@@ -157,6 +157,8 @@ app.use('/api/email-inbox', emailInboxRoutes);
 // under /api/email-folders/move-messages.
 app.use('/api/email-folders', require('./routes/email-folders-routes'));
 app.use('/api/email-labels', require('./routes/email-labels-routes'));
+// E3 signatures + quick parts — reusable blocks the draft box inserts.
+app.use('/api/email-snippets', require('./routes/email-snippets-routes'));
 // Payload DSL routes — file download, reject, apply (inline approval
 // card). Mounted before the broad /api/ai handler so /api/payloads
 // claims its namespace without ambiguity.
@@ -449,6 +451,15 @@ function startServer() {
         require('./reminders-cron').start();
       } catch (e) {
         console.warn('[reminders] failed to start scanner:', e && e.message);
+      }
+      // Email Hub snooze wake-up (E3) — ticks every 5 min. Returns snoozed
+      // mail to the owner's own Inbox, unread, once snoozed_until passes.
+      // Purely in-app: it sends nothing and touches only rows the owner
+      // snoozed themselves.
+      try {
+        require('./email-snooze-cron').start();
+      } catch (e) {
+        console.warn('[email-snooze] failed to start scanner:', e && e.message);
       }
       // Marketing campaigns worker (Wave 9). Ticks every 60s: picks
       // up scheduled campaigns whose time has come, drains in-flight

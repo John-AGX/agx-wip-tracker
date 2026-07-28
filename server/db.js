@@ -4252,6 +4252,46 @@ async function initSchema() {
       ON inbound_emails (user_id, received_at DESC) WHERE is_starred;
 
     -- ───────────────────────────────────────────────────────────────
+    -- E3 — signatures + quick parts (docs/email-hub-premium.md §3).
+    -- One table, two kinds, because they are the same thing: a named
+    -- block of reusable text you drop into a reply.
+    --   kind='signature'  a sign-off, per user. At most one is_default,
+    --                     and that one is what the draft box appends.
+    --   kind='quickpart'  a canned paragraph. user_id NULL = org-shared,
+    --                     so the company can reuse "our standard warranty
+    --                     language" without anyone retyping it.
+    --
+    -- Deliberately TEXT-only, not rich HTML: the only consumer today is
+    -- the draft box, whose content John copies into Outlook as plain text
+    -- (P86 still does not send). Add body_html when a real send path
+    -- exists, rather than storing markup nothing renders.
+    CREATE TABLE IF NOT EXISTS email_snippets (
+      id              TEXT PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      user_id         INTEGER REFERENCES users(id) ON DELETE CASCADE,   -- NULL = org-shared
+      kind            TEXT NOT NULL DEFAULT 'quickpart',                -- signature | quickpart
+      name            TEXT NOT NULL,
+      body_text       TEXT NOT NULL DEFAULT '',
+      is_default      BOOLEAN NOT NULL DEFAULT FALSE,
+      sort            INTEGER NOT NULL DEFAULT 0,
+      created_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    -- Names unique per owner per kind (the same COALESCE(user_id, 0)
+    -- namespace trick email_folders uses for personal vs org-shared).
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_email_snippets_name
+      ON email_snippets (organization_id, COALESCE(user_id, 0), kind, LOWER(name));
+    -- At most ONE default per owner per kind, enforced by the database
+    -- rather than route logic, so a concurrent double-save can never
+    -- leave two defaults and make "the" signature ambiguous.
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_email_snippets_default
+      ON email_snippets (organization_id, COALESCE(user_id, 0), kind)
+      WHERE is_default;
+    CREATE INDEX IF NOT EXISTS idx_email_snippets_owner
+      ON email_snippets (organization_id, COALESCE(user_id, 0), kind, sort);
+
+    -- ───────────────────────────────────────────────────────────────
     -- Plans & Takeoffs — first-class scale-drawing documents (the
     -- "dedicated home" for the Bluebeam-style markup tool). A plan is a
     -- drawing surface (blank gridded canvas / a photo / a PDF) plus its

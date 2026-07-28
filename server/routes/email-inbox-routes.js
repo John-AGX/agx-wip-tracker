@@ -528,10 +528,18 @@ router.get('/threads', requireAuth, async (req, res) => {
     const q = String(req.query.q || '').trim();
     const params = [req.user.id];
     let where = 'e.user_id = $1';
+    let parsedQuery = null;
     if (q) {
-      params.push('%' + q + '%');
-      const p = '$' + params.length;
-      where += ` AND (e.subject ILIKE ${p} OR e.from_email ILIKE ${p} OR COALESCE(e.orig_from_email, '') ILIKE ${p} OR e.body_text ILIKE ${p})`;
+      // E3 unified search: `from:` `subject:` `has:attachment` `is:unread`
+      // `label:` `folder:` `older_than:7d` `-exclude` and free text. The
+      // compiler emits parameterized predicates only — every user value is
+      // a placeholder, never interpolated. See services/email-search.js.
+      const built = require('../services/email-search').compile(q, { alias: 'e', startIndex: params.length + 1 });
+      parsedQuery = built.parsed;
+      if (built.count) {
+        where += ' AND ' + built.sql;
+        built.params.forEach((v) => params.push(v));
+      }
     }
     if (req.query.folder_id) {
       // Owner-gate the folder id before it reaches the query. One from
@@ -598,7 +606,9 @@ router.get('/threads', requireAuth, async (req, res) => {
         LIMIT ${limit}`,
       params
     );
-    res.json({ threads: r.rows });
+    // Echo the parsed query back so the UI can render operator chips and
+    // warn about a mistyped operator instead of silently ignoring it.
+    res.json({ threads: r.rows, query: parsedQuery });
   } catch (e) {
     console.error('GET /api/email-inbox/threads error:', e);
     res.status(500).json({ error: 'Server error' });
@@ -691,6 +701,67 @@ router.post('/messages/state', requireAuth, async (req, res) => {
     res.json({ ok: true, updated: r.rowCount });
   } catch (e) {
     console.error('POST /api/email-inbox/messages/state error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── POST /api/email-inbox/messages/snooze — E3 snooze ───────────────
+// Body: { thread_ids?: [...], message_ids?: [...], until: <ISO>|null }
+// Stamps snoozed_until and files the mail into the caller's Snoozed
+// folder. `until: null` un-snoozes immediately: clears the stamp and
+// returns it to the Inbox, unread — the same thing the wake-up sweep
+// (server/email-snooze-cron.js) does when the time arrives.
+//
+// Scoped user_id = req.user.id like every other dropbox write, so a
+// forged id matches nothing.
+router.post('/messages/snooze', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const msgIds = (Array.isArray(b.message_ids) ? b.message_ids : (b.message_id ? [b.message_id] : []))
+      .filter((x) => typeof x === 'string' && x).slice(0, 1000);
+    const threadIds = (Array.isArray(b.thread_ids) ? b.thread_ids : (b.thread_id ? [b.thread_id] : []))
+      .filter((x) => typeof x === 'string' && x).slice(0, 1000);
+    if (!msgIds.length && !threadIds.length) {
+      return res.status(400).json({ error: 'thread_ids[] or message_ids[] is required' });
+    }
+
+    let until = null;
+    if (b.until !== null && b.until !== undefined && b.until !== '') {
+      const d = new Date(b.until);
+      if (isNaN(d.getTime())) return res.status(400).json({ error: 'until must be an ISO date' });
+      // A snooze into the past would be woken by the very next sweep, so
+      // reject it rather than pretending it worked.
+      if (d.getTime() <= Date.now()) return res.status(400).json({ error: 'until must be in the future' });
+      until = d;
+    }
+
+    const ef = require('../services/email-folders');
+    const orgId = req.user.organization_id;
+    const slug = until ? 'snoozed' : 'inbox';
+    let folderId = await ef.systemFolderId(orgId, req.user.id, slug);
+    if (!folderId) {
+      await ef.ensureSystemFolders(orgId, req.user.id);
+      folderId = await ef.systemFolderId(orgId, req.user.id, slug);
+    }
+
+    const params = [req.user.id, until];
+    const sets = ['snoozed_until = $2'];
+    if (folderId) { params.push(folderId); sets.push('folder_id = $' + params.length); }
+    // Un-snoozing surfaces it again, so it comes back unread.
+    if (!until) sets.push('is_read = FALSE');
+
+    const scope = [];
+    if (msgIds.length) { params.push(msgIds); scope.push('id = ANY($' + params.length + '::text[])'); }
+    if (threadIds.length) { params.push(threadIds); scope.push('thread_id = ANY($' + params.length + '::text[])'); }
+
+    const r = await pool.query(
+      'UPDATE inbound_emails SET ' + sets.join(', ') +
+      ' WHERE user_id = $1 AND (' + scope.join(' OR ') + ')',
+      params
+    );
+    res.json({ ok: true, updated: r.rowCount, snoozed_until: until, folder_id: folderId || null });
+  } catch (e) {
+    console.error('POST /api/email-inbox/messages/snooze error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });

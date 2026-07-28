@@ -400,6 +400,16 @@
       '.ehub-menu button:hover{background:var(--row-hover,#232329);}',
       '.ehub-menu button.danger{color:#f87171;}',
       '.ehub-menu hr{border:none;border-top:1px solid var(--border,#2a2a32);margin:4px 2px;}',
+      '.ehub-menu-hd{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-dim,#6f748a);padding:6px 9px 3px;}',
+      '.ehub-menu-when{margin-left:auto;font-size:10.5px;color:var(--text-dim,#6f748a);font-weight:400;}',
+      // ── E3 search hint + shortcut cheatsheet
+      '.ehub-qhint{position:absolute;left:0;right:0;top:100%;margin-top:4px;font-size:11px;color:#e0b768;background:rgba(240,180,41,.09);border:1px solid rgba(240,180,41,.3);border-radius:7px;padding:4px 8px;display:none;z-index:6;}',
+      '.ehub-qhint.on{display:block;}',
+      '.ehub-keyhelp{left:50%;top:50%;transform:translate(-50%,-50%);min-width:340px;max-width:min(440px,92vw);padding:12px 14px;}',
+      '.ehub-keyhelp-hd{font-size:13px;font-weight:700;margin-bottom:8px;}',
+      '.ehub-keyrow{display:flex;align-items:baseline;gap:10px;padding:3px 0;font-size:12.5px;color:var(--text,#dfe2ec);}',
+      '.ehub-keyrow kbd{flex:0 0 92px;font:11px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--surface2,#202027);border:1px solid var(--border,#33333d);border-radius:5px;padding:1px 6px;text-align:center;color:var(--text-dim,#b4b4bf);}',
+      '.ehub-keyhelp-ft{margin-top:10px;padding-top:8px;border-top:1px solid var(--border,#2a2a32);font-size:11px;line-height:1.5;color:var(--text-dim,#8b90a5);}',
 
       // ── draft box (H5)
       '.ehub-draft{margin:14px 20px;padding:12px 14px;border:1px solid rgba(127,119,221,.34);border-radius:10px;background:rgba(127,119,221,.06);}',
@@ -454,10 +464,14 @@
           '<button class="ehub-tool" data-rail-toggle title="Show / hide the folder rail">' + ico('align-left', '&#9776;') + '</button>' +
           '<h2>Email</h2>' +
           '<span class="ehub-sub" id="ehubSub"></span>' +
-          '<div class="ehub-search"><input type="text" id="ehubSearch" placeholder="Search all folders…" spellcheck="false"></div>' +
+          '<div class="ehub-search">' +
+            '<input type="text" id="ehubSearch" placeholder="Search — try from: has:attachment is:unread older_than:7d" spellcheck="false">' +
+            '<div class="ehub-qhint" id="ehubQHint"></div>' +
+          '</div>' +
           '<button class="ehub-tool' + (_state.density === 'compact' ? ' on' : '') + '" data-density title="Comfortable / compact">' +
             ico('collapse', '&#8801;') + '</button>' +
           '<button class="ehub-tool" data-refresh title="Refresh">' + ico('refresh', '&#8635;') + '</button>' +
+          '<button class="ehub-tool" data-keys title="Keyboard shortcuts (?)">?</button>' +
         '</div>' +
         '<div class="ehub-body' + (_state.railHidden ? ' rail-off' : '') + '" id="ehubBody">' +
           '<div class="ehub-rail" id="ehubRail" style="flex-basis:' + _state.railW + 'px;width:' + _state.railW + 'px;"></div>' +
@@ -492,7 +506,9 @@
       lsSet('railHidden', _state.railHidden ? '1' : '0');
       body.classList.toggle('rail-off', _state.railHidden);
     });
+    pane.querySelector('[data-keys]').addEventListener('click', showShortcutHelp);
     wireSplitters();
+    wireShortcuts();
 
     loadFolders().then(function () { return loadThreads(); });
 
@@ -760,11 +776,27 @@
     return api(url).then(function (res) {
       _state.threads = (res && res.threads) || [];
       _state.loading = false;
+      paintQueryHint(res && res.query);
       paintList();
     }).catch(function (e) {
       _state.loading = false;
       rows.innerHTML = '<div class="ehub-empty">Could not load email.<br><span style="font-size:11.5px;">' + esc(e.message || '') + '</span></div>';
     });
+  }
+
+  // Warn when the query used something that LOOKS like an operator but
+  // isn't one — silently treating "form:tracy" as free text is how a
+  // search quietly lies about having filtered.
+  function paintQueryHint(parsed) {
+    var hint = document.getElementById('ehubQHint');
+    if (!hint) return;
+    var unknown = (parsed && parsed.unknown) || [];
+    if (!unknown.length) { hint.className = 'ehub-qhint'; hint.textContent = ''; return; }
+    var uniq = unknown.filter(function (v, i) { return unknown.indexOf(v) === i; });
+    hint.className = 'ehub-qhint on';
+    hint.textContent = (uniq.length === 1 ? 'Not an operator: ' : 'Not operators: ') +
+      uniq.map(function (u) { return u + ':'; }).join(', ') +
+      ' — searched as plain text. Try from:  subject:  has:attachment  is:unread  label:  folder:  older_than:7d';
   }
 
   function priorityClass(th) {
@@ -902,6 +934,7 @@
       '<button class="ehub-tool" data-b="read">Read</button>' +
       '<button class="ehub-tool" data-b="unread">Unread</button>' +
       '<button class="ehub-tool" data-b="star">' + '&#9733;' + '</button>' +
+      '<button class="ehub-tool" data-b="snooze">' + ico('bell', '') + ' Snooze</button>' +
       (archive ? '<button class="ehub-tool" data-b="archive">' + ico('import', '') + ' Archive</button>' : '') +
       (trash ? '<button class="ehub-tool" data-b="trash">' + ico('delete', '') + ' Trash</button>' : '') +
       '<select class="ehub-tool" data-b="move"><option value="">Move to…</option>' +
@@ -917,9 +950,10 @@
         el.addEventListener('change', function () { if (el.value) moveThreads(selectedIds(), el.value); });
         return;
       }
-      el.addEventListener('click', function () {
+      el.addEventListener('click', function (ev) {
         var sel = selectedIds();
         if (act === 'clear') { _state.selected = {}; paintList(); return; }
+        if (act === 'snooze') { ev.stopPropagation(); return snoozeMenu(ev, sel); }
         if (act === 'archive' && archive) return moveThreads(sel, archive.id);
         if (act === 'trash' && trash) return moveThreads(sel, trash.id);
         var patch = act === 'read' ? { is_read: true } : act === 'unread' ? { is_read: false } : { is_starred: true };
@@ -972,6 +1006,7 @@
             '<span class="ehub-sub">' + msgs.length + (msgs.length === 1 ? ' message' : ' messages') + '</span>' +
             '<button class="ehub-star' + (starred ? ' on' : '') + '" data-tstar title="Star">' + (starred ? '&#9733;' : '&#9734;') + '</button>' +
             '<button class="ehub-tool" data-unread title="Mark unread">' + ico('eye', '') + ' Unread</button>' +
+            '<button class="ehub-tool" data-snooze title="Snooze (h)">' + ico('bell', '') + ' Snooze</button>' +
             '<button class="ehub-tool" data-archive>' + ico('import', '') + ' Archive</button>' +
             '<button class="ehub-tool" data-trash>' + ico('delete', '') + ' Trash</button>' +
             '<select class="ehub-tool" data-move><option value="">Move to…</option>' +
@@ -1007,6 +1042,7 @@
             esc(st.draft_text || '') + '</textarea>' +
           '<div class="ehub-draft-actions">' +
             '<button class="ehub-dbtn" data-draft-ask>' + ico('sparkle', '') + ' Draft a reply</button>' +
+            '<button class="ehub-dbtn" data-snippets title="Insert a signature or quick part">' + ico('bookmark', '') + ' Insert</button>' +
             '<button class="ehub-dbtn" data-draft-copy>Copy</button>' +
             '<span class="ehub-draft-saved" data-draft-saved></span>' +
             '<button class="ehub-dbtn ehub-dbtn-primary" data-replied>' +
@@ -1113,6 +1149,8 @@
     if (tBtn && trash) tBtn.addEventListener('click', function () { moveThreads([threadId], trash.id); });
     var mv = pane.querySelector('[data-move]');
     if (mv) mv.addEventListener('change', function () { if (mv.value) moveThreads([threadId], mv.value); });
+    var snz = pane.querySelector('[data-snooze]');
+    if (snz) snz.addEventListener('click', function (ev) { ev.stopPropagation(); snoozeMenu(ev, [threadId]); });
 
     var unread = pane.querySelector('[data-unread]');
     if (unread) unread.addEventListener('click', function () {
@@ -1168,6 +1206,11 @@
     });
     var draftAskBtn = pane.querySelector('[data-draft-ask]');
     if (draftAskBtn) draftAskBtn.addEventListener('click', function () { askForDraft(threadId, subject); });
+    var snipBtn = pane.querySelector('[data-snippets]');
+    if (snipBtn) snipBtn.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      loadSnippets().then(function () { snippetMenu(ev, ta, threadId); });
+    });
     var repliedBtn = pane.querySelector('[data-replied]');
     if (repliedBtn) repliedBtn.addEventListener('click', function () {
       repliedBtn.disabled = true;
@@ -1217,6 +1260,325 @@
         setTimeout(function () { if (_state.activeThreadId === threadId) openThread(threadId); }, ms);
       });
     }
+  }
+
+  // ── E3: keyboard shortcuts ────────────────────────────────────────
+  // Mail-client muscle memory (docs/email-hub-premium.md §3). Bound once
+  // at module load and gated on the Email tab being the visible one, so
+  // pressing "e" while typing a job note never archives anything.
+  //
+  // Deliberately ABSENT: c (compose) and f (forward). Both need a send
+  // path, and P86 does not send until the Azure/Graph link lands — a key
+  // that opens a composer you can't send from is worse than no key.
+  // r is bound to "draft a reply" (the assistant writes into the draft
+  // box), which is the real reply workflow here.
+  var SHORTCUTS = [
+    ['j / k', 'Next / previous conversation'],
+    ['Enter or o', 'Open the selected conversation'],
+    ['e', 'Archive'],
+    ['#', 'Trash'],
+    ['s', 'Star / unstar'],
+    ['u', 'Mark unread and close'],
+    ['h', 'Snooze (Snoozed until tomorrow 8am)'],
+    ['x', 'Select / deselect for the bulk bar'],
+    ['r', 'Draft a reply with the assistant'],
+    ['/', 'Focus search'],
+    ['Esc', 'Clear search / close the reading pane'],
+    ['?', 'This list']
+  ];
+
+  // Is the Email tab actually the one on screen? Everything below is a
+  // no-op otherwise.
+  function hubVisible() {
+    var pane = document.getElementById('email-hub');
+    return !!(pane && pane.offsetParent !== null && document.getElementById('ehubRows'));
+  }
+  // Never hijack a key the user meant for a field.
+  function typingInField(t) {
+    if (!t) return false;
+    var tag = (t.tagName || '').toLowerCase();
+    return tag === 'input' || tag === 'textarea' || tag === 'select' || t.isContentEditable;
+  }
+
+  function cursorIndex() {
+    if (!_state.activeThreadId) return -1;
+    for (var i = 0; i < _state.threads.length; i++) {
+      if (_state.threads[i].thread_id === _state.activeThreadId) return i;
+    }
+    return -1;
+  }
+  function moveCursor(delta) {
+    if (!_state.threads.length) return;
+    var i = cursorIndex();
+    var next = (i === -1) ? 0 : Math.max(0, Math.min(_state.threads.length - 1, i + delta));
+    var th = _state.threads[next];
+    if (!th) return;
+    _state.activeThreadId = th.thread_id;
+    paintList();
+    var row = document.querySelector('#ehubRows .ehub-row[data-thread="' + cssEscape(th.thread_id) + '"]');
+    if (row && row.scrollIntoView) row.scrollIntoView({ block: 'nearest' });
+  }
+  // Attribute selectors need the id escaped; ids here are [a-z0-9_] but
+  // CSS.escape is free insurance if that ever changes.
+  function cssEscape(s) {
+    return (window.CSS && window.CSS.escape) ? window.CSS.escape(s) : String(s).replace(/["\\]/g, '\\$&');
+  }
+
+  function currentThreadId() {
+    return _state.activeThreadId || (_state.threads[0] && _state.threads[0].thread_id) || null;
+  }
+
+  var _shortcutsWired = false;
+  function wireShortcuts() {
+    if (_shortcutsWired) return;
+    _shortcutsWired = true;
+    document.addEventListener('keydown', function (e) {
+      if (!hubVisible()) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      var k = e.key;
+
+      // '/' focuses search even from elsewhere; Esc works inside search.
+      if (typingInField(e.target)) {
+        if (k === 'Escape' && e.target.id === 'ehubSearch') {
+          e.target.value = ''; _state.q = ''; loadThreads(); e.target.blur();
+          e.preventDefault();
+        }
+        return;
+      }
+      var tid = currentThreadId();
+
+      if (k === '/') { var s = document.getElementById('ehubSearch'); if (s) { s.focus(); e.preventDefault(); } return; }
+      if (k === '?') { showShortcutHelp(); e.preventDefault(); return; }
+      if (k === 'j') { moveCursor(1); e.preventDefault(); return; }
+      if (k === 'k') { moveCursor(-1); e.preventDefault(); return; }
+      if (k === 'Escape') {
+        closeMenu();
+        var body = document.getElementById('ehubBody');
+        if (body) body.classList.remove('show-thread');
+        e.preventDefault();
+        return;
+      }
+      if (!tid) return;
+
+      if (k === 'Enter' || k === 'o') { openThread(tid); e.preventDefault(); return; }
+      if (k === 'e') {
+        var arch = folderBySlug('archive');
+        if (arch) { moveThreads(sel1(tid), arch.id); e.preventDefault(); }
+        return;
+      }
+      if (k === '#') {
+        var tr = folderBySlug('trash');
+        if (tr) { moveThreads(sel1(tid), tr.id); e.preventDefault(); }
+        return;
+      }
+      if (k === 's') {
+        var th = _state.threads.filter(function (x) { return x.thread_id === tid; })[0];
+        var next = !(th && th.is_starred);
+        if (th) th.is_starred = next;
+        paintList();
+        post('/api/email-inbox/messages/state', { thread_ids: sel1(tid), is_starred: next })
+          .catch(function () { loadThreads(); });
+        e.preventDefault();
+        return;
+      }
+      if (k === 'u') {
+        post('/api/email-inbox/messages/state', { thread_ids: sel1(tid), is_read: false })
+          .then(function () { _state.activeThreadId = null; return loadFolders().then(loadThreads); })
+          .catch(function (err) { toast(err.message); });
+        e.preventDefault();
+        return;
+      }
+      if (k === 'h') { snoozeThreads(sel1(tid), 'tomorrow'); e.preventDefault(); return; }
+      if (k === 'x') {
+        _state.selected[tid] = !_state.selected[tid];
+        paintList();
+        e.preventDefault();
+        return;
+      }
+      if (k === 'r') {
+        var t2 = _state.threads.filter(function (x) { return x.thread_id === tid; })[0];
+        askForDraft(tid, (t2 && t2.subject) || '');
+        e.preventDefault();
+        return;
+      }
+    });
+  }
+  // A shortcut acts on the whole selection when there is one, else on the
+  // conversation under the cursor — the same rule every mail client uses.
+  function sel1(tid) {
+    var picked = selectedIds();
+    return picked.length ? picked : [tid];
+  }
+
+  function showShortcutHelp() {
+    closeMenu();
+    var m = document.createElement('div');
+    m.className = 'ehub-menu ehub-keyhelp';
+    m.innerHTML = '<div class="ehub-keyhelp-hd">Keyboard shortcuts</div>' +
+      SHORTCUTS.map(function (r) {
+        return '<div class="ehub-keyrow"><kbd>' + esc(r[0]) + '</kbd><span>' + esc(r[1]) + '</span></div>';
+      }).join('') +
+      '<div class="ehub-keyhelp-ft">Sending is not wired yet, so there is no compose or forward key — ' +
+      'r asks the assistant to draft the reply into the draft box.</div>';
+    document.body.appendChild(m);
+    m.addEventListener('click', function (e) { e.stopPropagation(); });
+  }
+
+  // ── E3: snooze ────────────────────────────────────────────────────
+  // Presets resolve against the USER's clock, not the server's.
+  function snoozeTarget(preset) {
+    var d = new Date();
+    if (preset === 'later') { d.setHours(d.getHours() + 3, 0, 0, 0); return d; }
+    if (preset === 'tomorrow') { d.setDate(d.getDate() + 1); d.setHours(8, 0, 0, 0); return d; }
+    if (preset === 'weekend') {
+      // Next Saturday 9am.
+      d.setDate(d.getDate() + ((6 - d.getDay() + 7) % 7 || 7));
+      d.setHours(9, 0, 0, 0);
+      return d;
+    }
+    if (preset === 'nextweek') {
+      // Next Monday 8am.
+      d.setDate(d.getDate() + ((1 - d.getDay() + 7) % 7 || 7));
+      d.setHours(8, 0, 0, 0);
+      return d;
+    }
+    return null;
+  }
+
+  function snoozeThreads(threadIds, preset) {
+    if (!threadIds || !threadIds.length) return Promise.resolve();
+    var until = preset === 'unsnooze' ? null : snoozeTarget(preset);
+    if (preset !== 'unsnooze' && !until) return Promise.resolve();
+    return post('/api/email-inbox/messages/snooze', {
+      thread_ids: threadIds, until: until ? until.toISOString() : null
+    }).then(function (r) {
+      toast(until
+        ? ((r.updated || 0) + ' snoozed until ' + until.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }))
+        : ((r.updated || 0) + ' back in your inbox'));
+      _state.selected = {};
+      if (threadIds.indexOf(_state.activeThreadId) !== -1) {
+        _state.activeThreadId = null;
+        var p = document.getElementById('ehubPane');
+        if (p) p.innerHTML = '<div class="ehub-empty">Snoozed. Pick another conversation.</div>';
+      }
+      return loadFolders().then(loadThreads);
+    }).catch(function (e) { toast(e.message || 'Could not snooze that.'); });
+  }
+
+  function snoozeMenu(evt, threadIds) {
+    closeMenu();
+    var m = document.createElement('div');
+    m.className = 'ehub-menu';
+    m.style.left = Math.min(evt.clientX, window.innerWidth - 200) + 'px';
+    m.style.top = Math.min(evt.clientY, window.innerHeight - 220) + 'px';
+    var opts = [
+      ['later', 'Later today', snoozeTarget('later')],
+      ['tomorrow', 'Tomorrow morning', snoozeTarget('tomorrow')],
+      ['weekend', 'This weekend', snoozeTarget('weekend')],
+      ['nextweek', 'Next week', snoozeTarget('nextweek')]
+    ];
+    m.innerHTML = opts.map(function (o) {
+      return '<button data-snz="' + o[0] + '">' + esc(o[1]) +
+        '<span class="ehub-menu-when">' + esc(o[2].toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })) + '</span></button>';
+    }).join('') + '<hr><button data-snz="unsnooze">Un-snooze now</button>';
+    document.body.appendChild(m);
+    m.addEventListener('click', function (e) {
+      var b = e.target.closest('[data-snz]');
+      if (!b) return;
+      e.stopPropagation();
+      closeMenu();
+      snoozeThreads(threadIds, b.getAttribute('data-snz'));
+    });
+  }
+
+  // ── E3: signatures + quick parts ──────────────────────────────────
+  function loadSnippets() {
+    if (_state.snippets) return Promise.resolve(_state.snippets);
+    return api('/api/email-snippets').then(function (r) {
+      _state.snippets = (r && r.snippets) || [];
+      return _state.snippets;
+    }).catch(function () { _state.snippets = []; return _state.snippets; });
+  }
+  function defaultSignature() {
+    return (_state.snippets || []).filter(function (s) { return s.kind === 'signature' && s.is_default; })[0] || null;
+  }
+  // Insert text at the caret (or append), then persist through the same
+  // debounced save the textarea already uses.
+  function insertIntoDraft(ta, text, threadId) {
+    if (!ta || !text) return;
+    var at = ta.selectionStart == null ? ta.value.length : ta.selectionStart;
+    var before = ta.value.slice(0, at);
+    var after = ta.value.slice(ta.selectionEnd == null ? at : ta.selectionEnd);
+    var glue = (before && !/\n\s*$/.test(before)) ? '\n\n' : '';
+    ta.value = before + glue + text + after;
+    var caret = (before + glue + text).length;
+    ta.focus();
+    ta.setSelectionRange(caret, caret);
+    api('/api/email-inbox/threads/' + encodeURIComponent(threadId) + '/draft', {
+      method: 'PUT', body: JSON.stringify({ draft_text: ta.value, source: 'user' })
+    }).catch(function () {});
+  }
+
+  function snippetMenu(evt, ta, threadId) {
+    closeMenu();
+    var list = _state.snippets || [];
+    var sigs = list.filter(function (s) { return s.kind === 'signature'; });
+    var parts = list.filter(function (s) { return s.kind === 'quickpart'; });
+    var m = document.createElement('div');
+    m.className = 'ehub-menu';
+    m.style.left = Math.min(evt.clientX, window.innerWidth - 240) + 'px';
+    m.style.top = Math.min(evt.clientY, window.innerHeight - 300) + 'px';
+    var html = '';
+    if (sigs.length) {
+      html += '<div class="ehub-menu-hd">Signatures</div>' + sigs.map(function (s) {
+        return '<button data-snip="' + esc(s.id) + '">' + esc(s.name) + (s.is_default ? ' <span class="ehub-menu-when">default</span>' : '') + '</button>';
+      }).join('');
+    }
+    if (parts.length) {
+      html += (sigs.length ? '<hr>' : '') + '<div class="ehub-menu-hd">Quick parts</div>' + parts.map(function (s) {
+        return '<button data-snip="' + esc(s.id) + '">' + esc(s.name) + (s.user_id === null ? ' <span class="ehub-menu-when">shared</span>' : '') + '</button>';
+      }).join('');
+    }
+    if (!html) html = '<div class="ehub-menu-hd">Nothing saved yet</div>';
+    html += '<hr><button data-newsnip="signature">' + ico('plus', '+') + ' New signature…</button>' +
+            '<button data-newsnip="quickpart">' + ico('plus', '+') + ' New quick part…</button>';
+    m.innerHTML = html;
+    document.body.appendChild(m);
+    m.addEventListener('click', function (e) {
+      var pick = e.target.closest('[data-snip]');
+      var mk = e.target.closest('[data-newsnip]');
+      if (!pick && !mk) return;
+      e.stopPropagation();
+      closeMenu();
+      if (pick) {
+        var s = list.filter(function (x) { return x.id === pick.getAttribute('data-snip'); })[0];
+        if (s) insertIntoDraft(ta, s.body_text, threadId);
+        return;
+      }
+      newSnippet(mk.getAttribute('data-newsnip'), ta, threadId);
+    });
+  }
+
+  function newSnippet(kind, ta, threadId) {
+    var label = kind === 'signature' ? 'signature' : 'quick part';
+    var name = window.prompt('Name this ' + label, kind === 'signature' ? 'My signature' : '');
+    if (!name || !name.trim()) return;
+    var seed = (ta && ta.selectionStart !== ta.selectionEnd)
+      ? ta.value.slice(ta.selectionStart, ta.selectionEnd)
+      : '';
+    var body = window.prompt('Text for "' + name.trim() + '"' +
+      (seed ? ' (pre-filled from your selection)' : ''), seed);
+    if (body === null) return;
+    post('/api/email-snippets', {
+      kind: kind, name: name.trim(), body_text: body,
+      is_default: kind === 'signature' && !defaultSignature()
+    }).then(function (r) {
+      _state.snippets = null;
+      return loadSnippets().then(function () {
+        if (r && r.snippet) insertIntoDraft(ta, r.snippet.body_text, threadId);
+        toast('Saved "' + (r.snippet ? r.snippet.name : name) + '".');
+      });
+    }).catch(function (e) { toast(e.message || 'Could not save that.'); });
   }
 
   window.renderEmailHubTab = renderEmailHubTab;
