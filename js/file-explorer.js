@@ -88,18 +88,25 @@
       '.p86fx-menu button.danger{color:#f87171;}' +
       '.p86fx-menu .sep{height:1px;background:var(--border,#2a2a32);margin:4px 2px;}' +
       // Folder colour + icon picker (right-click → Colour & icon…).
-      '.p86fx-styler{min-width:236px;padding:9px 10px 11px;}' +
+      // A fixed width, not min-width: the icon row is a wrapping flexbox,
+      // and with only a minimum it had nothing to wrap against and laid
+      // all 19 choices out in one 660px line.
+      '.p86fx-styler{width:236px;box-sizing:border-box;padding:9px 10px 11px;}' +
       '.p86fx-styler-hd{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-dim,#8b90a5);margin:2px 0 6px;}' +
       '.p86fx-sw{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;}' +
-      '.p86fx-swatch{width:22px;height:22px;border-radius:6px;border:2px solid transparent;cursor:pointer;padding:0;flex:0 0 auto;}' +
-      '.p86fx-swatch.on{border-color:var(--text,#e4e6f0);box-shadow:0 0 0 2px rgba(0,0,0,.35) inset;}' +
-      '.p86fx-swatch-none{background:transparent;border:2px dashed var(--border,#3a3a46);position:relative;}' +
+      // Selectors are .p86fx-menu-prefixed on purpose: the generic
+      // `.p86fx-menu button { display:flex; width:100% }` rule above is
+      // (0,1,1) and would otherwise outrank a bare `.p86fx-swatch` (0,1,0),
+      // stretching every swatch and icon into a full-width bar.
+      '.p86fx-menu .p86fx-swatch{width:22px;height:22px;border-radius:6px;border:2px solid transparent;cursor:pointer;padding:0;flex:0 0 auto;display:block;}' +
+      '.p86fx-menu .p86fx-swatch.on{border-color:var(--text,#e4e6f0);box-shadow:0 0 0 2px rgba(0,0,0,.35) inset;}' +
+      '.p86fx-menu .p86fx-swatch-none{background:transparent;border:2px dashed var(--border,#3a3a46);}' +
       '.p86fx-sw-ic{margin-bottom:0;}' +
-      '.p86fx-iconbtn{width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;border-radius:7px;' +
+      '.p86fx-menu .p86fx-iconbtn{width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;border-radius:7px;' +
         'border:1px solid transparent;background:var(--surface2,#23232e);color:var(--text,#dfe2ec);cursor:pointer;padding:0;flex:0 0 auto;font-size:14px;}' +
-      '.p86fx-iconbtn:hover{border-color:var(--accent,#22d3ee);}' +
-      '.p86fx-iconbtn.on{border-color:var(--accent,#22d3ee);background:rgba(34,211,238,.14);}' +
-      '.p86fx-iconbtn .p86fx-svg{width:15px;height:15px;}' +
+      '.p86fx-menu .p86fx-iconbtn:hover{border-color:var(--accent,#22d3ee);}' +
+      '.p86fx-menu .p86fx-iconbtn.on{border-color:var(--accent,#22d3ee);background:rgba(34,211,238,.14);}' +
+      '.p86fx-menu .p86fx-iconbtn .p86fx-svg{width:15px;height:15px;}' +
       // Folder / filetype icon glyphs inside tree rows, list rows, tiles.
       '.p86fx-fic{display:inline-flex;align-items:center;justify-content:center;}' +
       '.p86fx-fic .p86fx-svg{width:1em;height:1em;vertical-align:-0.12em;}' +
@@ -393,9 +400,13 @@
           }
           S.cur = fid; S.sel = {}; render();
         });
-        if (fid === PARENT_ID) return; // read-only: no drag/drop
+        if (fid === PARENT_ID) return; // read-only: no drag/drop, no menu
         if (fid) wireFolderDrag(el, fid);
         wireFolderDrop(el, fid);
+        // The TREE is the obvious place to right-click a folder, but it
+        // only ever had click + drag wired — the context menu lived solely
+        // on the folder rows in the items pane. Same menu, both places.
+        if (fid) el.addEventListener('contextmenu', function (e) { e.preventDefault(); folderMenu(e, fid); });
       });
     }
 
