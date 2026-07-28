@@ -199,34 +199,62 @@
     return '<span class="p86fx-fic"' + (f && f.color ? ' style="color:' + esc(f.color) + '"' : '') + '>' + svg + '</span>';
   }
 
-  // Filetype logo. Prefers a real icon from the app's set and falls back
-  // to the original emoji when agx-icons.js isn't loaded, so this
-  // degrades rather than rendering an empty box.
-  function fileIconName(f) {
+  // Filetype logo, keyed on the FILE EXTENSION first and the mime type
+  // only as a fallback.
+  //
+  // Extension-first is not arbitrary: the upload path sniffs magic bytes,
+  // and an .xlsx really is a ZIP container — so it is stored as
+  // application/zip and a mime-first lookup gave every spreadsheet the
+  // archive icon. text/plain likewise fell through to the generic clip.
+  // The extension is also what the row badge already shows, so keying on
+  // it keeps the icon and the badge telling the same story.
+  var EXT_FAMILY = {
+    pdf: 'pdf',
+    doc: 'doc', docx: 'doc', rtf: 'doc', odt: 'doc', pages: 'doc',
+    txt: 'doc', md: 'doc', log: 'doc', json: 'doc', xml: 'doc',
+    xls: 'sheet', xlsx: 'sheet', xlsm: 'sheet', csv: 'sheet', tsv: 'sheet', ods: 'sheet', numbers: 'sheet',
+    ppt: 'slides', pptx: 'slides', key: 'slides',
+    jpg: 'image', jpeg: 'image', png: 'image', gif: 'image', webp: 'image',
+    heic: 'image', heif: 'image', bmp: 'image', tif: 'image', tiff: 'image', svg: 'image',
+    zip: 'archive', rar: 'archive', '7z': 'archive', tar: 'archive', gz: 'archive',
+    mp4: 'video', mov: 'video', avi: 'video', webm: 'video', mkv: 'video',
+    mp3: 'audio', wav: 'audio', m4a: 'audio', aac: 'audio', ogg: 'audio',
+    dwg: 'cad', dxf: 'cad', rvt: 'cad', skp: 'cad'
+  };
+  // family -> [icon name, tint]. Tints are the dark-theme values; light
+  // mode darkens them via the brightness filter in ensureStyles.
+  var FAMILY_LOOK = {
+    image:   ['photos', '#22c55e'],
+    pdf:     ['document-text', '#f87171'],
+    sheet:   ['chart-bar', '#22a06b'],
+    doc:     ['document-text', '#4f8cff'],
+    slides:  ['presentation-chart', '#f97316'],
+    archive: ['cube', '#f0b429'],
+    video:   ['composer-camera', '#7f77dd'],
+    audio:   ['composer-mic', '#f97316'],
+    cad:     ['scale', '#22d3ee'],
+    other:   ['attachments', '#94a3b8']
+  };
+  function fileFamily(f) {
+    var m = /\.([a-z0-9]{1,6})$/i.exec((f && f.filename) || '');
+    if (m) {
+      var fam = EXT_FAMILY[m[1].toLowerCase()];
+      if (fam) return fam;
+    }
     var mt = (f && f.mime_type) || '';
-    var name = (f && f.filename) || '';
-    if (/^image\//i.test(mt)) return 'photos';
-    if (/pdf/i.test(mt)) return 'document-text';
-    if (/sheet|excel|csv/i.test(mt)) return 'chart-bar';
-    if (/word|document/i.test(mt)) return 'document-text';
-    if (/zip|compressed|archive/i.test(mt)) return 'cube';
-    if (/^video\//i.test(mt)) return 'composer-camera';
-    if (/^audio\//i.test(mt)) return 'composer-mic';
-    if (/\.(dwg|dxf|rvt)$/i.test(name)) return 'scale';
-    return 'attachments';
+    if (/^image\//i.test(mt)) return 'image';
+    if (/pdf/i.test(mt)) return 'pdf';
+    if (/sheet|excel|csv/i.test(mt)) return 'sheet';
+    if (/presentation|powerpoint/i.test(mt)) return 'slides';
+    if (/word|opendocument.text|^text\//i.test(mt)) return 'doc';
+    if (/zip|compressed|archive/i.test(mt)) return 'archive';
+    if (/^video\//i.test(mt)) return 'video';
+    if (/^audio\//i.test(mt)) return 'audio';
+    return 'other';
   }
-  // Per-family tint, so a folder of mixed files is scannable at a glance.
-  function fileIconColor(f) {
-    var mt = (f && f.mime_type) || '';
-    if (/^image\//i.test(mt)) return '#22c55e';
-    if (/pdf/i.test(mt)) return '#f87171';
-    if (/sheet|excel|csv/i.test(mt)) return '#22a06b';
-    if (/word|document/i.test(mt)) return '#4f8cff';
-    if (/zip|compressed|archive/i.test(mt)) return '#f0b429';
-    if (/^video\//i.test(mt)) return '#7f77dd';
-    if (/^audio\//i.test(mt)) return '#f97316';
-    return '#94a3b8';
-  }
+  function fileIconName(f) { return (FAMILY_LOOK[fileFamily(f)] || FAMILY_LOOK.other)[0]; }
+  function fileIconColor(f) { return (FAMILY_LOOK[fileFamily(f)] || FAMILY_LOOK.other)[1]; }
+
   function fileGlyph(f) {
     var svg = icoRaw(fileIconName(f));
     if (svg) return '<span class="p86fx-fic" style="color:' + fileIconColor(f) + '">' + svg + '</span>';
