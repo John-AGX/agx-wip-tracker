@@ -47,6 +47,7 @@
 | PLT-4 | **Dead code awaiting removal** — retired section-in-inspector pane-moving code; sub-portal persist helper not yet extracted (duplication risk). | P3 | Maintenance drag; the duplicate persist path can drift. | Cleanup pass. |
 | PLT-5 | **`buffers@0.1.1`** transitive dependency carries no machine-readable license; two direct deps unverified in the last scan. | P3 | Licensing record incomplete. | Confirm at next dependency cleanup (`docs/DEPENDENCIES.md`). |
 | PLT-6 | **Estimate delete returns 403 even for a system admin**; a leftover test estimate cannot be removed from the UI. | P3 | Minor operational annoyance. | Fix with the next estimates pass. |
+| PLT-7 | **Runtime version is not pinned** — `package.json` declares no `engines` field and there is no `.nvmrc`, so the host chooses the Node major. | P2 | A rebuild (or a host default change) could land on a different Node major than production and behave differently — a reproducibility gap for the rebuild procedure. | Stage 1 — cheap: declare `engines.node` and add `.nvmrc`. |
 
 ## Recently closed (for context — full history in the release notes)
 
