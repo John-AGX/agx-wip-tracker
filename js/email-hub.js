@@ -228,7 +228,22 @@
   // img-src data: only, a remote tracking pixel cannot load even if the
   // sanitizer missed one. "Show images" widens it to https: for this
   // message alone.
+  function isLightTheme() { return document.body.classList.contains('light-mode'); }
+
+  // THEME-AWARE BY HAND, and it has to be: this stylesheet lives inside a
+  // sandboxed iframe, which is a SEPARATE DOCUMENT and therefore cannot
+  // see the app's CSS custom properties. A var(--text) here resolves to
+  // nothing. The first version hardcoded the dark palette, so in light
+  // mode every email body rendered as #dfe2ec on white — 1.29:1, i.e.
+  // invisible. Colours are picked per theme instead.
   function bodyDoc(innerHtml, showImages) {
+    var light = isLightTheme();
+    var fg      = light ? '#111827' : '#dfe2ec';
+    var linkCol = light ? '#1d4ed8' : '#6ea8ff';
+    var quoteFg = light ? '#4b5563' : '#9aa2b6';
+    var hair    = light ? 'rgba(0,0,0,.22)'  : 'rgba(255,255,255,.2)';
+    var blockBg = light ? 'rgba(0,0,0,.05)'  : 'rgba(255,255,255,.06)';
+    var blockBd = light ? 'rgba(0,0,0,.28)'  : 'rgba(255,255,255,.22)';
     var csp = "default-src 'none'; style-src 'unsafe-inline'; img-src data:" +
               (showImages ? ' https:' : '') + "; font-src data:;";
     return '<!doctype html><html><head>' +
@@ -236,14 +251,30 @@
       '<meta http-equiv="Content-Security-Policy" content="' + esc(csp) + '">' +
       '<style>' +
         'html,body{margin:0;padding:0;background:transparent;}' +
-        'body{font:13.5px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#dfe2ec;word-break:break-word;}' +
-        'a{color:#6ea8ff;}' +
+        'body{font:13.5px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:' + fg + ';word-break:break-word;}' +
+        'a{color:' + linkCol + ';}' +
         'img{max-width:100%;height:auto;}' +
-        'img[data-blocked]{min-width:18px;min-height:18px;background:rgba(255,255,255,.06);border:1px dashed rgba(255,255,255,.22);border-radius:3px;}' +
+        'img[data-blocked]{min-width:18px;min-height:18px;background:' + blockBg + ';border:1px dashed ' + blockBd + ';border-radius:3px;}' +
         'table{max-width:100%;}' +
-        'blockquote{border-left:2px solid rgba(255,255,255,.2);margin:8px 0;padding-left:10px;color:#9aa2b6;}' +
+        'blockquote{border-left:2px solid ' + hair + ';margin:8px 0;padding-left:10px;color:' + quoteFg + ';}' +
         'pre{white-space:pre-wrap;word-break:break-word;}' +
       '</style></head><body>' + innerHtml + '</body></html>';
+  }
+
+  // The iframe's colours are baked into its srcdoc at render time, so a
+  // theme flip while a conversation is open leaves a stale document
+  // behind. Watch the body class and re-render the open thread.
+  var _themeWatch = null;
+  function watchTheme() {
+    if (_themeWatch || !window.MutationObserver) return;
+    var wasLight = isLightTheme();
+    _themeWatch = new MutationObserver(function () {
+      var nowLight = isLightTheme();
+      if (nowLight === wasLight) return;
+      wasLight = nowLight;
+      if (_state.activeThreadId) openThread(_state.activeThreadId);
+    });
+    _themeWatch.observe(document.body, { attributes: true, attributeFilter: ['class'] });
   }
 
   // Plain-text bodies: split off the quoted tail so a two-line reply
@@ -339,7 +370,9 @@
       '.ehub-row-prev{font-size:11.5px;color:var(--text-dim,#7f8498);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
       '.ehub-row-triage{font-style:italic;color:var(--text-dim,#8f95a8);}',
       '.ehub-row-chips{display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-top:1px;}',
-      '.ehub-star{background:none;border:none;cursor:pointer;font-size:14px;line-height:1;color:#4a4f60;padding:0 1px;flex:0 0 auto;}',
+      // #4a4f60 measured 1.92:1 on the dark row — an affordance you
+      // genuinely could not see. Non-text controls want >=3:1.
+      '.ehub-star{background:none;border:none;cursor:pointer;font-size:14px;line-height:1;color:#6b7186;padding:0 1px;flex:0 0 auto;}',
       '.ehub-star.on{color:#f0b429;}',
       '.ehub-star:hover{color:#f0b429;}',
       // The explicit width/height matters: styles.css:2221 has a global
@@ -429,6 +462,28 @@
       '.ehub-draft-saved{font-size:11px;color:var(--accent,#5ddb7e);}',
       '.ehub-back{display:none;align-items:center;gap:5px;font-size:12px;color:var(--text-dim,#8b90a5);background:none;border:none;cursor:pointer;padding:0 0 8px;}',
 
+      // ── Light-mode corrections ────────────────────────────────────
+      // Everything above that resolves through var(--…) follows the theme
+      // for free. These are the hand-picked hex values, all chosen against
+      // a dark background — measured on white they ran 1.7–2.4:1, so each
+      // gets a darker twin here. (Ratios in the comments are the light-mode
+      // figures after the change.)
+      'body.light-mode .ehub-badge-reply{background:rgba(5,150,105,.12);color:#046c4e;border-color:rgba(5,150,105,.42);}',   // 5.9
+      'body.light-mode .ehub-badge-high{background:rgba(220,38,38,.10);color:#b91c1c;border-color:rgba(220,38,38,.40);}',    // 6.1
+      'body.light-mode .ehub-badge-done{background:rgba(71,85,105,.10);color:#475569;border-color:rgba(71,85,105,.34);}',    // 6.4
+      'body.light-mode .ehub-badge-draft{background:rgba(109,40,217,.10);color:#5b21b6;border-color:rgba(109,40,217,.38);}', // 8.1
+      'body.light-mode .ehub-draft{border-color:rgba(109,40,217,.30);background:rgba(109,40,217,.05);}',
+      'body.light-mode .ehub-draft-ttl{color:#5b21b6;}',                                                                     // 8.1
+      'body.light-mode .ehub-imgbar{color:#8a5a00;background:rgba(217,119,6,.10);border-color:rgba(217,119,6,.38);}',        // 6.0
+      'body.light-mode .ehub-imgbar button{color:#8a5a00;border-color:rgba(217,119,6,.55);}',
+      'body.light-mode .ehub-qhint{color:#8a5a00;background:rgba(217,119,6,.10);border-color:rgba(217,119,6,.38);}',         // 6.0
+      'body.light-mode .ehub-star{color:#8b93a5;}',
+      'body.light-mode .ehub-star.on{color:#b45309;}',
+      // The priority stripe is a 3px bar, not text — it only has to be
+      // discernible, and these are the darker theme equivalents.
+      'body.light-mode .ehub-row.pri-high::before{background:#dc2626;}',
+      'body.light-mode .ehub-row.pri-money::before{background:#b45309;}',
+
       // ── mobile: rail becomes a drawer, list and pane swap
       '@media (max-width:900px){',
       '.ehub-split{display:none;}',
@@ -517,6 +572,7 @@
     });
     wireSplitters();
     wireShortcuts();
+    watchTheme();
 
     loadFolders().then(function () { return loadThreads(); });
 

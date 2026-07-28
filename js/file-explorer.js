@@ -111,6 +111,14 @@
       '.p86fx-fic{display:inline-flex;align-items:center;justify-content:center;}' +
       '.p86fx-fic .p86fx-svg{width:1em;height:1em;vertical-align:-0.12em;}' +
       '.p86fx-thumb .p86fx-fic .p86fx-svg{width:30px;height:30px;}' +
+      // Both the filetype tints and a folder's stored colour are inline
+      // `style="color:…"`, so CSS can't restyle them per theme — and the
+      // palette was picked against a dark background. On white they
+      // measured 1.9–2.8:1, under the 3:1 a non-text glyph needs. A
+      // brightness filter darkens whatever hex is actually set, including
+      // colours the user picks later, without touching stored data.
+      'body.light-mode .p86fx-fic{filter:brightness(0.72) saturate(1.1);}' +
+      'body.light-mode .p86fx-swatch{filter:none;}' +
       // name dialog
       '.p86fx-modal{position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;}' +
       '.p86fx-modal-box{background:var(--surface,#1b1b24);border:1px solid var(--border,#2a2a32);border-radius:12px;padding:16px;width:min(420px,92vw);}' +
