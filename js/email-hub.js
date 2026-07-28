@@ -477,7 +477,7 @@
       'body.light-mode .ehub-imgbar{color:#8a5a00;background:rgba(217,119,6,.10);border-color:rgba(217,119,6,.38);}',        // 6.0
       'body.light-mode .ehub-imgbar button{color:#8a5a00;border-color:rgba(217,119,6,.55);}',
       'body.light-mode .ehub-qhint{color:#8a5a00;background:rgba(217,119,6,.10);border-color:rgba(217,119,6,.38);}',         // 6.0
-      'body.light-mode .ehub-star{color:#8b93a5;}',
+      'body.light-mode .ehub-star{color:#6b7280;}',   // #8b93a5 measured 2.8 on the light row
       'body.light-mode .ehub-star.on{color:#b45309;}',
       // The priority stripe is a 3px bar, not text — it only has to be
       // discernible, and these are the darker theme equivalents.
