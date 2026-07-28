@@ -765,8 +765,21 @@
 
     // Swatch + icon picker. A popover rather than a prompt() — picking a
     // colour by typing a hex code is not a thing anyone wants to do.
+    //
+    // OPENS ON THE NEXT TICK, and that is load-bearing. showMenu arms a
+    // one-shot document click listener that closes the open menu. The
+    // click on "Colour & icon…" runs this handler and then KEEPS BUBBLING
+    // to that listener — so a popover created synchronously here would be
+    // torn down by the very click that asked for it. Deferring lets the
+    // in-flight click finish (consuming the old listener) before the new
+    // popover exists.
     function stylePicker(e, fid) {
       closeMenu();
+      var cx = e.clientX, cy = e.clientY;
+      setTimeout(function () { openStylePicker(cx, cy, fid); }, 0);
+    }
+
+    function openStylePicker(cx, cy, fid) {
       var f = folderById(fid) || {};
       var m = document.createElement('div');
       m.className = 'p86fx-menu p86fx-styler';
@@ -788,8 +801,8 @@
           '<button class="p86fx-iconbtn' + (!f.icon ? ' on' : '') + '" data-icon="" title="Default">\u{1F4C1}</button>' +
         '</div>';
       document.body.appendChild(m);
-      m.style.left = Math.min(e.clientX, window.innerWidth - 250) + 'px';
-      m.style.top = Math.min(e.clientY, window.innerHeight - 260) + 'px';
+      m.style.left = Math.min(cx, window.innerWidth - 250) + 'px';
+      m.style.top = Math.min(cy, window.innerHeight - 260) + 'px';
       window._p86fxMenu = m;
       m.addEventListener('click', function (ev) {
         var c = ev.target.closest('[data-color]');
