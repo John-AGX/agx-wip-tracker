@@ -87,6 +87,23 @@
       '.p86fx-menu button:hover{background:var(--hover,#23232e);}' +
       '.p86fx-menu button.danger{color:#f87171;}' +
       '.p86fx-menu .sep{height:1px;background:var(--border,#2a2a32);margin:4px 2px;}' +
+      // Folder colour + icon picker (right-click → Colour & icon…).
+      '.p86fx-styler{min-width:236px;padding:9px 10px 11px;}' +
+      '.p86fx-styler-hd{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-dim,#8b90a5);margin:2px 0 6px;}' +
+      '.p86fx-sw{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;}' +
+      '.p86fx-swatch{width:22px;height:22px;border-radius:6px;border:2px solid transparent;cursor:pointer;padding:0;flex:0 0 auto;}' +
+      '.p86fx-swatch.on{border-color:var(--text,#e4e6f0);box-shadow:0 0 0 2px rgba(0,0,0,.35) inset;}' +
+      '.p86fx-swatch-none{background:transparent;border:2px dashed var(--border,#3a3a46);position:relative;}' +
+      '.p86fx-sw-ic{margin-bottom:0;}' +
+      '.p86fx-iconbtn{width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;border-radius:7px;' +
+        'border:1px solid transparent;background:var(--surface2,#23232e);color:var(--text,#dfe2ec);cursor:pointer;padding:0;flex:0 0 auto;font-size:14px;}' +
+      '.p86fx-iconbtn:hover{border-color:var(--accent,#22d3ee);}' +
+      '.p86fx-iconbtn.on{border-color:var(--accent,#22d3ee);background:rgba(34,211,238,.14);}' +
+      '.p86fx-iconbtn .p86fx-svg{width:15px;height:15px;}' +
+      // Folder / filetype icon glyphs inside tree rows, list rows, tiles.
+      '.p86fx-fic{display:inline-flex;align-items:center;justify-content:center;}' +
+      '.p86fx-fic .p86fx-svg{width:1em;height:1em;vertical-align:-0.12em;}' +
+      '.p86fx-thumb .p86fx-fic .p86fx-svg{width:30px;height:30px;}' +
       // name dialog
       '.p86fx-modal{position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;}' +
       '.p86fx-modal-box{background:var(--surface,#1b1b24);border:1px solid var(--border,#2a2a32);border-radius:12px;padding:16px;width:min(420px,92vw);}' +
@@ -128,7 +145,76 @@
 
   function isImg(f) { return f && /^image\//i.test(f.mime_type || ''); }
   function isPdf(f) { return f && /pdf/i.test(f.mime_type || ''); }
+
+  // ── Folder + filetype appearance ─────────────────────────────────
+  // The palette offered by the folder colour picker. Deliberately small:
+  // eight distinguishable hues scan far better than a full colour wheel,
+  // and these read on both the dark and light themes.
+  var FOLDER_COLORS = [
+    { hex: '#22d3ee', name: 'Cyan' },
+    { hex: '#4f8cff', name: 'Blue' },
+    { hex: '#7f77dd', name: 'Violet' },
+    { hex: '#22c55e', name: 'Green' },
+    { hex: '#f0b429', name: 'Amber' },
+    { hex: '#f97316', name: 'Orange' },
+    { hex: '#f87171', name: 'Red' },
+    { hex: '#94a3b8', name: 'Slate' }
+  ];
+  // Icons offered for a folder — the subset of agx-icons.js that suits
+  // construction doc control, matching the taxonomy defaults the server
+  // stamps onto preloaded folders.
+  var FOLDER_ICONS = [
+    'folder', 'photos', 'scale', 'document-text', 'estimates', 'envelope',
+    'subs', 'clients', 'id-card', 'banknotes', 'edit', 'check-circle',
+    'admin', 'wrench', 'buildings', 'schedule', 'leads', 'target'
+  ];
+
+  function icoRaw(name, cls) {
+    return (window.p86Icon && name) ? window.p86Icon(name, { class: cls || 'p86fx-svg' }) : '';
+  }
+  // A folder's glyph: its chosen icon tinted by its colour, else the
+  // plain folder emoji — so an unstyled folder looks exactly as before.
+  function folderGlyph(f) {
+    var svg = icoRaw(f && f.icon);
+    if (!svg) {
+      return (f && f.color)
+        ? '<span style="color:' + esc(f.color) + '">\u{1F4C1}</span>'
+        : '\u{1F4C1}';
+    }
+    return '<span class="p86fx-fic"' + (f && f.color ? ' style="color:' + esc(f.color) + '"' : '') + '>' + svg + '</span>';
+  }
+
+  // Filetype logo. Prefers a real icon from the app's set and falls back
+  // to the original emoji when agx-icons.js isn't loaded, so this
+  // degrades rather than rendering an empty box.
+  function fileIconName(f) {
+    var mt = (f && f.mime_type) || '';
+    var name = (f && f.filename) || '';
+    if (/^image\//i.test(mt)) return 'photos';
+    if (/pdf/i.test(mt)) return 'document-text';
+    if (/sheet|excel|csv/i.test(mt)) return 'chart-bar';
+    if (/word|document/i.test(mt)) return 'document-text';
+    if (/zip|compressed|archive/i.test(mt)) return 'cube';
+    if (/^video\//i.test(mt)) return 'composer-camera';
+    if (/^audio\//i.test(mt)) return 'composer-mic';
+    if (/\.(dwg|dxf|rvt)$/i.test(name)) return 'scale';
+    return 'attachments';
+  }
+  // Per-family tint, so a folder of mixed files is scannable at a glance.
+  function fileIconColor(f) {
+    var mt = (f && f.mime_type) || '';
+    if (/^image\//i.test(mt)) return '#22c55e';
+    if (/pdf/i.test(mt)) return '#f87171';
+    if (/sheet|excel|csv/i.test(mt)) return '#22a06b';
+    if (/word|document/i.test(mt)) return '#4f8cff';
+    if (/zip|compressed|archive/i.test(mt)) return '#f0b429';
+    if (/^video\//i.test(mt)) return '#7f77dd';
+    if (/^audio\//i.test(mt)) return '#f97316';
+    return '#94a3b8';
+  }
   function fileGlyph(f) {
+    var svg = icoRaw(fileIconName(f));
+    if (svg) return '<span class="p86fx-fic" style="color:' + fileIconColor(f) + '">' + svg + '</span>';
     if (isImg(f)) return '\u{1F5BC}';
     if (isPdf(f)) return '\u{1F4C4}';
     if (/sheet|excel|csv/i.test(f.mime_type || '')) return '\u{1F4CA}';
@@ -287,7 +373,7 @@
           var caret = kids.length ? (exp ? '▾' : '▸') : '';
           html += '<div class="p86fx-tnode' + (S.cur === f.id ? ' active' : '') + '" data-fid="' + esc(f.id) + '" data-drop="' + esc(f.id) + '" draggable="true" style="padding-left:' + (6 + depth * 14) + 'px;">' +
             '<span class="p86fx-tcaret" data-caret="' + esc(f.id) + '">' + caret + '</span>' +
-            '<span class="p86fx-tlabel">\u{1F4C1} ' + esc(f.name) + '</span></div>';
+            '<span class="p86fx-tlabel">' + folderGlyph(f) + ' ' + esc(f.name) + '</span></div>';
           if (exp) walk(f.id, depth + 1);
         });
       }
@@ -344,7 +430,7 @@
       if (S.view === 'grid') {
         subs.forEach(function (f) {
           html += '<div class="p86fx-tile p86fx-folder" data-folder="' + esc(f.id) + '" data-drop="' + esc(f.id) + '" draggable="true">' +
-            '<div class="p86fx-thumb">\u{1F4C1}</div>' +
+            '<div class="p86fx-thumb">' + folderGlyph(f) + '</div>' +
             '<div class="p86fx-cap"><span class="nm">' + esc(f.name) + '</span><span class="mt">Folder</span></div></div>';
         });
         files.forEach(function (f) {
@@ -359,7 +445,7 @@
       } else {
         subs.forEach(function (f) {
           html += '<div class="p86fx-row" data-folder="' + esc(f.id) + '" data-drop="' + esc(f.id) + '" draggable="true">' +
-            '<span class="ck-spacer"></span><span class="ic">\u{1F4C1}</span>' +
+            '<span class="ck-spacer"></span><span class="ic">' + folderGlyph(f) + '</span>' +
             '<span class="nm"><span class="fn">' + esc(f.name) + '</span></span>' +
             '<span class="meta">Folder</span><span class="meta"></span></div>';
         });
@@ -669,9 +755,76 @@
       }
       showMenu(e, items);
     }
+    // Persist a folder's appearance and repaint. Patch keys are
+    // present-only, so setting a colour never clears the icon.
+    function styleFolder(fid, patch) {
+      return api().fileFolders.update(S.et, S.eid, fid, patch)
+        .then(load)
+        .catch(function (er) { toast((er && er.message) || 'Could not restyle that folder', 'error'); });
+    }
+
+    // Swatch + icon picker. A popover rather than a prompt() — picking a
+    // colour by typing a hex code is not a thing anyone wants to do.
+    function stylePicker(e, fid) {
+      closeMenu();
+      var f = folderById(fid) || {};
+      var m = document.createElement('div');
+      m.className = 'p86fx-menu p86fx-styler';
+      m.innerHTML =
+        '<div class="p86fx-styler-hd">Colour</div>' +
+        '<div class="p86fx-sw">' +
+          FOLDER_COLORS.map(function (c) {
+            return '<button class="p86fx-swatch' + (f.color === c.hex ? ' on' : '') + '" data-color="' + esc(c.hex) +
+              '" title="' + esc(c.name) + '" style="background:' + esc(c.hex) + '"></button>';
+          }).join('') +
+          '<button class="p86fx-swatch p86fx-swatch-none' + (!f.color ? ' on' : '') + '" data-color="" title="No colour"></button>' +
+        '</div>' +
+        '<div class="p86fx-styler-hd">Icon</div>' +
+        '<div class="p86fx-sw p86fx-sw-ic">' +
+          FOLDER_ICONS.map(function (n) {
+            return '<button class="p86fx-iconbtn' + (f.icon === n ? ' on' : '') + '" data-icon="' + esc(n) +
+              '" title="' + esc(n) + '">' + (icoRaw(n) || '?') + '</button>';
+          }).join('') +
+          '<button class="p86fx-iconbtn' + (!f.icon ? ' on' : '') + '" data-icon="" title="Default">\u{1F4C1}</button>' +
+        '</div>';
+      document.body.appendChild(m);
+      m.style.left = Math.min(e.clientX, window.innerWidth - 250) + 'px';
+      m.style.top = Math.min(e.clientY, window.innerHeight - 260) + 'px';
+      window._p86fxMenu = m;
+      m.addEventListener('click', function (ev) {
+        var c = ev.target.closest('[data-color]');
+        var i = ev.target.closest('[data-icon]');
+        if (!c && !i) return;
+        ev.stopPropagation();
+        // Keep the popover open so colour and icon can be set in one go;
+        // the swatches restyle live as they are clicked.
+        if (c) {
+          m.querySelectorAll('[data-color]').forEach(function (b) { b.classList.remove('on'); });
+          c.classList.add('on');
+          styleFolder(fid, { color: c.getAttribute('data-color') || null });
+        } else {
+          m.querySelectorAll('[data-icon]').forEach(function (b) { b.classList.remove('on'); });
+          i.classList.add('on');
+          styleFolder(fid, { icon: i.getAttribute('data-icon') || null });
+        }
+      });
+      // Same deferred close-on-outside-click contract as showMenu.
+      setTimeout(function () { document.addEventListener('click', closeMenu, { once: true }); }, 0);
+    }
+
     function folderMenu(e, fid) {
       var items = [{ key: 'open', label: 'Open', run: function () { S.cur = fid; S.sel = {}; render(); } }];
       if (S.canEdit) {
+        items.push({ sep: true });
+        items.push({ key: 'new', label: 'New subfolder…', run: function () {
+          askName('New subfolder', '').then(function (name) {
+            if (!name) return;
+            api().fileFolders.create(S.et, S.eid, { name: name, parent_id: fid })
+              .then(function () { S.expanded[fid] = true; return load(); })
+              .catch(function (er) { toast((er && er.message) || 'Could not create that folder', 'error'); });
+          });
+        } });
+        items.push({ key: 'style', label: 'Colour & icon…', run: function () { stylePicker(e, fid); } });
         items.push({ sep: true });
         items.push({ key: 'rename', label: 'Rename…', run: function () {
           var f = folderById(fid);

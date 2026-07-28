@@ -1364,6 +1364,19 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_attachments_folder_id
       ON attachments (folder_id);
 
+    -- Per-folder appearance (2026-07-28). A doc-control tree of 15
+    -- identically-grey folders is hard to scan; color and icon let the
+    -- ones you reach for daily (Photos, Contracts, Permits) read at a
+    -- glance. Purely cosmetic — nothing keys behavior off them, so a NULL
+    -- just falls back to the default folder glyph.
+    --   color  '#rrggbb', validated route-side (it lands in a style attr)
+    --   icon   an agx-icons.js name, validated route-side
+    -- The default/preloaded folders get an icon stamped at seed time from
+    -- the taxonomy map in services/file-folders.js, so a freshly-seeded
+    -- job tree is already legible before anyone customizes anything.
+    ALTER TABLE file_folders ADD COLUMN IF NOT EXISTS color TEXT;
+    ALTER TABLE file_folders ADD COLUMN IF NOT EXISTS icon  TEXT;
+
     -- Domain rebrand: rewrite attachment URLs from the old
     -- wip-agxco.com host to attachments.project86.net. Existing rows
     -- baked the host into thumb_url / web_url / original_url at

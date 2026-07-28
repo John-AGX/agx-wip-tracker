@@ -86,8 +86,10 @@ router.post('/:entityType/:entityId',
   }
 );
 
-// PATCH /api/file-folders/:entityType/:entityId/:folderId — rename and/or
-// move. Body: { name? } and/or { parent_id? } (parent_id null = root).
+// PATCH /api/file-folders/:entityType/:entityId/:folderId — rename, move
+// and/or restyle. Body: { name? }, { parent_id? } (null = root),
+// { color? } ('#rrggbb' or null to clear), { icon? } (an agx-icons.js
+// name, or null to clear).
 router.patch('/:entityType/:entityId/:folderId',
   requireAuth,
   requireDynamicCapability(req => entityTypeOk(req.params.entityType) ? writeCapForEntity(req.params.entityType) : null),
@@ -103,8 +105,24 @@ router.patch('/:entityType/:entityId/:folderId',
       if (typeof b.name === 'string' && b.name.trim()) {
         path = await ff.renameFolder(entityType, entityId, folderId, b.name);
       }
-      if (path === undefined) return res.status(400).json({ error: 'Nothing to update (provide name and/or parent_id)' });
-      res.json({ ok: true, path });
+      // Appearance. Present-key semantics, so { color: null } clears the
+      // color and leaves the icon alone. Both are validated in the service
+      // — the color lands in a style attribute and the icon in a lookup,
+      // so neither is ever stored unvalidated.
+      let folder = null;
+      const style = {};
+      ['color', 'icon'].forEach(function (k) {
+        if (Object.prototype.hasOwnProperty.call(b, k)) style[k] = b[k];
+      });
+      if (Object.keys(style).length) {
+        folder = await ff.setFolderStyle(entityType, entityId, folderId, style);
+        if (!folder) return res.status(404).json({ error: 'Folder not found' });
+        if (path === undefined) path = folder.path;
+      }
+      if (path === undefined) {
+        return res.status(400).json({ error: 'Nothing to update (provide name, parent_id, color and/or icon)' });
+      }
+      res.json({ ok: true, path: path, folder: folder });
     } catch (e) {
       console.error('PATCH /api/file-folders error:', e);
       res.status(400).json({ error: (e && e.message) || 'Could not update folder' });
