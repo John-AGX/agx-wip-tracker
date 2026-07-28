@@ -506,7 +506,15 @@
       lsSet('railHidden', _state.railHidden ? '1' : '0');
       body.classList.toggle('rail-off', _state.railHidden);
     });
-    pane.querySelector('[data-keys]').addEventListener('click', showShortcutHelp);
+    // stopPropagation is required, not cosmetic: a document-level click
+    // listener closes any open menu, so without this the very click that
+    // opens the cheatsheet bubbles up and closes it again. (The '?' key
+    // path has no click and was unaffected, which is what made this show
+    // up only on the button.)
+    pane.querySelector('[data-keys]').addEventListener('click', function (e) {
+      e.stopPropagation();
+      showShortcutHelp();
+    });
     wireSplitters();
     wireShortcuts();
 
