@@ -617,12 +617,27 @@
             try { localStorage.setItem(ACCORDION_LS_KEY, JSON.stringify(state)); }
             catch (e) { /* localStorage unavailable — degrade silently */ }
         }
+        // Some accordion sections have their children filled in by another
+        // module rather than by markup. Expanding one has to ASK for its
+        // content: My Files used to expand an EMPTY container on every tab
+        // except My Files itself (its list was only built when that page
+        // painted), which read as a broken dropdown.
+        function primeAccordionChildren(parent, key) {
+            if (!parent) return;
+            var slot = parent.querySelector('.app-nav-children');
+            if (!slot || slot.children.length) return;   // already populated
+            if (key === 'myfiles' && window.myFiles && window.myFiles.syncSidebarFolders) {
+                // Never let a fetch failure block the toggle itself.
+                try { window.myFiles.syncSidebarFolders(); } catch (e) { /* no-op */ }
+            }
+        }
         function setSidebarAccordionExpanded(parent, expanded) {
             if (!parent) return;
             parent.classList.toggle('expanded', !!expanded);
             var caret = parent.querySelector('.app-nav-caret');
             if (caret) caret.setAttribute('aria-expanded', expanded ? 'true' : 'false');
             var key = parent.getAttribute('data-accordion');
+            if (expanded) primeAccordionChildren(parent, key);
             if (key) {
                 var st = loadAccordionState();
                 st[key] = !!expanded;
@@ -640,6 +655,9 @@
                              : (key && key in defaults) ? defaults[key]
                              : false;
                 parent.classList.toggle('expanded', expanded);
+                // Restored-from-localStorage sections need priming too —
+                // otherwise a section the user left open comes back empty.
+                if (expanded) primeAccordionChildren(parent, key);
                 var caret = parent.querySelector('.app-nav-caret');
                 if (!caret) return;
                 caret.setAttribute('aria-expanded', expanded ? 'true' : 'false');

@@ -87,6 +87,10 @@ function p86Ask(message, opts) {
     loading: false,
     error: null
   };
+  // In-flight guard for the self-priming sidebar sync (see the exported
+  // syncSidebarFolders at the bottom of this file). Holds the promise of
+  // the current prime so repeated accordion clicks coalesce into one.
+  var _sidebarPriming = null;
 
   // ── Contextual sidebar state (My Files folder rail → #app-sidebar) ──
   // On desktop the folder rail is relocated out of the page and into the
@@ -1280,12 +1284,54 @@ function p86Ask(message, opts) {
     // longer needs the My Files __printouts__ virtual folder.
     renderPrintoutsInto: renderPrintoutsList,
     quickPhoto: quickPhoto,
-    // Exposed so sidebar / other modules can trigger a re-sync of the
-    // accordion children without forcing a full paint() of the page.
+    // Exposed so the sidebar / other modules can re-sync the accordion
+    // children without forcing a full paint() of the page.
+    //
+    // SELF-PRIMING (bug fix): the My Files accordion lives in the GLOBAL
+    // sidebar, but this list used to be filled only by paint() — which
+    // runs only when the My Files page itself renders. So on any other
+    // tab the caret expanded an empty container and the dropdown looked
+    // broken. It now fetches what it needs on demand.
+    //
+    // It also reads the real FOLDER TREE (/api/file-folders/user/:id),
+    // not just the folders implied by existing files. Folders derived
+    // from attachment paths can't include an empty one, so a brand-new or
+    // default-seeded folder was invisible until something was uploaded
+    // into it. The tree endpoint lazy-seeds the org's defaults, so the
+    // preloaded structure shows up here too.
     syncSidebarFolders: function() {
-      var bucket = groupByFolder(_state.files || []);
-      var folders = Object.keys(bucket);
-      syncSidebarFolders(folders, bucket);
+      var slot = document.querySelector('.app-nav-parent[data-accordion="myfiles"] .app-nav-children');
+      if (!slot) return Promise.resolve();
+      var uid = currentUserId();
+      if (!uid) return Promise.resolve();
+
+      function paintFrom(folderRows) {
+        var bucket = groupByFolder(_state.files || []);
+        // Union: every real folder row, plus any legacy folder string that
+        // still has files but no row yet. Neither source alone is complete.
+        var names = {};
+        (folderRows || []).forEach(function(r) { if (r && r.path) names[r.path] = true; });
+        Object.keys(bucket).forEach(function(f) { names[f] = true; });
+        if (!Object.keys(names).length) names.general = true;
+        syncSidebarFolders(Object.keys(names), bucket);
+      }
+
+      // One in-flight prime at a time — an accordion click while the first
+      // fetch is running must not fire a second pair of requests.
+      if (_sidebarPriming) return _sidebarPriming;
+      var needFiles = !_state.files || !_state.files.length;
+      _sidebarPriming = Promise.all([
+        needFiles ? fetchFiles().catch(function() {}) : Promise.resolve(),
+        (window.p86Api && window.p86Api.fileFolders
+          ? window.p86Api.fileFolders.tree('user', String(uid)).catch(function() { return null; })
+          : Promise.resolve(null))
+      ]).then(function(res) {
+        paintFrom((res[1] && res[1].folders) || []);
+      }).catch(function() {
+        // Never leave the accordion stuck: fall back to whatever is cached.
+        paintFrom([]);
+      }).then(function() { _sidebarPriming = null; });
+      return _sidebarPriming;
     }
   };
   // Context-free entry point for the header "+" menu's "New Photo" item.
