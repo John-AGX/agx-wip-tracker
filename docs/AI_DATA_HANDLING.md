@@ -25,7 +25,7 @@ The AI crew (86, the Assistant, the Scribe) is sent only what a turn requires:
 
 - Project 86 uses Anthropic's **commercial API** under its commercial terms.
 - **API inputs and outputs are not used to train Anthropic's models.** This is the material point for the platform's trade-secret position: submitting cost data or prompts to the API does not feed a public model.
-- **Zero-retention** processing is available on request for the API tier and is the target configuration.
+- **Zero-retention** processing is available on request for the API tier. **It is not yet enabled on this account** — requesting and confirming it is a Stage-1 item (§8). Until then, standard commercial-terms retention applies.
 - Anthropic's terms, not this document, are the controlling instrument; this statement describes how the platform uses the service.
 
 ## 4. What Project 86 retains itself
@@ -51,7 +51,7 @@ The platform holds customer PII (names, addresses, contact details), GPS-tagged 
 
 ## 7. Controls
 
-- **Per-organization scoping** on every AI read path; the model cannot be steered into another tenant's data.
+- **Per-organization scoping** on the AI read and write paths — reads are org-predicated and the client-directory writers fail closed without a resolved organization. One known residual: rows carrying a NULL organization (legacy records) remain shared across tenants by design, which must be resolved before a second tenant is onboarded (see `KNOWN_ISSUES.md` INT-2).
 - **Capability gating** — AI write actions run under the requesting user's permissions.
 - **Approval gate** — deletions, system changes, and outbound sends require explicit human approval before they execute.
 - **Audit trail** — privileged actions are recorded in an append-only admin audit log.

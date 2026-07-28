@@ -13,16 +13,16 @@
 | OPS-1 | **No independent off-platform database backup.** Railway holds same-vendor managed snapshots; there is no separate dump, and no restore has ever been tested. | **P1** | Worst case: loss of the pilot dataset. Buildertrend remains system-of-record, so the business survives — the P86 state would not. | Stage 1 — nightly `pg_dump` → separate R2 bucket + weekly second-provider copy; **first restore test ≤ 2026-08-02**. |
 | OPS-2 | **No uptime/health monitoring.** Detection today is "a user notices." | **P1** | An outage could run unobserved. | Stage 1 — `/healthz` shipped (this build); external uptime ping + alerting to follow. |
 | OPS-3 | **No AI spend/balance alert.** A prepaid balance hitting zero silently stops the AI crew (this has happened once — the $0.30 lapse). | **P1** | AI features stop mid-work with no page. | Stage 1 — provider billing threshold alert + an in-app spend-threshold alert. |
-| OPS-4 | **No credential escrow.** Every vendor account recovers to the founder's email; no second recovery contact. | **P1** | Single point of failure for infrastructure access. | Stage 1 — shared vault + named second contact. |
+| OPS-4 | **No credential escrow.** Infrastructure credentials are not held in a shared vault, and no second recovery contact is named. | **P1** | Single point of failure for infrastructure access if the operator is unavailable. | Stage 1 — shared vault + named second contact. |
 | OPS-5 | **No customer-facing Terms of Service / Privacy Policy**, and no written data-classification + retention policy. | P2 | Needed before wider or external use. | Stage 3. |
 
 ## Open — correctness & data integrity
 
 | # | Issue | Severity | Impact | Plan |
 |---|---|---|---|---|
-| INT-1 | **No reconciliation gate against QuickBooks / Buildertrend.** Job costs are not tied out to an external source with a tolerance and a sign-off. | **P1** | Given AGX's ~$40K historical WIP-workbook variance, an undetected drift is plausible. | Stage 2 — first deliverable. |
-| INT-2 | **Client-directory tool org predicate.** `execClientDirectoryTool` mutations were identified in the write-path audit as lacking an `organization_id` predicate. | **P1** | Cross-tenant risk *in a multi-tenant future*; contained today because the platform runs a single pilot org. | Next write-path pass (`docs/write-path-audit.md` §3). |
-| INT-3 | **Payload path ignores `is_locked`.** A sold estimate is immutable in the UI but can still be mutated via the AI payload path. | P2 | A locked/sold estimate could be altered after the fact. | Next write-path pass. |
+| INT-1 | **No reconciliation gate against QuickBooks / Buildertrend.** Job costs are not tied out to an external source with a tolerance and a sign-off. | **P1** | A historical variance in the legacy WIP workbooks means undetected drift is plausible. | Stage 2 — first deliverable. |
+| INT-2 | **NULL-organization rows are shared across tenants by design.** The tenancy predicate is `(organization_id = $N OR organization_id IS NULL)`, so legacy rows with a NULL org remain readable/writable by every tenant. | P2 | A deliberate single-tenant compatibility choice today; a real hazard before onboarding a second tenant. | Backfill org ids and drop the NULL branch — required before Stage 4. |
+| INT-3 | **Check-then-write in the client-directory tools.** The gating `SELECT` carries the org predicate but the terminal `UPDATE` matches on id alone. | P3 | Not exploitable as written (the gate fails closed), but it is the pattern that regresses silently if the gate is ever moved. | Fold the predicate into the write statement. |
 | INT-4 | **No over-billing guard.** A vendor bill's amount has no enforced relationship to its own lines or to its PO. | P2 | Over-billing is not caught by the system. | Stage 2 (with the accounting spine). |
 | INT-5 | **Two write paths per entity** (REST + AI payload dispatcher) for ~12 entity types. Rules added to a REST route are not automatically gained by the AI path. | P2 | Failure mode is a *successful-looking* apply. Mitigated by the `dispatchAssembly` service pattern, which is being extended. | Ongoing — see `docs/write-path-audit.md`. |
 | INT-6 | **`emit_payload_file` description truncation** (1024 chars) means much of the payload grammar never reaches the model. | P2 | The AI writes a narrower grammar than the system supports. | Scheduled with the agent-topology work. |
@@ -55,6 +55,10 @@
 - **Dead confirm/approve dialogs in the installed PWA** (62 sites) → fixed.
 - **`getJobWIP` drift** — a client/server duplicate quoting different margin math → ported server-side (`b2fad44`), pinned by differential assertions.
 - **Double-apply on payloads** → closed with an atomic claim + boot-time reset of stranded claims.
+- **Client-directory AI writes lacked an org predicate** → closed ("P0-1 extended", `server/routes/ai-routes.js`): every gating `SELECT` is org-scoped and the writers fail closed without a resolved organization.
+- **Payload path could edit a locked (sold) estimate** → closed; `server/services/payload-dispatcher.js` now hard-throws on a locked estimate.
+
+*Both of the above were listed as open in the first cut of this register, sourced from a point-in-time audit document rather than the current code. They were verified against the live source on 2026-07-27 and corrected. Verify against code, not against an older audit.*
 
 ---
 

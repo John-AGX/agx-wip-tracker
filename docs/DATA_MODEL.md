@@ -18,14 +18,14 @@
 
 | Table | Columns | References |
 |---|---|---|
-| `users` | id, email, password_hash, name, role, active, notification_prefs, created_at, updated_at | — |
-| `organizations` | id, slug, name, description, identity_body, settings, created_at, updated_at, archived_at | — |
+| `users` | id, email, password_hash, name, role, active, notification_prefs, created_at, updated_at, last_seen_at, phone_number, timezone, ai_host_agent_key, title, organization_id, sub_id, inbound_email_key | `organizations`, `subs` |
+| `organizations` | id, slug, name, description, identity_body, settings, created_at, updated_at, archived_at, branding, timezone, research_ingest_token, plan_key, plan_status, trial_ends_at, billing | — |
 | `roles` | name, label, description, builtin, capabilities, created_at, updated_at | — |
 | `org_invitations` | id, email, org_name, token, invited_by_user_id, expires_at, accepted_at, accepted_org_id, accepted_user_id, created_at | `users`, `organizations` |
 | `job_access` | job_id, user_id, access_level | `jobs`, `users` |
-| `subs` | id, name, trade, contact_name, phone, email, license_no, w9_on_file, w9_expires, insurance_expires, parent_sub_id, status, notes, created_at, updated_at | `subs` |
+| `subs` | id, name, trade, contact_name, phone, email, license_no, w9_on_file, w9_expires, insurance_expires, parent_sub_id, status, notes, created_at, updated_at, organization_id, division, primary_contact_first, primary_contact_last, business_phone, cell_phone, fax, street_address, city, state, zip, payment_email, payment_hold, preferences, notification_prefs | `subs`, `organizations` |
 | `sub_invites` | id, sub_id, email, token, created_by, created_at, expires_at, used_at, used_user_id | `subs`, `users` |
-| `sub_certificates` | id, sub_id, cert_type, attachment_id, expiration_date, reminder_days, reminder_direction, reminder_limit, created_at, updated_at | `subs`, `attachments` |
+| `sub_certificates` | id, sub_id, cert_type, attachment_id, expiration_date, reminder_days, reminder_direction, reminder_limit, created_at, updated_at, organization_id | `subs`, `attachments`, `organizations` |
 | `admin_audit_log` | id, created_at, actor_user_id, actor_email, actor_role, action, target_type, target_id, organization_id, actor_org_id, detail, ip | `users`, `organizations` |
 | `usage_counters` | organization_id, metric, period, count, updated_at | `organizations` |
 | `plans` | id, organization_id, name, base_kind, base_attachment_id, width, height, grid_spacing, pages, totals, entity_type, entity_id, thumb_url, created_by, created_at, updated_at, archived_at | `organizations`, `attachments`, `users` |
@@ -36,9 +36,9 @@
 
 | Table | Columns | References |
 |---|---|---|
-| `leads` | id, client_id, title, street_address, city, state, zip, status, confidence, projected_sale_date, estimated_revenue_low, estimated_revenue_high, source, project_type, salesperson_id, property_name, gate_code, market, notes, job_id, created_by, created_at, updated_at | `clients`, `users`, `jobs` |
-| `estimates` | id, owner_id, data, created_at, updated_at | `users` |
-| `clients` | id, parent_client_id, name, client_type, activation_status, first_name, last_name, email, phone, cell, address, city, state, zip, company_name, community_name, market, property_address, property_phone, website, gate_code, additional_pocs, community_manager, cm_email, cm_phone, maintenance_manager, mm_email, mm_phone, notes, created_at, updated_at | `clients` |
+| `leads` | id, client_id, title, street_address, city, state, zip, status, confidence, projected_sale_date, estimated_revenue_low, estimated_revenue_high, source, project_type, salesperson_id, property_name, gate_code, market, notes, job_id, created_by, created_at, updated_at, organization_id, geocode_lat, geocode_lng, geocode_status, geocode_at, status_changed_at, converted_at, lost_at, lost_reason, next_followup_at | `clients`, `users`, `jobs`, `organizations` |
+| `estimates` | id, owner_id, data, created_at, updated_at, organization_id, geocode_lat, geocode_lng, geocode_status, geocode_at, geocode_addr, is_locked, sent_at, viewed_at, accepted_at, sent_count, approval_status, sent_to, sent_method, approved_at, approved_by, approval_method, declined_at, decline_reason, signature, sign_token | `users`, `organizations` |
+| `clients` | id, parent_client_id, name, client_type, activation_status, first_name, last_name, email, phone, cell, address, city, state, zip, company_name, community_name, market, property_address, property_phone, website, gate_code, additional_pocs, community_manager, cm_email, cm_phone, maintenance_manager, mm_email, mm_phone, notes, created_at, updated_at, organization_id, salutation, short_name, agent_notes | `clients`, `organizations` |
 | `lead_graphs` | lead_id, data, updated_at | `leads` |
 | `deal_memory` | lineage_root, root_type, organization_id, numbers, numbers_stage, numbers_at, notes, created_at, updated_at | `organizations` |
 | `payload_templates` | id, organization_id, created_by_user_id, name, description, icon, parameters, ops_template, origin_payload_id, is_pinned, pinned_by_user_id, use_count, last_used_at, archived, created_at | `organizations`, `users`, `payloads` |
@@ -48,62 +48,62 @@
 
 | Table | Columns | References |
 |---|---|---|
-| `jobs` | id, owner_id, data, created_at, updated_at | `users` |
-| `job_change_orders` | id, job_id, owner_id, status, co_number, data, approved_at, approved_by, linked_node_id, created_at, updated_at | `jobs`, `users` |
+| `jobs` | id, owner_id, data, created_at, updated_at, client_id, geocode_lat, geocode_lng, geocode_status, geocode_address, geocode_at, organization_id, lead_id, estimate_id | `users`, `organizations`, `leads`, `estimates` |
+| `job_change_orders` | id, job_id, owner_id, status, co_number, data, approved_at, approved_by, linked_node_id, created_at, updated_at, organization_id, is_locked | `jobs`, `users`, `organizations` |
 | `job_purchase_orders` | id, job_id, organization_id, owner_id, sub_id, status, po_number, data, is_locked, approved_at, approved_by, created_at, updated_at | `jobs`, `organizations`, `users` |
 | `job_vendor_bills` | id, job_id, organization_id, owner_id, po_id, sub_id, status, bill_number, amount, bill_date, due_date, data, approved_at, approved_by, created_at, updated_at | `jobs`, `organizations`, `users` |
-| `job_subs` | id, job_id, sub_id, level, building_id, phase_id, contract_amt, billed_to_date, status, notes, created_at, updated_at | `jobs`, `subs` |
+| `job_subs` | id, job_id, sub_id, level, building_id, phase_id, contract_amt, billed_to_date, status, notes, created_at, updated_at, organization_id | `jobs`, `subs`, `organizations` |
 | `job_workflow_items` | id, organization_id, job_id, type, number, subject, body, status, due_date, responsible_user_id, metadata, created_by_user_id, closed_at, archived_at, created_at, updated_at | `organizations`, `jobs`, `users` |
-| `job_reports` | id, job_id, title, summary, sections, created_by, created_at, updated_at | `jobs`, `users` |
+| `job_reports` | id, job_id, title, summary, sections, created_by, created_at, updated_at, entity_type, entity_id, cover_page, template_type, style_pack | `jobs`, `users` |
 | `invoices` | id, organization_id, owner_id, job_id, client_id, pay_application_id, invoice_number, status, issue_date, due_date, terms, subtotal, tax_pct, tax_amount, retainage_amount, total, amount_paid, data, sent_at, paid_at, created_at, updated_at | `organizations`, `users`, `jobs`, `pay_applications` |
 | `payments` | id, organization_id, owner_id, client_id, payment_date, amount, method, reference, data, created_at, updated_at | `organizations`, `users` |
 | `pay_applications` | id, job_id, organization_id, owner_id, app_no, status, period_to, retainage_pct, data, certified_at, certified_by, created_at, updated_at | `jobs`, `organizations`, `users` |
-| `qb_cost_lines` | id, job_id, vendor, txn_date, txn_type, num, account, account_type, klass, memo, amount, linked_node_id, raw_data, source_file, report_date, imported_at, created_at, updated_at | `jobs` |
+| `qb_cost_lines` | id, job_id, vendor, txn_date, txn_type, num, account, account_type, klass, memo, amount, linked_node_id, raw_data, source_file, report_date, imported_at, created_at, updated_at, organization_id, bucket, building_id | `jobs`, `organizations` |
 | `cost_categories` | id, organization_id, name, position, archived, created_by, created_at, updated_at | `organizations` |
-| `receipts` | id, organization_id, ref, entity_type, entity_id, amount, vendor, cost_code, is_presale, notes, attachment_id, status, purchased_at, entered_by, created_at, updated_at | `organizations` |
+| `receipts` | id, organization_id, ref, entity_type, entity_id, amount, vendor, cost_code, is_presale, notes, attachment_id, status, purchased_at, entered_by, created_at, updated_at, tags, sub_id, payment_method, reimbursable, reimburse_to, is_billable, invoice_no | `organizations` |
 | `receipt_ocr_feedback` | id, organization_id, receipt_id, ocr_vendor, final_vendor, vendor_ok, ocr_date, final_date, date_ok, ocr_cost_code, final_cost_code, cost_code_ok, ocr_amount, final_amount, amount_ok, created_at | `organizations` |
-| `node_graphs` | job_id, data, updated_at | `jobs` |
+| `node_graphs` | job_id, data, updated_at, organization_id | `jobs`, `organizations` |
 | `compliance_items` | id, organization_id, entity_type, entity_id, type, status, title, effective_date, expiration_date, file_attachment_id, metadata, notes, created_by_user_id, archived_at, created_at, updated_at | `organizations`, `attachments`, `users` |
 
 ## Cost intelligence — assemblies & materials
 
 | Table | Columns | References |
 |---|---|---|
-| `assemblies` | id, organization_id, code, name, description, trade, category, unit, source, is_hidden, notes, created_by, created_at, updated_at | `organizations`, `users` |
-| `assembly_items` | id, assembly_id, sort_order, kind, material_id, child_assembly_id, description, qty_per_unit, unit, unit_cost, cost_code, waste_pct, notes, created_at | `assemblies`, `materials` |
+| `assemblies` | id, organization_id, code, name, description, trade, category, unit, source, is_hidden, notes, created_by, created_at, updated_at, params, system, variant | `organizations`, `users` |
+| `assembly_items` | id, assembly_id, sort_order, kind, material_id, child_assembly_id, description, qty_per_unit, unit, unit_cost, cost_code, waste_pct, notes, created_at, rationale, qty_formula | `assemblies`, `materials` |
 | `assembly_tuning_log` | id, organization_id, assembly_id, item_desc, field, old_value, new_value, reason, evidence, source, changed_by, created_at | `organizations`, `assemblies`, `users` |
 | `assembly_research` | id, organization_id, created_by, status, title, trade, scope, findings, raw_text, source_url, notes, consumed_assembly_id, created_at, consumed_at | `organizations`, `users`, `assemblies` |
 | `assembly_trades` | id, organization_id, code, name, sort_order, archived_at, created_by, created_at, updated_at | `organizations`, `users` |
 | `assembly_systems` | id, organization_id, trade_code, code, name, default_unit, sort_order, archived_at, created_by, created_at, updated_at | `organizations`, `users` |
 | `assembly_variants` | id, organization_id, trade_code, system_code, code, name, note, sort_order, archived_at, created_by, created_at, updated_at | `organizations`, `users` |
-| `materials` | id, vendor, sku, internet_sku, raw_description, description, hd_department, hd_class, hd_subclass, agx_subgroup, category, unit, last_unit_price, avg_unit_price, min_unit_price, max_unit_price, total_qty, purchase_count, first_seen, last_seen, is_hidden, manual_override, notes, created_at, updated_at | — |
-| `material_purchases` | id, material_id, purchase_date, store_number, transaction_id, job_name, quantity, unit_price, net_unit_price, is_return, source_file, imported_at | `materials` |
+| `materials` | id, vendor, sku, internet_sku, raw_description, description, hd_department, hd_class, hd_subclass, agx_subgroup, category, unit, last_unit_price, avg_unit_price, min_unit_price, max_unit_price, total_qty, purchase_count, first_seen, last_seen, is_hidden, manual_override, notes, created_at, updated_at, organization_id, price_basis, price_rationale, price_source_url, researched_price, researched_at, researched_by, needs_pricing, size_nominal | `organizations`, `users` |
+| `material_purchases` | id, material_id, purchase_date, store_number, transaction_id, job_name, quantity, unit_price, net_unit_price, is_return, source_file, imported_at, organization_id | `materials`, `organizations` |
 | `user_material_favorites` | user_id, material_id, created_at | `users`, `materials` |
 
 ## AI crew — sessions, memory & training
 
 | Table | Columns | References |
 |---|---|---|
-| `ai_messages` | id, estimate_id, user_id, role, content, model, input_tokens, output_tokens, photos_included, created_at | `users` |
-| `ai_sessions` | id, agent_key, entity_type, entity_id, user_id, anthropic_session_id, anthropic_agent_id, created_at, last_used_at, archived_at | `users` |
+| `ai_messages` | id, estimate_id, user_id, role, content, model, input_tokens, output_tokens, photos_included, created_at, organization_id, entity_type, tool_use_count, tool_uses, cache_creation_input_tokens, cache_read_input_tokens, packs_loaded, inline_image_blocks, output_files, session_id | `users`, `organizations`, `ai_sessions` |
+| `ai_sessions` | id, agent_key, entity_type, entity_id, user_id, anthropic_session_id, anthropic_agent_id, created_at, last_used_at, archived_at, label, summary, pinned, turn_count, total_cost_usd, effort_override, session_kind, last_compacted_at, lineage_root | `users` |
 | `ai_memories` | id, organization_id, user_id, scope, kind, topic, body, source, importance, created_at, updated_at, last_recalled_at, archived_at | `organizations`, `users` |
 | `ai_subtasks` | id, parent_session_id, organization_id, user_id, agent_key, depth, title, prompt, status, result, error, anthropic_session_id, anthropic_agent_id, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, started_at, finished_at, created_at | `ai_sessions`, `organizations`, `users` |
 | `ai_replays` | id, conversation_key, from_index, model_override, effort_override, system_prefix, run_at, run_by, input_tokens, output_tokens, duration_ms, response_text, tool_calls, error | `users` |
-| `ai_watches` | id, organization_id, created_by_user_id, name, description, cadence, time_of_day_utc, prompt, enabled, last_fired_at, next_fire_at, created_at, updated_at, archived_at | `organizations`, `users` |
+| `ai_watches` | id, organization_id, created_by_user_id, name, description, cadence, time_of_day_utc, prompt, enabled, last_fired_at, next_fire_at, created_at, updated_at, archived_at, kind, agent_key, scope_filter, last_scan_at, model, schedule_hours | `organizations`, `users` |
 | `ai_watch_runs` | id, watch_id, organization_id, triggered_at, started_at, finished_at, status, result, error, anthropic_session_id, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens | `ai_watches`, `organizations` |
 | `ai_evals` | id, name, kind, description, fixture, expected_signals, created_at, updated_at | — |
-| `ai_eval_runs` | id, eval_id, run_at, run_by, model, input_tokens, output_tokens, duration_ms, passed, score, response_text, tool_calls, error | `ai_evals`, `users` |
+| `ai_eval_runs` | id, eval_id, run_at, run_by, model, input_tokens, output_tokens, duration_ms, passed, score, response_text, tool_calls, error, effort | `ai_evals`, `users` |
 | `ai_training_examples` | id, organization_id, task, source_kind, source_id, input, model_output, human_final, accepted, model, created_at | `organizations` |
-| `agent_jobs` | id, organization_id, user_id, session_id, agent_key, status, title, prompt, payload, pause_question, pause_kind, pause_answer, result, error, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, created_at, started_at, paused_at, completed_at, updated_at, notified_at | `organizations`, `users`, `ai_sessions` |
-| `agent_reference_links` | id, title, url, description, enabled, max_rows, last_fetched_at, last_fetch_status, last_fetch_error, last_fetched_text, last_fetched_row_count, created_at, updated_at | — |
+| `agent_jobs` | id, organization_id, user_id, session_id, agent_key, status, title, prompt, payload, pause_question, pause_kind, pause_answer, result, error, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, created_at, started_at, paused_at, completed_at, updated_at, notified_at, seen_at | `organizations`, `users`, `ai_sessions` |
+| `agent_reference_links` | id, title, url, description, enabled, max_rows, last_fetched_at, last_fetch_status, last_fetch_error, last_fetched_text, last_fetched_row_count, created_at, updated_at, inject_mode, organization_id | `organizations` |
 | `agent_skills_versions` | id, saved_at, saved_by, value, comment | `users` |
-| `managed_agent_registry` | agent_key, anthropic_agent_id, model, tool_count, skill_count, registered_at, updated_at | — |
+| `managed_agent_registry` | agent_key, anthropic_agent_id, model, tool_count, skill_count, registered_at, updated_at, organization_id | `organizations` |
 | `managed_agent_skills` | agent_key, skill_id, position, enabled, created_at | — |
 | `managed_environment_registry` | env_key, anthropic_environment_id, networking, registered_at, updated_at | — |
 | `staff_agents` | id, organization_id, agent_key, display_name, tier, role_card, system_prompt, tool_keys, skill_pack_ids, trigger_rules, routing_hints, spawned_at, spawned_by, archived_at | `organizations` |
 | `org_memory` | id, organization_id, name, body, sort_order, created_at, updated_at, archived_at | `organizations` |
 | `org_mcp_servers` | id, organization_id, name, url, authorization_token, description, enabled, created_at, updated_at, archived_at | `organizations` |
-| `payloads` | id, organization_id, user_id, session_id, parent_message_id, source, emitting_agent_key, filename, file_content, targets, title, summary, rationale, template_id, status, applied_at, apply_summary, apply_error, created_at, expires_at | `organizations`, `users`, `ai_sessions`, `ai_messages` |
+| `payloads` | id, organization_id, user_id, session_id, parent_message_id, source, emitting_agent_key, filename, file_content, targets, title, summary, rationale, template_id, status, applied_at, apply_summary, apply_error, created_at, expires_at, claimed_at | `organizations`, `users`, `ai_sessions`, `ai_messages` |
 | `context_load_events` | id, organization_id, user_id, layer, item_id, item_name, item_meta, loaded_at | `organizations`, `users` |
 | `batch_jobs` | id, agent, kind, anthropic_batch_id, status, request_count, submitted_by, submitted_at, completed_at, results, error | `users` |
 
@@ -111,14 +111,14 @@
 
 | Table | Columns | References |
 |---|---|---|
-| `attachments` | id, entity_type, entity_id, filename, mime_type, size_bytes, width, height, thumb_url, web_url, original_url, thumb_key, web_key, original_key, caption, position, uploaded_by, uploaded_at | `users` |
-| `attachment_folder_grants` | id, sub_id, entity_type, entity_id, folder, granted_by, granted_at | `subs`, `users` |
+| `attachments` | id, entity_type, entity_id, filename, mime_type, size_bytes, width, height, thumb_url, web_url, original_url, thumb_key, web_key, original_key, caption, position, uploaded_by, uploaded_at, organization_id, extracted_text, extracted_text_at, anthropic_file_id, anthropic_file_uploaded_at, markup_of, include_in_proposal, tags, annotations, lat, lng, geo_accuracy, geo_source, taken_at, folder, folder_id | `users`, `organizations`, `attachments`, `file_folders` |
+| `attachment_folder_grants` | id, sub_id, entity_type, entity_id, folder, granted_by, granted_at, folder_id | `subs`, `users`, `file_folders` |
 | `file_folders` | id, organization_id, entity_type, entity_id, parent_id, name, path, position, created_by, created_at, updated_at | `organizations`, `file_folders`, `users` |
 | `org_folder_templates` | id, organization_id, entity_type, folders, updated_by, created_at, updated_at | `organizations`, `users` |
-| `projects` | id, organization_id, name, description, cover_attachment_id, lead_id, job_id, client_id, address_text, geocode_lat, geocode_lng, status, created_by, created_at, updated_at, archived_at | `organizations`, `attachments`, `leads`, `jobs`, `clients`, `users` |
+| `projects` | id, organization_id, name, description, cover_attachment_id, lead_id, job_id, client_id, address_text, geocode_lat, geocode_lng, status, created_by, created_at, updated_at, archived_at, tags, geocode_status | `organizations`, `attachments`, `leads`, `jobs`, `clients`, `users` |
 | `project_activity` | id, project_id, actor_user_id, kind, detail, created_at | `projects`, `users` |
 | `project_pairs` | id, project_id, before_attachment_id, after_attachment_id, label, created_by, created_at | `projects`, `attachments`, `users` |
-| `org_tags` | id, organization_id, name, hue, use_count, archived_at, created_by, created_at, updated_at | `organizations`, `users` |
+| `org_tags` | id, organization_id, name, hue, use_count, archived_at, created_by, created_at, updated_at, icon | `organizations`, `users` |
 | `field_tools` | id, name, description, category, html_body, created_by, organization_id, created_at, updated_at, is_system, system_key | `users`, `organizations` |
 | `field_tool_runs` | id, field_tool_id, user_id, inputs, outputs, notes, created_at, updated_at | `field_tools`, `users` |
 | `field_tool_drafts` | field_tool_id, user_id, inputs, outputs, updated_at | `field_tools`, `users` |
@@ -127,23 +127,23 @@
 
 | Table | Columns | References |
 |---|---|---|
-| `messages` | id, thread_key, user_id, body, created_at, edited_at | `users` |
+| `messages` | id, thread_key, user_id, body, created_at, edited_at, organization_id | `users`, `organizations` |
 | `message_reads` | thread_key, user_id, last_read_at | `users` |
-| `inbound_emails` | id, organization_id, user_id, thread_id, resend_email_id, message_id, in_reply_to, references_ids, from_name, from_email, orig_from_email, to_email, subject, subject_norm, body_text, body_html, is_forward_wrapper, delivered_direct, received_at, created_at | `organizations`, `users` |
+| `inbound_emails` | id, organization_id, user_id, thread_id, resend_email_id, message_id, in_reply_to, references_ids, from_name, from_email, orig_from_email, to_email, subject, subject_norm, body_text, body_html, is_forward_wrapper, delivered_direct, received_at, created_at, direction, entity_type, entity_id, entity_label, triaged_at, needs_reply, triage_urgency, triage_summary, triage_actions | `organizations`, `users` |
 | `email_thread_state` | id, organization_id, user_id, thread_id, draft_text, draft_source, draft_updated_at, notes, replied_at, updated_at, created_at | `organizations`, `users` |
 | `email_log` | id, to_address, subject, tag, status, provider_id, error, dry_run, sent_at | — |
 | `email_log_events` | id, log_id, kind, occurred_at, url, ip, user_agent | — |
 | `email_campaigns` | id, organization_id, name, event_key, subject, body, recipient_query, scheduled_at, status, created_by, created_at, sent_at, total_count, sent_count, failed_count, archived_at | `organizations`, `users` |
 | `email_campaign_recipients` | id, campaign_id, email, name, params, status, sent_at, log_id, error | `email_campaigns` |
-| `email_template_overrides` | event_key, subject, html_body, updated_at, updated_by | `users` |
+| `email_template_overrides` | event_key, subject, html_body, updated_at, updated_by, organization_id | `users`, `organizations` |
 | `sms_log` | id, direction, from_number, to_number, body, user_id, intent, twilio_sid, error, created_at | `users` |
 | `push_subscriptions` | id, user_id, endpoint, p256dh, auth, user_agent, created_at, last_used_at | `users` |
-| `calendar_events` | id, organization_id, user_id, title, starts_at, ends_at, all_day, location, notes, color, status, recurrence, reminder_minutes, created_at, updated_at | `organizations`, `users` |
-| `schedule_entries` | id, job_id, start_date, days, crew, includes_weekends, status, notes, created_by, created_at, updated_at | `jobs`, `users` |
+| `calendar_events` | id, organization_id, user_id, title, starts_at, ends_at, all_day, location, notes, color, status, recurrence, reminder_minutes, created_at, updated_at, entity_type, entity_id | `organizations`, `users` |
+| `schedule_entries` | id, job_id, start_date, days, crew, includes_weekends, status, notes, created_by, created_at, updated_at, organization_id | `jobs`, `users`, `organizations` |
 | `reminders` | id, organization_id, user_id, title, notes, remind_at, status, source, fired_at, entity_type, entity_id, created_at, updated_at | `organizations`, `users` |
-| `tasks` | id, organization_id, title, notes, kind, status, priority, due_date, assignee_user_id, created_by, entity_type, entity_id, checklist, completed_at, archived_at, created_at, updated_at | `organizations`, `users` |
+| `tasks` | id, organization_id, title, notes, kind, status, priority, due_date, assignee_user_id, created_by, entity_type, entity_id, checklist, completed_at, archived_at, created_at, updated_at, lat, lng, geo_accuracy, directions, scope, owner_user_id | `organizations`, `users` |
 | `user_notes` | id, organization_id, user_id, title, body, pinned, created_at, updated_at | `organizations`, `users` |
-| `oauth_tokens` | id, organization_id, user_id, provider, account_email, scope, access_token_enc, refresh_token_enc, expires_at, connected_at, updated_at | `organizations`, `users` |
+| `oauth_tokens` | id, organization_id, user_id, provider, account_email, scope, access_token_enc, refresh_token_enc, expires_at, connected_at, updated_at, token_cache_enc | `organizations`, `users` |
 | `app_settings` | key, value, updated_at | — |
 
 ---

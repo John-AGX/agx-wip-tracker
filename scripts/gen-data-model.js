@@ -113,6 +113,23 @@ function parseTables(src) {
 
     tables.push({ name, cols: [...new Set(cols)], fks });
   }
+
+  // Columns added by migration, not in the original CREATE TABLE. The schema
+  // evolves via `ALTER TABLE x ADD COLUMN IF NOT EXISTS y ...` (~190 of them),
+  // so a CREATE-only parse silently UNDER-REPORTS the real table shape — which
+  // is worse than no doc, because a reader concludes a column is absent when it
+  // is merely added later (e.g. materials.organization_id, whose absence would
+  // wrongly read as a tenancy gap).
+  const byName = Object.fromEntries(tables.map((t) => [t.name, t]));
+  const alterRe = /ALTER TABLE\s+(?:IF EXISTS\s+)?([a-z_0-9]+)\s+ADD COLUMN IF NOT EXISTS\s+([a-z_0-9]+)([^;]*)/gi;
+  let a;
+  while ((a = alterRe.exec(src))) {
+    const t = byName[a[1]];
+    if (!t) continue;
+    if (!t.cols.includes(a[2])) t.cols.push(a[2]);
+    const ref = /REFERENCES\s+([a-z_0-9]+)/i.exec(a[3] || '');
+    if (ref && !t.fks.includes(ref[1])) t.fks.push(ref[1]);
+  }
   return tables;
 }
 
