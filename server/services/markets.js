@@ -64,7 +64,7 @@ async function seedMarketsForOrg(orgId, client) {
 // the caller (and the admin re-run route) can SEE what actually happened
 // instead of trusting a silent "no error".
 async function backfill() {
-  const result = { seeded: 0, jobs: 0, leads: 0, estimates: 0, errors: [] };
+  const result = { seeded: 0, jobs: 0, leads: 0, clients: 0, estimates: 0, errors: [] };
 
   try {
     const orgs = await pool.query('SELECT id FROM organizations');
@@ -76,24 +76,33 @@ async function backfill() {
     result.errors.push('seed: ' + (e && e.message));
   }
 
-  // jobs + leads both carry the legacy `market TEXT`. LOWER(TRIM()) on both
-  // sides absorbs 'tampa ' / 'Tampa'. Org-scoped so one tenant's "Tampa"
-  // can never claim another's rows.
-  for (const table of ['jobs', 'leads']) {
+  // The legacy market string does NOT live in the same place on every table:
+  //   leads / clients -> a real `market TEXT` column
+  //   jobs            -> inside the JSONB blob, data->>'market'
+  //                      (jobs is id/owner_id/data — there is no market column,
+  //                       which is why a uniform `t.market` threw here)
+  // LOWER(TRIM()) on both sides absorbs 'tampa ' / 'Tampa'. Org-scoped so one
+  // tenant's "Tampa" can never claim another's rows.
+  const SOURCES = [
+    { table: 'leads',   expr: 't.market' },
+    { table: 'clients', expr: 't.market' },
+    { table: 'jobs',    expr: "t.data->>'market'" },
+  ];
+  for (const src of SOURCES) {
     try {
       const r = await pool.query(
-        `UPDATE ${table} t
+        `UPDATE ${src.table} t
             SET market_id = m.id
            FROM markets m
           WHERE t.market_id IS NULL
-            AND t.market IS NOT NULL
-            AND TRIM(t.market) <> ''
+            AND ${src.expr} IS NOT NULL
+            AND TRIM(${src.expr}) <> ''
             AND m.organization_id = t.organization_id
-            AND LOWER(TRIM(m.name)) = LOWER(TRIM(t.market))`
+            AND LOWER(TRIM(m.name)) = LOWER(TRIM(${src.expr}))`
       );
-      result[table] = r.rowCount || 0;
+      result[src.table] = r.rowCount || 0;
     } catch (e) {
-      result.errors.push(table + ': ' + (e && e.message));
+      result.errors.push(src.table + ': ' + (e && e.message));
     }
   }
 
