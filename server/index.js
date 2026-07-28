@@ -294,10 +294,43 @@ if (storage.localRoot) {
   console.log('[storage] backend =', storage.backend);
 }
 
-// Health check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', version: '1.0.0' });
-});
+// Health check — the endpoint an external uptime monitor polls.
+// Deliberately unauthenticated and mounted outside the API auth chain so a
+// monitor can reach it, but it reports NO business data: just liveness, the
+// build SHA, and whether the database actually answers. The DB probe is the
+// point — a process that is up but cannot reach Postgres is NOT healthy, and
+// the previous stub (static {status:'ok'}) would have reported green through
+// a total database outage. Returns 503 on DB failure so a monitor alerts.
+async function healthHandler(req, res) {
+  const build = process.env.RAILWAY_GIT_COMMIT_SHA || null;
+  let version = null;
+  try { version = require('./feature-catalog').APP_VERSION; } catch (e) { /* non-fatal */ }
+  try {
+    const t0 = Date.now();
+    await pool.query('SELECT 1');
+    res.json({
+      status: 'ok',
+      db: 'up',
+      db_ms: Date.now() - t0,
+      version: version,
+      build: build ? String(build).slice(0, 8) : null,
+      uptime_s: Math.round(process.uptime()),
+    });
+  } catch (e) {
+    // Log for the operator; keep the response body free of connection detail.
+    console.error('[health] database probe failed:', e.message);
+    res.status(503).json({
+      status: 'degraded',
+      db: 'down',
+      version: version,
+      build: build ? String(build).slice(0, 8) : null,
+      uptime_s: Math.round(process.uptime()),
+    });
+  }
+}
+app.get('/api/health', healthHandler);
+// /healthz — the conventional path uptime monitors default to. Same handler.
+app.get('/healthz', healthHandler);
 
 // Sub portal page — served before the SPA fallback so /portal lands
 // on a dedicated minimal page rather than the PM app shell. The
