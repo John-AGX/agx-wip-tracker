@@ -4091,6 +4091,167 @@ async function initSchema() {
       ON email_thread_state (user_id, thread_id);
 
     -- ───────────────────────────────────────────────────────────────
+    -- PREMIUM EMAIL HUB — E1, the folder spine (docs/email-hub-premium.md).
+    -- Two orthogonal systems, like every modern mail client:
+    --   FOLDERS — exclusive, ONE per message (email_folders + the
+    --             inbound_emails.folder_id column below).
+    --   LABELS  — multi, many per message (email_labels +
+    --             email_message_labels).
+    --
+    -- email_folders deliberately MIRRORS the file_folders shape (self-
+    -- referential parent_id, materialized 'path', per-parent case-
+    -- insensitive uniqueness) so the Explorer tree component built for
+    -- files (js/file-explorer.js) can be reused for the folder rail
+    -- rather than growing a second tree implementation.
+    --
+    -- OWNERSHIP — user_id is the axis file_folders doesn't have:
+    --   user_id = <id>  a PERSONAL folder. The dropbox is personal (every
+    --                   inbound_emails read is scoped user_id = req.user.id
+    --                   and excluded from admin act-as by construction), so
+    --                   the whole system spine — Inbox, Sent, Trash… — is
+    --                   seeded PER USER. Two users' Inboxes are two rows.
+    --   user_id = NULL  an ORG-SHARED folder (a team bucket everyone in the
+    --                   org sees). Admin-gated in the routes.
+    --
+    -- 'path' is built from SLUG segments, not display names, so a name may
+    -- contain '/' or '&' ("Bids / RFQs", "Subs & Vendors") without breaking
+    -- the materialized path. Uniqueness is enforced on BOTH slug and name
+    -- per parent — slug because it addresses the row, name because two
+    -- folders showing the same label in one place is a UX bug.
+    --
+    -- system = TRUE marks the auto-seeded spine. The routes refuse to
+    -- rename / move / delete those rows (color, icon and sort stay editable);
+    -- the partial unique index on (owner, slug) WHERE system keeps the seed
+    -- idempotent and concurrency-safe.
+    --
+    -- organization_id is NOT NULL here — unlike the older tables there are
+    -- no legacy un-stamped rows to tolerate, so this table is org-STRICT
+    -- from day one (no "OR-IS-NULL (org tolerance)" clause needed).
+    CREATE TABLE IF NOT EXISTS email_folders (
+      id              TEXT PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      user_id         INTEGER REFERENCES users(id) ON DELETE CASCADE,  -- NULL = org-shared
+      parent_id       TEXT REFERENCES email_folders(id) ON DELETE CASCADE,
+      name            TEXT NOT NULL,
+      slug            TEXT NOT NULL,
+      -- Semantic role the app keys behavior off: inbox | triaged |
+      -- triage_bucket | sent | drafts | scheduled | snoozed | archive |
+      -- spam | trash | custom. Only 'custom' is user-creatable.
+      kind            TEXT NOT NULL DEFAULT 'custom',
+      path            TEXT NOT NULL DEFAULT '',   -- slug chain, e.g. 'triaged/invoices-bills'
+      sort            INTEGER NOT NULL DEFAULT 0,
+      icon            TEXT,                        -- an agx-icons.js name
+      color           TEXT,                        -- '#rrggbb' chip color
+      system          BOOLEAN NOT NULL DEFAULT FALSE,
+      created_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    -- COALESCE(user_id, 0) so personal and org-shared folders occupy
+    -- separate namespaces (0 is not a valid users.id).
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_email_folders_slug
+      ON email_folders (organization_id, COALESCE(user_id, 0), COALESCE(parent_id, ''), LOWER(slug));
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_email_folders_name
+      ON email_folders (organization_id, COALESCE(user_id, 0), COALESCE(parent_id, ''), LOWER(name));
+    -- Seed guard: one system folder per slug per owner, regardless of where
+    -- it sits in the tree. Makes ensureSystemFolders idempotent under
+    -- concurrent boots/requests via ON CONFLICT DO NOTHING.
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_email_folders_system_slug
+      ON email_folders (organization_id, COALESCE(user_id, 0), LOWER(slug))
+      WHERE system;
+    -- The folder-rail read: an owner's tree in display order.
+    CREATE INDEX IF NOT EXISTS idx_email_folders_owner
+      ON email_folders (organization_id, COALESCE(user_id, 0), sort, name);
+    CREATE INDEX IF NOT EXISTS idx_email_folders_parent
+      ON email_folders (parent_id);
+
+    -- Labels — the multi-assignment axis. ORG-SHARED (no user_id): a label
+    -- is part of the org's vocabulary, like org_tags, whose conventions this
+    -- follows — CI-unique name per org, use_count for most-used-first
+    -- ordering, and archived_at soft-delete so historical assignments stay
+    -- traceable instead of vanishing. DEVIATION from org_tags: the chip color
+    -- is a hex string in 'color' rather than org_tags' 'hue' INTEGER, so
+    -- labels and folders (email_folders.color, above) speak one color format.
+    CREATE TABLE IF NOT EXISTS email_labels (
+      id              BIGSERIAL PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      name            TEXT NOT NULL,
+      color           TEXT,                        -- '#rrggbb' chip color
+      sort            INTEGER NOT NULL DEFAULT 0,
+      use_count       INTEGER NOT NULL DEFAULT 0,
+      archived_at     TIMESTAMPTZ,
+      created_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (organization_id, name)
+    );
+    -- Case-fold guard (same trick as idx_org_tags_ci_name): "Urgent" and
+    -- "urgent" can't both exist. ON CONFLICT in the create route targets it.
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_email_labels_ci_name
+      ON email_labels (organization_id, (LOWER(name)));
+    CREATE INDEX IF NOT EXISTS idx_email_labels_org
+      ON email_labels (organization_id, sort, name) WHERE archived_at IS NULL;
+
+    -- The many-to-many join. CASCADE on both sides: deleting a message or
+    -- hard-deleting a label takes its chips with it (an archived label keeps
+    -- its rows — that's the point of the soft delete).
+    CREATE TABLE IF NOT EXISTS email_message_labels (
+      message_id  TEXT   NOT NULL REFERENCES inbound_emails(id) ON DELETE CASCADE,
+      label_id    BIGINT NOT NULL REFERENCES email_labels(id)   ON DELETE CASCADE,
+      created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (message_id, label_id)
+    );
+    -- "every message carrying label X" (the label-filtered list view).
+    CREATE INDEX IF NOT EXISTS idx_email_message_labels_label
+      ON email_message_labels (label_id);
+
+    -- ── Message state columns (E1 §3) — ADDITIVE ONLY ────────────────
+    -- The live inbound path (Cloudflare Worker → storeInboundMessage) is
+    -- metadata-only by design and is NOT rewritten by this slice: every
+    -- column below is nullable or carries a default, so an insert that
+    -- doesn't mention them still succeeds exactly as before.
+    --
+    -- thread_id, entity_type and entity_id are in the E1 spec list but
+    -- ALREADY EXIST above (thread_id since S1, entity_* since H2) — they
+    -- are intentionally not re-declared here.
+    --
+    -- folder_id is ON DELETE SET NULL so a folder delete can never destroy
+    -- mail; the delete route re-files the folder's messages to Inbox first
+    -- and this is only the backstop. A NULL folder_id reads as "unfiled" —
+    -- the backfill and the inbound stamp both drive it to Inbox.
+    ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS folder_id       TEXT REFERENCES email_folders(id) ON DELETE SET NULL;
+    ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS is_read         BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS is_starred      BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS is_pinned       BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS snoozed_until   TIMESTAMPTZ;
+    ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS due_at          TIMESTAMPTZ;
+    -- AI layer (E5) writes these; E1 only reserves them. Kept SEPARATE from
+    -- the H3 triage_* columns: those are the existing Haiku advisory pass,
+    -- these are the hub's own priority stripe / one-line summary. Like
+    -- triage_summary, ai_summary is model paraphrase of UNTRUSTED email and
+    -- MUST be wrapped (wrapUserData) before it reaches the assistant.
+    ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS ai_category     TEXT;
+    ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS ai_priority     TEXT;
+    ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS ai_summary      TEXT;
+    ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS has_attachments BOOLEAN NOT NULL DEFAULT FALSE;
+    -- The message-list read: one folder, newest first, for one mailbox.
+    CREATE INDEX IF NOT EXISTS idx_inbound_emails_folder
+      ON inbound_emails (user_id, folder_id, received_at DESC);
+    -- Unread badge per folder — partial so it stays tiny as mail is read.
+    CREATE INDEX IF NOT EXISTS idx_inbound_emails_unread
+      ON inbound_emails (user_id, folder_id) WHERE is_read = FALSE;
+    -- The Snoozed folder's wake-up sweep.
+    CREATE INDEX IF NOT EXISTS idx_inbound_emails_snoozed
+      ON inbound_emails (user_id, snoozed_until) WHERE snoozed_until IS NOT NULL;
+    -- Follow-up flags with a due date (the "Waiting on me" smart folder).
+    CREATE INDEX IF NOT EXISTS idx_inbound_emails_due
+      ON inbound_emails (user_id, due_at) WHERE due_at IS NOT NULL;
+    -- Starred / pinned rails.
+    CREATE INDEX IF NOT EXISTS idx_inbound_emails_starred
+      ON inbound_emails (user_id, received_at DESC) WHERE is_starred;
+
+    -- ───────────────────────────────────────────────────────────────
     -- Plans & Takeoffs — first-class scale-drawing documents (the
     -- "dedicated home" for the Bluebeam-style markup tool). A plan is a
     -- drawing surface (blank gridded canvas / a photo / a PDF) plus its
@@ -4957,6 +5118,17 @@ async function init() {
     await require('./services/file-folders').backfill();
   } catch (e) {
     console.error('[init] file-folders backfill failed (non-fatal):', e && e.message);
+  }
+  // Email Hub E1: seed each mailbox's system folder spine and file every
+  // folder-less message (Sent for direction='outbound', Inbox otherwise)
+  // so nothing is orphaned. Idempotent — it only fills folder_id IS NULL,
+  // so a message the user has since moved is never dragged back. The
+  // service already swallows its own errors; this guard is belt-and-braces
+  // so a boot can never hang on it.
+  try {
+    await require('./services/email-folders').backfill();
+  } catch (e) {
+    console.error('[init] email-folders backfill failed (non-fatal):', e && e.message);
   }
   // Assembly code protocol: seed the global taxonomy + normalize/de-dupe
   // existing codes, THEN build the per-org unique-code index. Order matters —

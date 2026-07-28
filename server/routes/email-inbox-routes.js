@@ -377,6 +377,18 @@ async function storeInboundMessage(p) {
      isOutbound ? 'outbound' : 'inbound']
   );
   if (!ins.rows.length) return { deduped: true };
+  // E1 folder spine: file the new message into the owner's Inbox (or Sent
+  // for a captured copy of their own reply). Deliberately a POST-INSERT
+  // UPDATE rather than an extra column on the INSERT above: the inbound
+  // path is metadata-only by design and must not be rewritten, and this
+  // way the message is already durable before folders are consulted. The
+  // helper swallows its own errors, so a missing/failed folder lookup
+  // leaves folder_id NULL — which the boot-time + on-demand backfill
+  // sweeps up — and NEVER costs us the mail.
+  try {
+    await require('../services/email-folders')
+      .fileNewMessage(user.organization_id, user.id, ins.rows[0].id, isOutbound);
+  } catch (e) { /* stored; the backfill will file it */ }
   // H3: fire-and-forget triage — extracts needs-reply + dates so the
   // assistant can proactively propose reminders/calendar. Never throws into
   // the caller. Skip MY OWN outbound replies: there's nothing to classify or

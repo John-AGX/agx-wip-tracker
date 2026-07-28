@@ -151,6 +151,12 @@ app.post('/api/email-inbox/inbound-cf',
   emailInboxRoutes.inboundCfHandler);
 // Email Dropbox reads + my-address.
 app.use('/api/email-inbox', emailInboxRoutes);
+// Premium Email Hub — E1 folder spine (docs/email-hub-premium.md).
+// Folders are the exclusive axis (one per message), labels the multi
+// axis. Both are authed JSON routers; the move-message endpoint lives
+// under /api/email-folders/move-messages.
+app.use('/api/email-folders', require('./routes/email-folders-routes'));
+app.use('/api/email-labels', require('./routes/email-labels-routes'));
 // Payload DSL routes — file download, reject, apply (inline approval
 // card). Mounted before the broad /api/ai handler so /api/payloads
 // claims its namespace without ambiguity.
