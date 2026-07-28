@@ -58,6 +58,7 @@ const projectRoutes = require('./routes/project-routes');
 const projectPairsRoutes = require('./routes/project-pairs-routes');
 const plansRoutes = require('./routes/plans-routes');
 const orgTagsRoutes = require('./routes/org-tags-routes');
+const marketRoutes = require('./routes/market-routes');
 const folderTemplatesRoutes = require('./routes/folder-templates-routes');
 const tasksRoutes = require('./routes/tasks-routes');
 const notesRoutes = require('./routes/notes-routes');
@@ -222,6 +223,7 @@ app.use('/api/calendar', calendarRoutes);
 // lazy, so this is inert until the env vars are set and a user connects.
 app.use(outlookRoutes);
 app.use('/api/org-tags', orgTagsRoutes);
+app.use('/api/markets', marketRoutes);
 app.use('/api/folder-templates', folderTemplatesRoutes);
 // Org manifest — one read-only endpoint that powers the Summary
 // page's System Snapshot block + the System Map sub-tab. Returns

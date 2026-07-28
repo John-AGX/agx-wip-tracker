@@ -1255,6 +1255,67 @@ async function initSchema() {
     ALTER TABLE org_tags ADD COLUMN IF NOT EXISTS icon TEXT;
 
     -- ---------------------------------------------------------------
+    -- MARKETS (multi-market model, M1). AGX runs Tampa / Orlando /
+    -- Denver / Arizona / Texas out of ONE org. A market is a first-class
+    -- DIMENSION, not a saved-view filter: it carries its own timezone,
+    -- tax rate, labor rate, license and P&L. The hierarchy is
+    --   organization -> market -> job
+    -- organization_id stays the TENANT + SECURITY boundary; market is
+    -- the operating unit INSIDE it. NEVER swap an organization_id check
+    -- for a market check -- market is not a security boundary.
+    --
+    -- timezone is per-MARKET (not per-org) because these span ET/MT/CT.
+    -- Arizona MUST be America/Phoenix (no DST) -- folding it into
+    -- Denver/Mountain silently breaks every time-gated cron half the
+    -- year. See docs/multi-market.md.
+    -- ---------------------------------------------------------------
+    CREATE TABLE IF NOT EXISTS markets (
+      id                 BIGSERIAL PRIMARY KEY,
+      organization_id    INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      name               TEXT NOT NULL,
+      code               TEXT NOT NULL,              -- TPA / ORL / DEN / PHX / TEX
+      state              TEXT,                       -- FL / CO / AZ / TX
+      timezone           TEXT NOT NULL DEFAULT 'America/New_York',
+      address            TEXT,
+      phone              TEXT,
+      license_no         TEXT,
+      sales_tax_rate     NUMERIC(6,4),               -- 0.0700 = 7%
+      labor_rate_default NUMERIC(10,2),
+      color              TEXT,                       -- hex, for chips + map pins
+      active             BOOLEAN NOT NULL DEFAULT TRUE,
+      sort               INTEGER NOT NULL DEFAULT 0,
+      created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    -- Case-insensitive uniqueness on BOTH name and code per org, so
+    -- "tampa"/"Tampa" and "tpa"/"TPA" can't split into two markets.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_markets_ci_name
+      ON markets(organization_id, (LOWER(name)));
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_markets_ci_code
+      ON markets(organization_id, (LOWER(code)));
+    CREATE INDEX IF NOT EXISTS idx_markets_org_active
+      ON markets(organization_id, sort) WHERE active;
+
+    -- market_id on the core entities. ADDITIVE + NULLABLE by design:
+    -- a NULL market is "unassigned", never a broken row, and every
+    -- read must tolerate it (the M2 switcher treats NULL as
+    -- "All markets" only). ON DELETE SET NULL so deactivating or
+    -- removing a market can never cascade away a job.
+    ALTER TABLE jobs            ADD COLUMN IF NOT EXISTS market_id BIGINT REFERENCES markets(id) ON DELETE SET NULL;
+    ALTER TABLE leads           ADD COLUMN IF NOT EXISTS market_id BIGINT REFERENCES markets(id) ON DELETE SET NULL;
+    ALTER TABLE estimates       ADD COLUMN IF NOT EXISTS market_id BIGINT REFERENCES markets(id) ON DELETE SET NULL;
+    ALTER TABLE clients         ADD COLUMN IF NOT EXISTS market_id BIGINT REFERENCES markets(id) ON DELETE SET NULL;
+    ALTER TABLE subs            ADD COLUMN IF NOT EXISTS market_id BIGINT REFERENCES markets(id) ON DELETE SET NULL;
+    -- A user's HOME market (M4 uses it to default the switcher and to
+    -- filter assignment pickers). Nullable = org-wide / exec.
+    ALTER TABLE users           ADD COLUMN IF NOT EXISTS market_id BIGINT REFERENCES markets(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS idx_jobs_market      ON jobs(market_id);
+    CREATE INDEX IF NOT EXISTS idx_leads_market     ON leads(market_id);
+    CREATE INDEX IF NOT EXISTS idx_estimates_market ON estimates(market_id);
+    CREATE INDEX IF NOT EXISTS idx_clients_market   ON clients(market_id);
+    CREATE INDEX IF NOT EXISTS idx_subs_market      ON subs(market_id);
+
+    -- ---------------------------------------------------------------
     -- Per-org folder templates. Folders in Project 86 are IMPLICIT --
     -- a folder only "exists" once an attachment row carries that
     -- folder string. js/folder-taxonomy.js ships a hard-coded
@@ -5182,6 +5243,16 @@ async function init() {
     await require('./services/email-folders').backfill();
   } catch (e) {
     console.error('[init] email-folders backfill failed (non-fatal):', e && e.message);
+  }
+  // Multi-market M1: seed the 5 markets per org and map the LEGACY
+  // free-text `market` column on jobs/leads onto the new market_id FK.
+  // Idempotent — only fills market_id IS NULL, so a hand-reassigned
+  // market is never dragged back to the old text value. The legacy TEXT
+  // column is deliberately left in place (dual-read for one release).
+  try {
+    await require('./services/markets').backfill();
+  } catch (e) {
+    console.error('[init] markets backfill failed (non-fatal):', e && e.message);
   }
   // Assembly code protocol: seed the global taxonomy + normalize/de-dupe
   // existing codes, THEN build the per-org unique-code index. Order matters —

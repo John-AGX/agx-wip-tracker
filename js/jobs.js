@@ -2636,7 +2636,12 @@ function renderJobsMain() {
                     'job-info-pm':        () => '<select id="edit-jobPM" style="' + IST + '">' + opts(['John', 'Noah', 'Henry'], job.pm) + '</select>',
                     'job-info-type':      () => '<select id="edit-jobType" style="' + IST + '">' + opts(['Service', 'Renovation', 'Work Order'], job.jobType) + '</select>',
                     'job-info-worktype':  () => '<input id="edit-jobWorkType" type="text" value="' + escapeHTML(job.workType || '') + '" style="' + IST + '">',
-                    'job-info-market':    () => '<select id="edit-jobMarket" style="' + IST + '">' + opts(['Tampa', 'Orlando'], job.market) + '</select>',
+                    // Markets come from the markets TABLE (multi-market M1), not a
+                    // hardcoded pair. window.p86MarketNames() is cache-first and
+                    // always includes this job's current value, so a market that was
+                    // deactivated still shows on the job that already carries it
+                    // (otherwise editing any other field would silently blank it).
+                    'job-info-market':    () => '<select id="edit-jobMarket" style="' + IST + '">' + opts(window.p86MarketNames(job.market), job.market) + '</select>',
                     'job-info-contract':  () => '<input id="edit-jobContract" type="number" step="0.01" value="' + (job.contractAmount || 0) + '" style="' + IST + '">',
                     'job-info-estcosts':  () => '<input id="edit-jobEstCosts" type="number" step="0.01" value="' + (job.estimatedCosts || 0) + '" style="' + IST + '">',
                     'job-info-margin':    () => '<input id="edit-jobMargin" type="number" value="' + (job.targetMarginPct || 50) + '" style="' + IST + '">',
