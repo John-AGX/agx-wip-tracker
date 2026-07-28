@@ -3925,7 +3925,9 @@ function renderJobsMain() {
                     });
                     body += '</div>';
                 }
-                body += '<button class="p86-bldg-add-phase-btn" onclick="event.stopPropagation();openAddPhaseToJobModal(\'' + escapeHTML(building.id) + '\')">+ Scope</button>';
+                // Scopes are created in the Scope Manager (List/Matrix), not on the building card —
+                // this card is a read-only scope rollup. (+ Scope create button removed per John,
+                // to funnel scope creation to the one canonical surface.)
 
                 // Change Orders wired to this building
                 body += '<div class="p86-bldg-section-head">CHANGE ORDERS (' + cosWired.length + ')</div>';
