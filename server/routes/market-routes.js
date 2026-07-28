@@ -138,4 +138,18 @@ router.delete('/:id', requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
+// POST /api/markets/backfill — re-run the seed + legacy-text mapping and
+// REPORT what it did. Idempotent (only fills market_id IS NULL). This exists
+// because a boot backfill that swallows its own errors is unverifiable: the
+// first deploy looked clean and had in fact mapped nothing.
+router.post('/backfill', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const result = await require('../services/markets').backfill();
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    console.error('[markets] backfill error:', e && e.stack || e);
+    res.status(500).json({ error: e && e.message || 'Backfill failed' });
+  }
+});
+
 module.exports = router;

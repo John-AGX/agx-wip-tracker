@@ -25,6 +25,10 @@ const DEFAULT_MARKETS = [
   { name: 'Denver',  code: 'DEN', state: 'CO', timezone: 'America/Denver',   color: '#d98a1f', sort: 30 },
   { name: 'Arizona', code: 'PHX', state: 'AZ', timezone: 'America/Phoenix',  color: '#d85a30', sort: 40 },
   { name: 'Texas',   code: 'TEX', state: 'TX', timezone: 'America/Chicago',  color: '#7f77dd', sort: 50 },
+  // Jacksonville was NOT in the original five — it was found in the live
+  // data (2 jobs already carry it). Seeding it means those jobs map on the
+  // backfill instead of silently staying market-less.
+  { name: 'Jacksonville', code: 'JAX', state: 'FL', timezone: 'America/New_York', color: '#d4537e', sort: 25 },
 ];
 
 // Seed the five markets for one org. Idempotent: ON CONFLICT against the
@@ -53,37 +57,65 @@ async function seedMarketsForOrg(orgId, client) {
 //
 // Only fills market_id IS NULL, so a market someone has since reassigned
 // by hand is never dragged back to the text value.
+// Each step is INDEPENDENTLY guarded. A single bad query must never abort
+// the rest of the backfill — that exact failure mode (an estimates join on
+// a column that doesn't exist) silently swallowed the jobs+leads mapping on
+// the first deploy and left every job unassigned. Returns per-step counts so
+// the caller (and the admin re-run route) can SEE what actually happened
+// instead of trusting a silent "no error".
 async function backfill() {
-  const orgs = await pool.query('SELECT id FROM organizations');
-  for (const row of orgs.rows) {
-    await seedMarketsForOrg(row.id);
+  const result = { seeded: 0, jobs: 0, leads: 0, estimates: 0, errors: [] };
+
+  try {
+    const orgs = await pool.query('SELECT id FROM organizations');
+    for (const row of orgs.rows) {
+      await seedMarketsForOrg(row.id);
+      result.seeded++;
+    }
+  } catch (e) {
+    result.errors.push('seed: ' + (e && e.message));
   }
 
-  // jobs + leads both carry the legacy `market TEXT`. Same shape, so one
-  // loop. LOWER(TRIM()) on both sides absorbs 'tampa ' / 'Tampa'.
+  // jobs + leads both carry the legacy `market TEXT`. LOWER(TRIM()) on both
+  // sides absorbs 'tampa ' / 'Tampa'. Org-scoped so one tenant's "Tampa"
+  // can never claim another's rows.
   for (const table of ['jobs', 'leads']) {
-    await pool.query(
-      `UPDATE ${table} t
-          SET market_id = m.id
-         FROM markets m
-        WHERE t.market_id IS NULL
-          AND t.market IS NOT NULL
-          AND TRIM(t.market) <> ''
-          AND m.organization_id = t.organization_id
-          AND LOWER(TRIM(m.name)) = LOWER(TRIM(t.market))`
-    );
+    try {
+      const r = await pool.query(
+        `UPDATE ${table} t
+            SET market_id = m.id
+           FROM markets m
+          WHERE t.market_id IS NULL
+            AND t.market IS NOT NULL
+            AND TRIM(t.market) <> ''
+            AND m.organization_id = t.organization_id
+            AND LOWER(TRIM(m.name)) = LOWER(TRIM(t.market))`
+      );
+      result[table] = r.rowCount || 0;
+    } catch (e) {
+      result.errors.push(table + ': ' + (e && e.message));
+    }
   }
 
-  // Estimates + clients inherit from their parent where the link is
-  // unambiguous — an estimate belongs to the market of its job/lead.
-  await pool.query(
-    `UPDATE estimates e
-        SET market_id = j.market_id
-       FROM jobs j
-      WHERE e.market_id IS NULL
-        AND j.market_id IS NOT NULL
-        AND e.job_id = j.id`
-  );
+  // Estimates inherit their job's market. NOTE: estimates has NO job_id —
+  // the link runs the OTHER way, jobs.estimate_id -> estimates.id (see the
+  // schema note at db.js "estimate.data.job_id <-> jobs.estimate_id").
+  // Joining on e.job_id throws and was what aborted this whole function.
+  try {
+    const r = await pool.query(
+      `UPDATE estimates e
+          SET market_id = j.market_id
+         FROM jobs j
+        WHERE e.market_id IS NULL
+          AND j.market_id IS NOT NULL
+          AND j.estimate_id = e.id`
+    );
+    result.estimates = r.rowCount || 0;
+  } catch (e) {
+    result.errors.push('estimates: ' + (e && e.message));
+  }
+
+  return result;
 }
 
 // Resolve + validate a market id for a write. Returns the id when it
