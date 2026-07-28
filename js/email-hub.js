@@ -960,7 +960,10 @@
             '<button class="ehub-tool" data-archive>' + ico('import', '') + ' Archive</button>' +
             '<button class="ehub-tool" data-trash>' + ico('delete', '') + ' Trash</button>' +
             '<select class="ehub-tool" data-move><option value="">Move to…</option>' +
-              _state.folders.sort(function (a, b) { return (a.path || '').localeCompare(b.path || ''); })
+              // slice() first — sorting _state.folders in place would reshuffle
+              // the array the rail paints from, so opening a thread would
+              // silently reorder the folder tree behind it.
+              _state.folders.slice().sort(function (a, b) { return (a.path || '').localeCompare(b.path || ''); })
                 .map(function (f) { return '<option value="' + esc(f.id) + '">' + esc((f.parent_id ? '— ' : '') + f.name) + '</option>'; }).join('') +
             '</select>' +
             '<button class="ehub-ask" data-ask>' + ico('sparkle', '') + ' Ask the assistant</button>' +
