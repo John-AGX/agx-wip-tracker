@@ -80,9 +80,96 @@
     return out;
   }
 
-  window.p86Markets = { load: load, all: all, active: active, byId: byId, byName: byName, names: names };
-  // Convenience global for the string-concat pickers.
+  /* ── M2: the global market selection ──────────────────────────────────
+   * ONE selection drives every list / map / KPI. null = "All markets"
+   * (the exec roll-up). Persisted per user in localStorage so a reload
+   * lands you back in the market you were working.
+   *
+   * Surfaces DON'T poll this — they listen for p86:market-changed and
+   * re-render. Anything that filters must treat a NULL market_id row as
+   * "unassigned": it shows under All markets, and under no specific one.
+   * ─────────────────────────────────────────────────────────────────── */
+  var LS_KEY = 'p86_active_market';
+  var _sel = null;
+  try { _sel = localStorage.getItem(LS_KEY) || null; } catch (_) {}
+
+  function selectedId() { return _sel; }
+  function selected() { return _sel ? byId(_sel) : null; }
+
+  function select(id) {
+    var next = (id === '' || id === undefined) ? null : (id === null ? null : String(id));
+    if (String(_sel) === String(next)) return;
+    _sel = next;
+    try { next ? localStorage.setItem(LS_KEY, next) : localStorage.removeItem(LS_KEY); } catch (_) {}
+    renderSwitcher();
+    try {
+      document.dispatchEvent(new CustomEvent('p86:market-changed', {
+        detail: { market_id: _sel, market: selected() }
+      }));
+    } catch (_) {}
+  }
+
+  // Does a record belong in the current view? The ONE predicate every
+  // surface should use, so "unassigned" is handled identically everywhere.
+  function matches(rec) {
+    if (!_sel) return true;                       // All markets
+    if (!rec) return false;
+    var mid = rec.market_id != null ? rec.market_id
+            : (rec.market ? (byName(rec.market) || {}).id : null);
+    return String(mid) === String(_sel);
+  }
+  function filter(list) {
+    if (!_sel || !Array.isArray(list)) return list || [];
+    return list.filter(matches);
+  }
+
+  // ── switcher UI ──
+  function renderSwitcher() {
+    var host = document.getElementById('app-sidebar-market');
+    if (!host) return;
+    var list = active();
+    // A single-market org gets no chrome — the switcher would be a no-op.
+    if (list.length < 2) { host.hidden = true; host.innerHTML = ''; return; }
+    host.hidden = false;
+    var cur = selected();
+    var opts = ['<option value="">All markets</option>'].concat(list.map(function (m) {
+      var s = String(m.id) === String(_sel) ? ' selected' : '';
+      return '<option value="' + m.id + '"' + s + '>' + (m.name || '') + '</option>';
+    })).join('');
+    host.innerHTML =
+      '<label class="sidebar-market-label" for="p86-market-select">Market</label>' +
+      '<div class="sidebar-market-row">' +
+        '<span class="sidebar-market-dot" style="background:' + ((cur && cur.color) || '#8b90a5') + '"></span>' +
+        '<select id="p86-market-select" class="sidebar-market-select" ' +
+                'aria-label="Active market — scopes every list and dashboard">' + opts + '</select>' +
+      '</div>';
+    var sel = host.querySelector('#p86-market-select');
+    if (sel) sel.addEventListener('change', function () { select(sel.value || null); });
+  }
+
+  window.p86Markets = {
+    load: load, all: all, active: active, byId: byId, byName: byName, names: names,
+    selectedId: selectedId, selected: selected, select: select,
+    matches: matches, filter: filter, renderSwitcher: renderSwitcher
+  };
+  // Convenience globals for the string-concat pickers + list filters.
   window.p86MarketNames = names;
+  window.p86MarketFilter = filter;
+
+  document.addEventListener('p86:markets-loaded', renderSwitcher);
+
+  // Re-render whatever surface is open when the market changes. Each entry is
+  // best-effort and independently guarded: a page that isn't mounted (or a
+  // renderer that throws) must never stop the others from updating — a
+  // half-switched UI showing two markets at once is worse than a stale one.
+  document.addEventListener('p86:market-changed', function () {
+    ['renderJobsMain', 'renderLeadsMain', 'renderEstimatesMain',
+     'renderSummary', 'renderDashboard'].forEach(function (fn) {
+      try { if (typeof window[fn] === 'function') window[fn](); } catch (e) {
+        console.warn('[markets] re-render failed for ' + fn + ':', e && e.message);
+      }
+    });
+  });
 
   // Warm the cache once auth is up. The app fires p86:auth-ready; if we
   // missed it (script order), fall back to a direct load.

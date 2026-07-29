@@ -1809,7 +1809,12 @@ function renderJobsMain() {
         window.p86JobsExportSelected = p86JobsExportSelected;
 
         function getFilteredJobs() {
-            let jobs = appData.jobs;
+            // Multi-market M2: the global market switcher scopes EVERY surface
+            // fed by this function (the table AND the dashboard tiles), so the
+            // count you see always matches the market you're in. "All markets"
+            // (no selection) is a pass-through. Applied FIRST so every later
+            // filter/sort/tile counts within the market.
+            let jobs = (window.p86MarketFilter ? window.p86MarketFilter(appData.jobs) : appData.jobs);
             const filter = appState.currentStatusFilter;
             var drawerHasStatus = !!(_jobsDrawer && _jobsDrawer.status && _jobsDrawer.status.length);
             if (filter) {

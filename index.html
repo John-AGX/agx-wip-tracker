@@ -250,7 +250,7 @@
          system fallback if the font is slow/unreachable (offline / PWA cold). -->
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&display=swap">
-    <link rel="stylesheet" href="css/styles.css?v=252">
+    <link rel="stylesheet" href="css/styles.css?v=253">
     <link rel="stylesheet" href="css/report-style-packs.css?v=4">
     <link rel="stylesheet" href="css/workspace-layout.css?v=66">
     <link rel="stylesheet" href="css/workspace.css?v=41">
@@ -531,6 +531,12 @@
                      straddling child would be cut in half). -->
 
                 <!-- "+ New" create action lives in the sticky header's quick-add ("+") menu. -->
+                <!-- Multi-market M2: the global market switcher. Selecting a market
+                     scopes every list / map / KPI to it; "All markets" is the
+                     exec roll-up. Filled by js/markets.js (hidden until the
+                     markets load, so a single-market org never sees chrome it
+                     doesn't need). -->
+                <div class="app-sidebar-market" id="app-sidebar-market" hidden></div>
                 <!-- Global search — server-backed (js/search.js → GET
                      /api/search). Searches jobs / estimates / leads /
                      clients directly in the DB, so it finds entities even
@@ -3222,7 +3228,7 @@
     <script src="js/api.js?v=82"></script>
     <!-- Multi-market M1: client-side markets cache. Must load BEFORE any
          surface whose picker calls window.p86MarketNames() (jobs.js). -->
-    <script src="js/markets.js?v=1"></script>
+    <script src="js/markets.js?v=2"></script>
     <script src="js/header-weather.js?v=2"></script>
     <script src="js/account.js?v=8"></script>
     <script src="js/voice-input.js?v=11"></script>
@@ -3359,7 +3365,7 @@
          BEFORE any of them so window.p86Pricing is ready. -->
     <script src="js/pricing-pipeline.js?v=2"></script>
     <script src="js/progress.js?v=3"></script>
-    <script src="js/jobs.js?v=199"></script>
+    <script src="js/jobs.js?v=200"></script>
     <script src="js/doc-import.js?v=3"></script>
     <script src="js/job-workflow-ui.js?v=6"></script>
     <!-- Reusable rich-text field (window.p86RichText) — shared WYSIWYG for

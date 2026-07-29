@@ -11599,3 +11599,34 @@ textarea.ci-input { height: auto; resize: vertical; font-family: inherit; }
   border: 1px solid var(--accent, #4f8cff);
   border-radius: 4px;
 }
+
+/* ── Multi-market M2: sidebar market switcher ──────────────────────────
+   Scopes every list / map / KPI. Hidden by markets.js when an org has
+   fewer than 2 markets, so a single-market org never sees dead chrome. */
+.app-sidebar-market { padding: 8px 12px 4px; }
+.sidebar-market-label {
+  display: block; font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--text-muted, #8b90a5); margin: 0 0 4px 2px;
+}
+.sidebar-market-row { display: flex; align-items: center; gap: 7px; }
+.sidebar-market-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  box-shadow: 0 0 0 2px rgba(255,255,255,.06);
+}
+/* Explicit width — css/styles.css has a global `input, select, textarea
+   { width: 100% }` that a bare class LOSES to, which is what collapsed the
+   email-hub row layout. Never ship a new control without one. */
+.sidebar-market-select {
+  width: 100%; flex: 1 1 auto; min-width: 0;
+  background: var(--ng-input, rgba(255,255,255,.05));
+  border: 1px solid rgba(255,255,255,.12); border-radius: 7px;
+  color: inherit; font-size: 12px; padding: 5px 7px; cursor: pointer;
+}
+.sidebar-market-select:hover { border-color: rgba(255,255,255,.28); }
+.sidebar-market-select:focus { outline: none; border-color: #378add; }
+body.light-mode .sidebar-market-select {
+  background: #fff; border-color: rgba(0,0,0,.16); color: #1a1a1f;
+}
+body.light-mode .sidebar-market-label { color: #6b6b76; }
+/* Icon rail (collapsed sidebar): the switcher would be unreadable. */
+.app-sidebar.collapsed .app-sidebar-market { display: none; }
