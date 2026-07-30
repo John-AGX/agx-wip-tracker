@@ -100,25 +100,38 @@
     row.cost += num(w.actualCosts);
     row.backlog += num(w.backlog);
     row.wip += num(w.unbilled);
-    if (flagZeroEarned(w, job)) row.zeroEarned++;
+    if (flagUnallocated(job)) row.zeroEarned++;
   }
 
-  // A job that HAS a contract and HAS reported progress but rolls up to
-  // $0 earned. The live example is "Solace Chimney Cap Replacement"
-  // (j1783288956188): its scopes read 75% / 0% and the building card
-  // shows 37.5%, but no contract dollars were ever allocated to those
-  // scopes, so the revenue-WEIGHTED job percent divides into zero weight
-  // and collapses to 0. The contract is real and counts toward the
-  // market; the earned revenue is genuinely unknown until the contract is
-  // allocated. Counting these is the honest answer — silently summing a
-  // zero would understate every market that holds one.
-  function flagZeroEarned(w, job) {
-    if (num(w.totalIncome) <= 0) return false;      // nothing to earn against
-    if (num(w.revenueEarned) > 0) return false;     // earning fine
-    if (num(w.actualCosts) > 0) return true;        // spending with $0 earned
-    var hasScopes = ((window.appData && window.appData.phases) || [])
-      .some(function (p) { return p && p.jobId === job.id && num(p.pctComplete) > 0; });
-    return hasScopes;
+  /* UNALLOCATED-CONTRACT TRIPWIRE — reports, never corrects.
+   *
+   * Earned revenue is a REVENUE-WEIGHTED average over a job's scopes. A
+   * scope that reports progress but carries $0 of allocated contract
+   * weighs nothing, so its progress is invisible in the rollup: the job
+   * reads lower (or 0%) than the scope cards plainly show. That is
+   * UNALLOCATED CONTRACT — a data problem on the job — not a defect in
+   * the weighted-average math. "Fixing" it by reweighting would silently
+   * change earned revenue on every job in the system.
+   *
+   * Test the CAUSE, not the symptom: a scope with pctComplete > 0 and no
+   * asSoldRevenue. Testing the symptom instead ("$0 earned with costs
+   * logged") flags seven live jobs that are simply early — real costs, no
+   * progress reported — and a warning that cries wolf gets ignored.
+   *
+   * Verified on live data 2026-07-30: 1 hit, Oak Bridge Exterior Stucco
+   * Repairs (1 of 3 scopes unallocated). Solace Chimney Cap Replacement,
+   * the job this bug was originally reported on, has since had its
+   * contract allocated and now rolls up correctly.
+   */
+  function flagUnallocated(job) {
+    if (!job) return false;
+    var phases = (window.appData && window.appData.phases) || [];
+    for (var i = 0; i < phases.length; i++) {
+      var p = phases[i];
+      if (!p || p.jobId !== job.id) continue;
+      if (num(p.pctComplete) > 0 && num(p.asSoldRevenue) <= 0) return true;
+    }
+    return false;
   }
 
   /* ── The rollup ────────────────────────────────────────────────────
@@ -267,10 +280,10 @@
     if (!n) return '';
     return '<div class="p86-mktpnl-warn">' +
       '<strong>' + n + ' job' + (n === 1 ? '' : 's') + '</strong> ' +
-      (n === 1 ? 'has' : 'have') + ' a contract and reported progress but roll up to <strong>$0 earned</strong> — ' +
-      'their contract was never allocated across scopes, so the revenue-weighted percent has nothing to weight. ' +
-      'Contract and cost above are correct; earned revenue and margin are understated by that amount. ' +
-      'Fix by allocating the contract on the job, not here.' +
+      (n === 1 ? 'has a scope' : 'have scopes') + ' reporting progress with <strong>no contract allocated</strong> to ' +
+      (n === 1 ? 'it' : 'them') + '. Earned revenue is revenue-weighted, so that progress weighs zero and does not ' +
+      'reach the rollup — Earned and Margin above are understated. Contract, cost and backlog are unaffected. ' +
+      'Fix it by allocating the contract across the scopes on the job; the number here follows automatically.' +
     '</div>';
   }
 
