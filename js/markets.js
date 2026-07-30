@@ -109,6 +109,21 @@
     } catch (_) {}
   }
 
+  // Which market does this record belong to? Returns the market RECORD
+  // (or null when unassigned / not yet cached). The market_id FK wins;
+  // the legacy `market` TEXT name is the fallback so a row that hasn't
+  // been backfilled still resolves. Every surface that needs to SHOW a
+  // market — the list chips, the P&L rollup — goes through here, so
+  // there's exactly one answer to "what market is this?".
+  function resolve(rec) {
+    if (!rec) return null;
+    if (rec.market_id != null && rec.market_id !== '') {
+      var m = byId(rec.market_id);
+      if (m) return m;
+    }
+    return rec.market ? byName(rec.market) : null;
+  }
+
   // Does a record belong in the current view? The ONE predicate every
   // surface should use, so "unassigned" is handled identically everywhere.
   function matches(rec) {
@@ -121,6 +136,38 @@
   function filter(list) {
     if (!_sel || !Array.isArray(list)) return list || [];
     return list.filter(matches);
+  }
+
+  // Is this org actually multi-market? Same >=2 test the switcher uses,
+  // so the Market column and the P&L comparison appear and disappear
+  // together with it — a single-market org gets no dead chrome anywhere.
+  function hasMulti() { return active().length >= 2; }
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  // Market color chip for a list cell. Falls back to the record's raw
+  // legacy market TEXT when the markets cache can't resolve it (cold
+  // cache / deactivated market), so a cell never goes blank on data that
+  // visibly has a market — it just renders without a color.
+  function chipHTML(rec) {
+    var m = resolve(rec);
+    var label = m ? m.name : (rec && rec.market) || '';
+    if (!label) return '<span class="p86-mkt-chip p86-mkt-chip--none">&mdash;</span>';
+    var color = (m && m.color) || '#8b90a5';
+    return '<span class="p86-mkt-chip" title="' + esc(label) + (m && m.code ? ' (' + esc(m.code) + ')' : '') + '">' +
+             '<span class="p86-mkt-dot" style="background:' + esc(color) + ';"></span>' +
+             esc(label) +
+           '</span>';
+  }
+
+  // The market NAME for sorting / export — plain text, same resolution.
+  function nameFor(rec) {
+    var m = resolve(rec);
+    return m ? m.name : ((rec && rec.market) || '');
   }
 
   // ── switcher UI ──
@@ -150,29 +197,44 @@
   window.p86Markets = {
     load: load, all: all, active: active, byId: byId, byName: byName, names: names,
     selectedId: selectedId, selected: selected, select: select,
-    matches: matches, filter: filter, renderSwitcher: renderSwitcher
+    matches: matches, filter: filter, renderSwitcher: renderSwitcher,
+    resolve: resolve, chipHTML: chipHTML, nameFor: nameFor, hasMulti: hasMulti
   };
   // Convenience globals for the string-concat pickers + list filters.
   window.p86MarketNames = names;
   window.p86MarketFilter = filter;
 
-  document.addEventListener('p86:markets-loaded', renderSwitcher);
-
-  // Re-render whatever surface is open when the market changes. Each entry is
-  // best-effort and independently guarded: a page that isn't mounted (or a
-  // renderer that throws) must never stop the others from updating — a
-  // half-switched UI showing two markets at once is worse than a stale one.
-  document.addEventListener('p86:market-changed', function () {
-    // Verified-global renderers only. Guessed names (renderLeadsMain /
-    // renderEstimatesMain) silently never fire — the switcher would filter the
-    // data and leave the DOM stale, which reads as "the switcher is broken".
-    ['renderJobsMain', 'renderLeadsList', 'renderEstimatesList',
-     'renderSummary', 'renderDashboard'].forEach(function (fn) {
+  // Re-render whatever surface is open. Each entry is best-effort and
+  // independently guarded: a page that isn't mounted (or a renderer that
+  // throws) must never stop the others from updating — a half-switched UI
+  // showing two markets at once is worse than a stale one.
+  //
+  // Verified-global renderers ONLY. Guessed names silently never fire —
+  // the switcher would filter the data and leave the DOM stale, which
+  // reads as "the switcher is broken". `renderSummary` / `renderDashboard`
+  // were exactly that: neither has ever existed (the real one is
+  // renderSummaryDashboard), so nothing on Summary ever re-rendered.
+  // p86MarketPnlRender is the targeted repaint for the Summary P&L block —
+  // preferred over renderSummaryDashboard, which would re-fire every
+  // agenda/inbox/manifest fetch on the page just to update one table.
+  var RERENDER = ['renderJobsMain', 'renderLeadsList', 'renderEstimatesList',
+                  'p86MarketPnlRender'];
+  function rerenderSurfaces() {
+    RERENDER.forEach(function (fn) {
       try { if (typeof window[fn] === 'function') window[fn](); } catch (e) {
         console.warn('[markets] re-render failed for ' + fn + ':', e && e.message);
       }
     });
+  }
+
+  // The cache is warmed asynchronously, so a list that painted first has
+  // blank Market chips (nothing to resolve against yet). Repaint once the
+  // markets land — otherwise the column looks broken until you navigate.
+  document.addEventListener('p86:markets-loaded', function () {
+    renderSwitcher();
+    rerenderSurfaces();
   });
+  document.addEventListener('p86:market-changed', rerenderSurfaces);
 
   // Warm the cache once auth is up. The app fires p86:auth-ready; if we
   // missed it (script order), fall back to a direct load.

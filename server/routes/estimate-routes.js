@@ -153,7 +153,7 @@ router.get('/', requireAuth, async (req, res) => {
     // Wave 1.A Phase 2 — org-scoped list. NULL org_id retained for
     // unbackfilled legacy until NOT NULL tightening.
     const { rows } = await pool.query(
-      'SELECT id, owner_id, data, created_at, updated_at, geocode_lat, geocode_lng, is_locked, sent_at, viewed_at, accepted_at, sent_count, approval_status, sent_to, sent_method, approved_at, approved_by, approval_method, declined_at, decline_reason FROM estimates WHERE organization_id = $1 OR organization_id IS NULL ORDER BY updated_at DESC',
+      'SELECT id, owner_id, data, created_at, updated_at, geocode_lat, geocode_lng, is_locked, sent_at, viewed_at, accepted_at, sent_count, approval_status, sent_to, sent_method, approved_at, approved_by, approval_method, declined_at, decline_reason, market_id FROM estimates WHERE organization_id = $1 OR organization_id IS NULL ORDER BY updated_at DESC',
       [req.user.organization_id]
     );
     // Surface created_at/updated_at + geocode coords + lifecycle timestamps on
@@ -181,7 +181,14 @@ router.get('/', requireAuth, async (req, res) => {
       approved_by: r.approved_by || null,
       approval_method: r.approval_method || null,
       declined_at: r.declined_at,
-      decline_reason: r.decline_reason || null
+      decline_reason: r.decline_reason || null,
+      // Multi-market: the FK column is canonical, and it has to reach the
+      // client or the shared p86MarketFilter predicate has nothing to
+      // match on. Omitting it here is why only the handful of estimates
+      // carrying a legacy market NAME in their blob were resolving.
+      // Numeric in PG (BIGINT), stringified so the client's String()
+      // comparisons behave the same as they do for jobs and leads.
+      market_id: r.market_id != null ? String(r.market_id) : null
     }));
     res.json({ estimates });
   } catch (e) {
@@ -209,6 +216,18 @@ router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), async
         (Array.isArray(estimateLines) && estimateLines.length > 200000) ||
         (Array.isArray(estimateAlternates) && estimateAlternates.length > 20000)) {
       return res.status(400).json({ error: 'Bulk save payload too large' });
+    }
+
+    // Multi-market M3 — resolve this org's markets ONCE for the whole
+    // batch (the client posts every estimate on every save, so a per-row
+    // lookup would be hundreds of queries). Best-effort: if the markets
+    // table can't be read we fall through with a null map and simply
+    // don't touch market_id, rather than failing the save.
+    let marketMap = null;
+    try {
+      marketMap = await require('../services/markets').loadMarketMap(req.user.organization_id);
+    } catch (e) {
+      console.warn('[estimates] market map load failed:', e && e.message);
     }
 
     const client = await pool.connect();
@@ -264,6 +283,14 @@ router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), async
         delete blob.updated_at;
         delete blob.created_at;
         delete blob.owner_id;
+        // Multi-market M3 — market_id is a COLUMN, same as organization_id.
+        // Resolve it before stripping it out of the blob (same reason as
+        // the fields above: a copy inside the JSONB would shadow the
+        // column on the next GET and re-trigger the updated_at diff).
+        const estMarketId = marketMap
+          ? require('../services/markets').resolveMarketId(marketMap, blob)
+          : null;
+        delete blob.market_id;
         // Only bump updated_at when the JSONB actually differs from what's
         // stored. The frontend bulk-save sends EVERY estimate on every
         // save, so without this gate, opening any one estimate would
@@ -274,9 +301,17 @@ router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), async
         // org-filtering routes (next commit) find them. Existing rows
         // keep their backfilled value through the ON CONFLICT path.
         await client.query(
-          `INSERT INTO estimates (id, owner_id, data, organization_id) VALUES ($1, $2, $3, $4)
+          `INSERT INTO estimates (id, owner_id, data, organization_id, market_id) VALUES ($1, $2, $3, $4, $5)
            ON CONFLICT (id) DO UPDATE
              SET data = EXCLUDED.data,
+                 -- COALESCE, not EXCLUDED: this endpoint receives EVERY
+                 -- estimate on every save, and an older client (or one
+                 -- whose markets cache was cold) sends no market_id at
+                 -- all. Assigning EXCLUDED.market_id straight across
+                 -- would silently un-assign the whole portfolio on the
+                 -- next save from such a client. A market can be CHANGED
+                 -- (non-null wins) but never blanked by omission.
+                 market_id = COALESCE(EXCLUDED.market_id, estimates.market_id),
                  updated_at = CASE
                    WHEN estimates.data IS DISTINCT FROM EXCLUDED.data THEN NOW()
                    ELSE estimates.updated_at
@@ -284,7 +319,7 @@ router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), async
           // owner_id = attributed user (acted-as target when disguised). Set
           // on CREATE only (ON CONFLICT DO UPDATE doesn't re-stamp owner). The
           // DELETE /:id 403 guard keeps comparing owner_id to req.user.id.
-          [est.id, getAttributedUserId(req), JSON.stringify(blob), req.user.organization_id]
+          [est.id, getAttributedUserId(req), JSON.stringify(blob), req.user.organization_id, estMarketId]
         );
       }
       await client.query('COMMIT');

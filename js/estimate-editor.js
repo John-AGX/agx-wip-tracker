@@ -1580,6 +1580,31 @@
       '<input id="' + id + '" type="number" step="' + step + '" value="' + escapeHTML(v) + '" placeholder="' + escapeHTML(ph) + '" ' +
         'style="width:100%;padding:6px 8px;font-size:13px;background:var(--bg,#0a0a0f);border:1px solid var(--border,#333);border-radius:6px;color:var(--text,#fff);box-sizing:border-box;" /></div>';
   }
+  // Provenance line for the Tax & Fees popover: which market seeded this
+  // estimate's rate, and whether it still matches that market today.
+  // A drift note is deliberately informational — an estimate is NEVER
+  // silently re-rated from its market, because the number may already
+  // have gone out to a customer.
+  function eeMarketRateNote(est) {
+    var M = window.p86Markets;
+    var m = (M && M.resolve) ? M.resolve(est) : null;
+    if (!m) return '';
+    var rate = Number(m.sales_tax_rate);
+    var name = escapeHTML(m.name || '');
+    if (!isFinite(rate) || rate <= 0) {
+      return '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:6px;line-height:1.5;">' +
+        'Market: <strong>' + name + '</strong> — no default tax rate set.</div>';
+    }
+    var mktPct = Math.round(rate * 100 * 10000) / 10000;
+    var cur = num(est.taxPct);
+    var drift = Math.abs(cur - mktPct) > 0.0001
+      ? ' This estimate is at ' + cur + '% — edit above to change it.'
+      : '';
+    return '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:6px;line-height:1.5;">' +
+      'Market default: <strong>' + name + ' ' + mktPct + '%</strong>, applied when this estimate was created.' +
+      drift + '</div>';
+  }
+
   function eeOpenTaxFeesPopover(ev) {
     if (ev && ev.stopPropagation) ev.stopPropagation();
     // Toggle: a second click on the chip closes it.
@@ -1600,7 +1625,13 @@
       _eeTaxFeesPopField('Flat Fee ($)', 'ee-pop-feeFlat', est.feeFlat, '0.01', '0') +
       _eeTaxFeesPopField('Fee % of Marked-Up', 'ee-pop-feePct', est.feePct, '0.1', '0') +
       _eeTaxFeesPopField('Round Up to Nearest ($)', 'ee-pop-roundTo', est.roundTo, '1', '0 = off') +
-      '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;line-height:1.5;">Tax applies after fees. Round-up is the last step.</div>';
+      '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;line-height:1.5;">Tax applies after fees. Round-up is the last step.</div>' +
+      // Multi-market M3 — say WHERE the tax rate came from. The rate is
+      // seeded from the market at create and then owned by this estimate;
+      // without this line an estimator has no way to tell a market
+      // default from a number someone typed, and no reason to expect the
+      // rate NOT to follow a later change to the market.
+      eeMarketRateNote(est);
     document.body.appendChild(pop);
     // Anchor under the chip, clamped to the viewport.
     var r = chipEl.getBoundingClientRect();
@@ -2775,6 +2806,20 @@
     if (!sectionId) {
       var _alt = getActiveAlternate();
       if (_alt) sectionId = eeEnsureSectionByCategory(est, _alt, 'materials');
+    }
+    // Multi-market M3 — a line born under Direct Labor starts at the
+    // market's default labor rate (stamped onto the estimate at create
+    // from markets.labor_rate_default). It is a SEED, not a lock: the
+    // estimator overwrites the cell like any other. Only applied to
+    // labor sections, and only when the estimate actually carries a
+    // rate, so nothing changes for estimates without a market.
+    if (sectionId) {
+      var _sect = (appData.estimateLines || []).find(function (l) { return l.id === sectionId; });
+      var _rate = Number(est.laborRate);
+      if (_sect && _sect.btCategory === 'labor' && isFinite(_rate) && _rate > 0) {
+        newLine.unitCost = _rate;
+        newLine.unit = 'HR';
+      }
     }
     if (sectionId) {
       var arr = appData.estimateLines;

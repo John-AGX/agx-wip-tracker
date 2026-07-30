@@ -192,12 +192,44 @@ function p86Ask(message, opts) {
     { key: 'updated_at', label: 'Updated', sort: true },
     { key: 'id', label: 'Lead ID', sort: false }
   ];
-  var LEADS_DEFAULT_COLS = ['title', 'client', 'status', 'revenue', 'confidence', 'salesperson', 'project_type', 'projected_sale_date', 'next_followup_at', 'status_changed_at', 'updated_at'];
+  // 'market' is in the default set as of M3 (multi-market). See
+  // restoreLeadCols for why the default alone isn't enough.
+  var LEADS_DEFAULT_COLS = ['title', 'client', 'status', 'market', 'revenue', 'confidence', 'salesperson', 'project_type', 'projected_sale_date', 'next_followup_at', 'status_changed_at', 'updated_at'];
   var _leadCols = null;   // visible column keys; null → LEADS_DEFAULT_COLS
   function leadAllColKeys() { return LEAD_COLS.map(function (c) { return c.key; }); }
-  function leadVisibleCols() { var keys = _leadCols || LEADS_DEFAULT_COLS; return LEAD_COLS.filter(function (c) { return keys.indexOf(c.key) >= 0; }); }
+  function leadVisibleCols() {
+    var keys = _leadCols || LEADS_DEFAULT_COLS;
+    var multi = !!(window.p86Markets && window.p86Markets.hasMulti && window.p86Markets.hasMulti());
+    return LEAD_COLS.filter(function (c) {
+      // A single-market org gets no Market column even if it's in the
+      // saved set — same >=2 test the sidebar switcher hides itself on.
+      if (c.key === 'market' && !multi) return false;
+      return keys.indexOf(c.key) >= 0;
+    });
+  }
   function persistLeadCols() { try { localStorage.setItem('p86-leads-cols', JSON.stringify(_leadCols || LEADS_DEFAULT_COLS)); } catch (e) {} }
-  function restoreLeadCols() { try { var s = JSON.parse(localStorage.getItem('p86-leads-cols') || 'null'); if (Array.isArray(s) && s.length) _leadCols = s; } catch (e) {} }
+  function restoreLeadCols() {
+    try {
+      var s = JSON.parse(localStorage.getItem('p86-leads-cols') || 'null');
+      if (Array.isArray(s) && s.length) _leadCols = s;
+    } catch (e) {}
+    // One-time upgrade: anyone who has ever opened the Leads list has a
+    // saved column set, and a saved set silently out-ranks the default —
+    // so adding 'market' to LEADS_DEFAULT_COLS alone would ship the
+    // column to new users only, i.e. to nobody who actually uses this.
+    // Flagged so a user who then REMOVES the column keeps it removed.
+    try {
+      if (_leadCols && _leadCols.indexOf('market') === -1 &&
+          !localStorage.getItem('p86-leads-cols-mktv1')) {
+        var at = _leadCols.indexOf('status');
+        _leadCols.splice(at >= 0 ? at + 1 : _leadCols.length, 0, 'market');
+        localStorage.setItem('p86-leads-cols-mktv1', '1');
+        persistLeadCols();
+      } else if (!localStorage.getItem('p86-leads-cols-mktv1')) {
+        localStorage.setItem('p86-leads-cols-mktv1', '1');
+      }
+    } catch (e) {}
+  }
   var _isTerminalLead = function (l) { return ['sold', 'lost', 'no_opportunity'].indexOf(l.status) !== -1; };
   var _overdueDate = function (val, active) { if (!val) return false; var t = new Date(val).getTime(); return active && !isNaN(t) && t < Date.now() - 86400000; };
 
@@ -219,7 +251,13 @@ function p86Ask(message, opts) {
       case 'salesperson': return '<td data-col="salesperson">' + escapeHTML(l.salesperson_name || '') + '</td>';
       case 'source': return '<td data-col="source">' + escapeHTML(l.source || '') + '</td>';
       case 'project_type': return '<td data-col="project_type">' + escapeHTML(l.project_type || '') + '</td>';
-      case 'market': return '<td data-col="market">' + escapeHTML(l.market || '') + '</td>';
+      // Multi-market M3 — color chip instead of raw text, resolved through
+      // p86Markets so a lead assigned by market_id (no legacy text) still
+      // shows its market. Falls back to the raw text on a cold cache.
+      case 'market': return '<td data-col="market">' +
+        ((window.p86Markets && window.p86Markets.chipHTML)
+          ? window.p86Markets.chipHTML(l)
+          : escapeHTML(l.market || '')) + '</td>';
       case 'property_name': return '<td data-col="property_name">' + escapeHTML(l.property_name || '') + '</td>';
       case 'street_address': return '<td data-col="street_address">' + escapeHTML(l.street_address || '') + '</td>';
       case 'city': return '<td data-col="city">' + escapeHTML(l.city || '') + '</td>';

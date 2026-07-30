@@ -3,8 +3,26 @@ const { pool } = require('../db');
 const { requireAuth, requireRole, isAdminish } = require('../auth');
 const { sendEmail } = require('../email');
 const { jobAssigned } = require('../email-templates');
+const markets = require('../services/markets');
 
 const router = express.Router();
+
+// Multi-market — resolve a job blob's market to the market_id FK.
+// Jobs carry their market as a NAME inside the JSONB (`data.market`;
+// there is no market column on jobs), so this maps that name onto the
+// column every write, which is what keeps the FK from going stale when
+// someone re-markets a job. Best-effort: a markets lookup failure
+// returns null and the write proceeds unassigned — market is additive
+// and nullable, and the re-runnable admin backfill catches strays.
+async function marketIdForJob(job, orgId, client) {
+  try {
+    const map = await markets.loadMarketMap(orgId, client);
+    return markets.resolveMarketId(map, job || {});
+  } catch (e) {
+    console.warn('[jobs] market resolve failed:', e && e.message);
+    return null;
+  }
+}
 
 // Fire a job-assigned email to the new owner. Fire-and-forget; respects
 // the user's notification_prefs.job_assignment opt-out.
@@ -67,7 +85,7 @@ router.get('/', requireAuth, async (req, res) => {
     // data remains visible until the NOT NULL tightening commit.
     const { rows } = await pool.query(`
       SELECT j.id, j.data, j.owner_id, j.created_at, j.updated_at,
-             j.geocode_lat, j.geocode_lng, j.geocode_address,
+             j.geocode_lat, j.geocode_lng, j.geocode_address, j.market_id,
              COALESCE(ja.access_level, '') AS access_level
       FROM jobs j
       LEFT JOIN job_access ja ON ja.job_id = j.id AND ja.user_id = $1
@@ -88,7 +106,12 @@ router.get('/', requireAuth, async (req, res) => {
       return { ...j.data, id: j.id, owner_id: j.owner_id, _canEdit: canEdit,
         // Base version for optimistic concurrency on bulk save (millisecond ISO).
         _updatedAt: j.updated_at ? new Date(j.updated_at).toISOString() : null,
-        geocode_lat: j.geocode_lat, geocode_lng: j.geocode_lng, geocode_address: j.geocode_address };
+        geocode_lat: j.geocode_lat, geocode_lng: j.geocode_lng, geocode_address: j.geocode_address,
+        // Multi-market — the FK column, stringified to match how the
+        // client compares market ids everywhere else. The blob's legacy
+        // `market` NAME still rides along inside the spread above; the
+        // shared p86Markets predicate prefers this and falls back to it.
+        market_id: j.market_id != null ? String(j.market_id) : null };
     });
     res.json({ jobs: result });
   } catch (e) {
@@ -132,9 +155,12 @@ router.post('/', requireAuth, requireRole('admin', 'pm'), async (req, res) => {
     }
     // Wave 1.A — include organization_id on every new write so the
     // org-filtering routes (next commit) find this row immediately.
+    // Multi-market — stamp market_id at birth so a new job never has to
+    // wait on the backfill to show up in its market's P&L.
+    const marketId = await marketIdForJob(req.body, req.user.organization_id);
     await pool.query(
-      'INSERT INTO jobs (id, owner_id, data, organization_id) VALUES ($1, $2, $3, $4)',
-      [id, ownerId, JSON.stringify(req.body), req.user.organization_id]
+      'INSERT INTO jobs (id, owner_id, data, organization_id, market_id) VALUES ($1, $2, $3, $4, $5)',
+      [id, ownerId, JSON.stringify(req.body), req.user.organization_id, marketId]
     );
 
     // Notify the new owner if the saving client opted in. Skip when
@@ -187,23 +213,33 @@ router.post('/convert', requireAuth, requireRole('admin', 'pm'), async (req, res
     }
 
     // Guard: don't double-convert a lead that's already linked to a job.
+    // Also grab the lead's market_id — the conversion is where a market
+    // is inherited down the chain lead -> job -> estimate.
+    let leadMarketId = null;
     if (leadId) {
       const lr = await pool.query(
-        'SELECT job_id FROM leads WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+        'SELECT job_id, market_id FROM leads WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
         [leadId, orgId]
       );
       if (!lr.rows.length) return res.status(404).json({ error: 'Lead not found' });
       if (lr.rows[0].job_id) {
         return res.status(409).json({ error: 'Lead already linked to a job', job_id: lr.rows[0].job_id });
       }
+      leadMarketId = lr.rows[0].market_id || null;
     }
 
     const id = job.id || 'job' + Date.now();
 
+    // Market for the converted job: what the job blob names wins (the
+    // convert dialog carries the lead's market forward and the user can
+    // have corrected it), with the lead's own FK as the fallback for a
+    // lead whose market was assigned by id rather than by name.
+    const jobMarketId = (await marketIdForJob(job, orgId)) || leadMarketId;
+
     await client.query('BEGIN');
     await client.query(
-      'INSERT INTO jobs (id, owner_id, data, organization_id, lead_id, estimate_id) VALUES ($1, $2, $3, $4, $5, $6)',
-      [id, ownerId, JSON.stringify(job), orgId, leadId, estimateId]
+      'INSERT INTO jobs (id, owner_id, data, organization_id, lead_id, estimate_id, market_id) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+      [id, ownerId, JSON.stringify(job), orgId, leadId, estimateId, jobMarketId]
     );
     if (leadId) {
       await client.query(
@@ -234,9 +270,13 @@ router.post('/convert', requireAuth, requireRole('admin', 'pm'), async (req, res
       // Estimates keep their fields in a JSONB `data` blob — stamp job_id +
       // status:'sold' there, and lock the row so it can't be edited after the
       // lead is won (an admin can unlock via PUT /api/estimates/:id/lock).
+      // market_id rides along via COALESCE: the sold estimate inherits
+      // the job's market when it doesn't already have one, and an
+      // estimate that WAS already assigned keeps its own. A conversion
+      // must never silently re-market an estimate that has one.
       await client.query(
-        "UPDATE estimates SET data = jsonb_set(jsonb_set(COALESCE(data, '{}'::jsonb), '{job_id}', to_jsonb($1::text)), '{status}', to_jsonb('sold'::text)), is_locked = TRUE, accepted_at = COALESCE(accepted_at, NOW()), updated_at = NOW() WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)",
-        [id, estimateId, orgId]
+        "UPDATE estimates SET data = jsonb_set(jsonb_set(COALESCE(data, '{}'::jsonb), '{job_id}', to_jsonb($1::text)), '{status}', to_jsonb('sold'::text)), is_locked = TRUE, accepted_at = COALESCE(accepted_at, NOW()), market_id = COALESCE(market_id, $4), updated_at = NOW() WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)",
+        [id, estimateId, orgId, jobMarketId]
       );
     }
     await client.query('COMMIT');
@@ -557,6 +597,18 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, re
     const conflicts = [];
     const versions = {};
 
+    // Multi-market — one markets lookup for the whole batch. This is the
+    // path a market CHANGE travels (the job picker writes data.market and
+    // saves through here), so without it the FK would be correct only
+    // until the first re-market and the backfill would never repair it
+    // (the backfill only fills NULLs, by design).
+    let marketMap = null;
+    try {
+      marketMap = await markets.loadMarketMap(req.user.organization_id);
+    } catch (e) {
+      console.warn('[jobs] bulk market map load failed:', e && e.message);
+    }
+
     const client = await pool.connect();
     let saved = 0;
     let skipped = 0;
@@ -615,17 +667,31 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, re
         delete jobBlob._canEdit;
         delete jobBlob._notify;
         delete jobBlob.owner_id;
+        // market_id is a COLUMN (hydrated onto the GET response), and the
+        // job's USER-FACING market is the NAME in the picker. If a stale
+        // id copy survived in the blob it would out-rank that name in
+        // resolveMarketId below and re-marketing a job would update the
+        // label while the FK — and therefore the market's P&L — silently
+        // stayed put. Strip it so the name is what resolves.
+        delete jobBlob.market_id;
         // For new jobs, admins can specify owner_id to assign a PM. Non-admins
         // (PMs creating their own jobs) always own what they create. ON CONFLICT
         // never touches owner_id, so existing jobs keep their original PM.
         const ownerId = (isAdminish(req.user) && job.owner_id) ? job.owner_id : req.user.id;
         const isNewJob = !existing.rows.length;
         const priorOwnerId = isNewJob ? null : existing.rows[0].owner_id;
+        // Resolve from the blob's market NAME. A blob that names no
+        // market resolves to null, and COALESCE below keeps whatever the
+        // row already had rather than blanking it — the same
+        // never-un-assign-by-omission rule the estimates bulk save uses.
+        const jobMarketId = marketMap ? markets.resolveMarketId(marketMap, jobBlob) : null;
         const up = await client.query(
-          `INSERT INTO jobs (id, owner_id, data) VALUES ($1, $2, $3)
-           ON CONFLICT (id) DO UPDATE SET data = $3, updated_at = NOW()
+          `INSERT INTO jobs (id, owner_id, data, market_id) VALUES ($1, $2, $3, $4)
+           ON CONFLICT (id) DO UPDATE SET data = $3,
+                 market_id = COALESCE(EXCLUDED.market_id, jobs.market_id),
+                 updated_at = NOW()
            RETURNING updated_at`,
-          [job.id, ownerId, JSON.stringify(jobBlob)]
+          [job.id, ownerId, JSON.stringify(jobBlob), jobMarketId]
         );
         // Hand back the new version so the client can advance its base and not
         // false-conflict on its own next save.

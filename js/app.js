@@ -912,6 +912,16 @@
                     '</div>' +
                 '</div>' +
 
+                // ── Per-market P&L (multi-market M3) ───────────────
+                // Comparison table under "All markets", single-market
+                // figures when the sidebar switcher is set. Rendered by
+                // js/market-pnl.js, which SUMS getJobWIP() and derives
+                // nothing of its own; it hides itself entirely when the
+                // org has fewer than two markets (same test the switcher
+                // uses), so single-market orgs see no empty section
+                // label. The label lives inside the host for that reason.
+                '<div id="summary-market-pnl" class="p86-mktpnl"></div>' +
+
                 // ── System Snapshot (Wave M3) ──────────────────────
                 // Manifest-driven org-wide pulse. Fetched async after
                 // first paint via fetchManifest(); the placeholder
@@ -1009,6 +1019,11 @@
             renderSummaryTodayItinerary();
             renderSummaryNeedsYou();
             renderSummaryNotes();
+            // Per-market P&L. Self-hides on a single-market org and
+            // repaints itself on p86:market-changed (js/markets.js calls
+            // p86MarketPnlRender), so it never needs a full Summary
+            // repaint just to follow the switcher.
+            if (window.p86MarketPnl) window.p86MarketPnl.render();
             paintSnapshotRow();
             fetchWorkflowAttentionCounts();
             fetchComplianceAttentionCounts();

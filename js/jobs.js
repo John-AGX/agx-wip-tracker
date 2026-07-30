@@ -1783,7 +1783,7 @@ function renderJobsMain() {
                     var w = getJobWIP(j.id);
                     aoa.push([
                         j.jobNumber || '', j.title || '', j.client || '', getJobOwnerName(j) || '',
-                        j.status || '', j.jobType || '', j.market || '',
+                        j.status || '', j.jobType || '', marketName(j),
                         Number(w.totalIncome || 0), Number(j.pctComplete || 0),
                         Number(w.displayProfit || 0), Number((w.displayMargin || 0).toFixed(1)),
                         j.address || [j.street_address, j.city, j.state].filter(Boolean).join(', ') || '',
@@ -1901,6 +1901,30 @@ function renderJobsMain() {
             return '';
         }
 
+        // ── Multi-market M3: the Market column ────────────────────────
+        // Both helpers go through p86Markets so the chip, the sort key
+        // and the P&L rollup all answer "what market is this?" the same
+        // way (market_id FK first, legacy `market` text as fallback).
+        // Degrade to the raw text when markets.js hasn't loaded — a cold
+        // cache should show a plain label, never an empty cell.
+        function marketChip(rec) {
+            if (window.p86Markets && window.p86Markets.chipHTML) return window.p86Markets.chipHTML(rec);
+            return escapeHTML((rec && rec.market) || '');
+        }
+        function marketName(rec) {
+            if (window.p86Markets && window.p86Markets.nameFor) return window.p86Markets.nameFor(rec);
+            return (rec && rec.market) || '';
+        }
+        // Single-market orgs get no Market column at all — a column where
+        // every row says the same thing is noise, and it matches the
+        // sidebar switcher, which hides itself under the same test.
+        function syncJobsMarketColumn() {
+            var show = !!(window.p86Markets && window.p86Markets.hasMulti && window.p86Markets.hasMulti());
+            document.querySelectorAll('#jobs-table [data-col="market"]').forEach(function (el) {
+                el.style.display = show ? '' : 'none';
+            });
+        }
+
         function renderJobsTable() {
             const tbody = document.querySelector('#jobs-table tbody');
             tbody.innerHTML = '';
@@ -1923,8 +1947,12 @@ function renderJobsMain() {
                             vb = ((b.jobNumber || '') + ' ' + (b.title || '')).toLowerCase();
                             return va.localeCompare(vb) * dir;
                         case 'market':
-                            va = (a.market || '').toLowerCase();
-                            vb = (b.market || '').toLowerCase();
+                            // Sort on the RESOLVED market name, not the raw
+                            // legacy text — otherwise a job assigned by
+                            // market_id (with no text) sorts as blank while
+                            // its chip clearly shows a market.
+                            va = marketName(a).toLowerCase();
+                            vb = marketName(b).toLowerCase();
                             return va.localeCompare(vb) * dir;
                         case 'status':
                             va = (a.status || '').toLowerCase();
@@ -1995,6 +2023,7 @@ function renderJobsMain() {
                     <td data-col="client">${escapeHTML(job.client) || '—'}</td>
                     <td data-col="pm">${pmCell}</td>
                     <td data-col="status"><span class="badge ${statusClass}">${escapeHTML(job.status)}</span></td>
+                    <td data-col="market">${marketChip(job)}</td>
                     <td data-col="contract" style="text-align: right;">${formatCurrency(w.totalIncome)}</td>
                     <td data-col="pctcomplete" style="text-align: right;"><div class="progress-bar" style="margin-bottom: 2px; height: 6px;"><div class="progress-fill" style="width: ${w.pctComplete}%"></div></div><span style="font-size: 12px;">${w.pctComplete.toFixed(1)}%</span></td>
                     <td data-col="profit" style="text-align: right; color: ${w.displayProfit >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(w.displayProfit)}</td>
@@ -2005,6 +2034,9 @@ function renderJobsMain() {
 
             // Reorderable / resizable / freezable columns + internal scroll.
             if (window.p86Tables) window.p86Tables.enhance('jobs');
+            // After enhance() — it reorders <th>/<td> by data-col, so
+            // hiding first would just get shuffled around.
+            syncJobsMarketColumn();
             syncJobsSelectAll(); updateJobsBulkBar();
         }
 

@@ -11630,3 +11630,100 @@ body.light-mode .sidebar-market-select {
 body.light-mode .sidebar-market-label { color: #6b6b76; }
 /* Icon rail (collapsed sidebar): the switcher would be unreadable. */
 .app-sidebar.collapsed .app-sidebar-market { display: none; }
+
+/* ── Multi-market M3: market chips on the lists ───────────────────────
+   One chip style shared by the Jobs / Leads / Estimates Market column,
+   emitted by p86Markets.chipHTML(). The dot carries the market's own
+   color so a market is identifiable at a glance without reading. */
+.p86-mkt-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; line-height: 1.3; white-space: nowrap;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+}
+.p86-mkt-chip--none { color: var(--text-dim, #888); }
+.p86-mkt-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  box-shadow: 0 0 0 2px rgba(255,255,255,.06);
+}
+body.light-mode .p86-mkt-dot { box-shadow: 0 0 0 2px rgba(0,0,0,.05); }
+
+/* ── Multi-market M3: per-market P&L on Summary ───────────────────────
+   Read-only rollup of getJobWIP() grouped by market. The <tfoot> total
+   row is the reconciliation check made visible — the body rows must sum
+   to it, so it is styled to read as a rule beneath them, not as data. */
+.p86-mktpnl { margin: 0 0 4px; }
+.p86-mktpnl[hidden] { display: none; }
+/* Wide table, narrow laptops: scroll INSIDE the block. Without this the
+   dashboard column itself scrolls sideways and drags the whole
+   command-center layout with it. */
+.p86-mktpnl-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border, rgba(255,255,255,.08));
+  border-radius: 10px;
+  background: var(--surface2, rgba(255,255,255,.03));
+}
+.p86-mktpnl-table {
+  width: 100%; border-collapse: collapse; font-size: 12px; min-width: 660px;
+}
+.p86-mktpnl-table th {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+  font-weight: 600; color: var(--text-dim, #8b90a5);
+  padding: 8px 10px; text-align: left; white-space: nowrap;
+  border-bottom: 1px solid var(--border, rgba(255,255,255,.1));
+}
+.p86-mktpnl-table td {
+  padding: 7px 10px; color: var(--text, #fff); white-space: nowrap;
+  border-bottom: 1px solid var(--border, rgba(255,255,255,.05));
+}
+.p86-mktpnl-table th.num, .p86-mktpnl-table td.num { text-align: right; }
+.p86-mktpnl-table tbody tr:last-child td { border-bottom: none; }
+.p86-mktpnl-name { display: flex; align-items: center; gap: 7px; }
+.p86-mktpnl-code {
+  font-size: 9px; letter-spacing: .06em; color: var(--text-dim, #8b90a5);
+  border: 1px solid var(--border, rgba(255,255,255,.14));
+  border-radius: 4px; padding: 0 4px;
+}
+/* A market with no jobs and no leads still gets a row — dimmed, because
+   "Denver: $0" is an answer, not an empty cell. */
+.p86-mktpnl-quiet td { opacity: .5; }
+.p86-mktpnl-sub { font-size: 10px; color: var(--text-dim, #8b90a5); margin-left: 5px; }
+.p86-mktpnl-total td {
+  border-top: 1px solid var(--border, rgba(255,255,255,.18));
+  border-bottom: none; font-weight: 600;
+  background: var(--surface, rgba(255,255,255,.03));
+}
+/* Single-market view — same figures as that market's comparison row. */
+.p86-mktpnl-head {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 13px; color: var(--text, #fff); margin: 0 0 8px 2px;
+}
+.p86-mktpnl-tiles {
+  display: grid; gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+.p86-mktpnl-tile {
+  padding: 9px 11px; border-radius: 9px;
+  border: 1px solid var(--border, rgba(255,255,255,.08));
+  background: var(--surface2, rgba(255,255,255,.03));
+}
+.p86-mktpnl-tile-label {
+  font-size: 9px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-dim, #8b90a5); margin-bottom: 3px;
+}
+.p86-mktpnl-tile-value { font-size: 16px; font-weight: 700; }
+/* Unallocated-contract warning. This reports an UPSTREAM data problem
+   (a job whose contract was never allocated across its scopes rolls up
+   to $0 earned) — the rollup deliberately does not absorb it. */
+.p86-mktpnl-warn {
+  margin-top: 8px; padding: 8px 11px; border-radius: 8px;
+  font-size: 11px; line-height: 1.45;
+  color: var(--text, #fff);
+  background: rgba(251, 191, 36, .10);
+  border: 1px solid rgba(251, 191, 36, .32);
+}
+body.light-mode .p86-mktpnl-scroll { background: #fff; border-color: rgba(0,0,0,.1); }
+body.light-mode .p86-mktpnl-table td { color: #1a1a1f; border-bottom-color: rgba(0,0,0,.06); }
+body.light-mode .p86-mktpnl-table th { color: #6b6b76; border-bottom-color: rgba(0,0,0,.1); }
+body.light-mode .p86-mktpnl-total td { background: rgba(0,0,0,.03); border-top-color: rgba(0,0,0,.16); }
+body.light-mode .p86-mktpnl-tile { background: #fff; border-color: rgba(0,0,0,.1); }
+body.light-mode .p86-mktpnl-warn { background: rgba(180, 120, 10, .10); border-color: rgba(180, 120, 10, .3); color: #4a3708; }

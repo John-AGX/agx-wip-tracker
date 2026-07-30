@@ -171,6 +171,8 @@ function compareEstimates(a, b, key, dir) {
     } else if (key === 'client') {
         av = (a.client || a.community || '').toLowerCase();
         bv = (b.client || b.community || '').toLowerCase();
+    } else if (key === 'market') {
+        av = estMarketName(a).toLowerCase(); bv = estMarketName(b).toLowerCase();
     } else { // title
         av = (a.title || '').toLowerCase(); bv = (b.title || '').toLowerCase();
     }
@@ -230,6 +232,25 @@ window.computeEstimateTotals = computeEstimateTotals;
 // a `.sortable` th picks up its chevron + accent color from the global
 // `th.sortable.sort-asc/desc` rules in styles.css. No inline arrows or
 // label-color overrides here.
+// ── Multi-market M3: the Market column ────────────────────────────────
+// Estimates carry market_id as a COLUMN (hydrated by GET /api/estimates)
+// rather than a legacy market NAME — most estimates predate the text
+// field entirely — so both helpers go through p86Markets, which prefers
+// the FK and falls back to the name.
+function estMarketMulti() {
+    return !!(window.p86Markets && window.p86Markets.hasMulti && window.p86Markets.hasMulti());
+}
+function estMarketChip(est) {
+    return (window.p86Markets && window.p86Markets.chipHTML)
+        ? window.p86Markets.chipHTML(est)
+        : escapeHTML((est && est.market) || '');
+}
+function estMarketName(est) {
+    return (window.p86Markets && window.p86Markets.nameFor)
+        ? window.p86Markets.nameFor(est)
+        : ((est && est.market) || '');
+}
+
 function estimatesHeaderCell(label, key, opts) {
     opts = opts || {};
     var active = _estimatesSort.key === key;
@@ -605,14 +626,14 @@ function p86EstExportSelected() {
         document.head.appendChild(s);
     });
     load.then(function(XLSX) {
-        var header = ['Title', 'Client', 'Community', 'Job Type', 'Status', 'Lines', 'Base Cost', 'Markup %', 'Client Price', 'Margin %', 'Sent', 'Created', 'Updated', 'Estimate ID'];
+        var header = ['Title', 'Client', 'Community', 'Job Type', 'Status', 'Market', 'Lines', 'Base Cost', 'Markup %', 'Client Price', 'Margin %', 'Sent', 'Created', 'Updated', 'Estimate ID'];
         var aoa = [header];
         rows.forEach(function(e) {
             var t = e.__totals || computeEstimateTotals(e);
             var margin = t.markedUp > 0 ? ((t.markedUp - t.baseCost) / t.markedUp) * 100 : 0;
             aoa.push([
                 e.title || '', e.client || '', e.community || '', e.jobType || '',
-                estStatusMeta(e).label, t.lineCount,
+                estStatusMeta(e).label, estMarketName(e), t.lineCount,
                 Number(t.baseCost || 0), Number((t.blendedMarkup || 0).toFixed(1)),
                 Number(t.clientPrice || 0), Number(margin.toFixed(1)),
                 e.sent_at ? String(e.sent_at).slice(0, 10) : '',
@@ -689,6 +710,11 @@ function renderEstimatesList() {
                 estimatesHeaderCell('Title',         'title') +
                 estimatesHeaderCell('Client / Community', 'client') +
                 estimatesHeaderCell('Status',        'status') +
+                // Column is emitted only on a multi-market org (same >=2
+                // test as the sidebar switcher). Header and cell are
+                // gated by the SAME flag so they can never desync — a
+                // header without its cell shifts every column right.
+                (estMarketMulti() ? estimatesHeaderCell('Market', 'market') : '') +
                 estimatesHeaderCell('Lines',         'lines',       { num: true }) +
                 estimatesHeaderCell('Base Cost',     'baseCost',    { num: true }) +
                 estimatesHeaderCell('Markup %',      'markup',      { num: true }) +
@@ -705,7 +731,10 @@ function renderEstimatesList() {
                     '<div class="p86-tbl-scroll">' +
                         '<table id="estimates-table" class="dense-table">' +
                             '<thead><tr>' + headerRow + '</tr></thead>' +
-                            '<tbody><tr><td colspan="11" style="padding:24px;text-align:center;color:var(--text-dim,#888);">' + msg + '</td></tr></tbody>' +
+                            // colspan tracks the Market column so the empty
+                        // state still spans the full table on a
+                        // multi-market org.
+                        '<tbody><tr><td colspan="' + (estMarketMulti() ? 12 : 11) + '" style="padding:24px;text-align:center;color:var(--text-dim,#888);">' + msg + '</td></tr></tbody>' +
                         '</table>' +
                     '</div>';
                 return;
@@ -754,6 +783,7 @@ function renderEstimatesList() {
                     '<td data-col="title"><strong>' + escapeHTML(est.title || '(untitled)') + '</strong>' + titleSuffix + '</td>' +
                     '<td data-col="client">' + clientLabel + '</td>' +
                     '<td data-col="status" style="white-space:nowrap;"><span class="est-status-badge p86-statuschip" style="--c:' + sm.color + ';">' + sm.label + '</span>' + statusAction + '</td>' +
+                    (estMarketMulti() ? '<td data-col="market">' + estMarketChip(est) + '</td>' : '') +
                     '<td data-col="lines" class="num">' + t.lineCount + '</td>' +
                     '<td data-col="baseCost" class="num">' + formatCurrency(t.baseCost) + '</td>' +
                     '<td data-col="markup" class="num" style="color:#fbbf24;">' + t.blendedMarkup.toFixed(1) + '%</td>' +
@@ -839,6 +869,61 @@ function renderEstimatesList() {
             { name: 'Subcontractors Costs',       btCategory: 'sub',       markup: 0 }
         ];
 
+        /* ── Multi-market M3: what market does a NEW estimate belong to? ──
+         * Order matters and it is not arbitrary:
+         *   1. The LEAD it was started from. This is the real answer —
+         *      an estimate is written for a specific property, and the
+         *      lead already knows which market that property is in.
+         *   2. The sidebar switcher's current selection. If you're
+         *      working inside Orlando, a new estimate is an Orlando
+         *      estimate.
+         *   3. Nothing. Unassigned is a valid state (the FK is nullable
+         *      by design); the re-runnable backfill catches it later.
+         *
+         * Guessing from the address would be the tempting fourth rule —
+         * it isn't here on purpose. A wrong market silently mis-rates the
+         * sales tax on a real proposal.
+         */
+        function resolveNewEstimateMarket(leadId) {
+            var M = window.p86Markets;
+            if (!M) return null;
+            if (leadId && window.p86Leads && window.p86Leads.getCached) {
+                var lead = window.p86Leads.getCached().find(function (l) { return l.id === leadId; });
+                var fromLead = lead && M.resolve ? M.resolve(lead) : null;
+                if (fromLead) return fromLead;
+            }
+            return (M.selected && M.selected()) || null;
+        }
+
+        // Stamp the market's money defaults onto a NEW estimate.
+        //
+        // ⚠ NEW ESTIMATES ONLY. This is never applied to an existing
+        // estimate: silently re-rating a proposal that has already been
+        // priced (or sent) would change a number the customer was quoted.
+        // Changing a market's tax rate affects what gets written NEXT,
+        // never what was already written.
+        //
+        // sales_tax_rate is stored as a RATE (0.0700 = 7%); est.taxPct is
+        // a PERCENT (7). p86Pricing.applyFeesAndTax multiplies by
+        // taxPct/100, so the ×100 here is required, not cosmetic.
+        function applyMarketDefaults(est, market) {
+            if (!est || !market) return;
+            est.market_id = String(market.id);
+            est.market = market.name || '';
+            var rate = Number(market.sales_tax_rate);
+            if (isFinite(rate) && rate > 0 && (est.taxPct == null || est.taxPct === '')) {
+                est.taxPct = Math.round(rate * 100 * 10000) / 10000;
+            }
+            var labor = Number(market.labor_rate_default);
+            if (isFinite(labor) && labor > 0 && (est.laborRate == null || est.laborRate === '')) {
+                // Seeds the unit cost of new Direct Labor lines in the
+                // editor — a default the estimator can always override
+                // per line, not a locked rate.
+                est.laborRate = labor;
+            }
+        }
+        window.p86ApplyMarketDefaults = applyMarketDefaults;
+
         function createNewEstimate() {
             const estId = 'e' + Date.now();
             const defaultAlternateId = 'alt_default';
@@ -868,6 +953,13 @@ function renderEstimatesList() {
                 alternates: [{ id: defaultAlternateId, name: 'Base', isDefault: true, scope: seededScope }],
                 activeAlternateId: defaultAlternateId
             };
+            // Multi-market M3 — inherit the market (from the lead, else
+            // the active switcher) and the money defaults that come with
+            // it. This is the fix for "estimates don't inherit a market
+            // on create": before this, market_id was only ever set by the
+            // backfill, and only for the ~1-in-25 estimates that had
+            // already been converted to a job.
+            applyMarketDefaults(est, resolveNewEstimateMarket(est.lead_id));
             appData.estimates.push(est);
             // Seed the standard sections under the default alternate.
             ESTIMATE_STANDARD_SECTIONS.forEach(function(s, idx) {

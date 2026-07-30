@@ -209,7 +209,20 @@
       var known = {};
       def.forEach(function (c) { known[c] = true; });
       var saved = layout.order.filter(function (c) { return known[c]; });
-      def.forEach(function (c) { if (saved.indexOf(c) === -1) saved.push(c); });
+      // Columns the renderer has since ADDED aren't in the saved order.
+      // Slot each one in beside its default left-neighbour instead of
+      // pushing it to the far right: a saved layout is nearly universal
+      // (anyone who has opened the list has one), so "append" meant every
+      // new column shipped to the one edge nobody looks at.
+      def.forEach(function (c, i) {
+        if (saved.indexOf(c) !== -1) return;
+        var at = saved.length;
+        for (var j = i - 1; j >= 0; j--) {
+          var p = saved.indexOf(def[j]);
+          if (p !== -1) { at = p + 1; break; }
+        }
+        saved.splice(at, 0, c);
+      });
       order = saved;
     }
     var fr = effectiveFrozen(key);
@@ -565,6 +578,32 @@
     document.removeEventListener('keydown', onMenuKey, true);
   }
 
+  // A renderer can emit a column that didn't exist on the FIRST enhance —
+  // the multi-market Market column is the live case: it only appears once
+  // the async markets cache lands, which is usually after the first paint.
+  // Without this, that column stays out of DEFAULT_ORDER forever, so
+  // applyOrder never repositions it and it strands itself at the far left
+  // (appendChild moves every KNOWN column past it). Splice the newcomer in
+  // at the position the renderer actually put it, so it lands where the
+  // markup says — beside Status, not in front of the title.
+  function adoptNewColumns(key, table) {
+    var def = DEFAULT_ORDER[key];
+    if (!def) return;
+    var live = currentOrder(table);
+    var known = {};
+    def.forEach(function (c) { known[c] = true; });
+    live.forEach(function (c, i) {
+      if (!c || known[c]) return;
+      // Anchor on the live LEFT neighbour so the new column keeps its
+      // intended slot even when the user has reordered everything else.
+      var prev = null;
+      for (var j = i - 1; j >= 0; j--) { if (known[live[j]]) { prev = live[j]; break; } }
+      var at = prev ? def.indexOf(prev) + 1 : 0;
+      def.splice(at, 0, c);
+      known[c] = true;
+    });
+  }
+
   // ── public API ──────────────────────────────────────────────────
   function enhance(key) {
     var reg = REGISTRY[key];
@@ -576,6 +615,7 @@
     // Capture the renderer's natural column order ONCE, before we ever
     // reorder the DOM, so "Reset columns" has a true default to restore.
     if (!DEFAULT_ORDER[key]) DEFAULT_ORDER[key] = currentOrder(table);
+    else adoptNewColumns(key, table);
 
     table.classList.add('p86-enhanced');
     table.style.setProperty('--p86-frozen-bg', reg.frozenBg);

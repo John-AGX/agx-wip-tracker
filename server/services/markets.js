@@ -64,7 +64,7 @@ async function seedMarketsForOrg(orgId, client) {
 // the caller (and the admin re-run route) can SEE what actually happened
 // instead of trusting a silent "no error".
 async function backfill() {
-  const result = { seeded: 0, jobs: 0, leads: 0, clients: 0, estimates: 0, errors: [] };
+  const result = { seeded: 0, jobs: 0, leads: 0, clients: 0, estimates: 0, estimates_from_lead: 0, errors: [] };
 
   try {
     const orgs = await pool.query('SELECT id FROM organizations');
@@ -124,7 +124,69 @@ async function backfill() {
     result.errors.push('estimates: ' + (e && e.message));
   }
 
+  // M3 — estimates inherit their LEAD's market too. The job-linked step
+  // above only reaches estimates that have already been CONVERTED, which
+  // in live data was 1 of 25: an estimate spends most of its life
+  // pre-conversion, so "inherit from the job" resolves almost nothing.
+  // The lead link is the earlier (and far more common) one, and it lives
+  // in the JSONB blob — estimates has no lead_id column, so this reads
+  // data->>'lead_id' (TEXT) against leads.id (also TEXT).
+  //
+  // Runs AFTER the job step so a converted estimate keeps its JOB's
+  // market if the two ever disagree (the job is the later, realized
+  // truth). Still only fills NULLs, so neither step re-rates a row.
+  try {
+    const r = await pool.query(
+      `UPDATE estimates e
+          SET market_id = l.market_id
+         FROM leads l
+        WHERE e.market_id IS NULL
+          AND l.market_id IS NOT NULL
+          AND l.id = e.data->>'lead_id'
+          AND (e.organization_id = l.organization_id
+               OR e.organization_id IS NULL OR l.organization_id IS NULL)`
+    );
+    result.estimates_from_lead = r.rowCount || 0;
+  } catch (e) {
+    result.errors.push('estimates_from_lead: ' + (e && e.message));
+  }
+
   return result;
+}
+
+// ── Write-path market resolution ─────────────────────────────────────
+// The backfill above is a catch-up; these keep NEW rows from ever
+// needing one. Both take the org's market list ONCE (loadMarketMap) so a
+// bulk save resolving 200 jobs still costs a single query.
+//
+// A market NAME is what the job/lead blobs carry (the legacy TEXT
+// field the pickers still write), so the map is keyed both ways.
+async function loadMarketMap(orgId, client) {
+  const db = client || pool;
+  const r = await db.query(
+    'SELECT id, name FROM markets WHERE organization_id = $1',
+    [orgId]
+  );
+  const byName = new Map();
+  const ids = new Set();
+  for (const m of r.rows) {
+    byName.set(String(m.name || '').trim().toLowerCase(), m.id);
+    ids.add(String(m.id));
+  }
+  return { byName, ids };
+}
+
+// Resolve a record's market id from an explicit market_id (validated
+// against THIS org — a foreign id resolves to null, never leaks) or from
+// its market NAME. Returns null when nothing resolves, which is a valid
+// "unassigned" state, not an error: market is additive and nullable.
+function resolveMarketId(map, rec) {
+  if (!map || !rec) return null;
+  const explicit = rec.market_id != null && rec.market_id !== '' ? String(rec.market_id) : null;
+  if (explicit) return map.ids.has(explicit) ? explicit : null;
+  const name = String(rec.market || '').trim().toLowerCase();
+  if (!name) return null;
+  return map.byName.get(name) || null;
 }
 
 // Resolve + validate a market id for a write. Returns the id when it
@@ -145,4 +207,7 @@ async function assertMarketForOrg(marketId, orgId, client) {
   return r.rows[0].id;
 }
 
-module.exports = { DEFAULT_MARKETS, seedMarketsForOrg, backfill, assertMarketForOrg };
+module.exports = {
+  DEFAULT_MARKETS, seedMarketsForOrg, backfill, assertMarketForOrg,
+  loadMarketMap, resolveMarketId,
+};
