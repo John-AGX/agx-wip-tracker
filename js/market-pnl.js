@@ -63,14 +63,50 @@
     return jobs.filter(function (j) { return j && j.status !== 'Archived'; });
   }
 
+  // Leads are NOT part of appData — they live in the leads module's own
+  // cache, which is populated only when the Leads LIST is first rendered.
+  // Summary can be (and usually is) the first page you land on, so both
+  // sources are empty there and lead conversion would read "—" for every
+  // market until you happened to visit Leads and come back. Verified live
+  // 2026-07-30: appData.leads = 0, p86Leads.getCached() = 0 on a fresh
+  // Summary load, with 66 leads on the server.
+  //
+  // So fetch them ourselves, ONCE per page load, and repaint when they
+  // land. One request, no polling, and it never fires on an org that
+  // already has the cache warm.
+  var _leads = null;         // our own copy, only when we had to fetch
+  var _leadsTried = false;   // one attempt per load, success or failure
+
   function leadsList() {
-    // Leads live in the leads module's own cache, not appData — appData
-    // .leads is the legacy/offline copy. Prefer the live cache.
     if (window.p86Leads && typeof window.p86Leads.getCached === 'function') {
       var c = window.p86Leads.getCached();
       if (c && c.length) return c;
     }
-    return (window.appData && window.appData.leads) || [];
+    var d = (window.appData && window.appData.leads) || [];
+    if (d.length) return d;
+    if (_leads) return _leads;
+    fetchLeadsOnce();
+    return [];
+  }
+
+  function fetchLeadsOnce() {
+    if (_leadsTried) return;
+    if (!window.p86Api || !window.p86Api.leads || !window.p86Api.leads.list) return;
+    if (window.p86Api.isAuthenticated && !window.p86Api.isAuthenticated()) return;
+    _leadsTried = true;
+    window.p86Api.leads.list().then(function (res) {
+      _leads = (res && res.leads) || [];
+      // Hand them to the leads module too, so the next surface that wants
+      // them doesn't repeat this fetch.
+      if (window.p86Leads && window.p86Leads.cacheLead) {
+        _leads.forEach(function (l) { try { window.p86Leads.cacheLead(l); } catch (_) {} });
+      }
+      render();
+    }).catch(function (e) {
+      // Leave conversion blank rather than wrong. Everything else on the
+      // table is job-derived and already correct.
+      console.warn('[market-pnl] lead fetch failed:', e && e.message);
+    });
   }
 
   function emptyRow(key, market) {
