@@ -649,7 +649,12 @@ function renderEstimatesList() {
             if (!_estViewsLoaded) { _estViewsLoaded = true; estLoadViews(); }
             updateEstFilterBtn(); updateEstViewsBtn();
             const q = searchEl ? searchEl.value.trim().toLowerCase() : '';
-            const all = appData.estimates || [];
+            // Multi-market M2: scope to the active market first (All markets =
+            // pass-through), so the list, the summary line and the map view all
+            // agree with the sidebar switcher.
+            const all = (window.p86MarketFilter
+              ? window.p86MarketFilter(appData.estimates || [])
+              : (appData.estimates || []));
             const filtered = all.filter(function(e) {
                 if (_estDrawer && !matchesEstimateDrawer(e, _estDrawer)) return false;
                 if (q) {

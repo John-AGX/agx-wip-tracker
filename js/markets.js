@@ -163,7 +163,10 @@
   // renderer that throws) must never stop the others from updating — a
   // half-switched UI showing two markets at once is worse than a stale one.
   document.addEventListener('p86:market-changed', function () {
-    ['renderJobsMain', 'renderLeadsMain', 'renderEstimatesMain',
+    // Verified-global renderers only. Guessed names (renderLeadsMain /
+    // renderEstimatesMain) silently never fire — the switcher would filter the
+    // data and leave the DOM stale, which reads as "the switcher is broken".
+    ['renderJobsMain', 'renderLeadsList', 'renderEstimatesList',
      'renderSummary', 'renderDashboard'].forEach(function (fn) {
       try { if (typeof window[fn] === 'function') window[fn](); } catch (e) {
         console.warn('[markets] re-render failed for ' + fn + ':', e && e.message);

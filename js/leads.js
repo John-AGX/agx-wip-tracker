@@ -601,7 +601,12 @@ function p86Ask(message, opts) {
       return;
     }
 
-    var filtered = _leads.filter(function(l) {
+    // Multi-market M2: scope to the active market first (All markets =
+    // pass-through) so the list, summary counts and Leads map agree with the
+    // sidebar switcher. Uses the ONE shared predicate, so an unassigned lead
+    // behaves the same here as everywhere else.
+    var _mkScoped = window.p86MarketFilter ? window.p86MarketFilter(_leads) : _leads;
+    var filtered = _mkScoped.filter(function(l) {
       if (filterStatus && l.status !== filterStatus) return false;
       if (_leadsDrawer && !matchesLeadDrawer(l, _leadsDrawer)) return false;
       return matchesSearch(l, q);
