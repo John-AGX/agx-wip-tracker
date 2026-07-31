@@ -202,11 +202,19 @@ const KNOWN_CATEGORIES = [
   'Other'
 ];
 
+// Accounting parentheses mean negative — "(12.34)" is -12.34, not 0.
+// SheetJS hands us formatted text, so a credit/return line arrives
+// wrapped rather than signed, and a bare parseFloat yields NaN which the
+// isNaN guard would silently turn into 0. Same trap that made the QB cost
+// importer swallow $548,611.24 of credits; see js/job-costs-import.js.
 function num(v) {
   if (v == null) return 0;
-  const s = String(v).replace(/[$,\s]/g, '').trim();
+  let s = String(v).replace(/[$,\s]/g, '').replace(/−/g, '-').trim(); // U+2212 → ASCII minus
+  const paren = /^\(.*\)$/.test(s);
+  if (paren) s = s.slice(1, -1);
   const n = parseFloat(s);
-  return isNaN(n) ? 0 : n;
+  if (isNaN(n)) return 0;
+  return paren ? -Math.abs(n) : n;
 }
 
 // Safe string coercion — SheetJS returns numeric columns (SKU Number,

@@ -16,34 +16,19 @@
 // a line to a specific cost node.
 
 const express = require('express');
-const crypto = require('crypto');
 const { pool } = require('../db');
 const { requireAuth, requireCapability } = require('../auth');
+const { hashLineId, staleZeroLineId } = require('../util/qb-line-id');
 
 const router = express.Router();
 
 console.log('[qb-cost-routes] mounted at /api/qb-costs (Phase 2 — DB-backed cost lines)');
 
 // ──────────────────────────────────────────────────────────────────
-// Stable content-hash id. Same logical QB row → same id forever.
-// Includes job_id so the same vendor invoice landing on two
-// different jobs gets two distinct rows.
+// hashLineId / staleZeroLineId now live in ../util/qb-line-id so they
+// can be unit-tested without booting the DB pool + auth. The hash is
+// unchanged — every existing qb_cost_lines row is keyed by it.
 // ──────────────────────────────────────────────────────────────────
-function hashLineId(jobId, line) {
-  const parts = [
-    String(jobId || ''),
-    String(line.vendor || '').trim().toLowerCase(),
-    String(line.date || '').trim(),
-    String(line.txnType || '').trim().toLowerCase(),
-    String(line.num || '').trim(),
-    String(line.account || '').trim(),
-    String(line.memo || '').trim(),
-    Number(line.amount || 0).toFixed(2)
-  ];
-  const h = crypto.createHash('sha256');
-  h.update(parts.join('␟')); // unit-separator char so legitimate "|" in memos doesn't collide
-  return 'qbc_' + h.digest('hex').slice(0, 16);
-}
 
 // Convert ISO/parser dates to a Postgres-friendly value or null.
 function normDate(v) {
@@ -82,7 +67,7 @@ router.post('/import',
     try {
       await client.query('BEGIN');
 
-      const stats = { inserted: 0, updated: 0, skipped: 0, byJob: {} };
+      const stats = { inserted: 0, updated: 0, skipped: 0, cleaned: 0, byJob: {} };
       const reportDateNorm = normDate(reportDate);
 
       for (const j of jobs) {
@@ -155,6 +140,32 @@ router.post('/import',
           } else {
             jobStats.updated++;
             stats.updated++;
+          }
+
+          // Retire the row the pre-fix parser wrote for this same credit.
+          // Credits used to import as $0.00 (QB writes negatives in
+          // accounting parentheses, which the old client toNumber() read as
+          // NaN → 0). Amount is part of the id, so that old row has a
+          // different hash than the corrected one we just wrote and the
+          // upsert above cannot reach it — it would sit there forever as a
+          // phantom $0.00 line beside the real credit. Money was never
+          // wrong (a $0 row adds nothing); the line list was.
+          //
+          // Scoped hard: same job, the exact superseded hash, and amount 0.
+          // Self-limiting — once a job is cleaned there is nothing left to
+          // match on later imports.
+          if (amount < 0) {
+            const staleId = staleZeroLineId(j.jobId, line);
+            if (staleId !== id) {
+              const del = await client.query(
+                'DELETE FROM qb_cost_lines WHERE id = $1 AND job_id = $2 AND amount = 0',
+                [staleId, j.jobId]
+              );
+              if (del.rowCount) {
+                jobStats.cleaned = (jobStats.cleaned || 0) + del.rowCount;
+                stats.cleaned += del.rowCount;
+              }
+            }
           }
         }
         stats.byJob[j.jobId] = jobStats;

@@ -653,7 +653,8 @@ function p86Ask(message, opts) {
           } else {
             console.log('[qb-costs] server upsert: +' + (res.body.inserted || 0) +
               ' new, ' + (res.body.updated || 0) + ' updated, ' +
-              (res.body.skipped || 0) + ' skipped');
+              (res.body.skipped || 0) + ' skipped' +
+              (res.body.cleaned ? ', ' + res.body.cleaned + ' stale $0 credit row(s) retired' : ''));
             // Refresh the in-memory cache from the server so the QB view,
             // cost buckets, and job rollups reflect this import WITHOUT a
             // full reload. appData.qbCostLines is otherwise a boot-only
