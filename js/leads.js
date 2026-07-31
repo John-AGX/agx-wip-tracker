@@ -1704,7 +1704,6 @@ function p86Ask(message, opts) {
     var statusCol = window.p86EntityCard.leadStatusColor(l.status);
     var rev = revenueFromAttachedEstimates(l.id);
     var ageDays = l.created_at ? Math.max(0, Math.round((Date.now() - new Date(l.created_at).getTime()) / 86400000)) : null;
-    var conf = Number(l.confidence) || 0;
     var stats = [{ label: 'Est. value', value: (rev != null ? sm(rev) : '—') }];
     if (ageDays != null) stats.push({ label: 'Age', value: ageDays + 'd' });
     var meta = (typeof statusMeta === 'function') ? statusMeta(l.status) : null;
@@ -1714,7 +1713,7 @@ function p86Ask(message, opts) {
       title: l.title || 'Lead',
       subtitle: l.client_name || l.property_name || '',
       address: [l.street_address, l.city].filter(Boolean).join(', '),
-      ring: (conf > 0 ? { pct: conf } : undefined),
+      // Leads have no % complete — no progress dial (John). Keep the meta tiles.
       stats: stats
     });
   }

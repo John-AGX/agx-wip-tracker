@@ -2893,19 +2893,16 @@ function renderSidebarJobCard(){
   var job=(typeof appData!=='undefined' && appData.jobs) ? appData.jobs.find(function(j){return j.id===jid;}) : null;
   if(!job || !window.p86EntityCard){ host.innerHTML=''; return; }
   var w=(typeof window.getJobWIP==='function') ? (window.getJobWIP(jid)||{}) : {};
-  var sm=function(n){ n=Number(n)||0; var a=Math.abs(n), s=n<0?'-':''; if(a>=1e6) return s+'$'+(a/1e6).toFixed(1).replace(/\.0$/,'')+'M'; if(a>=1e3) return s+'$'+Math.round(a/1e3)+'k'; return s+'$'+Math.round(a); };
   var statusCol=window.p86EntityCard.jobStatusColor?window.p86EntityCard.jobStatusColor(job.status):'#8aa0c0';
   var accentCol=(window.p86EntityCard.pinColor?window.p86EntityCard.pinColor(job,'job'):null)||statusCol;
-  var profit=(w.displayProfit!=null)?w.displayProfit:0;
-  var contract=(w.contractIncome!=null)?w.contractIncome:(w.totalIncome!=null)?w.totalIncome:(Number(job.contractAmount)||0);
+  var _jn=job.jobNumber?String(job.jobNumber).trim():'';
+  // Slim job headline (John): blend the job# into the title (same font, no mono chip),
+  // keep the % ring, and DROP the Contract/Profit tiles — the money lives in the Project
+  // WIP metrics bar right below this card.
   host.innerHTML=window.p86EntityCard.render({
     kind:'job', accent:accentCol, status:{label:job.status||'In Progress', color:statusCol},
-    number:job.jobNumber||'', title:job.title||job.name||'', subtitle:job.client||'',
-    ring:{pct:(w.pctComplete||0)},
-    stats:[
-      {label:'Contract', value:sm(contract)},
-      {label:'Profit', value:(profit<0?'-':'+')+sm(Math.abs(profit)), tone:profit<0?'neg':'pos'}
-    ]
+    title:(_jn?_jn+' · ':'')+(job.title||job.name||''), subtitle:job.client||'',
+    ring:{pct:(w.pctComplete||0)}
   }, {compact:true})+
     '<div class="ng-jobcard-actions"><button class="ng-jobcard-btn" data-jobact="edit" title="Edit job details — name, client, address, dates, notes">Edit details</button></div>';
 }
@@ -3167,7 +3164,9 @@ function renderInspector(){
   if(body && !_inspSection){
     var _oldCard=body.querySelector('.ng-insp-jobcard');
     if(_oldCard) _oldCard.remove();
-    body.insertAdjacentHTML('afterbegin', inspectorJobCardHtml());
+    // Job overview card moved to the LEFT rail (renderSidebarJobCard), same side as the
+    // lead card — per John. Not inserted on the right anymore; the cleanup above still runs
+    // so any card left by a prior render is stripped.
   }
 }
 // Slice 3: the no-node Inspector hosts the JOB detail — reuses the classic job-overview
