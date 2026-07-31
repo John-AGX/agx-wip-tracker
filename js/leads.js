@@ -919,15 +919,33 @@ function p86Ask(message, opts) {
       (tks.length > 3 ? '<div class="lead-card-fu-more">+' + (tks.length - 3) + ' more</div>' : '') +
       '</div>';
     }
+    // Entity-card look (matches the job card): status accent bar + pill, an
+    // icon row (info · mail · carrot — the carrot tags a lead/opportunity), title,
+    // client, address, then the money meta + follow-ups. No progress dial (leads
+    // have no % complete). Keeps the .lead-card wrapper + data-lead-id so the
+    // existing drag + click handlers are untouched.
+    var statusCol = (window.p86EntityCard && window.p86EntityCard.leadStatusColor)
+      ? window.p86EntityCard.leadStatusColor(l.status) : '#4f8cff';
+    var statusLabel = l.status || 'New';
+    var addr = l.address || loc;
+    var metaBits = '';
+    if (revStr) metaBits += '<span class="lead-card-rev">' + escapeHTML(revStr) + '</span>';
+    if (proj) metaBits += '<span class="lead-card-proj"><i class="ti ti-calendar"></i> ' + escapeHTML(proj) + '</span>';
     return '<div class="lead-card" draggable="true" data-lead-id="' + escapeAttr(l.id) + '">' +
-      '<div class="lead-card-title">' + escapeHTML(l.title || 'Untitled lead') + '</div>' +
-      (l.client_name ? '<div class="lead-card-client">' + escapeHTML(l.client_name) + '</div>' : '') +
-      '<div class="lead-card-meta">' +
-        (revStr ? '<span class="lead-card-rev">' + escapeHTML(revStr) + '</span>' : '') +
-        (proj ? '<span class="lead-card-proj">📅 ' + escapeHTML(proj) + '</span>' : '') +
-        (loc ? '<span class="lead-card-loc">' + escapeHTML(loc) + '</span>' : '') +
+      '<div class="lead-card-accent" style="background:' + statusCol + ';"></div>' +
+      '<div class="lead-card-body">' +
+        '<div class="lead-card-head">' +
+          '<span class="lead-card-status" style="background:' + statusCol + '22;color:' + statusCol + ';">' +
+            '<span class="lead-card-dot" style="background:' + statusCol + ';"></span>' + escapeHTML(statusLabel) + '</span>' +
+          '<span class="lead-card-icons"><i class="ti ti-info-circle" aria-hidden="true"></i>' +
+            '<i class="ti ti-mail" aria-hidden="true"></i><i class="ti ti-carrot" aria-hidden="true"></i></span>' +
+        '</div>' +
+        '<div class="lead-card-title">' + escapeHTML(l.title || 'Untitled lead') + '</div>' +
+        (l.client_name ? '<div class="lead-card-client">' + escapeHTML(l.client_name) + '</div>' : '') +
+        (addr ? '<div class="lead-card-addr"><i class="ti ti-map-pin" aria-hidden="true"></i><span>' + escapeHTML(addr) + '</span></div>' : '') +
+        (metaBits ? '<div class="lead-card-meta">' + metaBits + '</div>' : '') +
+        fuHTML +
       '</div>' +
-      fuHTML +
     '</div>';
   }
 
