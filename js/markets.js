@@ -129,9 +129,11 @@
   function matches(rec) {
     if (!_sel) return true;                       // All markets
     if (!rec) return false;
-    var mid = rec.market_id != null ? rec.market_id
-            : (rec.market ? (byName(rec.market) || {}).id : null);
-    return String(mid) === String(_sel);
+    // Goes through resolve() — the ONE answer to "what market is this?" —
+    // rather than re-deriving market_id-then-name here. Two copies of that
+    // rule WOULD drift: the chip could say Tampa while the filter disagreed.
+    var m = resolve(rec);
+    return !!m && String(m.id) === String(_sel);
   }
   function filter(list) {
     if (!_sel || !Array.isArray(list)) return list || [];

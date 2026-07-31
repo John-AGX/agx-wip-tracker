@@ -143,8 +143,14 @@ async function backfill() {
         WHERE e.market_id IS NULL
           AND l.market_id IS NOT NULL
           AND l.id = e.data->>'lead_id'
-          AND (e.organization_id = l.organization_id
-               OR e.organization_id IS NULL OR l.organization_id IS NULL)`
+          -- STRICT org match. The earlier
+          --   OR e.organization_id IS NULL OR l.organization_id IS NULL
+          -- escape let an estimate with a NULL org inherit a market from
+          -- ANOTHER TENANT's lead. Org is the security boundary and market
+          -- never relaxes it (see AUDIT Wave A + docs/multi-market.md).
+          -- A null-org row simply doesn't backfill — that's the safe
+          -- failure; it stays unassigned and shows under "All markets".
+          AND e.organization_id = l.organization_id`
     );
     result.estimates_from_lead = r.rowCount || 0;
   } catch (e) {
