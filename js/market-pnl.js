@@ -162,12 +162,24 @@
   function flagUnallocated(job) {
     if (!job) return false;
     var phases = (window.appData && window.appData.phases) || [];
+    var hasBare = false, allocated = 0;
     for (var i = 0; i < phases.length; i++) {
       var p = phases[i];
       if (!p || p.jobId !== job.id) continue;
-      if (num(p.pctComplete) > 0 && num(p.asSoldRevenue) <= 0) return true;
+      allocated += num(p.asSoldRevenue);
+      if (num(p.pctComplete) > 0 && num(p.asSoldRevenue) <= 0) hasBare = true;
     }
-    return false;
+    if (!hasBare) return false;
+    // A $0-allocated scope only HIDES revenue when the contract isn't fully
+    // allocated elsewhere. Oak Bridge Exterior Stucco Repairs is the case
+    // that proves it: 3 scopes all at 100%, allocations $31,411 + $4,250 +
+    // $0 = $35,661 = the whole contract. The bare scope carries zero weight
+    // AND zero revenue, so the job correctly reads 100% / full contract
+    // earned — nothing is understated, it's just untidy bookkeeping.
+    // Without this check the tripwire flags a job whose numbers are right,
+    // which is how a warning earns its way into being ignored.
+    var contract = num(job.contractAmount);
+    return contract > 0 && allocated < contract - 0.01;   // cent tolerance
   }
 
   /* ── The rollup ────────────────────────────────────────────────────
