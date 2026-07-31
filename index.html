@@ -1007,7 +1007,11 @@
                                     <div style="font-size:19px;font-weight:700;color:var(--text);overflow:hidden;text-overflow:ellipsis;" id="job-info-estcosts"></div>
                                 </div>
                                 <div style="background:var(--surface2,#222636);border-radius:9px;padding:10px 12px;min-width:0;">
-                                    <div style="font-size:11px;color:var(--text-dim);margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Target Margin %</div>
+                                    <!-- DERIVED, not stored: (Contract - Est. Costs) / Contract, from
+                                         getJobWIP().asSoldMargin. Was "Target Margin %", which showed
+                                         job.targetMarginPct - a hardcoded 50 that nothing ever set and
+                                         nothing reads, sitting next to two real as-sold figures. -->
+                                    <div style="font-size:11px;color:var(--text-dim);margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Margin (As Sold)</div>
                                     <div style="font-size:19px;font-weight:700;color:var(--text);" id="job-info-margin"></div>
                                 </div>
                             </div>
@@ -3373,7 +3377,7 @@
          BEFORE any of them so window.p86Pricing is ready. -->
     <script src="js/pricing-pipeline.js?v=2"></script>
     <script src="js/progress.js?v=3"></script>
-    <script src="js/jobs.js?v=201"></script>
+    <script src="js/jobs.js?v=202"></script>
     <script src="js/doc-import.js?v=3"></script>
     <script src="js/job-workflow-ui.js?v=6"></script>
     <!-- Reusable rich-text field (window.p86RichText) — shared WYSIWYG for

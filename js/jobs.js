@@ -2654,7 +2654,10 @@ function renderJobsMain() {
                 if ((v = gv('edit-jobMarket')) !== null) job.market = v;
                 if ((v = gv('edit-jobContract')) !== null) job.contractAmount = parseFloat(v) || 0;
                 if ((v = gv('edit-jobEstCosts')) !== null) job.estimatedCosts = parseFloat(v) || 0;
-                if ((v = gv('edit-jobMargin')) !== null) job.targetMarginPct = parseFloat(v) || 50;
+                // No margin read — Margin (As Sold) is derived from the two
+                // fields above and has no input to read. job.targetMarginPct
+                // is left untouched on jobs that already carry it rather than
+                // deleted, so nothing that might reference it later loses data.
                 // Schedule page reads totalProductionDays for daily-revenue math.
                 if ((v = gv('edit-jobProductionDays')) !== null) job.totalProductionDays = parseInt(v, 10) || 0;
                 if ((v = gv('edit-jobStatus')) !== null) job.status = v;
@@ -2681,7 +2684,12 @@ function renderJobsMain() {
                     'job-info-market':    () => '<select id="edit-jobMarket" style="' + IST + '">' + opts(window.p86MarketNames(job.market), job.market) + '</select>',
                     'job-info-contract':  () => '<input id="edit-jobContract" type="number" step="0.01" value="' + (job.contractAmount || 0) + '" style="' + IST + '">',
                     'job-info-estcosts':  () => '<input id="edit-jobEstCosts" type="number" step="0.01" value="' + (job.estimatedCosts || 0) + '" style="' + IST + '">',
-                    'job-info-margin':    () => '<input id="edit-jobMargin" type="number" value="' + (job.targetMarginPct || 50) + '" style="' + IST + '">',
+                    // NOTE: no 'job-info-margin' entry. Margin (As Sold) is
+                    // DERIVED from the contract + est-costs inputs above it, so
+                    // it stays static text while its neighbours become inputs —
+                    // which is exactly the right signal that it's calculated.
+                    // Editing it was never meaningful anyway: it wrote
+                    // targetMarginPct, which nothing reads.
                     'job-info-prod-days': () => '<input id="edit-jobProductionDays" type="number" value="' + (job.totalProductionDays || '') + '" style="' + IST + '">',
                     'job-info-status':    () => '<select id="edit-jobStatus" style="' + SST + '">' + opts(['New', 'Backlog', 'In Progress', 'On Hold', 'Completed', 'Archived'], job.status) + '</select>',
                     'job-info-notes':     () => '<textarea id="edit-jobNotes" rows="3" style="' + IST + 'resize:vertical;">' + escapeHTML(job.notes || '') + '</textarea>'
@@ -3086,7 +3094,34 @@ function renderJobsMain() {
             document.getElementById('job-info-market').textContent = job.market || '—';
             document.getElementById('job-info-contract').textContent = formatCurrency(job.contractAmount);
             document.getElementById('job-info-estcosts').textContent = formatCurrency(job.estimatedCosts);
-            document.getElementById('job-info-margin').textContent = (job.targetMarginPct || 50) + '%';
+            // Margin (As Sold) — DERIVED from the two tiles beside it:
+            // (Contract - Est. Costs) / Contract, via getJobWIP().asSoldMargin.
+            //
+            // This used to print job.targetMarginPct, a stored field that is
+            // hardcoded to 50 by every create path (lead convert, add-job
+            // modal, cost import, seeds) and READ BY NOTHING. So a job sold
+            // at 58% displayed "50%" beside its own real contract and cost,
+            // and the two numbers had no arithmetic relationship at all.
+            // Deriving it means editing Contract or Est. Costs above now
+            // moves this immediately, which is the whole point of the strip.
+            var _mEl = document.getElementById('job-info-margin');
+            if (_mEl) {
+                // No contract = no margin to speak of. Printing "0.0%" would
+                // read as a job sold at zero margin rather than one not yet
+                // priced, which is a materially different thing.
+                _mEl.textContent = (job.contractAmount > 0)
+                    ? (w.asSoldMargin || 0).toFixed(1) + '%'
+                    : '—';
+                // Only flag the unambiguous case. A negative as-sold margin
+                // means the job was sold below its own estimated cost — worth
+                // shouting about. Everything else stays neutral rather than
+                // inventing "good"/"bad" thresholds for as-sold margin.
+                _mEl.style.color = (job.contractAmount > 0 && (w.asSoldMargin || 0) < 0)
+                    ? 'var(--red)' : 'var(--text)';
+                _mEl.title = 'As-sold margin — (Contract − Est. Costs) ÷ Contract. '
+                    + 'Calculated, not editable. This is what the job was SOLD at; '
+                    + 'job-to-date margin is on the WIP tab.';
+            }
             // Production days — read by Schedule page for daily-revenue math.
             var prodDaysCell = document.getElementById('job-info-prod-days');
             if (prodDaysCell) prodDaysCell.textContent = job.totalProductionDays ? (job.totalProductionDays + ' days') : '—';
