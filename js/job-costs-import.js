@@ -93,11 +93,27 @@ function p86Ask(message, opts) {
 
   // Strip $ , and whitespace, return numeric. QB sometimes emits
   // numbers as strings ("$1,234.56") because of formatting.
+  //
+  // Credits — vendor refunds, bill credits, reversals — are negative, and
+  // QB's amount format ("#,##0.00 ;[Red](#,##0.00)") renders them in
+  // ACCOUNTING PARENTHESES, not with a leading minus. We read the sheet
+  // with SheetJS `raw:false`, so what arrives here is that formatted text:
+  // "(1,234.56)". parseFloat of that is NaN, and the old isFinite guard
+  // turned NaN into 0 — so every credit silently became zero and job costs
+  // imported HIGH. On the 07.30.26 export that was 164 credit lines worth
+  // -$548,611.24, inflating the total from $2,351,823.05 to $2,900,434.29.
+  // Unwrap the parens (and the trailing-minus form some exports use)
+  // before parsing so credits keep their sign.
   function toNumber(v) {
     if (v == null || v === '') return 0;
     if (typeof v === 'number') return v;
-    var n = parseFloat(String(v).replace(/[$,\s]/g, ''));
-    return isFinite(n) ? n : 0;
+    var s = String(v).replace(/[$,\s]/g, '').replace(/−/g, '-'); // U+2212 → ASCII minus
+    var paren = /^\(.*\)$/.test(s);
+    if (paren) s = s.slice(1, -1);
+    if (/^[\d.]+-$/.test(s)) s = '-' + s.slice(0, -1); // "1234.56-" trailing-minus exports
+    var n = parseFloat(s);
+    if (!isFinite(n)) return 0;
+    return paren ? -Math.abs(n) : n;
   }
 
   // Extract job code from a header like "RV2001 Waterside I Milestone
@@ -175,13 +191,20 @@ function p86Ask(message, opts) {
     return { name: best, aoa: bestAoa };
   }
 
-  function parseQBCosts(arrayBuffer) {
-    var XLSX = window.XLSX;
-    var data = new Uint8Array(arrayBuffer);
-    var wb = XLSX.read(data, { type: 'array' });
-    var picked = pickDetailSheet(wb, XLSX);
-    var aoa = picked.aoa;
+  // A row whose column A is a subtotal ("Total for <project>") or the
+  // grand total ("Total"). These repeat money already carried by the
+  // detail lines above them, so they must never become cost lines.
+  // Kept separate from the detail test because the real discriminator is
+  // positional: a detail line has the project in col B with col A EMPTY,
+  // a total row is the reverse.
+  function isTotalRow(colA) {
+    return /^total for/i.test(colA) || /^total$/i.test(colA);
+  }
 
+  // Pure row-walk over a sheet-as-array-of-arrays. Split out of
+  // parseQBCosts so tests can drive it with a literal fixture instead of
+  // a real workbook.
+  function parseAoa(aoa, sheetLabel) {
     // Find the header row by looking for "Vendor" + "Amount" in the
     // first 12 rows. Earlier exports had it at row 5 (index 4), but
     // QB nudges this around so we scan rather than hard-code.
@@ -195,11 +218,11 @@ function p86Ask(message, opts) {
       }
     }
     if (headerRowIdx === -1) {
-      throw new Error('Could not find a Vendor / Amount header row in "' + picked.name + '"');
+      throw new Error('Could not find a Vendor / Amount header row in "' + sheetLabel + '"');
     }
     var col = buildColumnMap(aoa[headerRowIdx]);
     if (col.vendor == null || col.amount == null) {
-      throw new Error('Missing required columns in "' + picked.name + '" (need Vendor + Amount)');
+      throw new Error('Missing required columns in "' + sheetLabel + '" (need Vendor + Amount)');
     }
 
     var jobs = [];
@@ -210,7 +233,7 @@ function p86Ask(message, opts) {
       var colA = (detailRow[0] == null ? '' : String(detailRow[0])).trim();
 
       if (colA) {
-        if (/^Total for /i.test(colA)) {
+        if (isTotalRow(colA)) {
           if (current) {
             current.reportedTotal = toNumber(detailRow[col.amount]);
             jobs.push(current);
@@ -256,6 +279,14 @@ function p86Ask(message, opts) {
     });
 
     return jobs;
+  }
+
+  function parseQBCosts(arrayBuffer) {
+    var XLSX = window.XLSX;
+    var data = new Uint8Array(arrayBuffer);
+    var wb = XLSX.read(data, { type: 'array' });
+    var picked = pickDetailSheet(wb, XLSX);
+    return parseAoa(picked.aoa, picked.name);
   }
 
   // ─── Match parsed jobs against appData.jobs by jobNumber ─────────
@@ -704,7 +735,16 @@ function p86Ask(message, opts) {
     });
   }
 
-  window.handleQBCostsFile = handleQBCostsFile;
-  window.commitQBCostsImport = commitQBCostsImport;
-  window.qbCostsCreateStub = qbCostsCreateStub;
+  if (typeof window !== 'undefined') {
+    window.handleQBCostsFile = handleQBCostsFile;
+    window.commitQBCostsImport = commitQBCostsImport;
+    window.qbCostsCreateStub = qbCostsCreateStub;
+  }
+
+  // Test seam. This file is a browser script, not a module, so the pure
+  // parsing helpers are re-exported when loaded under Node (jest) to keep
+  // the money math covered. Guarded so the browser path is untouched.
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { toNumber: toNumber, isTotalRow: isTotalRow, parseAoa: parseAoa };
+  }
 })();
