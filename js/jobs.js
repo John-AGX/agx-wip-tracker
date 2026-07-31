@@ -2078,7 +2078,6 @@ function renderJobsMain() {
             document.getElementById('jobMarket').value = '';
             document.getElementById('jobContractAmount').value = '';
             document.getElementById('jobEstimatedCosts').value = '';
-            document.getElementById('jobTargetMargin').value = '50';
             // Schedule page reads totalProductionDays for daily-revenue math.
             var prodDaysEl = document.getElementById('jobTotalProductionDays');
             if (prodDaysEl) prodDaysEl.value = '';
@@ -2459,7 +2458,9 @@ function renderJobsMain() {
                 status: document.getElementById('jobStatus').value,
                 contractAmount: parseFloat(document.getElementById('jobContractAmount').value) || 0,
                 estimatedCosts: parseFloat(document.getElementById('jobEstimatedCosts').value) || 0,
-                targetMarginPct: parseFloat(document.getElementById('jobTargetMargin').value) || 50,
+                // No targetMarginPct — the field and its input are gone. Margin
+                // (As Sold) is derived from contractAmount vs estimatedCosts
+                // above, so there is nothing left to collect here.
                 totalProductionDays: parseInt(document.getElementById('jobTotalProductionDays') ? document.getElementById('jobTotalProductionDays').value : '', 10) || 0,
                 notes: document.getElementById('jobNotes').value.trim(),
                 pctComplete: 0,

@@ -2077,23 +2077,20 @@
                     <input type="number" id="jobContractAmount" placeholder="0.00" step="0.01">
                 </div>
             </div>
+            <!-- "Target Margin %" was removed here: it defaulted to 50, was
+                 read by nothing, and the job header now DERIVES Margin (As
+                 Sold) from contract vs estimated costs. Production days moved
+                 up into the freed slot rather than leaving two half-empty
+                 rows, which also retires the blank placeholder that used to
+                 pad its row out to the same width. -->
             <div class="form-row">
                 <div class="form-group">
                     <label>Estimated Costs (As Sold)</label>
                     <input type="number" id="jobEstimatedCosts" placeholder="0.00" step="0.01">
                 </div>
                 <div class="form-group">
-                    <label>Target Margin %</label>
-                    <input type="number" id="jobTargetMargin" value="50" step="0.1">
-                </div>
-            </div>
-            <div class="form-row">
-                <div class="form-group">
                     <label>Total Production Days</label>
                     <input type="number" id="jobTotalProductionDays" placeholder="e.g., 10" step="1" min="0" title="Used by the Schedule page to compute expected daily revenue (contract ÷ days).">
-                </div>
-                <div class="form-group">
-                    <!-- Empty placeholder so production days sits in the same row width as contract/margin. -->
                 </div>
             </div>
             <div class="form-row">
@@ -3377,7 +3374,7 @@
          BEFORE any of them so window.p86Pricing is ready. -->
     <script src="js/pricing-pipeline.js?v=2"></script>
     <script src="js/progress.js?v=3"></script>
-    <script src="js/jobs.js?v=202"></script>
+    <script src="js/jobs.js?v=203"></script>
     <script src="js/doc-import.js?v=3"></script>
     <script src="js/job-workflow-ui.js?v=6"></script>
     <!-- Reusable rich-text field (window.p86RichText) — shared WYSIWYG for
