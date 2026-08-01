@@ -3848,7 +3848,9 @@ function _subsForBuilding(pos, bId){
   (pos||[]).forEach(function(po){
     if(_poBuildingIds(po).indexOf(bId)===-1) return;
     var sid=po.sub_id||(po.data&&po.data.sub_id); if(!sid||seen[sid])return; seen[sid]=1;
-    var nm=_subNameById(sid); if(!nm)return;
+    // Prefer the sub_name the PO row already carries (server LEFT JOIN); appData.subs
+    // isn't always loaded on the Site Plan, so _subNameById alone dropped the sub. (John)
+    var nm=po.sub_name||_subNameById(sid); if(!nm)return;
     out.push({name:nm, po:po.po_number||'', status:po.status||''});
   });
   return out;
@@ -3886,13 +3888,13 @@ function fillBuildingSubs(sel){
       if(!onB.length && !avail.length){ el.style.display='none'; el.innerHTML=''; return; } // nothing to allocate
       _ensureBldgSubsStyles();
       var rows = onB.length ? onB.map(function(po){
-        var sid=po.sub_id||(po.data&&po.data.sub_id); var nm=_subNameById(sid)||'Sub';
+        var sid=po.sub_id||(po.data&&po.data.sub_id); var nm=po.sub_name||_subNameById(sid)||'Sub';
         return '<div class="ng-bldg-sub-row"><span class="ng-bldg-sub-nm">'+luEsc(nm)+'</span>'
           +(po.po_number?'<span class="ng-bldg-sub-po">'+luEsc(po.po_number)+'</span>':'')
           +'<button class="ng-bldg-sub-x" title="Remove this sub from the building" data-unalloc="'+luEsc(po.id)+'">×</button></div>';
       }).join('') : '<div class="ng-bldg-sub-empty">No subs allocated yet.</div>';
       var picker = avail.length ? ('<select class="ng-bldg-alloc-sel"><option value="">+ Allocate a sub (PO)…</option>'
-        + avail.map(function(po){ var sid=po.sub_id||(po.data&&po.data.sub_id); return '<option value="'+luEsc(po.id)+'">'+luEsc(_subNameById(sid)||'Sub')+(po.po_number?(' · '+luEsc(po.po_number)):'')+'</option>'; }).join('')
+        + avail.map(function(po){ var sid=po.sub_id||(po.data&&po.data.sub_id); return '<option value="'+luEsc(po.id)+'">'+luEsc(po.sub_name||_subNameById(sid)||'Sub')+(po.po_number?(' · '+luEsc(po.po_number)):'')+'</option>'; }).join('')
         + '</select>') : '';
       el.innerHTML='<div class="ng-bs-h">Subs on this building</div>'+rows+picker;
       el.style.display='';
