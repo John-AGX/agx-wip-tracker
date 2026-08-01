@@ -5685,24 +5685,27 @@ function renderJobsMain() {
             }
         }
 
+        // Subcontractors are derived from a job's POs — a PO with a sub_id IS a sub on the job
+        // (appData.subs isn't the source of truth). Aggregated by sub: contract = Σ PO effective
+        // totals, billed = Σ PO billed; name from the PO row's sub_name. (John: "the sub should
+        // be linked by the PO's".) Synchronous off appData.jobPurchaseOrders so the Subs tab AND
+        // the Site Plan job-overview inspector share ONE source.
+        function jobSubsFromPOs(jobId) {
+            var pos = ((typeof appData !== 'undefined' && appData.jobPurchaseOrders) || []).filter(function (p) { return (p.jobId || p.job_id) === jobId; });
+            var bySub = {};
+            pos.filter(function (po) { return !_JB_PO_DEAD[String(po.status || '').toLowerCase()]; }).forEach(function (po) {
+                var sid = po.sub_id || (po.data && po.data.sub_id); if (!sid) return;
+                if (!bySub[sid]) bySub[sid] = { id: sid, name: po.sub_name || _jbSubName(sid) || 'Sub', contractAmt: 0, billedToDate: 0 };
+                bySub[sid].contractAmt += (Number(poRowTotal(po)) || 0);
+                bySub[sid].billedToDate += (Number(poRowBilled(po)) || 0);
+            });
+            return Object.keys(bySub).map(function (k) { return bySub[k]; });
+        }
+        window.jobSubsFromPOs = jobSubsFromPOs;
+
         function renderJobSubs(jobId) {
             const container = document.getElementById('job-subs-cards');
-            if (!container) return;
-            // Subcontractors are derived from this job's POs — a PO with a sub_id IS a sub on
-            // the job (appData.subs isn't the source of truth). Aggregate by sub: contract = Σ
-            // PO effective totals, billed = Σ PO billed. Prefer the PO row's sub_name. (John:
-            // "the sub should be linked by the PO's".)
-            _jbLoadJobPOs(jobId).then(function (pos) {
-                var bySub = {};
-                (pos || []).filter(function (po) { return !_JB_PO_DEAD[String(po.status || '').toLowerCase()]; }).forEach(function (po) {
-                    var sid = po.sub_id || (po.data && po.data.sub_id); if (!sid) return;
-                    if (!bySub[sid]) bySub[sid] = { id: sid, name: po.sub_name || _jbSubName(sid) || 'Sub', contractAmt: 0, billedToDate: 0 };
-                    bySub[sid].contractAmt += (Number(poRowTotal(po)) || 0);
-                    bySub[sid].billedToDate += (Number(poRowBilled(po)) || 0);
-                });
-                var subs = Object.keys(bySub).map(function (k) { return bySub[k]; });
-                renderOverviewSubsInto(container, jobId, subs);
-            }).catch(function () { renderOverviewSubsInto(container, jobId, []); });
+            if (container) renderOverviewSubsInto(container, jobId, jobSubsFromPOs(jobId));
         }
 
         function renderJobLabor(jobId) {

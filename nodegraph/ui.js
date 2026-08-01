@@ -3282,7 +3282,7 @@ function refreshInspAccSums(){
   var nPh=Object.keys(pnames).length;
   var alloc=phasesJob.reduce(function(s,r){ return s+pd(r); },0);
   var w=(typeof window.getJobWIP==='function')?(window.getJobWIP(jid)||{}):{};
-  var nSubs=(appData.subs||[]).filter(function(s){ return s.jobId===jid; }).length;
+  var nSubs=((window.jobSubsFromPOs&&window.jobSubsFromPOs(jid))||[]).length;   // subs come from POs (John)
   set('accsum-buildings', nB+' building'+(nB===1?'':'s'));
   set('accsum-phases', nPh+(nPh?' · '+sm(alloc)+' allocated':' phases'));
   set('accsum-jobcosts', sm(w.actualCosts||0)+' linked');
@@ -3339,7 +3339,7 @@ function renderInspectorJobDetail(body){
   '</div>';
   try{
     var phases=(appData.phases||[]).filter(function(p){return p.jobId===jid;});
-    var subs=(appData.subs||[]).filter(function(s){return s.jobId===jid;});
+    var subs=((window.jobSubsFromPOs&&window.jobSubsFromPOs(jid))||[]);   // subs derived from job POs (John)
     if(typeof window.renderJobBuildings==='function') window.renderJobBuildings(jid,'insp-buildings');
     if(typeof window.renderOverviewPhasesInto==='function') window.renderOverviewPhasesInto(document.getElementById('insp-phases'),jid,phases);
     renderJobLevelCostsInto(document.getElementById('insp-jobcosts'));
@@ -3381,77 +3381,14 @@ function jobLevelCostNodes(){
 
 function renderJobLevelCostsInto(host){
   if(!host) return;
-  var list=jobLevelCostNodes();
-  if(E.resetComp) E.resetComp();
-  // Linked QuickBooks costs for THIS job (qb_cost_lines.linked_node_id set).
-  // Surfaced here so the overview shows real QB spend once it's linked: a job-
-  // wide total (which also catches QB linked to a building/phase node, since
-  // those don't appear in the job-level node list), plus a per-node fold-in
-  // below. Filtered by job_id — node ids like "n2" are per-graph, not global,
-  // so an unfiltered match would cross-contaminate jobs. Display-only; the job
-  // Actual-cost metric already counts these once via getJobWIP.
   var _jid=null; try{ _jid = E.job && E.job(); }catch(e){}
-  var _qbByNode={}, _qbTotal=0, _qbCount=0;
-  if(_jid){
-    ((window.appData&&window.appData.qbCostLines)||[]).forEach(function(l){
-      if(l.linked_node_id==null) return;
-      if(((l.job_id||l.jobId))!==_jid) return;
-      var a=Number(l.amount||0);
-      _qbByNode[l.linked_node_id]=(_qbByNode[l.linked_node_id]||0)+a;
-      _qbTotal+=a; _qbCount++;
-    });
-  }
-  // Lead with the canonical COST BUCKETS — every actual cost (QB + bills +
-  // receipts + manual) grouped into Materials/Labor/Subs/Equipment/GC. Read-only
-  // rollup; unlike the node list below it shows ALL of the job's QB, not just
-  // node-linked lines. The node-based list stays beneath during node retirement.
-  var h='';
-  if(window.p86CostBuckets && _jid){
-    h+='<div id="ng-cost-buckets" style="margin-bottom:10px;"></div>';
-  }
-  h+='<div class="ng-insp-sublabel" style="display:flex;align-items:center;justify-content:space-between;gap:8px;">'+
-    '<span>Job-Level Cost Nodes</span>'+
-    '<span style="font-size:9px;color:#6a7090;font-weight:500;text-transform:none;letter-spacing:0;">counts on the job total</span>'+
-  '</div>';
-  if(_qbTotal>0){
-    h+='<div title="QuickBooks cost lines linked to this job’s cost nodes — they count as actual cost" '+
-      'style="display:flex;align-items:center;gap:6px;margin:2px 0 8px;padding:5px 8px;border:1px solid #26406a;border-radius:6px;background:rgba(79,140,255,0.08);">'+
-      '<span style="font-size:11px;">🔗</span>'+
-      '<span style="font-size:11px;color:#bcd2ff;">QuickBooks: <b style="font-family:monospace;">'+(E.fmtC?E.fmtC(_qbTotal):('$'+Math.round(_qbTotal)))+'</b> linked · '+_qbCount+' line'+(_qbCount===1?'':'s')+'</span>'+
-    '</div>';
-  }
-  h+='<div style="display:flex;flex-wrap:wrap;gap:4px;margin:4px 0 8px;">';
-  JOB_COST_CATS.forEach(function(c){
-    h+='<button data-jlc-add="'+c.t+'" title="Add a job-level '+_jlcEsc(c.label)+' cost node" '+
-      'style="font-size:10px;padding:3px 8px;border:1px solid #2e3350;border-radius:5px;background:#171a2e;color:#c9cee8;cursor:pointer;">+ '+_jlcEsc(c.label)+'</button>';
-  });
-  h+='</div>';
-  if(list.length){
-    list.forEach(function(n){
-      var d=E.DEFS[n.type]||{};
-      var manual=E.getOutput?E.getOutput(n,0):(n.value||0);
-      var linkedQb=_qbByNode[n.id]||0;   // QB lines linked straight to this node
-      var total=manual+linkedQb;
-      h+='<div data-jlc-sel="'+n.id+'" title="Show on the graph" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 8px;border:1px solid #23273f;border-radius:5px;margin-bottom:4px;cursor:pointer;">'+
-        '<span style="font-size:11px;color:#dfe3f5;">'+(d.icon||'')+' '+_jlcEsc(n.label||d.label||'Cost')+
-          (linkedQb>0?' <span title="Includes '+(E.fmtC?E.fmtC(linkedQb):('$'+Math.round(linkedQb)))+' in linked QuickBooks costs" style="font-size:9px;">🔗</span>':'')+
-        '</span>'+
-        '<span style="font-size:11px;font-weight:600;color:#8fb8ff;font-family:monospace;">'+(E.fmtC?E.fmtC(total):('$'+Math.round(total)))+'</span>'+
-      '</div>';
-    });
-  } else {
-    h+='<div style="font-size:10px;color:#6a7090;padding:2px 2px 4px;line-height:1.4;">None yet. Add one above, then link QuickBooks costs to it in the job’s Detailed sub-tab.</div>';
-  }
-  host.innerHTML=h;
+  // Node model retired (John): the job cost breakdown is now just the canonical COST BUCKETS
+  // rollup (Materials/Labor/Subs/Equipment/GC from QB + bills + receipts + manual). The old
+  // "Job-Level Cost Nodes" list + "+ cost node" buttons were the retired node UI and are gone.
+  host.innerHTML='<div id="ng-cost-buckets"></div>';
   if(window.p86CostBuckets && _jid){
     try{ window.p86CostBuckets.renderJobInto(document.getElementById('ng-cost-buckets'), _jid); }catch(e){}
   }
-  host.querySelectorAll('[data-jlc-add]').forEach(function(b){
-    b.addEventListener('click', function(e){ e.stopPropagation(); addJobLevelCostNode(b.getAttribute('data-jlc-add')); });
-  });
-  host.querySelectorAll('[data-jlc-sel]').forEach(function(r){
-    r.addEventListener('click', function(e){ e.stopPropagation(); selN=r.getAttribute('data-jlc-sel'); render(); });
-  });
 }
 
 function addJobLevelCostNode(cat){
