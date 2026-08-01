@@ -5686,9 +5686,23 @@ function renderJobsMain() {
         }
 
         function renderJobSubs(jobId) {
-            const subs = appData.subs.filter(s => s.jobId === jobId);
             const container = document.getElementById('job-subs-cards');
-            if (container) renderOverviewSubsInto(container, jobId, subs);
+            if (!container) return;
+            // Subcontractors are derived from this job's POs — a PO with a sub_id IS a sub on
+            // the job (appData.subs isn't the source of truth). Aggregate by sub: contract = Σ
+            // PO effective totals, billed = Σ PO billed. Prefer the PO row's sub_name. (John:
+            // "the sub should be linked by the PO's".)
+            _jbLoadJobPOs(jobId).then(function (pos) {
+                var bySub = {};
+                (pos || []).filter(function (po) { return !_JB_PO_DEAD[String(po.status || '').toLowerCase()]; }).forEach(function (po) {
+                    var sid = po.sub_id || (po.data && po.data.sub_id); if (!sid) return;
+                    if (!bySub[sid]) bySub[sid] = { id: sid, name: po.sub_name || _jbSubName(sid) || 'Sub', contractAmt: 0, billedToDate: 0 };
+                    bySub[sid].contractAmt += (Number(poRowTotal(po)) || 0);
+                    bySub[sid].billedToDate += (Number(poRowBilled(po)) || 0);
+                });
+                var subs = Object.keys(bySub).map(function (k) { return bySub[k]; });
+                renderOverviewSubsInto(container, jobId, subs);
+            }).catch(function () { renderOverviewSubsInto(container, jobId, []); });
         }
 
         function renderJobLabor(jobId) {
