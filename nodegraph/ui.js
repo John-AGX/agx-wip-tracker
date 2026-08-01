@@ -2888,23 +2888,37 @@ var _jobChipEditing=false;
 // Slice 2: paint the live job-overview card at the top of the left rail — same
 // p86EntityCard view-model the app subnav uses (paintJobSubnavCard), fed by getJobWIP.
 function renderSidebarJobCard(){
-  var host=document.querySelector('.ng-sidebar-jobcard'); if(!host) return;
   var jid=E.job();
   var job=(typeof appData!=='undefined' && appData.jobs) ? appData.jobs.find(function(j){return j.id===jid;}) : null;
-  if(!job || !window.p86EntityCard){ host.innerHTML=''; return; }
+  var host=document.querySelector('.ng-sidebar-jobcard');
+  if(!job || !window.p86EntityCard){ if(host) host.innerHTML=''; var d=document.getElementById('ng-jobheadcard'); if(d) d.remove(); return; }
   var w=(typeof window.getJobWIP==='function') ? (window.getJobWIP(jid)||{}) : {};
   var statusCol=window.p86EntityCard.jobStatusColor?window.p86EntityCard.jobStatusColor(job.status):'#8aa0c0';
   var accentCol=(window.p86EntityCard.pinColor?window.p86EntityCard.pinColor(job,'job'):null)||statusCol;
   var _jn=job.jobNumber?String(job.jobNumber).trim():'';
   // Slim job headline (John): blend the job# into the title (same font, no mono chip),
   // keep the % ring, and DROP the Contract/Profit tiles — the money lives in the Project
-  // WIP metrics bar right below this card.
-  host.innerHTML=window.p86EntityCard.render({
+  // WIP metrics bar / inspector below.
+  var cardHtml=window.p86EntityCard.render({
     kind:'job', accent:accentCol, status:{label:job.status||'In Progress', color:statusCol},
     title:(_jn?_jn+' · ':'')+(job.title||job.name||''), subtitle:job.client||'',
     ring:{pct:(w.pctComplete||0)}
-  }, {compact:true})+
-    '<div class="ng-jobcard-actions"><button class="ng-jobcard-btn" data-jobact="edit" title="Edit job details — name, client, address, dates, notes">Edit details</button></div>';
+  }, {compact:true});
+  var actions='<div class="ng-jobcard-actions"><button class="ng-jobcard-btn" data-jobact="edit" title="Edit job details — name, client, address, dates, notes">Edit details</button></div>';
+  // The ng-rail host (shown only when the left rail is visible — non-clean modes).
+  if(host) host.innerHTML=cardHtml+actions;
+  // Clean satellite Site Plan hides the ng-rail, so put the job headline card at the TOP
+  // of the LEFT app-sidebar (inside #app-jobnav, above the section nav) — the SAME side the
+  // lead card sits on, per John. It lives inside #app-jobnav so it tears down with the job
+  // nav on leave. No Edit button here (matches the lead card; job stays editable elsewhere).
+  var railEl=document.querySelector('.ng-sidebar');
+  var railHidden=!railEl || getComputedStyle(railEl).display==='none' || railEl.getBoundingClientRect().width===0;
+  var jobnav=document.getElementById('app-jobnav');
+  if(jobnav && railHidden){
+    var slot=document.getElementById('ng-jobheadcard');
+    if(!slot){ slot=document.createElement('div'); slot.id='ng-jobheadcard'; slot.className='ng-jobheadcard'; slot.style.cssText='margin:6px 12px 10px;'; jobnav.insertBefore(slot, jobnav.firstChild); }
+    slot.innerHTML=cardHtml;
+  } else { var old=document.getElementById('ng-jobheadcard'); if(old) old.remove(); }
 }
 function renderSidebarMetrics(){
   if(!(E.viewMode && E.viewMode()==='siteplan')) return; // Site Plan only (the left rail is the job overview there)
