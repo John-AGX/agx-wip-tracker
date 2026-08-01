@@ -3897,9 +3897,14 @@ function renderJobsMain() {
                         var bId = span.getAttribute('data-bldg-crew');
                         var seen = {}, names = [];
                         active.forEach(function (po) {
-                            if (_jbPoBuildingIds(po).indexOf(bId) === -1) return;
+                            // Job-level fallback (John): a PO with NO building assigned is a job-wide
+                            // sub → show it on EVERY building; a PO WITH buildings shows only on those.
+                            var _b = _jbPoBuildingIds(po);
+                            if (_b.length && _b.indexOf(bId) === -1) return;
                             var sid = po.sub_id || (po.data && po.data.sub_id); if (!sid || seen[sid]) return; seen[sid] = 1;
-                            var nm = _jbSubName(sid); if (nm) names.push(nm);
+                            // Prefer the sub_name the PO row carries (server LEFT JOIN) — appData.subs
+                            // isn't always loaded on the Site Plan, so _jbSubName alone came back null.
+                            var nm = po.sub_name || _jbSubName(sid); if (nm) names.push(nm);
                         });
                         if (!names.length) return; // keep the In-house default
                         var label = names.length === 1 ? names[0] : (names.length + ' subs');

@@ -3864,6 +3864,7 @@ function _ensureBldgSubsStyles(){
     +'.ng-bldg-sub-row{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:13px;color:#c7ccd6;}'
     +'.ng-bldg-sub-nm{font-weight:600;}'
     +'.ng-bldg-sub-po{font-family:\'Courier New\',monospace;font-size:11px;color:#6a7090;}'
+    +'.ng-bldg-sub-jw{margin-left:auto;font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;color:#8a90a8;border:1px solid #2a303b;border-radius:4px;padding:1px 6px;white-space:nowrap;}'
     +'.ng-bldg-sub-x{margin-left:auto;background:none;border:none;color:#6a7090;font-size:16px;line-height:1;cursor:pointer;padding:0 2px;}'
     +'.ng-bldg-sub-x:hover{color:#e8836b;}'
     +'.ng-bldg-sub-empty{font-size:12.5px;color:#6a7090;padding:2px 0;}'
@@ -3883,15 +3884,21 @@ function fillBuildingSubs(sel){
     loadJobPOsCached(jobId).then(function(pos){
       var el=document.querySelector('.ng-bldg-subs[data-bldg-subs="'+bId+'"]'); if(!el)return;
       var withSub=(pos||[]).filter(function(po){ return po.sub_id||(po.data&&po.data.sub_id); });
-      var onB=withSub.filter(function(po){ return _poBuildingIds(po).indexOf(bId)!==-1; });
-      var avail=withSub.filter(function(po){ return _poBuildingIds(po).indexOf(bId)===-1; });
+      // Job-level fallback (John): a PO with NO building assigned is job-wide → it shows on
+      // EVERY building; a PO WITH buildings shows only on those. onB = job-wide OR on this
+      // building; avail (allocatable via the picker) = building-specific POs not on this building.
+      var onB=withSub.filter(function(po){ var b=_poBuildingIds(po); return !b.length || b.indexOf(bId)!==-1; });
+      var avail=withSub.filter(function(po){ var b=_poBuildingIds(po); return b.length && b.indexOf(bId)===-1; });
       if(!onB.length && !avail.length){ el.style.display='none'; el.innerHTML=''; return; } // nothing to allocate
       _ensureBldgSubsStyles();
       var rows = onB.length ? onB.map(function(po){
         var sid=po.sub_id||(po.data&&po.data.sub_id); var nm=po.sub_name||_subNameById(sid)||'Sub';
+        var jw=!_poBuildingIds(po).length;   // job-wide (no building assigned) → shown everywhere, read-only
         return '<div class="ng-bldg-sub-row"><span class="ng-bldg-sub-nm">'+luEsc(nm)+'</span>'
           +(po.po_number?'<span class="ng-bldg-sub-po">'+luEsc(po.po_number)+'</span>':'')
-          +'<button class="ng-bldg-sub-x" title="Remove this sub from the building" data-unalloc="'+luEsc(po.id)+'">×</button></div>';
+          +(jw?'<span class="ng-bldg-sub-jw" title="This PO has no building assigned, so it applies job-wide across every building">job-wide</span>'
+              :'<button class="ng-bldg-sub-x" title="Remove this sub from the building" data-unalloc="'+luEsc(po.id)+'">×</button>')
+          +'</div>';
       }).join('') : '<div class="ng-bldg-sub-empty">No subs allocated yet.</div>';
       var picker = avail.length ? ('<select class="ng-bldg-alloc-sel"><option value="">+ Allocate a sub (PO)…</option>'
         + avail.map(function(po){ var sid=po.sub_id||(po.data&&po.data.sub_id); return '<option value="'+luEsc(po.id)+'">'+luEsc(po.sub_name||_subNameById(sid)||'Sub')+(po.po_number?(' · '+luEsc(po.po_number)):'')+'</option>'; }).join('')
