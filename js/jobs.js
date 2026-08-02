@@ -3993,7 +3993,7 @@ function renderJobsMain() {
                 // Scopes (from node graph wiring)
                 body += '<div class="p86-bldg-section-head">SCOPES (' + wiredPhases.length + ')</div>';
                 if (wiredPhases.length === 0) {
-                    body += '<div class="p86-bldg-section-empty">No scopes wired to this building on the Site Plan</div>';
+                    body += '<div class="p86-bldg-section-empty">No scopes assigned to this building yet &mdash; assign them in the Scope Manager.</div>';
                 } else {
                     body += '<div class="p86-bldg-chip-list">';
                     wiredPhases.forEach(function(wp) {
@@ -4015,7 +4015,7 @@ function renderJobsMain() {
                 // Change Orders wired to this building
                 body += '<div class="p86-bldg-section-head">CHANGE ORDERS (' + cosWired.length + ')</div>';
                 if (cosWired.length === 0) {
-                    body += '<div class="p86-bldg-section-empty">No COs wired to this building</div>';
+                    body += '<div class="p86-bldg-section-empty">No change orders allocated to this building</div>';
                 } else {
                     body += '<div class="p86-bldg-co-list">';
                     cosWired.forEach(function(item) {
@@ -4254,17 +4254,49 @@ function renderJobsMain() {
         // Find COs that wire (in node graph) to a particular T1/T2 by data.id.
         // Returns array of { co (appData entry), wireAllocPct }.
         function getCOsConnectedTo(targetType, targetDataId) {
-            if (typeof NG === 'undefined') return [];
+            var results = [];
+            var seenCo = {};
+            var jobId = appState.currentJobId;
+
+            // LIVE: a CO reaches a building through its own allocation, not
+            // through a graph wire. coCompletion() is the canonical reader for
+            // that (it resolves both 'standalone' buildingAllocations and
+            // 'rider' COs that inherit a scope's per-building split), so use it
+            // rather than adding a third opinion about CO money — the reason
+            // this card previously read $0 of CO income was exactly that kind
+            // of drift.
+            if (targetType === 't1' && typeof coCompletion === 'function') {
+                (appData.jobChangeOrders || []).forEach(function(c) {
+                    if (!c || (jobId && c.jobId !== jobId)) return;
+                    var comp;
+                    try { comp = coCompletion(c, jobId); } catch (e) { return; }
+                    var b = comp && comp.byBuilding && comp.byBuilding[targetDataId];
+                    if (!b || !(b.share > 0)) return;
+                    seenCo[c.id] = 1;
+                    results.push({
+                        co: Object.assign({}, c, { income: comp.sell, estimatedCosts: comp.cost }),
+                        // Express the building's dollar share as a % of the CO
+                        // so the row's `income × allocPct` renders that share.
+                        allocPct: comp.sell > 0 ? (b.share / comp.sell * 100) : 0
+                    });
+                });
+            }
+
+            // LEGACY: node wires, for jobs still carrying graph state.
+            if (typeof NG === 'undefined') return results;
             ensureNGLoaded(appState.currentJobId);
             var nodes = NG.nodes(), wires = NG.wires();
             var targetNodes = nodes.filter(function(n) { return n.type === targetType && n.data && n.data.id === targetDataId; });
             var targetIds = {};
             targetNodes.forEach(function(n) { targetIds[n.id] = 1; });
-            var results = [];
             wires.forEach(function(w) {
                 if (!targetIds[w.toNode]) return;
                 var src = NG.findNode(w.fromNode);
                 if (!src || src.type !== 'co' || !src.data || !src.data.id) return;
+                // Already resolved through its own allocation above — a CO that
+                // is both allocated and wired must appear once.
+                if (seenCo[src.data.id]) return;
+                seenCo[src.data.id] = 1;
                 // Server COs live in appData.jobChangeOrders — money is in c.lines
                 // via the shared pricing pipeline, NOT a flat income field. (The old
                 // code read the dead appData.changeOrders relic, so every wired CO
@@ -4295,26 +4327,55 @@ function renderJobsMain() {
             return results;
         }
 
-        // Find phases (T2 nodes) wired to a particular building (T1 node) in the node graph.
+        // Scopes belonging to a building.
         // Returns array of { phase (appData entry), allocPct, t2NodeId }, deduplicated by phase.id.
+        //
+        // The name is a leftover: this used to read ONLY node-graph wiring, and
+        // nodes are retired. `appData.phases` IS the matrix now, and a scope
+        // belongs to a building via `phase.buildingId` — so a card built on the
+        // wire-only read showed "SCOPES (0) · No scopes wired to this building"
+        // for every building on a job whose scopes were assigned in the Scope
+        // Manager rather than dragged on a graph that no longer exists.
+        //
+        // buildingEffectiveBudget already worked around this with its own
+        // inline union over appData.phases, which is why the same card could
+        // show a correct AUTO budget derived from "this building's scope
+        // revenue" while listing zero scopes — two readers, one alive, one
+        // dead. Folding the live read in HERE puts them back on one path, so
+        // the scope list, the cost rollup and the budget can't disagree again.
         function getPhasesWiredToBuilding(buildingId) {
-            if (typeof NG === 'undefined') return [];
+            var seen = {};
+            var results = [];
+            var jobId = appState.currentJobId;
+
+            // LIVE: direct assignment from the Scopes × Buildings matrix.
+            (appData.phases || []).forEach(function(p) {
+                if (!p || p.buildingId !== buildingId) return;
+                if (jobId && p.jobId !== jobId) return;
+                seen[p.id] = 1;
+                results.push({ phase: p, allocPct: 100, t2NodeId: null });
+            });
+
+            // LEGACY: node wires, for any job still carrying graph state with a
+            // partial allocPct split. Skips anything the live pass already
+            // claimed so a scope can't be counted twice.
+            if (typeof NG === 'undefined') return results;
             ensureNGLoaded(appState.currentJobId);
             var nodes = NG.nodes(), wires = NG.wires();
             var t1Nodes = nodes.filter(function(n) { return n.type === 't1' && n.data && n.data.id === buildingId; });
             var t1Ids = {};
             t1Nodes.forEach(function(n) { t1Ids[n.id] = 1; });
-            var seen = {};
-            var results = [];
             wires.forEach(function(w) {
                 if (!t1Ids[w.toNode]) return;
                 var src = NG.findNode(w.fromNode);
                 if (!src || src.type !== 't2' || !src.data || !src.data.id) return;
                 var phEntry = appData.phases.find(function(p) { return p.id === src.data.id; });
                 if (!phEntry) return;
-                var key = phEntry.id + '|' + src.id;
-                if (seen[key]) return;
-                seen[key] = 1;
+                // Dedup by phase id (not phase|node): the live pass above keys
+                // on phase.id, and a scope that is both assigned AND wired must
+                // resolve once, not twice.
+                if (seen[phEntry.id]) return;
+                seen[phEntry.id] = 1;
                 results.push({ phase: phEntry, allocPct: w.allocPct != null ? w.allocPct : 100, t2NodeId: src.id });
             });
             return results;
