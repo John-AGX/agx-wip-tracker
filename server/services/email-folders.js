@@ -777,4 +777,12 @@ module.exports = {
   markFolderRead,
   backfill,
   fileNewMessage,
+  // The triage-bucket slugs, DERIVED from the spine above rather than
+  // written out again. email-triage classifies into exactly this set, and
+  // E4 will file into the matching folders — a second hand-maintained copy
+  // of these nine strings is precisely how a category that no longer has a
+  // folder (or a folder nothing ever classifies into) gets created.
+  TRIAGE_BUCKETS: SYSTEM_FOLDERS
+    .filter(function (f) { return f.kind === 'triage_bucket'; })
+    .map(function (f) { return f.slug; }),
 };

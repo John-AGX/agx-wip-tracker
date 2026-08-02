@@ -16,6 +16,7 @@
 
 const { Anthropic } = require('@anthropic-ai/sdk');
 const { pool } = require('../db');
+const { TRIAGE_BUCKETS } = require('./email-folders');
 
 const TRIAGE_MODEL = 'claude-haiku-4-5';
 
@@ -39,6 +40,7 @@ const SYSTEM = [
   '{',
   '  "needs_reply": boolean,        // does the owner likely need to respond?',
   '  "urgency": "low"|"normal"|"high",',
+  '  "category": ' + TRIAGE_BUCKETS.map(function (s) { return '"' + s + '"'; }).join('|') + '|"",',
   '  "summary": string,             // one plain sentence: what this email is about / asks',
   '  "actions": [                   // 0-3 concrete follow-ups worth proposing; [] if none',
   '    {',
@@ -53,6 +55,20 @@ const SYSTEM = [
   '"reminder" for a follow-up the owner should be nudged about; "task" for work with no fixed time.',
   'Only set when_iso when a concrete date is clearly stated in the email; otherwise leave it "".',
   'Marketing, newsletters, receipts, and automated notifications: needs_reply=false, urgency=low, actions=[].',
+  '',
+  'CATEGORY — pick the ONE bucket that best fits, from this fixed list:',
+  '  clients              a property owner / manager / HOA the company works for',
+  '  subs-vendors         a subcontractor or material supplier',
+  '  bids-rfqs            an invitation to bid, RFQ, or a proposal being solicited',
+  '  invoices-bills       a bill, invoice, statement, or payment/receipt matter',
+  '  scheduling           dates, crew timing, site access, delivery windows',
+  '  permits-inspections  a permit authority, inspector, or plan review',
+  '  insurance-legal      insurer, adjuster, attorney, contract, lien, or claim',
+  '  internal             from the company\'s own staff',
+  '  newsletters          marketing, bulk mail, or an automated notification',
+  'Use "" (empty) when genuinely none fits or you are unsure — an empty',
+  'category is FAR better than a confidently wrong one, because it files a',
+  'client email under the wrong heading. Do not guess to fill the field.',
 ].join('\n');
 
 function clampStr(s, n) { return String(s == null ? '' : s).slice(0, n); }
@@ -94,6 +110,12 @@ async function classifyEmail(email) {
   }
   // Normalize to the stored shape.
   const urgency = ['low', 'normal', 'high'].includes(obj.urgency) ? obj.urgency : 'normal';
+  // Category is validated against the folder spine, never taken on trust:
+  // anything outside the nine buckets — a hallucinated label, a display
+  // name instead of a slug, an injected string — becomes null. A null
+  // category simply shows no chip; a bogus one would be a heading the mail
+  // could later be filed under. Fail to "unknown", not to "wrong".
+  const category = TRIAGE_BUCKETS.includes(obj.category) ? obj.category : null;
   const actions = Array.isArray(obj.actions) ? obj.actions.slice(0, 3).map((a) => ({
     type: ['reminder', 'calendar', 'task'].includes(a && a.type) ? a.type : 'task',
     title: clampStr(a && a.title, 200),
@@ -103,6 +125,7 @@ async function classifyEmail(email) {
   return {
     needs_reply: !!obj.needs_reply,
     urgency,
+    category,
     summary: clampStr(obj.summary, 500),
     actions,
   };
@@ -128,16 +151,58 @@ async function triageEmailById(emailId) {
     if (row.direction === 'outbound') return false;
     const t = await classifyEmail(row);
     if (!t) return false; // leave triaged_at NULL so a sweep can retry
+    // ai_category is the ONE genuinely new signal here. ai_priority and
+    // ai_summary are deliberately NOT written: they would duplicate
+    // triage_urgency / triage_summary exactly, and two columns holding the
+    // same fact is how they drift. The thread list already reads
+    // ai_priority with a triage_urgency fallback, so it keeps working.
     const u = await pool.query(
       `UPDATE inbound_emails
           SET triaged_at = NOW(), needs_reply = $2, triage_urgency = $3,
-              triage_summary = $4, triage_actions = $5::jsonb
+              triage_summary = $4, triage_actions = $5::jsonb,
+              ai_category = $6
         WHERE id = $1 AND triaged_at IS NULL`,
-      [emailId, t.needs_reply, t.urgency, t.summary, JSON.stringify(t.actions)]
+      [emailId, t.needs_reply, t.urgency, t.summary, JSON.stringify(t.actions), t.category]
     );
     return u.rowCount > 0;
   } catch (e) {
     console.warn('[email-triage] triageEmailById error:', e && e.message);
+    return false;
+  }
+}
+
+/**
+ * Fill ai_category on a row that was ALREADY triaged before categories
+ * existed. Without this the feature is dead on arrival for every mailbox
+ * with history: triageEmailById refuses anything with triaged_at set, so
+ * an existing inbox would show no category chip, ever.
+ *
+ * Writes ONLY ai_category. It deliberately does not refresh needs_reply,
+ * urgency, summary or actions — those are older classifications the user
+ * may already have read, acted on, or dismissed, and silently rewriting
+ * them from a fresh model call would move state behind their back.
+ *
+ * Guarded on ai_category IS NULL so concurrent sweeps can't double-spend.
+ */
+async function categorizeEmailById(emailId) {
+  try {
+    const r = await pool.query(
+      `SELECT id, from_email, orig_from_email, subject, body_text, entity_type, entity_label
+         FROM inbound_emails
+        WHERE id = $1 AND direction = 'inbound' AND ai_category IS NULL`,
+      [emailId]
+    );
+    const row = r.rows[0];
+    if (!row) return false;
+    const t = await classifyEmail(row);
+    if (!t || !t.category) return false;   // no category → leave NULL, retry later
+    const u = await pool.query(
+      'UPDATE inbound_emails SET ai_category = $2 WHERE id = $1 AND ai_category IS NULL',
+      [emailId, t.category]
+    );
+    return u.rowCount > 0;
+  } catch (e) {
+    console.warn('[email-triage] categorizeEmailById error:', e && e.message);
     return false;
   }
 }
@@ -148,4 +213,4 @@ function triageInBackground(emailId) {
   Promise.resolve().then(() => triageEmailById(emailId)).catch(() => {});
 }
 
-module.exports = { classifyEmail, triageEmailById, triageInBackground };
+module.exports = { classifyEmail, triageEmailById, categorizeEmailById, triageInBackground };

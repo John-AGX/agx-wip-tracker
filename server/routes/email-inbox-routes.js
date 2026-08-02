@@ -596,7 +596,11 @@ router.get('/threads', requireAuth, async (req, res) => {
               (ARRAY_AGG(e.folder_id ORDER BY received_at DESC))[1] AS folder_id,
               -- E5 writes ai_priority; until then the stripe falls back to the
               -- H3 triage_urgency above. Inbound-only for the same reason.
-              (ARRAY_AGG(ai_priority ORDER BY received_at DESC) FILTER (WHERE direction = 'inbound'))[1] AS ai_priority
+              (ARRAY_AGG(ai_priority ORDER BY received_at DESC) FILTER (WHERE direction = 'inbound'))[1] AS ai_priority,
+              -- ai_category drives the row's category chip. Inbound-only for
+              -- the same reason: an outbound row is the owner's own captured
+              -- reply and classifying it says nothing about the conversation.
+              (ARRAY_AGG(ai_category ORDER BY received_at DESC) FILTER (WHERE direction = 'inbound' AND ai_category IS NOT NULL))[1] AS ai_category
          FROM inbound_emails e
          LEFT JOIN email_thread_state s
                 ON s.user_id = e.user_id AND s.thread_id = e.thread_id
@@ -964,7 +968,25 @@ router.post('/triage-pending', requireAuth, async (req, res) => {
     // Count only rows actually classified — a no-op (no API key, parse
     // fail) must not report as work, or the client fires a pointless reload.
     for (const row of rows.rows) { if (await triage.triageEmailById(row.id)) done++; }
-    res.json({ ok: true, triaged: done });
+
+    // Category backfill. Mail triaged BEFORE ai_category existed keeps
+    // triaged_at set, so the sweep above skips it forever — every inbox
+    // with history would show no category chip at all. Fill those
+    // separately, and only when the full pass had spare budget, so a real
+    // backlog of untriaged mail always wins the model calls.
+    let categorized = 0;
+    if (rows.rows.length < 25) {
+      const cats = await pool.query(
+        `SELECT id FROM inbound_emails
+          WHERE user_id = $1 AND direction = 'inbound'
+            AND triaged_at IS NOT NULL AND ai_category IS NULL
+            AND received_at > NOW() - INTERVAL '14 days'
+          ORDER BY received_at DESC LIMIT $2`,
+        [req.user.id, 25 - rows.rows.length]
+      );
+      for (const row of cats.rows) { if (await triage.categorizeEmailById(row.id)) categorized++; }
+    }
+    res.json({ ok: true, triaged: done, categorized: categorized });
   } catch (e) {
     console.error('POST /api/email-inbox/triage-pending error:', e);
     res.status(500).json({ error: 'Server error' });

@@ -496,6 +496,15 @@
       'body.light-mode .ehub-lchip{color:color-mix(in srgb, var(--lc,#6b7280) 72%, #000);' +
         'background:color-mix(in srgb, var(--lc,#6b7280) 13%, #fff);' +
         'border-color:color-mix(in srgb, var(--lc,#6b7280) 34%, #fff);}',
+      // Category chip: deliberately quieter than a label. A label is a
+      // human's deliberate filing; a category is a machine's guess, and it
+      // should not shout louder than the thing the user chose themselves.
+      '.ehub-cat{display:inline-flex;align-items:center;font-size:10.5px;line-height:1;' +
+        'padding:3px 7px;border-radius:5px;cursor:pointer;white-space:nowrap;' +
+        'color:var(--text-dim,#8b90a6);background:rgba(255,255,255,.05);' +
+        'border:1px solid var(--border,#31313c);}',
+      '.ehub-cat:hover{color:var(--text,#dfe2ec);border-color:var(--accent,#4f8cff);}',
+      'body.light-mode .ehub-cat{background:rgba(0,0,0,.04);color:#5b6070;}',
       '.ehub-lswatch{width:9px;height:9px;border-radius:3px;flex:0 0 auto;}',
       '.ehub-smart .ehub-fold-ic{opacity:.72;}',
       // E5 suggested-action strip. Explicit widths again: a bare `button`
@@ -738,6 +747,29 @@
       var rail = document.getElementById('ehubRail');
       if (rail) rail.innerHTML = '<div class="ehub-empty" style="padding:20px 10px;font-size:12px;">Folders unavailable.<br>' + esc(e.message || '') + '</div>';
     });
+  }
+
+  // ── E5: category chip ───────────────────────────────────────────────
+  // ai_category holds a triage-bucket SLUG, and the nine matching folders
+  // are already seeded in the rail. Rather than hard-code display names
+  // here — a third copy of the same nine strings — resolve the slug
+  // against the live folder list, so renaming "Bids / RFQs" in the spine
+  // renames the chip too. Falls back to a de-slugged label only if the
+  // folder is somehow missing.
+  function categoryLabel(slug) {
+    if (!slug) return '';
+    var f = folderBySlug(slug);
+    if (f && f.name) return f.name;
+    return String(slug).replace(/-/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+  }
+
+  function categoryChipHTML(slug) {
+    var label = categoryLabel(slug);
+    if (!label) return '';
+    // Clicking filters to that bucket via the existing folder: operator —
+    // the same one path everything else in the rail uses.
+    return '<span class="ehub-cat" data-cat="' + esc(slug) + '" title="Show everything in ' +
+      esc(label) + '">' + esc(label) + '</span>';
   }
 
   // ── E5: extract → act ───────────────────────────────────────────────
@@ -1258,6 +1290,7 @@
           (nav ? ' data-entity-type="' + esc(th.entity_type) + '" data-entity-id="' + esc(th.entity_id) + '"' : '') +
           '>' + ico('clients', '') + esc(th.entity_label) + '</span>';
       }
+      chips += categoryChipHTML(th.ai_category);
       chips += labelChipsHTML(th.labels);
       if (th.needs_reply && !handled) chips += '<span class="ehub-badge ehub-badge-reply">needs reply</span>';
       if (handled) chips += '<span class="ehub-badge ehub-badge-done">replied</span>';
@@ -1333,6 +1366,17 @@
       chip.addEventListener('click', function (e) {
         e.stopPropagation();
         openEntity(chip.getAttribute('data-entity-type'), chip.getAttribute('data-entity-id'));
+      });
+    });
+
+    // Category chip → show that whole bucket, through the existing
+    // `folder:` operator. stopPropagation so it doesn't also open the
+    // conversation underneath.
+    rows.querySelectorAll('[data-cat]').forEach(function (chip) {
+      chip.addEventListener('click', function (e) {
+        e.stopPropagation();
+        runQuery('folder:' + chip.getAttribute('data-cat'));
+        paintRail();
       });
     });
   }
