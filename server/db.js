@@ -1296,6 +1296,45 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_markets_org_active
       ON markets(organization_id, sort) WHERE active;
 
+    -- ── Per-market settings (M-A) ──────────────────────────────────
+    -- Compliance paperwork is per STATE, so it belongs on the market and
+    -- not the org: a company working FL + CO + AZ carries three separate
+    -- licences, three certs and three registrations, all expiring on
+    -- different dates. Expiries are DATE (never timestamptz) — a licence
+    -- expires on a calendar day, and giving it a time drags it across a
+    -- day boundary in another zone.
+    --
+    -- NOT included on purpose: EIN. That is federal and there is exactly
+    -- one per company, so a per-market copy would be the same number
+    -- duplicated N times, drifting the moment one gets edited. It belongs
+    -- on the organization if it is ever needed.
+    ALTER TABLE markets ADD COLUMN IF NOT EXISTS license_expiry           DATE;
+    ALTER TABLE markets ADD COLUMN IF NOT EXISTS state_registration_no    TEXT;
+    ALTER TABLE markets ADD COLUMN IF NOT EXISTS insurance_carrier        TEXT;
+    ALTER TABLE markets ADD COLUMN IF NOT EXISTS insurance_policy_no      TEXT;
+    ALTER TABLE markets ADD COLUMN IF NOT EXISTS insurance_expiry         DATE;
+    ALTER TABLE markets ADD COLUMN IF NOT EXISTS workers_comp_carrier     TEXT;
+    ALTER TABLE markets ADD COLUMN IF NOT EXISTS workers_comp_policy_no   TEXT;
+    ALTER TABLE markets ADD COLUMN IF NOT EXISTS workers_comp_expiry      DATE;
+    ALTER TABLE markets ADD COLUMN IF NOT EXISTS bond_carrier             TEXT;
+    ALTER TABLE markets ADD COLUMN IF NOT EXISTS bond_amount              NUMERIC(12,2);
+    ALTER TABLE markets ADD COLUMN IF NOT EXISTS bond_expiry              DATE;
+
+    -- Money/ops DEFAULTS for the market. Stored as percentages in whole
+    -- points (12.5 = 12.5%), matching how the estimate editor already
+    -- talks about margin, so nobody has to remember which fields are
+    -- fractions and which are points.
+    --
+    -- ⚠ THESE ARE INERT. Nothing reads them yet — adding them changes no
+    -- price, margin or rollup anywhere. Wiring any of them into the
+    -- estimating path is a money-model change and needs its own decision;
+    -- do not quietly start reading target_margin_pct because it exists.
+    ALTER TABLE markets ADD COLUMN IF NOT EXISTS target_margin_pct        NUMERIC(6,3);
+    ALTER TABLE markets ADD COLUMN IF NOT EXISTS overhead_pct             NUMERIC(6,3);
+    ALTER TABLE markets ADD COLUMN IF NOT EXISTS default_markup_pct       NUMERIC(6,3);
+    ALTER TABLE markets ADD COLUMN IF NOT EXISTS travel_minimum           NUMERIC(10,2);
+    ALTER TABLE markets ADD COLUMN IF NOT EXISTS mobilization_fee         NUMERIC(10,2);
+
     -- market_id on the core entities. ADDITIVE + NULLABLE by design:
     -- a NULL market is "unassigned", never a broken row, and every
     -- read must tolerate it (the M2 switcher treats NULL as

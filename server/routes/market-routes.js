@@ -26,6 +26,33 @@ async function requireAdmin(req, res, next) {
 // ON DELETE SET NULL — a hard delete would silently orphan history).
 // Deactivating hides it from pickers while every existing link survives.
 
+// The optional columns a caller may set, listed ONCE. Create and update
+// both build from this, because two hand-maintained field lists is how a
+// column ends up settable on PATCH but silently dropped on POST — you
+// create a market, the value vanishes, and nothing errors.
+//
+// name / code / timezone are deliberately absent: they are required and
+// validated separately.
+const SETTING_FIELDS = [
+  'state', 'address', 'phone', 'color', 'sort',
+  // identity + compliance (per state, so per market)
+  'license_no', 'license_expiry', 'state_registration_no',
+  'insurance_carrier', 'insurance_policy_no', 'insurance_expiry',
+  'workers_comp_carrier', 'workers_comp_policy_no', 'workers_comp_expiry',
+  'bond_carrier', 'bond_amount', 'bond_expiry',
+  // money/ops defaults — INERT: nothing reads these yet (see db.js)
+  'sales_tax_rate', 'labor_rate_default', 'target_margin_pct',
+  'overhead_pct', 'default_markup_pct', 'travel_minimum', 'mobilization_fee',
+];
+
+// Empty string from a cleared form field means "unset", not the literal
+// "". Without this a blanked DATE input becomes '' and Postgres rejects
+// the whole update with a type error the user can't act on.
+function normalize(v) {
+  if (v === '' || v === undefined) return null;
+  return typeof v === 'string' ? v.trim() : v;
+}
+
 // GET /api/markets  — ?include_inactive=true to see deactivated ones.
 // Returns live job/lead counts so the admin UI can warn before deactivating
 // a market that still has work in it.
@@ -62,14 +89,20 @@ router.post('/', requireAuth, requireAdmin, async (req, res) => {
     // every cron in the wrong hour — make it explicit, not a default.
     const timezone = String(b.timezone || '').trim();
     if (!timezone) return res.status(400).json({ error: 'timezone is required (IANA, e.g. America/Phoenix)' });
+    // Built from SETTING_FIELDS so a new column is settable at CREATE the
+    // moment it's added to the list — no second place to forget.
+    const cols = ['organization_id', 'name', 'code', 'timezone'];
+    const vals = [orgId, name, code, timezone];
+    for (const f of SETTING_FIELDS) {
+      if (b[f] === undefined) continue;
+      cols.push(f);
+      vals.push(f === 'sort' ? (normalize(b[f]) ?? 0) : normalize(b[f]));
+    }
     const r = await pool.query(
-      `INSERT INTO markets (organization_id, name, code, state, timezone, address, phone,
-                            license_no, sales_tax_rate, labor_rate_default, color, sort)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,COALESCE($12, 0))
+      `INSERT INTO markets (${cols.join(', ')})
+            VALUES (${cols.map((_, i) => '$' + (i + 1)).join(', ')})
          RETURNING *`,
-      [orgId, name, code, b.state || null, timezone, b.address || null, b.phone || null,
-       b.license_no || null, b.sales_tax_rate ?? null, b.labor_rate_default ?? null,
-       b.color || null, b.sort ?? null]
+      vals
     );
     res.status(201).json({ market: r.rows[0] });
   } catch (e) {
@@ -88,9 +121,7 @@ router.patch('/:id', requireAuth, requireAdmin, async (req, res) => {
     const sets = [];
     const params = [];
     let p = 1;
-    const FIELDS = ['name', 'code', 'state', 'timezone', 'address', 'phone',
-                    'license_no', 'sales_tax_rate', 'labor_rate_default',
-                    'color', 'sort', 'active'];
+    const FIELDS = ['name', 'code', 'timezone', 'active'].concat(SETTING_FIELDS);
     for (const f of FIELDS) {
       if (b[f] === undefined) continue;
       // Never let a required field be blanked into nothing.
@@ -98,7 +129,12 @@ router.patch('/:id', requireAuth, requireAdmin, async (req, res) => {
         return res.status(400).json({ error: f + ' cannot be empty' });
       }
       sets.push(`${f} = $${p++}`);
-      params.push(typeof b[f] === 'string' ? b[f].trim() : b[f]);
+      // Required fields keep raw trim (they can never be null here, the
+      // guard above already rejected empties); optional ones go through
+      // normalize so a cleared input becomes NULL rather than ''.
+      params.push((f === 'name' || f === 'code' || f === 'timezone' || f === 'active')
+        ? (typeof b[f] === 'string' ? b[f].trim() : b[f])
+        : normalize(b[f]));
     }
     if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
     sets.push('updated_at = NOW()');
