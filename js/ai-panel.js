@@ -1596,13 +1596,25 @@ function p86Ask(message, opts) {
     // panel pops in instantly while the body smoothly slides — feels
     // disconnected, like the panel and page aren't attached.
     void panel.offsetWidth; // force reflow on the off-screen state
-    requestAnimationFrame(function() {
-      // Docked mode (Assembly Studio): the .p86-ai-docked CSS class owns
-      // positioning (fills the dock column, no fixed drawer / body shift).
+    // Docked mode (Assembly Studio): the .p86-ai-docked CSS class owns
+    // positioning (fills the dock column, no fixed drawer / body shift).
+    // Idempotent — safe to run more than once.
+    function slideIn() {
       if (_isDocked) return;
       panel.style.transform = 'translateX(0)';
       document.body.classList.add('p86-ai-open');
-    });
+    }
+    requestAnimationFrame(slideIn);
+    // BELT AND BRACES: the rAF above is for the ANIMATION — the panel's
+    // VISIBILITY must not depend on it. requestAnimationFrame does not fire
+    // while a tab is backgrounded and can be coalesced away under heavy
+    // jank. When it is skipped the panel stays parked at translateX(100%),
+    // fully off-screen, while `_open` is already true: the drawer is
+    // invisible, the assistant still answers into it, and because toggle()
+    // branches on `_open` the NEXT click CLOSES the thing you were trying
+    // to open. That is exactly the "doesn't open on the first click"
+    // shape. A timer is not subject to the same suppression.
+    setTimeout(slideIn, 60);
     _open = true;
     // Photos toggle and proposal cards only make sense on the estimate
     // side. Hide / disable them when running against a job.
