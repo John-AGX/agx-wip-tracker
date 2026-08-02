@@ -7656,6 +7656,7 @@ const READ_TOOLS = [
       'Without thread_id: lists recent conversations (subject, sender, count, last received, preview) with [thread ids], each tagged with the linked client/sub and a triage read (⏎ needs reply + a one-line summary). With thread_id: the FULL conversation plus the triage summary and SUGGESTED FOLLOW-UPS (reminder/calendar/task) extracted from it. ' +
       'Use for "what emails came in", "anything I need to reply to", "summarize the thread with [person]", "read/summarize thread [th_...]", "draft a reply to [subject]". When the triage suggests a follow-up (a date to calendar, a reply to remember), OFFER to create it using your reminder/calendar/task tools — which confirm with the user first; never create anything silently from an email. ' +
       'q filters by sender/subject/body text. If the dropbox is empty or not set up, say so and point them to My Account → Email Dropbox for the forwarding address + setup steps. ' +
+      'Results also show how mail is FILED — its folder, its auto-category (one of: clients, subs-vendors, bids-rfqs, invoices-bills, scheduling, permits-inspections, insurance-legal, internal, newsletters), any labels, and whether a thread is snoozed. Use those to answer "what\'s sitting in invoices", "anything from subs this week", "what did I park". A snoozed thread was deliberately deferred — do not report it as neglected. ' +
       'NOTE: messages the user forwarded manually show the FORWARDER as sender; the real sender (when recoverable) is shown as "originally from".',
     tier: 'auto',
     input_schema: {
@@ -9683,16 +9684,40 @@ async function execStaffTool(name, input, ctx) {
       if (threadId) {
         const r = await pool.query(
           `SELECT * FROM (
-             SELECT from_name, from_email, orig_from_email, subject, body_text,
-                    is_forward_wrapper, delivered_direct, direction, entity_type, entity_id, entity_label,
-                    needs_reply, triage_summary, triage_urgency, triage_actions, received_at
-               FROM inbound_emails
-              WHERE user_id = $1 AND thread_id = $2
-              ORDER BY received_at DESC LIMIT 100
+             SELECT e.id, e.from_name, e.from_email, e.orig_from_email, e.subject, e.body_text,
+                    e.is_forward_wrapper, e.delivered_direct, e.direction,
+                    e.entity_type, e.entity_id, e.entity_label,
+                    e.needs_reply, e.triage_summary, e.triage_urgency, e.triage_actions, e.received_at,
+                    -- E1–E5 organisational layer. Without these the assistant
+                    -- reads the mail but is blind to how it is actually filed,
+                    -- so it can't answer "what's in Invoices & Bills" or know a
+                    -- thread is snoozed rather than ignored.
+                    e.ai_category, e.snoozed_until, f.name AS folder_name
+               FROM inbound_emails e
+               LEFT JOIN email_folders f ON f.id = e.folder_id
+              WHERE e.user_id = $1 AND e.thread_id = $2
+              ORDER BY e.received_at DESC LIMIT 100
            ) t ORDER BY received_at ASC`,
           [userId, threadId]
         );
         if (!r.rows.length) return 'No conversation with that thread id in your dropbox.';
+        // Labels are org-shared and authored by authenticated colleagues —
+        // NOT attacker-writable like an email body — so they print plain.
+        // Fetched separately rather than joined: a message with three labels
+        // would otherwise triple its row and the transcript would repeat.
+        let threadLabels = [];
+        try {
+          const lr = await pool.query(
+            `SELECT DISTINCT l.name
+               FROM inbound_emails e
+               JOIN email_message_labels ml ON ml.message_id = e.id
+               JOIN email_labels l ON l.id = ml.label_id AND l.archived_at IS NULL
+              WHERE e.user_id = $1 AND e.thread_id = $2
+              ORDER BY l.name`,
+            [userId, threadId]
+          );
+          threadLabels = lr.rows.map((x) => x.name);
+        } catch (e) { threadLabels = []; }   // labels are colour, never a blocker
         // Contextualize: name the directory entity this thread is from,
         // so the assistant reads mail tied to who sent it (and can pull
         // that client's jobs/leads with the other read tools).
@@ -9702,6 +9727,25 @@ async function execStaffTool(name, input, ctx) {
           : null;
         const parts = ['Conversation: ' + (r.rows[r.rows.length - 1].subject || '(no subject)') + ' — ' + r.rows.length + ' message(s)'];
         if (ctxLine) parts.push(ctxLine);
+
+        // How this thread is FILED. All trusted-by-construction and printed
+        // plain: ai_category is validated server-side against the nine
+        // triage-bucket slugs before storage (see services/email-triage —
+        // anything else is stored NULL), and folder/label names are authored
+        // by authenticated org members, not by whoever sent the email. Only
+        // email-derived text goes through wrapUserData.
+        const newestRow = r.rows[r.rows.length - 1];
+        const filedBits = [];
+        if (newestRow.folder_name) filedBits.push('folder "' + newestRow.folder_name + '"');
+        if (newestRow.ai_category) filedBits.push('category ' + newestRow.ai_category);
+        if (threadLabels.length) filedBits.push('labels: ' + threadLabels.join(', '));
+        if (filedBits.length) parts.push('Filed under ' + filedBits.join(' · ') + '.');
+        // Snoozed is a deliberate "not now", not neglect — saying so stops the
+        // assistant reporting a parked thread as something being ignored.
+        if (newestRow.snoozed_until && new Date(newestRow.snoozed_until) > new Date()) {
+          parts.push('Snoozed until ' + fmtWhen(newestRow.snoozed_until) +
+            ' — deliberately parked by the user, not overlooked.');
+        }
         // H3 triage from the newest message. The STRUCTURAL signals
         // (needs_reply bool, urgency enum, action type enum, when_iso)
         // are constrained values an attacker can't weaponize — printed
@@ -9776,7 +9820,10 @@ async function execStaffTool(name, input, ctx) {
                 -- trailing captured reply is unauthenticated and must not clear
                 -- or forge a thread's attention state.
                 (ARRAY_AGG(needs_reply    ORDER BY received_at DESC) FILTER (WHERE direction = 'inbound'))[1] AS needs_reply,
-                (ARRAY_AGG(triage_summary ORDER BY received_at DESC) FILTER (WHERE direction = 'inbound'))[1] AS triage_summary
+                (ARRAY_AGG(triage_summary ORDER BY received_at DESC) FILTER (WHERE direction = 'inbound'))[1] AS triage_summary,
+                -- Category on the LIST too, so "what's sitting in Invoices &
+                -- Bills?" is answerable without opening every thread.
+                (ARRAY_AGG(ai_category ORDER BY received_at DESC) FILTER (WHERE direction = 'inbound' AND ai_category IS NOT NULL))[1] AS ai_category
            FROM inbound_emails WHERE ${where}
           GROUP BY thread_id ORDER BY last_at DESC LIMIT ${limit}`,
         params
@@ -9800,6 +9847,8 @@ async function execStaffTool(name, input, ctx) {
         // paraphrase of the untrusted email → wrap it, so it can't launder
         // an injection into the trusted channel.
         if (t.entity_type && t.entity_label) lines.push('    ↳ ' + t.entity_type + ': ' + t.entity_label);
+        // Server-validated enum (one of nine slugs or NULL) → trusted, plain.
+        if (t.ai_category) lines.push('    ↳ category: ' + t.ai_category);
         // needs_reply reflects the newest INBOUND message (a trailing captured
         // reply is unauthenticated and never clears it) — trusted bool → plain.
         if (t.needs_reply) lines.push('    ↳ ⏎ likely needs a reply');
