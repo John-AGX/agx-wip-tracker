@@ -125,7 +125,13 @@ one-line summary, and up to three follow-ups in `triage_actions`). E5 was not
   an unverified captured copy). **`@fa12c6c`** taught it the E1–E5 layer —
   folder, category, labels, snooze — which it had been blind to.
 
-**Still open:** draft-reply via Scribe into the Live Writer diff.
+- ~~draft-reply~~ **DONE `@c8a7ddc`.** The loop was built end-to-end except its
+  last step: the assistant wrote the draft server-side and nothing told the
+  pane, so it sat in the database while the box stayed empty — the work
+  happened and looked like it hadn't. The pane now watches a new light
+  `GET /threads/:threadId/state` and paints it in place.
+
+**E5 is closed.** Still no send path — P86 does not send until Azure lands.
 
 > ⚠️ Editing a tool DESCRIPTION does not reach the live agent on deploy.
 > `@fa12c6c` changed `read_email_inbox`'s description — needs
