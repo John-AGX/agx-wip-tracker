@@ -13,7 +13,7 @@
 //      every credit: the 07.30.26 export came in at $2,900,434.29 against
 //      a true $2,351,823.05, over by the $548,611.24 of credits it ate.
 
-const { toNumber, isTotalRow, parseAoa } = require('../js/job-costs-import');
+const { toNumber, isTotalRow, parseAoa, reconcile } = require('../js/job-costs-import');
 
 // Column layout of the real export (header on row 5):
 // A=<group/total>, B=Project, C=Vendor, D=Transaction type, E=Date,
@@ -195,5 +195,129 @@ describe('parseAoa — credits', () => {
     const [job] = parseAoa(aoa, 'Sheet1');
     expect(job.computedTotal).toBeCloseTo(-700, 2);
     expect(job.reportedTotal).toBeCloseTo(-700, 2);
+  });
+});
+
+// The gate. Every test above hand-asserts that computed matches reported;
+// reconcile() makes that the import's own precondition instead of a thing
+// a human has to remember to check. QuickBooks prints its answer on every
+// project — the failure mode this closes is trusting our arithmetic over
+// theirs.
+describe('reconcile — the import gate', () => {
+  test('passes when every project matches its printed subtotal', () => {
+    const aoa = [
+      ...PREAMBLE,
+      groupHeader(),
+      detail('A', '304.95'),
+      detail('B', '315.62'),
+      totalRow('620.57'),
+    ];
+    const rec = reconcile(parseAoa(aoa, 'Sheet1'));
+    expect(rec.ok).toBe(true);
+    expect(rec.drifted).toHaveLength(0);
+    expect(rec.checked).toBe(1);
+    expect(rec.totalDelta).toBeCloseTo(0, 2);
+  });
+
+  // The regression that matters: this is the 07.30.26 export in miniature.
+  // Simulate the pre-fix behaviour by feeding a credit the parser can't
+  // read — the detail lines then sum HIGH against QB's own subtotal, which
+  // is precisely the $548,611.24 signature. The gate must refuse it.
+  test('BLOCKS an import where a credit was eaten (the $548k signature)', () => {
+    const aoa = [
+      ...PREAMBLE,
+      groupHeader(),
+      detail('Supplier invoice', '1,000.00'),
+      // A credit in a format toNumber cannot recover → reads as 0, so the
+      // parsed total becomes 1000 while QB still says 150.
+      detail('Supplier refund', 'CR 850.00'),
+      totalRow('150.00'),
+    ];
+    const jobs = parseAoa(aoa, 'Sheet1');
+    expect(jobs[0].computedTotal).toBeCloseTo(1000, 2); // wrong, on purpose
+
+    const rec = reconcile(jobs);
+    expect(rec.ok).toBe(false);
+    expect(rec.drifted).toHaveLength(1);
+    expect(rec.drifted[0].code).toBe('S2240');
+    expect(rec.drifted[0].computed).toBeCloseTo(1000, 2);
+    expect(rec.drifted[0].reported).toBeCloseTo(150, 2);
+    // Over by exactly the swallowed credit — the same shape as the real bug.
+    expect(rec.drifted[0].delta).toBeCloseTo(850, 2);
+    expect(rec.totalDelta).toBeCloseTo(850, 2);
+  });
+
+  test('catches a shortfall too, not just an overage', () => {
+    const aoa = [
+      ...PREAMBLE,
+      groupHeader(),
+      detail('A', '100.00'),
+      totalRow('250.00'), // QB saw more than we parsed — a dropped line
+    ];
+    const rec = reconcile(parseAoa(aoa, 'Sheet1'));
+    expect(rec.ok).toBe(false);
+    expect(rec.drifted[0].delta).toBeCloseTo(-150, 2);
+  });
+
+  test('one bad project blocks the whole import, good ones included', () => {
+    const other = 'S2157 Hammock II Stairway';
+    const aoa = [
+      ...PREAMBLE,
+      groupHeader(),
+      detail('A', '100.00'),
+      totalRow('100.00'),                       // fine
+      [other, '', '', '', '', '', '', '', '', '', ''],
+      ['', other, 'C', 'Expense', '05/26/2026', '', 'Subcontractors',
+        'Cost of Goods Sold', 'Service & Repair - Tampa', '', '618.00'],
+      ['Total for ' + other, '', '', '', '', '', '', '', '', '', '900.00'], // drifted
+    ];
+    const rec = reconcile(parseAoa(aoa, 'Sheet1'));
+    expect(rec.ok).toBe(false);
+    expect(rec.checked).toBe(2);
+    expect(rec.drifted.map(d => d.code)).toEqual(['S2157']);
+  });
+
+  test('sub-cent float noise does not trip the gate', () => {
+    // 0.1 + 0.2 === 0.30000000000000004 — must not read as drift.
+    const aoa = [
+      ...PREAMBLE,
+      groupHeader(),
+      detail('A', '0.10'),
+      detail('B', '0.20'),
+      totalRow('0.30'),
+    ];
+    const rec = reconcile(parseAoa(aoa, 'Sheet1'));
+    expect(rec.ok).toBe(true);
+  });
+
+  test('a project with no printed subtotal is reported unverified, not passed', () => {
+    // QB omits the total row for some single-line projects. Counting that
+    // as "reconciled" would overstate what was actually checked.
+    const aoa = [
+      ...PREAMBLE,
+      groupHeader(),
+      detail('A', '100.00'),
+      // no totalRow
+    ];
+    const rec = reconcile(parseAoa(aoa, 'Sheet1'));
+    expect(rec.ok).toBe(true);
+    expect(rec.checked).toBe(0);
+    expect(rec.unverified).toBe(1);
+  });
+
+  test('a project whose costs net to exactly $0.00 is still checked', () => {
+    // Guards the hasReportedTotal flag: keying off a truthy reportedTotal
+    // would silently skip this project.
+    const aoa = [
+      ...PREAMBLE,
+      groupHeader(),
+      detail('Bill', '500.00'),
+      detail('Full credit', '(500.00)'),
+      totalRow('0.00'),
+    ];
+    const rec = reconcile(parseAoa(aoa, 'Sheet1'));
+    expect(rec.ok).toBe(true);
+    expect(rec.checked).toBe(1);
+    expect(rec.unverified).toBe(0);
   });
 });

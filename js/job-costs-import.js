@@ -236,6 +236,10 @@ function p86Ask(message, opts) {
         if (isTotalRow(colA)) {
           if (current) {
             current.reportedTotal = toNumber(detailRow[col.amount]);
+            // Flag rather than infer from a non-zero total: a project
+            // whose costs legitimately net to $0.00 still printed a
+            // subtotal, and it still deserves to be reconciled.
+            current.hasReportedTotal = true;
             jobs.push(current);
             current = null;
           }
@@ -247,7 +251,8 @@ function p86Ask(message, opts) {
             code: parsed.code,
             name: parsed.name,
             lines: [],
-            reportedTotal: 0
+            reportedTotal: 0,
+            hasReportedTotal: false
           };
         }
       } else if (current) {
@@ -279,6 +284,57 @@ function p86Ask(message, opts) {
     });
 
     return jobs;
+  }
+
+  // ─── Reconciliation gate ─────────────────────────────────────────
+  // QuickBooks prints its own answer on every project — the "Total for
+  // <project>" row we already capture as reportedTotal. Until now we
+  // parsed it and threw it away, which is exactly how the credits bug
+  // stayed invisible: every credit read as zero, every project total
+  // came in high, and nothing ever asked QB whether it agreed. It
+  // didn't — by $548,611.24.
+  //
+  // So ask. Any project whose summed detail lines disagree with its own
+  // printed subtotal is a parser defect by definition, and the import is
+  // blocked until a human looks. This catches the NEXT format surprise
+  // (a new currency form, a shifted column, a rounding change) without
+  // anyone having to suspect it first.
+  //
+  // Tolerance is one cent per project — QB subtotals are exact, not
+  // rounded, so anything above a float-noise epsilon is a real defect.
+  // Deliberately NOT a percentage: a 0.5% tolerance on this export would
+  // have swallowed $14k.
+  var RECONCILE_TOLERANCE = 0.01;
+
+  function reconcile(jobs) {
+    var drifted = [];
+    (jobs || []).forEach(function(j) {
+      // A project with no printed subtotal can't be checked — QB omits
+      // the row for single-line projects in some exports. Not a defect,
+      // but count it so the preview can say how much went unverified
+      // rather than implying everything tied out.
+      if (!j.hasReportedTotal) return;
+      var delta = j.computedTotal - j.reportedTotal;
+      if (Math.abs(delta) > RECONCILE_TOLERANCE) {
+        drifted.push({
+          code: j.code,
+          name: j.name,
+          computed: j.computedTotal,
+          reported: j.reportedTotal,
+          delta: delta
+        });
+      }
+    });
+    var checked = (jobs || []).filter(function(j) { return j.hasReportedTotal; }).length;
+    return {
+      ok: drifted.length === 0,
+      drifted: drifted,
+      checked: checked,
+      unverified: (jobs || []).length - checked,
+      // Signed sum of every drift — the single number that would have
+      // read -548,611.24 on the 07.30.26 export before the credits fix.
+      totalDelta: drifted.reduce(function(s, d) { return s + d.delta; }, 0)
+    };
   }
 
   function parseQBCosts(arrayBuffer) {
@@ -326,6 +382,52 @@ function p86Ask(message, opts) {
       statBlock('Total $', fmtMoney(totalMatched), '#34d399') +
       statBlock('Unmatched', m.unmatched.length + (m.unmatched.length ? ' · ' + fmtMoney(totalUnmatched) : ''), m.unmatched.length ? '#fbbf24' : 'var(--text-dim,#888)') +
     '</div>';
+
+    // Reconciliation against QB's own printed subtotals. This outranks
+    // everything else in the dialog: an unmatched job loses costs, but a
+    // drifted job imports WRONG costs under a confident-looking total.
+    var rec = reconcile(_lastParse.jobs);
+    if (!rec.ok) {
+      html += '<div style="background:rgba(248,113,113,0.10);border:1px solid rgba(248,113,113,0.55);border-radius:8px;padding:12px 14px;margin-bottom:16px;">' +
+        '<div style="display:flex;gap:10px;align-items:flex-start;">' +
+          '<span style="font-size:18px;line-height:1;">&#9940;</span>' +
+          '<div style="font-size:12px;color:var(--text,#fff);line-height:1.5;">' +
+            '<strong style="color:#f87171;">Import blocked &mdash; ' + rec.drifted.length + ' project' + (rec.drifted.length === 1 ? '' : 's') +
+            ' disagree with QuickBooks’ own subtotal by ' + fmtMoney(Math.abs(rec.totalDelta)) + '.</strong><br>' +
+            'For each project below, the lines we parsed don’t add up to the &ldquo;Total for&hellip;&rdquo; figure QuickBooks printed. ' +
+            'That means <em>we</em> read the file wrong &mdash; not that your books are wrong. Importing would write costs that don’t match QuickBooks. ' +
+            'Send this file over and it gets fixed in the parser.' +
+          '</div>' +
+        '</div>';
+      html += '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:10px;">' +
+        '<thead><tr>' +
+          '<th style="text-align:left;padding:6px 8px;font-size:10px;text-transform:uppercase;letter-spacing:0.4px;color:var(--text-dim,#888);">Code</th>' +
+          '<th style="text-align:right;padding:6px 8px;font-size:10px;text-transform:uppercase;letter-spacing:0.4px;color:var(--text-dim,#888);">We parsed</th>' +
+          '<th style="text-align:right;padding:6px 8px;font-size:10px;text-transform:uppercase;letter-spacing:0.4px;color:var(--text-dim,#888);">QB says</th>' +
+          '<th style="text-align:right;padding:6px 8px;font-size:10px;text-transform:uppercase;letter-spacing:0.4px;color:var(--text-dim,#888);">Off by</th>' +
+        '</tr></thead><tbody>';
+      rec.drifted.slice(0, 25).forEach(function(d) {
+        html += '<tr style="border-top:1px solid rgba(248,113,113,0.25);">' +
+          '<td style="padding:6px 8px;font-family:\'SF Mono\',monospace;color:#f87171;">' + escapeHTML(d.code || '(none)') + '</td>' +
+          '<td style="text-align:right;padding:6px 8px;font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);">' + fmtMoney(d.computed) + '</td>' +
+          '<td style="text-align:right;padding:6px 8px;font-family:\'SF Mono\',monospace;color:var(--text,#fff);">' + fmtMoney(d.reported) + '</td>' +
+          '<td style="text-align:right;padding:6px 8px;font-family:\'SF Mono\',monospace;color:#f87171;font-weight:600;">' + fmtMoney(d.delta) + '</td>' +
+        '</tr>';
+      });
+      html += '</tbody></table>';
+      if (rec.drifted.length > 25) {
+        html += '<div style="font-size:11px;color:var(--text-dim,#888);padding:6px 8px;">' +
+          '&hellip; and ' + (rec.drifted.length - 25) + ' more.</div>';
+      }
+      html += '</div>';
+    } else {
+      html += '<div style="display:flex;gap:8px;align-items:center;background:rgba(52,211,153,0.08);border:1px solid rgba(52,211,153,0.35);border-radius:8px;padding:9px 12px;margin-bottom:16px;font-size:12px;color:var(--text,#fff);">' +
+        '<span style="font-size:14px;line-height:1;">&#10003;</span>' +
+        '<span>Reconciled to the penny against QuickBooks’ own subtotals &mdash; <strong>' + rec.checked + '</strong> project' + (rec.checked === 1 ? '' : 's') + ' checked' +
+        (rec.unverified ? ', <strong>' + rec.unverified + '</strong> had no printed subtotal to check against' : '') +
+        '.</span>' +
+      '</div>';
+    }
 
     // Flag mismatches LOUDLY. A QB project whose code doesn't match a P86 job
     // number silently imports nothing — that's how 20% of a real export can
@@ -411,10 +513,15 @@ function p86Ask(message, opts) {
     // Disable the Confirm button if nothing to import.
     var confirmBtn = document.getElementById('qbCostsImport_confirmBtn');
     if (confirmBtn) {
-      confirmBtn.disabled = !m.matched.length;
-      confirmBtn.textContent = m.matched.length
-        ? 'Import to ' + m.matched.length + ' job' + (m.matched.length === 1 ? '' : 's')
-        : 'Nothing to import';
+      // A failed reconciliation is a hard stop, not a warning. Blocking a
+      // good import is an annoyance someone can report; importing money
+      // that doesn't match QuickBooks is silent and compounds.
+      confirmBtn.disabled = !m.matched.length || !rec.ok;
+      confirmBtn.textContent = !rec.ok
+        ? 'Blocked — doesn’t match QuickBooks'
+        : (m.matched.length
+            ? 'Import to ' + m.matched.length + ' job' + (m.matched.length === 1 ? '' : 's')
+            : 'Nothing to import');
     }
   }
 
@@ -562,6 +669,28 @@ function p86Ask(message, opts) {
   // ─── Commit: write sheets to each matched job's workspace ────────
   async function commitQBCostsImport() {
     if (!_lastParse) return;
+
+    // The real gate. renderPreview() disables the Confirm button on a
+    // failed reconciliation, but a disabled button is decoration — this
+    // is a global, reachable from the console, a stale DOM, or any future
+    // caller. The check that protects the money lives at the write.
+    var rec = reconcile(_lastParse.jobs);
+    if (!rec.ok) {
+      var blockedMsg = rec.drifted.length + ' project' + (rec.drifted.length === 1 ? '' : 's') +
+        ' don’t match the subtotals QuickBooks printed (off by ' + fmtMoney(Math.abs(rec.totalDelta)) +
+        ' in total). The file was read incorrectly, so these costs would import wrong. Nothing was written.';
+      // p86Alert is referenced around the app but never actually defined,
+      // so those call sites fall through to native alert() — which is a
+      // no-op inside the installed PWA. Route through p86Ask instead: it
+      // uses the in-app overlay that does render there.
+      if (typeof window.p86Alert === 'function') {
+        window.p86Alert({ title: 'Import blocked', message: blockedMsg });
+      } else {
+        await p86Ask(blockedMsg, { title: 'Import blocked', confirmLabel: 'OK' });
+      }
+      return;
+    }
+
     var m = matchJobs(_lastParse.jobs);
     if (!m.matched.length) return;
 
@@ -746,6 +875,12 @@ function p86Ask(message, opts) {
   // parsing helpers are re-exported when loaded under Node (jest) to keep
   // the money math covered. Guarded so the browser path is untouched.
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { toNumber: toNumber, isTotalRow: isTotalRow, parseAoa: parseAoa };
+    module.exports = {
+      toNumber: toNumber,
+      isTotalRow: isTotalRow,
+      parseAoa: parseAoa,
+      reconcile: reconcile,
+      RECONCILE_TOLERANCE: RECONCILE_TOLERANCE
+    };
   }
 })();
