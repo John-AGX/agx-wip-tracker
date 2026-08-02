@@ -325,6 +325,13 @@ async function healthHandler(req, res) {
       db_ms: Date.now() - t0,
       version: version,
       build: build ? String(build).slice(0, 8) : null,
+      // The RUNTIME production is actually on. Nothing pins the Node major
+      // (no engines field, no .nvmrc, no host config), so the host picks it
+      // — which makes a rebuild non-reproducible and, more immediately,
+      // means nobody could state what to pin TO without guessing. Reporting
+      // it is the cheap half of closing PLT-7; the pin follows once this
+      // has been read off the live deploy.
+      node: process.version,
       uptime_s: Math.round(process.uptime()),
     });
   } catch (e) {
