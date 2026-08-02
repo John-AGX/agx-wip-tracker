@@ -2910,12 +2910,13 @@ function renderSidebarJobCard(jobIdOverride){
   // Slim job headline (John): blend the job# into the title (same font, no mono chip),
   // keep the % ring, and DROP the Contract/Profit tiles — the money lives in the Project
   // WIP metrics bar / inspector below.
-  // Fact row. Jobs carry NO start/end date (only createdAt/updatedAt), so
-  // there is no schedule chip to show — place is the only real fact here.
-  // Money stays OFF per John's 2026-07-31 call: the job page always shows a
-  // metrics ribbon (Total income / Costs / Margin) above this card, and a
-  // second copy of the same dollars in a 290px rail is noise, not emphasis.
+  // Fact row: start date + place. Money stays OFF (John, 2026-07-31 and
+  // reconfirmed 08-02): the job page always shows a metrics ribbon
+  // (Total income / Costs / Margin) above this card, and a second copy of
+  // the same dollars in a 290px rail is noise, not emphasis.
   var _facts=[];
+  var _sd=(job.startDate && window.p86EntityCard.shortDate) ? window.p86EntityCard.shortDate(job.startDate) : '';
+  if(_sd) _facts.push({icon:'calendar', text:_sd});
   var _place=[job.city,job.state].filter(Boolean).join(', ');
   if(_place) _facts.push({icon:'map-pin', text:_place});
 

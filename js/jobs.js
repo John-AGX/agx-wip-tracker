@@ -2661,6 +2661,11 @@ function renderJobsMain() {
                 // deleted, so nothing that might reference it later loses data.
                 // Schedule page reads totalProductionDays for daily-revenue math.
                 if ((v = gv('edit-jobProductionDays')) !== null) job.totalProductionDays = parseInt(v, 10) || 0;
+                // Start date — stored as a plain 'YYYY-MM-DD' string in the job
+                // blob (jobs have no dedicated column; data is JSONB). Kept as a
+                // date-only string on purpose: adding a time would drag the whole
+                // value across a day boundary when it's read in another timezone.
+                if ((v = gv('edit-jobStartDate')) !== null) job.startDate = (v || '').trim();
                 if ((v = gv('edit-jobStatus')) !== null) job.status = v;
                 if ((v = gv('edit-jobNotes')) !== null) job.notes = v.trim();
                 job.updatedAt = new Date().toISOString();
@@ -2692,6 +2697,7 @@ function renderJobsMain() {
                     // Editing it was never meaningful anyway: it wrote
                     // targetMarginPct, which nothing reads.
                     'job-info-prod-days': () => '<input id="edit-jobProductionDays" type="number" value="' + (job.totalProductionDays || '') + '" style="' + IST + '">',
+                    'job-info-start':     () => '<input id="edit-jobStartDate" type="date" value="' + escapeHTML(String(job.startDate || '').slice(0, 10)) + '" style="' + IST + '">',
                     'job-info-status':    () => '<select id="edit-jobStatus" style="' + SST + '">' + opts(['New', 'Backlog', 'In Progress', 'On Hold', 'Completed', 'Archived'], job.status) + '</select>',
                     'job-info-notes':     () => '<textarea id="edit-jobNotes" rows="3" style="' + IST + 'resize:vertical;">' + escapeHTML(job.notes || '') + '</textarea>'
                 };
@@ -3126,6 +3132,15 @@ function renderJobsMain() {
             // Production days — read by Schedule page for daily-revenue math.
             var prodDaysCell = document.getElementById('job-info-prod-days');
             if (prodDaysCell) prodDaysCell.textContent = job.totalProductionDays ? (job.totalProductionDays + ' days') : '—';
+            // Start date. Rendered via the shared LOCAL-date formatter — the
+            // stored value is a bare 'YYYY-MM-DD', and new Date() would read it
+            // as UTC midnight and print the day before for anyone west of GMT.
+            var startCell = document.getElementById('job-info-start');
+            if (startCell) {
+                startCell.textContent = (job.startDate && window.p86EntityCard && window.p86EntityCard.shortDate)
+                    ? (window.p86EntityCard.shortDate(job.startDate) || '—')
+                    : '—';
+            }
             const statusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
             document.getElementById('job-info-status').innerHTML = `<span class="badge ${statusClass}">${escapeHTML(job.status)}</span>`;
             document.getElementById('job-info-notes').textContent = job.notes || '—';

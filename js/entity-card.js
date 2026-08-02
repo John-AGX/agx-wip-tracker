@@ -341,6 +341,18 @@
   var DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   var MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+  /**
+   * 'YYYY-MM-DD' → 'Aug 14'. For dates that are just a date (a job start,
+   * a scheduled day) rather than a countdown — dueChip's Today/Overdue
+   * vocabulary would be wrong for those. Same local-date parse, same
+   * reason: never let a bare date shift a day by being read as UTC.
+   */
+  function shortDate(s) {
+    var d = parseDueLocal(s);
+    if (!d) return '';
+    return MON[d.getMonth()] + ' ' + d.getDate();
+  }
+
   function dueChip(dueDate) {
     var d = parseDueLocal(dueDate);
     if (!d) return { due: '', tone: '' };
@@ -395,6 +407,7 @@
     render: render,
     injectStyle: injectStyle,
     dueChip: dueChip,
+    shortDate: shortDate,
     loadTasks: loadTasks,
     jobStatusColor: jobStatusColor,
     leadStatusColor: leadStatusColor,
