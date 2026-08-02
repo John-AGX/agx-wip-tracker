@@ -60,6 +60,41 @@ async function ownedMessageIds(userId, ids) {
   return r.rows.map(function (row) { return row.id; });
 }
 
+// The caller's own message ids belonging to a set of THREADS.
+//
+// The hub is a threaded client — it selects conversations, not messages —
+// but labels attach per message, so a thread-shaped caller had no way in.
+// Mirrors the {ids, thread_ids} convention move-messages already uses, so
+// there is one story for "act on a conversation" rather than two. Same
+// user_id gate as ownedMessageIds: a foreign thread resolves to nothing.
+async function ownedMessageIdsForThreads(userId, threadIds) {
+  const list = (Array.isArray(threadIds) ? threadIds : [])
+    .filter(function (x) { return typeof x === 'string' && x; })
+    .slice(0, 200);
+  if (!list.length) return [];
+  const r = await pool.query(
+    'SELECT id FROM inbound_emails WHERE user_id = $1 AND thread_id = ANY($2::text[])',
+    [userId, list]
+  );
+  return r.rows.map(function (row) { return row.id; });
+}
+
+// Union of the explicit message ids and every message in the given threads.
+async function resolveTargets(userId, body) {
+  const b = body || {};
+  const direct = await ownedMessageIds(userId,
+    Array.isArray(b.message_ids) ? b.message_ids : (b.message_id ? [b.message_id] : []));
+  const threadIds = Array.isArray(b.thread_ids) ? b.thread_ids : (b.thread_id ? [b.thread_id] : []);
+  if (!threadIds.length) return direct;
+  const fromThreads = await ownedMessageIdsForThreads(userId, threadIds);
+  const seen = {};
+  return direct.concat(fromThreads).filter(function (id) {
+    if (seen[id]) return false;
+    seen[id] = 1;
+    return true;
+  });
+}
+
 // A label id in the caller's org, or null.
 async function getLabel(orgId, labelId) {
   const id = Number(labelId);
@@ -227,16 +262,17 @@ router.get('/messages/:messageId', requireAuth, async (req, res) => {
 });
 
 // ── POST /api/email-labels/assign — add labels to messages ──────────
-// Body: { message_ids: [...] | message_id, label_ids: [...] | label_id }.
-// Idempotent (ON CONFLICT DO NOTHING). Bumps use_count per NEW chip so
-// the picker's most-used-first ordering means something.
+// Body: { message_ids: [...] | message_id, thread_ids: [...] | thread_id,
+//         label_ids: [...] | label_id }. Labelling by thread labels every
+// message in the conversation, which is what a threaded client means by
+// "label this". Idempotent (ON CONFLICT DO NOTHING). Bumps use_count per
+// NEW chip so the picker's most-used-first ordering means something.
 router.post('/assign', requireAuth, async (req, res) => {
   try {
     const orgId = callerOrgId(req);
     if (!orgId) return res.status(400).json({ error: 'No organization for caller' });
     const b = req.body || {};
-    const messageIds = await ownedMessageIds(req.user.id,
-      Array.isArray(b.message_ids) ? b.message_ids : [b.message_id]);
+    const messageIds = await resolveTargets(req.user.id, b);
     const labelIds = (Array.isArray(b.label_ids) ? b.label_ids : [b.label_id])
       .map(Number).filter(Number.isFinite).slice(0, 50);
     if (!messageIds.length) return res.status(404).json({ error: 'No messages found' });
@@ -270,14 +306,13 @@ router.post('/assign', requireAuth, async (req, res) => {
 });
 
 // ── POST /api/email-labels/unassign — remove labels from messages ───
-// Body: same shape as /assign.
+// Body: same shape as /assign, thread_ids included.
 router.post('/unassign', requireAuth, async (req, res) => {
   try {
     const orgId = callerOrgId(req);
     if (!orgId) return res.status(400).json({ error: 'No organization for caller' });
     const b = req.body || {};
-    const messageIds = await ownedMessageIds(req.user.id,
-      Array.isArray(b.message_ids) ? b.message_ids : [b.message_id]);
+    const messageIds = await resolveTargets(req.user.id, b);
     const labelIds = (Array.isArray(b.label_ids) ? b.label_ids : [b.label_id])
       .map(Number).filter(Number.isFinite).slice(0, 50);
     if (!messageIds.length) return res.status(404).json({ error: 'No messages found' });

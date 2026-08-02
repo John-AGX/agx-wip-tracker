@@ -96,6 +96,7 @@
 
   var _state = {
     folders: [], counts: {}, folderId: null,
+    labels: [],                // org-shared chips; the MULTI axis to folders' ONE
     threads: [], activeThreadId: null, q: '',
     selected: {},              // thread_id -> true
     expanded: {},              // folder_id -> true
@@ -482,6 +483,31 @@
       '.ehub-menu hr{border:none;border-top:1px solid var(--border,#2a2a32);margin:4px 2px;}',
       '.ehub-menu-hd{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-dim,#6f748a);padding:6px 9px 3px;}',
       '.ehub-menu-when{margin-left:auto;font-size:10.5px;color:var(--text-dim,#6f748a);font-weight:400;}',
+      // ── Labels: the MULTI axis. Chips are tinted from the label's own
+      // colour via --lc, so one rule covers every label without minting a
+      // class per colour.
+      '.ehub-lchip{display:inline-flex;align-items:center;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;' +
+        'font-size:10.5px;line-height:1;padding:3px 7px;border-radius:999px;' +
+        'color:var(--lc,#6b7280);background:color-mix(in srgb, var(--lc,#6b7280) 16%, transparent);' +
+        'border:1px solid color-mix(in srgb, var(--lc,#6b7280) 42%, transparent);}',
+      // Light mode: the same tint on white is far too pale to read, so the
+      // text darkens and the fill lightens rather than inverting the hue.
+      'body.light-mode .ehub-lchip{color:color-mix(in srgb, var(--lc,#6b7280) 72%, #000);' +
+        'background:color-mix(in srgb, var(--lc,#6b7280) 13%, #fff);' +
+        'border-color:color-mix(in srgb, var(--lc,#6b7280) 34%, #fff);}',
+      '.ehub-lswatch{width:9px;height:9px;border-radius:3px;flex:0 0 auto;}',
+      '.ehub-lrow{gap:8px;padding-left:12px;}',
+      '.ehub-lrow .ehub-fold-nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+      '.ehub-menu-labels{min-width:212px;max-height:340px;overflow-y:auto;}',
+      '.ehub-menu-empty{font-size:11.5px;color:var(--text-dim,#6f748a);padding:8px 9px;}',
+      // EXPLICIT widths: `.ehub-menu button{width:100%}` above and the global
+      // `input,select,textarea{width:100%}` in styles.css would otherwise
+      // stack these two vertically at full width instead of side by side.
+      '.ehub-lnew{display:flex;gap:6px;align-items:center;padding:4px 5px 2px;}',
+      '.ehub-lnew input{flex:1 1 auto;width:auto;min-width:0;font-size:12px;padding:5px 7px;border-radius:6px;' +
+        'background:var(--input-bg,#0f0f14);border:1px solid var(--border,#31313c);color:var(--text,#dfe2ec);}',
+      '.ehub-lnew button{width:auto;flex:0 0 auto;padding:5px 10px;background:var(--accent,#4f8cff);color:#fff;border-radius:6px;font-size:11.5px;}',
+      '.ehub-lnew button:hover{filter:brightness(1.08);background:var(--accent,#4f8cff);}',
       // ── E3 search hint + shortcut cheatsheet
       '.ehub-qhint{position:absolute;left:0;right:0;top:100%;margin-top:4px;font-size:11px;color:#e0b768;background:rgba(240,180,41,.09);border:1px solid rgba(240,180,41,.3);border-radius:7px;padding:4px 8px;display:none;z-index:6;}',
       '.ehub-qhint.on{display:block;}',
@@ -629,6 +655,10 @@
     watchTheme();
     wireContainerQueries();
 
+    // Labels load alongside folders, not in series: the chips are
+    // decoration on a list that must not wait for them, and loadLabels
+    // swallows its own failure so a label outage can't blank the hub.
+    loadLabels();
     loadFolders().then(function () { return loadThreads(); });
 
     // Catch-up triage sweep (unchanged from H3): any emails whose
@@ -689,6 +719,53 @@
     });
   }
 
+  // ── Labels ──────────────────────────────────────────────────────────
+  // Folders are the ONE axis (a message lives in exactly one); labels are
+  // the MULTI axis and are org-shared. The table, the CRUD routes and the
+  // `label:` search operator all shipped with E1/E3 — this is the UI that
+  // was missing, so until now a label could be searched for but never
+  // created or attached.
+  function loadLabels() {
+    return api('/api/email-labels').then(function (res) {
+      _state.labels = (res && res.labels) || [];
+    }).catch(function () { _state.labels = []; });   // never block the hub on chips
+  }
+
+  function labelById(id) {
+    for (var i = 0; i < _state.labels.length; i++) {
+      if (String(_state.labels[i].id) === String(id)) return _state.labels[i];
+    }
+    return null;
+  }
+
+  // A label's color is author-chosen and lands in a style attribute, so it
+  // is escaped like any other untrusted value and falls back rather than
+  // emitting a broken rule.
+  function labelColor(c) {
+    return /^#[0-9a-fA-F]{3,8}$/.test(String(c || '')) ? String(c) : '#6b7280';
+  }
+
+  function labelChipsHTML(labels) {
+    if (!labels || !labels.length) return '';
+    return labels.map(function (l) {
+      var c = labelColor(l.color);
+      return '<span class="ehub-lchip" style="--lc:' + c + '" title="' + esc(l.name) + '">' +
+        esc(l.name) + '</span>';
+    }).join('');
+  }
+
+  // Search is the filter mechanism — `label:` already exists and is
+  // parameterized server-side, so clicking a label reuses the same path a
+  // typed query takes rather than inventing a second filter channel.
+  function filterByLabel(name) {
+    var q = 'label:"' + String(name).replace(/"/g, '') + '"';
+    var box = document.getElementById('ehubSearch');
+    if (box) box.value = q;
+    _state.q = q;
+    _state.selected = {};
+    loadThreads();
+  }
+
   // Sum a folder's unread with its whole subtree, so a collapsed
   // "Triaged" still shows that something below it needs attention.
   function subtreeUnread(id) {
@@ -728,9 +805,33 @@
     rail.innerHTML =
       branch(mine, null, 0) +
       '<div class="ehub-rail-hd">Folders<button data-new-root title="New folder">+</button></div>' +
-      (shared.length ? '<div class="ehub-rail-hd">Shared</div>' + branch(shared, null, 0) : '');
+      (shared.length ? '<div class="ehub-rail-hd">Shared</div>' + branch(shared, null, 0) : '') +
+      // Labels are a FILTER, not a location — clicking one runs the
+      // existing `label:` search rather than changing folders, so a
+      // labelled message still shows where it actually lives.
+      (_state.labels.length
+        ? '<div class="ehub-rail-hd">Labels</div>' +
+          _state.labels.map(function (l) {
+            return '<div class="ehub-fold ehub-lrow" data-label="' + esc(l.name) + '">' +
+              '<span class="ehub-lswatch" style="background:' + labelColor(l.color) + '"></span>' +
+              '<span class="ehub-fold-nm">' + esc(l.name) + '</span>' +
+              '</div>';
+          }).join('')
+        : '');
 
-    rail.querySelectorAll('.ehub-fold').forEach(function (el) {
+    rail.querySelectorAll('[data-label]').forEach(function (el) {
+      el.addEventListener('click', function () {
+        filterByLabel(el.getAttribute('data-label'));
+        var body = document.getElementById('ehubBody');
+        if (body) body.classList.remove('rail-open');
+      });
+    });
+
+    // [data-folder] is load-bearing, not decoration: label rows below reuse
+    // .ehub-fold for styling, and a bare '.ehub-fold' selector would bind
+    // the folder click/drag handlers to them too — setting folderId to null
+    // and blanking the list.
+    rail.querySelectorAll('.ehub-fold[data-folder]').forEach(function (el) {
       var fid = el.getAttribute('data-folder');
       el.addEventListener('click', function (e) {
         if (e.target.closest('[data-tw]') && e.target.textContent.trim()) {
@@ -970,6 +1071,7 @@
           (nav ? ' data-entity-type="' + esc(th.entity_type) + '" data-entity-id="' + esc(th.entity_id) + '"' : '') +
           '>' + ico('clients', '') + esc(th.entity_label) + '</span>';
       }
+      chips += labelChipsHTML(th.labels);
       if (th.needs_reply && !handled) chips += '<span class="ehub-badge ehub-badge-reply">needs reply</span>';
       if (handled) chips += '<span class="ehub-badge ehub-badge-done">replied</span>';
       else if (th.has_draft) chips += '<span class="ehub-badge ehub-badge-draft">draft ready</span>';
@@ -1062,6 +1164,7 @@
       '<button class="ehub-tool" data-b="unread">Unread</button>' +
       '<button class="ehub-tool" data-b="star">' + '&#9733;' + '</button>' +
       '<button class="ehub-tool" data-b="snooze">' + ico('bell', '') + ' Snooze</button>' +
+      '<button class="ehub-tool" data-b="label">' + ico('tag', '') + ' Label</button>' +
       (archive ? '<button class="ehub-tool" data-b="archive">' + ico('import', '') + ' Archive</button>' : '') +
       (trash ? '<button class="ehub-tool" data-b="trash">' + ico('delete', '') + ' Trash</button>' : '') +
       '<select class="ehub-tool" data-b="move"><option value="">Move to…</option>' +
@@ -1081,6 +1184,7 @@
         var sel = selectedIds();
         if (act === 'clear') { _state.selected = {}; paintList(); return; }
         if (act === 'snooze') { ev.stopPropagation(); return snoozeMenu(ev, sel); }
+        if (act === 'label') { ev.stopPropagation(); return labelMenu(ev, sel); }
         if (act === 'archive' && archive) return moveThreads(sel, archive.id);
         if (act === 'trash' && trash) return moveThreads(sel, trash.id);
         var patch = act === 'read' ? { is_read: true } : act === 'unread' ? { is_read: false } : { is_starred: true };
@@ -1678,6 +1782,95 @@
       closeMenu();
       snoozeThreads(threadIds, b.getAttribute('data-snz'));
     });
+  }
+
+  // Label picker for the selected conversations. Toggle semantics: a
+  // checked row means every selected thread already carries that label, so
+  // clicking it removes; anything else adds. Most-used-first comes from the
+  // API's use_count ordering, so the chips you actually file with rise.
+  function labelMenu(evt, threadIds) {
+    closeMenu();
+    if (!threadIds || !threadIds.length) return;
+
+    // Which labels are already on ALL of the selected threads. Read off
+    // the loaded rows rather than refetching — the list already carries
+    // them, and a picker that stalls on a round trip feels broken.
+    var counts = {};
+    var picked = _state.threads.filter(function (t) { return threadIds.indexOf(t.thread_id) !== -1; });
+    picked.forEach(function (t) {
+      (t.labels || []).forEach(function (l) { counts[l.id] = (counts[l.id] || 0) + 1; });
+    });
+    var onAll = function (id) { return counts[id] === picked.length && picked.length > 0; };
+
+    var m = document.createElement('div');
+    m.className = 'ehub-menu ehub-menu-labels';
+    m.style.left = Math.min(evt.clientX, window.innerWidth - 240) + 'px';
+    m.style.top = Math.min(evt.clientY, window.innerHeight - 300) + 'px';
+
+    var list = _state.labels.length
+      ? _state.labels.map(function (l) {
+          return '<button data-lbl="' + esc(String(l.id)) + '">' +
+            '<span class="ehub-lswatch" style="background:' + labelColor(l.color) + '"></span>' +
+            esc(l.name) +
+            (onAll(l.id) ? '<span class="ehub-menu-when">&#10003;</span>' : '') +
+            '</button>';
+        }).join('')
+      : '<div class="ehub-menu-empty">No labels yet.</div>';
+
+    m.innerHTML = list +
+      '<hr>' +
+      '<div class="ehub-lnew">' +
+        '<input type="text" id="ehubNewLabel" placeholder="New label…" maxlength="40" spellcheck="false">' +
+        '<button data-lbl-new="1">Add</button>' +
+      '</div>';
+    document.body.appendChild(m);
+
+    // Typing in the field must not reach the menu's click handler, and
+    // Enter should commit rather than submit anything upstream.
+    var input = m.querySelector('#ehubNewLabel');
+    if (input) {
+      input.addEventListener('click', function (e) { e.stopPropagation(); });
+      input.addEventListener('keydown', function (e) {
+        e.stopPropagation();                       // the hub owns j/k/e/# globally
+        if (e.key === 'Enter') { e.preventDefault(); createAndAssign(input.value, threadIds); }
+      });
+      setTimeout(function () { try { input.focus(); } catch (er) {} }, 0);
+    }
+
+    m.addEventListener('click', function (e) {
+      if (e.target.closest('[data-lbl-new]')) {
+        e.stopPropagation();
+        return createAndAssign(input ? input.value : '', threadIds);
+      }
+      var b = e.target.closest('[data-lbl]');
+      if (!b) return;
+      e.stopPropagation();
+      var id = b.getAttribute('data-lbl');
+      closeMenu();
+      applyLabel(threadIds, [id], onAll(id) ? 'unassign' : 'assign');
+    });
+  }
+
+  function applyLabel(threadIds, labelIds, verb) {
+    return post('/api/email-labels/' + verb, { thread_ids: threadIds, label_ids: labelIds })
+      .then(function () { return loadLabels(); })
+      .then(function () { return loadThreads(); })
+      .catch(function (e) { toast(e.message || 'Could not update labels.'); });
+  }
+
+  function createAndAssign(name, threadIds) {
+    var n = String(name || '').trim();
+    if (!n) return;
+    closeMenu();
+    // POST is idempotent on name, so typing an existing label just returns
+    // it — "create" and "pick" collapse into one action.
+    return post('/api/email-labels', { name: n })
+      .then(function (res) {
+        var l = res && res.label;
+        if (!l) throw new Error('Label not created');
+        return applyLabel(threadIds, [l.id], 'assign');
+      })
+      .catch(function (e) { toast(e.message || 'Could not create that label.'); });
   }
 
   // ── E3: signatures + quick parts ──────────────────────────────────

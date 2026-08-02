@@ -606,6 +606,30 @@ router.get('/threads', requireAuth, async (req, res) => {
         LIMIT ${limit}`,
       params
     );
+    // Labels for the returned threads, as a SECOND query rather than a join.
+    // Labels are per-message and a thread groups many messages, so joining
+    // email_message_labels into the aggregate above would multiply rows and
+    // silently inflate message_count / unread_count / the star and pin ORs —
+    // a label would change the unread badge. Keyed off the thread ids we
+    // already have (≤200), so it stays one extra round trip, not N+1.
+    if (r.rows.length) {
+      const threadIds = r.rows.map(function (row) { return row.thread_id; });
+      const lr = await pool.query(
+        `SELECT DISTINCT e.thread_id, l.id, l.name, l.color
+           FROM inbound_emails e
+           JOIN email_message_labels ml ON ml.message_id = e.id
+           JOIN email_labels l ON l.id = ml.label_id AND l.archived_at IS NULL
+          WHERE e.user_id = $1 AND e.thread_id = ANY($2::text[])
+          ORDER BY l.name`,
+        [req.user.id, threadIds]
+      );
+      const byThread = {};
+      lr.rows.forEach(function (row) {
+        (byThread[row.thread_id] = byThread[row.thread_id] || [])
+          .push({ id: row.id, name: row.name, color: row.color });
+      });
+      r.rows.forEach(function (row) { row.labels = byThread[row.thread_id] || []; });
+    }
     // Echo the parsed query back so the UI can render operator chips and
     // warn about a mistyped operator instead of silently ignoring it.
     res.json({ threads: r.rows, query: parsedQuery });
