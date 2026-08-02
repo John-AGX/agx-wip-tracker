@@ -20,10 +20,9 @@
 
 | # | Issue | Severity | Impact | Plan |
 |---|---|---|---|---|
-| INT-1 | **No reconciliation gate against QuickBooks / Buildertrend.** Job costs are not tied out to an external source with a tolerance and a sign-off. | **P1** | A historical variance in the legacy WIP workbooks means undetected drift is plausible. | Stage 2 — first deliverable. |
+| INT-1 | **No reconciliation gate against QuickBooks / Buildertrend.** *Partially closed (`081699b`):* the QuickBooks importer now reconciles every project against QuickBooks' own printed "Total for" subtotal before writing, and refuses the import on any disagreement over one cent. What remains open is the **standing** tie-out — a periodic job-cost reconciliation against an external source with a tolerance and a human sign-off, and anything equivalent for Buildertrend. | P2 *(was P1)* | The import path can no longer write costs that disagree with QuickBooks. Drift arising *after* import is still undetected. | Stage 2 — first deliverable. |
 | INT-2 | **NULL-organization rows are shared across tenants by design.** The tenancy predicate is `(organization_id = $N OR organization_id IS NULL)`, so legacy rows with a NULL org remain readable/writable by every tenant. | P2 | A deliberate single-tenant compatibility choice today; a real hazard before onboarding a second tenant. | Backfill org ids and drop the NULL branch — required before Stage 4. |
 | INT-3 | **Check-then-write in the client-directory tools.** The gating `SELECT` carries the org predicate but the terminal `UPDATE` matches on id alone. | P3 | Not exploitable as written (the gate fails closed), but it is the pattern that regresses silently if the gate is ever moved. | Fold the predicate into the write statement. |
-| INT-4 | **No over-billing guard.** A vendor bill's amount has no enforced relationship to its own lines or to its PO. | P2 | Over-billing is not caught by the system. | Stage 2 (with the accounting spine). |
 | INT-5 | **Two write paths per entity** (REST + AI payload dispatcher) for ~12 entity types. Rules added to a REST route are not automatically gained by the AI path. | P2 | Failure mode is a *successful-looking* apply. Mitigated by the `dispatchAssembly` service pattern, which is being extended. | Ongoing — see `docs/write-path-audit.md`. |
 | INT-6 | **`emit_payload_file` description truncation** (1024 chars) means much of the payload grammar never reaches the model. | P2 | The AI writes a narrower grammar than the system supports. | Scheduled with the agent-topology work. |
 | INT-7 | **No commit-time critic** on `applyPayload` (re-derive/diff at commit). Double-apply *is* closed (atomic `status='applying'` claim). | P2 | A wrong-but-valid write is not independently checked. | `docs/write-path-audit.md` item 4. |
@@ -50,6 +49,9 @@
 | PLT-7 | **Runtime version is not pinned** — `package.json` declares no `engines` field and there is no `.nvmrc`, so the host chooses the Node major. | P2 | A rebuild (or a host default change) could land on a different Node major than production and behave differently — a reproducibility gap for the rebuild procedure. | Stage 1 — cheap: declare `engines.node` and add `.nvmrc`. |
 
 ## Recently closed (for context — full history in the release notes)
+
+- **QuickBooks import wrote costs nobody checked** → closed (`081699b`). QuickBooks prints its own subtotal on every project and the parser had been capturing it and discarding it; the import now reconciles against it and blocks on any disagreement over a cent. This is the systemic fix for the credits-read-as-zero defect (`486b2ad`, $548,611.24 across 164 lines) — that bug was *found* by hand, and this is what would have caught it.
+- **INT-4 — no over-billing guard** → closed (`bd9f0da`). A bill's amount had no enforced relationship to its PO. It is now checked against the PO's committed total (baseline + approved addendums, so a pending revision can't authorize billing), blocked by default with the arithmetic shown, and overridable only via an explicit flag that records who acknowledged it.
 
 - **CO/PO/invoice AI writes were landing in dead arrays** and silently vanishing → fixed (`bf16ead`); `server/services/job-financials.js` is now the single write layer.
 - **Boot pushed stale local data over newer server data** → fixed; plus a pre-unload flush and a "never push if the load failed" guard.
