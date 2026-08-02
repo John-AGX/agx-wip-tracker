@@ -1879,6 +1879,14 @@
                     </div>
 
                     <!-- Users sub-tab -->
+                    <!-- Admin landing. Grouped section cards replace the dropdown;
+                         each sub-tab click delegates to the existing panes below,
+                         so nothing here owns a surface of its own. The Command
+                         Center band inside it renders only for system_admin. -->
+                    <div id="admin-subtab-dashboard" class="admin-subtab-content">
+                        <div id="admin-dashboard-host"></div>
+                    </div>
+
                     <div id="admin-subtab-users" class="admin-subtab-content">
                         <div class="action-buttons">
                             <button class="ee-btn primary" onclick="openNewUserModal()">&#x1F464; New User</button>
@@ -3254,7 +3262,11 @@
          BEFORE admin.js so window.p86EmailBlocks is available at the
          time renderTemplateEditor() runs its mount call. -->
     <script src="js/email-block-editor.js?v=6"></script>
-    <script src="js/admin.js?v=126"></script>
+    <!-- Shared dashboard shell — one renderer for Admin (org) and the
+         Command Center (platform). Must load BEFORE its consumers. -->
+    <script src="js/dash-shell.js?v=1"></script>
+    <script src="js/admin-dashboard.js?v=1"></script>
+    <script src="js/admin.js?v=127"></script>
     <!-- Act-as / disguise mode: persistent "Acting as NAME — Exit" banner +
          window.p86ActAs(userId). Self-contained; re-fetches /api/auth/me. -->
     <script src="js/actas.js?v=1"></script>
@@ -3294,7 +3306,7 @@
     <script src="js/entity-card.js?v=9"></script>
     <!-- Lead/estimate context card mounted into #app-sidebar (uses p86EntityCard). -->
     <script src="js/entity-subnav.js?v=3"></script>
-    <script src="js/app.js?v=130"></script>
+    <script src="js/app.js?v=131"></script>
     <script src="js/search-clear.js?v=3"></script>
     <script src="js/sidebar-brand.js?v=2"></script>
     <!-- Guided tours engine + the Help & What's New center (patch

@@ -2066,10 +2066,15 @@
             } else if (tabName === 'insights') {
                 if (typeof renderInsightsDashboard === 'function') renderInsightsDashboard();
             } else if (tabName === 'admin') {
-                // Default to the Users sub-tab; switchAdminSubTab handles the
-                // initial render so we don't double-fire API calls.
-                if (typeof switchAdminSubTab === 'function') switchAdminSubTab('users');
-                else if (typeof renderAdminUsers === 'function') renderAdminUsers();
+                // Land on the DASHBOARD, not on a sub-tab. Admin used to open
+                // on Users, which meant the first thing you saw was one list
+                // out of eight destinations with no sense of the rest.
+                // switchAdminSubTab handles the render so we don't double-fire.
+                // Falls back to the old Users landing if the dashboard module
+                // failed to load — never leave the tab blank.
+                if (typeof switchAdminSubTab === 'function') {
+                    switchAdminSubTab(window.renderAdminDashboard ? 'dashboard' : 'users');
+                } else if (typeof renderAdminUsers === 'function') renderAdminUsers();
             } else {
                 // Returning to Jobs from another tab: force back to the main job
                 // list, even if a job detail was previously open. Without this

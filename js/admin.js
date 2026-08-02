@@ -1147,7 +1147,8 @@ function p86Ask(message, opts) {
     // markup's initial style="display:none;" depending on browser
     // state. Setting block guarantees the pane shows.
     if (target) target.style.display = 'block';
-    if (name === 'users') renderAdminUsers();
+    if (name === 'dashboard') { if (window.renderAdminDashboard) window.renderAdminDashboard(); }
+    else if (name === 'users') renderAdminUsers();
     else if (name === 'metrics') renderAdminMetrics();
     else if (name === 'roles') renderAdminRoles();
     else if (name === 'agents') renderAdminAgents();
