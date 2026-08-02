@@ -300,6 +300,26 @@
   }
 
   // ── Styles ────────────────────────────────────────────────────────
+  // The compact three-pane rules, rendered either inside a media query
+  // (`@media (…)`) or scoped to a container class (`.ehub-body.cx-narrow`).
+  // One source of truth so the two triggers can never drift apart.
+  function compactRules(trigger) {
+    var media = trigger.charAt(0) === '@';
+    var p = media ? '' : trigger + ' ';        // descendant scope for the class form
+    var self = media ? '.ehub-body' : trigger; // rules that sit ON .ehub-body itself
+    var body = [
+      p + '.ehub-split{display:none;}',
+      p + '.ehub-rail{position:absolute;left:0;top:0;bottom:0;z-index:5;width:230px !important;flex-basis:230px !important;box-shadow:0 0 30px rgba(0,0,0,.55);}',
+      self + ':not(.rail-open) .ehub-rail{display:none;}',
+      self + '.rail-open .ehub-rail{display:block;}',
+      p + '.ehub-list{flex:1 1 auto !important;width:auto !important;border-right:none;}',
+      self + '.show-thread .ehub-list{display:none;}',
+      self + ':not(.show-thread) .ehub-pane{display:none;}',
+      p + '.ehub-back{display:inline-flex;}'
+    ].join('\n');
+    return media ? (trigger + '{\n' + body + '\n}') : body;
+  }
+
   function ensureStyles() {
     var existing = document.getElementById('p86-ehub-styles');
     if (existing) return;
@@ -484,17 +504,23 @@
       'body.light-mode .ehub-row.pri-high::before{background:#dc2626;}',
       'body.light-mode .ehub-row.pri-money::before{background:#b45309;}',
 
-      // ── mobile: rail becomes a drawer, list and pane swap
-      '@media (max-width:900px){',
-      '.ehub-split{display:none;}',
-      '.ehub-rail{position:absolute;left:0;top:0;bottom:0;z-index:5;width:230px !important;flex-basis:230px !important;box-shadow:0 0 30px rgba(0,0,0,.55);}',
-      '.ehub-body:not(.rail-open) .ehub-rail{display:none;}',
-      '.ehub-body.rail-open .ehub-rail{display:block;}',
-      '.ehub-list{flex:1 1 auto !important;width:auto !important;border-right:none;}',
-      '.ehub-body.show-thread .ehub-list{display:none;}',
-      '.ehub-body:not(.show-thread) .ehub-pane{display:none;}',
-      '.ehub-back{display:inline-flex;}',
-      '}'
+      // ── Compact layout ────────────────────────────────────────────
+      // Emitted TWICE, against two different triggers, because they
+      // answer different questions:
+      //
+      //   @media (max-width:900px)  — the VIEWPORT is small (a phone).
+      //   .ehub-body.cx-narrow      — the hub's own CONTAINER is small.
+      //
+      // The second is the one that matters here. Opening the assistant
+      // drawer does not change the viewport at all — it puts
+      // padding-right:420px on the body, which shrinks the hub's box
+      // while every media query keeps reporting the full width. So the
+      // three panes just crushed: on a 1280px screen the reading pane
+      // collapsed to ~110px and its buttons clipped to "Unrea", "Snooz",
+      // "Archiv". A ResizeObserver (see wireContainerQueries) measures
+      // the real box and sets cx-narrow / cx-tight.
+      compactRules('@media (max-width:900px)') +
+      compactRules('.ehub-body.cx-narrow')
     ].join('\n');
     document.head.appendChild(st);
   }
@@ -573,6 +599,7 @@
     wireSplitters();
     wireShortcuts();
     watchTheme();
+    wireContainerQueries();
 
     loadFolders().then(function () { return loadThreads(); });
 
@@ -1323,6 +1350,33 @@
       [6000, 14000, 25000].forEach(function (ms) {
         setTimeout(function () { if (_state.activeThreadId === threadId) openThread(threadId); }, ms);
       });
+    }
+  }
+
+  // ── Container queries ─────────────────────────────────────────────
+  // Watch the hub's OWN width, not the viewport's. Anything that steals
+  // horizontal space without resizing the window — the assistant drawer
+  // (body padding-right:420px), a docked panel, the sidebar expanding —
+  // is invisible to a media query but shrinks this box, and the three
+  // panes have to fold the same way they do on a phone.
+  var _cxRO = null;
+  function wireContainerQueries() {
+    var body = document.getElementById('ehubBody');
+    if (!body) return;
+    function apply() {
+      var w = body.clientWidth;
+      if (!w) return;                       // hidden tab / not laid out yet
+      body.classList.toggle('cx-narrow', w < 900);
+    }
+    apply();
+    if (window.ResizeObserver) {
+      if (_cxRO) { try { _cxRO.disconnect(); } catch (e) {} }
+      _cxRO = new ResizeObserver(apply);
+      _cxRO.observe(body);
+    } else {
+      // No ResizeObserver: the media query above still covers real
+      // viewport changes, so this degrades to the pre-existing behavior.
+      window.addEventListener('resize', apply);
     }
   }
 
