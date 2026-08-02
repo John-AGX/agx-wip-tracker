@@ -23,16 +23,30 @@ const { requireAuth, requireCapability } = require('../auth');
 
 const router = express.Router();
 
-// Cost ($/1M tokens) — input, output. Only used for friendly display
+// Cost ($/1M tokens) — input, output. Mirrors what's listed in
+// the public model pricing tables. Only used for friendly display
 // math; not persisted.
 //
-// The table itself now lives in services/ai-pricing.js so the spend
-// alarm can price tokens without importing this route file (which pulls
-// in auth.js and hard-fails without JWT_SECRET). Same values, same
-// fallback behaviour — the names below are re-bound, not redefined, so
-// every consumer in this file is unchanged. Two copies of a price table
-// is how an alarm ends up disagreeing with the page it is alarming on.
-const { MODEL_COSTS, DEFAULT_MODEL_COST } = require('../services/ai-pricing');
+// IMPORTANT: keep this in lock-step with the live default model in
+// ai-routes.js (process.env.AI_MODEL || 'claude-opus-4-8'). If the
+// default model isn't listed here, costFor() falls back to the
+// current Opus tier instead of silently reporting $0 — see below.
+const MODEL_COSTS = {
+  'claude-opus-4-8':   { in: 5,    out: 25  },
+  'claude-opus-4-7':   { in: 5,    out: 25  },
+  'claude-opus-4-6':   { in: 5,    out: 25  },
+  'claude-opus-4-5':   { in: 15,   out: 75  },
+  'claude-sonnet-4-6': { in: 3,    out: 15  },
+  'claude-sonnet-4-5': { in: 3,    out: 15  },
+  'claude-haiku-4-5':  { in: 1,    out: 5   }
+};
+
+// Fallback price for any model not in the table above. Mirrors the
+// current Opus tier so a newer model rev (e.g. a future opus-4-9)
+// never makes live cost metrics silently collapse to $0 — the bug
+// that hid all opus-4-8 spend until 2026-05. Conservative on the
+// high side by design: an estimated number beats a missing one.
+const DEFAULT_MODEL_COST = { in: 5, out: 25 };
 
 // Friendly labels mirror the front-end AGENT_LABELS. Emojis stay
 // here because these are server-rendered strings used in admin
@@ -281,9 +295,14 @@ router.get('/metrics',
     // input, cache READS at 0.10x input, output at the output rate.
     // This is what the Anthropic invoice actually charges — the old
     // input+output-only math understated writes and ignored reads.
-    // Shared with the spend alarm — identical arithmetic, identical
-    // rounding to cents, so the alert and this page never disagree.
-    const cacheCost = require('../services/ai-pricing').cacheCost;
+    const cacheCost = (model, inTok, outTok, cw, cr) => {
+      const rate = MODEL_COSTS[model] || DEFAULT_MODEL_COST;
+      const usd = (Number(inTok || 0) * rate.in
+        + Number(cw || 0) * rate.in * 1.25
+        + Number(cr || 0) * rate.in * 0.10) / 1e6
+        + (Number(outTok || 0) * rate.out) / 1e6;
+      return Math.round(usd * 100) / 100;
+    };
 
     // Compose the rich 86 payload. Chat cost is cache-aware but the
     // per-model SQL doesn't split cache classes per model — apportion
