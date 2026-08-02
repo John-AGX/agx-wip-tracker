@@ -4300,6 +4300,14 @@ async function initSchema() {
     ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS is_pinned       BOOLEAN NOT NULL DEFAULT FALSE;
     ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS snoozed_until   TIMESTAMPTZ;
     ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS due_at          TIMESTAMPTZ;
+    -- When this message was moved INTO Trash. The 30-day purge keys off
+    -- THIS, never received_at: mail is routinely trashed long after it
+    -- arrived, so purging on arrival would delete a two-year-old thread the
+    -- instant someone binned it. Set on the way in, cleared on the way out,
+    -- so dragging a message back out of Trash resets its clock.
+    ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS trashed_at      TIMESTAMPTZ;
+    CREATE INDEX IF NOT EXISTS idx_inbound_emails_trashed
+      ON inbound_emails (trashed_at) WHERE trashed_at IS NOT NULL;
     -- AI layer (E5) writes these; E1 only reserves them. Kept SEPARATE from
     -- the H3 triage_* columns: those are the existing Haiku advisory pass,
     -- these are the hub's own priority stripe / one-line summary. Like

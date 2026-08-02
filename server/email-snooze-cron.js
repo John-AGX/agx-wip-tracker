@@ -1,4 +1,10 @@
-// Snooze wake-up sweep — Premium Email Hub E3.
+// Email housekeeping sweep — Premium Email Hub E3.
+//
+// Two jobs on one 5-minute tick: waking snoozed mail, and purging Trash
+// past its retention window. They share a timer because both are coarse,
+// low-volume janitorial passes and a second scheduler would be pure
+// overhead — but they do NOT share a try block, because one is destructive
+// and must never be able to take the other down.
 //
 // Snoozing a conversation stamps inbound_emails.snoozed_until and files it
 // into the user's Snoozed folder. This scanner is what brings it BACK:
@@ -58,7 +64,51 @@ async function runOnce() {
     console.error('[email-snooze] sweep failed:', e && e.message);
     out.error = e.message;
   }
+
+  // ── Trash retention (spec §1) ────────────────────────────────────
+  // Deliberately its own try block: purging is destructive and must never
+  // be able to take the snooze wake-up down with it, in either direction.
+  try {
+    const p = await purgeTrash();
+    out.purged = p.purged;
+  } catch (e) {
+    console.error('[email-trash] purge failed:', e && e.message);
+    out.purgeError = e.message;
+  }
   return out;
+}
+
+// Permanently remove mail that has sat in Trash past the retention window.
+//
+// Keyed on trashed_at — stamped by moveMessages as a message crosses INTO
+// Trash — and NOT on received_at. Mail is routinely binned long after it
+// arrives, so an arrival-based rule would destroy a two-year-old thread the
+// moment someone trashed it. Anything trashed before that column existed
+// has a NULL stamp and is skipped rather than guessed at: it stays until a
+// human moves it, which is the safe direction to be wrong in.
+//
+// The folder check is re-asserted in the DELETE itself. A message rescued
+// from Trash has its stamp cleared, but belt-and-braces here means even a
+// stale stamp cannot delete something that is no longer in the bin.
+var TRASH_RETENTION_DAYS = 30;
+
+async function purgeTrash() {
+  const r = await pool.query(
+    `DELETE FROM inbound_emails e
+      USING email_folders f
+      WHERE f.id = e.folder_id
+        AND f.system
+        AND f.slug = 'trash'
+        AND e.trashed_at IS NOT NULL
+        AND e.trashed_at < NOW() - ($1 || ' days')::interval
+      RETURNING e.id`,
+    [String(TRASH_RETENTION_DAYS)]
+  );
+  if (r.rowCount) {
+    console.log('[email-trash] purged ' + r.rowCount +
+      ' message(s) held past ' + TRASH_RETENTION_DAYS + ' days');
+  }
+  return { purged: r.rowCount };
 }
 
 var _started = false;
@@ -75,4 +125,4 @@ function start() {
   console.log('[email-snooze] scanner armed; tick every ' + Math.round(TICK_MS / 60000) + ' min');
 }
 
-module.exports = { start: start, runOnce: runOnce };
+module.exports = { start: start, runOnce: runOnce, purgeTrash: purgeTrash, TRASH_RETENTION_DAYS: TRASH_RETENTION_DAYS };

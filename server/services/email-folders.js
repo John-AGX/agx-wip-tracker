@@ -627,12 +627,21 @@ async function moveMessages(owner, messageIds, folderId, opts) {
     if (!targetId) { const e = new Error('Inbox folder is missing'); e.status = 500; throw e; }
   }
 
+  // Stamp/clear trashed_at as the message crosses the Trash boundary. The
+  // 30-day purge keys off this rather than received_at, because mail is
+  // routinely trashed long after it arrived — purging on arrival would
+  // delete an old thread the moment someone binned it. Moving back OUT
+  // clears the stamp, so a rescued message starts its clock over.
+  const trashId = await systemFolderId(org, uid, 'trash', { client: opts.client });
+  const toTrash = !!trashId && String(trashId) === String(targetId);
+
   const params = [targetId, uid];
   const scope = [];
   if (ids.length) { params.push(ids); scope.push('id = ANY($' + params.length + '::text[])'); }
   if (threadIds.length) { params.push(threadIds); scope.push('thread_id = ANY($' + params.length + '::text[])'); }
   const r = await run(
-    'UPDATE inbound_emails SET folder_id = $1' +
+    'UPDATE inbound_emails SET folder_id = $1, trashed_at = ' +
+      (toTrash ? 'COALESCE(trashed_at, NOW())' : 'NULL') +
     ' WHERE user_id = $2 AND (' + scope.join(' OR ') + ')',
     params
   );
