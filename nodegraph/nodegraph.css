@@ -1,5 +1,5 @@
 /* AGX Node Graph v5 — T1/T2, Cost w/ sub-items, progress bars */
-#nodeGraphTab{display:none;position:fixed;left:0;right:0;bottom:0;z-index:99;background:var(--ng-bg,#0e0e12);overflow:hidden;font-family:'Segoe UI',system-ui,sans-serif}
+#nodeGraphTab{display:none;position:fixed;left:0;right:0;bottom:0;z-index:99;background:var(--ng-bg,#0e0e12);overflow:hidden;font-family:Inter,'Segoe UI',system-ui,-apple-system,sans-serif}
 #nodeGraphTab.active{display:flex;flex-direction:column}
 /* Maximize toggle — hide the AGX nav header AND the job-detail
    metrics strip + sub-tab nav so the graph claims the full
@@ -1232,7 +1232,7 @@ body.light-mode .ng-pop-check:hover{background:rgba(15,23,42,.05);}
 .ng-insp-metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:2px 0 12px;}
 .ng-im{background:var(--ng-surface,#14171c);border:1px solid var(--ng-border,#262b33);border-radius:9px;padding:7px 9px;display:flex;flex-direction:column;gap:2px;min-width:0;}
 .ng-im-k{font-size:8.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--text-dim,#8b929e);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.ng-im-v{font-size:14px;font-weight:700;font-family:'SF Mono',ui-monospace,monospace;color:var(--text,#e8eaed);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ng-im-v{font-size:14px;font-weight:700;font-family:Inter,'Segoe UI',system-ui,-apple-system,sans-serif;color:var(--text,#e8eaed);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .ng-im.inc .ng-im-v{color:#34d399;}
 .ng-im.cost .ng-im-v{color:#fbbf24;}
 .ng-im.gain .ng-im-v{color:#4f8cff;}

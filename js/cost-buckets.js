@@ -175,13 +175,13 @@
       h += '<div style="display:flex;align-items:center;gap:7px;padding:3px 0;border-top:1px solid var(--ng-border2,#222);">' +
         '<span style="width:7px;height:7px;border-radius:2px;background:' + b.color + ';opacity:' + (faint ? '0.35' : '1') + ';flex:none;"></span>' +
         '<span style="flex:1;font-size:11.5px;color:' + (faint ? '#6a7090' : 'var(--ng-text,#c8cbe0)') + ';">' + b.label + '</span>' +
-        (src.length ? '<span style="font-size:9px;color:#6a7090;font-family:monospace;">' + src.join(' · ') + '</span>' : '') +
-        '<span style="min-width:76px;text-align:right;font-family:monospace;font-size:12px;color:' + (faint ? '#4a4f63' : b.color) + ';">' + fmt(b.total) + '</span>' +
+        (src.length ? '<span style="font-size:9px;color:#6a7090;font-family:inherit;">' + src.join(' · ') + '</span>' : '') +
+        '<span style="min-width:76px;text-align:right;font-family:inherit;font-size:12px;color:' + (faint ? '#4a4f63' : b.color) + ';">' + fmt(b.total) + '</span>' +
         '</div>';
     });
     h += '<div style="display:flex;align-items:center;gap:7px;padding:4px 0 2px;border-top:2px solid var(--ng-border2,#333);font-weight:700;">' +
       '<span style="flex:1;font-size:11.5px;color:#c8cbe0;">Total actual cost</span>' +
-      '<span style="min-width:76px;text-align:right;font-family:monospace;font-size:12.5px;color:#e0a458;">' + fmt(roll.grand) + '</span>' +
+      '<span style="min-width:76px;text-align:right;font-family:inherit;font-size:12.5px;color:#e0a458;">' + fmt(roll.grand) + '</span>' +
       '</div></div>';
     host.innerHTML = h;
   }
