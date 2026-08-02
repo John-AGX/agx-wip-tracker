@@ -164,11 +164,43 @@ async function triageEmailById(emailId) {
         WHERE id = $1 AND triaged_at IS NULL`,
       [emailId, t.needs_reply, t.urgency, t.summary, JSON.stringify(t.actions), t.category]
     );
+    if (u.rowCount > 0) runPostTriageRules(emailId, row, t);
     return u.rowCount > 0;
   } catch (e) {
     console.warn('[email-triage] triageEmailById error:', e && e.message);
     return false;
   }
+}
+
+// E4: run the owner's 'post_triage' rules now that ai_category, urgency and
+// needs_reply actually exist. These CANNOT run at inbound — the columns are
+// still NULL then, so every such rule would silently never match, which is
+// why email_rules carries an explicit run_phase.
+//
+// Fire-and-forget and fully guarded: triage has already committed its work
+// by this point, and a rule must never be able to undo or block that.
+function runPostTriageRules(emailId, row, t) {
+  try {
+    const rules = require('./email-rules');
+    pool.query('SELECT organization_id, user_id, folder_id FROM inbound_emails WHERE id = $1', [emailId])
+      .then((r) => {
+        const m = r.rows[0];
+        if (!m || !m.user_id || !m.organization_id) return;
+        rules.runRulesInBackground('post_triage',
+          { orgId: m.organization_id, userId: m.user_id },
+          {
+            id: emailId,
+            from_email: row.from_email, orig_from_email: row.orig_from_email,
+            subject: row.subject, body_text: row.body_text,
+            entity_type: row.entity_type, direction: 'inbound',
+            has_attachments: false,
+            folder_id: m.folder_id,
+            // The whole reason this phase exists.
+            ai_category: t.category, triage_urgency: t.urgency, needs_reply: t.needs_reply,
+          });
+      })
+      .catch(() => {});
+  } catch (e) { /* triage already succeeded; rules are best-effort */ }
 }
 
 /**

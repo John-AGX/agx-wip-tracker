@@ -385,8 +385,12 @@ async function storeInboundMessage(p) {
   // helper swallows its own errors, so a missing/failed folder lookup
   // leaves folder_id NULL — which the boot-time + on-demand backfill
   // sweeps up — and NEVER costs us the mail.
+  // Capture where it was filed: the E4 'move' action only relocates mail
+  // still sitting where the rule expected it, so it needs the CURRENT
+  // folder_id. Passing null here would make every move a no-op.
+  let filedFolderId = null;
   try {
-    await require('../services/email-folders')
+    filedFolderId = await require('../services/email-folders')
       .fileNewMessage(user.organization_id, user.id, ins.rows[0].id, isOutbound);
   } catch (e) { /* stored; the backfill will file it */ }
   // H3: fire-and-forget triage — extracts needs-reply + dates so the
@@ -395,6 +399,29 @@ async function storeInboundMessage(p) {
   // nudge me about in a message I wrote (and it must never flag needs-reply).
   if (!isOutbound) {
     try { require('../services/email-triage').triageInBackground(ins.rows[0].id); } catch (e) { /* still stored */ }
+    // E4: the user's own 'inbound'-phase rules — sender / subject / body /
+    // attachment. Runs AFTER fileNewMessage so a rule's move has an Inbox
+    // to move OUT of, and fire-and-forget so a rule can never delay or
+    // fail delivery. Rules keyed on ai_category run in the other phase,
+    // from email-triage, because that column is still NULL right now.
+    try {
+      require('../services/email-rules').runRulesInBackground(
+        'inbound',
+        { orgId: user.organization_id, userId: user.id },
+        {
+          id: ins.rows[0].id,
+          from_email: fromEmail, orig_from_email: origFrom, from_name: fromName,
+          to_email: matchedAddress, subject: subject, body_text: bodyText,
+          // has_attachments is not populated by the ingest path yet (see the
+          // handoff's §4 #4) — reported honestly as false rather than
+          // guessed, so a has_attachment rule simply doesn't fire instead of
+          // firing on the wrong mail.
+          has_attachments: false, direction: 'inbound',
+          entity_type: ent ? ent.type : null,
+          folder_id: filedFolderId,
+        }
+      );
+    } catch (e) { /* stored + triaged; rules are best-effort by design */ }
   }
   return { ok: true, thread_id: threadId, entity: ent || null, direction: isOutbound ? 'outbound' : 'inbound' };
 }

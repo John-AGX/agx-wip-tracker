@@ -4269,6 +4269,56 @@ async function initSchema() {
     -- The many-to-many join. CASCADE on both sides: deleting a message or
     -- hard-deleting a label takes its chips with it (an archived label keeps
     -- its rows — that's the point of the soft delete).
+    -- ── E4 rules engine ──────────────────────────────────────────────
+    -- IF <conditions> THEN <actions>, evaluated server-side on the
+    -- caller's own mail. Personal like the dropbox itself: user_id is NOT
+    -- NULL, because a rule that files another person's mail is a
+    -- surprise, not a feature.
+    --
+    -- run_phase is the load-bearing column. Deterministic conditions
+    -- (sender, subject, attachment) can be judged the moment mail lands,
+    -- but anything keyed on ai_category CANNOT — that value is produced
+    -- by the Haiku triage pass which runs after. So a rule declares WHEN
+    -- it can be answered:
+    --   'inbound'     — evaluated immediately, before triage
+    --   'post_triage' — evaluated after triage fills ai_category
+    -- Storing the phase rather than inferring it from the conditions
+    -- means the evaluator never has to guess, and a rule can't silently
+    -- run at a moment when the field it tests is still NULL.
+    --
+    -- Named run_phase, not "trigger": TRIGGER is a PostgreSQL keyword and
+    -- nothing else in this schema leans on quoting to use one.
+    --
+    -- conditions/actions are JSONB rather than columns: the shapes are a
+    -- small closed vocabulary the evaluator validates, and widening them
+    -- must not need a migration on a live pilot mailbox.
+    CREATE TABLE IF NOT EXISTS email_rules (
+      id              TEXT PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name            TEXT NOT NULL,
+      run_phase       TEXT NOT NULL DEFAULT 'inbound',   -- inbound | post_triage
+      enabled         BOOLEAN NOT NULL DEFAULT TRUE,
+      match_all       BOOLEAN NOT NULL DEFAULT TRUE,     -- AND (default) vs OR
+      -- Stop evaluating later rules once this one matches, so a specific
+      -- rule can shadow a broad catch-all without the user reordering
+      -- their whole list.
+      stop_on_match   BOOLEAN NOT NULL DEFAULT FALSE,
+      sort            INTEGER NOT NULL DEFAULT 0,
+      conditions      JSONB NOT NULL DEFAULT '[]'::jsonb,
+      actions         JSONB NOT NULL DEFAULT '[]'::jsonb,
+      -- Observability: a rule that quietly stops matching is worse than
+      -- one that errors, so record whether it has ever fired.
+      last_matched_at TIMESTAMPTZ,
+      match_count     INTEGER NOT NULL DEFAULT 0,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    -- The evaluator's only query shape: this user's enabled rules for one
+    -- phase, in order.
+    CREATE INDEX IF NOT EXISTS idx_email_rules_eval
+      ON email_rules (user_id, run_phase, sort) WHERE enabled;
+
     CREATE TABLE IF NOT EXISTS email_message_labels (
       message_id  TEXT   NOT NULL REFERENCES inbound_emails(id) ON DELETE CASCADE,
       label_id    BIGINT NOT NULL REFERENCES email_labels(id)   ON DELETE CASCADE,
