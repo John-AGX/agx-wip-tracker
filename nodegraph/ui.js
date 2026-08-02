@@ -2927,8 +2927,25 @@ function renderSidebarJobCard(jobIdOverride){
       ring:{pct:(w.pctComplete||0)},
       facts:_facts,
       tasks:(taskVm&&taskVm.tasks)||[],
-      tasksMore:(taskVm&&taskVm.more)||0
+      tasksMore:(taskVm&&taskVm.more)||0,
+      canAddTask:!!(window.p86Tasks&&window.p86Tasks.openQuickAdd)
     }, {compact:true});
+  }
+
+  // One click from the card to a follow-up linked to this job, then repaint
+  // so what you just added is visible without navigating away.
+  function _addJobFollowUp(){
+    if(!window.p86Tasks||typeof window.p86Tasks.openQuickAdd!=='function') return;
+    window.p86Tasks.openQuickAdd({
+      scope:'org', entity_type:'job', entity_id:jid,
+      entity_label:(_jn?_jn+' · ':'')+(job.title||job.name||'Job')
+    });
+    setTimeout(function(){
+      window.p86EntityCard.loadTasks('job', jid, 2, function(vm){
+        _jobCardTasks[jid]=vm||{tasks:[],more:0};
+        renderSidebarJobCard(jid);
+      });
+    }, 1200);
   }
   var cardHtml=buildCard(_jobCardTasks[jid]||null);
   var actions='<div class="ng-jobcard-actions"><button class="ng-jobcard-btn" data-jobact="edit" title="Edit job details — name, client, address, dates, notes">Edit details</button></div>';
@@ -2943,7 +2960,26 @@ function renderSidebarJobCard(jobIdOverride){
   var jobnav=document.getElementById('app-jobnav');
   if(jobnav && railHidden){
     var slot=document.getElementById('ng-jobheadcard');
-    if(!slot){ slot=document.createElement('div'); slot.id='ng-jobheadcard'; slot.className='ng-jobheadcard'; slot.style.cssText='margin:6px 12px 10px;'; jobnav.insertBefore(slot, jobnav.firstChild); }
+    if(!slot){
+      slot=document.createElement('div'); slot.id='ng-jobheadcard'; slot.className='ng-jobheadcard';
+      slot.style.cssText='margin:6px 12px 10px;';
+      // Delegate the card's [data-act] controls. Bound ONCE, on slot
+      // creation — the innerHTML below is replaced on every repaint, so
+      // binding per render would stack a handler per paint.
+      slot.addEventListener('click', function(e){
+        var b=e.target&&e.target.closest?e.target.closest('[data-act]'):null;
+        if(!b||!slot.contains(b)) return;
+        e.preventDefault(); e.stopPropagation();
+        // Call the CURRENT render's handler off the element, never the one
+        // captured when this listener was bound. The bound closure belongs
+        // to whichever job was open at slot-creation time; if this slot ever
+        // outlives a job switch, using it would file the follow-up against
+        // the previous job — wrong entity, silently, with no error.
+        if(b.getAttribute('data-act')==='addtask' && typeof slot._p86AddFollowUp==='function') slot._p86AddFollowUp();
+      });
+      jobnav.insertBefore(slot, jobnav.firstChild);
+    }
+    slot._p86AddFollowUp=_addJobFollowUp;   // refreshed every render
     slot.innerHTML=cardHtml;
   } else { var old=document.getElementById('ng-jobheadcard'); if(old) old.remove(); }
 

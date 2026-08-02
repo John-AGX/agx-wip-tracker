@@ -1716,6 +1716,41 @@ function p86Ask(message, opts) {
     var place = [l.city, l.state].filter(Boolean).join(', ');
     if (place) facts.push({ icon: 'map-pin', text: place });
 
+    // Card actions. NOTE: no 'info' icon — this card only exists while the
+    // lead detail is already open, so "open the lead" would go nowhere.
+    function onAct(act, ds) {
+      if (act === 'addtask') return addFollowUp();
+      if (act === 'maps') {
+        var la = (ds && ds.lat) || l.latitude, ln = (ds && ds.lng) || l.longitude;
+        if (la && ln) window.open('https://www.google.com/maps/search/?api=1&query=' + la + ',' + ln, '_blank', 'noopener');
+        else if (window.p86MapLink && window.p86MapLink.url) {
+          var addr = [l.street_address, l.city, l.state].filter(Boolean).join(', ');
+          if (addr) window.open(window.p86MapLink.url(addr), '_blank', 'noopener');
+        }
+      }
+    }
+
+    // One click from the card to a linked follow-up. The org Tasks panel
+    // further down the page could always do this, but nothing was ever
+    // created there — the card is where the eye already is.
+    function addFollowUp() {
+      if (!window.p86Tasks || typeof window.p86Tasks.openQuickAdd !== 'function') return;
+      window.p86Tasks.openQuickAdd({
+        scope: 'org',
+        entity_type: 'lead',
+        entity_id: l.id,
+        entity_label: l.title || 'Lead'
+      });
+      // Repaint after the modal has had time to save. Cheap, and beats
+      // leaving a just-added follow-up invisible until the next navigation.
+      setTimeout(function () {
+        window.p86EntityCard.loadTasks('lead', l.id, 2, function (vm) {
+          if (_currentEditingLeadId && String(_currentEditingLeadId) !== String(l.id)) return;
+          paint(vm);
+        });
+      }, 1200);
+    }
+
     function paint(taskVm) {
       window.p86EntitySubnav.mount('lead', {
         kind: 'lead', accent: accent,
@@ -1724,17 +1759,17 @@ function p86Ask(message, opts) {
         subtitle: l.client_name || l.property_name || '',
         // Address moved INTO the fact row — no separate address line.
         // Leads have no % complete, so no ring; that also lets the header
-        // show the info/msg/maps icons instead.
+        // show the icon row instead.
         icons: [
-          { act: 'info', title: 'Lead details' },
-          { act: 'msg',  title: 'Email client' },
-          { act: 'maps', title: 'Open in Maps' }
+          { act: 'addtask', title: 'Add follow-up' },
+          { act: 'maps',    title: 'Open in Maps' }
         ],
         facts: facts,
         tasks: (taskVm && taskVm.tasks) || [],
         tasksMore: (taskVm && taskVm.more) || 0,
+        canAddTask: !!(window.p86Tasks && window.p86Tasks.openQuickAdd),
         data: { id: l.id, lat: l.latitude, lng: l.longitude }
-      });
+      }, onAct);
     }
 
     // Paint immediately so the card never waits on the network, then repaint

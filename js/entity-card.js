@@ -107,6 +107,14 @@
       '.p86-ecard-task-due{flex:0 0 auto;font-size:11.5px;color:var(--text-dim,#7f8699);}' +
       '.p86-ecard-task-due.overdue{color:var(--red,#f87171);font-weight:600;}' +
       '.p86-ecard-task-more{font-size:11.5px;color:var(--text-dim,#7f8699);padding-left:13px;}' +
+      // The empty state is an invitation, not silence. A card with nothing
+      // owed used to render no follow-up section at all, which reads as
+      // "this feature isn\'t here" rather than "nothing due" — and gives you
+      // nowhere to add the first one.
+      '.p86-ecard-addtask{display:inline-flex;align-items:center;gap:5px;background:transparent;' +
+        'border:0;padding:0;margin:0;font:inherit;font-size:11.5px;color:var(--text-dim,#7f8699);' +
+        'cursor:pointer;text-align:left;}' +
+      '.p86-ecard-addtask:hover{color:var(--accent,#4f8cff);}' +
       '.p86-ecard-actions{display:flex;gap:8px;margin-top:11px;}' +
       '.p86-ecard-btn{display:inline-flex;align-items:center;justify-content:center;gap:5px;' +
         'background:var(--card-bg,#12151f);color:var(--text-dim,#9aa0b4);border:1px solid var(--border,#2a2f3e);' +
@@ -154,7 +162,7 @@
 
   function iconRow(icons, baseData) {
     if (!icons || !icons.length) return '';
-    var map = { info: 'ti-info-circle', msg: 'ti-message', maps: 'ti-map-pin', file: 'ti-file-text', edit: 'ti-edit' };
+    var map = { info: 'ti-info-circle', msg: 'ti-message', maps: 'ti-map-pin', file: 'ti-file-text', edit: 'ti-edit', addtask: 'ti-plus' };
     var html = '<span class="p86-ecard-icons">';
     for (var i = 0; i < icons.length; i++) {
       var ic = icons[i];
@@ -240,8 +248,18 @@
     // Follow-up rows — vm.tasks:[{title,due,tone}] plus vm.tasksMore.
     // Rendered only when there is something owed, so a clean entity doesn't
     // grow an empty section and a divider for nothing.
+    // vm.canAddTask renders the add affordance — and, when there is nothing
+    // owed, renders the section anyway so the empty state is reachable
+    // instead of invisible.
+    var addBtn = vm.canAddTask
+      ? '<button type="button" class="p86-ecard-addtask" data-act="addtask"' + dataAttrs(baseData) +
+          '><i class="ti ti-plus" aria-hidden="true"></i>Add follow-up</button>'
+      : '';
+
     var tasks = '';
-    if (vm.tasks && vm.tasks.length) {
+    if (!(vm.tasks && vm.tasks.length) && addBtn) {
+      tasks = '<div class="p86-ecard-tasks">' + addBtn + '</div>';
+    } else if (vm.tasks && vm.tasks.length) {
       tasks = '<div class="p86-ecard-tasks">';
       for (var t = 0; t < vm.tasks.length; t++) {
         var tk = vm.tasks[t];
@@ -257,6 +275,7 @@
       if (vm.tasksMore > 0) {
         tasks += '<div class="p86-ecard-task-more">+' + vm.tasksMore + ' more</div>';
       }
+      if (addBtn) tasks += addBtn;
       tasks += '</div>';
     }
 
