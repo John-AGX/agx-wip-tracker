@@ -158,6 +158,7 @@ app.use('/api/email-inbox', emailInboxRoutes);
 // under /api/email-folders/move-messages.
 app.use('/api/email-folders', require('./routes/email-folders-routes'));
 app.use('/api/email-labels', require('./routes/email-labels-routes'));
+app.use('/api/email-rules', require('./routes/email-rules-routes'));
 // E3 signatures + quick parts — reusable blocks the draft box inserts.
 app.use('/api/email-snippets', require('./routes/email-snippets-routes'));
 // Payload DSL routes — file download, reject, apply (inline approval

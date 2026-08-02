@@ -97,6 +97,7 @@
   var _state = {
     folders: [], counts: {}, folderId: null,
     labels: [],                // org-shared chips; the MULTI axis to folders' ONE
+    rules: [],                 // E4 auto-filing rules (personal)
     activeSmart: null,         // key of the smart folder currently showing
     threads: [], activeThreadId: null, q: '',
     selected: {},              // thread_id -> true
@@ -506,6 +507,39 @@
       '.ehub-cat:hover{color:var(--text,#dfe2ec);border-color:var(--accent,#4f8cff);}',
       'body.light-mode .ehub-cat{background:rgba(0,0,0,.04);color:#5b6070;}',
       '.ehub-lswatch{width:9px;height:9px;border-radius:3px;flex:0 0 auto;}',
+      // ── E4 rules modal. EXPLICIT widths on every input/select: the
+      // global `input, select, textarea { width:100% }` (styles.css:2221)
+      // would otherwise stack every control in a row vertically at full
+      // width — the same trap that collapsed the message list to 0px.
+      '.ehub-rules-wrap{position:fixed;inset:0;z-index:9998;background:rgba(0,0,0,.55);' +
+        'display:flex;align-items:flex-start;justify-content:center;padding:6vh 16px;overflow:auto;}',
+      '.ehub-rules{width:100%;max-width:720px;background:var(--surface,#16161c);' +
+        'border:1px solid var(--border,#31313c);border-radius:12px;box-shadow:0 18px 50px rgba(0,0,0,.55);}',
+      '.ehub-rules-hd{display:flex;align-items:center;gap:10px;padding:12px 14px;font-size:13px;font-weight:600;' +
+        'border-bottom:1px solid var(--border,#2a2a32);color:var(--text,#dfe2ec);}',
+      '.ehub-rules-note{margin-left:auto;font-size:11px;font-weight:400;color:var(--text-dim,#6f748a);}',
+      '.ehub-rules-list{max-height:38vh;overflow-y:auto;}',
+      '.ehub-rule{padding:10px 14px;border-bottom:1px solid var(--border,#232329);}',
+      '.ehub-rule.off{opacity:.5;}',
+      '.ehub-rule-top{display:flex;align-items:center;gap:9px;}',
+      '.ehub-rule-en{display:flex;align-items:center;gap:7px;font-size:12.5px;cursor:pointer;color:var(--text,#dfe2ec);}',
+      '.ehub-rule-en input{width:auto;margin:0;}',
+      '.ehub-rule-phase{font-size:10px;padding:2px 6px;border-radius:4px;' +
+        'background:rgba(124,131,253,.14);color:#9aa0ff;}',
+      '.ehub-rule-stat{margin-left:auto;font-size:10.5px;color:var(--text-dim,#6f748a);}',
+      '.ehub-rule-body{font-size:11.5px;color:var(--text-dim,#8b90a6);margin-top:4px;line-height:1.5;}',
+      '.ehub-rf{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 14px;}',
+      '.ehub-rf-lbl{font-size:11.5px;font-weight:600;color:var(--text-dim,#8b90a6);min-width:30px;}',
+      '.ehub-rf input[type="text"]{width:auto;flex:1 1 150px;min-width:110px;font-size:12px;padding:6px 8px;' +
+        'border-radius:6px;background:var(--input-bg,#0f0f14);border:1px solid var(--border,#31313c);color:var(--text,#dfe2ec);}',
+      '.ehub-rf select{width:auto;flex:0 1 auto;max-width:220px;font-size:12px;padding:6px 8px;border-radius:6px;' +
+        'background:var(--input-bg,#0f0f14);border:1px solid var(--border,#31313c);color:var(--text,#dfe2ec);}',
+      '.ehub-rf-msg{font-size:11.5px;color:var(--text-dim,#8b90a6);}',
+      '.ehub-rf-msg.bad{color:#f87171;}',
+      '.ehub-rf-hits{max-height:26vh;overflow-y:auto;padding:0 14px 12px;}',
+      '.ehub-rf-hit{font-size:11.5px;padding:4px 0;color:var(--text-dim,#8b90a6);' +
+        'border-top:1px solid var(--border,#232329);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+      '.ehub-rf-hit.dim{opacity:.75;white-space:normal;}',
       '.ehub-smart .ehub-fold-ic{opacity:.72;}',
       // E5 suggested-action strip. Explicit widths again: a bare `button`
       // here inherits nothing useful, but any future global button rule
@@ -629,6 +663,7 @@
           '</div>' +
           '<button class="ehub-tool' + (_state.density === 'compact' ? ' on' : '') + '" data-density title="Comfortable / compact">' +
             ico('collapse', '&#8801;') + '</button>' +
+          '<button class="ehub-tool" data-rules title="Rules — file mail automatically">' + ico('funnel', '') + ' Rules</button>' +
           '<button class="ehub-tool" data-refresh title="Refresh">' + ico('refresh', '&#8635;') + '</button>' +
           '<button class="ehub-tool" data-keys title="Keyboard shortcuts (?)">?</button>' +
         '</div>' +
@@ -656,6 +691,7 @@
         loadThreads();
       }, 280);
     });
+    pane.querySelector('[data-rules]').addEventListener('click', function () { openRules(); });
     pane.querySelector('[data-refresh]').addEventListener('click', function () { loadFolders().then(loadThreads); });
     pane.querySelector('[data-density]').addEventListener('click', function (e) {
       _state.density = _state.density === 'compact' ? 'comfortable' : 'compact';
@@ -850,6 +886,250 @@
       due_date: actionDue(a),
       priority: a.type === 'reminder' ? 'high' : 'normal'
     }, link));
+  }
+
+  // ── E4b: rules ──────────────────────────────────────────────────────
+  // A rule is a standing instruction that moves mail while nobody is
+  // watching, so this surface is built around one idea: you should be able
+  // to SEE what a rule would do before it does it. Hence Preview, which
+  // runs the real matcher against real recent mail and changes nothing.
+  var RULE_FIELDS = [
+    { v: 'from',           label: 'Sender',        phase: 'inbound' },
+    { v: 'to',             label: 'Sent to',       phase: 'inbound' },
+    { v: 'subject',        label: 'Subject',       phase: 'inbound' },
+    { v: 'body',           label: 'Body',          phase: 'inbound' },
+    { v: 'has_attachment', label: 'Has attachment', phase: 'inbound', bool: true },
+    { v: 'entity_type',    label: 'Linked record', phase: 'inbound' },
+    { v: 'category',       label: 'Auto-category', phase: 'post_triage' },
+    { v: 'urgency',        label: 'Urgency',       phase: 'post_triage' },
+    { v: 'needs_reply',    label: 'Needs a reply', phase: 'post_triage', bool: true },
+  ];
+  var RULE_OPS = [
+    { v: 'contains', label: 'contains' }, { v: 'not_contains', label: "doesn't contain" },
+    { v: 'equals', label: 'is exactly' }, { v: 'not_equals', label: 'is not' },
+    { v: 'starts_with', label: 'starts with' }, { v: 'ends_with', label: 'ends with' },
+    { v: 'domain', label: 'is from domain' },
+  ];
+
+  function fieldMeta(v) {
+    for (var i = 0; i < RULE_FIELDS.length; i++) if (RULE_FIELDS[i].v === v) return RULE_FIELDS[i];
+    return null;
+  }
+
+  // A rule's phase is DERIVED from the fields it uses, not asked for. The
+  // server refuses a post-triage field on an inbound rule, and making the
+  // user understand that distinction to save a rule would be a worse
+  // product than simply working it out for them.
+  function phaseFor(conds) {
+    return (conds || []).some(function (c) {
+      var m = fieldMeta(c.field);
+      return m && m.phase === 'post_triage';
+    }) ? 'post_triage' : 'inbound';
+  }
+
+  function loadRules() {
+    return api('/api/email-rules').then(function (r) {
+      _state.rules = (r && r.rules) || [];
+    }).catch(function () { _state.rules = []; });
+  }
+
+  function openRules() {
+    loadRules().then(function () { paintRulesModal(); });
+  }
+
+  function ruleSummary(r) {
+    var conds = (r.conditions || []).map(function (c) {
+      var m = fieldMeta(c.field);
+      var op = RULE_OPS.filter(function (o) { return o.v === c.op; })[0];
+      if (m && m.bool) return m.label.toLowerCase() + ' = ' + (c.value === true || c.value === 'true' ? 'yes' : 'no');
+      return (m ? m.label.toLowerCase() : c.field) + ' ' + (op ? op.label : c.op) + ' "' + c.value + '"';
+    }).join(r.match_all ? ' AND ' : ' OR ');
+    var acts = (r.actions || []).map(function (a) {
+      if (a.type === 'move') return 'file in ' + (categoryLabel(a.folder) || a.folder);
+      if (a.type === 'label') return 'label "' + a.label + '"';
+      if (a.type === 'mark_read') return 'mark read';
+      if (a.type === 'star') return 'star';
+      if (a.type === 'link_entity') return 'link to ' + (a.entity_label || a.entity_type);
+      return a.type;
+    }).join(', ');
+    return { conds: conds, acts: acts };
+  }
+
+  function paintRulesModal() {
+    closeMenu();
+    var old = document.getElementById('ehubRulesModal');
+    if (old) old.remove();
+
+    var rows = _state.rules.length
+      ? _state.rules.map(function (r) {
+          var s = ruleSummary(r);
+          return '<div class="ehub-rule' + (r.enabled ? '' : ' off') + '" data-rid="' + esc(r.id) + '">' +
+            '<div class="ehub-rule-top">' +
+              '<label class="ehub-rule-en"><input type="checkbox" data-rtoggle' + (r.enabled ? ' checked' : '') + '> ' +
+                '<b>' + esc(r.name) + '</b></label>' +
+              (r.run_phase === 'post_triage'
+                ? '<span class="ehub-rule-phase" title="Runs after the AI reads the message, because it tests something only known then">after triage</span>'
+                : '') +
+              '<span class="ehub-rule-stat">' + (r.match_count ? r.match_count + ' matched' : 'never matched') + '</span>' +
+              '<button class="ehub-dbtn" data-rdel title="Delete">' + ico('delete', '✕') + '</button>' +
+            '</div>' +
+            '<div class="ehub-rule-body"><b>If</b> ' + esc(s.conds) + ' <b>then</b> ' + esc(s.acts) + '</div>' +
+          '</div>';
+        }).join('')
+      : '<div class="ehub-empty" style="padding:18px;">No rules yet. A rule files mail for you the moment it arrives — ' +
+        'for example, everything from a supplier straight into Invoices &amp; Bills.</div>';
+
+    var m = document.createElement('div');
+    m.id = 'ehubRulesModal';
+    m.className = 'ehub-rules-wrap';
+    m.innerHTML =
+      '<div class="ehub-rules">' +
+        '<div class="ehub-rules-hd">' +
+          '<span>' + ico('funnel', '') + ' Rules</span>' +
+          '<span class="ehub-rules-note">Rules act on new mail as it arrives. Nothing here can send.</span>' +
+          '<button class="ehub-dbtn" data-rclose>Close</button>' +
+        '</div>' +
+        '<div class="ehub-rules-list">' + rows + '</div>' +
+        '<div class="ehub-rules-new" id="ehubRuleNew"></div>' +
+      '</div>';
+    document.body.appendChild(m);
+
+    m.addEventListener('click', function (e) { if (e.target === m) m.remove(); });
+    m.querySelector('[data-rclose]').addEventListener('click', function () { m.remove(); });
+
+    m.querySelectorAll('.ehub-rule').forEach(function (el) {
+      var id = el.getAttribute('data-rid');
+      var t = el.querySelector('[data-rtoggle]');
+      if (t) t.addEventListener('change', function () {
+        api('/api/email-rules/' + encodeURIComponent(id), {
+          method: 'PATCH', body: JSON.stringify({ enabled: t.checked })
+        }).then(loadRules).then(paintRulesModal).catch(function (er) { toast(er.message); });
+      });
+      var d = el.querySelector('[data-rdel]');
+      if (d) d.addEventListener('click', function () {
+        api('/api/email-rules/' + encodeURIComponent(id), { method: 'DELETE' })
+          .then(loadRules).then(paintRulesModal).catch(function (er) { toast(er.message); });
+      });
+    });
+
+    paintRuleEditor(document.getElementById('ehubRuleNew'));
+  }
+
+  // The builder. One condition and one action keeps the common case — "mail
+  // from X goes to Y" — a few clicks rather than a form to fill in.
+  function paintRuleEditor(host) {
+    if (!host) return;
+    var folders = _state.folders.slice().sort(function (a, b) {
+      return (a.path || '').localeCompare(b.path || '');
+    });
+
+    host.innerHTML =
+      '<div class="ehub-rules-hd" style="border-top:1px solid var(--border,#2a2a32);border-bottom:none;">New rule</div>' +
+      '<div class="ehub-rf">' +
+        '<input type="text" id="rfName" placeholder="Name it — e.g. Supplier invoices" maxlength="120">' +
+      '</div>' +
+      '<div class="ehub-rf">' +
+        '<span class="ehub-rf-lbl">If</span>' +
+        '<select id="rfField">' + RULE_FIELDS.map(function (f) {
+          return '<option value="' + f.v + '">' + esc(f.label) + '</option>'; }).join('') + '</select>' +
+        '<select id="rfOp">' + RULE_OPS.map(function (o) {
+          return '<option value="' + o.v + '">' + esc(o.label) + '</option>'; }).join('') + '</select>' +
+        '<input type="text" id="rfVal" placeholder="value" maxlength="300">' +
+      '</div>' +
+      '<div class="ehub-rf">' +
+        '<span class="ehub-rf-lbl">Then</span>' +
+        '<select id="rfAct">' +
+          '<option value="move">file in folder</option>' +
+          '<option value="label">add label</option>' +
+          '<option value="star">star it</option>' +
+          '<option value="mark_read">mark it read</option>' +
+        '</select>' +
+        // SYSTEM folders travel as a slug (stable, and the same rule text
+        // means the same folder for any user); anything the user made
+        // travels as its id. applyAction resolves a slug only through
+        // systemFolderId, so sending a user folder's slug would match
+        // nothing and the move would silently never happen.
+        '<select id="rfFolder">' + folders.map(function (f) {
+          return '<option value="' + esc(f.system ? f.slug : f.id) + '">' +
+            esc((f.parent_id ? '— ' : '') + f.name) + '</option>';
+        }).join('') + '</select>' +
+        '<input type="text" id="rfLabel" placeholder="label name" maxlength="60" style="display:none;">' +
+      '</div>' +
+      '<div class="ehub-rf">' +
+        '<button class="ehub-dbtn" id="rfPreview">' + ico('eye', '') + ' Preview matches</button>' +
+        '<button class="ehub-dbtn ehub-dbtn-primary" id="rfSave">Create rule</button>' +
+        '<span class="ehub-rf-msg" id="rfMsg"></span>' +
+      '</div>' +
+      '<div class="ehub-rf-hits" id="rfHits"></div>';
+
+    var fField = host.querySelector('#rfField'), fOp = host.querySelector('#rfOp');
+    var fVal = host.querySelector('#rfVal'), fAct = host.querySelector('#rfAct');
+    var fFolder = host.querySelector('#rfFolder'), fLabel = host.querySelector('#rfLabel');
+    var msg = host.querySelector('#rfMsg'), hits = host.querySelector('#rfHits');
+
+    // A boolean field has nothing to type into and only one sensible
+    // comparison — showing a free-text box there invites a value that can
+    // never match.
+    function syncField() {
+      var meta = fieldMeta(fField.value);
+      var isBool = !!(meta && meta.bool);
+      fOp.style.display = isBool ? 'none' : '';
+      fVal.style.display = isBool ? 'none' : '';
+    }
+    function syncAct() {
+      fFolder.style.display = fAct.value === 'move' ? '' : 'none';
+      fLabel.style.display = fAct.value === 'label' ? '' : 'none';
+    }
+    fField.addEventListener('change', syncField);
+    fAct.addEventListener('change', syncAct);
+    syncField(); syncAct();
+
+    function build() {
+      var meta = fieldMeta(fField.value);
+      var cond = meta && meta.bool
+        ? { field: fField.value, op: 'is', value: true }
+        : { field: fField.value, op: fOp.value, value: fVal.value };
+      var act = { type: fAct.value };
+      if (fAct.value === 'move') act.folder = fFolder.value;
+      if (fAct.value === 'label') act.label = fLabel.value;
+      return {
+        name: host.querySelector('#rfName').value,
+        // Derived, never asked — see phaseFor.
+        run_phase: phaseFor([cond]),
+        conditions: [cond],
+        actions: [act],
+      };
+    }
+
+    function say(text, bad) {
+      msg.textContent = text || '';
+      msg.className = 'ehub-rf-msg' + (bad ? ' bad' : '');
+    }
+
+    host.querySelector('#rfPreview').addEventListener('click', function () {
+      say('Checking…');
+      hits.innerHTML = '';
+      post('/api/email-rules/preview', build())
+        .then(function (r) {
+          say(r.matched + ' of your last ' + r.scanned + ' messages would match.');
+          hits.innerHTML = r.hits.length
+            ? r.hits.map(function (h) {
+                return '<div class="ehub-rf-hit"><b>' + esc(h.from || 'unknown') + '</b> — ' +
+                  esc(h.subject || '(no subject)') + '</div>';
+              }).join('') + (r.truncated ? '<div class="ehub-rf-hit dim">…more not shown</div>' : '')
+            : '<div class="ehub-rf-hit dim">Nothing matched. That may be right for a rule aimed at future mail — ' +
+              'but check the value if you expected hits.</div>';
+        })
+        .catch(function (e) { say(e.message || 'Could not preview that.', true); });
+    });
+
+    host.querySelector('#rfSave').addEventListener('click', function () {
+      say('Saving…');
+      post('/api/email-rules', build())
+        .then(function () { return loadRules(); })
+        .then(function () { paintRulesModal(); })
+        .catch(function (e) { say(e.message || 'Could not save that rule.', true); });
+    });
   }
 
   // ── Smart folders (spec §1) ─────────────────────────────────────────
