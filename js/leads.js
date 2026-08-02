@@ -1704,17 +1704,47 @@ function p86Ask(message, opts) {
     var statusCol = window.p86EntityCard.leadStatusColor(l.status);
     var rev = revenueFromAttachedEstimates(l.id);
     var ageDays = l.created_at ? Math.max(0, Math.round((Date.now() - new Date(l.created_at).getTime()) / 86400000)) : null;
-    var stats = [{ label: 'Est. value', value: (rev != null ? sm(rev) : '—') }];
-    if (ageDays != null) stats.push({ label: 'Age', value: ageDays + 'd' });
     var meta = (typeof statusMeta === 'function') ? statusMeta(l.status) : null;
-    window.p86EntitySubnav.mount('lead', {
-      kind: 'lead', accent: accent,
-      status: { label: (meta && meta.label) || l.status || 'Open', color: statusCol },
-      title: l.title || 'Lead',
-      subtitle: l.client_name || l.property_name || '',
-      address: [l.street_address, l.city].filter(Boolean).join(', '),
-      // Leads have no % complete — no progress dial (John). Keep the meta tiles.
-      stats: stats
+
+    // One inline fact row instead of boxed tiles: value · key date · place.
+    // The vertical space the tiles used now carries the follow-up list, which
+    // is the thing that actually tells you to do something.
+    var dc = window.p86EntityCard.dueChip(l.projected_sale_date);
+    var facts = [];
+    if (rev != null) facts.push({ icon: '', text: sm(rev), tone: 'money' });
+    if (dc.due) facts.push({ icon: 'calendar', text: dc.due });
+    var place = [l.city, l.state].filter(Boolean).join(', ');
+    if (place) facts.push({ icon: 'map-pin', text: place });
+
+    function paint(taskVm) {
+      window.p86EntitySubnav.mount('lead', {
+        kind: 'lead', accent: accent,
+        status: { label: (meta && meta.label) || l.status || 'Open', color: statusCol },
+        title: l.title || 'Lead',
+        subtitle: l.client_name || l.property_name || '',
+        // Address moved INTO the fact row — no separate address line.
+        // Leads have no % complete, so no ring; that also lets the header
+        // show the info/msg/maps icons instead.
+        icons: [
+          { act: 'info', title: 'Lead details' },
+          { act: 'msg',  title: 'Email client' },
+          { act: 'maps', title: 'Open in Maps' }
+        ],
+        facts: facts,
+        tasks: (taskVm && taskVm.tasks) || [],
+        tasksMore: (taskVm && taskVm.more) || 0,
+        data: { id: l.id, lat: l.latitude, lng: l.longitude }
+      });
+    }
+
+    // Paint immediately so the card never waits on the network, then repaint
+    // once the follow-ups land. A slow/failed task fetch costs the rows, not
+    // the card.
+    paint(null);
+    window.p86EntityCard.loadTasks('lead', l.id, 2, function (vm) {
+      // Guard against a late response for a lead the user already left.
+      if (_currentEditingLeadId && String(_currentEditingLeadId) !== String(l.id)) return;
+      if (vm && vm.tasks && vm.tasks.length) paint(vm);
     });
   }
   window.p86MountLeadCard = mountLeadCard;

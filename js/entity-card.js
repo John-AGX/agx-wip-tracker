@@ -83,6 +83,30 @@
         'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
       '.p86-ecard-stat-val.pos{color:var(--green,#34d399);}' +
       '.p86-ecard-stat-val.neg{color:var(--red,#f87171);}' +
+      // Inline fact row (value · date · place). Replaces the boxed stat tiles
+      // on cards that want the facts to read as one line instead of three
+      // separate panels — the tiles cost a lot of vertical space in a sidebar
+      // and the task list below is what actually earns that space.
+      '.p86-ecard-facts{display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;margin-top:7px;}' +
+      '.p86-ecard-fact{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;' +
+        'color:var(--text-dim,#9aa0b4);min-width:0;}' +
+      '.p86-ecard-fact i{font-size:13px;flex:0 0 auto;opacity:.85;}' +
+      '.p86-ecard-fact span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
+      '.p86-ecard-fact.money{color:var(--green,#34d399);font-weight:650;font-size:13.5px;}' +
+      // Follow-up rows. The whole point of the card: what is owed on this
+      // entity and when. Overdue is the one thing allowed to shout.
+      '.p86-ecard-tasks{margin-top:9px;padding-top:8px;border-top:1px solid var(--border,#2a2f3e);' +
+        'display:flex;flex-direction:column;gap:5px;}' +
+      '.p86-ecard-task{display:flex;align-items:center;gap:7px;font-size:12.5px;min-width:0;}' +
+      '.p86-ecard-task-dot{width:6px;height:6px;border-radius:50%;flex:0 0 auto;' +
+        'background:var(--text-dim,#7f8699);}' +
+      '.p86-ecard-task-dot.soon{background:var(--amber,#f59e0b);}' +
+      '.p86-ecard-task-dot.overdue{background:var(--red,#f87171);}' +
+      '.p86-ecard-task-t{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;' +
+        'white-space:nowrap;color:var(--text,#e9ecf5);}' +
+      '.p86-ecard-task-due{flex:0 0 auto;font-size:11.5px;color:var(--text-dim,#7f8699);}' +
+      '.p86-ecard-task-due.overdue{color:var(--red,#f87171);font-weight:600;}' +
+      '.p86-ecard-task-more{font-size:11.5px;color:var(--text-dim,#7f8699);padding-left:13px;}' +
       '.p86-ecard-actions{display:flex;gap:8px;margin-top:11px;}' +
       '.p86-ecard-btn{display:inline-flex;align-items:center;justify-content:center;gap:5px;' +
         'background:var(--card-bg,#12151f);color:var(--text-dim,#9aa0b4);border:1px solid var(--border,#2a2f3e);' +
@@ -165,7 +189,11 @@
     var head =
       '<div class="p86-ecard-head">' +
         '<span class="p86-ecard-statuswrap">' + kindChip + statusPill + '</span>' +
-        (compact ? headRing : iconRow(vm.icons, baseData)) +
+        // headRing is already gated on (compact && hasRing), so this reads:
+        // a compact card WITH a ring shows the ring; anything else shows the
+        // icon row. Previously a compact ringless card showed neither, which
+        // is why the sidebar cards had no info/mail/map icons.
+        (headRing || iconRow(vm.icons, baseData)) +
       '</div>';
 
     var titleRow =
@@ -194,6 +222,44 @@
       stats += '</div>';
     }
 
+    // Inline fact row — vm.facts:[{icon,text,tone}]. An alternative to
+    // vm.stats, not a replacement: existing callers keep their tiles.
+    var facts = '';
+    if (vm.facts && vm.facts.length) {
+      facts = '<div class="p86-ecard-facts">';
+      for (var f = 0; f < vm.facts.length; f++) {
+        var ft = vm.facts[f];
+        if (!ft || !ft.text) continue;
+        facts += '<span class="p86-ecard-fact' + (ft.tone === 'money' ? ' money' : '') + '">' +
+          (ft.icon ? '<i class="ti ti-' + esc(ft.icon) + '" aria-hidden="true"></i>' : '') +
+          '<span>' + esc(ft.text) + '</span></span>';
+      }
+      facts += '</div>';
+    }
+
+    // Follow-up rows — vm.tasks:[{title,due,tone}] plus vm.tasksMore.
+    // Rendered only when there is something owed, so a clean entity doesn't
+    // grow an empty section and a divider for nothing.
+    var tasks = '';
+    if (vm.tasks && vm.tasks.length) {
+      tasks = '<div class="p86-ecard-tasks">';
+      for (var t = 0; t < vm.tasks.length; t++) {
+        var tk = vm.tasks[t];
+        if (!tk || !tk.title) continue;
+        var ttone = tk.tone === 'overdue' ? ' overdue' : tk.tone === 'soon' ? ' soon' : '';
+        tasks += '<div class="p86-ecard-task">' +
+          '<span class="p86-ecard-task-dot' + ttone + '"></span>' +
+          '<span class="p86-ecard-task-t">' + esc(tk.title) + '</span>' +
+          (tk.due ? '<span class="p86-ecard-task-due' + (tk.tone === 'overdue' ? ' overdue' : '') + '">' +
+            esc(tk.due) + '</span>' : '') +
+          '</div>';
+      }
+      if (vm.tasksMore > 0) {
+        tasks += '<div class="p86-ecard-task-more">+' + vm.tasksMore + ' more</div>';
+      }
+      tasks += '</div>';
+    }
+
     var actions = '';
     if (!compact && vm.actions && vm.actions.length) {
       actions = '<div class="p86-ecard-actions">';
@@ -208,7 +274,7 @@
 
     return '<div class="p86-ecard' + (compact ? ' compact' : '') + '" data-kind="' + esc(vm.kind || '') + '">' +
       '<div class="p86-ecard-accent" style="background:' + accent + ';"></div>' +
-      '<div class="p86-ecard-body">' + head + main + stats + actions + '</div></div>';
+      '<div class="p86-ecard-body">' + head + main + facts + stats + tasks + actions + '</div></div>';
   }
 
   // status hex -> low-alpha tint for the pill background (works on dark + light).
@@ -257,9 +323,79 @@
     return null;
   }
 
+  // ── follow-up rows ──────────────────────────────────────────────────
+  // Turn a tasks.due_date into the chip the card shows.
+  //
+  // TIMEZONE: due_date is a DATE column and arrives as 'YYYY-MM-DD'.
+  // `new Date('2026-08-14')` parses that as UTC midnight, which in Florida
+  // (UTC-4) is 8pm on the 13th — so a task due TODAY renders "Overdue" and
+  // a red dot, every afternoon, for everyone. Parse the parts and build a
+  // LOCAL date instead; compare date-only, never with a time component.
+  function parseDueLocal(s) {
+    if (!s) return null;
+    var m = String(s).slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return null;
+    return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  }
+
+  var DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  var MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  function dueChip(dueDate) {
+    var d = parseDueLocal(dueDate);
+    if (!d) return { due: '', tone: '' };
+    var now = new Date();
+    var today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    var days = Math.round((d - today) / 86400000);
+    if (days < 0) return { due: 'Overdue', tone: 'overdue' };
+    if (days === 0) return { due: 'Today', tone: 'soon' };
+    if (days === 1) return { due: 'Tomorrow', tone: 'soon' };
+    if (days <= 6) return { due: DOW[d.getDay()], tone: 'soon' };
+    return { due: MON[d.getMonth()] + ' ' + d.getDate(), tone: '' };
+  }
+
+  /**
+   * Fetch the open org Tasks linked to one entity and shape them for the
+   * card. Soonest due first, undated last (an undated task is a someday,
+   * and it should never outrank something with a real deadline).
+   *
+   * Fully defensive: any failure calls back with an empty list, because a
+   * task lookup must never be able to stop the card from rendering.
+   */
+  function loadTasks(entityType, entityId, max, cb) {
+    max = max || 2;
+    var done = function (list, more) { try { cb({ tasks: list, more: more }); } catch (e) {} };
+    if (!entityType || !entityId || !window.p86Api || !window.p86Api.tasks) return done([], 0);
+    var p;
+    try {
+      p = window.p86Api.tasks.list({
+        entity_type: entityType, entity_id: String(entityId), exclude_done: 1, limit: 25
+      });
+    } catch (e) { return done([], 0); }
+    if (!p || !p.then) return done([], 0);
+    p.then(function (res) {
+      var rows = (res && (res.tasks || res.rows || res)) || [];
+      if (!Array.isArray(rows)) rows = [];
+      rows.sort(function (a, b) {
+        var da = parseDueLocal(a && a.due_date), db = parseDueLocal(b && b.due_date);
+        if (da && db) return da - db;
+        if (da) return -1;
+        if (db) return 1;
+        return 0;
+      });
+      var shown = rows.slice(0, max).map(function (r) {
+        var c = dueChip(r && r.due_date);
+        return { title: (r && r.title) || '', due: c.due, tone: c.tone };
+      }).filter(function (r) { return r.title; });
+      done(shown, Math.max(0, rows.length - shown.length));
+    }).catch(function () { done([], 0); });
+  }
+
   window.p86EntityCard = {
     render: render,
     injectStyle: injectStyle,
+    dueChip: dueChip,
+    loadTasks: loadTasks,
     jobStatusColor: jobStatusColor,
     leadStatusColor: leadStatusColor,
     estimateStatusColor: estimateStatusColor,

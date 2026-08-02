@@ -636,6 +636,15 @@
         // — the build-time getJobWIP here can run before NG/appData are ready,
         // which previously left the card stuck at $0 / 0% while the strip was right.
         paintJobSubnavCard(job, (window.getJobWIP ? window.getJobWIP(job.id) : null));
+        // Job headline card at the top of #app-jobnav — the same side and
+        // shape as the lead card. This call is what makes it appear on EVERY
+        // section: the renderer used to be reachable only from the Site Map's
+        // node-graph metrics pass, so landing on Overview (the default) showed
+        // no job card at all and the redesign looked like it never shipped.
+        // Pass the id explicitly — the graph's own job pointer is empty here.
+        if (typeof window.p86RenderJobCard === 'function') {
+          try { window.p86RenderJobCard(job.id); } catch (e) {}
+        }
       } else {
         // Fallback (module not loaded): the original title + status text.
         var num = job.jobNumber || '';

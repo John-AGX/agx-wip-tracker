@@ -2887,8 +2887,19 @@ function wipChipEdit(wc){
 var _jobChipEditing=false;
 // Slice 2: paint the live job-overview card at the top of the left rail — same
 // p86EntityCard view-model the app subnav uses (paintJobSubnavCard), fed by getJobWIP.
-function renderSidebarJobCard(){
-  var jid=E.job();
+// Follow-up rows are fetched once per job and cached, because this renderer
+// is called on every graph repaint — without the cache a pan or a node drag
+// would fire a /api/tasks request each time.
+var _jobCardTasks={};
+var _jobCardTasksPending={};
+
+// jobIdOverride lets a non-graph caller (the job nav, on any section) paint
+// the card. E.job() is the node-graph's notion of the open job and can be
+// empty outside the Site Map, which would make this bail silently.
+function renderSidebarJobCard(jobIdOverride){
+  var jid=jobIdOverride||null;
+  if(!jid){ try{ jid=E.job(); }catch(e){ jid=null; } }
+  if(!jid) return;
   var job=(typeof appData!=='undefined' && appData.jobs) ? appData.jobs.find(function(j){return j.id===jid;}) : null;
   var host=document.querySelector('.ng-sidebar-jobcard');
   if(!job || !window.p86EntityCard){ if(host) host.innerHTML=''; var d=document.getElementById('ng-jobheadcard'); if(d) d.remove(); return; }
@@ -2899,11 +2910,26 @@ function renderSidebarJobCard(){
   // Slim job headline (John): blend the job# into the title (same font, no mono chip),
   // keep the % ring, and DROP the Contract/Profit tiles — the money lives in the Project
   // WIP metrics bar / inspector below.
-  var cardHtml=window.p86EntityCard.render({
-    kind:'job', accent:accentCol, status:{label:job.status||'In Progress', color:statusCol},
-    title:(_jn?_jn+' · ':'')+(job.title||job.name||''), subtitle:job.client||'',
-    ring:{pct:(w.pctComplete||0)}
-  }, {compact:true});
+  // Fact row. Jobs carry NO start/end date (only createdAt/updatedAt), so
+  // there is no schedule chip to show — place is the only real fact here.
+  // Money stays OFF per John's 2026-07-31 call: the job page always shows a
+  // metrics ribbon (Total income / Costs / Margin) above this card, and a
+  // second copy of the same dollars in a 290px rail is noise, not emphasis.
+  var _facts=[];
+  var _place=[job.city,job.state].filter(Boolean).join(', ');
+  if(_place) _facts.push({icon:'map-pin', text:_place});
+
+  function buildCard(taskVm){
+    return window.p86EntityCard.render({
+      kind:'job', accent:accentCol, status:{label:job.status||'In Progress', color:statusCol},
+      title:(_jn?_jn+' · ':'')+(job.title||job.name||''), subtitle:job.client||'',
+      ring:{pct:(w.pctComplete||0)},
+      facts:_facts,
+      tasks:(taskVm&&taskVm.tasks)||[],
+      tasksMore:(taskVm&&taskVm.more)||0
+    }, {compact:true});
+  }
+  var cardHtml=buildCard(_jobCardTasks[jid]||null);
   var actions='<div class="ng-jobcard-actions"><button class="ng-jobcard-btn" data-jobact="edit" title="Edit job details — name, client, address, dates, notes">Edit details</button></div>';
   // The ng-rail host (shown only when the left rail is visible — non-clean modes).
   if(host) host.innerHTML=cardHtml+actions;
@@ -2919,7 +2945,24 @@ function renderSidebarJobCard(){
     if(!slot){ slot=document.createElement('div'); slot.id='ng-jobheadcard'; slot.className='ng-jobheadcard'; slot.style.cssText='margin:6px 12px 10px;'; jobnav.insertBefore(slot, jobnav.firstChild); }
     slot.innerHTML=cardHtml;
   } else { var old=document.getElementById('ng-jobheadcard'); if(old) old.remove(); }
+
+  // Fetch follow-ups once per job, then repaint. Cached + in-flight guarded so
+  // repeated graph renders don't re-request; failures leave the card as-is.
+  if(!(jid in _jobCardTasks) && !_jobCardTasksPending[jid] && window.p86EntityCard.loadTasks){
+    _jobCardTasksPending[jid]=true;
+    window.p86EntityCard.loadTasks('job', jid, 2, function(vm){
+      _jobCardTasksPending[jid]=false;
+      _jobCardTasks[jid]=vm||{tasks:[],more:0};
+      // Only repaint if this card is still on screen and there are rows to add.
+      var still=document.getElementById('ng-jobheadcard')||document.querySelector('.ng-sidebar-jobcard');
+      if(still && vm && vm.tasks && vm.tasks.length) renderSidebarJobCard(jid);
+    });
+  }
 }
+// Exposed so the job nav can paint the card on EVERY section, not just the
+// Site Map. Previously renderSidebarMetrics() (a node-graph-only pass) was the
+// sole caller, so landing on Overview showed no job card at all.
+window.p86RenderJobCard = renderSidebarJobCard;
 function renderSidebarMetrics(){
   if(!(E.viewMode && E.viewMode()==='siteplan')) return; // Site Plan only (the left rail is the job overview there)
   renderSidebarJobCard();                                 // Slice 2: live job-overview card atop the rail
