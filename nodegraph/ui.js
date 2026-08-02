@@ -3107,29 +3107,6 @@ window.p86NgShowSection=function(pid){
 // Return the right Inspector to the Site Plan's native job overview
 // (used by the "‹ Overview" home chip + stale job-overview deep links).
 window.p86NgShowOverview=function(){ showSectionInInspector('job-overview', null); };
-// The job's live overview card (same p86EntityCard view-model as the left-rail card) for
-// the top of the right Inspector — the Site Plan is the job page, so the card is the
-// persistent job context. Contract + Profit + % ring from getJobWIP.
-function inspectorJobCardHtml(){
-  var jid=E.job();
-  var job=(typeof appData!=='undefined' && appData.jobs) ? appData.jobs.find(function(j){return j.id===jid;}) : null;
-  if(!job || !window.p86EntityCard) return '';
-  var w=(typeof window.getJobWIP==='function') ? (window.getJobWIP(jid)||{}) : {};
-  var sm=function(n){ n=Number(n)||0; var a=Math.abs(n), s=n<0?'-':''; if(a>=1e6) return s+'$'+(a/1e6).toFixed(1).replace(/\.0$/,'')+'M'; if(a>=1e3) return s+'$'+Math.round(a/1e3)+'k'; return s+'$'+Math.round(a); };
-  var statusCol=window.p86EntityCard.jobStatusColor?window.p86EntityCard.jobStatusColor(job.status):'#8aa0c0';
-  var accentCol=(window.p86EntityCard.pinColor?window.p86EntityCard.pinColor(job,'job'):null)||statusCol;
-  var profit=(w.displayProfit!=null)?w.displayProfit:0;
-  var contract=(w.contractIncome!=null)?w.contractIncome:(w.totalIncome!=null)?w.totalIncome:(Number(job.contractAmount)||0);
-  return '<div class="ng-insp-jobcard">'+window.p86EntityCard.render({
-    kind:'job', accent:accentCol, status:{label:job.status||'In Progress', color:statusCol},
-    number:job.jobNumber||'', title:job.title||job.name||'', subtitle:job.client||'',
-    ring:{pct:(w.pctComplete||0)},
-    stats:[
-      {label:'Contract', value:sm(contract)},
-      {label:'Profit', value:(profit<0?'-':'+')+sm(Math.abs(profit)), tone:profit<0?'neg':'pos'}
-    ]
-  }, {compact:true})+'</div>';
-}
 function renderInspector(){
   var panel=document.querySelector('.ng-inspector'); if(!panel) return;
   if(!(E.viewMode && E.viewMode()==='siteplan')) return;
@@ -3352,33 +3329,6 @@ function renderInspectorJobDetail(body){
   refreshInspAccSums();   // first-paint section rollups
 }
 
-// ── Job-Level Costs (overview panel) ───────────────────────────────
-// Add a category cost node — Materials / Labor / Equipment / GC / Burden —
-// straight at the JOB level from the overview. It drops a free-floating
-// (unwired) cost node, which counts on the job's total until you wire it
-// down to a building/phase/CO, and recomputes immediately. Link QuickBooks
-// costs to it in the Detailed sub-tab and they flow into Actual Costs.
-var JOB_COST_CATS = [
-  { t:'mat',    label:'Materials' },
-  { t:'labor',  label:'Labor' },
-  { t:'other',  label:'Equipment' },
-  { t:'gc',     label:'Gen Conditions' },
-  { t:'burden', label:'Burden' }
-];
-function _jlcEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-
-// Cost nodes NOT wired up to any building/phase/WIP = job-level costs.
-function jobLevelCostNodes(){
-  return E.nodes().filter(function(n){
-    if(n.type!=='labor'&&n.type!=='mat'&&n.type!=='gc'&&n.type!=='other'&&n.type!=='burden') return false;
-    return !E.wires().some(function(w){
-      if(w.fromNode!==n.id) return false;
-      var tgt=E.findNode(w.toNode);
-      return tgt&&(tgt.type==='t1'||tgt.type==='t2'||tgt.type==='wip');
-    });
-  });
-}
-
 function renderJobLevelCostsInto(host){
   if(!host) return;
   var _jid=null; try{ _jid = E.job && E.job(); }catch(e){}
@@ -3389,21 +3339,6 @@ function renderJobLevelCostsInto(host){
   if(window.p86CostBuckets && _jid){
     try{ window.p86CostBuckets.renderJobInto(document.getElementById('ng-cost-buckets'), _jid); }catch(e){}
   }
-}
-
-function addJobLevelCostNode(cat){
-  var d=E.DEFS[cat]; if(!d) return;
-  var p=E.pan(), z=E.zm();
-  var cx=-p.x+(wrap?wrap.clientWidth:800)/2/z, cy=-p.y+(wrap?wrap.clientHeight:600)/2/z;
-  var nn=E.addNode(cat, Math.round(cx-85), Math.round(cy-30), d.label);
-  if(!nn) return;
-  selN=nn.id;
-  try{ pushToJobSilent(); }catch(e){}
-  if(E.saveGraph) E.saveGraph();
-  render();
-  try{ refreshInspMetrics(); }catch(e){}
-  var host=document.getElementById('insp-jobcosts');
-  if(host) renderJobLevelCostsInto(host);
 }
 
 // Recompute a job's WIP from its live graph IF that graph is the one
@@ -3779,18 +3714,6 @@ function _subNameById(id){
   var inl=(typeof appData!=='undefined'&&appData.subs)||[];
   var s=dir.find(function(x){return String(x.id)===String(id);})||inl.find(function(x){return String(x.id)===String(id);});
   return s?(s.name||s.id):null;
-}
-function _subsForBuilding(pos, bId){
-  var seen={}, out=[];
-  (pos||[]).forEach(function(po){
-    if(_poBuildingIds(po).indexOf(bId)===-1) return;
-    var sid=po.sub_id||(po.data&&po.data.sub_id); if(!sid||seen[sid])return; seen[sid]=1;
-    // Prefer the sub_name the PO row already carries (server LEFT JOIN); appData.subs
-    // isn't always loaded on the Site Plan, so _subNameById alone dropped the sub. (John)
-    var nm=po.sub_name||_subNameById(sid); if(!nm)return;
-    out.push({name:nm, po:po.po_number||'', status:po.status||''});
-  });
-  return out;
 }
 function _ensureBldgSubsStyles(){
   if(document.getElementById('ng-bldg-subs-css'))return;
