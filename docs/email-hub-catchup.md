@@ -92,11 +92,37 @@ widths persist.
 
 ## 2. Not done — spec build order
 
-### E4 — Rules engine + auto-file on inbound
-`email_rules`: IF (from/domain/subject/body/has-attachment/entity-type)
-THEN (move to folder, label, star, forward, auto-reply w/ template, create
-task, link to entity, notify). Runs server-side on inbound, **before**
-triage. Nothing exists yet — table, evaluator, admin UI all outstanding.
+### E4 — Rules engine — *shipped 2026-08-02* (`@34349d8` engine, `@2e00cad` UI)
+`email_rules`: IF (sender/domain/subject/body/attachment/linked-record/
+category/urgency/needs-reply) THEN (move, label, star, mark read, link
+entity). Reachable from the **Rules** button in the hub toolbar.
+
+**This section said rules run "on inbound, before triage" — that is only
+half right, and the half that is wrong would have shipped a dead feature.**
+Sender/subject/body can be judged the moment mail lands. Anything keyed on
+`ai_category` cannot: that column is produced BY triage, so at inbound it
+is still NULL and every such rule would match nothing, silently, for ever.
+So a rule carries a `run_phase` (`inbound` | `post_triage`), the engine is
+wired into BOTH points, and `validateRule` refuses a post-triage field on
+an inbound rule at SAVE time — the only moment a human notices.
+
+- **`POST /preview` is the safety feature.** It runs the real matcher over
+  real recent mail and changes nothing, listing what would have been
+  caught. It reports `scanned` and `truncated` too, so "2 matches" can't be
+  misread as "only 2 exist".
+- **forward / auto_reply are REFUSED at save time**, with a reason. No send
+  path until Azure; accepting them would store rules that look armed and do
+  nothing.
+- `move` only relocates mail still where the rule expected it — once a
+  human has filed something, the rule has lost its claim.
+- `domain` compares the part after `@` exactly; `contains: acme.com` also
+  matches `evil-acme.com.attacker.net`.
+- Pure matcher in `services/email-rules-match.js` (24 tests, no db/auth);
+  IO in `services/email-rules.js`.
+
+**Not built:** multi-condition rules in the UI (the schema and evaluator
+take up to 20 — the builder writes one), reordering, and `has_attachment`
+is inert until the ingest path stores attachment metadata (§4 #4).
 
 ### E5 — AI layer — *mostly shipped 2026-08-02*
 **The framing in this section was wrong: triage already WAS the AI layer.** A
