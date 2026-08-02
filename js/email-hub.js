@@ -97,6 +97,7 @@
   var _state = {
     folders: [], counts: {}, folderId: null,
     labels: [],                // org-shared chips; the MULTI axis to folders' ONE
+    activeSmart: null,         // key of the smart folder currently showing
     threads: [], activeThreadId: null, q: '',
     selected: {},              // thread_id -> true
     expanded: {},              // folder_id -> true
@@ -496,6 +497,7 @@
         'background:color-mix(in srgb, var(--lc,#6b7280) 13%, #fff);' +
         'border-color:color-mix(in srgb, var(--lc,#6b7280) 34%, #fff);}',
       '.ehub-lswatch{width:9px;height:9px;border-radius:3px;flex:0 0 auto;}',
+      '.ehub-smart .ehub-fold-ic{opacity:.72;}',
       '.ehub-lrow{gap:8px;padding-left:12px;}',
       '.ehub-lrow .ehub-fold-nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
       '.ehub-menu-labels{min-width:212px;max-height:340px;overflow-y:auto;}',
@@ -624,7 +626,13 @@
     var tmr = null;
     if (searchEl) searchEl.addEventListener('input', function () {
       clearTimeout(tmr);
-      tmr = setTimeout(function () { _state.q = searchEl.value.trim(); loadThreads(); }, 280);
+      tmr = setTimeout(function () {
+        _state.q = searchEl.value.trim();
+        // Editing the box means the results are no longer that smart
+        // folder's, even if the text still resembles it.
+        if (_state.activeSmart) { _state.activeSmart = null; paintRail(); }
+        loadThreads();
+      }, 280);
     });
     pane.querySelector('[data-refresh]').addEventListener('click', function () { loadFolders().then(loadThreads); });
     pane.querySelector('[data-density]').addEventListener('click', function (e) {
@@ -719,6 +727,62 @@
     });
   }
 
+  // ── Smart folders (spec §1) ─────────────────────────────────────────
+  // Saved searches rendered as folders. ZERO storage — each one is just a
+  // query string run through the E3 search compiler, so they cost nothing
+  // to keep and can never drift out of sync with a stored copy.
+  //
+  // Every operator below is one the compiler actually implements. Two of
+  // them lean on `-is:replied`, which parsed but was silently DROPPED until
+  // the negation arm was added alongside this — an "unanswered" folder that
+  // quietly listed answered mail would be worse than not shipping it.
+  //
+  // `body:$` is a literal dollar sign: SQL LIKE only treats % and _ as
+  // wildcards, so it matches any body actually mentioning money.
+  var SMART_FOLDERS = [
+    // Icon names are checked against the generated set in js/agx-icons.js —
+    // ico() falls back to its second argument, so a name that isn't one of
+    // the 24 renders a silent blank rather than erroring. 'inbox' and
+    // 'dollar' both looked obvious and neither exists.
+    { key: 'waiting',  name: 'Waiting on me',   icon: 'envelope',
+      q: 'is:inbound -is:replied',
+      hint: 'Inbound conversations you have not replied to' },
+    { key: 'stale',    name: 'Unanswered > 24h', icon: 'bell-alert',
+      q: 'is:inbound -is:replied older_than:1d',
+      hint: 'Needs a reply and has been sitting over a day' },
+    { key: 'attach',   name: 'Has attachment',  icon: 'attachments',
+      q: 'has:attachment',
+      hint: 'Anything that arrived with a file' },
+    { key: 'money',    name: '$ mentioned',     icon: 'banknotes',
+      q: 'body:$',
+      hint: 'Body mentions a dollar figure' },
+    { key: 'thisweek', name: "This week's jobs", icon: 'links',
+      q: 'has:entity newer_than:7d',
+      hint: 'Linked to a client, lead or job in the last 7 days' }
+  ];
+
+  // One path for "show me this query", shared by smart folders and label
+  // chips. Writing it into the search box matters: the query stays visible
+  // and editable, so a smart folder is a starting point rather than a
+  // black box, and paintQueryHint still explains the operators.
+  function runQuery(q) {
+    var box = document.getElementById('ehubSearch');
+    if (box) box.value = q;
+    _state.q = q;
+    _state.selected = {};
+    _state.activeSmart = null;
+    loadThreads();
+  }
+
+  function runSmartFolder(key) {
+    var sf = null;
+    SMART_FOLDERS.forEach(function (s) { if (s.key === key) sf = s; });
+    if (!sf) return;
+    runQuery(sf.q);
+    _state.activeSmart = key;      // set AFTER runQuery, which clears it
+    paintRail();
+  }
+
   // ── Labels ──────────────────────────────────────────────────────────
   // Folders are the ONE axis (a message lives in exactly one); labels are
   // the MULTI axis and are org-shared. The table, the CRUD routes and the
@@ -758,12 +822,11 @@
   // parameterized server-side, so clicking a label reuses the same path a
   // typed query takes rather than inventing a second filter channel.
   function filterByLabel(name) {
-    var q = 'label:"' + String(name).replace(/"/g, '') + '"';
-    var box = document.getElementById('ehubSearch');
-    if (box) box.value = q;
-    _state.q = q;
-    _state.selected = {};
-    loadThreads();
+    // Quotes stripped from the value, not escaped: the tokenizer treats a
+    // quote as a phrase delimiter, so a label named `Bid "A"` would
+    // otherwise split the query rather than match.
+    runQuery('label:"' + String(name).replace(/"/g, '') + '"');
+    paintRail();                                  // clear any active smart pill
   }
 
   // Sum a folder's unread with its whole subtree, so a collapsed
@@ -806,6 +869,18 @@
       branch(mine, null, 0) +
       '<div class="ehub-rail-hd">Folders<button data-new-root title="New folder">+</button></div>' +
       (shared.length ? '<div class="ehub-rail-hd">Shared</div>' + branch(shared, null, 0) : '') +
+      // Smart folders: saved searches, not locations. No unread badge —
+      // these are views over mail that already lives somewhere, and a count
+      // here would double-report what the folder above it already shows.
+      '<div class="ehub-rail-hd">Smart</div>' +
+      SMART_FOLDERS.map(function (s) {
+        return '<div class="ehub-fold ehub-smart' +
+            (_state.activeSmart === s.key ? ' active' : '') +
+            '" data-smart="' + esc(s.key) + '" title="' + esc(s.hint) + '">' +
+          '<span class="ehub-fold-ic">' + ico(s.icon, '') + '</span>' +
+          '<span class="ehub-fold-nm">' + esc(s.name) + '</span>' +
+          '</div>';
+      }).join('') +
       // Labels are a FILTER, not a location — clicking one runs the
       // existing `label:` search rather than changing folders, so a
       // labelled message still shows where it actually lives.
@@ -818,6 +893,14 @@
               '</div>';
           }).join('')
         : '');
+
+    rail.querySelectorAll('[data-smart]').forEach(function (el) {
+      el.addEventListener('click', function () {
+        runSmartFolder(el.getAttribute('data-smart'));
+        var body = document.getElementById('ehubBody');
+        if (body) body.classList.remove('rail-open');
+      });
+    });
 
     rail.querySelectorAll('[data-label]').forEach(function (el) {
       el.addEventListener('click', function () {
@@ -842,6 +925,17 @@
         }
         _state.folderId = fid;
         _state.selected = {};
+        // Clicking a folder means "show me this folder". loadThreads lets a
+        // query WIN over folder_id, so without clearing it here the list
+        // would keep showing the previous search — which only looked like a
+        // quirk with typed text, but reads as broken now that a smart folder
+        // or a label chip can be what put a query there.
+        if (_state.q) {
+          _state.q = '';
+          var sbox = document.getElementById('ehubSearch');
+          if (sbox) sbox.value = '';
+        }
+        _state.activeSmart = null;
         // Reveal children on the way IN, but never fight a deliberate
         // collapse: the old version re-expanded on every row click, so a
         // folder you had just collapsed sprang open again the moment you

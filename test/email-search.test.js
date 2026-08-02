@@ -198,3 +198,49 @@ describe('buildWhere — parameterization', () => {
     expect(built.sql).toContain(' AND ');
   });
 });
+
+// Negation on is:/has:. parseQuery has always bucketed `-is:replied` as
+// 'is!', but buildWhere had no arm for it, so the term was parsed, DROPPED,
+// and never warned about — `is` is a real operator, so it doesn't trip the
+// unknown-operator path either. "-is:replied" quietly returned replied
+// mail. This is the failure the smart folders depend on not happening.
+describe('negated is: / has: operators', () => {
+  test('-is:replied emits a NOT predicate, not nothing', () => {
+    const built = search.compile('-is:replied', { alias: 'e', startIndex: 2 });
+    expect(built.count).toBe(1);
+    expect(built.sql).toContain('NOT (');
+    expect(built.sql).toContain('replied_at IS NOT NULL');
+  });
+
+  test('is:replied and -is:replied compile to opposite predicates', () => {
+    const pos = search.compile('is:replied', { alias: 'e', startIndex: 2 });
+    const neg = search.compile('-is:replied', { alias: 'e', startIndex: 2 });
+    expect(neg.sql).toBe('NOT (' + pos.sql + ')');
+  });
+
+  test('-has:attachment emits a NOT predicate', () => {
+    const built = search.compile('-has:attachment', { alias: 'e', startIndex: 2 });
+    expect(built.count).toBe(1);
+    expect(built.sql).toBe('NOT (e.has_attachments = TRUE)');
+  });
+
+  test('-is:unread negates the unread predicate', () => {
+    const built = search.compile('-is:unread', { alias: 'e', startIndex: 2 });
+    expect(built.sql).toBe('NOT (e.is_read = FALSE)');
+  });
+
+  test('an unknown is: value still emits nothing rather than broken SQL', () => {
+    const built = search.compile('-is:banana', { alias: 'e', startIndex: 2 });
+    expect(built.count).toBe(0);
+  });
+
+  // The composite the "Unanswered > 24h" smart folder is built from.
+  test('the unanswered-thread query compiles all three predicates', () => {
+    const built = search.compile('is:inbound -is:replied older_than:1d',
+      { alias: 'e', startIndex: 2 });
+    expect(built.count).toBe(3);
+    expect(built.sql).toContain("e.direction = 'inbound'");
+    expect(built.sql).toContain('NOT (');
+    expect(built.sql).toContain('received_at');
+  });
+});

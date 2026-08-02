@@ -151,33 +151,50 @@ function buildWhere(parsed, opts) {
   each('subject!', function (v) { parts.push('COALESCE(' + alias + '.subject, \'\') NOT ILIKE ' + ph(like(v))); });
   each('body', function (v) { parts.push('COALESCE(' + alias + '.body_text, \'\') ILIKE ' + ph(like(v))); });
 
-  // ── has:
-  each('has', function (v) {
+  // ── has: / is:
+  //
+  // Built through predicate helpers so the NEGATED buckets are just the
+  // same predicate under NOT. parseQuery has always accepted `-is:replied`
+  // (it buckets it as 'is!'), but buildWhere had no 'is!' or 'has!' arm, so
+  // the term was parsed, dropped, and NEVER WARNED ABOUT — `is` is a real
+  // operator, so it doesn't trip the unknown-operator path either. A search
+  // for "-is:replied" quietly returned replied mail. Negation now applies.
+  //
+  // A plain NOT wrapper is safe here: is_read / is_starred / is_pinned /
+  // has_attachments are all NOT NULL DEFAULT FALSE and direction is NOT
+  // NULL, so there is no three-valued-logic hole where NOT(NULL = TRUE)
+  // silently drops a row.
+  function hasPredicate(v) {
     var k = String(v).toLowerCase();
-    if (k === 'attachment' || k === 'attachments') parts.push(alias + '.has_attachments = TRUE');
-    else if (k === 'entity' || k === 'link') parts.push(alias + '.entity_type IS NOT NULL');
-    else if (k === 'draft') {
-      parts.push('EXISTS (SELECT 1 FROM email_thread_state s2 WHERE s2.user_id = ' + alias +
-                 '.user_id AND s2.thread_id = ' + alias + '.thread_id AND COALESCE(s2.draft_text, \'\') <> \'\')');
+    if (k === 'attachment' || k === 'attachments') return alias + '.has_attachments = TRUE';
+    if (k === 'entity' || k === 'link') return alias + '.entity_type IS NOT NULL';
+    if (k === 'draft') {
+      return 'EXISTS (SELECT 1 FROM email_thread_state s2 WHERE s2.user_id = ' + alias +
+             '.user_id AND s2.thread_id = ' + alias + '.thread_id AND COALESCE(s2.draft_text, \'\') <> \'\')';
     }
-  });
+    return null;
+  }
+  function isPredicate(v) {
+    var k = String(v).toLowerCase();
+    if (k === 'unread') return alias + '.is_read = FALSE';
+    if (k === 'read') return alias + '.is_read = TRUE';
+    if (k === 'starred') return alias + '.is_starred = TRUE';
+    if (k === 'unstarred') return alias + '.is_starred = FALSE';
+    if (k === 'pinned') return alias + '.is_pinned = TRUE';
+    if (k === 'snoozed') return alias + '.snoozed_until IS NOT NULL';
+    if (k === 'outbound') return alias + '.direction = \'outbound\'';
+    if (k === 'inbound') return alias + '.direction = \'inbound\'';
+    if (k === 'replied') {
+      return 'EXISTS (SELECT 1 FROM email_thread_state s3 WHERE s3.user_id = ' + alias +
+             '.user_id AND s3.thread_id = ' + alias + '.thread_id AND s3.replied_at IS NOT NULL)';
+    }
+    return null;
+  }
 
-  // ── is:
-  each('is', function (v) {
-    var k = String(v).toLowerCase();
-    if (k === 'unread') parts.push(alias + '.is_read = FALSE');
-    else if (k === 'read') parts.push(alias + '.is_read = TRUE');
-    else if (k === 'starred') parts.push(alias + '.is_starred = TRUE');
-    else if (k === 'unstarred') parts.push(alias + '.is_starred = FALSE');
-    else if (k === 'pinned') parts.push(alias + '.is_pinned = TRUE');
-    else if (k === 'snoozed') parts.push(alias + '.snoozed_until IS NOT NULL');
-    else if (k === 'outbound') parts.push(alias + '.direction = \'outbound\'');
-    else if (k === 'inbound') parts.push(alias + '.direction = \'inbound\'');
-    else if (k === 'replied') {
-      parts.push('EXISTS (SELECT 1 FROM email_thread_state s3 WHERE s3.user_id = ' + alias +
-                 '.user_id AND s3.thread_id = ' + alias + '.thread_id AND s3.replied_at IS NOT NULL)');
-    }
-  });
+  each('has',  function (v) { var p = hasPredicate(v); if (p) parts.push(p); });
+  each('has!', function (v) { var p = hasPredicate(v); if (p) parts.push('NOT (' + p + ')'); });
+  each('is',   function (v) { var p = isPredicate(v);  if (p) parts.push(p); });
+  each('is!',  function (v) { var p = isPredicate(v);  if (p) parts.push('NOT (' + p + ')'); });
 
   // ── label: — EXISTS, never a join, so a message with three labels is
   // still one row.
