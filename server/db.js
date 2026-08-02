@@ -4533,6 +4533,16 @@ async function initSchema() {
 
     CREATE INDEX IF NOT EXISTS idx_ai_messages_user_entity_created
       ON ai_messages(user_id, entity_type, created_at DESC);
+
+    -- Trailing-window spend scans (the hourly AI spend alarm, and the
+    -- admin usage/forensics views). Every other ai_messages index leads
+    -- with user_id, estimate_id, session_id or entity_type, so a query
+    -- filtered ONLY on a time range can use none of them and falls back
+    -- to a sequential scan of the largest table in the schema — once an
+    -- hour, forever. Partial on role='assistant' because that is the
+    -- only role carrying token counts, which keeps the index small.
+    CREATE INDEX IF NOT EXISTS idx_ai_messages_created_assistant
+      ON ai_messages(created_at) WHERE role = 'assistant';
   `);
 
   // Category 2 — pg_trgm GIN indexes. Wrapped in its own try/catch so
