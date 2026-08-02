@@ -827,6 +827,32 @@ async function upsertThreadState(userId, orgId, threadId, patch) {
 
 // ── PUT /api/email-inbox/threads/:threadId/draft — save the drafted reply ──
 // body: { draft_text, notes?, source? }  source: 'assistant' | 'user'
+// ── GET /api/email-inbox/threads/:threadId/state ────────────────────
+// Just the working state — draft text, who wrote it, when, replied_at.
+//
+// Exists so the hub can watch for a draft the ASSISTANT is writing without
+// re-fetching the conversation: /threads/:threadId returns up to 100 full
+// message bodies, and polling that every few seconds to check one column
+// would move megabytes to learn a timestamp.
+//
+// Owner-scoped by user_id, same as every other read here.
+router.get('/threads/:threadId/state', requireAuth, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT draft_text, draft_source, draft_updated_at, replied_at
+         FROM email_thread_state
+        WHERE user_id = $1 AND thread_id = $2`,
+      [req.user.id, req.params.threadId]
+    );
+    // No row yet is a normal state (nothing drafted), not a 404 — the
+    // client is polling for something that may not exist yet.
+    res.json({ state: r.rows[0] || null });
+  } catch (e) {
+    console.error('GET /api/email-inbox/threads/:threadId/state error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 router.put('/threads/:threadId/draft', requireAuth, async (req, res) => {
   try {
     const b = req.body || {};

@@ -1461,6 +1461,10 @@
 
   function openThread(threadId) {
     var switching = _state.activeThreadId !== threadId;
+    // Kill any draft watcher from the thread being left. The watcher also
+    // self-checks, but stopping it here means a fast click-through doesn't
+    // leave several loops polling at once.
+    stopDraftWatch();
     _state.activeThreadId = threadId;
     markActiveRow(threadId);
     var pane = document.getElementById('ehubPane');
@@ -1722,7 +1726,15 @@
       } else { try { ta.select(); document.execCommand('copy'); flashSaved('Copied'); } catch (e) { flashSaved('Copy failed'); } }
     });
     var draftAskBtn = pane.querySelector('[data-draft-ask]');
-    if (draftAskBtn) draftAskBtn.addEventListener('click', function () { askForDraft(threadId, subject); });
+    if (draftAskBtn) draftAskBtn.addEventListener('click', function () {
+      askForDraft(threadId, subject);
+      // The assistant writes the draft SERVER-side (draft_email_reply →
+      // email_thread_state). Nothing tells this pane about it, so before
+      // this the draft landed in the database and the box stayed empty
+      // until you navigated away and back — the work happened and looked
+      // like it hadn't. Watch for it instead.
+      watchForDraft(threadId, ta, savedEl, draftAskBtn);
+    });
     var snipBtn = pane.querySelector('[data-snippets]');
     if (snipBtn) snipBtn.addEventListener('click', function (ev) {
       ev.stopPropagation();
@@ -1751,6 +1763,73 @@
   function handToAssistant(threadId, subject) {
     seedAssistant('Read my email thread [' + threadId + '] ("' + subject + '") and give me a short summary — what it\'s asking, anything time-sensitive, and whether it needs a reply. If there\'s a date or a commitment, offer to add a reminder or calendar event.', threadId);
   }
+  // ── Watch for an assistant-written draft ────────────────────────────
+  // Polls the light /state endpoint until draft_updated_at moves, then
+  // paints the draft in place. Bounded and self-cancelling — this is a
+  // background loop attached to a pane the user can leave at any moment.
+  var _draftWatch = null;
+
+  function stopDraftWatch() {
+    if (_draftWatch) { clearTimeout(_draftWatch.timer); _draftWatch = null; }
+  }
+
+  function watchForDraft(threadId, ta, savedEl, btn) {
+    stopDraftWatch();                       // one watcher, ever
+    if (!ta) return;
+    var before = String(ta.value || '');
+    var tries = 0;
+    var MAX = 40;                           // ~2 min at 3s — a draft is a model call, not instant
+    var label = btn ? btn.innerHTML : '';
+    if (btn) { btn.disabled = true; btn.innerHTML = ico('sparkle', '') + ' Drafting…'; }
+
+    function done(msg) {
+      stopDraftWatch();
+      if (btn) { btn.disabled = false; btn.innerHTML = label; }
+      if (msg && savedEl) {
+        savedEl.textContent = msg;
+        setTimeout(function () { if (savedEl) savedEl.textContent = ''; }, 2600);
+      }
+    }
+
+    function tick() {
+      // Bail if the user moved on — a stale watcher must never write into
+      // whatever thread happens to be open now.
+      if (_state.activeThreadId !== threadId || !document.body.contains(ta)) return done('');
+      if (++tries > MAX) return done('Still drafting — reopen this email in a moment.');
+      // Don't burn polls (or the user's battery) against a hidden tab; just
+      // wait it out. The attempt still counts so this can't run forever.
+      if (document.hidden) { _draftWatch = { timer: setTimeout(tick, 3000) }; return; }
+
+      api('/api/email-inbox/threads/' + encodeURIComponent(threadId) + '/state')
+        .then(function (res) {
+          var st = (res && res.state) || null;
+          var text = st && st.draft_text ? String(st.draft_text) : '';
+          // Only take an ASSISTANT draft that actually differs from what was
+          // already there. Without the source check, the user's own
+          // autosave (source:'user', fired 700ms after they type) would
+          // satisfy the watcher and cancel it before the model replies.
+          if (st && st.draft_source === 'assistant' && text && text !== before) {
+            // Never clobber typing in progress. Someone who started writing
+            // while waiting has said what they want more clearly than the
+            // request did — offer it rather than overwrite it.
+            if (String(ta.value || '') !== before) {
+              return done('Assistant draft ready — reopen to load it.');
+            }
+            // Set the value WITHOUT dispatching 'input'. That listener
+            // autosaves with source:'user' 700ms later, which would rewrite
+            // draft_source from 'assistant' to 'user' — relabelling the
+            // assistant's work as the owner's own, and losing the "written"
+            // vs "edited" distinction the header already renders.
+            ta.value = text;
+            return done('Assistant draft ready');
+          }
+          _draftWatch = { timer: setTimeout(tick, 3000) };
+        })
+        .catch(function () { _draftWatch = { timer: setTimeout(tick, 3000) }; });
+    }
+    _draftWatch = { timer: setTimeout(tick, 2500) };
+  }
+
   function askForDraft(threadId, subject) {
     seedAssistant(
       'Draft my reply to email thread [' + threadId + '] ("' + subject + '"). ' +
