@@ -98,10 +98,38 @@ THEN (move to folder, label, star, forward, auto-reply w/ template, create
 task, link to entity, notify). Runs server-side on inbound, **before**
 triage. Nothing exists yet — table, evaluator, admin UI all outstanding.
 
-### E5 — AI layer
-Priority/summary chips, draft-reply via Scribe into the Live Writer diff,
-extract→act (email → Task / Calendar / Cost Inbox / RFI / CO / Bill), and a
-`read_email` tool for 86.
+### E5 — AI layer — *mostly shipped 2026-08-02*
+**The framing in this section was wrong: triage already WAS the AI layer.** A
+Haiku pass has classified every inbound since H3 (`needs_reply`, urgency, a
+one-line summary, and up to three follow-ups in `triage_actions`). E5 was not
+"add AI" — it was "surface and finish the AI already running".
+
+- ~~extract→act~~ **DONE `@2d2fcb3`.** `triage_actions` had never been
+  rendered anywhere — the intelligence was bought and discarded on every
+  email. Now a suggested-action strip in the reading pane. It also needed a
+  server fix: `triage_actions` was missing from the `/threads/:threadId`
+  SELECT. Every button opens a PRE-FILLED confirm surface, never creates
+  outright — an action title is model paraphrase of an untrusted email, and
+  triage's whole design property is that the user confirms.
+- ~~priority/summary chips~~ **N/A.** `ai_priority` and `ai_summary` duplicate
+  `triage_urgency` / `triage_summary` exactly and are deliberately NOT
+  double-written. Two columns holding one fact is how they drift.
+- **`ai_category` DONE `@f0c2e4f`** — the one genuinely new signal in those
+  three reserved columns. Classifies into the nine seeded Triaged buckets;
+  enum DERIVED from the folder spine (`email-folders.TRIAGE_BUCKETS`), model
+  output validated against it, anything else stored NULL. Needed a backfill
+  arm too: already-triaged mail keeps `triaged_at` set, so on any mailbox
+  with history nothing would ever have shown a category.
+- ~~`read_email` tool~~ **ALREADY EXISTED** as `read_email_inbox`, correctly
+  fenced (bodies / triage_summary / action titles wrapped; outbound shown as
+  an unverified captured copy). **`@fa12c6c`** taught it the E1–E5 layer —
+  folder, category, labels, snooze — which it had been blind to.
+
+**Still open:** draft-reply via Scribe into the Live Writer diff.
+
+> ⚠️ Editing a tool DESCRIPTION does not reach the live agent on deploy.
+> `@fa12c6c` changed `read_email_inbox`'s description — needs
+> `POST /managed/sync-all` + a **New chat**.
 
 **The columns are already reserved and indexed but nothing writes them:**
 `ai_category`, `ai_priority`, `ai_summary`. The list query reads
