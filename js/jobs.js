@@ -766,7 +766,7 @@ function renderJobsMain() {
                         '<td style="white-space:nowrap;padding:8px 10px;"><strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(c.co_number || 'CO') + '</strong></td>' +
                         '<td style="padding:8px 10px;font-size:12.5px;color:var(--text,#fff);">' + escapeHTML(c.title || '(untitled)') + '</td>' +
                         '<td style="white-space:nowrap;padding:8px 10px;">' + statusBadge(c.status || 'draft') + '</td>' +
-                        '<td class="num" style="text-align:right;white-space:nowrap;padding:8px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--green,#34d399);font-weight:600;">' + formatCurrency(total) + '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:8px 10px;font-family:inherit;font-size:13px;color:var(--green,#34d399);font-weight:600;">' + formatCurrency(total) + '</td>' +
                         '<td style="white-space:nowrap;padding:8px 10px;font-size:11px;color:var(--text-dim,#888);">' + (c.linked_node_id ? '⛓ Linked' : '—') + '</td>' +
                     '</tr>';
                 }).join('');
@@ -1160,9 +1160,9 @@ function renderJobsMain() {
                         '<td style="padding:8px 10px;font-size:12.5px;color:var(--text-dim,#aaa);">' + escapeHTML(p.sub_name || '—') + '</td>' +
                         '<td style="padding:8px 10px;font-size:12.5px;color:var(--text,#fff);">' + escapeHTML(p.title || '(untitled)') + '</td>' +
                         '<td style="white-space:nowrap;padding:8px 10px;">' + poStatusBadge(p.status) + '</td>' +
-                        '<td class="num" style="text-align:right;white-space:nowrap;padding:8px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--text,#fff);font-weight:600;">' + formatCurrency(total) + '</td>' +
-                        '<td class="num" style="text-align:right;white-space:nowrap;padding:8px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--text-dim,#aaa);">' + formatCurrency(billed) + '</td>' +
-                        '<td class="num" style="text-align:right;white-space:nowrap;padding:8px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:' + (outstanding > 0.005 ? 'var(--yellow,#fbbf24)' : 'var(--green,#34d399)') + ';font-weight:600;">' + formatCurrency(outstanding) + '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:8px 10px;font-family:inherit;font-size:13px;color:var(--text,#fff);font-weight:600;">' + formatCurrency(total) + '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:8px 10px;font-family:inherit;font-size:13px;color:var(--text-dim,#aaa);">' + formatCurrency(billed) + '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:8px 10px;font-family:inherit;font-size:13px;color:' + (outstanding > 0.005 ? 'var(--yellow,#fbbf24)' : 'var(--green,#34d399)') + ';font-weight:600;">' + formatCurrency(outstanding) + '</td>' +
                     '</tr>';
                 }).join('');
                 bodyHTML =
@@ -1465,7 +1465,7 @@ function renderJobsMain() {
                         '<td><strong>' + (escapeHTML(b.bill_number) || '—') + '</strong></td>' +
                         '<td>' + (escapeHTML(vendor) || '—') + '</td>' +
                         '<td>' + escapeHTML(desc) + poNote + '</td>' +
-                        '<td style="text-align:right;font-family:\'SF Mono\',monospace;">' + formatCurrency(amt) + '</td>' +
+                        '<td style="text-align:right;font-family:inherit;">' + formatCurrency(amt) + '</td>' +
                         '<td><span style="color:' + statusColor + ';font-weight:600;font-size:12px;">' + escapeHTML(status) + '</span></td>' +
                         '<td>' + (bdate || '—') + '</td>' +
                         '<td' + (overdue ? ' style="color:#f87171;font-weight:600;"' : '') + '>' + (ddate || '—') + '</td>' +
@@ -3248,7 +3248,7 @@ function renderJobsMain() {
                         '<td style="white-space:nowrap;padding:6px 10px;"><strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(b.bill_number || '—') + '</strong></td>' +
                         '<td style="padding:6px 10px;font-size:12px;color:var(--text-dim,#aaa);">' + escapeHTML(vendor || '—') + '</td>' +
                         '<td style="padding:6px 10px;font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(b.po_number || '—') + '</td>' +
-                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;font-weight:600;color:var(--accent);">' + formatCurrency(parseFloat(b.amount) || 0) + '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:inherit;font-size:13px;font-weight:600;color:var(--accent);">' + formatCurrency(parseFloat(b.amount) || 0) + '</td>' +
                         '<td style="white-space:nowrap;padding:6px 10px;"><span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(79,140,255,0.1);color:var(--text-dim);font-weight:600;">' + escapeHTML(b.status || 'open') + '</span></td>' +
                         '<td style="white-space:nowrap;padding:6px 10px;font-size:11px;' + (overdue ? 'color:#f87171;font-weight:600;' : 'color:var(--text-dim,#888);') + '">' + escapeHTML(due) + '</td>' +
                     '</tr>';
@@ -3532,7 +3532,7 @@ function renderJobsMain() {
                         '<td style="white-space:nowrap;padding:6px 10px;"><strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(i.invNumber || 'INV') + '</strong></td>' +
                         '<td style="padding:6px 10px;font-size:12px;color:var(--text-dim,#aaa);">' + escapeHTML(i.vendor || '') + '</td>' +
                         '<td style="padding:6px 10px;font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(i.description || '') + '</td>' +
-                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;font-weight:600;color:var(--accent);">' + formatCurrency(i.amount) + '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:inherit;font-size:13px;font-weight:600;color:var(--accent);">' + formatCurrency(i.amount) + '</td>' +
                         '<td style="white-space:nowrap;padding:6px 10px;font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(i.date || '') + '</td>' +
                         '<td style="white-space:nowrap;padding:6px 10px;font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(i.dueDate || '') + '</td>' +
                         '<td style="white-space:nowrap;padding:6px 10px;"><span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(79,140,255,0.1);color:' + statusColor + ';font-weight:600;">' + escapeHTML(i.status || 'Draft') + '</span></td>' +
@@ -4847,10 +4847,10 @@ function renderJobsMain() {
                 var modeChip = '<button type="button" data-mx-phase="' + attr(name) + '" onclick="onPhaseMatrixModeToggle(this)" title="Toggle percent / dollar allocation for this scope" style="margin-left:6px;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;border:1px solid var(--border);background:var(--overlay-light,rgba(255,255,255,0.05));color:var(--accent);cursor:pointer;">' + (isPct ? '%' : '$') + '</button>';
                 var accrChip = (poAccr[name] > 0) ? '<span title="Open PO commitment — accrued until billed/paid" style="margin-left:6px;font-size:10px;padding:1px 6px;border-radius:10px;background:rgba(224,164,88,0.15);color:var(--orange,#e0a458);white-space:nowrap;">&#9203; ' + formatCurrency(poAccr[name]) + '</span>' : '';
                 var totalCell = isPct
-                    ? '<td style="text-align:right;padding:3px 4px;"><input type="number" min="0" step="100" value="' + (info.total || '') + '" data-mx-phase="' + attr(name) + '" oninput="onPhaseMatrixTotal(this)" onchange="onPhaseMatrixCommit(this)" placeholder="total $" style="width:90px;font-size:12.5px;font-weight:700;padding:3px 5px;text-align:right;background:var(--bg);border:1px solid var(--accent);border-radius:4px;color:var(--accent);font-family:monospace;"/></td>'
-                    : '<td data-mx-rowtot="' + attr(name) + '" style="text-align:right;padding:4px 8px;font-size:12.5px;font-weight:700;color:var(--accent);font-family:monospace;">' + formatCurrency(rowTot) + '</td>';
-                var costCell = '<td style="text-align:right;padding:4px 8px;font-size:12px;font-family:monospace;color:var(--orange,#e0a458);border-left:1px solid var(--border);">' + formatCurrency(pcost) + '</td>';
-                var profitCell = '<td style="text-align:right;padding:4px 8px;font-size:12px;font-family:monospace;color:' + (pprofit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(pprofit) + '</td>';
+                    ? '<td style="text-align:right;padding:3px 4px;"><input type="number" min="0" step="100" value="' + (info.total || '') + '" data-mx-phase="' + attr(name) + '" oninput="onPhaseMatrixTotal(this)" onchange="onPhaseMatrixCommit(this)" placeholder="total $" style="width:90px;font-size:12.5px;font-weight:700;padding:3px 5px;text-align:right;background:var(--bg);border:1px solid var(--accent);border-radius:4px;color:var(--accent);font-family:inherit;"/></td>'
+                    : '<td data-mx-rowtot="' + attr(name) + '" style="text-align:right;padding:4px 8px;font-size:12.5px;font-weight:700;color:var(--accent);font-family:inherit;">' + formatCurrency(rowTot) + '</td>';
+                var costCell = '<td style="text-align:right;padding:4px 8px;font-size:12px;font-family:inherit;color:var(--orange,#e0a458);border-left:1px solid var(--border);">' + formatCurrency(pcost) + '</td>';
+                var profitCell = '<td style="text-align:right;padding:4px 8px;font-size:12px;font-family:inherit;color:' + (pprofit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(pprofit) + '</td>';
                 var doneCell = '<td style="text-align:right;padding:3px 4px;"><span style="display:inline-flex;align-items:center;gap:1px;justify-content:flex-end;"><input type="number" min="0" max="100" step="5" value="' + (avgPct || '') + '" data-mx-phase="' + attr(name) + '" oninput="onPhaseMatrixPctDone(this)" onchange="onPhaseMatrixCommit(this)" title="Scope % complete — drives the WIP roll-up" style="width:46px;font-size:12px;padding:3px 4px;text-align:right;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--accent);font-weight:700;"/><span style="font-size:10px;color:var(--text-dim);">%</span></span></td>';
                 var phaseChk = '<input type="checkbox"' + (_mxPhaseSel[name] ? ' checked' : '') + ' data-mx-prow="' + attr(name) + '" onchange="onMxTogglePhaseSel(this)" title="Select this scope to link to buildings" style="cursor:pointer;margin:0 6px 0 0;vertical-align:middle;"/>';
                 var pCellStick = _mxPhaseSel[name] ? stickLSel : stickL;
@@ -4860,16 +4860,16 @@ function renderJobsMain() {
             }).join('');
 
             var foot = '<tr style="border-top:2px solid var(--border);"><td style="text-align:left;padding:5px 8px;font-size:11px;font-weight:700;color:var(--text-dim);' + stickL + '">Building revenue</td>';
-            cols.forEach(function(c) { foot += '<td data-mx-coltot="' + attr(c.id) + '" style="text-align:right;padding:5px 8px;font-size:12px;font-weight:700;font-family:monospace;">' + formatCurrency(colTot[c.id]) + '</td>'; });
-            foot += '<td data-mx-coltot="__un__" style="text-align:right;padding:5px 8px;font-size:12px;font-weight:700;font-family:monospace;color:var(--text-dim);">' + formatCurrency(unTot) + '</td>';
-            foot += '<td data-mx-grand style="text-align:right;padding:5px 8px;font-size:13px;font-weight:800;font-family:monospace;color:var(--accent);">' + formatCurrency(grand) + '</td>';
-            foot += '<td style="text-align:right;padding:5px 8px;font-size:12px;font-weight:800;font-family:monospace;color:var(--orange,#e0a458);border-left:1px solid var(--border);">' + formatCurrency(grandCost) + '</td>';
-            foot += '<td style="text-align:right;padding:5px 8px;font-size:12px;font-weight:800;font-family:monospace;color:' + ((grand - grandCost) >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(grand - grandCost) + '</td>';
+            cols.forEach(function(c) { foot += '<td data-mx-coltot="' + attr(c.id) + '" style="text-align:right;padding:5px 8px;font-size:12px;font-weight:700;font-family:inherit;">' + formatCurrency(colTot[c.id]) + '</td>'; });
+            foot += '<td data-mx-coltot="__un__" style="text-align:right;padding:5px 8px;font-size:12px;font-weight:700;font-family:inherit;color:var(--text-dim);">' + formatCurrency(unTot) + '</td>';
+            foot += '<td data-mx-grand style="text-align:right;padding:5px 8px;font-size:13px;font-weight:800;font-family:inherit;color:var(--accent);">' + formatCurrency(grand) + '</td>';
+            foot += '<td style="text-align:right;padding:5px 8px;font-size:12px;font-weight:800;font-family:inherit;color:var(--orange,#e0a458);border-left:1px solid var(--border);">' + formatCurrency(grandCost) + '</td>';
+            foot += '<td style="text-align:right;padding:5px 8px;font-size:12px;font-weight:800;font-family:inherit;color:' + ((grand - grandCost) >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(grand - grandCost) + '</td>';
             foot += '<td></td></tr>';
             // Second footer row — per-building cost (folds the legacy Building table's Spent column).
             foot += '<tr><td style="text-align:left;padding:4px 8px;font-size:11px;color:var(--text-dim);' + stickL + '">Building cost</td>';
-            cols.forEach(function(c) { foot += '<td style="text-align:right;padding:4px 8px;font-size:11.5px;font-family:monospace;color:var(--orange,#e0a458);">' + formatCurrency(colCost[c.id]) + '</td>'; });
-            foot += '<td style="text-align:right;padding:4px 8px;font-size:11.5px;font-family:monospace;color:var(--text-dim);">' + formatCurrency(unCost) + '</td>';
+            cols.forEach(function(c) { foot += '<td style="text-align:right;padding:4px 8px;font-size:11.5px;font-family:inherit;color:var(--orange,#e0a458);">' + formatCurrency(colCost[c.id]) + '</td>'; });
+            foot += '<td style="text-align:right;padding:4px 8px;font-size:11.5px;font-family:inherit;color:var(--text-dim);">' + formatCurrency(unCost) + '</td>';
             foot += '<td></td><td></td><td></td><td></td></tr>';
 
             var linkTarget = selBldgCount ? (selBldgCount + ' building' + (selBldgCount === 1 ? '' : 's')) : 'all buildings';
@@ -4959,7 +4959,7 @@ function renderJobsMain() {
                         '<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">' +
                             '<span style="font-size:14px;font-weight:700;color:var(--text);">' + escapeHTML(name) + '</span>' + modeChip + accrChip +
                         '</div>' +
-                        '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:11.5px;font-family:monospace;">' +
+                        '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:11.5px;font-family:inherit;">' +
                             '<span style="color:var(--text-dim);">Rev <b style="color:var(--green);">' + formatCurrency(rev) + '</b></span>' +
                             '<span style="color:var(--text-dim);">Cost <b style="color:var(--orange,#e0a458);">' + formatCurrency(cost) + '</b></span>' +
                             '<span style="color:var(--text-dim);">Profit <b style="color:' + (profit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(profit) + '</b></span>' +
@@ -4973,8 +4973,8 @@ function renderJobsMain() {
                         '<div style="display:flex;align-items:center;gap:6px;">' +
                             '<span style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.4px;">Budget</span>' +
                             (isPct
-                                ? '<input type="number" min="0" step="100" value="' + (info.total || '') + '" data-mx-phase="' + attr(name) + '" oninput="onPhaseMatrixTotal(this)" onchange="onPhaseMatrixCommit(this)" placeholder="total $" style="width:110px;font-size:13px;font-weight:700;padding:3px 6px;text-align:right;background:var(--bg);border:1px solid var(--accent);border-radius:5px;color:var(--accent);font-family:monospace;"/>'
-                                : '<span style="font-size:13px;font-weight:700;color:var(--accent);font-family:monospace;">' + formatCurrency(info.sumDollars) + '</span>') +
+                                ? '<input type="number" min="0" step="100" value="' + (info.total || '') + '" data-mx-phase="' + attr(name) + '" oninput="onPhaseMatrixTotal(this)" onchange="onPhaseMatrixCommit(this)" placeholder="total $" style="width:110px;font-size:13px;font-weight:700;padding:3px 6px;text-align:right;background:var(--bg);border:1px solid var(--accent);border-radius:5px;color:var(--accent);font-family:inherit;"/>'
+                                : '<span style="font-size:13px;font-weight:700;color:var(--accent);font-family:inherit;">' + formatCurrency(info.sumDollars) + '</span>') +
                         '</div>' +
                         '<div style="display:flex;align-items:center;gap:5px;">' +
                             '<span style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.4px;">Split</span>' +
@@ -5021,11 +5021,11 @@ function renderJobsMain() {
                         var sh = isPct ? (shares[b.id] || { pct: 0, auto: true }) : { pct: bldgPct(b.id), auto: false };
                         var input = isPct
                             ? '<input type="number" min="0" max="100" step="1" value="' + (sh.pct != null ? Math.round(sh.pct * 10) / 10 : '') + '" data-mx-phase="' + attr(name) + '" data-mx-bldg="' + attr(b.id) + '" oninput="onPhaseMatrixPctCell(this)" onchange="onPhaseMatrixCommit(this)" title="' + (sh.auto ? 'Auto — type to override' : 'Manual override') + '" style="width:52px;font-size:12px;padding:2px 5px;text-align:right;background:var(--bg);border:1px ' + (sh.auto ? 'dashed' : 'solid') + ' var(--border);border-radius:4px;color:var(--text' + (sh.auto ? '-dim' : '') + ');"/><span style="font-size:10px;color:var(--text-dim);">%</span>'
-                            : '<input type="number" min="0" step="100" value="' + (d || '') + '" data-mx-phase="' + attr(name) + '" data-mx-bldg="' + attr(b.id) + '" oninput="onPhaseMatrixCell(this)" onchange="onPhaseMatrixCommit(this)" style="width:82px;font-size:12px;padding:2px 5px;text-align:right;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:monospace;"/>';
+                            : '<input type="number" min="0" step="100" value="' + (d || '') + '" data-mx-phase="' + attr(name) + '" data-mx-bldg="' + attr(b.id) + '" oninput="onPhaseMatrixCell(this)" onchange="onPhaseMatrixCommit(this)" style="width:82px;font-size:12px;padding:2px 5px;text-align:right;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:inherit;"/>';
                         return '<span style="display:inline-flex;align-items:center;gap:5px;padding:2px 0;">' +
                             '<span style="font-size:12px;color:var(--text);min-width:0;">' + escapeHTML(b.name || 'Building') + '</span>' +
                             input +
-                            '<span style="font-size:11px;color:var(--text-dim);font-family:monospace;">' + formatCurrency(d) + '</span>' +
+                            '<span style="font-size:11px;color:var(--text-dim);font-family:inherit;">' + formatCurrency(d) + '</span>' +
                         '</span>';
                     }).join('') + '</div>';
                 }
@@ -5620,16 +5620,16 @@ function renderJobsMain() {
                         '<td style="white-space:nowrap;padding:6px 10px;font-size:12px;color:var(--text-dim,#aaa);">' +
                             escapeHTML(sub.trade || '') +
                         '</td>' +
-                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--accent);font-weight:600;">' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:inherit;font-size:13px;color:var(--accent);font-weight:600;">' +
                             formatCurrency(contract) +
                         '</td>' +
-                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--green);font-weight:600;">' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:inherit;font-size:13px;color:var(--green);font-weight:600;">' +
                             formatCurrency(billed) +
                         '</td>' +
-                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--orange);font-weight:600;">' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:inherit;font-size:13px;color:var(--orange);font-weight:600;">' +
                             formatCurrency(remaining) +
                         '</td>' +
-                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:12px;color:var(--text-dim,#aaa);">' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:inherit;font-size:12px;color:var(--text-dim,#aaa);">' +
                             pctBilled + '%' +
                         '</td>' +
                         '<td style="white-space:nowrap;padding:6px 10px;text-align:right;">' +
@@ -6374,12 +6374,12 @@ function renderJobsMain() {
                     wiredBldgs.map(b =>
                         '<div style="display:flex;justify-content:space-between;padding:3px 0;">' +
                         '<span>' + escapeHTML(b.name) + '</span>' +
-                        '<span style="color:var(--yellow);font-family:\'Courier New\',monospace;">' + b.pct.toFixed(1) + '%</span>' +
+                        '<span style="color:var(--yellow);font-family:inherit;">' + b.pct.toFixed(1) + '%</span>' +
                         '</div>'
                     ).join('') +
                     '<div style="display:flex;justify-content:space-between;padding:4px 0 0;border-top:1px solid var(--border);margin-top:4px;font-weight:600;">' +
                         '<span>Total</span>' +
-                        '<span style="color:' + (pctOk ? 'var(--green)' : 'var(--red)') + ';font-family:\'Courier New\',monospace;">' + totalPct.toFixed(1) + '% ' + (pctOk ? '\u2713' : '\u26A0') + '</span>' +
+                        '<span style="color:' + (pctOk ? 'var(--green)' : 'var(--red)') + ';font-family:inherit;">' + totalPct.toFixed(1) + '% ' + (pctOk ? '\u2713' : '\u26A0') + '</span>' +
                     '</div>';
             } else {
                 connWrap.style.display = 'none';

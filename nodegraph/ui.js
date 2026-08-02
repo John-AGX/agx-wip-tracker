@@ -529,8 +529,8 @@ function renderNodes(){
         E.getOutput(n,0);
         var poContract=n._poContract||0, poInv=n._poInvoiced||0;
         h+='<div style="padding:2px 10px 4px;font-size:12px;border-top:1px solid var(--ng-border2);">';
-        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Contract <span style="color:#8899cc;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(poContract)+'</span></div>';
-        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Invoiced <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(poInv)+'</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Contract <span style="color:#8899cc;font-weight:600;font-family:inherit;">'+E.fmtC(poContract)+'</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Invoiced <span style="color:#34d399;font-weight:600;font-family:inherit;">'+E.fmtC(poInv)+'</span></div>';
         h+='</div>';
 
         // Linked phases — direct po→phase wires with allocPct split.
@@ -552,7 +552,7 @@ function renderNodes(){
           h+='<span style="font-size:9px;text-transform:uppercase;letter-spacing:0.5px;color:#8b90a5;font-weight:600;">Linked Phases</span>';
           var allocOk = phaseWires.length===0 || Math.abs(totalAlloc-100)<0.5;
           if(phaseWires.length){
-            h+='<span class="ng-po-alloc-badge" style="font-size:10px;color:'+(allocOk?'#6a7090':'#fbbf24')+';font-family:\'Courier New\',monospace;font-weight:600;" title="'+(allocOk?'Allocation totals 100%':'Allocation does not sum to 100% — phase rollups will under/over count')+'">'+totalAlloc.toFixed(0)+'%</span>';
+            h+='<span class="ng-po-alloc-badge" style="font-size:10px;color:'+(allocOk?'#6a7090':'#fbbf24')+';font-family:inherit;font-weight:600;" title="'+(allocOk?'Allocation totals 100%':'Allocation does not sum to 100% — phase rollups will under/over count')+'">'+totalAlloc.toFixed(0)+'%</span>';
           }
           h+='</div>';
           if(!phaseWires.length){
@@ -567,7 +567,7 @@ function renderNodes(){
               var pa=pw.wire.allocPct!=null?Number(pw.wire.allocPct):100;
               h+='<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:11px;color:#c4c9db;">';
               h+='<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">\u{1F4CB} '+pname+'</span>';
-              h+='<input class="ng-po-alloc" type="number" min="0" max="100" step="1" value="'+pa.toFixed(0)+'" data-from="'+n.id+'" data-to="'+pw.phase.id+'" style="width:48px;background:rgba(255,255,255,0.04);border:1px solid var(--ng-border2);color:#fff;border-radius:3px;padding:2px 4px;font-family:\'Courier New\',monospace;font-size:11px;text-align:right;" title="Allocation % to this phase" />';
+              h+='<input class="ng-po-alloc" type="number" min="0" max="100" step="1" value="'+pa.toFixed(0)+'" data-from="'+n.id+'" data-to="'+pw.phase.id+'" style="width:48px;background:rgba(255,255,255,0.04);border:1px solid var(--ng-border2);color:#fff;border-radius:3px;padding:2px 4px;font-family:inherit;font-size:11px;text-align:right;" title="Allocation % to this phase" />';
               h+='<span style="color:#6a7090;font-size:10px;">%</span>';
               h+='<span class="ng-po-unlink" data-from="'+n.id+'" data-to="'+pw.phase.id+'" title="Unlink phase" style="cursor:pointer;color:#f87171;padding:2px 6px;border-radius:3px;font-size:11px;">✖</span>';
               h+='</div>';
@@ -590,8 +590,8 @@ function renderNodes(){
       var subActual=E.getActual(n);
       var subAccrued=E.getAccrued(n);
       h+='<div style="padding:4px 10px 6px;font-size:12px;">';
-      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Actual <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(subActual)+'</span></div>';
-      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Accrued <span style="color:#fbbf24;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(subAccrued)+'</span></div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Actual <span style="color:#34d399;font-weight:600;font-family:inherit;">'+E.fmtC(subActual)+'</span></div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Accrued <span style="color:#fbbf24;font-weight:600;font-family:inherit;">'+E.fmtC(subAccrued)+'</span></div>';
       h+='</div>';
       // Scope breakdown — show each wired target with PO totals and + button
       if(!n.collapsed){
@@ -629,7 +629,7 @@ function renderNodes(){
             h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;font-size:10px;color:#c4c9db;">';
             h+='<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+tIcon+' '+tname+'</span>';
             if(poCount>0){
-              h+='<span style="color:#6a7090;font-size:9px;font-family:\'Courier New\',monospace;margin-right:6px;">'+poCount+' PO '+E.fmtC(poAmt)+'</span>';
+              h+='<span style="color:#6a7090;font-size:9px;font-family:inherit;margin-right:6px;">'+poCount+' PO '+E.fmtC(poAmt)+'</span>';
             }
             h+='<span class="ng-sub-add-po" data-sub-node="'+n.id+'" data-target-type="'+tgt.type+'" data-target-id="'+tDataId+'" data-target-node="'+tgt.id+'" title="Create PO for '+tname+'" style="cursor:pointer;color:#4f8cff;font-size:14px;font-weight:700;line-height:1;">+</span>';
             h+='</div>';
@@ -652,12 +652,12 @@ function renderNodes(){
       var gpColor=coGP>=0?'#34d399':'#f87171';
       var coPctColor=coPctComp>=100?'#34d399':coPctComp>=50?'#fbbf24':'#4f8cff';
       h+='<div style="padding:4px 10px 6px;font-size:12px;">';
-      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Income <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(coIncome)+'</span></div>';
-      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">% Complete <span style="color:'+coPctColor+';font-weight:600;font-family:\'Courier New\',monospace;">'+coPctComp.toFixed(1)+'%</span></div>';
-      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Rev. Earned <span style="color:#4f8cff;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(coRevEarned)+'</span></div>';
-      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Actual <span style="color:#f87171;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(coActual)+'</span></div>';
-      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Accrued <span style="color:#fbbf24;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(coAccrued)+'</span></div>';
-      h+='<div style="display:flex;justify-content:space-between;padding:3px 0 2px;border-top:1px solid var(--ng-border2);margin-top:2px;color:#6a7090;font-weight:600;">Gross Profit <span style="color:'+gpColor+';font-weight:700;font-family:\'Courier New\',monospace;">'+E.fmtC(coGP)+'</span></div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Income <span style="color:#34d399;font-weight:600;font-family:inherit;">'+E.fmtC(coIncome)+'</span></div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">% Complete <span style="color:'+coPctColor+';font-weight:600;font-family:inherit;">'+coPctComp.toFixed(1)+'%</span></div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Rev. Earned <span style="color:#4f8cff;font-weight:600;font-family:inherit;">'+E.fmtC(coRevEarned)+'</span></div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Actual <span style="color:#f87171;font-weight:600;font-family:inherit;">'+E.fmtC(coActual)+'</span></div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Accrued <span style="color:#fbbf24;font-weight:600;font-family:inherit;">'+E.fmtC(coAccrued)+'</span></div>';
+      h+='<div style="display:flex;justify-content:space-between;padding:3px 0 2px;border-top:1px solid var(--ng-border2);margin-top:2px;color:#6a7090;font-weight:600;">Gross Profit <span style="color:'+gpColor+';font-weight:700;font-family:inherit;">'+E.fmtC(coGP)+'</span></div>';
       // CO allocation breakdown per connected target (T1/T2/WIP)
       var coAw=E.getCOAllocWires(n.id);
       if(coAw.length){
@@ -683,16 +683,16 @@ function renderNodes(){
           h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;color:#6a7090;font-size:9px;gap:4px;">';
           h+='<span class="ng-alloc-lock" data-lock-co="'+n.id+'" data-lock-wire="'+w.toNode+'" title="'+(isLocked?'Unlock':'Lock')+' this allocation" style="cursor:pointer;font-size:10px;color:'+lockColor+';width:14px;text-align:center;">'+(isLocked?'\uD83D\uDD12':'\uD83D\uDD13')+'</span>';
           h+='<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+tname+'</span>';
-          h+='<span class="ng-alloc-pct" data-alloc-phase="'+n.id+'" data-alloc-bldg="'+w.toNode+'" title="Click to edit allocation %" style="color:#fbbf24;cursor:pointer;font-family:\'Courier New\',monospace;min-width:42px;text-align:right;">'+pct.toFixed(1)+'%</span>';
-          h+='<span class="ng-wire-pct" data-wire-pct-phase="'+n.id+'" data-wire-pct-bldg="'+w.toNode+'" title="Click to edit % complete" style="color:'+wpcColor+';cursor:pointer;font-family:\'Courier New\',monospace;min-width:38px;text-align:right;border-left:1px dotted var(--ng-border2);padding-left:4px;">'+wpc.toFixed(0)+'%</span>';
-          h+='<span class="ng-alloc-share" data-share-co="'+n.id+'" data-share-wire="'+w.toNode+'" data-share-income="'+coIncome+'" title="Click to edit $ share" style="color:#34d399;cursor:pointer;font-family:\'Courier New\',monospace;min-width:64px;text-align:right;">'+E.fmtC(share)+'</span>';
+          h+='<span class="ng-alloc-pct" data-alloc-phase="'+n.id+'" data-alloc-bldg="'+w.toNode+'" title="Click to edit allocation %" style="color:#fbbf24;cursor:pointer;font-family:inherit;min-width:42px;text-align:right;">'+pct.toFixed(1)+'%</span>';
+          h+='<span class="ng-wire-pct" data-wire-pct-phase="'+n.id+'" data-wire-pct-bldg="'+w.toNode+'" title="Click to edit % complete" style="color:'+wpcColor+';cursor:pointer;font-family:inherit;min-width:38px;text-align:right;border-left:1px dotted var(--ng-border2);padding-left:4px;">'+wpc.toFixed(0)+'%</span>';
+          h+='<span class="ng-alloc-share" data-share-co="'+n.id+'" data-share-wire="'+w.toNode+'" data-share-income="'+coIncome+'" title="Click to edit $ share" style="color:#34d399;cursor:pointer;font-family:inherit;min-width:64px;text-align:right;">'+E.fmtC(share)+'</span>';
           h+='</div>';
         });
         var coPctOk=Math.abs(coTotalPct-100)<0.01;
         var coWarnColor=coPctOk?'#34d399':'#f87171';
         h+='<div style="display:flex;justify-content:space-between;padding:3px 0 1px;border-top:1px solid var(--ng-border2);margin-top:2px;color:#6a7090;font-size:9px;font-weight:600;">';
         h+='<span>Total</span>';
-        h+='<span style="color:'+coWarnColor+';font-family:\'Courier New\',monospace;">'+coTotalPct.toFixed(1)+'% '+(coPctOk?'\u2713':'\u26a0')+'</span>';
+        h+='<span style="color:'+coWarnColor+';font-family:inherit;">'+coTotalPct.toFixed(1)+'% '+(coPctOk?'\u2713':'\u26a0')+'</span>';
         h+='</div></div>';
       }
       h+='</div>';
@@ -724,12 +724,12 @@ function renderNodes(){
         var phasePctColor=phasePctComp>=100?'#34d399':phasePctComp>=50?'#fbbf24':'#4f8cff';
         // Metric stack — same row shape and color coding as the CO
         // metric stack above so the two read identically.
-        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Revenue <span class="ng-phase-rev" data-phase-rev="'+n.id+'" title="Click to edit" style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;cursor:pointer;">'+E.fmtC(phaseRev)+'</span></div>';
-        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">% Complete <span style="color:'+phasePctColor+';font-weight:600;font-family:\'Courier New\',monospace;">'+phasePctComp.toFixed(1)+'%</span></div>';
-        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Rev. Earned <span style="color:#4f8cff;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(phaseRevEarned)+'</span></div>';
-        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Actual <span style="color:#f87171;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(tActual)+'</span></div>';
-        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Accrued <span style="color:#fbbf24;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(tAccrued)+'</span></div>';
-        h+='<div style="display:flex;justify-content:space-between;padding:3px 0 2px;border-top:1px solid var(--ng-border2);margin-top:2px;color:#6a7090;font-weight:600;">Gross Profit <span style="color:'+gpColor+';font-weight:700;font-family:\'Courier New\',monospace;">'+E.fmtC(phaseGP)+'</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Revenue <span class="ng-phase-rev" data-phase-rev="'+n.id+'" title="Click to edit" style="color:#34d399;font-weight:600;font-family:inherit;cursor:pointer;">'+E.fmtC(phaseRev)+'</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">% Complete <span style="color:'+phasePctColor+';font-weight:600;font-family:inherit;">'+phasePctComp.toFixed(1)+'%</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Rev. Earned <span style="color:#4f8cff;font-weight:600;font-family:inherit;">'+E.fmtC(phaseRevEarned)+'</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Actual <span style="color:#f87171;font-weight:600;font-family:inherit;">'+E.fmtC(tActual)+'</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Accrued <span style="color:#fbbf24;font-weight:600;font-family:inherit;">'+E.fmtC(tAccrued)+'</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:3px 0 2px;border-top:1px solid var(--ng-border2);margin-top:2px;color:#6a7090;font-weight:600;">Gross Profit <span style="color:'+gpColor+';font-weight:700;font-family:inherit;">'+E.fmtC(phaseGP)+'</span></div>';
         // Allocation breakdown per connected building (unchanged)
         var aw=E.getPhaseAllocWires(n.id);
         if(aw.length){
@@ -761,18 +761,18 @@ function renderNodes(){
             h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;color:#6a7090;font-size:9px;gap:4px;">';
             h+='<span class="ng-alloc-lock" data-lock-co="'+n.id+'" data-lock-wire="'+w.toNode+'" title="'+(isLocked?'Unlock':'Lock')+' this allocation" style="cursor:pointer;font-size:10px;color:'+lockColor+';width:14px;text-align:center;">'+(isLocked?'\uD83D\uDD12':'\uD83D\uDD13')+'</span>';
             h+='<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+bname+'</span>';
-            h+='<span class="ng-alloc-pct" data-alloc-phase="'+n.id+'" data-alloc-bldg="'+w.toNode+'" title="Click to edit allocation %" style="color:#fbbf24;cursor:pointer;font-family:\'Courier New\',monospace;min-width:42px;text-align:right;">'+pct.toFixed(1)+'%</span>';
+            h+='<span class="ng-alloc-pct" data-alloc-phase="'+n.id+'" data-alloc-bldg="'+w.toNode+'" title="Click to edit allocation %" style="color:#fbbf24;cursor:pointer;font-family:inherit;min-width:42px;text-align:right;">'+pct.toFixed(1)+'%</span>';
             // Units \u21C4 % toggle (only when the building has units).
             if(uCnt>0){
               h+='<span class="ng-scope-mode" data-scope-mode-phase="'+n.id+'" data-scope-mode-bldg="'+w.toNode+'" title="'+(isUnits?'Tracking by units \u2014 switch to percent':'Switch to unit check-off')+'" style="cursor:pointer;color:'+(isUnits?'#34d399':'#8b90a5')+';font-size:11px;line-height:1;width:14px;text-align:center;">'+(isUnits?'\u25A6':'%')+'</span>';
             }
             // % Cmp: editable percent chip, OR a read-only derived % in units mode.
             if(isUnits){
-              h+='<span title="Driven by the units checked off below" style="color:'+wpcColor+';font-family:\'Courier New\',monospace;min-width:38px;text-align:right;border-left:1px dotted var(--ng-border2);padding-left:4px;opacity:0.85;">'+wpc.toFixed(0)+'%</span>';
+              h+='<span title="Driven by the units checked off below" style="color:'+wpcColor+';font-family:inherit;min-width:38px;text-align:right;border-left:1px dotted var(--ng-border2);padding-left:4px;opacity:0.85;">'+wpc.toFixed(0)+'%</span>';
             } else {
-              h+='<span class="ng-wire-pct" data-wire-pct-phase="'+n.id+'" data-wire-pct-bldg="'+w.toNode+'" title="Click to edit % complete" style="color:'+wpcColor+';cursor:pointer;font-family:\'Courier New\',monospace;min-width:38px;text-align:right;border-left:1px dotted var(--ng-border2);padding-left:4px;">'+wpc.toFixed(0)+'%</span>';
+              h+='<span class="ng-wire-pct" data-wire-pct-phase="'+n.id+'" data-wire-pct-bldg="'+w.toNode+'" title="Click to edit % complete" style="color:'+wpcColor+';cursor:pointer;font-family:inherit;min-width:38px;text-align:right;border-left:1px dotted var(--ng-border2);padding-left:4px;">'+wpc.toFixed(0)+'%</span>';
             }
-            h+='<span class="ng-alloc-share" data-share-co="'+n.id+'" data-share-wire="'+w.toNode+'" data-share-income="'+phaseRev+'" title="Click to edit $ share" style="color:#34d399;cursor:pointer;font-family:\'Courier New\',monospace;min-width:64px;text-align:right;">'+E.fmtC(share)+'</span>';
+            h+='<span class="ng-alloc-share" data-share-co="'+n.id+'" data-share-wire="'+w.toNode+'" data-share-income="'+phaseRev+'" title="Click to edit $ share" style="color:#34d399;cursor:pointer;font-family:inherit;min-width:64px;text-align:right;">'+E.fmtC(share)+'</span>';
             h+='</div>';
             // Units check-off strip (units mode only): one cube per building unit,
             // filled to unitsDone. Clicking cube #k sets the count to k (or clears
@@ -782,7 +782,7 @@ function renderNodes(){
               for(var _c=0;_c<uCnt;_c++){
                 h+='<i class="ng-lu-cube ng-scope-cube'+(_c<uDone?' done':'')+'" data-scope-cube-phase="'+n.id+'" data-scope-cube-bldg="'+w.toNode+'" data-scope-cube-idx="'+_c+'" title="'+(_c<uDone?('Unit '+(_c+1)+' done \u2014 tap to set '+(_c+1)+' complete'):('Tap to mark '+(_c+1)+' unit'+(_c===0?'':'s')+' complete'))+'"></i>';
               }
-              h+='<span style="margin-left:5px;color:#8b90a5;font-family:\'Courier New\',monospace;font-size:9px;">'+uDone+' / '+uCnt+'</span>';
+              h+='<span style="margin-left:5px;color:#8b90a5;font-family:inherit;font-size:9px;">'+uDone+' / '+uCnt+'</span>';
               h+='</div>';
             }
           });
@@ -790,7 +790,7 @@ function renderNodes(){
           var warnColor=pctOk?'#34d399':'#f87171';
           h+='<div style="display:flex;justify-content:space-between;padding:3px 0 1px;border-top:1px solid var(--ng-border2);margin-top:2px;color:#6a7090;font-size:9px;font-weight:600;">';
           h+='<span>Total</span>';
-          h+='<span style="color:'+warnColor+';font-family:\'Courier New\',monospace;">'+totalPct.toFixed(1)+'% '+(pctOk?'\u2713':'\u26a0')+'</span>';
+          h+='<span style="color:'+warnColor+';font-family:inherit;">'+totalPct.toFixed(1)+'% '+(pctOk?'\u2713':'\u26a0')+'</span>';
           h+='</div></div>';
         }
       }
@@ -816,12 +816,12 @@ function renderNodes(){
         // cursor:pointer because both are rollups; the small "∑"
         // glyph in the label tells the user this value is summed
         // from the connected sources below, not editable here.
-        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;" title="Sum of revenue allocated from connected phases and COs">∑ Revenue <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(bRev)+'</span></div>';
-        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;" title="Income-weighted % complete across connected sources">∑ % Complete <span style="color:'+bldgPctColor+';font-weight:600;font-family:\'Courier New\',monospace;">'+bldgPctComp.toFixed(1)+'%</span></div>';
-        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Rev. Earned <span style="color:#4f8cff;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(bldgRevEarned)+'</span></div>';
-        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Actual <span style="color:#f87171;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(tActual)+'</span></div>';
-        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Accrued <span style="color:#fbbf24;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(tAccrued)+'</span></div>';
-        h+='<div style="display:flex;justify-content:space-between;padding:3px 0 2px;border-top:1px solid var(--ng-border2);margin-top:2px;color:#6a7090;font-weight:600;">Gross Profit <span style="color:'+bldgGpColor+';font-weight:700;font-family:\'Courier New\',monospace;">'+E.fmtC(bldgGP)+'</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;" title="Sum of revenue allocated from connected phases and COs">∑ Revenue <span style="color:#34d399;font-weight:600;font-family:inherit;">'+E.fmtC(bRev)+'</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;" title="Income-weighted % complete across connected sources">∑ % Complete <span style="color:'+bldgPctColor+';font-weight:600;font-family:inherit;">'+bldgPctComp.toFixed(1)+'%</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Rev. Earned <span style="color:#4f8cff;font-weight:600;font-family:inherit;">'+E.fmtC(bldgRevEarned)+'</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Actual <span style="color:#f87171;font-weight:600;font-family:inherit;">'+E.fmtC(tActual)+'</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Accrued <span style="color:#fbbf24;font-weight:600;font-family:inherit;">'+E.fmtC(tAccrued)+'</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:3px 0 2px;border-top:1px solid var(--ng-border2);margin-top:2px;color:#6a7090;font-weight:600;">Gross Profit <span style="color:'+bldgGpColor+';font-weight:700;font-family:inherit;">'+E.fmtC(bldgGP)+'</span></div>';
         // Connected phases + COs breakdown — source-of-truth detail
         // for where the Revenue + Actual + Accrued numbers above
         // came from. Unchanged from the previous implementation.
@@ -886,16 +886,16 @@ function renderNodes(){
             var incomeShare = (totRev > 0) ? (c.rev / totRev * 100) : 0;
             h+='<div style="display:flex;align-items:center;padding:2px 0;color:#6a7090;font-size:9px;gap:4px;">';
             h+='<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+c.icon+' '+c.name+' <span style="'+pctStyle+'">'+c.pct.toFixed(0)+'%</span></span>';
-            h+='<span style="color:#4f8cff;font-family:\'Courier New\',monospace;min-width:58px;text-align:right;">'+E.fmtC(c.rev)+'</span>';
-            h+='<span style="color:#f87171;font-family:\'Courier New\',monospace;min-width:58px;text-align:right;">'+E.fmtC(cost)+'</span>';
-            h+='<span title="Share of building total revenue ('+E.fmtC(c.rev)+' of '+E.fmtC(totRev)+')" style="color:#fbbf24;font-family:\'Courier New\',monospace;min-width:36px;text-align:right;">'+incomeShare.toFixed(1)+'%</span>';
+            h+='<span style="color:#4f8cff;font-family:inherit;min-width:58px;text-align:right;">'+E.fmtC(c.rev)+'</span>';
+            h+='<span style="color:#f87171;font-family:inherit;min-width:58px;text-align:right;">'+E.fmtC(cost)+'</span>';
+            h+='<span title="Share of building total revenue ('+E.fmtC(c.rev)+' of '+E.fmtC(totRev)+')" style="color:#fbbf24;font-family:inherit;min-width:36px;text-align:right;">'+incomeShare.toFixed(1)+'%</span>';
             h+='</div>';
           });
           h+='<div style="display:flex;align-items:center;padding:3px 0 1px;border-top:1px solid var(--ng-border2);margin-top:2px;color:#6a7090;font-size:9px;font-weight:600;gap:4px;">';
           h+='<span style="flex:1;">Total</span>';
-          h+='<span style="color:#4f8cff;font-family:\'Courier New\',monospace;min-width:58px;text-align:right;">'+E.fmtC(totRev)+'</span>';
-          h+='<span style="color:#f87171;font-family:\'Courier New\',monospace;min-width:58px;text-align:right;">'+E.fmtC(totCost)+'</span>';
-          h+='<span style="color:#fbbf24;font-family:\'Courier New\',monospace;min-width:36px;text-align:right;">'+(totRev > 0 ? '100%' : '—')+'</span>';
+          h+='<span style="color:#4f8cff;font-family:inherit;min-width:58px;text-align:right;">'+E.fmtC(totRev)+'</span>';
+          h+='<span style="color:#f87171;font-family:inherit;min-width:58px;text-align:right;">'+E.fmtC(totCost)+'</span>';
+          h+='<span style="color:#fbbf24;font-family:inherit;min-width:36px;text-align:right;">'+(totRev > 0 ? '100%' : '—')+'</span>';
           h+='</div></div>';
         }
       }
@@ -3723,7 +3723,7 @@ function _ensureBldgSubsStyles(){
     +'.ng-bldg-subs .ng-bs-h{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#6a7090;font-weight:600;margin-bottom:6px;}'
     +'.ng-bldg-sub-row{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:13px;color:#c7ccd6;}'
     +'.ng-bldg-sub-nm{font-weight:600;}'
-    +'.ng-bldg-sub-po{font-family:\'Courier New\',monospace;font-size:11px;color:#6a7090;}'
+    +'.ng-bldg-sub-po{font-family:inherit;font-size:11px;color:#6a7090;}'
     +'.ng-bldg-sub-jw{margin-left:auto;font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;color:#8a90a8;border:1px solid #2a303b;border-radius:4px;padding:1px 6px;white-space:nowrap;}'
     +'.ng-bldg-sub-x{margin-left:auto;background:none;border:none;color:#6a7090;font-size:16px;line-height:1;cursor:pointer;padding:0 2px;}'
     +'.ng-bldg-sub-x:hover{color:#e8836b;}'
@@ -3902,13 +3902,13 @@ function buildingRevBreakdownHtml(sel){
   var row=function(c, color){
     return '<div style="display:flex;align-items:center;gap:6px;padding:2px 0 2px 8px;font-size:11px;color:var(--ng-textdim,#8b90a5);">'
       +'<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+luEsc(c.name)+(c.matrix?' <span style="font-size:8px;color:#6b6f82;">matrix</span>':'')+'</span>'
-      +'<span style="font-family:\'Courier New\',monospace;color:'+(color||'#4f8cff')+';">'+E.fmtC(c.rev)+'</span>'
+      +'<span style="font-family:inherit;color:'+(color||'#4f8cff')+';">'+E.fmtC(c.rev)+'</span>'
       +'</div>';
   };
   var secHdr=function(title, amount, color){
     return '<div style="display:flex;align-items:center;padding:3px 0 1px;font-size:9px;text-transform:uppercase;letter-spacing:0.5px;color:'+(color||'#6a7090')+';font-weight:700;">'
       +'<span style="flex:1;">'+title+'</span>'
-      +'<span style="font-family:\'Courier New\',monospace;">'+E.fmtC(amount)+'</span></div>';
+      +'<span style="font-family:inherit;">'+E.fmtC(amount)+'</span></div>';
   };
   // Allocation-mode row carries click-to-edit % and $ chips so a building can be
   // re-shared without leaving its inspector (the job-level panel allocates the set).
@@ -3916,8 +3916,8 @@ function buildingRevBreakdownHtml(sel){
   var allocRow=function(c){
     return '<div style="display:flex;align-items:center;gap:6px;padding:2px 0 2px 8px;font-size:11px;color:var(--ng-textdim,#8b90a5);">'
       +'<span style="flex:1;">Share of job contract</span>'
-      +'<span class="ng-contract-pct" data-contract-bldg="'+luEsc(sel.id)+'" title="Click to edit this building’s % of the job contract" style="cursor:pointer;font-family:\'Courier New\',monospace;color:#fbbf24;min-width:46px;text-align:right;">'+Number(sel.contractPct).toFixed(1)+'%</span>'
-      +'<span class="ng-contract-share" data-contract-bldg="'+luEsc(sel.id)+'" data-contract-total="'+jc+'" title="Click to enter this building’s contract dollars" style="cursor:pointer;font-family:\'Courier New\',monospace;color:#4f8cff;min-width:66px;text-align:right;">'+E.fmtC(c.rev)+'</span>'
+      +'<span class="ng-contract-pct" data-contract-bldg="'+luEsc(sel.id)+'" title="Click to edit this building’s % of the job contract" style="cursor:pointer;font-family:inherit;color:#fbbf24;min-width:46px;text-align:right;">'+Number(sel.contractPct).toFixed(1)+'%</span>'
+      +'<span class="ng-contract-share" data-contract-bldg="'+luEsc(sel.id)+'" data-contract-total="'+jc+'" title="Click to enter this building’s contract dollars" style="cursor:pointer;font-family:inherit;color:#4f8cff;min-width:66px;text-align:right;">'+E.fmtC(c.rev)+'</span>'
       +'</div>';
   };
   var h='<div class="ng-insp-sec ng-bld-revbreak" style="padding-top:4px;">';
@@ -3938,7 +3938,7 @@ function buildingRevBreakdownHtml(sel){
   }
   h+='<div style="display:flex;align-items:center;padding:4px 0 1px;margin-top:3px;border-top:1px solid var(--ng-border2);font-size:11px;font-weight:700;color:#c8cbe0;">'
     +'<span style="flex:1;">Total revenue</span>'
-    +'<span style="font-family:\'Courier New\',monospace;color:#34d399;">'+E.fmtC(s.totalRev)+'</span></div>';
+    +'<span style="font-family:inherit;color:#34d399;">'+E.fmtC(s.totalRev)+'</span></div>';
   h+='</div>';
   return h;
 }
@@ -4091,8 +4091,8 @@ function scopePhasesHtml(k){
       h+='<div class="ng-ph-row" style="display:flex;align-items:center;gap:6px;padding:2px 0;">'
         +'<button data-ph-act="ph-done" data-scope="'+k.id+'" data-ph="'+p.id+'" title="'+(pc>=100?'Complete — tap to clear':'Mark complete')+'" style="flex:0 0 auto;border:0;background:transparent;cursor:pointer;color:'+(pc>=100?'#34d399':'#8b90a5')+';font-size:13px;width:16px;line-height:1;">'+(pc>=100?'✓':'○')+'</button>'
         +'<span data-ph-act="ph-rename" data-scope="'+k.id+'" data-ph="'+p.id+'" title="Rename" style="flex:1 1 auto;min-width:0;cursor:pointer;font-size:12px;color:#d6d9e6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+luEsc(p.name||'Phase')+'</span>'
-        +'<span data-ph-act="ph-weight" data-scope="'+k.id+'" data-ph="'+p.id+'" title="Weight — this phase’s share of the scope" style="cursor:pointer;flex:0 0 auto;color:#8b90a5;font-size:9px;font-family:\'Courier New\',monospace;">w'+wt+'</span>'
-        +'<span data-ph-act="ph-pct" data-scope="'+k.id+'" data-ph="'+p.id+'" title="Set % complete" style="cursor:pointer;flex:0 0 auto;color:'+col+';font-family:\'Courier New\',monospace;font-size:11px;min-width:34px;text-align:right;">'+Math.round(pc)+'%</span>'
+        +'<span data-ph-act="ph-weight" data-scope="'+k.id+'" data-ph="'+p.id+'" title="Weight — this phase’s share of the scope" style="cursor:pointer;flex:0 0 auto;color:#8b90a5;font-size:9px;font-family:inherit;">w'+wt+'</span>'
+        +'<span data-ph-act="ph-pct" data-scope="'+k.id+'" data-ph="'+p.id+'" title="Set % complete" style="cursor:pointer;flex:0 0 auto;color:'+col+';font-family:inherit;font-size:11px;min-width:34px;text-align:right;">'+Math.round(pc)+'%</span>'
         +'<button data-ph-act="ph-del" data-scope="'+k.id+'" data-ph="'+p.id+'" title="Remove phase" style="flex:0 0 auto;border:0;background:transparent;cursor:pointer;color:#6b6f82;font-size:12px;width:14px;line-height:1;">×</button>'
         +'</div>';
     });
@@ -4453,15 +4453,15 @@ function childGroupsHtml(sel){
           +'<span class="ng-cg-ic" onclick="'+sel1+'">'+ngTypeIco(k.type)+'</span>'
           +'<span class="ng-cg-nm" onclick="'+sel1+'" title="Open on canvas">'+luEsc(k.label||k.type)+'</span>';
         if(hasPh){
-          r+='<span title="Rolled up from '+phList.length+' weighted phase'+(phList.length===1?'':'s')+'" style="flex:0 0 auto;color:'+wpcColor+';font-family:\'Courier New\',monospace;font-size:11px;min-width:34px;text-align:right;">'+Math.round(wpc)+'%</span>';
+          r+='<span title="Rolled up from '+phList.length+' weighted phase'+(phList.length===1?'':'s')+'" style="flex:0 0 auto;color:'+wpcColor+';font-family:inherit;font-size:11px;min-width:34px;text-align:right;">'+Math.round(wpc)+'%</span>';
         } else {
           if(bUnits>0){
             r+='<span class="ng-scope-mode" data-scope-mode-phase="'+k.id+'" data-scope-mode-bldg="'+sel.id+'" title="'+(isUnits?'Tracking by units — switch to percent':'Switch to unit check-off')+'" style="cursor:pointer;flex:0 0 auto;color:'+(isUnits?'#34d399':'#8b90a5')+';font-size:12px;width:16px;text-align:center;">'+(isUnits?'▦':'%')+'</span>';
           }
           if(isUnits){
-            r+='<span title="Driven by the units checked off" style="flex:0 0 auto;color:'+wpcColor+';font-family:\'Courier New\',monospace;font-size:11px;min-width:34px;text-align:right;">'+Math.round(wpc)+'%</span>';
+            r+='<span title="Driven by the units checked off" style="flex:0 0 auto;color:'+wpcColor+';font-family:inherit;font-size:11px;min-width:34px;text-align:right;">'+Math.round(wpc)+'%</span>';
           } else if(w){
-            r+='<span class="ng-wire-pct" data-wire-pct-phase="'+k.id+'" data-wire-pct-bldg="'+sel.id+'" title="Click to edit % complete" style="cursor:pointer;flex:0 0 auto;color:'+wpcColor+';font-family:\'Courier New\',monospace;font-size:11px;min-width:34px;text-align:right;">'+Math.round(wpc)+'%</span>';
+            r+='<span class="ng-wire-pct" data-wire-pct-phase="'+k.id+'" data-wire-pct-bldg="'+sel.id+'" title="Click to edit % complete" style="cursor:pointer;flex:0 0 auto;color:'+wpcColor+';font-family:inherit;font-size:11px;min-width:34px;text-align:right;">'+Math.round(wpc)+'%</span>';
           }
         }
         r+='</div>';
@@ -4470,7 +4470,7 @@ function childGroupsHtml(sel){
           for(var _c=0;_c<bUnits;_c++){
             r+='<i class="ng-lu-cube ng-scope-cube'+(_c<uDone?' done':'')+'" data-scope-cube-phase="'+k.id+'" data-scope-cube-bldg="'+sel.id+'" data-scope-cube-idx="'+_c+'" title="'+(_c<uDone?('Unit '+(_c+1)+' done — tap to set '+(_c+1)):('Tap to mark '+(_c+1)+' unit'+(_c===0?'':'s')+' complete'))+'"></i>';
           }
-          r+='<span style="margin-left:5px;color:#8b90a5;font-family:\'Courier New\',monospace;font-size:9px;">'+uDone+' / '+bUnits+'</span>';
+          r+='<span style="margin-left:5px;color:#8b90a5;font-family:inherit;font-size:9px;">'+uDone+' / '+bUnits+'</span>';
           r+='</div>';
         }
         if(open) r+=scopePhasesHtml(k);
@@ -4490,8 +4490,8 @@ function childGroupsHtml(sel){
           +'<span class="ng-cg-ic" onclick="'+_edit+'">'+ngTypeIco('t2')+'</span>'
           +'<span class="ng-cg-nm" onclick="'+_edit+'" title="Edit scope">'+luEsc(p.phase||'Scope')+'</span>'
           +'<span class="ng-cg-mx-badge">matrix</span>'
-          +(_rev?'<span style="flex:0 0 auto;color:#8b90a5;font-family:\'Courier New\',monospace;font-size:10px;">$'+Math.round(_rev).toLocaleString()+'</span>':'')
-          +'<span class="ng-mx-pct" onclick="event.stopPropagation();window.p86NgScopePct&&window.p86NgScopePct(\''+_eid+'\',this)" title="Tap to set % complete" style="cursor:pointer;flex:0 0 auto;color:'+_pcc+';font-family:\'Courier New\',monospace;font-size:11px;min-width:34px;text-align:right;">'+_pc+'%</span>'
+          +(_rev?'<span style="flex:0 0 auto;color:#8b90a5;font-family:inherit;font-size:10px;">$'+Math.round(_rev).toLocaleString()+'</span>':'')
+          +'<span class="ng-mx-pct" onclick="event.stopPropagation();window.p86NgScopePct&&window.p86NgScopePct(\''+_eid+'\',this)" title="Tap to set % complete" style="cursor:pointer;flex:0 0 auto;color:'+_pcc+';font-family:inherit;font-size:11px;min-width:34px;text-align:right;">'+_pc+'%</span>'
           +'</div>';
       }).join('');
     } else {
@@ -4541,7 +4541,7 @@ function progChipEdit(pe){
   inp.type='number'; inp.min=0; inp.max=100; inp.step=1;
   inp.value=Math.round(pn.pctComplete||0);
   inp.dataset.progInput='1';
-  inp.style.cssText='width:54px;font-family:\'Courier New\',monospace;font-weight:700;background:var(--ng-input);border:1px solid #4f8cff;color:#fbbf24;border-radius:3px;padding:1px 4px;outline:none;text-align:right;font-size:11px';
+  inp.style.cssText='width:54px;font-family:inherit;font-weight:700;background:var(--ng-input);border:1px solid #4f8cff;color:#fbbf24;border-radius:3px;padding:1px 4px;outline:none;text-align:right;font-size:11px';
   pctSpan.textContent=''; pctSpan.appendChild(inp);
   setTimeout(function(){ inp.focus(); inp.select(); }, 0);
   var done=false;
@@ -4871,7 +4871,7 @@ function contractAllocHtml(){
   }
   var h='<div style="font-size:10.5px;color:#8b90a5;margin-bottom:6px;line-height:1.45;">Each scope×building cell is one AIA schedule-of-values line (“B5 - Exterior Painting”). Edit in the full grid on the job’s Scopes section.</div>'
    +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;font-size:11px;"><span style="flex:1;color:#8b90a5;">Job contract</span>'
-   +'<span style="font-family:\'Courier New\',monospace;color:#34d399;font-weight:700;">'+E.fmtC(jc)+'</span></div>'
+   +'<span style="font-family:inherit;color:#34d399;font-weight:700;">'+E.fmtC(jc)+'</span></div>'
    +'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;">'
    +'<thead><tr style="color:#8b90a5;font-size:9px;text-transform:uppercase;letter-spacing:.5px;">'
    +'<th style="text-align:left;padding:3px 4px;">Scope</th><th style="text-align:right;padding:3px 4px;">Revenue</th>';
@@ -4886,22 +4886,22 @@ function contractAllocHtml(){
     unTot+=recs.filter(function(p){ return !p.buildingId; }).reduce(function(a,p){ return a+pRev(p); },0);
     h+='<tr style="border-top:1px solid var(--ng-border2);">'
       +'<td style="padding:3px 4px;color:var(--ng-text,#c8cbe0);white-space:nowrap;">'+luEsc(nm)+'</td>'
-      +'<td style="padding:3px 4px;text-align:right;"><span class="ng-sc-total" data-sc-name="'+luEsc(nm)+'" title="Click to set this scope’s total revenue" style="cursor:pointer;font-family:\'Courier New\',monospace;color:#34d399;">'+E.fmtC(rowTot)+'</span></td>';
+      +'<td style="padding:3px 4px;text-align:right;"><span class="ng-sc-total" data-sc-name="'+luEsc(nm)+'" title="Click to set this scope’s total revenue" style="cursor:pointer;font-family:inherit;color:#34d399;">'+E.fmtC(rowTot)+'</span></td>';
     blds.forEach(function(b){
       var v=recs.filter(function(p){ return p.buildingId===b.id; }).reduce(function(a,p){ return a+pRev(p); },0);
       colTot[b.id]+=v;
       var pct=rowTot>0?(v/rowTot*100):0;
       h+='<td style="padding:3px 4px;text-align:right;">'
-        +'<span class="ng-sc-pct" data-sc-name="'+luEsc(nm)+'" data-sc-bldg="'+luEsc(b.id)+'" title="Click to set this scope’s % to '+luEsc(b.name||'this building')+'" style="cursor:pointer;font-family:\'Courier New\',monospace;color:'+(v>0?'#fbbf24':'#4a4f63')+';">'+pct.toFixed(1)+'%</span>'
-        +'<div style="font-size:9px;color:#6b6f82;font-family:\'Courier New\',monospace;">'+E.fmtC(v)+'</div></td>';
+        +'<span class="ng-sc-pct" data-sc-name="'+luEsc(nm)+'" data-sc-bldg="'+luEsc(b.id)+'" title="Click to set this scope’s % to '+luEsc(b.name||'this building')+'" style="cursor:pointer;font-family:inherit;color:'+(v>0?'#fbbf24':'#4a4f63')+';">'+pct.toFixed(1)+'%</span>'
+        +'<div style="font-size:9px;color:#6b6f82;font-family:inherit;">'+E.fmtC(v)+'</div></td>';
     });
     h+='</tr>';
   });
   var tOk=Math.abs(grand-jc)<0.5;
   h+='<tr style="border-top:2px solid var(--ng-border2);font-weight:700;color:#c8cbe0;">'
     +'<td style="padding:4px;">Total</td>'
-    +'<td style="padding:4px;text-align:right;font-family:\'Courier New\',monospace;color:'+(tOk?'#34d399':'#f87171')+';">'+E.fmtC(grand)+(tOk?' ✓':' ⚠')+'</td>';
-  blds.forEach(function(b){ h+='<td style="padding:4px;text-align:right;font-family:\'Courier New\',monospace;color:#4f8cff;">'+E.fmtC(colTot[b.id])+'</td>'; });
+    +'<td style="padding:4px;text-align:right;font-family:inherit;color:'+(tOk?'#34d399':'#f87171')+';">'+E.fmtC(grand)+(tOk?' ✓':' ⚠')+'</td>';
+  blds.forEach(function(b){ h+='<td style="padding:4px;text-align:right;font-family:inherit;color:#4f8cff;">'+E.fmtC(colTot[b.id])+'</td>'; });
   h+='</tr></tbody></table></div>';
   if(!tOk) h+='<div style="font-size:10px;color:'+(grand<jc?'#f87171':'#fbbf24')+';padding:3px 0;">Allocated '+E.fmtC(grand)+' vs job contract '+E.fmtC(jc)+' — '+E.fmtC(Math.abs(jc-grand))+(grand<jc?' unallocated.':' over.')+'</div>';
   if(unTot>0.5) h+='<div style="font-size:10px;color:#fbbf24;padding:3px 0;">'+E.fmtC(unTot)+' is not assigned to any building — it will not appear on the AIA as a building line.</div>';
@@ -4996,10 +4996,10 @@ function coAllocHtml(jid, blds){
     h+='<tr data-co-alloc="'+luEsc(c.id)+'" style="border-top:1px solid var(--ng-border2);cursor:pointer;" title="Allocate this change order across buildings">'
       +'<td style="padding:3px 4px;color:var(--ng-text,#c8cbe0);white-space:nowrap;">'+luEsc(c.co_number||'CO')
         +' <span style="color:#4f8cff;font-size:9px;">✎ allocate</span></td>'
-      +'<td style="padding:3px 4px;text-align:right;font-family:\'Courier New\',monospace;color:#e879a6;">'+E.fmtC(sh.sell)+'</td>';
+      +'<td style="padding:3px 4px;text-align:right;font-family:inherit;color:#e879a6;">'+E.fmtC(sh.sell)+'</td>';
     blds.forEach(function(b){
       var v=Number(sh.byBuilding[b.id])||0;
-      h+='<td style="padding:3px 4px;text-align:right;font-family:\'Courier New\',monospace;color:'+(v>0?'#e879a6':'#4a4f63')+';font-size:9px;">'+(v>0?E.fmtC(v):'—')+'</td>';
+      h+='<td style="padding:3px 4px;text-align:right;font-family:inherit;color:'+(v>0?'#e879a6':'#4a4f63')+';font-size:9px;">'+(v>0?E.fmtC(v):'—')+'</td>';
     });
     h+='</tr>';
     if(Math.abs(sh.unallocated)>0.5) unlinked+=sh.unallocated;
@@ -5007,7 +5007,7 @@ function coAllocHtml(jid, blds){
   h+='</tbody></table></div>';
   var jc=ngJobContract();
   h+='<div style="display:flex;align-items:center;gap:6px;margin-top:5px;font-size:11px;"><span style="flex:1;color:#8b90a5;">Contract + change orders</span>'
-    +'<span style="font-family:\'Courier New\',monospace;color:#34d399;font-weight:700;">'+E.fmtC(jc+coGrand)+'</span></div>';
+    +'<span style="font-family:inherit;color:#34d399;font-weight:700;">'+E.fmtC(jc+coGrand)+'</span></div>';
   if(Math.abs(unlinked)>0.5) h+='<div style="font-size:10px;color:#f87171;padding:3px 0;">'+E.fmtC(unlinked)+' of change-order revenue is not allocated to any building — it will not appear on the AIA as a building line. Click a change order above to allocate it.</div>';
   return h+'</div>';
 }
