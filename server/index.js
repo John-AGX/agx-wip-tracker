@@ -490,6 +490,18 @@ function startServer() {
       } catch (e) {
         console.warn('[agent-jobs] failed to start worker:', e && e.message);
       }
+      // AI spend alarm — ticks hourly, emails the system admin when
+      // trailing-24h token spend crosses AI_SPEND_DAILY_ALERT_USD.
+      // Started AFTER the agent-jobs worker on purpose: that worker is
+      // the largest token consumer, so the thing most likely to run away
+      // is already running by the time the alarm is watching it.
+      // Enabled by default at a threshold far above normal use; set the
+      // env var to 0 to disable.
+      try {
+        require('./ai-spend-cron').start();
+      } catch (e) {
+        console.warn('[ai-spend] failed to start alarm:', e && e.message);
+      }
     }
   });
 }
