@@ -20,6 +20,8 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireCapability, hasCapability } = require('../auth');
+const { poEffectiveTotal } = require('../services/job-financials');
+const { overbillVerdict } = require('../services/money/overbill');
 
 const router = express.Router();
 
@@ -67,7 +69,11 @@ function shapeRow(r) {
 function cleanData(body) {
   const data = { ...(body || {}) };
   ['id', 'job_id', 'owner_id', 'po_id', 'sub_id', 'status', 'bill_number', 'amount',
-   'bill_date', 'due_date', 'approved_at', 'approved_by', 'created_at', 'updated_at'].forEach((k) => delete data[k]);
+   'bill_date', 'due_date', 'approved_at', 'approved_by', 'created_at', 'updated_at',
+   // Transport-only: the override flag is a request instruction, not a
+   // field on the bill. Without this it lands in the data blob as junk
+   // and, worse, sticks around to look like a standing permission.
+   'allow_overbill'].forEach((k) => delete data[k]);
   // Do NOT force lines:[] here — the PUT merges this blob (data || $1), so an
   // injected empty lines would clobber a bill's real data.lines (e.g. future
   // OCR line items). Callers that need lines pass them explicitly.
@@ -192,11 +198,63 @@ router.get('/bills/:id', requireAuth, async (req, res) => {
 async function poContext(orgId, poId) {
   if (!poId) return null;
   const { rows } = await pool.query(
-    `SELECT po.id, po.job_id, po.sub_id FROM job_purchase_orders po
+    `SELECT po.id, po.job_id, po.sub_id, po.po_number, po.data FROM job_purchase_orders po
        JOIN jobs j ON j.id = po.job_id
       WHERE po.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
     [poId, orgId]);
   return rows[0] || null;
+}
+
+// ── Over-billing guard (INT-4) ──────────────────────────────────────
+// A bill's amount had no enforced relationship to the PO it bills
+// against, so a sub could be paid past their commitment and nothing in
+// the system would say so. The PO editor already *displays* billed vs
+// total — it just never stopped anyone.
+//
+// The authorizing figure is poEffectiveTotal(), the same committed total
+// (frozen baseline + APPROVED addendum deltas) the rest of the money
+// stack uses. Deliberately NOT the raw line sum: a PO being revised
+// carries unapproved pending changes, and billing against a price nobody
+// approved is the exact hole this closes. Reusing the shared helper also
+// keeps this from drifting into a second opinion about what a PO is
+// worth — the getJobWIP duplicate taught that lesson already.
+//
+// Unlike the QB reconciliation gate, exceeding a PO is not automatically
+// a defect — overages get approved in the field all the time. So this
+// blocks by DEFAULT but takes an explicit `allow_overbill: true`, which
+// stamps who acknowledged it. Deliberate beats silent.
+//
+// The decision itself lives in services/money/overbill.js so it can be
+// tested without booting auth; this file only does the IO around it.
+
+async function billedAgainstPo(poId, excludeBillId) {
+  const { rows } = await pool.query(
+    `SELECT COALESCE(SUM(amount), 0) AS billed FROM job_vendor_bills
+      WHERE po_id = $1 AND status <> 'void' AND ($2::text IS NULL OR id <> $2)`,
+    [poId, excludeBillId || null]);
+  return Number(rows[0].billed) || 0;
+}
+
+async function overbillCheck(orgId, poId, newAmount, excludeBillId) {
+  if (!poId) return null;                       // unlinked bills have nothing to exceed
+  const po = await poContext(orgId, poId);
+  if (!po) return null;                         // caller already 400s on a bad PO
+  const others = await billedAgainstPo(poId, excludeBillId);
+  const verdict = overbillVerdict(poEffectiveTotal(po.data || {}), others, newAmount);
+  if (!verdict) return null;
+  return Object.assign({ po_id: poId, po_number: po.po_number || null }, verdict);
+}
+
+// Audit stamp written into the bill's data blob when someone overrides.
+function overbillAck(user, check) {
+  return {
+    acknowledgedBy: user.id,
+    acknowledgedByName: user.name || user.email || String(user.id),
+    acknowledgedAt: new Date().toISOString(),
+    poTotal: check.po_total,
+    wouldTotal: check.would_total,
+    overBy: check.over_by
+  };
 }
 
 // ── create ──────────────────────────────────────────────────────────
@@ -216,11 +274,16 @@ router.post('/jobs/:jobId/bills', requireAuth, requireCapability('ESTIMATES_EDIT
     if (b.po_id && !po) return res.status(400).json({ error: 'Linked PO not found in this org' });
     if (po && po.job_id !== jobId) return res.status(400).json({ error: 'That PO belongs to a different job' });
 
+    const amount = money(b.amount);
+    const over = await overbillCheck(req.user.organization_id, b.po_id || null, amount, null);
+    if (over && !b.allow_overbill) return res.status(409).json(over);
+
     const id = 'bill_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
     const billNumber = (b.bill_number && String(b.bill_number).trim().slice(0, 60)) || await nextBillNumber(req.user.organization_id);
     // Vendor: explicit sub_id wins, else inherit the PO's sub.
     const subId = (b.sub_id != null ? (b.sub_id || null) : (po ? po.sub_id : null));
     const data = cleanData(b.data || b);
+    if (over) data.overbillAck = overbillAck(req.user, over);
 
     const { rows } = await pool.query(
       `INSERT INTO job_vendor_bills
@@ -228,7 +291,7 @@ router.post('/jobs/:jobId/bills', requireAuth, requireCapability('ESTIMATES_EDIT
        VALUES ($1,$2,$3,$4,$5,$6,'open',$7,$8,$9,$10,$11)
        RETURNING ${SELECT_COLS.replace(/b\./g, '')}`,
       [id, jobId, req.user.organization_id, req.user.id, b.po_id || null, subId, billNumber,
-       money(b.amount), dateOrNull(b.bill_date), dateOrNull(b.due_date), JSON.stringify(data)]);
+       amount, dateOrNull(b.bill_date), dateOrNull(b.due_date), JSON.stringify(data)]);
     res.json({ bill: Object.assign(shapeRow(rows[0]), { job_number: job.rows[0].job_number, job_title: job.rows[0].job_title }) });
   } catch (e) {
     console.error('POST /api/jobs/:jobId/bills error:', e);
@@ -241,7 +304,7 @@ router.put('/bills/:id', requireAuth, requireCapability('ESTIMATES_EDIT'), async
   try {
     const id = req.params.id;
     const existing = await pool.query(
-      `SELECT b.status, b.job_id FROM job_vendor_bills b
+      `SELECT b.status, b.job_id, b.amount, b.po_id FROM job_vendor_bills b
          JOIN jobs j ON j.id = b.job_id
         WHERE b.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
       [id, req.user.organization_id]);
@@ -260,6 +323,17 @@ router.put('/bills/:id', requireAuth, requireCapability('ESTIMATES_EDIT'), async
       }
     }
     const data = cleanData(b.data || b);
+
+    // Check the bill as it will look AFTER the update — either field may
+    // be absent from the body, in which case the stored value stands.
+    // Excludes this bill's own current amount from the "already billed"
+    // sum, or editing a bill would count it twice and self-trip.
+    const effPoId = has('po_id') ? (poId || null) : existing.rows[0].po_id;
+    const effAmount = has('amount') ? money(b.amount) : Number(existing.rows[0].amount) || 0;
+    const over = await overbillCheck(req.user.organization_id, effPoId, effAmount, id);
+    if (over && !b.allow_overbill) return res.status(409).json(over);
+    if (over) data.overbillAck = overbillAck(req.user, over);
+
     const { rows } = await pool.query(
       `UPDATE job_vendor_bills SET
           data = COALESCE(data, '{}'::jsonb) || $1::jsonb,
