@@ -498,6 +498,19 @@
         'border-color:color-mix(in srgb, var(--lc,#6b7280) 34%, #fff);}',
       '.ehub-lswatch{width:9px;height:9px;border-radius:3px;flex:0 0 auto;}',
       '.ehub-smart .ehub-fold-ic{opacity:.72;}',
+      // E5 suggested-action strip. Explicit widths again: a bare `button`
+      // here inherits nothing useful, but any future global button rule
+      // would stretch these, and they must stay inline chips.
+      '.ehub-acts{display:flex;flex-wrap:wrap;align-items:center;gap:7px;padding:9px 14px;' +
+        'border-bottom:1px solid var(--border,#2a2a32);background:rgba(124,131,253,.05);}',
+      '.ehub-acts-hd{display:inline-flex;align-items:center;gap:5px;font-size:10px;text-transform:uppercase;' +
+        'letter-spacing:.08em;color:var(--text-dim,#6f748a);margin-right:2px;}',
+      '.ehub-act{display:inline-flex;align-items:center;gap:6px;width:auto;max-width:100%;' +
+        'font-size:11.5px;padding:5px 10px;border-radius:999px;cursor:pointer;' +
+        'background:var(--surface,#16161c);border:1px solid var(--border,#31313c);color:var(--text,#dfe2ec);}',
+      '.ehub-act:hover{border-color:var(--accent,#4f8cff);}',
+      '.ehub-act-verb{font-weight:600;white-space:nowrap;}',
+      '.ehub-act-t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:340px;color:var(--text-dim,#9aa0b5);}',
       '.ehub-lrow{gap:8px;padding-left:12px;}',
       '.ehub-lrow .ehub-fold-nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
       '.ehub-menu-labels{min-width:212px;max-height:340px;overflow-y:auto;}',
@@ -725,6 +738,86 @@
       var rail = document.getElementById('ehubRail');
       if (rail) rail.innerHTML = '<div class="ehub-empty" style="padding:20px 10px;font-size:12px;">Folders unavailable.<br>' + esc(e.message || '') + '</div>';
     });
+  }
+
+  // ── E5: extract → act ───────────────────────────────────────────────
+  // H3 triage has been extracting follow-ups into triage_actions on every
+  // inbound email since it shipped — [{type, title, when_text, when_iso}] —
+  // and NOTHING has ever rendered them. The intelligence was already paid
+  // for and thrown away. This surfaces it.
+  //
+  // SECURITY — the rule that shapes this whole feature: an action's title
+  // is model paraphrase of an UNTRUSTED email, so these buttons must never
+  // create anything outright. triage's own header states the property:
+  // "it NEVER creates a reminder, calendar event, or task — the user
+  // confirms. So a prompt-injected email can, at worst, produce a wrong
+  // suggestion the user sees and declines." Every button below opens a
+  // PRE-FILLED confirm surface. Keeping one hop of human judgement between
+  // an emailed sentence and a row in the database is the entire point.
+  var ACTION_META = {
+    task:     { icon: 'check-circle', verb: 'Add to-do' },
+    reminder: { icon: 'bell-alert',   verb: 'Remind me' },
+    calendar: { icon: 'schedule',     verb: 'Schedule' }
+  };
+
+  function parseActions(raw) {
+    var list = raw;
+    // triage_actions is jsonb; some drivers hand it back as a string.
+    if (typeof list === 'string') { try { list = JSON.parse(list); } catch (e) { return []; } }
+    if (!Array.isArray(list)) return [];
+    return list.filter(function (a) { return a && a.title; }).slice(0, 3);
+  }
+
+  function actionStripHTML(actions) {
+    if (!actions.length) return '';
+    return '<div class="ehub-acts">' +
+      '<span class="ehub-acts-hd">' + ico('sparkle', '') + ' Suggested</span>' +
+      actions.map(function (a, i) {
+        var m = ACTION_META[a.type] || ACTION_META.task;
+        var when = a.when_text ? ' · ' + esc(a.when_text) : '';
+        return '<button class="ehub-act" data-actidx="' + i + '" title="' + esc(a.title) + '">' +
+          ico(m.icon, '') + '<span class="ehub-act-verb">' + esc(m.verb) + '</span>' +
+          '<span class="ehub-act-t">' + esc(a.title) + when + '</span>' +
+          '</button>';
+      }).join('') +
+      '</div>';
+  }
+
+  // A concrete when_iso becomes the due date; a vague one ("next week")
+  // deliberately does NOT get guessed into a date — the quick-add opens
+  // with the field empty so the human sets it.
+  function actionDue(a) {
+    var iso = String((a && a.when_iso) || '');
+    return /^\d{4}-\d{2}-\d{2}/.test(iso) ? iso.slice(0, 10) : '';
+  }
+
+  function runAction(a, threadId, subject, newest) {
+    var link = (newest && newest.entity_type && newest.entity_id)
+      ? { entity_type: newest.entity_type, entity_id: String(newest.entity_id),
+          entity_label: newest.entity_label || '' }
+      : {};
+
+    // 'calendar' has no pre-fillable event modal in the app, and inventing
+    // a half-flow for it would be worse than handing it to the assistant —
+    // which is already a confirm-then-act surface.
+    if (a.type === 'calendar') {
+      return seedAssistant(
+        'From this email, set up: ' + a.title +
+        (a.when_text ? ' (' + a.when_text + ')' : '') +
+        '. Confirm the details with me before creating anything.', threadId);
+    }
+
+    if (!(window.p86Tasks && window.p86Tasks.openQuickAdd)) {
+      return toast('Tasks are not available on this page.');
+    }
+    // reminder vs task: both land as a to-do — the reminders cron already
+    // nudges on to-dos due today — so the only real difference is whether
+    // a date came with it.
+    window.p86Tasks.openQuickAdd(Object.assign({
+      title: a.title,
+      due_date: actionDue(a),
+      priority: a.type === 'reminder' ? 'high' : 'normal'
+    }, link));
   }
 
   // ── Smart folders (spec §1) ─────────────────────────────────────────
@@ -1377,6 +1470,17 @@
           '</div>' +
         '</div>';
 
+      // Suggested follow-ups from the newest INBOUND message. Inbound-only
+      // for the same reason the row badges are: an outbound row is the
+      // owner's own captured reply, and its triage fields are an
+      // unauthenticated, forgeable classification.
+      var actSrc = null;
+      for (var ai = msgs.length - 1; ai >= 0; ai--) {
+        if (msgs[ai].direction !== 'outbound') { actSrc = msgs[ai]; break; }
+      }
+      var actions = parseActions(actSrc && actSrc.triage_actions);
+      var actsHtml = actionStripHTML(actions);
+
       var bodyHtml = msgs.map(function (m) { return renderMessage(m); }).join('');
 
       // ── Assistant draft + handled state (H5, unchanged contract) ────
@@ -1407,9 +1511,9 @@
           '</div>' +
         '</div>';
 
-      pane.innerHTML = head + draftHtml + bodyHtml;
+      pane.innerHTML = head + actsHtml + draftHtml + bodyHtml;
       sizeFrames(pane);
-      wirePane(pane, threadId, subject, msgs, isHandled, newest);
+      wirePane(pane, threadId, subject, msgs, isHandled, newest, actions);
 
       // Opening a conversation marks it read (every mail client does).
       if (msgs.some(function (m) { return !m.is_read; })) {
@@ -1493,13 +1597,23 @@
     });
   }
 
-  function wirePane(pane, threadId, subject, msgs, isHandled, newest) {
+  function wirePane(pane, threadId, subject, msgs, isHandled, newest, paneActions) {
+    paneActions = paneActions || [];
     var body = document.getElementById('ehubBody');
     var backBtn = pane.querySelector('[data-back]');
     if (backBtn) backBtn.addEventListener('click', function () { if (body) body.classList.remove('show-thread'); });
 
     var askBtn = pane.querySelector('[data-ask]');
     if (askBtn) askBtn.addEventListener('click', function () { handToAssistant(threadId, subject); });
+
+    // Suggested-action buttons. Index into the array captured when the pane
+    // was built, so the button carries no user text of its own.
+    pane.querySelectorAll('[data-actidx]').forEach(function (el) {
+      el.addEventListener('click', function () {
+        var a = paneActions[Number(el.getAttribute('data-actidx'))];
+        if (a) runAction(a, threadId, subject, newest);
+      });
+    });
 
     var arch = folderBySlug('archive'), trash = folderBySlug('trash');
     var aBtn = pane.querySelector('[data-archive]');

@@ -654,7 +654,11 @@ router.get('/threads/:threadId', requireAuth, async (req, res) => {
                 entity_type, entity_id, entity_label, received_at,
                 folder_id, is_read, is_starred, is_pinned, has_attachments,
                 snoozed_until, due_at, ai_category, ai_priority, ai_summary,
-                needs_reply, triage_summary, triage_urgency
+                -- triage_actions drives the E5 suggested-action strip. It was
+                -- extracted on every inbound since H3 but never selected here,
+                -- so the reading pane could not have shown a suggestion even
+                -- once.
+                needs_reply, triage_summary, triage_urgency, triage_actions
            FROM inbound_emails
           WHERE user_id = $1 AND thread_id = $2
           ORDER BY received_at DESC LIMIT 100
