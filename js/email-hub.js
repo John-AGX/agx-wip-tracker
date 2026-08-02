@@ -303,20 +303,41 @@
   // The compact three-pane rules, rendered either inside a media query
   // (`@media (…)`) or scoped to a container class (`.ehub-body.cx-narrow`).
   // One source of truth so the two triggers can never drift apart.
-  function compactRules(trigger) {
+  // TWO tiers, because the panes stop fitting at two different widths:
+  //
+  //   'rail'  the folder rail becomes an overlay drawer, list + reading
+  //           pane stay side by side. Needed below ~820px
+  //           (rail 230 + list 340 + a usable 250px pane).
+  //   'swap'  full phone behavior — list and reading pane take turns.
+  //           Only below ~560px, where list + pane genuinely cannot share.
+  //
+  // Getting this wrong is not cosmetic: the first version used one tier at
+  // 900px, and since the hub's container is ~390px narrower than the
+  // viewport (the app sidebar), an ordinary 1280px desktop sat at 888px
+  // and folded to phone layout permanently, with nothing else open.
+  function compactRules(trigger, tier) {
     var media = trigger.charAt(0) === '@';
     var p = media ? '' : trigger + ' ';        // descendant scope for the class form
     var self = media ? '.ehub-body' : trigger; // rules that sit ON .ehub-body itself
-    var body = [
-      p + '.ehub-split{display:none;}',
-      p + '.ehub-rail{position:absolute;left:0;top:0;bottom:0;z-index:5;width:230px !important;flex-basis:230px !important;box-shadow:0 0 30px rgba(0,0,0,.55);}',
-      self + ':not(.rail-open) .ehub-rail{display:none;}',
-      self + '.rail-open .ehub-rail{display:block;}',
-      p + '.ehub-list{flex:1 1 auto !important;width:auto !important;border-right:none;}',
-      self + '.show-thread .ehub-list{display:none;}',
-      self + ':not(.show-thread) .ehub-pane{display:none;}',
-      p + '.ehub-back{display:inline-flex;}'
-    ].join('\n');
+    var out = [];
+    if (tier === 'rail' || tier === 'both') {
+      out.push(
+        p + '.ehub-split-rail{display:none;}',
+        p + '.ehub-rail{position:absolute;left:0;top:0;bottom:0;z-index:5;width:230px !important;flex-basis:230px !important;box-shadow:0 0 30px rgba(0,0,0,.55);}',
+        self + ':not(.rail-open) .ehub-rail{display:none;}',
+        self + '.rail-open .ehub-rail{display:block;}'
+      );
+    }
+    if (tier === 'swap' || tier === 'both') {
+      out.push(
+        p + '.ehub-split{display:none;}',
+        p + '.ehub-list{flex:1 1 auto !important;width:auto !important;border-right:none;}',
+        self + '.show-thread .ehub-list{display:none;}',
+        self + ':not(.show-thread) .ehub-pane{display:none;}',
+        p + '.ehub-back{display:inline-flex;}'
+      );
+    }
+    var body = out.join('\n');
     return media ? (trigger + '{\n' + body + '\n}') : body;
   }
 
@@ -351,7 +372,13 @@
       '.ehub-fold:hover{background:var(--row-hover,#1c1c22);}',
       '.ehub-fold.active{background:rgba(16,124,65,.16);color:var(--text,#eef0f6);font-weight:600;}',
       '.ehub-fold.drop{outline:1.5px dashed var(--accent,#5ddb7e);outline-offset:-2px;background:rgba(16,124,65,.12);}',
-      '.ehub-fold-tw{width:13px;flex:0 0 13px;text-align:center;font-size:9px;color:var(--text-dim,#7b8195);}',
+      // 13px was too small to hit reliably — the twisty is the only way to
+      // collapse a branch, so it gets a real target. The glyph stays small;
+      // the padding does the work, and negative margins keep the row from
+      // reflowing to accommodate it.
+      '.ehub-fold-tw{width:13px;flex:0 0 13px;text-align:center;font-size:9px;color:var(--text-dim,#7b8195);',
+        'padding:6px 5px;margin:-6px -5px;box-sizing:content-box;cursor:pointer;border-radius:4px;}',
+      '.ehub-fold-tw:hover{color:var(--text,#e4e6f0);background:var(--surface2,#202027);}',
       '.ehub-fold-ic{width:15px;height:15px;flex:0 0 15px;opacity:.8;}',
       '.ehub-fold-nm{flex:1;overflow:hidden;text-overflow:ellipsis;}',
       '.ehub-fold-ct{font-size:10.5px;font-weight:700;color:var(--accent,#5ddb7e);}',
@@ -519,8 +546,9 @@
       // collapsed to ~110px and its buttons clipped to "Unrea", "Snooz",
       // "Archiv". A ResizeObserver (see wireContainerQueries) measures
       // the real box and sets cx-narrow / cx-tight.
-      compactRules('@media (max-width:900px)') +
-      compactRules('.ehub-body.cx-narrow')
+      compactRules('@media (max-width:900px)', 'both') +
+      compactRules('.ehub-body.cx-narrow', 'rail') +
+      compactRules('.ehub-body.cx-tight', 'swap')
     ].join('\n');
     document.head.appendChild(st);
   }
@@ -713,8 +741,16 @@
         }
         _state.folderId = fid;
         _state.selected = {};
-        // Auto-expand so children are reachable after clicking a parent.
-        if (_state.folders.some(function (f) { return f.parent_id === fid; })) _state.expanded[fid] = true;
+        // Reveal children on the way IN, but never fight a deliberate
+        // collapse: the old version re-expanded on every row click, so a
+        // folder you had just collapsed sprang open again the moment you
+        // selected it and the twisty looked broken. Only auto-expand a
+        // parent the user has not already made a decision about.
+        var hasKids = _state.folders.some(function (f) { return f.parent_id === fid; });
+        if (hasKids && !Object.prototype.hasOwnProperty.call(_state.expanded, fid)) {
+          _state.expanded[fid] = true;
+          lsSet('expanded', JSON.stringify(_state.expanded));
+        }
         paintRail();
         loadThreads();
         var body = document.getElementById('ehubBody');
@@ -1073,16 +1109,47 @@
   }
 
   // ── Reading pane ──────────────────────────────────────────────────
+  // Move the selection highlight WITHOUT repainting the list. paintList()
+  // rebuilds every row — avatars, chips, the lot — so calling it just to
+  // move a highlight made the whole list visibly flash on every click, and
+  // threw away scroll position with it. Only the two affected rows change.
+  function markActiveRow(threadId) {
+    var rows = document.querySelectorAll('#ehubRows .ehub-row');
+    for (var i = 0; i < rows.length; i++) {
+      var isActive = rows[i].getAttribute('data-thread') === threadId;
+      rows[i].classList.toggle('active', isActive);
+      // Opening a thread reads it; reflect that immediately rather than
+      // waiting for the next full refresh.
+      if (isActive) rows[i].classList.remove('unread');
+    }
+  }
+
   function openThread(threadId) {
+    var switching = _state.activeThreadId !== threadId;
     _state.activeThreadId = threadId;
-    paintList();
+    markActiveRow(threadId);
     var pane = document.getElementById('ehubPane');
     var body = document.getElementById('ehubBody');
     if (body) body.classList.add('show-thread');
     if (!pane) return;
-    pane.innerHTML = '<div class="ehub-empty">Loading conversation…</div>';
+    // Only flash a loading state if the fetch is actually slow. The thread
+    // endpoint normally answers in ~300ms, and blanking the pane instantly
+    // meant every open was a teardown → "Loading…" → rebuild, which reads
+    // as a glitch. Holding the previous content for 180ms makes a fast open
+    // a single repaint. (Re-opening the SAME thread never blanks at all.)
+    var loadingTimer = null;
+    if (switching) {
+      loadingTimer = setTimeout(function () {
+        if (_state.activeThreadId === threadId) pane.innerHTML = '<div class="ehub-empty">Loading conversation…</div>';
+      }, 180);
+    }
+    function clearLoading() { if (loadingTimer) { clearTimeout(loadingTimer); loadingTimer = null; } }
 
     api('/api/email-inbox/threads/' + encodeURIComponent(threadId)).then(function (res) {
+      clearLoading();
+      // A slower earlier request must not overwrite a thread the user has
+      // since moved on to.
+      if (_state.activeThreadId !== threadId) return;
       var msgs = (res && res.messages) || [];
       if (!msgs.length) { pane.innerHTML = '<div class="ehub-empty">This conversation is empty.</div>'; return; }
       var subject = msgs[msgs.length - 1].subject || '(no subject)';
@@ -1157,6 +1224,8 @@
           .catch(function () {});
       }
     }).catch(function (e) {
+      clearLoading();   // or the "Loading…" flash lands after the error
+      if (_state.activeThreadId !== threadId) return;
       pane.innerHTML = '<div class="ehub-empty">Could not load that conversation.<br>' + esc(e.message || '') + '</div>';
     });
   }
@@ -1366,7 +1435,8 @@
     function apply() {
       var w = body.clientWidth;
       if (!w) return;                       // hidden tab / not laid out yet
-      body.classList.toggle('cx-narrow', w < 900);
+      body.classList.toggle('cx-narrow', w < 820);
+      body.classList.toggle('cx-tight', w < 560);
     }
     apply();
     if (window.ResizeObserver) {
