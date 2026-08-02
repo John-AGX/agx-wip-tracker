@@ -1132,16 +1132,17 @@
     var body = document.getElementById('ehubBody');
     if (body) body.classList.add('show-thread');
     if (!pane) return;
-    // Only flash a loading state if the fetch is actually slow. The thread
-    // endpoint normally answers in ~300ms, and blanking the pane instantly
-    // meant every open was a teardown → "Loading…" → rebuild, which reads
-    // as a glitch. Holding the previous content for 180ms makes a fast open
-    // a single repaint. (Re-opening the SAME thread never blanks at all.)
+    // Only flash a loading state if the fetch is actually slow. Blanking
+    // the pane instantly made every open a teardown → "Loading…" → rebuild,
+    // which reads as a glitch. The threshold sits ABOVE the endpoint's real
+    // latency deliberately — measured live at 224ms, and a first guess of
+    // 180ms still let the placeholder through — so a normal open is a
+    // single repaint. (Re-opening the SAME thread never blanks at all.)
     var loadingTimer = null;
     if (switching) {
       loadingTimer = setTimeout(function () {
         if (_state.activeThreadId === threadId) pane.innerHTML = '<div class="ehub-empty">Loading conversation…</div>';
-      }, 180);
+      }, 400);
     }
     function clearLoading() { if (loadingTimer) { clearTimeout(loadingTimer); loadingTimer = null; } }
 
