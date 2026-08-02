@@ -140,13 +140,13 @@ Ranked by how visible they are.
 
 | # | Gap | Notes |
 |---|---|---|
-| 1 | **Labels have no UI** | `email_labels` + `email_message_labels` + full CRUD routes are live and `label:` search works, but nothing in the hub creates or assigns a label. Highest-value quick win — the backend is done. |
+| 1 | ~~**Labels have no UI**~~ | **DONE `@0a0b2b9`.** Chips on rows (tinted from the label's own colour via one `--lc` property), a toggle picker on the bulk bar that creates-and-assigns in one gesture, and a rail Labels section that filters through the existing `label:` search rather than changing folders. Threads list returns labels as a **second keyed query, not a join** — joining per-message labels into the thread aggregate would multiply rows and inflate `message_count`/`unread_count`. assign/unassign gained `thread_ids`, mirroring move-messages. |
 | 2 | **Smart folders** (spec §1) | Saved searches rendered as folders: `Unanswered > 24h`, `Waiting on me`, `Has attachment`, `$ mentioned`, `This week's jobs`, per-entity. Zero storage — a query blob. The search operators to power them already exist. |
-| 3 | **Trash 30-day purge** | Spec §1 calls for it. Folder exists; no sweep. `email-snooze-cron.js` is the natural host. |
+| 3 | ~~**Trash 30-day purge**~~ | **DONE `@259bf88`.** Needed a new `trashed_at` column first: the table only had arrival times, so a purge keyed on `received_at` would have deleted a two-year-old thread the moment it was binned. Stamped on the way into Trash, cleared on the way out. Pre-existing rows have a NULL stamp and are skipped, not guessed at. Rides the snooze tick in its own try block. |
 | 4 | **`has_attachments` never populated** | Column + `has:attachment` search are wired, but the ingest path stores no attachment metadata. Needs the Resend/CF attachment fetch first. |
 | 5 | **Attachment strip + "Save to job files"** (spec §2) | Blocked by #4. |
 | 6 | **Saved views in the message list** | Spec §2 says reuse `p86Api.listViews`; not wired. |
-| 7 | **Mark-all-read** | Server endpoint exists; not surfaced in the folder context menu. |
+| 7 | ~~**Mark-all-read**~~ | **Was already shipped** — this entry was wrong. `folderMenu()` renders "Mark all read" and wires it to `markFolderRead()` (`js/email-hub.js`). No work needed. |
 | 8 | **Org-shared folders unreachable from UI** | `user_id NULL` is supported end-to-end server-side and admin-gated; the rail only creates personal folders. |
 | 9 | **`due_at` unused** | Column exists for follow-up flags; no UI. |
 
@@ -164,12 +164,22 @@ never finished — the schema comment in `db.js` says so:
 
 3a-1 shipped; 3a-2 did not.
 
+> **Corrected 2026-08-02 against the code.** The table below overstated the
+> problem — `GET /api/ai/sessions/:id` does use `session_id` for two of its
+> three branches. Re-verified at `server/routes/ai-routes.js:13846`:
+
 | | reads by |
 |---|---|
 | `ai_messages.session_id` | exists, indexed, written on new inserts ✅ |
-| Deal threads (`/86/messages`) | `session_id` ✅ already migrated |
-| General / rolling sessions | legacy `(user_id, entity_type, entity_id)` ❌ |
-| `GET /api/ai/sessions/:id` | legacy key — never uses `session_id` ❌ |
+| Deal threads (`session_kind = 'deal_thread'`) | `session_id` ✅ |
+| `user_thread` sessions | `session_id` ✅ — migrated, with **no** tuple fallback (a 0-row result means a genuinely-new chat and must render empty) |
+| **Everything else** (default `session_kind` is `legacy_partitioned`) | legacy `(user_id, entity_type, entity_id)` ❌ — the fall-through at `:13869`, and the actual source of the shared-pool symptom |
+
+**So the remaining work is narrower than written, and a different shape:**
+the fix should branch on **whether the rows carry a `session_id`**, not on
+`session_kind`. An all-or-nothing kind check is exactly what stranded this
+branch in the first place; repeating it just leaves the next kind behind.
+Still open: that fall-through, plus recomputing `turn_count` from real data.
 
 **Observed:** sessions 206, 207 and 208 — showing 47, 0 and 1 turns — each
 returned **the identical 953 messages**. Every `general` session is the same
