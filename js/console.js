@@ -123,6 +123,10 @@
         // dropdown (switchConsoleSubTab). The platform service views
         // (anthropic/email/btmapping/settings) mount the existing
         // host-parameterized admin.js renderers — single source of truth.
+        // Landing: the same grouped dashboard the Admin tab uses (p86Dash),
+        // so eleven platform views read as four groups instead of a menu.
+        '<div id="cc-dashboard" class="cc-section" style="display:none;">' +
+          '<div id="console-dashboard-host"></div></div>' +
         '<div id="cc-overview"  class="cc-section" style="display:none;"></div>' +
         '<div id="cc-docs"      class="cc-section" style="display:none;"></div>' +
         // Assembly Studio moved OUT of the Command Center to its own
@@ -139,18 +143,87 @@
         '<div id="cc-settings"  class="cc-section" style="display:none;"></div>' +
         '<div id="cc-danger"    class="cc-section" style="display:none;"></div>' +
       '</div>';
-    // Land on the last-viewed section (persisted) or Overview by default.
-    var initial = 'overview';
+    // Land on the last-viewed section (persisted) or the grouped DASHBOARD by
+    // default — same reasoning as Admin: opening on one view out of eleven
+    // gives no sense of the other ten.
+    var initial = 'dashboard';
     try { var saved = sessionStorage.getItem('agx_console_tab'); if (saved && CONSOLE_VIEWS.indexOf(saved) >= 0) initial = saved; } catch (e) {}
     switchConsoleSubTab(initial);
   }
 
   // The platform sub-views, in sidebar order.
-  var CONSOLE_VIEWS = ['overview', 'docs', 'metrics', 'forensics', 'tenants', 'audit', 'anthropic', 'email', 'btmapping', 'settings', 'danger'];
+  var CONSOLE_VIEWS = ['dashboard', 'overview', 'docs', 'metrics', 'forensics', 'tenants', 'audit', 'anthropic', 'email', 'btmapping', 'settings', 'danger'];
+
+  // Eleven platform views, four groups — the same shape Admin uses, via the
+  // shared p86Dash shell. Grouping is data; the shell owns the layout, so
+  // the two surfaces cannot drift into different dialects of "admin".
+  var CC_LABELS = {
+    overview: 'Overview', docs: 'Docs', metrics: 'Metrics', forensics: 'Forensics',
+    tenants: 'Tenants', audit: 'Audit', anthropic: 'Anthropic', email: 'Email',
+    btmapping: 'BT mapping', settings: 'Settings', danger: 'Danger Zone'
+  };
+
+  function ccGo(view) { return function () { switchConsoleSubTab(view); }; }
+
+  function consoleDashSpec() {
+    var g = function (key, title, count, pill, views) {
+      return {
+        key: key, title: title, count: count,
+        pills: [{ label: pill[0], value: pill[1] }],
+        items: views.map(function (v) { return { label: CC_LABELS[v], open: ccGo(v) }; })
+      };
+    };
+    return {
+      eyebrow: 'PLATFORM',
+      title: 'Command Center',
+      chip: 'system administrator',
+      kpis: [
+        { label: 'Tenants',  value: '1' },
+        { label: 'Status',   value: 'ok', tone: 'ok' },
+        { label: 'Services', value: '3' },
+        { label: 'Views',    value: '11' }
+      ],
+      attn: [],
+      bands: [{
+        label: null,
+        groups: [
+          g('health',   'Health',   '4 views',   ['Status', 'live'],  ['overview', 'metrics', 'forensics', 'audit']),
+          g('tenants',  'Tenants',  'orgs',      ['Orgs', '1'],       ['tenants']),
+          g('services', 'Services', '3 vendors', ['Vendors', '3'],    ['anthropic', 'email', 'btmapping']),
+          g('platform', 'Platform', '3 views',   ['Docs', 'live'],    ['docs', 'settings', 'danger'])
+        ]
+      }]
+    };
+  }
+
+  function loadConsoleDashboard() {
+    var host = document.getElementById('console-dashboard-host');
+    if (host && window.p86Dash) window.p86Dash.render(host, consoleDashSpec());
+  }
+
+  // "← Command Center" on every platform section, mirroring the admin back
+  // bar. Same reason: a landing page you cannot return to is a one-way door.
+  function ccBackBar(section, view) {
+    if (!section || view === 'dashboard') return;
+    var id = 'cc-backbar-' + view;
+    if (document.getElementById(id)) return;
+    if (window.p86Dash && window.p86Dash.injectStyle) window.p86Dash.injectStyle();
+    var bar = document.createElement('div');
+    bar.id = id;
+    bar.className = 'p86adm-back';
+    bar.innerHTML = '<button type="button" class="p86adm-backbtn">' +
+      '<span aria-hidden="true">&larr;</span> Command Center</button>' +
+      '<span class="p86adm-crumb">' + (CC_LABELS[view] || view) + '</span>';
+    bar.querySelector('.p86adm-backbtn').addEventListener('click', function () {
+      switchConsoleSubTab('dashboard');
+    });
+    section.insertBefore(bar, section.firstChild);
+  }
 
   // Each view's loader. The system-service views mount the existing
   // host-parameterized admin.js renderers (re-runs fresh each visit).
   function loadConsoleView(view) {
+    if (view === 'dashboard') return loadConsoleDashboard();
     if (view === 'overview') return loadOverview();
     if (view === 'docs') return loadDocs();
     if (view === 'metrics') return loadMetrics();
@@ -190,6 +263,7 @@
     }
     document.querySelectorAll('#consolePageHost .cc-section').forEach(function (s) { s.style.display = 'none'; });
     target.style.display = 'block';
+    ccBackBar(target, view);
     loadConsoleView(view);
     try { sessionStorage.setItem('agx_console_tab', view); } catch (e) {}
     if (typeof window.markVirtualTabActive === 'function') window.markVirtualTabActive('console-' + view);

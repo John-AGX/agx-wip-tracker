@@ -204,6 +204,43 @@
     }
   }
 
+  // ── back bar ────────────────────────────────────────────────────────
+  // Landing on a dashboard and then drilling into a section is only half a
+  // navigation model — without a way back you've replaced a dropdown with a
+  // one-way door. Every admin sub-pane gets a "← Admin" bar; the dashboard
+  // itself gets none (there is nothing above it).
+  //
+  // Injected rather than added to each pane's markup: there are eight panes
+  // and more will arrive, and a bar that has to be pasted into each one is a
+  // bar that will be missing from the ninth.
+  var LABELS = {
+    users: 'Users', roles: 'Roles', compliance: 'Compliance',
+    organization: 'Organization', agents: 'Agents', context: 'Context',
+    metrics: 'Usage', 'ocr-inbox': 'OCR Inbox'
+  };
+
+  function ensureBackBar(pane, name) {
+    if (!pane) return;
+    if (name === 'dashboard') return;           // nothing above the landing
+    var BAR_ID = 'admin-backbar-' + name;
+    if (document.getElementById(BAR_ID)) return; // already injected
+
+    // Styles live in the shared shell so they exist wherever it does.
+    if (window.p86Dash && window.p86Dash.injectStyle) window.p86Dash.injectStyle();
+    var bar = document.createElement('div');
+    bar.id = BAR_ID;
+    bar.className = 'p86adm-back';
+    bar.innerHTML =
+      '<button type="button" class="p86adm-backbtn">' +
+        '<span aria-hidden="true">&larr;</span> Admin</button>' +
+      '<span class="p86adm-crumb">' + (LABELS[name] || name) + '</span>';
+    bar.querySelector('.p86adm-backbtn').addEventListener('click', function () {
+      if (typeof window.switchAdminSubTab === 'function') window.switchAdminSubTab('dashboard');
+    });
+    pane.insertBefore(bar, pane.firstChild);
+  }
+
   window.renderAdminDashboard = render;
+  window.p86AdminBackBar = ensureBackBar;
   window.p86AdminDashboard = { render: render, _spec: buildSpec };
 })();

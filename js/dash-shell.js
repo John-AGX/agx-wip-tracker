@@ -101,7 +101,19 @@
         'border:1px solid var(--border,#2a2f3e);border-radius:6px;padding:4px 10px;cursor:pointer;}',
       '.p86dash-sub:hover{color:var(--text,#e9ecf5);border-color:#3c465c;}',
       '.p86dash-sub:focus-visible{outline:2px solid var(--accent,#4f8cff);outline-offset:1px;}',
-      '@media (max-width:700px){.p86dash-cards{grid-template-columns:1fr;}}'
+      '@media (max-width:700px){.p86dash-cards{grid-template-columns:1fr;}}',
+      // Back bar — lives HERE, not in either consumer, because both Admin and
+      // the Command Center render one and a landing page you cannot return to
+      // is a one-way door. Owning it in the shell means the style exists
+      // wherever the shell does, rather than depending on which module
+      // happened to load first.
+      '.p86adm-back{display:flex;align-items:center;gap:10px;margin:0 0 12px;}',
+      '.p86adm-backbtn{font:inherit;font-size:12px;color:var(--text-dim,#9aa0b4);background:transparent;' +
+        'border:1px solid var(--border,#2a2f3e);border-radius:7px;padding:5px 11px;cursor:pointer;' +
+        'display:inline-flex;align-items:center;gap:6px;}',
+      '.p86adm-backbtn:hover{color:var(--text,#e9ecf5);border-color:#3c465c;}',
+      '.p86adm-backbtn:focus-visible{outline:2px solid var(--accent,#4f8cff);outline-offset:2px;}',
+      '.p86adm-crumb{font-size:12px;color:var(--text-dim,#7f8699);}'
     ].join('');
     document.head.appendChild(s);
   }

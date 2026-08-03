@@ -1147,6 +1147,10 @@ function p86Ask(message, opts) {
     // markup's initial style="display:none;" depending on browser
     // state. Setting block guarantees the pane shows.
     if (target) target.style.display = 'block';
+    // Every sub-pane gets a "← Admin" bar back to the dashboard landing.
+    // Injected here, once, rather than pasted into eight panes' markup —
+    // otherwise the ninth pane ships without one.
+    if (window.p86AdminBackBar) { try { window.p86AdminBackBar(target, name); } catch (e) {} }
     if (name === 'dashboard') { if (window.renderAdminDashboard) window.renderAdminDashboard(); }
     else if (name === 'users') renderAdminUsers();
     else if (name === 'metrics') renderAdminMetrics();
