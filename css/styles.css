@@ -2157,6 +2157,25 @@
             flex: 0 0 auto;
         }
 
+        /* List select boxes are 10x10 — John's call, and the size the Leads
+           list happened to render before any of this. `width:auto` above gives
+           the native 13px square, which reads too heavy in a dense row.
+
+           Qualified with input[type="checkbox"] on purpose: a bare `.lead-check`
+           is (0,1,0) and would lose to the (0,1,1) rule directly above it, so
+           the whole thing would silently do nothing. Verified live at 10x10 on
+           rows and the select-all header before shipping. */
+        input[type="checkbox"].lead-check,
+        input[type="checkbox"].job-check,
+        input[type="checkbox"].est-check,
+        input[type="checkbox"].ci-check,
+        input[type="checkbox"].jh-check,
+        input[type="checkbox"].md-check,
+        input[type="checkbox"][id$="-check-all"] {
+            width: 10px;
+            height: 10px;
+        }
+
         /* Select-column cells must not clip. They inherit the table's
            overflow:hidden + text-overflow:ellipsis, which is right for a
            title column and wrong here: there is no text to truncate, only a
