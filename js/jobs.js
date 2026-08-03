@@ -2075,6 +2075,7 @@ function renderJobsMain() {
             if (clientIdEl) clientIdEl.value = '';
             document.getElementById('jobType').value = '';
             document.getElementById('jobWorkType').value = '';
+            populateJobMarketSelect();
             document.getElementById('jobMarket').value = '';
             document.getElementById('jobContractAmount').value = '';
             document.getElementById('jobEstimatedCosts').value = '';
@@ -2385,6 +2386,41 @@ function renderJobsMain() {
         // Populate the PM <select> from cached users when authenticated. For admins,
         // any active PM/admin can be assigned. For PMs themselves, lock the field
         // to their own user. Falls back to the legacy hardcoded list when offline.
+        // The New Job market picker was static HTML — Orlando/Tampa/Denver/
+        // "Other" — so three real markets (Jacksonville, Arizona, Texas) could
+        // not be chosen at creation, and "Other" wrote a market that does not
+        // exist. The job EDIT path already builds its options from the live
+        // list via p86MarketNames; this makes create agree with edit.
+        //
+        // Stores the market NAME, not the id, because that is what every job
+        // row already holds and what the edit path writes. p86Markets.resolve()
+        // reads market_id first and falls back to the name, so names resolve
+        // correctly everywhere; moving jobs to market_id is a separate
+        // migration, not a side effect of fixing this dropdown.
+        function populateJobMarketSelect() {
+            var sel = document.getElementById('jobMarket');
+            if (!sel) return;
+            var M = window.p86Markets;
+            var list = (M && M.active) ? M.active() : [];
+            // Cold cache — leave the existing options rather than blanking the
+            // control, so the form is never unusable on a slow first load.
+            if (!list.length) return;
+            var prev = sel.value;
+            sel.innerHTML = ['<option value="">-- Select Market --</option>'].concat(
+                list.map(function (m) {
+                    var n = m.name || '';
+                    return '<option value="' + escapeHTML(n) + '">' + escapeHTML(n) + '</option>';
+                })
+            ).join('');
+            // Preserve a legacy value (e.g. a job saved as "Other") so opening
+            // the form doesn't silently reassign it.
+            if (prev && !list.some(function (m) { return m.name === prev; })) {
+                sel.insertAdjacentHTML('beforeend',
+                    '<option value="' + escapeHTML(prev) + '">' + escapeHTML(prev) + '</option>');
+            }
+            sel.value = prev;
+        }
+
         function populateJobPMSelect() {
             var sel = document.getElementById('jobPM');
             if (!sel) return;
@@ -6605,7 +6641,20 @@ function renderJobsMain() {
             const nameInput = document.querySelector('[data-mp-name="' + key + '"]');
             const revInput = document.querySelector('[data-mp-rev="' + key + '"]');
             if (nameInput) phase.phase = nameInput.value.trim();
-            if (revInput) phase.asSoldRevenue = parseFloat(revInput.value) || 0;
+            // Write ALL THREE money fields, not just asSoldRevenue.
+            // asSoldRevenue / asSoldPhaseBudget / phaseBudget are mirrors of
+            // one number (see onPhaseBreakdownInput). Writing one alone splits
+            // the job in two: readers whose chain starts at asSoldRevenue see
+            // the new value, the four that start at asSoldPhaseBudget still see
+            // the old one. That is exactly how Oak Bridge ended up showing
+            // $35,661 on the revenue rollup and $38,911 in the building
+            // breakdown from the same two phases.
+            if (revInput) {
+                const rev = parseFloat(revInput.value) || 0;
+                phase.asSoldRevenue = rev;
+                phase.asSoldPhaseBudget = rev;
+                phase.phaseBudget = rev + (phase.coPhaseBudget || 0);
+            }
             saveData();
             // Sync revenue to node graph if present
             if (typeof NG !== 'undefined') {

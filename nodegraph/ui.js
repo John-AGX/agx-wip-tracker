@@ -6416,7 +6416,12 @@ function pushToJob(){
     var pName=n.label.split(' \u203A ')[0].trim();
     if(pName) phase.phase=pName;
     phase.pctComplete=n.pctComplete||0;
+    // Mirror all three, same invariant as saveManagedPhase/onPhaseBreakdownInput.
+    // Writing asSoldRevenue alone splits the readers: the revenue rollup moves
+    // and the building/allocation breakdown silently keeps the old number.
     phase.asSoldRevenue=n.revenue||0;
+    phase.asSoldPhaseBudget=n.revenue||0;
+    phase.phaseBudget=(n.revenue||0)+(phase.coPhaseBudget||0);
     // Sum costs from wired cost nodes
     var mat=0,lab=0,equip=0;
     wires.forEach(function(w){

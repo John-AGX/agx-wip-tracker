@@ -55,7 +55,29 @@
       '.p86mk-cd{color:var(--text-dim,#7f8699);font-size:11px;}',
       '.p86mk-sp{flex:1;}',
       '.p86mk-done{font-size:10.5px;font-variant-numeric:tabular-nums;color:var(--text-dim,#7f8699);}',
-      '.p86mk-done.gap{color:#f4cf94;}'
+      '.p86mk-done.gap{color:#f4cf94;}',
+      // add / deactivate
+      '.p86mk-bar{display:flex;align-items:center;gap:10px;margin-bottom:10px;}',
+      '.p86mk-add{background:var(--surface2,#151d2c);border:1px solid var(--border,#2a2f3e);color:var(--text,#e9ecf5);',
+      'border-radius:7px;padding:6px 11px;font-size:12px;font-weight:600;cursor:pointer;}',
+      '.p86mk-add:hover{border-color:#3f6bb8;}',
+      '.p86mk-count{font-size:11px;color:var(--text-dim,#7f8699);}',
+      '.p86mk-new{border:1px solid #3f6bb8;border-radius:9px;padding:12px;margin-bottom:12px;',
+      'background:var(--surface2,#151d2c);}',
+      '.p86mk-newbtns{display:flex;align-items:center;gap:10px;margin-top:10px;}',
+      '.p86mk-cancel{background:none;border:1px solid var(--border,#2a2f3e);color:var(--text-dim,#7f8699);',
+      'border-radius:6px;padding:5px 10px;font-size:11.5px;cursor:pointer;}',
+      '.p86mk-err{font-size:11.5px;color:var(--red,#f87171);}',
+      // The row action is quiet until hover so the list still reads as a list.
+      '.p86mk-act{opacity:0;background:none;border:1px solid var(--border,#2a2f3e);border-radius:6px;',
+      'color:var(--text-dim,#7f8699);font-size:10.5px;padding:3px 8px;cursor:pointer;flex:0 0 auto;',
+      'transition:opacity .12s;}',
+      '.p86mk-row:hover .p86mk-act,.p86mk-row.off .p86mk-act{opacity:1;}',
+      '.p86mk-act:hover{color:var(--red,#f87171);border-color:var(--red,#f87171);}',
+      '.p86mk-row.off .p86mk-act:hover{color:var(--green,#34d399);border-color:var(--green,#34d399);}',
+      '.p86mk-row.off{opacity:.55;}',
+      '.p86mk-inact{font-size:10px;text-transform:uppercase;letter-spacing:.4px;color:#f4cf94;',
+      'border:1px solid #f4cf9455;border-radius:4px;padding:1px 5px;}'
     ].join('');
     document.head.appendChild(s);
   }
@@ -131,7 +153,7 @@
   }
 
   // ── Markets pane — the registry's first consumer ────────────────────
-  var _spec = null, _markets = [], _openId = null;
+  var _spec = null, _markets = [], _openId = null, _adding = false;
 
   function completeness(m) {
     if (!_spec) return null;
@@ -143,6 +165,23 @@
     return { set: set, total: optional.length };
   }
 
+  // The create row is built from the registry's own required fields, so a
+  // new required column becomes a create input automatically rather than
+  // being a fourth place to remember.
+  function requiredFields() {
+    return _spec ? _spec.settings.filter(function (s) { return s.required; }) : [];
+  }
+
+  function createFormHTML() {
+    return '<div class="p86mk-new">' +
+      '<div class="p86set-grid">' + requiredFields().map(function (s) { return field(s, ''); }).join('') + '</div>' +
+      '<div class="p86mk-newbtns">' +
+        '<button type="button" class="p86set-save" data-mk-create>Create market</button>' +
+        '<button type="button" class="p86mk-cancel" data-mk-cancel>Cancel</button>' +
+        '<span class="p86mk-err" data-mk-err></span>' +
+      '</div></div>';
+  }
+
   function paint() {
     var host = document.getElementById('admin-markets-host');
     if (!host) return;
@@ -150,22 +189,48 @@
     var rows = _markets.map(function (m) {
       var c = completeness(m);
       var gap = c && c.set === 0;
-      return '<div class="p86mk-row' + (String(_openId) === String(m.id) ? ' on' : '') + '" data-id="' + esc(m.id) + '">' +
+      var off = m.active === false;
+      return '<div class="p86mk-row' + (String(_openId) === String(m.id) ? ' on' : '') + (off ? ' off' : '') +
+               '" data-id="' + esc(m.id) + '">' +
         '<span class="p86mk-sw" style="background:' + esc(m.color || '#4f8cff') + '"></span>' +
         '<span class="p86mk-nm">' + esc(m.name) + '</span>' +
         '<span class="p86mk-cd">' + esc(m.code || '') + (m.state ? ' · ' + esc(m.state) : '') + '</span>' +
+        (off ? '<span class="p86mk-inact">inactive</span>' : '') +
         '<span class="p86mk-sp"></span>' +
         (c ? '<span class="p86mk-done' + (gap ? ' gap' : '') + '">' + c.set + ' / ' + c.total + ' set</span>' : '') +
+        // Deactivate, not delete — the server soft-deletes (active=FALSE) so
+        // jobs and leads already pointing at this market keep resolving. Say
+        // what it actually does rather than promising a delete it won't do.
+        '<button type="button" class="p86mk-act" data-act="' + (off ? 'on' : 'off') + '" ' +
+                'data-mk-id="' + esc(m.id) + '" title="' +
+                (off ? 'Reactivate this market' : 'Deactivate — hides it from pickers, keeps existing records intact') + '">' +
+          (off ? 'Reactivate' : 'Deactivate') + '</button>' +
         '</div>';
     }).join('');
-    host.innerHTML = '<div class="p86mk-list">' + rows + '</div><div id="admin-market-form"></div>';
+    host.innerHTML =
+      '<div class="p86mk-bar">' +
+        '<button type="button" class="p86mk-add" data-mk-add>+ New market</button>' +
+        '<span class="p86mk-count">' + _markets.length + ' market' + (_markets.length === 1 ? '' : 's') + '</span>' +
+      '</div>' +
+      (_adding ? createFormHTML() : '') +
+      '<div class="p86mk-list">' + rows + '</div><div id="admin-market-form"></div>';
 
     host.querySelector('.p86mk-list').addEventListener('click', function (e) {
+      // Row actions must not also open/close the row underneath them.
+      var act = e.target.closest('.p86mk-act');
+      if (act) { e.stopPropagation(); toggleActive(act.getAttribute('data-mk-id'), act.getAttribute('data-act')); return; }
       var r = e.target.closest('.p86mk-row'); if (!r) return;
       var id = r.getAttribute('data-id');
       _openId = (String(_openId) === String(id)) ? null : id;
       paint();
     });
+
+    var addBtn = host.querySelector('[data-mk-add]');
+    if (addBtn) addBtn.addEventListener('click', function () { _adding = !_adding; paint(); });
+    var cancelBtn = host.querySelector('[data-mk-cancel]');
+    if (cancelBtn) cancelBtn.addEventListener('click', function () { _adding = false; paint(); });
+    var createBtn = host.querySelector('[data-mk-create]');
+    if (createBtn) createBtn.addEventListener('click', function () { createMarket(host, createBtn); });
 
     if (_openId) {
       var m = _markets.filter(function (x) { return String(x.id) === String(_openId); })[0];
@@ -188,6 +253,77 @@
         });
       }
     }
+  }
+
+  function createMarket(host, btn) {
+    var errEl = host.querySelector('[data-mk-err]');
+    var body = {};
+    requiredFields().forEach(function (s) {
+      var el = host.querySelector('#set_' + s.key);
+      if (el) body[s.key] = el.value;
+    });
+    // Mirror the server's own required checks so the common mistakes get a
+    // useful message here instead of a bare 400.
+    var missing = requiredFields().filter(function (s) { return !String(body[s.key] || '').trim(); });
+    if (missing.length) {
+      if (errEl) errEl.textContent = 'Required: ' + missing.map(function (s) { return s.label; }).join(', ');
+      return;
+    }
+    if (errEl) errEl.textContent = '';
+    btn.disabled = true;
+    window.p86Api.post('/api/markets', body)
+      .then(function (res) {
+        var m = (res && res.market) || null;
+        if (m) _markets = _markets.concat([m]);
+        _adding = false;
+        _openId = m ? m.id : null;   // drop straight into the new market's settings
+        paint();
+        // The switcher and every market chip read a cached list — without
+        // this the new market exists but is invisible until a reload.
+        if (window.p86Markets && window.p86Markets.load) {
+          window.p86Markets.load(true).then(function () {
+            if (window.p86Markets.renderSwitcher) window.p86Markets.renderSwitcher();
+          }).catch(function () {});
+        }
+      })
+      .catch(function (e) {
+        btn.disabled = false;
+        if (errEl) errEl.textContent = (e && e.message) || 'Could not create market';
+      });
+  }
+
+  function toggleActive(id, act) {
+    var m = _markets.filter(function (x) { return String(x.id) === String(id); })[0];
+    if (!m) return;
+    var off = act === 'off';
+    var go = off
+      ? window.p86Confirm({
+          title: 'Deactivate ' + (m.name || 'market') + '?',
+          message: 'It disappears from market pickers and the switcher. Jobs, leads and estimates already ' +
+                   'assigned to it keep their assignment and keep resolving — nothing is deleted, and you ' +
+                   'can reactivate it here at any time.',
+          confirmText: 'Deactivate', cancelText: 'Cancel', destructive: true
+        })
+      : Promise.resolve(true);
+    go.then(function (ok) {
+      if (!ok) return;
+      // DELETE is the deactivate verb server-side (active=FALSE); reactivating
+      // is an ordinary PATCH back to active.
+      var p = off
+        ? window.p86Api.del('/api/markets/' + encodeURIComponent(id))
+        : window.p86Api.patch('/api/markets/' + encodeURIComponent(id), { active: true });
+      return p.then(function () {
+        _markets = _markets.map(function (x) {
+          return String(x.id) === String(id) ? Object.assign({}, x, { active: !off }) : x;
+        });
+        paint();
+        if (window.p86Markets && window.p86Markets.load) {
+          window.p86Markets.load(true).then(function () {
+            if (window.p86Markets.renderSwitcher) window.p86Markets.renderSwitcher();
+          }).catch(function () {});
+        }
+      });
+    }).catch(function () {});
   }
 
   function render() {
