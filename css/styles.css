@@ -2138,6 +2138,23 @@
         input[type="checkbox"],
         input[type="radio"] {
             accent-color: #5ddb7e;
+            /* Undo the global `input, select, textarea { width: 100% }` rule
+               further down for TOGGLES. A checkbox is not a text field: with
+               width:100% it stretches to whatever space its container has
+               left over, so identical markup rendered different sizes on
+               every list — measured live, the Leads row box was 10×13 and
+               the Jobs row box 18×13, from the same <input> in the same
+               34px cell. Neither size was chosen; both were leftovers of
+               cell padding.
+
+               width:auto restores the native square control, so every list's
+               select box is the same size by construction rather than by
+               each list remembering to set one. Matches how
+               label.p86-check-row and label.cap-row already fix this
+               locally. Anything that genuinely wants a bigger box (the subs
+               notification matrix) sets it inline and still wins. */
+            width: auto;
+            flex: 0 0 auto;
         }
 
         /* Reusable checkbox-with-label row.
