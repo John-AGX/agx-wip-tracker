@@ -2157,6 +2157,22 @@
             flex: 0 0 auto;
         }
 
+        /* Select-column cells must not clip. They inherit the table's
+           overflow:hidden + text-overflow:ellipsis, which is right for a
+           title column and wrong here: there is no text to truncate, only a
+           control. While the box was 10px it fit inside the 34px cell and
+           nobody noticed; at its native 13px the cell started rendering a
+           stray "…" beside every checkbox. Widening the box exposed a clip
+           that was always there. */
+        .lead-check-cell,
+        .job-check-cell,
+        .est-check-cell {
+            overflow: visible;
+            text-overflow: clip;
+            padding-left: 2px;
+            padding-right: 2px;
+        }
+
         /* Reusable checkbox-with-label row.
            Use whenever you have a single <input type="checkbox"> sitting
            next to descriptive text. The global label{} rule

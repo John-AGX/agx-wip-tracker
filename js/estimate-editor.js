@@ -1894,7 +1894,7 @@
       var valColorStyle = opts.cls ? '' : ('color:' + color + ';');
       return '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;' + divider + '">' +
         '<span style="font-size:' + (opts.bold ? 12 : 11) + 'px;color:var(--text-dim,#888);' + (opts.bold ? 'text-transform:uppercase;letter-spacing:0.5px;font-weight:700;' : '') + '">' + label + '</span>' +
-        '<span' + valClsAttr + ' style="font-family:\'SF Mono\',monospace;font-size:' + size + 'px;font-weight:' + weight + ';' + valColorStyle + '">' + fmtCurrency(value) + '</span>' +
+        '<span' + valClsAttr + ' style="font-variant-numeric:tabular-nums;font-size:' + size + 'px;font-weight:' + weight + ';' + valColorStyle + '">' + fmtCurrency(value) + '</span>' +
       '</div>';
     }
     var html = '';
@@ -1905,13 +1905,13 @@
       (t.includedGroups || []).forEach(function(g) {
         html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;font-size:12px;">' +
           '<span style="color:var(--text,#ddd);">' + escapeHTML(g.alt.name || '(unnamed)') + '</span>' +
-          '<span style="font-family:\'SF Mono\',monospace;color:var(--text,#fff);">' + fmtCurrency(g.markedUp) + '</span>' +
+          '<span style="font-variant-numeric:tabular-nums;color:var(--text,#fff);">' + fmtCurrency(g.markedUp) + '</span>' +
         '</div>';
       });
       (t.excludedGroups || []).forEach(function(g) {
         html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;font-size:12px;opacity:0.5;">' +
           '<span style="color:var(--text-dim,#888);text-decoration:line-through;">' + escapeHTML(g.alt.name || '(unnamed)') + '</span>' +
-          '<span style="font-family:\'SF Mono\',monospace;color:var(--text-dim,#666);">' + fmtCurrency(g.markedUp) + ' (excluded)</span>' +
+          '<span style="font-variant-numeric:tabular-nums;color:var(--text-dim,#666);">' + fmtCurrency(g.markedUp) + ' (excluded)</span>' +
         '</div>';
       });
       html += '<div style="border-top:1px solid var(--border,#333);margin:8px 0;"></div>';
@@ -1924,7 +1924,7 @@
       var pct = Number(t.targetMargin || 0).toFixed(1);
       html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:11px;color:#fbbf24;">' +
         '<span>&#x1F512; Target margin locked &middot; <strong>' + pct + '%</strong></span>' +
-        '<span style="font-family:\'SF Mono\',monospace;">markup back-computed</span>' +
+        '<span style="font-variant-numeric:tabular-nums;">markup back-computed</span>' +
       '</div>';
     }
     html += row('Markup', t.markupAmount, { color: 'var(--yellow,#fbbf24)' });
@@ -1990,9 +1990,9 @@
           '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(b.description || '(item)') +
             '<span style="font-size:8px;font-style:normal;padding:1px 5px;border-radius:7px;margin-left:6px;background:' + (b.cost_code === 'labor' ? 'rgba(242,165,92,0.13);color:#f2a55c' : 'rgba(79,209,197,0.13);color:#4fd1c5') + ';">' + escapeHTML(b.cost_code || '') + '</span>' +
           '</span>' +
-          '<span style="font-family:monospace;font-style:normal;flex:0 0 auto;">' + bq + ' ' + escapeHTML(b.unit || '') + '</span>' +
-          '<span style="font-family:monospace;font-style:normal;flex:0 0 84px;text-align:right;">@ $' + uc.toFixed(2) + '</span>' +
-          '<span style="font-family:monospace;font-style:normal;flex:0 0 84px;text-align:right;">$' + (bq * uc).toFixed(2) + '</span>' +
+          '<span style="font-variant-numeric:tabular-nums;font-style:normal;flex:0 0 auto;">' + bq + ' ' + escapeHTML(b.unit || '') + '</span>' +
+          '<span style="font-variant-numeric:tabular-nums;font-style:normal;flex:0 0 84px;text-align:right;">@ $' + uc.toFixed(2) + '</span>' +
+          '<span style="font-variant-numeric:tabular-nums;font-style:normal;flex:0 0 84px;text-align:right;">$' + (bq * uc).toFixed(2) + '</span>' +
         '</div>';
     });
     html +=
@@ -2423,7 +2423,7 @@
           '<span style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.4px;font-weight:600;">Markup</span>' +
           '<span style="width:24px;height:24px;line-height:22px;text-align:center;font-size:12px;font-weight:700;color:var(--text-dim,#888);border:1px solid var(--border,#333);border-radius:4px;background:rgba(0,0,0,0.15);display:inline-block;">%</span>' +
           '<input type="text" value="' + tmEffMarkup + '" readonly disabled tabindex="-1" ' +
-            'style="width:64px;padding:2px 4px;font-size:12px;background:transparent;border:1px solid transparent;border-radius:4px;color:var(--text-dim,#888);text-align:right;font-family:\'SF Mono\',monospace;cursor:not-allowed;" />' +
+            'style="width:64px;padding:2px 4px;font-size:12px;background:transparent;border:1px solid transparent;border-radius:4px;color:var(--text-dim,#888);text-align:right;font-variant-numeric:tabular-nums;cursor:not-allowed;" />' +
           '<span style="font-size:11px;color:var(--text-dim,#888);">%</span>' +
         '</div>' +
         '<label title="Overrides are inactive while a target margin drives pricing" style="display:inline-flex;align-items:center;padding:0 4px;opacity:0.4;">' +
@@ -2441,7 +2441,7 @@
         (prefix ? '<span style="font-size:11px;color:var(--text-dim,#888);">' + prefix + '</span>' : '') +
         '<input type="text" inputmode="decimal" placeholder="0" value="' + markupVal + '" ' +
           'onchange="updateSectionMarkup(\'' + idAttr + '\', this.value)" ' +
-          'style="width:64px;padding:2px 4px;font-size:12px;background:transparent;border:1px solid transparent;border-radius:4px;color:var(--text,#fff);text-align:right;font-family:\'SF Mono\',monospace;" ' +
+          'style="width:64px;padding:2px 4px;font-size:12px;background:transparent;border:1px solid transparent;border-radius:4px;color:var(--text,#fff);text-align:right;font-variant-numeric:tabular-nums;" ' +
           'onfocus="this.style.borderColor=\'var(--border,#333)\';" onblur="this.style.borderColor=\'transparent\';" />' +
         (suffix ? '<span style="font-size:11px;color:var(--text-dim,#888);">' + suffix + '</span>' : '') +
       '</div>' +
@@ -2507,7 +2507,7 @@
         ' onchange="updateLineField(\'' + idAttr + '\', \'' + field + '\', this.value)"' +
         ' style="width:100%;padding:6px 8px;font-size:12px;background:transparent;border:1px solid var(--border,#333);border-radius:4px;color:var(--text,#fff);' +
         (opts.align ? 'text-align:' + opts.align + ';' : '') +
-        (opts.mono ? 'font-family:\'SF Mono\',monospace;' : '') +
+        (opts.mono ? 'font-variant-numeric:tabular-nums;' : '') +
         '"';
       // Numeric fields render as type="text" with inputmode="decimal"
       // instead of type="number". The native number input has
@@ -2550,7 +2550,7 @@
       // light mode can flip the green to plain text via CSS.
       var clsAttr = cls ? ' class="' + cls + '"' : '';
       var colorStyle = cls ? '' : ('color:' + (color || 'var(--text-dim,#888)') + ';');
-      return '<div' + clsAttr + ' style="flex:' + flex + ';padding:8px 10px;font-size:12px;text-align:right;' + colorStyle + 'font-family:\'SF Mono\',monospace;">' + value + '</div>';
+      return '<div' + clsAttr + ' style="flex:' + flex + ';padding:8px 10px;font-size:12px;text-align:right;' + colorStyle + 'font-variant-numeric:tabular-nums;">' + value + '</div>';
     };
 
     // align-items:flex-start so the row keeps its natural height when
@@ -2571,7 +2571,7 @@
     // on the Margin chip, not per line).
     var markupCellHTML = tmActive
       ? '<div data-cell="markup" data-label="Markup %" title="Driven by the target margin — clear the target on the Margin chip to edit markups" style="flex:0 0 90px;padding:4px 6px;">' +
-          '<div style="width:100%;padding:6px 8px;font-size:12px;border:1px dashed var(--border,#333);border-radius:4px;text-align:right;font-family:\'SF Mono\',monospace;color:var(--text-dim,#888);background:rgba(251,191,36,0.06);">' +
+          '<div style="width:100%;padding:6px 8px;font-size:12px;border:1px dashed var(--border,#333);border-radius:4px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text-dim,#888);background:rgba(251,191,36,0.06);">' +
             (Math.round(effective * 10) / 10) + '%' +
           '</div>' +
         '</div>'
@@ -2619,8 +2619,8 @@
       '<div style="flex:0 0 70px;"></div>' +
       '<div style="flex:0 0 110px;"></div>' +
       '<div style="flex:0 0 90px;"></div>' +
-      '<div style="flex:0 0 110px;text-align:right;font-family:\'SF Mono\',monospace;font-size:12px;color:var(--text,#fff);padding:0 10px;">' + fmtCurrency(rawSum) + '</div>' +
-      '<div class="ee-section-total" style="flex:0 0 120px;text-align:right;font-family:\'SF Mono\',monospace;font-size:12px;font-weight:700;padding:0 10px;">' + fmtCurrency(markedUp) + '</div>' +
+      '<div style="flex:0 0 110px;text-align:right;font-variant-numeric:tabular-nums;font-size:12px;color:var(--text,#fff);padding:0 10px;">' + fmtCurrency(rawSum) + '</div>' +
+      '<div class="ee-section-total" style="flex:0 0 120px;text-align:right;font-variant-numeric:tabular-nums;font-size:12px;font-weight:700;padding:0 10px;">' + fmtCurrency(markedUp) + '</div>' +
       '<div style="flex:0 0 36px;"></div>' +
     '</div>';
   }
