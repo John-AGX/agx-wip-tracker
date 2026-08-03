@@ -128,6 +128,7 @@
           return p;
         })(),
         items: [
+          { label: 'Markets',      open: goAdmin('markets') },
           { label: 'Organization', open: goAdmin('organization') }
         ] },
       { key: 'ai', title: 'AI', count: '3 agents',
@@ -215,8 +216,8 @@
   // bar that will be missing from the ninth.
   var LABELS = {
     users: 'Users', roles: 'Roles', compliance: 'Compliance',
-    organization: 'Organization', agents: 'Agents', context: 'Context',
-    metrics: 'Usage', 'ocr-inbox': 'OCR Inbox'
+    organization: 'Organization', markets: 'Markets', agents: 'Agents',
+    context: 'Context', metrics: 'Usage', 'ocr-inbox': 'OCR Inbox'
   };
 
   function ensureBackBar(pane, name) {

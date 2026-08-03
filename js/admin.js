@@ -1152,6 +1152,7 @@ function p86Ask(message, opts) {
     // otherwise the ninth pane ships without one.
     if (window.p86AdminBackBar) { try { window.p86AdminBackBar(target, name); } catch (e) {} }
     if (name === 'dashboard') { if (window.renderAdminDashboard) window.renderAdminDashboard(); }
+    else if (name === 'markets') { if (window.renderAdminMarkets) window.renderAdminMarkets(); }
     else if (name === 'users') renderAdminUsers();
     else if (name === 'metrics') renderAdminMetrics();
     else if (name === 'roles') renderAdminRoles();

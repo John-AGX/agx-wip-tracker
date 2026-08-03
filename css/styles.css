@@ -9148,6 +9148,30 @@ body.light-mode .p86-pv-tag-modal-chip {
 .ee-line-tbl-head .ee-th-desc   { flex: 2 1 200px; padding: 0 8px; }
 .ee-line-tbl-head .ee-th-num    { flex: 1; min-width: 80px; padding: 0 8px; text-align: right; }
 .ee-line-tbl-head .ee-th-del    { flex: 0 0 40px; }
+
+/* Numeric font — match the jobs page / overview (.summary-card-value and
+   the PO editor already do this). Proportional digits make a column of
+   money jitter: the "1" is narrower than the "0", so $30,846.00 and
+   $30,000.00 don't line up their decimal points and the eye can't scan
+   down the column. Tabular figures give every digit the same advance
+   width, which is the whole reason the estimate reads as a spreadsheet.
+   Applied to the cells AND their inputs — an <input> does not inherit
+   font-variant-numeric from its container. */
+.ee-line-tbl .ee-th-num,
+.ee-line-tbl [data-cell="qty"],
+.ee-line-tbl [data-cell="unit"],
+.ee-line-tbl [data-cell="unitCost"],
+.ee-line-tbl [data-cell="markup"],
+.ee-line-tbl .ee-line-ext,
+.ee-line-tbl input,
+.ee-section-total,
+.ee-mtb-total,
+.ee-mtb-sub,
+.ee-sheet-readouts,
+.ee-sheet-field input {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
 /* Mobile: collapse the header label row, then reflow each line into a
    stacked card. The line row is a flex row of 9 positional cells (handle,
    desc, qty, unit, unitCost, markup, ext, client-price, delete) that overflow

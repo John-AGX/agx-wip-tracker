@@ -14,8 +14,26 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth } = require('../auth');
+const registry = require('../services/settings-registry');
 
 const router = express.Router();
+
+// GET /api/markets/registry — the field declarations the admin pane and the
+// assistant both render from. Read-only and non-sensitive (it is a schema of
+// labels and types, not values), so plain requireAuth.
+//
+// Served from the SAME module the server validates against, so a form can't
+// drift from what the API will accept — the usual failure being a field that
+// renders, submits, and is silently dropped.
+router.get('/registry', requireAuth, (req, res) => {
+  res.json({
+    scope: 'market',
+    title: registry.REGISTRY.market.title,
+    describe: registry.REGISTRY.market.describe,
+    groups: registry.groupsFor('market'),
+    settings: registry.MARKET_SETTINGS,
+  });
+});
 
 async function requireAdmin(req, res, next) {
   if (req.user && (req.user.role === 'admin' || req.user.role === 'system_admin')) return next();

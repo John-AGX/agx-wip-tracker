@@ -250,7 +250,7 @@
          system fallback if the font is slow/unreachable (offline / PWA cold). -->
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&display=swap">
-    <link rel="stylesheet" href="css/styles.css?v=258">
+    <link rel="stylesheet" href="css/styles.css?v=259">
     <link rel="stylesheet" href="css/report-style-packs.css?v=4">
     <link rel="stylesheet" href="css/workspace-layout.css?v=66">
     <link rel="stylesheet" href="css/workspace.css?v=41">
@@ -1887,6 +1887,10 @@
                         <div id="admin-dashboard-host"></div>
                     </div>
 
+                    <div id="admin-subtab-markets" class="admin-subtab-content">
+                        <div id="admin-markets-host"></div>
+                    </div>
+
                     <div id="admin-subtab-users" class="admin-subtab-content">
                         <div class="action-buttons">
                             <button class="ee-btn primary" onclick="openNewUserModal()">&#x1F464; New User</button>
@@ -3265,8 +3269,9 @@
     <!-- Shared dashboard shell — one renderer for Admin (org) and the
          Command Center (platform). Must load BEFORE its consumers. -->
     <script src="js/dash-shell.js?v=2"></script>
-    <script src="js/admin-dashboard.js?v=2"></script>
-    <script src="js/admin.js?v=128"></script>
+    <script src="js/settings-registry.js?v=1"></script>
+    <script src="js/admin-dashboard.js?v=3"></script>
+    <script src="js/admin.js?v=129"></script>
     <!-- Act-as / disguise mode: persistent "Acting as NAME — Exit" banner +
          window.p86ActAs(userId). Self-contained; re-fetches /api/auth/me. -->
     <script src="js/actas.js?v=1"></script>
