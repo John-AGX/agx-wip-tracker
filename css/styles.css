@@ -2157,21 +2157,20 @@
             flex: 0 0 auto;
         }
 
-        /* List select boxes are 10x10 — John's call, and the size the Leads
-           list happened to render before any of this. `width:auto` above gives
-           the native 13px square, which reads too heavy in a dense row.
+        /* Checkboxes are 10x10 EVERYWHERE — John's call. `width:auto` above
+           gives the native 13px square, which reads too heavy in a dense row.
 
-           Qualified with input[type="checkbox"] on purpose: a bare `.lead-check`
-           is (0,1,0) and would lose to the (0,1,1) rule directly above it, so
-           the whole thing would silently do nothing. Verified live at 10x10 on
-           rows and the select-all header before shipping. */
-        input[type="checkbox"].lead-check,
-        input[type="checkbox"].job-check,
-        input[type="checkbox"].est-check,
-        input[type="checkbox"].ci-check,
-        input[type="checkbox"].jh-check,
-        input[type="checkbox"].md-check,
-        input[type="checkbox"][id$="-check-all"] {
+           Deliberately global rather than a list of component classes. The
+           first version of this named six classes; the app actually has
+           fourteen (ci-rowcheck, ehub-pick, lc-box, mf-tile-checkbox,
+           p86fx-check, p86inv-tax, roleEditor_capChk, rpt-picker-checkbox,
+           sch-dsr-check, ws-filter-opt, …) and one of the six — md-check —
+           didn't exist at all. A hand-kept list is a list that goes stale the
+           next time someone adds a table; sizing the ELEMENT can't miss one.
+
+           Anything that genuinely needs a bigger box (the subs notification
+           matrix) sets it inline and still wins — inline beats this. */
+        input[type="checkbox"] {
             width: 10px;
             height: 10px;
         }
