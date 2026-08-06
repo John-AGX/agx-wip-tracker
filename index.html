@@ -1582,23 +1582,37 @@
                                          in while scrolling a long line list (the title input above is
                                          hidden; it's edited on the Details tab). Populated by
                                          renderEstimateIdentity(); truncates so it never crowds the chips. -->
-                                    <div id="ee-identity" style="min-width:0;max-width:320px;display:flex;flex-direction:column;justify-content:center;line-height:1.2;"></div>
-                                    <!-- Job-action buttons (Create Job / Open job / Sync). flex:1 keeps
-                                         the save indicator + icon cluster pinned right. -->
-                                    <div id="ee-linked-chips" style="display:flex;gap:6px;flex-wrap:wrap;flex:1;min-width:0;"></div>
+                                    <!-- HIDDEN, not removed — same reason as #ee-title above: the
+                                         renderers still read/write these nodes. Everything this row
+                                         used to show is already on screen somewhere better:
+                                           · title + SOLD chip → the parent LEAD card in the sidebar
+                                             and the sold bar directly below
+                                           · Open job / Create job → the linked-job row below
+                                         A header that repeats the page underneath it is just a band
+                                         of duplicates between you and the work. -->
+                                    <div id="ee-identity" style="display:none;"></div>
+                                    <div id="ee-linked-chips" style="display:none;"></div>
+                                    <!-- Pushes the (now empty) right cluster out; keeps Back alone at left. -->
+                                    <span style="flex:1;min-width:0;"></span>
                                     <!-- Save-state indicator. Same text + colored states as before
                                          (No changes / Unsaved / Saving… / ✓ Saved / Retrying / Error).
                                          Clicking forces an immediate save. -->
-                                    <span id="ee-save-indicator" style="font-size:11px;color:var(--text-dim,#888);padding:0 4px;display:flex;align-items:center;font-weight:500;cursor:pointer;white-space:nowrap;" onclick="saveEstimateNow()" title="Click to save now"><span style="font-weight:700;margin-right:5px;">&#x25CB;</span>No changes</span>
+                                    <span id="ee-save-indicator" style="display:none;" onclick="saveEstimateNow()" title="Click to save now"><span style="font-weight:700;margin-right:5px;">&#x25CB;</span>No changes</span>
                                     <!-- Icon action cluster — Export / Save / Delete. Borderless
                                          circles using the .header-icon-btn class (32px transparent
                                          at rest, faint ring on hover). Decorated with Heroicons
                                          via data-p86-icon. Delete keeps a danger tint via a
                                          scoped class so it reads as destructive. -->
+                                    <!-- Save and Delete are gone from here on purpose.
+                                         Save: the editor already saves on blur, so a Save button is
+                                         a control that does nothing you haven't already had done.
+                                         Delete: destroying an estimate from a always-visible header
+                                         icon is one stray click from real loss, and it belongs
+                                         behind the same gate as the rest of editing.
+                                         Export stays — it is the one action here with no equivalent
+                                         below and no destructive edge. -->
                                     <div class="ee-header-icons" style="display:inline-flex;align-items:center;gap:2px;">
                                         <button class="header-icon-btn" data-p86-icon="exports" onclick="exportEstimateToBuildertrend()" title="Export Buildertrend xlsx" aria-label="Export"></button>
-                                        <button class="header-icon-btn" data-p86-icon="save" onclick="saveEstimateNow()" title="Save (auto-saves on edit)" aria-label="Save"></button>
-                                        <button class="header-icon-btn ee-header-icon-danger" data-p86-icon="delete" onclick="deleteEstimateFromEditor()" title="Delete this estimate" aria-label="Delete estimate"></button>
                                     </div>
                                     <span class="p86-ask86-mount"></span>
                                 </div>
