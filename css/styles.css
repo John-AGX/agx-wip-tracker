@@ -11055,7 +11055,11 @@ textarea.ci-input { height: auto; resize: vertical; font-family: inherit; }
 .ci-selinfo { font-size: 12px; color: var(--text-dim, #b4b4bf); white-space: nowrap; }
 .ci-selinfo a { color: var(--accent, #6ea8fe); text-decoration: none; }
 .ci-th-check, .ci-td-check { width: 34px; text-align: center; padding-left: 8px !important; padding-right: 4px !important; }
-.ci-td-check input, .ci-th-check input { cursor: pointer; width: 16px; height: 16px; }
+/* Size deliberately omitted — the global input[type="checkbox"] 10x10 rule
+   owns it. This used to hard-code 16px, which tied that global rule on
+   specificity (both 0,1,1) and beat it on source order, so Cost Inbox stayed
+   oversized through two rounds of "make them all 10x10". */
+.ci-td-check input, .ci-th-check input { cursor: pointer; }
 /* Estimates lifecycle status badge + Mark-sent action */
 .est-status-badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: .02em; }
 .est-mark-sent { margin-left: 6px; font-size: 11px; padding: 1px 7px; border-radius: 6px; border: 1px solid var(--border, #2a2a32); background: transparent; color: var(--accent, #6ea8fe); cursor: pointer; }
@@ -11237,7 +11241,10 @@ textarea.ci-input { height: auto; resize: vertical; font-family: inherit; }
 .ci-tagchip-bill { background: rgba(52,199,123,.16); border-color: #2e6b4b; color: #7ee2a8; }
 /* inline checkbox label in the receipt form */
 .ci-check { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text, #e8ebf5); cursor: pointer; }
-.ci-check input { width: 16px; height: 16px; cursor: pointer; }
+/* Same as above — size comes from the global rule. Note .ci-check is on the
+   CONTAINER, not the input; an `input[type="checkbox"].ci-check` selector
+   matches nothing, which is how the first attempt at this silently no-op'd. */
+.ci-check input { cursor: pointer; }
 
 .ci-list { display: flex; flex-direction: column; gap: 8px; }
 .ci-empty { padding: 40px 16px; text-align: center; color: var(--text-dim, #b4b4bf); font-size: 14px; }
