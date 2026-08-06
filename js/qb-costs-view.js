@@ -507,7 +507,10 @@ function p86Ask(message, opts) {
               '<th style="padding:6px 8px;width:28px;">' +
                 '<input type="checkbox" id="qbcSelectAll" ' + (allVisibleSelected ? 'checked' : '') + ' ' +
                   'onchange="window.qbCostsView.selectAllVisible(this.checked)" ' +
-                  'style="cursor:pointer;width:14px;height:14px;" />' +
+                  // No inline width/height — the global input[type="checkbox"]
+                  // rule sizes it. Inline beats every stylesheet, so hard-coding
+                  // 14px here made this table unreachable by any CSS fix.
+                  'style="cursor:pointer;" />' +
               '</th>' +
               sortTh('Date', 'date') +
               sortTh('Vendor', 'vendor') +
@@ -694,7 +697,10 @@ function p86Ask(message, opts) {
         '<input type="checkbox" ' + (checked ? 'checked' : '') + ' ' +
           'data-qbc-select="' + escapeAttr(l.id) + '" ' +
           'onchange="window.qbCostsView.toggleSelect(\'' + escapeAttr(l.id) + '\')" ' +
-          'style="cursor:pointer;width:14px;height:14px;" />' +
+          // Size intentionally NOT set here — the global input[type="checkbox"]
+          // 10x10 rule owns it. An inline width beats every stylesheet, so
+          // hard-coding it here made this table unreachable by any CSS fix.
+          'style="cursor:pointer;" />' +
       '</td>' +
       td(fmtDate(l.date), { fontFamily: 'mono', size: 11, dim: true }) +
       td(l.vendor || '', { weight: 600 }) +
