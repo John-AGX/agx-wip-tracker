@@ -14,9 +14,64 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth } = require('../auth');
+const { auditLog } = require('../audit');
 const registry = require('../services/settings-registry');
 
 const router = express.Router();
+
+// Everything that points at a market.
+//
+// Two generations coexist: the market_id FK, and a legacy free-text market
+// NAME that predates it. A hard delete has to clear BOTH — p86Markets
+// .resolve() falls back to the name when market_id is null, so a row with a
+// stale name keeps rendering a market that no longer exists.
+//
+// And the name lives in two different SHAPES: jobs and estimates are
+// JSONB-blob tables (data->>'market'); leads and clients have a real column.
+// Getting this wrong is not cosmetic — an UPDATE naming a column that isn't
+// there aborts the transaction and the delete silently fails.
+const MARKET_REFS = [
+  { table: 'jobs',      text: 'market', kind: 'jsonb'  },
+  { table: 'estimates', text: 'market', kind: 'jsonb'  },
+  { table: 'leads',     text: 'market', kind: 'column' },
+  { table: 'clients',   text: 'market', kind: 'column' },
+  { table: 'subs',      text: null,     kind: null     },
+  { table: 'users',     text: null,     kind: null     },
+];
+
+// "This row still carries the market's NAME", in whichever shape it lives.
+function nameMatchSql(ref, idx) {
+  if (!ref.text) return null;
+  return ref.kind === 'jsonb'
+    ? `LOWER(data->>'${ref.text}') = LOWER($${idx})`
+    : `LOWER(${ref.text}) = LOWER($${idx})`;
+}
+
+// Count every row bound to this market, by id and by legacy name.
+async function marketUsage(orgId, marketId, marketName) {
+  const out = { total: 0, by_table: {} };
+  for (const ref of MARKET_REFS) {
+    const params = [orgId, marketId];
+    let sql = `SELECT COUNT(*)::int AS n FROM ${ref.table}
+                WHERE organization_id = $1 AND (market_id = $2`;
+    if (ref.text && marketName) {
+      params.push(marketName);
+      sql += ' OR ' + nameMatchSql(ref, 3);
+    }
+    sql += ')';
+    try {
+      const r = await pool.query(sql, params);
+      const n = (r.rows[0] && r.rows[0].n) || 0;
+      if (n) { out.by_table[ref.table] = n; out.total += n; }
+    } catch (e) {
+      // Surface it rather than silently under-report — a table we can't read
+      // is exactly the case where a blind delete would lose data.
+      out.by_table[ref.table] = 'unknown';
+      console.warn('[markets] usage count failed on', ref.table, '-', e && e.message);
+    }
+  }
+  return out;
+}
 
 // GET /api/markets/registry — the field declarations the admin pane and the
 // assistant both render from. Read-only and non-sensitive (it is a schema of
@@ -176,19 +231,145 @@ router.patch('/:id', requireAuth, requireAdmin, async (req, res) => {
 
 // Deactivate (soft). Existing jobs/leads keep pointing at it — we only take
 // it out of the pickers. Reactivate via PATCH { active: true }.
-router.delete('/:id', requireAuth, requireAdmin, async (req, res) => {
+// GET /api/markets/:id/usage — what would break if this market went away.
+// The delete UI calls this first so the admin sees the blast radius BEFORE
+// committing, rather than discovering it afterwards as silently blanked rows.
+router.get('/:id/usage', requireAuth, requireAdmin, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
-    const r = await pool.query(
-      `UPDATE markets SET active = FALSE, updated_at = NOW()
-        WHERE id = $1 AND organization_id = $2 RETURNING id, name, active`,
+    const m = await pool.query(
+      'SELECT id, name FROM markets WHERE id = $1 AND organization_id = $2',
       [req.params.id, orgId]
     );
-    if (!r.rows.length) return res.status(404).json({ error: 'Market not found' });
-    res.json({ ok: true, market: r.rows[0] });
+    if (!m.rows.length) return res.status(404).json({ error: 'Market not found' });
+    const usage = await marketUsage(orgId, m.rows[0].id, m.rows[0].name);
+    res.json({ market: m.rows[0], usage });
   } catch (e) {
-    console.error('[markets] DELETE error:', e && e.stack || e);
+    console.error('[markets] usage error:', e && e.stack || e);
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// DELETE /api/markets/:id
+//   default            → deactivate (soft). Existing behaviour, unchanged.
+//   ?hard=1            → really remove the row.
+//   ?hard=1&reassign_to=<id|none>
+//                      → move every attached record first, then remove.
+//
+// A hard delete of a market that is still in use is REFUSED (409 + the
+// counts) unless reassign_to is supplied. The FK is ON DELETE SET NULL, so
+// without this guard the delete would "succeed" and quietly strip the market
+// off live jobs, leads, estimates and clients with no record of what they had.
+router.delete('/:id', requireAuth, requireAdmin, async (req, res) => {
+  const orgId = req.user.organization_id;
+  const hard = String(req.query.hard || '') === '1';
+
+  if (!hard) {
+    try {
+      const r = await pool.query(
+        `UPDATE markets SET active = FALSE, updated_at = NOW()
+          WHERE id = $1 AND organization_id = $2 RETURNING id, name, active`,
+        [req.params.id, orgId]
+      );
+      if (!r.rows.length) return res.status(404).json({ error: 'Market not found' });
+      auditLog(req, {
+        action: 'market.deactivate', targetType: 'market', targetId: String(r.rows[0].id),
+        organizationId: orgId, detail: { name: r.rows[0].name },
+      });
+      return res.json({ ok: true, market: r.rows[0] });
+    } catch (e) {
+      console.error('[markets] DELETE(soft) error:', e && e.stack || e);
+      return res.status(500).json({ error: 'Server error' });
+    }
+  }
+
+  const client = await pool.connect();
+  try {
+    const m = await client.query(
+      'SELECT id, name FROM markets WHERE id = $1 AND organization_id = $2',
+      [req.params.id, orgId]
+    );
+    if (!m.rows.length) return res.status(404).json({ error: 'Market not found' });
+    const market = m.rows[0];
+
+    const usage = await marketUsage(orgId, market.id, market.name);
+    const raw = req.query.reassign_to;
+    const wantsReassign = raw !== undefined && raw !== '';
+    const toNone = wantsReassign && String(raw) === 'none';
+    let target = null;
+
+    if (usage.total > 0 && !wantsReassign) {
+      return res.status(409).json({
+        error: 'Market is still in use', usage,
+        hint: 'Pass reassign_to=<marketId> to move these records, or reassign_to=none to leave them unassigned.',
+      });
+    }
+    if (wantsReassign && !toNone) {
+      const t = await client.query(
+        'SELECT id, name FROM markets WHERE id = $1 AND organization_id = $2',
+        [raw, orgId]
+      );
+      if (!t.rows.length) return res.status(400).json({ error: 'reassign_to is not a market in this organization' });
+      if (String(t.rows[0].id) === String(market.id)) {
+        return res.status(400).json({ error: 'Cannot reassign a market to itself' });
+      }
+      target = t.rows[0];
+    }
+
+    await client.query('BEGIN');
+    const moved = {};
+    for (const ref of MARKET_REFS) {
+      // $1 org, $2 this market's id, $3 the new market_id (or NULL)
+      const params = [orgId, market.id, target ? target.id : null];
+      const sets = ['market_id = $3'];
+
+      if (ref.text) {
+        params.push(market.name);                   // $4 — the name to match
+        const nameIdx = params.length;
+        let newName = null;
+        if (target) { params.push(target.name); newName = '$' + params.length; }  // $5
+        if (ref.kind === 'jsonb') {
+          sets.push(newName
+            ? `data = jsonb_set(COALESCE(data,'{}'::jsonb), '{${ref.text}}', to_jsonb(${newName}::text))`
+            : `data = COALESCE(data,'{}'::jsonb) - '${ref.text}'`);
+        } else {
+          sets.push(`${ref.text} = ${newName || 'NULL'}`);
+        }
+        var whereName = ' OR ' + nameMatchSql(ref, nameIdx);
+      }
+
+      let sql = `UPDATE ${ref.table} SET ${sets.join(', ')}
+                  WHERE organization_id = $1 AND (market_id = $2`;
+      if (ref.text) sql += whereName;
+      sql += ')';
+      try {
+        const r = await client.query(sql, params);
+        if (r.rowCount) moved[ref.table] = r.rowCount;
+      } catch (e) {
+        await client.query('ROLLBACK');
+        console.error('[markets] hard-delete reassign failed on', ref.table, e && e.message);
+        return res.status(500).json({ error: 'Could not move records off ' + ref.table + ' — nothing was deleted' });
+      }
+    }
+    const del = await client.query(
+      'DELETE FROM markets WHERE id = $1 AND organization_id = $2 RETURNING id, name',
+      [market.id, orgId]
+    );
+    if (!del.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Market not found' }); }
+    await client.query('COMMIT');
+
+    auditLog(req, {
+      action: 'market.delete', targetType: 'market', targetId: String(market.id),
+      organizationId: orgId,
+      detail: { name: market.name, reassigned_to: target ? target.name : (toNone ? '(unassigned)' : null), moved: moved, usage_before: usage },
+    });
+    res.json({ ok: true, deleted: del.rows[0], moved: moved, reassigned_to: target || null });
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch (e2) {}
+    console.error('[markets] DELETE(hard) error:', e && e.stack || e);
+    res.status(500).json({ error: 'Server error' });
+  } finally {
+    client.release();
   }
 });
 

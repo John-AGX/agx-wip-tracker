@@ -77,7 +77,10 @@
       '.p86mk-row.off .p86mk-act:hover{color:var(--green,#34d399);border-color:var(--green,#34d399);}',
       '.p86mk-row.off{opacity:.55;}',
       '.p86mk-inact{font-size:10px;text-transform:uppercase;letter-spacing:.4px;color:#f4cf94;',
-      'border:1px solid #f4cf9455;border-radius:4px;padding:1px 5px;}'
+      'border:1px solid #f4cf9455;border-radius:4px;padding:1px 5px;}',
+      '.p86mk-del:hover{color:var(--red,#f87171);border-color:var(--red,#f87171);}',
+      '.p86mk-delhead{font-size:13px;font-weight:700;color:var(--red,#f87171);margin-bottom:2px;}',
+      '.p86mk-delsub{font-size:11.5px;color:var(--text-dim,#7f8699);margin-bottom:10px;}'
     ].join('');
     document.head.appendChild(s);
   }
@@ -205,6 +208,11 @@
                 'data-mk-id="' + esc(m.id) + '" title="' +
                 (off ? 'Reactivate this market' : 'Deactivate — hides it from pickers, keeps existing records intact') + '">' +
           (off ? 'Reactivate' : 'Deactivate') + '</button>' +
+        // Deactivate hides a market you still operate; delete is for one that
+        // shouldn't exist at all. Separate actions because they are separate
+        // intents and only one of them is reversible.
+        '<button type="button" class="p86mk-act p86mk-del" data-act="del" ' +
+                'data-mk-id="' + esc(m.id) + '" title="Delete this market permanently">Delete</button>' +
         '</div>';
     }).join('');
     host.innerHTML =
@@ -218,7 +226,13 @@
     host.querySelector('.p86mk-list').addEventListener('click', function (e) {
       // Row actions must not also open/close the row underneath them.
       var act = e.target.closest('.p86mk-act');
-      if (act) { e.stopPropagation(); toggleActive(act.getAttribute('data-mk-id'), act.getAttribute('data-act')); return; }
+      if (act) {
+        e.stopPropagation();
+        var a = act.getAttribute('data-act');
+        if (a === 'del') deleteMarket(act.getAttribute('data-mk-id'));
+        else toggleActive(act.getAttribute('data-mk-id'), a);
+        return;
+      }
       var r = e.target.closest('.p86mk-row'); if (!r) return;
       var id = r.getAttribute('data-id');
       _openId = (String(_openId) === String(id)) ? null : id;
@@ -289,6 +303,81 @@
       .catch(function (e) {
         btn.disabled = false;
         if (errEl) errEl.textContent = (e && e.message) || 'Could not create market';
+      });
+  }
+
+  // Permanent delete. Two-step ON PURPOSE: ask the server what is attached
+  // BEFORE offering the button, because the FK is ON DELETE SET NULL — a
+  // delete that "works" would quietly strip the market off live jobs, leads,
+  // estimates and clients and leave no record of what they used to be.
+  function deleteMarket(id) {
+    var m = _markets.filter(function (x) { return String(x.id) === String(id); })[0];
+    if (!m) return;
+    window.p86Api.get('/api/markets/' + encodeURIComponent(id) + '/usage')
+      .then(function (r) {
+        var usage = (r && r.usage) || { total: 0, by_table: {} };
+        if (!usage.total) {
+          return window.p86Confirm({
+            title: 'Delete ' + (m.name || 'market') + '?',
+            message: 'Nothing is assigned to it. This removes the market permanently — it cannot be undone.',
+            confirmText: 'Delete', cancelText: 'Cancel', destructive: true
+          }).then(function (ok) { if (ok) doDelete(id, null); });
+        }
+        // In use → make the admin choose a destination. There is no sensible
+        // default here: silently dumping records into "unassigned" is the very
+        // data loss this dialog exists to prevent.
+        var lines = Object.keys(usage.by_table).map(function (t) {
+          return usage.by_table[t] + ' ' + t;
+        }).join(', ');
+        var others = _markets.filter(function (x) { return String(x.id) !== String(id); });
+        var opts = others.map(function (x) {
+          return '<option value="' + esc(x.id) + '">' + esc(x.name) + '</option>';
+        }).join('') + '<option value="none">— leave them unassigned —</option>';
+        var host = document.getElementById('admin-markets-host');
+        var box = document.createElement('div');
+        box.className = 'p86mk-new';
+        box.innerHTML =
+          '<div class="p86mk-delhead">Delete ' + esc(m.name) + ' — ' + usage.total + ' record' +
+            (usage.total === 1 ? '' : 's') + ' still assigned</div>' +
+          '<div class="p86mk-delsub">' + esc(lines) + '</div>' +
+          '<div class="p86set-f"><label class="p86set-l">Move them to</label>' +
+            '<select data-mk-to>' + opts + '</select>' +
+            '<div class="p86set-h">Every record above is re-tagged first, then the market is removed. One transaction — if any part fails, nothing is deleted.</div>' +
+          '</div>' +
+          '<div class="p86mk-newbtns">' +
+            '<button type="button" class="p86set-save" data-mk-godel>Move &amp; delete</button>' +
+            '<button type="button" class="p86mk-cancel" data-mk-delcancel>Cancel</button>' +
+            '<span class="p86mk-err" data-mk-err></span>' +
+          '</div>';
+        host.insertBefore(box, host.firstChild);
+        box.querySelector('[data-mk-delcancel]').addEventListener('click', function () { paint(); });
+        box.querySelector('[data-mk-godel]').addEventListener('click', function () {
+          doDelete(id, box.querySelector('[data-mk-to]').value, box);
+        });
+      })
+      .catch(function (e) {
+        if (window.p86Toast) window.p86Toast('Could not read market usage: ' + ((e && e.message) || 'error'));
+      });
+  }
+
+  function doDelete(id, reassignTo, box) {
+    var q = '/api/markets/' + encodeURIComponent(id) + '?hard=1';
+    if (reassignTo) q += '&reassign_to=' + encodeURIComponent(reassignTo);
+    window.p86Api.del(q)
+      .then(function () {
+        _markets = _markets.filter(function (x) { return String(x.id) !== String(id); });
+        _openId = null;
+        paint();
+        if (window.p86Markets && window.p86Markets.load) {
+          window.p86Markets.load(true).then(function () {
+            if (window.p86Markets.renderSwitcher) window.p86Markets.renderSwitcher();
+          }).catch(function () {});
+        }
+      })
+      .catch(function (e) {
+        var el = box && box.querySelector('[data-mk-err]');
+        var msg = (e && e.message) || 'Delete failed';
+        if (el) el.textContent = msg; else if (window.p86Toast) window.p86Toast(msg);
       });
   }
 
