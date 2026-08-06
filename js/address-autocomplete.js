@@ -63,7 +63,9 @@
     var zip = findComp(comps, 'postal_code');
     var zipSuffix = findComp(comps, 'postal_code_suffix');
     if (zip && zipSuffix) zip = zip + '-' + zipSuffix;
-    var ll = readLatLng(place.location);
+    // New Places puts coords on .location; the legacy Autocomplete puts them
+    // on .geometry.location. Read both so one parser serves either API.
+    var ll = readLatLng(place.location || (place.geometry && place.geometry.location));
     return {
       formatted: place.formattedAddress || place.formatted_address || '',
       components: { street_address: street, city: city, state: state, zip: zip },
@@ -113,6 +115,68 @@
     return handle;
   }
 
+  // Bind predictions DIRECTLY to an existing <input> — no second search box.
+  //
+  // This is the only way to get "type in the street field and see suggestions":
+  // PlaceAutocompleteElement is a web component that renders and owns its own
+  // input, so it can never decorate a field you already have. The legacy
+  // places.Autocomplete does attach to a real input, which also means the field
+  // stays a plain <input> — typing an address Google doesn't know still works,
+  // and collect() keeps reading the same node it always did.
+  //
+  // Trade-off worth knowing: places.Autocomplete is Google's LEGACY API. It
+  // still functions and is supported for existing usage, but new capability
+  // goes to the element. We fall back to the mounted element automatically if
+  // the legacy class ever disappears, so this degrades rather than breaks.
+  function bindInput(inputEl, opts) {
+    opts = opts || {};
+    if (!inputEl || inputEl.dataset.p86AcBound) return null;
+    if (!window.p86Maps || typeof window.p86Maps.ready !== 'function') return null;
+    inputEl.dataset.p86AcBound = '1';
+    var handle = { ac: null, _destroyed: false, destroy: function () { handle._destroyed = true; } };
+    window.p86Maps.ready().then(function (maps) {
+      if (handle._destroyed) return;
+      if (!maps.places || typeof maps.places.Autocomplete !== 'function') {
+        // No legacy class — let the caller fall back to the mounted element.
+        delete inputEl.dataset.p86AcBound;
+        if (typeof opts.onUnavailable === 'function') opts.onUnavailable();
+        return;
+      }
+      var ac = new maps.places.Autocomplete(inputEl, {
+        fields: ['address_components', 'formatted_address', 'geometry'],
+        types: ['address'],
+        componentRestrictions: { country: 'us' }
+      });
+      handle.ac = ac;
+      ac.addListener('place_changed', function () {
+        var place = ac.getPlace();
+        if (!place || !(place.address_components || place.geometry)) return;  // typed, never picked
+        if (typeof opts.onPlace === 'function') opts.onPlace(parsePlace(place));
+      });
+      // The dropdown renders in a body-level .pac-container. Inside a modal
+      // with its own stacking context it lands underneath unless lifted.
+      ensurePacCss();
+    }).catch(function () { delete inputEl.dataset.p86AcBound; });
+    return handle;
+  }
+
+  function ensurePacCss() {
+    if (document.getElementById('p86-pac-css')) return;
+    var s = document.createElement('style'); s.id = 'p86-pac-css';
+    s.textContent =
+      '.pac-container{z-index:100000 !important;border-radius:8px;border:1px solid var(--border,#2a2f3e);' +
+      'background:var(--card-bg,#141419);box-shadow:0 10px 28px rgba(0,0,0,.5);font-family:inherit;padding:4px 0;}' +
+      '.pac-item{border-top:0;padding:7px 11px;font-size:12.5px;color:var(--text-dim,#9d9da8);cursor:pointer;}' +
+      '.pac-item:hover,.pac-item-selected{background:rgba(255,255,255,.06);}' +
+      '.pac-item-query{font-size:13px;color:var(--text,#e9ecf5);}' +
+      '.pac-matched{color:#4f8cff;}' +
+      '.pac-icon{display:none;}' +                    /* Google's sprite pin reads as a broken image on dark */
+      '.hdpi .pac-icon{display:none;}' +
+      'body.light-mode .pac-container{background:#fff;border-color:#d5dae5;}' +
+      'body.light-mode .pac-item{color:#475569;} body.light-mode .pac-item-query{color:#0f172a;}';
+    document.head.appendChild(s);
+  }
+
   // Convenience: decorate a single free-text address <input>. Inserts a search
   // box immediately before it; on pick, writes the chosen address into the input
   // (formatted by default, or just the street line) and fires input/change so
@@ -141,5 +205,5 @@
     });
   }
 
-  window.p86AddressAutocomplete = { attach: attach, attachToField: attachToField };
+  window.p86AddressAutocomplete = { attach: attach, attachToField: attachToField, bindInput: bindInput };
 })();

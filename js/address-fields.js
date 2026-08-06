@@ -66,7 +66,7 @@
     var dis = opts.disabled ? ' disabled' : '';
     return '<div class="p86-addr"' + (opts.id ? ' id="' + esc(opts.id) + '"' : '') + '>' +
       '<div class="p86-addr-acm"></div>' +
-      '<input class="p86-addr-in" data-addr="street" placeholder="Street address" value="' + esc(c.street) + '"' + dis + '>' +
+      '<input class="p86-addr-in" data-addr="street" placeholder="Start typing an address…" autocomplete="off" value="' + esc(c.street) + '"' + dis + '>' +
       '<div class="p86-addr-row">' +
         '<input class="p86-addr-in p86-addr-city" data-addr="city" placeholder="City" value="' + esc(c.city) + '"' + dis + '>' +
         '<input class="p86-addr-in p86-addr-state" data-addr="state" placeholder="State" maxlength="20" value="' + esc(c.state) + '"' + dis + '>' +
@@ -98,23 +98,47 @@
   function wire(container, obj, onPick) {
     var root = container && (container.classList && container.classList.contains('p86-addr') ? container : container.querySelector('.p86-addr'));
     if (!root || !window.p86AddressAutocomplete) return null;
-    var mount = root.querySelector('.p86-addr-acm'); if (!mount) return null;
     function setIn(k, val) { var el = root.querySelector('[data-addr="' + k + '"]'); if (el && val != null) { el.value = val; try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {} } }
-    return window.p86AddressAutocomplete.attach({
-      mount: mount,
-      placeholder: 'Search address…',
-      onPlace: function (r) {
-        var cc = r.components || {};
-        setIn('street', cc.street_address || '');
-        setIn('city', cc.city || '');
-        setIn('state', cc.state || '');
-        setIn('zip', cc.zip || '');
-        if (obj) {
-          if (r.lat != null) { obj.geocode_lat = r.lat; obj.lat = r.lat; }
-          if (r.lng != null) { obj.geocode_lng = r.lng; obj.lng = r.lng; }
-        }
-        if (typeof onPick === 'function') onPick(r);
+
+    function fill(r) {
+      var cc = r.components || {};
+      setIn('street', cc.street_address || '');
+      setIn('city', cc.city || '');
+      setIn('state', cc.state || '');
+      setIn('zip', cc.zip || '');
+      if (obj) {
+        if (r.lat != null) { obj.geocode_lat = r.lat; obj.lat = r.lat; }
+        if (r.lng != null) { obj.geocode_lng = r.lng; obj.lng = r.lng; }
       }
+      if (typeof onPick === 'function') onPick(r);
+    }
+
+    // Preferred: predictions come off the STREET field itself, so there is one
+    // box instead of a search box stacked above the thing it fills. Typing an
+    // address Google doesn't recognise still works — it stays an ordinary
+    // input, and collect() reads the same node either way.
+    var street = root.querySelector('[data-addr="street"]');
+    var mount = root.querySelector('.p86-addr-acm');
+    // Already bound (wire() re-run on a re-render) — bail rather than fall
+    // through, or the fallback would stack a second search box on top.
+    if (street && street.dataset.p86AcBound) return null;
+    if (street && window.p86AddressAutocomplete.bindInput) {
+      var bound = window.p86AddressAutocomplete.bindInput(street, {
+        onPlace: fill,
+        // Legacy class missing → put the old search box back rather than
+        // leaving the user with no lookup at all.
+        onUnavailable: function () { if (mount) mountSearchBox(mount, fill); }
+      });
+      if (bound) { if (mount) mount.style.display = 'none'; return bound; }
+    }
+    return mount ? mountSearchBox(mount, fill) : null;
+  }
+
+  // Fallback path: the original separate "Search address…" element.
+  function mountSearchBox(mount, fill) {
+    mount.style.display = '';
+    return window.p86AddressAutocomplete.attach({
+      mount: mount, placeholder: 'Search address…', onPlace: fill
     });
   }
 
