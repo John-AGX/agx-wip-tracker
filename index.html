@@ -1517,11 +1517,24 @@
                             <div id="ld-header" style="position:sticky;top:0;z-index:40;background:var(--bg,#0a0a0f);border-bottom:1px solid var(--border,#333);padding:14px 4px;margin-bottom:14px;box-shadow:0 4px 12px rgba(0,0,0,0.4);">
                                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
                                     <button class="ee-btn secondary" onclick="closeLeadDetail()" title="Back to leads list">&larr; Back</button>
-                                    <h2 id="ld-title" style="flex:1;min-width:200px;margin:0;font-size:17px;font-weight:600;color:var(--text,#fff);"></h2>
-                                    <span id="ld-status-pill"></span>
+                                    <!-- Same trim as the estimate header. Title and status pill are
+                                         already on the lead's Pulse card in the sidebar
+                                         (mountLeadSidebarCard), and this editor saves on blur — so a
+                                         Save button reports an action that already happened.
+                                         Hidden rather than removed: refreshLeadDetailHeader() writes
+                                         to all three every time the status changes. -->
+                                    <h2 id="ld-title" style="display:none;"></h2>
+                                    <span id="ld-status-pill" style="display:none;"></span>
+                                    <span style="flex:1;min-width:0;"></span>
+                                    <!-- Delete is UNCHANGED: refreshLeadDetailHeader() un-hides it for
+                                         any saved lead, exactly as before. Left alone deliberately —
+                                         the estimate's delete was removed because it was asked for;
+                                         quietly changing a second destructive control on a live pilot
+                                         is not the same decision and isn't mine to make.
+                                         Create Job survives for the same reason Export did on the
+                                         estimate: a real action with no equivalent on this page. -->
                                     <button class="ee-btn danger" id="ld-delete-btn" style="display:none;" onclick="deleteLeadFromEditor()" title="Delete this lead (cannot be undone)">&#x1F5D1; Delete</button>
                                     <button class="ee-btn success" id="ld-convert-btn" style="display:none;" onclick="convertLeadToJob()" data-cap="JOBS_EDIT_ANY JOBS_EDIT_OWN" title="Create a job from this lead">&#x1F3D7; Create Job</button>
-                                    <button class="ee-btn primary" onclick="submitLeadEditor()" title="Save lead">&#x1F4BE; Save</button>
                                     <span class="p86-ask86-mount"></span>
                                 </div>
                                 <div id="ld-status-msg" style="font-size:12px;min-height:14px;color:var(--text-dim,#888);"></div>
