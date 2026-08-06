@@ -268,9 +268,25 @@
   padding: 7px 11px;
   border-radius: 8px;
   text-align: left;
-  font-size: 13.5px;
+  /* 13px, matching .app-nav .tab-btn — this list sits directly under the
+     main nav and should read as the same control, not a half-pixel off it. */
+  font-size: 13px;
   font-weight: 500;
   position: relative;
+}
+/* Resting colour. Without this the rows fall through to the base
+   `.ws-right-tab { color: var(--text-dim) }`, which is right for the
+   horizontal tab strip but wrong here — and worse in the sidebar than
+   anywhere else, because `body:not(.light-mode) .app-sidebar` RE-SCOPES
+   --text-dim from #b4b4bf down to #9d9da8 for the Console palette. The
+   result was the job's own section nav rendering dimmer than the global
+   nav sitting right above it, which is backwards.
+   :not(.active) so this can't clobber `.ws-right-tab.active` — that rule
+   is (0,2,0) and declared EARLIER in this file, so a plain
+   `.app-jobnav .ws-right-tab` colour would win on source order and kill
+   the active state. */
+.app-jobnav .ws-right-tab:not(.active) {
+  color: var(--text, #e4e6f0);
 }
 .app-jobnav .ws-right-tab:hover {
   background: var(--surface2, #202027);
