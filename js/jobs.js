@@ -2882,8 +2882,12 @@ function renderJobsMain() {
               '.jd-grid{display:grid;grid-template-columns:1fr 1fr;gap:11px 14px;}' +
               '.jd-fld{display:flex;flex-direction:column;gap:4px;}.jd-fld.jd-full{grid-column:1/-1;margin-top:11px;}' +
               '.jd-fld>span{font-size:10.5px;font-weight:600;letter-spacing:.3px;text-transform:uppercase;color:var(--text-dim,#8aa0c0);}' +
-              '.jd-fld input,.jd-fld textarea{background:var(--input-bg,rgba(0,0,0,.25));border:1px solid var(--border,rgba(255,255,255,.12));border-radius:8px;color:var(--text,#e9ecf5);font-size:13px;padding:8px 10px;font-family:inherit;}' +
-              '.jd-fld input:focus,.jd-fld textarea:focus{outline:none;border-color:#4f8cff;}' +
+              '.jd-fld input,.jd-fld textarea,.jd-fld select{background:var(--input-bg,rgba(0,0,0,.25));border:1px solid var(--border,rgba(255,255,255,.12));border-radius:8px;color:var(--text,#e9ecf5);font-size:13px;padding:8px 10px;font-family:inherit;}' +
+              '.jd-fld input:focus,.jd-fld textarea:focus,.jd-fld select:focus{outline:none;border-color:#4f8cff;}' +
+              // Width must be explicit: the global `input,select,textarea{width:100%}`
+              // is (0,0,1) and a bare .jd-fld select would inherit it inconsistently
+              // across the grid. Match the inputs beside it.
+              '.jd-fld select{width:100%;appearance:none;-webkit-appearance:none;cursor:pointer;}' +
               '.jd-btn{background:var(--surface,rgba(255,255,255,.06));border:1px solid var(--border,rgba(255,255,255,.14));border-radius:9px;color:var(--text,#e9ecf5);font-size:13px;font-weight:600;padding:9px 14px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;}' +
               '.jd-btn svg{width:15px;height:15px;}.jd-btn:hover{border-color:#4f8cff;}' +
               '.jd-btn-primary{background:#4f8cff;border-color:#4f8cff;color:#fff;margin-top:16px;}.jd-btn-primary:hover{background:#3d7bef;}' +
@@ -2980,6 +2984,25 @@ function renderJobsMain() {
             function fld(label, key, val) {
                 return '<label class="jd-fld"><span>' + _jdEsc(label) + '</span><input data-k="' + key + '" type="text" value="' + _jdEsc(val == null ? '' : val) + '"' + (ro ? ' disabled' : '') + '></label>';
             }
+            // Market is a controlled list, not free text. Same data-k contract as
+            // fld() so the save loop (querySelectorAll('[data-k]') → .value) picks
+            // a <select> up unchanged. Options come from the live markets cache;
+            // an unrecognised existing value is appended so opening the form can
+            // never silently reassign a job's market.
+            function mktFld(val) {
+                var M = window.p86Markets;
+                var list = (M && M.active) ? M.active() : [];
+                if (!list.length) return fld('Market', 'market', val);   // cold cache — don't lose the value
+                var cur = val == null ? '' : String(val);
+                var opts = '<option value="">— none —</option>' + list.map(function (m) {
+                    var n = m.name || '';
+                    return '<option value="' + _jdEsc(n) + '"' + (n === cur ? ' selected' : '') + '>' + _jdEsc(n) + '</option>';
+                }).join('');
+                if (cur && !list.some(function (m) { return m.name === cur; })) {
+                    opts += '<option value="' + _jdEsc(cur) + '" selected>' + _jdEsc(cur) + ' (not a current market)</option>';
+                }
+                return '<label class="jd-fld"><span>Market</span><select data-k="market"' + (ro ? ' disabled' : '') + '>' + opts + '</select></label>';
+            }
             var h = '<div class="jd-sec"><div class="jd-h">' + _jdIco('edit') + ' Job Details</div>';
             if (job.lead_id) h += '<div class="jd-backlead"><button class="jd-btn" data-backlead="' + _jdEsc(job.lead_id) + '">' + _jdIco('leads') + ' Back to lead</button></div>';
             h += '<div class="jd-cost"><div class="jd-cost-h">Contract &amp; cost — <em>from the estimate</em></div>' +
@@ -2993,7 +3016,7 @@ function renderJobsMain() {
                 fld('Client', 'client', job.client) +
                 fld('PM', 'pm', job.pm) +
                 fld('Type', 'type', job.type) +
-                fld('Market', 'market', job.market) +
+                mktFld(job.market) +
                 '</div>';
             h += '<label class="jd-fld jd-full"><span>Address</span>' +
                 (window.p86Address ? window.p86Address.fieldsHtml(job, { disabled: ro }) : '<input data-k="address" value="' + _jdEsc(job.address || '') + '"' + (ro ? ' disabled' : '') + '>') + '</label>';

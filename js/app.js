@@ -1340,7 +1340,13 @@
                 '.p86-needs-body{flex:1;min-width:0;display:flex;flex-direction:column;}' +
                 '.p86-needs-title{font-size:13px;font-weight:600;color:var(--text,#fff);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
                 '.p86-needs-sub{font-size:11.5px;color:var(--text-dim,#8a8a9a);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
-                '.p86-needs-more{font-size:11.5px;color:var(--accent,#22d3ee);padding:4px 12px 2px;cursor:default;}';
+                // Was a non-interactive div that merely counted the overflow —
+                // it looked like a link and did nothing. It is a real toggle now.
+                '.p86-needs-more{display:block;width:100%;text-align:left;font-size:11.5px;color:var(--accent,#22d3ee);' +
+                  'padding:6px 12px;cursor:pointer;background:none;border:1px solid transparent;border-radius:8px;font-family:inherit;}' +
+                '.p86-needs-more:hover{background:rgba(255,255,255,0.04);border-color:var(--border,#2a2a3a);}' +
+                '.p86-needs-more:focus-visible{outline:2px solid var(--accent,#22d3ee);outline-offset:1px;}' +
+                '.p86-needs-note{font-size:11px;color:var(--text-dim,#8a8a9a);padding:2px 12px 0;}';
             var st = document.createElement('style');
             st.id = 'p86-needs-styles';
             st.textContent = css;
@@ -1370,8 +1376,21 @@
                 var items = [];
                 function q(s) { return String(s == null ? '' : s).replace(/'/g, "\\'"); }
                 // 1) Emails needing a reply (urgency from triage).
+                //
+                // needs_reply is written ONCE by the Haiku triage pass on the
+                // newest inbound message and nothing ever clears it — so on its
+                // own this lane grows forever and keeps nagging about threads
+                // already dealt with. The thread payload does carry the answer
+                // (last_direction: "'outbound' means I replied last", plus
+                // replied_at from email_thread_state); this lane simply wasn't
+                // consulting it. Suppress anything already answered.
+                //
+                // Read state is deliberately NOT used: having opened a mail is
+                // not the same as having handled it, and dropping rows on read
+                // would hide work rather than complete it.
                 threads.forEach(function (t) {
                     if (!t.needs_reply) return;
+                    if (t.last_direction === 'outbound' || t.replied_at) return;
                     var hi = (t.triage_urgency === 'high');
                     items.push({
                         sev: hi ? 2 : 1, color: hi ? '#f87171' : '#fbbf24', icon: 'at-symbol',
@@ -1412,8 +1431,12 @@
                     host.innerHTML = '<div class="p86-needs-empty">&#10003; You\'re all caught up — nothing needs you right now.</div>';
                     return;
                 }
-                var CAP = 7;
-                var html = items.slice(0, CAP).map(function (it) {
+                // Collapsed by default: the single most urgent item, everything
+                // else behind a toggle. At 7 rows this card ate the fold and
+                // pushed the actual dashboard off screen — a "what needs me"
+                // lane that buries the page is self-defeating. items is already
+                // sorted by severity, so slice(0,1) IS the most urgent.
+                function rowHTML(it) {
                     var ic = (window.p86Icon && window.p86Icon(it.icon)) || '';
                     return '<div class="p86-needs-row' + (it.sev === 2 ? ' p86-needs-crit' : '') + '" style="--needs-c:' + it.color + ';" onclick="' + it.onclick + '">' +
                         '<span class="p86-needs-ico">' + ic + '</span>' +
@@ -1422,9 +1445,24 @@
                             '<span class="p86-needs-sub">' + escapeHTML(it.sub) + '</span>' +
                         '</span>' +
                     '</div>';
-                }).join('');
-                if (items.length > CAP) html += '<div class="p86-needs-more">+' + (items.length - CAP) + ' more</div>';
-                host.innerHTML = html;
+                }
+                var CAP = 12;                       // ceiling once expanded
+                var shown = items.slice(0, CAP);
+                function paint(expanded) {
+                    var html = (expanded ? shown : shown.slice(0, 1)).map(rowHTML).join('');
+                    var hidden = shown.length - 1;
+                    if (hidden > 0) {
+                        html += '<button type="button" class="p86-needs-more" data-needs-toggle>' +
+                            (expanded ? '&minus; Show less' : '+' + hidden + ' more') + '</button>';
+                    }
+                    if (!expanded && items.length > CAP) {
+                        html += '<div class="p86-needs-note">' + (items.length - CAP) + ' beyond the first ' + CAP + ' not listed</div>';
+                    }
+                    host.innerHTML = html;
+                    var tg = host.querySelector('[data-needs-toggle]');
+                    if (tg) tg.addEventListener('click', function () { paint(!expanded); });
+                }
+                paint(false);
             }).catch(function () {
                 host.innerHTML = '<div class="p86-needs-empty">Could not load your action items.</div>';
             });
