@@ -1081,6 +1081,7 @@ function p86Ask(message, opts) {
     // "Fill in the Project Address…" placeholder no matter what you typed.
     // Runs after openModal so the fields are laid out and focusable.
     wireLeadAddressWatchers();
+    syncLostReasonVisibility();
   }
 
   // Last-resort open: the lead isn't in the cache and no list fetch is in
@@ -1167,6 +1168,13 @@ function p86Ask(message, opts) {
     var wrap = document.getElementById('leadEditor_lostReasonWrap');
     if (!wrap) return;
     var st = document.getElementById('leadEditor_status');
+    // Bind our own change listener rather than relying on the caller's. The
+    // edit path wires a statusField.onchange; the CREATE path doesn't, and
+    // this needs to react on both.
+    if (st && !st.dataset.lostReasonBound) {
+      st.dataset.lostReasonBound = '1';
+      st.addEventListener('change', syncLostReasonVisibility);
+    }
     var isLost = String((st && st.value) || '').toLowerCase() === 'lost';
     wrap.style.display = isLost ? '' : 'none';
   }
