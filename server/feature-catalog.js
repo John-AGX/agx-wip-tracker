@@ -444,9 +444,27 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.15';
+const APP_VERSION = '1.16';
 
 const releases = [
+  {
+    version: '1.16',
+    date: '2026-08-07',
+    name: 'Lead to Job',
+    summary: 'A full walkthrough of the lifecycle — intake through billing — and a pass over the rough edges found by actually running one job end to end.',
+    changes: [
+      { type: 'new', text: 'From lead to sold job — the guided tour now walks the whole lifecycle in twelve steps: starting a lead from its address, building and pricing the estimate, sending the proposal, converting to a job, then how that job bills and collects cost.', tour: 'lead-to-job' },
+      { type: 'fixed', text: 'New Lead now has address lookup. Type into Street and pick a suggestion — city, state and zip fill themselves, and the Map and 7-Day Forecast panels come to life instead of sitting on their placeholder.' },
+      { type: 'improved', text: 'Address suggestions come off the Street field itself on leads, matching estimates and jobs — no more separate search box stacked above the field it fills.' },
+      { type: 'improved', text: 'Market is a dropdown on leads and clients, not a free-text box. It has to match for the market to follow a lead through to its job, and a typo used to drop it silently.' },
+      { type: 'fixed', text: 'Creating an estimate from a lead opens the estimate. It used to leave you back on the Leads list with nothing to show for it, which looked like the create had failed.' },
+      { type: 'fixed', text: 'A sold estimate reads "Sold". Converted estimates used to show their proposal status as "Draft" forever, directly under the Sold banner.' },
+      { type: 'fixed', text: 'Pay applications no longer withhold 10% retainage automatically. Retainage applies when you enter it; existing applications keep whatever rate they were saved with.' },
+      { type: 'improved', text: 'Job numbers suggest the next available S and RV number as a chip when you convert, instead of a blank box.' },
+      { type: 'improved', text: 'Clearer wording on the job money strip: "On buildings" and "Unassigned" instead of "Allocated" and "Unallocated", which read as a contradiction on a job whose contract had not been split across buildings yet.' },
+      { type: 'improved', text: 'Lost Reason only shows on a lead once you mark it Lost — it used to sit on the New Lead form, where it cannot apply.' },
+    ],
+  },
   {
     version: '1.15',
     date: '2026-07-26',

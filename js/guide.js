@@ -95,11 +95,19 @@
       ]
     },
 
+    // The full lifecycle walkthrough. Steps with no `sel` render as centered
+    // text cards — used deliberately for anything inside a modal or a job
+    // subtab, because an anchor that never becomes visible is skipped SILENTLY
+    // and the reader would lose that part of the story with no sign it existed.
     'lead-to-job': {
       title: 'From lead to sold job',
-      blurb: 'Track a lead, estimate it, and convert the win into a job with one click.',
+      blurb: 'The whole lifecycle end to end: intake, estimate, proposal, convert, then how the job bills and collects cost.',
       icon: 'leads',
       steps: [
+        {
+          title: 'One thread, start to finish',
+          body: 'A lead becomes an estimate, the estimate becomes a proposal, the proposal becomes a job — and the job bills and collects cost against the number you sold. Every stage stays linked to the one before it, so you can always get back to where a figure came from. About 12 steps; Esc to bail.'
+        },
         {
           go: function () {
             if (typeof window.switchTab === 'function') window.switchTab('estimates');
@@ -107,21 +115,54 @@
             if (typeof window.markVirtualTabActive === 'function') window.markVirtualTabActive('leads');
           },
           sel: '#leads-list-view',
-          title: 'The pipeline lives in Leads',
-          body: 'Every opportunity with status, value, confidence, and follow-up date. Filter, save views, bulk-update, or see them all on the map.'
+          title: '1 · The pipeline lives in Leads',
+          body: 'Every opportunity with status, value, confidence, and follow-up date. Filter it, save the view, bulk-update, or switch to Map to see the whole pipeline geographically.'
         },
         {
-          sel: '.leads-row, .leads-list-row, #leads-list-view',
-          title: 'Open a lead to work it',
-          body: 'Inside: the full sales pipeline (confidence, projected sale date), site details, photos, weather, and attached estimates under the Proposals tab.'
+          title: '2 · Start the lead from the address',
+          body: 'Hit "+ New Lead" and type into Street — predictions come off the field itself. Picking one fills city, state and zip, and captures the exact coordinates, so the Map and 7-Day Forecast panels light up immediately and the job inherits real coords later. Set Market from the dropdown: it follows the lead all the way to the job, so it must be picked, not typed.'
         },
         {
-          title: 'Estimates attach to the lead',
-          body: 'Draft estimates from the lead\'s Estimates tab. When one\'s accepted, mark it — the lead\'s value tracks the highest attached estimate automatically.'
+          title: '3 · Work the lead',
+          body: 'Inside a lead: the sales pipeline (confidence, projected sale date), site details, photos, weather, and its estimates. Lost Reason only appears once you set the status to Lost. Fields save on blur — there is no Save button to hunt for.'
         },
         {
-          title: 'Win it? One click makes the job',
-          body: 'The "Create Job" button on the lead converts it: the contract pulls the estimate total, pre-sale costs carry forward, the estimate locks as sold, and the job links back to its source.'
+          title: '4 · Draft the estimate from the lead',
+          body: 'Use "+ New Estimate from Lead" on the lead\'s Proposals tab. The client and property details carry over already filled in — "Re-copy from lead" is there to restore them if you clear something by accident. Creating it drops you straight into the estimate editor.'
+        },
+        {
+          go: function () { if (typeof window.switchTab === 'function') window.switchTab('estimates'); },
+          sel: '#estimate-editor-view, #estimates-list-view',
+          title: '5 · Build the estimate',
+          body: 'Every new estimate starts with the four cost sections — Materials, Direct Labor, General Conditions, Subcontractors. Add lines by hand, pull from the Materials Catalog, or explode an assembly and let it write the lines for you.'
+        },
+        {
+          title: '6 · Price it with target margin',
+          body: 'Margin is the one driver. Set the margin you want and the table reconciles to it — you do not mark up sections individually and hope the bottom line lands. The ribbon reads Subtotal, Markup, Tax + Fees, Proposal Total, Margin, Lines. Proposal Total is the number the client sees, and the number the contract becomes.'
+        },
+        {
+          title: '7 · Say what you are selling',
+          body: 'The Scope tab holds the written scope for this estimate, per alternate — so Good / Better / Best can each carry their own. This is what prints on the proposal, and what the crew reads later.'
+        },
+        {
+          title: '8 · Send it, then record the answer',
+          body: 'Send prints or emails the proposal and records who it went to. When the client says yes, Record approval stamps it. The pill in the header tracks the state: Draft → Sent → Approved, and reads Sold once it has been converted.'
+        },
+        {
+          title: '9 · Convert the win into a job',
+          body: 'Create Job asks for a job number — S#### for Service, RV#### for Renovation — and offers the next available of each as a chip so you are not hunting for the last one. The contract is set to the full Proposal Total, the estimate locks as sold, and the job links back to the estimate and the lead.'
+        },
+        {
+          title: '10 · What the new job looks like',
+          body: 'The job opens on its Site Map — the map is the job page. The contract arrives in a single scope, so the strip reads the full amount as "Unassigned" until you allocate it. Allocate to buildings when the work is split across them; a single-address service job can stay as it is.'
+        },
+        {
+          title: '11 · Bill it',
+          body: 'Billing runs AIA-style pay applications: a G702 certificate over a G703 continuation sheet, drawn against the schedule of values. Applications default to no retainage — enter a rate when the contract calls for one and it applies from there.'
+        },
+        {
+          title: '12 · Cost lands against it',
+          body: 'Actual cost arrives three ways: the QuickBooks import (the source of truth for non-sub cost), subcontractor cost through POs and bills, and field spend through the Cost Inbox — snap a receipt and it codes itself to the job. That is what the sold number gets measured against.'
         }
       ]
     },
