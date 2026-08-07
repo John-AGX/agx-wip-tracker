@@ -439,7 +439,7 @@ function isImageMime(mime) {
 // shared util module (SEC P0-4) so the sub-portal upload path runs the
 // SAME content sniffing + SVG sanitization as this PM path. Imported by
 // name so every existing call site (and __internals__) is unchanged.
-const { sniffMimeFromBytes, sanitizeSvg, mimeFamilyMatches } = require('../util/attachment-mime');
+const { sniffMimeFromBytes, sanitizeSvg, mimeFamilyMatches, resolveStoredMime } = require('../util/attachment-mime');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -922,7 +922,12 @@ router.post('/:entityType/:entityId',
       // If the sniffed MIME differs cosmetically (e.g. client claimed
       // image/jpg, real is image/jpeg), use the canonical sniffed value
       // for storage so downloads serve with the correct header.
-      const mime = sniffedMime || claimedMime;
+      //
+      // Office files need one extra step: they are all ZIP (or OLE) containers,
+      // so the sniffer returns application/zip and a workbook stops being
+      // recognisable as a workbook. resolveStoredMime narrows a generic
+      // container back to the real format using the extension.
+      const mime = resolveStoredMime(ext, claimedMime, sniffedMime);
 
       // SVG sandbox — scrub <script>, <foreignObject>, on*= handlers,
       // and javascript: URIs before storage. Prevents stored XSS via

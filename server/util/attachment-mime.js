@@ -92,4 +92,45 @@ function mimeFamilyMatches(claimed, sniffed) {
   return false;
 }
 
-module.exports = { sniffMimeFromBytes, sanitizeSvg, mimeFamilyMatches };
+// Magic-byte sniffing is deliberately coarse for container formats: every
+// modern Office file (.xlsx/.docx/.pptx) IS a ZIP and every legacy one is an
+// OLE compound document, so bytes alone cannot tell a workbook from a plain
+// archive. The extension is the only thing that can — which is why
+// sniffMimeFromBytes's own comment says "caller distinguishes by extension".
+// This is that step, and its absence is why every .xlsx ever uploaded was
+// stored as application/zip and nothing downstream could recognise it as a
+// spreadsheet.
+//
+// Safety: this only ever NARROWS a generic container to a specific Office
+// type. A confident sniff (PNG, PDF, SVG…) always wins, and it runs AFTER
+// mimeFamilyMatches() has validated claimed-vs-sniffed, so it cannot be used
+// to smuggle a mislabelled file past the spoof check.
+const EXT_OFFICE_MIME = {
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  xlsm: 'application/vnd.ms-excel.sheet.macroEnabled.12',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  xls: 'application/vnd.ms-excel',
+  doc: 'application/msword',
+  ppt: 'application/vnd.ms-powerpoint'
+};
+
+const GENERIC_CONTAINER_MIMES = new Set([
+  'application/zip',
+  'application/x-zip-compressed',
+  'application/x-ole-compound'
+]);
+
+// Decide what MIME to persist. ext is the lowercased extension WITHOUT a dot.
+function resolveStoredMime(ext, claimedMime, sniffedMime) {
+  const sniffed = String(sniffedMime || '').toLowerCase();
+  // A specific sniff is authoritative — never second-guess real magic bytes.
+  if (sniffed && !GENERIC_CONTAINER_MIMES.has(sniffed)) return sniffedMime;
+  // Generic container (or nothing sniffed): let the extension name the format.
+  // A genuine .zip has no entry here and correctly stays application/zip.
+  const byExt = EXT_OFFICE_MIME[String(ext || '').toLowerCase()];
+  if (byExt) return byExt;
+  return sniffedMime || claimedMime;
+}
+
+module.exports = { sniffMimeFromBytes, sanitizeSvg, mimeFamilyMatches, resolveStoredMime };
