@@ -309,8 +309,18 @@ async function extractPdfText(buffer) {
 // preceded by `## Sheet: <name>`. Empty trailing rows/cols trimmed by
 // exceljs's actualRowCount / actualColumnCount. Skips formula cells'
 // .formula and uses .result instead so we get the value, not "=A1+B1".
+// Why the most recent extraction produced nothing. Extractors swallow their
+// own failures on purpose (a bad file must never fail the upload), which left
+// no way to tell "module missing" from "parse threw" from "file really is
+// empty". Set on the failure paths, read by the extract-text backfill.
+let _lastExtractError = null;
+
 async function extractXlsxText(buffer) {
-  if (!ExcelJS) return null;
+  if (!ExcelJS) { _lastExtractError = 'exceljs module not loaded'; return null; }
+  if (!buffer || !buffer.length) {
+    _lastExtractError = 'empty buffer (length=' + (buffer ? buffer.length : 'null') + ')';
+    return null;
+  }
   try {
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(buffer);
@@ -339,8 +349,16 @@ async function extractXlsxText(buffer) {
       });
       out.push('');
     });
-    return capText(out.join('\n'), 'spreadsheet');
+    const joined = out.join('\n');
+    if (!joined.trim()) {
+      _lastExtractError = 'workbook loaded but yielded no rows (sheets=' + wb.worksheets.length + ')';
+    }
+    return capText(joined, 'spreadsheet');
   } catch (e) {
+    // Record the reason as well as logging it. A swallowed throw and a
+    // genuinely empty sheet both returned null, so the caller could only ever
+    // say "no extractable text" — true but useless. See _lastExtractError.
+    _lastExtractError = 'xlsx.load threw: ' + e.message;
     console.warn('[attachment-routes] Excel text extraction failed:', e.message);
     return null;
   }
@@ -1534,6 +1552,7 @@ router.post('/extract-text', requireAuth, async (req, res) => {
         failed++;
         continue;
       }
+      _lastExtractError = null;   // per-file, so a stale reason can't mislead
       const text = await extractAttachmentText(att.mime_type, buf);
       if (text) {
         await pool.query(
@@ -1547,7 +1566,9 @@ router.post('/extract-text', requireAuth, async (req, res) => {
           `UPDATE attachments SET extracted_text_at = NOW() WHERE id = $1`,
           [att.id]
         );
-        res.write(`  · ${att.filename} (${att.mime_type}) — no extractable text\n`);
+        res.write(`  · ${att.filename} (${att.mime_type}) — no extractable text` +
+          (_lastExtractError ? ` [${_lastExtractError}]` : '') +
+          ` (${buf.length} bytes read)\n`);
         empty++;
       }
     } catch (e) {
