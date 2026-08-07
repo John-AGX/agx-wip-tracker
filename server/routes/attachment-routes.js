@@ -1510,6 +1510,12 @@ router.post('/extract-text', requireAuth, async (req, res) => {
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.write(`Found ${rows.length} file(s) to process${force ? ' (force re-run)' : ''}${req.query.mime ? ' (mime=' + req.query.mime + ')' : ''}.\n`);
+  // Which extractors actually loaded. Each is a soft require that degrades to
+  // null with only a console.warn, so a missing module and a genuine
+  // "spreadsheet has no text" both surfaced identically as "no extractable
+  // text" — indistinguishable from outside, which is how a broken extractor
+  // stayed invisible. Report it up front.
+  res.write(`Extractors available — pdf: ${pdfParse ? 'yes' : 'NO'}, xlsx: ${ExcelJS ? 'yes' : 'NO'}, docx: ${mammoth ? 'yes' : 'NO'}.\n`);
 
   let extracted = 0, empty = 0, failed = 0;
   for (const att of rows) {
