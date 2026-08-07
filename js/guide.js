@@ -53,9 +53,12 @@
     if (typeof window.markVirtualTabActive === 'function') window.markVirtualTabActive('leads');
   }
 
-  // The lead editor is a MODAL — leaving it open would cover every later
-  // step. There is no global close, so use its own Cancel button (nothing
-  // is saved by it; the editor saves on blur as you go).
+  // Belt-and-braces before leaving the lead. In the normal flow the lead is a
+  // full-page VIEW (#leadEditorModal sits display:none) and routing away is
+  // enough — this no-ops. But the same editor CAN come up as a real overlay
+  // depending on how it was opened, and left open it would cover every later
+  // step. No global close exists, so click its own Cancel; nothing is lost,
+  // the editor saves on blur as you go.
   function closeLeadModal() {
     var m = document.getElementById('leadEditorModal');
     if (!m || getComputedStyle(m).display === 'none') return;
@@ -174,7 +177,13 @@
             if (t.leadId && typeof window.openEditLeadModal === 'function') window.openEditLeadModal(t.leadId);
             else goLeadsList();
           },
-          sel: '#leadEditorModal',
+          // The lead opens as a full-page VIEW, not a floating modal:
+          // #leadEditorModal is display:none / 0x0 in this flow, so anchoring
+          // on it skipped both lead steps and the tour raced to the estimate.
+          // .app-content-col is the always-present content column and acts as
+          // the guaranteed-visible fallback, so this step can never silently
+          // vanish the way it did.
+          sel: '#leadEditor_tabs, #lead-detail-view, #leadEditorModal, .app-content-col',
           title: '2 · Inside a lead',
           body: 'This is a real lead of yours. Type into Street and Google suggests the address — picking one fills city, state and zip and captures the exact coordinates, which is what makes the Map and 7-Day Forecast panels on the right work. Market is a dropdown because it has to match to follow the lead through to the job. Fields save on blur; there is no Save button.'
         },
@@ -182,7 +191,13 @@
           go: function () {
             if (typeof window.switchLeadEditorTab === 'function') window.switchLeadEditorTab('proposals');
           },
-          sel: '#leadEditorModal',
+          // The lead opens as a full-page VIEW, not a floating modal:
+          // #leadEditorModal is display:none / 0x0 in this flow, so anchoring
+          // on it skipped both lead steps and the tour raced to the estimate.
+          // .app-content-col is the always-present content column and acts as
+          // the guaranteed-visible fallback, so this step can never silently
+          // vanish the way it did.
+          sel: '#leadEditor_tabs, #lead-detail-view, #leadEditorModal, .app-content-col',
           title: '3 · Estimates hang off the lead',
           body: 'The Proposals tab lists every estimate written for this lead. "+ New Estimate from Lead" starts one with the client and property already filled in, and drops you straight into the estimate editor.'
         },
@@ -192,24 +207,24 @@
             var t = lifecycleTrio();
             if (t.estId && window.p86Router) window.p86Router.navigate({ top: 'estimates', estId: t.estId });
           },
-          sel: '#estimate-editor-view',
+          sel: '#estimate-editor-view, .app-content-col',
           title: '4 · Build the estimate',
           body: 'The estimate this lead produced. Every new one starts with the four cost sections — Materials, Direct Labor, General Conditions, Subcontractors. Add lines by hand, pull from the Materials Catalog, or explode an assembly and let it write the lines for you.'
         },
         {
-          sel: '#estimate-editor-view .ee-ribbon, #estimate-editor-view',
+          sel: '#estimate-editor-view .ee-ribbon, #estimate-editor-view, .app-content-col',
           title: '5 · Margin is the one driver',
           body: 'Set the margin you want and the table reconciles to it — you do not mark up each section and hope the bottom line lands. The strip reads Subtotal, Markup, Tax + Fees, Proposal Total, Margin, Lines. Proposal Total is what the client sees, and what the contract becomes.'
         },
         {
           go: function () { clickWsTab('scope'); },
-          sel: '#estimate-editor-view',
+          sel: '#estimate-editor-view, .app-content-col',
           title: '6 · Say what you are selling',
           body: 'The written scope for this estimate, held per alternate — so Good / Better / Best can each carry their own. This is what prints on the proposal and what the crew reads later.'
         },
         {
           go: function () { clickWsTab('line items'); },
-          sel: '#estimate-editor-view .ee-prop-pill, #estimate-editor-view',
+          sel: '#estimate-editor-view .ee-prop-pill, #estimate-editor-view, .app-content-col',
           title: '7 · Send it, then record the answer',
           body: 'Send prints or emails the proposal and records who it went to. Record approval stamps the yes. This pill tracks where it stands — Draft, Sent, Approved, and Sold once converted. Create Job sits alongside them.'
         },
@@ -218,19 +233,19 @@
             var t = lifecycleTrio();
             if (t.jobId && window.p86Router) window.p86Router.navigate({ top: 'jobs', jobId: t.jobId });
           },
-          sel: '#job-info-card, .app-jobnav',
+          sel: '#job-info-card, .app-jobnav, .app-content-col',
           title: '8 · The job it became',
           body: 'Converting asks for a job number (S#### Service, RV#### Renovation, with the next available offered as a chip), sets the contract to the full Proposal Total, locks the estimate as sold, and links the job back to both. The map is the job page; the sections down the left are the rest of it.'
         },
         {
           go: function () { clickWsTab('billing'); },
-          sel: '.app-jobnav',
+          sel: '.app-jobnav, .app-content-col',
           title: '9 · Bill it',
           body: 'Billing runs AIA-style pay applications — a G702 certificate over a G703 continuation sheet, drawn against the schedule of values. Applications start with no retainage; enter a rate when the contract calls for one and it applies from there.'
         },
         {
           go: function () { clickWsTab('detailed'); },
-          sel: '.app-jobnav',
+          sel: '.app-jobnav, .app-content-col',
           title: '10 · Cost lands against it',
           body: 'Actual cost arrives three ways: the QuickBooks import (the source of truth for non-sub cost), subcontractor cost through POs and bills, and field spend through the Cost Inbox — snap a receipt and it codes itself to the job. That is what the number you sold gets measured against. End of the thread.'
         }
