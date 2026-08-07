@@ -739,7 +739,21 @@ function p86Ask(message, opts) {
       x.job.updatedAt = new Date().toISOString();
     });
 
-    localStorage.setItem('p86-workspaces', JSON.stringify(allWs));
+    // The workspace sheets are a VIEW; Postgres is the source of truth. This
+    // write used to be a bare setItem sitting directly above the server POST —
+    // so when p86-workspaces hit the localStorage quota (this importer is what
+    // grows it: a full sheet per job per import date, ~9MB and climbing) the
+    // throw aborted the whole handler and the /api/qb-costs/import call below
+    // NEVER RAN. Costs silently stopped landing on jobs while the UI looked
+    // like the import had worked. Never let a cache write block the money path.
+    var sheetCacheFailed = null;
+    try {
+      localStorage.setItem('p86-workspaces', JSON.stringify(allWs));
+    } catch (e) {
+      sheetCacheFailed = (e && e.name) || String(e);
+      console.warn('[qb-costs] workspace sheet cache write failed:', sheetCacheFailed,
+        '— continuing to the server import; the sheets just will not be cached locally.');
+    }
     if (typeof saveData === 'function') saveData();
 
     // ── Phase 2: Server persistence ─────────────────────────────
@@ -823,6 +837,14 @@ function p86Ask(message, opts) {
       doneMsg += '\n\n⚠️ Skipped ' + m.unmatched.length + ' unmatched project' +
         (m.unmatched.length === 1 ? '' : 's') + ' (' + fmtMoney(skippedTotal) +
         ') — their QB code didn’t match a job number. Fix the code in QuickBooks or create a stub, then re-import.';
+    }
+    // A failed sheet cache is survivable (the server has the costs) but the
+    // user must know their local workbook copy is stale, not silently assume
+    // the "QB Costs <date>" sheet is there.
+    if (sheetCacheFailed) {
+      doneMsg += '\n\n⚠️ Costs were saved to the server, but the local "QB Costs" ' +
+        'workbook sheets could not be cached (' + sheetCacheFailed + ') — browser ' +
+        'storage is full. The job cost figures are correct; only the offline sheet copy is missing.';
     }
     alert(doneMsg);
 
