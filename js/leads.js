@@ -2058,6 +2058,20 @@ function p86Ask(message, opts) {
       : { jobNumber: (prompt('Job number (S#### or RV####):', '') || '').trim().toUpperCase(), title: suggestedTitle };
     if (!fin || !fin.jobNumber) return;  // cancelled / no number
 
+    // Gross (pre-fee) margin the estimate was priced to. Prefers the explicit
+    // target margin when that's the active driver, else derives it from the
+    // marked-up total. 0 when there's no estimate — an unknown margin is not 50%.
+    function _leadConvMargin(est) {
+      if (!est || !window.computeEstimateTotals) return 0;
+      var t = window.computeEstimateTotals(est);
+      if (!t) return 0;
+      if (window.p86Pricing && window.p86Pricing.targetMarginActive && window.p86Pricing.targetMarginActive(est)) {
+        return Number(est.targetMargin) || 0;
+      }
+      if (t.markedUp > 0) return Math.round((t.markedUp - t.baseCost) / t.markedUp * 1000) / 10;
+      return 0;
+    }
+
     var me = window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser();
     var ownerId = l.salesperson_id || (me && me.id) || null;
     var jobId = 'j' + Date.now();
@@ -2081,10 +2095,17 @@ function p86Ask(message, opts) {
       workType: '',
       market: l.market || '',
       status: 'New',
-      contractAmount: contractAmt,
+      // Money is rounded to cents here. contractAmount fed straight from the
+      // pricing engine carries a raw float (a 35% margin on 48,990 yields
+      // …23076923077), which then never reconciles against the rounded scope
+      // the job is seeded with.
+      contractAmount: Math.round(contractAmt * 100) / 100,
       // Estimate is the source of truth for estimated costs (its base cost).
       estimatedCosts: (chosen && window.computeEstimateTotals ? (window.computeEstimateTotals(chosen).baseCost || 0) : 0),
-      targetMarginPct: 50,
+      // The GROSS margin this estimate was actually priced to — same derivation
+      // as the estimate-side convert. This was hardcoded 50, so a job converted
+      // from the lead reported a margin the bid never used.
+      targetMarginPct: _leadConvMargin(chosen),
       pctComplete: 0,
       invoicedToDate: 0,
       revisedCostChanges: 0,

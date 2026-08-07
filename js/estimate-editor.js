@@ -997,7 +997,10 @@
       return;
     }
     var totals = (window.computeEstimateTotals ? window.computeEstimateTotals(est) : null);
-    var contractAmt = (totals && totals.proposalTotal) || 0;
+    // Round to cents. The pricing engine returns a raw float (a 35% margin on
+    // 48,990 gives …23076923077); stored unrounded it never reconciles against
+    // the scope the job is seeded with.
+    var contractAmt = Math.round((((totals && totals.proposalTotal) || 0)) * 100) / 100;
     // The GROSS margin (pre-fee) this estimate was priced to — carried onto the
     // job for cost/revenue tracking instead of an arbitrary hardcoded 50%.
     var _convMargin = 0;

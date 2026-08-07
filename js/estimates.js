@@ -124,7 +124,10 @@ function seedJobScopesFromEstimate(jobId, estimateId) {
     if (!est) return 0;
 
     var num = function(v) { var n = Number(v); return isFinite(n) ? n : 0; };
-    var contract = Math.round(num(computeEstimateTotals(est).proposalTotal));
+    // Round to CENTS, not whole dollars. Rounding to dollars left the seeded
+    // scope short of the contract (75,369.23 contract vs a 75,369 scope), so
+    // every converted job opened with a few cents permanently unallocated.
+    var contract = Math.round(num(computeEstimateTotals(est).proposalTotal) * 100) / 100;
     if (contract <= 0) return 0;
 
     appData.phases.push({
