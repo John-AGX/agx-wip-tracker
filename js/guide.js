@@ -25,6 +25,58 @@
 (function () {
   'use strict';
 
+  // ── Helpers for the lifecycle tour ──────────────────────────────────
+  //
+  // The lifecycle tour WALKS the app rather than narrating it: each step
+  // navigates to the real surface it is describing. To do that it needs a
+  // real lead → estimate → job chain out of the user's own data, resolved
+  // once per run (not baked in — every org has different records).
+  var _trio = null;
+  function lifecycleTrio() {
+    if (_trio) return _trio;
+    var ests = (window.appData && window.appData.estimates) || [];
+    function ok(e) { return e && e.lead_id && e.job_id; }
+    // Prefer a converted estimate that still has both ends of the chain, so
+    // every step has something real to show. Fall back through weaker
+    // matches rather than leaving the tour with nothing to open.
+    var e = ests.filter(ok).filter(function (x) { return !/^(zz |__)/i.test(x.title || ''); })[0]
+         || ests.filter(ok)[0]
+         || ests.filter(function (x) { return x && x.lead_id; })[0]
+         || ests[0] || null;
+    _trio = e ? { estId: e.id, leadId: e.lead_id, jobId: e.job_id } : {};
+    return _trio;
+  }
+
+  function goLeadsList() {
+    if (typeof window.switchTab === 'function') window.switchTab('estimates');
+    if (typeof window.switchEstimatesSubTab === 'function') window.switchEstimatesSubTab('leads');
+    if (typeof window.markVirtualTabActive === 'function') window.markVirtualTabActive('leads');
+  }
+
+  // The lead editor is a MODAL — leaving it open would cover every later
+  // step. There is no global close, so use its own Cancel button (nothing
+  // is saved by it; the editor saves on blur as you go).
+  function closeLeadModal() {
+    var m = document.getElementById('leadEditorModal');
+    if (!m || getComputedStyle(m).display === 'none') return;
+    var btns = m.querySelectorAll('button');
+    for (var i = 0; i < btns.length; i++) {
+      if (/^cancel$/i.test((btns[i].textContent || '').trim())) { btns[i].click(); return; }
+    }
+    m.style.display = 'none';
+  }
+
+  // Estimate + job section tabs are .ws-right-tab buttons, matched by label.
+  function clickWsTab(label) {
+    var tabs = document.querySelectorAll('.ws-right-tab');
+    for (var i = 0; i < tabs.length; i++) {
+      if ((tabs[i].textContent || '').trim().toLowerCase().indexOf(label.toLowerCase()) === 0) {
+        tabs[i].click(); return true;
+      }
+    }
+    return false;
+  }
+
   var TOURS = {
     'welcome': {
       title: 'Get your bearings',
@@ -95,10 +147,12 @@
       ]
     },
 
-    // The full lifecycle walkthrough. Steps with no `sel` render as centered
-    // text cards — used deliberately for anything inside a modal or a job
-    // subtab, because an anchor that never becomes visible is skipped SILENTLY
-    // and the reader would lose that part of the story with no sign it existed.
+    // The full lifecycle walkthrough. This one WALKS: each step opens the
+    // real screen it describes, on one of the user's own lead→estimate→job
+    // chains (see lifecycleTrio). An earlier version narrated all of it from
+    // centered text cards while the Leads list sat behind — technically safe,
+    // useless as a walkthrough. Read-only throughout: it opens and switches
+    // tabs, never edits, and closes the lead modal before moving on.
     'lead-to-job': {
       title: 'From lead to sold job',
       blurb: 'The whole lifecycle end to end: intake, estimate, proposal, convert, then how the job bills and collects cost.',
@@ -106,75 +160,82 @@
       steps: [
         {
           title: 'One thread, start to finish',
-          body: 'A lead becomes an estimate, the estimate becomes a proposal, the proposal becomes a job — and the job bills and collects cost against the number you sold. Every stage stays linked to the one before it, so you can always get back to where a figure came from. About 12 steps; Esc to bail.'
+          body: 'A lead becomes an estimate, the estimate becomes a proposal, the proposal becomes a job — and the job bills and collects cost against the number you sold. This walkthrough OPENS each of those screens on one of your own jobs as it goes. Nothing is changed or saved. Esc to bail anytime.'
         },
         {
-          go: function () {
-            if (typeof window.switchTab === 'function') window.switchTab('estimates');
-            if (typeof window.switchEstimatesSubTab === 'function') window.switchEstimatesSubTab('leads');
-            if (typeof window.markVirtualTabActive === 'function') window.markVirtualTabActive('leads');
-          },
+          go: goLeadsList,
           sel: '#leads-list-view',
           title: '1 · The pipeline lives in Leads',
-          body: 'Every opportunity with status, value, confidence, and follow-up date. Filter it, save the view, bulk-update, or switch to Map to see the whole pipeline geographically.'
+          body: 'Every opportunity with status, value, confidence, and follow-up date. Filter it, save the view, bulk-update, or switch to Map to see the whole pipeline geographically. New work starts with "+ New Lead".'
         },
         {
-          title: '2 · Start the lead from the address',
-          body: 'Hit "+ New Lead" and type into Street — predictions come off the field itself. Picking one fills city, state and zip, and captures the exact coordinates, so the Map and 7-Day Forecast panels light up immediately and the job inherits real coords later. Set Market from the dropdown: it follows the lead all the way to the job, so it must be picked, not typed.'
-        },
-        {
-          title: '3 · Work the lead',
-          body: 'Inside a lead: the sales pipeline (confidence, projected sale date), site details, photos, weather, and its estimates. Lost Reason only appears once you set the status to Lost. Fields save on blur — there is no Save button to hunt for.'
-        },
-        {
-          title: '4 · Draft the estimate from the lead',
-          body: 'Use "+ New Estimate from Lead" on the lead\'s Proposals tab. The client and property details carry over already filled in — "Re-copy from lead" is there to restore them if you clear something by accident. Creating it drops you straight into the estimate editor.'
-        },
-        {
-          // switchTab('estimates') ALONE is not enough — Leads and Estimates
-          // share that tab, so coming from step 2 it leaves #leads-list-view
-          // up and this step's anchor never appears (which would skip the
-          // step silently). The sub-tab id for the estimates list is 'list'.
           go: function () {
-            if (typeof window.switchTab === 'function') window.switchTab('estimates');
-            if (typeof window.switchEstimatesSubTab === 'function') window.switchEstimatesSubTab('list');
-            if (typeof window.markVirtualTabActive === 'function') window.markVirtualTabActive('estimates');
+            var t = lifecycleTrio();
+            if (t.leadId && typeof window.openEditLeadModal === 'function') window.openEditLeadModal(t.leadId);
+            else goLeadsList();
           },
-          sel: '#estimate-editor-view, #estimates-list-view',
-          title: '5 · Build the estimate',
-          body: 'Every new estimate starts with the four cost sections — Materials, Direct Labor, General Conditions, Subcontractors. Add lines by hand, pull from the Materials Catalog, or explode an assembly and let it write the lines for you.'
+          sel: '#leadEditorModal',
+          title: '2 · Inside a lead',
+          body: 'This is a real lead of yours. Type into Street and Google suggests the address — picking one fills city, state and zip and captures the exact coordinates, which is what makes the Map and 7-Day Forecast panels on the right work. Market is a dropdown because it has to match to follow the lead through to the job. Fields save on blur; there is no Save button.'
         },
         {
-          title: '6 · Price it with target margin',
-          body: 'Margin is the one driver. Set the margin you want and the table reconciles to it — you do not mark up sections individually and hope the bottom line lands. The ribbon reads Subtotal, Markup, Tax + Fees, Proposal Total, Margin, Lines. Proposal Total is the number the client sees, and the number the contract becomes.'
+          go: function () {
+            if (typeof window.switchLeadEditorTab === 'function') window.switchLeadEditorTab('proposals');
+          },
+          sel: '#leadEditorModal',
+          title: '3 · Estimates hang off the lead',
+          body: 'The Proposals tab lists every estimate written for this lead. "+ New Estimate from Lead" starts one with the client and property already filled in, and drops you straight into the estimate editor.'
         },
         {
-          title: '7 · Say what you are selling',
-          body: 'The Scope tab holds the written scope for this estimate, per alternate — so Good / Better / Best can each carry their own. This is what prints on the proposal, and what the crew reads later.'
+          go: function () {
+            closeLeadModal();
+            var t = lifecycleTrio();
+            if (t.estId && window.p86Router) window.p86Router.navigate({ top: 'estimates', estId: t.estId });
+          },
+          sel: '#estimate-editor-view',
+          title: '4 · Build the estimate',
+          body: 'The estimate this lead produced. Every new one starts with the four cost sections — Materials, Direct Labor, General Conditions, Subcontractors. Add lines by hand, pull from the Materials Catalog, or explode an assembly and let it write the lines for you.'
         },
         {
-          title: '8 · Send it, then record the answer',
-          body: 'Send prints or emails the proposal and records who it went to. When the client says yes, Record approval stamps it. The pill in the header tracks the state: Draft → Sent → Approved, and reads Sold once it has been converted.'
+          sel: '#estimate-editor-view .ee-ribbon, #estimate-editor-view',
+          title: '5 · Margin is the one driver',
+          body: 'Set the margin you want and the table reconciles to it — you do not mark up each section and hope the bottom line lands. The strip reads Subtotal, Markup, Tax + Fees, Proposal Total, Margin, Lines. Proposal Total is what the client sees, and what the contract becomes.'
         },
         {
-          title: '9 · Convert the win into a job',
-          body: 'Create Job asks for a job number — S#### for Service, RV#### for Renovation — and offers the next available of each as a chip so you are not hunting for the last one. The contract is set to the full Proposal Total, the estimate locks as sold, and the job links back to the estimate and the lead.'
+          go: function () { clickWsTab('scope'); },
+          sel: '#estimate-editor-view',
+          title: '6 · Say what you are selling',
+          body: 'The written scope for this estimate, held per alternate — so Good / Better / Best can each carry their own. This is what prints on the proposal and what the crew reads later.'
         },
         {
-          title: '10 · What the new job looks like',
-          body: 'The job opens on its Site Map — the map is the job page. The contract arrives in a single scope, so the strip reads the full amount as "Unassigned" until you allocate it. Allocate to buildings when the work is split across them; a single-address service job can stay as it is.'
+          go: function () { clickWsTab('line items'); },
+          sel: '#estimate-editor-view .ee-prop-pill, #estimate-editor-view',
+          title: '7 · Send it, then record the answer',
+          body: 'Send prints or emails the proposal and records who it went to. Record approval stamps the yes. This pill tracks where it stands — Draft, Sent, Approved, and Sold once converted. Create Job sits alongside them.'
         },
         {
-          title: '11 · Bill it',
-          body: 'Billing runs AIA-style pay applications: a G702 certificate over a G703 continuation sheet, drawn against the schedule of values. Applications default to no retainage — enter a rate when the contract calls for one and it applies from there.'
+          go: function () {
+            var t = lifecycleTrio();
+            if (t.jobId && window.p86Router) window.p86Router.navigate({ top: 'jobs', jobId: t.jobId });
+          },
+          sel: '#job-info-card, .app-jobnav',
+          title: '8 · The job it became',
+          body: 'Converting asks for a job number (S#### Service, RV#### Renovation, with the next available offered as a chip), sets the contract to the full Proposal Total, locks the estimate as sold, and links the job back to both. The map is the job page; the sections down the left are the rest of it.'
         },
         {
-          title: '12 · Cost lands against it',
-          body: 'Actual cost arrives three ways: the QuickBooks import (the source of truth for non-sub cost), subcontractor cost through POs and bills, and field spend through the Cost Inbox — snap a receipt and it codes itself to the job. That is what the sold number gets measured against.'
+          go: function () { clickWsTab('billing'); },
+          sel: '.app-jobnav',
+          title: '9 · Bill it',
+          body: 'Billing runs AIA-style pay applications — a G702 certificate over a G703 continuation sheet, drawn against the schedule of values. Applications start with no retainage; enter a rate when the contract calls for one and it applies from there.'
+        },
+        {
+          go: function () { clickWsTab('detailed'); },
+          sel: '.app-jobnav',
+          title: '10 · Cost lands against it',
+          body: 'Actual cost arrives three ways: the QuickBooks import (the source of truth for non-sub cost), subcontractor cost through POs and bills, and field spend through the Cost Inbox — snap a receipt and it codes itself to the job. That is what the number you sold gets measured against. End of the thread.'
         }
       ]
     },
-
     'receipts': {
       title: 'Capture a receipt',
       blurb: 'Snap it, let AI read it, and watch the cost roll up on the job.',
