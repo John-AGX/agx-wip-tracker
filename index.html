@@ -1604,7 +1604,12 @@
                                          A header that repeats the page underneath it is just a band
                                          of duplicates between you and the work. -->
                                     <div id="ee-identity" style="display:none;"></div>
-                                    <div id="ee-linked-chips" style="display:none;"></div>
+                                    <!-- Header ACTIONS: proposal approval (Send / Record approval)
+                                         + Create Job / Sync-costs. Was display:none during the header
+                                         trim, which also took the approval workflow and the only
+                                         estimate-side path to a job. The redundant identity chips it
+                                         used to hold are already gone from renderHeaderChips. -->
+                                    <div id="ee-linked-chips"></div>
                                     <!-- Pushes the (now empty) right cluster out; keeps Back alone at left. -->
                                     <span style="flex:1;min-width:0;"></span>
                                     <!-- Save-state indicator. Same text + colored states as before
@@ -3430,7 +3435,7 @@
     <script src="js/rich-text.js?v=1"></script>
     <script src="js/estimates.js?v=58"></script>
     <script src="js/proposal.js?v=26"></script>
-    <script src="js/estimate-editor.js?v=89"></script>
+    <script src="js/estimate-editor.js?v=90"></script>
     <!-- Change Order editor — overlay opened from the job detail's
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which
