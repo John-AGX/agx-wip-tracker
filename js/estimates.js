@@ -956,6 +956,19 @@ function renderEstimatesList() {
                 alternates: [{ id: defaultAlternateId, name: 'Base', isDefault: true, scope: seededScope }],
                 activeAlternateId: defaultAlternateId
             };
+            // Split the property address into the structured fields the rest of
+            // the app actually reads. The modal only ever wrote the combined
+            // propertyAddr blob, so street_address/city/state/zip came back
+            // undefined — and convert falls back to est.street_address for an
+            // estimate-only -> job, which meant that job was born with no
+            // address (no map, no weather, nothing to geocode).
+            if (window.p86Address && window.p86Address.parse) {
+                var _pc = window.p86Address.parse(est.propertyAddr || '');
+                est.street_address = _pc.street || '';
+                est.city = _pc.city || '';
+                est.state = _pc.state || '';
+                est.zip = _pc.zip || '';
+            }
             // Multi-market M3 — inherit the market (from the lead, else
             // the active switcher) and the money defaults that come with
             // it. This is the fix for "estimates don't inherit a market
@@ -978,7 +991,16 @@ function renderEstimatesList() {
             });
             saveData();
             closeModal('newEstimateModal');
-            renderEstimatesList();
+            // Open the estimate you just created. This used to re-render the
+            // estimates LIST instead — and when the modal was launched from a
+            // lead, closing it left you looking at the Leads list with no sign
+            // of the estimate, which read as "the create failed". Falls back to
+            // the list render if the editor isn't loaded.
+            if (typeof window.openEstimateEditor === 'function') {
+                window.openEstimateEditor(estId);
+            } else {
+                renderEstimatesList();
+            }
         }
 
         function editEstimate(estId) {

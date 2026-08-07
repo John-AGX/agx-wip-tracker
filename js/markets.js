@@ -196,11 +196,44 @@
     if (sel) sel.addEventListener('change', function () { select(sel.value || null); });
   }
 
+  // Fill a <select> with the ACTIVE markets, by name. One helper for every
+  // market picker in the app — lead, client, job — so market is chosen from
+  // the real list instead of typed. That matters beyond tidiness: conversion
+  // resolves a job's market by MATCHING the lead's market string, so a typo
+  // in a free-text box silently drops the market on the way to the job.
+  //
+  // Cold cache leaves the control alone rather than blanking it, and a legacy
+  // value that's no longer an active market is preserved as its own option so
+  // opening a form never silently reassigns a saved record.
+  function fillSelect(el, currentValue) {
+    var sel = (typeof el === 'string') ? document.getElementById(el) : el;
+    if (!sel) return false;
+    var list = active() || [];
+    if (!list.length) return false;
+    var prev = (currentValue != null && currentValue !== '') ? String(currentValue) : (sel.value || '');
+    function esc(s) {
+      return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+    sel.innerHTML = ['<option value="">— Select market —</option>'].concat(
+      list.map(function (m) {
+        var n = m.name || '';
+        return '<option value="' + esc(n) + '">' + esc(n) + '</option>';
+      })
+    ).join('');
+    if (prev && !list.some(function (m) { return m.name === prev; })) {
+      sel.insertAdjacentHTML('beforeend', '<option value="' + esc(prev) + '">' + esc(prev) + '</option>');
+    }
+    sel.value = prev;
+    return true;
+  }
+
   window.p86Markets = {
     load: load, all: all, active: active, byId: byId, byName: byName, names: names,
     selectedId: selectedId, selected: selected, select: select,
     matches: matches, filter: filter, renderSwitcher: renderSwitcher,
-    resolve: resolve, chipHTML: chipHTML, nameFor: nameFor, hasMulti: hasMulti
+    resolve: resolve, chipHTML: chipHTML, nameFor: nameFor, hasMulti: hasMulti,
+    fillSelect: fillSelect
   };
   // Convenience globals for the string-concat pickers + list filters.
   window.p86MarketNames = names;

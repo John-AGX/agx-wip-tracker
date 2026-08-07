@@ -798,7 +798,22 @@ function p86Ask(message, opts) {
 
   function setEditorField(name, value) {
     var el = document.getElementById('clientEditor_' + name);
-    if (el) el.value = (value == null ? '' : value);
+    if (!el) return;
+    var v = (value == null ? '' : value);
+    // Market is a picker now, not free text — fill from the real market list.
+    if (name === 'market' && el.tagName === 'SELECT' &&
+        window.p86Markets && window.p86Markets.fillSelect) {
+      window.p86Markets.fillSelect(el, v);
+    }
+    // A <select> silently selects NOTHING when handed a value it has no option
+    // for, and the save would then write that blank over the stored value.
+    if (el.tagName === 'SELECT' && v !== '' &&
+        !Array.prototype.some.call(el.options, function (o) { return o.value === v; })) {
+      var opt = document.createElement('option');
+      opt.value = v; opt.textContent = v;
+      el.appendChild(opt);
+    }
+    el.value = v;
   }
   function getEditorField(name) {
     var el = document.getElementById('clientEditor_' + name);

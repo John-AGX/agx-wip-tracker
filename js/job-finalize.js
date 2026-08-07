@@ -28,6 +28,27 @@
     });
   }
 
+  // Highest existing number for a prefix, + 1. The field was a blank box with
+  // only a format hint, so every conversion made someone go find what the last
+  // job number was. Suggestion only — the field stays free-text, because the
+  // real sequence lives in the office's head (and in Buildertrend), not here.
+  // Width is preserved: S1042 -> S1043, RV0007 -> RV0008.
+  function nextNumber(prefix) {
+    var jobs = (window.appData && window.appData.jobs) || [];
+    var re = new RegExp('^' + prefix + '(\\d{1,6})$', 'i');
+    var best = 0, width = prefix === 'RV' ? 4 : 4;
+    for (var i = 0; i < jobs.length; i++) {
+      var m = String((jobs[i] && jobs[i].jobNumber) || '').trim().match(re);
+      if (!m) continue;
+      var n = parseInt(m[1], 10);
+      if (isFinite(n) && n > best) { best = n; width = m[1].length; }
+    }
+    if (!best) return null;
+    var s = String(best + 1);
+    while (s.length < width) s = '0' + s;
+    return prefix + s;
+  }
+
   function open(opts) {
     opts = opts || {};
     return new Promise(function (resolve) {
@@ -39,6 +60,8 @@
       var inp = 'appearance:none;width:100%;box-sizing:border-box;background:var(--input-bg,#101014);border:1px solid var(--border,#2a2a32);color:var(--text,#eef0f6);border-radius:8px;padding:9px 10px;font-size:14px;';
       var btn = 'appearance:none;border:1px solid var(--border,#2a2a32);background:var(--surface,#17171c);color:var(--text,#eef0f6);border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;';
       var btnPri = 'appearance:none;border:1px solid var(--accent,#4f8cff);background:var(--accent,#4f8cff);color:#fff;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer;';
+      var chip = 'appearance:none;border:1px solid var(--border,#2a2a32);background:transparent;color:var(--accent,#4f8cff);border-radius:999px;padding:2px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;';
+      var sugg = ['S', 'RV'].map(nextNumber).filter(Boolean);
       modal.innerHTML =
         '<div style="' + card + '">' +
           '<div style="padding:16px;">' +
@@ -48,6 +71,14 @@
               '<label style="' + lbl + '">Job Number <span style="color:#f0a020;">*</span></label>' +
               '<input id="p86jfNum" style="' + inp + '" placeholder="S0000 or RV0000" autocomplete="off" />' +
               '<div style="font-size:11px;color:var(--text-dim,#b4b4bf);margin-top:5px;">Required — <strong>S####</strong> for Service or <strong>RV####</strong> for Renovation. Editable.</div>' +
+              (sugg.length
+                ? '<div style="display:flex;gap:6px;align-items:center;margin-top:7px;flex-wrap:wrap;">' +
+                    '<span style="font-size:11px;color:var(--text-dim,#b4b4bf);">Next available:</span>' +
+                    sugg.map(function (s) {
+                      return '<button type="button" data-jfsugg="' + esc(s) + '" style="' + chip + '">' + esc(s) + '</button>';
+                    }).join('') +
+                  '</div>'
+                : '') +
               '<div id="p86jfErr" style="font-size:11px;color:#ff6b6b;margin-top:5px;display:none;">Enter a valid job number: S#### (Service) or RV#### (Renovation).</div>' +
             '</div>' +
             '<div style="margin-bottom:18px;">' +
@@ -76,6 +107,15 @@
         close({ jobNumber: n, title: (titleEl.value || '').trim() });
       }
       numEl.addEventListener('input', function () { errEl.style.display = 'none'; numEl.style.borderColor = ''; });
+      // Suggestion chips fill the field rather than submitting — the number is
+      // still the user's call, they just don't have to go look it up.
+      Array.prototype.forEach.call(modal.querySelectorAll('[data-jfsugg]'), function (b) {
+        b.addEventListener('click', function () {
+          numEl.value = b.getAttribute('data-jfsugg');
+          errEl.style.display = 'none'; numEl.style.borderColor = '';
+          numEl.focus();
+        });
+      });
       numEl.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
       titleEl.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
       modal.querySelector('#p86jfOk').addEventListener('click', submit);

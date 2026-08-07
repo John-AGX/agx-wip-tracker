@@ -670,26 +670,39 @@
     } else {
       var _appr = (est.approval_status === 'approved');
       html += '<button class="ee-btn ' + (_appr ? 'primary' : 'secondary') + '" data-cap="JOBS_EDIT_ANY JOBS_EDIT_OWN" onclick="convertEstimateToJob()" title="' + (_appr ? 'Create the job from this approved &amp; signed estimate' : 'Create a job from this estimate') + '" style="display:inline-flex;align-items:center;gap:6px;' + (_appr ? 'background:#34d399;border-color:#34d399;color:#04210f;' : '') + '">' +
-        '<span>&#x1F3D7;&#xFE0F;</span>' + (_appr ? 'Create Job from approved' : 'Create Job') +
+        '' + ic('buildings') + '' + (_appr ? 'Create Job from approved' : 'Create Job') +
       '</button>';
     }
     chipsEl.innerHTML = html;
   }
 
+  // Inline AGX icon, falling back to nothing rather than a raw emoji if the
+  // icon helper hasn't loaded. These header buttons were the last emoji left
+  // behind by the heroicon sweep.
+  function ic(name) {
+    return (typeof window.p86Icon === 'function') ? window.p86Icon(name) : '';
+  }
+
   // ── Proposal approval workflow (status pill + Send / Approve / Decline) ──────
   function proposalActionsHtml(est) {
     if (!est) return '';
-    var st = est.approval_status || (est.sent_at ? 'sent' : 'draft');
+    // A converted estimate is WON, whatever its approval_status says. Convert
+    // stamps status:'sold' + job_id but never touches approval_status, so an
+    // estimate that was never formally "approved" in-app kept reading "Draft"
+    // forever — directly under a "Sold — locked" banner.
+    var won = !!(est.job_id || est.status === 'sold');
+    var st = won ? 'won' : (est.approval_status || (est.sent_at ? 'sent' : 'draft'));
     var lbl, col;
-    if (st === 'approved') { lbl = '✓ Approved' + (est.approved_by ? ' · ' + escapeHTML(est.approved_by) : ''); col = '#34d399'; }
+    if (st === 'won') { lbl = '✓ Sold'; col = '#34d399'; }
+    else if (st === 'approved') { lbl = '✓ Approved' + (est.approved_by ? ' · ' + escapeHTML(est.approved_by) : ''); col = '#34d399'; }
     else if (st === 'declined') { lbl = 'Declined'; col = '#f87171'; }
     else if (st === 'sent') { lbl = 'Sent' + (est.sent_to ? ' · ' + escapeHTML(est.sent_to) : ''); col = '#fbbf24'; }
     else { lbl = 'Draft'; col = 'var(--text-dim,#8b90a5)'; }
     var h = '<span class="ee-prop-pill" title="Proposal status" style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;padding:4px 10px;border-radius:999px;background:rgba(255,255,255,0.05);color:' + col + ';border:1px solid ' + col + '44;">' + lbl + '</span>';
     if (est.job_id) return h;   // already converted — proposal actions no longer apply
-    h += '<button class="ee-btn secondary" onclick="openProposalSend(\'' + escapeHTML(est.id) + '\')" title="Print or email this proposal to any recipient" style="display:inline-flex;align-items:center;gap:6px;"><span>📤</span>Send</button>';
+    h += '<button class="ee-btn secondary" onclick="openProposalSend(\'' + escapeHTML(est.id) + '\')" title="Print or email this proposal to any recipient" style="display:inline-flex;align-items:center;gap:6px;">' + ic('composer-send') + 'Send</button>';
     if (st !== 'approved') {
-      h += '<button class="ee-btn secondary" onclick="openProposalApprove(\'' + escapeHTML(est.id) + '\')" title="Record that the proposal was approved / signed" style="display:inline-flex;align-items:center;gap:6px;"><span>✍️</span>Record approval</button>';
+      h += '<button class="ee-btn secondary" onclick="openProposalApprove(\'' + escapeHTML(est.id) + '\')" title="Record that the proposal was approved / signed" style="display:inline-flex;align-items:center;gap:6px;">' + ic('edit') + 'Record approval</button>';
     }
     if (st === 'sent') {
       h += '<button class="ee-btn secondary" onclick="proposalDecline(\'' + escapeHTML(est.id) + '\')" title="Record that the client declined" style="font-size:11px;opacity:.85;">Declined?</button>';

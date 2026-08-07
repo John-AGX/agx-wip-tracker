@@ -889,6 +889,22 @@ function p86Ask(message, opts) {
     // (e.g. "2025-07-15T00:00:00.000Z") is silently REJECTED and the field
     // renders BLANK on reopen (D2: Projected Sale Date). Slice date values down.
     if (el.type === 'date' && typeof v === 'string' && v.length > 10) v = v.slice(0, 10);
+    // Market is a picker now, not a free-text box — fill it from the real
+    // market list so a lead can't carry a typo'd market that conversion then
+    // fails to resolve into the job's market_id.
+    if (name === 'market' && el.tagName === 'SELECT' &&
+        window.p86Markets && window.p86Markets.fillSelect) {
+      window.p86Markets.fillSelect(el, v);
+    }
+    // Assigning a value a <select> has no option for silently selects NOTHING,
+    // and the next blur-save would then write that blank back over a real
+    // stored value. Keep the unknown value as its own option instead.
+    if (el.tagName === 'SELECT' && v !== '' &&
+        !Array.prototype.some.call(el.options, function (o) { return o.value === v; })) {
+      var opt = document.createElement('option');
+      opt.value = v; opt.textContent = v;
+      el.appendChild(opt);
+    }
     el.value = v;
     if (name === 'confidence') {
       var lbl = document.getElementById('leadEditor_confidenceLabel');
@@ -1059,6 +1075,12 @@ function p86Ask(message, opts) {
     // brand-new lead without tapping 5 pencils first. The pencils are
     // still attached so a sloppy first-pass can be re-locked afterward.
     applyLeadFieldsetGates(true);
+    // Address autocomplete + the debounced map/forecast refresh. This was
+    // called only from the EDIT branch, so a brand-new lead had no address
+    // lookup at all and its Map / 7-Day Forecast panels stayed on their
+    // "Fill in the Project Address…" placeholder no matter what you typed.
+    // Runs after openModal so the fields are laid out and focusable.
+    wireLeadAddressWatchers();
   }
 
   // Last-resort open: the lead isn't in the cache and no list fetch is in
@@ -1131,8 +1153,22 @@ function p86Ask(message, opts) {
       };
     }
     if (statusField) {
-      statusField.onchange = function() { refreshLeadDetailHeader(); };
+      statusField.onchange = function() { refreshLeadDetailHeader(); syncLostReasonVisibility(); };
     }
+    syncLostReasonVisibility();
+  }
+
+  // Lost Reason only makes sense on a lead that's actually lost. It used to
+  // sit permanently in the Sales Pipeline grid, including on the New Lead
+  // form where a brand-new lead cannot possibly have one. Shown when the
+  // status select reads "lost", hidden otherwise; a stored reason is left
+  // untouched either way, so flipping back to Lost restores it.
+  function syncLostReasonVisibility() {
+    var wrap = document.getElementById('leadEditor_lostReasonWrap');
+    if (!wrap) return;
+    var st = document.getElementById('leadEditor_status');
+    var isLost = String((st && st.value) || '').toLowerCase() === 'lost';
+    wrap.style.display = isLost ? '' : 'none';
   }
 
   // ── Right-panel context (map / photos / weather) ─────────────
@@ -1571,40 +1607,69 @@ function p86Ask(message, opts) {
     wireLeadAddressAutocomplete();
   }
 
-  // Google Places autocomplete on the Project Address fieldset — a "Search
-  // address" box that fills street/city/state/zip and captures the exact
-  // lat/lng, so the lead saves with real coords (map + Site Plan satellite
-  // render immediately, no separate geocode). Mounted once per editor DOM.
+  // Google Places autocomplete on the Project Address fieldset — fills
+  // street/city/state/zip and captures the exact lat/lng, so the lead saves
+  // with real coords (map + Site Plan satellite render immediately, no
+  // separate geocode).
+  //
+  // Predictions come off the STREET input itself, matching the estimate and
+  // job editors. Leads used to stack a separate "Search address" box above
+  // the field it fills — the one surface that never got the in-field
+  // treatment. The old box is still the fallback when the legacy Places
+  // class is unavailable, so a missing API never leaves the user with no
+  // lookup at all.
   function wireLeadAddressAutocomplete() {
     if (!window.p86AddressAutocomplete) return;
     var street = document.getElementById('leadEditor_street_address');
     if (!street || typeof street.closest !== 'function') return;
     var fs = street.closest('fieldset');
-    if (!fs || fs.querySelector('.p86-addr-ac-row')) return; // mount once
-    var row = document.createElement('div');
-    row.className = 'p86-addr-ac-row';
-    var lbl = document.createElement('label');
-    lbl.textContent = 'Search address';
-    row.appendChild(lbl);
-    var legend = fs.querySelector('legend');
-    if (legend && legend.nextSibling) fs.insertBefore(row, legend.nextSibling);
-    else fs.insertBefore(row, fs.firstChild);
-    _leadAcHandle = window.p86AddressAutocomplete.attach({
-      mount: row,
-      placeholder: 'Start typing an address…',
-      onPlace: function (r) {
-        function set(id, v) { var el = document.getElementById(id); if (el && v) el.value = v; }
-        set('leadEditor_street_address', r.components.street_address || r.formatted);
-        set('leadEditor_city', r.components.city);
-        set('leadEditor_state', r.components.state);
-        set('leadEditor_zip', r.components.zip);
-        _pickedGeo = (r.lat != null && r.lng != null) ? { lat: r.lat, lng: r.lng } : null;
-        ['leadEditor_street_address', 'leadEditor_city', 'leadEditor_state', 'leadEditor_zip'].forEach(function (id) {
-          var el = document.getElementById(id);
-          if (el) { try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {} }
-        });
+    if (!fs) return;
+
+    function applyPlace(r) {
+      function set(id, v) { var el = document.getElementById(id); if (el && v) el.value = v; }
+      set('leadEditor_street_address', r.components.street_address || r.formatted);
+      set('leadEditor_city', r.components.city);
+      set('leadEditor_state', r.components.state);
+      set('leadEditor_zip', r.components.zip);
+      _pickedGeo = (r.lat != null && r.lng != null) ? { lat: r.lat, lng: r.lng } : null;
+      ['leadEditor_street_address', 'leadEditor_city', 'leadEditor_state', 'leadEditor_zip'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) { try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {} }
+      });
+    }
+
+    // Fallback: the original separate search row, mounted once.
+    function mountLegacyRow() {
+      if (fs.querySelector('.p86-addr-ac-row')) return;
+      var row = document.createElement('div');
+      row.className = 'p86-addr-ac-row';
+      var lbl = document.createElement('label');
+      lbl.textContent = 'Search address';
+      row.appendChild(lbl);
+      var legend = fs.querySelector('legend');
+      if (legend && legend.nextSibling) fs.insertBefore(row, legend.nextSibling);
+      else fs.insertBefore(row, fs.firstChild);
+      _leadAcHandle = window.p86AddressAutocomplete.attach({
+        mount: row, placeholder: 'Start typing an address…', onPlace: applyPlace
+      });
+    }
+
+    if (street.dataset.p86AcBound) return;  // already bound on this DOM
+    if (window.p86AddressAutocomplete.bindInput) {
+      var bound = window.p86AddressAutocomplete.bindInput(street, {
+        onPlace: applyPlace,
+        onUnavailable: mountLegacyRow
+      });
+      if (bound) {
+        _leadAcHandle = bound;
+        // Drop a legacy row left over from a previous open.
+        var stale = fs.querySelector('.p86-addr-ac-row');
+        if (stale) stale.remove();
+        if (!street.placeholder) street.placeholder = 'Start typing an address…';
+        return;
       }
-    });
+    }
+    mountLegacyRow();
   }
 
   // Wire the edit-gate pencil into editable fieldsets on the LEFT

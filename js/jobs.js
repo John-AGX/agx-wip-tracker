@@ -4611,8 +4611,14 @@ function renderJobsMain() {
                 stripHTML =
                     '<div class="p86-sc-strip">' +
                         '<div class="st"><div class="k">Contract</div><div class="v">' + formatCurrency(_recon.contract) + '</div></div>' +
-                        '<div class="st"><div class="k">Allocated</div><div class="v ' + _allocCls + '">' + formatCurrency(_recon.onBuildings) + '</div></div>' +
-                        '<div class="st"><div class="k">Unallocated</div><div class="v ' + _gapCls + '">' + (_recon.over ? 'over ' + formatCurrency(-_recon.gap) : formatCurrency(Math.max(0, _recon.gap))) + '</div></div>' +
+                        // "Allocated" here has always meant allocated TO BUILDINGS
+                        // (_recon.onBuildings). On a freshly converted job the whole
+                        // contract sits in a job-level scope with no building yet, so
+                        // the strip read "Allocated $0 / Unallocated <full contract>"
+                        // directly above a scope card showing that same contract —
+                        // which reads as a contradiction. Say what's actually measured.
+                        '<div class="st" title="Contract allocated to buildings"><div class="k">On buildings</div><div class="v ' + _allocCls + '">' + formatCurrency(_recon.onBuildings) + '</div></div>' +
+                        '<div class="st" title="Contract not yet allocated to a building"><div class="k">Unassigned</div><div class="v ' + _gapCls + '">' + (_recon.over ? 'over ' + formatCurrency(-_recon.gap) : formatCurrency(Math.max(0, _recon.gap))) + '</div></div>' +
                         '<div class="st"><div class="k">Avg %</div><div class="v">' + jobPct + '%</div></div>' +
                     '</div>';
             } else {
