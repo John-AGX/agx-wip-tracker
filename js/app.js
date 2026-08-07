@@ -2831,18 +2831,56 @@
         var _conflictReloadPending = false;
         function handleSaveConflicts(conflicts) {
             try {
+                // Snapshot what THIS client was holding for each rejected job so
+                // we can tell, after the reload, whether anything the user
+                // actually typed was lost.
+                var beforeSig = {};
+                conflicts.forEach(function(c) { beforeSig[c.id] = jobSliceSig(c.id); });
                 var names = conflicts.map(function(c) {
                     var j = (appData.jobs || []).find(function(x) { return x.id === c.id; });
                     return (j && (j.title || j.name)) || c.id;
                 });
-                var msg = (names.length === 1 ? ('“' + names[0] + '” was') : (names.length + ' jobs were')) +
-                    ' changed by someone else — your latest edit ' + (names.length === 1 ? 'to it was' : 'to them was') +
-                    ' NOT saved. Reloading the current version…';
-                if (window.p86Toast) { try { window.p86Toast(msg, 'error'); } catch (e) {} }
                 console.warn('[save-conflict]', names.join(', '));
+
                 if (!_conflictReloadPending) {
                     _conflictReloadPending = true;
-                    setTimeout(function() { _conflictReloadPending = false; try { loadData(); } catch (e) {} }, 1200);
+                    setTimeout(function() {
+                        _conflictReloadPending = false;
+                        Promise.resolve().then(function() { return loadData(); }).then(function() {
+                            // Only NOW do we know whether the user lost anything.
+                            //
+                            // A rejected push is not automatically a lost edit. The
+                            // common case by far is a second session (or the QB
+                            // import, which stamps qbCosts* + updatedAt on every
+                            // matched job) making ~20 jobs dirty with values that
+                            // already match the server. Announcing "22 jobs were
+                            // changed by someone else — your latest edit was NOT
+                            // saved" for that is both false and alarming: the user
+                            // edited nothing and lost nothing.
+                            //
+                            // Compare the slice we were holding against the server's
+                            // truth. Same → silent converge. Different → the user
+                            // really did lose something and must be told.
+                            var lost = conflicts.filter(function(c) {
+                                return beforeSig[c.id] !== jobSliceSig(c.id);
+                            });
+                            if (!lost.length) {
+                                console.log('[save-conflict] ' + conflicts.length +
+                                    ' job(s) rejected but identical to the server after reload — nothing was lost, converged silently.');
+                                return;
+                            }
+                            var lostNames = lost.map(function(c) {
+                                var j = (appData.jobs || []).find(function(x) { return x.id === c.id; });
+                                return (j && (j.title || j.name)) || c.id;
+                            });
+                            var msg = (lostNames.length === 1
+                                    ? ('“' + lostNames[0] + '” was changed by someone else — your edit to it was NOT saved.')
+                                    : (lostNames.length + ' jobs were changed by someone else — your edits to them were NOT saved.')) +
+                                ' The current version has been loaded.';
+                            if (window.p86Toast) { try { window.p86Toast(msg, 'error'); } catch (e) {} }
+                            console.warn('[save-conflict] genuinely lost edits on:', lostNames.join(', '));
+                        }).catch(function () {});
+                    }, 1200);
                 }
             } catch (e) {}
         }
