@@ -78,7 +78,10 @@
   // ── per-line + summary math ───────────────────────────────
   function lineRetPct(l, app) {
     if (l && l.retainagePct != null && l.retainagePct !== '') return num(l.retainagePct);
-    return app ? num(app.retainage_pct) : 10;
+    // Default 0, NOT 10. Retainage is withheld money — applying it because
+    // nobody said otherwise understates what the client owes on every app
+    // that never touched the field. It applies when it's entered.
+    return app ? num(app.retainage_pct) : 0;
   }
   function lineG(l) { return round2(num(l.scheduledValue) * num(l.pctComplete) / 100 + num(l.stored)); }
   function lineThisPeriod(l) { return round2(lineG(l) - num(l.previous)); }
@@ -794,7 +797,10 @@
     var prevApp = _st.apps[0]; // highest app_no (sorted desc)
     var payload = {
       period_to: todayISO(),
-      retainage_pct: prevApp ? num(prevApp.retainage_pct) : 10,
+      // Carry the prior app's rate (a contract's retainage doesn't change
+      // mid-job), but a FIRST application starts at 0 — retainage applies
+      // when it's entered, not by default.
+      retainage_pct: prevApp ? num(prevApp.retainage_pct) : 0,
       notes: '',
       lines: (sov && sov.lines) || []
     };

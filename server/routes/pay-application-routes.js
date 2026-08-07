@@ -54,7 +54,8 @@ function shapeRow(r) {
     app_no: r.app_no,
     status: r.status,
     period_to: r.period_to,
-    retainage_pct: r.retainage_pct != null ? Number(r.retainage_pct) : 10,
+    // Read fallback also 0 — a row with no stored rate withholds nothing.
+    retainage_pct: r.retainage_pct != null ? Number(r.retainage_pct) : 0,
     certified_at: r.certified_at,
     certified_by: r.certified_by,
     created_at: r.created_at,
@@ -159,7 +160,11 @@ router.post('/jobs/:jobId/pay-applications',
       }));
 
       const id = 'pa_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-      const retPct = req.body.retainage_pct != null ? num(req.body.retainage_pct) : 10;
+      // Default 0. A new pay app withholds nothing unless retainage is
+      // explicitly set — previously every application started at 10% whether
+      // or not the contract called for it, which silently understated the
+      // current payment due on the very first G702.
+      const retPct = req.body.retainage_pct != null ? num(req.body.retainage_pct) : 0;
       const periodTo = (req.body.period_to && String(req.body.period_to).trim()) ? req.body.period_to : null;
 
       const { rows } = await pool.query(

@@ -794,13 +794,18 @@ async function initSchema() {
       app_no INTEGER NOT NULL DEFAULT 1,
       status TEXT NOT NULL DEFAULT 'draft',
       period_to DATE,
-      retainage_pct NUMERIC NOT NULL DEFAULT 10,
+      retainage_pct NUMERIC NOT NULL DEFAULT 0,
       data JSONB NOT NULL DEFAULT '{}'::jsonb,
       certified_at TIMESTAMPTZ,
       certified_by INTEGER REFERENCES users(id),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    -- Retainage default moved 10 -> 0: it applies only when entered.
+    -- The CREATE above never re-runs on an existing table, so the live column
+    -- keeps its old DEFAULT 10 without this. Only the DEFAULT changes —
+    -- every existing pay application keeps the rate it was saved with.
+    ALTER TABLE pay_applications ALTER COLUMN retainage_pct SET DEFAULT 0;
     CREATE INDEX IF NOT EXISTS idx_pay_applications_job ON pay_applications(job_id, app_no DESC);
     CREATE INDEX IF NOT EXISTS idx_pay_applications_org ON pay_applications(organization_id, status, created_at DESC) WHERE organization_id IS NOT NULL;
 
