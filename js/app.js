@@ -107,7 +107,9 @@
             return safeLoadJSON(key, []);
         }
         function saveCustomItems(key, items) {
-            localStorage.setItem(key, JSON.stringify(items));
+            // putCache, not a bare setItem — same reason as writeToLocalStorage:
+            // a full quota must not throw out of a UI handler.
+            putCache(key, JSON.stringify(items));
         }
 
         function populateCustomSelect(selectId, defaults, storageKey, placeholder) {
@@ -2509,18 +2511,45 @@
             appData.estimateAlternates = [];
         }
 
+        // localStorage here is a CACHE — the server is the source of truth. A
+        // failed write must therefore never propagate: these bare setItem calls
+        // used to throw QuotaExceededError straight up through saveData() into
+        // renderJobDetail(), which aborted mid-render and left jobs unable to
+        // open at all. Losing the offline cache is a nuisance; losing the app
+        // is not acceptable.
+        //
+        // Deliberately does NOT evict anything to make room. The obvious
+        // candidate (p86-workspaces, by far the largest key) is the ONLY copy
+        // of the user's workbooks — there is no workspace CRUD API — so
+        // "freeing space" there would destroy real data.
+        var _cacheWarned = false;
+        function putCache(key, value) {
+            try {
+                localStorage.setItem(key, value);
+                return true;
+            } catch (e) {
+                if (!_cacheWarned) {
+                    _cacheWarned = true;
+                    console.warn('[p86] Local cache write failed (' + key + '): ' + ((e && e.name) || e) +
+                        '. Browser storage is full — the app keeps working from the server, ' +
+                        'but the offline cache is now stale.');
+                }
+                return false;
+            }
+        }
+
         function writeToLocalStorage() {
-            localStorage.setItem('p86-jobs-jobs', JSON.stringify(appData.jobs));
-            localStorage.setItem('p86-jobs-buildings', JSON.stringify(appData.buildings));
-            localStorage.setItem('p86-jobs-phases', JSON.stringify(appData.phases));
-            localStorage.setItem('p86-jobs-subs', JSON.stringify(appData.subs));
-            localStorage.setItem('p86-jobs-changeorders', JSON.stringify(appData.changeOrders));
-            localStorage.setItem('p86-jobs-purchaseorders', JSON.stringify(appData.purchaseOrders));
-            localStorage.setItem('p86-jobs-jobpurchaseorders', JSON.stringify(appData.jobPurchaseOrders || []));
-            localStorage.setItem('p86-jobs-jobchangeorders', JSON.stringify(appData.jobChangeOrders || []));
-            localStorage.setItem('p86-jobs-invoices', JSON.stringify(appData.invoices));
-            localStorage.setItem('p86-estimates', JSON.stringify(appData.estimates));
-            localStorage.setItem('p86-estimate-lines', JSON.stringify(appData.estimateLines));
+            putCache('p86-jobs-jobs', JSON.stringify(appData.jobs));
+            putCache('p86-jobs-buildings', JSON.stringify(appData.buildings));
+            putCache('p86-jobs-phases', JSON.stringify(appData.phases));
+            putCache('p86-jobs-subs', JSON.stringify(appData.subs));
+            putCache('p86-jobs-changeorders', JSON.stringify(appData.changeOrders));
+            putCache('p86-jobs-purchaseorders', JSON.stringify(appData.purchaseOrders));
+            putCache('p86-jobs-jobpurchaseorders', JSON.stringify(appData.jobPurchaseOrders || []));
+            putCache('p86-jobs-jobchangeorders', JSON.stringify(appData.jobChangeOrders || []));
+            putCache('p86-jobs-invoices', JSON.stringify(appData.invoices));
+            putCache('p86-estimates', JSON.stringify(appData.estimates));
+            putCache('p86-estimate-lines', JSON.stringify(appData.estimateLines));
             // estimateAlternates flat array dropped — see loadFromLocalStorage.
             // Clean up the legacy key so stale data can't reappear after a
             // future schema change.
