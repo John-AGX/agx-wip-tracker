@@ -131,7 +131,15 @@
           body: 'Use "+ New Estimate from Lead" on the lead\'s Proposals tab. The client and property details carry over already filled in — "Re-copy from lead" is there to restore them if you clear something by accident. Creating it drops you straight into the estimate editor.'
         },
         {
-          go: function () { if (typeof window.switchTab === 'function') window.switchTab('estimates'); },
+          // switchTab('estimates') ALONE is not enough — Leads and Estimates
+          // share that tab, so coming from step 2 it leaves #leads-list-view
+          // up and this step's anchor never appears (which would skip the
+          // step silently). The sub-tab id for the estimates list is 'list'.
+          go: function () {
+            if (typeof window.switchTab === 'function') window.switchTab('estimates');
+            if (typeof window.switchEstimatesSubTab === 'function') window.switchEstimatesSubTab('list');
+            if (typeof window.markVirtualTabActive === 'function') window.markVirtualTabActive('estimates');
+          },
           sel: '#estimate-editor-view, #estimates-list-view',
           title: '5 · Build the estimate',
           body: 'Every new estimate starts with the four cost sections — Materials, Direct Labor, General Conditions, Subcontractors. Add lines by hand, pull from the Materials Catalog, or explode an assembly and let it write the lines for you.'
