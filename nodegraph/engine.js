@@ -1248,10 +1248,40 @@ function migrateIfNeeded(state){
 // (fire-and-forget, indicator updates on response). Browser quota
 // pressure no longer wipes user layouts since the cloud copy is
 // authoritative.
+// Mirrors the server's graphGeomCount (job-routes.js). Counts building
+// nodes carrying real geometry — a traced footprint or a geo-anchor.
+function localGeomCount(state){
+  if (!state || !Array.isArray(state.nodes)) return 0;
+  var c = 0;
+  for (var i = 0; i < state.nodes.length; i++) {
+    var n = state.nodes[i];
+    if ((Array.isArray(n.polygon) && n.polygon.length > 0) ||
+        (n.geoLatLng && typeof n.geoLatLng === 'object')) c++;
+  }
+  return c;
+}
+
+// True once a GET /graph for the CURRENT job has come back OK — i.e. this
+// client knows exactly what the cloud holds. Reset on every job switch.
+//
+// This is the difference the server's footprint guard cannot see on its own.
+// The guard blocks any write that takes a graph WITH footprints down to zero,
+// because a fresh-open bare seed (from a client whose cloud load blipped) looks
+// exactly like that. But so does a legitimate delete of the last building that
+// carries geometry — and THAT is what made buildings undeletable: the record
+// delete persisted through the jobs bulk-save while the graph write 409'd, so
+// the t1 node survived in the cloud and pushToJob's orphan self-heal recreated
+// the building (with a fresh id) on the very next load.
+//
+// A client that has loaded the cloud state is not guessing. Its zero-geometry
+// write is a deliberate removal, so it passes force=1 and the guard stands down.
+var _cloudStateKnown = false;
+
 function saveGraphToCloud(state){
   if (!jobId) return;
   try {
-    fetch('/api/jobs/' + encodeURIComponent(jobId) + '/graph', {
+    var deliberateGeomRemoval = _cloudStateKnown && localGeomCount(state) === 0;
+    fetch('/api/jobs/' + encodeURIComponent(jobId) + '/graph' + (deliberateGeomRemoval ? '?force=1' : ''), {
       method: 'PUT',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
@@ -1263,7 +1293,13 @@ function saveGraphToCloud(state){
           // fresh-open seed racing over drawn geometry. This is the guard
           // WORKING: the cloud copy is safe and untouched. Don't flash a
           // save error; the real graph renders on the next cloud sync.
+          //
+          // It stays SILENT only when we never loaded the cloud state, since
+          // that is the seed-clobber case the user didn't ask for. If we DID
+          // know the state, force=1 was sent and a 409 shouldn't be possible —
+          // so surface it rather than let a delete quietly fail again.
           console.warn('[nodegraph] cloud save blocked by footprint guard (409) — server footprints are protected; the local seed was not persisted.');
+          if (deliberateGeomRemoval && typeof window.ngMarkSaved === 'function') window.ngMarkSaved('error');
           return;
         }
         console.warn('[nodegraph] cloud save failed:', r.status);
@@ -1293,6 +1329,10 @@ function loadGraphFromCloud(){
     credentials: 'include'
   }).then(function(r){
     if (!r.ok) return null;
+    // We now hold the authoritative cloud state for this job, so a later
+    // zero-geometry save is a real edit rather than a bare seed. Set on OK
+    // regardless of body: "the cloud has nothing" is knowledge too.
+    _cloudStateKnown = true;
     return r.json();
   }).then(function(body){
     if (!body || !body.graph || !body.graph.nodes || !body.graph.nodes.length) return null;
@@ -1757,7 +1797,10 @@ return {
   setNid:function(n){ nid=n; },
   pan:function(x,y){ if(x!=null)panX=x; if(y!=null)panY=y; return{x:panX,y:panY}; },
   zm:function(z){ if(z!=null)zoom=z; return zoom; },
-  job:function(j){ if(j!=null)jobId=j; return jobId; },
+  // Switching jobs invalidates what we know about the cloud graph — the
+  // next job's state has not been fetched yet, so a zero-geometry save
+  // must go back to being guard-checked until its own load lands.
+  job:function(j){ if(j!=null){ if(j!==jobId) _cloudStateKnown=false; jobId=j; } return jobId; },
   canConn:canConn, addNode:addNode, findNode:findNode,
   cleanMode:getCleanMode, setCleanMode:setCleanMode, firstCompatPort:firstCompatPort,
   viewMode:getViewMode, setViewMode:setViewMode, sitePlanVisible:sitePlanVisible, budgetFootprint:budgetFootprint, spBuildingFootprint:spBuildingFootprint,

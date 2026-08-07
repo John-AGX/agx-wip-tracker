@@ -6368,6 +6368,15 @@ function pushToJob(){
              materials:0, labor:0, sub:0, equipment:0, hoursWeek:0, hoursTotal:0,
              rate:40, workScope:'in-house', locked:false, excludeFromSubDist:false,
              units:Array.isArray(n.units)?n.units.slice():[], levels:Array.isArray(n.levels)?n.levels.slice():[] };
+      // Loud on purpose. This path is correct when the graph and appData
+      // genuinely diverge, but it is ALSO the mechanism that makes a building
+      // look undeletable: if the delete's graph write never lands (e.g. the
+      // server footprint guard 409s it), the node survives and this recreates
+      // the record on every load, with a NEW id each time. If you are chasing
+      // "I deleted it and it came back", this line firing is the smoking gun.
+      console.warn('[nodegraph] orphan t1 node "' + (_bnm || '?') + '" (' + n.id +
+        ') had no building record — recreating as ' + bldg.id +
+        '. If this repeats, the graph delete is not persisting.');
       appData.buildings.push(bldg);
       if(!n.data||!n.data.id) n.data=bldg;   // re-link the node to the fresh record
     }
