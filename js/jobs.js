@@ -2082,6 +2082,12 @@ function renderJobsMain() {
             // Schedule page reads totalProductionDays for daily-revenue math.
             var prodDaysEl = document.getElementById('jobTotalProductionDays');
             if (prodDaysEl) prodDaysEl.value = '';
+            // This form is reused, not rebuilt — without clearing, the dates
+            // from the last job you added would ride along into the next one.
+            var startEl = document.getElementById('jobStartDate');
+            if (startEl) startEl.value = '';
+            var endEl = document.getElementById('jobEndDate');
+            if (endEl) endEl.value = '';
             document.getElementById('jobStatus').value = 'New';
             document.getElementById('jobNotes').value = '';
             populateJobPMSelect();
@@ -2480,6 +2486,19 @@ function renderJobsMain() {
             // both can coexist when the user picks from the directory and
             // the picker auto-fills the name. Empty string means unlinked.
             var pickedClientId = (document.getElementById('jobClientId') || {}).value || '';
+            // Schedule window. Date-only strings (no time) — see the modal
+            // markup for why. Blank is valid: not every job has dates known at
+            // setup, and an empty string reads as "—" everywhere.
+            var startDateVal = ((document.getElementById('jobStartDate') || {}).value || '').trim();
+            var endDateVal = ((document.getElementById('jobEndDate') || {}).value || '').trim();
+            // Only meaningful when BOTH are set; catching it here is cheaper
+            // than a job that reports a negative duration on the Schedule.
+            if (startDateVal && endDateVal && endDateVal < startDateVal) {
+                alert('End Date is before Start Date.');
+                var _endEl = document.getElementById('jobEndDate');
+                if (_endEl) _endEl.focus();
+                return;
+            }
             const job = {
                 id: 'j' + Date.now(),
                 jobNumber: jobNum,
@@ -2498,6 +2517,8 @@ function renderJobsMain() {
                 // (As Sold) is derived from contractAmount vs estimatedCosts
                 // above, so there is nothing left to collect here.
                 totalProductionDays: parseInt(document.getElementById('jobTotalProductionDays') ? document.getElementById('jobTotalProductionDays').value : '', 10) || 0,
+                startDate: startDateVal,
+                endDate: endDateVal,
                 notes: document.getElementById('jobNotes').value.trim(),
                 pctComplete: 0,
                 invoicedToDate: 0,
@@ -2702,6 +2723,7 @@ function renderJobsMain() {
                 // date-only string on purpose: adding a time would drag the whole
                 // value across a day boundary when it's read in another timezone.
                 if ((v = gv('edit-jobStartDate')) !== null) job.startDate = (v || '').trim();
+                if ((v = gv('edit-jobEndDate')) !== null) job.endDate = (v || '').trim();
                 if ((v = gv('edit-jobStatus')) !== null) job.status = v;
                 if ((v = gv('edit-jobNotes')) !== null) job.notes = v.trim();
                 job.updatedAt = new Date().toISOString();
@@ -2734,6 +2756,7 @@ function renderJobsMain() {
                     // targetMarginPct, which nothing reads.
                     'job-info-prod-days': () => '<input id="edit-jobProductionDays" type="number" value="' + (job.totalProductionDays || '') + '" style="' + IST + '">',
                     'job-info-start':     () => '<input id="edit-jobStartDate" type="date" value="' + escapeHTML(String(job.startDate || '').slice(0, 10)) + '" style="' + IST + '">',
+                    'job-info-end':       () => '<input id="edit-jobEndDate" type="date" value="' + escapeHTML(String(job.endDate || '').slice(0, 10)) + '" style="' + IST + '">',
                     'job-info-status':    () => '<select id="edit-jobStatus" style="' + SST + '">' + opts(['New', 'Backlog', 'In Progress', 'On Hold', 'Completed', 'Archived'], job.status) + '</select>',
                     'job-info-notes':     () => '<textarea id="edit-jobNotes" rows="3" style="' + IST + 'resize:vertical;">' + escapeHTML(job.notes || '') + '</textarea>'
                 };
@@ -3198,6 +3221,12 @@ function renderJobsMain() {
             if (startCell) {
                 startCell.textContent = (job.startDate && window.p86EntityCard && window.p86EntityCard.shortDate)
                     ? (window.p86EntityCard.shortDate(job.startDate) || '—')
+                    : '—';
+            }
+            var endCell = document.getElementById('job-info-end');
+            if (endCell) {
+                endCell.textContent = (job.endDate && window.p86EntityCard && window.p86EntityCard.shortDate)
+                    ? (window.p86EntityCard.shortDate(job.endDate) || '—')
                     : '—';
             }
             const statusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';

@@ -1024,6 +1024,7 @@
                                 <div style="min-width:0;"><div style="font-size:11px;color:var(--text-dim);margin-bottom:2px;">Job Number</div><div style="font-size:13px;color:var(--text);" id="job-info-number"></div></div>
                                 <div style="min-width:0;"><div style="font-size:11px;color:var(--text-dim);margin-bottom:2px;">Production Days</div><div style="font-size:13px;color:var(--text);" id="job-info-prod-days"></div></div>
                                 <div style="min-width:0;"><div style="font-size:11px;color:var(--text-dim);margin-bottom:2px;">Start Date</div><div style="font-size:13px;color:var(--text);" id="job-info-start"></div></div>
+                                <div style="min-width:0;"><div style="font-size:11px;color:var(--text-dim);margin-bottom:2px;">End Date</div><div style="font-size:13px;color:var(--text);" id="job-info-end"></div></div>
                             </div>
 
                             <div style="margin-top:14px;">
@@ -2138,6 +2139,21 @@
                 <div class="form-group">
                     <label>Total Production Days</label>
                     <input type="number" id="jobTotalProductionDays" placeholder="e.g., 10" step="1" min="0" title="Used by the Schedule page to compute expected daily revenue (contract ÷ days).">
+                </div>
+            </div>
+            <!-- Schedule window. startDate already existed on the job model but
+                 could only be set AFTER creation, from the Job Information card;
+                 endDate did not exist at all. Both are date-only strings on
+                 purpose — a time component would drag the value across a day
+                 boundary when read in another timezone (we run multi-market). -->
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Start Date</label>
+                    <input type="date" id="jobStartDate" title="Scheduled start on site.">
+                </div>
+                <div class="form-group">
+                    <label>End Date</label>
+                    <input type="date" id="jobEndDate" title="Scheduled completion.">
                 </div>
             </div>
             <div class="form-row">
@@ -3426,7 +3442,7 @@
          BEFORE any of them so window.p86Pricing is ready. -->
     <script src="js/pricing-pipeline.js?v=2"></script>
     <script src="js/progress.js?v=3"></script>
-    <script src="js/jobs.js?v=212"></script>
+    <script src="js/jobs.js?v=213"></script>
     <script src="js/doc-import.js?v=3"></script>
     <script src="js/job-workflow-ui.js?v=6"></script>
     <!-- Reusable rich-text field (window.p86RichText) — shared WYSIWYG for
