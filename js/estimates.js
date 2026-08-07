@@ -994,9 +994,16 @@ function renderEstimatesList() {
             // Open the estimate you just created. This used to re-render the
             // estimates LIST instead — and when the modal was launched from a
             // lead, closing it left you looking at the Leads list with no sign
-            // of the estimate, which read as "the create failed". Falls back to
-            // the list render if the editor isn't loaded.
-            if (typeof window.openEstimateEditor === 'function') {
+            // of the estimate, which read as "the create failed".
+            //
+            // Route through p86Router rather than calling openEstimateEditor
+            // directly: that function only swaps #estimates-list-view for
+            // #estimate-editor-view, it does NOT change the active top-level
+            // page. Called from a lead it mounted the editor underneath the
+            // Leads page — invisible, which looked identical to the old bug.
+            if (window.p86Router && typeof window.p86Router.navigate === 'function') {
+                window.p86Router.navigate({ top: 'estimates', estId: estId });
+            } else if (typeof window.openEstimateEditor === 'function') {
                 window.openEstimateEditor(estId);
             } else {
                 renderEstimatesList();
