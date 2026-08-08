@@ -600,6 +600,20 @@
           var cs = (det && det.payload) ? det.payload.apply_changeset : (det && det.apply_changeset);
           delete _shown[p.id];            // let renderChangeset re-claim + actually render
           renderChangeset(cs, p.id);
+          // Server-side / approve-in-chat applies never fire the client apply event, so
+          // re-emit it here → the ai-panel listener fans out to reloadLeadsCache /
+          // reloadClientsCache / p86ReloadAllData / renderSchedule so the affected entity's
+          // list + detail repaint LIVE (no page refresh). Deduped: renderChangeset above
+          // re-claims _shown[p.id], so live-writer's own onApplied handler no-ops.
+          try {
+            if (Array.isArray(cs) && cs.length) {
+              document.dispatchEvent(new CustomEvent('p86:payload-applied', { detail: {
+                payload_id: p.id,
+                affected_targets: cs.map(function (e) { return { entity_type: e.entity_type, entity_id: e.id }; }),
+                apply_changeset: cs
+              } }));
+            }
+          } catch (_) {}
         } catch (_) {}
       }
     } catch (_) {}

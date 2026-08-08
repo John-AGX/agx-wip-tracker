@@ -78,7 +78,10 @@ function p86Ask(message, opts) {
     '<p>Please review and approve this Change Order to confirm the adjustment to your original Scope of Work.</p>' +
     '<p>By approving, you acknowledge the updated construction schedule and understand that invoicing will occur either upon approval or at completion of the project. Timely payment helps us keep the project moving smoothly and on schedule.</p>';
 
-  function openNew(jobId) {
+  var _onClose = null;      // one-shot: the caller's own surface repaint, fired on close()
+
+  function openNew(jobId, opts) {
+    _onClose = (opts && typeof opts.onClose === 'function') ? opts.onClose : null;
     if (!jobId) { console.warn('openNew: jobId required'); return; }
     if (!window.p86Api || !window.p86Api.changeOrders) {
       alert('API not available'); return;
@@ -101,7 +104,8 @@ function p86Ask(message, opts) {
       alert('Could not create change order: ' + (e.message || e));
     });
   }
-  function openExisting(coId) {
+  function openExisting(coId, opts) {
+    _onClose = (opts && typeof opts.onClose === 'function') ? opts.onClose : null;
     if (!coId) { console.warn('open: coId required'); return; }
     if (!window.p86Api || !window.p86Api.changeOrders) {
       alert('API not available'); return;
@@ -140,8 +144,12 @@ function p86Ask(message, opts) {
     _state.dirty = false;
     _state.saving = false;
     _state.saveError = null;
-    // The hub list underneath may show stale title/status — refresh it.
+    // The hub list underneath may show stale title/status — refresh it. Also fire the
+    // caller's own surface repaint (e.g. the job-detail CO tab, which the hub refresh does
+    // NOT cover). _onClose is one-shot.
     if (typeof window.p86JobsHubRefresh === 'function') window.p86JobsHubRefresh();
+    var _cb = _onClose; _onClose = null;
+    if (_cb) { try { _cb(); } catch (_) {} }
   }
 
   // ──────────────────────────────────────────────────────────────────

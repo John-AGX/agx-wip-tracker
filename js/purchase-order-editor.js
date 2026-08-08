@@ -16,6 +16,7 @@
   var _saveTimer = null;
   var _subsCache = null;
   var _pendingPOExtraction = null; // raw PDF extraction, sent once on close for training
+  var _onClose = null;      // one-shot: the caller's own surface repaint, fired after close()'s save flush
 
   var STATUS_LABEL = {
     draft: 'Draft', issued: 'Issued', approved: 'Approved',
@@ -80,7 +81,8 @@
   }
 
   // ── open / create ───────────────────────────────────────────────────
-  function open(id) {
+  function open(id, opts) {
+    _onClose = (opts && typeof opts.onClose === 'function') ? opts.onClose : null;
     if (!window.p86Api || !window.p86Api.purchaseOrders) return;
     mountShell('Loading…');
     window.p86Api.purchaseOrders.get(id).then(function (r) {
@@ -93,6 +95,7 @@
 
   function openNew(jobId, opts) {
     opts = opts || {};
+    _onClose = (typeof opts.onClose === 'function') ? opts.onClose : null;
     if (!window.p86Api || !window.p86Api.purchaseOrders) return;
     mountShell('Creating…');
     window.p86Api.purchaseOrders.create(jobId, {
@@ -138,10 +141,16 @@
     var ov = document.getElementById('po-editor-overlay');
     if (ov) ov.style.display = 'none';
     _po = null;
-    // Refresh the list AFTER the final save lands — else the re-fetch races the
-    // in-flight PUT and re-renders the stale title/sub/status the user just changed.
-    var _hub = function () { if (typeof window.p86JobsHubRefresh === 'function') window.p86JobsHubRefresh(); };
-    Promise.resolve(saveFlush).then(_hub, _hub);
+    // Refresh AFTER the final save lands — else the re-fetch races the in-flight PUT and
+    // re-renders the stale title/sub/status the user just changed. Fire BOTH the cross-job
+    // Jobs Hub refresh AND the caller's own surface repaint (e.g. the job-detail PO tab,
+    // which p86JobsHubRefresh does NOT cover). _onClose is one-shot.
+    var _cb = _onClose; _onClose = null;
+    var _done = function () {
+      if (typeof window.p86JobsHubRefresh === 'function') window.p86JobsHubRefresh();
+      if (_cb) { try { _cb(); } catch (_) {} }
+    };
+    Promise.resolve(saveFlush).then(_done, _done);
   }
   window.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') {

@@ -795,7 +795,9 @@ function renderJobsMain() {
                 tr.addEventListener('click', function() {
                     var id = tr.getAttribute('data-co-open');
                     if (window.p86ChangeOrders && window.p86ChangeOrders.open) {
-                        window.p86ChangeOrders.open(id);
+                        window.p86ChangeOrders.open(id, { onClose: function() {
+                            loadChangeOrdersForJob(jobId).then(function() { paintJobChangeOrdersInto(mount, jobId); });
+                        } });
                     }
                 });
             });
@@ -805,16 +807,11 @@ function renderJobsMain() {
             var newBtn = mount.querySelector('[data-co-new]');
             if (newBtn) newBtn.addEventListener('click', function() {
                 if (window.p86ChangeOrders && window.p86ChangeOrders.openNew) {
-                    window.p86ChangeOrders.openNew(jobId);
-                    // After the editor closes the user may have created
-                    // a row. Best-effort refresh after a short delay so
-                    // the list shows it. The editor doesn't currently
-                    // emit a close-event, so this is the simplest hook.
-                    setTimeout(function() {
-                        loadChangeOrdersForJob(jobId).then(function() {
-                            paintJobChangeOrdersInto(mount, jobId);
-                        });
-                    }, 500);
+                    // Refresh THIS tab when the editor closes — real close callback now,
+                    // no more setTimeout(500) race.
+                    window.p86ChangeOrders.openNew(jobId, { onClose: function() {
+                        loadChangeOrdersForJob(jobId).then(function() { paintJobChangeOrdersInto(mount, jobId); });
+                    } });
                 }
             });
         }
@@ -1193,18 +1190,19 @@ function renderJobsMain() {
             mount.querySelectorAll('[data-po-open]').forEach(function(tr) {
                 tr.addEventListener('click', function() {
                     var id = tr.getAttribute('data-po-open');
-                    if (window.p86PurchaseOrders && window.p86PurchaseOrders.open) window.p86PurchaseOrders.open(id);
+                    if (window.p86PurchaseOrders && window.p86PurchaseOrders.open) window.p86PurchaseOrders.open(id, { onClose: function() {
+                        loadPurchaseOrdersForJob(jobId).then(function() { paintJobPurchaseOrdersInto(mount, jobId); });
+                    } });
                 });
             });
             var newBtn = mount.querySelector('[data-po-new]');
             if (newBtn) newBtn.addEventListener('click', function() {
                 if (window.p86PurchaseOrders && window.p86PurchaseOrders.openNew) {
-                    window.p86PurchaseOrders.openNew(jobId);
-                    // Best-effort refresh after the editor opens — it doesn't
-                    // emit a close event, so re-fetch shortly after.
-                    setTimeout(function() {
+                    // Refresh THIS tab when the editor closes — real close callback now,
+                    // no more setTimeout(600) that raced the create + repainted a half-typed row.
+                    window.p86PurchaseOrders.openNew(jobId, { onClose: function() {
                         loadPurchaseOrdersForJob(jobId).then(function() { paintJobPurchaseOrdersInto(mount, jobId); });
-                    }, 600);
+                    } });
                 }
             });
             var impBtn = mount.querySelector('[data-po-import]');

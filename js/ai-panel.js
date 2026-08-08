@@ -43,6 +43,7 @@ function p86Ask(message, opts) {
   var _streaming = false;
   var _includePhotos = true;    // default-on with toggle, per the user
   var _abortController = null;
+  var _pendingApprovalsPollTimer = null;   // polls the pending-Scribe-drafts strip while the panel is open
 
   // Crew chip bridge (js/crew-chip.js) — narrates the turn's baton-passing in the
   // header ("Assistant is thinking…" → "Pulling 86 in…" → "Scribe is drafting…").
@@ -1529,6 +1530,15 @@ function p86Ask(message, opts) {
     // hook that runs on EVERY open. (Async; populates when the fetch
     // lands.)
     try { refreshPendingApprovals(); } catch (_) {}
+    // ...and KEEP checking while the panel stays open. A background Scribe draft
+    // turns `ready` 30-60s AFTER the foreground turn already ended — long after the
+    // open/turn-end hooks ran — so without a poll its approval card wouldn't appear
+    // until the next reopen or a page refresh. (Mirrors live-writer's applied poll.)
+    if (!_pendingApprovalsPollTimer) {
+      _pendingApprovalsPollTimer = setInterval(function () {
+        if (!document.hidden) { try { refreshPendingApprovals(); } catch (_) {} }
+      }, 15000);
+    }
     // Prefetch the session list once per panel lifetime so auto-anchor
     // has data to work with on the first navigation. Subsequent opens
     // skip the fetch (cached); the sidebar's own open handler refreshes
@@ -1893,6 +1903,7 @@ function p86Ask(message, opts) {
     _open = false;
     // Stop the rolling-hint rotation while the panel is closed.
     if (_presetRotateTimer) { clearInterval(_presetRotateTimer); _presetRotateTimer = null; }
+    if (_pendingApprovalsPollTimer) { clearInterval(_pendingApprovalsPollTimer); _pendingApprovalsPollTimer = null; }
     closeSlashPalette();
     if (_abortController) {
       try { _abortController.abort(); } catch (e) { /* ignore */ }

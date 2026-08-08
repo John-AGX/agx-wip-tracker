@@ -311,19 +311,30 @@
       lines: _cur.lines, notes: _cur.notes || '', billTo: _cur.billTo || null,
       pay_application_id: _cur.pay_application_id || null };
   }
+  // AR invoices also drive the jobs-list "Invoiced / Unbilled" tiles + job WIP, which read
+  // appData.arInvoices — a read-cache hydrated ONLY at boot. So a mutation here must patch
+  // that store + repaint the jobs list, or those tiles stay stale until a full page refresh.
+  function _syncJobsWIP() {
+    try {
+      api().list().then(function (r) {
+        if (typeof appData !== 'undefined') appData.arInvoices = (r && (r.invoices || r.rows || r)) || appData.arInvoices || [];
+        if (typeof window.renderJobsMain === 'function') { try { window.renderJobsMain(); } catch (_) {} }
+      }).catch(function () {});
+    } catch (_) {}
+  }
   function save() {
     var p = payload();
     var req = _cur.id ? api().update(_cur.id, p) : api().create(p);
-    req.then(function (r) { _cur = r && r.invoice; toast('Invoice saved.'); showEditor(); })
+    req.then(function (r) { _cur = r && r.invoice; toast('Invoice saved.'); showEditor(); _syncJobsWIP(); })
       .catch(function (e) { toast((e && e.message) || 'Save failed.', true); });
   }
   function setStatus(s) {
     if (!_cur.id) { toast('Save the invoice first.', true); return; }
-    api().setStatus(_cur.id, s).then(function (r) { _cur = r && r.invoice; toast('Status → ' + s + '.'); showEditor(); })
+    api().setStatus(_cur.id, s).then(function (r) { _cur = r && r.invoice; toast('Status → ' + s + '.'); showEditor(); _syncJobsWIP(); })
       .catch(function (e) { toast((e && e.message) || 'Could not change status.', true); });
   }
   function del() {
-    api().remove(_cur.id).then(function () { toast('Invoice deleted.'); closeEditor(); })
+    api().remove(_cur.id).then(function () { toast('Invoice deleted.'); closeEditor(); _syncJobsWIP(); })
       .catch(function (e) { toast((e && e.message) || 'Delete failed.', true); });
   }
 
