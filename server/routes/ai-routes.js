@@ -11906,12 +11906,72 @@ const AI_TOOL_CAPABILITY = new Map([
   ['update_client_field',     'ESTIMATES_EDIT'],
   ['create_property',         'ESTIMATES_EDIT'],
   ['link_property_to_parent', 'ESTIMATES_EDIT'],
+  // ── APPROVED-WRITE tools (executed by POST /86/chat/continue) ──────
+  //
+  // These were previously absent from this map, and /continue never
+  // called the gate at all — so an approved write ran with NO capability
+  // check on a route whose only middleware is requireAuth + requireOrg.
+  // Every role that can reach the AI (including `sub`, whose entire
+  // capability set is SUB_PORTAL_VIEW + SUB_PORTAL_UPLOAD, and which
+  // resolveHostKeyForUser pins to the 86 agent) could POST a
+  // {name, input, approved:true} tool_result and have it execute.
+  //
+  // Each capability below MIRRORS the equivalent non-AI REST route, so
+  // this closes the hole without inventing a new policy:
+  //   client writes  → ESTIMATES_EDIT  (client-routes.js:337/368/433/491)
+  //   lead create    → LEADS_EDIT      (lead-routes.js:148)
+  //   skill packs    → ROLES_MANAGE    (admin-organizations-routes.js:495/559/727)
+  //
+  // Job-linking is the one entry with NO REST capability gate to mirror
+  // (the REST path authorizes per-job via canEdit instead). ANY-of
+  // EDIT_ANY/EDIT_OWN is a deliberate coarse pre-filter: `pm` holds only
+  // JOBS_EDIT_OWN, so requiring EDIT_ANY would lock PMs out of a flow
+  // they use today. NOTE this is only a role filter — execLinkJobToClient
+  // still updates jobs by bare id with no owner and no org predicate, so
+  // an EDIT_OWN holder can retarget any job. That weakness is PRE-EXISTING
+  // (today the route has no gate at all, so this is strictly an
+  // improvement); the per-job ownership check REST does via canEdit is
+  // tracked as its own follow-up, not smuggled in here.
+  //
+  // DELIBERATELY NOT LISTED — propose_create_field_tool / _update / _delete.
+  // Their REST twins (field-tools-routes.js:68/453/519) are requireAuth
+  // only, so gating them here would REVOKE a flow pm/corporate/field_crew
+  // have today rather than mirror one. (An earlier draft of this block
+  // cited field-tools-routes.js:377/417 as the mirror — those are the
+  // system-preset CATALOG endpoints, a different operation.) If field
+  // tools should require a capability, that is a policy change and must
+  // land on BOTH surfaces in one commit.
+  ['propose_create_lead',                'LEADS_EDIT'],
+  ['propose_link_job_to_client',         ['JOBS_EDIT_ANY', 'JOBS_EDIT_OWN']],
+  ['propose_bulk_link_jobs_to_clients',  ['JOBS_EDIT_ANY', 'JOBS_EDIT_OWN']],
+  ['propose_skill_pack_add',             'ROLES_MANAGE'],
+  ['propose_skill_pack_edit',            'ROLES_MANAGE'],
+  ['propose_skill_pack_delete',          'ROLES_MANAGE'],
+  // Remaining ClientDirectoryTools writes. create_property /
+  // update_client_field / link_property_to_parent are already above.
+  ['create_parent_company',                  'ESTIMATES_EDIT'],
+  ['rename_client',                          'ESTIMATES_EDIT'],
+  ['change_property_parent',                 'ESTIMATES_EDIT'],
+  ['merge_clients',                          'ESTIMATES_EDIT'],
+  ['split_client_into_parent_and_property',  'ESTIMATES_EDIT'],
+  ['delete_client',                          'ESTIMATES_EDIT'],
+  ['attach_business_card_to_client',         'ESTIMATES_EDIT'],
+  ['add_client_note',                        'ESTIMATES_EDIT'],
   // CoS introspection over team conversations / usage metrics.
   ['read_metrics',              'INSIGHTS_VIEW'],
   ['read_recent_conversations', 'INSIGHTS_VIEW'],
   ['read_conversation_detail',  'INSIGHTS_VIEW'],
-  // read_users intentionally UNGATED — it's the assignment-picker
+  // read_users WAS intentionally ungated — it's the assignment-picker
   // directory (org-scoped in the handler, no PII beyond name/email/role).
+  // That reasoning held while only staff could reach it. It no longer does:
+  // read_users is a member of ClientDirectoryTools, so the /86/chat/continue
+  // loop executes it for anyone who posts {name:'read_users', approved:true},
+  // and resolveHostKeyForUser pins `sub` — an EXTERNAL subcontractor whose
+  // role description is literally "No PM-app access" — to the 86 agent.
+  // Gating ANY-of JOBS_VIEW_ALL/ESTIMATES_VIEW denies exactly one role,
+  // `sub`; every internal role (incl. field_crew via ESTIMATES_VIEW) still
+  // passes, so the assignment picker is unaffected.
+  ['read_users', ['JOBS_VIEW_ALL', 'ESTIMATES_VIEW']],
   // "Near me" — surfaces nearby job/lead locations; ANY-of jobs-or-leads view.
   ['find_entities_near', ['JOBS_VIEW_ALL', 'LEADS_VIEW']],
   // Projects + POs reads — org-domain work; gate to job viewers.
@@ -11966,11 +12026,18 @@ function aiToolRequiredCapability(name, input) {
 // user lacks the capability. `user` is a {role} object (req.user, or a
 // row loaded from users for background/watch fires); a missing or
 // role-less user is denied for any gated tool (fail-closed).
-function aiToolCapabilityDenial(name, input, user) {
+// `verb` is 'read' (default) or 'write' — it only changes the wording handed
+// back to the model. Existing 3-arg callers keep the original read phrasing.
+function aiToolCapabilityDenial(name, input, user, verb) {
   const need = aiToolRequiredCapability(name, input);
   if (!need) return null;
   const needed = Array.isArray(need) ? need : [need];
   if (user && user.role && needed.some((cap) => hasCapability(user, cap))) return null;
+  if (verb === 'write') {
+    return 'Permission denied: the current user lacks the ' + needed.join(' or ') +
+           ' capability required to make this change. The change was NOT applied. Tell the user ' +
+           'their role doesn\'t allow this action and suggest they ask an admin to do it.';
+  }
   return 'Permission denied: the current user lacks the ' + needed.join(' or ') +
          ' capability required to read this. Tell the user you can\'t show this data because ' +
          'their role doesn\'t have access, and suggest they contact an admin if they need it.';
@@ -14496,6 +14563,30 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
     for (const r of toolResults) {
       let summary;
       let isError = false;
+      // ── Capability gate on the approved-write path ──────────────────
+      //
+      // This route's middleware is only requireAuth + requireOrg, and the
+      // loop below dispatches on `r.name` / `r.input` read straight off
+      // req.body with `r.approved` — a client-supplied boolean — as the
+      // sole condition. Without this check, ANY authenticated user in an
+      // org could POST {name:'delete_client', approved:true, input:{…}}
+      // and have it execute, regardless of role. That includes `sub`
+      // (SUB_PORTAL_VIEW + SUB_PORTAL_UPLOAD only) and `field_crew`,
+      // both of which resolveHostKeyForUser pins to the 86 agent.
+      //
+      // aiToolCapabilityDenial fails CLOSED on a missing/role-less user
+      // but returns null for any tool absent from AI_TOOL_CAPABILITY —
+      // so this is additive: it can only deny tools with an EXPLICIT
+      // capability requirement. The approved-write tools were added to
+      // that map in the same commit; each mirrors its non-AI REST gate.
+      // Derive the verb: ClientDirectoryTools includes read_jobs and
+      // read_users, so a hardcoded 'write' would tell the user "the change
+      // was NOT applied" about a pure read — a false claim in the chat
+      // transcript and in the denial log line below.
+      const capDenial = (r.approved && !r.apply_error)
+        ? aiToolCapabilityDenial(r.name, r.input || {}, req.user,
+            String(r.name || '').startsWith('read_') ? 'read' : 'write')
+        : null;
       // Client-side apply threw (BUG #6 path). Tag as is_error so the
       // agent reacts as if the tool errored — different remediation
       // than a user-driven reject (retry vs. ask follow-up).
@@ -14505,6 +14596,12 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
         isError = true;
       } else if (!r.approved) {
         summary = r.reject_reason || 'User rejected this proposal.';
+      } else if (capDenial) {
+        // Denied BEFORE any executor runs — nothing was written.
+        console.warn('[86/continue] capability denial: user ' + (req.user && req.user.id) +
+                     ' (role=' + (req.user && req.user.role) + ') attempted ' + r.name);
+        summary = capDenial;
+        isError = true;
       } else if (r.name === 'propose_create_lead') {
         try { summary = await execProposeCreateLead(r.input || {}, req.user.id); }
         catch (e) { summary = 'Error: ' + (e.message || 'failed'); isError = true; }
