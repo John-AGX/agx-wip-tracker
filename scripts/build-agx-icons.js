@@ -24,7 +24,7 @@ const MAP = {
   'insights':        'phosphor/chart-line-up-light',
   'admin':           'heroicons/shield-check',
   'estimates':       'heroicons/document-currency-dollar',
-  // 'leads' is a hand-drawn carrot now (CUSTOM_ICONS below) — John's call.
+  // 'leads' is the Phosphor carrot now (CUSTOM_ICONS below) — John's pick.
   'clients':         'phosphor/users-light',
   'subs':            'heroicons/wrench-screwdriver',
   'materials':       'phosphor/package-light',
@@ -403,11 +403,9 @@ const CUSTOM_ICONS = {
 CUSTOM_ICONS['users'] = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><circle cx="128" cy="96" r="64" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="12"/><path d="M30.99,224a112.12,112.12,0,0,1,194.02,0" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="12"/></svg>';
 CUSTOM_ICONS['id-card'] = '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.2" stroke="currentColor" aria-hidden="true" data-slot="icon"><path stroke-linecap="round" stroke-linejoin="round" d="M15 9h3.75M15 12h3.75M15 15h3.75M4.5 19.5h15a2.25 2.25 0 0 0 2.25-2.25V6.75A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25v10.5A2.25 2.25 0 0 0 4.5 19.5Zm6-10.125a1.875 1.875 0 1 1-3.75 0 1.875 1.875 0 0 1 3.75 0Zm1.294 6.336a6.721 6.721 0 0 1-3.17.789 6.721 6.721 0 0 1-3.168-.789 3.376 3.376 0 0 1 6.338 0Z"/></svg>';
 CUSTOM_ICONS['check-circle'] = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><polyline points="172 104 113.33 160 84 132" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="12"/><circle cx="128" cy="128" r="96" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="12"/></svg>';
-// 'leads' — a hand-drawn carrot (John: the Leads nav icon should be a carrot).
-// Phosphor 256 grid, stroke-only currentColor so it tints + scales like the rest:
-// a tapered root pointing down + a leafy top (center stalk + two side leaves) +
-// two short ridge dashes on the body.
-CUSTOM_ICONS['leads'] = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none" stroke="currentColor" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"><path d="M100 104 L128 206 L156 104 Z"/><path d="M128 104 L128 50"/><path d="M114 102 C100 84 88 76 74 72"/><path d="M142 102 C156 84 168 76 182 72"/><path d="M118 134 L138 134"/><path d="M123 166 L133 166"/></svg>';
+// 'leads' — the Phosphor "carrot" icon (John picked it from the library options).
+// Phosphor 256 grid, filled currentColor so it tints with the theme like the rest.
+CUSTOM_ICONS['leads'] = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor"><path d="M232,64H203.31l26.35-26.34a8,8,0,0,0-11.32-11.32L192,52.69V24a8,8,0,0,0-16,0V56.57a64,64,0,0,0-77.2,10.12l0,0,0,0,0,0c-40.1,39.39-70.25,133.08-73.19,142.45a16,16,0,0,0,21.26,21.26c9.37-2.94,103.18-33.13,142.47-73.21A64,64,0,0,0,199.43,80H232a8,8,0,0,0,0-16Zm-54.12,82c-8.94,9.12-21.25,17.8-34.85,25.73l-25.38-25.39a8,8,0,0,0-11.32,11.32l22.09,22.09c-40.87,21.19-86.32,35.42-87,35.63A7.93,7.93,0,0,0,40,216a7.93,7.93,0,0,0,.59-1.41c.29-.93,28-89.58,64-130.67l33.77,33.77a8,8,0,0,0,11.32-11.32L116.18,72.88A48,48,0,0,1,177.88,146Z"/></svg>';
 // dna-86-badge is the user-supplied 86Badge.svg, traced as filled paths.
 // Loaded from disk so the source SVG stays canonical and we don't double-
 // maintain it. fill="#000000" on the <g> is rewritten to currentColor in
