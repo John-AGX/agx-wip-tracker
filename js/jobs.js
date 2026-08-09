@@ -2000,7 +2000,7 @@ function renderJobsMain() {
                 }
                 const w = getJobWIP(job.id);
                 const statusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
-                const typeLabel = job.jobType ? `<span style="font-size: 11px; color: var(--text-dim); font-weight: normal; margin-left: 6px;">${escapeHTML(job.jobType)}${job.market ? ' - ' + escapeHTML(job.market) : ''}</span>` : '';
+                const typeLabel = job.jobType ? `<span style="font-size: 11px; color: var(--text-dim); font-weight: normal; margin-left: 6px;">${escapeHTML(job.jobType)}${job.market ? `<span style="margin-left: 8px; opacity: 0.7;">${escapeHTML(job.market)}</span>` : ''}</span>` : '';
 
                 const row = document.createElement('tr');
                 row.style.cursor = 'pointer';
@@ -2016,7 +2016,6 @@ function renderJobsMain() {
                 if (readOnly) pmCell += ' <span style="font-size:9px;color:var(--text-dim,#888);margin-left:4px;">view only</span>';
                 row.innerHTML = `
                     <td class="job-check-cell" style="width:34px;text-align:center;" onclick="event.stopPropagation();"><input type="checkbox" class="job-check" data-id="${escapeHTML(job.id)}" ${_jobsSelected.has(job.id) ? 'checked' : ''} onclick="event.stopPropagation();window.p86JobsSelect('${escapeHTML(job.id)}',this.checked);"></td>
-                    <td data-col="idx">${index + 1}</td>
                     <td data-col="name"><strong>${job.jobNumber ? escapeHTML(job.jobNumber) + ' — ' : ''}${escapeHTML(job.title)}</strong>${typeLabel}</td>
                     <td data-col="client">${escapeHTML(job.client) || '—'}</td>
                     <td data-col="pm">${pmCell}</td>
