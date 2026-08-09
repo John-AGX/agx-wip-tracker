@@ -127,6 +127,18 @@
       ops.push({ kind: 'edit', label: l.description || b.description || 'line', detail: changes.join(' · '), amount: ac });
     });
 
+    // Scalar fields too — NOT just lines. diffEstimate used to diff only
+    // line items, so an estimate-scoped field change produced zero ops and
+    // renderDiff's `.filter(g => g.ops.length)` dropped the group entirely:
+    // the write rendered as NOTHING, leaving the agent-authored title as the
+    // only thing on screen.
+    //
+    // Live 2026-08-09: Scribe, lacking a convert tool, wrote a payload titled
+    // "Convert Estimate … to Job" whose only op was {status:'sold'}. Invisible
+    // here, so the title was the whole story — and the title was wrong.
+    // A card must describe its OPS, never just its title.
+    ops = scalarFieldOps(before, after).concat(ops);
+
     return { entity_type: 'estimate', name: name, ops: ops, impact: impact };
   }
 
@@ -155,26 +167,33 @@
     return out;
   }
 
+  // Scalar (non-nested) field changes between two snapshots. Extracted so
+  // BOTH diffFields and diffEstimate use it — a status/title move has to be
+  // visible on every entity type, not only the ones without a bespoke differ.
+  function scalarFieldOps(before, after) {
+    var SKIP = { id: 1, created_at: 1, updated_at: 1, organization_id: 1, user_id: 1, data: 1, lines: 1 };
+    if (!before || !after) return [];   // create/delete framed by the caller
+    var out = [];
+    Object.keys(after).forEach(function (k) {
+      if (SKIP[k]) return;
+      var bv = before[k], av = after[k];
+      if (av && typeof av === 'object') return; // skip nested
+      if (String(bv == null ? '' : bv) === String(av == null ? '' : av)) return;
+      out.push({
+        kind: 'edit', label: k.replace(/_/g, ' '),
+        detail: (bv == null || bv === '' ? '∅' : String(bv).slice(0, 40)) + '→' + (av == null || av === '' ? '∅' : String(av).slice(0, 40)),
+        amount: null
+      });
+    });
+    return out;
+  }
+
   // generic scalar-field diff for non-estimate entities
   function diffFields(et, name, before, after) {
     var ops = [];
-    var SKIP = { id: 1, created_at: 1, updated_at: 1, organization_id: 1, user_id: 1, data: 1, lines: 1 };
-    var b = before || {}, a = after || {};
     if (!before && after) { ops.push({ kind: 'add', label: 'created', detail: name, amount: null }); }
     else if (before && !after) { ops.push({ kind: 'delete', label: 'deleted', detail: name, amount: null }); }
-    else {
-      Object.keys(a).forEach(function (k) {
-        if (SKIP[k]) return;
-        var bv = b[k], av = a[k];
-        if (av && typeof av === 'object') return; // skip nested
-        if (String(bv == null ? '' : bv) === String(av == null ? '' : av)) return;
-        ops.push({
-          kind: 'edit', label: k.replace(/_/g, ' '),
-          detail: (bv == null || bv === '' ? '∅' : String(bv).slice(0, 40)) + '→' + (av == null || av === '' ? '∅' : String(av).slice(0, 40)),
-          amount: null
-        });
-      });
-    }
+    else { ops = scalarFieldOps(before, after); }
     return { entity_type: et, name: name, ops: ops, impact: 0 };
   }
 
