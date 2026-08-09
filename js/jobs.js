@@ -2089,6 +2089,11 @@ function renderJobsMain() {
             document.getElementById('jobNotes').value = '';
             populateJobPMSelect();
             populateJobClientPicker('jobClientPicker', '');
+            // Job numbering — populate the Type options from the org registry and
+            // auto-fill the number preview when a type is picked (editable override).
+            if (window.p86JobFinalize && window.p86JobFinalize.setupCreateModal) {
+                window.p86JobFinalize.setupCreateModal('jobType', 'jobNumber');
+            }
             openModal('addJobModal');
         }
 
@@ -2459,15 +2464,36 @@ function renderJobsMain() {
             }
         }
 
-        function saveJob() {
+        async function saveJob() {
             const title = document.getElementById('jobTitle').value.trim();
             if (!title) { alert('Enter a job name'); return; }
-            // Require a job number: S#### (Service) or RV#### (Renovation), editable.
-            var _jnRaw = (document.getElementById('jobNumber').value || '');
-            var jobNum = (window.p86JobFinalize && window.p86JobFinalize.normalizeNumber)
-                ? window.p86JobFinalize.normalizeNumber(_jnRaw)
-                : (/^(S|RV)\d{1,6}$/i.test(_jnRaw.trim()) ? _jnRaw.trim().toUpperCase() : null);
-            if (!jobNum) { alert('Enter a valid job number: S#### (Service) or RV#### (Renovation).'); document.getElementById('jobNumber').focus(); return; }
+            // Job number. When the field still holds our auto-filled preview
+            // (data-autofilled='1') or is blank AND a Type is picked, CLAIM the
+            // next number atomically on the server (the counter is the source of
+            // truth). If the user typed their own, use that override. Falls back
+            // to plain validation if the registry/endpoint isn't available.
+            var numEl = document.getElementById('jobNumber');
+            var typeVal = (document.getElementById('jobType').value || '');
+            var typed = (numEl.value || '').trim();
+            var autofilled = numEl.getAttribute('data-autofilled') === '1';
+            var jobNum = null;
+            if (typeVal && (autofilled || !typed) && window.p86JobFinalize && window.p86JobFinalize.claimForLabel) {
+                if (saveJob._claiming) return;          // guard against double-submit during the claim
+                saveJob._claiming = true;
+                try { jobNum = await window.p86JobFinalize.claimForLabel(typeVal); }
+                catch (e) { jobNum = null; }
+                finally { saveJob._claiming = false; }
+            }
+            if (!jobNum) {
+                jobNum = (window.p86JobFinalize && window.p86JobFinalize.normalizeNumber)
+                    ? window.p86JobFinalize.normalizeNumber(typed)
+                    : (/^[A-Za-z]{1,4}\d{1,6}$/.test(typed) ? typed.toUpperCase() : null);
+            }
+            if (!jobNum) { alert('Pick a Job Type to auto-assign a number, or type one manually (e.g. RV0000).'); numEl.focus(); return; }
+            // Uniqueness guard — never issue a duplicate job number.
+            if ((appData.jobs || []).some(function(j) { return String(j.jobNumber || '').toUpperCase() === String(jobNum).toUpperCase(); })) {
+                alert('Job number ' + jobNum + ' already exists — pick another.'); numEl.focus(); return;
+            }
             const pmSelect = document.getElementById('jobPM');
             const pmOpt = pmSelect.options[pmSelect.selectedIndex];
             const pmName = (pmOpt && pmOpt.dataset && pmOpt.dataset.name) ? pmOpt.dataset.name : pmSelect.value;

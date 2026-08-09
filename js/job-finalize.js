@@ -10,15 +10,12 @@
 (function () {
   'use strict';
 
-  // Valid = S or RV prefix + digits. Returns the normalized (upper-prefix) value
-  // or null if it doesn't match.
+  // Valid = a 1–4 letter prefix (S, RV, WO, or a custom org prefix) + digits.
+  // Returns the normalized (upper-prefix) value or null. Widened from the old
+  // S/RV-only rule now that the org registry defines the prefixes.
   function normalizeNumber(v) {
-    var m = String(v == null ? '' : v).trim().match(/^(s|rv)\s*0*?(\d{1,6})$/i);
-    if (!m) {
-      var m2 = String(v == null ? '' : v).trim().match(/^(s|rv)(\d{1,6})$/i);
-      if (!m2) return null;
-      return m2[1].toUpperCase() + m2[2];
-    }
+    var m = String(v == null ? '' : v).trim().match(/^([A-Za-z]{1,4})\s*(\d{1,6})$/);
+    if (!m) return null;
     return m[1].toUpperCase() + m[2];
   }
 
@@ -28,25 +25,85 @@
     });
   }
 
-  // Highest existing number for a prefix, + 1. The field was a blank box with
-  // only a format hint, so every conversion made someone go find what the last
-  // job number was. Suggestion only — the field stays free-text, because the
-  // real sequence lives in the office's head (and in Buildertrend), not here.
-  // Width is preserved: S1042 -> S1043, RV0007 -> RV0008.
-  function nextNumber(prefix) {
+  // ── Org job-numbering registry ────────────────────────────────────────
+  // The source of truth is branding.job_types [{key,label,prefix,pad,next}]
+  // (Admin → Organization). Cached here; the server is authoritative on the
+  // ACTUAL claim (atomic + collision-safe). All of this degrades gracefully to
+  // derive-from-max when the registry / endpoint isn't available.
+  var _registry = null, _regLoaded = false, _regPromise = null;
+  function loadRegistry(force) {
+    if (_regLoaded && !force) return Promise.resolve(_registry);
+    if (_regPromise && !force) return _regPromise;
+    if (!(window.p86Api && window.p86Api.org && window.p86Api.org.branding)) { _regLoaded = true; _registry = []; return Promise.resolve(_registry); }
+    _regPromise = window.p86Api.org.branding().then(function (r) {
+      _registry = (r && r.branding && Array.isArray(r.branding.job_types)) ? r.branding.job_types : [];
+      _regLoaded = true; return _registry;
+    }).catch(function () { _regLoaded = true; _registry = []; return _registry; });
+    return _regPromise;
+  }
+  function getTypes() { return _registry || []; }
+  function typeForLabel(label) { label = String(label || '').toLowerCase(); return getTypes().find(function (t) { return String(t.label || '').toLowerCase() === label; }) || null; }
+  function pad(n, width) { var s = String(Math.max(1, parseInt(n, 10) || 1)); width = Math.max(1, Math.min(8, parseInt(width, 10) || 4)); while (s.length < width) s = '0' + s; return s; }
+  function maxExistingFor(prefix) {
+    var re = new RegExp('^' + String(prefix || '') + '(\\d+)$', 'i');
     var jobs = (window.appData && window.appData.jobs) || [];
-    var re = new RegExp('^' + prefix + '(\\d{1,6})$', 'i');
-    var best = 0, width = prefix === 'RV' ? 4 : 4;
+    var max = 0;
     for (var i = 0; i < jobs.length; i++) {
       var m = String((jobs[i] && jobs[i].jobNumber) || '').trim().match(re);
-      if (!m) continue;
-      var n = parseInt(m[1], 10);
-      if (isFinite(n) && n > best) { best = n; width = m[1].length; }
+      if (m) { var n = parseInt(m[1], 10); if (isFinite(n) && n > max) max = n; }
     }
-    if (!best) return null;
-    var s = String(best + 1);
-    while (s.length < width) s = '0' + s;
-    return prefix + s;
+    return max;
+  }
+  // Non-consuming preview of the next number for a registry type (registry
+  // counter, floored above the highest existing number so it never collides).
+  function previewFor(t) {
+    if (!t) return null;
+    var n = Math.max(parseInt(t.next, 10) || 1, maxExistingFor(t.prefix) + 1);
+    return String(t.prefix) + pad(n, t.pad);
+  }
+  // Suggestion for a prefix: registry-aware when the prefix maps to a type,
+  // else the old derive-from-max (null when there's no prior job).
+  function nextNumber(prefix) {
+    prefix = String(prefix || '').toUpperCase();
+    var t = getTypes().find(function (x) { return String(x.prefix || '').toUpperCase() === prefix; });
+    if (t) return previewFor(t);
+    var maxE = maxExistingFor(prefix);
+    if (!maxE) return null;
+    return prefix + pad(maxE + 1, 4);
+  }
+  // Atomically CLAIM the next number for a type (bumps the server counter).
+  // Falls back to the non-consuming preview if the endpoint isn't reachable.
+  function claimFor(t) {
+    if (!t) return Promise.resolve(null);
+    if (window.p86Api && window.p86Api.org && window.p86Api.org.nextJobNumber) {
+      return window.p86Api.org.nextJobNumber({ key: t.key, prefix: t.prefix })
+        .then(function (r) { return (r && r.jobNumber) || previewFor(t); })
+        .catch(function () { return previewFor(t); });
+    }
+    return Promise.resolve(previewFor(t));
+  }
+  function claimForLabel(label) { var t = typeForLabel(label); return t ? claimFor(t) : Promise.resolve(null); }
+
+  // Wire a create form (a job-type <select> + a job-number <input>): populate
+  // the type options from the registry and auto-fill the number preview when a
+  // type is picked. Editing the number clears the auto-flag so saveJob knows to
+  // use the typed override instead of claiming.
+  function setupCreateModal(typeSelId, numInputId) {
+    var sel = document.getElementById(typeSelId), num = document.getElementById(numInputId);
+    if (!sel || !num) return;
+    num.setAttribute('data-autofilled', '0');
+    if (!num._jnWired) { num._jnWired = true; num.addEventListener('input', function () { num.setAttribute('data-autofilled', '0'); }); }
+    loadRegistry().then(function (types) {
+      if (types && types.length) {
+        var cur = sel.value;
+        sel.innerHTML = '<option value="">-- Select Type --</option>' + types.map(function (t) { return '<option value="' + esc(t.label) + '">' + esc(t.label) + '</option>'; }).join('');
+        if (cur) sel.value = cur;
+      }
+      sel.onchange = function () {
+        var t = typeForLabel(sel.value);
+        if (t) { num.value = previewFor(t); num.setAttribute('data-autofilled', '1'); }
+      };
+    });
   }
 
   function open(opts) {
@@ -61,7 +118,8 @@
       var btn = 'appearance:none;border:1px solid var(--border,#2a2a32);background:var(--surface,#17171c);color:var(--text,#eef0f6);border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;';
       var btnPri = 'appearance:none;border:1px solid var(--accent,#4f8cff);background:var(--accent,#4f8cff);color:#fff;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer;';
       var chip = 'appearance:none;border:1px solid var(--border,#2a2a32);background:transparent;color:var(--accent,#4f8cff);border-radius:999px;padding:2px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;';
-      var sugg = ['S', 'RV'].map(nextNumber).filter(Boolean);
+      var _prefixes = getTypes().length ? getTypes().map(function (t) { return t.prefix; }) : ['S', 'RV'];
+      var sugg = _prefixes.map(nextNumber).filter(Boolean);
       modal.innerHTML =
         '<div style="' + card + '">' +
           '<div style="padding:16px;">' +
@@ -124,5 +182,11 @@
     });
   }
 
-  window.p86JobFinalize = { open: open, normalizeNumber: normalizeNumber };
+  window.p86JobFinalize = {
+    open: open, normalizeNumber: normalizeNumber, nextNumber: nextNumber,
+    loadRegistry: loadRegistry, getTypes: getTypes, previewFor: previewFor,
+    claimForLabel: claimForLabel, setupCreateModal: setupCreateModal
+  };
+  // Warm the registry cache so create/convert modals have it ready.
+  try { loadRegistry(); } catch (e) {}
 })();
