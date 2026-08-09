@@ -3873,6 +3873,37 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
     try { res.write('data: [DONE]\n\n'); } catch (e) {}
     try { res.end(); } catch (e) {}
   }
+  // Persist a FAILED turn so its reason survives a refresh.
+  //
+  // Until now an error existed only as an SSE frame. The client rendered it,
+  // but a reload replays history from ai_messages — where the error paths
+  // wrote nothing at all — so the turn silently reverted to a dangling user
+  // message with no reply. That is why the audit found 39 user turns with no
+  // assistant row: the failures were real, explained, and unrecorded.
+  //
+  // Idempotent. The idle watchdog fires from a timer and can race the main
+  // flow's own error handling, and the row must not be written twice.
+  //
+  // Note the TERMINAL persist further down is deliberately NOT gated on this
+  // flag: if the watchdog ends a turn at 5 min and the model actually lands
+  // an answer at 7, we want that answer recorded too. An extra row reads
+  // oddly; a lost answer is worse.
+  let _errorPersisted = false;
+  async function persistTurnError(message, partialText) {
+    if (_errorPersisted || !persistAssistantText) return;
+    _errorPersisted = true;
+    const body = (partialText && String(partialText).trim())
+      ? String(partialText).trimEnd() + '\n\n⚠️ ' + message
+      : '⚠️ ' + message;
+    try {
+      // usage is null — a failed turn has no trustworthy token accounting,
+      // and the persist callback already coalesces null usage to NULL columns.
+      await persistAssistantText(body, null, {});
+    } catch (e) {
+      console.error('[v2-stream] persistTurnError failed:', e && e.message);
+    }
+  }
+
   // Start the keepalive now that send/end helpers exist. unref so it never
   // holds the process open on its own.
   _hb = setInterval(() => {
@@ -3897,8 +3928,14 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
       try {
         console.warn('[v2-stream] idle watchdog fired on', sessionId,
           '— no progress for', Math.round((Date.now() - _lastProgressAt) / 1000) + 's; ending turn');
-        send({ error: 'This turn stopped responding and was ended after '
-          + Math.round(TURN_IDLE_MS / 60000) + ' minutes of silence. Nothing was saved. Please try again.' });
+        const idleMsg = '86 stopped responding and this turn was ended after '
+          + Math.round(TURN_IDLE_MS / 60000) + ' minutes with no output. Please try again.';
+        send({ error: idleMsg });
+        // Fire-and-forget: we are in a sync timer callback and cannot await.
+        // Deliberately NOT passing partial text — assistantText is scoped to
+        // the stream loop below, so touching it from this timer risks a
+        // ReferenceError, and a throw in a timer takes the process down.
+        persistTurnError(idleMsg).catch(() => {});
         endWithDone();
       } catch (e) {
         try { clearHeartbeat(); } catch (_) {}
@@ -4191,7 +4228,10 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
       vDebug('[v2-stream] opened', sessionId);
     } catch (e) {
       console.error('Session stream open failed:', e);
-      send({ error: e.message || 'Failed to open session stream' });
+      const openMsg = e.message || 'Failed to open session stream';
+      send({ error: openMsg });
+      // No partial text is possible — the stream never opened.
+      await persistTurnError(openMsg);
       endWithDone();
       return null;
     }
@@ -4309,7 +4349,9 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
               return openStreamAndSend(eventsForThisOpen);
             } catch (e2) {
               console.error('Stuck-session recovery failed:', e2);
-              send({ error: 'Could not recover session: ' + (e2.message || 'unknown') });
+              const recoverMsg = 'Could not recover session: ' + (e2.message || 'unknown');
+              send({ error: recoverMsg });
+              await persistTurnError(recoverMsg);
               endWithDone();
               return null;
             }
@@ -4325,13 +4367,17 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
         if (isStaleToolUseIdError(e)) {
           console.warn('[v2-stream] stale tool_use_id on', sessionId,
             '— session was recreated after the proposal card was shown.');
-          send({ error: 'The chat session was reset between turns, so those approval cards no longer apply. Re-send your request and I\'ll redo the proposals fresh.' });
+          const staleMsg = 'The chat session was reset between turns, so those approval cards no longer apply. Re-send your request and I\'ll redo the proposals fresh.';
+          send({ error: staleMsg });
           send({ stale_tool_use_id: true });
+          await persistTurnError(staleMsg);
           endWithDone();
           return null;
         }
         console.error('Session events.send failed:', e);
-        send({ error: e.message || 'Failed to send session events' });
+        const sendFailMsg = e.message || 'Failed to send session events';
+        send({ error: sendFailMsg });
+        await persistTurnError(sendFailMsg);
         endWithDone();
         return null;
       }
@@ -4591,11 +4637,14 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
           case 'session.error': {
             const msg = (event.error && event.error.message) || 'Session error';
             send({ error: msg });
+            await persistTurnError(msg, assistantText);
             endWithDone();
             return;
           }
           case 'session.status_terminated': {
-            send({ error: 'Session terminated' });
+            const termMsg = 'Session terminated';
+            send({ error: termMsg });
+            await persistTurnError(termMsg, assistantText);
             endWithDone();
             return;
           }
@@ -5031,7 +5080,11 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
         'silentStopNudges:', silentStopNudges,
         'autoResultsFlushedThisTurn:', autoResultsFlushedThisTurn,
         'events:', JSON.stringify(eventCounts));
-      send({ error: e.message || 'Stream failed' });
+      const failMsg = e.message || 'Stream failed';
+      send({ error: failMsg });
+      // Keep whatever prose 86 had already streamed — losing a partial
+      // answer alongside the error would be its own information loss.
+      await persistTurnError(failMsg, assistantText);
       endWithDone();
       return;
     }
