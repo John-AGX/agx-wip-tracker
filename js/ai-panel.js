@@ -2448,6 +2448,41 @@ function p86Ask(message, opts) {
       '</div>';
   }
 
+  var _recentExpanded = false;   // Recent list shows 5; +more → 15
+
+  // Slim session card — one shared renderer for the Recent preview and the
+  // grouped lists. compact=true (Recent) is a single line (icon · title ·
+  // time, no summary/marks); compact=false keeps the summary sub-line + the
+  // rolling / compacted marks, just tighter than the old blocky card.
+  function sessionRowHtml(r, compact) {
+    var active = sameSession(_currentSessionId, r.id);
+    var rowStyle = 'display:flex;align-items:center;gap:9px;padding:' + (compact ? '4px 10px' : '6px 11px') + ';margin:1px 6px;border-radius:7px;cursor:pointer;transition:background 0.12s;' + (active ? 'background:rgba(79,140,255,0.14);' : '');
+    var pinnedMark = r.pinned ? ' <span style="font-size:9px;opacity:0.7;" title="Pinned">⭐</span>' : '';
+    var rollingMark = (!compact && r.session_kind === 'user_thread')
+      ? ' <span style="font-size:8.5px;background:rgba(79,140,255,0.18);color:#9bbcff;border-radius:3px;padding:1px 4px;letter-spacing:0.04em;text-transform:uppercase;" title="Rolling thread — every chat surface lands here">rolling</span>'
+      : '';
+    var compactedMark = (!compact && r.last_compacted_at)
+      ? ' <span style="font-size:8.5px;opacity:0.55;" title="Last compacted ' + escapeAttr(r.last_compacted_at) + '">📦 ' + escapeHTML(relativeTime(r.last_compacted_at)) + '</span>'
+      : '';
+    var subLine = '';
+    if (!compact && r.summary) {
+      subLine = '<div style="font-size:10.5px;color:rgba(255,255,255,0.42);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;">' + escapeHTML(String(r.summary).slice(0, 80)) + compactedMark + '</div>';
+    } else if (!compact && r.last_compacted_at) {
+      subLine = '<div style="font-size:10.5px;color:rgba(255,255,255,0.42);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;">' + compactedMark + '</div>';
+    }
+    return '<div data-session-id="' + r.id + '" class="ai-session-row" data-active="' + (active ? '1' : '0') + '" style="' + rowStyle + '" ' +
+      'onmouseenter="if(this.dataset.active!==\'1\') this.style.background=\'rgba(255,255,255,0.04)\'" ' +
+      'onmouseleave="if(this.dataset.active!==\'1\') this.style.background=\'transparent\'">' +
+      '<span style="font-size:' + (compact ? '13px' : '14px') + ';line-height:1;flex-shrink:0;width:16px;text-align:center;opacity:0.85;">' + entityIcon(r.entity_type) + '</span>' +
+      '<div style="flex:1;min-width:0;">' +
+        '<div style="color:rgba(255,255,255,0.9);font-weight:500;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;">' +
+          escapeHTML(r.label || ('Session ' + r.id)) + pinnedMark + rollingMark +
+        '</div>' + subLine +
+      '</div>' +
+      '<span style="font-size:9.5px;color:rgba(255,255,255,0.32);flex-shrink:0;">' + escapeHTML(relativeTime(r.last_used_at)) + '</span>' +
+    '</div>';
+  }
+
   function renderSessionList(rows) {
     var host = document.getElementById('ai-sidebar-list');
     if (!host) return;
@@ -2466,6 +2501,28 @@ function p86Ask(message, opts) {
     }
     var groups = _grpMode === 'date' ? bucketSessions(rows) : null;
     var html = '';
+    // Recent — a slim preview of the last few conversations, pinned above the
+    // groups in both modes. Shows 5; "+ more" expands to 15.
+    function renderRecentSection(all) {
+      var sorted = all.slice().sort(function(a, b) { return new Date(b.last_used_at || 0) - new Date(a.last_used_at || 0); });
+      if (!sorted.length) return;
+      var shown = sorted.slice(0, _recentExpanded ? 15 : 5);
+      var grpOpen = getPanelSectionOpen('chats-recent');
+      html += '<div class="ai-grp-header" data-grp="recent" style="padding:10px 12px 4px 12px;display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;">' +
+        '<span class="p86-caret" style="font-size:9px;opacity:0.5;transition:transform 0.15s;display:inline-block;transform:' + (grpOpen ? 'rotate(0deg)' : 'rotate(-90deg)') + ';">&#x25BC;</span>' +
+        '<span style="font-size:12px;line-height:1;opacity:0.75;">🕘</span>' +
+        '<span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:rgba(255,255,255,0.32);">Recent</span>' +
+        '<span style="font-size:10px;color:rgba(255,255,255,0.26);flex-shrink:0;">' + shown.length + '</span>' +
+      '</div>';
+      html += '<div class="ai-grp-body" data-grp-body="recent" style="' + (grpOpen ? '' : 'display:none;') + '">';
+      shown.forEach(function(r) { html += sessionRowHtml(r, true); });
+      if (sorted.length > 5) {
+        html += '<div id="ai-recent-more" style="padding:3px 12px 6px 37px;cursor:pointer;font-size:11px;font-weight:600;color:#9bbcff;user-select:none;">' +
+          (_recentExpanded ? '&minus; Show less' : '+ ' + Math.min(15, sorted.length) + ' more') +
+        '</div>';
+      }
+      html += '</div>';
+    }
     function renderGroup(label, items, key, icon) {
       if (!items.length) return;
       // Each group is a collapsible section: clickable header (caret + optional
@@ -2480,52 +2537,7 @@ function p86Ask(message, opts) {
         '<span style="font-size:10px;color:rgba(255,255,255,0.26);flex-shrink:0;">' + items.length + '</span>' +
       '</div>';
       html += '<div class="ai-grp-body" data-grp-body="' + key + '" style="' + (grpOpen ? '' : 'display:none;') + '">';
-      items.forEach(function(r) {
-        var active = sameSession(_currentSessionId, r.id);
-        // Active row: subtle accent (no harsh left bar). Hover: faint
-        // tint that matches the rest of the panel's hover language.
-        var rowStyle =
-          'display:flex;align-items:center;gap:10px;padding:8px 12px;margin:1px 6px;border-radius:8px;cursor:pointer;transition:background 0.12s;' +
-          (active
-            ? 'background:rgba(79,140,255,0.14);'
-            : '');
-        var pinnedMark = r.pinned ? ' <span style="font-size:10px;opacity:0.7;" title="Pinned">⭐</span>' : '';
-        var rollingMark = r.session_kind === 'user_thread'
-          ? ' <span style="font-size:9px;background:rgba(79,140,255,0.18);color:#9bbcff;border-radius:3px;padding:1px 5px;letter-spacing:0.04em;text-transform:uppercase;" title="Rolling thread — every chat surface lands here">rolling</span>'
-          : '';
-        var compactedMark = r.last_compacted_at
-          ? ' <span style="font-size:9px;opacity:0.55;" title="Last compacted ' + escapeAttr(r.last_compacted_at) + '">📦 ' + escapeHTML(relativeTime(r.last_compacted_at)) + '</span>'
-          : '';
-        // Sub-line: ONLY summary if we have one, otherwise nothing.
-        // The redundant "estimate · e1778..." trail was noise — the
-        // entity is already conveyed by the icon and the label.
-        var subLine = '';
-        if (r.summary) {
-          subLine = '<div style="font-size:11px;color:rgba(255,255,255,0.45);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;">' +
-            escapeHTML(String(r.summary).slice(0, 80)) + compactedMark + '</div>';
-        } else if (r.last_compacted_at) {
-          subLine = '<div style="font-size:11px;color:rgba(255,255,255,0.45);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;">' +
-            compactedMark + '</div>';
-        }
-        var turnsRight = r.turn_count
-          ? '<span style="font-size:10px;color:rgba(255,255,255,0.32);">' + r.turn_count + '</span>'
-          : '';
-        html += '<div data-session-id="' + r.id + '" class="ai-session-row" data-active="' + (active ? '1' : '0') + '" style="' + rowStyle + '" ' +
-                  'onmouseenter="if(this.dataset.active!==\'1\') this.style.background=\'rgba(255,255,255,0.04)\'" ' +
-                  'onmouseleave="if(this.dataset.active!==\'1\') this.style.background=\'transparent\'">' +
-          '<span style="font-size:15px;line-height:1;flex-shrink:0;width:18px;text-align:center;opacity:0.85;">' + entityIcon(r.entity_type) + '</span>' +
-          '<div style="flex:1;min-width:0;">' +
-            '<div style="color:rgba(255,255,255,0.92);font-weight:500;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;">' +
-              escapeHTML(r.label || ('Session ' + r.id)) + pinnedMark + rollingMark +
-            '</div>' +
-            subLine +
-          '</div>' +
-          '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;flex-shrink:0;">' +
-            '<span style="font-size:10px;color:rgba(255,255,255,0.35);">' + escapeHTML(relativeTime(r.last_used_at)) + '</span>' +
-            turnsRight +
-          '</div>' +
-        '</div>';
-      });
+      items.forEach(function(r) { html += sessionRowHtml(r, false); });
       html += '</div>';
     }
     // Deals — a lineage-grouped group of deal_thread cards, pinned to the top of
@@ -2544,6 +2556,7 @@ function p86Ask(message, opts) {
       deals.forEach(function(r) { html += renderDealCard(r); });
       html += '</div>';
     }
+    renderRecentSection(rows);
     if (_grpMode === 'entity') {
       var eg = bucketSessionsByEntity(rows);
       renderDealsGroup(eg.deals);
@@ -2589,6 +2602,14 @@ function p86Ask(message, opts) {
         if (sid) openSessionMenu(sid, e.clientX, e.clientY);
       };
     });
+
+    // Recent "+ more" / "Show less" toggle (5 ↔ 15).
+    var recentMore = document.getElementById('ai-recent-more');
+    if (recentMore) recentMore.onclick = function(e) {
+      e.stopPropagation();
+      _recentExpanded = !_recentExpanded;
+      renderSessionList(_sessionList);
+    };
   }
 
   // Resolve a session row to its entity_id + entity_type so we can
