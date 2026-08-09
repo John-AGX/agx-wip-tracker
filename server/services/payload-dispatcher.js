@@ -1379,6 +1379,114 @@ function pickNum(obj, keys) {
   return null;
 }
 
+// ── Section placement ──────────────────────────────────────────────
+//
+// The estimate editor groups lines by their POSITION in data.lines, using
+// `__section_header__` rows as delimiters (js/estimate-editor.js:2163): a
+// header opens a section and every row after it belongs to that section
+// until the next header. A line's own `section` / `btCategory` fields are
+// NOT consulted for placement.
+//
+// So appending a new line to the END of the array books it under whichever
+// header happens to be last — in a standard estimate, "Subcontractors
+// Costs". applyLineAdds resolved the correct target and then pushed anyway,
+// which is why 86 burned 2-3 payloads re-placing the same lines.
+//
+// These mirror the INLINE tool path, which already routes deterministically:
+// eeEnsureSectionByCategory (js/estimate-editor.js:3546) and
+// applyAddLineItem's insert walk (:3645).
+
+function sameAlternate(a, b) {
+  return (a || 'alt_default') === (b || 'alt_default');
+}
+
+// Find — or create — the standard section header for a bt category inside
+// one alternate. Returns the header row, or null for an unknown category.
+function ensureSectionHeader(lines, estimateId, alternateId, btCategory) {
+  const preset = STANDARD_SECTION_PRESETS.find((p) => p.btCategory === btCategory);
+  const presetName = preset ? preset.name.toLowerCase() : null;
+  const existing = lines.find((l) => {
+    if (!l || l.section !== '__section_header__') return false;
+    if (!sameAlternate(l.alternateId, alternateId)) return false;
+    if (l.btCategory === btCategory) return true;
+    // A same-named header carrying no btCategory (legacy / AI-created) is
+    // the same bucket — adopt and backfill it rather than making a twin.
+    return !l.btCategory && presetName &&
+           String(l.description || '').toLowerCase() === presetName;
+  });
+  if (existing) {
+    if (!existing.btCategory && preset) existing.btCategory = preset.btCategory;
+    return existing;
+  }
+  if (!preset) return null;
+  const hdr = {
+    id: 's' + Date.now() + '_' + Math.random().toString(36).slice(2, 5),
+    estimateId: estimateId,
+    alternateId: alternateId || 'alt_default',
+    section: '__section_header__',
+    description: preset.name,
+    btCategory: preset.btCategory,
+    // MONEY: a header with no `markup` is not neutral. pricing-pipeline.js
+    // sectionMarkupForLine falls through to est.defaultMarkup when the
+    // header carries none, so lines under a markup-less header price
+    // differently from identical lines under a seeded one. Every other
+    // header-creation site stamps 0 (applyEstimateGroups here, and
+    // eeEnsureSectionByCategory client-side) — match them.
+    markup: 0,
+  };
+  lines.push(hdr);
+  return hdr;
+}
+
+// An existing header in this alternate whose NAME matches. The inline path
+// does this before falling back to a category (js/estimate-editor.js:3597);
+// without it a line addressed to a CUSTOM section ("Roofing") silently
+// lands somewhere else.
+function findHeaderByName(lines, alternateId, name) {
+  const want = String(name || '').trim().toLowerCase();
+  if (!want) return null;
+  return lines.find((l) =>
+    l && l.section === '__section_header__' &&
+    sameAlternate(l.alternateId, alternateId) &&
+    String(l.description || '').trim().toLowerCase() === want
+  ) || null;
+}
+
+// The header a row currently sits under — nearest preceding header in the
+// same alternate. Used to skip a no-op move (and the reorder it would cause).
+function enclosingHeader(lines, idx, alternateId) {
+  for (let i = idx - 1; i >= 0; i--) {
+    const L = lines[i];
+    if (!L || L.section !== '__section_header__') continue;
+    if (sameAlternate(L.alternateId, alternateId)) return L;
+  }
+  return null;
+}
+
+// Splice `row` into the section that `header` opens — i.e. immediately
+// before the next section header in the SAME alternate. Falls back to the
+// end of that alternate's own block, and only then to the array end.
+function insertIntoSection(lines, row, header) {
+  const startIdx = lines.indexOf(header);
+  if (startIdx < 0) { lines.push(row); return; }
+  let insertAt = -1;
+  for (let j = startIdx + 1; j < lines.length; j++) {
+    const L = lines[j];
+    if (!L || !sameAlternate(L.alternateId, header.alternateId)) continue;
+    if (L.section === '__section_header__') { insertAt = j; break; }
+  }
+  if (insertAt < 0) {
+    // No later header in this alternate — land after the last row that
+    // belongs to it, so we never jump past another alternate's block.
+    for (let k = lines.length - 1; k > startIdx; k--) {
+      const M = lines[k];
+      if (M && sameAlternate(M.alternateId, header.alternateId)) { insertAt = k + 1; break; }
+    }
+  }
+  if (insertAt < 0) insertAt = startIdx + 1;
+  lines.splice(insertAt, 0, row);
+}
+
 function applyLineAdds(data, lineAdds) {
   const lines = ensureArray(data, 'lines');
   const alternates = Array.isArray(data.alternates) ? data.alternates : [];
@@ -1399,9 +1507,14 @@ function applyLineAdds(data, lineAdds) {
     let sectionName = add.section || add.section_name || null;
     let btCategory  = add.btCategory || add.bt_category || null;
     let alternateId = add.alternateId || add.group_id || null;
+    // The header row this line must be spliced under. The resolve block
+    // below already finds it; capturing it here is what stops the answer
+    // being thrown away at placement time.
+    let targetHeader = null;
     if (add.subgroup_id) {
       const header = findSubgroupHeader(lines, add.subgroup_id);
       if (header) {
+        targetHeader = header;
         sectionName = sectionName || header.description || null;
         btCategory  = btCategory  || header.btCategory  || null;
         alternateId = alternateId || header.alternateId || null;
@@ -1426,6 +1539,7 @@ function applyLineAdds(data, lineAdds) {
           }
           if (!chosen) chosen = altHeaders[0] || null;
           if (chosen) {
+            targetHeader = chosen;
             sectionName = sectionName || chosen.description || null;
             btCategory  = btCategory  || chosen.btCategory  || null;
           }
@@ -1467,7 +1581,44 @@ function applyLineAdds(data, lineAdds) {
       unitCost: unitCost != null ? unitCost : 0,
       markup: markup,
     };
-    lines.push(row);
+
+    // Placement. Grouping is positional, so this is what actually decides
+    // which subgroup the line renders under — the section/btCategory fields
+    // above are only carried for the BT export.
+    // 1. The header subgroup_id resolved to. An explicit alternateId can
+    //    override the one it came from, in which case it belongs to another
+    //    alternate and must not be used.
+    let placeHeader = targetHeader;
+    if (placeHeader && !sameAlternate(placeHeader.alternateId, row.alternateId)) {
+      placeHeader = null;
+    }
+    // 2. An existing header matching the section NAME. Mirrors the inline
+    //    path; without it, adds addressed to a custom section land elsewhere.
+    if (!placeHeader && sectionName) {
+      placeHeader = findHeaderByName(lines, row.alternateId, sectionName);
+    }
+    // 3. A standard section by category — EXACT matches only. btCategoryFromName
+    //    (used for the export metadata above) is a substring matcher whose keys
+    //    include the 3-char 'sub', so it resolves "Substrate Repair" to
+    //    Subcontractors and never returns falsy. Fine for a metadata field;
+    //    it must never decide placement.
+    const placeCat = add.btCategory || add.bt_category
+      || BT_CATEGORY_BY_SECTION_NAME[sectionName];
+    if (!placeHeader && placeCat) {
+      placeHeader = ensureSectionHeader(lines, data.id, row.alternateId, placeCat);
+    }
+    // 4. Nothing resolved. Materials — never the array end, which silently
+    //    books the line as Subcontractor cost.
+    if (!placeHeader) {
+      placeHeader = ensureSectionHeader(lines, data.id, row.alternateId, 'materials');
+    }
+    if (placeHeader) {
+      if (!row.section)    row.section    = placeHeader.description || null;
+      if (!row.btCategory) row.btCategory = placeHeader.btCategory  || null;
+      insertIntoSection(lines, row, placeHeader);
+    } else {
+      lines.push(row); // true last resort — no headers exist at all
+    }
   }
 }
 
@@ -1511,6 +1662,65 @@ function applyLineEdits(data, lineEdits) {
         lines[idx][targetKey] = (f[k] === '' || f[k] == null) ? '' : Number(f[k]);
       } else {
         lines[idx][targetKey] = f[k];
+      }
+    }
+
+    // MOVE. An edit carrying subgroup_id is a request to RE-SECTION the
+    // line. Grouping is positional, so writing section/btCategory alone
+    // does nothing — the row has to be physically re-spliced. Before this,
+    // subgroup_id was dropped as a control key and the move silently
+    // no-op'd, which is why 86's "reassign these lines" retries appeared
+    // to do nothing.
+    //
+    // subgroup_id STAYS in CONTROL above on purpose: it must never be
+    // copied onto the row as a stray property. It is read directly here.
+    // No subgroup_id → no move, which preserves the guard that a pure
+    // reprice/rename edit can't shift a line's scope.
+    if (edit.subgroup_id) {
+      const line = lines[idx];
+      if (line.section !== '__section_header__') {
+        // Resolve the alternate the same way the add path does — reading
+        // line.alternateId raw would mint a phantom 'alt_default' header
+        // that no alternate owns, dropping the line out of the proposal.
+        const altId = line.alternateId
+          || data.activeAlternateId
+          || (Array.isArray(data.alternates) && data.alternates[0] && data.alternates[0].id)
+          || 'alt_default';
+        let hdr = findSubgroupHeader(lines, edit.subgroup_id);
+        // A header in ANOTHER alternate must not pull the line out of its
+        // own block: it would sit above its alternate's first header with no
+        // section markup, no subtotal and a fallback BT code. Re-resolve the
+        // same category inside this line's alternate instead.
+        if (hdr && !sameAlternate(hdr.alternateId, altId)) {
+          hdr = ensureSectionHeader(lines, data.id, altId, hdr.btCategory);
+        }
+        if (!hdr) {
+          // 86 conflates header id / section name / bt category. Resolve by
+          // NAME then by EXACT category — deliberately not btCategoryFromName,
+          // which substring-matches (a header id whose random suffix contains
+          // 'gc' or 'sub' would relocate the line) and never returns falsy.
+          hdr = findHeaderByName(lines, altId, edit.subgroup_id);
+          if (!hdr) {
+            const cat = edit.btCategory || edit.bt_category
+              || BT_CATEGORY_BY_SECTION_NAME[edit.subgroup_id];
+            if (cat) hdr = ensureSectionHeader(lines, data.id, altId, cat);
+          }
+        }
+        if (!hdr) {
+          // Never report a move that did not happen. line_id already throws
+          // when unresolvable; an unresolvable subgroup_id is the same class
+          // of caller error, and silently counting it as an applied edit is
+          // how 86 concludes a write landed and stops retrying.
+          throw new Error(`subgroup_id not found: ${edit.subgroup_id}`);
+        }
+        // Skip a no-op move — re-splicing into the section it already sits
+        // in would reorder it for nothing.
+        if (enclosingHeader(lines, idx, altId) !== hdr) {
+          lines.splice(idx, 1);            // remove from its current slot
+          insertIntoSection(lines, line, hdr);
+          line.section    = hdr.description || line.section;
+          line.btCategory = hdr.btCategory  || line.btCategory;
+        }
       }
     }
     edited++;
@@ -3343,6 +3553,11 @@ module.exports = {
     resolveRef,
     isRef,
     resolveRefsInOps,
+    // Section placement — pure array surgery over data.lines, no DB.
+    applyLineAdds,
+    applyLineEdits,
+    ensureSectionHeader,
+    insertIntoSection,
     buildApplySummary,
     CLIENT_EDITABLE_FIELDS,
     ESTIMATE_FIELD_KEYS,
