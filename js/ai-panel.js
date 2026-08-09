@@ -3765,6 +3765,30 @@ function p86Ask(message, opts) {
           lastServerError = String(payload.error);
           if (contentEl) contentEl.innerHTML = '<span style="color:#f87171;">' + escapeHTMLLocal(payload.error) + '</span>';
         }
+      }, {
+        // 2.5 minutes of heartbeats with zero payloads = the turn is not
+        // moving. Say so out loud instead of spinning silently. Deliberately
+        // NOT an abort: a long tool call can legitimately be this quiet, and
+        // killing real work is worse than the bug. Bounding the turn belongs
+        // on the server, which can actually tell wedged from slow.
+        stallMs: 150000,
+        onStall: function(secs) {
+          if (!streamDiv) return;
+          var note = streamDiv.querySelector('[data-stall-note]');
+          if (!note) {
+            note = document.createElement('div');
+            note.setAttribute('data-stall-note', '1');
+            note.style.cssText = 'margin-top:6px;font-size:12px;color:#fbbf24;opacity:.9;';
+            streamDiv.appendChild(note);
+          }
+          note.textContent = '⏳ Still connected, but nothing has come back for '
+            + secs + 's. You can stop and retry.';
+        },
+        onResume: function() {
+          if (!streamDiv) return;
+          var note = streamDiv.querySelector('[data-stall-note]');
+          if (note && note.parentNode) note.parentNode.removeChild(note);
+        }
       });
     }).then(function() {
       brainYoga.stop();
@@ -3773,6 +3797,15 @@ function p86Ask(message, opts) {
       setSendDisabled(false);
       _abortController = null;
       crewEmit('turn_end');
+
+      // Drop any "nothing has come back for Ns" notice — the turn just ended,
+      // so it is stale by definition. Unconditional because the chipsAppended
+      // branch below deliberately KEEPS streamDiv, which would otherwise
+      // strand the notice under the chips forever.
+      if (streamDiv) {
+        var _sn = streamDiv.querySelector('[data-stall-note]');
+        if (_sn && _sn.parentNode) _sn.parentNode.removeChild(_sn);
+      }
 
       if (pendingToolUses.length) {
         // Tool-use turn. The server tags the turn with a tier:
@@ -3828,8 +3861,24 @@ function p86Ask(message, opts) {
         // Clear the live timer in the header — replaced by the footer.
         var hdrTimer = streamDiv && streamDiv.querySelector('[data-stream-timer]');
         if (hdrTimer) hdrTimer.textContent = '';
+      } else if (lastServerError) {
+        // The server TOLD us why the turn produced nothing — a structured
+        // {error} event (credit exhaustion, empty completion, upstream
+        // failure, stream drop). That was already painted into contentEl…
+        // and the branch below used to delete streamDiv and replace it with
+        // a bare "(no response)", destroying the explanation microseconds
+        // after it rendered. Three rounds of server-side "surface the
+        // error" work landed correctly and were thrown away right here.
+        //
+        // NB the sibling guard in .catch (search lastServerError) only
+        // covers a REJECTED fetch. A server that emits {error} and then
+        // closes cleanly RESOLVES, so it lands in this .then instead —
+        // which is why that guard never fired for this case.
+        if (streamDiv && streamDiv.parentNode) streamDiv.parentNode.removeChild(streamDiv);
+        _messages.push({ role: 'assistant', content: '⚠️ ' + lastServerError });
+        renderMessages();
       } else {
-        // No text and no chips — true "(no response)" empty turn.
+        // No text, no chips, and the server said nothing about why.
         if (streamDiv && streamDiv.parentNode) streamDiv.parentNode.removeChild(streamDiv);
         _messages.push({ role: 'assistant', content: '(no response)' });
         renderMessages();
@@ -6705,28 +6754,68 @@ function p86Ask(message, opts) {
   // Read SSE chunks from a fetch response. Delegates to onChunk for each
   // `data: ...\n\n` payload until `[DONE]`. SSE in JS without EventSource
   // is just newline-delimited parsing.
-  function readSSEStream(response, onChunk) {
+  //
+  // opts.stallMs + opts.onStall/onResume: the server holds the socket open with
+  // `: hb` comment frames every 15s. Those are NOT `data:` frames — they prove
+  // the CONNECTION is alive but say nothing about whether the TURN is moving.
+  // A wedged turn therefore streams heartbeats forever: bytes never stop, no
+  // proxy idles the socket out, fetch never rejects, and pump() never resolves,
+  // so the finalize below never runs at all. That is the silent-forever spinner.
+  //
+  // So: time PAYLOADS, not bytes, and hand the stall to the caller as a NOTICE.
+  // Deliberately not an abort — a long tool call can legitimately go minutes
+  // without emitting a frame, and killing real work would be worse than the bug.
+  // Bounding the turn is the server's job (it knows if it's actually wedged);
+  // the client's job is to stop lying about it.
+  function readSSEStream(response, onChunk, opts) {
+    opts = opts || {};
     var reader = response.body.getReader();
     var decoder = new TextDecoder();
     var buffer = '';
+    var lastPayloadAt = Date.now();
+    var stalled = false;
+    var stallTimer = null;
+
+    if (opts.stallMs && typeof opts.onStall === 'function') {
+      stallTimer = setInterval(function() {
+        if (stalled || Date.now() - lastPayloadAt < opts.stallMs) return;
+        stalled = true;
+        try { opts.onStall(Math.round((Date.now() - lastPayloadAt) / 1000)); } catch (e) {}
+      }, 5000);
+    }
+    function stopStallTimer() {
+      if (stallTimer) { clearInterval(stallTimer); stallTimer = null; }
+    }
+
     function pump() {
       return reader.read().then(function(result) {
-        if (result.done) return;
+        if (result.done) { stopStallTimer(); return; }
         buffer += decoder.decode(result.value, { stream: true });
         var parts = buffer.split('\n\n');
         buffer = parts.pop(); // last is incomplete
         parts.forEach(function(part) {
+          // `: hb` comment frame. Not JSON — every heartbeat used to fall into
+          // the swallow-everything catch below, which is why a live-but-wedged
+          // stream was indistinguishable from a dead one on this side.
+          if (part.replace(/^\s+/, '').charAt(0) === ':') return;
           var line = part.replace(/^data: /, '').trim();
           if (!line || line === '[DONE]') return;
           try {
             var payload = JSON.parse(line);
+            lastPayloadAt = Date.now();
+            if (stalled) {
+              stalled = false;
+              if (typeof opts.onResume === 'function') { try { opts.onResume(); } catch (e) {} }
+            }
             onChunk(payload);
           } catch (e) { /* ignore malformed chunk */ }
         });
         return pump();
       });
     }
-    return pump();
+    // Clear the interval on the reject path too (abort / network drop), then
+    // re-throw so callers keep their existing rejection semantics.
+    return pump().catch(function(err) { stopStallTimer(); throw err; });
   }
 
   function setSendDisabled(disabled) {
