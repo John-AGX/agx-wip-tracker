@@ -9,8 +9,9 @@
 //   • filterable via the shared p86FilterDrawer (market / job type / status /
 //     city / state / contract$ / margin%) with a Group-by (market/type/status)
 //   • two views: a live Dashboard (KPI ribbon + breakdown + per-job strip) and
-//     a Reports section whose first report is the WIP Schedule (CSV export;
-//     Excel/PDF + the other reports land in later slices).
+//     a Reports section (S2). Reports run off a registry — WIP Schedule, Job
+//     P&L, Job Cost Detail, Committed Costs, AR/Billing — each filterable +
+//     group-able, with CSV + styled Excel export (server buildWorkbook).
 (function () {
   'use strict';
 
@@ -20,6 +21,7 @@
     });
   };
   function num(v) { v = Number(v); return isFinite(v) ? v : 0; }
+  function hasMulti() { return !!(window.p86Markets && window.p86Markets.hasMulti && window.p86Markets.hasMulti()); }
 
   // ── Formatters ───────────────────────────────────────────────────────
   function fmtCurrency(v) {
@@ -67,8 +69,9 @@
     if (/^S/.test(n)) return 'Service';
     return '';
   }
+  function marketName(j) { return (window.p86Markets ? window.p86Markets.nameFor(j) : (j.market || '')) || ''; }
 
-  // ── Live WIP row for a job (report + KPI source) ─────────────────────
+  // ── Live WIP row for a job (the base every report/KPI reads) ─────────
   function wipRow(j) {
     var w = {};
     try { w = (typeof getJobWIP === 'function') ? getJobWIP(j.id) : {}; } catch (e) { w = {}; }
@@ -77,22 +80,26 @@
     var total = num(w.totalIncome) || (contract + co);
     var earned = num(w.revenueEarned);
     var billed = num(w.invoiced);
+    var cost = num(w.actualCosts);
     return {
       id: j.id,
       jobNumber: j.jobNumber || '',
       title: j.title || 'Untitled',
-      market: (window.p86Markets ? window.p86Markets.nameFor(j) : (j.market || '')) || '',
+      market: marketName(j),
       jobType: jobTypeLabel(j),
       status: j.status || '',
       pct: num(w.pctComplete),
       contract: contract,
       co: co,
       total: total,
-      cost: num(w.actualCosts),
+      cost: cost,
       earned: earned,
       billed: billed,
+      unbilled: num(w.unbilled),
       overUnder: billed - earned,     // billings in excess of earned (>0 = overbilled)
       backlog: num(w.backlog),
+      budget: num(w.revisedEstCosts || w.estimatedCosts),
+      profit: earned - cost,
       margin: num(w.displayMargin)
     };
   }
@@ -105,7 +112,6 @@
     return out;
   }
   function jobAddr(j) { return window.p86Address ? window.p86Address.get(j) : { city: j.city || '', state: j.state || '', zip: j.zip || '' }; }
-  function marketName(j) { return (window.p86Markets ? window.p86Markets.nameFor(j) : (j.market || '')) || ''; }
   function insFilterFields() {
     var jobs = baseJobs();
     var opt = function (arr) { return arr.map(function (s) { return { v: s, label: s }; }); };
@@ -155,10 +161,16 @@
     order.sort(function (a, b) { return a.toLowerCase().localeCompare(b.toLowerCase()); });
     return order.map(function (k) { return { key: k, rows: map[k] }; });
   }
-  function sumRows(list) {
-    var s = { count: list.length, contract: 0, co: 0, total: 0, cost: 0, earned: 0, billed: 0, backlog: 0 };
-    list.forEach(function (r) { s.contract += r.contract; s.co += r.co; s.total += r.total; s.cost += r.cost; s.earned += r.earned; s.billed += r.billed; s.backlog += r.backlog; });
-    s.overUnder = s.billed - s.earned;
+  function sumFields(rows, keys) {
+    var t = {};
+    keys.forEach(function (k) { t[k] = 0; });
+    rows.forEach(function (r) { keys.forEach(function (k) { t[k] += num(r[k]); }); });
+    return t;
+  }
+  // Dashboard KPI aggregate (built on wip rows).
+  function kpiAgg(rows) {
+    var s = sumFields(rows, ['total', 'earned', 'cost', 'backlog']);
+    s.count = rows.length;
     s.profit = s.earned - s.cost;
     s.margin = s.earned > 0 ? (s.profit / s.earned * 100) : 0;
     s.avgPct = s.total > 0 ? (s.earned / s.total * 100) : 0;
@@ -175,10 +187,8 @@
     if (!allCount) { dash.innerHTML = header(0) + emptyCard('No jobs yet.'); return; }
 
     var jobs = filteredJobs();
-    var rows = jobs.map(wipRow);
-
     var html = header(jobs.length) + toolbar();
-    html += (_view === 'reports') ? reportsBody(rows) : dashboardBody(rows);
+    html += (_view === 'reports') ? reportsBody(jobs) : dashboardBody(jobs.map(wipRow));
     dash.innerHTML = html;
   }
 
@@ -203,7 +213,7 @@
       '<label class="ins-group"><span>Group</span><select onchange="insightsSetGroup(this.value)">' + grpOpts + '</select></label>' +
       '<button type="button" class="ins-btn' + (n ? ' on' : '') + '" onclick="insightsOpenFilter()">' + (window.p86Icon ? window.p86Icon('funnel') : 'Filter') + (n ? ' <strong>(' + n + ')</strong>' : '') + '</button>' +
       (n ? '<button type="button" class="ins-btn" onclick="insightsClearFilter()">Clear</button>' : '') +
-      (_view === 'reports' && _report === 'wip' ? '<button type="button" class="ins-btn" onclick="insightsExportCsv()">Export CSV</button>' : '');
+      (_view === 'reports' ? '<button type="button" class="ins-btn" onclick="insightsExportCsv()">CSV</button><button type="button" class="ins-btn" onclick="insightsExportXlsx()">Excel</button>' : '');
     return '<div class="ins-toolbar">' +
       '<div class="ins-tabs">' + tab('dashboard', 'Dashboard') + tab('reports', 'Reports') + '</div>' +
       '<div class="ins-tools">' + right + '</div></div>';
@@ -215,7 +225,7 @@
 
   // ── Render: Dashboard view ───────────────────────────────────────────
   function dashboardBody(rows) {
-    var a = sumRows(rows);
+    var a = kpiAgg(rows);
     var kpis = [
       ['Total Pipeline', fmtBig(a.total), 'var(--accent,#4f8cff)'],
       ['Rev Earned', fmtBig(a.earned), 'var(--green,#34d399)'],
@@ -242,10 +252,10 @@
       '<th class="l">' + label + '</th><th class="r">Jobs</th><th class="r">Contract</th><th class="r">Earned</th><th class="r">Cost</th><th class="r">Profit</th><th class="r">Margin</th>' +
       '</tr></thead><tbody>';
     groupRows(rows).forEach(function (g) {
-      var s = sumRows(g.rows);
+      var s = kpiAgg(g.rows);
       h += '<tr><td class="l">' + esc(g.key) + '</td><td class="r">' + s.count + '</td><td class="r">' + fmtMoney(s.total) + '</td><td class="r">' + fmtMoney(s.earned) + '</td><td class="r">' + fmtMoney(s.cost) + '</td><td class="r">' + fmtMoney(s.profit) + '</td><td class="r">' + fmtPct(s.margin) + '</td></tr>';
     });
-    var a = sumRows(rows);
+    var a = kpiAgg(rows);
     h += '</tbody><tfoot><tr class="ins-tot"><td class="l">Total</td><td class="r">' + a.count + '</td><td class="r">' + fmtMoney(a.total) + '</td><td class="r">' + fmtMoney(a.earned) + '</td><td class="r">' + fmtMoney(a.cost) + '</td><td class="r">' + fmtMoney(a.profit) + '</td><td class="r">' + fmtPct(a.margin) + '</td></tr></tfoot></table></div></div>';
     return h;
   }
@@ -268,101 +278,250 @@
     return h;
   }
 
-  // ── Render: Reports view ─────────────────────────────────────────────
-  function reportsBody(rows) {
-    var defs = [['wip', 'WIP Schedule', true], ['cost', 'Job Cost Detail', false], ['pnl', 'Job P&L', false], ['committed', 'Committed Costs', false], ['ar', 'AR / Billing', false]];
-    var picker = defs.map(function (o) {
-      var on = _report === o[0], soon = !o[2];
-      return '<button type="button" class="ins-rpick' + (on ? ' on' : '') + (soon ? ' soon' : '') + '"' +
-        (soon ? ' disabled title="Coming next"' : ' onclick="insightsSetReport(\'' + o[0] + '\')"') + '>' +
-        esc(o[1]) + (soon ? ' <span class="ins-soon">soon</span>' : '') + '</button>';
-    }).join('');
-    var h = '<div class="ins-rpicker">' + picker + '</div>';
-    h += (_report === 'wip') ? wipReport(rows) : emptyCard('This report is coming next.');
-    return h;
+  // ── Report registry ──────────────────────────────────────────────────
+  // Each report: columns [{k,label,t,multiOnly?}] where t ∈
+  // text|money|moneyParen|pct|pct0; rows(jobs) → display rows (with market/
+  // jobType/status for group-by); total(rows) → correctly-weighted totals.
+  // Text columns MUST lead (subtotal label spans them).
+  function costBucketsFor(jobId) {
+    var b = { materials: 0, labor: 0, subs: 0, equipment: 0, gc: 0, other: 0 };
+    try {
+      if (window.p86CostBuckets) {
+        var roll = p86CostBuckets.getJobCostBuckets(jobId);
+        (roll.buckets || []).forEach(function (bk) { if (b[bk.code] != null) b[bk.code] = num(bk.total); });
+      }
+    } catch (e) { /* leave zeros */ }
+    return b;
+  }
+  function committedFor(jobId) {
+    var committed = 0, billed = 0;
+    try {
+      (window.jobSubsFromPOs ? jobSubsFromPOs(jobId) : []).forEach(function (s) { committed += num(s.contractAmt); billed += num(s.billedToDate); });
+    } catch (e) { /* none */ }
+    return { committed: committed, billed: billed };
   }
 
-  function wipRowHtml(r, multi) {
-    var ou = r.overUnder;
-    var ouTxt = (ou < 0 ? '(' : '') + fmtMoney(Math.abs(ou)) + (ou < 0 ? ')' : '');
-    return '<tr>' +
-      '<td class="l">' + esc(r.jobNumber) + '</td>' +
-      '<td class="l" title="' + esc(r.title) + '">' + esc(r.title) + '</td>' +
-      (multi ? '<td class="l">' + esc(r.market) + '</td>' : '') +
-      '<td class="l">' + esc(r.jobType) + '</td>' +
-      '<td class="r">' + fmtMoney(r.contract) + '</td>' +
-      '<td class="r">' + fmtMoney(r.co) + '</td>' +
-      '<td class="r">' + fmtMoney(r.total) + '</td>' +
-      '<td class="r">' + fmtMoney(r.cost) + '</td>' +
-      '<td class="r">' + fmtPct(r.pct, 0) + '</td>' +
-      '<td class="r">' + fmtMoney(r.earned) + '</td>' +
-      '<td class="r">' + fmtMoney(r.billed) + '</td>' +
-      '<td class="r"' + (ou < 0 ? ' style="color:#fbbf24;"' : '') + '>' + ouTxt + '</td>' +
-      '<td class="r">' + fmtMoney(r.backlog) + '</td>' +
-    '</tr>';
+  var REPORTS = {
+    wip: {
+      name: 'WIP Schedule',
+      columns: [
+        { k: 'jobNumber', label: 'Job #', t: 'text' }, { k: 'title', label: 'Job', t: 'text' },
+        { k: 'market', label: 'Market', t: 'text', multiOnly: true }, { k: 'jobType', label: 'Type', t: 'text' },
+        { k: 'contract', label: 'Contract', t: 'money' }, { k: 'co', label: 'COs', t: 'money' },
+        { k: 'total', label: 'Total', t: 'money' }, { k: 'cost', label: 'Cost to Date', t: 'money' },
+        { k: 'pct', label: '%', t: 'pct0' }, { k: 'earned', label: 'Earned', t: 'money' },
+        { k: 'billed', label: 'Billed', t: 'money' }, { k: 'overUnder', label: 'Over/(Under)', t: 'moneyParen' },
+        { k: 'backlog', label: 'Backlog', t: 'money' }
+      ],
+      rows: function (jobs) { return jobs.map(wipRow); },
+      total: function (rows) { var t = sumFields(rows, ['contract', 'co', 'total', 'cost', 'earned', 'billed', 'backlog']); t.pct = t.total > 0 ? (t.earned / t.total * 100) : 0; t.overUnder = t.billed - t.earned; return t; }
+    },
+    pnl: {
+      name: 'Job P&L',
+      columns: [
+        { k: 'jobNumber', label: 'Job #', t: 'text' }, { k: 'title', label: 'Job', t: 'text' },
+        { k: 'market', label: 'Market', t: 'text', multiOnly: true }, { k: 'jobType', label: 'Type', t: 'text' },
+        { k: 'total', label: 'Revenue', t: 'money' }, { k: 'earned', label: 'Earned', t: 'money' },
+        { k: 'cost', label: 'Cost', t: 'money' }, { k: 'profit', label: 'Gross Profit', t: 'moneyParen' },
+        { k: 'margin', label: 'Margin', t: 'pct' }
+      ],
+      rows: function (jobs) { return jobs.map(wipRow); },
+      total: function (rows) { var t = sumFields(rows, ['total', 'earned', 'cost']); t.profit = t.earned - t.cost; t.margin = t.earned > 0 ? (t.profit / t.earned * 100) : 0; return t; }
+    },
+    cost: {
+      name: 'Job Cost Detail',
+      columns: [
+        { k: 'jobNumber', label: 'Job #', t: 'text' }, { k: 'title', label: 'Job', t: 'text' },
+        { k: 'materials', label: 'Materials', t: 'money' }, { k: 'labor', label: 'Labor', t: 'money' },
+        { k: 'subs', label: 'Subs', t: 'money' }, { k: 'equipment', label: 'Equip', t: 'money' },
+        { k: 'gc', label: 'GC', t: 'money' }, { k: 'other', label: 'Other', t: 'money' },
+        { k: 'cost', label: 'Total Cost', t: 'money' }, { k: 'budget', label: 'Budget', t: 'money' },
+        { k: 'variance', label: 'Variance', t: 'moneyParen' }
+      ],
+      rows: function (jobs) {
+        return jobs.map(function (j) {
+          var w = wipRow(j); var b = costBucketsFor(j.id);
+          return {
+            id: j.id, jobNumber: w.jobNumber, title: w.title, market: w.market, jobType: w.jobType, status: w.status,
+            materials: b.materials, labor: b.labor, subs: b.subs, equipment: b.equipment, gc: b.gc, other: b.other,
+            cost: w.cost, budget: w.budget, variance: w.budget - w.cost
+          };
+        });
+      },
+      total: function (rows) { var t = sumFields(rows, ['materials', 'labor', 'subs', 'equipment', 'gc', 'other', 'cost', 'budget']); t.variance = t.budget - t.cost; return t; }
+    },
+    committed: {
+      name: 'Committed Costs',
+      columns: [
+        { k: 'jobNumber', label: 'Job #', t: 'text' }, { k: 'title', label: 'Job', t: 'text' },
+        { k: 'market', label: 'Market', t: 'text', multiOnly: true },
+        { k: 'committed', label: 'Committed (PO)', t: 'money' }, { k: 'billed', label: 'Billed', t: 'money' },
+        { k: 'remaining', label: 'Remaining', t: 'money' }, { k: 'pctBilled', label: '% Billed', t: 'pct0' }
+      ],
+      rows: function (jobs) {
+        return jobs.map(function (j) {
+          var c = committedFor(j.id);
+          return {
+            id: j.id, jobNumber: j.jobNumber || '', title: j.title || 'Untitled', market: marketName(j), jobType: jobTypeLabel(j), status: j.status || '',
+            committed: c.committed, billed: c.billed, remaining: c.committed - c.billed, pctBilled: c.committed > 0 ? (c.billed / c.committed * 100) : 0
+          };
+        });
+      },
+      total: function (rows) { var t = sumFields(rows, ['committed', 'billed']); t.remaining = t.committed - t.billed; t.pctBilled = t.committed > 0 ? (t.billed / t.committed * 100) : 0; return t; }
+    },
+    ar: {
+      name: 'AR / Billing',
+      columns: [
+        { k: 'jobNumber', label: 'Job #', t: 'text' }, { k: 'title', label: 'Job', t: 'text' },
+        { k: 'market', label: 'Market', t: 'text', multiOnly: true },
+        { k: 'total', label: 'Contract', t: 'money' }, { k: 'earned', label: 'Earned Rev', t: 'money' },
+        { k: 'billed', label: 'Billed', t: 'money' }, { k: 'unbilled', label: 'Unbilled', t: 'money' },
+        { k: 'overUnder', label: 'Over/(Under)', t: 'moneyParen' }
+      ],
+      rows: function (jobs) { return jobs.map(wipRow); },
+      total: function (rows) { var t = sumFields(rows, ['total', 'earned', 'billed', 'unbilled']); t.overUnder = t.billed - t.earned; return t; }
+    }
+  };
+  var REPORT_ORDER = ['wip', 'pnl', 'cost', 'committed', 'ar'];
+
+  // ── Render: Reports view ─────────────────────────────────────────────
+  function reportCols(report) { var multi = hasMulti(); return report.columns.filter(function (c) { return !c.multiOnly || multi; }); }
+  function labelColCount(cols) { var n = 0; for (var i = 0; i < cols.length; i++) { if (cols[i].t === 'text') n++; else break; } return n; }
+  function cellCls(t) { return t === 'text' ? 'l' : 'r'; }
+  function fmtCellVal(v, t) {
+    if (t === 'money') return fmtMoney(v);
+    if (t === 'moneyParen') { var n = num(v); return (n < 0 ? '(' : '') + fmtMoney(Math.abs(n)) + (n < 0 ? ')' : ''); }
+    if (t === 'pct') return fmtPct(num(v));
+    if (t === 'pct0') return fmtPct(num(v), 0);
+    return esc(v == null ? '' : v);
   }
-  function wipTotRow(label, list, multi, labelCols, cls) {
-    var s = sumRows(list);
-    var ou = s.overUnder;
-    var ouTxt = (ou < 0 ? '(' : '') + fmtMoney(Math.abs(ou)) + (ou < 0 ? ')' : '');
-    return '<tr class="' + cls + '"><td class="l" colspan="' + labelCols + '">' + esc(label) + '</td>' +
-      '<td class="r">' + fmtMoney(s.contract) + '</td>' +
-      '<td class="r">' + fmtMoney(s.co) + '</td>' +
-      '<td class="r">' + fmtMoney(s.total) + '</td>' +
-      '<td class="r">' + fmtMoney(s.cost) + '</td>' +
-      '<td class="r">' + fmtPct(s.avgPct, 0) + '</td>' +
-      '<td class="r">' + fmtMoney(s.earned) + '</td>' +
-      '<td class="r">' + fmtMoney(s.billed) + '</td>' +
-      '<td class="r"' + (ou < 0 ? ' style="color:#fbbf24;"' : '') + '>' + ouTxt + '</td>' +
-      '<td class="r">' + fmtMoney(s.backlog) + '</td></tr>';
+
+  function reportsBody(jobs) {
+    var picker = REPORT_ORDER.map(function (id) {
+      var on = _report === id;
+      return '<button type="button" class="ins-rpick' + (on ? ' on' : '') + '" onclick="insightsSetReport(\'' + id + '\')">' + esc(REPORTS[id].name) + '</button>';
+    }).join('');
+    var report = REPORTS[_report] || REPORTS.wip;
+    var rows = report.rows(jobs);
+    return '<div class="ins-rpicker">' + picker + '</div>' + renderReport(report, rows);
   }
-  function wipReport(rows) {
-    var multi = !!(window.p86Markets && window.p86Markets.hasMulti && window.p86Markets.hasMulti());
-    var labelCols = multi ? 4 : 3;
-    var totalCols = labelCols + 9;
-    var head = '<th class="l">Job #</th><th class="l">Job</th>' + (multi ? '<th class="l">Market</th>' : '') + '<th class="l">Type</th>' +
-      '<th class="r">Contract</th><th class="r">COs</th><th class="r">Total</th><th class="r">Cost to Date</th><th class="r">%</th><th class="r">Earned</th><th class="r">Billed</th><th class="r">Over/(Under)</th><th class="r">Backlog</th>';
-    var h = '<div class="card ins-block"><div class="ins-block-h">WIP Schedule <span class="ins-sub">' + rows.length + ' job' + (rows.length === 1 ? '' : 's') + ' &middot; live</span></div>' +
+
+  function renderReport(report, rows) {
+    var cols = reportCols(report);
+    var lc = labelColCount(cols);
+    var head = cols.map(function (c) { return '<th class="' + cellCls(c.t) + '">' + esc(c.label) + '</th>'; }).join('');
+    function dataTr(r) {
+      return '<tr>' + cols.map(function (c) {
+        var v = r[c.k]; var st = (c.t === 'moneyParen' && num(v) < 0) ? ' style="color:#fbbf24;"' : '';
+        return '<td class="' + cellCls(c.t) + '"' + st + '>' + fmtCellVal(v, c.t) + '</td>';
+      }).join('') + '</tr>';
+    }
+    function totTr(label, list, cls) {
+      var t = report.total(list); var cells = '';
+      cols.forEach(function (c, i) {
+        if (i < lc) { if (i === 0) cells += '<td class="l" colspan="' + lc + '">' + esc(label) + '</td>'; return; }
+        var v = t[c.k]; var st = (c.t === 'moneyParen' && num(v) < 0) ? ' style="color:#fbbf24;"' : '';
+        cells += '<td class="r"' + st + '>' + fmtCellVal(v, c.t) + '</td>';
+      });
+      return '<tr class="' + cls + '">' + cells + '</tr>';
+    }
+    var h = '<div class="card ins-block"><div class="ins-block-h">' + esc(report.name) + ' <span class="ins-sub">' + rows.length + ' job' + (rows.length === 1 ? '' : 's') + ' &middot; live</span></div>' +
       '<div class="ins-tblwrap"><table class="ins-tbl ins-wip"><thead><tr>' + head + '</tr></thead><tbody>';
     if (!rows.length) {
-      h += '<tr><td colspan="' + totalCols + '" style="text-align:center;padding:24px;color:var(--text-dim,#888);">No jobs match the current filters.</td></tr>';
+      h += '<tr><td colspan="' + cols.length + '" style="text-align:center;padding:24px;color:var(--text-dim,#888);">No jobs match the current filters.</td></tr>';
     } else if (_groupBy !== 'none') {
       groupRows(rows).forEach(function (g) {
-        h += '<tr class="ins-grp"><td class="l" colspan="' + totalCols + '">' + esc(groupLabel() + ': ' + g.key) + ' <span class="ins-sub">(' + g.rows.length + ')</span></td></tr>';
-        g.rows.forEach(function (r) { h += wipRowHtml(r, multi); });
-        h += wipTotRow('Subtotal', g.rows, multi, labelCols, 'ins-sub-tot');
+        h += '<tr class="ins-grp"><td class="l" colspan="' + cols.length + '">' + esc(groupLabel() + ': ' + g.key) + ' <span class="ins-sub">(' + g.rows.length + ')</span></td></tr>';
+        g.rows.forEach(function (r) { h += dataTr(r); });
+        h += totTr('Subtotal', g.rows, 'ins-sub-tot');
       });
     } else {
-      rows.forEach(function (r) { h += wipRowHtml(r, multi); });
+      rows.forEach(function (r) { h += dataTr(r); });
     }
     h += '</tbody>';
-    if (rows.length) h += '<tfoot>' + wipTotRow('Company total', rows, multi, labelCols, 'ins-tot') + '</tfoot>';
+    if (rows.length) h += '<tfoot>' + totTr('Company total', rows, 'ins-tot') + '</tfoot>';
     h += '</table></div></div>';
     return h;
   }
 
-  // ── CSV export (WIP Schedule) ────────────────────────────────────────
-  function csvCell(v) { v = v == null ? '' : String(v); if (/[",\r\n]/.test(v)) v = '"' + v.replace(/"/g, '""') + '"'; return v; }
+  // ── Exports (CSV + server-side styled Excel) ─────────────────────────
   function dateStamp() { var d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
-  function exportWipCsv() {
-    var rows = filteredJobs().map(wipRow);
-    var head = ['Job #', 'Job', 'Market', 'Type', 'Contract', 'Approved COs', 'Total Contract', 'Cost to Date', '% Complete', 'Earned Revenue', 'Billed', 'Over/(Under) Billing', 'Backlog'];
-    var lines = [head.map(csvCell).join(',')];
-    rows.forEach(function (r) {
-      lines.push([r.jobNumber, r.title, r.market, r.jobType,
-        Math.round(r.contract), Math.round(r.co), Math.round(r.total), Math.round(r.cost),
-        r.pct.toFixed(1), Math.round(r.earned), Math.round(r.billed), Math.round(r.overUnder), Math.round(r.backlog)
-      ].map(csvCell).join(','));
-    });
-    var s = sumRows(rows);
-    lines.push(['TOTAL', '', '', '', Math.round(s.contract), Math.round(s.co), Math.round(s.total), Math.round(s.cost), s.avgPct.toFixed(1), Math.round(s.earned), Math.round(s.billed), Math.round(s.overUnder), Math.round(s.backlog)].map(csvCell).join(','));
+  function slug(s) { return String(s).replace(/[^\w]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase(); }
+  function csvCell(v) { v = v == null ? '' : String(v); if (/[",\r\n]/.test(v)) v = '"' + v.replace(/"/g, '""') + '"'; return v; }
+  function csvVal(v, t) {
+    if (t === 'money' || t === 'moneyParen') return Math.round(num(v));
+    if (t === 'pct') return num(v).toFixed(1);
+    if (t === 'pct0') return num(v).toFixed(0);
+    return v == null ? '' : String(v);
+  }
+  function exportReportCsv() {
+    var report = REPORTS[_report] || REPORTS.wip;
+    var cols = report.columns; // include every column (market too) in the file
+    var rows = report.rows(filteredJobs());
+    var lines = [cols.map(function (c) { return c.label; }).map(csvCell).join(',')];
+    rows.forEach(function (r) { lines.push(cols.map(function (c) { return csvVal(r[c.k], c.t); }).map(csvCell).join(',')); });
+    var t = report.total(rows);
+    lines.push(cols.map(function (c, i) { return i === 0 ? 'TOTAL' : (c.t === 'text' ? '' : csvVal(t[c.k], c.t)); }).map(csvCell).join(','));
     var blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'wip-schedule-' + dateStamp() + '.csv';
+    a.download = slug(report.name) + '-' + dateStamp() + '.csv';
     document.body.appendChild(a); a.click();
     setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 100);
-    if (typeof window.p86Toast === 'function') window.p86Toast('WIP schedule exported', 'success');
+    if (typeof window.p86Toast === 'function') window.p86Toast(report.name + ' exported (CSV)', 'success');
+  }
+
+  function colLetter(n) { var s = ''; n++; while (n > 0) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
+  function xlCell(v, t) {
+    if (t === 'money' || t === 'moneyParen') return { raw: num(v), fmt: 'currency', decimals: 0, style: { align: 'right' } };
+    if (t === 'pct') return { raw: num(v) / 100, fmt: 'percent', decimals: 1, style: { align: 'right' } };
+    if (t === 'pct0') return { raw: num(v) / 100, fmt: 'percent', decimals: 0, style: { align: 'right' } };
+    return { raw: (v == null ? '' : String(v)), style: { align: 'left' } };
+  }
+  function exportReportXlsx() {
+    var report = REPORTS[_report] || REPORTS.wip;
+    var cols = report.columns;
+    var rows = report.rows(filteredJobs());
+    var cells = {};
+    // Row 1 title, row 2 header, rows 3.. data, then a bold TOTAL row.
+    cells['A1'] = { raw: report.name + ' — ' + dateStamp(), style: { bold: true, fontSize: 22, color: '#1f2a44' } };
+    cols.forEach(function (c, ci) {
+      cells[colLetter(ci) + '2'] = { raw: c.label, style: { bold: true, bg: '#1f2a44', color: '#ffffff', align: (c.t === 'text' ? 'left' : 'right') } };
+    });
+    var rr = 3;
+    rows.forEach(function (row) { cols.forEach(function (c, ci) { cells[colLetter(ci) + rr] = xlCell(row[c.k], c.t); }); rr++; });
+    var t = report.total(rows);
+    cols.forEach(function (c, ci) {
+      var ref = colLetter(ci) + rr, cell;
+      if (ci === 0) cell = { raw: 'TOTAL', style: { align: 'left' } };
+      else if (c.t === 'text') cell = { raw: '', style: {} };
+      else cell = xlCell(t[c.k], c.t);
+      cell.style = Object.assign({}, cell.style, { bold: true, borders: { top: { style: 'thin', color: '#888888' } } });
+      cells[ref] = cell;
+    });
+    var lastDataRow = rows.length ? (2 + rows.length) : 2; // 1-based; header is row 2
+    var colWidths = {}; cols.forEach(function (c, ci) { colWidths[ci] = c.k === 'title' ? 240 : (c.t === 'text' ? 90 : 105); });
+    var sheet = {
+      name: report.name.slice(0, 31), cells: cells, colWidths: colWidths,
+      frozen: 'row',
+      autoFilter: { r1: 1, c1: 0, r2: lastDataRow - 1, c2: cols.length - 1 } // 0-based, header row .. last data row
+    };
+    var payload = { filename: slug(report.name) + '-' + dateStamp() + '.xlsx', sheets: [sheet] };
+    var headers = { 'Content-Type': 'application/json' };
+    var token = (window.p86Auth && window.p86Auth.getToken && window.p86Auth.getToken()) || localStorage.getItem('p86-auth-token');
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    if (typeof window.p86Toast === 'function') window.p86Toast('Building Excel…', 'success');
+    fetch('/api/workspace/export-xlsx', { method: 'POST', credentials: 'same-origin', headers: headers, body: JSON.stringify(payload) })
+      .then(function (res) { if (!res.ok) throw new Error('HTTP ' + res.status); return res.blob(); })
+      .then(function (blob) {
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = payload.filename;
+        document.body.appendChild(a); a.click();
+        setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+        if (typeof window.p86Toast === 'function') window.p86Toast(report.name + ' exported (Excel)', 'success');
+      })
+      .catch(function (e) { console.error('[insights] xlsx export failed', e); if (typeof window.p86Toast === 'function') window.p86Toast('Excel export failed', 'error'); });
   }
 
   // ── Filter drawer open ───────────────────────────────────────────────
@@ -416,8 +575,6 @@
       '.ins-rpicker{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}' +
       '.ins-rpick{font:inherit;font-size:13px;font-weight:600;padding:8px 14px;border-radius:8px;background:var(--surface2,rgba(255,255,255,.05));color:var(--text-dim,#888);border:1px solid var(--border,#333);cursor:pointer}' +
       '.ins-rpick.on{background:var(--accent,#4f8cff);color:#fff;border-color:var(--accent,#4f8cff)}' +
-      '.ins-rpick.soon{opacity:.5;cursor:not-allowed}' +
-      '.ins-soon{font-size:9px;text-transform:uppercase;opacity:.8}' +
       '.ins-perf{display:flex;flex-direction:column;gap:6px}' +
       '.ins-perf-row{display:grid;grid-template-columns:2fr 1fr 1fr 1fr 120px 44px;gap:10px;align-items:center;padding:8px 10px;border-radius:8px;background:var(--surface2,rgba(255,255,255,.03))}' +
       '.ins-perf-t{font-size:12px;font-weight:600;color:var(--text,#fff);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
@@ -439,6 +596,7 @@
   window.insightsSetGroup = function (v) { _groupBy = v; renderInsightsDashboard(); };
   window.insightsOpenFilter = openInsFilter;
   window.insightsClearFilter = function () { _drawer = null; renderInsightsDashboard(); };
-  window.insightsExportCsv = exportWipCsv;
+  window.insightsExportCsv = exportReportCsv;
+  window.insightsExportXlsx = exportReportXlsx;
   window.renderInsightsDashboard = renderInsightsDashboard;
 })();
