@@ -213,7 +213,7 @@
       '<label class="ins-group"><span>Group</span><select onchange="insightsSetGroup(this.value)">' + grpOpts + '</select></label>' +
       '<button type="button" class="ins-btn' + (n ? ' on' : '') + '" onclick="insightsOpenFilter()">' + (window.p86Icon ? window.p86Icon('funnel') : 'Filter') + (n ? ' <strong>(' + n + ')</strong>' : '') + '</button>' +
       (n ? '<button type="button" class="ins-btn" onclick="insightsClearFilter()">Clear</button>' : '') +
-      (_view === 'reports' ? '<button type="button" class="ins-btn" onclick="insightsExportCsv()">CSV</button><button type="button" class="ins-btn" onclick="insightsExportXlsx()">Excel</button>' : '');
+      (_view === 'reports' ? '<button type="button" class="ins-btn" onclick="insightsExportCsv()">CSV</button><button type="button" class="ins-btn" onclick="insightsExportXlsx()">Excel</button><button type="button" class="ins-btn" onclick="insightsExportPdf()">PDF</button>' : '');
     return '<div class="ins-toolbar">' +
       '<div class="ins-tabs">' + tab('dashboard', 'Dashboard') + tab('reports', 'Reports') + '</div>' +
       '<div class="ins-tools">' + right + '</div></div>';
@@ -524,6 +524,70 @@
       .catch(function (e) { console.error('[insights] xlsx export failed', e); if (typeof window.p86Toast === 'function') window.p86Toast('Excel export failed', 'error'); });
   }
 
+  // Branded, paginated print → PDF (clone of the pay-app print builder).
+  function exportReportPdf() {
+    var report = REPORTS[_report] || REPORTS.wip;
+    var cols = reportCols(report);
+    var rows = report.rows(filteredJobs());
+    var lc = labelColCount(cols);
+    var logo = location.origin + '/images/logo-color.png';
+    var sel = (window.p86Markets && window.p86Markets.selected) ? window.p86Markets.selected() : null;
+    var scope = sel ? (sel.name + ' market') : 'All markets';
+    var thead = cols.map(function (c) { return '<th class="' + (c.t === 'text' ? 'l' : 'n') + '">' + esc(c.label) + '</th>'; }).join('');
+    function pcell(v, t) {
+      if (t === 'text') return '<td class="l">' + esc(v == null ? '' : v) + '</td>';
+      var neg = (t === 'moneyParen' && num(v) < 0);
+      return '<td class="n' + (neg ? ' neg' : '') + '">' + fmtCellVal(v, t) + '</td>';
+    }
+    function prow(r) { return '<tr>' + cols.map(function (c) { return pcell(r[c.k], c.t); }).join('') + '</tr>'; }
+    function ptot(label, list, cls) {
+      var t = report.total(list), cells = '';
+      cols.forEach(function (c, i) {
+        if (i < lc) { if (i === 0) cells += '<td class="l" colspan="' + lc + '"><b>' + esc(label) + '</b></td>'; return; }
+        var v = t[c.k], neg = (c.t === 'moneyParen' && num(v) < 0);
+        cells += '<td class="n' + (neg ? ' neg' : '') + '"><b>' + fmtCellVal(v, c.t) + '</b></td>';
+      });
+      return '<tr class="' + cls + '">' + cells + '</tr>';
+    }
+    var body = '';
+    if (rows.length && _groupBy !== 'none') {
+      groupRows(rows).forEach(function (g) {
+        body += '<tr class="grp"><td colspan="' + cols.length + '">' + esc(groupLabel() + ': ' + g.key) + '</td></tr>';
+        g.rows.forEach(function (r) { body += prow(r); });
+        body += ptot('Subtotal', g.rows, 'sub');
+      });
+    } else {
+      rows.forEach(function (r) { body += prow(r); });
+    }
+    var doc = '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(report.name) + ' — Project 86</title><style>' +
+      '*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#111;margin:0;padding:24px;font-size:11px}' +
+      '.page{max-width:1100px;margin:0 auto}' +
+      '.hd{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #1B3A5C;padding-bottom:10px;margin-bottom:6px}' +
+      '.hd img{height:42px}.hd .t{text-align:right}.doctitle{font-size:18px;font-weight:bold;color:#1B3A5C}.docsub{font-size:10.5px;color:#666;letter-spacing:.3px}' +
+      '.meta{font-size:10px;color:#666;margin-bottom:12px}' +
+      'table{width:100%;border-collapse:collapse}' +
+      'th{background:#1B3A5C;color:#fff;padding:6px;font-size:9px;text-transform:uppercase;letter-spacing:.3px;border:1px solid #16304d}' +
+      'th.l,td.l{text-align:left}th.n,td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}' +
+      'td{padding:4px 6px;border:1px solid #d5dbe3}tr:nth-child(even) td{background:#f6f8fb}td.neg{color:#b45309}' +
+      'tr.grp td{background:#e9eef5;font-weight:bold;color:#1B3A5C}tr.sub td{background:#f0f4fa;font-weight:bold}' +
+      'tr.tot td{background:#dbe6f4;font-weight:bold;border-top:2px solid #1B3A5C}' +
+      '.bar{position:fixed;top:10px;right:10px}.bar button{font:inherit;padding:8px 16px;border-radius:8px;border:0;background:#1B8541;color:#fff;cursor:pointer;font-weight:bold}' +
+      '@media print{.bar{display:none}body{padding:0}th,tr.grp td,tr.sub td,tr.tot td,tr:nth-child(even) td{-webkit-print-color-adjust:exact;print-color-adjust:exact}}' +
+      '</style></head><body>' +
+      '<div class="bar"><button onclick="window.print()">Print / Save PDF</button></div>' +
+      '<div class="page">' +
+        '<div class="hd"><img src="' + esc(logo) + '" onerror="this.style.display=\'none\'"/>' +
+          '<div class="t"><div class="doctitle">' + esc(report.name) + '</div><div class="docsub">Company WIP Insights &middot; Project 86</div></div></div>' +
+        '<div class="meta">' + esc(scope) + ' &middot; ' + rows.length + ' job' + (rows.length === 1 ? '' : 's') + ' &middot; generated ' + esc(dateStamp()) + '</div>' +
+        '<table><thead><tr>' + thead + '</tr></thead><tbody>' + body + '</tbody>' +
+        (rows.length ? '<tfoot>' + ptot('Company total', rows, 'tot') + '</tfoot>' : '') +
+        '</table>' +
+      '</div></body></html>';
+    var w = window.open('', '_blank');
+    if (!w) { if (typeof window.p86Toast === 'function') window.p86Toast('Allow pop-ups to open the printable PDF', 'error'); return; }
+    w.document.open(); w.document.write(doc); w.document.close();
+  }
+
   // ── Filter drawer open ───────────────────────────────────────────────
   function openInsFilter() {
     var FD = window.p86FilterDrawer; if (!FD) return;
@@ -598,5 +662,6 @@
   window.insightsClearFilter = function () { _drawer = null; renderInsightsDashboard(); };
   window.insightsExportCsv = exportReportCsv;
   window.insightsExportXlsx = exportReportXlsx;
+  window.insightsExportPdf = exportReportPdf;
   window.renderInsightsDashboard = renderInsightsDashboard;
 })();

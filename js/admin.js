@@ -4448,22 +4448,18 @@ function p86Ask(message, opts) {
     var cardsEl = document.getElementById('admin-metrics-cards');
     var tbody = document.getElementById('admin-metrics-jobs-tbody');
     if (!cardsEl || !tbody) return;
-
-    // (Phase F note removed): a previous version of this function
-    // triggered window.p86Data.reloadFromServer() to refresh the tile
-    // data on every Metrics visit. That caused a re-render LOOP because
-    // reloadFromServer's success callback in app.js calls renderAdminMetrics
-    // again (line ~1533), which would trigger another reload, repeat.
-    // Visible as flickering on Insights and other reload-listening pages.
-    // Reverted: paint from the cached window.appData, which is kept
-    // reasonably fresh by app.js's own reload triggers (saveData calls,
-    // initial boot, etc.). The audit's "stale data" concern only
-    // surfaces if the user leaves Metrics open for a long time without
-    // any data-mutating activity in another tab; that's an acceptable
-    // edge case versus the flickering regression.
-    var jobs = (window.appData && window.appData.jobs) || [];
-    var users = (_users.length ? _users : []);
-    paintMetricsContents(cardsEl, tbody, jobs, users);
+    // RETIRED 2026-08-09 (Insights live rework): the per-job Go-Live / Capture /
+    // Revert controls managed the old snapshot gate, which no longer exists —
+    // Insights is now live for EVERY active job. The controls are replaced with
+    // a pointer to the live reports. (paintMetricsContents / toggleJobLiveStatus
+    // / captureNowForJob are left defined but unused — dead code.)
+    cardsEl.innerHTML =
+      '<div style="grid-column:1/-1;padding:18px 20px;border:1px solid var(--border,#333);border-radius:10px;background:var(--surface2,rgba(255,255,255,0.03));">' +
+        '<div style="font-size:14px;font-weight:600;color:var(--text,#fff);margin-bottom:6px;">Metrics moved to Insights</div>' +
+        '<div style="font-size:12.5px;color:var(--text-dim,#888);line-height:1.5;">Insights is now <strong>live for every job</strong> — there is no longer a &ldquo;Go Live&rdquo; step or a nightly snapshot. ' +
+        'Open <strong>Insights &rarr; Reports &rarr; WIP Schedule</strong> for the company WIP roll-up, filterable by market / job type with CSV, Excel and PDF export.</div>' +
+      '</div>';
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-dim,#888);padding:18px;">The Go-Live / Capture controls have been retired — see Insights &rarr; Reports.</td></tr>';
   }
 
   // Extracted because renderAdminMetrics used to wrap a paint() helper;

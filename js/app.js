@@ -241,7 +241,8 @@
             backfillSampleData();
             migrateBudgetFields();
             renderJobsMain();
-            startDailySnapshotScheduler();
+            // Daily snapshot scheduler RETIRED 2026-08-09 — Insights is now 100%
+            // live (no dailySnapshots / liveStatus gate). No auto-capture to arm.
         }
 
         // Expose loadData globally so cross-module reload triggers (e.g.
@@ -251,33 +252,14 @@
         // cycle completes.
         window.p86ReloadAllData = loadData;
 
-        // Fires daily snapshots for every Live job. Two trigger paths:
-        //   1) On app load — catch-up if today's snapshot is missing for any
-        //      Live job. Runs after a small delay to let async loadData finish.
-        //   2) setTimeout to next 3 AM America/New_York — re-arms itself each
-        //      time it fires, so the app captures automatically across midnight
-        //      if it stays open (or catches up the next time it loads).
-        function startDailySnapshotScheduler() {
-            // Catch-up: run shortly after load when server data has arrived
-            setTimeout(function() {
-                if (typeof captureDailySnapshotsForAllLiveJobs === 'function') {
-                    captureDailySnapshotsForAllLiveJobs();
-                }
-            }, 5000);
-
-            function tickAndReschedule() {
-                if (typeof captureDailySnapshotsForAllLiveJobs === 'function') {
-                    captureDailySnapshotsForAllLiveJobs();
-                }
-                if (typeof msUntilNext3AmEst === 'function') {
-                    setTimeout(tickAndReschedule, msUntilNext3AmEst());
-                }
-            }
-
-            if (typeof msUntilNext3AmEst === 'function') {
-                setTimeout(tickAndReschedule, msUntilNext3AmEst());
-            }
-        }
+        // RETIRED 2026-08-09 (Insights live rework): the daily-snapshot capture
+        // is gone — Insights now computes 100% live from getJobWIP() for every
+        // active job, with no `liveStatus` gate. The old capture was a browser
+        // setTimeout that only fired if a tab happened to be open at 3 AM (it
+        // silently lost days and capped history at 90). Kept as a no-op so any
+        // stray caller stays harmless; the snapshot helpers in jobs.js are now
+        // dead code.
+        function startDailySnapshotScheduler() { /* retired — no-op */ }
 
         function migrateBudgetFields() {
             var changed = false;
