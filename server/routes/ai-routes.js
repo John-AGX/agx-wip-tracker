@@ -3808,6 +3808,11 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
   // crashed the Node process and put Railway into a deploy-restart
   // loop. Idempotent writes prevent that.
   let _ended = false;
+  // Idle watchdog state. 5 min sits above any realistic think/tool gap, below
+  // undici's ~5min body timeout, and below ACTIVE_TURN_TTL_MS (6 min) so the
+  // turn ends cleanly rather than racing the lock's auto-expire.
+  const TURN_IDLE_MS = 5 * 60 * 1000;
+  let _lastProgressAt = Date.now();
   // Track consecutive write failures so we can hard-end the response
   // after the underlying TCP stream is clearly broken. Pre-fix: the
   // empty catch blocks swallowed every write failure; subsequent
@@ -3829,6 +3834,10 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
     try {
       res.write('data: ' + JSON.stringify(payload) + '\n\n');
       _consecWriteFails = 0;
+      // Every form of forward progress — text delta, tool chip, status —
+      // funnels through here, so this is the one honest "the turn is still
+      // moving" signal. The idle watchdog on the heartbeat below reads it.
+      _lastProgressAt = Date.now();
     } catch (e) {
       _consecWriteFails++;
       // Log once per failure burst so Railway tails capture the
@@ -3868,6 +3877,35 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
   // holds the process open on its own.
   _hb = setInterval(() => {
     if (_ended || res.writableEnded) { clearHeartbeat(); return; }
+
+    // Idle watchdog. The heartbeat itself is the reason a wedged turn used to
+    // hang forever: `: hb` keeps bytes flowing, so no proxy idles the socket
+    // out, the client's fetch never rejects, and the browser waits with no
+    // ceiling. Measured: 39 dangling turns since May, median 11 minutes before
+    // the user gave up and retyped.
+    //
+    // So the same timer that causes the symptom now bounds it. Deliberately
+    // measured from the last SEND, not the last upstream event — a turn that
+    // is still emitting text or tool chips is making progress even if the
+    // upstream iterator is between events. TURN_IDLE_MS sits above any
+    // realistic thinking/tool gap and below undici's ~5min body timeout, so
+    // the user gets a real explanation instead of a silent socket death.
+    if (Date.now() - _lastProgressAt > TURN_IDLE_MS) {
+      // Belt-and-braces: an uncaught throw inside a timer callback takes the
+      // whole process down. That already happened once in this file (see the
+      // sessionId TDZ note above) and put Railway into a deploy-restart loop.
+      try {
+        console.warn('[v2-stream] idle watchdog fired on', sessionId,
+          '— no progress for', Math.round((Date.now() - _lastProgressAt) / 1000) + 's; ending turn');
+        send({ error: 'This turn stopped responding and was ended after '
+          + Math.round(TURN_IDLE_MS / 60000) + ' minutes of silence. Nothing was saved. Please try again.' });
+        endWithDone();
+      } catch (e) {
+        try { clearHeartbeat(); } catch (_) {}
+      }
+      return;
+    }
+
     try { res.write(': hb\n\n'); } catch (_) {}
   }, 15000);
   if (_hb && _hb.unref) _hb.unref();
