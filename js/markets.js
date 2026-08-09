@@ -253,7 +253,7 @@
   // preferred over renderSummaryDashboard, which would re-fire every
   // agenda/inbox/manifest fetch on the page just to update one table.
   var RERENDER = ['renderJobsMain', 'renderLeadsList', 'renderEstimatesList',
-                  'p86MarketPnlRender'];
+                  'p86MarketPnlRender', 'renderInsightsDashboard'];
   function rerenderSurfaces() {
     RERENDER.forEach(function (fn) {
       try { if (typeof window[fn] === 'function') window[fn](); } catch (e) {
