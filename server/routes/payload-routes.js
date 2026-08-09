@@ -527,6 +527,26 @@ function isHighRiskPayload(payload) {
       if (/_deletes"\s*:\s*\[\s*[^\]\s]/.test(s)) return true;        // non-empty line_deletes / section_deletes / ...
       if (/"(delete|remove)_[a-z_]*"\s*:\s*(\[\s*[^\]\s]|true)/.test(s)) return true;
       if (/"send_email"|"outbound"|"mail_send"/.test(s)) return true; // future outbound kinds
+
+      // Lifecycle transitions on a money-bearing record are NOT ordinary
+      // field edits. "sold" puts an estimate in the pipeline, "paid" closes
+      // AR, "complete" moves a job — each has downstream money and metric
+      // effects the user should see before it lands.
+      //
+      // Live 2026-08-09: Scribe had no estimate→job conversion tool, so it
+      // improvised — a payload titled "Convert Estimate … to Job" whose only
+      // op was {status:'sold'}, with the rationale "attempting to drive job
+      // creation by updating estimate status". It AUTO-APPLIED, because a
+      // field update looked harmless here. Result: an estimate marked sold
+      // with no job behind it, quietly inflating pipeline numbers.
+      //
+      // Scoped to money-bearing entities so personal to-dos / reminders /
+      // calendar items keep their card-free flow.
+      if (/^(estimate|job|invoice|lead|purchase_order|change_order|bill|pay_app|payapp)$/
+            .test(String(t.entity_type || '')) &&
+          /"(status|stage|state)"\s*:/.test(s)) {
+        return true;
+      }
     }
     return false;
   } catch (_) {
