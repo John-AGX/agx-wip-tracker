@@ -64,6 +64,26 @@ function normMapPins(obj) {
   return out;
 }
 
+// Job-numbering registry — [{key,label,prefix,pad,next}]. The org's job
+// numbers auto-assign from this (type → prefix → stored counter). Prefix is
+// forced to [A-Z] (safe to embed in the claim endpoint's regex), unique per
+// org; pad 1–8 (John: 4); next ≥ 1. Malformed/duplicate-prefix entries drop.
+function normJobTypes(arr) {
+  if (!Array.isArray(arr)) return [];
+  var seen = {};
+  return arr.slice(0, 24).map(function (t) {
+    if (!t || typeof t !== 'object') return null;
+    var prefix = String(t.prefix == null ? '' : t.prefix).trim().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4);
+    if (!prefix || seen[prefix]) return null;
+    seen[prefix] = true;
+    var label = String(t.label == null ? '' : t.label).trim().slice(0, 40) || prefix;
+    var key = String(t.key == null ? '' : t.key).trim().toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 32) || prefix.toLowerCase();
+    var pad = Math.max(1, Math.min(8, parseInt(t.pad, 10) || 4));
+    var next = Math.max(1, parseInt(t.next, 10) || 1);
+    return { key: key, label: label, prefix: prefix, pad: pad, next: next };
+  }).filter(Boolean);
+}
+
 function callerOrgId(req) {
   const oid = req.user && req.user.organization_id;
   return oid ? Number(oid) : null;
@@ -503,6 +523,7 @@ router.get('/branding', requireAuth, async (req, res) => {
         accent_color: typeof b.accent_color === 'string' ? b.accent_color : '',
         footer_address: typeof b.footer_address === 'string' ? b.footer_address : '',
         map_pins: normMapPins(b.map_pins),
+        job_types: normJobTypes(b.job_types),
       },
     });
   } catch (e) {
@@ -535,6 +556,8 @@ router.put('/branding', requireAuth, requireOrg, requireCapability('ROLES_MANAGE
     if (typeof body.accent_color === 'string' && /^#[0-9a-f]{3,8}$/i.test(body.accent_color)) b.accent_color = body.accent_color;
     if (typeof body.footer_address === 'string') b.footer_address = body.footer_address.slice(0, 500);
     if (body.map_pins && typeof body.map_pins === 'object') b.map_pins = normMapPins(body.map_pins);
+    // Job-numbering registry (auto-assign source of truth). Admin write only.
+    if (Array.isArray(body.job_types)) b.job_types = normJobTypes(body.job_types);
     // Keep the primary logo_url consistent with the library so the titleblock
     // + email (which read logo_url) always resolve to a real logo.
     if (Array.isArray(b.logos) && b.logos.length) {
@@ -546,6 +569,57 @@ router.put('/branding', requireAuth, requireOrg, requireCapability('ROLES_MANAGE
   } catch (e) {
     console.error('PUT /api/org/branding error:', e);
     res.status(500).json({ error: 'Server error', detail: e.message });
+  }
+});
+
+// POST /api/org/next-job-number — atomically claim the next job number for a
+// job type. ANY authenticated org user (PMs create jobs, not just admins). The
+// stored counter in branding.job_types is the source of truth; `SELECT … FOR
+// UPDATE` serializes concurrent claims so two creates can never collide. Body:
+// { key } or { prefix }. Also floors `next` above the highest EXISTING job
+// number for that prefix, so a fresh registry (or any hand-typed number)
+// self-seeds instead of re-issuing a taken number.
+router.post('/next-job-number', requireAuth, requireOrg, async (req, res) => {
+  const orgId = callerOrgId(req);
+  if (!orgId) return res.status(403).json({ error: 'Caller has no organization' });
+  const body = req.body || {};
+  const wantKey = String(body.key || '').trim().toLowerCase();
+  const wantPrefix = String(body.prefix || '').trim().toUpperCase().replace(/[^A-Z]/g, '');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const cur = (await client.query('SELECT branding FROM organizations WHERE id = $1 FOR UPDATE', [orgId])).rows[0];
+    if (!cur) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Organization not found' }); }
+    const b = (cur.branding && typeof cur.branding === 'object') ? cur.branding : {};
+    const types = normJobTypes(b.job_types);
+    let idx = wantKey ? types.findIndex(function (t) { return t.key === wantKey; }) : -1;
+    if (idx < 0 && wantPrefix) idx = types.findIndex(function (t) { return t.prefix === wantPrefix; });
+    if (idx < 0) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'Unknown job type' }); }
+    const t = types[idx];
+    // Highest existing number for this prefix (org-scoped). Prefix is [A-Z]-only
+    // so the regex params are safe.
+    const maxRow = await client.query(
+      "SELECT MAX((substring(j.data->>'jobNumber' from $2))::int) AS m " +
+      "  FROM jobs j JOIN users u ON u.id = j.owner_id " +
+      " WHERE u.organization_id = $1 AND j.data->>'jobNumber' ~ $3",
+      [orgId, '^' + t.prefix + '([0-9]+)$', '^' + t.prefix + '[0-9]+$']
+    );
+    const maxExisting = Number((maxRow.rows[0] && maxRow.rows[0].m) || 0);
+    const n = Math.max(t.next, maxExisting + 1);
+    let numStr = String(n);
+    while (numStr.length < t.pad) numStr = '0' + numStr;
+    const jobNumber = t.prefix + numStr;
+    types[idx] = Object.assign({}, t, { next: n + 1 });
+    const nb = Object.assign({}, b, { job_types: types });
+    await client.query('UPDATE organizations SET branding = $2::jsonb, updated_at = NOW() WHERE id = $1', [orgId, JSON.stringify(nb)]);
+    await client.query('COMMIT');
+    res.json({ ok: true, jobNumber: jobNumber, key: t.key, prefix: t.prefix, label: t.label, next: n + 1 });
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    console.error('POST /api/org/next-job-number error:', e);
+    res.status(500).json({ error: 'Server error', detail: e.message });
+  } finally {
+    client.release();
   }
 });
 

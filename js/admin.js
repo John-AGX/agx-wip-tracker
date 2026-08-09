@@ -1681,6 +1681,8 @@ function p86Ask(message, opts) {
   // leave those fields empty. Stored on organizations.branding JSONB.
   var _orgBrandingOrgId = null;
   var _orgBrandingSaveTimer = null;
+  var _orgJobTypes = [];         // job-numbering registry [{key,label,prefix,pad,next}]
+  var _orgJobTypesFresh = false; // true when seeded from jobs (auto-save once)
   var _orgLogos = [];        // [{url,label}] logo library
   var _orgPrimary = '';      // primary logo url (used by titleblock + email)
   var _orgLight = '';        // logo url shown in LIGHT-mode app UI ('' = use primary)
@@ -1710,6 +1712,16 @@ function p86Ask(message, opts) {
     // Per-mode logo picks — keep only if still present in the library.
     _orgLight = (b.logo_light_url && _orgLogos.some(function (l) { return l.url === b.logo_light_url; })) ? b.logo_light_url : '';
     _orgDark  = (b.logo_dark_url  && _orgLogos.some(function (l) { return l.url === b.logo_dark_url;  })) ? b.logo_dark_url  : '';
+    // Job-numbering registry — use the saved one, else seed from existing jobs
+    // and flag it fresh so we persist the seed once (auto-assign then works
+    // without the admin having to touch anything).
+    _orgJobTypesFresh = false;
+    if (Array.isArray(b.job_types) && b.job_types.length) {
+      _orgJobTypes = b.job_types.map(function (t) { return { key: t.key || '', label: t.label || '', prefix: t.prefix || '', pad: t.pad || 4, next: t.next || 1 }; });
+    } else {
+      _orgJobTypes = seedJobTypesFromJobs();
+      _orgJobTypesFresh = true;
+    }
     var primary = b.primary_color || '#4f8cff';
     var accent  = b.accent_color  || '#4f8cff';
     var footer  = b.footer_address || '';
@@ -1750,6 +1762,12 @@ function p86Ask(message, opts) {
             '<input type="text" id="org-brand-accent-text" value="' + escapeAttr(accent) + '" maxlength="9" style="flex:1;background:var(--input-bg,#141419);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:6px 8px;font-size:12px;font-family:monospace;" />' +
           '</div>' +
           '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;">Used for button blocks when no per-block color is set.</div>' +
+        '</div>' +
+        '<div style="grid-column:1 / -1;border-top:1px solid var(--border,#2a2a32);padding-top:12px;margin-top:2px;">' +
+          '<label style="font-size:11px;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;display:block;margin-bottom:2px;">Job Numbering</label>' +
+          '<div style="font-size:10px;color:var(--text-dim,#888);margin-bottom:10px;">New jobs auto-assign the next number for their type &mdash; <strong>Prefix</strong> + zero-padded <strong>Next&nbsp;#</strong>. Existing jobs keep their numbers; &ldquo;Next&nbsp;#&rdquo; is seeded from your highest and advances on each new job.</div>' +
+          '<div id="org-jobtypes-list" style="overflow-x:auto;"></div>' +
+          '<button type="button" id="org-jobtypes-add" class="ee-btn secondary" style="font-size:11px;margin-top:8px;">+ Add job type</button>' +
         '</div>' +
       '</div>';
 
@@ -1814,6 +1832,16 @@ function p86Ask(message, opts) {
       addUrlInp.addEventListener('keydown', function(e) { if (e.key === 'Enter') { e.preventDefault(); doAdd(); } });
     }
     renderLogoList();
+
+    // Job Numbering — render the editable registry + wire "Add job type".
+    renderJobTypeList();
+    var jtAdd = document.getElementById('org-jobtypes-add');
+    if (jtAdd) jtAdd.addEventListener('click', function () {
+      _orgJobTypes.push({ key: 'type' + (_orgJobTypes.length + 1), label: '', prefix: '', pad: 4, next: 1 });
+      renderJobTypeList(); scheduleSaveOrgBranding();
+    });
+    // Persist a freshly-seeded registry once so the claim endpoint has counters.
+    if (_orgJobTypesFresh) { _orgJobTypesFresh = false; scheduleSaveOrgBranding(); }
   }
 
   // Render the logo-library cards from _orgLogos / _orgPrimary into the
@@ -1847,6 +1875,69 @@ function p86Ask(message, opts) {
     host.querySelectorAll('[data-logo-dark]').forEach(function(cb) { cb.addEventListener('change', function() { var i = +cb.getAttribute('data-logo-dark'); _orgDark = (cb.checked && _orgLogos[i]) ? _orgLogos[i].url : ''; renderLogoList(); scheduleSaveOrgBranding(); }); });
   }
 
+  // ── Job Numbering registry (org settings) ─────────────────────────────
+  function _jtPad(n, pad) {
+    var s = String(Math.max(1, parseInt(n, 10) || 1));
+    pad = Math.max(1, Math.min(8, parseInt(pad, 10) || 4));
+    while (s.length < pad) s = '0' + s;
+    return s;
+  }
+  // Default 3 types (S/RV/WO), each seeded so "Next #" continues past the
+  // highest EXISTING job number for that prefix — so a first-time setup keeps
+  // the sequence going instead of restarting at 1.
+  function seedJobTypesFromJobs() {
+    var defs = [
+      { key: 'service', label: 'Service', prefix: 'S', pad: 4 },
+      { key: 'renovation', label: 'Renovation', prefix: 'RV', pad: 4 },
+      { key: 'work_order', label: 'Work Order', prefix: 'WO', pad: 4 }
+    ];
+    var jobs = (window.appData && window.appData.jobs) || [];
+    return defs.map(function (d) {
+      var re = new RegExp('^' + d.prefix + '(\\d+)$', 'i');
+      var max = 0;
+      jobs.forEach(function (j) {
+        var m = String((j && j.jobNumber) || '').trim().match(re);
+        if (m) { var n = parseInt(m[1], 10); if (isFinite(n) && n > max) max = n; }
+      });
+      return { key: d.key, label: d.label, prefix: d.prefix, pad: d.pad, next: max + 1 };
+    });
+  }
+  function renderJobTypeList() {
+    var host = document.getElementById('org-jobtypes-list'); if (!host) return;
+    var inp = 'background:var(--input-bg,#141419);color:var(--text);border:1px solid var(--border,#333);border-radius:5px;padding:5px 7px;font-size:12px;box-sizing:border-box;';
+    var rows = _orgJobTypes.map(function (t, i) {
+      var preview = String(t.prefix || '') + _jtPad(t.next, t.pad);
+      return '<tr>' +
+        '<td style="padding:3px 5px;"><input type="text" data-jt-label="' + i + '" value="' + escapeAttr(t.label || '') + '" placeholder="Renovation" style="' + inp + 'width:150px;" /></td>' +
+        '<td style="padding:3px 5px;"><input type="text" data-jt-prefix="' + i + '" value="' + escapeAttr(t.prefix || '') + '" placeholder="RV" maxlength="4" style="' + inp + 'width:60px;text-transform:uppercase;" /></td>' +
+        '<td style="padding:3px 5px;"><input type="number" data-jt-pad="' + i + '" value="' + (t.pad || 4) + '" min="1" max="8" style="' + inp + 'width:56px;" /></td>' +
+        '<td style="padding:3px 5px;"><input type="number" data-jt-next="' + i + '" value="' + (t.next || 1) + '" min="1" style="' + inp + 'width:82px;" /></td>' +
+        '<td style="padding:3px 5px;color:var(--text-dim,#888);white-space:nowrap;">&rarr; <strong style="color:var(--text,#ddd);">' + escapeHTML(preview) + '</strong></td>' +
+        '<td style="padding:3px 5px;"><button type="button" data-jt-remove="' + i + '" title="Remove" style="background:transparent;border:0;color:#f87171;cursor:pointer;font-size:13px;">&times;</button></td>' +
+      '</tr>';
+    }).join('');
+    host.innerHTML = '<table style="border-collapse:collapse;">' +
+      '<thead><tr style="text-align:left;font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">' +
+        '<th style="padding:2px 5px;font-weight:600;">Type</th><th style="padding:2px 5px;font-weight:600;">Prefix</th><th style="padding:2px 5px;font-weight:600;">Digits</th><th style="padding:2px 5px;font-weight:600;">Next #</th><th style="padding:2px 5px;font-weight:600;">Next job</th><th></th>' +
+      '</tr></thead><tbody>' + (rows || '<tr><td colspan="6" style="padding:8px;color:var(--text-dim,#888);font-size:12px;">No types yet — add one.</td></tr>') + '</tbody></table>';
+    // 'input' updates the model (no re-render → keeps focus); 'change' (blur)
+    // re-renders to refresh the "Next job" preview.
+    host.querySelectorAll('[data-jt-label]').forEach(function (el) { el.addEventListener('input', function () { var i = +el.getAttribute('data-jt-label'); if (_orgJobTypes[i]) { _orgJobTypes[i].label = el.value; scheduleSaveOrgBranding(); } }); });
+    host.querySelectorAll('[data-jt-prefix]').forEach(function (el) {
+      el.addEventListener('input', function () { var i = +el.getAttribute('data-jt-prefix'); if (_orgJobTypes[i]) { _orgJobTypes[i].prefix = el.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4); scheduleSaveOrgBranding(); } });
+      el.addEventListener('change', renderJobTypeList);
+    });
+    host.querySelectorAll('[data-jt-pad]').forEach(function (el) {
+      el.addEventListener('input', function () { var i = +el.getAttribute('data-jt-pad'); if (_orgJobTypes[i]) { _orgJobTypes[i].pad = Math.max(1, Math.min(8, parseInt(el.value, 10) || 4)); scheduleSaveOrgBranding(); } });
+      el.addEventListener('change', renderJobTypeList);
+    });
+    host.querySelectorAll('[data-jt-next]').forEach(function (el) {
+      el.addEventListener('input', function () { var i = +el.getAttribute('data-jt-next'); if (_orgJobTypes[i]) { _orgJobTypes[i].next = Math.max(1, parseInt(el.value, 10) || 1); scheduleSaveOrgBranding(); } });
+      el.addEventListener('change', renderJobTypeList);
+    });
+    host.querySelectorAll('[data-jt-remove]').forEach(function (el) { el.addEventListener('click', function () { var i = +el.getAttribute('data-jt-remove'); _orgJobTypes.splice(i, 1); renderJobTypeList(); scheduleSaveOrgBranding(); }); });
+  }
+
   function currentOrgBrandingFromInputs() {
     return {
       logo_url: _orgPrimary || '',
@@ -1856,7 +1947,8 @@ function p86Ask(message, opts) {
       logos: _orgLogos.map(function(l) { return { url: l.url, label: l.label || '' }; }),
       primary_color: (document.getElementById('org-brand-primary-text') || {}).value || '',
       accent_color: (document.getElementById('org-brand-accent-text') || {}).value || '',
-      footer_address: (document.getElementById('org-brand-footer') || {}).value || ''
+      footer_address: (document.getElementById('org-brand-footer') || {}).value || '',
+      job_types: (_orgJobTypes || []).map(function (t) { return { key: t.key || '', label: t.label || '', prefix: t.prefix || '', pad: t.pad || 4, next: t.next || 1 }; })
     };
   }
 

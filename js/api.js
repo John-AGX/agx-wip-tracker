@@ -520,7 +520,10 @@
   // is the System Map summary feed.
   var org = {
     branding: function() { return get('/api/org/branding'); },
-    manifest: function() { return get('/api/org/manifest'); }
+    manifest: function() { return get('/api/org/manifest'); },
+    // Atomically claim the next job number for a job type (by key or prefix).
+    // Server-side counter is the source of truth; returns { jobNumber, ... }.
+    nextJobNumber: function(payload) { return post('/api/org/next-job-number', payload); }
   };
 
   // Per-org folder templates. Customizes the default folder set shown
