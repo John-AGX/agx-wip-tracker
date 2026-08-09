@@ -626,11 +626,23 @@
         try { history.pushState({ route: route }, '', path); } catch (e) { /* noop */ }
         applyRoute(route);
       },
-      // The set of valid first path segments. Exposed so other modules
-      // (the AI chat's in-app link renderer) can validate a destination
-      // against the SAME list the router enforces, instead of keeping a
-      // second copy that drifts.
+      // The top-level TAB ids. Note this is NOT the set of valid URL
+      // roots: parsePath also accepts pseudo-tops (/clients, /subs,
+      // /leads, /assemblies, /files) and legacy /wip via alias branches
+      // that return before the KNOWN_TOP_TABS check. Use canGo() to ask
+      // "is this path reachable?" — testing against this list alone
+      // wrongly rejects every alias.
       tops: function () { return KNOWN_TOP_TABS.slice(); },
+      // Would go(path) succeed? Runs the identical parse WITHOUT
+      // navigating, so a caller can validate a destination (e.g. before
+      // rendering it as a link) with no second copy of the route table
+      // to drift out of sync.
+      canGo: function (path) {
+        var clean = String(path || '').split('?')[0].split('#')[0];
+        if (clean.charAt(0) !== '/') return false;
+        var r = parsePath(clean);
+        return !!(r && r.top);
+      },
       // Navigate to a same-origin PATH string (as opposed to navigate(),
       // which takes an already-built route object).
       //

@@ -924,10 +924,14 @@ function p86Ask(message, opts) {
   function _inAppPathIsLive(path) {
     var parts = String(path || '').split('/').filter(Boolean);
     if (!parts.length) return false;
-    // (b) top-level tab must be one the router actually knows.
-    var tops = (window.p86Router && typeof window.p86Router.tops === 'function')
-      ? window.p86Router.tops() : null;
-    if (tops && tops.indexOf(parts[0]) === -1) return false;
+    // (b) Ask the ROUTER whether it can reach this path, rather than
+    // testing the first segment against a list here. parsePath accepts
+    // pseudo-tops — /clients, /subs, /leads, /assemblies, /files — via
+    // alias branches that return BEFORE its KNOWN_TOP_TABS check, so
+    // matching on that list alone rejected every one of them and
+    // silently downgraded valid links to plain text.
+    if (!(window.p86Router && typeof window.p86Router.canGo === 'function'
+          && window.p86Router.canGo(path))) return false;
     // (c) entity paths must resolve. entityDisplayName is the existing
     // name resolver and returns null on a miss — reuse it as the
     // existence check so there is one lookup, not two that can disagree.
@@ -937,10 +941,10 @@ function p86Ask(message, opts) {
     if (parts[0] === 'estimates' && parts[1] === 'edit' && parts[2]) {
       return !!entityDisplayName('estimate', parts[2]);
     }
-    if (parts[0] === 'leads' && parts[1] && parts[1] !== 'map' && parts[1] !== 'list') {
-      return !!entityDisplayName('lead', parts[1]);
-    }
-    return true;   // a plain page — the router's allowlist is the only gate
+    if (parts[0] === 'leads'   && parts[1]) return !!entityDisplayName('lead', parts[1]);
+    if (parts[0] === 'clients' && parts[1]) return !!entityDisplayName('client', parts[1]);
+    if (parts[0] === 'subs'    && parts[1]) return !!entityDisplayName('sub', parts[1]);
+    return true;   // a plain page — canGo above is the only gate needed
   }
 
   // In-app link clicks: route through the SPA instead of loading a new
