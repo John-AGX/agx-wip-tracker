@@ -11887,6 +11887,49 @@ async function execEmitPayloadFile(tu, ctx) {
       };
     }
 
+    // ── Duplicate-emit guard ────────────────────────────────────────
+    // Live test 2026-08-09: one "create a lead" request produced TWO
+    // payload rows 4.5s apart (pl_…i40livjy / pl_…2dkl5qg0), yielding
+    // 2 clients + 2 leads. The second row was CREATED 1.5s BEFORE the
+    // first finished applying, so this was never a double-apply — the
+    // status='applying' + claimed_at guard did its job. That guard
+    // protects ONE payload from applying twice; it cannot see that the
+    // agent emitted the same change twice. This is that missing layer.
+    //
+    // Same org + user + byte-identical file_content inside a short
+    // window is a re-emit (stream reopen, retried tool call), not a
+    // second intent. Reuse the original row instead of writing another.
+    // Deliberately NOT scoped by session_id: Scribe may emit under a
+    // different session than the 86 turn that asked for it, and the
+    // narrower key would miss exactly the case we're fixing.
+    try {
+      const dup = await pool.query(
+        `SELECT id, status FROM payloads
+          WHERE organization_id = $1
+            AND user_id IS NOT DISTINCT FROM $2
+            AND file_content = $3::jsonb
+            AND created_at > NOW() - INTERVAL '90 seconds'
+          ORDER BY created_at DESC
+          LIMIT 1`,
+        [orgId, ctx.userId || null, JSON.stringify(fileContent)]
+      );
+      if (dup.rows.length) {
+        const prior = dup.rows[0];
+        console.warn('[execEmitPayloadFile] duplicate emit suppressed — reusing ' +
+          prior.id + ' (status ' + prior.status + ') for user ' + (ctx.userId || '?'));
+        // No meta → no second card. The first emit already rendered one.
+        return {
+          tier: 'auto',
+          summary: 'This exact change was already submitted moments ago as ' +
+            prior.id + ' (status: ' + prior.status + '). Nothing new was created. ' +
+            'Do NOT emit it again — tell the user it is already in flight.',
+        };
+      }
+    } catch (e) {
+      // A failed dedupe probe must never block a legitimate write.
+      console.warn('[execEmitPayloadFile] dedupe probe failed (continuing):', e.message);
+    }
+
     await pool.query(
       `INSERT INTO payloads
          (id, organization_id, user_id, session_id, source, emitting_agent_key,
