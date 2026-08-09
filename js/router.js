@@ -625,6 +625,27 @@
         var path = serializeRoute(route);
         try { history.pushState({ route: route }, '', path); } catch (e) { /* noop */ }
         applyRoute(route);
+      },
+      // The set of valid first path segments. Exposed so other modules
+      // (the AI chat's in-app link renderer) can validate a destination
+      // against the SAME list the router enforces, instead of keeping a
+      // second copy that drifts.
+      tops: function () { return KNOWN_TOP_TABS.slice(); },
+      // Navigate to a same-origin PATH string (as opposed to navigate(),
+      // which takes an already-built route object).
+      //
+      // parsePath IS the gate: it returns { top: null } for anything
+      // outside KNOWN_TOP_TABS, so an unrecognised or made-up path can
+      // never move the user. Returns true only when it actually
+      // navigated, so callers can fall back rather than appear to work.
+      go: function (path) {
+        var clean = String(path || '').split('?')[0].split('#')[0];
+        if (clean.charAt(0) !== '/') return false;   // same-origin, absolute-path only
+        var route = parsePath(clean);
+        if (!route || !route.top) return false;
+        try { history.pushState({ route: route }, '', clean); } catch (e) { /* noop */ }
+        applyRoute(route);
+        return true;
       }
     };
 

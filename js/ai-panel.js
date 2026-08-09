@@ -917,6 +917,51 @@ function p86Ask(message, opts) {
   // Lightweight markdown — bold, italic, inline code, lists, paragraphs.
   // Safer than pulling in marked.js for this scale; trades feature breadth
   // for zero dependencies.
+  // Is this in-app path worth rendering as a link? See the gates described
+  // at the call site in renderMarkdown. Returns false for anything the
+  // router would refuse OR any entity path whose record doesn't exist —
+  // the caller then emits plain text, so a dead link is never shown.
+  function _inAppPathIsLive(path) {
+    var parts = String(path || '').split('/').filter(Boolean);
+    if (!parts.length) return false;
+    // (b) top-level tab must be one the router actually knows.
+    var tops = (window.p86Router && typeof window.p86Router.tops === 'function')
+      ? window.p86Router.tops() : null;
+    if (tops && tops.indexOf(parts[0]) === -1) return false;
+    // (c) entity paths must resolve. entityDisplayName is the existing
+    // name resolver and returns null on a miss — reuse it as the
+    // existence check so there is one lookup, not two that can disagree.
+    if (parts[0] === 'jobs' && parts[1] && parts[1] !== 'archived') {
+      return !!entityDisplayName('job', parts[1]);
+    }
+    if (parts[0] === 'estimates' && parts[1] === 'edit' && parts[2]) {
+      return !!entityDisplayName('estimate', parts[2]);
+    }
+    if (parts[0] === 'leads' && parts[1] && parts[1] !== 'map' && parts[1] !== 'list') {
+      return !!entityDisplayName('lead', parts[1]);
+    }
+    return true;   // a plain page — the router's allowlist is the only gate
+  }
+
+  // In-app link clicks: route through the SPA instead of loading a new
+  // document. Delegated at document level and registered once, because the
+  // streaming renderer replaces the message HTML on every token — anchors
+  // are rebuilt constantly, so a per-anchor listener would not survive.
+  // p86Router.go re-validates the path and returns false if it refuses, in
+  // which case we leave the click inert rather than doing something wrong.
+  if (!window.__p86NavLinksBound) {
+    window.__p86NavLinksBound = true;
+    document.addEventListener('click', function (e) {
+      var a = e.target && e.target.closest && e.target.closest('a[data-p86-nav]');
+      if (!a) return;
+      e.preventDefault();
+      var path = a.getAttribute('data-p86-nav');
+      if (window.p86Router && typeof window.p86Router.go === 'function') {
+        window.p86Router.go(path);
+      }
+    });
+  }
+
   function renderMarkdown(text) {
     if (!text) return '';
     var html = escapeHTMLLocal(text);
@@ -1007,6 +1052,26 @@ function p86Ask(message, opts) {
     // a freshly-built href="…". Placeholders are restored at the end.
     var _linkStash = [];
     function _stash(anchorHtml) { var i = _linkStash.length; _linkStash.push(anchorHtml); return '\u0000L' + i + '\u0000'; }
+    // 0) IN-APP links [text](/jobs/j5) — same-origin absolute paths. Runs
+    //    BEFORE the http(s) pass so these never fall through to it, which
+    //    would open a new tab and drop SPA state.
+    //
+    //    Three gates, cheapest first:
+    //      a. Character class — letters, digits and - . _ ~ / only.
+    //         Deliberately narrow: no quote can break out of the href it
+    //         is interpolated into, and with no ':' a scheme
+    //         (javascript:, data:) cannot appear at all.
+    //      b. Known top-level tab, read from p86Router.tops() — the
+    //         router's own allowlist, not a second copy that can drift.
+    //      c. For ENTITY paths, the record must exist. entityDisplayName
+    //         returns null on a miss, so a hallucinated id renders as
+    //         plain text rather than a link into nothing. That check is
+    //         what makes it safe to let a model emit these at all.
+    rendered = rendered.replace(/\[([^\]]+)\]\((\/[A-Za-z0-9][A-Za-z0-9\-._~\/]*)\)/g, function(_, text, path) {
+      if (!_inAppPathIsLive(path)) return text;   // dead target → plain text
+      return _stash('<a href="' + path + '" data-p86-nav="' + path + '" ' +
+        'style="color:#4f8cff;text-decoration:underline;cursor:pointer;">' + text + '</a>');
+    });
     // 1) Markdown links [text](url) — http(s) targets only (no javascript:).
     rendered = rendered.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, function(_, text, url) {
       return _stash('<a href="' + url + '" target="_blank" rel="noopener" style="color:#4f8cff;text-decoration:underline;">' + text + '</a>');
