@@ -3809,17 +3809,9 @@ function p86Ask(message, opts) {
         ? '<p style="margin:0 0 12px 0;color:var(--text-dim,#888);font-size:12px;">' + activeTab.desc + '</p>'
         : '';
       pane.innerHTML = tabsHTML + emailHint +
-        // Branding card — logo, primary/accent colors, footer address.
-        '<div class="card" style="padding:16px;margin-bottom:14px;">' +
-          '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px;gap:10px;">' +
-            '<div>' +
-              '<h3 style="margin:0 0 4px 0;">&#x1F3A8; Branding kit</h3>' +
-              '<p style="margin:0;color:var(--text-dim,#888);font-size:12px;">Org-wide defaults applied to every outbound email. Individual blocks override these per-template, but missing fields fall back to your branding.</p>' +
-            '</div>' +
-            '<span id="org-branding-status" style="font-size:11px;color:var(--text-dim,#888);"></span>' +
-          '</div>' +
-          '<div id="org-branding-form" style="font-size:13px;color:var(--text-dim,#888);">Loading…</div>' +
-        '</div>' +
+        // Branding (logos / colors / footer) moved to Organization → Identity;
+        // it applies to emails + titleblocks alike. Just a pointer here now.
+        '<div class="card" style="padding:14px 16px;margin-bottom:14px;font-size:12px;color:var(--text-dim,#888);">&#x1F3A8; Logos, colors and the footer line now live in <strong>Organization &rarr; Identity</strong> &mdash; they still apply to every outbound email.</div>' +
         // Events card — toggles + BCC for the 6 org-scope events.
         '<div class="card" style="padding:16px;margin-bottom:14px;">' +
           '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px;gap:10px;">' +
@@ -3844,7 +3836,6 @@ function p86Ask(message, opts) {
       try { sessionStorage.setItem('agx_email_view', 'templates_org'); } catch (e) {}
       renderAdminEmailTemplates();
       loadOrgScopeEvents();
-      loadOrgBranding();
       var refreshBtn = document.getElementById('org-email-events-refresh');
       if (refreshBtn) refreshBtn.addEventListener('click', loadOrgScopeEvents);
       return;
@@ -5019,8 +5010,6 @@ function p86Ask(message, opts) {
     { key: 'identity', label: '\u{1FAAA} Identity',     desc: 'Company name + the prose composed into 86\'s system prompt. After saving, click Sync managed agent to push to Anthropic.' },
     { key: 'jobnum',   label: '\u{1F522} Job Numbering', desc: 'Auto-assign job numbers by type — Prefix + a zero-padded counter. New jobs claim the next number for their type on creation; existing job numbers are never changed.' },
     { key: 'kb',       label: '\u{1F4DA} Company KB',   desc: 'Org-wide reference files every user can read; only admins upload. 86 searches these via search_org_kb.' },
-    { key: 'packs',    label: '\u{1F9E0} Section Playbooks',  desc: 'On-demand instruction blocks — the local source copies. Sync uploads each one to Anthropic as a native Skill, which the model loads by description when it maps to the work. (Same content as the "Skills" tab inside Admin → Agents.)' },
-    { key: 'refs',     label: '\u{1F4D1} Reference Links', desc: 'Live SharePoint / Google Sheets URLs the company exposes to 86 (Job Numbers, Short Names, WIP report). Each sheet refreshes every 15 min. Lookup-mode is the default; flip a sheet to Inline if 86 should always have its rows in context.' },
     { key: 'mcp',      label: '\u{1F50C} MCP Connectors', desc: 'External tool reach via Model Context Protocol (Gmail, Calendar, QuickBooks, custom). Registers on next sync.' },
     // Phase F additions — features that were previously top-level admin
     // tabs but back per-org data (the audit found materials, templates,
@@ -5138,8 +5127,6 @@ function p86Ask(message, opts) {
       setTimeout(renderJobNumbering, 0);
     }
     else if (_orgActiveTab === 'kb')   bodyHTML = renderOrgKBTabHTML();
-    else if (_orgActiveTab === 'packs') bodyHTML = renderOrgPacksTabHTML();
-    else if (_orgActiveTab === 'refs') bodyHTML = renderOrgRefsTabHTML();
     else if (_orgActiveTab === 'mcp')  bodyHTML = renderOrgMcpTabHTML();
     else if (_orgActiveTab === 'tags') {
       // Tag catalog renders into a host div, then fetches+paints
@@ -5266,6 +5253,17 @@ function p86Ask(message, opts) {
       +   '<div style="margin-top:10px;font-size:11px;color:var(--text-dim,#888);">'
       +     'Looking to audit stale Anthropic-side agents (pre-unification leftovers)? That cross-tenant tool now lives in Admin → System → Anthropic Resources.'
       +   '</div>'
+      + '</fieldset>'
+      // Branding — logos / colors / footer. Moved here from the buried
+      // Templates→Email tab so all of company identity lives in one place.
+      // #org-branding-form is populated by loadOrgBranding() (attachOrgHandlers).
+      + '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:14px;margin-top:14px;">'
+      +   '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Branding</legend>'
+      +   '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;">'
+      +     '<div style="font-size:11px;color:var(--text-dim,#888);">Logos, primary / accent colors, and the footer / company line — used on titleblocks + emails.</div>'
+      +     '<span id="org-branding-status" style="font-size:11px;color:var(--text-dim,#888);"></span>'
+      +   '</div>'
+      +   '<div id="org-branding-form" style="font-size:13px;color:var(--text-dim,#888);">Loading…</div>'
       + '</fieldset>';
   }
 
@@ -6231,17 +6229,15 @@ function p86Ask(message, opts) {
 
   function attachOrgHandlers() {
     // Tab-aware: each section's wiring only fires when its DOM is mounted.
+    if (_orgActiveTab === 'identity') {
+      loadOrgBranding();   // populates the Branding card now merged into Identity
+    }
     if (_orgActiveTab === 'kb') {
       wireOrgKBUpload();
       refreshOrgKB();
     }
     if (_orgActiveTab === 'mcp') {
       loadOrgMcpServers();
-    }
-    if (_orgActiveTab === 'refs') {
-      // Reuse the legacy Agents-tab renderer; the underlying table is
-      // org-scoped (Phase D) so both surfaces show the same data.
-      renderReferenceLinksView('org-ref-links-host');
     }
     // Phase F nested tabs — mount existing renderers into the inline
     // pane stub from renderOrgHTML. Each render function looks for its
