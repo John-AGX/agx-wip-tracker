@@ -1712,16 +1712,6 @@ function p86Ask(message, opts) {
     // Per-mode logo picks — keep only if still present in the library.
     _orgLight = (b.logo_light_url && _orgLogos.some(function (l) { return l.url === b.logo_light_url; })) ? b.logo_light_url : '';
     _orgDark  = (b.logo_dark_url  && _orgLogos.some(function (l) { return l.url === b.logo_dark_url;  })) ? b.logo_dark_url  : '';
-    // Job-numbering registry — use the saved one, else seed from existing jobs
-    // and flag it fresh so we persist the seed once (auto-assign then works
-    // without the admin having to touch anything).
-    _orgJobTypesFresh = false;
-    if (Array.isArray(b.job_types) && b.job_types.length) {
-      _orgJobTypes = b.job_types.map(function (t) { return { key: t.key || '', label: t.label || '', prefix: t.prefix || '', pad: t.pad || 4, next: t.next || 1 }; });
-    } else {
-      _orgJobTypes = seedJobTypesFromJobs();
-      _orgJobTypesFresh = true;
-    }
     var primary = b.primary_color || '#4f8cff';
     var accent  = b.accent_color  || '#4f8cff';
     var footer  = b.footer_address || '';
@@ -1762,12 +1752,6 @@ function p86Ask(message, opts) {
             '<input type="text" id="org-brand-accent-text" value="' + escapeAttr(accent) + '" maxlength="9" style="flex:1;background:var(--input-bg,#141419);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:6px 8px;font-size:12px;font-family:monospace;" />' +
           '</div>' +
           '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;">Used for button blocks when no per-block color is set.</div>' +
-        '</div>' +
-        '<div style="grid-column:1 / -1;border-top:1px solid var(--border,#2a2a32);padding-top:12px;margin-top:2px;">' +
-          '<label style="font-size:11px;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;display:block;margin-bottom:2px;">Job Numbering</label>' +
-          '<div style="font-size:10px;color:var(--text-dim,#888);margin-bottom:10px;">New jobs auto-assign the next number for their type &mdash; <strong>Prefix</strong> + zero-padded <strong>Next&nbsp;#</strong>. Existing jobs keep their numbers; &ldquo;Next&nbsp;#&rdquo; is seeded from your highest and advances on each new job.</div>' +
-          '<div id="org-jobtypes-list" style="overflow-x:auto;"></div>' +
-          '<button type="button" id="org-jobtypes-add" class="ee-btn secondary" style="font-size:11px;margin-top:8px;">+ Add job type</button>' +
         '</div>' +
       '</div>';
 
@@ -1832,16 +1816,6 @@ function p86Ask(message, opts) {
       addUrlInp.addEventListener('keydown', function(e) { if (e.key === 'Enter') { e.preventDefault(); doAdd(); } });
     }
     renderLogoList();
-
-    // Job Numbering — render the editable registry + wire "Add job type".
-    renderJobTypeList();
-    var jtAdd = document.getElementById('org-jobtypes-add');
-    if (jtAdd) jtAdd.addEventListener('click', function () {
-      _orgJobTypes.push({ key: 'type' + (_orgJobTypes.length + 1), label: '', prefix: '', pad: 4, next: 1 });
-      renderJobTypeList(); scheduleSaveOrgBranding();
-    });
-    // Persist a freshly-seeded registry once so the claim endpoint has counters.
-    if (_orgJobTypesFresh) { _orgJobTypesFresh = false; scheduleSaveOrgBranding(); }
   }
 
   // Render the logo-library cards from _orgLogos / _orgPrimary into the
@@ -1902,6 +1876,53 @@ function p86Ask(message, opts) {
       return { key: d.key, label: d.label, prefix: d.prefix, pad: d.pad, next: max + 1 };
     });
   }
+  // Standalone Organization → Job Numbering view. Loads the org's
+  // branding.job_types, seeds from existing jobs on first setup, and renders
+  // the editable registry into #admin-org-jobnum-host. Saves ONLY job_types
+  // (a merge PUT), so it can never blank logos/colors like the full branding
+  // save would.
+  function renderJobNumbering() {
+    var host = document.getElementById('admin-org-jobnum-host');
+    if (!host) return;
+    host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;padding:14px 0;">Loading…</div>';
+    window.p86Api.get('/api/org/branding').then(function (r) {
+      var b = (r && r.branding) || {};
+      _orgJobTypesFresh = false;
+      if (Array.isArray(b.job_types) && b.job_types.length) {
+        _orgJobTypes = b.job_types.map(function (t) { return { key: t.key || '', label: t.label || '', prefix: t.prefix || '', pad: t.pad || 4, next: t.next || 1 }; });
+      } else {
+        _orgJobTypes = seedJobTypesFromJobs();
+        _orgJobTypesFresh = true;
+      }
+      host.innerHTML =
+        '<div style="font-size:12px;color:var(--text-dim,#888);margin-bottom:12px;line-height:1.55;">New jobs auto-assign the next number for their type &mdash; <strong>Prefix</strong> + a zero-padded <strong>Next&nbsp;#</strong>. Existing jobs keep their numbers; &ldquo;Next&nbsp;#&rdquo; is seeded from your highest and advances on each new job. <span id="org-jobnum-status" style="margin-left:6px;"></span></div>' +
+        '<div id="org-jobtypes-list" style="overflow-x:auto;"></div>' +
+        '<button type="button" id="org-jobtypes-add" class="ee-btn secondary" style="font-size:11px;margin-top:10px;">+ Add job type</button>';
+      renderJobTypeList();
+      var addBtn = document.getElementById('org-jobtypes-add');
+      if (addBtn) addBtn.addEventListener('click', function () {
+        _orgJobTypes.push({ key: 'type' + (_orgJobTypes.length + 1), label: '', prefix: '', pad: 4, next: 1 });
+        renderJobTypeList(); scheduleSaveJobTypes();
+      });
+      if (_orgJobTypesFresh) { _orgJobTypesFresh = false; scheduleSaveJobTypes(); }
+    }).catch(function (e) {
+      host.innerHTML = '<div style="color:#f87171;padding:14px 0;">Failed to load job numbering: ' + escapeHTML((e && e.message) || '') + '</div>';
+    });
+  }
+  var _jobTypesSaveTimer = null;
+  function scheduleSaveJobTypes() {
+    if (_jobTypesSaveTimer) clearTimeout(_jobTypesSaveTimer);
+    _jobTypesSaveTimer = setTimeout(saveJobTypes, 400);
+  }
+  function saveJobTypes() {
+    var statusEl = document.getElementById('org-jobnum-status');
+    if (statusEl) { statusEl.textContent = 'Saving…'; statusEl.style.color = 'var(--text-dim,#888)'; }
+    // Merge PUT with only job_types — leaves logos / colors / footer untouched.
+    window.p86Api.put('/api/org/branding', { job_types: (_orgJobTypes || []).map(function (t) { return { key: t.key || '', label: t.label || '', prefix: t.prefix || '', pad: t.pad || 4, next: t.next || 1 }; }) })
+      .then(function () { if (statusEl) statusEl.innerHTML = '<span style="color:#34d399;">&#x2713; Saved</span>'; })
+      .catch(function () { if (statusEl) statusEl.innerHTML = '<span style="color:#f87171;">Save failed</span>'; });
+  }
+
   function renderJobTypeList() {
     var host = document.getElementById('org-jobtypes-list'); if (!host) return;
     var inp = 'background:var(--input-bg,#141419);color:var(--text);border:1px solid var(--border,#333);border-radius:5px;padding:5px 7px;font-size:12px;box-sizing:border-box;';
@@ -1922,20 +1943,20 @@ function p86Ask(message, opts) {
       '</tr></thead><tbody>' + (rows || '<tr><td colspan="6" style="padding:8px;color:var(--text-dim,#888);font-size:12px;">No types yet — add one.</td></tr>') + '</tbody></table>';
     // 'input' updates the model (no re-render → keeps focus); 'change' (blur)
     // re-renders to refresh the "Next job" preview.
-    host.querySelectorAll('[data-jt-label]').forEach(function (el) { el.addEventListener('input', function () { var i = +el.getAttribute('data-jt-label'); if (_orgJobTypes[i]) { _orgJobTypes[i].label = el.value; scheduleSaveOrgBranding(); } }); });
+    host.querySelectorAll('[data-jt-label]').forEach(function (el) { el.addEventListener('input', function () { var i = +el.getAttribute('data-jt-label'); if (_orgJobTypes[i]) { _orgJobTypes[i].label = el.value; scheduleSaveJobTypes(); } }); });
     host.querySelectorAll('[data-jt-prefix]').forEach(function (el) {
-      el.addEventListener('input', function () { var i = +el.getAttribute('data-jt-prefix'); if (_orgJobTypes[i]) { _orgJobTypes[i].prefix = el.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4); scheduleSaveOrgBranding(); } });
+      el.addEventListener('input', function () { var i = +el.getAttribute('data-jt-prefix'); if (_orgJobTypes[i]) { _orgJobTypes[i].prefix = el.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4); scheduleSaveJobTypes(); } });
       el.addEventListener('change', renderJobTypeList);
     });
     host.querySelectorAll('[data-jt-pad]').forEach(function (el) {
-      el.addEventListener('input', function () { var i = +el.getAttribute('data-jt-pad'); if (_orgJobTypes[i]) { _orgJobTypes[i].pad = Math.max(1, Math.min(8, parseInt(el.value, 10) || 4)); scheduleSaveOrgBranding(); } });
+      el.addEventListener('input', function () { var i = +el.getAttribute('data-jt-pad'); if (_orgJobTypes[i]) { _orgJobTypes[i].pad = Math.max(1, Math.min(8, parseInt(el.value, 10) || 4)); scheduleSaveJobTypes(); } });
       el.addEventListener('change', renderJobTypeList);
     });
     host.querySelectorAll('[data-jt-next]').forEach(function (el) {
-      el.addEventListener('input', function () { var i = +el.getAttribute('data-jt-next'); if (_orgJobTypes[i]) { _orgJobTypes[i].next = Math.max(1, parseInt(el.value, 10) || 1); scheduleSaveOrgBranding(); } });
+      el.addEventListener('input', function () { var i = +el.getAttribute('data-jt-next'); if (_orgJobTypes[i]) { _orgJobTypes[i].next = Math.max(1, parseInt(el.value, 10) || 1); scheduleSaveJobTypes(); } });
       el.addEventListener('change', renderJobTypeList);
     });
-    host.querySelectorAll('[data-jt-remove]').forEach(function (el) { el.addEventListener('click', function () { var i = +el.getAttribute('data-jt-remove'); _orgJobTypes.splice(i, 1); renderJobTypeList(); scheduleSaveOrgBranding(); }); });
+    host.querySelectorAll('[data-jt-remove]').forEach(function (el) { el.addEventListener('click', function () { var i = +el.getAttribute('data-jt-remove'); _orgJobTypes.splice(i, 1); renderJobTypeList(); scheduleSaveJobTypes(); }); });
   }
 
   function currentOrgBrandingFromInputs() {
@@ -1947,8 +1968,7 @@ function p86Ask(message, opts) {
       logos: _orgLogos.map(function(l) { return { url: l.url, label: l.label || '' }; }),
       primary_color: (document.getElementById('org-brand-primary-text') || {}).value || '',
       accent_color: (document.getElementById('org-brand-accent-text') || {}).value || '',
-      footer_address: (document.getElementById('org-brand-footer') || {}).value || '',
-      job_types: (_orgJobTypes || []).map(function (t) { return { key: t.key || '', label: t.label || '', prefix: t.prefix || '', pad: t.pad || 4, next: t.next || 1 }; })
+      footer_address: (document.getElementById('org-brand-footer') || {}).value || ''
     };
   }
 
@@ -4997,6 +5017,7 @@ function p86Ask(message, opts) {
 
   var ORG_TABS = [
     { key: 'identity', label: '\u{1FAAA} Identity',     desc: 'Company name + the prose composed into 86\'s system prompt. After saving, click Sync managed agent to push to Anthropic.' },
+    { key: 'jobnum',   label: '\u{1F522} Job Numbering', desc: 'Auto-assign job numbers by type — Prefix + a zero-padded counter. New jobs claim the next number for their type on creation; existing job numbers are never changed.' },
     { key: 'kb',       label: '\u{1F4DA} Company KB',   desc: 'Org-wide reference files every user can read; only admins upload. 86 searches these via search_org_kb.' },
     { key: 'packs',    label: '\u{1F9E0} Section Playbooks',  desc: 'On-demand instruction blocks — the local source copies. Sync uploads each one to Anthropic as a native Skill, which the model loads by description when it maps to the work. (Same content as the "Skills" tab inside Admin → Agents.)' },
     { key: 'refs',     label: '\u{1F4D1} Reference Links', desc: 'Live SharePoint / Google Sheets URLs the company exposes to 86 (Job Numbers, Short Names, WIP report). Each sheet refreshes every 15 min. Lookup-mode is the default; flip a sheet to Inline if 86 should always have its rows in context.' },
@@ -5110,6 +5131,12 @@ function p86Ask(message, opts) {
 
     var bodyHTML = '';
     if (_orgActiveTab === 'identity')  bodyHTML = renderOrgIdentityHTML();
+    else if (_orgActiveTab === 'jobnum') {
+      // Job-numbering registry — fetch the org's branding.job_types + paint the
+      // editable table into a host (same async pattern as tags / map pins).
+      bodyHTML = '<div id="admin-org-jobnum-host"><div style="color:var(--text-dim,#888);font-style:italic;font-size:12px;padding:20px 0;">Loading…</div></div>';
+      setTimeout(renderJobNumbering, 0);
+    }
     else if (_orgActiveTab === 'kb')   bodyHTML = renderOrgKBTabHTML();
     else if (_orgActiveTab === 'packs') bodyHTML = renderOrgPacksTabHTML();
     else if (_orgActiveTab === 'refs') bodyHTML = renderOrgRefsTabHTML();
