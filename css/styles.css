@@ -11585,10 +11585,16 @@ textarea.ci-input { height: auto; resize: vertical; font-family: inherit; }
    Admin sub-tab pill strips live on ONLY as the phone fallback: the
    sidebar (the desktop nav home) is hidden under the phone-chrome
    breakpoint, so phones still need an in-page switcher. */
-.p86-mobile-subnav { display: none !important; }
-@media (max-width: 768px) and (pointer: coarse) {
-  .p86-mobile-subnav { display: flex !important; flex-wrap: wrap; }
-}
+/* Admin nav simplified (John 2026-08-10): the left bar shows ONLY the "Admin"
+   tab — all sub-navigation happens on the dashboard page (its section cards for
+   the sub-tabs, + these in-page pills for the Organization / Agents views,
+   which now show on desktop too, not just phones). */
+.p86-mobile-subnav { display: flex !important; flex-wrap: wrap; }
+/* Collapse the Admin sidebar accordion to just the "Admin" tab. The children
+   stay in the DOM (so the active-state sync never dereferences a missing node)
+   but are hidden, and the expand caret is removed. */
+.app-nav-parent[data-accordion="admin"] > .app-nav-children,
+.app-nav-parent[data-accordion="admin"] .app-nav-caret { display: none !important; }
 /* Level-3 sidebar children (Agents ▸ Overview…, Organization ▸ Identity…):
    text-only, one indent step deeper than .app-nav-child. */
 .app-nav .app-nav-child2 {
