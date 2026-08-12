@@ -1696,7 +1696,7 @@ function geoRenderPos(n){
 function showSatHint(show, msg){
   if(!wrap) return;
   if(!_satHintEl){ _satHintEl=document.createElement('div'); _satHintEl.className='ng-sat-hint'; wrap.appendChild(_satHintEl); }
-  _satHintEl.textContent = msg || 'Add a geocoded job address to enable the satellite basemap.';
+  _satHintEl.textContent = msg || ('Add a geocoded ' + ((E.isSurvey && E.isSurvey()) ? 'lead' : 'job') + ' address to enable the satellite basemap.');
   _satHintEl.style.display = show ? 'block' : 'none';
 }
 // On-demand geocode: when a job has no coords yet, the weather endpoint geocodes
@@ -8140,6 +8140,19 @@ window.openLeadSitePlan=function(lid){
     render();
     syncFromCloud();
   }
+  // First-open race: p86Leads' cache (which surveyLead + jobOrigin read) and the
+  // basemap origin can still be settling on the very first survey open, so the
+  // inspector shows "Lead not loaded" and the map its hint until a second
+  // render. Re-stamp the origin + re-render a few times as things settle,
+  // guarded to THIS lead, so it lands without a manual reopen. Lead-only — the
+  // job mounter (openNodeGraph) is untouched.
+  [0, 300, 900].forEach(function(_d){
+    setTimeout(function(){
+      if(!(E.isSurvey && E.isSurvey()) || String(E.job())!==String(lid)) return;
+      if(!_spOrigin){ _spOrigin=jobOrigin(); _spOriginGraph=siteplanCentroid(); _spOriginJob=E.job(); }
+      render();
+    }, _d);
+  });
 };
 
 // Cloud sync — fires after the initial local-cache render. If cloud
