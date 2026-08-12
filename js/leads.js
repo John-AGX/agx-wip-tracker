@@ -2749,8 +2749,60 @@ function p86Ask(message, opts) {
     'sold': 'sold',
     'lost': 'lost',
     'no opportunity': 'no_opportunity',
-    'closed': 'no_opportunity'
+    'closed': 'no_opportunity',
+    // Both seen in the 2026-08-11 BT export (8 leads) and both fell through
+    // to the 'new' fallback — silently downgrading active work to a fresh
+    // lead. Note 'pending' was already mapped but BT also writes the literal
+    // 'in progress', which did not match.
+    'on hold': 'in_progress',
+    'in progress': 'in_progress'
   };
+
+  // BT's Market column is a free-text custom field and is blank on ~8% of
+  // rows. Market is a first-class filter dimension in P86, so a blank one
+  // makes the lead invisible to every market-scoped view. Infer it from the
+  // city we already have rather than importing it market-less.
+  var MARKET_BY_CITY = {
+    tampa:'Tampa', clearwater:'Tampa', 'st petersburg':'Tampa', 'saint petersburg':'Tampa',
+    'st. petersburg':'Tampa', brandon:'Tampa', riverview:'Tampa', valrico:'Tampa',
+    'wesley chapel':'Tampa', lutz:'Tampa', odessa:'Tampa', 'land o lakes':'Tampa',
+    "land o' lakes":'Tampa', largo:'Tampa', seminole:'Tampa', 'pinellas park':'Tampa',
+    dunedin:'Tampa', 'palm harbor':'Tampa', 'safety harbor':'Tampa', oldsmar:'Tampa',
+    'temple terrace':'Tampa', 'plant city':'Tampa', zephyrhills:'Tampa', ruskin:'Tampa',
+    'apollo beach':'Tampa', 'sun city center':'Tampa', 'new port richey':'Tampa',
+    'port richey':'Tampa', trinity:'Tampa', 'spring hill':'Tampa', bradenton:'Tampa',
+    sarasota:'Tampa', venice:'Tampa', lakeland:'Tampa', 'tarpon springs':'Tampa',
+    orlando:'Orlando', kissimmee:'Orlando', 'winter park':'Orlando', 'winter garden':'Orlando',
+    'winter springs':'Orlando', 'altamonte springs':'Orlando', sanford:'Orlando',
+    'lake mary':'Orlando', longwood:'Orlando', oviedo:'Orlando', apopka:'Orlando',
+    ocoee:'Orlando', maitland:'Orlando', casselberry:'Orlando', clermont:'Orlando',
+    deltona:'Orlando', 'daytona beach':'Orlando', 'st cloud':'Orlando', 'saint cloud':'Orlando',
+    jacksonville:'Jacksonville', 'st augustine':'Jacksonville', 'saint augustine':'Jacksonville',
+    'ponte vedra':'Jacksonville', 'ponte vedra beach':'Jacksonville', 'orange park':'Jacksonville',
+    miami:'South Florida', 'fort lauderdale':'South Florida', 'ft lauderdale':'South Florida',
+    'west palm beach':'South Florida', 'boca raton':'South Florida', naples:'South Florida',
+    'fort myers':'South Florida', 'ft myers':'South Florida', 'cape coral':'South Florida',
+    'bonita springs':'South Florida', estero:'South Florida', 'delray beach':'South Florida',
+    'boynton beach':'South Florida', jupiter:'South Florida', stuart:'South Florida',
+    'port st lucie':'South Florida', 'port saint lucie':'South Florida', hollywood:'South Florida',
+    // Stragglers found by running this map against the real 2026-08-11 export
+    // — the last 5 blanks. 'tamp' is a genuine typo in the BT data; keeping it
+    // here is cheaper than correcting BT and harmless if it is ever fixed.
+    'indian shores':'Tampa', palmetto:'Tampa', tamp:'Tampa',
+    davenport:'Orlando', aventura:'South Florida'
+  };
+
+  // Returns '' when we cannot tell — an empty market is honest, a guessed
+  // one is worse than none because it silently misfiles the lead.
+  function inferMarket(city, state) {
+    var c = String(city || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    if (c && MARKET_BY_CITY[c]) return MARKET_BY_CITY[c];
+    var s = String(state || '').trim().toUpperCase();
+    if (s === 'CO') return 'Denver';
+    if (s === 'AZ') return 'Arizona';
+    if (s === 'TX') return 'Texas';
+    return ''; // FL without a known city stays blank — too many markets to guess
+  }
 
   function mapBTStatus(s) {
     if (!s) return 'new';
@@ -2853,7 +2905,7 @@ function p86Ask(message, opts) {
         state: state,
         zip: zip,
         gate_code: cell(row, 'Gate Code (if applicable)*') || cell(row, 'Gate Code'),
-        market: cell(row, 'Market*') || cell(row, 'Market'),
+        market: cell(row, 'Market*') || cell(row, 'Market') || inferMarket(city, state),
         notes: cell(row, 'Notes')
       });
     }

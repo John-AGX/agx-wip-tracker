@@ -29,6 +29,10 @@ const DEFAULT_MARKETS = [
   // data (2 jobs already carry it). Seeding it means those jobs map on the
   // backfill instead of silently staying market-less.
   { name: 'Jacksonville', code: 'JAX', state: 'FL', timezone: 'America/New_York', color: '#d4537e', sort: 25 },
+  // Same story as Jacksonville: found in the BT lead export (7 leads carry
+  // it) rather than designed up front. Seeding it so those leads land on a
+  // real market instead of an unrecognized string.
+  { name: 'South Florida', code: 'SFL', state: 'FL', timezone: 'America/New_York', color: '#3aa8a0', sort: 26 },
 ];
 
 // Seed the five markets for one org. Idempotent: ON CONFLICT against the
