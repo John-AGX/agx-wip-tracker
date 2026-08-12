@@ -547,6 +547,21 @@ function isHighRiskPayload(payload) {
           /"(status|stage|state)"\s*:/.test(s)) {
         return true;
       }
+
+      // Completion percentage is THE driver of the cost model — John,
+      // 2026-08-11: "scope completion drives the entire cost model."
+      // Earned revenue, WIP, over/under billing and the job's whole
+      // financial position are derived from it, so a wrong value does not
+      // look like an error: it silently restates what the job is worth.
+      //
+      // Deliberately NOT scoped to an entity-type list, unlike the status
+      // rule above. Completion has lived on phases, wires and nodes over
+      // time and now lives on scopes; enumerating carriers is how one gets
+      // missed. If a payload sets a completion percentage ANYWHERE, a human
+      // sees it first.
+      if (/"(pct_complete|percent_complete|pctComplete|complete_pct|completion_pct)"\s*:/.test(s)) {
+        return true;
+      }
     }
     return false;
   } catch (_) {
