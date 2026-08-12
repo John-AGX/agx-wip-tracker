@@ -1636,16 +1636,28 @@ function fitSiteplan(){
 // view-mode toggle) — no graph write, no GRAPH_VER concern.
 
 // The job's geocoded lat/lng = the map origin (validated like projects-map's projectCoords).
+// The lead backing the current survey. Sourced from p86Leads' cache (the leads
+// module's own store, populated once the Leads page has loaded) first, then
+// appData.leads — matched with String() equality because lead ids arrive as
+// number OR string across surfaces (the same reason projects.js uses
+// String(id)===String(id) for every lead lookup).
+function surveyLead(){
+  var lid=E.job(); if(lid==null) return null;
+  var pool=(window.p86Leads && window.p86Leads.getCached && window.p86Leads.getCached())
+        || (typeof appData!=='undefined' && appData.leads) || [];
+  for(var i=0;i<pool.length;i++){ if(pool[i] && String(pool[i].id)===String(lid)) return pool[i]; }
+  return null;
+}
 function jobOrigin(){
   if(typeof appData==='undefined') return null;
   var jid=E.job(); if(!jid) return null;
   // Survey mode (lead Site Plan) centers the imagery on the LEAD's geocode;
-  // job mode on the JOB's. Both tables carry geocode_lat/geocode_lng (db.js),
-  // so only the source list differs. For a job E.isSurvey() is false → this is
-  // byte-identical to the old appData.jobs lookup.
+  // job mode on the JOB's. Both carry geocode_lat/geocode_lng (db.js), so only
+  // the source differs. For a job E.isSurvey() is false → byte-identical to the
+  // old appData.jobs lookup.
   var job=null;
   if(E.isSurvey && E.isSurvey()){
-    if(appData.leads) job=appData.leads.find(function(l){ return l.id===jid; });
+    job=surveyLead();
   } else {
     if(appData.jobs) job=appData.jobs.find(function(j){ return j.id===jid; });
   }
@@ -1693,6 +1705,10 @@ function showSatHint(show, msg){
 function tryGeocodeJobThenMount(){
   var jid=E.job();
   if(_geocoding) return;
+  // Survey mode: the lead's geocode already lives on its record (jobOrigin reads
+  // it). If it's not resolving, the lead simply has no saved address yet — and
+  // the weather/geocode endpoint is job-scoped, so it can't help. Just hint.
+  if(E.isSurvey && E.isSurvey()){ showSatHint(true, 'Add a street address to this lead to enable the satellite map.'); return; }
   if(!jid || typeof p86Api==='undefined' || !p86Api.weather){ showSatHint(true); return; }
   _geocoding=true;
   showSatHint(true, 'Locating the job address…');
@@ -3270,7 +3286,7 @@ function renderInspector(){
 // sparse card rather than throwing. E.job() is the lead id in survey mode.
 function renderInspectorLeadDetail(hdr, body){
   var lid=E.job();
-  var lead=(typeof appData!=='undefined'&&appData.leads)?appData.leads.find(function(l){return l.id===lid;}):null;
+  var lead=surveyLead();
   var title=(lead&&(lead.title||lead.project_name||lead.name||lead.client_name))||'Lead';
   if(hdr) hdr.innerHTML='<span class="ng-insp-ic">'+ngIco('leads')+'</span> '+luEsc(title)+'<span class="ng-insp-type">Survey</span>';
   if(!body) return;
@@ -3282,7 +3298,7 @@ function renderInspectorLeadDetail(hdr, body){
   row('Address', addr);
   row('Contact', lead.client_name||lead.contact_name||lead.customer_name);
   row('Phone', lead.phone||lead.contact_phone);
-  var ests=(typeof appData!=='undefined'&&appData.estimates)?appData.estimates.filter(function(e){return (e.lead_id||e.leadId)===lid;}):[];
+  var ests=(typeof appData!=='undefined'&&appData.estimates)?appData.estimates.filter(function(e){return String(e.lead_id||e.leadId)===String(lid);}):[];
   var estHtml='';
   if(ests.length){
     estHtml='<div style="margin-top:12px"><div style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;opacity:.5;margin-bottom:6px">Estimates</div>'

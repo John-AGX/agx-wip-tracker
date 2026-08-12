@@ -2001,6 +2001,9 @@ function p86Ask(message, opts) {
     var leadId = _currentEditingLeadId;
     if (!leadId) return;
     try { closeLeadEditorAny(); } catch (e) {}
+    // Google Places autocomplete appends a .pac-container to <body> that can
+    // linger over the Site Plan after the editor closes — sweep any away.
+    try { document.querySelectorAll('.pac-container').forEach(function(el){ el.remove(); }); } catch (e) {}
     if (typeof window.openLeadSitePlan === 'function') window.openLeadSitePlan(leadId);
     else if (typeof window.p86Toast === 'function') window.p86Toast('Site Plan is still loading — try again in a moment.');
   };
