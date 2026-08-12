@@ -775,10 +775,42 @@ function p86Ask(message, opts) {
     var ids = Array.from(_leadsSelected);
     if (!ids.length) return;
     if (!(window.p86Api && window.p86Api.leads && window.p86Api.leads.update)) { if (typeof window.p86Toast === 'function') window.p86Toast('Bulk edit is not available (refresh the app).', 'error'); return; }
-    var proms = ids.map(function(id) { return window.p86Api.leads.update(id, body).then(function() { return true; }).catch(function() { return false; }); });
-    Promise.all(proms).then(function(res) {
-      var ok = res.filter(Boolean).length, fail = res.length - ok;
-      if (typeof window.p86Toast === 'function') window.p86Toast(label + ': ' + ok + ' updated' + (fail ? (', ' + fail + ' failed') : '') + '.', fail ? 'error' : 'success');
+    // This used to fire one PUT per lead ALL AT ONCE via Promise.all over
+    // ids.map(). Select every lead after a BT import and that is ~900
+    // simultaneous requests: it exhausts the browser's connection pool and
+    // bursts the server in one shot. Run a small number of waves instead.
+    //
+    // The old .catch also collapsed every failure to `false`, so a rate
+    // limit, an auth error and a validation error were indistinguishable —
+    // you got "N failed" with no reason to act on. Keep the first real
+    // message and put it in the toast.
+    var CONCURRENCY = 5;
+    var ok = 0, fail = 0, firstErr = '';
+    var queue = ids.slice();
+
+    function runNext() {
+      if (!queue.length) return Promise.resolve();
+      var id = queue.shift();
+      return window.p86Api.leads.update(id, body)
+        .then(function() { ok++; })
+        .catch(function(e) {
+          fail++;
+          if (!firstErr) firstErr = (e && (e.message || e.error)) || 'unknown error';
+        })
+        .then(runNext); // chain, so each worker pulls the next id when free
+    }
+
+    var workers = [];
+    for (var w = 0; w < Math.min(CONCURRENCY, ids.length); w++) workers.push(runNext());
+
+    Promise.all(workers).then(function() {
+      var msg = label + ': ' + ok + ' updated' +
+        (fail ? (', ' + fail + ' failed — ' + firstErr) : '') + '.';
+      if (typeof window.p86Toast === 'function') window.p86Toast(msg, fail ? 'error' : 'success');
+      if (fail) {
+        console.error('[leads/bulk] ' + fail + ' of ' + ids.length +
+          ' update(s) failed. First error: ' + firstErr);
+      }
       _leadsSelected.clear();
       reloadLeadsCache();
     });
