@@ -345,6 +345,10 @@
         S.files = out[1];
         S.parentFiles = out[2] || [];
         S.loading = false;
+        // A folder restored from a previous mount may have since been deleted
+        // or belong to a bucket we can no longer see — fall back to root
+        // rather than stranding the user in an empty view of nothing.
+        if (S.cur && S.cur !== PARENT_ID && !folderById(S.cur)) S.cur = null;
         // prune selection to existing files
         var ok = {}; S.files.forEach(function (f) { ok[f.id] = 1; });
         Object.keys(S.sel).forEach(function (id) { if (!ok[id]) delete S.sel[id]; });
