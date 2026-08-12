@@ -1601,7 +1601,16 @@ function p86Ask(message, opts) {
   function wireLeadAddressWatchers() {
     ['leadEditor_street_address', 'leadEditor_city', 'leadEditor_state', 'leadEditor_zip'].forEach(function(id) {
       var el = document.getElementById(id);
-      if (!el || el.dataset.watcherBound) return;
+      if (!el) return;
+      // Kill the browser's "Save address?" prompt: Chrome classifies this
+      // street/city/state/zip set as an address form, autofills the user's
+      // saved profile into it, then offers to save it every time the editor
+      // opens. autocomplete="off" (re-applied each render, since Chrome can
+      // re-enable) + the password-manager opt-outs keep the fields untouched.
+      el.setAttribute('autocomplete', 'off');
+      el.setAttribute('data-1p-ignore', '');
+      el.setAttribute('data-lpignore', 'true');
+      if (el.dataset.watcherBound) return;
       el.dataset.watcherBound = '1';
       el.addEventListener('input', function() {
         if (_addressRebuildTimer) clearTimeout(_addressRebuildTimer);
