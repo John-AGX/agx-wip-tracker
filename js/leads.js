@@ -962,6 +962,10 @@ function p86Ask(message, opts) {
     if (chip) chip.style.display = 'none';
     var convertBtn = document.getElementById('leadEditor_convertJobBtn');
     if (convertBtn) convertBtn.style.display = 'none';
+    // New Lead has no id yet — hide the Site Plan/Survey button (needs a saved
+    // lead to persist a graph against) so it can't linger from a prior edit.
+    var spBtn = document.getElementById('leadEditor_sitePlanBtn');
+    if (spBtn) spBtn.style.display = 'none';
   }
 
   // Reuse the clients cache (loaded by clients.js) so we don't hit the API
@@ -1972,7 +1976,24 @@ function p86Ask(message, opts) {
       window.p86Auth.hasCapability('JOBS_EDIT_OWN')
     );
     btn.style.display = (canEditJobs && (!l || !l.job_id)) ? '' : 'none';
+    // Site Plan / Survey button — available for any SAVED lead (a pre-sale
+    // survey of footprints / measurements / photos that carries into the job on
+    // convert). Shown whenever we're editing an existing lead; hidden on the
+    // New Lead form (no id yet to persist a graph against).
+    var spBtn = document.getElementById('leadEditor_sitePlanBtn');
+    if (spBtn) spBtn.style.display = (l && l.id) ? '' : 'none';
   }
+
+  // Open the currently-editing lead in the Site Plan as a pre-sale survey.
+  // Closes the editor first, then activates the node-graph overlay in survey
+  // mode via the engine's entity-aware mounter (nodegraph/ui.js).
+  window.openLeadSurvey = function() {
+    var leadId = _currentEditingLeadId;
+    if (!leadId) return;
+    try { closeLeadEditorAny(); } catch (e) {}
+    if (typeof window.openLeadSitePlan === 'function') window.openLeadSitePlan(leadId);
+    else if (typeof window.p86Toast === 'function') window.p86Toast('Site Plan is still loading — try again in a moment.');
+  };
 
   // Open the job linked to the currently-editing lead.
   function openLinkedJobFromLead() {

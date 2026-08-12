@@ -67,6 +67,31 @@ var measurements = []; // Site-plan survey measurements (distance/area). Additiv
                        // Never wired, never in cost calcs — pure annotation persisted on the blob.
 var panX = 0, panY = 0, zoom = 1;
 var jobId = null;
+// ── Entity abstraction (Lead Survey Site Plan, S2) ──────────────────────────
+// The Site Plan engine drives TWO entity kinds off the SAME graph model:
+//   'job'  — the live job Site Plan (cost/revenue rollups; node_graphs table)
+//   'lead' — a pre-sale SURVEY on a lead (footprints / measurements / photos
+//            only, NO cost data; persisted to the separate lead_graphs table).
+// `entityType` defaults to 'job' and is only ever flipped to 'lead' by
+// E.setEntity('lead', id) from the lead-open path (S4). Until that path ships
+// this is a pure NO-OP: graphCloudUrl()/graphCacheKey() below return values
+// byte-identical to the job-only build, so the live job Site Plan is untouched.
+// `jobId` holds the CURRENT entity's id regardless of kind (job id OR lead id);
+// job-only appData lookups (phases / buildings / COs, all keyed by jobId)
+// naturally return empty for a lead — which is exactly survey mode (no rollup).
+var entityType = 'job';
+// Cloud graph endpoint for the current entity. Leads persist to their OWN
+// table so a survey can never collide with (or clobber) a real job's graph.
+function graphCloudUrl(){
+  return (entityType === 'lead' ? '/api/leads/' : '/api/jobs/') + encodeURIComponent(jobId) + '/graph';
+}
+// localStorage cache key. Lead surveys are namespaced ('lead:<id>') so a lead
+// and a job that happen to share a numeric id keep separate cached graphs. For
+// a job this is String(jobId) — identical to the old bare `all[jobId]` key,
+// since object keys are always strings anyway.
+function graphCacheKey(){
+  return entityType === 'lead' ? ('lead:' + jobId) : String(jobId);
+}
 // n8n-style "Clean Mode" — flat calm nodes + wires. Default ON; persisted
 // per-user (anyone who toggled it off keeps that choice).
 var cleanMode = (function(){ try { var v = localStorage.getItem('ngCleanMode'); return v === null ? true : v === '1'; } catch(_) { return true; } })();
@@ -1281,7 +1306,7 @@ function saveGraphToCloud(state){
   if (!jobId) return;
   try {
     var deliberateGeomRemoval = _cloudStateKnown && localGeomCount(state) === 0;
-    fetch('/api/jobs/' + encodeURIComponent(jobId) + '/graph' + (deliberateGeomRemoval ? '?force=1' : ''), {
+    fetch(graphCloudUrl() + (deliberateGeomRemoval ? '?force=1' : ''), {
       method: 'PUT',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
@@ -1325,7 +1350,7 @@ function saveGraphToCloud(state){
 // null if the cloud has nothing/the response is malformed.
 function loadGraphFromCloud(){
   if (!jobId) return Promise.resolve(null);
-  return fetch('/api/jobs/' + encodeURIComponent(jobId) + '/graph', {
+  return fetch(graphCloudUrl(), {
     credentials: 'include'
   }).then(function(r){
     if (!r.ok) return null;
@@ -1356,7 +1381,7 @@ function loadGraphFromCloudAndApply(){
     if (!state || !jobId) return false;
     try {
       var all = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
-      all[jobId] = state;
+      all[graphCacheKey()] = state;
       localStorage.setItem('agx-nodegraphs', JSON.stringify(all));
     } catch (e) {
       // Cache write failed (probably quota) — loadGraph below will
@@ -1389,7 +1414,7 @@ function saveGraph(){
     // failure here doesn't block the cloud write.
     try {
       var all = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
-      all[jobId] = state;
+      all[graphCacheKey()] = state;
       localStorage.setItem('agx-nodegraphs', JSON.stringify(all));
     } catch (lsErr) {
       console.warn('[nodegraph] localStorage save failed (likely quota exceeded):', lsErr && lsErr.message);
@@ -1415,7 +1440,7 @@ function saveSnapshot(){
   var state = buildGraphState();
   state.savedAt = new Date().toISOString();
   var all = JSON.parse(localStorage.getItem('agx-nodegraph-snapshots') || '{}');
-  all[jobId] = state;
+  all[graphCacheKey()] = state;
   localStorage.setItem('agx-nodegraph-snapshots', JSON.stringify(all));
   return state.savedAt;
 }
@@ -1423,7 +1448,7 @@ function saveSnapshot(){
 function getSnapshot(){
   if(!jobId) return null;
   var all = JSON.parse(localStorage.getItem('agx-nodegraph-snapshots') || '{}');
-  return all[jobId] || null;
+  return all[graphCacheKey()] || null;
 }
 
 // Restore a previously-saved snapshot. Replaces nodes/wires/pan/zoom
@@ -1489,7 +1514,7 @@ function restoreSnapshot(){
 function loadGraph(){
   if(!jobId) return false;
   var all = JSON.parse(localStorage.getItem('agx-nodegraphs') || '{}');
-  var state = all[jobId];
+  var state = all[graphCacheKey()];
   if(!state || !state.nodes || !state.nodes.length) return false;
   // Phase B: try migrations before rejecting. If MIGRATIONS doesn't
   // have a path from state.ver up to GRAPH_VER, the function returns
@@ -1800,7 +1825,19 @@ return {
   // Switching jobs invalidates what we know about the cloud graph — the
   // next job's state has not been fetched yet, so a zero-geometry save
   // must go back to being guard-checked until its own load lands.
-  job:function(j){ if(j!=null){ if(j!==jobId) _cloudStateKnown=false; jobId=j; } return jobId; },
+  job:function(j){ if(j!=null){ if(j!==jobId || entityType!=='job') _cloudStateKnown=false; jobId=j; entityType='job'; } return jobId; },
+  // Open a pre-sale SURVEY on a lead (type='lead') or a job. Same graph model;
+  // only the persistence target (graphCloudUrl) + cache namespace (graphCacheKey)
+  // differ. Any type other than 'lead' is treated as 'job'. Passing id===null
+  // is a no-op getter, mirroring E.job().
+  setEntity:function(type, id){
+    var t = (type === 'lead') ? 'lead' : 'job';
+    if(id!=null){ if(id!==jobId || t!==entityType) _cloudStateKnown=false; jobId=id; entityType=t; }
+    return { type: entityType, id: jobId };
+  },
+  getEntity:function(){ return { type: entityType, id: jobId }; },
+  getEntityType:function(){ return entityType; },
+  isSurvey:function(){ return entityType === 'lead'; },
   canConn:canConn, addNode:addNode, findNode:findNode,
   cleanMode:getCleanMode, setCleanMode:setCleanMode, firstCompatPort:firstCompatPort,
   viewMode:getViewMode, setViewMode:setViewMode, sitePlanVisible:sitePlanVisible, budgetFootprint:budgetFootprint, spBuildingFootprint:spBuildingFootprint,

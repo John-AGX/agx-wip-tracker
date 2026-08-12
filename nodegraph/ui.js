@@ -1637,9 +1637,19 @@ function fitSiteplan(){
 
 // The job's geocoded lat/lng = the map origin (validated like projects-map's projectCoords).
 function jobOrigin(){
-  if(typeof appData==='undefined' || !appData.jobs) return null;
+  if(typeof appData==='undefined') return null;
   var jid=E.job(); if(!jid) return null;
-  var job=appData.jobs.find(function(j){ return j.id===jid; }); if(!job) return null;
+  // Survey mode (lead Site Plan) centers the imagery on the LEAD's geocode;
+  // job mode on the JOB's. Both tables carry geocode_lat/geocode_lng (db.js),
+  // so only the source list differs. For a job E.isSurvey() is false → this is
+  // byte-identical to the old appData.jobs lookup.
+  var job=null;
+  if(E.isSurvey && E.isSurvey()){
+    if(appData.leads) job=appData.leads.find(function(l){ return l.id===jid; });
+  } else {
+    if(appData.jobs) job=appData.jobs.find(function(j){ return j.id===jid; });
+  }
+  if(!job) return null;
   var lat=Number(job.geocode_lat), lng=Number(job.geocode_lng);
   if(!isFinite(lat)||!isFinite(lng)) return null;
   if(lat===0&&lng===0) return null;                       // Null Island = never geocoded
@@ -2681,6 +2691,9 @@ function openEntityCreateModal(type, cb, preselectId){
   // auto-create a wired cost node here (the editor is async/full-screen) —
   // wiring an existing PO/CO as a canvas node is the picker path, a separate
   // follow-up. cb(null) so pickNodeType doesn't spawn an orphan node.
+  // Survey mode never creates cost objects (a lead has no job to bill against).
+  // Backstop to the pickNodeType gate above — covers any direct spawn path.
+  if(E.isSurvey && E.isSurvey()){ return cb && cb(null); }
   if(type==='po' && window.p86PurchaseOrders && typeof window.p86PurchaseOrders.openNew==='function'){
     window.p86PurchaseOrders.openNew(E.job()); return cb(null);
   }
@@ -2721,6 +2734,13 @@ function openEntityCreateModal(type, cb, preselectId){
 // data-backed types (PICKABLE_TYPES) open the entity picker; others drop at view center.
 function pickNodeType(type){
   var d=E.DEFS[type]; if(!d) return;
+  // Survey mode (lead Site Plan): a lead has no cost ledger, so only spatial
+  // types belong here. Building footprint tracing (t1) is allowed; cost objects
+  // (PO / CO / scope / subs / line items) are blocked until the lead is a job.
+  if(E.isSurvey && E.isSurvey() && type!=='t1'){
+    if(typeof window.p86Toast==='function') window.p86Toast('Available once this lead is converted to a job.');
+    return;
+  }
   if(type==='t1' && _spSatellite && E.viewMode && E.viewMode()==='siteplan'){
     selN=null; toggleTraceMode(); return;
   }
@@ -3216,6 +3236,9 @@ function renderInspector(){
                   : iType==='sub' ? inspectorSubHtml(sel)
                   : LI_TYPES[iType] ? inspectorLineItemHtml(sel)
                   : inspectorGenericHtml(sel, d);
+  } else if(E.isSurvey && E.isSurvey()){
+    // Survey mode: no job cost detail — show the lead context card instead.
+    renderInspectorLeadDetail(hdr, body);
   } else {
     var _jb=(typeof appData!=='undefined'&&appData.jobs)?appData.jobs.find(function(j){return j.id===E.job();}):null;
     if(hdr) hdr.innerHTML='<span class="ng-insp-ic">'+ngIco('wip')+'</span> '+luEsc((_jb&&(_jb.title||_jb.name))||'Job Detail')+'<span class="ng-insp-type">Job</span>';
@@ -3239,6 +3262,42 @@ function renderInspector(){
     // lead card — per John. Not inserted on the right anymore; the cleanup above still runs
     // so any card left by a prior render is stripped.
   }
+}
+// Survey inspector (lead Site Plan): the no-node panel shows the LEAD's context
+// — title, address, status, linked estimates — in place of the job cost detail.
+// Pure read of appData.leads/estimates; self-contained inline styles so it needs
+// no new CSS. Field names use ||-fallbacks so a shape mismatch degrades to a
+// sparse card rather than throwing. E.job() is the lead id in survey mode.
+function renderInspectorLeadDetail(hdr, body){
+  var lid=E.job();
+  var lead=(typeof appData!=='undefined'&&appData.leads)?appData.leads.find(function(l){return l.id===lid;}):null;
+  var title=(lead&&(lead.title||lead.project_name||lead.name||lead.client_name))||'Lead';
+  if(hdr) hdr.innerHTML='<span class="ng-insp-ic">'+ngIco('leads')+'</span> '+luEsc(title)+'<span class="ng-insp-type">Survey</span>';
+  if(!body) return;
+  if(!lead){ body.innerHTML='<div style="padding:14px;opacity:.7;font-size:13px">Lead not loaded.</div>'; return; }
+  var addr=[lead.street_address||lead.address, lead.city, lead.state, lead.zip||lead.zip_code].filter(Boolean).join(', ');
+  var rows='';
+  function row(k,v){ if(v==null||v==='') return; rows+='<div style="display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid rgba(128,128,128,.15);font-size:12.5px"><span style="opacity:.6">'+luEsc(k)+'</span><span style="text-align:right;font-weight:500">'+luEsc(v)+'</span></div>'; }
+  row('Status', lead.status||lead.stage);
+  row('Address', addr);
+  row('Contact', lead.client_name||lead.contact_name||lead.customer_name);
+  row('Phone', lead.phone||lead.contact_phone);
+  var ests=(typeof appData!=='undefined'&&appData.estimates)?appData.estimates.filter(function(e){return (e.lead_id||e.leadId)===lid;}):[];
+  var estHtml='';
+  if(ests.length){
+    estHtml='<div style="margin-top:12px"><div style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;opacity:.5;margin-bottom:6px">Estimates</div>'
+      +ests.map(function(e){
+        var amt=Number(e.total||e.amount||e.contract_total||0);
+        return '<div style="display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid rgba(128,128,128,.15);font-size:12.5px"><span>'+luEsc(e.estimate_number||e.number||('Estimate #'+e.id))+'</span><span style="font-weight:600">'+luEsc(E.fmtC?E.fmtC(amt):('$'+amt))+'</span></div>';
+      }).join('')+'</div>';
+  }
+  body.innerHTML='<div style="padding:12px 14px">'
+    +'<div style="font-size:12px;line-height:1.5;opacity:.8;background:rgba(80,140,255,.10);border:1px solid rgba(80,140,255,.25);border-radius:8px;padding:9px 11px;margin-bottom:12px">'
+      +'Pre-sale <b>survey</b> — trace building footprints, take measurements, and drop site photos. This carries into the job automatically when the lead is converted.'
+    +'</div>'
+    +'<div>'+rows+'</div>'
+    +estHtml
+  +'</div>';
 }
 // Slice 3: the no-node Inspector hosts the JOB detail — reuses the classic job-overview
 // renderers (buildings / phases / subs). Built ONCE per job-detail entry: these mount
@@ -7974,7 +8033,11 @@ window.openNodeGraph=function(jid){
   if (E && typeof E.setInitialCloudSyncInFlight === 'function') {
     E.setInitialCloudSyncInFlight(true);
   }
-  if(jid && jid!==E.job()){
+  // Entity-aware "different entity" check: a lead survey and a job can share a
+  // numeric id, so switching from a lead (entityType 'lead') back to a job must
+  // re-mount even when the id matches. For pure job→job usage entityType is
+  // always 'job', so the added clause is always false → behavior is unchanged.
+  if(jid && (jid!==E.job() || (E.getEntityType && E.getEntityType()!=='job'))){
     E.job(jid);
     _spOrigin=null; _spOriginGraph=null; _spOriginJob=null; _geoPhotos=[]; _geoPhotosJob=null; _geocoding=false; _fannedSet={}; ngOpenScopes={}; // drop geo caches + fan state + scope-expand state: avoid cross-job staleness (node ids collide across jobs)
     E.setNodes([]); E.setWires([]); E.setNid(1);
@@ -7997,6 +8060,67 @@ window.openNodeGraph=function(jid){
     syncFromCloud();
   } else {
     ensureWatchFan();
+    render();
+    syncFromCloud();
+  }
+};
+
+// ── Lead Survey Site Plan (S4) ──────────────────────────────────────────────
+// Opens the SAME satellite Site Plan tool on a LEAD (pre-sale survey: footprints
+// / measurements / photos), instead of a job. Deliberately parallel to
+// openNodeGraph above rather than a shared helper, so the proven job mount stays
+// byte-identical. Key differences: it sets the 'lead' entity (so the engine's
+// graphCloudUrl/graphCacheKey target /api/leads/:id/graph + a 'lead:<id>' cache
+// namespace), and it does NOT populate() job cost scaffolding on an empty graph
+// — a survey starts as a blank trace canvas. Cost-object creation is separately
+// blocked while surveying (see pickNodeType + E.isSurvey). Survey geometry
+// carries into the job on convert (server copies lead_graphs → node_graphs).
+window.openLeadSitePlan=function(lid){
+  if(!lid) return;
+  var tab=document.getElementById('nodeGraphTab'); if(!tab) return;
+  tab.classList.add('active');
+  wireGraphTabPositioning();
+  positionGraphTab();
+  try { restoreSectionPanel(); } catch(e){}
+  _inspJobKey=null;
+  try { exitOrbit3D(); } catch(e){}
+  try {
+    var _clean = E && E.cleanMode && E.cleanMode();
+    tab.classList.toggle('ng-clean', !!_clean);
+    var _cb = document.getElementById('ngCleanBtn'); if(_cb) _cb.classList.toggle('ng-on', !!_clean);
+  } catch(_){}
+  // Force Site Plan + satellite ON, same as the job open — a survey is only ever
+  // the spatial view (the abstract cost graph is meaningless for a lead).
+  try {
+    if(E && E.setViewMode) E.setViewMode('siteplan');
+    _spSatellite = true;
+    try { localStorage.setItem('ngSitePlanSatellite','1'); } catch(_){}
+    var _sp = E && E.viewMode && E.viewMode()==='siteplan';
+    tab.classList.toggle('ng-siteplan', !!_sp);
+    var _spb = document.getElementById('ngSitePlanBtn'); if(_spb) _spb.classList.toggle('ng-on', !!_sp);
+    var _satb = document.getElementById('ngSatelliteBtn'); if(_satb) _satb.classList.toggle('ng-on', _spSatellite);
+    var _3db = document.getElementById('ng3dBtn'); if(_3db) _3db.classList.toggle('ng-on', _spMassing);
+    var _phb = document.getElementById('ngPhotosBtn'); if(_phb) _phb.classList.toggle('ng-on', _spPhotos);
+    if(tab && tab.offsetWidth>0) updateBasemapVisibility();
+  } catch(_){}
+  if(!wrap) init();
+  resize();
+  if (E && typeof E.setInitialCloudSyncInFlight === 'function') E.setInitialCloudSyncInFlight(true);
+  // Entity-aware switch check: re-mount when the open entity isn't THIS lead
+  // (covers job→lead and lead→different-lead, and a lead/job id collision).
+  var cur = (E.getEntity ? E.getEntity() : { type:'job', id:E.job() });
+  if(cur.type!=='lead' || cur.id!==lid){
+    E.setEntity('lead', lid);
+    _spOrigin=null; _spOriginGraph=null; _spOriginJob=null; _geoPhotos=[]; _geoPhotosJob=null; _geocoding=false; _fannedSet={}; ngOpenScopes={};
+    E.setNodes([]); E.setWires([]); E.setNid(1);
+    if(E.setMeasurements) E.setMeasurements([]);
+    // Survey: load the lead's saved graph if any; if none, START EMPTY — no
+    // populate() (that seeds job cost nodes, which a lead has none of).
+    E.loadGraph();
+    _spOrigin=jobOrigin(); _spOriginGraph=siteplanCentroid(); _spOriginJob=E.job();
+    applyTx(); render();
+    syncFromCloud();
+  } else {
     render();
     syncFromCloud();
   }

@@ -2957,6 +2957,7 @@
         <div class="modal-footer" id="leadEditor_modalFooter">
           <button id="leadEditor_deleteBtn" class="danger" style="margin-right:auto;display:none;" onclick="deleteLeadFromEditor()">Delete</button>
           <button id="leadEditor_convertJobBtn" class="success" style="display:none;" onclick="convertLeadToJob()" data-cap="JOBS_EDIT_ANY JOBS_EDIT_OWN">&#x1F3D7; Create Job from Lead</button>
+          <button id="leadEditor_sitePlanBtn" class="secondary" style="display:none;" onclick="openLeadSurvey()" title="Open this lead in the Site Plan to survey footprints, take measurements, and drop photos — carries into the job on convert">&#x1F5FA;&#xFE0F; Site Plan</button>
           <button onclick="closeModal('leadEditorModal')" class="secondary">Cancel</button>
           <button onclick="submitLeadEditor()" class="primary" id="leadEditor_submitBtn">Save Lead</button>
         </div>
@@ -3352,7 +3353,7 @@
     <script src="js/table-enhancements.js?v=15"></script>
     <script src="js/bulk-ribbon.js?v=1"></script>
     <script src="js/job-finalize.js?v=5"></script>
-    <script src="js/leads.js?v=89"></script>
+    <script src="js/leads.js?v=90"></script>
     <script src="js/job-costs-import.js?v=12"></script>
     <script src="js/qb-costs-view.js?v=20"></script>
     <script src="js/insights.js?v=10"></script>
@@ -3733,9 +3734,9 @@
         <button class="ng-mseg-btn" data-mseg="detail">Detail</button>
       </div>
     </div>
-    <script src="nodegraph/engine.js?v=124"></script>
+    <script src="nodegraph/engine.js?v=125"></script>
     <script src="js/cost-buckets.js?v=4"></script>
-    <script src="nodegraph/ui.js?v=324"></script>
+    <script src="nodegraph/ui.js?v=325"></script>
     <!-- Ribbon popovers (Layers / More) + layer visibility persistence.
          Loads after ui.js; only owns the popover chrome — the moved
          ribbon buttons stay wired by ui.js itself. -->
