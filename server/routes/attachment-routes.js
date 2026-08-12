@@ -1058,6 +1058,26 @@ router.post('/:entityType/:entityId',
         folder = sanitizeFolderPath(req.body.folder);
       }
 
+      // folder_id is the real target; the `folder` string is only a mirror.
+      // They can't be derived from each other — sanitizeFolderPath lowercases
+      // and hyphenates while file_folders.path keeps case and spaces, so
+      // "Site Photos" stored as "site-photos" never matches its own folder.
+      // Resolve the row and mirror its true path, which is the dual-write the
+      // schema comment in db.js has always described.
+      let folderId = null;
+      const reqFolderId = req.body && req.body.folder_id;
+      if (typeof reqFolderId === 'string' && reqFolderId.trim()) {
+        const ff = await pool.query(
+          'SELECT id, path FROM file_folders WHERE id = $1 AND entity_type = $2 AND entity_id = $3',
+          [reqFolderId.trim(), entityType, entityId]
+        );
+        // Hard 400 rather than falling back to root: a silent fallback is
+        // exactly how uploads were landing in the wrong place unnoticed.
+        if (!ff.rows[0]) return res.status(400).json({ error: 'Target folder not found' });
+        folderId = ff.rows[0].id;
+        folder = ff.rows[0].path;
+      }
+
       // Walkthrough upload (Phase 1.7): caller can pre-fill caption /
       // tags / annotations in the SAME request so a guided upload
       // doesn't need a follow-up PATCH per field. All three are
@@ -1078,8 +1098,8 @@ router.post('/:entityType/:entityId',
           position, uploaded_by, extracted_text, extracted_text_at,
           markup_of, include_in_proposal, folder,
           caption, tags, annotations,
-          lat, lng, geo_accuracy, geo_source, taken_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23::jsonb,$24::jsonb,$25,$26,$27,$28,$29)
+          lat, lng, geo_accuracy, geo_source, taken_at, folder_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23::jsonb,$24::jsonb,$25,$26,$27,$28,$29,$30)
          RETURNING *`,
         [
           id, entityType, entityId,
@@ -1092,7 +1112,7 @@ router.post('/:entityType/:entityId',
           initialCaption,
           JSON.stringify(initialTags),
           JSON.stringify(initialAnnotations),
-          lat, lng, geoAccuracy, geoSource, takenAt
+          lat, lng, geoAccuracy, geoSource, takenAt, folderId
         ]
       );
       res.json({ ok: true, attachment: ins.rows[0] });

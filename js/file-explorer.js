@@ -292,6 +292,14 @@
     try { return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }); } catch (e) { return ''; }
   }
 
+  // The open folder has to survive a remount. mount() allocates a fresh S on
+  // every call, and several callers remount unconditionally (a My Files tab
+  // switch, a sidebar folder click), which silently reset both the view and
+  // the upload target back to root. Keyed per bucket so one record's folder
+  // can never leak into another's.
+  var LAST_CUR = {};
+  function curKey(et, eid) { return String(et) + '|' + String(eid); }
+
   function mount(host, opts) {
     opts = opts || {};
     if (!host) return { refresh: function () {}, destroy: function () {} };
@@ -302,7 +310,7 @@
       canEdit: opts.canEdit !== false,
       folders: [],
       files: [],
-      cur: null,            // current folder id (null = root)
+      cur: LAST_CUR[curKey(opts.entityType, opts.entityId)] || null,  // current folder id (null = root)
       // Default to LIST (John's preference); remember the user's last toggle.
       view: (function () { try { return localStorage.getItem('p86fx-view') === 'grid' ? 'grid' : 'list'; } catch (e) { return 'list'; } })(),
       sort: 'name',
@@ -350,6 +358,9 @@
       // (e.g. a My Files virtual folder) while our async load was in
       // flight. Bail so we don't clobber it.
       if (opts.shouldRender && !opts.shouldRender()) return;
+      // Remember where we are so a remount lands back here. PARENT_ID is a
+      // read-only pseudo-folder, never a real upload target, so it is not kept.
+      if (S.cur !== PARENT_ID) LAST_CUR[curKey(S.et, S.eid)] = S.cur || null;
       // In the read-only inherited-files view, hide the editing actions.
       var canEdit = S.canEdit && S.cur !== PARENT_ID;
       // Embedded contexts (entity modals, an overview fieldset) get a
@@ -694,13 +705,24 @@
       var fid = (folderId === undefined) ? S.cur : folderId;
       var ff = fid ? folderById(fid) : null;
       var path = (ff ? ff.path : '') || 'general';
-      var done = 0;
-      toast('Uploading ' + files.length + ' file(s)…');
+      var total = files.length, done = 0, failed = [];
+      toast('Uploading ' + total + ' file(s)…');
       (function next() {
-        if (!files.length) { load(); toast(done + ' file(s) uploaded', 'success'); return; }
+        if (!files.length) {
+          load();
+          if (failed.length) toast(done + ' of ' + total + ' uploaded — ' + failed.length + ' failed: ' + failed[0], 'error');
+          else toast(done + ' file(s) uploaded', 'success');
+          return;
+        }
         var f = files.shift();
-        api().attachments.upload(S.et, S.eid, f, { folder: path })
-          .then(function () { done++; }).catch(function (e) { toast((e && e.message) || 'Upload failed', 'error'); })
+        // folder_id is what actually files it; `folder` stays for the string
+        // readers. Only a resolvable folder is sent — PARENT_ID has no row and
+        // the server rejects an id it cannot find.
+        var extra = { folder: path };
+        if (ff) extra.folder_id = ff.id;
+        api().attachments.upload(S.et, S.eid, f, extra)
+          .then(function () { done++; })
+          .catch(function (e) { failed.push((e && e.message) || 'Upload failed'); })
           .then(next);
       })();
     }
