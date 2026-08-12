@@ -901,10 +901,20 @@ const { slugify: slugifySkillName } = require('../util/slugify');
 function buildSkillMarkdown(pack) {
   const slug = slugifySkillName(pack.name);
   const human = (pack.name || 'Project 86 skill').replace(/[\r\n]/g, ' ');
-  const desc = (pack.replaces_section
-    ? 'Section override for ' + pack.replaces_section
-    : (pack.category ? 'Category: ' + pack.category : human)
-  ).replace(/[\r\n]/g, ' ');
+
+  // The description is the TRIGGER, not a label. Anthropic Skills are
+  // progressively disclosed: only name + description sit in context each
+  // turn, and the model reads the description to decide whether to pull
+  // the body in. Until now this fell through to the pack NAME — so every
+  // skill shipped with `description: Estimating Playbook`, which says
+  // nothing about WHEN it applies. All nine packs were live, attached,
+  // counted, and effectively unreachable. pack.description now wins.
+  const desc = (pack.description && String(pack.description).trim()
+    ? String(pack.description).trim()
+    : (pack.replaces_section
+        ? 'Section override for ' + pack.replaces_section
+        : (pack.category ? 'Category: ' + pack.category : human))
+  ).replace(/[\r\n]+/g, ' ').slice(0, 900);
   const lines = [
     '---',
     'name: ' + slug,
