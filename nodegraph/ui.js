@@ -3303,7 +3303,12 @@ function renderInspectorLeadDetail(hdr, body){
   if(ests.length){
     estHtml='<div style="margin-top:12px"><div style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;opacity:.5;margin-bottom:6px">Estimates</div>'
       +ests.map(function(e){
-        var amt=Number(e.total||e.amount||e.contract_total||0);
+        // The client price is computed (markup + fees + tax + rounding), not a
+        // stored column — use computeEstimateTotals like the revenue sync does,
+        // else this reads a blank e.total and shows $0.
+        var amt=0;
+        try { if(typeof window.computeEstimateTotals==='function'){ var t=window.computeEstimateTotals(e); amt=Number((t&&t.clientPrice)||0); } } catch(_){}
+        if(!amt) amt=Number(e.total||e.amount||e.contract_total||0);
         return '<div style="display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid rgba(128,128,128,.15);font-size:12.5px"><span>'+luEsc(e.estimate_number||e.number||('Estimate #'+e.id))+'</span><span style="font-weight:600">'+luEsc(E.fmtC?E.fmtC(amt):('$'+amt))+'</span></div>';
       }).join('')+'</div>';
   }
