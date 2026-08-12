@@ -23,6 +23,7 @@ const { pool, listOrganizations, getOrgById } = require('../db');
 const { requireAuth, requireCapability, requireOrg, requireSystemAdmin, signToken } = require('../auth');
 const { sendForEvent } = require('../email');
 const { auditLog } = require('../audit');
+const { deleteSkillDeep } = require('../services/anthropic-skills');
 
 const router = express.Router();
 
@@ -666,10 +667,12 @@ router.put('/:id/skill-packs/:packId', requireAuth, requireOrg, requireCapabilit
           // reads from org_skill_packs.anthropic_skill_id).
           const oldSkillId = updated.anthropic_skill_id;
           try {
-            try { await anthropic.beta.skills.delete(oldSkillId); }
-            catch (delErr) {
-              // 404 means it was already gone — fine, proceed to create.
-              if (!/404|not.?found/i.test(String(delErr.message || ''))) throw delErr;
+            const delOld = await deleteSkillDeep(anthropic, oldSkillId);
+            // An orphan upstream must not block the recreate — the new
+            // skill is what the agent needs. Log it and carry on.
+            if (!delOld.ok) {
+              console.warn('[skill-pack edit] old skill ' + oldSkillId +
+                ' left upstream (delete failed):', delOld.error);
             }
             const created = await uploadPackAsNewSkill(anthropic, updated);
             await pool.query(
@@ -742,14 +745,34 @@ router.delete('/:id/skill-packs/:packId', requireAuth, requireOrg, requireCapabi
     // Delete the Anthropic-side mirror first. If it fails (e.g.
     // already deleted upstream), proceed with local soft-delete
     // rather than leaving an orphaned local pack.
+    //
+    // The soft-delete NULLs anthropic_skill_id, so a swallowed failure
+    // here strands the skill upstream with nothing left pointing at it.
+    // Report the error in the response instead of only console.warn —
+    // the caller is the one who can act on it.
+    let anthropicDeleteError = null;
+    let detached = 0;
     if (pack.anthropic_skill_id) {
       const anthropic = getAnthropic();
       if (anthropic) {
-        try {
-          await anthropic.beta.skills.delete(pack.anthropic_skill_id);
-        } catch (delErr) {
-          console.warn('[skill-pack delete] Anthropic-side delete failed (continuing local delete):', delErr.message || delErr);
+        const del = await deleteSkillDeep(anthropic, pack.anthropic_skill_id);
+        if (!del.ok) {
+          anthropicDeleteError = del.error;
+          console.warn('[skill-pack delete] Anthropic-side delete failed (continuing local delete):', del.error);
         }
+      } else {
+        anthropicDeleteError = 'ANTHROPIC_API_KEY not set — skill left upstream.';
+      }
+      // Drop any agent attachment rows too; otherwise the agent keeps
+      // registering a skill id that no longer resolves.
+      try {
+        const d = await pool.query(
+          `DELETE FROM managed_agent_skills WHERE skill_id = $1`,
+          [pack.anthropic_skill_id]
+        );
+        detached = d.rowCount || 0;
+      } catch (e) {
+        console.warn('[skill-pack delete] managed_agent_skills detach failed:', e.message);
       }
     }
 
@@ -760,7 +783,13 @@ router.delete('/:id/skill-packs/:packId', requireAuth, requireOrg, requireCapabi
       [targetId, packId]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Pack not found' });
-    res.json({ ok: true, id: r.rows[0].id, name: r.rows[0].name });
+    res.json({
+      ok: true,
+      id: r.rows[0].id,
+      name: r.rows[0].name,
+      anthropic_delete_error: anthropicDeleteError,
+      agent_rows_detached: detached
+    });
   } catch (e) {
     const status = e.status || 500;
     console.error('DELETE /api/admin/organizations/:id/skill-packs/:packId error:', e);

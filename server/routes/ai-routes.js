@@ -36,6 +36,7 @@ const jobWip = require('../services/money/job-wip');
 // Timezone helpers — render reminder remind_at instants in the acting
 // user's local zone (the time IS the point of a reminder).
 const { resolveTz, formatInTz } = require('../timezone');
+const { deleteSkillDeep } = require('../services/anthropic-skills');
 
 const router = express.Router();
 
@@ -10897,12 +10898,29 @@ async function execStaffApprovalTool(name, input, ctx) {
 
       // Best-effort Anthropic-side delete. If it fails we still scrub
       // locally — orphan Anthropic skills are easier to clean up than
-      // a divergent local-only pack.
+      // a divergent local-only pack. But say so in the result: this
+      // string is what 86 reports back, and it used to claim the mirror
+      // was removed whether or not it was.
+      let mirrorNote = '';
       if (pack.anthropic_skill_id) {
         const anthropic = getAnthropic();
         if (anthropic) {
-          try { await anthropic.beta.skills.delete(pack.anthropic_skill_id); }
-          catch (e) { console.warn('[propose_skill_pack_delete] Anthropic-side delete failed:', e.message || e); }
+          const del = await deleteSkillDeep(anthropic, pack.anthropic_skill_id);
+          if (del.ok) {
+            mirrorNote = ' + Anthropic mirror removed';
+          } else {
+            mirrorNote = ' — WARNING: the Anthropic mirror (' + pack.anthropic_skill_id +
+              ') could NOT be deleted (' + del.error + ') and is still live upstream';
+            console.warn('[propose_skill_pack_delete] Anthropic-side delete failed:', del.error);
+          }
+        } else {
+          mirrorNote = ' — WARNING: no Anthropic key on this deployment, mirror left upstream';
+        }
+        try {
+          await pool.query(`DELETE FROM managed_agent_skills WHERE skill_id = $1`,
+            [pack.anthropic_skill_id]);
+        } catch (e) {
+          console.warn('[propose_skill_pack_delete] managed_agent_skills detach failed:', e.message);
         }
       }
 
@@ -10911,7 +10929,7 @@ async function execStaffApprovalTool(name, input, ctx) {
           WHERE id = $1`,
         [pack.id]
       );
-      return 'Deleted skill pack "' + input.name + '" (local soft-archive + Anthropic mirror removed).';
+      return 'Deleted skill pack "' + input.name + '" (local soft-archive' + mirrorNote + ').';
     }
     // Watch + staff-spawn approval handlers removed 2026-07-03 (features
     // retired — zero production usage; see the WATCH_TOOLS removal note).

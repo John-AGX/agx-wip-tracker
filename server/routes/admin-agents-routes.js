@@ -33,6 +33,7 @@ const router = express.Router();
 // every consumer in this file is unchanged. Two copies of a price table
 // is how an alarm ends up disagreeing with the page it is alarming on.
 const { MODEL_COSTS, DEFAULT_MODEL_COST } = require('../services/ai-pricing');
+const { deleteSkillDeep } = require('../services/anthropic-skills');
 
 // Friendly labels mirror the front-end AGENT_LABELS. Emojis stay
 // here because these are server-rendered strings used in admin
@@ -1070,15 +1071,18 @@ router.post('/skills/:idx/sync-to-anthropic', requireAuth, requireCapability('RO
     );
 
     // 4 — retire the old skill. Non-fatal: an orphan upstream is untidy,
-    // a missing skill is an outage.
+    // a missing skill is an outage. deleteSkillDeep clears versions first
+    // — a bare skills.delete fails on every skill we've ever created, and
+    // the old code logged that failure to a console nobody reads.
     let oldDeleted = false;
+    let oldDeleteError = null;
     if (priorId) {
-      try {
-        await anthropic.beta.skills.delete(priorId);
-        oldDeleted = true;
-      } catch (e) {
+      const del = await deleteSkillDeep(anthropic, priorId);
+      oldDeleted = !!del.ok;
+      if (!del.ok) {
+        oldDeleteError = del.error;
         console.warn('[skills/sync] old skill ' + priorId +
-          ' replaced but not deleted (orphan left upstream):', e.message);
+          ' replaced but not deleted (orphan left upstream):', del.error);
       }
     }
 
@@ -1088,6 +1092,7 @@ router.post('/skills/:idx/sync-to-anthropic', requireAuth, requireCapability('RO
       replaced: priorId,
       agent_rows_repointed: repointed,
       old_deleted: oldDeleted,
+      old_delete_error: oldDeleteError,
       note: priorId ? 'Run managed sync-all + start a new chat for the agent to pick this up.' : undefined
     });
   } catch (e) {
@@ -1118,15 +1123,28 @@ router.post('/skills/:idx/unsync-from-anthropic', requireAuth, requireCapability
     const pack = skills[idx];
     if (!pack.anthropic_skill_id) return res.status(400).json({ error: 'Pack is not currently synced.' });
 
+    // Detach BEFORE deleting. managed_agent_skills is source 1 in
+    // collectSkillsFor, so a row left behind keeps feeding the skill id
+    // into the agent definition after the pack has been unsynced —
+    // and once the upstream skill is gone that id is a dangling
+    // reference. Unsync never touched this table before, which is how
+    // a "retired" playbook kept loading into 86.
+    let detached = 0;
+    try {
+      const d = await pool.query(
+        `DELETE FROM managed_agent_skills WHERE skill_id = $1`,
+        [pack.anthropic_skill_id]
+      );
+      detached = d.rowCount || 0;
+    } catch (e) {
+      console.warn('[skills/unsync] managed_agent_skills detach failed:', e.message);
+    }
+
     // Delete on the Anthropic side. If that fails (e.g. already
     // deleted out-of-band), still clear the local id so the next
     // sync makes a fresh one.
-    let deleteError = null;
-    try {
-      await anthropic.beta.skills.delete(pack.anthropic_skill_id);
-    } catch (e) {
-      deleteError = e.message;
-    }
+    const del = await deleteSkillDeep(anthropic, pack.anthropic_skill_id);
+    const deleteError = del.ok ? null : del.error;
 
     const updated = Object.assign({}, pack);
     delete updated.anthropic_skill_id;
@@ -1138,7 +1156,7 @@ router.post('/skills/:idx/unsync-from-anthropic', requireAuth, requireCapability
          SET value = EXCLUDED.value, updated_at = NOW()`,
       [JSON.stringify(Object.assign({}, cfg, { skills }))]
     );
-    res.json({ ok: true, delete_error: deleteError });
+    res.json({ ok: true, delete_error: deleteError, agent_rows_detached: detached });
   } catch (e) {
     console.error('POST /api/admin/agents/skills/:idx/unsync-from-anthropic error:', e);
     res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
@@ -3191,20 +3209,19 @@ async function archiveAllSkillsForOrg(orgId, opts) {
   let archivedCount = 0;
   if (!dryRun && anthropic) {
     for (const p of packs.filter(r => r.anthropic_skill_id)) {
-      try {
-        // Prefer .delete (hard remove); fall back to .archive if the
-        // SDK / API path differs.
-        if (typeof anthropic.beta.skills.delete === 'function') {
-          await anthropic.beta.skills.delete(p.anthropic_skill_id);
-        } else if (typeof anthropic.beta.skills.archive === 'function') {
-          await anthropic.beta.skills.archive(p.anthropic_skill_id);
-        }
-        archivedCount++;
-      } catch (e) {
-        const status = e.status || e.statusCode;
-        if (status === 404 || status === 410) { archivedCount++; continue; }
-        errors.push({ pack_id: p.id, name: p.name, anthropic_id: p.anthropic_skill_id, error: e.message || 'unknown' });
+      // deleteSkillDeep clears versions first and treats 404 as done.
+      const res = await deleteSkillDeep(anthropic, p.anthropic_skill_id);
+      if (res.ok) { archivedCount++; continue; }
+      errors.push({ pack_id: p.id, name: p.name, anthropic_id: p.anthropic_skill_id, error: res.error });
+    }
+    // Attachment rows point at ids that are about to stop resolving.
+    try {
+      const ids = packs.filter(r => r.anthropic_skill_id).map(r => r.anthropic_skill_id);
+      if (ids.length) {
+        await pool.query(`DELETE FROM managed_agent_skills WHERE skill_id = ANY($1::text[])`, [ids]);
       }
+    } catch (e) {
+      console.warn('[archiveAllSkillsForOrg] managed_agent_skills detach failed:', e.message);
     }
   }
   let localDeleted = 0;

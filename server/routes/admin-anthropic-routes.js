@@ -23,6 +23,7 @@
 const express = require('express');
 const { requireAuth, requireSystemAdmin } = require('../auth');
 const { auditLog } = require('../audit');
+const { deleteSkillDeep } = require('../services/anthropic-skills');
 
 const router = express.Router();
 
@@ -145,45 +146,24 @@ router.delete('/skills/:id', requireAuth, requireSystemAdmin, async (req, res) =
     const id = String(req.params.id || '').trim();
     if (!id) return res.status(400).json({ error: 'id is required' });
 
-    // Step 1: enumerate all versions for this skill. versions.list
-    // returns a paginated iterator; pull every page so we delete the
-    // whole history, not just the first page.
-    const versions = [];
-    try {
-      const iter = await anthropic.beta.skills.versions.list(id);
-      for await (const v of iter) versions.push(v);
-    } catch (e) {
-      // If list itself 404s, the skill is already gone — succeed idempotently.
-      if (/404|not.?found/i.test(String(e.message || ''))) {
-        return res.json({ ok: true, deleted: id, note: 'Skill already gone (404 on versions.list).' });
-      }
-      throw e;
-    }
-
-    // Step 2: delete each version. The API tolerates concurrent
-    // deletes but we go serial to keep error reporting clean.
-    const versionErrors = [];
-    for (const v of versions) {
-      const versionId = v.version || v.id; // SDK exposes both depending on shape
-      try {
-        await anthropic.beta.skills.versions.delete(versionId, { skill_id: id });
-      } catch (e) {
-        versionErrors.push({ versionId, error: e.message || 'unknown' });
-      }
-    }
-    if (versionErrors.length) {
+    // versions-then-envelope lives in services/anthropic-skills so every
+    // retire path shares it — this route had the only correct copy while
+    // five others called the bare skills.delete and failed.
+    const del = await deleteSkillDeep(anthropic, id);
+    if (!del.ok) {
       return res.status(500).json({
-        error: 'Some skill versions failed to delete',
+        error: del.error,
         skill_id: id,
-        version_count: versions.length,
-        version_errors: versionErrors
+        stage: del.stage,
+        version_errors: del.version_errors
       });
     }
+    if (del.already_gone) {
+      return res.json({ ok: true, deleted: id, note: 'Skill was already gone upstream.' });
+    }
 
-    // Step 3: delete the skill envelope now that no versions remain.
-    await anthropic.beta.skills.delete(id);
-    auditLog(req, { action: 'anthropic.skill_delete', targetType: 'anthropic_skill', targetId: id, detail: { versions_deleted: versions.length } });
-    res.json({ ok: true, deleted: id, versions_deleted: versions.length });
+    auditLog(req, { action: 'anthropic.skill_delete', targetType: 'anthropic_skill', targetId: id, detail: { versions_deleted: del.versions_deleted } });
+    res.json({ ok: true, deleted: id, versions_deleted: del.versions_deleted });
   } catch (e) {
     console.error('DELETE /api/admin/anthropic/skills/:id error:', e);
     res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
