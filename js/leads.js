@@ -100,6 +100,26 @@ function p86Ask(message, opts) {
     });
     return maxPrice;
   }
+  // Sync the lead editor's Estimated Revenue field to the attached proposal
+  // total (max client price across linked estimates). Once a proposal exists it
+  // IS the revenue figure, so the field mirrors it and goes read-only (edit the
+  // estimate to change it); with no proposal it stays hand-editable. Called on
+  // lead load + whenever the proposals list (re)renders. Idempotent.
+  function syncEstimatedRevenueFromProposals(leadId) {
+    var input = document.getElementById('leadEditor_estimated_revenue_low');
+    if (!input) return;
+    var total = revenueFromAttachedEstimates(leadId);
+    if (total != null && !isNaN(total)) {
+      input.value = Math.round(Number(total));
+      input.readOnly = true;
+      input.style.opacity = '0.7';
+      input.title = 'From the attached proposal total — edit the estimate to change it.';
+    } else {
+      input.readOnly = false;
+      input.style.opacity = '';
+      input.title = '';
+    }
+  }
   // Project 86-side only uses the single estimated revenue figure (the min).
   // Kept the same function name and accepts (low, high) for back-compat
   // with existing call sites — the high arg is ignored.
@@ -962,10 +982,6 @@ function p86Ask(message, opts) {
     if (chip) chip.style.display = 'none';
     var convertBtn = document.getElementById('leadEditor_convertJobBtn');
     if (convertBtn) convertBtn.style.display = 'none';
-    // New Lead has no id yet — hide the Site Plan/Survey button (needs a saved
-    // lead to persist a graph against) so it can't linger from a prior edit.
-    var spBtn = document.getElementById('leadEditor_sitePlanBtn');
-    if (spBtn) spBtn.style.display = 'none';
   }
 
   // Reuse the clients cache (loaded by clients.js) so we don't hit the API
@@ -1976,12 +1992,6 @@ function p86Ask(message, opts) {
       window.p86Auth.hasCapability('JOBS_EDIT_OWN')
     );
     btn.style.display = (canEditJobs && (!l || !l.job_id)) ? '' : 'none';
-    // Site Plan / Survey button — available for any SAVED lead (a pre-sale
-    // survey of footprints / measurements / photos that carries into the job on
-    // convert). Shown whenever we're editing an existing lead; hidden on the
-    // New Lead form (no id yet to persist a graph against).
-    var spBtn = document.getElementById('leadEditor_sitePlanBtn');
-    if (spBtn) spBtn.style.display = (l && l.id) ? '' : 'none';
   }
 
   // Open the currently-editing lead in the Site Plan as a pre-sale survey.
@@ -2365,6 +2375,8 @@ function p86Ask(message, opts) {
     var estimates = (window.appData && appData.estimates) || [];
     var linked = estimates.filter(function(e) { return e.lead_id === leadId; });
     if (countEl) countEl.textContent = linked.length ? '(' + linked.length + ')' : '';
+    // Estimated Revenue mirrors the proposal total (or frees up if no estimate).
+    syncEstimatedRevenueFromProposals(leadId);
     if (!linked.length) {
       listEl.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;border:1px dashed var(--border,#333);border-radius:8px;">' +
         'No estimates yet. Click <strong>+ New Estimate from Lead</strong> to draft the first estimate.' +
@@ -3187,6 +3199,10 @@ function p86Ask(message, opts) {
     // a single number on our forms. The schema asks for both, but we
     // ignore the high.
     if (lead.estimated_revenue_low) setField('estimated_revenue_low', lead.estimated_revenue_low);
+    // Override with the attached proposal total when one exists (it's the real
+    // revenue figure); no-op if estimates aren't loaded yet — renderLeadProposals
+    // re-syncs once they are.
+    syncEstimatedRevenueFromProposals(lead.id);
     if (lead.confidence_pct != null) setField('confidence', lead.confidence_pct);
     if (lead.project_type) setField('project_type', lead.project_type);
     if (lead.market) setField('market', lead.market);

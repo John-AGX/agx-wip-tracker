@@ -2716,6 +2716,9 @@
           <button class="ws-right-tab active" data-leadeditor-tab="general" onclick="switchLeadEditorTab('general')">General</button>
           <button class="ws-right-tab" data-leadeditor-tab="proposals" onclick="switchLeadEditorTab('proposals')">Estimates <span id="leadEditor_proposalsCount" style="opacity:0.6;font-weight:400;"></span></button>
           <button class="ws-right-tab" data-leadeditor-tab="photos" onclick="switchLeadEditorTab('photos')">&#x1F4CE; Attachments</button>
+          <!-- Not a panel tab: launches the full-screen Site Plan survey for this lead
+               (no data-leadeditor-tab, so switchLeadEditorTab leaves it alone). -->
+          <button class="ws-right-tab" onclick="openLeadSurvey()" title="Survey this lead in the Site Plan — trace footprints, take measurements, drop photos; carries into the job on convert">&#x1F5FA;&#xFE0F; Site Plan</button>
         </div>
 
         <!-- Linked-job banner — when the lead is SOLD (has job_id) this sits
@@ -2957,7 +2960,6 @@
         <div class="modal-footer" id="leadEditor_modalFooter">
           <button id="leadEditor_deleteBtn" class="danger" style="margin-right:auto;display:none;" onclick="deleteLeadFromEditor()">Delete</button>
           <button id="leadEditor_convertJobBtn" class="success" style="display:none;" onclick="convertLeadToJob()" data-cap="JOBS_EDIT_ANY JOBS_EDIT_OWN">&#x1F3D7; Create Job from Lead</button>
-          <button id="leadEditor_sitePlanBtn" class="secondary" style="display:none;" onclick="openLeadSurvey()" title="Open this lead in the Site Plan to survey footprints, take measurements, and drop photos — carries into the job on convert">&#x1F5FA;&#xFE0F; Site Plan</button>
           <button onclick="closeModal('leadEditorModal')" class="secondary">Cancel</button>
           <button onclick="submitLeadEditor()" class="primary" id="leadEditor_submitBtn">Save Lead</button>
         </div>
@@ -3353,7 +3355,7 @@
     <script src="js/table-enhancements.js?v=15"></script>
     <script src="js/bulk-ribbon.js?v=1"></script>
     <script src="js/job-finalize.js?v=5"></script>
-    <script src="js/leads.js?v=90"></script>
+    <script src="js/leads.js?v=91"></script>
     <script src="js/job-costs-import.js?v=12"></script>
     <script src="js/qb-costs-view.js?v=20"></script>
     <script src="js/insights.js?v=10"></script>
