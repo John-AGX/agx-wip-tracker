@@ -1998,7 +1998,15 @@ function p86Ask(message, opts) {
   // Closes the editor first, then activates the node-graph overlay in survey
   // mode via the engine's entity-aware mounter (nodegraph/ui.js).
   window.openLeadSurvey = function() {
-    var leadId = _currentEditingLeadId;
+    // Resolve the lead id robustly across entry paths: the hidden editor field
+    // is populated on BOTH the modal and the full-page detail view;
+    // _currentEditingLeadId is only set on the modal path; the URL carries it on
+    // a deep-link. First non-empty wins. (Fixes the tab doing nothing when a
+    // lead is opened by direct URL, where _currentEditingLeadId stays null.)
+    var idField = document.getElementById('leadEditor_id');
+    var leadId = (idField && idField.value)
+      || _currentEditingLeadId
+      || (location.pathname.match(/\/leads\/([^\/?#]+)/) || [])[1];
     if (!leadId) return;
     try { closeLeadEditorAny(); } catch (e) {}
     // Google Places autocomplete appends a .pac-container to <body> that can
