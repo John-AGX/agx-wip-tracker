@@ -2960,10 +2960,32 @@ function p86Ask(message, opts) {
     if (titleEl) titleEl.textContent = 'Lead Import Result';
     var html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">' +
       statBlock('New leads', res.inserted || 0, '#34d399') +
-      statBlock('Skipped (duplicate title)', res.skipped || 0, '#fbbf24') +
+      statBlock('Skipped (title collision)', res.skipped || 0, '#fbbf24') +
       statBlock('Errors', (res.errors || []).length, '#f87171') +
       statBlock('Total rows', res.total || 0, 'var(--text-dim,#888)') +
     '</div>';
+    // Name every skipped row. A title collision is NOT proof of a duplicate:
+    // repeat work at the same property is normal (Cortona Sidewalk Repairs
+    // exists as both S2014 and S2060), so these need a human eye. Showing a
+    // bare count meant a real lead could vanish with nothing to review.
+    var skippedList = res.skippedTitles || [];
+    if (skippedList.length) {
+      html += '<div style="font-size:12px;color:#fbbf24;margin-bottom:6px;font-weight:600;">' +
+        skippedList.length + ' row(s) skipped — a lead with this title already exists:</div>' +
+        '<div style="font-size:11px;color:var(--text-dim,#888);margin-bottom:6px;line-height:1.4;">' +
+        'These were NOT imported. Same title does not mean duplicate — if any of these is real ' +
+        'repeat work, rename it in the export and re-import.</div>' +
+        '<div style="max-height:160px;overflow-y:auto;font-size:11px;background:rgba(251,191,36,0.05);' +
+        'border:1px solid rgba(251,191,36,0.2);border-radius:6px;padding:8px;margin-bottom:12px;">';
+      skippedList.slice(0, 100).forEach(function(t) {
+        html += '<div>' + escapeHTML(t) + '</div>';
+      });
+      if (skippedList.length > 100) {
+        html += '<div style="opacity:0.7;margin-top:4px;">…and ' + (skippedList.length - 100) + ' more</div>';
+      }
+      html += '</div>';
+    }
+
     var errs = res.errors || [];
     if (errs.length) {
       html += '<div style="font-size:12px;color:#f87171;margin-bottom:6px;font-weight:600;">' + errs.length + ' row(s) had errors:</div>';

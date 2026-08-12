@@ -354,12 +354,27 @@ router.post('/import', requireAuth, requireCapability('LEADS_EDIT'), async (req,
       let inserted = 0;
       let skipped = 0;
       const errors = [];
+      // Every title we refused to import, so the caller can SEE what was
+      // dropped. Previously this was a bare count: a legitimate lead that
+      // happened to share a title with an existing one vanished with no
+      // record of which one it was.
+      //
+      // Real case (2026-08-11 BT export): 'Waterside I Siding Replacement'
+      // exists twice — one is live job RV2006, the other a separate ~$381k
+      // open opportunity with no job attached. Title-matching drops the
+      // second. Repeat work at the same property is normal here, so a title
+      // collision is a QUESTION for a human, never a verdict.
+      const skippedTitles = [];
 
       for (let i = 0; i < incoming.length; i++) {
         const row = incoming[i] || {};
         const title = (row.title || '').trim();
         if (!title) { errors.push({ row: i, error: 'missing title' }); continue; }
-        if (existingByTitle.has(title.toLowerCase())) { skipped++; continue; }
+        if (existingByTitle.has(title.toLowerCase())) {
+          skipped++;
+          skippedTitles.push(title);
+          continue;
+        }
 
         const fields = pickEditable(row);
         fields.title = title;
@@ -390,7 +405,13 @@ router.post('/import', requireAuth, requireCapability('LEADS_EDIT'), async (req,
       }
 
       await client.query('COMMIT');
-      res.json({ ok: true, total: incoming.length, inserted, skipped, errors });
+      if (skippedTitles.length) {
+        console.warn('[leads/import] skipped ' + skippedTitles.length +
+          ' row(s) on title collision — NOT necessarily duplicates: ' +
+          skippedTitles.slice(0, 25).join(' | ') +
+          (skippedTitles.length > 25 ? ' …+' + (skippedTitles.length - 25) + ' more' : ''));
+      }
+      res.json({ ok: true, total: incoming.length, inserted, skipped, skippedTitles, errors });
       // Geocode the freshly-imported leads in the background so they land on the
       // leads/combined map without waiting for the next boot backfill. The
       // single-create/edit paths geocode inline; the bulk path didn't, which left
