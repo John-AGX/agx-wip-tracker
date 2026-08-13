@@ -392,11 +392,67 @@
 
   function renderEditor(task) {
     var checklist = Array.isArray(task.checklist) ? task.checklist : [];
+    function _lbl(arr, v) { for (var i = 0; i < arr.length; i++) { if (arr[i].v === v) return arr[i].label; } return v || ''; }
+    var _clDone = checklist.filter(function (c) { return c && c.done; }).length;
+    var _linkChip = task.entity_type ? esc(task.linked_label || (window.entityDisplayName && window.entityDisplayName(task.entity_type, task.entity_id)) || task.entity_type) : '';
+    var _stat = String(task.status || '');
+    var _statColor = _stat === 'done' ? 'var(--green,#22c55e)' : _stat === 'blocked' ? 'var(--red,#ef4444)' : 'var(--accent,#4f8cff)';
     var html =
       '<div class="modal-content">' +
-        '<div class="modal-header"><span>Edit task</span>' +
-          '<button class="p86-modal-close" data-close>&times;</button></div>' +
-        '<div style="padding:16px;max-height:70vh;overflow:auto;">' +
+        '<div class="modal-header p86-td-hd">' +
+          '<span class="p86-td-hd-ttl">Task</span>' +
+          '<span style="display:flex;gap:6px;align-items:center;">' +
+            '<button class="ee-btn secondary" id="tdEditBtn" title="Edit this task">&#x1F512; Edit</button>' +
+            '<button class="p86-modal-close" data-close>&times;</button>' +
+          '</span>' +
+        '</div>' +
+        '<div style="max-height:74vh;overflow:auto;">' +
+
+          '<div id="tdView" style="padding:16px 18px;display:flex;flex-direction:column;gap:14px;">' +
+            '<div>' +
+              '<div style="font-size:17px;font-weight:600;line-height:1.35;color:var(--text,#e9ecf5);">' + esc(task.title || 'Untitled task') + '</div>' +
+              '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">' +
+                '<span style="font-size:12px;padding:3px 9px;border-radius:20px;background:color-mix(in srgb,' + _statColor + ' 18%,transparent);color:' + _statColor + ';">' + esc(_lbl(STATUSES, task.status)) + '</span>' +
+                '<span style="font-size:12px;padding:3px 9px;border-radius:20px;background:var(--card-bg,#141a26);color:var(--text-dim,#9aa);border:1px solid var(--border,#333);">' + esc(_lbl(PRIORITIES, task.priority)) + '</span>' +
+                '<span style="font-size:12px;padding:3px 9px;border-radius:20px;background:var(--card-bg,#141a26);color:var(--text-dim,#9aa);border:1px solid var(--border,#333);">' + esc(_lbl(KINDS, task.kind)) + '</span>' +
+                (_linkChip ? '<span style="font-size:12px;padding:3px 9px;border-radius:20px;background:var(--card-bg,#141a26);color:var(--text-dim,#9aa);border:1px solid var(--border,#333);">&#x1F517; ' + _linkChip + '</span>' : '') +
+              '</div>' +
+              '<div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:9px;font-size:12px;color:var(--text-dim,#888);">' +
+                '<span>&#x1F4C5; ' + (task.due_date ? esc((task.due_date || '').slice(0, 10)) : 'No due date') + '</span>' +
+                '<span>&#x1F464; ' + esc(task.assignee_name || 'Unassigned') + '</span>' +
+              '</div>' +
+            '</div>' +
+
+            (task.notes ? '<div><div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--text-dim,#888);margin-bottom:5px;">Notes</div><div style="font-size:14px;line-height:1.6;color:var(--text,#cfd6e4);white-space:pre-wrap;">' + esc(task.notes) + '</div></div>' : '') +
+
+            '<div style="background:var(--card-bg,#141a26);border:1px solid var(--border,#333);border-radius:12px;padding:12px 14px;">' +
+              '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-size:13px;font-weight:600;color:var(--text,#e9ecf5);"><span>&#x2611;&#xFE0F; Punch list</span><span id="tdPunchCount" style="font-weight:400;color:var(--text-dim,#888);">' + _clDone + ' of ' + checklist.length + ' done</span></div>' +
+              '<div style="height:4px;border-radius:4px;background:var(--border,#333);overflow:hidden;margin-bottom:10px;"><i id="tdPunchBar" style="display:block;height:100%;background:var(--accent,#4f8cff);width:' + (checklist.length ? Math.round(_clDone / checklist.length * 100) : 0) + '%;"></i></div>' +
+              '<div id="tdViewChecklist" style="display:flex;flex-direction:column;gap:7px;font-size:13.5px;"></div>' +
+              (checklist.length ? '' : '<div style="font-size:12.5px;color:var(--text-dim,#888);">No punch items yet. Tap Edit to add some.</div>') +
+            '</div>' +
+
+            '<div style="background:var(--card-bg,#141a26);border:1px solid var(--border,#333);border-radius:12px;padding:11px 14px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">' +
+              '<div style="min-width:0;">' +
+                '<div style="font-size:13px;color:var(--text,#e9ecf5);"><span style="color:var(--accent,#4f8cff);">&#x1F4CD;</span> <span id="tdViewLocLine">Location</span></div>' +
+                '<div id="tdViewDir" style="font-size:12px;color:var(--text-dim,#888);margin-top:2px;' + (task.directions ? '' : 'display:none;') + '">' + esc(task.directions || '') + '</div>' +
+              '</div>' +
+              '<a id="tdViewDirBtn" class="ee-btn secondary" target="_blank" rel="noopener" style="flex:none;display:none;">&#x27A4; Directions</a>' +
+            '</div>' +
+
+            '<div>' +
+              '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
+                '<span style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--text-dim,#888);">Photos</span>' +
+                '<span style="display:flex;gap:6px;">' +
+                  '<button class="ee-btn secondary" id="tdViewTake" style="font-size:11px;">&#x1F4F7; Take</button>' +
+                  '<button class="ee-btn secondary" id="tdViewUpload" style="font-size:11px;">&#x1F5BC;&#xFE0F; Upload</button>' +
+                '</span>' +
+              '</div>' +
+              '<div id="tdViewPhotos" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px;"></div>' +
+            '</div>' +
+          '</div>' +
+
+          '<div id="tdEdit" style="display:none;padding:16px 18px;">' +
           '<label class="p86-field"><span>Title</span>' +
             '<input id="tdTitle" type="text" value="' + escAttr(task.title || '') + '" /></label>' +
           '<label class="p86-field"><span>Notes</span>' +
@@ -448,10 +504,11 @@
             '<div id="tdChecklist" class="p86-task-checklist"></div>' +
             '<button type="button" id="tdAddCl" class="ee-btn secondary" style="align-self:flex-start;margin-top:4px;">+ Add item</button>' +
           '</div>' +
+          '</div>' +
         '</div>' +
-        '<div class="modal-footer" style="justify-content:space-between;">' +
+        '<div class="modal-footer" id="tdFooter" style="display:none;justify-content:space-between;">' +
           '<button class="ee-btn secondary" id="tdDelete" style="color:#b91c1c;">Delete</button>' +
-          '<span><button class="ee-btn secondary" data-close>Cancel</button> ' +
+          '<span><button class="ee-btn secondary" id="tdCancelEdit">Cancel</button> ' +
           '<button class="primary" id="tdSave">Save</button></span>' +
         '</div>' +
       '</div>';
@@ -579,18 +636,29 @@
     // ── Photos (attachments on entity_type='task'). Upload auto-geotags images;
     // the first geotagged photo seeds the task pin when none is set yet. ──
     function loadTaskPhotos() {
-      var host = h.modal.querySelector('#tdPhotos'); if (!host) return;
-      if (!window.p86Api || !p86Api.attachments) { host.innerHTML = ''; return; }
+      var host = h.modal.querySelector('#tdPhotos');
+      var vhost = h.modal.querySelector('#tdViewPhotos');
+      if (!window.p86Api || !p86Api.attachments) { if (host) host.innerHTML = ''; if (vhost) vhost.innerHTML = ''; return; }
       p86Api.attachments.list('task', task.id).then(function (resp) {
         var atts = (resp && resp.attachments) || [];
-        if (!atts.length) { host.innerHTML = '<span style="font-size:12px;color:var(--text-dim,#888);">No photos yet.</span>'; return; }
-        host.innerHTML = atts.map(function (a) {
-          var u = a.thumb_url || a.web_url || '';
-          return '<a href="' + escAttr(a.web_url || u) + '" target="_blank" rel="noopener" title="' + escAttr(a.filename || '') + '" ' +
-            'style="display:block;width:54px;height:54px;border-radius:6px;overflow:hidden;border:1px solid var(--border,#333);background:#0f1420;">' +
-            (u ? '<img src="' + escAttr(u) + '" alt="" style="width:100%;height:100%;object-fit:cover;" />' : '') + '</a>';
-        }).join('');
-      }).catch(function () { host.innerHTML = ''; });
+        var empty = '<span style="font-size:12px;color:var(--text-dim,#888);">No photos yet.</span>';
+        if (host) {
+          host.innerHTML = atts.length ? atts.map(function (a) {
+            var u = a.thumb_url || a.web_url || '';
+            return '<a href="' + escAttr(a.web_url || u) + '" target="_blank" rel="noopener" title="' + escAttr(a.filename || '') + '" ' +
+              'style="display:block;width:54px;height:54px;border-radius:6px;overflow:hidden;border:1px solid var(--border,#333);background:#0f1420;">' +
+              (u ? '<img src="' + escAttr(u) + '" alt="" style="width:100%;height:100%;object-fit:cover;" />' : '') + '</a>';
+          }).join('') : empty;
+        }
+        if (vhost) {
+          vhost.innerHTML = atts.length ? atts.map(function (a) {
+            var u = a.thumb_url || a.web_url || '';
+            return '<a href="' + escAttr(a.web_url || u) + '" target="_blank" rel="noopener" title="' + escAttr(a.filename || '') + '" ' +
+              'style="display:block;aspect-ratio:1;border-radius:10px;overflow:hidden;border:1px solid var(--border,#333);background:#0f1420;">' +
+              (u ? '<img src="' + escAttr(u) + '" alt="" style="width:100%;height:100%;object-fit:cover;" />' : '') + '</a>';
+          }).join('') : ('<span style="grid-column:1/-1;font-size:12px;color:var(--text-dim,#888);">No photos yet.</span>');
+        }
+      }).catch(function () { if (host) host.innerHTML = ''; if (vhost) vhost.innerHTML = ''; });
     }
     loadTaskPhotos();
     h.modal.querySelector('#tdAddPhoto').addEventListener('click', function () { h.modal.querySelector('#tdPhotoInput').click(); });
@@ -657,6 +725,64 @@
         refreshOpenSurfaces();
       }).catch(function (e) { toast((e && e.message) || 'Could not delete', 'error'); });
     });
+
+    // ── View ⇄ Edit gate + read-only dashboard wiring ──────────────────
+    function _showEdit(on) {
+      h.modal.querySelector('#tdView').style.display = on ? 'none' : '';
+      h.modal.querySelector('#tdEdit').style.display = on ? '' : 'none';
+      h.modal.querySelector('#tdFooter').style.display = on ? 'flex' : 'none';
+      h.modal.querySelector('#tdEditBtn').style.display = on ? 'none' : '';
+    }
+    h.modal.querySelector('#tdEditBtn').addEventListener('click', function () { _showEdit(true); });
+    var _cancelEdit = h.modal.querySelector('#tdCancelEdit');
+    if (_cancelEdit) _cancelEdit.addEventListener('click', function () { _showEdit(false); });
+
+    function _refreshPunchProgress() {
+      var total = clState.length, done = clState.filter(function (c) { return c.done; }).length;
+      var cnt = h.modal.querySelector('#tdPunchCount'), bar = h.modal.querySelector('#tdPunchBar');
+      if (cnt) cnt.textContent = done + ' of ' + total + ' done';
+      if (bar) bar.style.width = (total ? Math.round(done / total * 100) : 0) + '%';
+    }
+    // Read-only punch list: tap a box to toggle + persist, no unlock needed.
+    function paintViewChecklist() {
+      var host = h.modal.querySelector('#tdViewChecklist'); if (!host) return;
+      host.innerHTML = clState.map(function (c, i) {
+        return '<label style="display:flex;gap:9px;align-items:flex-start;cursor:pointer;color:' + (c.done ? 'var(--text-dim,#888)' : 'var(--text,#e9ecf5)') + ';">' +
+          '<input type="checkbox" data-vcl="' + i + '"' + (c.done ? ' checked' : '') + ' style="margin-top:2px;width:16px;height:16px;flex:none;" />' +
+          '<span style="' + (c.done ? 'text-decoration:line-through;' : '') + '">' + esc(c.text || '') + '</span></label>';
+      }).join('');
+      host.querySelectorAll('[data-vcl]').forEach(function (el) {
+        el.addEventListener('change', function () {
+          clState[+el.getAttribute('data-vcl')].done = el.checked;
+          try { paintChecklist(); } catch (e) {}
+          _refreshPunchProgress();
+          paintViewChecklist();
+          api().update(task.id, { checklist: clState.filter(function (c) { return (c.text || '').trim(); }) })
+            .then(function () { refreshOpenSurfaces(); })
+            .catch(function () { toast('Could not save', 'error'); });
+        });
+      });
+    }
+    paintViewChecklist();
+
+    // Read-only location line + Directions link (own pin, else the job default).
+    (function paintViewLoc() {
+      var lat = parseFloat(task.lat), lng = parseFloat(task.lng);
+      var hasPin = isFinite(lat) && isFinite(lng);
+      var eff = hasPin ? { lat: lat, lng: lng } : (_jobDef && _jobDef.coords ? _jobDef.coords : null);
+      var effAddr = hasPin ? '' : (_jobDef ? _jobDef.address : '');
+      var line = h.modal.querySelector('#tdViewLocLine'), btn = h.modal.querySelector('#tdViewDirBtn');
+      var label = effAddr || (eff ? (Number(eff.lat).toFixed(5) + ', ' + Number(eff.lng).toFixed(5)) : '');
+      if (line) line.textContent = label || 'No location set';
+      var href = (eff && window.p86MapLink) ? window.p86MapLink.url({ lat: eff.lat, lng: eff.lng, address: effAddr }) : '';
+      if (btn) { if (href) { btn.href = href; btn.style.display = ''; } else { btn.style.display = 'none'; } }
+    })();
+
+    // Take / Upload in the view reuse the edit form's file input; tiles open the image.
+    var _vt = h.modal.querySelector('#tdViewTake'), _vu = h.modal.querySelector('#tdViewUpload');
+    var _photoInp = h.modal.querySelector('#tdPhotoInput');
+    if (_vt && _photoInp) _vt.addEventListener('click', function () { _photoInp.click(); });
+    if (_vu && _photoInp) _vu.addEventListener('click', function () { _photoInp.click(); });
   }
 
   // ── List renderer ──────────────────────────────────────────────────
