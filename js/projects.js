@@ -1379,8 +1379,15 @@
               btn('spacious', '&#x25A3;', 'Spacious tiles') +
             '</div>';
           })() +
-          '<button class="primary" onclick="document.getElementById(\'projPhotoFileInput\').click();">&#x2795; Upload Photos</button>' +
-          '<input type="file" id="projPhotoFileInput" multiple accept="image/*,application/pdf,.xlsx,.xls,.xlsm,.csv,.tsv,.docx,.doc,.txt,.md" capture="environment" style="display:none;" />' +
+          // Two distinct paths (John, streamline). CAMERA input carries
+          // capture="environment" + pure image/* → taps open the camera DIRECTLY
+          // (no Camera/Files sheet). LIBRARY input is image/* + multiple + NO
+          // capture → one library open, bulk-select 20+ at once. Both quick-save
+          // (no per-photo preview modal); caption/annotate happen in the viewer.
+          '<button class="primary" onclick="document.getElementById(\'projPhotoCameraInput\').click();" title="Open the camera and snap photos — each saves instantly">&#x1F4F7; Take Photos</button>' +
+          '<button class="secondary" onclick="document.getElementById(\'projPhotoFileInput\').click();" title="Pick many photos from your library at once">&#x1F5BC;&#xFE0F; Upload Photos</button>' +
+          '<input type="file" id="projPhotoCameraInput" accept="image/*" capture="environment" style="display:none;" />' +
+          '<input type="file" id="projPhotoFileInput" accept="image/*" multiple style="display:none;" />' +
         '</div>' +
       '</div>' +
 
@@ -1543,19 +1550,26 @@
       });
     }
 
-    // Wire upload input. Walkthrough-loop heuristic mirrors the
-    // photos-tab handler: single image file from a touch device =
-    // camera capture, so keep the camera open after each save.
+    // Wire the two upload inputs. Both quick-save (no per-photo preview modal)
+    // with the current sticky/walkthrough tags — caption/annotate happen later
+    // in the photo viewer. CAMERA also sets keepOpen so it re-opens for the next
+    // shot (best-effort: Android re-opens automatically; iOS blocks a
+    // programmatic re-open without a gesture, so you just tap Take Photos again —
+    // each tap still goes straight to the camera, no sheet).
+    var cameraInput = host.querySelector('#projPhotoCameraInput');
+    if (cameraInput) {
+      cameraInput.addEventListener('change', function(e) {
+        if (e.target.files && e.target.files.length) {
+          uploadFiles(e.target.files, { quickSave: true, keepOpen: true });
+        }
+        cameraInput.value = '';
+      });
+    }
     var fileInput = host.querySelector('#projPhotoFileInput');
     if (fileInput) {
       fileInput.addEventListener('change', function(e) {
         if (e.target.files && e.target.files.length) {
-          var f = e.target.files[0];
-          var isImage = f && f.type && /^image\//.test(f.type);
-          var oneFile = e.target.files.length === 1;
-          var touch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
-          if (oneFile && isImage && touch) _walkthroughKeepOpen = true;
-          uploadFiles(e.target.files);
+          uploadFiles(e.target.files, { quickSave: true, keepOpen: false });
         }
         fileInput.value = '';
       });
@@ -1574,7 +1588,7 @@
         e.preventDefault();
         feedHost.classList.remove('p86-proj-drop-active');
         if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
-          uploadFiles(e.dataTransfer.files);
+          uploadFiles(e.dataTransfer.files, { quickSave: true });
         }
       });
     }
@@ -5128,10 +5142,14 @@
   // the camera re-opens after each save until they explicitly tap
   // "Done" inside the preview modal. This matches the CompanyCam
   // capture loop where you tap once and snap a dozen photos.
-  function uploadFiles(files) {
+  function uploadFiles(files, opts) {
     var pid = _detailState.projectId;
     if (!pid) return;
-    _quickSaveThisBatch = false;
+    opts = opts || {};
+    // quickSave skips the per-photo preview modal (bulk + rapid capture);
+    // keepOpen re-opens the CAMERA after the batch for the next shot.
+    _quickSaveThisBatch = !!opts.quickSave;
+    _walkthroughKeepOpen = !!opts.keepOpen;
     var fileList = Array.from(files);
     var chain = Promise.resolve();
     fileList.forEach(function(f) {
@@ -5163,7 +5181,7 @@
       // so the old 220ms just read as a dead pause between shots).
       if (_walkthroughKeepOpen) {
         setTimeout(function() {
-          var inp = document.getElementById('projPhotoFileInput');
+          var inp = document.getElementById('projPhotoCameraInput');   // reopen the CAMERA (straight to camera, no sheet)
           if (inp) inp.click();
         }, 80);
       }
