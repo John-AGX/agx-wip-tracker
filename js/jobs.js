@@ -4188,11 +4188,10 @@ function renderJobsMain() {
                     (_totalUnits ? (' · ' + _totalUnits + ' unit' + (_totalUnits === 1 ? '' : 's')) : '') +
                     (_recon.contract > 0 ? (' · of ' + formatCurrency(_recon.contract) + ' contract') : '') +
                     ' · budgets derive from each building’s scope slices</div>';
-            // Site Plan inspector renders the buildings as a compact tile GRID
-            // that expands to fill the row on click (John); the job-overview host
-            // keeps the plain vertical list.
-            var _tileGrid = /insp/.test(hostId || '');
-            container.innerHTML = stripHTML + '<div class="p86-mline-list' + (_tileGrid ? ' p86-mline-grid' : '') + '">' + rowsHTML + '</div>';
+            // Buildings render as a compact tile GRID that expands to fill the
+            // row on click (John) — on BOTH the Site Plan inspector and the
+            // job-overview (the only two hosts renderJobBuildings targets).
+            container.innerHTML = stripHTML + '<div class="p86-mline-list p86-mline-grid">' + rowsHTML + '</div>';
             // Crew chips are DERIVED from allocated-PO subs, filled async after the
             // money (which is already in the DOM). Never blocks or alters numbers.
             fillBuildingCrew(jobId, container);
