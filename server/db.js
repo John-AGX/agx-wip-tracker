@@ -314,9 +314,24 @@ async function initSchema() {
     DO $migrate_packs$
     DECLARE
       agx_id INTEGER;
+      existing INTEGER;
     BEGIN
       SELECT id INTO agx_id FROM organizations WHERE slug = 'agx';
       IF agx_id IS NULL THEN RETURN; END IF;
+
+      -- Actually make it one-shot. This block runs on EVERY boot, and
+      -- ON CONFLICT (organization_id, name) DO NOTHING only protects a
+      -- pack whose row still exists — an archived row does hold the key,
+      -- but a HARD-deleted one does not. archiveAllSkillsForOrg() does
+      -- DELETE FROM org_skill_packs, so after an org reset the next
+      -- boot silently rebuilt every pack from the legacy app_settings
+      -- blob, complete with its stale anthropic_skill_id.
+      --
+      -- Seed only when this org has no packs at all (archived included).
+      -- That is the migration's real intent: populate org_skill_packs
+      -- from the legacy row the first time, never again.
+      SELECT COUNT(*) INTO existing FROM org_skill_packs WHERE organization_id = agx_id;
+      IF existing > 0 THEN RETURN; END IF;
       -- Phase E retired the contexts column; the one-shot pack-copy
       -- migration below no longer references it (legacy 'contexts'
       -- value from app_settings.agent_skills is dropped on the way

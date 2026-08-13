@@ -927,6 +927,74 @@ function buildSkillMarkdown(pack) {
   return lines.join('\n');
 }
 
+// Push ONE pack to Anthropic and swap the agent onto it.
+//
+// Extracted so the per-pack route and sync-all share one implementation.
+// They used to differ, and the difference WAS the bug: the per-pack route
+// created unconditionally, sync-all skipped anything that already had an id
+// (so it could only ever create, never update). Between them, an edited
+// playbook never reached the agent.
+//
+// The ordering is the whole safety argument. Every failure mode leaves the
+// agent running the OLD skill rather than no skill:
+//   1. upload the new skill   (old still live and still referenced)
+//   2. re-point managed_agent_skills old id -> new id
+//   3. caller persists the new id onto the pack
+//   4. retire the old skill   (now unreferenced; failure = harmless orphan)
+// Never delete first.
+async function pushPackToAnthropic(anthropic, pack) {
+  const md = buildSkillMarkdown(pack);
+  const slug = slugifySkillName(pack.name);
+  const priorId = pack.anthropic_skill_id || null;
+
+  // Anthropic requires SKILL.md inside a top-level folder (slug/SKILL.md).
+  const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
+  const created = await anthropic.beta.skills.create({
+    display_title: (pack.name || 'Project 86 skill').slice(0, 200),
+    files: [file]
+  });
+
+  let repointed = 0;
+  if (priorId) {
+    try {
+      const up = await pool.query(
+        `UPDATE managed_agent_skills SET skill_id = $1 WHERE skill_id = $2`,
+        [created.id, priorId]
+      );
+      repointed = up.rowCount || 0;
+    } catch (e) {
+      console.error('[skills/sync] re-point managed_agent_skills failed for ' +
+        priorId + ' -> ' + created.id + ':', e.message);
+    }
+  }
+
+  let oldDeleted = false, oldDeleteError = null;
+  if (priorId) {
+    const del = await deleteSkillDeep(anthropic, priorId);
+    oldDeleted = !!del.ok;
+    if (!del.ok) {
+      oldDeleteError = del.error;
+      console.warn('[skills/sync] old skill ' + priorId +
+        ' replaced but not deleted (orphan left upstream):', del.error);
+    }
+  }
+
+  return { id: created.id, replaced: priorId, repointed, oldDeleted, oldDeleteError,
+           hash: skillBodyHash(md) };
+}
+
+// Fingerprint of what was actually uploaded, stored back on the pack as
+// `synced_hash`. Without it, "synced" only ever meant "has an id" — it could
+// not tell a pack that matches its live skill from one edited weeks ago that
+// never shipped. A pack with no stored hash counts as drifted and is
+// re-pushed once, which is self-healing: after one sync-all every pack
+// carries a hash and the status becomes trustworthy.
+function skillBodyHash(md) {
+  // Inline require matches the existing style in this file — there is no
+  // top-level crypto binding here.
+  return require('crypto').createHash('sha256').update(md, 'utf8').digest('hex').slice(0, 16);
+}
+
 // POST /api/admin/agents/skills/sync-all-to-anthropic
 //   For each local pack without anthropic_skill_id, packages SKILL.md,
 //   uploads via beta.skills.create, persists the returned id back into
@@ -945,32 +1013,34 @@ router.post('/skills/sync-all-to-anthropic', requireAuth, requireCapability('ROL
     const summary = [];
     for (let i = 0; i < skills.length; i++) {
       const pack = skills[i];
-      // NOTE: create-only by design, for now. This loop's inline create
-      // does NOT re-point managed_agent_skills or retire the old skill, so
-      // letting a changed pack fall through here would mint an orphan and
-      // leave the agent on the stale copy — the exact bug the per-pack
-      // route now fixes. Until this loop delegates to that same path,
-      // 'already_synced' means "has an id", NOT "matches what is live".
-      // Use POST /skills/:idx/sync-to-anthropic to push an edit.
-      if (pack.anthropic_skill_id) {
-        summary.push({ idx: i, name: pack.name, status: 'already_synced', anthropic_skill_id: pack.anthropic_skill_id });
+      // Delegates to the same create -> re-point -> retire path the per-pack
+      // route uses. This loop used to create-only and skip anything with an
+      // id, so an edited playbook could never ship through here — while it
+      // reported 'already_synced', which was true only of the id.
+      const currentHash = skillBodyHash(buildSkillMarkdown(pack));
+      if (pack.anthropic_skill_id && pack.synced_hash === currentHash) {
+        summary.push({ idx: i, name: pack.name, status: 'already_synced',
+                       anthropic_skill_id: pack.anthropic_skill_id });
         continue;
       }
+      const isUpdate = !!pack.anthropic_skill_id;
       try {
-        const md = buildSkillMarkdown(pack);
-        const slug = slugifySkillName(pack.name);
-        // Anthropic Skills API requires SKILL.md inside a top-level folder
-        // (slug/SKILL.md) since 2026-05-14.
-        const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
-        const created = await anthropic.beta.skills.create({
-          display_title: (pack.name || 'Project 86 skill').slice(0, 200),
-          files: [file]
-        });
-        // Persist the returned id back onto the local pack. Mutating
+        const pushed = await pushPackToAnthropic(anthropic, pack);
+        // Persist the id + fingerprint back onto the local pack. Mutating
         // skills[i] then writing the whole row preserves admin edits
         // on other packs (no race because admin is single-user).
-        skills[i] = Object.assign({}, pack, { anthropic_skill_id: created.id });
-        summary.push({ idx: i, name: pack.name, status: 'synced', anthropic_skill_id: created.id });
+        skills[i] = Object.assign({}, pack, {
+          anthropic_skill_id: pushed.id,
+          synced_hash: pushed.hash
+        });
+        summary.push({
+          idx: i, name: pack.name,
+          status: isUpdate ? 'updated' : 'synced',
+          anthropic_skill_id: pushed.id,
+          replaced: pushed.replaced,
+          agent_rows_repointed: pushed.repointed,
+          old_delete_error: pushed.oldDeleteError
+        });
       } catch (e) {
         summary.push({ idx: i, name: pack.name, status: 'failed', error: e.message });
       }
@@ -979,7 +1049,7 @@ router.post('/skills/sync-all-to-anthropic', requireAuth, requireCapability('ROL
     // Single write at the end — only persist if at least one pack
     // changed. Avoids generating a snapshot version when no syncs
     // landed.
-    const newSyncs = summary.filter(s => s.status === 'synced').length;
+    const newSyncs = summary.filter(s => s.status === 'synced' || s.status === 'updated').length;
     if (newSyncs > 0) {
       await pool.query(
         `INSERT INTO app_settings (key, value, updated_at)
@@ -1015,53 +1085,25 @@ router.post('/skills/:idx/sync-to-anthropic', requireAuth, requireCapability('RO
     if (idx >= skills.length) return res.status(404).json({ error: 'idx out of range.' });
 
     const pack = skills[idx];
-    const md = buildSkillMarkdown(pack);
-    const slug = slugifySkillName(pack.name);
 
-    // Re-sync of an ALREADY-synced pack used to be impossible. This route
+    // Re-syncing an ALREADY-synced pack used to be impossible. This route
     // called skills.create unconditionally: editing a pack minted a second
     // Anthropic skill, overwrote the local id, and left the old skill live
     // and still referenced by managed_agent_skills — so the agent kept
     // running the stale copy while the UI showed "synced". sync-all had the
-    // mirror-image bug: it SKIPS anything with an id, so it can only ever
+    // mirror-image bug: it SKIPPED anything with an id, so it could only
     // create, never update. Between them, content edits never propagated.
     //
-    // Order below is deliberate and is the whole safety argument. Anything
-    // that fails leaves the agent running the OLD skill rather than none:
-    //   1. upload the new skill  (old still live + referenced)
-    //   2. re-point managed_agent_skills old id -> new id
-    //   3. persist the pack's new id
-    //   4. delete the old skill  (now unreferenced; failure = harmless orphan)
-    // Never delete first — that would strip a live playbook off the agent
-    // with no guarantee the replacement lands.
-    const priorId = pack.anthropic_skill_id || null;
+    // Both now call pushPackToAnthropic, which owns the ordering (upload →
+    // re-point → retire). The paths diverging is what let edits go unshipped.
+    const pushed = await pushPackToAnthropic(anthropic, pack);
 
-    // Anthropic Skills API requires SKILL.md inside a top-level folder
-    // (slug/SKILL.md) since 2026-05-14.
-    const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
-    const created = await anthropic.beta.skills.create({
-      display_title: (pack.name || 'Project 86 skill').slice(0, 200),
-      files: [file]
+    // Persist the swap, including the fingerprint of what was uploaded
+    // so sync-all can tell "matches live" from merely "has an id".
+    skills[idx] = Object.assign({}, pack, {
+      anthropic_skill_id: pushed.id,
+      synced_hash: pushed.hash
     });
-
-    // 2 — re-point the agent attachment. Without this the agent keeps
-    // loading priorId no matter what the pack says.
-    let repointed = 0;
-    if (priorId) {
-      try {
-        const up = await pool.query(
-          `UPDATE managed_agent_skills SET skill_id = $1 WHERE skill_id = $2`,
-          [created.id, priorId]
-        );
-        repointed = up.rowCount || 0;
-      } catch (e) {
-        console.error('[skills/sync] re-point managed_agent_skills failed for ' +
-          priorId + ' -> ' + created.id + ':', e.message);
-      }
-    }
-
-    // 3 — persist the swap.
-    skills[idx] = Object.assign({}, pack, { anthropic_skill_id: created.id });
     await pool.query(
       `INSERT INTO app_settings (key, value, updated_at)
        VALUES ('agent_skills', $1::jsonb, NOW())
@@ -1070,30 +1112,18 @@ router.post('/skills/:idx/sync-to-anthropic', requireAuth, requireCapability('RO
       [JSON.stringify(Object.assign({}, cfg, { skills }))]
     );
 
-    // 4 — retire the old skill. Non-fatal: an orphan upstream is untidy,
-    // a missing skill is an outage. deleteSkillDeep clears versions first
-    // — a bare skills.delete fails on every skill we've ever created, and
-    // the old code logged that failure to a console nobody reads.
-    let oldDeleted = false;
-    let oldDeleteError = null;
-    if (priorId) {
-      const del = await deleteSkillDeep(anthropic, priorId);
-      oldDeleted = !!del.ok;
-      if (!del.ok) {
-        oldDeleteError = del.error;
-        console.warn('[skills/sync] old skill ' + priorId +
-          ' replaced but not deleted (orphan left upstream):', del.error);
-      }
-    }
-
+    // Retiring the old skill already happened inside pushPackToAnthropic
+    // (deleteSkillDeep, which clears versions first — a bare skills.delete
+    // fails on every skill we have ever created). Non-fatal: an orphan
+    // upstream is untidy, a missing skill is an outage.
     res.json({
       ok: true,
-      anthropic_skill_id: created.id,
-      replaced: priorId,
-      agent_rows_repointed: repointed,
-      old_deleted: oldDeleted,
-      old_delete_error: oldDeleteError,
-      note: priorId ? 'Run managed sync-all + start a new chat for the agent to pick this up.' : undefined
+      anthropic_skill_id: pushed.id,
+      replaced: pushed.replaced,
+      agent_rows_repointed: pushed.repointed,
+      old_deleted: pushed.oldDeleted,
+      old_delete_error: pushed.oldDeleteError,
+      note: pushed.replaced ? 'Run managed sync-all + start a new chat for the agent to pick this up.' : undefined
     });
   } catch (e) {
     console.error('POST /api/admin/agents/skills/:idx/sync-to-anthropic error:', e);
