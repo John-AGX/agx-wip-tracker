@@ -3971,6 +3971,29 @@ async function initSchema() {
       ON tasks(organization_id, owner_user_id, status)
       WHERE scope = 'personal' AND archived_at IS NULL;
 
+    -- Task share links — send a single task to an outside worker (a sub's crew)
+    -- by email and let them complete it with NO account. The random token IS the
+    -- access, scoped to ONE task; usable while not revoked and not past expiry.
+    -- "Expires on completion" too: once completed_at is set the guest routes
+    -- refuse mutations. See server/routes/task-share-routes.js.
+    CREATE TABLE IF NOT EXISTS task_shares (
+      id                TEXT PRIMARY KEY,
+      organization_id   INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      task_id           TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      token             TEXT NOT NULL UNIQUE,
+      sub_id            TEXT,
+      recipient_email   TEXT NOT NULL,
+      recipient_name    TEXT,
+      expires_at        TIMESTAMPTZ NOT NULL,
+      opened_at         TIMESTAMPTZ,
+      completed_at      TIMESTAMPTZ,
+      revoked_at        TIMESTAMPTZ,
+      last_used_at      TIMESTAMPTZ,
+      created_by        INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_shares_task ON task_shares(task_id, created_at DESC);
+
     -- ───────────────────────────────────────────────────────────────
     -- My Notes — a personal, PRIVATE scratchpad (Phase 1 / Deliverable
     -- 3). Unlike tasks (org-shared, assignee-driven), a note belongs to

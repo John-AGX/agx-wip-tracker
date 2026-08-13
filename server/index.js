@@ -61,6 +61,7 @@ const orgTagsRoutes = require('./routes/org-tags-routes');
 const marketRoutes = require('./routes/market-routes');
 const folderTemplatesRoutes = require('./routes/folder-templates-routes');
 const tasksRoutes = require('./routes/tasks-routes');
+const taskShareRoutes = require('./routes/task-share-routes');
 const notesRoutes = require('./routes/notes-routes');
 const remindersCrudRoutes = require('./routes/reminders-crud-routes');
 const receiptRoutes = require('./routes/receipt-routes');
@@ -256,6 +257,7 @@ app.use('/api/subs', subRoutes);
 // the sub-routes router gets first crack at /subs/* paths and falls
 // through to here only for the invite endpoints it doesn't define.
 app.use('/api', subPortalRoutes);
+app.use('/api', taskShareRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/agent-jobs', require('./routes/agent-jobs-routes'));
 app.use('/api/push', require('./routes/push-routes'));
