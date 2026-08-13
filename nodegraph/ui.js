@@ -1291,6 +1291,8 @@ function renderNestedOverlay(){
   }
   var on=!!window._p86Nested;
   btn.classList.toggle('ng-nc-on', !!window._p86NcDefault);   // "Cards" now toggles the docked cost-cards-on-map mode
+  // Survey mode (lead Site Plan) has no cost cards — hide the Cards toggle.
+  btn.style.display = (E.isSurvey && E.isSurvey()) ? 'none' : '';
   obtn.style.display = on ? '' : 'none';
   obtn.classList.toggle('ng-nc-on', !!window._p86NcOutline);
   host.classList.toggle('ng-outline', !!window._p86NcOutline);
@@ -5737,7 +5739,9 @@ function initEvents(){
       // RS-C: the node "library" is retired — attachable nodes (scope/sub/PO/cost/CO)
       // now spawn inline from a node's inspector. This menu keeps only what doesn't
       // attach to a parent: the Building (map-placed) + the Math/Note/Watch utilities.
-      var LIB_KEEP={t1:1,sum:1,sub2:1,mul:1,pct:1,note:1,watch:1};
+      // Survey mode (lead Site Plan): only the Building footprint + a Note make
+      // sense — the Math / Watch cost utilities don't belong on a pre-sale survey.
+      var LIB_KEEP=(E.isSurvey && E.isSurvey())?{t1:1,note:1}:{t1:1,sum:1,sub2:1,mul:1,pct:1,note:1,watch:1};
       E.CATS.forEach(function(c){
         var items=c.items.filter(function(t){ if(!LIB_KEEP[t]) return false; var d=E.DEFS[t]; return d && ((d.label||t).toLowerCase().indexOf(f)>=0 || c.name.toLowerCase().indexOf(f)>=0); });
         if(!items.length) return;
