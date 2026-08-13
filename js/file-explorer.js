@@ -64,7 +64,7 @@
       '.p86fx-cap .nm{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
       '.p86fx-cap .mt{color:var(--muted,#6b7280);font-size:10.5px;}' +
       '.p86fx-folder .p86fx-thumb{color:var(--accent,#22d3ee);}' +
-      '.p86fx-check{position:absolute;top:6px;left:6px;width:18px;height:18px;z-index:2;}' +
+      '.p86fx-check{position:absolute;top:6px;left:6px;width:10px;height:10px;z-index:2;}' +
       // list rows
       // Fixed-column grid so the icon / name / size / date line up across
       // EVERY row — folders (no checkbox) get a .ck-spacer in column 1 so they
@@ -73,7 +73,7 @@
       '.p86fx-row:hover{background:var(--hover,#23232e);}' +
       '.p86fx-row.sel{background:rgba(34,211,238,0.12);}' +
       '.p86fx-row.drop-ok{outline:2px dashed var(--accent,#22d3ee);}' +
-      '.p86fx-row>input[type=checkbox]{width:16px;height:16px;margin:0;justify-self:center;}' +
+      '.p86fx-row>input[type=checkbox]{width:10px;height:10px;margin:0;justify-self:center;}' +
       '.p86fx-row .ck-spacer{display:block;}' +
       '.p86fx-row .ic{justify-self:center;font-size:16px;line-height:1;}' +
       '.p86fx-row .nm{display:flex;align-items:center;gap:7px;min-width:0;}' +
@@ -632,8 +632,15 @@
       // folder open + drag/drop
       box.querySelectorAll('[data-folder]').forEach(function (el) {
         var fid = el.getAttribute('data-folder');
-        el.addEventListener('dblclick', function () { S.cur = fid; S.sel = {}; render(); });
-        el.addEventListener('click', function (e) { if (e.detail === 1 && S.view === 'list') { /* single click no-op */ } });
+        // Single click opens, to match files. Same debounce so the second
+        // click of a habitual double-click doesn't re-enter the folder.
+        var lastNav = 0;
+        el.addEventListener('click', function () {
+          var now = Date.now();
+          if (now - lastNav < 500) return;
+          lastNav = now;
+          S.cur = fid; S.sel = {}; render();
+        });
         el.addEventListener('contextmenu', function (e) { e.preventDefault(); folderMenu(e, fid); });
         wireFolderDrag(el, fid);
         wireFolderDrop(el, fid);
@@ -641,13 +648,21 @@
       // file open + select + drag + menu
       box.querySelectorAll('[data-file]').forEach(function (el) {
         var id = el.getAttribute('data-file');
+        var lastOpen = 0;
         el.addEventListener('click', function (e) {
           if (e.target && e.target.hasAttribute && e.target.hasAttribute('data-check')) return;
-          if (e.ctrlKey || e.metaKey) { if (S.sel[id]) delete S.sel[id]; else S.sel[id] = 1; renderItems(); return; }
-          // plain click selects (single)
-          S.sel = {}; S.sel[id] = 1; renderItems();
+          if (e.ctrlKey || e.metaKey || e.shiftKey) {
+            if (S.sel[id]) delete S.sel[id]; else S.sel[id] = 1;
+            renderItems(); return;
+          }
+          // A plain click OPENS. Selecting is the checkbox's job (plus
+          // ctrl/cmd-click) — a click that only ticked a box left no way to
+          // open a file short of a double-click nobody discovers.
+          var now = Date.now();
+          if (now - lastOpen < 500) return;  // swallow the 2nd click of a habitual double-click
+          lastOpen = now;
+          openFile(id);
         });
-        el.addEventListener('dblclick', function () { openFile(id); });
         el.addEventListener('contextmenu', function (e) { e.preventDefault(); fileMenu(e, id); });
         el.addEventListener('dragstart', function (e) {
           if (!S.sel[id]) { S.sel = {}; S.sel[id] = 1; renderItems(); }
