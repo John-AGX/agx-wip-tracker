@@ -4084,7 +4084,7 @@ function renderJobsMain() {
                     ? ' <a href="' + window.p86MapLink.url(building.address).replace(/&/g, '&amp;') + '" target="_blank" rel="noopener" onclick="event.stopPropagation();" title="Open in Google Maps" style="text-decoration:none;margin-left:2px;">' + (window.p86Icon ? window.p86Icon('map-pin') : '') + '</a>'
                     : '';
                 let body =
-                    '<div class="p86-mline" onclick="(function(){var d=document.getElementById(\'' + uid + '\');var a=document.getElementById(\'' + arrowId + '\');var closed=d.style.display===\'none\';d.style.display=closed?\'block\':\'none\';a.textContent=closed?\'' + ARROW_DOWN + '\':\'' + ARROW_RIGHT + '\';})()">' +
+                    '<div class="p86-mline" onclick="(function(el){var d=document.getElementById(\'' + uid + '\');var a=document.getElementById(\'' + arrowId + '\');var closed=d.style.display===\'none\';d.style.display=closed?\'block\':\'none\';a.textContent=closed?\'' + ARROW_DOWN + '\':\'' + ARROW_RIGHT + '\';el.classList.toggle(\'is-open\',closed);})(this)">' +
                         '<div class="p86-mline-top">' +
                             '<div class="p86-mline-id">' +
                                 '<span id="' + arrowId + '" class="p86-mline-arrow">' + ARROW_RIGHT + '</span>' +
@@ -4103,6 +4103,7 @@ function renderJobsMain() {
                             '<span class="p86-mline-of">' + bldgPct + '% of job</span>' +
                         '</div>' +
                         '<div class="p86-mline-track"><i style="width:' + Math.max(0, Math.min(100, compPct)) + '%"></i></div>' +
+                        '<div class="p86-mline-tilecap">' + pctComplete + '% complete</div>' +
                         '<div id="' + uid + '" class="p86-mline-body" style="display:none">';
 
                 // Cost breakdown
@@ -4187,7 +4188,11 @@ function renderJobsMain() {
                     (_totalUnits ? (' · ' + _totalUnits + ' unit' + (_totalUnits === 1 ? '' : 's')) : '') +
                     (_recon.contract > 0 ? (' · of ' + formatCurrency(_recon.contract) + ' contract') : '') +
                     ' · budgets derive from each building’s scope slices</div>';
-            container.innerHTML = stripHTML + '<div class="p86-mline-list">' + rowsHTML + '</div>';
+            // Site Plan inspector renders the buildings as a compact tile GRID
+            // that expands to fill the row on click (John); the job-overview host
+            // keeps the plain vertical list.
+            var _tileGrid = /insp/.test(hostId || '');
+            container.innerHTML = stripHTML + '<div class="p86-mline-list' + (_tileGrid ? ' p86-mline-grid' : '') + '">' + rowsHTML + '</div>';
             // Crew chips are DERIVED from allocated-PO subs, filled async after the
             // money (which is already in the DOM). Never blocks or alters numbers.
             fillBuildingCrew(jobId, container);

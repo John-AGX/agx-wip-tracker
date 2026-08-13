@@ -10436,6 +10436,21 @@ body.light-mode .p86-pv-tag-modal-chip {
 .p86-mline-edit { font-size: 11px; color: var(--accent); background: none; border: 1px solid var(--border, #333); border-radius: 7px; padding: 4px 10px; cursor: pointer; }
 .p86-mline-edit:hover { border-color: var(--accent); }
 
+/* Site Plan Buildings → compact tile grid that expands to fill the row on click
+   (John). Scoped to .p86-mline-grid so the job-overview vertical list is
+   byte-identical. Collapsed tile = name + budget + progress bar + "% complete";
+   an open tile spans the full width and reveals the Spent/Left detail + body. */
+.p86-mline-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; align-items: start; }
+.p86-mline-grid .p86-mline { padding: 9px 10px; }
+.p86-mline-grid .p86-mline-name { font-size: 12.5px; }
+.p86-mline-grid .p86-mline-hero .hv { font-size: 15px; }
+.p86-mline-grid .p86-mline-track { margin-top: 7px; }
+.p86-mline-grid .p86-mline-sub { display: none; }
+.p86-mline-tilecap { display: none; }
+.p86-mline-grid .p86-mline:not(.is-open) .p86-mline-tilecap { display: block; font-size: 10px; color: var(--text-dim); margin-top: 5px; }
+.p86-mline-grid .p86-mline.is-open { grid-column: 1 / -1; }
+.p86-mline-grid .p86-mline.is-open .p86-mline-sub { display: flex; }
+
 /* ── Scope panel (re-lit, "Scope Manager" look) — compact stat strip + a
    List/Matrix toggle + clean money-line-style scope rows, on the app theme
    vars and unified with the Buildings cards. ── */
