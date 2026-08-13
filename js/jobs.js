@@ -473,7 +473,7 @@ function renderJobsMain() {
             // "Subcontractors" lines are for MATCHING only — they do NOT roll into
             // actual cost (else subs double-count against the bills). qbSubMatch is
             // returned so the QB view can reconcile QB subs vs what's been billed.
-            let qbActualCosts = 0, qbCostLineCount = 0, qbCostsAsOf = null, qbSubMatch = 0;
+            let qbActualCosts = 0, qbCostLineCount = 0, qbCostsAsOf = null, qbSubMatch = 0, qbAccrual = 0;
             try {
                 const qbLines = (window.appData && Array.isArray(appData.qbCostLines))
                     ? appData.qbCostLines.filter(l => (l.job_id || l.jobId) === jobId) : [];
@@ -481,8 +481,15 @@ function renderJobsMain() {
                 const isSub = (l) => (window.p86CostBuckets
                     ? p86CostBuckets.effectiveBucket({ bucket: l.bucket, account: l.account, account_type: l.account_type }) === 'subs'
                     : /\bsub|subcontract/i.test(String(l.account || l.account_type || '')));
+                // Month-end accrual/reversal JEs are accounting artifacts, not
+                // cost. Checked BEFORE isSub — most of them sit on the
+                // Subcontractors account and would otherwise skew qbSubMatch.
+                const isAccrual = (l) => (window.p86CostBuckets
+                    ? p86CostBuckets.isAccrualLine(l)
+                    : String(l.txn_type || l.txnType || '').trim() === 'Journal Entry');
                 qbLines.forEach(l => {
                     const amt = Number(l.amount || 0);
+                    if (isAccrual(l)) { qbAccrual += amt; return; }
                     if (isSub(l)) { qbSubMatch += amt; return; }  // matching only, not cost
                     qbActualCosts += amt;
                     const d = l.report_date || l.reportDate;
@@ -606,7 +613,7 @@ function renderJobsMain() {
                 asSoldProfit, asSoldMargin, revisedProfit, revisedMargin,
                 pctComplete, revenueEarned, actualCosts, jtdProfit, jtdMargin,
                 displayProfit, displayMargin,
-                qbActualCosts, qbCostLineCount, qbCostsAsOf, qbSubMatch,
+                qbActualCosts, qbCostLineCount, qbCostsAsOf, qbSubMatch, qbAccrual,
                 invoiced, unbilled, backlog, remainingCosts,
                 accruedCosts, poAccrued, billedCost, projectedCost, projectedProfit
             };

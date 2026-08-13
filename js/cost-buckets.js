@@ -58,6 +58,34 @@
     return bucketFor(l && (l.account || l.account_type));
   }
 
+  // A month-end accrual / reversal journal entry — an accounting artifact,
+  // not job cost.
+  //
+  // Measured on the live pilot 2026-08-12: 87 of 697 QB lines are Journal
+  // Entries, and they are ALL accrual pairs — memos read "To record month-end
+  // WIP adjustment" / "To accrue payroll as of 06.30.26", numbered 251 / 251R
+  // (QuickBooks' reversing-entry convention), dated month-end and the 1st of
+  // the next month. $310,269.88 accrued, $310,269.88 reversed, netting to
+  // exactly $0.00 on every job and every account.
+  //
+  // Which is precisely why this never surfaced: an accrual and its reversal
+  // inside one export window cancel. It bites when the window CUTS BETWEEN
+  // them — pull a report through a month end (the natural instinct at close)
+  // and you capture accruals with no reversals. Measured: a 6/30 cutoff would
+  // strand $22,455.12 of adjustments in actual cost, inflating cost and
+  // depressing margin on the affected jobs.
+  //
+  // Excluding them is a NO-OP against balanced data — every current total
+  // moves by $0.00 — which is what makes now the safe moment to do it.
+  //
+  // A manual bucket override wins: if someone classifies a JE line by hand
+  // they have decided it IS cost, and that decision stands.
+  function isAccrualLine(l) {
+    if (!l) return false;
+    if (l.bucket && CODES.indexOf(l.bucket) !== -1) return false;
+    return String(l.txn_type || l.txnType || '').trim() === 'Journal Entry';
+  }
+
   function num(v) { var n = Number(v); return isFinite(n) ? n : 0; }
   function fmt(n) {
     n = Math.round(num(n));
@@ -82,10 +110,17 @@
     // double-count against the bills). qbSubMatch carries the QB sub figure for
     // reconciliation against what's actually been billed.
     var qbSubMatch = 0;
+    var qbAccrual = 0, qbAccrualLines = 0;
     (app.qbCostLines || []).forEach(function (l) {
       if (!l || (l.job_id || l.jobId) !== jobId) return;
       var code = effectiveBucket(l);
       var a = num(l.amount);
+      // Accrual check FIRST — ahead of the subs branch. 54 of the 87 live JE
+      // lines sit on the Subcontractors account, so testing subs first would
+      // route them into qbSubMatch, which is the figure reconciled against
+      // vendor bills. A stranded accrual there reads as "invoiced beyond QB"
+      // and raises a false over-billing alarm.
+      if (isAccrualLine(l)) { qbAccrual += a; qbAccrualLines++; return; }
       if (code === 'subs') { qbSubMatch += a; return; }
       var b = acc[code];
       b.qb += a; b.total += a; b.lines++;
@@ -125,7 +160,11 @@
     var grand = buckets.reduce(function (s, b) { return s + b.total; }, 0);
     // billedSubs = the Subcontractors bucket total (bills only, QB subs excluded).
     var billedSubs = acc['subs'].total;
-    return { buckets: buckets, grand: grand, qbSubMatch: qbSubMatch, billedSubs: billedSubs };
+    // qbAccrual is returned, not dropped: the lines stay visible and auditable,
+    // they just don't count as cost. On balanced data this is $0.00; a non-zero
+    // value means an import window cut between an accrual and its reversal.
+    return { buckets: buckets, grand: grand, qbSubMatch: qbSubMatch, billedSubs: billedSubs,
+             qbAccrual: qbAccrual, qbAccrualLines: qbAccrualLines };
   }
 
   // Cost attributed to ONE building: its manual cost fields, plus any QB line /
@@ -190,6 +229,7 @@
     CANON: CANON, CODES: CODES,
     bucketFor: bucketFor,
     effectiveBucket: effectiveBucket,
+    isAccrualLine: isAccrualLine,
     getJobCostBuckets: getJobCostBuckets,
     getBuildingCostBuckets: getBuildingCostBuckets,
     renderJobInto: renderJobInto

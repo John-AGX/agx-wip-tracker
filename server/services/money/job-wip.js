@@ -146,10 +146,27 @@ function computeJobWIP(job, deps) {
   const isSubLine = (l) => l.bucket
     ? l.bucket === 'subs'
     : /\bsub|subcontract/i.test(String(l.account || l.account_type || ''));
-  let qbActualCosts = 0, qbCostLineCount = 0, qbCostsAsOf = null, qbSubMatch = 0;
+  // Month-end accrual / reversal journal entries are accounting artifacts, not
+  // job cost. Measured live 2026-08-12: every one of the 87 JE lines is an
+  // accrual pair ("To record month-end WIP adjustment", JE 251 / 251R, dated
+  // month-end and the 1st), $310,269.88 accrued against $310,269.88 reversed,
+  // netting to $0.00 per job. They cancel inside a full export window — and
+  // strand in cost when the window cuts between the halves. A 6/30 cutoff
+  // would have left $22,455.12 of adjustments counted as real cost.
+  //
+  // Ordered BEFORE isSubLine on purpose: most JE lines carry the
+  // Subcontractors account, and routing them to qbSubMatch skews the
+  // reconciliation against vendor bills into a false over-billing flag.
+  //
+  // An explicit bucket override means a human classified the line — respect it.
+  // Mirrors p86CostBuckets.isAccrualLine + js/jobs.js getJobWIP.
+  const isAccrualLine = (l) => !l.bucket &&
+    String(l.txn_type || l.txnType || '').trim() === 'Journal Entry';
+  let qbActualCosts = 0, qbCostLineCount = 0, qbCostsAsOf = null, qbSubMatch = 0, qbAccrual = 0;
   for (const l of (d.qbCostLines || [])) {
     qbCostLineCount++;
     const amt = num(l.amount);
+    if (isAccrualLine(l)) { qbAccrual += amt; continue; }
     if (isSubLine(l)) { qbSubMatch += amt; continue; }
     qbActualCosts += amt;
     const when = l.report_date || l.reportDate;
@@ -223,7 +240,7 @@ function computeJobWIP(job, deps) {
     asSoldProfit, asSoldMargin, revisedProfit, revisedMargin,
     pctComplete, revenueEarned, actualCosts, jtdProfit, jtdMargin,
     displayProfit, displayMargin,
-    qbActualCosts, qbCostLineCount, qbCostsAsOf, qbSubMatch,
+    qbActualCosts, qbCostLineCount, qbCostsAsOf, qbSubMatch, qbAccrual,
     invoiced, unbilled, backlog, remainingCosts,
     accruedCosts, poAccrued, billedCost, projectedCost, projectedProfit,
   };
