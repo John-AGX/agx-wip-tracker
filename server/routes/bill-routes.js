@@ -34,10 +34,19 @@ const ALLOWED_TRANSITIONS = {
   void: ['open']
 };
 
+// A bill amount. Returns null for anything that isn't a usable non-negative
+// number so the caller can REFUSE it — this used to `return 0`, which meant a
+// negative amount (someone entering a -20% retention holdback as a credit bill)
+// saved silently as $0.00. The row persisted, the vendor total was wrong, and
+// nothing anywhere said so. Refusing is not a feature regression: because the
+// old code zeroed them, no negative bill has ever been stored, so nothing can
+// depend on it. Supporting retention properly is a separate decision — it
+// belongs on the PO as a held-back amount, not as a negative bill.
 function money(v) {
   if (v == null || v === '') return 0;
   const n = Number(String(v).replace(/[$,]/g, ''));
-  return isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : 0;
+  if (!isFinite(n) || n < 0) return null;
+  return Math.round(n * 100) / 100;
 }
 function dateOrNull(v) {
   if (!v) return null;
@@ -275,6 +284,9 @@ router.post('/jobs/:jobId/bills', requireAuth, requireCapability('ESTIMATES_EDIT
     if (po && po.job_id !== jobId) return res.status(400).json({ error: 'That PO belongs to a different job' });
 
     const amount = money(b.amount);
+    if (amount === null) {
+      return res.status(400).json({ error: 'Bill amount must be a non-negative number. To record a retention holdback, reduce it on the purchase order rather than entering a negative bill.' });
+    }
     const over = await overbillCheck(req.user.organization_id, b.po_id || null, amount, null);
     if (over && !b.allow_overbill) return res.status(409).json(over);
 
@@ -330,6 +342,9 @@ router.put('/bills/:id', requireAuth, requireCapability('ESTIMATES_EDIT'), async
     // sum, or editing a bill would count it twice and self-trip.
     const effPoId = has('po_id') ? (poId || null) : existing.rows[0].po_id;
     const effAmount = has('amount') ? money(b.amount) : Number(existing.rows[0].amount) || 0;
+    if (effAmount === null) {
+      return res.status(400).json({ error: 'Bill amount must be a non-negative number. To record a retention holdback, reduce it on the purchase order rather than entering a negative bill.' });
+    }
     const over = await overbillCheck(req.user.organization_id, effPoId, effAmount, id);
     if (over && !b.allow_overbill) return res.status(409).json(over);
     if (over) data.overbillAck = overbillAck(req.user, over);

@@ -4128,6 +4128,31 @@ function p86Ask(message, opts) {
     job: '86'
   };
 
+  // Re-render JUST the pack list from the in-memory draft.
+  //
+  // addSkill/deleteSkill used to call renderTemplatesForm() — a leftover from
+  // when the packs lived under Organization > Templates. That renderer paints
+  // #admin-subtab-templates, which is only mounted while THAT tab is open; the
+  // pack editor now lives in #agents-skills-body under Agents > Skills. So it
+  // returned on its first line (`if (!pane) return`) every time and the DOM
+  // never regenerated. That is not a cosmetic bug: syncSkillsFromInputs()
+  // reads inputs by ARRAY INDEX ([data-skill-name="3"] -> skills[3]), so a
+  // splice that leaves N DOM rows over an N-1 array shifts every pack's text
+  // onto its neighbour on the next save. The anthropic_skill_id rides on the
+  // object, not the DOM, so the next mirror uploads the WRONG body to a live
+  // skill. Losing a delete is annoying; scrambling pack->skill is data loss.
+  //
+  // Deliberately NOT renderAgentsSkillsView() — that re-fetches agent_skills
+  // from the server and would discard the unsaved edit we just made.
+  function renderSkillsListInPlace() {
+    var host = document.getElementById('agents-skills-body');
+    if (!host) return false;
+    host.innerHTML = renderAgentSkillsHTML();
+    var count = document.getElementById('agents-skills-count');
+    if (count) count.textContent = String((_skillsDraft && _skillsDraft.skills || []).length);
+    return true;
+  }
+
   function renderAgentSkillsHTML() {
     if (!_skillsDraft || !Array.isArray(_skillsDraft.skills)) _skillsDraft = { skills: [] };
     var html = '';
@@ -4257,7 +4282,7 @@ function p86Ask(message, opts) {
       agents: ['job'],
       body: ''
     });
-    renderTemplatesForm();
+    renderSkillsListInPlace();
   }
 
   async function deleteSkill(idx) {
@@ -4269,7 +4294,7 @@ function p86Ask(message, opts) {
     syncBTMappingFromInputs();
     syncSkillsFromInputs();
     _skillsDraft.skills.splice(idx, 1);
-    renderTemplatesForm();
+    renderSkillsListInPlace();
   }
 
   window.addSkill = addSkill;
@@ -8642,12 +8667,18 @@ function p86Ask(message, opts) {
 
   async function unsyncSkillFromAnthropic(idx) {
     if (!(await p86Ask('Delete the Anthropic-side mirror for this pack?\n\nThe local pack stays. The next time you click Mirror, a fresh copy goes up — useful when the body has changed and you want to refresh the mirror.'))) return;
+    // Save BEFORE unsyncing. The route addresses packs by ARRAY INDEX, so an
+    // unsaved add/delete in the draft shifts the client's idx off the server's
+    // array and this deletes the mirror of a DIFFERENT pack. Mirror (above)
+    // already saves first; this path never did.
+    saveAgentsSkillsThen(function() {
     window.p86Api.post('/api/admin/agents/skills/' + encodeURIComponent(idx) + '/unsync-from-anthropic', {}).then(function(resp) {
       if (resp.delete_error) {
         alert('Local link cleared.\n\nNote: Anthropic-side delete also reported: ' + resp.delete_error);
       }
       renderAgentsSkillsView();
     }).catch(function(err) { alert('Unsync failed: ' + (err.message || 'unknown')); });
+    });
   }
 
   // Save the current Skills draft, then run a callback. The sync
