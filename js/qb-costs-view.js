@@ -59,6 +59,13 @@ function p86Ask(message, opts) {
     filterStatus: '', // '', 'linked', 'unlinked', 'orphan'
     search: '',
     sortBy: 'date',  // 'date' | 'vendor' | 'account' | 'amount'
+    // Weekly cost rhythm. Grouping keys off txn_date — when the cost was
+    // INCURRED — not report_date, which only tracks when an import landed and
+    // moves every time a window is re-pulled. groupByWeek only takes effect
+    // while sorted by date; grouping a vendor-sorted list would interleave
+    // weeks meaninglessly. filterWeek is a Monday ISO date, '' = all weeks.
+    groupByWeek: true,
+    filterWeek: '',
     sortDir: 'desc', // 'asc' | 'desc'
     selected: (typeof Set === 'function') ? new Set() : null,
     embedTarget: null,
@@ -337,6 +344,9 @@ function p86Ask(message, opts) {
     if (_state.filterTxnType) {
       lines = lines.filter(function(l) { return (l.txnType || '(no type)') === _state.filterTxnType; });
     }
+    if (_state.filterWeek) {
+      lines = lines.filter(function(l) { return weekStartOf(l.date || l.txn_date) === _state.filterWeek; });
+    }
     if (_state.filterStatus && _state.filterStatus.indexOf('bucket:') === 0) {
       var wantBucket = _state.filterStatus.slice(7);
       lines = lines.filter(function(l) { return effBucket(l) === wantBucket; });
@@ -452,6 +462,23 @@ function p86Ask(message, opts) {
             return '<option value="bucket:' + b.code + '"' + (_state.filterStatus === 'bucket:' + b.code ? ' selected' : '') + '>' + escapeHTML(b.label) + '</option>';
           }).join('') +
         '</select>' +
+        // Week picker + grouping toggle. Built from allLines, not the
+        // filtered set, so choosing a week doesn't collapse the list of
+        // weeks you can switch to.
+        '<select onchange="window.qbCostsView.setWeek(this.value)" style="width:auto;min-width:170px;">' +
+          '<option value="">All weeks</option>' +
+          weeksIn(allLines).map(function (w) {
+            return '<option value="' + escapeAttr(w.week) + '"' + (_state.filterWeek === w.week ? ' selected' : '') + '>' +
+              escapeHTML(w.label) + ' (' + w.count + ')</option>';
+          }).join('') +
+        '</select>' +
+        '<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--text-dim,#888);cursor:pointer;" ' +
+          'title="' + (_state.sortBy === 'date' ? 'Group rows under week headers with a subtotal' : 'Sort by Date to group by week') + '">' +
+          '<input type="checkbox" ' + (_state.groupByWeek ? 'checked' : '') + ' ' +
+            (_state.sortBy === 'date' ? '' : 'disabled ') +
+            'onchange="window.qbCostsView.setGroupByWeek(this.checked)" style="cursor:pointer;" />' +
+          'By week' +
+        '</label>' +
         activeFilterChips +
         '<input type="text" placeholder="Search vendor, memo, account, num…" oninput="window.qbCostsView.setSearch(this.value)" value="' + escapeAttr(_state.search) + '" style="margin-left:auto;min-width:240px;" />' +
       '</div>' +
@@ -522,7 +549,7 @@ function p86Ask(message, opts) {
               th('Building') +
             '</tr>' +
           '</thead><tbody>' +
-            lines.map(function(l) { return renderRow(l); }).join('') +
+            renderBody(lines) +
           '</tbody>' +
         '</table>' +
       '</div>';
@@ -689,6 +716,83 @@ function p86Ask(message, opts) {
     }
   }
 
+  // ── Weekly grouping ────────────────────────────────────────────────
+  // Monday-start weeks. Parsed as a plain Y-M-D triple rather than
+  // new Date(str): an ISO date string is parsed as UTC, so in any negative
+  // offset (all of AGX's markets) it renders as the PREVIOUS day and a
+  // Monday cost silently lands in the prior week.
+  function weekStartOf(dateStr) {
+    var s = String(dateStr || '').slice(0, 10);
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+    if (!m) return '';
+    var d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    var dow = d.getDay();                 // 0 Sun … 6 Sat
+    var back = (dow === 0) ? 6 : dow - 1; // Monday-start
+    d.setDate(d.getDate() - back);
+    var mm = String(d.getMonth() + 1).padStart(2, '0');
+    var dd = String(d.getDate()).padStart(2, '0');
+    return d.getFullYear() + '-' + mm + '-' + dd;
+  }
+
+  // "Aug 4 – Aug 10" (adds the year only when it isn't the current one).
+  function weekLabel(mondayStr) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(mondayStr || '');
+    if (!m) return 'Undated';
+    var a = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    var b = new Date(a.getFullYear(), a.getMonth(), a.getDate() + 6);
+    var MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    var yr = a.getFullYear() !== new Date().getFullYear() ? (' ' + a.getFullYear()) : '';
+    return MON[a.getMonth()] + ' ' + a.getDate() + ' – ' + MON[b.getMonth()] + ' ' + b.getDate() + yr;
+  }
+
+  // Every distinct week present, newest first — drives the week picker.
+  function weeksIn(lines) {
+    var seen = {};
+    (lines || []).forEach(function (l) {
+      var w = weekStartOf(l.date || l.txn_date);
+      if (w) seen[w] = (seen[w] || 0) + 1;
+    });
+    return Object.keys(seen).sort().reverse().map(function (w) {
+      return { week: w, label: weekLabel(w), count: seen[w] };
+    });
+  }
+
+  // Body rows with a subtotal header per week. Falls back to a plain list
+  // when grouping is off or the list isn't in date order.
+  function renderBody(lines) {
+    var grouped = _state.groupByWeek && _state.sortBy === 'date';
+    if (!grouped) return lines.map(function (l) { return renderRow(l); }).join('');
+
+    var html = '';
+    var currentWeek = null;
+    var i = 0;
+    while (i < lines.length) {
+      var w = weekStartOf(lines[i].date || lines[i].txn_date);
+      if (w !== currentWeek) {
+        currentWeek = w;
+        // Sum this week's run before printing the header, so the subtotal
+        // sits ON the header rather than trailing the group.
+        var sum = 0, n = 0;
+        for (var j = i; j < lines.length; j++) {
+          if (weekStartOf(lines[j].date || lines[j].txn_date) !== w) break;
+          sum += Number(lines[j].amount) || 0; n++;
+        }
+        html +=
+          '<tr style="background:var(--card-bg,#141419);border-top:1px solid var(--border,#333);">' +
+            '<td colspan="6" style="padding:7px 8px;font-size:11px;font-weight:700;color:#c8cbe0;letter-spacing:0.3px;">' +
+              (w ? 'Week of ' + escapeHTML(weekLabel(w)) : 'Undated') +
+              '<span style="margin-left:8px;font-weight:400;color:var(--text-dim,#888);">' + n + (n === 1 ? ' line' : ' lines') + '</span>' +
+            '</td>' +
+            '<td style="padding:7px 8px;text-align:right;font-size:12px;font-weight:700;color:#e0a458;font-variant-numeric:tabular-nums;">' + fmtMoney(sum) + '</td>' +
+            '<td colspan="2"></td>' +
+          '</tr>';
+      }
+      html += renderRow(lines[i]);
+      i++;
+    }
+    return html;
+  }
+
   function renderRow(l) {
     var checked = isSelected(l.id);
     var rowBg = checked ? 'background:rgba(34,211,238,0.06);' : '';
@@ -808,6 +912,14 @@ function p86Ask(message, opts) {
   }
   function setStatusFilter(v) {
     _state.filterStatus = v || '';
+    reRender();
+  }
+  function setWeek(v) {
+    _state.filterWeek = v || '';
+    reRender();
+  }
+  function setGroupByWeek(on) {
+    _state.groupByWeek = !!on;
     reRender();
   }
   function setSearch(v) {
@@ -1161,6 +1273,8 @@ function p86Ask(message, opts) {
     filterByVendor: filterByVendor,
     filterByTxnType: filterByTxnType,
     setStatusFilter: setStatusFilter,
+    setWeek: setWeek,
+    setGroupByWeek: setGroupByWeek,
     setSearch: setSearch,
     toggleSort: toggleSort,
     toggleSelect: toggleSelect,
