@@ -368,6 +368,13 @@ app.get('/accept-org-invite', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'accept-org-invite.html'));
 });
 
+// Public task-share page — an outside worker lands here from the task_share
+// email (link is /t/<token>). The page reads the token from its own path and
+// talks to the token-gated /api/task-share/* endpoints. No login, no app shell.
+app.get('/t/:token', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'task-share.html'));
+});
+
 // Dynamic /sw.js — stamp the cache version with the current Railway
 // deployment SHA so EVERY deploy produces a different sw.js, which is
 // what triggers the "An update is available — Relaunch" toast in the

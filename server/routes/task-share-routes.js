@@ -198,11 +198,13 @@ router.get('/task-share/:token', loadShare, async (req, res) => {
   try {
     pool.query('UPDATE task_shares SET opened_at = COALESCE(opened_at, NOW()), last_used_at = NOW() WHERE id = $1', [req.share.id]).catch(function () {});
     const photos = await taskPhotos(req.task.id);
+    let orgName = null;
+    try { const o = await pool.query('SELECT name FROM organizations WHERE id = $1', [req.task.organization_id]); if (o.rows.length) orgName = o.rows[0].name; } catch (e) {}
     res.json({
       task: publicTask(req.task),
       photos: photos,
       share: { recipient_name: req.share.recipient_name, needs_name: !req.share.recipient_name, completed: !!req.share.completed_at, expires_at: req.share.expires_at },
-      org_name: undefined
+      org_name: orgName
     });
   } catch (e) {
     console.error('GET /api/task-share/:token error:', e);
