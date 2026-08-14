@@ -50,6 +50,170 @@ function normDate(v) {
 }
 
 // ──────────────────────────────────────────────────────────────────
+// The write — ordered, chunked, and retried on a lock race.
+//
+// The 08.13.26 import POSTed 1205 matched rows and Postgres answered
+// `40P01 deadlock detected`. The whole transaction rolled back, so the
+// receipt read PARSED 3109 / MATCHED 1205 / WRITTEN 0.
+//
+// The import never conflicted with itself. It conflicted with
+// PUT /api/jobs/bulk/save — which the importer's own client kicks off
+// ~600ms BEFORE the POST lands, because it stamps qbCosts*/updatedAt on
+// every matched job and that makes all of them dirty. Two writers, one
+// shared resource, opposite orders:
+//
+//   * Every INSERT INTO qb_cost_lines fires the FK check for
+//     job_id → jobs(id), and that check takes FOR KEY SHARE on the jobs
+//     row and HOLDS IT TO COMMIT. One BEGIN wrapped around 1205
+//     sequential round-trips therefore sat on ~25 jobs rows for the tens
+//     of seconds the batch took. (The plain `SELECT 1 FROM jobs`
+//     existence check took no lock — the FK did.)
+//   * bulk/save takes FOR UPDATE on the same ~25 jobs rows, walking them
+//     in appData order.
+//
+// FOR KEY SHARE conflicts with FOR UPDATE, and the two orderings were
+// unrelated — QB report order on one side, Postgres heap order on the
+// other. With a 30-60s hold over an identical row set, a cycle was close
+// to certain rather than unlucky.
+//
+// Three changes, and they are only safe together:
+//
+//   1. TOTAL ORDER. The batch is flattened and sorted by (job_id, id)
+//      before a single row is written. Sorting by the primary key means
+//      any two transactions touching an overlapping set of rows walk the
+//      intersection in the same sequence. job_id LEADS the key because
+//      the jobs-row FK lock is the one that actually collided;
+//      job-routes.js bulk/save now sorts by job.id for the same reason,
+//      so the two routes agree on jobs ordering and the observed cycle
+//      cannot form. id (the content hash) is the tiebreak, which
+//      serialises two concurrent imports against each other.
+//
+//   2. CHUNKS. ~200 rows per transaction instead of all of them. A chunk
+//      holds its jobs locks for a fraction of a second rather than the
+//      length of the file, collapsing the collision window. Chunking
+//      gives up all-or-nothing, and that trade is acceptable ONLY
+//      because of the content-hash id: a half-landed import is repaired
+//      by importing the same file again, which upserts every row by
+//      primary key and cannot double-count.
+//
+//   3. RETRY. 40P01 (deadlock_detected) and 40001 (serialization_failure)
+//      are the two SQLSTATEs Postgres raises to say "you lost a lock
+//      race, run it again". Retrying is safe HERE BY CONSTRUCTION: every
+//      id is a content hash and every write is INSERT … ON CONFLICT (id)
+//      DO UPDATE, so re-running a rolled-back chunk reproduces exactly
+//      the same rows — never extra ones. Counts are tallied per ATTEMPT
+//      and folded into the receipt only on COMMIT, so a chunk that
+//      deadlocked halfway and then succeeded is counted once, not twice.
+//
+// A chunk that exhausts its retries does NOT take the request down with
+// it: it is reported as a rejection carrying its reason and row count,
+// and `ok` goes false. A partial write has to read as partial. That is
+// the whole point of this month's work on this importer — a write that
+// did not land must never be able to look like one that did.
+// ──────────────────────────────────────────────────────────────────
+
+const IMPORT_CHUNK_ROWS = 200;
+const IMPORT_MAX_ATTEMPTS = 4;   // 1 attempt + 3 retries
+const IMPORT_BACKOFF_MS = 25;    // doubles per retry, plus jitter
+// Exactly the two "re-run me" errors. Anything else is a real fault and
+// is surfaced immediately rather than hammered at.
+const RETRYABLE_SQLSTATE = new Set(['40P01', '40001']);
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// ON CONFLICT update — but only the mutable fields (memo etc. can change
+// between exports if the user edits in QB). Keep imported_at fresh so we
+// know the row was seen this round.
+const UPSERT_LINE_SQL = `INSERT INTO qb_cost_lines (
+     id, job_id, vendor, txn_date, txn_type, num,
+     account, account_type, klass, memo, amount,
+     raw_data, source_file, report_date, imported_at
+   ) VALUES (
+     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW()
+   )
+   ON CONFLICT (id) DO UPDATE SET
+     vendor = EXCLUDED.vendor,
+     txn_date = EXCLUDED.txn_date,
+     txn_type = EXCLUDED.txn_type,
+     num = EXCLUDED.num,
+     account = EXCLUDED.account,
+     account_type = EXCLUDED.account_type,
+     klass = EXCLUDED.klass,
+     memo = EXCLUDED.memo,
+     amount = EXCLUDED.amount,
+     raw_data = EXCLUDED.raw_data,
+     source_file = EXCLUDED.source_file,
+     report_date = EXCLUDED.report_date,
+     imported_at = NOW(),
+     updated_at = NOW()
+   RETURNING (xmax = 0) AS inserted`;
+
+// Retire the row the pre-fix parser wrote for this same credit. Credits
+// used to import as $0.00 (QB writes negatives in accounting
+// parentheses, which the old client toNumber() read as NaN → 0). Amount
+// is part of the id, so that old row has a different hash than the
+// corrected one and the upsert cannot reach it — it would sit there
+// forever as a phantom $0.00 line beside the real credit. Money was
+// never wrong (a $0 row adds nothing); the line list was.
+//
+// Scoped hard: same job, the exact superseded hash, and amount 0.
+// Self-limiting — once a job is cleaned there is nothing left to match
+// on later imports. It runs at a FIXED position in the sorted sequence
+// (immediately after its own credit row), so it does not perturb the
+// total order two concurrent imports agree on.
+const RETIRE_STALE_ZERO_SQL =
+  'DELETE FROM qb_cost_lines WHERE id = $1 AND job_id = $2 AND amount = 0';
+
+// One chunk = one transaction, retried on a lock race.
+//
+// The tally is per-ATTEMPT and is only handed back on COMMIT. An attempt
+// that rolled back put nothing in the database, so it must put nothing
+// on the receipt either — that discard is what keeps a retried chunk
+// from being counted twice.
+async function writeChunk(rows) {
+  let lastErr = null;
+  for (let attempt = 1; attempt <= IMPORT_MAX_ATTEMPTS; attempt++) {
+    const client = await pool.connect();
+    const tally = { inserted: 0, updated: 0, cleaned: 0, byJob: {} };
+    try {
+      await client.query('BEGIN');
+      for (const row of rows) {
+        const jb = tally.byJob[row.jobId] ||
+          (tally.byJob[row.jobId] = { inserted: 0, updated: 0, cleaned: 0 });
+        const result = await client.query(UPSERT_LINE_SQL, row.params);
+        if (result.rows[0] && result.rows[0].inserted) {
+          tally.inserted++; jb.inserted++;
+        } else {
+          tally.updated++; jb.updated++;
+        }
+        if (row.staleId) {
+          const del = await client.query(RETIRE_STALE_ZERO_SQL, [row.staleId, row.jobId]);
+          if (del.rowCount) { tally.cleaned += del.rowCount; jb.cleaned += del.rowCount; }
+        }
+      }
+      await client.query('COMMIT');
+      return { ok: true, tally, attempts: attempt };
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      lastErr = e;
+      const retryable = RETRYABLE_SQLSTATE.has(e && e.code);
+      if (!retryable || attempt === IMPORT_MAX_ATTEMPTS) {
+        return { ok: false, error: e, attempts: attempt, retryable };
+      }
+      console.warn('[qb-costs] chunk of ' + rows.length + ' rows hit ' + e.code +
+        ' on attempt ' + attempt + '/' + IMPORT_MAX_ATTEMPTS + ' — rolled back, retrying');
+      await sleep(IMPORT_BACKOFF_MS * Math.pow(2, attempt - 1) +
+        Math.floor(Math.random() * IMPORT_BACKOFF_MS));
+    } finally {
+      client.release();
+    }
+  }
+  // Unreachable — the loop always returns on its last attempt. Here so a
+  // future edit to the bounds cannot silently return undefined.
+  return { ok: false, error: lastErr, attempts: IMPORT_MAX_ATTEMPTS, retryable: true };
+}
+
+// ──────────────────────────────────────────────────────────────────
 // POST /api/qb-costs/import
 // Body: { reportDate, sourceFile, jobs: [{ jobId, lines: [...] }] }
 // Each line: { vendor, date, txnType, num, account, accountType,
@@ -63,18 +227,17 @@ router.post('/import',
       return res.status(400).json({ error: 'jobs array required' });
     }
 
-    const client = await pool.connect();
     try {
-      await client.query('BEGIN');
-
       // `received` and `rejected` exist because the client used to have no
       // way to tell "wrote 224 rows" from "wrote nothing" — the whole
       // 08.13.26 import failure was invisible for three weeks. A count of
       // what arrived, plus a REASON for every row that did not land, is
-      // what makes the importer's result screen trustworthy.
+      // what makes the importer's result screen trustworthy. `failed` is
+      // the same idea one level down: rows the server accepted, tried to
+      // write, and could not commit.
       const stats = {
         received: jobs.reduce((n, j) => n + (j && Array.isArray(j.lines) ? j.lines.length : 0), 0),
-        inserted: 0, updated: 0, skipped: 0, cleaned: 0,
+        inserted: 0, updated: 0, skipped: 0, cleaned: 0, failed: 0,
         rejected: [], byJob: {}
       };
       const reject = (jobId, lines, reason) => {
@@ -82,6 +245,28 @@ router.post('/import',
         stats.rejected.push({ jobId: jobId || null, lines, reason });
       };
       const reportDateNorm = normDate(reportDate);
+
+      // Which jobs exist — ONE query, and deliberately OUTSIDE any
+      // transaction. `SELECT 1 FROM jobs` never took a row lock, so this
+      // check was not part of the deadlock; running it per-job inside the
+      // batch just added a round-trip per job to the window during which
+      // the FK locks were held open.
+      const wanted = [...new Set(
+        jobs.filter((j) => j && j.jobId).map((j) => String(j.jobId))
+      )];
+      let known = new Set();
+      if (wanted.length) {
+        const found = await pool.query(
+          'SELECT id FROM jobs WHERE id = ANY($1::text[])', [wanted]
+        );
+        known = new Set(found.rows.map((r) => r.id));
+      }
+
+      // ── Flatten + validate before anything is written ─────────────
+      // Every rejection below is decided with no database work at all, so
+      // the transactions further down carry only rows that can actually
+      // land. `work` is the flat, sortable unit of that write.
+      const work = [];
 
       for (const j of jobs) {
         if (!j || !j.jobId || !Array.isArray(j.lines)) {
@@ -91,15 +276,16 @@ router.post('/import',
         }
         // Verify the job exists. Skipping silently is friendlier than
         // throwing on a stale jobId.
-        const jobCheck = await client.query('SELECT 1 FROM jobs WHERE id = $1', [j.jobId]);
-        if (!jobCheck.rows.length) {
-          reject(j.jobId, j.lines.length,
+        const jobId = String(j.jobId);
+        if (!known.has(jobId)) {
+          reject(jobId, j.lines.length,
             'no job with this id exists — it was deleted, or the browser is holding a stale copy of the jobs list');
-          stats.byJob[j.jobId] = { inserted: 0, updated: 0, skipped: j.lines.length, reason: 'job not found' };
+          stats.byJob[jobId] = { inserted: 0, updated: 0, skipped: j.lines.length, reason: 'job not found' };
           continue;
         }
 
-        const jobStats = { inserted: 0, updated: 0, skipped: 0 };
+        const jobStats = stats.byJob[jobId] ||
+          (stats.byJob[jobId] = { inserted: 0, updated: 0, skipped: 0 });
 
         for (const line of j.lines) {
           // Pre-flight, before the row can reach NUMERIC(12,2). A non-finite
@@ -108,7 +294,7 @@ router.post('/import',
           // batch stays atomic because nothing here touches the write.
           if (!line || typeof line !== 'object') {
             jobStats.skipped++;
-            reject(j.jobId, 1, 'line is not an object');
+            reject(jobId, 1, 'line is not an object');
             continue;
           }
           // Exactly the expression the INSERT uses, so this rejects only
@@ -117,44 +303,26 @@ router.post('/import',
           const amount = Number(line.amount || 0);
           if (!Number.isFinite(amount)) {
             jobStats.skipped++;
-            reject(j.jobId, 1,
+            reject(jobId, 1,
               'amount is not a number (' + JSON.stringify(line.amount) + ') — vendor ' +
               JSON.stringify(line.vendor || '') + ', ' + JSON.stringify(line.date || ''));
             continue;
           }
 
-          const id = hashLineId(j.jobId, line);
+          const id = hashLineId(jobId, line);
           const txnDate = normDate(line.date);
+          // Credits carry the id their pre-fix $0.00 twin was stored
+          // under, so the chunk can retire it right after writing the
+          // corrected row. Computed here (no DB work) to keep the
+          // transaction down to pure writes.
+          const staleId = amount < 0 ? staleZeroLineId(jobId, line) : null;
 
-          // ON CONFLICT update — but only the mutable fields (memo etc.
-          // can change between exports if the user edits in QB). Keep
-          // imported_at fresh so we know it was seen this round.
-          const result = await client.query(
-            `INSERT INTO qb_cost_lines (
-               id, job_id, vendor, txn_date, txn_type, num,
-               account, account_type, klass, memo, amount,
-               raw_data, source_file, report_date, imported_at
-             ) VALUES (
-               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW()
-             )
-             ON CONFLICT (id) DO UPDATE SET
-               vendor = EXCLUDED.vendor,
-               txn_date = EXCLUDED.txn_date,
-               txn_type = EXCLUDED.txn_type,
-               num = EXCLUDED.num,
-               account = EXCLUDED.account,
-               account_type = EXCLUDED.account_type,
-               klass = EXCLUDED.klass,
-               memo = EXCLUDED.memo,
-               amount = EXCLUDED.amount,
-               raw_data = EXCLUDED.raw_data,
-               source_file = EXCLUDED.source_file,
-               report_date = EXCLUDED.report_date,
-               imported_at = NOW(),
-               updated_at = NOW()
-             RETURNING (xmax = 0) AS inserted`,
-            [
-              id, j.jobId,
+          work.push({
+            jobId,
+            id,
+            staleId: (staleId && staleId !== id) ? staleId : null,
+            params: [
+              id, jobId,
               line.vendor || null,
               txnDate,
               line.txnType || null,
@@ -168,58 +336,105 @@ router.post('/import',
               sourceFile || null,
               reportDateNorm
             ]
-          );
-          if (result.rows[0]?.inserted) {
-            jobStats.inserted++;
-            stats.inserted++;
-          } else {
-            jobStats.updated++;
-            stats.updated++;
-          }
-
-          // Retire the row the pre-fix parser wrote for this same credit.
-          // Credits used to import as $0.00 (QB writes negatives in
-          // accounting parentheses, which the old client toNumber() read as
-          // NaN → 0). Amount is part of the id, so that old row has a
-          // different hash than the corrected one we just wrote and the
-          // upsert above cannot reach it — it would sit there forever as a
-          // phantom $0.00 line beside the real credit. Money was never
-          // wrong (a $0 row adds nothing); the line list was.
-          //
-          // Scoped hard: same job, the exact superseded hash, and amount 0.
-          // Self-limiting — once a job is cleaned there is nothing left to
-          // match on later imports.
-          if (amount < 0) {
-            const staleId = staleZeroLineId(j.jobId, line);
-            if (staleId !== id) {
-              const del = await client.query(
-                'DELETE FROM qb_cost_lines WHERE id = $1 AND job_id = $2 AND amount = 0',
-                [staleId, j.jobId]
-              );
-              if (del.rowCount) {
-                jobStats.cleaned = (jobStats.cleaned || 0) + del.rowCount;
-                stats.cleaned += del.rowCount;
-              }
-            }
-          }
+          });
         }
-        stats.byJob[j.jobId] = jobStats;
       }
 
-      await client.query('COMMIT');
+      // ── TOTAL ORDER ───────────────────────────────────────────────
+      // Sort by (job_id, id) — see the header comment. Plain byte
+      // comparison, never localeCompare: this order has to be one every
+      // process and every machine agrees on, independent of locale.
+      work.sort((a, b) => (
+        a.jobId < b.jobId ? -1 : a.jobId > b.jobId ? 1 :
+          a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+      ));
+
+      // ── The write ─────────────────────────────────────────────────
+      const chunkCount = Math.ceil(work.length / IMPORT_CHUNK_ROWS);
+      let chunksCommitted = 0;
+      let chunksFailed = 0;
+      let attemptsUsed = 0;
+
+      for (let start = 0, n = 0; start < work.length; start += IMPORT_CHUNK_ROWS) {
+        const chunk = work.slice(start, start + IMPORT_CHUNK_ROWS);
+        n++;
+        const out = await writeChunk(chunk);
+        attemptsUsed += out.attempts;
+
+        if (out.ok) {
+          chunksCommitted++;
+          stats.inserted += out.tally.inserted;
+          stats.updated += out.tally.updated;
+          stats.cleaned += out.tally.cleaned;
+          for (const [id, jb] of Object.entries(out.tally.byJob)) {
+            const target = stats.byJob[id] ||
+              (stats.byJob[id] = { inserted: 0, updated: 0, skipped: 0 });
+            target.inserted += jb.inserted;
+            target.updated += jb.updated;
+            if (jb.cleaned) target.cleaned = (target.cleaned || 0) + jb.cleaned;
+          }
+          continue;
+        }
+
+        // A chunk that could not commit. Every one of its rows was rolled
+        // back, so none of them are stored — and the receipt has to say so
+        // by job, with the reason, or a partial import reads as a clean
+        // one. This is the exact failure mode the whole importer rework
+        // exists to make impossible.
+        chunksFailed++;
+        stats.failed += chunk.length;
+        const code = (out.error && out.error.code) || '';
+        const detail = out.retryable
+          ? 'the database could not commit this batch after ' + out.attempts +
+            ' attempts (' + (out.error && out.error.message || 'lock contention') +
+            (code ? ', SQLSTATE ' + code : '') + ')'
+          : 'the database rejected this batch (' +
+            (out.error && out.error.message || 'unknown error') +
+            (code ? ', SQLSTATE ' + code : '') + ')';
+        const reason = 'batch ' + n + ' of ' + chunkCount + ' was rolled back — ' + detail +
+          '. These rows are NOT stored. Re-import the same file: every line id is a ' +
+          'content hash, so re-importing rewrites the same rows and cannot double-count.';
+
+        const perJob = new Map();
+        for (const row of chunk) perJob.set(row.jobId, (perJob.get(row.jobId) || 0) + 1);
+        for (const [id, count] of perJob) {
+          reject(id, count, reason);
+          const target = stats.byJob[id] ||
+            (stats.byJob[id] = { inserted: 0, updated: 0, skipped: 0 });
+          target.skipped += count;
+          target.failed = (target.failed || 0) + count;
+        }
+      }
 
       // (Removed: the post-import 86-pm agent-watcher nudge. The staff/watcher
       // agents were retired/archived — re-firing one on every QB import was the
       // one automatic trigger that could turn a routine import into recurring
       // Opus spend. QB lines are read on demand by 86/the assistant instead.)
 
-      res.json({ ok: true, ...stats });
+      if (chunksFailed) {
+        console.error('[qb-costs] import finished with ' + chunksFailed + ' of ' + chunkCount +
+          ' batches rolled back — ' + stats.failed + ' of ' + work.length +
+          ' rows were NOT stored (' + stats.inserted + ' inserted, ' + stats.updated + ' updated)');
+      }
+
+      // ok is false the moment anything failed to commit. The client
+      // receipt keys off the counts (written / already-on-file /
+      // rejected-with-reason) rather than this flag, but any programmatic
+      // caller gets one unambiguous boolean instead of having to infer it.
+      res.json({
+        ok: chunksFailed === 0,
+        ...stats,
+        chunks: {
+          size: IMPORT_CHUNK_ROWS,
+          total: chunkCount,
+          committed: chunksCommitted,
+          failed: chunksFailed,
+          attempts: attemptsUsed
+        }
+      });
     } catch (e) {
-      await client.query('ROLLBACK').catch(() => {});
       console.error('POST /api/qb-costs/import error:', e);
       res.status(500).json({ error: e.message || 'Server error' });
-    } finally {
-      client.release();
     }
   }
 );

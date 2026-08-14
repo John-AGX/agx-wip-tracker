@@ -614,7 +614,29 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, re
     let skipped = 0;
     try {
       await client.query('BEGIN');
-      for (const job of appData.jobs) {
+      // Deterministic lock order — the other half of the QB import
+      // deadlock fix (see the header comment in qb-cost-routes.js).
+      //
+      // This loop takes `SELECT … FOR UPDATE` on every job row and holds
+      // it to COMMIT. The QB cost import takes FOR KEY SHARE on the SAME
+      // rows, because every INSERT INTO qb_cost_lines fires the
+      // job_id → jobs(id) FK check. FOR KEY SHARE conflicts with FOR
+      // UPDATE, so when the two walked the same ~25 jobs in different
+      // orders — appData order here (Postgres heap order, unstable: the
+      // jobs GET has no ORDER BY), QB report order there — they formed a
+      // cycle and Postgres killed one of them. That is what wrote 0 of
+      // 1205 cost rows on the 08.13.26 import.
+      //
+      // Both routes now walk jobs in ascending id order, so neither can
+      // ever be behind the other on a row the other already holds. Order
+      // is not otherwise meaningful here: each iteration is self-contained
+      // and every result is keyed by job id, not by position.
+      const ordered = [...appData.jobs].sort((a, b) => {
+        const x = String((a && a.id) || '');
+        const y = String((b && b.id) || '');
+        return x < y ? -1 : x > y ? 1 : 0;
+      });
+      for (const job of ordered) {
         // Defense in depth: even if the client sends jobs the user can't edit,
         // we re-check here. Admins can edit anything; PMs need ownership or
         // explicit job_access edit grant; corporate is read-only.
@@ -727,6 +749,11 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, re
     }
     res.json({ ok: true, count: saved, skipped: skipped, conflicts: conflicts, versions: versions });
   } catch (e) {
+    // This logged nothing at all. When bulk/save was the losing side of the
+    // QB-import deadlock rather than the import, the incident left no trace
+    // anywhere on the server — the client saw a bare 500 and the deadlock
+    // itself was only ever visible from the other route's logs.
+    console.error('PUT /api/jobs/bulk/save error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
