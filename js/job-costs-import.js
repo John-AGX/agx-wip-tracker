@@ -513,6 +513,15 @@ function p86Ask(message, opts) {
     // Disable the Confirm button if nothing to import.
     var confirmBtn = document.getElementById('qbCostsImport_confirmBtn');
     if (confirmBtn) {
+      // renderCommitReceipt() repurposes the footer into a single dismiss
+      // button, so a second import in the same page load has to get the
+      // commit handler back. Reassigning .onclick replaces the inline
+      // onclick="" attribute handler, which is why this must be restored
+      // explicitly rather than relying on the markup.
+      confirmBtn.onclick = function() { commitQBCostsImport(); };
+      confirmBtn.style.background = '';
+      var cancelBtn = document.querySelector('#qbCostsImportModal .modal-footer .secondary');
+      if (cancelBtn) cancelBtn.style.display = '';
       // A failed reconciliation is a hard stop, not a warning. Blocking a
       // good import is an annoyance someone can report; importing money
       // that doesn't match QuickBooks is silent and compounds.
@@ -679,10 +688,10 @@ function p86Ask(message, opts) {
       var blockedMsg = rec.drifted.length + ' project' + (rec.drifted.length === 1 ? '' : 's') +
         ' don’t match the subtotals QuickBooks printed (off by ' + fmtMoney(Math.abs(rec.totalDelta)) +
         ' in total). The file was read incorrectly, so these costs would import wrong. Nothing was written.';
-      // p86Alert is referenced around the app but never actually defined,
-      // so those call sites fall through to native alert() — which is a
-      // no-op inside the installed PWA. Route through p86Ask instead: it
-      // uses the in-app overlay that does render there.
+      // Never native alert() — it is a no-op inside the installed PWA, so
+      // a block that reports itself with alert() reports nothing on
+      // John's phone. p86Alert (js/dialogs.js) is the in-app single-button
+      // overlay; p86Ask is the fallback, also in-app.
       if (typeof window.p86Alert === 'function') {
         window.p86Alert({ title: 'Import blocked', message: blockedMsg });
       } else {
@@ -757,98 +766,338 @@ function p86Ask(message, opts) {
     if (typeof saveData === 'function') saveData();
 
     // ── Phase 2: Server persistence ─────────────────────────────
-    // Workspace sheets are now a *view* of the data; the source of
-    // truth lives in Postgres so re-imports across devices stay
-    // idempotent. Fire-and-forget — if the server is offline the
-    // workspace sheets still render fine from localStorage.
-    if (window.p86Api && window.p86Api.isAuthenticated && window.p86Api.isAuthenticated()) {
-      var payload = {
-        reportDate: _lastParse.reportDate,
-        sourceFile: _lastParse.fileName || null,
-        jobs: m.matched.map(function(x) {
-          return {
-            jobId: x.job.id,
-            lines: x.parsed.lines.map(function(l) {
-              return {
-                vendor: l.vendor || '',
-                date: l.date || '',
-                txnType: l.txnType || '',
-                num: l.num || '',
-                account: l.account || '',
-                accountType: l.accountType || '',
-                klass: l.klass || '',
-                memo: l.memo || '',
-                amount: l.amount || 0
-              };
-            })
-          };
-        })
-      };
-      fetch('/api/qb-costs/import', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify(payload)
-      }).then(function(r) { return r.json().then(function(j) { return { ok: r.ok, body: j }; }); })
-        .then(function(res) {
-          if (!res.ok) {
-            console.warn('[qb-costs] server import failed:', res.body && res.body.error);
-          } else {
-            console.log('[qb-costs] server upsert: +' + (res.body.inserted || 0) +
-              ' new, ' + (res.body.updated || 0) + ' updated, ' +
-              (res.body.skipped || 0) + ' skipped' +
-              (res.body.cleaned ? ', ' + res.body.cleaned + ' stale $0 credit row(s) retired' : ''));
-            // Refresh the in-memory cache from the server so the QB view,
-            // cost buckets, and job rollups reflect this import WITHOUT a
-            // full reload. appData.qbCostLines is otherwise a boot-only
-            // snapshot — the root cause of "the costs didn't import" when
-            // they were in fact in the DB (RV2013). A batch touches many
-            // jobs, so refresh the whole list.
-            if (window.p86Api && p86Api.qbCosts && typeof p86Api.qbCosts.list === 'function') {
-              p86Api.qbCosts.list().then(function(all) {
-                if (all && Array.isArray(all.lines)) window.appData.qbCostLines = all.lines;
-                if (typeof renderJobsMain === 'function') renderJobsMain();
-                // Repaint the QB view if it's currently open on a job.
-                if (typeof window.renderJobQBCosts === 'function' &&
-                    window.qbCostsView && window.qbCostsView.currentJobId &&
-                    window.qbCostsView.currentJobId()) {
-                  window.renderJobQBCosts(window.qbCostsView.currentJobId());
-                }
-              }).catch(function() {});
-            }
-          }
-        }).catch(function(err) {
-          console.warn('[qb-costs] server import error:', err && err.message);
-        });
+    // Workspace sheets are a *view*; the source of truth is Postgres, so
+    // re-imports across devices stay idempotent.
+    //
+    // THIS IS WHERE THREE WEEKS OF QB IMPORTS DIED. The write used to be a
+    // fire-and-forget raw fetch() nested inside an isAuthenticated() gate,
+    // and EVERY way it could fail — gate false, 401, 403, 429 (there is a
+    // global per-IP rate limiter), 500, dropped connection, or even a 200
+    // that skipped every job — landed in a console.warn nobody was
+    // reading. Worse, the success alert sat OUTSIDE that gate and was
+    // computed from `m.matched` — client-side spreadsheet math — so it
+    // fired before the request resolved and cheerfully said "Imported 25
+    // jobs — $X total" whether or not one row reached the database. The
+    // 08.13.26 export was imported twice and wrote ZERO rows; both times
+    // the UI looked identical to a good import. That is the actual defect:
+    // not the parser, not the dedupe, but a money write with no delivery
+    // guarantee and no failure surface.
+    //
+    // Three changes, all of them the same idea — stop guessing:
+    //   1. The write is unconditional. If we cannot reach the server the
+    //      user is TOLD, instead of the request quietly never firing.
+    //   2. It goes through p86Api, which sends `Authorization: Bearer`
+    //      AND same-origin cookies (a strict superset of what the raw
+    //      fetch sent) and throws with the server's status + message on
+    //      any non-2xx.
+    //   3. It is awaited, and the result screen reports the SERVER'S
+    //      counts — written / already-stored / rejected-with-reason —
+    //      never the client's arithmetic.
+    var payload = {
+      reportDate: _lastParse.reportDate,
+      sourceFile: _lastParse.fileName || null,
+      jobs: m.matched.map(function(x) {
+        return {
+          jobId: x.job.id,
+          lines: x.parsed.lines.map(function(l) {
+            return {
+              vendor: l.vendor || '',
+              date: l.date || '',
+              txnType: l.txnType || '',
+              num: l.num || '',
+              account: l.account || '',
+              accountType: l.accountType || '',
+              klass: l.klass || '',
+              memo: l.memo || '',
+              amount: l.amount || 0
+            };
+          })
+        };
+      })
+    };
+
+    var parsedLines = _lastParse.jobs.reduce(function(s, p) { return s + p.lines.length; }, 0);
+    var sentLines = payload.jobs.reduce(function(s, j) { return s + j.lines.length; }, 0);
+    var reportDate = _lastParse.reportDate;
+    var fileName = _lastParse.fileName;
+
+    setCommitBusy(true, 'Writing ' + sentLines + ' line' + (sentLines === 1 ? '' : 's') + '…');
+
+    var srv = null;
+    var srvErr = null;
+    if (!(window.p86Api && p86Api.qbCosts && typeof p86Api.qbCosts.importBatch === 'function')) {
+      // Previously this branch was the silent `if (isAuthenticated())`
+      // false-path: no request, no message, no trace.
+      srvErr = 'The Project 86 API client is not loaded, so nothing could be sent to the server. ' +
+        'Reload the page and import again.';
+    } else {
+      try {
+        srv = await p86Api.qbCosts.importBatch(payload);
+      } catch (e) {
+        srvErr = ((e && e.status) ? 'HTTP ' + e.status + ' — ' : '') +
+          ((e && e.message) || 'unknown error');
+      }
     }
 
-    // If the workspace for the currently-open job got updated, the
-    // user will see the new sheet on next open. Re-rendering the Jobs
-    // list refreshes any rollup display.
-    if (typeof closeModal === 'function') closeModal('qbCostsImportModal');
+    // Refresh the in-memory cache from the server so the QB view, cost
+    // buckets, and job rollups reflect this import WITHOUT a full reload.
+    // appData.qbCostLines is otherwise a boot-only snapshot — that is what
+    // made a *successful* import look like it did nothing on RV2013. Only
+    // worth doing when something actually landed.
+    if (srv && window.p86Api && p86Api.qbCosts && typeof p86Api.qbCosts.list === 'function') {
+      try {
+        var all = await p86Api.qbCosts.list();
+        if (all && Array.isArray(all.lines)) window.appData.qbCostLines = all.lines;
+      } catch (e) {
+        // Non-fatal: the receipt below already carries the authoritative
+        // server counts. Only the on-screen cost views are stale.
+        console.warn('[qb-costs] post-import cache refresh failed:', e && e.message);
+      }
+    }
+    setCommitBusy(false);
     if (typeof renderJobsMain === 'function') renderJobsMain();
-
-    var totalImported = m.matched.reduce(function(s, x) { return s + x.parsed.computedTotal; }, 0);
-    var skippedTotal = m.unmatched.reduce(function(s, p) { return s + p.computedTotal; }, 0);
-    var doneMsg = 'Imported ' + m.matched.length + ' job' + (m.matched.length === 1 ? '' : 's') +
-      ' — ' + fmtMoney(totalImported) + ' total.';
-    // Never report a silent partial success — call out skipped $ explicitly.
-    if (m.unmatched.length) {
-      doneMsg += '\n\n⚠️ Skipped ' + m.unmatched.length + ' unmatched project' +
-        (m.unmatched.length === 1 ? '' : 's') + ' (' + fmtMoney(skippedTotal) +
-        ') — their QB code didn’t match a job number. Fix the code in QuickBooks or create a stub, then re-import.';
+    // Repaint the QB view if it's currently open on a job.
+    if (typeof window.renderJobQBCosts === 'function' &&
+        window.qbCostsView && window.qbCostsView.currentJobId &&
+        window.qbCostsView.currentJobId()) {
+      window.renderJobQBCosts(window.qbCostsView.currentJobId());
     }
+
+    // The receipt replaces the preview in the same modal. The modal used
+    // to close itself here and hand the user a native alert() — which is
+    // a no-op inside the installed PWA, so on John's phone the import
+    // reported literally nothing.
+    renderCommitReceipt({
+      fileName: fileName,
+      reportDate: reportDate,
+      parsedProjects: _lastParse.jobs.length,
+      parsedLines: parsedLines,
+      matched: m.matched,
+      unmatched: m.unmatched,
+      sentLines: sentLines,
+      srv: srv,
+      srvErr: srvErr,
+      sheetCacheFailed: sheetCacheFailed
+    });
+
+    _lastParse = null;
+  }
+
+  // Busy state for the footer button while the server write is in flight.
+  // The old code never had one because it never waited for anything.
+  function setCommitBusy(busy, label) {
+    var btn = document.getElementById('qbCostsImport_confirmBtn');
+    if (!btn) return;
+    if (busy) {
+      btn._qbPrevLabel = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = label || 'Importing…';
+    } else {
+      btn.disabled = false;
+      if (btn._qbPrevLabel) btn.textContent = btn._qbPrevLabel;
+    }
+  }
+
+  // ─── Commit receipt ──────────────────────────────────────────────
+  // What the import ACTUALLY did, sourced from the server's response and
+  // never from client-side arithmetic. Five numbers, because those are
+  // the five that distinguish a good import from the two bad ones we've
+  // now shipped: rows parsed out of the file, rows matched to a job, rows
+  // WRITTEN, rows already stored (the idempotent-hash dedupe doing its
+  // job), and rows rejected — each with the server's reason.
+  function renderCommitReceipt(r) {
+    var body = document.getElementById('qbCostsImport_body');
+    var srv = r.srv;
+    var written = srv ? (Number(srv.inserted) || 0) : 0;
+    var dupes = srv ? (Number(srv.updated) || 0) : 0;
+    var rejected = srv ? (Number(srv.skipped) || 0) : 0;
+    var cleaned = srv ? (Number(srv.cleaned) || 0) : 0;
+    var received = srv && srv.received != null ? Number(srv.received) : null;
+    var unmatchedLines = r.unmatched.reduce(function(s, p) { return s + p.lines.length; }, 0);
+    var unmatchedTotal = r.unmatched.reduce(function(s, p) { return s + p.computedTotal; }, 0);
+    var matchedTotal = r.matched.reduce(function(s, x) { return s + x.parsed.computedTotal; }, 0);
+
+    // A write that landed nothing is a FAILURE, not a quiet success. This
+    // is the exact case that shipped twice and looked fine both times.
+    var failed = !!r.srvErr || (r.sentLines > 0 && written + dupes === 0);
+    var partial = !failed && (rejected > 0 || (received != null && received !== r.sentLines));
+
+    if (!body) {
+      // No modal to paint into (headless / stale DOM). Never fall through
+      // to native alert() — it is a no-op in the installed PWA.
+      var fallback = failed
+        ? 'QB cost import FAILED — nothing was written. ' + (r.srvErr || 'the server accepted 0 rows.')
+        : written + ' new cost line(s) written, ' + dupes + ' already on file, ' + rejected + ' rejected.';
+      if (typeof window.p86Alert === 'function') window.p86Alert({ title: 'QB cost import', message: fallback });
+      else console.warn('[qb-costs] ' + fallback);
+      return;
+    }
+
+    var accent = failed ? '#f87171' : (partial ? '#fbbf24' : '#34d399');
+    var html = '';
+
+    html += '<div style="margin-bottom:14px;font-size:12px;color:var(--text-dim,#888);">' +
+      'File: <strong style="color:var(--text,#fff);">' + escapeHTML(r.fileName || '') + '</strong>' +
+      ' &middot; Report date: <strong style="color:var(--text,#fff);">' + escapeHTML(r.reportDate || '') + '</strong>' +
+      '</div>';
+
+    if (failed) {
+      html += '<div style="background:rgba(248,113,113,0.10);border:1px solid rgba(248,113,113,0.55);border-radius:8px;padding:12px 14px;margin-bottom:16px;">' +
+        '<div style="font-size:13px;font-weight:700;color:#f87171;margin-bottom:6px;">Nothing was written to the database.</div>' +
+        '<div style="font-size:12px;color:var(--text,#fff);line-height:1.55;">' +
+          (r.srvErr
+            ? 'The server rejected the import: <strong>' + escapeHTML(r.srvErr) + '</strong>'
+            : 'The server accepted the request but stored none of the ' + r.sentLines + ' line' +
+              (r.sentLines === 1 ? '' : 's') + ' sent.') +
+          '<br>Your QuickBooks costs did <strong>not</strong> land on these jobs. Fix the cause and import the same file again — ' +
+          'the line ids are content hashes, so re-importing cannot double-count.' +
+        '</div></div>';
+    } else if (partial) {
+      html += '<div style="background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.45);border-radius:8px;padding:12px 14px;margin-bottom:16px;">' +
+        '<div style="font-size:13px;font-weight:700;color:#fbbf24;margin-bottom:4px;">Imported with rejections.</div>' +
+        '<div style="font-size:12px;color:var(--text,#fff);line-height:1.55;">' +
+          'Some lines did not reach the database. The reasons are listed below — re-import once they are fixed.' +
+        '</div></div>';
+    } else {
+      html += '<div style="display:flex;gap:8px;align-items:center;background:rgba(52,211,153,0.08);border:1px solid rgba(52,211,153,0.35);border-radius:8px;padding:10px 13px;margin-bottom:16px;font-size:12px;color:var(--text,#fff);">' +
+        '<span style="font-size:14px;line-height:1;">&#10003;</span>' +
+        '<span>Confirmed by the server: <strong>' + written + '</strong> new cost line' + (written === 1 ? '' : 's') +
+        ' written' + (dupes ? ', <strong>' + dupes + '</strong> already on file (updated in place, not duplicated)' : '') + '.</span>' +
+      '</div>';
+    }
+
+    html += '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:16px;">' +
+      statBlock('Parsed', r.parsedLines, 'var(--text,#fff)') +
+      statBlock('Matched', r.sentLines, r.sentLines ? 'var(--text,#fff)' : '#fbbf24') +
+      statBlock('Written', written, written ? '#34d399' : '#f87171') +
+      statBlock('Already on file', dupes, 'var(--text-dim,#aaa)') +
+      statBlock('Rejected', rejected + unmatchedLines, (rejected + unmatchedLines) ? '#fbbf24' : 'var(--text-dim,#888)') +
+    '</div>';
+
+    html += '<div style="font-size:11px;color:var(--text-dim,#888);line-height:1.6;margin-bottom:16px;">' +
+      '<strong style="color:var(--text-dim,#aaa);">Parsed</strong> = detail rows read out of the file (' + r.parsedProjects + ' project' +
+      (r.parsedProjects === 1 ? '' : 's') + '). ' +
+      '<strong style="color:var(--text-dim,#aaa);">Matched</strong> = rows whose QB project code resolved to a Project&nbsp;86 job number and were sent to the server' +
+      (received != null ? ' (server received ' + received + ')' : '') + '. ' +
+      '<strong style="color:var(--text-dim,#aaa);">Written</strong> = rows newly stored in <code>qb_cost_lines</code>. ' +
+      '<strong style="color:var(--text-dim,#aaa);">Already on file</strong> = rows this export re-sent that were stored by an earlier import; the QB report is cumulative, so this is normal and is <em>not</em> a double-count &mdash; each line id is a content hash and re-sending updates the same row. ' +
+      '<strong style="color:var(--text-dim,#aaa);">Rejected</strong> = rows that did not land, itemised below.' +
+      (cleaned ? ' Also retired ' + cleaned + ' stale $0.00 credit row' + (cleaned === 1 ? '' : 's') + ' left behind by the pre-fix parser.' : '') +
+      '</div>';
+
+    if (received != null && received !== r.sentLines) {
+      html += '<div style="background:rgba(248,113,113,0.10);border:1px solid rgba(248,113,113,0.45);border-radius:8px;padding:10px 13px;margin-bottom:16px;font-size:12px;color:var(--text,#fff);">' +
+        'Sent <strong>' + r.sentLines + '</strong> lines but the server counted <strong>' + received + '</strong>. ' +
+        'The request was truncated in transit — re-import and, if it repeats, split the file.' +
+        '</div>';
+    }
+
+    // Server-side rejections, with the reason the server gave.
+    var rejects = (srv && Array.isArray(srv.rejected)) ? srv.rejected : [];
+    if (rejects.length || r.unmatched.length) {
+      html += '<div style="font-weight:600;margin-bottom:6px;color:var(--text,#fff);font-size:13px;">Rejected &mdash; why each row did not land:</div>';
+      html += '<div style="border:1px solid var(--border,#333);border-radius:6px;overflow:hidden;margin-bottom:16px;">' +
+        '<table style="width:100%;border-collapse:collapse;font-size:12px;">' +
+        '<thead style="background:rgba(251,191,36,0.05);"><tr>' +
+          '<th style="text-align:left;padding:8px 10px;font-weight:600;color:var(--text-dim,#888);text-transform:uppercase;font-size:10px;letter-spacing:0.4px;">Project / Job</th>' +
+          '<th style="text-align:right;padding:8px 10px;font-weight:600;color:var(--text-dim,#888);text-transform:uppercase;font-size:10px;letter-spacing:0.4px;">Rows</th>' +
+          '<th style="text-align:left;padding:8px 10px;font-weight:600;color:var(--text-dim,#888);text-transform:uppercase;font-size:10px;letter-spacing:0.4px;">Reason</th>' +
+        '</tr></thead><tbody>';
+      rejects.forEach(function(rj) {
+        var label = rj && rj.jobId ? String(rj.jobId) : '(unidentified)';
+        // Prefer the human job number over the raw id.
+        var hit = r.matched.filter(function(x) { return x.job.id === (rj && rj.jobId); })[0];
+        if (hit) label = (hit.job.jobNumber || '') + ' ' + (hit.job.title || '');
+        html += '<tr style="border-top:1px solid var(--border,#2a2a32);">' +
+          '<td style="padding:8px 10px;color:var(--text,#fff);">' + escapeHTML(label) + '</td>' +
+          '<td style="text-align:right;padding:8px 10px;font-family:\'SF Mono\',monospace;color:#fbbf24;">' + (Number(rj && rj.lines) || 0) + '</td>' +
+          '<td style="padding:8px 10px;color:#fbbf24;">' + escapeHTML((rj && rj.reason) || 'no reason given') + '</td>' +
+        '</tr>';
+      });
+      r.unmatched.forEach(function(p) {
+        html += '<tr style="border-top:1px solid var(--border,#2a2a32);">' +
+          '<td style="padding:8px 10px;color:var(--text,#fff);">' + escapeHTML((p.code || '(no code)') + ' ' + (p.name || '')) +
+            ' <span style="color:var(--text-dim,#888);">' + fmtMoney(p.computedTotal) + '</span></td>' +
+          '<td style="text-align:right;padding:8px 10px;font-family:\'SF Mono\',monospace;color:#fbbf24;">' + p.lines.length + '</td>' +
+          '<td style="padding:8px 10px;color:#fbbf24;">Not sent &mdash; the QuickBooks project code doesn’t match any Project&nbsp;86 job number. ' +
+            'Fix the project name in QB to lead with the job number, or create a stub job, then re-import.</td>' +
+        '</tr>';
+      });
+      html += '</tbody></table></div>';
+      if (unmatchedLines) {
+        html += '<div style="font-size:11px;color:var(--text-dim,#888);margin-bottom:16px;">' +
+          fmtMoney(unmatchedTotal) + ' of cost sat on unmatched projects and was not imported.</div>';
+      }
+    }
+
+    // Per-job breakdown of what the server actually stored.
+    var byJob = (srv && srv.byJob) || {};
+    if (r.matched.length) {
+      html += '<div style="font-weight:600;margin-bottom:6px;color:var(--text,#fff);font-size:13px;">Per job &mdash; as stored by the server:</div>';
+      html += '<div style="border:1px solid var(--border,#333);border-radius:6px;overflow:hidden;">' +
+        '<table style="width:100%;border-collapse:collapse;font-size:12px;">' +
+        '<thead style="background:rgba(255,255,255,0.03);"><tr>' +
+          '<th style="text-align:left;padding:8px 10px;font-weight:600;color:var(--text-dim,#888);text-transform:uppercase;font-size:10px;letter-spacing:0.4px;">Job #</th>' +
+          '<th style="text-align:left;padding:8px 10px;font-weight:600;color:var(--text-dim,#888);text-transform:uppercase;font-size:10px;letter-spacing:0.4px;">Job Title</th>' +
+          '<th style="text-align:right;padding:8px 10px;font-weight:600;color:var(--text-dim,#888);text-transform:uppercase;font-size:10px;letter-spacing:0.4px;">Sent</th>' +
+          '<th style="text-align:right;padding:8px 10px;font-weight:600;color:var(--text-dim,#888);text-transform:uppercase;font-size:10px;letter-spacing:0.4px;">Written</th>' +
+          '<th style="text-align:right;padding:8px 10px;font-weight:600;color:var(--text-dim,#888);text-transform:uppercase;font-size:10px;letter-spacing:0.4px;">On file</th>' +
+          '<th style="text-align:right;padding:8px 10px;font-weight:600;color:var(--text-dim,#888);text-transform:uppercase;font-size:10px;letter-spacing:0.4px;">Total</th>' +
+        '</tr></thead><tbody>';
+      r.matched.forEach(function(x) {
+        var st = byJob[x.job.id] || {};
+        var w = Number(st.inserted) || 0;
+        var u = Number(st.updated) || 0;
+        var sk = Number(st.skipped) || 0;
+        html += '<tr style="border-top:1px solid var(--border,#2a2a32);">' +
+          '<td style="padding:8px 10px;font-family:\'SF Mono\',monospace;color:#4f8cff;">' + escapeHTML(x.job.jobNumber || '') + '</td>' +
+          '<td style="padding:8px 10px;color:var(--text,#fff);">' + escapeHTML(x.job.title || x.parsed.name) + '</td>' +
+          '<td style="text-align:right;padding:8px 10px;font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);">' + x.parsed.lines.length + '</td>' +
+          '<td style="text-align:right;padding:8px 10px;font-family:\'SF Mono\',monospace;color:' + (sk ? '#fbbf24' : (w ? '#34d399' : 'var(--text-dim,#888)')) + ';font-weight:600;">' +
+            (sk ? '0 (' + sk + ' rejected)' : w) + '</td>' +
+          '<td style="text-align:right;padding:8px 10px;font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);">' + u + '</td>' +
+          '<td style="text-align:right;padding:8px 10px;font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);">' + fmtMoney(x.parsed.computedTotal) + '</td>' +
+        '</tr>';
+      });
+      html += '</tbody></table></div>';
+      html += '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:6px;">' +
+        'Matched project total in the file: <strong style="color:var(--text-dim,#aaa);">' + fmtMoney(matchedTotal) + '</strong>. ' +
+        'The QuickBooks report is cumulative, so on a re-import most rows land in &ldquo;On file&rdquo; rather than &ldquo;Written&rdquo;.' +
+        '</div>';
+    }
+
     // A failed sheet cache is survivable (the server has the costs) but the
     // user must know their local workbook copy is stale, not silently assume
     // the "QB Costs <date>" sheet is there.
-    if (sheetCacheFailed) {
-      doneMsg += '\n\n⚠️ Costs were saved to the server, but the local "QB Costs" ' +
-        'workbook sheets could not be cached (' + sheetCacheFailed + ') — browser ' +
-        'storage is full. The job cost figures are correct; only the offline sheet copy is missing.';
+    if (r.sheetCacheFailed) {
+      html += '<div style="background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.4);border-radius:8px;padding:10px 13px;margin-top:14px;font-size:12px;color:var(--text,#fff);line-height:1.55;">' +
+        'The local &ldquo;QB Costs ' + escapeHTML(r.reportDate || '') + '&rdquo; workbook sheets could not be cached (' +
+        escapeHTML(r.sheetCacheFailed) + ') &mdash; browser storage is full. ' +
+        'Job cost figures are unaffected; only the offline sheet copy is missing.' +
+        '</div>';
     }
-    alert(doneMsg);
 
-    _lastParse = null;
+    body.innerHTML = html;
+    body.scrollTop = 0;
+
+    // The footer is now a single dismiss. Re-importing means dropping the
+    // file again, which re-runs renderPreview() and restores both buttons.
+    var confirmBtn = document.getElementById('qbCostsImport_confirmBtn');
+    if (confirmBtn) {
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = failed ? 'Close — nothing imported' : 'Done';
+      confirmBtn.style.background = failed ? '#7f1d1d' : '';
+      confirmBtn.onclick = function() {
+        if (typeof closeModal === 'function') closeModal('qbCostsImportModal');
+        else document.getElementById('qbCostsImportModal').classList.remove('active');
+      };
+    }
+    var cancelBtn = document.querySelector('#qbCostsImportModal .modal-footer .secondary');
+    if (cancelBtn) cancelBtn.style.display = 'none';
+
+    console.log('[qb-costs] import receipt — parsed ' + r.parsedLines + ', matched ' + r.sentLines +
+      ', written ' + written + ', already on file ' + dupes + ', rejected ' + (rejected + unmatchedLines) +
+      (r.srvErr ? ' — ERROR: ' + r.srvErr : ''), srv);
   }
 
   // ─── File picker entry point ─────────────────────────────────────
@@ -902,7 +1151,11 @@ function p86Ask(message, opts) {
       isTotalRow: isTotalRow,
       parseAoa: parseAoa,
       reconcile: reconcile,
-      RECONCILE_TOLERANCE: RECONCILE_TOLERANCE
+      RECONCILE_TOLERANCE: RECONCILE_TOLERANCE,
+      // The result screen is part of the fix, not decoration: an import
+      // that wrote nothing used to look exactly like one that worked.
+      // Exported so the numbers it prints can be pinned under jsdom.
+      renderCommitReceipt: renderCommitReceipt
     };
   }
 })();

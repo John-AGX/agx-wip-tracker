@@ -67,29 +67,64 @@ router.post('/import',
     try {
       await client.query('BEGIN');
 
-      const stats = { inserted: 0, updated: 0, skipped: 0, cleaned: 0, byJob: {} };
+      // `received` and `rejected` exist because the client used to have no
+      // way to tell "wrote 224 rows" from "wrote nothing" — the whole
+      // 08.13.26 import failure was invisible for three weeks. A count of
+      // what arrived, plus a REASON for every row that did not land, is
+      // what makes the importer's result screen trustworthy.
+      const stats = {
+        received: jobs.reduce((n, j) => n + (j && Array.isArray(j.lines) ? j.lines.length : 0), 0),
+        inserted: 0, updated: 0, skipped: 0, cleaned: 0,
+        rejected: [], byJob: {}
+      };
+      const reject = (jobId, lines, reason) => {
+        stats.skipped += lines;
+        stats.rejected.push({ jobId: jobId || null, lines, reason });
+      };
       const reportDateNorm = normDate(reportDate);
 
       for (const j of jobs) {
         if (!j || !j.jobId || !Array.isArray(j.lines)) {
-          stats.skipped += (j && Array.isArray(j.lines) ? j.lines.length : 0);
+          reject(j && j.jobId, (j && Array.isArray(j.lines) ? j.lines.length : 0),
+            'malformed batch entry — missing jobId or lines array');
           continue;
         }
         // Verify the job exists. Skipping silently is friendlier than
         // throwing on a stale jobId.
         const jobCheck = await client.query('SELECT 1 FROM jobs WHERE id = $1', [j.jobId]);
         if (!jobCheck.rows.length) {
-          stats.skipped += j.lines.length;
-          stats.byJob[j.jobId] = { skipped: j.lines.length, reason: 'job not found' };
+          reject(j.jobId, j.lines.length,
+            'no job with this id exists — it was deleted, or the browser is holding a stale copy of the jobs list');
+          stats.byJob[j.jobId] = { inserted: 0, updated: 0, skipped: j.lines.length, reason: 'job not found' };
           continue;
         }
 
-        const jobStats = { inserted: 0, updated: 0 };
+        const jobStats = { inserted: 0, updated: 0, skipped: 0 };
 
         for (const line of j.lines) {
+          // Pre-flight, before the row can reach NUMERIC(12,2). A non-finite
+          // amount stores as NaN in Postgres and silently poisons every
+          // rollup that sums this job. Reject it by name instead — the
+          // batch stays atomic because nothing here touches the write.
+          if (!line || typeof line !== 'object') {
+            jobStats.skipped++;
+            reject(j.jobId, 1, 'line is not an object');
+            continue;
+          }
+          // Exactly the expression the INSERT uses, so this rejects only
+          // values that would actually be written as NaN — a missing or
+          // empty amount still coerces to 0.00 the way it always has.
+          const amount = Number(line.amount || 0);
+          if (!Number.isFinite(amount)) {
+            jobStats.skipped++;
+            reject(j.jobId, 1,
+              'amount is not a number (' + JSON.stringify(line.amount) + ') — vendor ' +
+              JSON.stringify(line.vendor || '') + ', ' + JSON.stringify(line.date || ''));
+            continue;
+          }
+
           const id = hashLineId(j.jobId, line);
           const txnDate = normDate(line.date);
-          const amount = Number(line.amount || 0);
 
           // ON CONFLICT update — but only the mutable fields (memo etc.
           // can change between exports if the user edits in QB). Keep
