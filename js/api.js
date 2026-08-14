@@ -856,7 +856,11 @@
     get: function(id) { return get('/api/tasks/' + encodeURIComponent(id)); },
     create: function(payload) { return post('/api/tasks', payload); },
     update: function(id, payload) { return patch('/api/tasks/' + encodeURIComponent(id), payload); },
-    remove: function(id) { return del('/api/tasks/' + encodeURIComponent(id)); }
+    remove: function(id) { return del('/api/tasks/' + encodeURIComponent(id)); },
+    // Task share links — send a task to an outside worker by email (S3).
+    share: function(id, payload) { return post('/api/tasks/' + encodeURIComponent(id) + '/share', payload || {}); },
+    shares: function(id) { return get('/api/tasks/' + encodeURIComponent(id) + '/shares'); },
+    revokeShare: function(id, sid) { return post('/api/tasks/' + encodeURIComponent(id) + '/shares/' + encodeURIComponent(sid) + '/revoke', {}); }
   };
 
   // My Notes — personal, private scratchpad. Mirrors the tasks/schedule

@@ -402,6 +402,7 @@
         '<div class="modal-header p86-td-hd">' +
           '<span class="p86-td-hd-ttl">Task</span>' +
           '<span style="display:flex;gap:6px;align-items:center;">' +
+            '<button class="ee-btn secondary" id="tdShareBtn" title="Send this task to an outside worker by email">&#x1F517; Share</button>' +
             '<button class="ee-btn secondary" id="tdEditBtn" title="Edit this task">&#x1F512; Edit</button>' +
             '<button class="p86-modal-close" data-close>&times;</button>' +
           '</span>' +
@@ -421,6 +422,19 @@
                 '<span>&#x1F4C5; ' + (task.due_date ? esc((task.due_date || '').slice(0, 10)) : 'No due date') + '</span>' +
                 '<span>&#x1F464; ' + esc(task.assignee_name || 'Unassigned') + '</span>' +
               '</div>' +
+            '</div>' +
+
+            '<div id="tdSharePanel" style="display:none;background:var(--card-bg,#141a26);border:1px solid var(--border,#333);border-radius:12px;padding:12px 14px;">' +
+              '<div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--text,#e9ecf5);">&#x1F517; Send this task to an outside worker</div>' +
+              '<div style="font-size:12px;color:var(--text-dim,#888);margin-bottom:8px;">They get an email link — no login. They can check items, add photos, and mark it done. The link expires on completion or after the days below.</div>' +
+              '<label style="display:block;font-size:11px;color:var(--text-dim,#888);margin-bottom:3px;">Subcontractor</label>' +
+              '<select id="tdShareSub" class="p86-task-select" style="width:100%;margin-bottom:8px;"></select>' +
+              '<label style="display:block;font-size:11px;color:var(--text-dim,#888);margin-bottom:3px;">Their email</label>' +
+              '<input id="tdShareEmail" type="email" placeholder="worker@email.com" style="width:100%;margin-bottom:8px;" />' +
+              '<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;"><label style="font-size:12px;color:var(--text-dim,#888);">Expires in</label><input id="tdShareDays" type="number" min="1" max="90" value="14" style="width:64px;" /><span style="font-size:12px;color:var(--text-dim,#888);">days</span></div>' +
+              '<button class="primary" id="tdShareSend" style="width:100%;">Send link</button>' +
+              '<div id="tdShareResult" style="margin-top:8px;font-size:12.5px;"></div>' +
+              '<div id="tdShareList" style="margin-top:12px;"></div>' +
             '</div>' +
 
             (task.notes ? '<div><div style="font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--text-dim,#888);margin-bottom:5px;">Notes</div><div style="font-size:14px;line-height:1.6;color:var(--text,#cfd6e4);white-space:pre-wrap;">' + esc(task.notes) + '</div></div>' : '') +
@@ -783,6 +797,67 @@
     var _photoInp = h.modal.querySelector('#tdPhotoInput');
     if (_vt && _photoInp) _vt.addEventListener('click', function () { _photoInp.click(); });
     if (_vu && _photoInp) _vu.addEventListener('click', function () { _photoInp.click(); });
+
+    // ── Share: send this task to an outside worker by email ──
+    var _shareLoaded = false;
+    var shareBtn = h.modal.querySelector('#tdShareBtn');
+    if (shareBtn) shareBtn.addEventListener('click', function () {
+      var panel = h.modal.querySelector('#tdSharePanel'); if (!panel) return;
+      var open = (panel.style.display === 'none' || !panel.style.display);
+      panel.style.display = open ? '' : 'none';
+      if (open && !_shareLoaded) { _shareLoaded = true; populateShareSubs(); loadShares(); }
+    });
+    function populateShareSubs() {
+      var sel = h.modal.querySelector('#tdShareSub'); if (!sel) return;
+      var subs = (window.appData && appData.subsDirectory) || [];
+      var opts = '<option value="">— Pick a sub (or just type an email) —</option>';
+      subs.slice().sort(function (a, b) { return String(a.name || '').localeCompare(String(b.name || '')); }).forEach(function (s) {
+        opts += '<option value="' + escAttr(s.id) + '" data-email="' + escAttr(s.email || '') + '">' + esc(s.name || '(unnamed)') + (s.email ? '' : ' — no email') + '</option>';
+      });
+      sel.innerHTML = opts;
+      sel.addEventListener('change', function () {
+        var o = sel.options[sel.selectedIndex], em = o && o.getAttribute('data-email');
+        if (em) h.modal.querySelector('#tdShareEmail').value = em;
+      });
+    }
+    function loadShares() {
+      var host = h.modal.querySelector('#tdShareList'); if (!host) return;
+      host.innerHTML = '<div style="font-size:12px;color:var(--text-dim,#888);">Loading links…</div>';
+      api().shares(task.id).then(function (r) {
+        var rows = (r && r.shares) || [];
+        if (!rows.length) { host.innerHTML = '<div style="font-size:12px;color:var(--text-dim,#888);">No links sent yet.</div>'; return; }
+        host.innerHTML = '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-dim,#888);margin-bottom:4px;">Sent links</div>' + rows.map(function (s) {
+          var color = s.state === 'completed' ? 'var(--green,#22c55e)' : (s.state === 'revoked' || s.state === 'expired') ? 'var(--text-dim,#888)' : 'var(--accent,#4f8cff)';
+          var canRevoke = (s.state === 'sent' || s.state === 'opened');
+          return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--border,#333);font-size:12.5px;">' +
+            '<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(s.recipient_name || s.recipient_email) + ' <span style="color:' + color + ';">&middot; ' + esc(s.state) + '</span></span>' +
+            (canRevoke ? '<button class="ee-btn secondary" data-revoke="' + escAttr(s.id) + '" style="font-size:11px;flex:none;">Revoke</button>' : '') +
+          '</div>';
+        }).join('');
+        host.querySelectorAll('[data-revoke]').forEach(function (el) {
+          el.addEventListener('click', function () {
+            el.disabled = true;
+            api().revokeShare(task.id, el.getAttribute('data-revoke')).then(function () { toast('Link revoked'); loadShares(); }).catch(function () { el.disabled = false; toast('Could not revoke', 'error'); });
+          });
+        });
+      }).catch(function () { host.innerHTML = '<div style="font-size:12px;color:var(--text-dim,#888);">Could not load links.</div>'; });
+    }
+    var shareSend = h.modal.querySelector('#tdShareSend');
+    if (shareSend) shareSend.addEventListener('click', function () {
+      var sub = h.modal.querySelector('#tdShareSub').value || null;
+      var email = (h.modal.querySelector('#tdShareEmail').value || '').trim();
+      var days = Number(h.modal.querySelector('#tdShareDays').value) || 14;
+      if (!email || email.indexOf('@') < 0) { toast('Enter a valid email', 'error'); return; }
+      shareSend.disabled = true; shareSend.textContent = 'Sending…';
+      api().share(task.id, { sub_id: sub, email: email, days: days }).then(function (r) {
+        shareSend.disabled = false; shareSend.textContent = 'Send link';
+        var res = h.modal.querySelector('#tdShareResult'), sent = r && r.email_sent;
+        res.innerHTML = (sent ? '<span style="color:var(--green,#22c55e);">Sent to ' + esc(email) + '.</span> ' : '<span style="color:var(--orange,#e0a458);">Link created (email is off — copy it):</span> ') +
+          (r && r.link ? '<a href="' + escAttr(r.link) + '" target="_blank" rel="noopener" style="color:var(--accent,#4f8cff);word-break:break-all;">' + esc(r.link) + '</a>' : '');
+        toast(sent ? 'Link sent' : 'Link created', 'success');
+        loadShares();
+      }).catch(function (e) { shareSend.disabled = false; shareSend.textContent = 'Send link'; toast((e && e.message) || 'Could not send', 'error'); });
+    });
   }
 
   // ── List renderer ──────────────────────────────────────────────────
