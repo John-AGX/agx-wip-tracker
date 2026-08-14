@@ -66,6 +66,7 @@ function p86Ask(message, opts) {
     // weeks meaninglessly. filterWeek is a Monday ISO date, '' = all weeks.
     groupByWeek: true,
     filterWeek: '',
+    showFlow: true,
     sortDir: 'desc', // 'asc' | 'desc'
     selected: (typeof Set === 'function') ? new Set() : null,
     embedTarget: null,
@@ -555,7 +556,10 @@ function p86Ask(message, opts) {
       '</div>';
     }
 
-    panel.innerHTML = headerHtml + bucketStripHtml(jobId) + summaryHtml + filterBarHtml + bulkBarHtml + tableHtml;
+    var flowHtml = _state.showFlow ? renderWeeklyFlow(allLines) :
+      '<div style="margin:8px 0;"><button class="ee-btn secondary" style="padding:3px 10px;font-size:11px;" ' +
+        'onclick="window.qbCostsView.toggleFlow()">Show weekly cost flow</button></div>';
+    panel.innerHTML = headerHtml + bucketStripHtml(jobId) + summaryHtml + flowHtml + filterBarHtml + bulkBarHtml + tableHtml;
 
     // Apply indeterminate state on master checkbox after render.
     var master = panel.querySelector('#qbcSelectAll');
@@ -591,6 +595,93 @@ function p86Ask(message, opts) {
   // QB lines auto-bucket by their account (js/cost-buckets.js); each row
   // can override the bucket and attribute itself to a building. Replaces
   // the retired "link to a graph node" flow.
+  // ── Weekly cost flow (slice 2) ─────────────────────────────────────
+  // Weeks down the side, cost buckets across. The point of the grid is
+  // that a spike is only actionable once you can see WHICH bucket moved —
+  // a total alone tells you something happened, not what.
+  //
+  // Built from the job's FULL line set, not the filtered view. This is the
+  // rhythm you scan in order to choose a week — filtering it down to the one
+  // week you already picked would defeat it. Keeping it unfiltered also means
+  // the grid reads the same no matter what the table below is showing, so a
+  // week-over-week comparison is never quietly against a different basis.
+  //
+  // Excluded from every cell, matching what the cost engines do:
+  //   - subcontractor lines (cost lives on the PO / bill side)
+  //   - journal entries (month-end accruals, not cost)
+  function renderWeeklyFlow(lines) {
+    if (!_state.showFlow) return '';
+    var buckets = canonBuckets().filter(function (b) { return b.code !== 'subs'; });
+    var isAccrual = (window.p86CostBuckets && p86CostBuckets.isAccrualLine)
+      ? p86CostBuckets.isAccrualLine
+      : function (l) { return String(l.txn_type || l.txnType || '').trim() === 'Journal Entry'; };
+
+    var byWeek = {};
+    (lines || []).forEach(function (l) {
+      if (isAccrual(l)) return;
+      var code = effBucket(l);
+      if (code === 'subs') return;
+      var w = weekStartOf(l.date || l.txn_date);
+      if (!w) return;
+      if (!byWeek[w]) byWeek[w] = { total: 0 };
+      byWeek[w][code] = (byWeek[w][code] || 0) + (Number(l.amount) || 0);
+      byWeek[w].total += Number(l.amount) || 0;
+    });
+
+    var weeks = Object.keys(byWeek).sort().reverse().slice(0, 12); // last 12 weeks
+    if (!weeks.length) return '';
+    var peak = Math.max.apply(null, weeks.map(function (w) { return byWeek[w].total; })) || 1;
+
+    var head = '<tr>' +
+      '<th style="padding:5px 8px;text-align:left;font-size:10px;color:var(--text-dim,#888);font-weight:600;">Week of</th>' +
+      buckets.map(function (b) {
+        return '<th style="padding:5px 8px;text-align:right;font-size:10px;color:' + b.color + ';font-weight:600;">' + escapeHTML(b.label) + '</th>';
+      }).join('') +
+      '<th style="padding:5px 8px;text-align:right;font-size:10px;color:#c8cbe0;font-weight:700;">Total</th>' +
+      '<th style="padding:5px 8px;width:90px;"></th>' +
+    '</tr>';
+
+    var body = weeks.map(function (w, i) {
+      var row = byWeek[w];
+      // Delta vs the NEXT row down, which is the previous week (weeks are
+      // newest-first). The oldest row on screen has no predecessor loaded,
+      // so it shows no delta rather than a fake one.
+      var prev = (i + 1 < weeks.length) ? byWeek[weeks[i + 1]].total : null;
+      var delta = (prev == null) ? null : row.total - prev;
+      var deltaHtml = (delta == null) ? '' :
+        '<span style="font-size:10px;color:' + (delta > 0 ? '#e0a458' : '#35d0a5') + ';">' +
+          (delta > 0 ? '▲' : '▼') + ' ' + fmtMoney(Math.abs(delta)) + '</span>';
+      var barPct = Math.round((row.total / peak) * 100);
+      return '<tr style="border-top:1px solid var(--border,#333);cursor:pointer;" ' +
+          'onclick="window.qbCostsView.setWeek(\'' + escapeAttr(w) + '\')" ' +
+          'title="Filter the table to this week">' +
+        '<td style="padding:5px 8px;font-size:11px;color:#c8cbe0;white-space:nowrap;">' + escapeHTML(weekLabel(w)) + '</td>' +
+        buckets.map(function (b) {
+          var v = row[b.code] || 0;
+          return '<td style="padding:5px 8px;text-align:right;font-size:11px;font-variant-numeric:tabular-nums;color:' +
+            (v ? 'var(--text,#fff)' : '#4a4f63') + ';">' + (v ? fmtMoney(v) : '—') + '</td>';
+        }).join('') +
+        '<td style="padding:5px 8px;text-align:right;font-size:11.5px;font-weight:700;font-variant-numeric:tabular-nums;color:#e0a458;">' + fmtMoney(row.total) + '</td>' +
+        '<td style="padding:5px 8px;">' +
+          '<div style="height:4px;background:rgba(255,255,255,0.06);border-radius:2px;overflow:hidden;">' +
+            '<div style="height:100%;width:' + barPct + '%;background:#e0a458;"></div>' +
+          '</div>' + deltaHtml +
+        '</td>' +
+      '</tr>';
+    }).join('');
+
+    return '<div style="margin:10px 0 14px;border:1px solid var(--border,#333);border-radius:8px;overflow:hidden;">' +
+      '<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--card-bg,#141419);border-bottom:1px solid var(--border,#333);">' +
+        '<span style="font-size:11px;font-weight:700;color:#c8cbe0;letter-spacing:0.3px;">WEEKLY COST FLOW</span>' +
+        '<span style="font-size:10px;color:var(--text-dim,#888);">last ' + weeks.length + ' weeks &middot; excludes subs (PO/bill side) and month-end accruals &middot; click a week to filter</span>' +
+        '<button class="ee-btn secondary" style="margin-left:auto;padding:2px 8px;font-size:10px;" onclick="window.qbCostsView.toggleFlow()">Hide</button>' +
+      '</div>' +
+      '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">' +
+        '<thead>' + head + '</thead><tbody>' + body + '</tbody>' +
+      '</table></div>' +
+    '</div>';
+  }
+
   function canonBuckets() { return (window.p86CostBuckets && p86CostBuckets.CANON) || []; }
   function jobBuildingsList(jobId) {
     return ((window.appData && appData.buildings) || []).filter(function (b) { return b && b.jobId === jobId; });
@@ -920,6 +1011,10 @@ function p86Ask(message, opts) {
   }
   function setGroupByWeek(on) {
     _state.groupByWeek = !!on;
+    reRender();
+  }
+  function toggleFlow() {
+    _state.showFlow = !_state.showFlow;
     reRender();
   }
   function setSearch(v) {
@@ -1275,6 +1370,7 @@ function p86Ask(message, opts) {
     setStatusFilter: setStatusFilter,
     setWeek: setWeek,
     setGroupByWeek: setGroupByWeek,
+    toggleFlow: toggleFlow,
     setSearch: setSearch,
     toggleSort: toggleSort,
     toggleSelect: toggleSelect,
