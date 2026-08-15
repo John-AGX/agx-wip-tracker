@@ -7,8 +7,6 @@ const estLines = require('../services/estimate-lines');
 
 const router = express.Router();
 
-const enum2 = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
-
 // POST /api/estimates/:id/append-assembly — append a parametric assembly's
 // exploded quantities as estimate lines (the takeoff Quantify "Add to
 // estimate" bridge). Body: { assembly_id, params:{Q,...}, mode?:'rollup'|
@@ -24,23 +22,19 @@ router.post('/:id/append-assembly', requireAuth, requireCapability('ESTIMATES_ED
 
     // Explode at the takeoff quantity — refuse a broken recipe rather than
     // append $0 / partial lines. (Assembly load is org-scoped + read-only,
-    // so do it before opening the row-locked txn.)
+    // so do it before opening the row-locked txn.) The refusals themselves
+    // live in estLines.explodeForEstimate, shared with the payload
+    // dispatcher's estimate.ops.assembly_adds so the two doors into an
+    // estimate can never disagree about what is safe to append.
     const graph = await asm.loadGraph(pool, orgId);
-    const a = graph.assemblies.get(assemblyId);
-    if (!a) return res.status(404).json({ error: 'Assembly not found' });
-    const scope = asm.paramScope(a, b.params || {});
-    const Q = enum2(scope.Q);
-    if (!(Q > 0)) return res.status(400).json({ error: 'Takeoff quantity (Q) must be greater than zero' });
-    const ex = asm.explodeParametric(assemblyId, graph, scope);
-    if (ex.errors && ex.errors.length) {
-      return res.status(400).json({ error: 'Formula error: ' + ex.errors.map((e2) => (e2.item ? e2.item + ' — ' : '') + e2.error).join('; '), errors: ex.errors });
+    const ex = estLines.explodeForEstimate({ assembly_id: assemblyId, graph: graph, params: b.params });
+    if (!ex.ok) {
+      const body = { error: ex.error, code: ex.code };
+      if (ex.errors) body.errors = ex.errors;
+      return res.status(ex.code === 'assembly_not_found' ? 404 : 400).json(body);
     }
-    if (!ex.rows.length) return res.status(400).json({ error: 'Assembly has no items to add' });
-    // Match the client's incomplete gate — don't quietly append an
-    // understated cost for an assembly with an unpriced item.
-    if (ex.rows.some((row) => row.unit_cost == null)) {
-      return res.status(400).json({ error: 'Assembly has unpriced items — price them before adding to an estimate.' });
-    }
+    const a = ex.assembly;
+    const scope = ex.scope;
 
     // Read-modify-write under a row lock so two simultaneous appends to the
     // same estimate serialize instead of one silently overwriting the other.

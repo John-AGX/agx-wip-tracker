@@ -371,7 +371,7 @@ const ESTIMATE_TOOLS = [
   },
   {
     name: 'read_assemblies',
-    description: 'Query Project 86\'s ASSEMBLIES — costed recipes that price ONE OUTPUT UNIT of installed work (e.g. "Exterior Repaint — Stucco, per SF" = primer + paint + painter hours + nested pressure-wash sub-assembly). **CALL THIS BEFORE PRICING ANY SCOPE OF WORK** — if a matching assembly exists, its resolved unit cost beats line-by-line guessing, and materials in it are live-priced from our purchase history. Without `id`: returns the index (id, code, name, trade, output unit, resolved cost/unit, item count). With `id`: full recipe (items incl. nested sub-assemblies) PLUS `flat` — leaf rows with effective qty per 1 output unit; multiply each flat row by the takeoff qty to build estimate line_adds (carry source_material_id and set source_assembly_id so actuals can roll up per assembly later). You are the owner of this database: when a recipe is missing or its rates look stale, say so and offer to draft the fix via scribe_write (entity_type "assembly"). Codes follow the controlled TRADE-SYSTEM-VARIANT registry — call read_assembly_taxonomy for the valid Trades + Systems; when you draft an assembly, set trade + system (+ optional variant) and OMIT code (the server derives a compliant, unique one).',
+    description: 'Query Project 86\'s ASSEMBLIES — costed recipes that price ONE OUTPUT UNIT of installed work (e.g. "Exterior Repaint — Stucco, per SF" = primer + paint + painter hours + nested pressure-wash sub-assembly). **CALL THIS BEFORE PRICING ANY SCOPE OF WORK** — if a matching assembly exists, its resolved unit cost beats line-by-line guessing, and materials in it are live-priced from our purchase history. Without `id`: returns the index (id, code, name, trade, output unit, resolved cost/unit, item count). With `id`: full recipe (items incl. nested sub-assemblies), its `params` (the parametric inputs it accepts), PLUS `flat` — leaf rows with effective qty per 1 output unit, for EXPLAINING the price. **To put a recipe ON an estimate, the assembly goes on as ONE line, not as its components** — hand it to `scribe_write` as an `assembly_adds` entry (assembly_id + params.Q = the takeoff qty). NEVER hand-expand a recipe into line_adds yourself: the server explodes and prices it, keeps the assembly intact and traceable, and lands it in the right section. Exploding a line into its components is a HUMAN action taken later in the estimate editor. An unpriced item in the recipe is a HARD STOP — the append is refused, so say so and offer to price it. You are the owner of this database: when a recipe is missing or its rates look stale, say so and offer to draft the fix via scribe_write (entity_type "assembly"). Codes follow the controlled TRADE-SYSTEM-VARIANT registry — call read_assembly_taxonomy for the valid Trades + Systems; when you draft an assembly, set trade + system (+ optional variant) and OMIT code (the server derives a compliant, unique one).',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -1671,7 +1671,10 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
       const sectionNames = groupLines
         .filter(l => l.section === '__section_header__')
         .map(l => l.description || 'subgroup');
-      lines.push('- ' + a.name +
+      // The id is printed so a write can TARGET this group (alternate_id on
+      // an estimate op). Name-only left 86 unable to say which scope a line
+      // or assembly belongs in.
+      lines.push('- ' + a.name + ' [' + a.id + ']' +
         (isActive ? ' (active in editor)' : '') +
         (isExcluded ? ' [EXCLUDED from proposal]' : '') +
         ' · ' + itemLines.length + ' line' + (itemLines.length === 1 ? '' : 's') +
@@ -1915,7 +1918,7 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
       const trades = (asmRes.rows[0].trades || []).filter(Boolean);
       lines.push('# Assemblies (costed recipes) — you own this database');
       lines.push(`Project 86 has ${totalAsm} assemblies — recipes that price ONE OUTPUT UNIT of installed work (per SF/LF/SQ/EA). Trades covered: ${trades.join(', ') || '(untagged)'}.`);
-      lines.push('**Price scopes from assemblies FIRST**: call `read_assemblies` with a trade/scope keyword before line-by-line pricing. To put a recipe on this estimate, fetch it with `id`, multiply each `flat` row by the takeoff qty, and emit line_adds routed to the section matching each row\'s cost_code — carry source_material_id and set source_assembly_id.');
+      lines.push('**Price scopes from assemblies FIRST**: call `read_assemblies` with a trade/scope keyword before line-by-line pricing. An assembly goes onto this estimate as ONE line, not as its components — `scribe_write` an estimate `assembly_adds` entry {assembly_id, params:{Q: takeoff qty}, alternate_name?: which group}. NEVER hand-expand a recipe into line_adds: the server explodes, prices, and files it into the right section, and keeps the assembly intact so it can be re-priced or exploded later. An unpriced item in the recipe is a hard stop — the append is refused rather than understated.');
       lines.push('When rates look stale or a recipe is missing, say so and offer to draft the create/update via `scribe_write` (entity_type "assembly") — the user approves in chat.');
       lines.push('');
     }
@@ -7842,7 +7845,7 @@ const PAYLOAD_TOOLS = [
       'emitting. ' +
       'Per-entity_type op vocabulary: ' +
       'client: {op,fields,notes}. ' +
-      'estimate: {op,scope,field_updates,sections,groups,line_adds,line_edits,line_deletes}. ' +
+      'estimate: {op,scope,field_updates,sections,groups,line_adds,line_edits,line_deletes,assembly_adds}. ' +
       'job: {field_updates,phase_updates,node_values,wire_updates,qb_assignments,change_orders,purchase_orders,invoices,notes,graph} ' +
       // NOTE: this description is HARD-TRUNCATED at 1024 chars by the
       // managed-agents API (toCustomToolParam in admin-agents-routing).
@@ -9277,9 +9280,16 @@ async function execStaffTool(name, input, ctx) {
             trade: a.trade, unit: a.unit, source: a.source, notes: a.notes,
             unit_cost: cost.unitCost, incomplete: cost.incomplete,
           },
+          // Parametric inputs this recipe accepts. Q (the takeoff quantity in
+          // the output unit) is always in scope and is NOT listed here.
+          params: asmSvc.paramDefs(a),
           items: (graph.itemsBy.get(wantId) || []).map(asmSvc.shapeItem),
           flat: asmSvc.flatten(wantId, graph, 1),
-          usage: 'flat rows are per 1 ' + (a.unit || 'unit') + ' of installed work. Line qty = takeoff × qty_per_unit. Route each line to the section matching its cost_code; carry source_material_id and set source_assembly_id=' + a.id + '.',
+          usage: 'flat rows are per 1 ' + (a.unit || 'unit') + ' of installed work — they are for EXPLAINING the price, not for retyping onto an estimate. ' +
+            'To put this on an estimate it goes on INTACT as ONE line: scribe_write an estimate assembly_adds entry ' +
+            '{assembly_id: ' + a.id + ', params: {Q: <takeoff qty in ' + (a.unit || 'unit') + '>}} — the server explodes, prices, and files it into the right section. ' +
+            'Do NOT hand-expand these rows into line_adds. Exploding a line into components is a human action in the editor, later. ' +
+            (cost.incomplete ? 'WARNING: this recipe has UNPRICED items — an estimate append will be REFUSED until they are priced.' : ''),
         }, null, 1);
       }
       const q2 = (input && input.q || '').trim().toLowerCase();
@@ -12465,8 +12475,12 @@ async function driveScribeWrite(intent, ctx) {
 
   let captured = null;   // { payloadId, filename, title, changeset, applySummary }
   let lastError = null;
+  // A dry-run failure the Scribe CANNOT fix by re-emitting (a refusal, not a
+  // typo) — see the retry loop below.
+  let lastErrorTerminal = false;
 
   const onCustomToolUse = async (tu) => {
+    lastErrorTerminal = false;
     if (!tu || tu.name !== 'emit_payload_file') {
       lastError = 'The Scribe may only call emit_payload_file.';
       return { tier: 'auto', error: lastError };
@@ -12500,6 +12514,7 @@ async function driveScribeWrite(intent, ctx) {
       // and feed the structured error back for self-correction.
       try { await pool.query('DELETE FROM payloads WHERE id = $1', [payloadId]); } catch (_) {}
       lastError = (e && (e.message || (e.detail && JSON.stringify(e.detail)))) || 'Dry-run failed.';
+      lastErrorTerminal = !!(e && e.detail && e.detail.retryable === false);
       return { tier: 'auto', error: lastError };
     }
   };
@@ -12515,6 +12530,13 @@ async function driveScribeWrite(intent, ctx) {
     result = await driveSubtaskTurn({ anthropic, sessionId, eventsToSend: nextEvents, onCustomToolUse });
     if (captured) break;
     if (result && result.error && !lastError) break;  // hard session error, not a fixable miss
+    // A REFUSAL is terminal — re-prompting "fix it and re-emit" only tempts
+    // the Scribe into a workaround. Concretely: an assembly refused for
+    // unpriced items is not fixable in a payload, and the Scribe's most
+    // available "fix" is to drop assembly_adds and hand-write line_adds with
+    // invented unit costs — laundering a refusal into a silently understated
+    // estimate. Surface the refusal to the user instead.
+    if (lastErrorTerminal) break;
     if (attempt === SCRIBE_MAX_RETRIES) break;
     nextEvents = [{ type: 'user.message', content: [{ type: 'text',
       text: 'Your payload was not accepted: ' + (lastError || 'unknown error') +

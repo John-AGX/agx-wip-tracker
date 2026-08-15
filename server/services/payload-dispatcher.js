@@ -200,9 +200,12 @@ const PAYLOAD_OPS_SCHEMAS = Object.freeze({
     allowedTopKeys: new Set(['op', 'fields', 'notes', 'structure']),
   },
   estimate: {
+    // assembly_adds: [{assembly_id, params:{Q,...}, mode?, alternate_id?,
+    //   alternate_name?}] — put a COSTED RECIPE on the estimate INTACT.
+    //   The dispatcher explodes + prices it; the agent never hand-expands.
     allowedTopKeys: new Set([
       'op', 'scope', 'field_updates', 'sections', 'groups',
-      'line_adds', 'line_edits', 'line_deletes',
+      'line_adds', 'line_edits', 'line_deletes', 'assembly_adds',
     ]),
   },
   job: {
@@ -457,7 +460,7 @@ function validateOps(entityType, ops) {
         }
       }
     }
-    for (const k of ['sections', 'groups', 'line_adds', 'line_edits', 'line_deletes']) {
+    for (const k of ['sections', 'groups', 'line_adds', 'line_edits', 'line_deletes', 'assembly_adds']) {
       if (ops[k] != null && !Array.isArray(ops[k])) {
         throw new PayloadValidationError(
           `estimate.ops.${k} must be an array`,
@@ -999,6 +1002,109 @@ function preRegisterEstimateRefs(ops, refTable) {
   }
 }
 
+// ── applyAssemblyAdds ────────────────────────────────────────────────
+// estimate.ops.assembly_adds — put a costed ASSEMBLY (recipe) on the
+// estimate as ONE line per cost bucket, intact.
+//
+// Why this is an op and not a tool: an assembly append is estimate money,
+// and estimate money is written in exactly one place — this dispatcher,
+// behind ESTIMATES_EDIT, inside applyPayload's transaction, with a
+// before/after changeset and an approve-in-chat card. A direct HTTP tool
+// for 86 would be a second, ungoverned door into the same numbers.
+//
+// The agent must NEVER hand-expand a recipe into line_adds: doing that
+// re-prices it from a stale read, drops the assembly provenance
+// (sourceAssemblyId / assemblyBreakdown) the editor's explode + per-unit
+// refresh depend on, and pushes every line to the END of the array
+// instead of into its section. This op does all three correctly by
+// reusing estimate-lines.applyAssemblyToEstimateData — the same code the
+// takeoff "Add to estimate" button runs.
+//
+// Refusals (explodeForEstimate) are TERMINAL: they carry
+// detail.retryable === false so the Scribe's retry loop breaks instead of
+// re-prompting, because the Scribe's only available "fix" for an unpriced
+// recipe is to invent unit costs in hand-written line_adds — which would
+// launder a refusal into a silently understated estimate.
+async function applyAssemblyAdds(dbClient, data, estId, entries, ctx) {
+  const asmSvc = require('./assemblies');
+  const estLines = require('./estimate-lines');
+  if (!ctx || !ctx.organizationId) {
+    throw new PayloadValidationError(
+      'estimate.ops.assembly_adds requires an authenticated org context',
+      { code: 'missing_org', field_path: 'estimate.ops.assembly_adds', retryable: false }
+    );
+  }
+  // One catalog load for the whole array — loadGraph is org-scoped and
+  // read-only, and re-loading per entry would be a query per assembly.
+  const graph = await asmSvc.loadGraph(dbClient, ctx.organizationId);
+  let added = 0;
+  const names = [];
+  // applyAssemblyToEstimateData derives line ids from a timestamp; two entries
+  // in the same array land in the same millisecond, so disambiguate per entry
+  // or the second assembly's lines collide with the first's.
+  const stampBase = Date.now().toString(36);
+
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i] || {};
+    const path = `estimate.ops.assembly_adds[${i}]`;
+    // 'rollup' (ONE line per cost bucket) is the default and the norm.
+    // Exploding a recipe into its components is a HUMAN action taken
+    // later in the estimate editor — only honour 'exploded' when the
+    // caller asked for it in so many words.
+    const mode = e.mode === 'exploded' ? 'exploded' : 'rollup';
+
+    const ex = estLines.explodeForEstimate({
+      assembly_id: e.assembly_id, graph: graph, params: e.params || {},
+    });
+    if (!ex.ok) {
+      throw new PayloadValidationError(ex.error, {
+        code: ex.code, field_path: path, op_index: i, retryable: false,
+        received: e.assembly_id,
+        suggestion: ex.code === 'assembly_unpriced'
+          ? 'Do NOT work around this by hand-writing line_adds with guessed unit costs. The recipe has to be priced first.'
+          : 'Fix the recipe (or the takeoff quantity) before putting it on an estimate.',
+      });
+    }
+
+    // Which SCOPE (alternate) does this land in? An id wins; a name is
+    // resolved case-insensitively (86 sees alternates by name in its turn
+    // context). Both are optional — applyAssemblyToEstimateData falls back
+    // to the active alternate, then the first one, i.e. "Base".
+    let altPref = e.alternate_id || null;
+    const wantName = (typeof e.alternate_name === 'string' && e.alternate_name.trim())
+      ? e.alternate_name.trim().toLowerCase() : null;
+    const alts = Array.isArray(data.alternates) ? data.alternates : [];
+    if (!altPref && wantName) {
+      const hits = alts.filter((x) => x && String(x.name || '').trim().toLowerCase() === wantName);
+      if (hits.length !== 1) {
+        // Self-correcting: name the valid choices so the Scribe can retry.
+        throw new PayloadValidationError(
+          (hits.length ? 'Ambiguous' : 'Unknown') + ` alternate_name "${e.alternate_name}" on this estimate.`,
+          { code: hits.length ? 'ambiguous_alternate' : 'unknown_alternate',
+            field_path: path + '.alternate_name', op_index: i, received: e.alternate_name,
+            expected: alts.map((x) => (x && x.name) || '').filter(Boolean),
+            suggestion: 'Use one of the listed group names exactly, or omit alternate_name to use the active group.' }
+        );
+      }
+      altPref = hits[0].id;
+    }
+
+    const plan = estLines.applyAssemblyToEstimateData(data, {
+      estId: estId, assembly: ex.assembly, rows: ex.rows, scope: ex.scope,
+      mode: mode, alternatePref: altPref, nowStamp: stampBase + 'a' + i,
+    });
+    if (!plan.added) {
+      throw new PayloadValidationError(
+        `Assembly "${ex.assembly.name || e.assembly_id}" produced no lines (all items priced at zero or empty).`,
+        { code: 'assembly_empty', field_path: path, op_index: i, retryable: false }
+      );
+    }
+    added += plan.added;
+    names.push(ex.assembly.name || ('#' + ex.assembly.id));
+  }
+  return { added, names };
+}
+
 async function dispatchEstimate(dbClient, target, refTable, ctx) {
   const ops = target.ops || {};
   // Register intra-target ref placeholders (groups, sections, lines
@@ -1088,6 +1194,11 @@ async function dispatchEstimate(dbClient, target, refTable, ctx) {
     if (ops.sections) applyEstimateSections(blob, ops.sections);
     if (ops.groups) applyEstimateGroups(blob, ops.groups);
     if (ops.line_adds) applyLineAdds(blob, ops.line_adds);
+    // Assemblies land AFTER the groups/sections ops above so they can be
+    // routed into an alternate this same payload just created.
+    if (Array.isArray(ops.assembly_adds) && ops.assembly_adds.length) {
+      await applyAssemblyAdds(dbClient, blob, id, ops.assembly_adds, ctx);
+    }
 
     // organization_id must be stamped here — a NULL-org estimate is visible
     // to every tenant through the `OR organization_id IS NULL` read predicate.
@@ -1142,6 +1253,10 @@ async function dispatchEstimate(dbClient, target, refTable, ctx) {
     if (Array.isArray(ops.line_adds) && ops.line_adds.length) {
       applyLineAdds(data, ops.line_adds);
       changes.push(`+${ops.line_adds.length} line(s)`);
+    }
+    if (Array.isArray(ops.assembly_adds) && ops.assembly_adds.length) {
+      const r2 = await applyAssemblyAdds(dbClient, data, id, ops.assembly_adds, ctx);
+      changes.push(`+${r2.added} line(s) from assembly ${r2.names.map((n) => `"${n}"`).join(', ')}`);
     }
     if (Array.isArray(ops.line_edits) && ops.line_edits.length) {
       const n = applyLineEdits(data, ops.line_edits);

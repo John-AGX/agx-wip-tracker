@@ -9,6 +9,8 @@
 // Mirrors js/estimate-editor.js:
 //   STANDARD_SECTIONS_PRESET  · eeEnsureSectionByCategory · applyAddLineItem insert.
 
+const asm = require('./assemblies');
+
 const SECTION_PRESET = {
   materials: 'Materials & Supplies Costs',
   labor: 'Direct Labor',
@@ -95,6 +97,68 @@ function buildAssemblySpecs(assembly, rows, scope, mode) {
   return specs;
 }
 
+// ── explodeForEstimate ───────────────────────────────────────────────
+// THE single gate every "put this assembly on an estimate" path runs
+// through: the HTTP POST /api/estimates/:id/append-assembly route (the
+// Quantify takeoff bridge) AND the payload dispatcher's
+// estimate.ops.assembly_adds (86/Scribe). Both doors MUST refuse the same
+// recipes — duplicating this math is how the two silently drift apart and
+// one of them starts appending an understated cost.
+//
+// Pure: the caller loads the assembly graph (asm.loadGraph) and passes it
+// in, so this is unit-testable with no DB and no JWT_SECRET.
+//
+// Returns { ok:true, assembly, scope, rows, warnings } or
+//         { ok:false, code, error, ... }. Every failure is a HARD STOP —
+// there is deliberately no "price what we can and skip the rest" path.
+//   assembly_not_found    · no such recipe in this org's catalog
+//   assembly_zero_qty     · takeoff quantity Q <= 0
+//   assembly_formula_error· a qty_formula didn't evaluate
+//   assembly_empty        · recipe has no items
+//   assembly_unpriced     · at least one leaf has no unit cost
+function explodeForEstimate(opts) {
+  const o = opts || {};
+  const graph = o.graph;
+  const assemblyId = parseInt(o.assembly_id, 10);
+  if (!isFinite(assemblyId)) {
+    return { ok: false, code: 'assembly_not_found', error: 'assembly_id required (the numeric id from read_assemblies)' };
+  }
+  if (!graph || !graph.assemblies || typeof graph.assemblies.get !== 'function') {
+    return { ok: false, code: 'assembly_not_found', error: 'Assembly catalog unavailable' };
+  }
+  const a = graph.assemblies.get(assemblyId);
+  if (!a) return { ok: false, code: 'assembly_not_found', error: 'Assembly not found: ' + assemblyId };
+
+  const scope = asm.paramScope(a, o.params || {});
+  const Q = num(scope.Q);
+  if (!(Q > 0)) {
+    return { ok: false, code: 'assembly_zero_qty', assembly: a, scope,
+      error: 'Takeoff quantity (Q) must be greater than zero' };
+  }
+
+  const ex = asm.explodeParametric(assemblyId, graph, scope);
+  if (ex.errors && ex.errors.length) {
+    return { ok: false, code: 'assembly_formula_error', assembly: a, scope, errors: ex.errors,
+      error: 'Formula error: ' + ex.errors.map((e2) => (e2.item ? e2.item + ' — ' : '') + e2.error).join('; ') };
+  }
+  if (!ex.rows.length) {
+    return { ok: false, code: 'assembly_empty', assembly: a, scope, error: 'Assembly has no items to add' };
+  }
+  // Match the client's incomplete gate — don't quietly append an
+  // understated cost for an assembly with an unpriced item. Naming the
+  // offenders makes this actionable instead of a dead end.
+  const unpriced = ex.rows.filter((row) => row.unit_cost == null);
+  if (unpriced.length) {
+    const names = unpriced.slice(0, 5).map((row) => row.description || row.kind || 'item');
+    return { ok: false, code: 'assembly_unpriced', assembly: a, scope, unpriced,
+      error: 'Assembly "' + (a.name || assemblyId) + '" has unpriced items (' +
+        names.join(', ') + (unpriced.length > names.length ? ', +' + (unpriced.length - names.length) + ' more' : '') +
+        ') — price them before adding to an estimate.' };
+  }
+
+  return { ok: true, assembly: a, scope, rows: ex.rows, warnings: ex.warnings || [] };
+}
+
 // Mutate `data` (the estimate JSONB blob) in place: resolve a target
 // alternate, then route + insert every spec. Returns
 // { added, altId, altName, createdAlt }. `opts.nowStamp` lets tests pin ids.
@@ -159,5 +223,5 @@ function applyAssemblyToEstimateData(data, params) {
 module.exports = {
   SECTION_PRESET, BUCKET_ORDER, BUCKET_SUFFIX,
   ensureSectionByCategory, insertLineAfterHeader, buildAssemblySpecs,
-  applyAssemblyToEstimateData,
+  explodeForEstimate, applyAssemblyToEstimateData,
 };
