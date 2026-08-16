@@ -173,8 +173,6 @@ function isDisplayTitleCollision(e) {
 async function createSkillWithUniqueTitle(anthropic, opts) {
   const { pack, md, toFile } = opts;
   const slug = slugify(pack && pack.name);
-  // Anthropic requires SKILL.md inside a top-level folder (slug/SKILL.md).
-  const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
 
   // Attempt 1 is the deterministic hash-suffixed title. Attempts 2-3 add a
   // salt, for the case where an identical body's predecessor is still live
@@ -182,6 +180,11 @@ async function createSkillWithUniqueTitle(anthropic, opts) {
   const salts = [null, Date.now().toString(36), Math.random().toString(36).slice(2, 8)];
   let lastErr = null;
   for (let i = 0; i < salts.length; i++) {
+    // Rebuilt per attempt rather than hoisted out of the loop: an
+    // Uploadable is an upload BODY, and the retry must not depend on the
+    // failed attempt having left it re-readable.
+    // Anthropic requires SKILL.md inside a top-level folder (slug/SKILL.md).
+    const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
     try {
       return await anthropic.beta.skills.create({
         display_title: anthropicDisplayTitle(pack, md, salts[i]),
