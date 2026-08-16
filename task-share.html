@@ -125,8 +125,7 @@
       h+='<div class="card"><div class="sec-h">Location</div>';
       var mlat=Number(t.lat), mlng=Number(t.lng);
       if(state.mapsKey && isFinite(mlat) && isFinite(mlng) && !(mlat===0&&mlng===0)){
-        var murl='https://maps.googleapis.com/maps/api/staticmap?center='+mlat+','+mlng+'&zoom=16&scale=2&size=640x280&maptype=hybrid&markers=color:red%7C'+mlat+','+mlng+'&key='+encodeURIComponent(state.mapsKey);
-        h+='<a href="'+esc(loc.href||('https://www.google.com/maps/search/?api=1&query='+mlat+','+mlng))+'" target="_blank" rel="noopener" style="display:block;border-radius:12px;overflow:hidden;border:1px solid var(--line);margin-bottom:10px;"><img src="'+esc(murl)+'" alt="Map of the location" style="width:100%;height:auto;display:block;" onerror="this.parentNode.style.display=\'none\'"></a>';
+        h+='<div id="gmap" style="height:200px;border-radius:12px;overflow:hidden;border:1px solid var(--line);margin-bottom:10px;background:#e8ebf0;"></div>';
       }
       if(loc.label) h+='<div style="font-size:15px;margin-bottom:'+(t.directions?'4px':'10px')+';">'+esc(loc.label)+'</div>';
       if(t.directions) h+='<div class="muted" style="margin-bottom:10px;">'+esc(t.directions)+'</div>';
@@ -175,6 +174,33 @@
     if(bLib) bLib.addEventListener('click', function(){ document.getElementById('libIn').click(); });
     var bNote=document.getElementById('bNote'); if(bNote) bNote.addEventListener('click', sendNote);
     var bDone=document.getElementById('bDone'); if(bDone) bDone.addEventListener('click', markDone);
+    if(document.getElementById('gmap')) mountMap();
+  }
+
+  var _mapsPromise=null;
+  function loadMapsJs(){
+    if(window.google && window.google.maps) return Promise.resolve();
+    if(_mapsPromise) return _mapsPromise;
+    _mapsPromise=new Promise(function(resolve,reject){
+      window.__p86gmapInit=function(){ resolve(); };
+      var s=document.createElement('script');
+      s.src='https://maps.googleapis.com/maps/api/js?key='+encodeURIComponent(state.mapsKey||'')+'&callback=__p86gmapInit&loading=async';
+      s.async=true; s.defer=true;
+      s.onerror=function(){ reject(new Error('maps load failed')); };
+      document.head.appendChild(s);
+    });
+    return _mapsPromise;
+  }
+  function mountMap(){
+    var el=document.getElementById('gmap'); if(!el) return;
+    var lat=Number(state.task.lat), lng=Number(state.task.lng);
+    if(!state.mapsKey || !isFinite(lat) || !isFinite(lng)){ el.style.display='none'; return; }
+    loadMapsJs().then(function(){
+      var g=window.google.maps, center={ lat:lat, lng:lng };
+      var map=new g.Map(el, { center:center, zoom:17, mapTypeId:'hybrid', disableDefaultUI:true, zoomControl:true, gestureHandling:'greedy' });
+      new g.Marker({ position:center, map:map });
+      setTimeout(function(){ g.event.trigger(map,'resize'); map.setCenter(center); }, 140);
+    }).catch(function(){ el.style.display='none'; });
   }
 
   function toggleItem(i, checked, el){
