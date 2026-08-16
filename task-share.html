@@ -156,7 +156,16 @@
 
   function photoTiles(){
     if(!state.photos.length) return '<div class="muted" style="grid-column:1/-1;">No photos yet.</div>';
-    return state.photos.map(function(p){ var u=p.thumb_url||p.web_url||p.original_url||''; return '<a href="'+esc(p.web_url||p.original_url||u)+'" target="_blank" rel="noopener">'+(u?'<img src="'+esc(u)+'" alt="">':'')+'</a>'; }).join('');
+    return state.photos.map(function(p){
+      var u=p.thumb_url||p.web_url||p.original_url||'';
+      var full=p.web_url||p.original_url||u;
+      // href kept as a no-JS fallback; the delegated handler opens the
+      // fullscreen viewer. A blue dot marks photos that also show on the map.
+      return '<a href="'+esc(full)+'" data-photo="'+esc(full)+'" target="_blank" rel="noopener" style="position:relative;">'+
+        (u?'<img src="'+esc(u)+'" alt="">':'')+
+        (hasGeo(p)?'<span title="On the map" style="position:absolute;right:5px;bottom:5px;width:12px;height:12px;border-radius:50%;background:rgba(37,99,235,.95);border:1.5px solid #fff;box-shadow:0 0 2px rgba(0,0,0,.5);"></span>':'')+
+      '</a>';
+    }).join('');
   }
   function locLabel(t){
     var lat=Number(t.lat), lng=Number(t.lng), has=isFinite(lat)&&isFinite(lng)&&!(lat===0&&lng===0);
@@ -174,6 +183,8 @@
     if(bLib) bLib.addEventListener('click', function(){ document.getElementById('libIn').click(); });
     var bNote=document.getElementById('bNote'); if(bNote) bNote.addEventListener('click', sendNote);
     var bDone=document.getElementById('bDone'); if(bDone) bDone.addEventListener('click', markDone);
+    var tiles=document.getElementById('tiles');
+    if(tiles) tiles.addEventListener('click', function(e){ var a=e.target.closest('a[data-photo]'); if(a){ e.preventDefault(); openPhoto(a.getAttribute('data-photo')); } });
     if(document.getElementById('gmap')) mountMap();
   }
 
@@ -191,6 +202,42 @@
     });
     return _mapsPromise;
   }
+  function hasGeo(p){ var la=Number(p&&p.lat), ln=Number(p&&p.lng); return isFinite(la)&&isFinite(ln)&&la>=-90&&la<=90&&ln>=-180&&ln<=180&&!(la===0&&ln===0); }
+  // Circular clipped-thumbnail pin (same look as the in-app task map).
+  function photoPinIcon(g, p){
+    var thumb=p.thumb_url||p.web_url||''; if(!thumb) return undefined;
+    var svg='<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36">'+
+      '<defs><clipPath id="tsc"><circle cx="18" cy="18" r="15"/></clipPath>'+
+      '<filter id="tss" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="1" stdDeviation="1.5" flood-opacity="0.5"/></filter></defs>'+
+      '<circle cx="18" cy="18" r="17" fill="#fff" filter="url(#tss)"/>'+
+      '<image href="'+thumb+'" x="3" y="3" width="30" height="30" clip-path="url(#tsc)" preserveAspectRatio="xMidYMid slice"/>'+
+      '<circle cx="18" cy="18" r="15" fill="none" stroke="#2563eb" stroke-width="2"/>'+
+    '</svg>';
+    return { url:'data:image/svg+xml;utf8,'+encodeURIComponent(svg), anchor:new g.Point(18,36), scaledSize:new g.Size(36,36) };
+  }
+  function openPinInfo(g, map, iw, marker, p){
+    var thumb=p.thumb_url||p.web_url||'';
+    var full=p.web_url||p.original_url||thumb;
+    var html='<div style="width:158px;font-family:inherit;">'+
+      (thumb?'<img src="'+esc(thumb)+'" style="width:158px;height:104px;object-fit:cover;border-radius:6px;display:block;" alt="">':'')+
+      '<button id="tsView" type="button" style="width:100%;margin-top:6px;font:inherit;font-size:12px;font-weight:600;padding:7px 8px;border-radius:6px;border:1px solid #2563eb;background:#2563eb;color:#fff;cursor:pointer;">View photo</button>'+
+    '</div>';
+    iw.setContent(html); iw.open(map, marker);
+    setTimeout(function(){ var b=document.getElementById('tsView'); if(b) b.addEventListener('click', function(){ iw.close(); openPhoto(full); }); }, 0);
+  }
+  // Fullscreen photo view — guests can't annotate/tag, this is just a big look.
+  function openPhoto(url){
+    if(!url) return;
+    var ov=document.createElement('div');
+    ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.93);z-index:50;display:flex;align-items:center;justify-content:center;padding:14px;';
+    ov.innerHTML='<img src="'+esc(url)+'" style="max-width:100%;max-height:100%;object-fit:contain;border-radius:8px;" alt="">'+
+      '<button type="button" aria-label="Close" style="position:fixed;top:14px;right:16px;width:40px;height:40px;border-radius:50%;border:none;background:rgba(255,255,255,.18);color:#fff;font-size:20px;line-height:1;cursor:pointer;">&#10005;</button>';
+    function close(){ if(ov.parentNode) ov.parentNode.removeChild(ov); document.removeEventListener('keydown', onK, true); }
+    function onK(e){ if(e.key==='Escape'){ e.stopPropagation(); close(); } }
+    ov.addEventListener('click', function(e){ if(e.target===ov || e.target.tagName==='BUTTON') close(); });
+    document.addEventListener('keydown', onK, true);
+    document.body.appendChild(ov);
+  }
   function mountMap(){
     var el=document.getElementById('gmap'); if(!el) return;
     var lat=Number(state.task.lat), lng=Number(state.task.lng);
@@ -198,8 +245,19 @@
     loadMapsJs().then(function(){
       var g=window.google.maps, center={ lat:lat, lng:lng };
       var map=new g.Map(el, { center:center, zoom:17, mapTypeId:'hybrid', disableDefaultUI:true, zoomControl:true, gestureHandling:'greedy' });
-      new g.Marker({ position:center, map:map });
-      setTimeout(function(){ g.event.trigger(map,'resize'); map.setCenter(center); }, 140);
+      new g.Marker({ position:center, map:map, title:'Task location' });
+      // Photo pins: every geotagged photo drops a thumbnail pin; tap for a
+      // preview + View (fullscreen). Map fits to include the task + all pins.
+      var iw=new g.InfoWindow(), bounds=new g.LatLngBounds(); bounds.extend(center);
+      var geo=(state.photos||[]).filter(hasGeo);
+      geo.forEach(function(p){
+        var pos={ lat:Number(p.lat), lng:Number(p.lng) };
+        var m=new g.Marker({ position:pos, map:map, icon:photoPinIcon(g, p), title:p.filename||'Photo' });
+        bounds.extend(pos);
+        m.addListener('click', function(){ openPinInfo(g, map, iw, m, p); });
+      });
+      if(geo.length){ map.fitBounds(bounds, 40); g.event.addListenerOnce(map,'idle',function(){ if(map.getZoom()>18) map.setZoom(18); }); }
+      setTimeout(function(){ g.event.trigger(map,'resize'); if(!geo.length){ map.setCenter(center); map.setZoom(17); } }, 140);
     }).catch(function(){ el.style.display='none'; });
   }
 
