@@ -218,7 +218,7 @@ async function loadShare(req, res, next) {
 async function taskPhotos(taskId) {
   try {
     const { rows } = await pool.query(
-      "SELECT id, filename, thumb_url, web_url, original_url, lat, lng FROM attachments WHERE entity_type = 'task' AND entity_id = $1 ORDER BY position, created_at",
+      "SELECT id, filename, thumb_url, web_url, original_url, lat, lng FROM attachments WHERE entity_type = 'task' AND entity_id = $1 ORDER BY position, uploaded_at",
       [taskId]
     );
     return rows;
