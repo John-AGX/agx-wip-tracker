@@ -441,7 +441,16 @@
       // z-index: 940 / 930 sits ABOVE the Site Plan job page (500) and the AI
       // drawer (200) and BELOW .modal (1000) and p86Confirm (1100). The old
       // 99998/99997 painted the diff on top of any open modal.
-      '#p86-live-writer{position:fixed;right:16px;bottom:16px;width:390px;max-width:calc(100vw - 32px);',
+      // right tracks the OPEN chat drawer (--p86-ai-w, published live by
+      // ai-panel) instead of a bare 16px. Seen live: with the drawer open the
+      // strip's 390px sat entirely inside its footprint, so the write
+      // notification painted on top of the conversation that produced it.
+      // body.p86-ai-open's padding-right can't help — this is a fixed child
+      // of body, so body padding never moves it. min() keeps a very wide
+      // drawer from pushing the strip off the left edge.
+      '#p86-live-writer{position:fixed;right:calc(16px + min(var(--p86-ai-w, 0px), 55vw));bottom:16px;',
+      'width:390px;max-width:calc(100vw - 32px - min(var(--p86-ai-w, 0px), 55vw));',
+      'transition:right .22s ease;',
       'z-index:940;font-family:inherit;color:#e7e7ea;pointer-events:none;}',
       '#p86-live-writer .p86lw-card{pointer-events:auto;background:#16161c;border:1px solid rgba(255,255,255,0.10);',
       'border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,0.45);overflow:hidden;',
@@ -508,8 +517,9 @@
       'body.light-mode .p86lw-err{color:#a33;}',
       // ── the estimate "document" pane (applied writes only) ──
       // left tracks the user-resizable sidebar instead of a magic 300px.
+      // Anchored left, so the drawer only has to shrink it, not move it.
       '#p86-live-pane{position:fixed;left:calc(var(--p86-sidebar-w, 290px) + 10px);bottom:24px;width:560px;',
-      'max-width:calc(100vw - var(--p86-sidebar-w, 290px) - 30px);',
+      'max-width:calc(100vw - var(--p86-sidebar-w, 290px) - 30px - min(var(--p86-ai-w, 0px), 55vw));',
       'max-height:82vh;z-index:930;font-family:inherit;color:#e7e7ea;pointer-events:none;}',
       '#p86-live-pane .p86lp-card{pointer-events:auto;display:flex;flex-direction:column;max-height:82vh;',
       'background:#16161c;border:1px solid rgba(255,255,255,0.10);border-radius:16px;',

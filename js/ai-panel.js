@@ -1126,6 +1126,28 @@ function p86Ask(message, opts) {
     return Math.max(AI_PANEL_WIDTH_MIN, Math.min(max, px));
   }
 
+  // Publish the drawer's LIVE width as --p86-ai-w on documentElement.
+  //
+  // Fixed-position surfaces anchored to the right edge — the Live Writer strip
+  // and its estimate pane — otherwise land ON TOP of the open chat. Seen live:
+  // the strip's 390px sat entirely inside the drawer's footprint, so the write
+  // notification painted over the conversation that produced it.
+  //
+  // body.p86-ai-open's padding-right does not help them: they are position:
+  // fixed children of body, so body padding never moves them. And the constant
+  // in that rule is 420px against a drag-resizable panel, which is its own
+  // small lie — this var is the measured truth.
+  //
+  // 0 when closed or docked (docked mode is a grid column, not an overlay).
+  function publishAIWidth() {
+    try {
+      var p = document.getElementById('p86-ai-panel');
+      var open = !!(p && document.body.classList.contains('p86-ai-open') && !_isDocked);
+      var w = open ? Math.round(p.getBoundingClientRect().width) : 0;
+      document.documentElement.style.setProperty('--p86-ai-w', w + 'px');
+    } catch (e) {}
+  }
+
   function ensurePanel() {
     var panel = document.getElementById('p86-ai-panel');
     if (panel) return panel;
@@ -1315,6 +1337,13 @@ function p86Ask(message, opts) {
       // close #ai-body
       '</div>';
     document.body.appendChild(panel);
+
+    // Keep --p86-ai-w true through DRAGS as well as open/close. A resize
+    // observer is one hook instead of one at each of the five places the
+    // panel's width is written.
+    try {
+      if (window.ResizeObserver) new ResizeObserver(publishAIWidth).observe(panel);
+    } catch (e) {}
 
     // Wire interactions
     panel.querySelector('#ai-close').onclick = close;
@@ -1683,6 +1712,7 @@ function p86Ask(message, opts) {
       if (_isDocked) return;
       panel.style.transform = 'translateX(0)';
       document.body.classList.add('p86-ai-open');
+      publishAIWidth();
     }
     requestAnimationFrame(slideIn);
     // BELT AND BRACES: the rAF above is for the ANIMATION — the panel's
@@ -1970,6 +2000,7 @@ function p86Ask(message, opts) {
     var panel = document.getElementById('p86-ai-panel');
     if (panel) panel.style.transform = 'translateX(100%)';
     document.body.classList.remove('p86-ai-open');
+    publishAIWidth();
     _open = false;
     // Stop the rolling-hint rotation while the panel is closed.
     if (_presetRotateTimer) { clearInterval(_presetRotateTimer); _presetRotateTimer = null; }
@@ -2017,6 +2048,7 @@ function p86Ask(message, opts) {
     _dockOpening = true;
     try { open({ entityType: 'ask86' }); } finally { _dockOpening = false; }
     document.body.classList.remove('p86-ai-open'); // docked doesn't shift the page
+    publishAIWidth();
   }
   function setDockContext(ctx) { _dockContext = ctx || null; }
   function undock() {
@@ -2040,6 +2072,7 @@ function p86Ask(message, opts) {
     document.body.appendChild(panel);           // rescue the singleton back to body…
     panel.style.transform = 'translateX(100%)'; // …closed, as a normal drawer
     document.body.classList.remove('p86-ai-open');
+    publishAIWidth();
     _open = false;
   }
 
