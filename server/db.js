@@ -3019,18 +3019,20 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_estimates_lead_id
       ON estimates ((data->>'lead_id'));
 
-    -- Backfill labels for pre-sidebar rows so the sidebar UI doesn't
-    -- show blank labels on existing sessions. "General" for the
-    -- catch-all (entity_type='86' historically meant the global
-    -- thread). Entity-anchored rows get a placeholder label that the
-    -- UI / auto-label flow will replace on next turn.
+    -- Backfill labels for pre-sidebar rows. This used to also mint
+    --     INITCAP(entity_type) || ' ' || entity_id
+    -- for every entity-anchored row with a NULL label — which is where
+    -- "Estimate e1786502505932" came from, and, because initSchema() re-runs on
+    -- EVERY boot, it re-minted them after any cleanup. That arm is gone.
+    --
+    -- A NULL label is now meaningful: it says "no human has titled this, derive
+    -- the title from the entity on read" (server/services/session-title.js).
+    -- Filling it in is what destroyed the signal. Only the non-entity catch-all
+    -- still gets a word, because "General" IS its name, not a stand-in for one.
     UPDATE ai_sessions
-       SET label = CASE
-         WHEN entity_type IN ('86', 'general', 'ask86') THEN 'General'
-         WHEN entity_id IS NOT NULL THEN INITCAP(entity_type) || ' ' || entity_id
-         ELSE INITCAP(entity_type)
-       END
-     WHERE label IS NULL;
+       SET label = 'General'
+     WHERE label IS NULL
+       AND entity_type IN ('86', 'general', 'ask86');
 
     -- Heal any pre-sidebar general-session rows that have entity_id=NULL.
     -- The chat path keys ai_messages.estimate_id by the session's
@@ -4901,6 +4903,67 @@ async function initSchema() {
     }
   } catch (e) {
     console.warn('[db] estimates updated_at reset skipped:', e.message);
+  }
+
+  // ── One-shot cleanup: NULL the machine-minted ai_sessions.label rows ──
+  //
+  // John, live pilot 2026-08-16: the chat sidebar was showing
+  // "Deal · lead_1786497735707_d39nqj" and "Estimate e1786502505932". Titles
+  // are now DERIVED on read (server/services/session-title.js), which fixes
+  // the display on its own — but the derived title only wins when `label` is
+  // absent, and these rows have a machine string sitting in the human column.
+  // So the stored junk has to go.
+  //
+  // The predicate is EXACT RECONSTRUCTION of what the writers emitted, not a
+  // "looks like an id" regex. That matters, because this UPDATE is destructive
+  // and a human title it wrongly matched would be gone with no undo. The repo's
+  // existing shape-detector (looksLikeSystemId in js/ai-panel.js) fails in both
+  // directions here — it does NOT match "Estimate e1786502505932" (no
+  // underscore, and the prefix arm is anchored), and it DOES match
+  // "Fairways_bldg3", a perfectly good chat title. Comparing against the
+  // literal mint expressions can only hit strings a machine wrote:
+  //   INITCAP(entity_type) || ' ' || entity_id   (this file, arm now removed)
+  //   INITCAP(entity_type)                       (same)
+  //   'Deal · ' || lineage_root                  (ai-routes deal mint, removed)
+  // "Let's look At the fire unit estimate" — a real title John has, sitting one
+  // row above the broken ones — cannot be reached by any of the three.
+  //
+  // Sentinel-guarded so it runs ONCE. initSchema() re-runs on every boot and a
+  // value-matching UPDATE is not naturally idempotent the way `WHERE label IS
+  // NULL` is: left unguarded it would silently re-fire against any NEW row a
+  // future writer happened to shape the same way.
+  try {
+    const sentinelKey = 'ai_sessions_machine_label_null_v1';
+    const exists = await pool.query(
+      `SELECT 1 FROM app_settings WHERE key = $1`,
+      [sentinelKey]
+    );
+    if (!exists.rows.length) {
+      const r = await pool.query(
+        `UPDATE ai_sessions
+            SET label = NULL
+          WHERE label IS NOT NULL
+            AND (
+                  label = INITCAP(entity_type) || ' ' || entity_id
+               OR label = INITCAP(entity_type)
+               OR (session_kind = 'deal_thread'
+                   AND lineage_root IS NOT NULL
+                   AND label = 'Deal · ' || lineage_root)
+               OR (entity_id IS NOT NULL AND label = 'Deal · ' || entity_id)
+            )`
+      );
+      await pool.query(
+        `INSERT INTO app_settings (key, value, updated_at)
+         VALUES ($1, $2::jsonb, NOW())
+         ON CONFLICT (key) DO NOTHING`,
+        [sentinelKey, JSON.stringify({ ran_at: new Date().toISOString(), rows_touched: r.rowCount })]
+      );
+      if (r.rowCount > 0) {
+        console.log('[db] ai_sessions machine-minted labels cleared:', r.rowCount, 'row(s) — titles now derive from the entity.');
+      }
+    }
+  } catch (e) {
+    console.warn('[db] ai_sessions machine-label cleanup skipped:', e.message);
   }
 
   // Seed built-in roles. ON CONFLICT lets us re-run safely without

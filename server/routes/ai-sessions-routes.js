@@ -20,9 +20,28 @@
 
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireOrg } = require('../auth');
+const { requireAuth, requireOrg, resolveUserOrg } = require('../auth');
+// Session TITLES are computed here, never read from ai_sessions.label — see
+// server/services/session-title.js for why label and display_label are two
+// different things. One batched resolve per response, org-scoped.
+const { attachSessionTitles, attachSessionTitle } = require('../services/session-title');
 
 const router = express.Router();
+
+// The org to resolve entity names against. ai_sessions has no
+// organization_id column of its own (rows are per-USER), so the tenant comes
+// from the caller: the JWT claim when present, a DB read for legacy tokens
+// issued before organizations existed. Null means "don't scope" — the
+// resolver keeps its previous behaviour rather than resolving nothing.
+async function titleOrgId(req) {
+  if (req && req.user && req.user.organization_id != null) return req.user.organization_id;
+  try {
+    const org = await resolveUserOrg(req);
+    return org ? org.id : null;
+  } catch (_) {
+    return null;
+  }
+}
 
 // Lazy Anthropic client + delegated session creation. We reuse the
 // helpers exported by ai-routes so there's one code path that creates
@@ -60,6 +79,11 @@ router.get('/', requireAuth, async (req, res) => {
               s.session_kind, s.last_compacted_at, s.lineage_root,
               dm.numbers       AS deal_numbers,
               dm.numbers_stage AS deal_stage,
+              -- root_type says WHAT KIND of id lineage_root is. Without it a
+              -- deal thread whose deal_memory row carries no stage id has to
+              -- guess the type from the id prefix; with it the title resolver
+              -- looks the root up in the right table.
+              dm.root_type     AS deal_root_type,
               substr(lm.content, 1, 120) AS last_snippet
          FROM ai_sessions s
          LEFT JOIN deal_memory dm ON dm.lineage_root = s.lineage_root
@@ -74,6 +98,11 @@ router.get('/', requireAuth, async (req, res) => {
         LIMIT $3`,
       [req.user.id, includeArchived, limit]
     );
+    // display_label — what the sidebar paints. NOT stored: computed from the
+    // row's entity reference every fetch, so a renamed lead retitles its
+    // thread and the rows already carrying a raw id heal without a backfill.
+    // Costs one query per entity TYPE for the whole page, not one per row.
+    await attachSessionTitles(await titleOrgId(req), r.rows);
     res.json({ sessions: r.rows });
   } catch (e) {
     console.error('GET /api/ai/sessions error:', e);
@@ -146,9 +175,12 @@ router.get('/search', requireAuth, async (req, res) => {
     const metaRows = await pool.query(
       `SELECT s.id, s.label, s.summary, s.entity_type, s.entity_id,
               s.last_used_at, s.turn_count,
+              s.session_kind, s.lineage_root,
+              dm.numbers AS deal_numbers, dm.root_type AS deal_root_type,
               'meta'::text AS match_kind,
               NULL::text AS snippet
          FROM ai_sessions s
+         LEFT JOIN deal_memory dm ON dm.lineage_root = s.lineage_root
         WHERE s.user_id = $1
           AND s.archived_at IS NULL
           AND (s.label ILIKE $2 OR s.summary ILIKE $2)
@@ -166,6 +198,8 @@ router.get('/search', requireAuth, async (req, res) => {
       `WITH matches AS (
          SELECT s.id AS session_id, s.label, s.summary, s.entity_type, s.entity_id,
                 s.last_used_at, s.turn_count,
+                s.session_kind, s.lineage_root,
+                dm.numbers AS deal_numbers, dm.root_type AS deal_root_type,
                 m.content AS snippet,
                 ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY m.created_at ASC) AS rn
            FROM ai_sessions s
@@ -173,12 +207,14 @@ router.get('/search', requireAuth, async (req, res) => {
              ON m.user_id = s.user_id
             AND m.entity_type = s.entity_type
             AND COALESCE(m.estimate_id, '') = COALESCE(s.entity_id, '')
+           LEFT JOIN deal_memory dm ON dm.lineage_root = s.lineage_root
           WHERE s.user_id = $1
             AND s.archived_at IS NULL
             AND m.content ILIKE $2
        )
        SELECT session_id AS id, label, summary, entity_type, entity_id,
               last_used_at, turn_count,
+              session_kind, lineage_root, deal_numbers, deal_root_type,
               'message'::text AS match_kind,
               substr(snippet, 1, 240) AS snippet
          FROM matches
@@ -197,7 +233,9 @@ router.get('/search', requireAuth, async (req, res) => {
       seen.add(row.id);
       results.push(row);
     });
-    res.json({ results: results.slice(0, 30) });
+    const trimmed = results.slice(0, 30);
+    await attachSessionTitles(await titleOrgId(req), trimmed);
+    res.json({ results: trimmed });
   } catch (e) {
     console.error('GET /api/ai/sessions/search error:', e);
     res.status(500).json({ error: 'Server error' });
@@ -215,11 +253,17 @@ router.get('/:id', requireAuth, async (req, res) => {
     if (!Number.isFinite(sid)) return res.status(400).json({ error: 'Invalid session id' });
 
     const sr = await pool.query(
-      `SELECT * FROM ai_sessions WHERE id = $1 AND user_id = $2`,
+      // deal_memory joined for the same reason the list query joins it: a deal
+      // thread names itself after its CURRENT stage, which lives there.
+      `SELECT s.*, dm.numbers AS deal_numbers, dm.root_type AS deal_root_type
+         FROM ai_sessions s
+         LEFT JOIN deal_memory dm ON dm.lineage_root = s.lineage_root
+        WHERE s.id = $1 AND s.user_id = $2`,
       [sid, req.user.id]
     );
     if (!sr.rows.length) return res.status(404).json({ error: 'Session not found' });
     const session = sr.rows[0];
+    await attachSessionTitle(await titleOrgId(req), session);
 
     // Load this session's message history. Use entity_type+entity_id
     // as the lookup key (matches how ai_messages is keyed today).
@@ -313,6 +357,10 @@ router.post('/', requireAuth, requireOrg, async (req, res) => {
     }
 
     const r = await pool.query(`SELECT * FROM ai_sessions WHERE id = $1`, [session.id]);
+    // The sidebar unshifts this row straight into its cached list and paints
+    // display_label from it — without this a brand-new chat would title itself
+    // "Untitled chat" until the next full fetchSessions.
+    await attachSessionTitle(await titleOrgId(req), r.rows[0]);
     res.json({ session: r.rows[0] });
   } catch (e) {
     console.error('POST /api/ai/sessions error:', e);
@@ -369,6 +417,11 @@ router.patch('/:id', requireAuth, async (req, res) => {
       params
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Session not found' });
+    // Rename is the one path where the client Object.assign's this row over its
+    // cached copy. If the response carried no display_label the assign would
+    // leave the STALE one in place and the sidebar would show the old title
+    // after a successful rename.
+    await attachSessionTitle(await titleOrgId(req), r.rows[0]);
     res.json({ session: r.rows[0] });
   } catch (e) {
     console.error('PATCH /api/ai/sessions/:id error:', e);
@@ -432,11 +485,20 @@ router.post('/:id/export', requireAuth, async (req, res) => {
     const format = (req.body && req.body.format) === 'json' ? 'json' : 'markdown';
 
     const sr = await pool.query(
-      `SELECT * FROM ai_sessions WHERE id = $1 AND user_id = $2`,
+      `SELECT s.*, dm.numbers AS deal_numbers, dm.root_type AS deal_root_type
+         FROM ai_sessions s
+         LEFT JOIN deal_memory dm ON dm.lineage_root = s.lineage_root
+        WHERE s.id = $1 AND s.user_id = $2`,
       [sid, req.user.id]
     );
     if (!sr.rows.length) return res.status(404).json({ error: 'Session not found' });
     const session = sr.rows[0];
+    // The export is a FILE the user keeps and forwards. Same standing rule as
+    // the sidebar: its heading, its filename, and its context line name the
+    // lead or the job, never the id (and never "Session 137" — a DB serial is
+    // an id too).
+    await attachSessionTitle(await titleOrgId(req), session);
+    const exportTitle = session.display_label || 'Untitled chat';
 
     const mr = await pool.query(
       `SELECT role, content, created_at
@@ -455,13 +517,15 @@ router.post('/:id/export', requireAuth, async (req, res) => {
 
     // Markdown format — readable transcript with role headers.
     const lines = [
-      '# ' + (session.label || 'Session ' + session.id),
+      '# ' + exportTitle,
       '',
       session.summary ? '_' + session.summary + '_' : null,
       '',
       '- Created: ' + new Date(session.created_at).toISOString(),
       '- Turns: ' + session.turn_count,
-      session.entity_id ? '- Context: ' + session.entity_type + ' ' + session.entity_id : '- Context: general',
+      (session.entity_id && session.entity_id !== 'global')
+        ? '- Context: ' + session.entity_type + ' — ' + exportTitle
+        : '- Context: general',
       '',
       '---',
       ''
@@ -477,7 +541,7 @@ router.post('/:id/export', requireAuth, async (req, res) => {
 
     res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
     res.setHeader('Content-Disposition',
-      'attachment; filename="' + (session.label || 'session-' + session.id).replace(/[^\w\-]+/g, '_') + '.md"');
+      'attachment; filename="' + (exportTitle.replace(/[^\w\-]+/g, '_').replace(/^_+|_+$/g, '') || 'chat') + '.md"');
     res.send(lines.join('\n'));
   } catch (e) {
     console.error('POST /api/ai/sessions/:id/export error:', e);
@@ -507,11 +571,17 @@ router.post('/:id/branch', requireAuth, requireOrg, async (req, res) => {
       || 'Branch';
 
     const sr = await pool.query(
-      `SELECT * FROM ai_sessions WHERE id = $1 AND user_id = $2`,
+      `SELECT s.*, dm.numbers AS deal_numbers, dm.root_type AS deal_root_type
+         FROM ai_sessions s
+         LEFT JOIN deal_memory dm ON dm.lineage_root = s.lineage_root
+        WHERE s.id = $1 AND s.user_id = $2`,
       [sid, req.user.id]
     );
     if (!sr.rows.length) return res.status(404).json({ error: 'Session not found' });
     const parent = sr.rows[0];
+    // "(branched from …)" is a summary the user reads — name the parent, don't
+    // fall back to 'session 137'.
+    await attachSessionTitle(await titleOrgId(req), parent);
     // requireOrg guarantees req.organization is set.
 
     // Load history up through the branch point so the new session
@@ -534,7 +604,7 @@ router.post('/:id/branch', requireAuth, requireOrg, async (req, res) => {
     });
     await pool.query(
       `UPDATE ai_sessions SET label = $1, summary = $2 WHERE id = $3`,
-      [label, '(branched from ' + (parent.label || 'session ' + parent.id) + ')', newSession.id]
+      [label, '(branched from ' + (parent.display_label || 'Untitled chat') + ')', newSession.id]
     );
 
     res.json({ session_id: newSession.id, anthropic_session_id: newSession.anthropic_session_id });

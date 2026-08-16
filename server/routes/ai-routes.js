@@ -3292,15 +3292,19 @@ async function resolveSessionForChat({ sessionId, currentContext, userId, organi
             sessionKind: 'deal_thread',
             lineageRoot: resolved.lineage_root
           });
-          // Readable sidebar label from the surface the user is on (the client
-          // sends entity_label in current_context), falling back to the raw
-          // lineage id. No extra query — only runs once, at mint.
-          const dealNm = (currentContext && currentContext.entity_label)
-            ? String(currentContext.entity_label).slice(0, 80)
-            : String(resolved.lineage_root);
-          const dealLbl = 'Deal · ' + dealNm;
-          await pool.query(`UPDATE ai_sessions SET label = COALESCE(label, $2) WHERE id = $1`, [fresh.id, dealLbl]);
-          if (!fresh.label) fresh.label = dealLbl;
+          // NO label is written at mint — deliberately.
+          //
+          // This used to compose 'Deal · ' + (client-supplied entity_label OR
+          // the raw lineage id), which is how `Deal · lead_1786497735707_d39nqj`
+          // reached John's sidebar. The deeper problem was not the fallback: it
+          // was writing a DERIVED name into `label`, the column that holds human
+          // intent. Once a machine string sits there it goes stale on rename and
+          // every self-heal path treats it as authored.
+          //
+          // The title is now composed on READ from the deal's current stage —
+          // see server/services/session-title.js. Leaving label NULL is the
+          // signal that says "derive me", and it is the one signal this line
+          // used to destroy.
           fresh._freshlyCreated = true;
           return fresh;
         }
@@ -3379,18 +3383,11 @@ async function resolveSessionForChat({ sessionId, currentContext, userId, organi
       userId,
       organization
     });
-    // Auto-label from the entity. Format chosen so the sidebar shows
-    // "Job RV2024" / "Estimate EST-0142" / "Lead Solace Tampa" out of
-    // the box. The user can rename; the auto-label background task
-    // (after first turn) may overwrite with something more specific.
-    const initialLabel = autoLabelFromContext(ctxType, ctxId, currentContext);
-    if (initialLabel) {
-      await pool.query(
-        `UPDATE ai_sessions SET label = $1 WHERE id = $2`,
-        [initialLabel, fresh.id]
-      );
-      fresh.label = initialLabel;
-    }
+    // NO auto-label. `label` holds human intent only; the sidebar title is
+    // derived from entity_type + entity_id on read (session-title.js), so an
+    // anchored session shows the lead's / job's live name without anything
+    // being written here. autoLabelFromContext's fallback arm ("Estimate
+    // e1786502505932") is exactly the string John reported.
     fresh._freshlyCreated = true;
     return fresh;
   }
@@ -3423,18 +3420,17 @@ async function resolveSessionForChat({ sessionId, currentContext, userId, organi
   return fresh;
 }
 
-// Generate a starter label from the current_context payload. The
-// frontend ships entity name / number / display when available so we
-// can build something readable without a DB round-trip. Falls back to
-// "Type <id>" if nothing better is present.
-function autoLabelFromContext(entityType, entityId, ctx) {
-  const display = ctx && (ctx.entity_label || ctx.entity_display || ctx.entity_name);
-  if (display && typeof display === 'string') {
-    return String(display).slice(0, 200);
-  }
-  const cap = String(entityType).charAt(0).toUpperCase() + String(entityType).slice(1);
-  return (cap + ' ' + entityId).slice(0, 200);
-}
+// REMOVED 2026-08-16 — autoLabelFromContext.
+//
+// It composed a starter label from current_context, falling back to
+// "Type <id>" ("Estimate e1786502505932"). Both halves were wrong for the
+// same reason: they wrote a DERIVED display name into ai_sessions.label, the
+// column that is supposed to hold what a human typed. The derived half went
+// stale the moment the entity was renamed; the fallback half put a raw system
+// id on a user-facing surface, which the standing rule forbids.
+//
+// Session titles are now composed on READ from the row's entity reference —
+// server/services/session-title.js. Nothing replaced this function.
 
 async function createFreshAiSession({ agentKey, entityType, entityId, userId, organization, sessionKind, lineageRoot }) {
   const adminAgents = require('./admin-agents-routes');
@@ -3631,8 +3627,14 @@ async function maybeGenerateSessionLabel(sessionOrId) {
     // explicitly renamed stays. The placeholder pattern is "Type id"
     // or "Type <number>" — distinct from descriptive labels which
     // tend to be longer with multiple lower-case words.
-    const isPlaceholder = !session.label ||
+    let isPlaceholder = !session.label ||
       /^(Job|Estimate|Lead|Intake|General|Client)( [A-Za-z0-9_\-]+)?$/.test(session.label);
+
+    // A deal thread's title is the deal's IDENTITY, not a summary of one
+    // conversation. Let this write a label and "Deal · Waterside 1" becomes
+    // "Roof scope questions" after a single turn and stops tracking the deal
+    // forever. The summary still gets written — only the label is off-limits.
+    if (session.session_kind === 'deal_thread') isPlaceholder = false;
 
     await pool.query(
       `UPDATE ai_sessions
@@ -9074,8 +9076,11 @@ async function execStaffTool(name, input, ctx) {
 
       const meta = await pool.query(
         `SELECT s.id, s.label, s.summary, s.entity_type, s.entity_id,
-                s.last_used_at, s.turn_count, NULL::text AS snippet
+                s.last_used_at, s.turn_count, NULL::text AS snippet,
+                s.session_kind, s.lineage_root,
+                dm.numbers AS deal_numbers, dm.root_type AS deal_root_type
            FROM ai_sessions s
+           LEFT JOIN deal_memory dm ON dm.lineage_root = s.lineage_root
           WHERE s.user_id = $1
             AND s.archived_at IS NULL
             AND (s.label ILIKE $2 OR s.summary ILIKE $2)
@@ -9087,16 +9092,20 @@ async function execStaffTool(name, input, ctx) {
         `WITH matches AS (
            SELECT s.id AS session_id, s.label, s.summary, s.entity_type, s.entity_id,
                   s.last_used_at, s.turn_count, m.content AS snippet,
+                  s.session_kind, s.lineage_root,
+                  dm.numbers AS deal_numbers, dm.root_type AS deal_root_type,
                   ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY m.created_at ASC) AS rn
              FROM ai_sessions s
              JOIN ai_messages m
                ON m.user_id = s.user_id
               AND m.entity_type = s.entity_type
               AND COALESCE(m.estimate_id, '') = COALESCE(s.entity_id, '')
+             LEFT JOIN deal_memory dm ON dm.lineage_root = s.lineage_root
             WHERE s.user_id = $1 AND s.archived_at IS NULL AND m.content ILIKE $2
          )
          SELECT session_id AS id, label, summary, entity_type, entity_id,
-                last_used_at, turn_count, substr(snippet, 1, 200) AS snippet
+                last_used_at, turn_count, substr(snippet, 1, 200) AS snippet,
+                session_kind, lineage_root, deal_numbers, deal_root_type
            FROM matches WHERE rn = 1
           ORDER BY last_used_at DESC LIMIT $3`,
         [userId, pattern, limit]
@@ -9110,10 +9119,21 @@ async function execStaffTool(name, input, ctx) {
         merged.push(r);
       });
       if (!merged.length) return 'No prior sessions matched "' + q + '".';
+      // 86 quotes these lines back to the user verbatim, so they follow the
+      // same rule the sidebar does: name the lead / job, never the id. The
+      // titles are user-entered text flowing into a tool result read by an
+      // agent that holds write tools — attachSessionTitles caps length and
+      // strips control characters for exactly that reason.
+      const shown = merged.slice(0, limit);
+      let _ssOrgId = null;
+      try { _ssOrgId = await resolveOrgIdFromCtx(ctx); } catch (_) { _ssOrgId = null; }
+      try { await require('../services/session-title').attachSessionTitles(_ssOrgId, shown); } catch (_) {}
       const lines = ['Found ' + merged.length + ' session(s) matching "' + q + '":'];
-      merged.slice(0, limit).forEach(r => {
-        const label = r.label || ('Session ' + r.id);
-        const ctxStr = r.entity_id ? r.entity_type + ' ' + r.entity_id : r.entity_type;
+      shown.forEach(r => {
+        const label = r.display_label || 'Untitled chat';
+        const ctxStr = (r.entity_id && r.entity_id !== 'global')
+          ? r.entity_type + ' — ' + label
+          : r.entity_type;
         const when = r.last_used_at ? new Date(r.last_used_at).toISOString().slice(0, 10) : '?';
         lines.push('• [' + r.id + '] "' + label + '" (' + ctxStr + ', last used ' + when + ', ' + (r.turn_count || 0) + ' turns)');
         if (r.summary) lines.push('    summary: ' + r.summary);
@@ -14540,8 +14560,18 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
     const GENERIC_LABELS = new Set(['New chat', '86', '', null]);
     const isFirstTurn = session.turn_count === 0 || session.turn_count == null;
     const labelIsGeneric = GENERIC_LABELS.has(session.label);
+    // An entity-anchored thread is NAMED BY ITS ENTITY — that is what John
+    // asked for, and it is what the read-path resolver now produces from a
+    // NULL label. Before labels stopped being minted at anchor time, such a
+    // row carried "Estimate e178…", which is not in GENERIC_LABELS, so this
+    // derive never fired on it. Now that the row is NULL it would start firing
+    // and retitle a job thread after the user's first sentence. This keeps the
+    // derive where it was designed to apply: threads with no entity to name
+    // them ("New chat", the rolling user_thread).
+    const isAnchored = !!(session.entity_id && session.entity_id !== 'global' &&
+      ['job', 'estimate', 'lead', 'client'].includes(String(session.entity_type)));
     let derivedLabel = null;
-    if (isFirstTurn && labelIsGeneric && userMessage) {
+    if (isFirstTurn && labelIsGeneric && !isAnchored && userMessage) {
       derivedLabel = String(userMessage)
         .replace(/\s+/g, ' ')
         .trim()

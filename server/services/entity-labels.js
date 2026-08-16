@@ -26,27 +26,58 @@ const { pool } = require('../db');
 // `jobNumber + ' ' + title` for both sides. See js/job-label.js.
 const jobLabel = require('../../js/job-label');
 
-// type → { sql(orgId) } returning rows of { id, label }. $1 = text[] ids.
+// Tenant guard. organization_id is the security boundary, and the ids handed
+// to this resolver are NOT trustworthy: ai_sessions.entity_id is whatever the
+// caller POSTed (ai-sessions-routes.js takes `b.entity_id` with no existence
+// or ownership check), so an unscoped primary-key lookup turns a stored client
+// string into a cross-tenant NAME ORACLE — mint N sessions pointing at another
+// org's leads, read the list back, collect the titles in one batched response.
+// Every table below carries organization_id, indexed (server/db.js:466-597),
+// and the single-row twin in ai-routes.js (resolveTaskEntityLabel) already
+// guards exactly this way.
+//
+// Applied ONLY when the caller supplies an org. A null orgId keeps the previous
+// unscoped behaviour rather than silently resolving nothing for the callers
+// that pass `req.user.organization_id || null` on a legacy token — tightening
+// where we know the tenant, never breaking where we don't.
+function orgGuard(orgId) {
+  return orgId == null ? '' : ' AND (organization_id = $2 OR organization_id IS NULL)';
+}
+function orgParams(ids, orgId) {
+  return orgId == null ? [ids] : [ids, orgId];
+}
+
+// type → { sql(orgId) } returning rows of { id, label }. $1 = text[] ids,
+// $2 = orgId when scoped.
 function queryFor(type, ids, orgId) {
+  const g = orgGuard(orgId);
+  const p = orgParams(ids, orgId);
   switch (type) {
     case 'lead':
-      return { text: 'SELECT id::text AS id, title AS label FROM leads WHERE id::text = ANY($1::text[])', params: [ids] };
+      return { text: 'SELECT id::text AS id, title AS label FROM leads WHERE id::text = ANY($1::text[])' + g, params: p };
     case 'client':
-      return { text: 'SELECT id::text AS id, name AS label FROM clients WHERE id::text = ANY($1::text[])', params: [ids] };
+      return { text: 'SELECT id::text AS id, name AS label FROM clients WHERE id::text = ANY($1::text[])' + g, params: p };
     case 'sub':
-      return { text: 'SELECT id::text AS id, name AS label FROM subs WHERE id::text = ANY($1::text[])', params: [ids] };
+      return { text: 'SELECT id::text AS id, name AS label FROM subs WHERE id::text = ANY($1::text[])' + g, params: p };
     case 'project':
-      // projects carry organization_id — scope to the caller's org.
+      // projects carry organization_id — scope to the caller's org. Unlike the
+      // branches above this one has ALWAYS been strict (no OR-IS-NULL arm);
+      // left exactly as it was.
       return { text: 'SELECT id::text AS id, name AS label FROM projects WHERE id::text = ANY($1::text[]) AND organization_id = $2', params: [ids, orgId] };
     case 'estimate':
-      return { text: "SELECT id::text AS id, COALESCE(data->>'name', data->>'title', 'Estimate') AS label FROM estimates WHERE id::text = ANY($1::text[])", params: [ids] };
+      // Ends in '' — NOT the literal 'Estimate', for the same reason the job
+      // branch below ends in '': a bare type word is a synthetic string that
+      // reaches forward-facing surfaces as if it were a real name. Empty is
+      // the honest answer and the caller picks the fallback it wants
+      // ('Untitled estimate' for a session title).
+      return { text: "SELECT id::text AS id, COALESCE(data->>'name', data->>'title', '') AS label FROM estimates WHERE id::text = ANY($1::text[])" + g, params: p };
     case 'job':
       // The title COALESCE ends in '' — NOT the literal 'Job'. A synthetic
       // word here reached jobLabel as a real title, so a numbered job with
       // no title rendered "RV2006 Job". Empty is the honest answer; the
       // formatter below decides what an empty pair looks like. Matches the
       // single-row twin in tasks-routes.js.
-      return { text: "SELECT id::text AS id, COALESCE(NULLIF(data->>'jobNumber',''),'') AS num, COALESCE(data->>'title', data->>'name', '') AS label FROM jobs WHERE id::text = ANY($1::text[])", params: [ids] };
+      return { text: "SELECT id::text AS id, COALESCE(NULLIF(data->>'jobNumber',''),'') AS num, COALESCE(data->>'title', data->>'name', '') AS label FROM jobs WHERE id::text = ANY($1::text[])" + g, params: p };
     default:
       return null;
   }

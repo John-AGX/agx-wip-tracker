@@ -195,7 +195,12 @@ function p86Ask(message, opts) {
         var job = (window.appData && Array.isArray(window.appData.jobs))
           ? window.appData.jobs.find(function(j) { return j && j.id === openJobId; })
           : null;
-        if (job) ctx.entity_label = job.name || job.jobNumber || job.id;
+        // One job formatter, app-wide (js/job-label.js): number + space +
+        // title. This used to be `job.name || job.jobNumber || job.id` — a
+        // third format whose first key jobs don't even carry (they store
+        // `title`), so it normally emitted the bare number, and whose last
+        // resort was the raw job id on a forward-facing surface.
+        if (job) ctx.entity_label = window.p86JobLabel.fromJob(job);
       } catch (e) { /* best-effort */ }
     }
 
@@ -203,12 +208,20 @@ function p86Ask(message, opts) {
     // is open (the user is actively editing an estimate, even if it's
     // linked to a job).
     try {
-      if (window.estimateEditorAPI && typeof window.estimateEditorAPI.getCurrentEstimateId === 'function') {
-        var eid = window.estimateEditorAPI.getCurrentEstimateId();
+      // getOpenId, not getCurrentEstimateId — the latter has never existed on
+      // estimateEditorAPI (js/estimate-editor.js exposes getOpenId), so this
+      // whole branch was dead and an open estimate kept whatever entity the
+      // JOB branch above had already set.
+      if (window.estimateEditorAPI && typeof window.estimateEditorAPI.getOpenId === 'function') {
+        var eid = window.estimateEditorAPI.getOpenId();
         if (eid) {
           ctx.entity_type = 'estimate';
           ctx.entity_id = String(eid);
-          ctx.entity_label = null;
+          // Clear the JOB's label — leaving it would tag an estimate session
+          // with a different entity's name.
+          ctx.entity_label = window.entityDisplayName
+            ? (window.entityDisplayName('estimate', eid) || null)
+            : null;
         }
       }
     } catch (e) { /* best-effort */ }
@@ -2320,8 +2333,11 @@ function p86Ask(message, opts) {
         r = find(A.jobs);
         return r ? window.p86JobLabel.fromJob(r, { fallback: 'Job' }) : null;
       case 'estimate':
+        // name || title — matching server/services/entity-labels.js. `r.client`
+        // used to sit in the middle of this chain, so an estimate with no name
+        // rendered the CUSTOMER's name as if it were the estimate's own.
         r = find(A.estimates);
-        return r ? (r.name || r.client || r.title || 'Estimate') : null;
+        return r ? (r.name || r.title || 'Estimate') : null;
       case 'lead':
         r = find(A.leads);
         return r ? (r.title || r.property_name || r.street_address || 'Lead') : null;
@@ -2353,6 +2369,21 @@ function p86Ask(message, opts) {
   }
   window.p86LooksLikeSystemId = looksLikeSystemId;
 
+  // What a session row is CALLED. Every surface that paints a thread title
+  // goes through here so there is one answer.
+  //
+  // display_label is computed server-side per response from the row's entity
+  // (server/services/session-title.js); ai_sessions.label holds only what a
+  // human typed. Reading `label` directly is what put
+  // "Deal · lead_1786497735707_d39nqj" and "Estimate e1786502505932" in the
+  // sidebar. `label` remains the fallback for a response shape that predates
+  // display_label; 'Untitled chat' is the floor — never 'Session <id>', since
+  // a DB serial is an id too.
+  function sessionTitle(row) {
+    if (!row) return 'Untitled chat';
+    return row.display_label || row.label || 'Untitled chat';
+  }
+
   // Group sessions by the entity they belong to. Pinned float first; the
   // personal / rolling thread and any un-anchored chats fall into "Personal".
   // Each entity group is sorted internally by recency; groups are ordered by
@@ -2373,12 +2404,15 @@ function p86Ask(message, opts) {
       if (!anchored) { personal.items.push(r); if (when > personal.recent) personal.recent = when; return; }
       var key = t + ':' + r.entity_id;
       if (!byKey[key]) {
-        // On a name miss (entity not in appData yet, or deleted) keep the
-        // fallback DISTINCT with a short id so two unresolved entities don't
-        // share one header. Resolves to the real name on the next render once
-        // appData is loaded.
-        var nm = entityDisplayName(t, r.entity_id)
-          || (t.charAt(0).toUpperCase() + t.slice(1) + ' · ' + String(r.entity_id).slice(-5));
+        // The server already resolved this row's entity name into
+        // display_label — prefer it. appData is empty on a fresh load (see
+        // js/market-pnl.js), so the client-side lookup alone used to leave the
+        // BIGGEST title on the surface reading "Estimate · 05932": the tail of
+        // a raw id. The appData path stays as a second chance, and the last
+        // resort is a named fallback, never an id fragment.
+        var nm = (r.display_label && String(r.display_label))
+          || entityDisplayName(t, r.entity_id)
+          || ('Untitled ' + t);
         byKey[key] = { key: key, type: t, id: r.entity_id, label: nm, icon: entityIcon(t), items: [], recent: 0 };
       }
       byKey[key].items.push(r);
@@ -2410,7 +2444,13 @@ function p86Ask(message, opts) {
     // /system id (lead_…, j…, e…); those stay internal. Falls back to the
     // stored label only when it's already human; a name miss resolves on
     // the next render once appData is loaded.
-    var title = entityDisplayName('job', n.jobId)
+    // The server composes this from the deal's CURRENT stage against live rows
+    // (session-title.js) — it is the authority, and unlike the appData lookups
+    // below it can't be defeated by a cold cache. Strip the prefix; the card
+    // draws its own lineage chips.
+    var served = String(r.display_label || '').replace(/^Deal\s*·\s*/, '').trim();
+    var title = served
+             || entityDisplayName('job', n.jobId)
              || entityDisplayName('estimate', n.estimateId)
              || entityDisplayName('lead', n.leadId || r.lineage_root);
     // Even a resolved title is suppressed if a name column literally holds an
@@ -2450,7 +2490,12 @@ function p86Ask(message, opts) {
       ? ' <span style="font-size:8.5px;background:rgba(79,140,255,0.18);color:#9bbcff;border-radius:3px;padding:1px 4px;letter-spacing:0.04em;text-transform:uppercase;" title="Rolling thread — every chat surface lands here">rolling</span>'
       : '';
     var compactedMark = (!compact && r.last_compacted_at)
-      ? ' <span style="font-size:8.5px;opacity:0.55;" title="Last compacted ' + escapeAttr(r.last_compacted_at) + '">📦 ' + escapeHTML(relativeTime(r.last_compacted_at)) + '</span>'
+      // escapeHTML, not escapeAttr — there is no escapeAttr in this module (or
+      // on window; every definition in the repo is module-local), so this line
+      // threw a ReferenceError out of renderSessionList and blanked the whole
+      // sidebar for any non-compact row carrying last_compacted_at. escapeHTML
+      // escapes quotes too, so it is correct in an attribute.
+      ? ' <span style="font-size:8.5px;opacity:0.55;" title="Last compacted ' + escapeHTML(r.last_compacted_at) + '">📦 ' + escapeHTML(relativeTime(r.last_compacted_at)) + '</span>'
       : '';
     var subLine = '';
     if (!compact && r.summary) {
@@ -2464,7 +2509,7 @@ function p86Ask(message, opts) {
       '<span style="font-size:' + (compact ? '13px' : '14px') + ';line-height:1;flex-shrink:0;width:16px;text-align:center;opacity:0.85;">' + entityIcon(r.entity_type) + '</span>' +
       '<div style="flex:1;min-width:0;">' +
         '<div style="color:rgba(255,255,255,0.9);font-weight:500;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;">' +
-          escapeHTML(r.label || ('Session ' + r.id)) + pinnedMark + rollingMark +
+          escapeHTML(sessionTitle(r)) + pinnedMark + rollingMark +
         '</div>' + subLine +
       '</div>' +
       '<span style="font-size:9.5px;color:rgba(255,255,255,0.32);flex-shrink:0;">' + escapeHTML(relativeTime(r.last_used_at)) + '</span>' +
@@ -2621,7 +2666,7 @@ function p86Ask(message, opts) {
     }
     // Update the panel title to reflect the selected session.
     var titleEl = document.querySelector('#p86-ai-panel .p86-ai-title');
-    if (titleEl) titleEl.textContent = row.label || ('Session ' + sessionId);
+    if (titleEl) titleEl.textContent = sessionTitle(row);
   }
 
   // Collapse state for sidebar sections (shared by the Chats section).
@@ -2662,7 +2707,7 @@ function p86Ask(message, opts) {
       renderSessionList(_sessionList);
       closeSidebar();
       var titleEl = document.querySelector('#p86-ai-panel .p86-ai-title');
-      if (titleEl) titleEl.textContent = s.label || 'New chat';
+      if (titleEl) titleEl.textContent = sessionTitle(s);
     }).catch(function(err) {
       alert('Could not start new chat: ' + (err && err.message || 'unknown error'));
     });
@@ -2716,7 +2761,7 @@ function p86Ask(message, opts) {
         renderSessionList(_sessionList);
         if (sameSession(_currentSessionId, sessionId)) {
           var titleEl = document.querySelector('#p86-ai-panel .p86-ai-title');
-          if (titleEl) titleEl.textContent = row.label;
+          if (titleEl) titleEl.textContent = sessionTitle(row);
         }
       }
     }).catch(function(err) {
@@ -2741,7 +2786,7 @@ function p86Ask(message, opts) {
 
   async function deleteSession(sessionId) {
     var row = _sessionList.find(function(s) { return sameSession(s.id, sessionId); });
-    var label = row && row.label || ('Session ' + sessionId);
+    var label = sessionTitle(row);
     if (!(await p86Ask('Permanently delete "' + label + '"? This removes the Anthropic-side session too. Your local message history stays.'))) return;
     window.p86Api.del('/api/ai/sessions/' + sessionId).then(function() {
       _sessionList = _sessionList.filter(function(s) { return s.id !== sessionId; });
@@ -2794,7 +2839,7 @@ function p86Ask(message, opts) {
           '<span style="font-size:15px;line-height:1;flex-shrink:0;width:18px;text-align:center;opacity:0.85;">' + entityIcon(r.entity_type) + '</span>' +
           '<div style="flex:1;min-width:0;">' +
             '<div style="color:rgba(255,255,255,0.92);font-weight:500;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;">' +
-              escapeHTML(r.label || ('Session ' + r.id)) +
+              escapeHTML(sessionTitle(r)) +
             '</div>' +
             snippet +
           '</div>' +
@@ -2834,7 +2879,9 @@ function p86Ask(message, opts) {
     if (match) {
       if (!sameSession(_currentSessionId, match.id)) {
         _currentSessionId = match.id;
-        showSessionSwitchToast(match.label || (entityType + ' ' + entityId));
+        // Never `entityType + ' ' + entityId` — that fallback was a raw id by
+        // construction, shown in a toast the moment the user navigated.
+        showSessionSwitchToast(sessionTitle(match));
         renderSessionList(_sessionList);
       }
       return;
@@ -3440,8 +3487,19 @@ function p86Ask(message, opts) {
       // Pin the active entity even when the page-context heuristic
       // missed it (e.g. an estimate editor opened via deep link).
       if (isJobMode() || isEstimateMode()) {
+        // entity_label belongs to whatever entity getCurrentPageContext
+        // resolved. Overwriting the type/id without clearing it shipped a
+        // JOB's name attached to an ESTIMATE's id — a session labelled with a
+        // different entity's name. Re-resolve, or send nothing.
+        var _sameEntity = (pageCtx.entity_type === _entityType &&
+                           String(pageCtx.entity_id) === String(_entityId));
         pageCtx.entity_type = _entityType;
         pageCtx.entity_id = _entityId;
+        if (!_sameEntity) {
+          pageCtx.entity_label = (window.entityDisplayName && _entityId)
+            ? (window.entityDisplayName(_entityType, _entityId) || null)
+            : null;
+        }
       } else if (isIntakeMode()) {
         pageCtx.entity_type = 'intake';
       } else if (isAsk86Mode() && !pageCtx.entity_type) {
