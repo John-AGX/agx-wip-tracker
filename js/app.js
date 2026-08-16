@@ -2744,6 +2744,12 @@
                 if (typeof renderInsightsDashboard === 'function') renderInsightsDashboard();
                 if (typeof renderAdminMetrics === 'function') renderAdminMetrics();
                 if (typeof renderAdminJobs === 'function') renderAdminJobs();
+                // The open estimate editor is NOT in this list by accident —
+                // it re-renders only when an agent write is pending, and it
+                // must run here (post-hydrate) rather than off the
+                // p86:payload-applied event, so it repaints against the
+                // objects this load just installed instead of racing them.
+                if (typeof window.p86EstimateEditorRefresh === 'function') window.p86EstimateEditorRefresh();
             }).catch(function(err) {
                 _serverLoadInFlight = false;
                 _serverLoadComplete = true; // mark complete so UI doesn't hang waiting

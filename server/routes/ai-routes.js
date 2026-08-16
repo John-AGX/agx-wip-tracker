@@ -1637,9 +1637,14 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
     lines.push('');
   }
 
-  if (alternates.length > 1) {
+  // Printed for ONE group too. Gating this on `> 1` meant a single-scope
+  // estimate never showed its group id and never mentioned that groups
+  // exist — so a write aimed at "the scope" had nothing addressable to
+  // aim at, and the scope text ended up on the estimate blob where
+  // nothing reads it. An estimate always has at least one scope; say so.
+  if (alternates.length >= 1) {
     lines.push('# Groups on this estimate');
-    lines.push('Project 86 organizes a multi-scope estimate into Groups (e.g., Deck 1, Deck 2, Roof, Optional Adds). Each group carries its own scope and its own line items. The proposal total = sum of every INCLUDED group; groups marked `excluded` are not priced or shown to the client. To switch the active group or add a new one, emit a payload with estimate ops `groups: [{op:\'switch_active\'|\'add\', ...}]`.');
+    lines.push('Project 86 organizes an estimate into Groups (a.k.a. scopes/alternates — e.g., Deck 1, Deck 2, Roof, Optional Adds). Every estimate has at least one. Each group carries its own SCOPE OF WORK and its own line items — scope text lives on the GROUP, never on the estimate itself. The proposal total = sum of every INCLUDED group; groups marked `excluded` are not priced or shown to the client. Ops: `groups: [{op:\'add\'|\'update\'|\'delete\', group_id?, name?, scope?}]` — set a scope of work with `{op:\'update\', group_id:\'<id below>\', scope:\'…\'}`. Top-level `scope` on an estimate op writes the ACTIVE group\'s scope.');
     alternates.forEach(a => {
       const isActive = a.id === blob.activeAlternateId;
       const isExcluded = !!a.excludeFromTotal;

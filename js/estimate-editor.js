@@ -3489,6 +3489,65 @@
   window.switchAlternate = switchAlternate;
   window.renderScopePanel = renderScopePanel;
 
+  // ── Repaint after an AGENT write ────────────────────────────────
+  // A Scribe/86 write lands as a payload apply on the server, not as a
+  // local edit, so this editor never heard about it: the user watched a
+  // "done" message and an unchanged screen.
+  //
+  // Worse than the stale paint: renderScopePanel mounts the rich-text
+  // editor over a CAPTURED `alt` object (deliberately — see the comment
+  // there). The hydrate that follows an apply rebuilds appData.estimates
+  // from scratch, so the still-mounted editor keeps writing into a
+  // detached orphan; the signature never changes, the save is skipped,
+  // and the user's next paragraph is lost with no error.
+  //
+  // We deliberately do NOT reload from here. ai-panel.js already calls
+  // p86ReloadAllData() for estimate targets; a second parallel reload
+  // would race it and re-orphan the closure we just re-mounted. This only
+  // raises a flag — the repaint runs from app.js's post-hydrate render
+  // fan-out, i.e. once the fresh objects are actually in place.
+  var _serverWritePending = false;
+  document.addEventListener('p86:payload-applied', function(ev) {
+    try {
+      var targets = (ev && ev.detail && ev.detail.affected_targets) || [];
+      var hit = targets.some(function(t) {
+        return t && t.entity_type === 'estimate' && _currentId && t.entity_id === _currentId;
+      });
+      if (!hit) return;
+      _serverWritePending = true;
+      // Safety net: if nothing hydrates (AI panel never initialised, for
+      // instance) pull it ourselves rather than sit on a stale screen.
+      setTimeout(function() {
+        if (_serverWritePending && typeof window.p86ReloadAllData === 'function') {
+          try { window.p86ReloadAllData(); }
+          catch (e) { console.warn('[estimate-editor] fallback reload failed:', e); }
+        }
+      }, 2500);
+    } catch (e) {
+      console.warn('[estimate-editor] payload-applied hook failed:', e);
+    }
+  });
+
+  // Called by app.js AFTER a server hydrate has swapped appData.estimates.
+  // No-ops unless an agent write is actually pending, so a routine reload
+  // never yanks the view out from under someone who is typing.
+  window.p86EstimateEditorRefresh = function() {
+    if (!_serverWritePending) return false;
+    _serverWritePending = false;
+    if (!_currentId || !getEstimate()) return false;
+    try {
+      renderHeaderChips();
+      renderAlternateTabs();
+      renderTotals();
+      renderLineItems();
+      renderScopePanel();   // re-mounts rich text against the FRESH alternate
+      return true;
+    } catch (e) {
+      console.warn('[estimate-editor] post-write refresh failed:', e);
+      return false;
+    }
+  };
+
   // Tiny shim so the sticky-header "Ask AI" button can find the active
   // estimate id without the AI panel having to read the editor's private
   // state. Just delegates to p86AI.open with the current id.

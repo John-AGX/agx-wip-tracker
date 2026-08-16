@@ -93,8 +93,20 @@ const ESTIMATE_FIELD_KEYS = new Set([
 const ESTIMATE_BLOCKED_FIELDS = new Set([
   'id', 'owner_id', 'created_at', 'updated_at',
   '__totals', 'lines', // lines have their own ops; not free-form
+  // `alternates` are the SCOPES. Replacing the array wholesale orphans
+  // every line's alternateId (and every line's money with it) while
+  // being reported as "1 field(s)". Scopes have their own ops: groups[].
+  'alternates',
   'estimateAlternates', 'estimateLines',
 ]);
+
+// Where a blocked estimate field SHOULD be written instead. Named in the
+// refusal so the agent gets a route, not just a "no".
+const ESTIMATE_BLOCKED_FIELD_ROUTES = {
+  lines:      "Use estimate ops line_adds / line_edits / line_deletes.",
+  alternates: "Use estimate ops groups:[{op:'add'|'update'|'delete', ...}] — one op per scope.",
+  __totals:   'Totals are computed from the lines; they are never written directly.',
+};
 
 // Lead-table editable fields. Mirrors EDITABLE_FIELDS in lead-routes.js.
 const LEAD_EDITABLE_FIELDS = new Set([
@@ -493,8 +505,9 @@ function validateOps(entityType, ops) {
           throw new PayloadValidationError(
             `estimate.ops.field_updates blocked key: '${k}'`,
             { code: 'blocked_field', field_path: `estimate.ops.field_updates.${k}`,
-              received: k, expected: [...ESTIMATE_BLOCKED_FIELDS],
-              suggestion: 'This field is not user-writable via payload. Edit it through the proper proposal flow.' }
+              received: k, expected: [...ESTIMATE_BLOCKED_FIELDS], retryable: false,
+              suggestion: ESTIMATE_BLOCKED_FIELD_ROUTES[k] ||
+                'This field is not user-writable via payload. Edit it through the proper proposal flow.' }
           );
         }
       }
@@ -1207,7 +1220,8 @@ async function dispatchEstimate(dbClient, target, refTable, ctx) {
     // (e.g. an estimate that reuses an old job's nickname); those
     // take precedence over the auto-snapshot.
     const blob = { id, ...snap, ...fields };
-    if (ops.scope !== undefined) blob.scope = ops.scope;
+    // NB: ops.scope is applied AFTER the group ops below — scope lives on
+    // a group, so there has to be a group first. See applyEstimateScopeText.
     // Auto-seed a "Base" alternate with the four standard section
     // headers IF the payload doesn't create an alternate of its own
     // via ops.groups. Matches what the editor's New Estimate flow
@@ -1223,6 +1237,11 @@ async function dispatchEstimate(dbClient, target, refTable, ctx) {
     }
     if (ops.sections) applyEstimateSections(blob, ops.sections);
     if (ops.groups) applyEstimateGroups(blob, ops.groups);
+    // Scope text goes on the group the payload just established, never on
+    // the blob (the blob key has no readers — that was the bug).
+    if (ops.scope !== undefined) {
+      applyEstimateScopeText(blob, ops.scope, { fieldPath: 'estimate.ops.scope' });
+    }
     if (ops.line_adds) applyLineAdds(blob, ops.line_adds);
     // Assemblies land AFTER the groups/sections ops above so they can be
     // routed into an alternate this same payload just created.
@@ -1261,13 +1280,29 @@ async function dispatchEstimate(dbClient, target, refTable, ctx) {
 
     const changes = [];
 
+    // Self-heal FIRST, on every estimate update: earlier builds wrote scope
+    // text into data.scope, where nothing could read it. Move it onto the
+    // group before this payload's own ops run, so the recovery happens even
+    // when the payload is about something else entirely.
+    if (migrateLegacyEstimateScope(data)) {
+      changes.push('scope (recovered from the legacy estimate-level field)');
+    }
+
     if (ops.scope !== undefined) {
-      data.scope = ops.scope;
+      applyEstimateScopeText(data, ops.scope, { fieldPath: 'estimate.ops.scope' });
       changes.push('scope');
     }
     if (ops.field_updates) {
       for (const k of Object.keys(ops.field_updates)) {
         if (ESTIMATE_BLOCKED_FIELDS.has(k)) continue;
+        // `scope` is NOT a blob field. This is the exact shape the Scribe
+        // emitted on the Uptown estimate; sending it to data[k] is what
+        // made three successive "applied" writes invisible.
+        if (k === 'scope') {
+          applyEstimateScopeText(data, ops.field_updates[k],
+            { fieldPath: 'estimate.ops.field_updates.scope' });
+          continue;
+        }
         data[k] = ops.field_updates[k];
       }
       changes.push(`${Object.keys(ops.field_updates).length} field(s)`);
@@ -1463,7 +1498,9 @@ function applyEstimateGroups(data, groupOps) {
       });
     } else if (kind === 'update') {
       const idx = alternates.findIndex((a) => a.id === op.group_id);
-      if (idx < 0) throw new Error(`group_id not found in alternates[]: ${op.group_id}`);
+      // Typed, not bare: a bare Error gives the agent no `code` and no
+      // `retryable:false`, so it re-emits the same unresolvable id.
+      if (idx < 0) throw unknownAlternateError(alternates, op.group_id, 'estimate.ops.groups.group_id');
       if (op.name !== undefined) alternates[idx].name = op.name;
       if (op.scope !== undefined) alternates[idx].scope = op.scope;
     } else if (kind === 'delete') {
@@ -1472,12 +1509,163 @@ function applyEstimateGroups(data, groupOps) {
       // Cascade: also drop any lines (headers + items) belonging to that alternate.
       data.lines = lines.filter((l) => !l || l.alternateId !== op.group_id);
       if (data.alternates.length === before) {
-        throw new Error(`group_id not found in alternates[]: ${op.group_id}`);
+        throw unknownAlternateError(alternates, op.group_id, 'estimate.ops.groups.group_id');
       }
     } else {
       throw new Error(`group op must be add|update|delete, got: ${kind}`);
     }
   }
+}
+
+// ──────────────────────────────────────────────────────────────────
+// SCOPE TEXT — an estimate's scope of work lives on the GROUP
+// (alternate), never on the estimate blob.
+//
+// THE FAILING CONDITION THIS CLOSES: `estimate.ops.scope` and
+// `ops.field_updates.scope` both wrote `data.scope` — a blob key with
+// ZERO readers anywhere in the product. Every surface that shows scope
+// reads `data.alternates[i].scope` (estimate-editor renderScopePanel,
+// estimate-preview, proposal, bt-export), and the agent's own turn
+// context reads `activeAlt.scope` too. So the write committed, the
+// payload went `applied` with `apply_error: null`, and the text was
+// invisible forever — including to the agent that wrote it, which then
+// concluded there was no scope yet and wrote it again. A write-only
+// field plus a read path that skips it is a closed retry loop.
+//
+// Everything below routes scope text to the field the app reads, and
+// refuses with a NAMED code when it cannot work out which group is
+// meant. Silence is what caused this bug; it is not an option here.
+// ──────────────────────────────────────────────────────────────────
+
+function alternateNamesOf(alternates) {
+  return (alternates || []).map((a) => (a && a.name) || '').filter(Boolean);
+}
+
+function unknownAlternateError(alternates, received, fieldPath, extra) {
+  return new PayloadValidationError(
+    `Unknown group "${received}" on this estimate — nothing was written.`,
+    Object.assign({
+      code: 'unknown_alternate',
+      field_path: fieldPath,
+      received: received,
+      retryable: false,
+      expected: (alternates || []).map((a) => a && a.id).filter(Boolean),
+      expected_names: alternateNamesOf(alternates),
+      suggestion: 'Use one of the listed group ids (or names) exactly, or omit the group target to use the active group.',
+    }, extra || {})
+  );
+}
+
+// Resolve WHICH group an op is aimed at. Order: explicit id → explicit
+// name (case-insensitive, must be unique) → the estimate's active group
+// → the first group. Returns null only when the estimate has no groups.
+function resolveAlternateTarget(data, opts, fieldPath) {
+  const o = opts || {};
+  const alternates = Array.isArray(data.alternates) ? data.alternates : [];
+  const wantId = o.alternateId || null;
+  if (wantId) {
+    const hit = alternates.find((a) => a && a.id === wantId);
+    if (!hit) throw unknownAlternateError(alternates, wantId, fieldPath + '.alternate_id', o.errorExtra);
+    return hit;
+  }
+  const wantName = (typeof o.alternateName === 'string' && o.alternateName.trim())
+    ? o.alternateName.trim().toLowerCase() : null;
+  if (wantName) {
+    const hits = alternates.filter(
+      (a) => a && String(a.name || '').trim().toLowerCase() === wantName
+    );
+    if (hits.length !== 1) {
+      throw new PayloadValidationError(
+        (hits.length ? 'Ambiguous' : 'Unknown') +
+          ` group name "${o.alternateName}" on this estimate — nothing was written.`,
+        Object.assign({
+          code: hits.length ? 'ambiguous_alternate' : 'unknown_alternate',
+          field_path: fieldPath + '.alternate_name',
+          received: o.alternateName,
+          retryable: false,
+          expected: alternateNamesOf(alternates),
+          suggestion: 'Use one of the listed group names exactly, or omit it to use the active group.',
+        }, o.errorExtra || {})
+      );
+    }
+    return hits[0];
+  }
+  if (data.activeAlternateId) {
+    const hit = alternates.find((a) => a && a.id === data.activeAlternateId);
+    if (hit) return hit;
+  }
+  return alternates[0] || null;
+}
+
+// Recover scope text stranded on the blob by the old write path. Moves
+// it onto the group that owns it, and only DELETES the dead key once the
+// text is safely somewhere a reader can see it. If the group already has
+// different scope text we leave the orphan alone — a dead field costs
+// nothing; destroying a client's scope of work costs a lot.
+function migrateLegacyEstimateScope(data) {
+  if (!data || typeof data.scope !== 'string') return false;
+  const legacy = data.scope;
+  if (!legacy.trim()) { delete data.scope; return false; }
+  const alternates = Array.isArray(data.alternates) ? data.alternates : [];
+  if (!alternates.length) return false; // no home yet — keep it until there is one
+  let idx = alternates.findIndex((a) => a && a.id === data.activeAlternateId);
+  if (idx < 0) idx = 0;
+  const current = String((alternates[idx] && alternates[idx].scope) || '');
+  if (!current.trim()) { alternates[idx].scope = legacy; delete data.scope; return true; }
+  if (current.indexOf(legacy) >= 0) { delete data.scope; return false; } // already superseded
+  return false;
+}
+
+// Write scope text onto a group. Never touches data.scope.
+function applyEstimateScopeText(data, text, opts) {
+  const o = opts || {};
+  const fieldPath = o.fieldPath || 'estimate.ops.scope';
+  const alternates = ensureArray(data, 'alternates');
+
+  if (!alternates.length) {
+    if (o.alternateId || o.alternateName) {
+      throw unknownAlternateError(alternates, o.alternateId || o.alternateName, fieldPath);
+    }
+    // Legacy estimate with no groups. Seed "Base" EXACTLY the way the
+    // editor's ensureAlternates does — a bare group, no section headers —
+    // and adopt every existing line into it.
+    //
+    // MONEY: both totals engines (js/estimates.js and
+    // server/services/money/estimate-totals.js) switch from "sum every
+    // line" to "sum lines whose alternateId matches an INCLUDED group"
+    // the moment alternates[] stops being empty. Without the adoption
+    // backfill below, a text-only scope write would drop this estimate's
+    // proposal total to $0 — and a job converted from it would be seeded
+    // with no scope at all. The backfill makes the seed provably
+    // total-neutral: same lines, same one group, same sum.
+    alternates.push({
+      id: 'alt_default',
+      name: 'Base',
+      isDefault: true,
+      scope: (typeof data.scopeOfWork === 'string' ? data.scopeOfWork : '') || '',
+    });
+    data.activeAlternateId = 'alt_default';
+    ensureArray(data, 'lines').forEach((l) => {
+      if (l && !l.alternateId) l.alternateId = 'alt_default';
+    });
+  }
+
+  // Recover anything the old dead-field path stranded before we overwrite.
+  migrateLegacyEstimateScope(data);
+
+  const alt = resolveAlternateTarget(data, o, fieldPath);
+  if (!alt) {
+    throw new PayloadValidationError(
+      'Cannot write scope: this estimate has no groups to attach it to — nothing was written.',
+      { code: 'no_scope_target', field_path: fieldPath, retryable: false,
+        suggestion: "Emit estimate ops groups:[{op:'add', name:'Base'}] first, then set the scope." }
+    );
+  }
+  // `undefined` means "no scope text in this op" — used by the seed path,
+  // where the point was to establish the group, not to blank its scope.
+  // An explicit null/'' is a deliberate clear and is honoured.
+  if (text !== undefined) alt.scope = (text === null) ? '' : String(text);
+  return alt;
 }
 
 // Resolve a section header row by its id (subgroup_id from 86). The
@@ -1635,7 +1823,55 @@ function insertIntoSection(lines, row, header) {
 function applyLineAdds(data, lineAdds) {
   const lines = ensureArray(data, 'lines');
   const alternates = Array.isArray(data.alternates) ? data.alternates : [];
-  for (const add of lineAdds) {
+  let opIndex = -1;
+  for (const rawAdd of lineAdds) {
+    let add = rawAdd;
+    opIndex++;
+    const path = `estimate.ops.line_adds[${opIndex}]`;
+    // WHICH SCOPE? Resolve it BEFORE anything else, and refuse by name if
+    // it can't be resolved. The old behaviour was to fall through to the
+    // active scope's Materials section and report "+1 line(s)" — a wrong
+    // scope that looks exactly like a right one. `alternate_name` is
+    // accepted here for parity with assembly_adds, which has had name
+    // resolution (and these refusals) all along.
+    const wantsNamedAlt = !!(add.alternate_id || add.alternate_name || add.group_name);
+    if (wantsNamedAlt && !alternates.length) {
+      // Naming a scope on an estimate that has none can only be a mistake.
+      throw unknownAlternateError(
+        alternates, add.alternate_id || add.alternate_name || add.group_name,
+        path, { op_index: opIndex }
+      );
+    }
+    if (alternates.length) {
+      const named = resolveAlternateTarget(data, {
+        alternateId: add.alternate_id || null,
+        alternateName: add.alternate_name || add.group_name || null,
+        errorExtra: { op_index: opIndex },
+      }, path);
+      if (wantsNamedAlt && named) {
+        add = Object.assign({}, add, { alternateId: named.id });
+      }
+      const explicitAlt = add.alternateId || add.group_id || null;
+      // group_id doubles as a subgroup (section header) id in some older
+      // payloads, so only refuse when it matches NEITHER.
+      if (explicitAlt
+          && !alternates.some((a) => a && a.id === explicitAlt)
+          && !findSubgroupHeader(lines, explicitAlt)) {
+        throw unknownAlternateError(alternates, explicitAlt, path, { op_index: opIndex });
+      }
+      if (add.subgroup_id
+          && !findSubgroupHeader(lines, add.subgroup_id)
+          && !alternates.some((a) => a && a.id === add.subgroup_id)) {
+        throw new PayloadValidationError(
+          `Unknown subgroup_id "${add.subgroup_id}" on this estimate — no line was added.`,
+          { code: 'unknown_subgroup', field_path: path + '.subgroup_id',
+            op_index: opIndex, received: add.subgroup_id, retryable: false,
+            expected: lines.filter((l) => l && l.section === '__section_header__')
+              .map((l) => `${l.id} (${l.description || 'subgroup'})`),
+            suggestion: 'Use a section-header id from this estimate, or drop subgroup_id and pass `section` (the subgroup name) instead.' }
+        );
+      }
+    }
     // Resolve which subgroup this line belongs to. Input shapes 86
     // might send (we accept all for back-compat):
     //   1. subgroup_id   — preferred. Either a section header row id
@@ -3595,6 +3831,11 @@ module.exports = {
     applyLineEdits,
     ensureSectionHeader,
     insertIntoSection,
+    // Scope (alternate) ops — pure blob surgery, no DB.
+    applyEstimateGroups,
+    applyEstimateScopeText,
+    migrateLegacyEstimateScope,
+    resolveAlternateTarget,
     buildApplySummary,
     CLIENT_EDITABLE_FIELDS,
     ESTIMATE_FIELD_KEYS,
