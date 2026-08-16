@@ -490,7 +490,19 @@
         '<br><br>' + why + '</div>';
     } else if (isApplied && cs.length === 1 && cs[0].entity_type === 'estimate' &&
                cs[0].after && cs[0].after.data && Array.isArray(cs[0].after.data.lines) && cs[0].after.data.lines.length) {
-      bodyHtml = '<div class="cw-dbody">' + documentHtml(cs[0]) + '</div>';
+      // The document highlights the rows that moved — but ops WITHOUT a
+      // lineId have no row to highlight, so in the document they are
+      // invisible. Seen live: a scope write rendered the whole estimate with
+      // nothing marked, i.e. "here is the estimate, good luck spotting it".
+      // State those ops above the document; the document is the context.
+      var offRow = groups.map(function (g) {
+        return { name: g.name, ops: g.ops.filter(function (o) { return !o.lineId; }) };
+      }).filter(function (g) { return g.ops.length; });
+      bodyHtml = (offRow.length
+          ? '<div class="cw-note" style="padding-bottom:2px;">What changed:</div>' +
+            '<div class="cw-dbody" style="max-height:none;">' + opsHtml(offRow) + '</div>'
+          : '') +
+        '<div class="cw-dbody">' + documentHtml(cs[0]) + '</div>';
     } else {
       var lead = (row.status === 'ready')
         ? '<div class="cw-note" style="padding-bottom:2px;">Proposes to:</div>' : '';
