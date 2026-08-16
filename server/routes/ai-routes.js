@@ -12545,6 +12545,31 @@ async function driveScribeWrite(intent, ctx) {
   };
 }
 
+// Shape guard for the Scribe's dry-run diff. Lives in services/ so it is
+// testable without JWT_SECRET; see that file for why both of its checks are
+// load-bearing.
+const { isRenderableChangeset } = require('../services/changeset-guard');
+
+// Persist the Scribe's DRY-RUN diff onto its own draft row so a 'ready'
+// payload can show what it proposes before anyone approves it. Writes
+// draft_changeset — never apply_changeset, which means "committed" and must
+// stay NULL until the dispatcher actually commits. Guarded on status='ready'
+// so a payload already applied (approve-in-chat races this by milliseconds)
+// is never back-stamped with a simulation.
+async function persistDraftChangeset(payloadId, changeset) {
+  if (!payloadId || !isRenderableChangeset(changeset)) return;
+  try {
+    await pool.query(
+      `UPDATE payloads
+          SET draft_changeset = $1::jsonb, draft_changeset_at = NOW()
+        WHERE id = $2 AND status = 'ready'`,
+      [JSON.stringify(changeset), payloadId]
+    );
+  } catch (e) {
+    console.warn('[scribe-bg] draft changeset persist failed:', e && e.message);
+  }
+}
+
 // execScribeWrite — 86's `scribe_write` tool lands here. 86 describes the
 // change in plain words; we hand it to the Scribe (driveScribeWrite),
 // which authors + dry-runs the payload. On success we surface the SAME
@@ -12582,6 +12607,16 @@ async function execScribeWrite(tu, ctx) {
   Promise.resolve()
     .then(function () { return driveScribeWrite({ instruction: instr }, scribeCtx); })
     .then(async function (result) {
+      // Persist the dry-run diff FIRST — before the notify, before the
+      // approve-in-chat apply, and regardless of whether we have a user to
+      // notify. driveScribeWrite already computed this changeset and, until
+      // now, threw it away; that is why an ordinary Scribe draft showed a
+      // "composing…" card for 45s and then the change itself NEVER, on any
+      // surface: the row sat at status='ready' with no diff to render and
+      // the Live Writer poller only ever looked at status='applied'.
+      if (result && result.ok) {
+        await persistDraftChangeset(result.payloadId, result.changeset);
+      }
       const uid = scribeCtx.userId;
       if (!uid) return;
       const { sendPushForEvent } = require('../notify-events');

@@ -3619,6 +3619,27 @@ async function initSchema() {
      WHERE status = 'applying'
        AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '15 minutes');
 
+    -- draft_changeset — the Scribe's DRY-RUN before/after snapshot, captured
+    -- when the draft is authored so a 'ready' payload can show its diff
+    -- before anyone approves it. Deliberately a SEPARATE column from
+    -- apply_changeset, which stays exactly what it has always been: what the
+    -- dispatcher actually COMMITTED.
+    --
+    -- The distinction is the whole point. A dry run opens a transaction,
+    -- writes, snapshots, and ROLLS BACK — so its after-rows carry line ids
+    -- minted at dispatch time that the real apply will never re-create, and
+    -- its before-snapshot is stale the instant it is taken. Reusing
+    -- apply_changeset for it would make a FAILED apply carry a full diff of a write that
+    -- never happened (nothing ever clears apply_changeset on the failure
+    -- path), and the bookkeeping-fallback UPDATE would leave an 'applied'
+    -- row carrying a rolled-back simulation. Two columns, two meanings:
+    --   draft_changeset  = what the Scribe PROPOSES   (a simulation)
+    --   apply_changeset  = what the server COMMITTED  (the record)
+    -- Surfaces render the first as ops ("proposed") and only the second as
+    -- a document ("applied").
+    ALTER TABLE payloads ADD COLUMN IF NOT EXISTS draft_changeset JSONB;
+    ALTER TABLE payloads ADD COLUMN IF NOT EXISTS draft_changeset_at TIMESTAMPTZ;
+
     CREATE INDEX IF NOT EXISTS idx_payloads_targets_gin
       ON payloads USING gin (targets jsonb_path_ops);
     CREATE INDEX IF NOT EXISTS idx_payloads_source

@@ -115,21 +115,62 @@ const { generateFilename, sanitizeShortName, newPayloadId } = dispatcher;
 // ──────────────────────────────────────────────────────────────────
 // GET /api/payloads — recent payloads for the caller (own rows + org-wide
 // watcher rows). Lean columns only; drives the Crew Activity panel's
-// "Scribe drafts" section. Declared BEFORE /:id so the root path can't be
-// swallowed by the param route.
+// "Scribe drafts" section, the AI panel's Pending-approvals strip, the Live
+// Writer poller, and the Cowork writes ledger. Declared BEFORE /:id so the
+// root path can't be swallowed by the param route.
+//
+// FOUR CONSUMERS, ONE ROUTE — so every behaviour change here is OPT-IN.
+// ai-panel's refreshPendingApprovals asks for ?limit=30 and client-filters
+// status==='ready' to render the approval cards AND their "(N)" count;
+// agent-tasks asks for ?limit=8. If this route silently switched to
+// ordering by apply time, a busy day of auto-applies would push still-ready
+// drafts past those windows and the approval strip would confidently report
+// fewer pending cards than exist. So:
+//   ?status=ready,applied   filter server-side (the ledger + the draft arm)
+//   ?order=activity         COALESCE(applied_at, created_at) DESC
+//   ?before=<iso>           keyset cursor on the SAME expression as ?order
+// Defaults are byte-for-byte the old behaviour: no filter, created_at DESC.
+//
+// The row shape gains has_diff / has_draft as BOOLEANS, never the blobs —
+// the list stays lean and the per-row detail fetch stays mandatory.
 // ──────────────────────────────────────────────────────────────────
+const LIST_STATUSES = new Set(['ready', 'applying', 'applied', 'failed', 'rejected']);
+
 router.get('/', requireAuth, requireOrg, async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 15, 50);
+    const byActivity = String(req.query.order || '') === 'activity';
+    const sortExpr = byActivity ? 'COALESCE(applied_at, created_at)' : 'created_at';
+
+    const statuses = String(req.query.status || '')
+      .split(',').map((s) => s.trim().toLowerCase()).filter((s) => LIST_STATUSES.has(s));
+
+    const params = [req.user.organization_id, req.user.id];
+    let where = 'organization_id = $1 AND (user_id = $2 OR user_id IS NULL)';
+    if (statuses.length) {
+      params.push(statuses);
+      where += ` AND status = ANY($${params.length}::text[])`;
+    }
+    if (req.query.before) {
+      const d = new Date(String(req.query.before));
+      if (!isNaN(d.getTime())) {
+        params.push(d.toISOString());
+        where += ` AND ${sortExpr} < $${params.length}::timestamptz`;
+      }
+    }
+    params.push(limit);
+
     const r = await pool.query(
       `SELECT id, title, summary, status, apply_summary, emitting_agent_key,
-              created_at, applied_at
+              created_at, applied_at, apply_error,
+              (apply_changeset IS NOT NULL) AS has_diff,
+              (draft_changeset IS NOT NULL) AS has_draft,
+              ${sortExpr} AS activity_at
          FROM payloads
-        WHERE organization_id = $1
-          AND (user_id = $2 OR user_id IS NULL)
-        ORDER BY created_at DESC
-        LIMIT $3`,
-      [req.user.organization_id, req.user.id, limit]
+        WHERE ${where}
+        ORDER BY ${sortExpr} DESC
+        LIMIT $${params.length}`,
+      params
     );
     res.json({ payloads: r.rows });
   } catch (e) {
@@ -151,7 +192,8 @@ router.get('/:id', requireAuth, requireOrg, async (req, res) => {
       `SELECT id, source, emitting_agent_key, filename, file_content, targets,
               title, summary, rationale, template_id, status, applied_at,
               apply_summary, apply_changeset, apply_error, apply_error_detail,
-              created_at, expires_at, session_id,
+              draft_changeset, draft_changeset_at,
+              created_at, expires_at, session_id, claimed_at,
               parent_message_id, user_id
          FROM payloads
         WHERE id = $1
