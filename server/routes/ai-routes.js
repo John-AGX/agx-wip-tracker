@@ -995,9 +995,9 @@ const JOB_TOOLS = [
   {
     name: 'read_building_breakdown',
     description:
-      'Read the complete phase composition + computed rollups for a single building. Auto-applies, no approval. ' +
-      'Returns every phase under the building (no truncation), each phase\'s pctComplete + budget + weight, the budget-weighted rollup, AND every graph wire (t2/co → t1) feeding the building with their wire-level pctComplete + allocPct overrides. ' +
-      'Use this when the truncated # Structure block in your context isn\'t enough — i.e. building has more phases than were shown, or you need wire-level allocation/pct values to diagnose why the WIP page and the graph view disagree on a building\'s number.',
+      'Read the complete phase composition + computed rollup for a single building. Auto-applies, no approval. ' +
+      'Returns every phase under the building (no truncation) with its pctComplete + budget + weight, and the budget-weighted average those produce — which IS the building\'s % complete. There is no other input to it. ' +
+      'Use this when the truncated # Structure block in your context isn\'t enough — i.e. the building has more phases than were shown.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -1012,12 +1012,10 @@ const JOB_TOOLS = [
     description:
       'Sweep the job for percent-complete inconsistencies. Auto-applies, no approval. Reports:\n' +
       '  • Orphan phases (no buildingId or pointing at a deleted building — invisible to the rollup).\n' +
-      '  • Dangling t1 nodes (graph t1 with no underlying building record).\n' +
-      '  • Stale t1 pctComplete (t1 with its own pctComplete set AND wired t2/co children — value is ignored, usually leftover).\n' +
-      '  • Wires with allocPct=0 (contribute nothing to the rollup).\n' +
       '  • Buildings with no phases (always read 0%).\n' +
       '  • Phases with no budget (equal-weighted in the rollup; can over/under-count vs. intent).\n' +
-      'Run this FIRST when the PM says "something\'s off with the percentages" or before a big cascade write.',
+      'These are the only ways a building % can be wrong: the rollup is the budget-weighted average of the phase records pointing at that building, so a bad number is always a missing, orphaned, or unbudgeted PHASE. ' +
+      'Run this FIRST when the PM says "something\'s off with the percentages" or before a big phase_updates write.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -5610,6 +5608,12 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   // of the regex, and the total is labelled as the partial vendor subtotal it
   // actually is. The old "N/M unlinked" count was measured against
   // linked_node_id — the retired node graph — and is gone.
+  //
+  // The two exclusion totals are hoisted OUT of this block on purpose: the
+  // "# QuickBooks cost data" section further down prints a client-computed
+  // grand total over the same lines, and without these it repeats exactly
+  // the defect this block was fixed for. One measurement, quoted twice.
+  let qbExcludedSub = 0, qbExcludedAccrual = 0, qbClassified = false;
   try {
     const cl = await pool.query(
       `SELECT vendor, amount, account, account_type, txn_type, bucket
@@ -5619,12 +5623,12 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
     );
     if (cl.rows.length) {
       const byVendor = new Map();
-      let excludedSub = 0, excludedAccrual = 0;
+      qbClassified = true;
       for (const r of cl.rows) {
         const amt = Number(r.amount || 0);
         const cls = classifyCostLine(r);
-        if (cls === 'accrual') { excludedAccrual += amt; continue; }
-        if (cls === 'sub') { excludedSub += amt; continue; }
+        if (cls === 'accrual') { qbExcludedAccrual += amt; continue; }
+        if (cls === 'sub') { qbExcludedSub += amt; continue; }
         const v = (r.vendor || '').trim() || '(no vendor)';
         const cur = byVendor.get(v) || { total: 0, count: 0 };
         cur.total += amt; cur.count++;
@@ -5638,10 +5642,10 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
         const shownTotal = shown.reduce((s, r) => s + r.total, 0);
         lines.push('# Top cost lines by vendor (' + shown.length + ' of ' + ranked.length + ' vendors) — QB job-cost lines only');
         lines.push('- Subtotal of the vendors SHOWN: ' + fmtMoney(shownTotal) + '. This is a partial vendor list, NOT this job\'s cost — the # WIP block above carries actual/projected cost.');
-        if (excludedSub || excludedAccrual) {
-          lines.push('- Excluded here exactly as the cost engine excludes them: ' + fmtMoney(excludedSub) +
+        if (qbExcludedSub || qbExcludedAccrual) {
+          lines.push('- Excluded here exactly as the cost engine excludes them: ' + fmtMoney(qbExcludedSub) +
             ' of QB "Subcontractors" lines (match-only — sub cost comes from POs/vendor bills) and ' +
-            fmtMoney(excludedAccrual) + ' of month-end accrual journal entries.');
+            fmtMoney(qbExcludedAccrual) + ' of month-end accrual journal entries.');
         }
         shown.forEach(r => {
           lines.push('- ' + fmtMoney(r.total) + ' ' + r.vendor + ' (' + r.count + ' line' + (r.count === 1 ? '' : 's') + ')');
@@ -5653,8 +5657,8 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
         // and printing nothing would read as the first.
         lines.push('# Top cost lines by vendor');
         lines.push('- ' + cl.rows.length + ' QB line(s) imported, but NONE count as job cost: ' +
-          fmtMoney(excludedSub) + ' is QB "Subcontractors" (match-only — sub cost comes from POs/vendor bills) and ' +
-          fmtMoney(excludedAccrual) + ' is month-end accrual journal entries.');
+          fmtMoney(qbExcludedSub) + ' is QB "Subcontractors" (match-only — sub cost comes from POs/vendor bills) and ' +
+          fmtMoney(qbExcludedAccrual) + ' is month-end accrual journal entries.');
         lines.push('');
       }
     } else if (subs.length) {
@@ -5762,8 +5766,24 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
       lines.push('**This is the SINGLE SOURCE OF TRUTH for all imported QuickBooks cost data on this job.** It is the same data the user sees in the workspace\'s "Detailed Costs" tab (a pinned sheet that renders this exact dataset live — totals, by-account chips, filterable line table). When the user references "the Detailed Costs sheet", "the QB sheet", "imported costs", "the cost data", or any individual transaction, pull from this block — don\'t look anywhere else, and don\'t tell them to re-import or save anything.');
       lines.push('**For individual lines call `read_qb_cost_lines`** (auto-applies, no approval). It returns the full per-line list filtered by account/vendor/status/search. Use it whenever the user asks about a specific transaction, vendor total, or account that isn\'t already in the summary below.');
       lines.push('**DO NOT call `read_workspace_sheet_full` on "QB Costs YYYY-MM-DD" sheets or on the "Detailed Costs" tab.** Those are legacy per-import snapshots / a live view of THIS block. Reading them one-by-one is a useless loop — every line below is already deduplicated server-side.');
-      lines.push('- Lines: ' + (qb.lineCount || 0) + (qb.unlinkedCount != null ? ' (' + qb.unlinkedCount + ' unlinked to a graph node)' : ''));
-      lines.push('- Total: ' + fmtMoney(qb.total || 0));
+      // The line count used to carry "(N unlinked to a graph node)" and the
+      // per-line samples an "→ n38" node id. Same dead measurement the "Top
+      // cost lines" block above shed on 2026-08-16, surviving in the block
+      // that calls itself the SINGLE SOURCE OF TRUTH — so 86 was still being
+      // handed a linkage stat for a rollup that no longer exists.
+      lines.push('- Lines: ' + (qb.lineCount || 0));
+      // And this total is every imported line summed — it is NOT job cost.
+      // The cost engine drops match-only QB "Subcontractors" and month-end
+      // accrual journal entries first (money/cost-line-filters.js). Quoting
+      // it bare next to a WIP block that already netted them out is the D1b
+      // defect one section lower down the same prompt.
+      lines.push('- Total imported (raw sum of every line above): ' + fmtMoney(qb.total || 0) +
+        ' — this is the IMPORT total, NOT this job\'s cost. The # WIP block above carries actual cost.');
+      if (qbClassified && (qbExcludedSub || qbExcludedAccrual)) {
+        lines.push('  Of that raw total, the cost engine excludes ' + fmtMoney(qbExcludedSub) +
+          ' of QB "Subcontractors" (match-only — sub cost comes from POs/vendor bills) and ' +
+          fmtMoney(qbExcludedAccrual) + ' of month-end accrual journal entries. Never quote the raw total as cost.');
+      }
       if (qb.mostRecentImport) lines.push('- Most recent import: ' + qb.mostRecentImport);
       if (qb.byCategory && Object.keys(qb.byCategory).length) {
         lines.push('## By category (Distribution Account)');
@@ -5778,14 +5798,13 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
         lines.push('## Top ' + Math.min(qb.samples.length, 20) + ' lines by amount');
         qb.samples.slice(0, 20).forEach(function(s) {
           var lineMarker = s.id ? ' [id=' + s.id + ']' : '';
-          var linked = s.linkedNodeId ? ' → ' + s.linkedNodeId : '';
           // Inline-strip just the role-container tags from memo (cheap;
           // keeps the table format readable; full wrapUserData envelope
           // would break the one-line-per-row layout).
           const safeMemo = s.memo
             ? String(s.memo).slice(0, 80).replace(/<\/?(?:system|assistant|tool_use|user_data)\s*>/gi, '')
             : '';
-          lines.push('- ' + (s.date || '') + ' ' + fmtMoney(s.amount || 0) + ' ' + (s.vendor || '') + (s.account ? ' | ' + s.account : '') + (safeMemo ? ' — ' + safeMemo : '') + linked + lineMarker);
+          lines.push('- ' + (s.date || '') + ' ' + fmtMoney(s.amount || 0) + ' ' + (s.vendor || '') + (s.account ? ' | ' + s.account : '') + (safeMemo ? ' — ' + safeMemo : '') + lineMarker);
         });
       }
       lines.push('');
@@ -10321,15 +10340,16 @@ async function execStaffTool(name, input, ctx) {
       const d = r.rows[0].data || {};
       const buildings = Array.isArray(d.buildings) ? d.buildings : [];
       const phases    = Array.isArray(d.phases)    ? d.phases    : [];
-      // The node graph lives in the node_graphs table (one row per job),
-      // NOT in jobs.data — same source change-order-routes reads.
+      // node_graphs is read for ONE reason: the caller may pass a t1 node id
+      // instead of a building record id, and dataId maps it back. It is the
+      // Site Plan's geometry store, not a money model — `wires` is no longer
+      // read here at all (see the deleted wire block below).
       let graph = {};
       const gRes = await pool.query(
         'SELECT data FROM node_graphs WHERE job_id = $1', [jobId]
       );
       if (gRes.rowCount) graph = gRes.rows[0].data || {};
       const nodes     = Array.isArray(graph.nodes) ? graph.nodes : [];
-      const wires     = Array.isArray(graph.wires) ? graph.wires : [];
 
       // Resolve target: a specific building (b1 record id, or t1 node id)
       // or fall through to a per-building summary if none given.
@@ -10372,20 +10392,15 @@ async function execStaffTool(name, input, ctx) {
         });
         if (bPhases.length > phaseLimit) blocks.push('  • …and ' + (bPhases.length - phaseLimit) + ' more');
 
-        // Wires feeding this building (t2/co → t1 with dataId=b.id).
-        // Real graph shape: wires use fromNode/toNode.
-        const t1Nodes = nodes.filter(n => n.type === 't1' && n.dataId === b.id).map(n => n.id);
-        const feedingWires = wires.filter(w => t1Nodes.indexOf(w.toNode) !== -1);
-        if (feedingWires.length) {
-          blocks.push('### Graph wires feeding this building (' + feedingWires.length + ')');
-          feedingWires.slice(0, 30).forEach(w => {
-            const src = nodes.find(n => n.id === w.fromNode);
-            const srcLabel = src ? (src.type + ' "' + (src.label || '?') + '"') : w.fromNode;
-            blocks.push('  • ' + srcLabel + ' → [' + w.toNode + '] · allocPct=' + Math.round(Number(w.allocPct || 0)) +
-              '% · pctComplete=' + (w.pctComplete != null ? Math.round(Number(w.pctComplete)) + '%' : '(falls back to source)'));
-          });
-          if (feedingWires.length > 30) blocks.push('  • …and ' + (feedingWires.length - 30) + ' more');
-        }
+        // ── "### Graph wires feeding this building" block: DELETED ──
+        // It listed every t2/co → t1 wire with `allocPct=N% · pctComplete=N%
+        // (falls back to source)`. That is a description of the RETIRED
+        // rollup, and it reached the live agent as a tool RESULT: read_entity
+        // is on the managed job agent's allowlist and its own description
+        // advertises include:["building_breakdown"], which routes here. The
+        // per-turn context was cleaned of this vocabulary on 2026-08-16; this
+        // handler was still handing it back on request. The budget-weighted
+        // phase list above IS the rollup, and it is the whole answer.
         blocks.push('');
       }
       return 'Building breakdown for job ' + jobId + ':\n\n' + blocks.join('\n');
@@ -10412,42 +10427,29 @@ async function execStaffTool(name, input, ctx) {
       const d = r.rows[0].data || {};
       const buildings = Array.isArray(d.buildings) ? d.buildings : [];
       const phases    = Array.isArray(d.phases)    ? d.phases    : [];
-      // The node graph lives in the node_graphs table (one row per job),
-      // NOT in jobs.data — same source change-order-routes reads.
-      let graph = {};
-      const gRes = await pool.query(
-        'SELECT data FROM node_graphs WHERE job_id = $1', [jobId]
-      );
-      if (gRes.rowCount) graph = gRes.rows[0].data || {};
-      const nodes     = Array.isArray(graph.nodes) ? graph.nodes : [];
-      const wires     = Array.isArray(graph.wires) ? graph.wires : [];
+      // node_graphs is NO LONGER READ HERE. Three of this audit's six
+      // findings were graph findings — "Dangling t1 nodes", "Stale t1
+      // pctComplete (own pct set AND has wired children — value ignored)"
+      // and "Zero-alloc wires (contribute nothing to rollup)". Every one of
+      // them asserts the retired revenue-weighted-wire rollup as fact, and
+      // this handler is reachable from the LIVE managed job agent: read_entity
+      // is allowlisted and its description advertises depth:"audit", which
+      // routes here. So an agent that had just been told (correctly) that the
+      // phase matrix is the only rollup could ask for an audit and be told
+      // wires contribute to one. The three surviving findings are the true
+      // ones, and they are exactly what the per-turn context now points at:
+      // a building's % moves only if phase records point at it with budget.
       const buildingIds = new Set(buildings.map(b => b.id));
 
       const orphanPhases = phases.filter(ph => !ph.buildingId || !buildingIds.has(ph.buildingId));
       const phasesNoBudget = phases.filter(ph => !(Number(ph.phaseBudget || ph.budget) > 0));
       const buildingsNoPhases = buildings.filter(b => !phases.some(ph => ph.buildingId === b.id));
-      // t1 nodes reference their building record via dataId; wires use
-      // fromNode/toNode (the engine's real shapes).
-      const danglingT1 = nodes.filter(n => n.type === 't1' && (!n.dataId || !buildingIds.has(n.dataId)));
-      const staleT1 = nodes.filter(n =>
-        n.type === 't1' &&
-        Number(n.pctComplete || 0) > 0 &&
-        wires.some(w => w.toNode === n.id)
-      );
-      const zeroAllocWires = wires.filter(w => Number(w.allocPct || 0) === 0);
 
       const out = ['PCT audit for job ' + jobId + ':'];
       const sections = [
         ['Orphan phases (invisible to rollup)', orphanPhases, (p) =>
           '[' + p.id + '] ' + (p.phase || p.name || '(unnamed)') +
           (p.buildingId ? ' · points at deleted building ' + p.buildingId : ' · no buildingId')],
-        ['Dangling t1 nodes (graph t1 with no underlying building record)', danglingT1, (n) =>
-          '[' + n.id + '] ' + (n.label || '(no label)') +
-          (n.dataId ? ' · dataId=' + n.dataId : '')],
-        ['Stale t1 pctComplete (own pct set AND has wired children — value ignored)', staleT1, (n) =>
-          '[' + n.id + '] ' + (n.label || '(no label)') + ' · pct=' + Math.round(Number(n.pctComplete || 0)) + '%'],
-        ['Zero-alloc wires (contribute nothing to rollup)', zeroAllocWires, (w) =>
-          w.fromNode + ' → ' + w.toNode + ' · allocPct=0'],
         ['Buildings with no phases (always read 0%)', buildingsNoPhases, (b) =>
           '[' + b.id + '] ' + (b.name || '(unnamed)')],
         ['Phases without budget (equal-weighted in rollup; can over/under-count)', phasesNoBudget, (p) =>

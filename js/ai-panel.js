@@ -730,8 +730,11 @@ function p86Ask(message, opts) {
             amount: amt,
             account: l.account || '',
             klass: l.klass || '',
-            memo: l.memo || '',
-            linkedNodeId: l.linked_node_id || l.linkedNodeId || null
+            memo: l.memo || ''
+            // linkedNodeId dropped 2026-08-16: the server rendered it as
+            // "→ n38" per sample line and counted the un-linked ones as
+            // "(N unlinked to a graph node)". Nothing reads linked_node_id
+            // for money — every line counts by its account bucket.
           });
           var rd = l.report_date || l.reportDate || '';
           if (typeof rd === 'string') {
@@ -801,11 +804,9 @@ function p86Ask(message, opts) {
       if (allLines.length) {
         var total = allLines.reduce(function(s, l) { return s + l.amount; }, 0);
         var byCategory = {};
-        var unlinkedCount = 0;
         allLines.forEach(function(l) {
           var key = l.account || '(uncategorized)';
           byCategory[key] = (byCategory[key] || 0) + l.amount;
-          if (!l.linkedNodeId) unlinkedCount++;
         });
         var samples = allLines.slice().sort(function(a, b) { return b.amount - a.amount; }).slice(0, 20);
         ctx.qbCosts = {
@@ -813,7 +814,8 @@ function p86Ask(message, opts) {
           total: total,
           byCategory: byCategory,
           lineCount: allLines.length,
-          unlinkedCount: unlinkedCount,
+          // unlinkedCount dropped 2026-08-16 — it counted lines with no
+          // graph node, against a rollup that was retired.
           mostRecentImport: mostRecent || null,
           samples: samples
         };
