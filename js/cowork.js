@@ -137,7 +137,7 @@
       '.cw-impact{margin-left:auto;font-variant-numeric:tabular-nums;font-weight:700;font-size:12px;}',
       '.cw-impact.pos{color:#1d9e75;} .cw-impact.neg{color:#e24b4a;}',
       '.cw-unread{background:#d98a1f;color:#2a1a03;font-size:9px;font-weight:800;padding:1px 6px;border-radius:9px;margin-left:auto;}',
-      '.cw-seg{display:none;gap:4px;padding:8px 10px;}',
+      '.cw-seg{display:none;gap:4px;grid-column:1/-1;}',
       '.cw-seg button{flex:1;border:1px solid var(--border,rgba(255,255,255,0.14));background:none;color:var(--text-dim,#9a9aa2);',
       'border-radius:8px;padding:7px;font-size:12px;font-weight:600;cursor:pointer;}',
       '.cw-seg button.on{background:rgba(55,138,221,.16);color:#5aa6ea;border-color:rgba(55,138,221,.4);}',
@@ -194,12 +194,15 @@
     if (document.getElementById('cw-doc')) return host;
     host.innerHTML =
       '<div id="cw-left">' +
+        // The switch sits OUTSIDE the rail on purpose: on mobile the rail is
+        // one of the two things it toggles, so a switch inside it would
+        // disappear along with it and strand the user on the Write view.
+        '<div class="cw-seg">' +
+          '<button data-cwseg="doc" class="on">Write</button>' +
+          '<button data-cwseg="ledger">History</button>' +
+        '</div>' +
         '<div class="cw-panel" id="cw-ledger-rail">' +
           '<div class="cw-phead">Writes<span id="cw-unread"></span></div>' +
-          '<div class="cw-seg">' +
-            '<button data-cwseg="doc" class="on">Write</button>' +
-            '<button data-cwseg="ledger">History</button>' +
-          '</div>' +
           '<div class="cw-pbody" id="cw-ledger-body"></div>' +
         '</div>' +
         '<div class="cw-panel" id="cw-doc"></div>' +
