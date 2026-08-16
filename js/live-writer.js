@@ -60,6 +60,22 @@
   var _detailRetry = Object.create(null);
   var MAX_DETAIL_RETRIES = 3;
 
+  // First time each 'ready' row was SEEN by a sweep, and how long a draft with
+  // no recorded diff is given before we report it as having none.
+  //
+  // The window is real, not paranoia: driveScribeWrite INSERTS the payload row
+  // (execEmitPayloadFile, step 1) and only then dry-runs it; persistDraftChangeset
+  // runs after that resolves. So a row legitimately sits at status='ready' with
+  // draft_changeset NULL for seconds. Reporting "no before/after was recorded"
+  // into that gap would be false — and worse, the report marks the row seen for
+  // this state, so the diff that lands a moment later would never be shown.
+  //
+  // Keyed on the CLIENT's first sighting rather than created_at: it only has to
+  // be monotonic within the session, so a skewed client clock can't make a draft
+  // permanently unreportable.
+  var _draftFirstSeen = Object.create(null);
+  var DRAFT_SETTLE_MS = 20000;   // ~4 sweeps; the composing backstop is at 180s
+
   // The recorder that stores a draft's before/after (payloads.draft_changeset)
   // shipped in commit 369553a, authored 2026-08-16T21:49:41Z. That is a fixed
   // historical fact rather than configuration, so a constant is the right shape
@@ -1437,14 +1453,23 @@
         if (st === 'proposed') {
           // Its OWN clock. See _draftBaselineTs.
           //
-          // NO has_draft/has_diff condition. It used to require one, which
-          // meant a draft that landed with no recordable changeset was never
-          // ingested at all: clearComposing() never ran and the handoff card
-          // timed out claiming the draft never arrived. A draft that exists
-          // is news whether or not its diff is renderable — the surface has
-          // a truthful rendering for the diff-less case (draftNoDiffWhy).
+          // has_draft/has_diff is no longer a REQUIREMENT, only a fast path.
+          // Requiring it meant a draft that landed with no recordable
+          // changeset was never ingested at all: clearComposing() never ran
+          // and the handoff card timed out claiming the draft never arrived.
+          // A draft that exists is news whether or not its diff is
+          // renderable — there is a truthful rendering for the diff-less
+          // case now (draftNoDiffWhy).
           var ct = Date.parse(p.created_at || '');
-          return isFinite(ct) && ct > _draftBaselineTs;
+          if (!(isFinite(ct) && ct > _draftBaselineTs)) return false;
+          if (p.has_draft || p.has_diff) return true;
+          // ...but a draft with NO diff yet is only news once the recorder
+          // has had its chance. The row is inserted before the dry run even
+          // starts, so "no before/after was recorded" is momentarily true of
+          // every draft — and reporting it marks the row seen for this state,
+          // which would bury the diff that lands a second later.
+          var first = _draftFirstSeen[p.id] || (_draftFirstSeen[p.id] = Date.now());
+          return (Date.now() - first) >= DRAFT_SETTLE_MS;
         }
         return false;   // 'applying' is transient; the next sweep sees its outcome
       }).sort(function (a, b) {

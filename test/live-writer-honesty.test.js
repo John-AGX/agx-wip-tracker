@@ -314,6 +314,8 @@ describe('D4 · a diff-less draft still counts as arriving', () => {
     // row was never ingested, clearComposing() never fired, and the handoff
     // card ran its full 180s and concluded the draft never landed.
     LW.startComposing('Move the crew to Tuesday', {});
+    await LW._pollOnce(true);              // first sighting — inside the settle window
+    jest.advanceTimersByTime(21000);       // recorder had its chance
     await LW._pollOnce(true);
 
     const txt = root().textContent;
@@ -323,6 +325,43 @@ describe('D4 · a diff-less draft still counts as arriving', () => {
     // And the backstop must now stay silent: the draft DID land.
     await jest.advanceTimersByTimeAsync(190000);
     expect(root().textContent).not.toContain("hasn't come back");
+  });
+
+  test('a draft still being dry-run is NOT reported as having no diff', async () => {
+    // driveScribeWrite INSERTS the payload row and only then dry-runs it;
+    // persistDraftChangeset runs after that. So every draft is momentarily a
+    // draft with no recorded before/after. Announcing that on sight would be
+    // false AND self-sealing — the announcement marks the row seen for this
+    // state, so the diff that lands a second later would never be shown.
+    const soon = nextTs();
+    let hasDraft = false;
+    global.fetch.mockImplementation((url) => {
+      if (/\/api\/payloads\/\?/.test(String(url))) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ payloads: [{
+          id: 'd4c', status: 'ready', title: 'Add framing to B4',
+          created_at: soon, activity_at: soon, has_draft: hasDraft
+        }] }) });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ payload: {
+        id: 'd4c', status: 'ready', title: 'Add framing to B4', created_at: soon,
+        targets: [{ entity_type: 'estimate', entity_id: 'est_1' }],
+        draft_changeset: hasDraft ? [{
+          entity_type: 'estimate', id: 'est_1',
+          before: { id: 'est_1', title: 'B4', data: { lines: [] } },
+          after: { id: 'est_1', title: 'B4', data: { lines: [{ id: 'l1', description: 'Framing', qty: 4, unitCost: 120 }] } }
+        }] : null
+      } }) });
+    });
+
+    await LW._pollOnce(true);
+    expect(document.getElementById('p86-live-writer')).toBeNull();   // held, not announced
+
+    // The recorder finishes; the very next sweep shows the real diff.
+    hasDraft = true;
+    await LW._pollOnce(true);
+    const txt = root().textContent;
+    expect(txt).toContain('Framing');
+    expect(txt).not.toContain('No before/after was recorded');
   });
 
   test('a diff-less draft is explained, not just announced', async () => {
@@ -338,6 +377,8 @@ describe('D4 · a diff-less draft still counts as arriving', () => {
         created_at: '2026-06-19T14:02:00Z', draft_changeset: null, targets: [{ entity_type: 'estimate', entity_id: 'e1' }]
       } }) });
     });
+    await LW._pollOnce(true);
+    jest.advanceTimersByTime(21000);
     await LW._pollOnce(true);
     // created_at on the DETAIL row is what the copy reasons about, and it is
     // pre-migration — so the provable sentence, not the hedge.
