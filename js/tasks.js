@@ -707,11 +707,15 @@
       var st = document.createElement('style');
       st.id = 'tdPinIwCss';
       st.textContent =
-        '.gm-style-iw-c:has(#tdPinTile){padding:0!important;border-radius:9px!important;overflow:hidden!important;box-shadow:0 3px 12px rgba(0,0,0,.4)!important;}' +
+        '.gm-style-iw-c:has(#tdPinTile){padding:0!important;border-radius:9px!important;overflow:hidden!important;box-shadow:0 3px 12px rgba(0,0,0,.45)!important;}' +
         '.gm-style-iw-c:has(#tdPinTile) .gm-style-iw-d{overflow:hidden!important;padding:0!important;max-height:none!important;}' +
-        '.gm-style-iw-c:has(#tdPinTile) + .gm-style-iw-tc::after{background:var(--card-bg,#141419)!important;}' +
-        '.gm-style-iw-c:has(#tdPinTile) button.gm-ui-hover-effect{background:rgba(0,0,0,.4)!important;border-radius:0 9px 0 8px!important;top:0!important;right:0!important;opacity:1!important;}' +
-        '.gm-style-iw-c:has(#tdPinTile) button.gm-ui-hover-effect span{background:#fff!important;}';
+        // Google's context drops the tile's aspect-ratio; pin it back to the
+        // projects thumbnail's 4:3 so the preview matches the grid tile.
+        '.gm-style-iw-c:has(#tdPinTile) .p86-proj-photo-tile-visual{aspect-ratio:auto!important;height:132px!important;}' +
+        // Collapse Google's header row (holds the X) so no white strip sits
+        // above the image; the X is floated back over the top-right corner.
+        '.gm-style-iw-c:has(#tdPinTile) .gm-style-iw-chr{height:0!important;min-height:0!important;max-height:0!important;padding:0!important;overflow:visible!important;}' +
+        '.gm-style-iw-c:has(#tdPinTile) .gm-style-iw-chr button{position:absolute!important;top:4px!important;right:4px!important;width:24px!important;height:24px!important;min-width:0!important;min-height:0!important;padding:0!important;margin:0!important;background:rgba(255,255,255,.92)!important;border-radius:6px!important;box-shadow:0 1px 3px rgba(0,0,0,.4)!important;opacity:1!important;z-index:3;}';
       document.head.appendChild(st);
     }
     // Match the projects photo thumbnail exactly: the shared .p86-proj-photo-tile
