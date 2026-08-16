@@ -655,29 +655,147 @@
 
     // ── Photos (attachments on entity_type='task'). Upload auto-geotags images;
     // the first geotagged photo seeds the task pin when none is set yet. ──
+    // Photo geo-pins on the mini-map: every task photo carrying a GPS fix
+    // (device or EXIF) drops a small circular thumbnail pin at where it was
+    // shot; clicking it shows a thumbnail + "Expand & annotate" that opens the
+    // shared photo viewer (annotate / tag / fullscreen) on that photo, and the
+    // viewer's onClose refreshes tiles + pins. The task's own location stays a
+    // standard marker so the two read as distinct.
+    var _tdMap = null, _tdMaps = null, _tdPhotoMarkers = [], _tdInfoWin = null;
+    var _photoImgs = null, _taskMarker = null, _taskCenter = null, _mapBuilding = false;
+
+    function hasValidGeoTask(p) {
+      if (!p) return false;
+      var la = Number(p.lat), ln = Number(p.lng);
+      if (!isFinite(la) || !isFinite(ln)) return false;
+      if (la < -90 || la > 90 || ln < -180 || ln > 180) return false;
+      if (la === 0 && ln === 0) return false;
+      return true;
+    }
+    function isImageAtt(a) { return !!(a && (/^image\//.test(a.mime_type || '') || a.thumb_url || a.web_url)); }
+    // Circular clipped-thumbnail marker icon (mirrors the proven projects.js
+    // 'photo' pin: an SVG <image href=thumb_url> — Google Maps renders it fine
+    // for same-origin storage URLs).
+    function photoThumbIcon(maps, photo) {
+      var thumb = photo.thumb_url || photo.web_url || '';
+      if (!thumb) return undefined;
+      var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36">' +
+        '<defs><clipPath id="tdpc"><circle cx="18" cy="18" r="15"/></clipPath>' +
+        '<filter id="tdsh" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="1" stdDeviation="1.5" flood-opacity="0.5"/></filter></defs>' +
+        '<circle cx="18" cy="18" r="17" fill="#fff" filter="url(#tdsh)"/>' +
+        '<image href="' + thumb + '" x="3" y="3" width="30" height="30" clip-path="url(#tdpc)" preserveAspectRatio="xMidYMid slice"/>' +
+        '<circle cx="18" cy="18" r="15" fill="none" stroke="#2f6df6" stroke-width="2"/>' +
+      '</svg>';
+      return { url: 'data:image/svg+xml;utf8,' + encodeURIComponent(svg), anchor: new maps.Point(18, 36), scaledSize: new maps.Size(36, 36) };
+    }
+    // Open the shared viewer positioned on `photo`; onClose refreshes the task
+    // tiles + pins (tags/annotations/deletes done in the viewer flow back).
+    function openPhotoViewer(photo) {
+      var list = Array.isArray(_photoImgs) ? _photoImgs : [];
+      if (window.p86Attachments && window.p86Attachments.openLightbox) {
+        var idx = list.findIndex(function (p) { return p.id === photo.id; });
+        window.p86Attachments.openLightbox(list, Math.max(0, idx), { parentLabel: (task.title || 'Task'), parentSubtitle: '', onClose: function () { loadTaskPhotos(); } });
+      } else if (photo.original_url || photo.web_url) {
+        window.open(photo.original_url || photo.web_url, '_blank', 'noopener');
+      }
+    }
+    function openPhotoInfo(marker, photo) {
+      if (!_tdInfoWin) return;
+      var thumb = photo.thumb_url || photo.web_url || '';
+      var cap = photo.caption || photo.filename || 'Photo';
+      var safeCap = String(cap).replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      var html = '<div style="min-width:180px;max-width:230px;font-family:system-ui,sans-serif;">' +
+        (thumb ? '<img src="' + thumb + '" style="width:100%;max-height:130px;object-fit:cover;border-radius:5px;display:block;margin-bottom:8px;" alt="" />' : '') +
+        '<div style="font-size:12px;font-weight:600;color:#111;margin-bottom:8px;word-break:break-word;">' + safeCap + '</div>' +
+        '<button id="tdPinOpen" style="width:100%;font-size:12px;padding:7px 8px;border-radius:5px;border:1px solid #2f6df6;background:#2f6df6;color:#fff;font-weight:600;cursor:pointer;">Expand &amp; annotate</button>' +
+      '</div>';
+      _tdInfoWin.setContent(html);
+      _tdInfoWin.open(_tdMap, marker);
+      setTimeout(function () {
+        var b = document.getElementById('tdPinOpen');
+        if (b) b.addEventListener('click', function () { _tdInfoWin.close(); openPhotoViewer(photo); });
+      }, 0);
+    }
+    function refreshMarkers() {
+      if (!_tdMap || !_tdMaps) return;
+      var maps = _tdMaps;
+      if (!_tdInfoWin) _tdInfoWin = new maps.InfoWindow();
+      if (_taskCenter && !_taskMarker) {
+        _taskMarker = new maps.Marker({ position: _taskCenter, map: _tdMap, title: 'Task location', zIndex: 999 });
+      }
+      _tdPhotoMarkers.forEach(function (m) { try { m.setMap(null); } catch (e) {} });
+      _tdPhotoMarkers = [];
+      var geo = Array.isArray(_photoImgs) ? _photoImgs.filter(hasValidGeoTask) : [];
+      var bounds = new maps.LatLngBounds();
+      if (_taskCenter) bounds.extend(_taskCenter);
+      geo.forEach(function (photo) {
+        var pos = { lat: Number(photo.lat), lng: Number(photo.lng) };
+        var marker = new maps.Marker({ position: pos, map: _tdMap, icon: photoThumbIcon(maps, photo), title: photo.caption || photo.filename || 'Photo' });
+        bounds.extend(pos);
+        marker.addListener('click', function () { openPhotoInfo(marker, photo); });
+        _tdPhotoMarkers.push(marker);
+      });
+      var ptCount = (_taskCenter ? 1 : 0) + geo.length;
+      if (ptCount > 1) {
+        _tdMap.fitBounds(bounds, 36);
+        maps.event.addListenerOnce(_tdMap, 'idle', function () { if (_tdMap.getZoom() > 18) _tdMap.setZoom(18); });
+      } else if (ptCount === 1) {
+        var only = _taskCenter || { lat: Number(geo[0].lat), lng: Number(geo[0].lng) };
+        _tdMap.setCenter(only); _tdMap.setZoom(17);
+      }
+    }
+    // Build the mini-map once (centered on the task pin, else the first
+    // geotagged photo) then (re)draw markers. Called from both paintViewLoc
+    // (when the pin is known) and loadTaskPhotos (when photos arrive); it is
+    // idempotent and safe to call in either order.
+    function drawTaskMap() {
+      if (!window.p86Maps || typeof window.p86Maps.ready !== 'function') return;
+      var geo = Array.isArray(_photoImgs) ? _photoImgs.filter(hasValidGeoTask) : [];
+      var center = _taskCenter || (geo.length ? { lat: Number(geo[0].lat), lng: Number(geo[0].lng) } : null);
+      if (!center) return;
+      var mapEl = h.modal.querySelector('#tdMiniMap'); if (!mapEl) return;
+      if (_tdMap) { refreshMarkers(); return; }
+      if (_mapBuilding) return;
+      _mapBuilding = true;
+      mapEl.style.display = 'block';
+      window.p86Maps.ready().then(function (maps) {
+        _tdMaps = maps;
+        _tdMap = new maps.Map(mapEl, { center: center, zoom: 17, mapTypeId: maps.MapTypeId.HYBRID, disableDefaultUI: true, gestureHandling: 'cooperative' });
+        _mapBuilding = false;
+        setTimeout(function () { try { maps.event.trigger(_tdMap, 'resize'); } catch (e) {} refreshMarkers(); }, 90);
+      }).catch(function () { _mapBuilding = false; mapEl.style.display = 'none'; });
+    }
     function loadTaskPhotos() {
       var host = h.modal.querySelector('#tdPhotos');
       var vhost = h.modal.querySelector('#tdViewPhotos');
       if (!window.p86Api || !p86Api.attachments) { if (host) host.innerHTML = ''; if (vhost) vhost.innerHTML = ''; return; }
       p86Api.attachments.list('task', task.id).then(function (resp) {
         var atts = (resp && resp.attachments) || [];
+        var imgs = atts.filter(isImageAtt);
+        _photoImgs = imgs;
         var empty = '<span style="font-size:12px;color:var(--text-dim,#888);">No photos yet.</span>';
-        if (host) {
-          host.innerHTML = atts.length ? atts.map(function (a) {
-            var u = a.thumb_url || a.web_url || '';
-            return '<a href="' + escAttr(a.web_url || u) + '" target="_blank" rel="noopener" title="' + escAttr(a.filename || '') + '" ' +
-              'style="display:block;width:54px;height:54px;border-radius:6px;overflow:hidden;border:1px solid var(--border,#333);background:#0f1420;">' +
-              (u ? '<img src="' + escAttr(u) + '" alt="" style="width:100%;height:100%;object-fit:cover;" />' : '') + '</a>';
-          }).join('') : empty;
+        // Tiles open the shared in-app viewer (annotate/tag/fullscreen), not a
+        // raw new tab. A small blue dot marks photos that also appear on the map.
+        function tile(a, i, big) {
+          var u = a.thumb_url || a.web_url || '';
+          var box = big ? 'aspect-ratio:1;border-radius:10px;' : 'width:54px;height:54px;border-radius:6px;';
+          return '<div class="td-photo-tile" data-pi="' + i + '" role="button" tabindex="0" title="' + escAttr(a.filename || '') + '" ' +
+            'style="position:relative;display:block;' + box + 'overflow:hidden;border:1px solid var(--border,#333);background:#0f1420;cursor:pointer;">' +
+            (u ? '<img src="' + escAttr(u) + '" alt="" style="width:100%;height:100%;object-fit:cover;pointer-events:none;" />' : '') +
+            (hasValidGeoTask(a) ? '<span title="On the map" style="position:absolute;right:3px;bottom:3px;width:' + (big ? 13 : 10) + 'px;height:' + (big ? 13 : 10) + 'px;border-radius:50%;background:rgba(47,109,246,.95);border:1.5px solid #fff;box-shadow:0 0 2px rgba(0,0,0,.5);"></span>' : '') +
+            '</div>';
         }
-        if (vhost) {
-          vhost.innerHTML = atts.length ? atts.map(function (a) {
-            var u = a.thumb_url || a.web_url || '';
-            return '<a href="' + escAttr(a.web_url || u) + '" target="_blank" rel="noopener" title="' + escAttr(a.filename || '') + '" ' +
-              'style="display:block;aspect-ratio:1;border-radius:10px;overflow:hidden;border:1px solid var(--border,#333);background:#0f1420;">' +
-              (u ? '<img src="' + escAttr(u) + '" alt="" style="width:100%;height:100%;object-fit:cover;" />' : '') + '</a>';
-          }).join('') : ('<span style="grid-column:1/-1;font-size:12px;color:var(--text-dim,#888);">No photos yet.</span>');
+        function wireTiles(hostEl) {
+          if (!hostEl) return;
+          hostEl.querySelectorAll('[data-pi]').forEach(function (el) {
+            function open() { var p = imgs[+el.getAttribute('data-pi')]; if (p) openPhotoViewer(p); }
+            el.addEventListener('click', open);
+            el.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+          });
         }
+        if (host) { host.innerHTML = imgs.length ? imgs.map(function (a, i) { return tile(a, i, false); }).join('') : empty; wireTiles(host); }
+        if (vhost) { vhost.innerHTML = imgs.length ? imgs.map(function (a, i) { return tile(a, i, true); }).join('') : ('<span style="grid-column:1/-1;font-size:12px;color:var(--text-dim,#888);">No photos yet.</span>'); wireTiles(vhost); }
+        drawTaskMap();
       }).catch(function () { if (host) host.innerHTML = ''; if (vhost) vhost.innerHTML = ''; });
     }
     loadTaskPhotos();
@@ -818,20 +936,13 @@
       if (line) line.textContent = label || 'No location set';
       var href = (eff && window.p86MapLink) ? window.p86MapLink.url({ lat: eff.lat, lng: eff.lng, address: effAddr }) : '';
       if (btn) { if (href) { btn.href = href; btn.style.display = ''; } else { btn.style.display = 'none'; } }
-      // Immersive mini-map centered on the pin (interactive, hybrid/satellite).
-      // The view is visible by default so the map mounts + renders right away.
-      var mapEl = h.modal.querySelector('#tdMiniMap');
-      if (mapEl && eff && window.p86Maps && typeof window.p86Maps.ready === 'function') {
-        mapEl.style.display = 'block';
-        window.p86Maps.ready().then(function (maps) {
-          try {
-            var c = { lat: Number(eff.lat), lng: Number(eff.lng) };
-            var m = new maps.Map(mapEl, { center: c, zoom: 17, mapTypeId: maps.MapTypeId.HYBRID, disableDefaultUI: true, gestureHandling: 'cooperative' });
-            new maps.Marker({ position: c, map: m });
-            setTimeout(function () { try { maps.event.trigger(m, 'resize'); m.setCenter(c); } catch (e) {} }, 90);
-          } catch (e) { mapEl.style.display = 'none'; }
-        }).catch(function () { mapEl.style.display = 'none'; });
-      }
+      // Immersive mini-map (interactive HYBRID/satellite). The task's own
+      // location is a standard marker; every geotagged task photo adds a
+      // circular thumbnail pin (drawn once the photos load). drawTaskMap()
+      // builds the map once and is safe to call from here + loadTaskPhotos,
+      // in either order.
+      _taskCenter = eff ? { lat: Number(eff.lat), lng: Number(eff.lng) } : null;
+      drawTaskMap();
     })();
 
     // Take / Upload in the view reuse the edit form's file input; tiles open the image.
