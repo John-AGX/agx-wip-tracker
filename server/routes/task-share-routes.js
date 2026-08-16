@@ -204,7 +204,10 @@ router.get('/task-share/:token', loadShare, async (req, res) => {
       task: publicTask(req.task),
       photos: photos,
       share: { recipient_name: req.share.recipient_name, needs_name: !req.share.recipient_name, completed: !!req.share.completed_at, expires_at: req.share.expires_at },
-      org_name: orgName
+      org_name: orgName,
+      // Client Maps key (same one the app exposes) so the guest page can show a
+      // static map preview of the pin. Referrer-restricted to our domain.
+      maps_key: process.env.GOOGLE_MAPS_API_KEY || null
     });
   } catch (e) {
     console.error('GET /api/task-share/:token error:', e);

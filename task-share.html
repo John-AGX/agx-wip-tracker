@@ -33,7 +33,7 @@
   .btn.go { background:var(--green); border-color:var(--green); color:#fff; width:100%; padding:15px; font-size:16px; }
   .btn:active { transform:scale(.99); }
   .btn[disabled] { opacity:.55; }
-  .tiles { display:grid; grid-template-columns:repeat(auto-fill,minmax(90px,1fr)); gap:8px; }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fill,minmax(112px,1fr)); gap:8px; }
   .tiles a { display:block; aspect-ratio:1; border-radius:10px; overflow:hidden; border:1px solid var(--line); background:#eef1f5; }
   .tiles img { width:100%; height:100%; object-fit:cover; }
   .row { display:flex; gap:8px; }
@@ -54,7 +54,7 @@
   var token = (location.pathname.split('/').filter(Boolean).pop() || '');
   var app = document.getElementById('app');
   var toastEl = document.getElementById('toast');
-  var state = { task: null, photos: [], share: null, org: 'This company', name: '', busy: false };
+  var state = { task: null, photos: [], share: null, org: 'This company', name: '', mapsKey: null, busy: false };
 
   function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
   function toast(m){ toastEl.textContent=m; toastEl.classList.add('on'); setTimeout(function(){toastEl.classList.remove('on');},1800); }
@@ -72,6 +72,7 @@
       if(!res.ok){ fatal(res.j&&res.j.error || 'This link is no longer valid.'); return; }
       state.task=res.j.task||{}; state.photos=res.j.photos||[]; state.share=res.j.share||{};
       state.org=res.j.org_name||'This company';
+      state.mapsKey=res.j.maps_key||null;
       state.name=state.share.recipient_name||'';
       render();
     }).catch(function(){ fatal('Could not load this task. Check your connection and try again.'); });
@@ -111,6 +112,11 @@
     var loc = locLabel(t);
     if(loc.label || loc.href){
       h+='<div class="card"><div class="sec-h">Location</div>';
+      var mlat=Number(t.lat), mlng=Number(t.lng);
+      if(state.mapsKey && isFinite(mlat) && isFinite(mlng) && !(mlat===0&&mlng===0)){
+        var murl='https://maps.googleapis.com/maps/api/staticmap?center='+mlat+','+mlng+'&zoom=16&scale=2&size=640x280&maptype=hybrid&markers=color:red%7C'+mlat+','+mlng+'&key='+encodeURIComponent(state.mapsKey);
+        h+='<a href="'+esc(loc.href||('https://www.google.com/maps/search/?api=1&query='+mlat+','+mlng))+'" target="_blank" rel="noopener" style="display:block;border-radius:12px;overflow:hidden;border:1px solid var(--line);margin-bottom:10px;"><img src="'+esc(murl)+'" alt="Map of the location" style="width:100%;height:auto;display:block;" onerror="this.parentNode.style.display=\'none\'"></a>';
+      }
       if(loc.label) h+='<div style="font-size:15px;margin-bottom:'+(t.directions?'4px':'10px')+';">'+esc(loc.label)+'</div>';
       if(t.directions) h+='<div class="muted" style="margin-bottom:10px;">'+esc(t.directions)+'</div>';
       if(loc.href) h+='<a class="btn" href="'+esc(loc.href)+'" target="_blank" rel="noopener">Get directions</a>';
