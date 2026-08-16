@@ -3503,11 +3503,11 @@
     <!-- The Live Writer ENGINE — ingest + dedupe + the one differ + the one
          estimate row model, plus surface B (the docked notification). Every
          other surface registers against it. -->
-    <script src="js/live-writer.js?v=8"></script>
+    <script src="js/live-writer.js?v=9"></script>
     <!-- Surface A — the Cowork page. Consumes the engine, so it must load
          AFTER it (live-writer is idempotent-by-existence: a re-load is a
          no-op, so registration has to go through registerSurface). -->
-    <script src="js/cowork.js?v=2"></script>
+    <script src="js/cowork.js?v=3"></script>
     <script src="js/ai-panel.js?v=171"></script>
     <!-- Save-from-chat bridge (Workstream ③). Owns p86SaveCodeBlock /
          p86SaveResponse / p86SaveToPicker, called by inline onclick

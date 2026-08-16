@@ -187,9 +187,63 @@
     // "Convert Estimate … to Job" whose only op was {status:'sold'}. Invisible
     // here, so the title was the whole story — and the title was wrong.
     // A card must describe its OPS, never just its title.
-    ops = scalarFieldOps(before, after).concat(ops);
+    ops = scalarFieldOps(before, after).concat(dataFieldOps(before, after)).concat(ops);
 
     return { entity_type: 'estimate', name: name, ops: ops, impact: impact };
+  }
+
+  // Changes that live INSIDE `data` but are not line items — scope text on a
+  // group, an alternate's name, a settings flag.
+  //
+  // Found live 2026-08-16 on a real applied write: the Scribe set the Base
+  // group's scope-of-work, the dispatcher recorded a perfectly good
+  // apply_changeset, and every surface rendered NOTHING — because
+  // scalarFieldOps skips `data` wholesale (it's nested) and no line moved.
+  // The page then told the user "this write type doesn't record a diff",
+  // which was simply untrue: it recorded one, we just couldn't read it.
+  //
+  // Two levels deep and no further, `lines` excluded (diffEstimate owns
+  // those), values truncated. No amounts — a scope edit is not money, and
+  // inventing one here would put a second number next to the impact delta.
+  function dataFieldOps(before, after) {
+    var bd = before && before.data, ad = after && after.data;
+    if (!bd || !ad || typeof bd !== 'object' || typeof ad !== 'object') return [];
+    var out = [];
+    var SKIP = { lines: 1 };
+    function short(v) {
+      if (v == null || v === '') return '∅';
+      var s = String(v).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      return s.length > 48 ? (s.slice(0, 48) + '…') : (s || '∅');
+    }
+    function cmp(label, bv, av) {
+      if (out.length >= 12) return;
+      if (String(bv == null ? '' : bv) === String(av == null ? '' : av)) return;
+      out.push({ kind: 'edit', label: label, detail: short(bv) + ' → ' + short(av), amount: null });
+    }
+    Object.keys(ad).forEach(function (k) {
+      if (SKIP[k] || out.length >= 12) return;
+      var bv = bd[k], av = ad[k];
+      if (av && typeof av === 'object') {
+        if (!Array.isArray(av)) return;                 // deeper objects: not walked
+        var bArr = Array.isArray(bv) ? bv : [];
+        var bById = Object.create(null);
+        bArr.forEach(function (x, i) { if (x && x.id != null) bById[x.id] = x; else bById['#' + i] = x; });
+        av.forEach(function (item, i) {
+          if (!item || typeof item !== 'object' || out.length >= 12) return;
+          var prev = (item.id != null ? bById[item.id] : bById['#' + i]) || {};
+          var who = item.name || item.title || item.id || (k + ' ' + (i + 1));
+          Object.keys(item).forEach(function (f) {
+            if (f === 'id' || SKIP[f]) return;
+            var iv = item[f];
+            if (iv && typeof iv === 'object') return;    // arrays/objects inside items: not walked
+            cmp(who + ' · ' + f.replace(/_/g, ' '), prev[f], iv);
+          });
+        });
+        return;
+      }
+      cmp(k.replace(/_/g, ' '), bv, av);
+    });
+    return out;
   }
 
   function lineMeta(l) {
@@ -836,13 +890,18 @@
         return;
       }
       if (!entry.groups.length) {
-        // A payload the dispatcher records no before/after for (schedule /
-        // system / assembly / deal_memory have no snapshot table). Say so
-        // rather than render nothing, which reads as "it didn't happen".
+        // Two different silences, and they are NOT the same claim.
+        //   no changeset at all → the dispatcher has no snapshot table for
+        //     this entity type (schedule / system / assembly / deal_memory)
+        //   changeset present, no ops → it recorded a before/after we can't
+        //     break into ops. Saying "doesn't record a diff" here would be
+        //     false, and it was: a live scope write hit exactly this path.
         if (meta.state === 'applied' && meta.payloadId) {
-          showNotice(meta, 'wrote something this view can\'t diff',
+          showNotice(meta, 'wrote something this view can\'t break down',
             (meta.summary || meta.title || 'The change was applied.') +
-            ' — this write type doesn\'t record a before/after yet.');
+            (entry.changeset.length
+              ? ' — the server recorded a before/after for it, but not as changes this view can list.'
+              : ' — this write type doesn\'t record a before/after yet.'));
         }
         return;
       }

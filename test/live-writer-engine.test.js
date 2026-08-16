@@ -80,6 +80,49 @@ describe('diff() — the one differ', () => {
     expect(groups[0].ops.some((o) => /status/.test(o.label) && /draft→sold/.test(o.detail))).toBe(true);
   });
 
+  // FOUND LIVE, 2026-08-16, on applied payload pl_1786915643428_q82xitei.
+  // The Scribe set the Base group's scope-of-work. The dispatcher recorded a
+  // perfectly good apply_changeset (one estimate entry, 17 lines before and
+  // 17 after) — and every Live Writer surface rendered NOTHING, because
+  // scalarFieldOps skips `data` wholesale and no line had moved. The page
+  // then told the user "this write type doesn't record a before/after diff",
+  // which was flatly untrue: it recorded one, we just couldn't read it.
+  test('a scope change nested inside data.groups[] is an op, not a silence', () => {
+    const withScope = (scope) => est([L('l1', 'Framing', 10, 100)]);
+    const before = withScope();
+    const after = withScope();
+    before.data.groups = [{ id: 'g1', name: 'Base', scope: '' }];
+    after.data.groups = [{ id: 'g1', name: 'Base', scope: 'Furnish and install dumpster pad.' }];
+
+    const groups = LW.diff([{ entity_type: 'estimate', id: 'est_1', before, after }]);
+    expect(groups).toHaveLength(1);
+    const op = groups[0].ops.find((o) => /Base/.test(o.label) && /scope/.test(o.label));
+    expect(op).toBeTruthy();
+    expect(op.detail).toContain('Furnish and install dumpster pad.');
+    // A scope edit is not money. Emitting an amount here would put a second
+    // number on screen next to the impact delta.
+    expect(op.amount).toBeNull();
+    expect(groups[0].impact).toBe(0);
+  });
+
+  test('nested-data ops strip html and truncate rather than dumping a document', () => {
+    const before = est([L('l1', 'Framing', 10, 100)]);
+    const after = est([L('l1', 'Framing', 10, 100)]);
+    before.data.groups = [{ id: 'g1', name: 'Base', scope: '' }];
+    after.data.groups = [{ id: 'g1', name: 'Base', scope: '<p>' + 'x'.repeat(400) + '</p>' }];
+    const op = LW.diff([{ entity_type: 'estimate', id: 'est_1', before, after }])[0].ops[0];
+    expect(op.detail).not.toContain('<p>');
+    expect(op.detail.length).toBeLessThan(120);
+  });
+
+  test('line items are NOT double-reported by the nested-data walk', () => {
+    const before = est([L('l1', 'Framing', 10, 100)]);
+    const after = est([L('l1', 'Framing', 12, 100)]);
+    const ops = LW.diff([{ entity_type: 'estimate', id: 'est_1', before, after }])[0].ops;
+    expect(ops).toHaveLength(1);
+    expect(ops[0].lineId).toBe('l1');
+  });
+
   test('non-estimate creates and deletes are framed as such', () => {
     const created = LW.diff([{ entity_type: 'lead', id: 'ld1', before: null, after: { id: 'ld1', title: 'Oak Bridge' } }]);
     expect(created[0].ops[0].kind).toBe('add');

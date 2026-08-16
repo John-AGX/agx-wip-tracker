@@ -471,15 +471,23 @@
       //     there is genuinely no before/after to show.
       // (b) The row says applied but carries no committed changeset.
       // Either way: say so. Rendering nothing reads as "it didn't happen".
+      // THREE different silences, and they are three different claims. Saying
+      // the wrong one is the same defect as showing the wrong diff.
+      var why;
+      if (appliedNoDiff && draft) {
+        why = 'This write applied, but the server didn\'t record a before/after for it, so what you\'d ' +
+              'see here would be the Scribe\'s draft — a simulation that was rolled back, not what ' +
+              'actually landed. It isn\'t shown for that reason.';
+      } else if (cs.length) {
+        why = 'The server did record a before/after for this write, but nothing in it comes out as a ' +
+              'change this view can list. Only what it says it did is shown.';
+      } else {
+        why = 'This kind of write doesn\'t record a before/after diff yet, so there is nothing to show ' +
+              'line by line — only what it says it did.';
+      }
       bodyHtml = '<div class="cw-note">' +
         esc(row.apply_summary || row.summary || 'No line-level detail was recorded for this write.') +
-        '<br><br>' + (appliedNoDiff && draft
-          ? 'This write applied, but the server didn\'t record a before/after for it, so what you\'d ' +
-            'see below would be the Scribe\'s draft — a simulation that was rolled back, not what ' +
-            'actually landed. It isn\'t shown for that reason.'
-          : 'This kind of write doesn\'t record a before/after diff yet, so there is nothing to show ' +
-            'line by line — only what it says it did.') +
-        '</div>';
+        '<br><br>' + why + '</div>';
     } else if (isApplied && cs.length === 1 && cs[0].entity_type === 'estimate' &&
                cs[0].after && cs[0].after.data && Array.isArray(cs[0].after.data.lines) && cs[0].after.data.lines.length) {
       bodyHtml = '<div class="cw-dbody">' + documentHtml(cs[0]) + '</div>';
