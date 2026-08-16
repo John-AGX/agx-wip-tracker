@@ -172,7 +172,7 @@
       fetchComments();
     }
     function close() {
-      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('keydown', onKey, true);
       if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
       // Let the caller refresh their UI to reflect anything the user
       // changed in the viewer — annotations saved, description edited,
@@ -187,15 +187,20 @@
       var tag = e.target && e.target.tagName;
       var typing = tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable);
       if (e.key === 'Escape') {
+        // Topmost overlay owns Escape: stop it reaching a modal behind us
+        // (e.g. the task detail modal that launched the viewer) so Esc returns
+        // to that caller instead of closing it too. The listener is capture-
+        // phase so this runs before the caller's bubble-phase Escape handler.
+        e.stopPropagation();
         if (state.fullscreen) { state.fullscreen = false; render(); return; }
         close();
         return;
       }
       if (typing) return;
-      if (e.key === 'ArrowRight') next();
-      else if (e.key === 'ArrowLeft') prev();
+      if (e.key === 'ArrowRight') { e.stopPropagation(); next(); }
+      else if (e.key === 'ArrowLeft') { e.stopPropagation(); prev(); }
     }
-    document.addEventListener('keydown', onKey);
+    document.addEventListener('keydown', onKey, true);
 
     // Optimistic local patch — caller-supplied attachment array is the
     // source of truth for what the viewer paints, so mutate it in
