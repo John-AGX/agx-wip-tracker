@@ -759,6 +759,15 @@
                         <button class="tab-btn" data-tab="my-tasks" data-p86-icon="check-circle" title="My Tasks"><span class="app-nav-label">My Tasks</span></button>
                         <button class="tab-btn" data-tab="messages" data-p86-icon="envelope" title="Messages"><span class="app-nav-label">Messages</span><span id="navMessagesBadge" style="display:none;margin-left:auto;background:#f87171;color:#fff;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;line-height:1.5;"></span></button>
                         <button class="tab-btn" data-tab="email-hub" data-p86-icon="at-symbol" title="Email — your forwarded inbox, readable by the assistant"><span class="app-nav-label">Email</span></button>
+                        <!-- Cowork — watch what 86 / the Scribe write, approve
+                             drafts, and read the history of what they did.
+                             Capability-gated: the writes ledger shows org-wide
+                             agent activity with signed cost impact, and
+                             watcher-emitted payloads are org-readable
+                             (user_id IS NULL), so it is not a field-crew
+                             surface. Lives with Messages because it is a
+                             COMMUNICATION surface, not a document tool. -->
+                        <button class="tab-btn" data-tab="cowork" data-cap="ESTIMATES_VIEW" data-p86-icon="dna" title="Cowork — watch and approve what your AI coworker writes"><span class="app-nav-label">Cowork</span></button>
                         <button class="tab-btn" data-tab="plans" data-p86-icon="scale" title="Plans &amp; Takeoffs"><span class="app-nav-label">Plans</span></button>
                         <div class="app-nav-parent" data-accordion="myfiles">
                             <button class="tab-btn app-nav-parent-btn" data-tab="my-files" data-p86-icon="folder" title="My Files">
@@ -1447,6 +1456,17 @@
                      SYSTEM_ADMIN so only the platform owner ever sees it. -->
                 <div id="console" class="tab-content">
                     <div id="consolePageHost"></div>
+                </div>
+
+                <!-- COWORK TAB — the Live Writer's home surface (js/cowork.js).
+                     A normal tab in document flow ON PURPOSE: it therefore
+                     claims ZERO z-index and cannot fight the sidebar, the AI
+                     drawer, the Site Plan job page, modals, p86Confirm, entity
+                     cards or the approval card, all of which already stake a
+                     lane between 200 and 2147483600. The docked strip stays as
+                     the off-page notification. -->
+                <div id="cowork" class="tab-content">
+                    <div id="coworkHost"></div>
                 </div>
 
                 <!-- JOBS HUB TAB — cross-job index pages (Purchase Orders /
@@ -3373,7 +3393,7 @@
     <script src="js/entity-card.js?v=9"></script>
     <!-- Lead/estimate context card mounted into #app-sidebar (uses p86EntityCard). -->
     <script src="js/entity-subnav.js?v=3"></script>
-    <script src="js/app.js?v=137"></script>
+    <script src="js/app.js?v=138"></script>
     <script src="js/search-clear.js?v=3"></script>
     <script src="js/sidebar-brand.js?v=2"></script>
     <!-- Guided tours engine + the Help & What's New center (patch
@@ -3467,7 +3487,7 @@
     <script src="js/rich-text.js?v=1"></script>
     <script src="js/estimates.js?v=61"></script>
     <script src="js/proposal.js?v=26"></script>
-    <script src="js/estimate-editor.js?v=93"></script>
+    <script src="js/estimate-editor.js?v=94"></script>
     <!-- Change Order editor — overlay opened from the job detail's
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which
@@ -3479,11 +3499,16 @@
     <!-- Payload inline approval card (used by ai-panel.js). Must load
          BEFORE ai-panel.js so window.PayloadArtifact exists when the
          panel mounts. -->
-    <script src="js/payload-artifact.js?v=9"></script>
-    <!-- Scribe "live writer" surface — visualizes apply_changeset as an
-         animated add/edit/delete diff on p86:payload-applied. -->
-    <script src="js/live-writer.js?v=7"></script>
-    <script src="js/ai-panel.js?v=170"></script>
+    <script src="js/payload-artifact.js?v=10"></script>
+    <!-- The Live Writer ENGINE — ingest + dedupe + the one differ + the one
+         estimate row model, plus surface B (the docked notification). Every
+         other surface registers against it. -->
+    <script src="js/live-writer.js?v=8"></script>
+    <!-- Surface A — the Cowork page. Consumes the engine, so it must load
+         AFTER it (live-writer is idempotent-by-existence: a re-load is a
+         no-op, so registration has to go through registerSurface). -->
+    <script src="js/cowork.js?v=1"></script>
+    <script src="js/ai-panel.js?v=171"></script>
     <!-- Save-from-chat bridge (Workstream ③). Owns p86SaveCodeBlock /
          p86SaveResponse / p86SaveToPicker, called by inline onclick
          handlers in ai-panel.js renderMarkdown / renderBubble. Loads
@@ -3819,6 +3844,9 @@
         <div class="p86-mobile-more-grid" data-more-grid>
           <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('my-tasks')"><span class="p86-mobile-more-icon" data-p86-icon="check-circle"></span><span>My Tasks</span></button>
           <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('messages')"><span class="p86-mobile-more-icon" data-p86-icon="envelope"><span id="moreMessagesBadge" class="p86-mobile-more-badge" style="display:none;"></span></span><span>Messages</span></button>
+          <!-- Cowork rides the More sheet, not a 6th bottom-nav slot: the
+               5-slot rail is settled and 86 already owns the center. -->
+          <button type="button" class="p86-mobile-more-tile" data-cap="ESTIMATES_VIEW" onclick="p86MoreGo('cowork')"><span class="p86-mobile-more-icon" data-p86-icon="dna"></span><span>Cowork</span></button>
           <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('email-hub')"><span class="p86-mobile-more-icon" data-p86-icon="at-symbol"></span><span>Email</span></button>
           <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('projects')"><span class="p86-mobile-more-icon" data-p86-icon="folder"></span><span>Projects</span></button>
           <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('my-files')"><span class="p86-mobile-more-icon" data-p86-icon="folder"></span><span>My Files</span></button>
@@ -3969,7 +3997,16 @@
           sidebar.appendChild(handle);
           try {
             var savedW = parseInt(localStorage.getItem(WKEY), 10);
-            if (savedW >= MINW && savedW <= MAXW) wHost.style.setProperty('--p86-sidebar-w', savedW + 'px');
+            if (savedW >= MINW && savedW <= MAXW) {
+              wHost.style.setProperty('--p86-sidebar-w', savedW + 'px');
+              // Mirror onto <html> too. .app-body is where the var must live
+              // for the sidebar + its edge pill to inherit it, but a
+              // position:fixed child of <body> (the Live Writer document
+              // pane) cannot see a custom property set on .app-body. Without
+              // this mirror that pane's `left` is a magic number against a
+              // 220-480px user-resizable sidebar.
+              document.documentElement.style.setProperty('--p86-sidebar-w', savedW + 'px');
+            }
           } catch (e) { /* private mode */ }
           var dragging = false, startX = 0, startW = 0;
           handle.addEventListener('mousedown', function (e) {
@@ -3986,6 +4023,7 @@
             if (!dragging) return;
             var w = Math.max(MINW, Math.min(MAXW, startW + (e.clientX - startX)));
             wHost.style.setProperty('--p86-sidebar-w', w + 'px');
+            document.documentElement.style.setProperty('--p86-sidebar-w', w + 'px');
           });
           window.addEventListener('mouseup', function () {
             if (!dragging) return;

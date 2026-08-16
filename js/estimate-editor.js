@@ -3527,6 +3527,10 @@
     }
   });
 
+  // Which estimate is open right now, for surfaces that need to know whether
+  // a write they just heard about is the one on screen (Live Writer C).
+  window.p86EstimateEditorCurrentId = function () { return _currentId || null; };
+
   // Called by app.js AFTER a server hydrate has swapped appData.estimates.
   // No-ops unless an agent write is actually pending, so a routine reload
   // never yanks the view out from under someone who is typing.
@@ -3540,6 +3544,16 @@
       renderTotals();
       renderLineItems();
       renderScopePanel();   // re-mounts rich text against the FRESH alternate
+      // Surface C — flash the rows the agent actually touched, NOW that the
+      // repaint has run. Firing this off p86:payload-applied (as the Live
+      // Writer's other surfaces do) would paint against the pre-write DOM:
+      // an added line has no row yet, and this very re-render would wipe
+      // whatever we decorated. It paints only; it never re-renders.
+      try {
+        if (window.p86LiveWriter && window.p86LiveWriter.flashEditorRows) {
+          window.p86LiveWriter.flashEditorRows(_currentId);
+        }
+      } catch (e) { /* decoration must never break the refresh */ }
       return true;
     } catch (e) {
       console.warn('[estimate-editor] post-write refresh failed:', e);

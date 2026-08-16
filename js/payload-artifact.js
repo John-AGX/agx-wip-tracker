@@ -384,7 +384,16 @@
     // Reject is wired now — POST /api/payloads/:id/reject is live.
     if ((payload.status || 'ready') === 'ready') {
       actions.appendChild(btn('Reject', async () => {
-        if (!window.confirm('Reject this payload? It will be marked dismissed.')) return;
+        // window.confirm is a SILENT NO-OP in the installed PWA — it returns
+        // undefined without ever showing a dialog, so this guard used to
+        // swallow every Reject click on John's phone. p86Confirm is the
+        // in-app dialog (app.js owns it) and returns a promise.
+        let ok = true;
+        try {
+          if (window.p86Confirm) ok = await window.p86Confirm('Reject this payload? It will be marked dismissed.');
+          else ok = window.confirm('Reject this payload? It will be marked dismissed.');
+        } catch (_) { ok = false; }
+        if (!ok) return;
         try {
           const r = await fetch('/api/payloads/' + encodeURIComponent(payload.id) + '/reject', {
             method: 'POST',
@@ -395,7 +404,10 @@
           updateStatus(payload.id, 'rejected');
         } catch (err) {
           console.error('[payload-artifact] reject:', err);
-          window.alert('Reject failed: ' + (err && err.message || err));
+          // Same PWA trap as confirm(): alert() never paints in a standalone
+          // display-mode window. Report on the button itself instead.
+          const b = actions.querySelector('button:last-child');
+          if (b) { b.textContent = '✗ Reject failed'; setTimeout(() => { b.textContent = 'Reject'; }, 4500); }
         }
       }, { title: 'Dismiss this payload' }));
     }

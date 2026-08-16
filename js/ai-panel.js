@@ -3671,15 +3671,17 @@ function p86Ask(message, opts) {
           crewEmit('tool', { name: payload.tool_started.name });
           var label = TOOL_VERBS[payload.tool_started.name] || (payload.tool_started.name + '…');
           brainYoga.override(label, true);
-          // Live Writer (Slice 2b): a write tool kicking off = Scribe composing.
-          // Show the "composing…" state now; the diff pane/strip supersedes it
-          // when the write lands (tool_applied render or the poller). No latency
-          // change — this is just the existing SSE event driving a UI affordance.
+          // Live Writer: a write tool kicking off is a REAL moment — the
+          // handoff — so show it. Pass the tool name: scribe_write hands off
+          // to the Scribe (a background draft, usually under a minute), while
+          // emit_payload_file is 86 writing directly with no Scribe involved
+          // at all. One label for both would be false half the time. The
+          // poller clears this the moment the row actually appears.
           try {
             var _tn = payload.tool_started.name;
             if ((_tn === 'scribe_write' || _tn === 'emit_payload_file') &&
                 window.p86LiveWriter && window.p86LiveWriter.startComposing) {
-              window.p86LiveWriter.startComposing('drafting your change');
+              window.p86LiveWriter.startComposing('drafting your change', { tool: _tn });
             }
           } catch (_e) {}
           scrollToBottom();

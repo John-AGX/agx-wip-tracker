@@ -1875,6 +1875,7 @@
             orgmap:     'Job Map',
             orgleadsmap: 'Leads Map',
             jobshub:    'Jobs',
+            cowork:     'Cowork',
             console:    'Command Center'
         };
 
@@ -1987,6 +1988,24 @@
                 }
             }
 
+            // Leaving Cowork: same rescue. Deliberately a THIRD independent
+            // block rather than a shared "is this a dock host?" predicate —
+            // independent blocks compose correctly for N hosts (a non-host
+            // destination trips every block, a host destination trips all but
+            // its own), while a predicate that skips the undock on
+            // host→host would let the console's `ccHost.innerHTML = ''`
+            // teardown run with the singleton panel still inside it. That is
+            // the exact disaster the comment above the console block exists
+            // to prevent.
+            if (tabName !== 'cowork') {
+                if (window.p86AI && typeof window.p86AI.undock === 'function' && window.p86AI.isDocked && window.p86AI.isDocked()) {
+                    try { window.p86AI.undock(); } catch (e) {}
+                }
+                if (window.p86Cowork && window.p86Cowork.onLeave) {
+                    try { window.p86Cowork.onLeave(); } catch (e) {}
+                }
+            }
+
             if (tabName === 'summary') {
                 renderSummaryDashboard();
             } else if (tabName === 'my-files') {
@@ -2055,6 +2074,12 @@
                 // already geocoded, so no warm-up.
                 if (window.p86EntitiesMap && typeof window.p86EntitiesMap.render === 'function') {
                     window.p86EntitiesMap.render('orgLeadsMapHost', { satellite: true, jobsSidebar: true, warmGeocode: false, only: 'lead' });
+                }
+            } else if (tabName === 'cowork') {
+                // Cowork — the Live Writer's home. Docks the singleton 86
+                // panel alongside the ledger + the write being read.
+                if (window.p86Cowork && typeof window.p86Cowork.render === 'function') {
+                    window.p86Cowork.render();
                 }
             } else if (tabName === 'console') {
                 // Project 86 Command Center — platform-owner surface.

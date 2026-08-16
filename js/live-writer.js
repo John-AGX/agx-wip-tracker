@@ -1,31 +1,64 @@
 /* ────────────────────────────────────────────────────────────────────────
- * live-writer.js — the "Scribe live writer" surface (Slice 1).
+ * live-writer.js — the ONE Live Writer engine.
  *
- * Watches for p86:payload-applied and renders what the Scribe just wrote as
- * an animated, color-coded diff in a docked strip — add (green), edit
- * (amber, before→after), delete (red, struck). This is the "coworker shows
- * its work" surface: 86 keeps talking in the chat while this narrates the
- * write landing.
+ * Watches for writes the coworker makes and turns them into an animated,
+ * color-coded diff — add (green), edit (amber, before→after), delete (red,
+ * struck). This is the "coworker shows its work" surface: 86 keeps talking
+ * in the chat while this narrates the write.
  *
- * Slice 1 fires on APPLY (post-commit) and reveals the diff line-by-line for
- * the live feel. The diff is derived from the dispatcher's apply_changeset
- * ({entity_type, id, before, after} full-row snapshots) — for estimates we
- * diff before.data.lines vs after.data.lines to get precise per-line deltas.
- * Nothing here writes; it only visualizes what the server already committed.
+ * ONE ENGINE, THREE SURFACES. This module owns ingest + dedupe + diffing +
+ * the row model, and BROADCASTS to registered surfaces:
+ *   A · Cowork      the center page (js/cowork.js) — the home surface
+ *   B · strip/pane  the docked notification, defined here — the fallback
+ *   C · in-editor   the estimate editor's own row flash
+ * A and B are mutually exclusive (both are "where the write is reported").
+ * C is non-exclusive (the editor can be open while Cowork is not active).
+ * If a surface ever needs its own differ, this design has failed — consume
+ * p86LiveWriter.diff() / .rows() and the per-op `lineId` instead.
  *
- * Promotes later into the center pane (A) / in-editor highlight (C) — same
- * event, richer host. See docs / project_86_scribe_rework memory.
+ * THE CHANGESET IS TWO DIFFERENT THINGS, and the difference is the whole
+ * honesty of this feature:
+ *   draft_changeset  = the Scribe's DRY RUN. A simulation that was rolled
+ *                      back. Its line ids were minted at dispatch and will
+ *                      never exist; its `before` is stale the moment it is
+ *                      taken; a second pending draft on the same estimate
+ *                      isn't in it. Rendered as OPS ("proposes"), never as
+ *                      a document.
+ *   apply_changeset  = what the dispatcher COMMITTED. The record. This one
+ *                      may be rendered as a document.
+ * A surface that renders a simulation as a document is lying, and it is the
+ * same defect class this feature exists to fix.
+ *
+ * Five real states, each backed by a column, none of them a spinner that
+ * never resolves: proposed (status='ready') · applying · applied · failed
+ * (carries apply_error) · rejected.
+ *
+ * Nothing here writes anything except through the SAME apply/reject
+ * endpoints the chat approval card uses.
  * ──────────────────────────────────────────────────────────────────────── */
 (function () {
   'use strict';
   if (window.p86LiveWriter) return;
 
-  var COLLAPSE_MS = 14000;  // auto-collapse to a pill after this idle
+  var COLLAPSE_MS = 14000;  // auto-collapse the notification to a pill
   var STAGGER_MS = 180;     // per-op reveal delay for the "writing" feel
-  var MAX_OPS = 24;         // cap rendered rows (rest summarized)
-  var POLL_MS = 5000;       // how often to sweep for server-side/pre-approved applies
-  var _shown = Object.create(null);  // payload_id → true, so we render each apply once
-  var _baselineTs = 0;      // ignore applies that predate page load
+  var MAX_OPS = 24;         // cap rendered rows in the strip (rest summarized)
+  var MAX_REVEALS = 40;     // cap ANIMATED rows; the rest paint instantly
+  var POLL_MS = 5000;       // how often to sweep for server-side applies
+
+  // Dedupe key is payloadId + ':' + state, NOT payloadId — a payload
+  // legitimately passes through proposed → applying → applied and each
+  // transition is a new fact worth showing. Keyed per-state, the client
+  // event and the poller still can't double-render the SAME transition.
+  var _seen = Object.create(null);
+  var _appliedBaselineTs = 0;   // newest applied_at at page load
+  var _draftBaselineTs = 0;     // page-load stamp for the DRAFT arm
+
+  // _draftBaselineTs is its own clock on purpose. _appliedBaselineTs is
+  // derived from applied_at and advances on every apply; comparing a draft's
+  // created_at against it is a category error — one auto-applied calendar
+  // create would push the baseline past every draft made before it and
+  // blind the draft arm permanently.
 
   // ── tiny helpers ────────────────────────────────────────────────────────
   function esc(s) {
@@ -77,9 +110,26 @@
     if (window.p86LooksLikeSystemId && window.p86LooksLikeSystemId(id)) return et;
     return id || et || 'record';
   }
+  function relTime(iso) {
+    if (!iso) return '';
+    var t = Date.parse(iso);
+    if (!isFinite(t)) return '';
+    var s = Math.max(0, Math.round((Date.now() - t) / 1000));
+    if (s < 45) return 'just now';
+    if (s < 3600) return Math.round(s / 60) + 'm ago';
+    if (s < 86400) return Math.round(s / 3600) + 'h ago';
+    return Math.round(s / 86400) + 'd ago';
+  }
+  function agentLabel(k) {
+    if (!k) return 'Scribe';
+    if (k === 'scribe') return 'Scribe';
+    if (k === 'job' || k === '86') return '86';
+    if (k === 'assistant') return 'Assistant';
+    return String(k);
+  }
 
   // ── diff one changeset entry into a list of ops ──────────────────────────
-  // Returns { entity_type, name, ops:[{kind:'add'|'edit'|'delete', label, detail, amount}], impact }
+  // Returns { entity_type, name, ops:[{kind, label, detail, amount, lineId}], impact }
   function diffEntry(entry) {
     var et = entry && entry.entity_type;
     var before = entry && entry.before;
@@ -103,7 +153,7 @@
       if (!aById[l.id]) {
         var c = lineCost(l);
         if (c != null) impact -= c;
-        ops.push({ kind: 'delete', label: l.description || 'line', detail: lineMeta(l), amount: c });
+        ops.push({ kind: 'delete', label: l.description || 'line', detail: lineMeta(l), amount: c, lineId: l.id });
       }
     });
     // adds — new in after
@@ -112,7 +162,7 @@
       if (!bById[l.id]) {
         var c = lineCost(l);
         if (c != null) impact += c;
-        ops.push({ kind: 'add', label: l.description || 'line', detail: lineMeta(l), amount: c });
+        ops.push({ kind: 'add', label: l.description || 'line', detail: lineMeta(l), amount: c, lineId: l.id });
       }
     });
     // edits — present in both, some field changed
@@ -124,7 +174,7 @@
       if (!changes.length) return;
       var bc = lineCost(b), ac = lineCost(l);
       if (bc != null && ac != null) impact += (ac - bc);
-      ops.push({ kind: 'edit', label: l.description || b.description || 'line', detail: changes.join(' · '), amount: ac });
+      ops.push({ kind: 'edit', label: l.description || b.description || 'line', detail: changes.join(' · '), amount: ac, lineId: l.id });
     });
 
     // Scalar fields too — NOT just lines. diffEstimate used to diff only
@@ -197,14 +247,138 @@
     return { entity_type: et, name: name, ops: ops, impact: 0 };
   }
 
-  // ── DOM ──────────────────────────────────────────────────────────────────
-  var root = null, body = null, collapseTimer = null;
+  // Diff a whole changeset array into groups. PUBLIC (p86LiveWriter.diff) —
+  // this is THE differ; every surface consumes its output.
+  function diffChangeset(cs) {
+    if (!Array.isArray(cs)) return [];
+    return cs.map(diffEntry).filter(function (g) { return g && g.ops && g.ops.length; });
+  }
+
+  // ── the ONE row model for a rendered estimate ────────────────────────────
+  // Extracted out of showEstimatePane, which used to compute isAdd / isEdit /
+  // changes / the unit-cost cell WHILE emitting HTML — so a second, larger
+  // chrome (the Cowork document column) could not exist without a second
+  // copy of that logic. Now the pane and Cowork are two chromes over one
+  // model. PUBLIC as p86LiveWriter.rows().
+  function buildEstimateRows(entry) {
+    var before = entry && entry.before, after = entry && entry.after;
+    var bl = getLines(before), al = getLines(after);
+    var bById = Object.create(null);
+    bl.forEach(function (l) { if (l && l.id != null) bById[l.id] = l; });
+    var aIds = Object.create(null);
+    al.forEach(function (l) { if (l && l.id != null) aIds[l.id] = true; });
+
+    var rows = [];
+    al.forEach(function (l) {
+      if (isHeaderLine(l)) { rows.push({ kind: 'section', label: l.description || '', line: l }); return; }
+      var b = bById[l.id];
+      var isAdd = !b;
+      var changes = b ? lineFieldChanges(b, l) : [];
+      var isEdit = !isAdd && changes.length > 0;
+      rows.push({
+        kind: isAdd ? 'add' : (isEdit ? 'edit' : 'same'),
+        line: l, before: b || null, changes: changes,
+        lineId: l.id, cost: lineCost(l),
+        unitCost: num(l.unitCost),
+        unitCostWas: (isEdit && b && num(b.unitCost) !== num(l.unitCost)) ? num(b.unitCost) : null
+      });
+    });
+    var dels = bl.filter(function (l) { return l && !isHeaderLine(l) && l.id != null && !aIds[l.id]; })
+      .map(function (l) { return { kind: 'delete', line: l, lineId: l.id, cost: lineCost(l) }; });
+
+    return { name: entityName('estimate', entry && entry.id, before, after), rows: rows, deletes: dels };
+  }
+
+  // ── ingest + broadcast (the fan-out seam) ────────────────────────────────
+  // The old renderChangeset conflated "payload ingested" with "payload
+  // rendered by the ONE chosen host": it set _shown[payloadId] and every
+  // later consumer was refused at the gate, which is why the poller had to
+  // do a claim/release dance and why a second surface could not coexist with
+  // the first. Ingest dedupes; broadcast fans out. They are separate now.
+  var _surfaces = [];
+
+  /* registerSurface({ name, order, exclusive, claims(entry), render(entry) }) */
+  function registerSurface(spec) {
+    if (!spec || typeof spec.render !== 'function') return function () {};
+    var s = {
+      name: spec.name || ('surface' + _surfaces.length),
+      order: typeof spec.order === 'number' ? spec.order : 50,
+      exclusive: spec.exclusive !== false,
+      claims: typeof spec.claims === 'function' ? spec.claims : function () { return true; },
+      render: spec.render
+    };
+    _surfaces = _surfaces.filter(function (x) { return x.name !== s.name; }).concat([s]);
+    _surfaces.sort(function (a, b) { return a.order - b.order; });
+    return function unregister() {
+      _surfaces = _surfaces.filter(function (x) { return x !== s; });
+    };
+  }
+
+  function broadcast(entry) {
+    var reported = false;
+    for (var i = 0; i < _surfaces.length; i++) {
+      var s = _surfaces[i];
+      if (s.exclusive && reported) continue;
+      var ok = false;
+      try { ok = !!s.claims(entry); } catch (e) { ok = false; }
+      if (!ok) continue;
+      try { s.render(entry); if (s.exclusive) reported = true; }
+      catch (e) { console.warn('[live-writer] surface "' + s.name + '" failed:', e); }
+    }
+    return reported;
+  }
+
+  /* ingest(changeset, meta) → the broadcast entry, or null when deduped.
+   * meta: { payloadId, state, title, summary, emittingAgentKey, createdAt,
+   *         appliedAt, applyError, isDraft } */
+  function ingest(cs, meta) {
+    meta = meta || {};
+    var state = meta.state || 'applied';
+    var key = (meta.payloadId || ('anon' + Date.now())) + ':' + state;
+    if (meta.payloadId && _seen[key]) return null;
+    if (meta.payloadId) _seen[key] = true;
+
+    var groups = diffChangeset(cs);
+    var first = (Array.isArray(cs) && cs.length === 1) ? cs[0] : null;
+    var entry = {
+      changeset: Array.isArray(cs) ? cs : [],
+      groups: groups,
+      meta: {
+        payloadId: meta.payloadId || null,
+        state: state,
+        // isDraft marks a changeset that came from a ROLLED-BACK dry run.
+        // Surfaces must render it as ops, never as a document.
+        isDraft: state === 'proposed' || !!meta.isDraft,
+        title: meta.title || '',
+        summary: meta.summary || '',
+        emittingAgentKey: meta.emittingAgentKey || '',
+        createdAt: meta.createdAt || null,
+        appliedAt: meta.appliedAt || null,
+        applyError: meta.applyError || null,
+        entityType: first ? first.entity_type : (groups.length === 1 ? groups[0].entity_type : null),
+        entityId: first ? first.id : null,
+        estimateId: (first && first.entity_type === 'estimate') ? first.id : null
+      },
+      // lazily-built row model — only the surfaces that need it pay for it
+      rows: function () { return first ? buildEstimateRows(first) : null; }
+    };
+    // A state change supersedes any "handed to the Scribe" placeholder.
+    clearComposing();
+    if (!broadcast(entry)) return entry;   // nobody claimed it; still a valid entry
+    return entry;
+  }
+
+  // ── DOM (surface B — the notification) ───────────────────────────────────
+  var root = null, collapseTimer = null;
 
   function ensureStyle() {
     if (document.getElementById('p86lw-style')) return;
     var css = [
+      // z-index: 940 / 930 sits ABOVE the Site Plan job page (500) and the AI
+      // drawer (200) and BELOW .modal (1000) and p86Confirm (1100). The old
+      // 99998/99997 painted the diff on top of any open modal.
       '#p86-live-writer{position:fixed;right:16px;bottom:16px;width:390px;max-width:calc(100vw - 32px);',
-      'z-index:99998;font-family:inherit;color:#e7e7ea;pointer-events:none;}',
+      'z-index:940;font-family:inherit;color:#e7e7ea;pointer-events:none;}',
       '#p86-live-writer .p86lw-card{pointer-events:auto;background:#16161c;border:1px solid rgba(255,255,255,0.10);',
       'border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,0.45);overflow:hidden;',
       'transform:translateY(8px);opacity:0;transition:transform .22s ease,opacity .22s ease;}',
@@ -245,6 +419,7 @@
       '.p86lw-view{background:none;border:1px solid rgba(255,255,255,0.16);color:#c9c9d2;border-radius:7px;',
       'padding:3px 9px;font-size:11px;cursor:pointer;}',
       '.p86lw-view:hover{border-color:rgba(255,255,255,0.4);color:#fff;}',
+      '.p86lw-err{padding:11px 13px;font-size:12px;line-height:1.5;color:#f0a9a8;}',
       // light mode
       'body.light-mode #p86-live-writer{color:#1a1a1f;}',
       'body.light-mode #p86-live-writer .p86lw-card,body.light-mode #p86-live-writer .p86lw-pill{background:#fff;border-color:rgba(0,0,0,0.10);box-shadow:0 12px 40px rgba(0,0,0,0.14);}',
@@ -253,9 +428,17 @@
       'body.light-mode .p86lw-amt{color:#44444a;}',
       'body.light-mode .p86lw-del .l1{color:#a33;}',
       'body.light-mode .p86lw-view{border-color:rgba(0,0,0,0.18);color:#44444a;}',
-      // ── Slice 2: the "document" pane (estimate rendered + rows highlighted) ──
-      '#p86-live-pane{position:fixed;left:300px;bottom:24px;width:560px;max-width:calc(100vw - 320px);',
-      'max-height:82vh;z-index:99997;font-family:inherit;color:#e7e7ea;pointer-events:none;}',
+      // Light twins for the op fills: the dark rgba washes read as muddy
+      // smears on white, and the +/~/− glyph colors lose contrast.
+      'body.light-mode .p86lw-add{background:rgba(29,158,117,0.10);} body.light-mode .p86lw-add .p86lw-i{color:#0f6e56;}',
+      'body.light-mode .p86lw-edit{background:rgba(186,117,23,0.12);} body.light-mode .p86lw-edit .p86lw-i{color:#8a5c0d;}',
+      'body.light-mode .p86lw-del{background:rgba(226,75,74,0.10);} body.light-mode .p86lw-del .p86lw-i{color:#a33;}',
+      'body.light-mode .p86lw-err{color:#a33;}',
+      // ── the estimate "document" pane (applied writes only) ──
+      // left tracks the user-resizable sidebar instead of a magic 300px.
+      '#p86-live-pane{position:fixed;left:calc(var(--p86-sidebar-w, 290px) + 10px);bottom:24px;width:560px;',
+      'max-width:calc(100vw - var(--p86-sidebar-w, 290px) - 30px);',
+      'max-height:82vh;z-index:930;font-family:inherit;color:#e7e7ea;pointer-events:none;}',
       '#p86-live-pane .p86lp-card{pointer-events:auto;display:flex;flex-direction:column;max-height:82vh;',
       'background:#16161c;border:1px solid rgba(255,255,255,0.10);border-radius:16px;',
       'box-shadow:0 18px 60px rgba(0,0,0,0.5);overflow:hidden;transform:translateY(10px);opacity:0;',
@@ -290,7 +473,29 @@
       'body.light-mode .p86lp-head,body.light-mode .p86lp-foot{border-color:rgba(0,0,0,0.08);}',
       'body.light-mode .p86lp-sub,body.light-mode .p86lp-sec,body.light-mode .p86lp-foot{color:#6b6b76;}',
       'body.light-mode .p86lp-row{color:#33333a;} body.light-mode .p86lp-row.add{color:#0f6e56;}',
-      '@media (max-width:900px){#p86-live-pane{left:8px;right:8px;bottom:8px;width:auto;max-width:none;}}'
+      // #e88 struck text on white is unreadable; so is the "was" grey.
+      'body.light-mode .p86lp-del{background:rgba(226,75,74,0.10);color:#a33;}',
+      'body.light-mode .p86lp-was{color:#77777f;}',
+      'body.light-mode .p86lp-tag.tadd{background:#0f6e56;color:#eafaf4;}',
+      'body.light-mode .p86lp-tag.tedit{background:#8a5c0d;color:#fff6e6;}',
+      // ── surface C: the in-editor row flash ──
+      // Animates box-shadow + outline, NOT background: estimate rows carry
+      // inline background styles in places, and inline beats all CSS.
+      '@keyframes p86lwFlashAdd{0%{box-shadow:inset 0 0 0 999px rgba(29,158,117,.28);outline-color:#1d9e75;}',
+      '100%{box-shadow:inset 0 0 0 999px rgba(29,158,117,0);outline-color:transparent;}}',
+      '@keyframes p86lwFlashEdit{0%{box-shadow:inset 0 0 0 999px rgba(217,138,31,.28);outline-color:#d98a1f;}',
+      '100%{box-shadow:inset 0 0 0 999px rgba(217,138,31,0);outline-color:transparent;}}',
+      '.p86lw-flash-add{outline:2px solid transparent;outline-offset:-2px;animation:p86lwFlashAdd 1.6s ease-out 1;}',
+      '.p86lw-flash-edit{outline:2px solid transparent;outline-offset:-2px;animation:p86lwFlashEdit 1.6s ease-out 1;}',
+      // ── mobile ──
+      // The strip had NO mobile rule and buried the 5-slot bottom nav; the
+      // pane's rule already existed at 900px so it is AMENDED here, not
+      // supplemented, or it keeps winning at the width that matters.
+      '@media (max-width:900px){#p86-live-pane{left:8px;right:8px;bottom:8px;width:auto;max-width:none;}}',
+      '@media (max-width:768px) and (pointer:coarse){',
+      '#p86-live-writer{right:8px;left:8px;width:auto;bottom:calc(78px + env(safe-area-inset-bottom,0px));}',
+      '#p86-live-pane{bottom:calc(78px + env(safe-area-inset-bottom,0px));max-height:60vh;}',
+      '#p86-live-pane .p86lp-card{max-height:60vh;}}'
     ].join('');
     var st = document.createElement('style');
     st.id = 'p86lw-style';
@@ -323,8 +528,38 @@
 
   var ICON = { add: '+', edit: '~', delete: '−' };
 
-  // Render a set of diffed groups. `writing` shows the pulsing "writing" head
-  // briefly, then settles to the ✓ "wrote" state.
+  // Per-state chrome for the notification header. Every one of these is a
+  // real row state, not a mood: proposed = status 'ready' with a persisted
+  // draft diff, applying = the claim is held, applied = committed, failed =
+  // apply_error is set.
+  function stateChrome(meta) {
+    var who = agentLabel(meta && meta.emittingAgentKey);
+    switch (meta && meta.state) {
+      case 'proposed': return { verb: 'drafted — needs approval', who: who, dot: '#d98a1f', pulse: false, settle: null };
+      case 'applying': return { verb: 'is applying…', who: who, dot: '#378add', pulse: true, settle: null };
+      case 'failed':   return { verb: "couldn't apply that", who: who, dot: '#e24b4a', pulse: false, settle: null };
+      case 'rejected': return { verb: 'draft dismissed', who: who, dot: '#9a9aa5', pulse: false, settle: null };
+      default:         return { verb: 'is writing', who: who, dot: '#378add', pulse: true, settle: 'wrote' };
+    }
+  }
+
+  function openInCoworkBtn(meta) {
+    if (!meta || !meta.payloadId) return '';
+    return '<button class="p86lw-view" data-cowork="' + esc(meta.payloadId) + '">Open in Cowork</button>';
+  }
+  function wireCoworkBtn(card) {
+    var ob = card.querySelector('.p86lw-view[data-cowork]');
+    if (!ob) return;
+    ob.addEventListener('click', function () {
+      var id = ob.getAttribute('data-cowork');
+      try {
+        if (window.p86Cowork && window.p86Cowork.open) window.p86Cowork.open(id);
+        else if (window.switchTab) window.switchTab('cowork');
+      } catch (e) { console.warn('[live-writer] open in Cowork failed', e); }
+    });
+  }
+
+  // Render a set of diffed groups into the compact strip.
   function show(groups, meta) {
     ensureRoot();
     var totalOps = groups.reduce(function (n, g) { return n + g.ops.length; }, 0);
@@ -337,8 +572,7 @@
 
     var card = root.querySelector('.p86lw-card');
     var name = (groups.length === 1) ? groups[0].name : (groups.length + ' records');
-    var openBtn = (groups.length === 1 && groups[0].entity_type === 'estimate' && meta && meta.estimateId)
-      ? '<button class="p86lw-view" data-open="' + esc(meta.estimateId) + '">Open</button>' : '';
+    var chrome = stateChrome(meta);
 
     var rows = '';
     var shownOps = 0;
@@ -363,6 +597,8 @@
     if (counts.add) summ.push('+' + counts.add + ' added');
     if (counts.edit) summ.push(counts.edit + ' edited');
     if (counts.delete) summ.push('−' + counts.delete + ' removed');
+    // A proposal has not happened yet, so it must not be phrased as if it had.
+    if (meta && meta.state === 'proposed') summ = summ.map(function (s) { return s.replace(' added', ' to add').replace(' edited', ' to edit').replace(' removed', ' to remove'); });
 
     var impHtml = '';
     if (netImpact) {
@@ -372,47 +608,69 @@
 
     card.innerHTML =
       '<div class="p86lw-head">' +
-        '<span class="p86lw-av">S</span>' +
-        '<div><div class="p86lw-ttl">Scribe <span class="p86lw-verb">is writing</span></div>' +
+        '<span class="p86lw-av">' + esc(chrome.who.charAt(0)) + '</span>' +
+        '<div><div class="p86lw-ttl">' + esc(chrome.who) + ' <span class="p86lw-verb">' + esc(chrome.verb) + '</span></div>' +
         '<div class="p86lw-sub">' + esc(name) + '</div></div>' +
-        '<span class="p86lw-dot" title="writing"></span>' +
+        '<span class="p86lw-dot" style="background:' + chrome.dot + (chrome.pulse ? '' : ';animation:none') + '"></span>' +
         '<button class="p86lw-x" title="Dismiss">×</button>' +
       '</div>' +
       '<div class="p86lw-body">' + rows + '</div>' +
-      '<div class="p86lw-foot">' + esc(summ.join(' · ')) + openBtn + impHtml + '</div>';
+      '<div class="p86lw-foot">' + esc(summ.join(' · ')) + openInCoworkBtn(meta) + impHtml + '</div>';
 
     card.querySelector('.p86lw-x').addEventListener('click', dismiss);
-    var ob = card.querySelector('.p86lw-view[data-open]');
-    if (ob) ob.addEventListener('click', function () {
-      var id = ob.getAttribute('data-open');
-      try {
-        if (window.openEstimate) window.openEstimate(id);
-        else if (window.router && window.router.navigate) window.router.navigate('estimate/' + id);
-      } catch (e) { console.warn('[live-writer] open failed', e); }
-    });
+    wireCoworkBtn(card);
 
     requestAnimationFrame(function () { card.classList.add('p86lw-in'); });
 
-    // staggered reveal → the "writing" feel, then settle to "wrote ✓"
+    // staggered reveal → the "writing" feel, then settle. Capped: past
+    // MAX_REVEALS the remaining rows paint at once instead of animating for
+    // longer than the card's own lifetime.
     var opEls = card.querySelectorAll('.p86lw-op');
     var i = 0;
     (function reveal() {
+      if (i >= MAX_REVEALS) {
+        for (var k = i; k < opEls.length; k++) opEls[k].classList.add('p86lw-shown');
+        i = opEls.length;
+      }
       if (i < opEls.length) {
         opEls[i].classList.add('p86lw-shown');
         i++;
         setTimeout(reveal, STAGGER_MS);
       } else {
-        var verb = card.querySelector('.p86lw-verb');
         var dot = card.querySelector('.p86lw-head .p86lw-dot');
-        if (verb) verb.textContent = 'wrote';
-        if (dot) { dot.style.animation = 'none'; dot.style.background = '#1d9e75'; }
+        if (chrome.settle) {
+          var verb = card.querySelector('.p86lw-verb');
+          if (verb) verb.textContent = chrome.settle;
+          if (dot) { dot.style.animation = 'none'; dot.style.background = '#1d9e75'; }
+        }
         armCollapse();
       }
     })();
 
     // keep a short pill label reflecting the last write
     var pill = root.querySelector('.p86lw-pilltext');
-    if (pill) pill.textContent = 'Scribe wrote · ' + summ.join(', ');
+    if (pill) pill.textContent = chrome.who + ' ' + (chrome.settle || chrome.verb) + ' · ' + summ.join(', ');
+  }
+
+  // A write that FAILED, or a payload whose entity type records no diff.
+  // Both are real outcomes that used to render as silence.
+  function showNotice(meta, headline, bodyText) {
+    ensureRoot();
+    root.classList.remove('p86lw-collapsed');
+    var chrome = stateChrome(meta);
+    var card = root.querySelector('.p86lw-card');
+    card.innerHTML =
+      '<div class="p86lw-head"><span class="p86lw-av">' + esc(chrome.who.charAt(0)) + '</span>' +
+      '<div><div class="p86lw-ttl">' + esc(chrome.who) + ' <span class="p86lw-verb">' + esc(headline) + '</span></div>' +
+      '<div class="p86lw-sub">' + esc(meta.title || '') + '</div></div>' +
+      '<span class="p86lw-dot" style="background:' + chrome.dot + ';animation:none"></span>' +
+      '<button class="p86lw-x" title="Dismiss">×</button></div>' +
+      '<div class="p86lw-err">' + esc(bodyText) + '</div>' +
+      '<div class="p86lw-foot">' + openInCoworkBtn(meta) + '</div>';
+    card.querySelector('.p86lw-x').addEventListener('click', dismiss);
+    wireCoworkBtn(card);
+    requestAnimationFrame(function () { card.classList.add('p86lw-in'); });
+    armCollapse();
   }
 
   function dismiss() {
@@ -421,39 +679,58 @@
     dismissPane();
   }
 
-  // ── Slice 2b: "Scribe is composing…" pending state ───────────────────────
-  // Fires on the existing tool_started SSE event (a scribe/write tool kicking
-  // off) — BEFORE the draft lands — so you watch it happen while 86 keeps
-  // talking. No server/turn change, no latency: the real diff pane/strip
-  // supersedes this the moment the write commits (clearComposing in render).
+  // ── the handoff placeholder ──────────────────────────────────────────────
+  // Fires on the existing tool_started SSE event. That IS a real moment —
+  // 86 handing the write off — so the card says exactly that and nothing
+  // more. It does NOT claim the Scribe is "composing", because on the
+  // scribe_write path the tool returns in milliseconds and the Scribe does
+  // not even start for a moment yet; and on 86's own emit_payload_file there
+  // is no Scribe and no handoff at all.
+  //
+  // The timer is a FAILURE BACKSTOP, not the thing that ends the card: the
+  // draft usually lands after the old 45s window, which is why the card used
+  // to delete itself just before the change existed. The poller's draft arm
+  // clears it when the row actually appears.
   var composingTimer = null, _composing = false;
-  function startComposing(label) {
+  function startComposing(label, opts) {
     ensureRoot();
+    opts = opts || {};
     _composing = true;
+    var viaScribe = opts.tool !== 'emit_payload_file';
     root.classList.remove('p86lw-collapsed');
     var card = root.querySelector('.p86lw-card');
     card.innerHTML =
-      '<div class="p86lw-head"><span class="p86lw-av">S</span>' +
-      '<div><div class="p86lw-ttl">Scribe <span style="color:#378add">is composing…</span></div>' +
-      '<div class="p86lw-sub">' + esc(label || 'drafting your change') + '</div></div>' +
+      '<div class="p86lw-head"><span class="p86lw-av">' + (viaScribe ? 'S' : '8') + '</span>' +
+      '<div><div class="p86lw-ttl">' +
+      (viaScribe ? 'Handed to the Scribe <span style="color:#378add">— drafting</span>'
+                 : '86 <span style="color:#378add">is writing the change</span>') +
+      '</div><div class="p86lw-sub">' + esc(label || 'drafting your change') + '</div></div>' +
       '<span class="p86lw-dot"></span><button class="p86lw-x" title="Dismiss">×</button></div>' +
       '<div class="p86lw-body" style="padding:12px 12px 14px;color:#9a9aa5;font-size:12px;line-height:1.5;">' +
-      'Drafting the change — the diff appears here the moment it lands.</div>';
+      (viaScribe
+        ? 'The Scribe drafts in the background — usually under a minute. The diff appears here the moment the draft lands.'
+        : 'The diff appears here the moment the change lands.') +
+      '</div>';
     card.querySelector('.p86lw-x').addEventListener('click', dismiss);
     requestAnimationFrame(function () { card.classList.add('p86lw-in'); });
     if (composingTimer) clearTimeout(composingTimer);
-    composingTimer = setTimeout(function () { if (_composing) dismiss(); }, 45000);
+    composingTimer = setTimeout(function () {
+      if (!_composing) return;
+      _composing = false;
+      showNotice({ state: 'failed', emittingAgentKey: viaScribe ? 'scribe' : 'job', title: label || '' },
+        "hasn't come back",
+        'No draft has landed in three minutes. It may still be running — check Pending approvals above the chat box, or the Cowork page.');
+    }, 180000);
   }
   function clearComposing() {
     if (composingTimer) { clearTimeout(composingTimer); composingTimer = null; }
     if (_composing) { _composing = false; if (root) { root.remove(); root = null; } }
   }
 
-  // ── event wiring ─────────────────────────────────────────────────────────
-  // ── Slice 2: the estimate "document" pane ────────────────────────────────
-  // Renders the whole estimate (from the after-snapshot) read-only and
-  // highlights the changed rows IN PLACE — the "watch Scribe work on the doc"
-  // surface. Deletes (absent from `after`) are listed under a Removed group.
+  // ── the estimate "document" pane (surface B, applied writes only) ────────
+  // Renders the whole estimate read-only from the COMMITTED after-snapshot
+  // and highlights the changed rows in place. Never used for a draft: a
+  // dry-run `after` is a document that has never existed.
   var paneRoot = null, paneTimer = null;
   function ensurePane() {
     ensureStyle();
@@ -467,85 +744,74 @@
     if (paneTimer) clearTimeout(paneTimer);
     if (paneRoot) { paneRoot.remove(); paneRoot = null; }
   }
-  function showEstimatePane(entry, diff) {
+  function showEstimatePane(entry) {
     ensurePane();
-    var before = entry.before, after = entry.after;
-    var bl = getLines(before), al = getLines(after);
-    var bById = Object.create(null);
-    bl.forEach(function (l) { if (l && l.id != null) bById[l.id] = l; });
-    var aIds = Object.create(null);
-    al.forEach(function (l) { if (l && l.id != null) aIds[l.id] = true; });
-    var name = entityName('estimate', entry.id, before, after);
+    var cs0 = entry.changeset[0];
+    var model = buildEstimateRows(cs0);
+    var diff = entry.groups[0] || { ops: [], impact: 0 };
+    var meta = entry.meta;
 
     var rows = '';
-    al.forEach(function (l) {
-      if (isHeaderLine(l)) { rows += '<div class="p86lp-sec">' + esc(l.description || '') + '</div>'; return; }
-      var b = bById[l.id];
-      var isAdd = !b;
-      var changes = (b && !isAdd) ? lineFieldChanges(b, l) : [];
-      var isEdit = !isAdd && changes.length > 0;
-      var cls = isAdd ? 'add' : (isEdit ? 'edit' : '');
-      var chg = (isAdd || isEdit) ? ' chg' : '';
-      var tag = isAdd ? '<span class="p86lp-tag tadd">new</span>'
-                      : (isEdit ? '<span class="p86lp-tag tedit">edited</span>' : '');
-      var c = lineCost(l);
-      var ucCell = (num(l.unitCost) == null) ? '' : usd(num(l.unitCost));
-      if (isEdit && b && num(b.unitCost) !== num(l.unitCost)) {
-        ucCell = '<span class="p86lp-was">' + usd(num(b.unitCost)) + '</span>' + usd(num(l.unitCost));
+    model.rows.forEach(function (r) {
+      if (r.kind === 'section') { rows += '<div class="p86lp-sec">' + esc(r.label) + '</div>'; return; }
+      var cls = (r.kind === 'add') ? 'add' : (r.kind === 'edit' ? 'edit' : '');
+      var chg = (r.kind === 'add' || r.kind === 'edit') ? ' chg' : '';
+      var tag = (r.kind === 'add') ? '<span class="p86lp-tag tadd">new</span>'
+              : (r.kind === 'edit' ? '<span class="p86lp-tag tedit">edited</span>' : '');
+      var ucCell = (r.unitCost == null) ? '' : usd(r.unitCost);
+      if (r.unitCostWas != null) {
+        ucCell = '<span class="p86lp-was">' + usd(r.unitCostWas) + '</span>' + usd(r.unitCost);
       }
       rows += '<div class="p86lp-row ' + cls + chg + '">' +
-        '<span class="r-d">' + esc(l.description || '') + tag + '</span>' +
-        '<span>' + (l.qty == null || l.qty === '' ? '' : esc(l.qty)) + '</span>' +
-        '<span>' + esc(l.unit || '') + '</span>' +
+        '<span class="r-d">' + esc(r.line.description || '') + tag + '</span>' +
+        '<span>' + (r.line.qty == null || r.line.qty === '' ? '' : esc(r.line.qty)) + '</span>' +
+        '<span>' + esc(r.line.unit || '') + '</span>' +
         '<span>' + ucCell + '</span>' +
-        '<span>' + (c != null ? usd(c) : '') + '</span>' +
+        '<span>' + (r.cost != null ? usd(r.cost) : '') + '</span>' +
         '</div>';
     });
-    var dels = bl.filter(function (l) { return l && !isHeaderLine(l) && l.id != null && !aIds[l.id]; });
-    if (dels.length) {
+    if (model.deletes.length) {
       rows += '<div class="p86lp-sec">Removed</div>';
-      dels.forEach(function (l) {
+      model.deletes.forEach(function (d) {
         rows += '<div class="p86lp-del chg"><span style="font-weight:700">−</span>' +
-          '<span class="r-d">' + esc(l.description || 'line') + '</span>' +
+          '<span class="r-d">' + esc(d.line.description || 'line') + '</span>' +
           '<span style="margin-left:auto;font-variant-numeric:tabular-nums">' +
-          (lineCost(l) != null ? usd(lineCost(l)) : '') + '</span></div>';
+          (d.cost != null ? usd(d.cost) : '') + '</span></div>';
       });
     }
 
+    var nAdd = 0, nEdit = 0;
+    model.rows.forEach(function (r) { if (r.kind === 'add') nAdd++; else if (r.kind === 'edit') nEdit++; });
     var summ = [];
-    var nAdd = diff.ops.filter(function (o) { return o.kind === 'add'; }).length;
-    var nEdit = diff.ops.filter(function (o) { return o.kind === 'edit'; }).length;
     if (nAdd) summ.push('+' + nAdd + ' added');
     if (nEdit) summ.push(nEdit + ' edited');
-    if (dels.length) summ.push('−' + dels.length + ' removed');
+    if (model.deletes.length) summ.push('−' + model.deletes.length + ' removed');
     var imp = diff.impact || 0;
     var impHtml = imp ? '<span style="margin-left:auto;font-weight:600;color:' +
       (imp > 0 ? '#1d9e75' : '#e24b4a') + '">' + (imp > 0 ? '+' : '−') + usd(Math.abs(imp)) + '</span>' : '';
 
+    var who = agentLabel(meta.emittingAgentKey);
     var card = paneRoot.querySelector('.p86lp-card');
     card.innerHTML =
-      '<div class="p86lp-head"><span class="p86lp-av">S</span>' +
-      '<div><div class="p86lp-ttl">Scribe <span class="p86lp-verb">is writing</span></div>' +
-      '<div class="p86lp-sub">' + esc(name) + '</div></div>' +
+      '<div class="p86lp-head"><span class="p86lp-av">' + esc(who.charAt(0)) + '</span>' +
+      '<div><div class="p86lp-ttl">' + esc(who) + ' <span class="p86lp-verb">is writing</span></div>' +
+      '<div class="p86lp-sub">' + esc(model.name) + '</div></div>' +
       '<span class="p86lw-dot" style="margin-left:4px"></span>' +
       '<button class="p86lp-x" title="Dismiss">×</button></div>' +
       '<div class="p86lp-body">' + rows + '</div>' +
-      '<div class="p86lp-foot">' + esc(summ.join(' · ')) +
-      ' <button class="p86lw-view" data-open="' + esc(entry.id) + '">Open estimate</button>' + impHtml + '</div>';
+      '<div class="p86lp-foot">' + esc(summ.join(' · ')) + ' ' + openInCoworkBtn(meta) + impHtml + '</div>';
 
     card.querySelector('.p86lp-x').addEventListener('click', dismissPane);
-    var ob = card.querySelector('.p86lw-view[data-open]');
-    if (ob) ob.addEventListener('click', function () {
-      try {
-        if (window.openEstimate) window.openEstimate(entry.id);
-        else if (window.router && window.router.navigate) window.router.navigate('estimate/' + entry.id);
-      } catch (e) { console.warn('[live-writer] open failed', e); }
-    });
+    wireCoworkBtn(card);
 
     requestAnimationFrame(function () { card.classList.add('in'); });
     var chgEls = card.querySelectorAll('.chg');
     var i = 0;
     (function reveal() {
+      if (i >= MAX_REVEALS) {
+        for (var k = i; k < chgEls.length; k++) chgEls[k].classList.add('on');
+        i = chgEls.length;
+      }
       if (i < chgEls.length) { chgEls[i].classList.add('on'); i++; setTimeout(reveal, STAGGER_MS); }
       else {
         var v = card.querySelector('.p86lp-verb'); if (v) v.textContent = 'wrote';
@@ -556,31 +822,116 @@
     })();
   }
 
-  // Render a changeset array; returns true if anything was shown. Dedupes by
-  // payload id so the client event and the poller can't double-render one apply.
-  function renderChangeset(cs, payloadId) {
-    if (payloadId && _shown[payloadId]) return false;
-    if (!Array.isArray(cs) || !cs.length) return false;
-    clearComposing(); // the real diff supersedes any "composing…" pending state
-    var groups = cs.map(diffEntry).filter(function (g) { return g && g.ops && g.ops.length; });
-    if (!groups.length) return false;
-    if (payloadId) _shown[payloadId] = true;
-    // A single estimate write gets the rich document pane (Slice 2); anything
-    // else (multi-entity, non-estimate field edits) gets the compact strip.
-    if (cs.length === 1 && cs[0].entity_type === 'estimate' && cs[0].after && getLines(cs[0].after).length) {
-      showEstimatePane(cs[0], groups[0]);
-    } else {
-      show(groups, {});
+  // ── surface B registration (the fallback notification) ───────────────────
+  registerSurface({
+    name: 'notification',
+    order: 90,
+    exclusive: true,
+    claims: function () { return true; },
+    render: function (entry) {
+      var meta = entry.meta;
+      if (meta.state === 'rejected') return;            // a dismissal is not news
+      if (meta.state === 'failed') {
+        showNotice(meta, "couldn't apply that", meta.applyError || 'The write failed and nothing was changed.');
+        return;
+      }
+      if (!entry.groups.length) {
+        // A payload the dispatcher records no before/after for (schedule /
+        // system / assembly / deal_memory have no snapshot table). Say so
+        // rather than render nothing, which reads as "it didn't happen".
+        if (meta.state === 'applied' && meta.payloadId) {
+          showNotice(meta, 'wrote something this view can\'t diff',
+            (meta.summary || meta.title || 'The change was applied.') +
+            ' — this write type doesn\'t record a before/after yet.');
+        }
+        return;
+      }
+      // Only a COMMITTED single-estimate write earns the document pane.
+      if (meta.state === 'applied' && !meta.isDraft && entry.changeset.length === 1 &&
+          entry.changeset[0].entity_type === 'estimate' && entry.changeset[0].after &&
+          getLines(entry.changeset[0].after).length) {
+        showEstimatePane(entry);
+      } else {
+        show(entry.groups, meta);
+      }
     }
-    return true;
+  });
+
+  // ── surface C: in-editor row flash ───────────────────────────────────────
+  // NOT driven by the broadcast. The estimate editor deliberately does not
+  // repaint on p86:payload-applied — it sets a latch and waits for app.js's
+  // post-hydrate fan-out. At broadcast time the DOM is still the PRE-write
+  // DOM: an added line has no [data-line-id] row at all, an edited row still
+  // shows the old values, and the imminent re-render would destroy anything
+  // we painted. So C is armed by the broadcast and FIRES from the editor's
+  // post-hydrate refresh, against the repainted rows.
+  var _pendingFlash = null;
+  registerSurface({
+    name: 'editor-flash',
+    order: 10,
+    exclusive: false,
+    claims: function (entry) {
+      var m = entry.meta;
+      if (m.state !== 'applied' || m.isDraft) return false;
+      if (m.entityType !== 'estimate' || !m.entityId) return false;
+      var view = document.getElementById('estimate-editor-view');
+      if (!view || view.offsetParent === null) return false;
+      return !!(window.p86EstimateEditorCurrentId && window.p86EstimateEditorCurrentId() === m.entityId);
+    },
+    render: function (entry) {
+      var ops = [];
+      entry.groups.forEach(function (g) {
+        g.ops.forEach(function (o) { if (o.lineId) ops.push(o); });
+      });
+      if (!ops.length) return;
+      _pendingFlash = { estimateId: entry.meta.entityId, ops: ops, at: Date.now() };
+    }
+  });
+
+  /* Called by the estimate editor AFTER it has repainted from fresh server
+   * rows. Paints only — it never re-renders, so it cannot race the hydrate
+   * or clobber an unsaved local edit. */
+  function flashEditorRows(estimateId) {
+    var p = _pendingFlash;
+    if (!p) return 0;
+    if (estimateId && p.estimateId && estimateId !== p.estimateId) return 0;
+    if (Date.now() - p.at > 60000) { _pendingFlash = null; return 0; }
+    _pendingFlash = null;
+    var painted = 0, i = 0;
+    (function step() {
+      if (i >= p.ops.length) return;
+      var o = p.ops[i++];
+      if (o.kind !== 'delete') {
+        var el = document.querySelector('[data-line-id="' + String(o.lineId).replace(/"/g, '\\"') + '"]');
+        if (el) {
+          var cls = 'p86lw-flash-' + (o.kind === 'add' ? 'add' : 'edit');
+          el.classList.remove(cls);
+          void el.offsetWidth;              // restart the keyframe
+          el.classList.add(cls);
+          setTimeout(function () { el.classList.remove(cls); }, 1800);
+          if (painted === 0) { try { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (_) {} }
+          painted++;
+        }
+      }
+      setTimeout(step, STAGGER_MS);
+    })();
+    return p.ops.length;
   }
 
-  // Client-initiated applies (Approve click / low-risk auto-apply) arrive here.
+  // ── event wiring ─────────────────────────────────────────────────────────
+  // Client-initiated applies (Approve click / low-risk auto-apply).
   function onApplied(ev) {
     try {
       var d = ev && ev.detail;
       if (!d) return;
-      renderChangeset(d.apply_changeset, d.payload_id);
+      ingest(d.apply_changeset, {
+        payloadId: d.payload_id,
+        state: 'applied',
+        title: d.title || '',
+        summary: d.apply_summary || '',
+        emittingAgentKey: d.emitting_agent_key || '',
+        appliedAt: new Date().toISOString()
+      });
     } catch (e) {
       console.warn('[live-writer] render failed:', e);
     }
@@ -588,69 +939,153 @@
   document.addEventListener('p86:payload-applied', onApplied);
 
   // ── poller ────────────────────────────────────────────────────────────────
-  // Server-side / pre-approved applies (86 "just does it") never fire the client
-  // event above, so sweep the payloads feed for freshly-applied rows and surface
-  // them too — this is what makes the coworker's autonomous writes VISIBLE.
+  // Server-side / pre-approved applies AND background Scribe drafts never fire
+  // a client event, so sweep the payloads feed. This is what makes the
+  // coworker's autonomous work visible at all.
   function authHeaders() {
     try { var t = localStorage.getItem('p86-auth-token'); return t ? { Authorization: 'Bearer ' + t } : {}; }
     catch (_) { return {}; }
   }
+  async function fetchJson(url) {
+    var r = await fetch(url, { credentials: 'include', headers: authHeaders() });
+    if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + url);
+    return r.json();
+  }
+  async function fetchPayload(id) {
+    var det = await fetchJson('/api/payloads/' + encodeURIComponent(id));
+    // GET /:id nests the row under .payload (res.json({ payload: row })).
+    // The v2 poller read det.apply_changeset directly and therefore rendered
+    // nothing, ever. Keep the .payload hop.
+    return (det && det.payload) || det || null;
+  }
+  function stateOf(row) {
+    switch (row && row.status) {
+      case 'ready': return 'proposed';
+      case 'applying': return 'applying';
+      case 'applied': return 'applied';
+      case 'failed': return 'failed';
+      case 'rejected': return 'rejected';
+      default: return null;
+    }
+  }
+  function metaFromRow(row, state) {
+    return {
+      payloadId: row.id,
+      state: state,
+      title: row.title || '',
+      summary: row.apply_summary || row.summary || '',
+      emittingAgentKey: row.emitting_agent_key || '',
+      createdAt: row.created_at || null,
+      appliedAt: row.applied_at || null,
+      applyError: row.apply_error || null,
+      isDraft: state !== 'applied'
+    };
+  }
+
+  // Ingest one list row: fetch its detail, pick the RIGHT changeset column
+  // for its state, and hand it to the engine.
+  async function ingestRow(row) {
+    var state = stateOf(row);
+    if (!state) return null;
+    var key = row.id + ':' + state;
+    if (_seen[key]) return null;
+    var det;
+    try { det = await fetchPayload(row.id); }
+    catch (e) {
+      // Do NOT mark it seen — an unreadable detail must be retried on the
+      // next sweep, or one 500 makes that write permanently invisible.
+      console.warn('[live-writer] payload detail fetch failed for', row.id, e && e.message);
+      return null;
+    }
+    if (!det) return null;
+    var realState = stateOf(det) || state;
+    // apply_changeset = committed. draft_changeset = simulation.
+    //
+    // An APPLIED row shows ONLY the committed column, with no fallback to the
+    // draft. That fallback looks harmless and is the whole bug back again:
+    // the bookkeeping UPDATE has a failure path that stamps
+    // status='applied' WITHOUT apply_changeset, so falling back would paint
+    // the rolled-back simulation under an "Applied" header. Better to say
+    // "no diff was recorded" than to show a plausible wrong one.
+    var cs = (realState === 'applied')
+      ? (det.apply_changeset || [])
+      : (det.draft_changeset || []);
+    var meta = metaFromRow(det, realState);
+    meta.isDraft = realState !== 'applied';
+    var entry = ingest(cs, meta);
+
+    // Server-side / approve-in-chat applies never fire the client apply
+    // event, so re-emit it — ai-panel's listener fans out to the entity
+    // caches so the affected list + detail repaint LIVE. Applied rows only,
+    // and exactly once: a draft has changed nothing, so re-hydrating the app
+    // for it would be a lie in a different register.
+    if (realState === 'applied' && Array.isArray(det.apply_changeset) && det.apply_changeset.length) {
+      try {
+        document.dispatchEvent(new CustomEvent('p86:payload-applied', { detail: {
+          payload_id: det.id,
+          title: det.title || '',
+          emitting_agent_key: det.emitting_agent_key || '',
+          apply_summary: det.apply_summary || '',
+          affected_targets: det.apply_changeset.map(function (e) { return { entity_type: e.entity_type, entity_id: e.id }; }),
+          apply_changeset: det.apply_changeset
+        } }));
+      } catch (_) {}
+    }
+    return entry;
+  }
+
   async function pollApplies() {
     if (document.hidden) return;
     try {
-      var r = await fetch('/api/payloads/?limit=8', { credentials: 'include', headers: authHeaders() });
-      if (!r.ok) return;
-      var j = await r.json();
+      var j = await fetchJson('/api/payloads/?limit=12&order=activity');
       var rows = j.payloads || j.rows || j || [];
       var fresh = rows.filter(function (p) {
-        return p && p.status === 'applied' && p.applied_at &&
-               Date.parse(p.applied_at) > _baselineTs && !_shown[p.id];
-      }).sort(function (a, b) { return Date.parse(a.applied_at) - Date.parse(b.applied_at); });
+        if (!p || !p.id) return false;
+        var st = stateOf(p);
+        if (!st) return false;
+        if (_seen[p.id + ':' + st]) return false;
+        if (st === 'applied' || st === 'failed') {
+          var at = Date.parse(p.applied_at || p.activity_at || p.created_at || '');
+          return isFinite(at) && at > _appliedBaselineTs;
+        }
+        if (st === 'proposed') {
+          // Its OWN clock. See _draftBaselineTs.
+          var ct = Date.parse(p.created_at || '');
+          return isFinite(ct) && ct > _draftBaselineTs && (p.has_draft || p.has_diff);
+        }
+        return false;   // 'applying' is transient; the next sweep sees its outcome
+      }).sort(function (a, b) {
+        return Date.parse(a.activity_at || a.created_at || 0) - Date.parse(b.activity_at || b.created_at || 0);
+      });
       for (var i = 0; i < fresh.length; i++) {
         var p = fresh[i];
-        var ts = Date.parse(p.applied_at);
-        if (ts > _baselineTs) _baselineTs = ts;
-        _shown[p.id] = true; // claim it up-front so a slow detail fetch can't double-fire
-        try {
-          var dr = await fetch('/api/payloads/' + encodeURIComponent(p.id), { credentials: 'include', headers: authHeaders() });
-          if (!dr.ok) continue;
-          var det = await dr.json();
-          // GET /:id nests the row under .payload (res.json({ payload: row }))
-          var cs = (det && det.payload) ? det.payload.apply_changeset : (det && det.apply_changeset);
-          delete _shown[p.id];            // let renderChangeset re-claim + actually render
-          renderChangeset(cs, p.id);
-          // Server-side / approve-in-chat applies never fire the client apply event, so
-          // re-emit it here → the ai-panel listener fans out to reloadLeadsCache /
-          // reloadClientsCache / p86ReloadAllData / renderSchedule so the affected entity's
-          // list + detail repaint LIVE (no page refresh). Deduped: renderChangeset above
-          // re-claims _shown[p.id], so live-writer's own onApplied handler no-ops.
-          try {
-            if (Array.isArray(cs) && cs.length) {
-              document.dispatchEvent(new CustomEvent('p86:payload-applied', { detail: {
-                payload_id: p.id,
-                affected_targets: cs.map(function (e) { return { entity_type: e.entity_type, entity_id: e.id }; }),
-                apply_changeset: cs
-              } }));
-            }
-          } catch (_) {}
-        } catch (_) {}
+        var ts = Date.parse(p.applied_at || '');
+        if (isFinite(ts) && ts > _appliedBaselineTs) _appliedBaselineTs = ts;
+        await ingestRow(p);
       }
-    } catch (_) {}
+    } catch (e) {
+      // Loud enough to debug, quiet enough not to spam a 5s loop.
+      if (!pollApplies._warned) { pollApplies._warned = true; console.warn('[live-writer] poll failed:', e && e.message); }
+    }
   }
-  // Establish a baseline (applies before now = history, don't replay) then start
-  // sweeping. Retry until an authenticated fetch succeeds so we never replay old
-  // applies as if they were live.
+
+  // Establish baselines (everything already on screen at load = history, do
+  // not replay it) then start sweeping. Retry until an authenticated fetch
+  // succeeds so we never replay old writes as if they were live.
   var _pollStarted = false;
   async function initPoll() {
     if (_pollStarted) return;
     try {
-      var r = await fetch('/api/payloads/?limit=8', { credentials: 'include', headers: authHeaders() });
-      if (!r.ok) { setTimeout(initPoll, 6000); return; }
-      var j = await r.json();
+      var j = await fetchJson('/api/payloads/?limit=20&order=activity');
       var rows = j.payloads || j.rows || j || [];
+      _draftBaselineTs = Date.now();
       rows.forEach(function (p) {
-        if (p.applied_at) { var ts = Date.parse(p.applied_at); if (ts > _baselineTs) _baselineTs = ts; }
-        if (p.status !== 'ready') _shown[p.id] = true; // terminal already — never a "live" write
+        if (p.applied_at) { var ts = Date.parse(p.applied_at); if (ts > _appliedBaselineTs) _appliedBaselineTs = ts; }
+        // Mark TERMINAL states seen only. An 'applying' row is mid-commit —
+        // stamping it here would blind us to its outcome; a 'ready' row is a
+        // live draft the user may still act on.
+        var st = stateOf(p);
+        if (st === 'applied' || st === 'rejected' || st === 'failed') _seen[p.id + ':' + st] = true;
       });
       _pollStarted = true;
       setInterval(pollApplies, POLL_MS);
@@ -659,13 +1094,33 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initPoll);
   else initPoll();
 
-  // ── public API (also handy for manual verification) ──────────────────────
+  // ── public API ───────────────────────────────────────────────────────────
   window.p86LiveWriter = {
-    /* Render straight from an apply_changeset array (bypasses the event). */
-    render: function (changeset) { return renderChangeset(changeset, null); },
-    /* Show the "Scribe is composing…" pending state (called from the SSE hook). */
+    /* Render straight from a changeset array (bypasses the event). */
+    render: function (changeset, meta) { return !!ingest(changeset, meta || { state: 'applied' }); },
+    /* THE differ. changeset[] → groups[] with per-op lineId. */
+    diff: diffChangeset,
+    /* THE estimate row model. one changeset entry → {name, rows[], deletes[]}. */
+    rows: buildEstimateRows,
+    /* Fan-out registration for surfaces A and C. */
+    registerSurface: registerSurface,
+    /* Install the shared diff/row CSS. Surfaces that render engine markup
+     * without going through the strip or the pane must call this, or their
+     * op rows and estimate rows land unstyled. */
+    ensureStyle: ensureStyle,
+    /* Ingest a fetched payload row (Cowork rehydrate / manual verification). */
+    ingest: ingest,
+    ingestRow: ingestRow,
+    fetchPayload: fetchPayload,
+    /* Fired by the estimate editor's post-hydrate refresh (surface C). */
+    flashEditorRows: flashEditorRows,
+    /* The handoff placeholder. */
     startComposing: startComposing,
+    clearComposing: clearComposing,
     dismiss: dismiss,
-    _diffEntry: diffEntry
+    _diffEntry: diffEntry,
+    _usd: usd,
+    _relTime: relTime,
+    _agentLabel: agentLabel
   };
 })();
