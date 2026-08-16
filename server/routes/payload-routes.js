@@ -96,6 +96,11 @@ const ALLOWED_ENTITY_TYPES = new Set([
 // ──────────────────────────────────────────────────────────────────
 const VALID_SOURCES = new Set([
   '86',
+  // The Scribe has written rows with source 'scribe' since the write loop
+  // shipped (ai-routes scribeCtx.payloadSource) — the set simply never said
+  // so, which made a "closed union" quietly untrue for the most common
+  // emitter in the app. Refusal rows use it too.
+  'scribe',
   'watcher_86-pm',
   'watcher_86-directory',
   'watcher_86-estimator',

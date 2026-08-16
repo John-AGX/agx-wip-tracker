@@ -12549,6 +12549,23 @@ async function driveScribeWrite(intent, ctx) {
 // testable without JWT_SECRET; see that file for why both of its checks are
 // load-bearing.
 const { isRenderableChangeset } = require('../services/changeset-guard');
+const { buildRefusalRow } = require('../services/scribe-refusal');
+
+// Record a Scribe REFUSAL as a terminal payloads row so the Writes ledger
+// shows the times the coworker couldn't do it, not only the times it could.
+// Never throws and never rejects: this is bookkeeping on a detached path, and
+// a failure to record must not become a second failure in the logs. The row
+// it writes can never be applied — see services/scribe-refusal.js.
+async function recordScribeRefusal(opts) {
+  try {
+    const dispatcherMod = require('../services/payload-dispatcher');
+    const row = buildRefusalRow(Object.assign({ id: dispatcherMod.newPayloadId() }, opts || {}));
+    if (!row) return;
+    await pool.query(row.text, row.params);
+  } catch (e) {
+    console.warn('[scribe-bg] refusal record failed:', e && e.message);
+  }
+}
 
 // Persist the Scribe's DRY-RUN diff onto its own draft row so a 'ready'
 // payload can show what it proposes before anyone approves it. Writes
@@ -12604,9 +12621,25 @@ async function execScribeWrite(tu, ctx) {
     gateUser: (ctx && ctx.gateUser) || null
   };
   const instr = String(instruction);
+  // Held across the chain so the refusal-recording link below can see the
+  // outcome even though the notify link consumed it.
+  let lastResult = null;
+  let refusalRecorded = false;
+  const recordRefusalOnce = (why) => {
+    if (refusalRecorded) return Promise.resolve();
+    refusalRecorded = true;
+    return recordScribeRefusal({
+      orgId: scribeCtx.orgId,
+      userId: scribeCtx.userId,
+      sessionId: scribeCtx.parentSession && scribeCtx.parentSession.id,
+      instruction: instr,
+      error: why || 'The Scribe did not produce a valid payload.'
+    });
+  };
   Promise.resolve()
     .then(function () { return driveScribeWrite({ instruction: instr }, scribeCtx); })
     .then(async function (result) {
+      lastResult = result;
       // Persist the dry-run diff FIRST — before the notify, before the
       // approve-in-chat apply, and regardless of whether we have a user to
       // notify. driveScribeWrite already computed this changeset and, until
@@ -12671,7 +12704,20 @@ async function execScribeWrite(tu, ctx) {
         try { await sendPushForEvent(uid, 'scribe_draft', { title: '⚠️ Scribe draft failed', body: String(errMsg).slice(0, 200), url: '/' }); } catch (_) {}
       }
     })
-    .catch(function (e) { console.warn('[scribe-bg] detached draft failed:', e && e.message); });
+    .then(function () {
+      // The refusal row is written on its OWN link of the chain: a throw in
+      // the notify path above (a dead thread, a push provider hiccup) must
+      // not be the reason a refusal goes unrecorded, and neither must a
+      // throw out of driveScribeWrite itself — hence the same call in the
+      // catch below, made once by the guard.
+      // See services/scribe-refusal.js for why ending 3 needs a row at all.
+      if (lastResult && lastResult.ok) return null;
+      return recordRefusalOnce((lastResult && lastResult.error) || null);
+    })
+    .catch(function (e) {
+      console.warn('[scribe-bg] detached draft failed:', e && e.message);
+      return recordRefusalOnce((e && e.message) || null);
+    });
   return {
     tier: 'auto',
     summary: approved

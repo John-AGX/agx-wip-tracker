@@ -106,6 +106,10 @@
       '.cw-lrow:hover{background:rgba(127,127,140,0.10);}',
       '.cw-lrow.sel{background:rgba(55,138,221,0.14);box-shadow:inset 2px 0 0 #378add;}',
       '.cw-lttl{font-size:12px;font-weight:600;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+      // Two lines, hard-clamped: enough to tell two writes apart, not enough
+      // for one verbose apply_summary to own the rail.
+      '.cw-lsaid{font-size:11px;line-height:1.4;margin-top:2px;color:var(--text-dim,#9a9aa2);',
+      'display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}',
       '.cw-lmeta{display:flex;align-items:center;gap:6px;margin-top:3px;font-size:10px;color:var(--text-dim,#9a9aa2);}',
       '.cw-pill{font-size:9px;font-weight:700;padding:1px 6px;border-radius:9px;letter-spacing:.02em;flex:none;}',
       '.cw-pill.ok{background:rgba(29,158,117,.18);color:#1d9e75;}',
@@ -162,7 +166,7 @@
       'body.light-mode .cw-lrow{border-bottom-color:rgba(0,0,0,0.06);}',
       'body.light-mode .cw-lrow:hover{background:rgba(0,0,0,0.04);}',
       'body.light-mode .cw-lrow.sel{background:rgba(55,138,221,0.10);}',
-      'body.light-mode .cw-lmeta,body.light-mode .cw-dsub,body.light-mode .cw-note,body.light-mode .cw-more{color:#6b6b76;}',
+      'body.light-mode .cw-lmeta,body.light-mode .cw-lsaid,body.light-mode .cw-dsub,body.light-mode .cw-note,body.light-mode .cw-more{color:#6b6b76;}',
       'body.light-mode .cw-err{background:rgba(226,75,74,0.10);color:#a33;}',
       'body.light-mode .cw-pill.ok{color:#0f6e56;} body.light-mode .cw-pill.warn{color:#8a5c0d;}',
       'body.light-mode .cw-pill.info{color:#1e6fb8;} body.light-mode .cw-pill.bad{color:#a33;}',
@@ -325,8 +329,18 @@
     var html = '';
     _rows.forEach(function (p) {
       var st = stateOf(p);
+      // A row must say what it DID, not only what it was called. A rail of
+      // titles is the same defect as a card of titles (commit 7a34252): the
+      // title is the agent's own label for its intention, and when the
+      // intention and the write disagree the title is the part that lies.
+      // apply_summary is the dispatcher's account of what actually landed, so
+      // it wins; summary (what was asked for) is the fallback; apply_error is
+      // what a failed row has instead of either.
+      var said = (st.key === 'failed' && p.apply_error) ? p.apply_error
+               : (p.apply_summary || p.summary || '');
       html += '<button class="cw-lrow' + (p.id === _selectedId ? ' sel' : '') + '" data-cwrow="' + esc(p.id) + '">' +
         '<div class="cw-lttl">' + esc(p.title || p.summary || 'a change') + '</div>' +
+        (said ? '<div class="cw-lsaid">' + esc(String(said).slice(0, 160)) + '</div>' : '') +
         '<div class="cw-lmeta">' +
           '<span class="cw-pill ' + st.tone + '">' + esc(st.label) + '</span>' +
           '<span>' + esc(agentLabel(p.emitting_agent_key)) + '</span>' +
@@ -434,6 +448,9 @@
     // a rolled-back simulation under an "Applied" header, which is the exact
     // class of lie this page exists to end.
     var appliedNoDiff = row.status === 'applied' && !isApplied;
+    // No targets = the payload never existed. That is a recorded REFUSAL, not
+    // an apply that blew up. Only the detail fetch carries targets.
+    var neverDrafted = Array.isArray(row.targets) && row.targets.length === 0;
     var cs = isApplied ? committed : (row.status === 'applied' ? [] : (draft || []));
     var groups = lw.diff(cs);
     var impact = groups.reduce(function (s, g) { return s + (g.impact || 0); }, 0);
@@ -455,10 +472,25 @@
 
     var bodyHtml = '';
     if (row.status === 'failed') {
-      bodyHtml = '<div class="cw-err"><strong>This write failed and nothing was changed.</strong><br>' +
-        esc(row.apply_error || 'The dispatcher rejected it; no reason was recorded.') + '</div>';
-      if (groups.length) bodyHtml += '<div class="cw-note" style="padding-bottom:4px;">What it would have done:</div>' +
-        '<div class="cw-dbody">' + opsHtml(groups) + '</div>';
+      // A REFUSAL and a failed APPLY are two different events and the ledger
+      // must not blur them. A refusal has no targets — the Scribe never got
+      // as far as a payload, so there is nothing that could be approved and
+      // no card to go looking for. A failed apply had a real payload that the
+      // dispatcher rejected. Telling the user "this write failed" about a
+      // refusal sends them hunting for a draft that does not exist.
+      if (neverDrafted) {
+        bodyHtml = '<div class="cw-err"><strong>The Scribe couldn\'t draft this, so nothing was written.</strong><br>' +
+          esc(row.apply_error || 'No reason was recorded.') + '</div>' +
+          '<div class="cw-note">There is no draft to approve — this is the record that the attempt happened ' +
+          'and stopped. Re-ask with the exact record and the exact fields, and it goes back to the Scribe.</div>' +
+          (row.summary ? '<div class="cw-note" style="padding-top:0;"><strong>What was asked for:</strong><br>' +
+            esc(row.summary) + '</div>' : '');
+      } else {
+        bodyHtml = '<div class="cw-err"><strong>This write failed and nothing was changed.</strong><br>' +
+          esc(row.apply_error || 'The dispatcher rejected it; no reason was recorded.') + '</div>';
+        if (groups.length) bodyHtml += '<div class="cw-note" style="padding-bottom:4px;">What it would have done:</div>' +
+          '<div class="cw-dbody">' + opsHtml(groups) + '</div>';
+      }
     } else if (row.status === 'applying') {
       bodyHtml = '<div class="cw-note">This write is being applied right now. The result — applied or failed — ' +
         'lands here within a few seconds. If it is still here in five minutes the apply was abandoned ' +

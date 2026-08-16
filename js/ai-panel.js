@@ -2098,7 +2098,13 @@ function p86Ask(message, opts) {
     if (!host || _pendingApprovalsBusy) return;
     if (!(window.PayloadArtifact && typeof window.PayloadArtifact.render === 'function')) return;
     _pendingApprovalsBusy = true;
-    fetch('/api/payloads?limit=30', { headers: authHeaders() })
+    // status=ready is filtered SERVER-side (the list route supports it) so the
+    // 30-row window is 30 pending drafts, not 30 rows of mixed history that a
+    // busy day of applies — or a run of recorded Scribe refusals — can push a
+    // still-pending draft out of. The "(N)" count below is read off this same
+    // list, so a truncated window did not just hide a card, it under-reported
+    // how many were waiting.
+    fetch('/api/payloads?limit=30&status=ready', { headers: authHeaders() })
       .then(function(r) { return r.ok ? r.json() : null; })
       .then(function(d) {
         var ready = ((d && d.payloads) || []).filter(function(p) { return p.status === 'ready'; });

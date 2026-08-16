@@ -75,6 +75,9 @@
       '.p86-bgt-body{overflow:auto;flex:1 1 auto;min-height:0;-webkit-overflow-scrolling:touch}',
       '.p86-bgt-list{padding:8px}',
       '.p86-bgt-item{border:1px solid var(--border,rgba(255,255,255,.08));border-radius:10px;padding:11px 12px;margin-bottom:8px;background:var(--surface2,#141824)}',
+      '.p86-bgt-draft{cursor:pointer}',
+      '.p86-bgt-draft:hover{border-color:rgba(96,165,250,.55)}',
+      '.p86-bgt-draft:focus-visible{outline:2px solid #60a5fa;outline-offset:1px}',
       '.p86-bgt-t{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--text,#e6e9f0);font:600 13px/1.3 system-ui,sans-serif}',
       '.p86-bgt-pill{font-size:11px;font-weight:700;padding:2px 8px;border-radius:9px;white-space:nowrap}',
       '.p86-bgt-body{margin-top:7px;color:var(--text-dim,#aeb4c4);font:400 12px/1.5 system-ui,sans-serif;white-space:pre-wrap;word-break:break-word}',
@@ -275,11 +278,27 @@
           '<div style="padding:4px 8px 10px">' +
           rows.map(function (p) {
             var m = sMeta(p.status);
-            return '<div class="p86-bgt-item"><div class="p86-bgt-t"><span>' + esc(p.title || p.id) + '</span>' +
+            // Clicking a draft goes to the Writes ledger, where the same row
+            // has its diff and (when it is still pending) its Approve button.
+            // This popover is a glance; Cowork is the place you act.
+            return '<div class="p86-bgt-item p86-bgt-draft" data-cwopen="' + esc(p.id) + '" ' +
+              'role="button" tabindex="0" title="Open in Cowork">' +
+              '<div class="p86-bgt-t"><span>' + esc(p.title || p.id) + '</span>' +
               '<span class="p86-bgt-pill" style="background:' + m.color + '22;color:' + m.color + '">' + esc(m.label) + '</span></div>' +
               (p.apply_summary || p.summary ? '<div class="p86-bgt-body">' + esc(String(p.apply_summary || p.summary).slice(0, 140)) + '</div>' : '') +
               '</div>';
           }).join('') + '</div>';
+        // Delegated once per render — the list is rebuilt wholesale on refresh.
+        host.onclick = function (e) {
+          var it = e.target && e.target.closest && e.target.closest('[data-cwopen]');
+          if (!it) return;
+          var id = it.getAttribute('data-cwopen');
+          try { if (typeof close === 'function') close(); } catch (_) {}
+          try {
+            if (window.p86Cowork && window.p86Cowork.open) window.p86Cowork.open(id);
+            else if (window.switchTab) window.switchTab('cowork');
+          } catch (err) { console.warn('[agent-tasks] open in Cowork failed', err); }
+        };
       })
       .catch(function () { host.innerHTML = ''; });
   }
