@@ -34,6 +34,9 @@ const router = express.Router();
 // is how an alarm ends up disagreeing with the page it is alarming on.
 const { MODEL_COSTS, DEFAULT_MODEL_COST } = require('../services/ai-pricing');
 const { deleteSkillDeep } = require('../services/anthropic-skills');
+// The managed-agents 1024-char tool-description cap, and the loud warning
+// that used to be a silent slice(). See the module header for the incident.
+const { capToolDescription } = require('../services/agent-tool-description');
 
 // Friendly labels mirror the front-end AGENT_LABELS. Emojis stay
 // here because these are server-rendered strings used in admin
@@ -2246,7 +2249,9 @@ const AGENT_SYSTEM_BASELINE = {
     '     - **`assembly_adds`: `{assembly_id (int), params:{Q, ...}, mode?, alternate_id?|alternate_name?}` — puts a costed ASSEMBLY (recipe) on the estimate as ONE LINE per cost bucket, INTACT.** Use this whenever the instruction names an assembly/recipe. `params.Q` is the takeoff quantity in the assembly\'s output unit; other params only if the instruction gives them. The server explodes, prices, and files each line into the right section.\n' +
     '     - Do NOT expand a recipe into hand-written `line_adds` — that re-prices it from stale numbers, loses the assembly link, and dumps the lines at the end of the estimate. Exploding a line into its components is a HUMAN action taken later in the editor, so leave `mode` off (it defaults to `rollup`) unless the instruction explicitly says to explode it.\n' +
     '     - If an `assembly_adds` entry is REFUSED (unpriced items, formula error, Q ≤ 0) that is a HARD STOP, not a validation nit. Do NOT retry, and above all do NOT substitute hand-written `line_adds` with your own unit costs — an understated estimate is worse than no estimate. Return the refusal.',
-    '  • job: `{field_updates?, phase_updates?, node_values?, wire_updates?, qb_assignments?, change_orders?, purchase_orders?, invoices?, notes?, graph?}`',
+    '  • job: `{field_updates?, phase_updates?, change_orders?, purchase_orders?, invoices?, notes?}`',
+    '     - phase_updates: `[{phase_id, pct_complete?, materials?, labor?, sub?, equipment?, buildingId?}]`. This is the ONLY lever on completion and therefore on revenue earned — a building goes to 100% by setting pct_complete=100 on EVERY phase whose buildingId is that building.',
+    '     - `node_values`, `wire_updates`, `qb_assignments` and `graph` are RETIRED. The dispatcher REFUSES them (non-retryable). They used to commit and report success while moving no money. Do not emit them and do not retry them in another shape.',
     '     - change_orders / purchase_orders / invoices are array ops: `{op:\'create\'|\'update\'|\'delete\', co_id?|po_id?|invoice_id?, fields:{...}}`. They write the REAL `job_change_orders` / `job_purchase_orders` / `invoices` tables.',
     '     - **MONEY COMES FROM `fields.lines[]`, NEVER A FLAT AMOUNT.** Sending `income`, `estimated_costs`, `costs`, `amount`, `total`, or `subtotal` is REJECTED and aborts the whole payload. A record created with no lines is worth $0.',
     '     - change_orders fields: `{title, lines:[{description, qty, unitCost, markup?}], scope?, terms?, co_number? (create only), defaultMarkup?, targetMargin?, feeFlat?, feePct?, taxPct?, roundTo?, notes?, building_id?}`. Income = lines through markup → target-margin → fees → tax (exactly the CO editor\'s math); cost = the raw line subtotal.',
@@ -2262,6 +2267,15 @@ const AGENT_SYSTEM_BASELINE = {
     '     - items[] (FULL REPLACE on update): `{kind:\'material\'|\'labor\'|\'sub\'|\'gc\'|\'assembly\', material_id? (int — links a catalog row; leave unit_cost null so it live-prices), child_assembly_id? (int — nested sub-assembly), description?, qty_per_unit (per 1 output unit), unit?, unit_cost?, cost_code? (materials|labor|sub|gc), waste_pct?}`.\n' +
     '     - update/delete take the assembly\'s numeric id as entity_id. Nesting is cycle-guarded; deletes are blocked while other recipes nest the target.',
     '  • deal_memory: `{note_adds:[{text}], note_supersedes:[{id}]}` — append a durable DEAL decision/constraint to this deal-thread\'s memory (persists across lead→estimate→job and survives compaction). entity_id = the "Deal key" shown in the <deal_memory> block. RULES: PROSE only, NO money figures or numbers — a dollar amount is the deterministic rollup\'s job and is REJECTED (write "client imposed a hard price cap", not "hard cap $190k"); ≤500 chars/note; supersede an old note by its [id] when a decision changes.',
+    // These four are the ones the 1024-char tool-description cap used to
+    // delete outright (they sat past the cut), while the Assistant baseline
+    // was already ordering scribe_write on 'calendar_event' and 'task'. They
+    // are documented HERE now — the baseline is not capped.
+    '  • calendar_event: `{op:\'create\', fields:{title, starts_at, ends_at?, all_day?, location?, notes?, color?, status?, recurrence?, reminder_minutes?, entity_type?, entity_id?}}` — an APPOINTMENT occupying a block on the calendar. starts_at/ends_at are ISO 8601 LOCAL datetimes (`2026-06-25T09:00:00`) — resolve a real one, never a relative phrase. status: confirmed | tentative | canceled.',
+    '  • reminder: `{op:\'create\', fields:{title, remind_at, notes?, entity_type?, entity_id?}}` — a timed personal NUDGE on the user\'s own Reminders list (NOT a calendar block); it emails them at remind_at (ISO 8601 local datetime).',
+    '  • task: `{op:\'create\', fields:{title, due_date? (DATE), notes?, kind?, status?, priority?, assignee_user_id?, entity_type?, entity_id?}}` — ORG work: org-visible and assignable. kind: todo | punch | follow_up. status: open | in_progress | blocked | done. priority: low | normal | high | urgent. assignee_user_id must be a real in-org user id; it defaults to the acting user.',
+    '  • todo: same fields as task MINUS assignee_user_id — a PRIVATE personal to-do for the acting user only, never org-visible.',
+    '     - LINKING (all four): `fields.entity_type` (client | job | lead | project) + `fields.entity_id` tie the item to a record. Omit both for a purely personal item. user + organization are stamped automatically — never pass user/org ids.',
     '',
     'Canonical field names (do NOT invent fields — the dispatcher rejects unknown columns and lists the valid set in its error):',
     '  • lead.fields: client_id, title, street_address, city, state, zip, status, confidence, projected_sale_date, estimated_revenue_low, estimated_revenue_high, source, project_type, salesperson_id, property_name, gate_code, market, notes, job_id. status enum: new | in_progress | sent | lost | sold | no_opportunity.',
@@ -2328,14 +2342,18 @@ function sanitizeInputSchemaForAgents(node) {
 }
 
 function toCustomToolParam(tool) {
-  const desc = (tool.description || '').toString();
+  // Truncation still beats failing the whole bootstrap — but it must not be
+  // SILENT. capToolDescription (services/agent-tool-description.js) owns the
+  // cap and builds the warning; see that file for what the silent version
+  // cost us. Warn once per registration so the next tool to outgrow the cap
+  // is caught here, not by an agent that quietly cannot see half its own
+  // contract.
+  const capped = capToolDescription(tool.name, tool.description);
+  if (capped.warning) console.warn(capped.warning);
   return {
     type: 'custom',
     name: tool.name,
-    // Hard cap at the Anthropic managed-agents 1024-char limit.
-    // Truncating beats failing the whole bootstrap; the agent still
-    // sees the first 1024 chars which is plenty to disambiguate.
-    description: desc.length > 1024 ? desc.slice(0, 1021) + '...' : desc,
+    description: capped.description,
     input_schema: sanitizeInputSchemaForAgents(tool.input_schema || { type: 'object', properties: {} })
   };
 }

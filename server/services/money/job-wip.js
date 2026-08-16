@@ -30,6 +30,7 @@
  */
 
 const jobMoney = require('./change-order-totals');
+const { classifyCostLine } = require('./cost-line-filters');
 
 function num(v) { const n = Number(v); return isFinite(n) ? n : 0; }
 
@@ -140,34 +141,19 @@ function computeJobWIP(job, deps) {
 
   // ACTUAL cost = QB import for materials/labor/GC/equipment (node retirement:
   // every line counts, linked or not — the old "only linked QB counts" rule is
-  // retired). Subcontractor cost lives on the PO + invoicing (vendor bills) side,
-  // so QB "Subcontractors" lines are MATCH-ONLY and excluded from cost (else subs
-  // double-count against the bills). Mirrors js/jobs.js getJobWIP.
-  const isSubLine = (l) => l.bucket
-    ? l.bucket === 'subs'
-    : /\bsub|subcontract/i.test(String(l.account || l.account_type || ''));
-  // Month-end accrual / reversal journal entries are accounting artifacts, not
-  // job cost. Measured live 2026-08-12: every one of the 87 JE lines is an
-  // accrual pair ("To record month-end WIP adjustment", JE 251 / 251R, dated
-  // month-end and the 1st), $310,269.88 accrued against $310,269.88 reversed,
-  // netting to $0.00 per job. They cancel inside a full export window — and
-  // strand in cost when the window cuts between the halves. A 6/30 cutoff
-  // would have left $22,455.12 of adjustments counted as real cost.
-  //
-  // Ordered BEFORE isSubLine on purpose: most JE lines carry the
-  // Subcontractors account, and routing them to qbSubMatch skews the
-  // reconciliation against vendor bills into a false over-billing flag.
-  //
-  // An explicit bucket override means a human classified the line — respect it.
-  // Mirrors p86CostBuckets.isAccrualLine + js/jobs.js getJobWIP.
-  const isAccrualLine = (l) => !l.bucket &&
-    String(l.txn_type || l.txnType || '').trim() === 'Journal Entry';
+  // retired). The two exclusions — match-only QB "Subcontractors" lines and
+  // month-end accrual journal entries — now live in ONE place,
+  // money/cost-line-filters.js, because this rule had drifted into four copies
+  // and the AI's per-turn job context had no copy at all. classifyCostLine
+  // carries the ordering (accrual tested before sub) that the comment there
+  // explains. Mirrors js/jobs.js getJobWIP.
   let qbActualCosts = 0, qbCostLineCount = 0, qbCostsAsOf = null, qbSubMatch = 0, qbAccrual = 0;
   for (const l of (d.qbCostLines || [])) {
     qbCostLineCount++;
     const amt = num(l.amount);
-    if (isAccrualLine(l)) { qbAccrual += amt; continue; }
-    if (isSubLine(l)) { qbSubMatch += amt; continue; }
+    const cls = classifyCostLine(l);
+    if (cls === 'accrual') { qbAccrual += amt; continue; }
+    if (cls === 'sub') { qbSubMatch += amt; continue; }
     qbActualCosts += amt;
     const when = l.report_date || l.reportDate;
     if (when && (!qbCostsAsOf || String(when) > String(qbCostsAsOf))) {

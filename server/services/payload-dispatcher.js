@@ -211,17 +211,17 @@ const PAYLOAD_OPS_SCHEMAS = Object.freeze({
   job: {
     // field_updates: top-level job blob keys (NOT structural sub-arrays)
     // phase_updates: [{phase_id, pct_complete?, materials?, labor?, sub?, equipment?, buildingId?}]
-    // node_values:  [{node_id, amount}]  (graph node value writes)
-    // wire_updates: [{from_node_id, to_node_id, pct_complete?, alloc_pct?}]
-    // qb_assignments: [{line_id, node_id}]  (direct SQL on qb_cost_lines)
     // change_orders / purchase_orders / invoices: array ops with {op, *_id?, fields}
     // notes: [string, ...]  (append to job.data.agent_notes JSONB array if present)
-    // graph: { nodes:[{op,...}], wires:[{op,...}] }  — structural topology
+    //
+    // node_values / wire_updates / qb_assignments / graph are RETIRED —
+    // see RETIRED_JOB_OPS below. They are deliberately absent here and
+    // refused with a named error instead of falling through to the
+    // generic "unknown op key" message.
     allowedTopKeys: new Set([
       'field_updates', 'phase_updates',
-      'node_values', 'wire_updates', 'qb_assignments',
       'change_orders', 'purchase_orders', 'invoices',
-      'notes', 'graph',
+      'notes',
     ]),
   },
   lead: {
@@ -355,6 +355,31 @@ const REPORT_SECTION_LAYOUTS = new Set([
 ]);
 
 // ──────────────────────────────────────────────────────────────────
+// RETIRED_JOB_OPS — the node-graph write vocabulary, refused by name.
+//
+// These four used to EXECUTE: dispatchJob loaded node_graphs.data, wrote
+// graph.wires[i].pctComplete / graph.nodes[i].value / qb_cost_lines
+// .linked_node_id, committed, and reported success. None of it has moved a
+// dollar since the node retirement — the phase matrix is the rollup — so
+// "set B1 to 100%" routed through wire_updates came back APPLIED with the
+// job's money untouched. A write that reports success and moves nothing is
+// the worst possible outcome; these now refuse loudly instead.
+//
+// (node_graphs itself is NOT dead — it is the Site Plan's geometry store,
+// written by PUT /api/jobs/:id/graph. Nothing but these ops ever reached it
+// from a payload, so removing the branch strands no other caller.)
+//
+// retryable:false so the Scribe's self-correction loop stops rather than
+// re-emitting a variant of the same dead op.
+// ──────────────────────────────────────────────────────────────────
+const RETIRED_JOB_OPS = {
+  node_values: 'The node graph no longer carries job money. Move the number with `phase_updates` on the phase records instead.',
+  wire_updates: 'Wire pctComplete/allocPct no longer feed any rollup. To set completion, emit `phase_updates`: [{phase_id, pct_complete}] for EVERY phase whose buildingId is the target building.',
+  graph: 'Graph topology is not a money model and is not writable from a payload. Building/phase structure is edited on the job; completion moves through `phase_updates`.',
+  qb_assignments: 'qb_cost_lines.linked_node_id no longer affects cost — every imported line counts by its account bucket. There is no payload op for reclassifying a QB line; do it in the job\'s cost view.',
+};
+
+// ──────────────────────────────────────────────────────────────────
 // validateOps — light shape check raised before any SQL runs.
 // Throws Error with a descriptive message; the apply endpoint wraps
 // these to return 422.
@@ -365,6 +390,20 @@ function validateOps(entityType, ops) {
   if (!schema) throw new Error(`Unknown entity_type: ${entityType}`);
   if (!ops || typeof ops !== 'object') {
     throw new Error(`ops must be an object for entity_type=${entityType}`);
+  }
+  // Retired node-graph ops get a NAMED refusal, ahead of the generic
+  // unknown-key message — "unknown op key 'wire_updates'" reads like a
+  // typo, and the agent's next move is to try a spelling variant.
+  if (entityType === 'job') {
+    for (const k of Object.keys(ops)) {
+      if (RETIRED_JOB_OPS[k]) {
+        throw new PayloadValidationError(
+          `job.ops.${k} is RETIRED — this write would move NO money and is refused. ${RETIRED_JOB_OPS[k]}`,
+          { code: 'retired_op', field_path: `job.ops.${k}`, received: k,
+            retryable: false, suggestion: RETIRED_JOB_OPS[k] }
+        );
+      }
+    }
   }
   for (const k of Object.keys(ops)) {
     if (!schema.allowedTopKeys.has(k)) {
@@ -481,19 +520,10 @@ function validateOps(entityType, ops) {
         }
       }
     }
-    for (const k of ['phase_updates', 'node_values', 'wire_updates',
-                     'qb_assignments', 'change_orders', 'purchase_orders',
+    for (const k of ['phase_updates', 'change_orders', 'purchase_orders',
                      'invoices', 'notes']) {
       if (ops[k] != null && !Array.isArray(ops[k])) {
         throw new Error(`job.ops.${k} must be an array`);
-      }
-    }
-    if (ops.graph) {
-      if (typeof ops.graph !== 'object') throw new Error('job.ops.graph must be an object');
-      for (const k of ['nodes', 'wires']) {
-        if (ops.graph[k] != null && !Array.isArray(ops.graph[k])) {
-          throw new Error(`job.ops.graph.${k} must be an array`);
-        }
       }
     }
   }
@@ -1857,16 +1887,32 @@ function applyLineDeletes(data, lineDeletes) {
 // ──────────────────────────────────────────────────────────────────
 // dispatchJob — handles ops on entity_type='job'.
 //
-// Job state is split across jobs.data (JSONB blob with phases,
-// changeOrders, purchaseOrders, invoices, etc.), node_graphs.data
-// (graph topology + values), and qb_cost_lines.linked_node_id (QB
-// assignments). All mutations happen inside the outer transaction so
-// a multi-section apply is atomic.
+// Job state lives in jobs.data (JSONB blob with phases, changeOrders,
+// purchaseOrders, invoices, etc.) plus the real CO/PO/invoice tables.
+// All mutations happen inside the outer transaction so a multi-section
+// apply is atomic.
+//
+// It ALSO used to write node_graphs.data and qb_cost_lines.linked_node_id
+// for node_values / wire_updates / graph / qb_assignments. Those wrote
+// fields no rollup reads anymore, so they committed and reported success
+// while the job's money stayed exactly where it was. The branch is gone and
+// the ops are refused by name (RETIRED_JOB_OPS) — validateOps catches them
+// first; the guard below is the belt for any path that skips validation.
 // ──────────────────────────────────────────────────────────────────
 
 async function dispatchJob(dbClient, target, refTable, ctx) {
   const ops = target.ops || {};
   resolveRefsInOps(ops, refTable);
+
+  for (const k of Object.keys(RETIRED_JOB_OPS)) {
+    if (ops[k] != null) {
+      throw new PayloadValidationError(
+        `job.ops.${k} is RETIRED — this write would move NO money and is refused. ${RETIRED_JOB_OPS[k]}`,
+        { code: 'retired_op', field_path: `job.ops.${k}`, received: k,
+          retryable: false, suggestion: RETIRED_JOB_OPS[k] }
+      );
+    }
+  }
 
   let id = resolveRef(target.entity_id, refTable);
   if (!id) throw new Error('job ops require entity_id');
@@ -2003,136 +2049,8 @@ async function dispatchJob(dbClient, target, refTable, ctx) {
     [JSON.stringify(data), id]
   );
 
-  // Graph mutations — these live on node_graphs.data, not jobs.data.
-  // We do a read-modify-write inside the same transaction so
-  // graph + qb_assignments + node_values + wire_updates all serialize.
-  const needsGraph =
-    (ops.node_values && ops.node_values.length) ||
-    (ops.wire_updates && ops.wire_updates.length) ||
-    (ops.graph && ((ops.graph.nodes && ops.graph.nodes.length) ||
-                   (ops.graph.wires && ops.graph.wires.length)));
-  if (needsGraph) {
-    const gRes = await dbClient.query(
-      'SELECT data FROM node_graphs WHERE job_id = $1 FOR UPDATE',
-      [id]
-    );
-    const graph = (gRes.rows.length && gRes.rows[0].data) || { nodes: [], wires: [] };
-    if (!Array.isArray(graph.nodes)) graph.nodes = [];
-    if (!Array.isArray(graph.wires)) graph.wires = [];
-
-    // node_values: shorthand for "set the .value field on these nodes".
-    if (Array.isArray(ops.node_values)) {
-      for (const nv of ops.node_values) {
-        const nid = resolveRef(nv.node_id, refTable);
-        const idx = graph.nodes.findIndex((n) => n.id === nid);
-        if (idx < 0) throw new Error(`node_id not found on job ${id}: ${nid}`);
-        graph.nodes[idx].value = Number(nv.amount);
-      }
-      changes.push(`${ops.node_values.length} node value(s)`);
-    }
-
-    // wire_updates: pct_complete / alloc_pct on existing wires.
-    if (Array.isArray(ops.wire_updates)) {
-      for (const wu of ops.wire_updates) {
-        const fromId = resolveRef(wu.from_node_id, refTable);
-        const toId   = resolveRef(wu.to_node_id, refTable);
-        const idx = graph.wires.findIndex((w) =>
-          (w.from === fromId || w.fromNodeId === fromId) &&
-          (w.to === toId || w.toNodeId === toId)
-        );
-        if (idx < 0) throw new Error(`wire ${fromId} → ${toId} not found on job ${id}`);
-        if (wu.pct_complete !== undefined) graph.wires[idx].pctComplete = Number(wu.pct_complete);
-        if (wu.alloc_pct    !== undefined) graph.wires[idx].allocPct    = Number(wu.alloc_pct);
-      }
-      changes.push(`${ops.wire_updates.length} wire update(s)`);
-    }
-
-    // graph.nodes — create/update/delete topology
-    if (ops.graph && Array.isArray(ops.graph.nodes)) {
-      for (const nop of ops.graph.nodes) {
-        if (nop.op === 'create') {
-          const nid = (nop.node_id && !isRef(nop.node_id))
-            ? nop.node_id
-            : ('node_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8));
-          const row = Object.assign({
-            id: nid,
-            kind: nop.kind || 'phase',
-            label: nop.label || '',
-            position: nop.position || { x: 0, y: 0 },
-            value: nop.value != null ? Number(nop.value) : 0,
-          }, nop.fields || {});
-          graph.nodes.push(row);
-          if (isRef(nop.node_id)) refTable[nop.node_id] = nid;
-        } else if (nop.op === 'update') {
-          const nid = resolveRef(nop.node_id, refTable);
-          const idx = graph.nodes.findIndex((n) => n.id === nid);
-          if (idx < 0) throw new Error(`graph node ${nid} not found`);
-          Object.assign(graph.nodes[idx], nop.fields || {});
-          if (nop.label !== undefined)    graph.nodes[idx].label = nop.label;
-          if (nop.position !== undefined) graph.nodes[idx].position = nop.position;
-          if (nop.value !== undefined)    graph.nodes[idx].value = Number(nop.value);
-        } else if (nop.op === 'delete') {
-          const nid = resolveRef(nop.node_id, refTable);
-          graph.nodes = graph.nodes.filter((n) => n.id !== nid);
-          // Also drop wires touching the deleted node.
-          graph.wires = graph.wires.filter((w) =>
-            w.from !== nid && w.to !== nid &&
-            w.fromNodeId !== nid && w.toNodeId !== nid
-          );
-        } else {
-          throw new Error(`graph.nodes[].op must be create|update|delete, got: ${nop.op}`);
-        }
-      }
-      changes.push(`${ops.graph.nodes.length} graph node op(s)`);
-    }
-
-    // graph.wires — create/delete only (updates go through wire_updates).
-    if (ops.graph && Array.isArray(ops.graph.wires)) {
-      for (const wop of ops.graph.wires) {
-        const fromId = resolveRef(wop.from, refTable);
-        const toId   = resolveRef(wop.to, refTable);
-        if (wop.op === 'create') {
-          graph.wires.push({
-            from: fromId, to: toId,
-            allocPct: wop.alloc_pct != null ? Number(wop.alloc_pct) : 100,
-            pctComplete: wop.pct_complete != null ? Number(wop.pct_complete) : 0,
-          });
-        } else if (wop.op === 'delete') {
-          graph.wires = graph.wires.filter((w) =>
-            !((w.from === fromId || w.fromNodeId === fromId) &&
-              (w.to === toId || w.toNodeId === toId))
-          );
-        } else {
-          throw new Error(`graph.wires[].op must be create|delete, got: ${wop.op}`);
-        }
-      }
-      changes.push(`${ops.graph.wires.length} graph wire op(s)`);
-    }
-
-    await dbClient.query(
-      `INSERT INTO node_graphs (job_id, data) VALUES ($1, $2)
-       ON CONFLICT (job_id) DO UPDATE SET data = $2, updated_at = NOW()`,
-      [id, JSON.stringify(graph)]
-    );
-  }
-
-  // QB assignments — direct SQL on qb_cost_lines.linked_node_id.
-  if (Array.isArray(ops.qb_assignments) && ops.qb_assignments.length) {
-    for (const a of ops.qb_assignments) {
-      if (!a.line_id) throw new Error('qb_assignments[].line_id required');
-      const nid = resolveRef(a.node_id, refTable);
-      // node_id can be null to UNLINK; that's allowed.
-      const upd = await dbClient.query(
-        `UPDATE qb_cost_lines SET linked_node_id = $1, updated_at = NOW()
-           WHERE id = $2 AND job_id = $3`,
-        [nid || null, a.line_id, id]
-      );
-      if (!upd.rowCount) {
-        throw new Error(`qb_cost_lines row ${a.line_id} not found on job ${id}`);
-      }
-    }
-    changes.push(`${ops.qb_assignments.length} qb assignment(s)`);
-  }
+  // (node_graphs + qb_cost_lines.linked_node_id writes removed here —
+  // see the RETIRED_JOB_OPS guard at the top of this function.)
 
   return {
     entity_type: 'job',
@@ -3661,6 +3579,10 @@ module.exports = {
   internals: {
     dispatchClient,
     dispatchEstimate,
+    // Exported for test/retired-job-ops.test.js — the retired-op guard must
+    // be provable to fire BEFORE any SQL runs, which needs the raw handler.
+    dispatchJob,
+    RETIRED_JOB_OPS,
     dispatchTask,
     dispatchTodo,
     dispatchReminder,

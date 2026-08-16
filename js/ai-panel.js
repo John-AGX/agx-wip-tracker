@@ -681,36 +681,22 @@ function p86Ask(message, opts) {
   };
 
   // ── Client context for Job mode ──────────────────────────────
-  // Bundles the node-graph snapshot (localStorage) plus an aggregated
-  // QB cost summary (parsed from workspace sheets named
-  // "QB Costs YYYY-MM-DD") so 86 can reason about
-  // wiring + uncategorized costs. Returns null if no useful data is
-  // available — the server tolerates a missing clientContext.
+  // An aggregated QB cost summary plus the workspace sheet index, so 86
+  // can reason about uncategorized costs and knows what tabs exist.
+  // Returns null if no useful data is available — the server tolerates a
+  // missing clientContext.
+  //
+  // It used to lead with a node-graph snapshot lifted out of
+  // localStorage['p86-nodegraphs'] — up to 60 nodes and 80 wires, shipped
+  // on EVERY message and every tool continuation, which the server rendered
+  // as a "# Node graph" prompt block teaching wire/node ids for payload ops
+  // that are now refused. Removed 2026-08-16; the server no longer reads
+  // ctx.nodeGraph. (The Site Plan's real geometry lives server-side in
+  // node_graphs and is not the AI's business here.)
   function buildJobClientContext() {
     var jobId = _entityId;
     if (!jobId) return null;
     var ctx = {};
-
-    // Node graph
-    try {
-      var allGraphs = JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}');
-      var g = allGraphs[jobId];
-      if (g && Array.isArray(g.nodes)) {
-        ctx.nodeGraph = {
-          nodes: g.nodes.map(function(n) {
-            return {
-              id: n.id, type: n.type, label: n.label,
-              value: n.value, pctComplete: n.pctComplete,
-              budget: n.budget, revenue: n.revenue,
-              dataId: n.dataId, attachedTo: n.attachedTo
-            };
-          }),
-          wires: (g.wires || []).map(function(w) {
-            return { fromNode: w.fromNode, fromPort: w.fromPort, toNode: w.toNode, toPort: w.toPort };
-          })
-        };
-      }
-    } catch (e) { /* defensive */ }
 
     // QB cost data — Phase 2 made this server-persisted, so the
     // canonical source is appData.qbCostLines (hydrated from the
@@ -911,7 +897,7 @@ function p86Ask(message, opts) {
       }
     } catch (e) { /* defensive */ }
 
-    return (ctx.nodeGraph || ctx.qbCosts || ctx.workspaceSheets || (ctx.workspaceSheetIndex && ctx.workspaceSheetIndex.length)) ? ctx : null;
+    return (ctx.qbCosts || ctx.workspaceSheets || (ctx.workspaceSheetIndex && ctx.workspaceSheetIndex.length)) ? ctx : null;
   }
 
   // Lightweight markdown — bold, italic, inline code, lists, paragraphs.

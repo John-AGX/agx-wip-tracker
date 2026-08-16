@@ -33,6 +33,9 @@ const jobMoney = require('../services/money/change-order-totals');
 // Job WIP, ported from the browser's getJobWIP — QB actuals, vendor bills,
 // PO/sub accrual and the display figures the job card shows.
 const jobWip = require('../services/money/job-wip');
+// The ONE definition of "which QB cost lines are job cost" — shared with
+// job-wip.js so the per-turn vendor rollup cannot drift from the engine.
+const { classifyCostLine } = require('../services/money/cost-line-filters');
 // Timezone helpers — render reminder remind_at instants in the acting
 // user's local zone (the time IS the point of a reminder).
 const { resolveTz, formatInTz } = require('../timezone');
@@ -5225,10 +5228,11 @@ function computeJobWIP(job, jobBuildings, jobPhases, jobChangeOrders, jobSubs, j
 }
 
 // clientContext is optional; if provided, the client passed extra
-// state the server can't reach yet (node graph state lives in
-// localStorage; QB cost lines aren't in the DB until Phase 2).
-// Fields used: { nodeGraph: { nodes, wires }, qbCosts: { total,
-// byCategory, lineCount, mostRecentImport, samples[] } }
+// state the server can't reach on its own.
+// Fields used: { qbCosts: { total, byCategory, lineCount,
+// mostRecentImport, samples[] }, workspaceSheets, workspaceSheetIndex }.
+// `nodeGraph` was dropped 2026-08-16 with the node-graph doctrine — the
+// client no longer sends it and nothing here reads it.
 async function buildJobContext(jobId, clientContext, aiPhase, organization, opts) {
   // opts.includePhotos (default false) — when true, the cascade photos
   // are tokenized inline as vision blocks. Default is false so the
@@ -5471,7 +5475,7 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
       lines.push('');
     }
     lines.push('# Detail available on demand — pull with your read tools ONLY if your analysis needs it');
-    lines.push('- Full per-phase budgets/% + orphan phases + node-graph wiring: read_entity { entity_type:"job", id:"' + jobId + '" }');
+    lines.push('- Full per-phase budgets/% + orphan phases: read_entity { entity_type:"job", id:"' + jobId + '" }');
     lines.push('- Top cost lines by vendor / QB actuals, invoices, POs, change orders, RFIs: search_entities or read_entity as needed.');
     lines.push('');
     return { system: lines.join('\n'), photoBlocks: [], aiPhase: aiPhase, packsLoaded: [] };
@@ -5550,28 +5554,19 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
       lines.push('');
     }
 
-    // ── How building % complete actually works (mental model) ─────
-    // 86 has had trouble with this — two parallel cascade paths
-    // exist that compute the SAME conceptual number from DIFFERENT
-    // data, and they can diverge. Spell it out so she can diagnose.
-    lines.push('## How building % complete works (read this before answering rollup questions)');
-    lines.push('Building % complete is computed by TWO parallel paths that may show different numbers for the same building:');
-    lines.push('');
-    lines.push('  • **Legacy WIP rollup** (the WIP page tiles, the per-building cards): a *budget-weighted average* of every phase record where `phase.buildingId == building.id`. Each phase\'s contribution = `phase.pctComplete × phase.phaseBudget / sum(phase.phaseBudget)`. This is what the # Structure block above shows.');
-    lines.push('  • **Graph rollup** (the canvas, the t1 node\'s % display): a *revenue-weighted sum* over incoming t2 (phase) and co (change order) wires. Per-wire contribution = `wire.pctComplete × wire.allocPct × source.revenue`. The wire\'s `pctComplete` is a per-allocation override; if not set, it falls back to the source node\'s `pctComplete`.');
-    lines.push('');
-    lines.push('Key asymmetry: a phase RECORD has exactly one `buildingId`, but a phase NODE in the graph can wire to MANY buildings (COATINGS allocates 14% to each of 7 buildings). When that happens:');
-    lines.push('  – Setting `phase.pctComplete = 100` propagates to ALL wired buildings (via the wire-fallback path) AND to the legacy WIP rollup for the one buildingId on the record.');
-    lines.push('  – Setting `wire.pctComplete = 100` only affects ONE building\'s graph view (the wire\'s target).');
-    lines.push('  – Setting the t1 node\'s own `pctComplete` is a no-op when there are wires; the rollup ignores it.');
-    lines.push('');
-    lines.push('When the user says "set B1 to 100%": emit a payload with `phase_updates` covering every phase whose buildingId is b1, setting pctComplete=100. The apply path cascades to both the WIP rollup and the graph wires that feed off those phases.');
-    lines.push('');
-    lines.push('Diagnostic checklist when a building % won\'t move:');
-    lines.push('  1. Are there phase records linked to this building? If 0, the legacy rollup will show 0% no matter what you do at the t1 level. (Check the # Structure block.)');
-    lines.push('  2. Are there orphan phases that should be linked? (Check the "Orphan phases" subsection above.)');
-    lines.push('  3. Are wires set on the graph? If a t2 has a wire to a t1 with `allocPct=0`, that allocation contributes nothing.');
-    lines.push('  4. Did the payload target `t1.pctComplete` directly? That field is ignored when wires/phases exist — target phases or wires via the payload ops instead.');
+    // ── How building % complete actually works ────────────────────
+    // This used to teach the node-graph engine: a revenue-weighted sum
+    // over wires (wire.pctComplete × wire.allocPct × source.revenue),
+    // a phase node fanning out to many buildings, and a choice between
+    // phase / wire / t1 pctComplete. That engine is RETIRED — the phase
+    // matrix is the only rollup — but the doctrine kept shipping on
+    // every turn, where per-turn context outranks the skill packs that
+    // teach the live model. Six lines of truth replace twenty of it.
+    lines.push('## How building % complete works');
+    lines.push('ONE rollup: a building\'s % is the budget-weighted average of the phase records whose `buildingId` is that building — `Σ(phase.pctComplete × phase.phaseBudget) / Σ(phase.phaseBudget)`. The # Structure block above is that computation. Job revenue earned = total income × job % complete.');
+    lines.push('The phase matrix IS the cost/revenue model. Phase/scope completion is the only thing that moves money.');
+    lines.push('When the user says "set B1 to 100%": emit `phase_updates` for EVERY phase whose buildingId is b1, each with pct_complete=100. There is no other lever — the node-graph ops (`node_values`, `wire_updates`, `graph`, `qb_assignments`) are retired and the dispatcher now REFUSES them.');
+    lines.push('If a building % will not move, it is a data problem, not a wiring problem: either no phase records point at it (see # Structure) or its phases are orphaned (see above).');
     lines.push('');
   }
 
@@ -5602,40 +5597,66 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
     lines.push('');
   }
 
-  // Cost-side detail — top vendors by total dollars posted from
-  // qb_cost_lines for this job. The old code read job.subs and tried
-  // to pull .amount/.vendor off sub-directory records that don't
-  // have those fields (subs use .name / .contractAmt / .billedToDate),
-  // so every row rendered as "$0 <sub-name>" regardless of what was
-  // actually posted. Now groups the real QB cost lines by vendor,
-  // sums amount, sorts desc, top 20. Includes ALL lines (linked AND
-  // unlinked to graph nodes) — many lines on real jobs haven't been
-  // wired yet, and silently filtering them out would hide cost.
+  // Cost-side detail — top vendors by job cost posted from qb_cost_lines.
+  //
+  // This used to be a raw `SUM(amount) GROUP BY vendor` with NO exclusions,
+  // printed as "Grand total across shown vendors". The real cost engine
+  // (services/money/job-wip.js) drops two whole classes of line before it
+  // counts a dollar — match-only QB "Subcontractors" and month-end accrual
+  // journal entries — so this block handed 86 an inflated cost figure before
+  // it called anything, and the WIP header three sections up disagreed with
+  // it. It now runs the SAME predicate the engine runs (classifyCostLine, the
+  // one definition, in money/cost-line-filters.js) instead of a fourth copy
+  // of the regex, and the total is labelled as the partial vendor subtotal it
+  // actually is. The old "N/M unlinked" count was measured against
+  // linked_node_id — the retired node graph — and is gone.
   try {
     const cl = await pool.query(
-      `SELECT COALESCE(NULLIF(TRIM(vendor), ''), '(no vendor)') AS vendor,
-              SUM(amount)::numeric(12,2) AS total,
-              COUNT(*)::int AS line_count,
-              SUM(CASE WHEN linked_node_id IS NULL THEN 1 ELSE 0 END)::int AS unlinked_count
+      `SELECT vendor, amount, account, account_type, txn_type, bucket
          FROM qb_cost_lines
-        WHERE job_id = $1
-        GROUP BY 1
-        ORDER BY total DESC
-        LIMIT 20`,
+        WHERE job_id = $1`,
       [jobId]
     );
     if (cl.rows.length) {
-      const grandTotal = cl.rows.reduce((s, r) => s + Number(r.total || 0), 0);
-      lines.push('# Top cost lines (top ' + cl.rows.length + ' vendors by spend)');
-      lines.push('- Grand total across shown vendors: ' + fmtMoney(grandTotal));
-      cl.rows.forEach(r => {
-        const amt = fmtMoney(Number(r.total || 0));
-        const unlinkedNote = r.unlinked_count > 0
-          ? ' · ' + r.unlinked_count + '/' + r.line_count + ' unlinked'
-          : '';
-        lines.push('- ' + amt + ' ' + r.vendor + ' (' + r.line_count + ' line' + (r.line_count === 1 ? '' : 's') + unlinkedNote + ')');
-      });
-      lines.push('');
+      const byVendor = new Map();
+      let excludedSub = 0, excludedAccrual = 0;
+      for (const r of cl.rows) {
+        const amt = Number(r.amount || 0);
+        const cls = classifyCostLine(r);
+        if (cls === 'accrual') { excludedAccrual += amt; continue; }
+        if (cls === 'sub') { excludedSub += amt; continue; }
+        const v = (r.vendor || '').trim() || '(no vendor)';
+        const cur = byVendor.get(v) || { total: 0, count: 0 };
+        cur.total += amt; cur.count++;
+        byVendor.set(v, cur);
+      }
+      const ranked = [...byVendor.entries()]
+        .map(([vendor, v]) => ({ vendor, total: v.total, count: v.count }))
+        .sort((a, b) => b.total - a.total);
+      const shown = ranked.slice(0, 20);
+      if (shown.length) {
+        const shownTotal = shown.reduce((s, r) => s + r.total, 0);
+        lines.push('# Top cost lines by vendor (' + shown.length + ' of ' + ranked.length + ' vendors) — QB job-cost lines only');
+        lines.push('- Subtotal of the vendors SHOWN: ' + fmtMoney(shownTotal) + '. This is a partial vendor list, NOT this job\'s cost — the # WIP block above carries actual/projected cost.');
+        if (excludedSub || excludedAccrual) {
+          lines.push('- Excluded here exactly as the cost engine excludes them: ' + fmtMoney(excludedSub) +
+            ' of QB "Subcontractors" lines (match-only — sub cost comes from POs/vendor bills) and ' +
+            fmtMoney(excludedAccrual) + ' of month-end accrual journal entries.');
+        }
+        shown.forEach(r => {
+          lines.push('- ' + fmtMoney(r.total) + ' ' + r.vendor + ' (' + r.count + ' line' + (r.count === 1 ? '' : 's') + ')');
+        });
+        lines.push('');
+      } else {
+        // Every imported line was excluded. Say so — "no cost lines" and
+        // "all your cost lines are sub-match/accrual" are different facts,
+        // and printing nothing would read as the first.
+        lines.push('# Top cost lines by vendor');
+        lines.push('- ' + cl.rows.length + ' QB line(s) imported, but NONE count as job cost: ' +
+          fmtMoney(excludedSub) + ' is QB "Subcontractors" (match-only — sub cost comes from POs/vendor bills) and ' +
+          fmtMoney(excludedAccrual) + ' is month-end accrual journal entries.');
+        lines.push('');
+      }
     } else if (subs.length) {
       // No QB cost lines imported yet, but subs are configured —
       // surface the contract-amount view so 86 at least sees the
@@ -5682,64 +5703,16 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
     lines.push('');
   }
 
-  // ── Client-supplied context (graph + QB cost data) ─────────────
-  // The node graph lives in localStorage; QB cost lines lived in
-  // workspace sheets pre-Phase-2. The client snapshots both and
-  // sends them with the chat request so the assistant can reason
-  // about wiring and uncategorized costs.
-  if (clientContext && clientContext.nodeGraph) {
-    var ng = clientContext.nodeGraph;
-    var nodes = Array.isArray(ng.nodes) ? ng.nodes : [];
-    var wires = Array.isArray(ng.wires) ? ng.wires : [];
-    if (nodes.length) {
-      lines.push('# Node graph (' + nodes.length + ' nodes, ' + wires.length + ' wires)');
-      lines.push('**This block is LIVE, not a snapshot.** It\'s rebuilt from the client on every user message AND every tool_use continuation. New nodes the user creates (or that you create via tools) WILL appear in the next turn — never tell the user "I can\'t see new nodes in real-time" or "you need to refresh the session." If a node was just added, it\'s in the list below this turn.');
-      lines.push('Each node listed as: `[id=NODE_ID] TYPE "label" | value | %complete | budget`. Types: t1 = building, t2 = phase, sub = subcontractor cost, co = change order, po = purchase order, inv = invoice, wip = WIP rollup, watch = KPI display, note = sticky note.');
-      lines.push('**CRITICAL** — when emitting payload ops that reference a node id (graph wires, qb assignments, node-value updates), pass the bracketed `id=` value from this list (e.g. `n_5`, NOT `"Painting - B31"`). Labels can include separator characters (›, /, etc.) and will not match.');
-      var sortedNodes = nodes.slice().sort(function(a, b) { return (a.type || '').localeCompare(b.type || ''); });
-      sortedNodes.slice(0, 60).forEach(function(n) {
-        var pct = (n.pctComplete != null && n.pctComplete > 0) ? ' | ' + Math.round(n.pctComplete) + '%' : '';
-        var bud = (n.budget != null && n.budget > 0) ? ' | budget ' + fmtMoney(n.budget) : '';
-        var val = (n.value != null && n.value !== 0) ? ' | value ' + fmtMoney(n.value) : '';
-        lines.push('- [id=' + (n.id || '?') + '] ' + (n.type || '?') + ' "' + (n.label || '(no label)') + '"' + val + pct + bud);
-      });
-      if (nodes.length > 60) lines.push('- …and ' + (nodes.length - 60) + ' more nodes');
-      lines.push('');
-      lines.push('## Wires (' + wires.length + ' connections)');
-      // Group wires by source for readability — show ids first, labels in parens for context
-      if (wires.length) {
-        var nodeById = {};
-        nodes.forEach(function(n) { nodeById[n.id] = n; });
-        wires.slice(0, 80).forEach(function(w) {
-          var from = nodeById[w.fromNode];
-          var to = nodeById[w.toNode];
-          if (from && to) {
-            lines.push('- ' + w.fromNode + ' → ' + w.toNode + ' (' + (from.label || from.type) + ' → ' + (to.label || to.type) + ')');
-          }
-        });
-        if (wires.length > 80) lines.push('- …and ' + (wires.length - 80) + ' more wires');
-      } else {
-        lines.push('(no wires — every node is currently disconnected)');
-      }
-      // Connectivity hints — pre-compute simple disconnection signals
-      // since the graph data is right here.
-      var hasIncoming = {};
-      var hasOutgoing = {};
-      wires.forEach(function(w) { hasIncoming[w.toNode] = true; hasOutgoing[w.fromNode] = true; });
-      var orphans = nodes.filter(function(n) {
-        if (n.type === 'note' || n.type === 'wip' || n.type === 'watch') return false;
-        return !hasIncoming[n.id] && !hasOutgoing[n.id];
-      });
-      if (orphans.length) {
-        lines.push('## Orphan nodes (disconnected)');
-        orphans.slice(0, 20).forEach(function(n) {
-          lines.push('- ' + (n.type || '?') + ' "' + (n.label || '(no label)') + '"');
-        });
-        if (orphans.length > 20) lines.push('- …and ' + (orphans.length - 20) + ' more');
-      }
-      lines.push('');
-    }
-  }
+  // ── Node graph block: DELETED 2026-08-16 ──────────────────────
+  // Up to ~60 nodes + 80 wires + an orphan list were rendered here every
+  // turn from a localStorage snapshot ('p86-nodegraphs' via ai-panel.js),
+  // under a "CRITICAL — pass this node id when emitting graph wires, qb
+  // assignments, node-value updates" heading. Those ops are retired and
+  // now refuse (see payload-dispatcher dispatchJob), so the block taught
+  // a vocabulary that cannot be used and priced it on every turn. The
+  // node_graphs table survives as the Site Plan's GEOMETRY store
+  // (footprints, geo anchors) — that is not money and not the AI's
+  // business here. The client no longer sends ctx.nodeGraph at all.
 
   // Workspace spreadsheet content — anything the user typed into the
   // in-app Workspace tab (phase lists, scope notes, custom tables).
@@ -7835,59 +7808,36 @@ const WAVE3_TOOLS = [
 const PAYLOAD_TOOLS = [
   {
     name: 'emit_payload_file',
+    // ── THIS STRING MUST STAY UNDER 1024 CHARS ────────────────────
+    // toCustomToolParam (admin-agents-routes.js) hard-caps a managed-agent
+    // tool description at Anthropic's 1024-char limit. The previous version
+    // ran 4694 chars, so 3673 were silently cut — and the cut always lands
+    // on whatever was appended most recently. What survived was the DEAD
+    // node-graph vocabulary (it appeared early); what fell off the cliff was
+    // task, todo, reminder, calendar_event and every target form. The Scribe
+    // literally could not see the ops the Assistant was ordering it to write.
+    //
+    // So: this string is the INDEX — entity types and their op keys, nothing
+    // more. The per-entity FIELD lists live in the Scribe's system baseline
+    // (admin-agents-routes.js SYSTEM_BASELINES.scribe), which is not capped.
+    // Add a new entity type here; add its fields THERE. If this ever needs to
+    // grow past the cap, move detail to the baseline — do not raise the cap,
+    // which would put the cost on every turn of every agent.
     description:
-      'Emit a .p86.json payload file with fully-resolved targets and ops. ' +
-      'This is your ONE write primitive — use it for every field update, ' +
-      'line item change, phase update, lead create, report create, etc. ' +
-      'The user reviews the resulting file artifact in chat and drags it ' +
-      'into the universal dropbox to apply. Plan in conversation first; ' +
-      'emit ONE file per turn. Resolve target entity_ids via reads before ' +
-      'emitting. ' +
-      'Per-entity_type op vocabulary: ' +
-      'client: {op,fields,notes}. ' +
-      'estimate: {op,scope,field_updates,sections,groups,line_adds,line_edits,line_deletes,assembly_adds}. ' +
-      'job: {field_updates,phase_updates,node_values,wire_updates,qb_assignments,change_orders,purchase_orders,invoices,notes,graph} ' +
-      // NOTE: this description is HARD-TRUNCATED at 1024 chars by the
-      // managed-agents API (toCustomToolParam in admin-agents-routing).
-      // The full per-entity contract lives in the Scribe's system baseline,
-      // which is not truncated — keep this line short and put detail there.
-      '— change_orders/purchase_orders/invoices are array ops ' +
-      '{op:create|update|delete, *_id?, fields} writing the REAL tables; ' +
-      'their money comes from fields.lines[], never a flat amount. ' +
-      'lead: {op,fields,notes}. ' +
-      'schedule: {blocks} — array of {op:create|update|delete, entry_id?, ' +
-      'jobId, startDate, days, crew, includesWeekends, status, notes} for ' +
-      'all schedule entry writes (no separate create tool needed). ' +
-      'report: {op,template_type,parent_id,title,cover_page,sections, ' +
-      'section_adds,section_updates,section_deletes} — op:create needs ' +
-      'template_type (one of walkthrough|daily-log|weekly-progress| ' +
-      'engineers-report|submittal-package|punch-list|pre-con-survey| ' +
-      'change-order) and parent_id (a project id); op:update can take ' +
-      'sections (full replace) OR granular section_adds/updates/deletes. ' +
-      'Section layout is one of photo-grid|single-photo|before-after| ' +
-      'text-block|attachment-list. ' +
-      'system: {skill_pack_ops,field_tool_ops,link_ops} ' +
-      '— link_ops includes {op:attach_files, attachment_ids[], target_entity_type, target_entity_id} to link existing files to an entity. ' +
-      'FOUR personal/org scheduling+work types — pick by what the user means: ' +
-      'calendar_event: {op:create, fields:{title, starts_at (ISO 8601 local datetime, e.g. 2026-06-25T09:00:00), ends_at?, all_day?, location?, notes?, reminder_minutes?, status?, entity_type?, entity_id?}} ' +
-      '— an APPOINTMENT that occupies a block on the calendar (a walkthrough, a meeting). Set reminder_minutes for a heads-up before it. Always resolve a real local datetime for starts_at. ' +
-      'reminder: {op:create, fields:{title, remind_at (ISO 8601 local datetime, e.g. 2026-06-25T15:00:00), notes?, entity_type?, entity_id?}} ' +
-      '— a timed personal NUDGE on the user\'s own Reminders list (NOT a calendar block); it emails the user at remind_at. Use for "remind me at 3pm to call the inspector". ' +
-      'task: {op:create, fields:{title, due_date? (DATE, e.g. 2026-06-25), notes?, kind?(todo|punch|follow_up), priority?(low|normal|high|urgent), assignee_user_id? (an in-org user id; defaults to the acting user), entity_type?, entity_id?}} ' +
-      '— ORG work, visible org-wide and assignable to a teammate. Use for "assign Bob to fix the punch list" or any team to-do. Resolve assignee_user_id from read_users when the user names someone. ' +
-      'todo: {op:create, fields:{title, due_date? (DATE), notes?, kind?, priority?, entity_type?, entity_id?}} ' +
-      '— a PRIVATE personal to-do, just for the acting user (never assignable, never org-visible). Use for "remind me to pick up materials" with no specific time. ' +
-      'OPTIONAL LINK (calendar_event/reminder/task/todo): set fields.entity_type (client|job|lead|project) + fields.entity_id to tie the item to a record. ' +
-      'DEFAULT to linking when it concerns a property or a specific record: prefer the CLIENT for anything about a property/the relationship (e.g. "remind me to call the Sterling HOA about the deck"), the JOB for active work, the lead/project when that is the subject. Resolve the real row id from a read first. ' +
-      'Leave entity_type/entity_id OUT for a purely personal item with no property/client (e.g. "remind me to pick up my kid at 3pm"). ' +
-      '(user/org are always stamped automatically — never pass user/org ids; the entity link above is the ONLY association you set.) ' +
-      'To populate an estimate/job workspace, do NOT use a payload — build an .xlsx with code_execution and the user drops it into the workspace (it auto-imports as sheets), or edit the sheet directly in the workspace UI. ' +
-      'TARGET FORMS (siblings of entity_type/ops, work on any entity_type): ' +
-      'conditional — add condition:"if_exists"|"if_missing"|"upsert" to a target (upsert needs no pre-check; if_exists/if_missing need a concrete entity_id). ' +
-      'bulk — {entity_type, bulk:{items:[{entity_id?, ops}, ...]}} applies the same dispatcher N times. ' +
-      'move — {op:"move", source:{entity_type,entity_id,ops}, dest:{entity_type,entity_id,ops}} runs source then dest in one transaction (e.g. delete a line from estimate A, add it to estimate B). ' +
-      'Cross-entity refs ($new_id syntax) resolve at apply time. ' +
-      'Do NOT pre-narrate the file.',
+      'Emit ONE .p86.json payload — your only write primitive. ' +
+      '{targets:[{entity_type,entity_id?,ops}], title, summary}. ' +
+      'entity_id = the real id, or $new_<name> for a create other targets reference. ' +
+      'entity_type → ops: ' +
+      'estimate {op,scope,field_updates,sections,groups,line_adds,line_edits,line_deletes,assembly_adds} · ' +
+      'job {field_updates,phase_updates,change_orders,purchase_orders,invoices,notes} · ' +
+      'lead/client {op,fields,notes} · assembly {op,fields,items} · schedule {blocks} · ' +
+      'report {op,template_type,parent_id} · system {skill_pack_ops,field_tool_ops,link_ops} · ' +
+      'deal_memory {note_adds,note_supersedes} · ' +
+      'calendar_event {title,starts_at} = appointment · reminder {title,remind_at} = personal nudge · ' +
+      'task {title,due_date?,assignee_user_id?} = ORG work, assignable · todo = same, PRIVATE. ' +
+      'Link those four with fields.entity_type+entity_id. ' +
+      'Target forms: condition:if_exists|if_missing|upsert · bulk:{items:[]} · {op:"move",source,dest}. ' +
+      'Field lists are in your system prompt. Do NOT pre-narrate.',
     tier: 'auto',
     input_schema: {
       type: 'object',
@@ -7911,7 +7861,11 @@ const PAYLOAD_TOOLS = [
             properties: {
               entity_type: {
                 type: 'string',
-                enum: ['estimate', 'job', 'lead', 'client', 'schedule', 'system', 'report', 'calendar_event', 'task', 'todo', 'reminder', 'assembly'],
+                // deal_memory was missing here while the dispatcher has
+                // implemented it since the deal-threads work — the enum is
+                // what an agent reads to decide a type is legal, so an
+                // omission here is a capability the Scribe cannot reach.
+                enum: ['estimate', 'job', 'lead', 'client', 'schedule', 'system', 'report', 'calendar_event', 'task', 'todo', 'reminder', 'assembly', 'deal_memory'],
               },
               entity_id: {
                 type: 'string',
