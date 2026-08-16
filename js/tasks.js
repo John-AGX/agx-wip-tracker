@@ -448,7 +448,7 @@
             '</div>' +
 
             '<div style="background:var(--card-bg,#141a26);border:1px solid var(--border,#333);border-radius:12px;overflow:hidden;">' +
-              '<div id="tdMiniMap" style="height:172px;background:#0c1017;display:none;"></div>' +
+              '<div id="tdMiniMap" style="height:220px;background:#0c1017;display:none;"></div>' +
               '<div style="padding:11px 14px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">' +
                 '<div style="min-width:0;">' +
                   '<div style="font-size:13px;color:var(--text,#e9ecf5);"><span style="color:var(--accent,#4f8cff);">&#x1F4CD;</span> <span id="tdViewLocLine">Location</span></div>' +
