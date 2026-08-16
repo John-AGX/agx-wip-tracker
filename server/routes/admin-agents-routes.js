@@ -893,109 +893,30 @@ router.post('/skills/versions/:id/restore', requireAuth, requireCapability('ROLE
 // Buffer as an Uploadable for beta.skills.create.
 const { toFile } = require('@anthropic-ai/sdk');
 
-// Build the SKILL.md content for one pack. Anthropic Skills typically
-// open with YAML frontmatter declaring name + description so the
-// loading runtime can decide when to fetch the skill body. We include
-// both even though our current pack model doesn't separate them — the
-// pack name doubles as the description for now.
-// slugifySkillName retained as a thin alias for back-compat with the
-// 3 call sites below; canonical helper lives in server/util/slugify.js.
-const { slugify: slugifySkillName } = require('../util/slugify');
+// buildSkillMarkdown / skillBodyHash / pushPackToAnthropic moved to
+// server/services/anthropic-skills.js so they can be tested without
+// booting this router (which pulls in auth, and therefore JWT_SECRET).
+// The mirror push is where the display_title-collision fix lives — see
+// anthropicDisplayTitle over there for why an EDIT could never sync.
+const {
+  buildSkillMarkdown,
+  skillBodyHash,
+  pushPackToAnthropic: pushPackToAnthropicCore
+} = require('../services/anthropic-skills');
 
-function buildSkillMarkdown(pack) {
-  const slug = slugifySkillName(pack.name);
-  const human = (pack.name || 'Project 86 skill').replace(/[\r\n]/g, ' ');
-
-  // The description is the TRIGGER, not a label. Anthropic Skills are
-  // progressively disclosed: only name + description sit in context each
-  // turn, and the model reads the description to decide whether to pull
-  // the body in. Until now this fell through to the pack NAME — so every
-  // skill shipped with `description: Estimating Playbook`, which says
-  // nothing about WHEN it applies. All nine packs were live, attached,
-  // counted, and effectively unreachable. pack.description now wins.
-  const desc = (pack.description && String(pack.description).trim()
-    ? String(pack.description).trim()
-    : (pack.replaces_section
-        ? 'Section override for ' + pack.replaces_section
-        : (pack.category ? 'Category: ' + pack.category : human))
-  ).replace(/[\r\n]+/g, ' ').slice(0, 900);
-  const lines = [
-    '---',
-    'name: ' + slug,
-    'description: ' + desc,
-    '---',
-    '',
-    pack.body || ''
-  ];
-  return lines.join('\n');
+// Re-point the agent's attachment rows from the retired skill id to the
+// replacement. Injected rather than reached for, so the mirror logic
+// stays DB-free and testable.
+async function repointAgentSkills(oldId, newId) {
+  const up = await pool.query(
+    `UPDATE managed_agent_skills SET skill_id = $1 WHERE skill_id = $2`,
+    [newId, oldId]
+  );
+  return up.rowCount || 0;
 }
 
-// Push ONE pack to Anthropic and swap the agent onto it.
-//
-// Extracted so the per-pack route and sync-all share one implementation.
-// They used to differ, and the difference WAS the bug: the per-pack route
-// created unconditionally, sync-all skipped anything that already had an id
-// (so it could only ever create, never update). Between them, an edited
-// playbook never reached the agent.
-//
-// The ordering is the whole safety argument. Every failure mode leaves the
-// agent running the OLD skill rather than no skill:
-//   1. upload the new skill   (old still live and still referenced)
-//   2. re-point managed_agent_skills old id -> new id
-//   3. caller persists the new id onto the pack
-//   4. retire the old skill   (now unreferenced; failure = harmless orphan)
-// Never delete first.
-async function pushPackToAnthropic(anthropic, pack) {
-  const md = buildSkillMarkdown(pack);
-  const slug = slugifySkillName(pack.name);
-  const priorId = pack.anthropic_skill_id || null;
-
-  // Anthropic requires SKILL.md inside a top-level folder (slug/SKILL.md).
-  const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
-  const created = await anthropic.beta.skills.create({
-    display_title: (pack.name || 'Project 86 skill').slice(0, 200),
-    files: [file]
-  });
-
-  let repointed = 0;
-  if (priorId) {
-    try {
-      const up = await pool.query(
-        `UPDATE managed_agent_skills SET skill_id = $1 WHERE skill_id = $2`,
-        [created.id, priorId]
-      );
-      repointed = up.rowCount || 0;
-    } catch (e) {
-      console.error('[skills/sync] re-point managed_agent_skills failed for ' +
-        priorId + ' -> ' + created.id + ':', e.message);
-    }
-  }
-
-  let oldDeleted = false, oldDeleteError = null;
-  if (priorId) {
-    const del = await deleteSkillDeep(anthropic, priorId);
-    oldDeleted = !!del.ok;
-    if (!del.ok) {
-      oldDeleteError = del.error;
-      console.warn('[skills/sync] old skill ' + priorId +
-        ' replaced but not deleted (orphan left upstream):', del.error);
-    }
-  }
-
-  return { id: created.id, replaced: priorId, repointed, oldDeleted, oldDeleteError,
-           hash: skillBodyHash(md) };
-}
-
-// Fingerprint of what was actually uploaded, stored back on the pack as
-// `synced_hash`. Without it, "synced" only ever meant "has an id" — it could
-// not tell a pack that matches its live skill from one edited weeks ago that
-// never shipped. A pack with no stored hash counts as drifted and is
-// re-pushed once, which is self-healing: after one sync-all every pack
-// carries a hash and the status becomes trustworthy.
-function skillBodyHash(md) {
-  // Inline require matches the existing style in this file — there is no
-  // top-level crypto binding here.
-  return require('crypto').createHash('sha256').update(md, 'utf8').digest('hex').slice(0, 16);
+function pushPackToAnthropic(anthropic, pack) {
+  return pushPackToAnthropicCore(anthropic, pack, { toFile, repointAgentSkills });
 }
 
 // POST /api/admin/agents/skills/sync-all-to-anthropic

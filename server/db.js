@@ -4778,54 +4778,24 @@ async function initSchema() {
            AND (s->>'name' LIKE 'AGX %' OR s->>'name' = 'Elle WIP Analyst Playbook')
        );
 
-    -- Seed the "Workspace placement & wiring discipline" always-on skill
-    -- pack for 86 so any time he adds nodes via create_node / wire_nodes
-    -- they follow the user's preferred LTR cost-flow layout. Idempotent:
-    -- the WHERE NOT EXISTS gate skips re-insert once the pack is in place.
-    INSERT INTO app_settings (key, value, updated_at)
-    SELECT 'agent_skills',
-           jsonb_build_object(
-             'skills',
-             jsonb_build_array(
-               jsonb_build_object(
-                 'name', 'Workspace placement and wiring discipline',
-                 'agents', jsonb_build_array('job'),
-                 'contexts', jsonb_build_array('job'),
-                 'alwaysOn', true,
-                 'body',
-                 E'# Workspace node-graph placement and wiring\n' ||
-                 E'\n' ||
-                 E'When you add nodes via create_node or connect them via wire_nodes, follow the LTR cost-flow layout the user has standardized on. The graph reads like an org chart for money: sources on the left, accumulator (WIP) on the far right.\n' ||
-                 E'\n' ||
-                 E'## The 5-column layout (left to right)\n' ||
-                 E'1. **Subs** (cyan, person glyph). Subcontractor source nodes.\n' ||
-                 E'2. **Scope / Change Orders** — green (t2 / scope) on top, pink (CO) on bottom of the same column.\n' ||
-                 E'3. **Buildings** (cyan, lock glyph). t1 nodes representing the physical structures.\n' ||
-                 E'4. **Job-level cost buckets** (yellow). JOB LABOR / JOB MATERIALS / JOB GC / JOB EQUIPMENT.\n' ||
-                 E'5. **WIP master** (yellow border). The single accumulator on the far right.\n' ||
-                 E'\n' ||
-                 E'## Wiring rules\n' ||
-                 E'- Every wire flows LEFT to RIGHT. Never create a wire that closes a loop or runs right-to-left.\n' ||
-                 E'- Subs feed into the Scope or Building they serve, not directly into a cost bucket.\n' ||
-                 E'- Change Orders feed into the Building(s) they impact.\n' ||
-                 E'- Cost-bucket nodes (mat / labor / gc / sub / burden / other) sit BETWEEN buildings and the WIP master, not before buildings.\n' ||
-                 E'- Wire color is derived from the source node — let it be. Do not override.\n' ||
-                 E'\n' ||
-                 E'## Node-type discipline\n' ||
-                 E'- A new building -> t1.\n' ||
-                 E'- A scope item / phase -> t2.\n' ||
-                 E'- A subcontractor on the job -> sub.\n' ||
-                 E'- A change order -> co.\n' ||
-                 E'- A job-level rolled-up cost bucket -> labor / mat / gc / sub / burden / other (pick the right one).\n' ||
-                 E'- Use note nodes only for sticky annotations the user wants visible — never as a substitute for a real type.\n' ||
-                 E'\n' ||
-                 E'## After multi-node restructures\n' ||
-                 E'create_node does not accept x/y coordinates — the engine auto-positions. After a batch (3+ create_node + wire_nodes calls), end the turn with a one-line note suggesting the user click "Arrange" in the graph toolbar so the new nodes snap into the column scheme above. Do not call Arrange yourself; it is a UI action.\n'
-               )
-             )
-           ),
-           NOW()
-    WHERE NOT EXISTS (SELECT 1 FROM app_settings WHERE key = 'agent_skills');
+    -- REMOVED 2026-08-16 — the "Workspace placement and wiring discipline"
+    -- boot seed. Two statements used to live here and below: one that
+    -- CREATED the agent_skills row carrying that pack, and one that
+    -- re-appended the pack to an existing row whenever it was missing.
+    -- Together they made the pack undeletable: retire it in the admin UI,
+    -- and the next boot put it straight back — after which the next
+    -- sync-all minted a fresh Anthropic skill for it and re-attached it
+    -- to 86.
+    --
+    -- The doctrine itself is dead: it teaches create_node / wire_nodes,
+    -- the node-graph engine retired in 8cc8ced / 6124bb1. Deleted rather
+    -- than guarded, deliberately — a guard leaves the dead doctrine one
+    -- edit away from returning. Skill packs are admin-owned content now;
+    -- boot must never author them.
+    --
+    -- The agent_skills row itself is still created (empty) further down,
+    -- next to the other app_settings defaults, so readers that expect the
+    -- row to exist keep working.
 
     -- Tag every existing 86 skill pack with the right contexts array
     -- so the loader filters by entity_type. Idempotent: only sets
@@ -4883,59 +4853,11 @@ async function initSchema() {
     -- the JS template literal. Admins can clean pack bodies via
     -- Admin -> Agents -> Skills until that ships.)
 
-    -- If the row already existed, append the pack only if the name isn't
-    -- already present (covers admins who edited skill packs via the UI
-    -- before this migration shipped).
-    UPDATE app_settings
-       SET value = jsonb_set(
-             value,
-             '{skills}',
-             COALESCE(value->'skills', '[]'::jsonb) ||
-               jsonb_build_array(
-                 jsonb_build_object(
-                   'name', 'Workspace placement and wiring discipline',
-                   'agents', jsonb_build_array('job'),
-                   'contexts', jsonb_build_array('job'),
-                   'alwaysOn', true,
-                   'body',
-                   E'# Workspace node-graph placement and wiring\n' ||
-                   E'\n' ||
-                   E'When you add nodes via create_node or connect them via wire_nodes, follow the LTR cost-flow layout the user has standardized on. The graph reads like an org chart for money: sources on the left, accumulator (WIP) on the far right.\n' ||
-                   E'\n' ||
-                   E'## The 5-column layout (left to right)\n' ||
-                   E'1. **Subs** (cyan, person glyph). Subcontractor source nodes.\n' ||
-                   E'2. **Scope / Change Orders** — green (t2 / scope) on top, pink (CO) on bottom of the same column.\n' ||
-                   E'3. **Buildings** (cyan, lock glyph). t1 nodes representing the physical structures.\n' ||
-                   E'4. **Job-level cost buckets** (yellow). JOB LABOR / JOB MATERIALS / JOB GC / JOB EQUIPMENT.\n' ||
-                   E'5. **WIP master** (yellow border). The single accumulator on the far right.\n' ||
-                   E'\n' ||
-                   E'## Wiring rules\n' ||
-                   E'- Every wire flows LEFT to RIGHT. Never create a wire that closes a loop or runs right-to-left.\n' ||
-                   E'- Subs feed into the Scope or Building they serve, not directly into a cost bucket.\n' ||
-                   E'- Change Orders feed into the Building(s) they impact.\n' ||
-                   E'- Cost-bucket nodes (mat / labor / gc / sub / burden / other) sit BETWEEN buildings and the WIP master, not before buildings.\n' ||
-                   E'- Wire color is derived from the source node — let it be. Do not override.\n' ||
-                   E'\n' ||
-                   E'## Node-type discipline\n' ||
-                   E'- A new building -> t1.\n' ||
-                   E'- A scope item / phase -> t2.\n' ||
-                   E'- A subcontractor on the job -> sub.\n' ||
-                   E'- A change order -> co.\n' ||
-                   E'- A job-level rolled-up cost bucket -> labor / mat / gc / sub / burden / other (pick the right one).\n' ||
-                   E'- Use note nodes only for sticky annotations the user wants visible — never as a substitute for a real type.\n' ||
-                   E'\n' ||
-                   E'## After multi-node restructures\n' ||
-                   E'create_node does not accept x/y coordinates — the engine auto-positions. After a batch (3+ create_node + wire_nodes calls), end the turn with a one-line note suggesting the user click "Arrange" in the graph toolbar so the new nodes snap into the column scheme above. Do not call Arrange yourself; it is a UI action.\n'
-                 )
-               )
-           ),
-           updated_at = NOW()
-     WHERE key = 'agent_skills'
-       AND value ? 'skills'
-       AND NOT EXISTS (
-         SELECT 1 FROM jsonb_array_elements(value->'skills') s
-         WHERE s->>'name' = 'Workspace placement and wiring discipline'
-       );
+    -- REMOVED 2026-08-16 — the re-append half of the same seed (see the
+    -- note above where the row-creating half used to be). This one was
+    -- the actual resurrection engine: "append the pack if its name is not
+    -- already present" ran on EVERY boot, so deleting the pack in the
+    -- admin UI bought exactly one deploy of peace.
   `);
 
   // ── One-shot migration: reset estimates.updated_at on rows the
@@ -5190,60 +5112,21 @@ async function initSchema() {
     [JSON.stringify(DEFAULT_BT_MAPPING)]
   );
 
-  // Agent skills — admin-editable prompt extensions that the in-app AI
-  // agents (AG, the Customer Relations Agent) load into their system
-  // prompts. Each skill has a body (free-form prompt text), the agents
-  // it applies to, and an alwaysOn flag. v1 only honors alwaysOn — the
-  // body just gets appended for every chat. v2 will support on-demand
-  // loading via a tool call.
+  // Agent skills — admin-editable prompt extensions, mirrored to Anthropic
+  // as native Skills and loaded on demand. The row is created empty; the
+  // packs themselves are ADMIN CONTENT and boot never authors them.
   //
-  // Default seed bundles Project 86's house-style estimating playbook for AG.
-  // Admins edit these in Admin -> Templates -> Skills; nothing in code
-  // needs to change to add a new playbook.
-  const DEFAULT_AGENT_SKILLS = {
-    skills: [
-      {
-        id: 'sk_agx_estimating_playbook',
-        name: 'Project 86 Estimating Playbook',
-        agents: ['ag'],
-        alwaysOn: true,
-        body: [
-          'Project 86 house style for estimating:',
-          '',
-          '## Slotting (extra emphasis)',
-          'Always slot lines into the four standard subgroups. Materials = anything you can hold. Labor = Project 86 crew hours. GC = overhead/permits/dumpster/PM. Subs = work handed to another company.',
-          '',
-          '## Quantity discipline',
-          'Take quantities off photos when possible: count balusters, pickets, treads, doors, windows, panels. State your count in the rationale ("counted 38 balusters across 4 sections of railing"). When you can\'t count from the photo, ask for a measurement.',
-          '',
-          '## Common Project 86 scopes — typical line bundles',
-          '- Deck repair: PT 5/4 deck boards (Materials), 8d hot-dip nails or trim screws (Materials), demo + install labor (Direct Labor), dump fees (GC), paint sub if separate (Subs).',
-          '- Painting: primer (Materials), top-coat paint (Materials), masking + drop cloths (Materials), prep + paint labor (Direct Labor), color match samples (Materials small lot).',
-          '- Stair tread replacement: oak/PT treads (Materials), risers if needed (Materials), construction adhesive (Materials), demo + install labor (Direct Labor), finish stain/sealer (Materials).',
-          '',
-          '## What I always check before saying "complete"',
-          '- Did I cover demo / disposal? (GC dump fees + Direct Labor demo hours)',
-          '- Did I include mobilization?',
-          '- Is there a permit cost the client expects us to pull?',
-          '- Are there access issues (height, gate codes, scheduling) that need a line?',
-          '- Did I match section_name on every line item?',
-          '',
-          '## Tone',
-          'Trade vocab welcome. Speak like a senior PM walking the job. No corporate filler.'
-        ].join('\n')
-      },
-      {
-        id: 'sk_cra_directory_hygiene',
-        name: 'Customer Directory Hygiene',
-        agents: ['cra'],
-        alwaysOn: true,
-        body: [
-          'When auditing the directory, work in this order: (1) split obvious parent+property compounds, (2) link unparented properties to existing parents, (3) merge clear duplicates, (4) normalize parent-company spelling. Flag ambiguous cases for the user — don\'t guess on a 50/50.',
-          'Always prefer reusing an existing parent over creating a new one. PAC, Associa, FirstService Residential, Greystar, RangeWater are common — check the directory before proposing new ones.'
-        ].join('\n')
-      }
-    ]
-  };
+  // This used to seed two packs on a fresh deployment ("Project 86
+  // Estimating Playbook" for the 'ag' agent, "Customer Directory Hygiene"
+  // for 'cra'). Both are dead doctrine: 'cra' was archived with the staff
+  // agents, 'ag' was renamed to 'job', and the bodies teach the propose_*
+  // tool arsenal removed in AGT-A. Seeding them only ever produced packs
+  // an admin then had to hunt down and retire. Removed 2026-08-16.
+  //
+  // The empty row is still seeded because GET /api/settings/agent_skills
+  // 404s when the row is absent, and the admin Skills editor reads it on
+  // mount.
+  const DEFAULT_AGENT_SKILLS = { skills: [] };
   await pool.query(
     `INSERT INTO app_settings (key, value)
      VALUES ('agent_skills', $1::jsonb)
@@ -5251,92 +5134,22 @@ async function initSchema() {
     [JSON.stringify(DEFAULT_AGENT_SKILLS)]
   );
 
-  // Idempotent additive merge — packs we want every deployment to have
-  // even after the initial agent_skills row has been written. Each
-  // pack is identified by id; if the id already exists in the row,
-  // we leave it alone (admins may have edited the body). New packs
-  // get appended.
-  const ADDITIVE_AGENT_SKILLS = [
-    {
-      id: 'sk_ag_group_discipline',
-      name: 'Project 86 Group Discipline',
-      agents: ['ag'],
-      alwaysOn: true,
-      body: [
-        'Estimates can have multiple Groups. Discipline:',
-        '- Before adding lines or scope, confirm which group the user is talking about. The "Groups on this estimate" block in your context shows every group with line count + subtotal + subgroup names.',
-        '- When the user pivots ("now let\'s work on the roof", "let\'s look at the optional adds") and the active group is not the one they\'re talking about: call propose_switch_active_group FIRST. Don\'t silently slot lines into the wrong group.',
-        '- When the user describes a NEW scope that doesn\'t belong in any existing group ("add a separate scope for the back deck"), call propose_add_group with a clear name. The four standard subgroups auto-seed.',
-        '- When the user says "same as Deck 1 but for Deck 2," call propose_add_group with copy_from_active=true, then walk through delta edits.',
-        '- For Good/Better/Best style estimates, use propose_toggle_group_include to mark the alternate options as excluded so only one rolls into the headline.'
-      ].join('\n')
-    },
-    {
-      id: 'sk_ag_lead_client_linking',
-      name: 'Project 86 Lead/Client Linking',
-      agents: ['ag'],
-      alwaysOn: true,
-      body: [
-        'When an estimate is unlinked (no client_id / lead_id in context) and the user mentions a client or lead name:',
-        '- For client name → call read_clients(q="...") first. If you find a confident match (single result OR exact name match in top 3), call propose_link_to_client. If the match is ambiguous, ask the user to confirm before linking.',
-        '- For lead → call read_leads(q="...") then propose_link_to_lead the same way.',
-        '- After linking a client, the client\'s notes start auto-injecting into your context every turn. propose_add_client_note becomes available for durable facts the user shares.',
-        '- Do NOT link based on weak matches (substring of a common word, fuzzy partial). Better to ask "is this PAC at Wimbledon Greens, or PAC at another property?" than to mis-link.',
-        'Other top-level metadata: title, salutation, markup_default, bt_export_status, notes — use propose_update_estimate_field. Don\'t use it for fields the user can edit faster themselves (most metadata); reserve it for moments where you\'re confident from conversation context (e.g., user says "rename this to Wimbledon Greens — Building 4 deck rebuild").'
-      ].join('\n')
-    },
-    {
-      id: 'sk_ag_pricing_benchmark',
-      name: 'Project 86 Pricing Benchmark Loop',
-      agents: ['ag'],
-      alwaysOn: true,
-      body: [
-        'Before quoting a NON-MATERIALS line (Direct Labor, Subcontractors, GC):',
-        '- Call read_past_estimate_lines(q="<trade keyword>") to anchor the unit_cost to Project 86 history.',
-        '- If the median + range output shows 3+ priced matches in the last 2 years, anchor your quote to the median (or the high end if recent inflation is visible in the range).',
-        '- If 0 matches, mark the rationale "first-time line — no Project 86 history yet" and quote a defensible Central-FL number from your trade knowledge.',
-        '- 1-2 matches: cite both — "$X based on [estimate title], $Y based on [other estimate title], proposing $Z."',
-        'For MATERIALS still use read_materials (real receipts) — past_estimate_lines doesn\'t differentiate retail vs Project 86 cost the way the receipt log does.',
-        'Don\'t loop. ONE read_past_estimate_lines call per trade keyword. If empty, move on — don\'t keep retrying narrower queries.'
-      ].join('\n')
-    },
-    {
-      id: 'sk_ag_cross_group_awareness',
-      name: 'Project 86 Cross-Group Awareness',
-      agents: ['ag'],
-      alwaysOn: true,
-      body: [
-        'The "Groups on this estimate" block in your context shows every group\'s line count, subtotal, and subgroup names. Before proposing a line, scan it.',
-        '- If the user describes a scope that already exists in a different (inactive) group, surface that BEFORE proposing duplicates: "Looks like Deck 1 already has the deck-board work — did you want me to add it to Deck 2 (this one), or move it from Deck 1?"',
-        '- For multi-deck or multi-building scopes, prefer one group per scope (Deck 1, Deck 2, Roof) over jamming everything into one group with subgroup gymnastics.',
-        '- When the user says "do the same for the other decks too," consider propose_add_group(copy_from_active=true) per additional deck instead of duplicating lines manually.'
-      ].join('\n')
-    }
-  ];
-  // Read the current row, merge any missing packs, write back.
-  const existingSkills = await pool.query(
-    `SELECT value FROM app_settings WHERE key = 'agent_skills'`
-  );
-  if (existingSkills.rows.length) {
-    const cur = existingSkills.rows[0].value || {};
-    const skills = Array.isArray(cur.skills) ? cur.skills.slice() : [];
-    let added = 0;
-    for (const pack of ADDITIVE_AGENT_SKILLS) {
-      if (!skills.some(s => s && (s.id === pack.id || s.name === pack.name))) {
-        skills.push(pack);
-        added++;
-      }
-    }
-    if (added > 0) {
-      const merged = Object.assign({}, cur, { skills });
-      await pool.query(
-        `UPDATE app_settings SET value = $1::jsonb, updated_at = NOW() WHERE key = 'agent_skills'`,
-        [JSON.stringify(merged)]
-      );
-      console.log('[db] seeded ' + added + ' new agent skill pack' + (added === 1 ? '' : 's'));
-    }
-  }
-
+  // REMOVED 2026-08-16 — the ADDITIVE_AGENT_SKILLS merge.
+  //
+  // Four packs ("Project 86 Group Discipline", "Lead/Client Linking",
+  // "Pricing Benchmark Loop", "Cross-Group Awareness") were re-appended on
+  // EVERY boot, matched by id-or-name. That is the same undeletable-pack
+  // bug as the workspace/wiring seed above, times four: retire one in the
+  // admin UI, and the next deploy put it back — and the next sync-all then
+  // minted a brand-new Anthropic skill for it and attached it to 86.
+  //
+  // All four teach the propose_* estimate arsenal deleted in AGT-A and
+  // target the 'ag' agent key retired in the ag->job rename, so every one
+  // of them was live doctrine for tools that no longer exist.
+  //
+  // Nothing replaces this. Skill packs are admin-authored content that
+  // lives in app_settings.agent_skills and mirrors to Anthropic; boot
+  // seeds none of them.
   // Sync the admin user from env vars on every boot.
   // ADMIN_EMAIL + ADMIN_PASSWORD are set in Railway/production env. Treated as a
   // system-managed account, not user-facing — change the env var to rotate the password.

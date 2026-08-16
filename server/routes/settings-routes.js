@@ -6,6 +6,7 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireCapability } = require('../auth');
+const { removedPacks } = require('../services/skill-pack-lifecycle');
 
 const router = express.Router();
 
@@ -70,10 +71,66 @@ function preserveSkillIds(incoming, prior) {
   }
 }
 
+// Retire a pack everywhere once it leaves the authoritative array.
+//
+// app_settings.agent_skills is the authority (see services/skill-pack-
+// lifecycle.js for the full argument), but deleting a pack from it used to
+// change nothing else: the managed_agent_skills row kept pointing the
+// agent at the skill, and the org_skill_packs mirror kept its copy — so
+// collectSkillsFor still handed the "retired" playbook to 86 on every
+// session. Removing it here is what makes the delete real.
+//
+// Best-effort by design. A failure to detach must not fail the admin's
+// save; it is reported back instead.
+async function retireRemovedPacks(removed, orgId) {
+  const report = [];
+  for (const pack of removed) {
+    const row = { name: pack.name, anthropic_skill_id: pack.anthropic_skill_id, detached: 0, archived: 0 };
+    if (pack.anthropic_skill_id) {
+      try {
+        const d = await pool.query(
+          `DELETE FROM managed_agent_skills WHERE skill_id = $1`,
+          [pack.anthropic_skill_id]
+        );
+        row.detached = d.rowCount || 0;
+      } catch (e) {
+        row.error = e.message;
+        console.warn('[settings/agent_skills] detach failed for ' + pack.anthropic_skill_id + ':', e.message);
+      }
+    }
+    if (pack.name && orgId) {
+      try {
+        // Archive rather than delete: the tombstone holds the UNIQUE
+        // (organization_id, name) key, which is what stops the legacy
+        // one-shot copy migration from rebuilding the pack on a later boot.
+        //
+        // Scoped to the caller's org. app_settings.agent_skills is a single
+        // global row while org_skill_packs is per-tenant, so the mapping is
+        // one-to-many; archiving unscoped would retire another tenant's
+        // same-named pack. No org on the caller -> skip the mirror rather
+        // than guess.
+        const a = await pool.query(
+          `UPDATE org_skill_packs
+              SET archived_at = NOW(), anthropic_skill_id = NULL, updated_at = NOW()
+            WHERE organization_id = $1 AND name = $2 AND archived_at IS NULL`,
+          [orgId, pack.name]
+        );
+        row.archived = a.rowCount || 0;
+      } catch (e) {
+        row.error = e.message;
+        console.warn('[settings/agent_skills] org_skill_packs archive failed for ' + pack.name + ':', e.message);
+      }
+    }
+    report.push(row);
+  }
+  return report;
+}
+
 router.put('/:key', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
     let value = req.body && req.body.value;
     if (value == null) return res.status(400).json({ error: 'value is required' });
+    let retired = null;
 
     // Snapshot the prior agent_skills blob before overwriting so
     // admins have a rollback path. Only for the agent_skills key —
@@ -111,6 +168,12 @@ router.put('/:key', requireAuth, requireCapability('ROLES_MANAGE'), async (req, 
           // Snapshot failure shouldn't block the save — log and continue.
           console.warn('agent_skills snapshot failed:', snapErr.message);
         }
+
+        // Computed against the MERGED value, after preserveSkillIds — so a
+        // draft that merely omitted anthropic_skill_id doesn't read as a
+        // deletion. Applied after the write below.
+        const gone = removedPacks(priorValue, value);
+        if (gone.length) retired = gone;
       }
     }
 
@@ -121,7 +184,15 @@ router.put('/:key', requireAuth, requireCapability('ROLES_MANAGE'), async (req, 
          SET value = EXCLUDED.value, updated_at = NOW()`,
       [req.params.key, JSON.stringify(value)]
     );
-    res.json({ ok: true });
+
+    // Only after the authoritative array has actually been written — a
+    // failed save must not leave the mirrors detached from packs that are
+    // still live.
+    const retiredReport = retired
+      ? await retireRemovedPacks(retired, (req.user && req.user.organization_id) || null)
+      : null;
+
+    res.json(retiredReport ? { ok: true, retired: retiredReport } : { ok: true });
   } catch (e) {
     console.error('PUT /api/settings/:key error:', e);
     res.status(500).json({ error: 'Server error' });

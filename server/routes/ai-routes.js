@@ -39,7 +39,7 @@ const { classifyCostLine } = require('../services/money/cost-line-filters');
 // Timezone helpers — render reminder remind_at instants in the acting
 // user's local zone (the time IS the point of a reminder).
 const { resolveTz, formatInTz } = require('../timezone');
-const { deleteSkillDeep } = require('../services/anthropic-skills');
+const { deleteSkillDeep, anthropicDisplayTitle } = require('../services/anthropic-skills');
 
 const router = express.Router();
 
@@ -10674,7 +10674,9 @@ async function execStaffApprovalTool(name, input, ctx) {
         // (slug/SKILL.md) since 2026-05-14.
         const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
         const created = await anthropic.beta.skills.create({
-          display_title: (pack.name || 'Project 86 skill').slice(0, 200),
+          // Content-suffixed: Anthropic 400s on a reused display_title,
+          // and the pack name may already be owned by a live skill.
+          display_title: anthropicDisplayTitle(pack, md),
           files: [file]
         });
         await pool.query(
@@ -10797,7 +10799,7 @@ async function execStaffApprovalTool(name, input, ctx) {
                 'unusable —', isStructureMismatch ? 'structure mismatch' : 'stale/404',
                 '— recreating');
               const recreated = await anthropic.beta.skills.create({
-                display_title: (updated.name || 'Project 86 skill').slice(0, 200),
+                display_title: anthropicDisplayTitle(updated, md),
                 files: [file]
               });
               await pool.query(
@@ -10807,7 +10809,7 @@ async function execStaffApprovalTool(name, input, ctx) {
             }
           } else {
             const created = await anthropic.beta.skills.create({
-              display_title: (updated.name || 'Project 86 skill').slice(0, 200),
+              display_title: anthropicDisplayTitle(updated, md),
               files: [file]
             });
             await pool.query(

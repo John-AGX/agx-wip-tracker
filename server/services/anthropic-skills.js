@@ -85,4 +85,176 @@ function msg(e) {
   return String((e && e.message) || e || 'unknown');
 }
 
-module.exports = { deleteSkillDeep };
+// ─── Mirroring a local pack UP to Anthropic ──────────────────────────────
+//
+// Lives here rather than in admin-agents-routes.js so it can be tested
+// without booting the router (which pulls in auth, and therefore requires
+// JWT_SECRET). The route keeps only the DB plumbing, injected as `deps`.
+
+const { slugify } = require('../util/slugify');
+
+// Compose the SKILL.md we upload.
+//
+// The description is the TRIGGER, not a label. Anthropic Skills are
+// progressively disclosed: only name + description sit in context each
+// turn, and the model reads the description to decide whether to pull the
+// body in. This used to fall through to the pack NAME — so every skill
+// shipped with `description: Estimating Playbook`, which says nothing
+// about WHEN it applies. Every pack was live, attached, counted, and
+// effectively unreachable. pack.description now wins.
+function buildSkillMarkdown(pack) {
+  const p = pack || {};
+  const slug = slugify(p.name);
+  const human = (p.name || 'Project 86 skill').replace(/[\r\n]/g, ' ');
+
+  const desc = (p.description && String(p.description).trim()
+    ? String(p.description).trim()
+    : (p.replaces_section
+        ? 'Section override for ' + p.replaces_section
+        : (p.category ? 'Category: ' + p.category : human))
+  ).replace(/[\r\n]+/g, ' ').slice(0, 900);
+
+  return [
+    '---',
+    'name: ' + slug,
+    'description: ' + desc,
+    '---',
+    '',
+    p.body || ''
+  ].join('\n');
+}
+
+// Fingerprint of what was actually uploaded, stored back on the pack as
+// `synced_hash`. Without it, "synced" only ever meant "has an id" — it
+// could not tell a pack that matches its live skill from one edited weeks
+// ago that never shipped. A pack with no stored hash counts as drifted and
+// is re-pushed once, which is self-healing.
+function skillBodyHash(md) {
+  return require('crypto').createHash('sha256').update(String(md), 'utf8').digest('hex').slice(0, 16);
+}
+
+// The Anthropic-side display_title. NOT the user-visible pack name.
+//
+// Anthropic enforces uniqueness on display_title across live skills:
+//
+//   400 invalid_request_error
+//   "Skill cannot reuse an existing display_title: WIP & Cost Analysis"
+//
+// pushPackToAnthropic replaces a skill by CREATING the new one before
+// retiring the old (see the ordering argument below), so on any edit the
+// old skill is still live and still owns the plain pack name. Sending the
+// bare name therefore succeeded exactly once per pack — the first-ever
+// create — and every subsequent edit 400'd. Measured 2026-08-16: all 10
+// upstream skills had created_at === updated_at. No edit had EVER shipped.
+//
+// Suffixing with the content hash makes the title vary with the body, so
+// the replacement never collides with the copy it is replacing, while the
+// pack's own `name` (what admins see, and what the SKILL.md frontmatter
+// slug is built from) is untouched.
+//
+// `salt` breaks the remaining tie: re-pushing byte-identical content whose
+// predecessor failed to delete would otherwise regenerate the same title.
+function anthropicDisplayTitle(pack, md, salt) {
+  const base = String((pack && pack.name) || 'Project 86 skill').replace(/[\r\n]+/g, ' ').trim() || 'Project 86 skill';
+  const mark = skillBodyHash(md).slice(0, 8) + (salt ? '-' + salt : '');
+  const suffix = ' [' + mark + ']';
+  return base.slice(0, 200 - suffix.length) + suffix;
+}
+
+// Anthropic's phrasing for the collision. Matched loosely on purpose —
+// the status code alone is too broad (any 400 would retry) and the exact
+// sentence is not contractual.
+function isDisplayTitleCollision(e) {
+  return /display_title/i.test(String((e && e.message) || ''));
+}
+
+// Create the upstream skill, guaranteeing a non-colliding display_title.
+// Returns the created skill object from the SDK.
+async function createSkillWithUniqueTitle(anthropic, opts) {
+  const { pack, md, toFile } = opts;
+  const slug = slugify(pack && pack.name);
+  // Anthropic requires SKILL.md inside a top-level folder (slug/SKILL.md).
+  const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
+
+  // Attempt 1 is the deterministic hash-suffixed title. Attempts 2-3 add a
+  // salt, for the case where an identical body's predecessor is still live
+  // upstream (its delete failed and left an orphan holding the title).
+  const salts = [null, Date.now().toString(36), Math.random().toString(36).slice(2, 8)];
+  let lastErr = null;
+  for (let i = 0; i < salts.length; i++) {
+    try {
+      return await anthropic.beta.skills.create({
+        display_title: anthropicDisplayTitle(pack, md, salts[i]),
+        files: [file]
+      });
+    } catch (e) {
+      lastErr = e;
+      if (!isDisplayTitleCollision(e)) throw e;
+    }
+  }
+  throw lastErr;
+}
+
+// Push ONE pack to Anthropic and swap the agent onto it.
+//
+// The ordering is the whole safety argument. Every failure mode leaves the
+// agent running the OLD skill rather than no skill:
+//   1. upload the new skill   (old still live and still referenced)
+//   2. re-point the agent's attachment rows old id -> new id
+//   3. caller persists the new id onto the pack
+//   4. retire the old skill   (now unreferenced; failure = harmless orphan)
+// Never delete first. Because step 1 happens while the old skill is live,
+// the new skill CANNOT reuse its display_title — see anthropicDisplayTitle.
+//
+// deps:
+//   toFile              — the SDK's toFile helper (injected; keeps this
+//                         module free of a hard @anthropic-ai/sdk import)
+//   repointAgentSkills  — async (oldId, newId) => rows updated
+async function pushPackToAnthropic(anthropic, pack, deps) {
+  const d = deps || {};
+  const toFile = d.toFile;
+  const md = buildSkillMarkdown(pack);
+  const priorId = (pack && pack.anthropic_skill_id) || null;
+
+  const created = await createSkillWithUniqueTitle(anthropic, { pack, md, toFile });
+
+  let repointed = 0;
+  if (priorId && typeof d.repointAgentSkills === 'function') {
+    try {
+      repointed = (await d.repointAgentSkills(priorId, created.id)) || 0;
+    } catch (e) {
+      console.error('[skills/sync] re-point agent skills failed for ' +
+        priorId + ' -> ' + created.id + ':', e.message);
+    }
+  }
+
+  let oldDeleted = false, oldDeleteError = null;
+  if (priorId) {
+    const del = await deleteSkillDeep(anthropic, priorId);
+    oldDeleted = !!del.ok;
+    if (!del.ok) {
+      oldDeleteError = del.error;
+      console.warn('[skills/sync] old skill ' + priorId +
+        ' replaced but not deleted (orphan left upstream):', del.error);
+    }
+  }
+
+  return {
+    id: created.id,
+    display_title: created.display_title,
+    replaced: priorId,
+    repointed,
+    oldDeleted,
+    oldDeleteError,
+    hash: skillBodyHash(md)
+  };
+}
+
+module.exports = {
+  deleteSkillDeep,
+  buildSkillMarkdown,
+  skillBodyHash,
+  anthropicDisplayTitle,
+  createSkillWithUniqueTitle,
+  pushPackToAnthropic
+};

@@ -23,7 +23,8 @@ const { pool, listOrganizations, getOrgById } = require('../db');
 const { requireAuth, requireCapability, requireOrg, requireSystemAdmin, signToken } = require('../auth');
 const { sendForEvent } = require('../email');
 const { auditLog } = require('../audit');
-const { deleteSkillDeep } = require('../services/anthropic-skills');
+const { deleteSkillDeep, anthropicDisplayTitle } = require('../services/anthropic-skills');
+const { dropPackByName } = require('../services/skill-pack-lifecycle');
 
 const router = express.Router();
 
@@ -78,7 +79,10 @@ async function uploadPackAsNewSkill(anthropic, pack) {
   const slug = slugifyPackName(pack.name);
   const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
   return anthropic.beta.skills.create({
-    display_title: String(pack.name || 'Project 86 skill').slice(0, 200),
+    // Content-suffixed so this can never collide with a live skill that
+    // already owns the bare pack name (Anthropic 400s on a reused
+    // display_title). See anthropicDisplayTitle in services/anthropic-skills.
+    display_title: anthropicDisplayTitle(pack, md),
     files: [file]
   });
 }
@@ -783,12 +787,42 @@ router.delete('/:id/skill-packs/:packId', requireAuth, requireOrg, requireCapabi
       [targetId, packId]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Pack not found' });
+
+    // Retiring here has to reach the AUTHORITATIVE store too, or the pack
+    // is not retired at all — see services/skill-pack-lifecycle.js.
+    // app_settings.agent_skills is what POST /skills/sync-all-to-anthropic
+    // walks, and any pack sitting in that array without a live id gets a
+    // brand-new Anthropic skill minted for it and re-attached to the
+    // agent. That is exactly how five packs archived out of this table
+    // came back upstream on 2026-08-16, all reported status:"synced".
+    let legacyRemoved = 0;
+    try {
+      const legacy = await pool.query(
+        `SELECT value FROM app_settings WHERE key = 'agent_skills'`
+      );
+      if (legacy.rows.length) {
+        const cfg = legacy.rows[0].value || {};
+        const dropped = dropPackByName(cfg, r.rows[0].name);
+        if (dropped.removed.length) {
+          await pool.query(
+            `UPDATE app_settings SET value = $1::jsonb, updated_at = NOW()
+              WHERE key = 'agent_skills'`,
+            [JSON.stringify(dropped.value)]
+          );
+          legacyRemoved = dropped.removed.length;
+        }
+      }
+    } catch (e) {
+      console.warn('[skill-pack delete] agent_skills prune failed (pack may resurrect on the next sync-all):', e.message);
+    }
+
     res.json({
       ok: true,
       id: r.rows[0].id,
       name: r.rows[0].name,
       anthropic_delete_error: anthropicDeleteError,
-      agent_rows_detached: detached
+      agent_rows_detached: detached,
+      agent_skills_entries_removed: legacyRemoved
     });
   } catch (e) {
     const status = e.status || 500;
@@ -980,7 +1014,7 @@ router.post('/:id/skill-packs/mirror-all',
           // folder (slug/SKILL.md) since the 2026-05-14 update.
           const file = await toFile(Buffer.from(md, 'utf8'), slug + '/SKILL.md', { type: 'text/markdown' });
           const created = await anthropic.beta.skills.create({
-            display_title: String(pack.name || 'Project 86 skill').slice(0, 200),
+            display_title: anthropicDisplayTitle(pack, md),
             files: [file]
           });
           await pool.query(
