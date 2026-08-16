@@ -3514,15 +3514,14 @@
         return t && t.entity_type === 'estimate' && _currentId && t.entity_id === _currentId;
       });
       if (!hit) return;
+      // A latch, not a timer. Deliberately no fallback reload of our own:
+      // loadData() has no re-entrancy guard and starts by re-seeding
+      // appData from the localStorage cache, so a second concurrent load
+      // fired while the first is still in flight can put stale rows back
+      // in memory — the clobber class this repo has been bitten by before.
+      // If no hydrate ever arrives the flag simply waits for the next one,
+      // which is exactly the behaviour that existed before this fix.
       _serverWritePending = true;
-      // Safety net: if nothing hydrates (AI panel never initialised, for
-      // instance) pull it ourselves rather than sit on a stale screen.
-      setTimeout(function() {
-        if (_serverWritePending && typeof window.p86ReloadAllData === 'function') {
-          try { window.p86ReloadAllData(); }
-          catch (e) { console.warn('[estimate-editor] fallback reload failed:', e); }
-        }
-      }, 2500);
     } catch (e) {
       console.warn('[estimate-editor] payload-applied hook failed:', e);
     }
