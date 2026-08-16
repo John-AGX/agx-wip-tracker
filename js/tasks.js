@@ -421,6 +421,7 @@
               '<div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:9px;font-size:12px;color:var(--text-dim,#888);">' +
                 '<span>&#x1F4C5; ' + (task.due_date ? esc((task.due_date || '').slice(0, 10)) : 'No due date') + '</span>' +
                 '<span>&#x1F464; ' + esc(task.assignee_name || 'Unassigned') + '</span>' +
+                (task.created_at ? '<span>&#x1F552; Created ' + esc(String(task.created_at).slice(0, 10)) + '</span>' : '') +
               '</div>' +
             '</div>' +
 
@@ -446,12 +447,15 @@
               (checklist.length ? '' : '<div style="font-size:12.5px;color:var(--text-dim,#888);">No punch items yet. Tap Edit to add some.</div>') +
             '</div>' +
 
-            '<div style="background:var(--card-bg,#141a26);border:1px solid var(--border,#333);border-radius:12px;padding:11px 14px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">' +
-              '<div style="min-width:0;">' +
-                '<div style="font-size:13px;color:var(--text,#e9ecf5);"><span style="color:var(--accent,#4f8cff);">&#x1F4CD;</span> <span id="tdViewLocLine">Location</span></div>' +
-                '<div id="tdViewDir" style="font-size:12px;color:var(--text-dim,#888);margin-top:2px;' + (task.directions ? '' : 'display:none;') + '">' + esc(task.directions || '') + '</div>' +
+            '<div style="background:var(--card-bg,#141a26);border:1px solid var(--border,#333);border-radius:12px;overflow:hidden;">' +
+              '<div id="tdMiniMap" style="height:172px;background:#0c1017;display:none;"></div>' +
+              '<div style="padding:11px 14px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">' +
+                '<div style="min-width:0;">' +
+                  '<div style="font-size:13px;color:var(--text,#e9ecf5);"><span style="color:var(--accent,#4f8cff);">&#x1F4CD;</span> <span id="tdViewLocLine">Location</span></div>' +
+                  '<div id="tdViewDir" style="font-size:12px;color:var(--text-dim,#888);margin-top:2px;' + (task.directions ? '' : 'display:none;') + '">' + esc(task.directions || '') + '</div>' +
+                '</div>' +
+                '<a id="tdViewDirBtn" class="ee-btn secondary" target="_blank" rel="noopener" style="flex:none;display:none;">&#x27A4; Directions</a>' +
               '</div>' +
-              '<a id="tdViewDirBtn" class="ee-btn secondary" target="_blank" rel="noopener" style="flex:none;display:none;">&#x27A4; Directions</a>' +
             '</div>' +
 
             '<div>' +
@@ -462,7 +466,7 @@
                   '<button class="ee-btn secondary" id="tdViewUpload" style="font-size:11px;">&#x1F5BC;&#xFE0F; Upload</button>' +
                 '</span>' +
               '</div>' +
-              '<div id="tdViewPhotos" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px;"></div>' +
+              '<div id="tdViewPhotos" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:8px;"></div>' +
             '</div>' +
           '</div>' +
 
@@ -814,6 +818,20 @@
       if (line) line.textContent = label || 'No location set';
       var href = (eff && window.p86MapLink) ? window.p86MapLink.url({ lat: eff.lat, lng: eff.lng, address: effAddr }) : '';
       if (btn) { if (href) { btn.href = href; btn.style.display = ''; } else { btn.style.display = 'none'; } }
+      // Immersive mini-map centered on the pin (interactive, hybrid/satellite).
+      // The view is visible by default so the map mounts + renders right away.
+      var mapEl = h.modal.querySelector('#tdMiniMap');
+      if (mapEl && eff && window.p86Maps && typeof window.p86Maps.ready === 'function') {
+        mapEl.style.display = 'block';
+        window.p86Maps.ready().then(function (maps) {
+          try {
+            var c = { lat: Number(eff.lat), lng: Number(eff.lng) };
+            var m = new maps.Map(mapEl, { center: c, zoom: 17, mapTypeId: maps.MapTypeId.HYBRID, disableDefaultUI: true, gestureHandling: 'cooperative' });
+            new maps.Marker({ position: c, map: m });
+            setTimeout(function () { try { maps.event.trigger(m, 'resize'); m.setCenter(c); } catch (e) {} }, 90);
+          } catch (e) { mapEl.style.display = 'none'; }
+        }).catch(function () { mapEl.style.display = 'none'; });
+      }
     })();
 
     // Take / Upload in the view reuse the edit form's file input; tiles open the image.
