@@ -492,8 +492,10 @@
               assigneeSelectHTML('tdAssignee', task.assignee_user_id) + '</label>' +
           '</div>' +
           (task.entity_type ? '<div style="margin-top:10px;"><span class="p86-task-linkchip">Linked: ' + esc(task.linked_label || (window.entityDisplayName && window.entityDisplayName(task.entity_type, task.entity_id)) || task.entity_type) + '</span></div>' : '') +
-          // Location pin — geotag from the device, or type/clear coords manually.
-          '<div class="p86-field" style="margin-top:12px;"><span>Location pin</span>' +
+          // Location — search an address (same Places autocomplete as the rest of
+          // the app, fills the pin), geotag from the device, or type/pick coords.
+          '<div class="p86-field" style="margin-top:12px;"><span>Location</span>' +
+            '<div id="tdAddrSearch" style="margin:2px 0 8px;"></div>' +
             '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
               '<input id="tdLat" type="number" step="0.000001" placeholder="Latitude" style="flex:1;min-width:120px;" value="' + escAttr(task.lat != null ? task.lat : '') + '" />' +
               '<input id="tdLng" type="number" step="0.000001" placeholder="Longitude" style="flex:1;min-width:120px;" value="' + escAttr(task.lng != null ? task.lng : '') + '" />' +
@@ -747,7 +749,29 @@
       h.modal.querySelector('#tdFooter').style.display = on ? 'flex' : 'none';
       h.modal.querySelector('#tdEditBtn').style.display = on ? 'none' : '';
     }
-    h.modal.querySelector('#tdEditBtn').addEventListener('click', function () { _showEdit(true); });
+    // Address search on the location picker — same Places autocomplete as the
+    // rest of the app. Attached lazily on first Edit (so it mounts visible, not
+    // inside the hidden edit panel); a pick fills the task's lat/lng pin.
+    var _addrAttached = false;
+    function attachAddrSearch() {
+      if (_addrAttached || !window.p86AddressAutocomplete || !window.p86AddressAutocomplete.attach) return;
+      var mount = h.modal.querySelector('#tdAddrSearch'); if (!mount) return;
+      _addrAttached = true;
+      try {
+        window.p86AddressAutocomplete.attach({
+          mount: mount, placeholder: 'Search an address…',
+          onPlace: function (r) {
+            if (r && r.lat != null && r.lng != null) {
+              h.modal.querySelector('#tdLat').value = Number(r.lat).toFixed(6);
+              h.modal.querySelector('#tdLng').value = Number(r.lng).toFixed(6);
+              _geoAcc = null; syncGeoLink();
+              toast('Pin set from the address', 'success');
+            }
+          }
+        });
+      } catch (e) {}
+    }
+    h.modal.querySelector('#tdEditBtn').addEventListener('click', function () { _showEdit(true); attachAddrSearch(); });
     var _cancelEdit = h.modal.querySelector('#tdCancelEdit');
     if (_cancelEdit) _cancelEdit.addEventListener('click', function () { _showEdit(false); });
 
