@@ -497,14 +497,19 @@
         '(a deploy mid-flight will do it) and the claim releases itself so it can be approved again.</div>';
       if (groups.length) bodyHtml += '<div class="cw-dbody">' + opsHtml(groups) + '</div>';
     } else if (!groups.length) {
-      // Two different silences, and they deserve different words.
-      // (a) The entity type records no snapshot — schedule / system /
-      //     assembly / deal_memory have no table in the dispatcher's map, so
-      //     there is genuinely no before/after to show.
-      // (b) The row says applied but carries no committed changeset.
-      // Either way: say so. Rendering nothing reads as "it didn't happen".
-      // THREE different silences, and they are three different claims. Saying
+      // FOUR different silences, and they are four different claims. Saying
       // the wrong one is the same defect as showing the wrong diff.
+      // (a) applied, no committed changeset, but a draft exists — the draft is
+      //     a rolled-back simulation and must not be shown under "Applied".
+      // (b) a changeset exists but breaks into no listable ops.
+      // (c) a DRAFT with nothing recorded — see draftNoDiffWhy: a row that
+      //     predates the recorder and a write type the recorder can't snapshot
+      //     are DIFFERENT FACTS and get different sentences. The old copy here
+      //     asserted the second about every row, which is false for all 14
+      //     drafts currently in the approval queue: they are ordinary writes
+      //     made before the column existed.
+      // (d) anything else with nothing recorded — cause not knowable, so not
+      //     claimed.
       var why;
       if (appliedNoDiff && draft) {
         why = 'This write applied, but the server didn\'t record a before/after for it, so what you\'d ' +
@@ -513,9 +518,12 @@
       } else if (cs.length) {
         why = 'The server did record a before/after for this write, but nothing in it comes out as a ' +
               'change this view can list. Only what it says it did is shown.';
+      } else if (row.status === 'ready' && lw.draftNoDiffWhy) {
+        why = lw.draftNoDiffWhy(row.created_at);
       } else {
-        why = 'This kind of write doesn\'t record a before/after diff yet, so there is nothing to show ' +
-              'line by line — only what it says it did.';
+        why = 'No before/after was recorded for this write. This view can\'t tell whether the write type ' +
+              'is one the recorder doesn\'t snapshot or whether recording it failed, so it isn\'t going ' +
+              'to guess — only what it says it did is shown.';
       }
       bodyHtml = '<div class="cw-note">' +
         esc(row.apply_summary || row.summary || 'No line-level detail was recorded for this write.') +

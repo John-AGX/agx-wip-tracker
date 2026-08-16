@@ -54,6 +54,21 @@
   var _appliedBaselineTs = 0;   // newest applied_at at page load
   var _draftBaselineTs = 0;     // page-load stamp for the DRAFT arm
 
+  // Rows whose DETAIL fetch failed, keyed the same way as _seen. A row in here
+  // is deliberately NOT seen (it must come back) and is re-offered by the sweep
+  // regardless of the baselines. Bounded — see ingestRow.
+  var _detailRetry = Object.create(null);
+  var MAX_DETAIL_RETRIES = 3;
+
+  // The recorder that stores a draft's before/after (payloads.draft_changeset)
+  // shipped in commit 369553a, authored 2026-08-16T21:49:41Z. That is a fixed
+  // historical fact rather than configuration, so a constant is the right shape
+  // and it will never need updating. It is deliberately the COMMIT time: the
+  // deploy is necessarily later, so a row created before this instant is
+  // CERTAINLY older than the recorder, while a row in the commit→deploy gap
+  // falls through to the "can't tell" wording instead of being asserted about.
+  var DRAFT_RECORDER_SINCE = Date.parse('2026-08-16T21:49:41Z');
+
   // _draftBaselineTs is its own clock on purpose. _appliedBaselineTs is
   // derived from applied_at and advances on every apply; comparing a draft's
   // created_at against it is a category error — one auto-applied calendar
@@ -373,6 +388,22 @@
   // from the document pane to the compact strip when C has the editor: the
   // registry order (C=10, A=20, B=90) is the whole coordination mechanism, and
   // no surface needs to reach into another's DOM to find out.
+  //
+  // KNOWN OPEN — claim ≠ paint. `reported` is set when render() merely does
+  // not throw, so a surface can claim a write and never actually put it on
+  // screen: C arms _pendingFlash and paints only from the editor's
+  // post-hydrate refresh, which may never run; A claims on isActive() alone
+  // without checking the row is findable. In both cases B has already stepped
+  // down and nobody reports the write.
+  //
+  // NOT fixed here on purpose. The honest fix is not "render() returns a
+  // boolean" — C physically cannot answer synchronously, by design — it is a
+  // deadline: arm, and if the paint has not happened in N seconds, hand the
+  // entry back to B. That is a new behaviour with its own failure mode
+  // (double-reporting a write the user did see) and it does not belong bolted
+  // onto an honesty fix. Severity is also a tier below D1-D4: this degrades to
+  // a MISSED notification, not to a FALSE one — nothing on screen says
+  // something untrue.
   function broadcast(entry) {
     var reported = false;
     entry.claimedBy = [];
@@ -434,6 +465,7 @@
 
   // ── DOM (surface B — the notification) ───────────────────────────────────
   var root = null, collapseTimer = null;
+  var PILL_NEUTRAL = '#9a9aa5';   // the pill's "claims nothing" colour
 
   function ensureStyle() {
     if (document.getElementById('p86lw-style')) return;
@@ -626,15 +658,35 @@
     if (root && document.body.contains(root)) return;
     root = document.createElement('div');
     root.id = 'p86-live-writer';
+    // The pill's DEFAULT is a label, not a claim, and its dot is neutral grey.
+    // It used to be hardcoded "Scribe wrote" on a success-green dot: after the
+    // 14s auto-collapse, a refusal card reading "The Scribe did not produce a
+    // valid payload. Nothing was written" became a green pill asserting the
+    // opposite. Every path that fills this card now calls setPill; this markup
+    // is only what shows if one ever forgets, so it must claim nothing.
     root.innerHTML =
       '<div class="p86lw-full"><div class="p86lw-card"></div></div>' +
-      '<div class="p86lw-pill"><span class="p86lw-dot" style="animation:none;background:#1d9e75"></span>' +
-      '<span class="p86lw-pilltext">Scribe wrote</span></div>';
+      '<div class="p86lw-pill"><span class="p86lw-dot" style="animation:none;background:' + PILL_NEUTRAL + '"></span>' +
+      '<span class="p86lw-pilltext">Live Writer</span></div>';
     document.body.appendChild(root);
     root.querySelector('.p86lw-pill').addEventListener('click', function () {
       root.classList.remove('p86lw-collapsed');
       armCollapse();
     });
+  }
+
+  // A COLLAPSED pill is a claim, and it is the claim most people actually read
+  // — the card is gone 14 seconds after it appears, the pill can sit there for
+  // the rest of the session. So the pill carries the state: text AND colour.
+  function setPill(text, color) {
+    if (!root) return;
+    var t = root.querySelector('.p86lw-pilltext');
+    if (t) t.textContent = text || 'Live Writer';
+    // Scoped to the PILL. A bare '.p86lw-dot' matches the CARD's header dot
+    // first (the card is the earlier sibling), so an unscoped write would
+    // recolour the wrong element and leave the pill exactly as green as it was.
+    var d = root.querySelector('.p86lw-pill .p86lw-dot');
+    if (d) d.style.background = color || PILL_NEUTRAL;
   }
 
   function armCollapse() {
@@ -659,6 +711,42 @@
       case 'rejected': return { verb: 'draft dismissed', who: who, dot: '#9a9aa5', pulse: false, settle: null };
       default:         return { verb: 'is writing', who: who, dot: '#378add', pulse: true, settle: 'wrote' };
     }
+  }
+
+  /* Why a draft has no before/after to show — and, much more to the point,
+   * which parts of that this code actually KNOWS.
+   *
+   * The old sentence was "This kind of write doesn't record a before/after
+   * diff yet". That is a claim about the write TYPE, and for every draft
+   * currently sitting in the approval queue it is false: they are ordinary
+   * writes made before the recorder existed. Two different facts, so two
+   * different sentences — they must not collapse into one.
+   *
+   *   · created before DRAFT_RECORDER_SINCE → provable. The recorder was not
+   *     deployed yet. Say exactly that, and say that it cannot be backfilled:
+   *     the dry run was rolled back, so re-simulating now would describe
+   *     TODAY's data, not what the Scribe saw. A reconstructed "before" here
+   *     would be a simulation presented as a record — the precise lie this
+   *     whole feature exists to end.
+   *   · anything later → NOT provable. It could be a write type the recorder
+   *     doesn't snapshot (schedule / system / assembly / deal_memory produce
+   *     an empty changeset that changeset-guard rejects), or a persist that
+   *     failed, or a row from the commit→deploy gap. So say that it isn't
+   *     known, rather than picking the likeliest cause and asserting it.
+   *
+   * Returns the WHY only — no call to action. Each surface appends its own
+   * ("Open it in Cowork" is nonsense when you are already on Cowork).
+   */
+  function draftNoDiffWhy(createdAt) {
+    var ct = Date.parse(createdAt || '');
+    if (isFinite(ct) && ct < DRAFT_RECORDER_SINCE) {
+      return 'This draft was made before the app started recording what a draft proposes ' +
+             '(16 Aug 2026), so there is no before/after to show. It can’t be reconstructed either — ' +
+             'the dry run it came from was rolled back, and re-running it now would describe today’s ' +
+             'data rather than what the Scribe saw.';
+    }
+    return 'No before/after was recorded for this draft. This view can’t tell whether the write type is ' +
+           'one the recorder doesn’t snapshot or whether recording it failed, so it isn’t going to guess.';
   }
 
   function openInCoworkBtn(meta) {
@@ -765,17 +853,25 @@
       }
     })();
 
-    // keep a short pill label reflecting the last write
-    var pill = root.querySelector('.p86lw-pilltext');
-    if (pill) pill.textContent = chrome.who + ' ' + (chrome.settle || chrome.verb) + ' · ' + summ.join(', ');
+    // The pill reflects the last write's STATE, not a fixed "wrote". Only a
+    // state that actually settles — the applied default, the one branch above
+    // that turns the header dot green — earns success-green here; a proposal
+    // stays amber, a failure red, an in-flight apply blue.
+    setPill(chrome.who + ' ' + (chrome.settle || chrome.verb) + (summ.length ? ' · ' + summ.join(', ') : ''),
+            chrome.settle ? '#1d9e75' : chrome.dot);
   }
 
   // A write that FAILED, or a payload whose entity type records no diff.
   // Both are real outcomes that used to render as silence.
-  function showNotice(meta, headline, bodyText) {
+  // opts.dot overrides the state colour for a DEGRADED outcome — a row we
+  // know reached 'applied' but whose content we could not read is not the
+  // same as a clean apply, and painting it success-green would let a glance
+  // at the pill say "fine" about something that needs a second look.
+  function showNotice(meta, headline, bodyText, opts) {
     ensureRoot();
     root.classList.remove('p86lw-collapsed');
     var chrome = stateChrome(meta);
+    if (opts && opts.dot) chrome = { who: chrome.who, verb: chrome.verb, dot: opts.dot, pulse: false, settle: null };
     var card = root.querySelector('.p86lw-card');
     card.innerHTML =
       '<div class="p86lw-head"><span class="p86lw-av">' + esc(chrome.who.charAt(0)) + '</span>' +
@@ -788,6 +884,11 @@
     card.querySelector('.p86lw-x').addEventListener('click', dismiss);
     wireCoworkBtn(card);
     requestAnimationFrame(function () { card.classList.add('p86lw-in'); });
+    // The whole reason this function exists is that a refusal, a failed apply
+    // and a no-diff notice are real outcomes rather than silence — so they must
+    // survive the collapse too. This arms the SAME 14s timer show() does, and
+    // without this line the notice collapsed into "Scribe wrote" on a green dot.
+    setPill(chrome.who + ' ' + headline, chrome.settle ? '#1d9e75' : chrome.dot);
     armCollapse();
   }
 
@@ -831,13 +932,31 @@
       '</div>';
     card.querySelector('.p86lw-x').addEventListener('click', dismiss);
     requestAnimationFrame(function () { card.classList.add('p86lw-in'); });
+    // A collapse timer armed by the PREVIOUS card is still running: 14s from
+    // now it would hide this one behind a pill describing a write that is
+    // already history. This card ends when the draft lands (or when its own
+    // backstop fires), not on someone else's clock.
+    if (collapseTimer) { clearTimeout(collapseTimer); collapseTimer = null; }
+    setPill(viaScribe ? 'Handed to the Scribe — drafting' : '86 is writing the change', '#378add');
     if (composingTimer) clearTimeout(composingTimer);
-    composingTimer = setTimeout(function () {
+    composingTimer = setTimeout(async function () {
+      if (!_composing) return;
+      // Before concluding that nothing landed, LOOK. The sweep is the only
+      // path that ever sees a background draft and it does not run while the
+      // tab is hidden — so "no draft has landed" can easily mean "nobody
+      // checked". If the sweep finds the row, ingest() calls clearComposing()
+      // and this branch never speaks at all.
+      var swept = false;
+      try { swept = await pollApplies(true); } catch (_) { swept = false; }
       if (!_composing) return;
       _composing = false;
       showNotice({ state: 'failed', emittingAgentKey: viaScribe ? 'scribe' : 'job', title: label || '' },
         "hasn't come back",
-        'No draft has landed in three minutes. It may still be running — check Pending approvals above the chat box, or the Cowork page.');
+        'Nothing has landed here in three minutes. ' +
+        (swept
+          ? 'The writes feed was just checked and this write is not in it — it may still be running.'
+          : 'The writes feed could not be checked just now, so this view does not know whether it landed.') +
+        ' Check Pending approvals above the chat box, or the Cowork page.');
     }, 180000);
   }
   function clearComposing() {
@@ -963,9 +1082,20 @@
         return;
       }
       if (!entry.groups.length) {
+        // A DRAFT with nothing to render is still a draft that landed. This
+        // arm used to not exist, so the poller's `proposed` filter had to
+        // refuse such rows outright — and refusing them meant ingest() never
+        // ran, clearComposing() never fired, and the "Handed to the Scribe —
+        // drafting" card ran its full 180s and concluded "No draft has landed
+        // in three minutes" about a draft sitting in Pending approvals.
+        if (meta.state === 'proposed' && meta.payloadId) {
+          showNotice(meta, 'drafted — needs approval',
+            draftNoDiffWhy(meta.createdAt) + ' Open it in Cowork to read the change itself.');
+          return;
+        }
         // Two different silences, and they are NOT the same claim.
-        //   no changeset at all → the dispatcher has no snapshot table for
-        //     this entity type (schedule / system / assembly / deal_memory)
+        //   no changeset at all → nothing was recorded; WHY is not knowable
+        //     from here, so it isn't guessed at
         //   changeset present, no ops → it recorded a before/after we can't
         //     break into ops. Saying "doesn't record a diff" here would be
         //     false, and it was: a live scope write hit exactly this path.
@@ -974,7 +1104,7 @@
             (meta.summary || meta.title || 'The change was applied.') +
             (entry.changeset.length
               ? ' — the server recorded a before/after for it, but not as changes this view can list.'
-              : ' — this write type doesn\'t record a before/after yet.'));
+              : ' — the server recorded no before/after for it, so what changed is not known here.'));
         }
         return;
       }
@@ -1188,6 +1318,27 @@
     };
   }
 
+  // A write we can see the existence of but not the content of. The list row
+  // is thin, but it is not nothing: it proves the write reached this state.
+  // Say only that, and say plainly that the rest is unknown — never fall back
+  // to the cheerful branch just because the detail fetch is the thing that
+  // broke.
+  function noticeUnreadable(row, state, err) {
+    try {
+      showNotice(metaFromRow(row, state),
+        state === 'applied' ? 'wrote something this view could not read'
+                            : 'left a write this view could not read',
+        (row.title ? '“' + row.title + '” — ' : '') +
+        'the server would not return its details (' + ((err && err.message) || 'fetch failed') +
+        ') after ' + MAX_DETAIL_RETRIES + ' tries, so what it changed is not known here. ' +
+        'Open it in Cowork, which fetches it again.',
+        // Amber, not the state's own green: the write did land — that much the
+        // list row proves — but this is a degraded report of it, and a glance
+        // at a green pill would read as "nothing to see here".
+        { dot: '#d98a1f' });
+    } catch (e) { console.warn('[live-writer] unreadable notice failed', e); }
+  }
+
   // Ingest one list row: fetch its detail, pick the RIGHT changeset column
   // for its state, and hand it to the engine.
   async function ingestRow(row) {
@@ -1200,9 +1351,25 @@
     catch (e) {
       // Do NOT mark it seen — an unreadable detail must be retried on the
       // next sweep, or one 500 makes that write permanently invisible.
-      console.warn('[live-writer] payload detail fetch failed for', row.id, e && e.message);
+      //
+      // BOUNDED, because "retry forever" would hammer a permanently-500ing
+      // row every 5s for the life of the tab and never tell anyone. Three
+      // sweeps (~15s); after that stop asking and SAY SO, using the only
+      // facts the lean list row actually proves — that the write reached this
+      // state, and that its detail could not be read. The alternative is the
+      // write silently vanishing, which is the defect class this whole
+      // surface exists to end.
+      _detailRetry[key] = (_detailRetry[key] || 0) + 1;
+      console.warn('[live-writer] payload detail fetch failed for', row.id,
+        '(attempt ' + _detailRetry[key] + ' of ' + MAX_DETAIL_RETRIES + ')', e && e.message);
+      if (_detailRetry[key] >= MAX_DETAIL_RETRIES) {
+        delete _detailRetry[key];
+        _seen[key] = true;
+        noticeUnreadable(row, state, e);
+      }
       return null;
     }
+    delete _detailRetry[key];
     if (!det) return null;
     var realState = stateOf(det) || state;
     // apply_changeset = committed. draft_changeset = simulation.
@@ -1240,8 +1407,12 @@
     return entry;
   }
 
-  async function pollApplies() {
-    if (document.hidden) return;
+  /* One sweep. Returns TRUE only if the feed was actually read — the composing
+   * card's backstop needs to distinguish "checked, not there" from "couldn't
+   * check", and a swallowed catch cannot tell it apart. `force` runs the sweep
+   * even in a hidden tab, which is exactly the case that backstop is for. */
+  async function pollApplies(force) {
+    if (document.hidden && !force) return false;
     try {
       var j = await fetchJson('/api/payloads/?limit=12&order=activity');
       var rows = j.payloads || j.rows || j || [];
@@ -1249,15 +1420,31 @@
         if (!p || !p.id) return false;
         var st = stateOf(p);
         if (!st) return false;
-        if (_seen[p.id + ':' + st]) return false;
+        var key = p.id + ':' + st;
+        if (_seen[key]) return false;
+        // A row whose DETAIL fetch failed is re-offered regardless of either
+        // baseline. Holding the baseline back (below) is not enough on its
+        // own: rows are swept oldest-first, so a NEWER sibling in the same
+        // batch would advance the baseline past the failed row and the
+        // strictly-greater compare would hide it from every later sweep —
+        // exactly the "one 500 makes that write permanently invisible"
+        // outcome the retry was written to prevent.
+        if (_detailRetry[key]) return true;
         if (st === 'applied' || st === 'failed') {
           var at = Date.parse(p.applied_at || p.activity_at || p.created_at || '');
           return isFinite(at) && at > _appliedBaselineTs;
         }
         if (st === 'proposed') {
           // Its OWN clock. See _draftBaselineTs.
+          //
+          // NO has_draft/has_diff condition. It used to require one, which
+          // meant a draft that landed with no recordable changeset was never
+          // ingested at all: clearComposing() never ran and the handoff card
+          // timed out claiming the draft never arrived. A draft that exists
+          // is news whether or not its diff is renderable — the surface has
+          // a truthful rendering for the diff-less case (draftNoDiffWhy).
           var ct = Date.parse(p.created_at || '');
-          return isFinite(ct) && ct > _draftBaselineTs && (p.has_draft || p.has_diff);
+          return isFinite(ct) && ct > _draftBaselineTs;
         }
         return false;   // 'applying' is transient; the next sweep sees its outcome
       }).sort(function (a, b) {
@@ -1265,13 +1452,22 @@
       });
       for (var i = 0; i < fresh.length; i++) {
         var p = fresh[i];
+        await ingestRow(p);
+        // Advance the baseline only AFTER the row is accounted for. It used to
+        // advance FIRST, which quietly defeated the retry above: the row's
+        // applied_at then EQUALLED the baseline, and the filter is strictly
+        // greater, so a single transient 500 on /api/payloads/:id hid that
+        // write until a page reload — and the poller is the only path that
+        // ever sees a server-side apply.
+        if (_detailRetry[p.id + ':' + stateOf(p)]) continue;
         var ts = Date.parse(p.applied_at || '');
         if (isFinite(ts) && ts > _appliedBaselineTs) _appliedBaselineTs = ts;
-        await ingestRow(p);
       }
+      return true;
     } catch (e) {
       // Loud enough to debug, quiet enough not to spam a 5s loop.
       if (!pollApplies._warned) { pollApplies._warned = true; console.warn('[live-writer] poll failed:', e && e.message); }
+      return false;
     }
   }
 
@@ -1294,7 +1490,10 @@
         if (st === 'applied' || st === 'rejected' || st === 'failed') _seen[p.id + ':' + st] = true;
       });
       _pollStarted = true;
-      setInterval(pollApplies, POLL_MS);
+      // Wrapped, not passed bare: pollApplies' first argument is `force`, and
+      // a timer implementation that hands its callback anything truthy would
+      // start sweeping a hidden tab every 5 seconds.
+      setInterval(function () { pollApplies(); }, POLL_MS);
     } catch (_) { setTimeout(initPoll, 6000); }
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initPoll);
@@ -1318,6 +1517,10 @@
     ingest: ingest,
     ingestRow: ingestRow,
     fetchPayload: fetchPayload,
+    /* Shared copy: why a draft has no before/after. ONE wording, so Cowork and
+     * the strip cannot drift into telling the user two different stories about
+     * the same row. */
+    draftNoDiffWhy: draftNoDiffWhy,
     /* Fired by the estimate editor's post-hydrate refresh (surface C). */
     flashEditorRows: flashEditorRows,
     /* The handoff placeholder. */
@@ -1326,6 +1529,9 @@
     dismiss: dismiss,
     _diffEntry: diffEntry,
     _metaFromRow: metaFromRow,
+    /* One sweep, on demand. The interval owns the live loop; this is the seam
+     * the composing backstop and the tests drive. */
+    _pollOnce: pollApplies,
     _usd: usd,
     _relTime: relTime,
     _agentLabel: agentLabel

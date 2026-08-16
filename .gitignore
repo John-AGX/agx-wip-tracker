@@ -2,3 +2,9 @@ node_modules/
 data/
 *.db
 .env
+
+# Scratch files that live in the working tree but are not the project. These
+# were sitting untracked at the repo root and one `git add -A` away from
+# landing in main.
+probe*.js
+docs/scope-rework-brief.md
