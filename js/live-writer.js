@@ -368,15 +368,21 @@
     };
   }
 
+  // entry.claimedBy is filled IN ORDER as surfaces render, so a later surface
+  // can see what an earlier one already did. That is how B knows to step down
+  // from the document pane to the compact strip when C has the editor: the
+  // registry order (C=10, A=20, B=90) is the whole coordination mechanism, and
+  // no surface needs to reach into another's DOM to find out.
   function broadcast(entry) {
     var reported = false;
+    entry.claimedBy = [];
     for (var i = 0; i < _surfaces.length; i++) {
       var s = _surfaces[i];
       if (s.exclusive && reported) continue;
       var ok = false;
       try { ok = !!s.claims(entry); } catch (e) { ok = false; }
       if (!ok) continue;
-      try { s.render(entry); if (s.exclusive) reported = true; }
+      try { s.render(entry); entry.claimedBy.push(s.name); if (s.exclusive) reported = true; }
       catch (e) { console.warn('[live-writer] surface "' + s.name + '" failed:', e); }
     }
     return reported;
@@ -409,6 +415,10 @@
         createdAt: meta.createdAt || null,
         appliedAt: meta.appliedAt || null,
         applyError: meta.applyError || null,
+        // A 'failed' row with no targets is a recorded REFUSAL — the Scribe
+        // never authored a payload — not an apply that blew up. The two get
+        // different words because they send the user to different places.
+        neverDrafted: !!meta.neverDrafted,
         entityType: first ? first.entity_type : (groups.length === 1 ? groups[0].entity_type : null),
         entityId: first ? first.id : null,
         estimateId: (first && first.entity_type === 'estimate') ? first.id : null
@@ -461,10 +471,18 @@
       '.p86lw-op .p86lw-i{width:16px;text-align:center;flex:none;font-weight:700;font-size:12px;line-height:1.5;}',
       '.p86lw-add{background:rgba(29,158,117,0.13);} .p86lw-add .p86lw-i{color:#1d9e75;}',
       '.p86lw-edit{background:rgba(186,117,23,0.14);} .p86lw-edit .p86lw-i{color:#d98a1f;}',
-      '.p86lw-del{background:rgba(226,75,74,0.13);} .p86lw-del .p86lw-i{color:#e24b4a;}',
+      // `.p86lw-delete`, not `.p86lw-del`. The op row's class is built as
+      // 'p86lw-' + op.kind and the kind is the word "delete" — so these four
+      // rules have never matched anything since S1, and a removed line has
+      // been rendering in the strip (and in Cowork's op list, which uses the
+      // same markup) with no red fill, no red glyph and no strikethrough:
+      // visually identical to an unchanged row. It matters more now that the
+      // strip is the ONLY place deletes are reported while the editor holds
+      // the document.
+      '.p86lw-delete{background:rgba(226,75,74,0.13);} .p86lw-delete .p86lw-i{color:#e24b4a;}',
       '.p86lw-lbl{flex:1;min-width:0;}',
       '.p86lw-lbl .l1{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
-      '.p86lw-del .l1{text-decoration:line-through;color:#e88;}',
+      '.p86lw-delete .l1{text-decoration:line-through;color:#e88;}',
       '.p86lw-lbl .l2{font-size:11px;color:#9a9aa5;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
       '.p86lw-amt{flex:none;font-variant-numeric:tabular-nums;font-size:11px;color:#c9c9d2;padding-left:4px;}',
       '.p86lw-foot{display:flex;align-items:center;gap:8px;padding:9px 13px;border-top:1px solid rgba(255,255,255,0.08);font-size:11px;color:#9a9aa5;}',
@@ -480,13 +498,13 @@
       'body.light-mode .p86lw-head,body.light-mode .p86lw-foot{border-color:rgba(0,0,0,0.08);}',
       'body.light-mode .p86lw-sub,body.light-mode .p86lw-grpname,body.light-mode .p86lw-lbl .l2,body.light-mode .p86lw-foot{color:#6b6b76;}',
       'body.light-mode .p86lw-amt{color:#44444a;}',
-      'body.light-mode .p86lw-del .l1{color:#a33;}',
+      'body.light-mode .p86lw-delete .l1{color:#a33;}',
       'body.light-mode .p86lw-view{border-color:rgba(0,0,0,0.18);color:#44444a;}',
       // Light twins for the op fills: the dark rgba washes read as muddy
       // smears on white, and the +/~/− glyph colors lose contrast.
       'body.light-mode .p86lw-add{background:rgba(29,158,117,0.10);} body.light-mode .p86lw-add .p86lw-i{color:#0f6e56;}',
       'body.light-mode .p86lw-edit{background:rgba(186,117,23,0.12);} body.light-mode .p86lw-edit .p86lw-i{color:#8a5c0d;}',
-      'body.light-mode .p86lw-del{background:rgba(226,75,74,0.10);} body.light-mode .p86lw-del .p86lw-i{color:#a33;}',
+      'body.light-mode .p86lw-delete{background:rgba(226,75,74,0.10);} body.light-mode .p86lw-delete .p86lw-i{color:#a33;}',
       'body.light-mode .p86lw-err{color:#a33;}',
       // ── the estimate "document" pane (applied writes only) ──
       // left tracks the user-resizable sidebar instead of a magic 300px.
@@ -533,14 +551,50 @@
       'body.light-mode .p86lp-tag.tadd{background:#0f6e56;color:#eafaf4;}',
       'body.light-mode .p86lp-tag.tedit{background:#8a5c0d;color:#fff6e6;}',
       // ── surface C: the in-editor row flash ──
-      // Animates box-shadow + outline, NOT background: estimate rows carry
-      // inline background styles in places, and inline beats all CSS.
-      '@keyframes p86lwFlashAdd{0%{box-shadow:inset 0 0 0 999px rgba(29,158,117,.28);outline-color:#1d9e75;}',
-      '100%{box-shadow:inset 0 0 0 999px rgba(29,158,117,0);outline-color:transparent;}}',
-      '@keyframes p86lwFlashEdit{0%{box-shadow:inset 0 0 0 999px rgba(217,138,31,.28);outline-color:#d98a1f;}',
-      '100%{box-shadow:inset 0 0 0 999px rgba(217,138,31,0);outline-color:transparent;}}',
-      '.p86lw-flash-add{outline:2px solid transparent;outline-offset:-2px;animation:p86lwFlashAdd 1.6s ease-out 1;}',
-      '.p86lw-flash-edit{outline:2px solid transparent;outline-offset:-2px;animation:p86lwFlashEdit 1.6s ease-out 1;}',
+      // NOT background. An estimate row's own cells set inline backgrounds
+      // (the drag-over highlight sets row.style.background directly), and
+      // inline beats all CSS — a background animation would be silently
+      // cancelled on exactly the row someone is interacting with.
+      //
+      // Nor an INSET shadow, which was the first attempt: an inset shadow
+      // paints on the row's own background layer, and every cell in the row
+      // is an opaque child stacked above it, so the wash showed only in the
+      // gaps. This rings the row from OUTSIDE the border box — nothing the
+      // editor renders inside the row can occlude it — and outline-offset
+      // pulls a second line just inside the edge. Both properties are
+      // unclaimed by the editor.
+      '@keyframes p86lwFlashAdd{',
+      '0%{box-shadow:0 0 0 2px #1d9e75,0 0 14px 2px rgba(29,158,117,.55);outline-color:rgba(29,158,117,.85);}',
+      '70%{box-shadow:0 0 0 2px #1d9e75,0 0 14px 2px rgba(29,158,117,.35);outline-color:rgba(29,158,117,.6);}',
+      '100%{box-shadow:0 0 0 0 rgba(29,158,117,0),0 0 0 0 rgba(29,158,117,0);outline-color:transparent;}}',
+      '@keyframes p86lwFlashEdit{',
+      '0%{box-shadow:0 0 0 2px #d98a1f,0 0 14px 2px rgba(217,138,31,.55);outline-color:rgba(217,138,31,.85);}',
+      '70%{box-shadow:0 0 0 2px #d98a1f,0 0 14px 2px rgba(217,138,31,.35);outline-color:rgba(217,138,31,.6);}',
+      '100%{box-shadow:0 0 0 0 rgba(217,138,31,0),0 0 0 0 rgba(217,138,31,0);outline-color:transparent;}}',
+      // position:relative so the ring paints above the NEXT row rather than
+      // being clipped under it, and a z-index that stays well below the
+      // notification band.
+      '.p86lw-flash-add,.p86lw-flash-edit{position:relative;z-index:2;border-radius:4px;',
+      'outline:2px solid transparent;outline-offset:-2px;}',
+      '.p86lw-flash-add{animation:p86lwFlashAdd 1.6s ease-out 1;}',
+      '.p86lw-flash-edit{animation:p86lwFlashEdit 1.6s ease-out 1;}',
+      // The dark-mode greens/ambers wash out on white; the light twins are
+      // the same hues at the contrast the rest of light mode uses.
+      'body.light-mode .p86lw-flash-add{animation-name:p86lwFlashAddL;}',
+      'body.light-mode .p86lw-flash-edit{animation-name:p86lwFlashEditL;}',
+      '@keyframes p86lwFlashAddL{',
+      '0%{box-shadow:0 0 0 2px #0f6e56,0 0 14px 2px rgba(15,110,86,.35);outline-color:rgba(15,110,86,.8);}',
+      '70%{box-shadow:0 0 0 2px #0f6e56,0 0 14px 2px rgba(15,110,86,.22);outline-color:rgba(15,110,86,.55);}',
+      '100%{box-shadow:0 0 0 0 rgba(15,110,86,0),0 0 0 0 rgba(15,110,86,0);outline-color:transparent;}}',
+      '@keyframes p86lwFlashEditL{',
+      '0%{box-shadow:0 0 0 2px #8a5c0d,0 0 14px 2px rgba(138,92,13,.35);outline-color:rgba(138,92,13,.8);}',
+      '70%{box-shadow:0 0 0 2px #8a5c0d,0 0 14px 2px rgba(138,92,13,.22);outline-color:rgba(138,92,13,.55);}',
+      '100%{box-shadow:0 0 0 0 rgba(138,92,13,0),0 0 0 0 rgba(138,92,13,0);outline-color:transparent;}}',
+      // Someone who has asked the OS not to animate still needs to see WHICH
+      // rows moved — so the ring holds still instead of disappearing.
+      '@media (prefers-reduced-motion:reduce){',
+      '.p86lw-flash-add{animation:none;box-shadow:0 0 0 2px #1d9e75;}',
+      '.p86lw-flash-edit{animation:none;box-shadow:0 0 0 2px #d98a1f;}}',
       // ── mobile ──
       // The strip had NO mobile rule and buried the 5-slot bottom nav; the
       // pane's rule already existed at 900px so it is AMENDED here, not
@@ -886,7 +940,16 @@
       var meta = entry.meta;
       if (meta.state === 'rejected') return;            // a dismissal is not news
       if (meta.state === 'failed') {
-        showNotice(meta, "couldn't apply that", meta.applyError || 'The write failed and nothing was changed.');
+        // A refusal and a failed apply are different claims. "Couldn't apply
+        // that" on a write that never got as far as a draft would send the
+        // user hunting for a card that does not exist.
+        if (meta.neverDrafted) {
+          showNotice(meta, "couldn't draft that",
+            (meta.applyError || 'The Scribe did not produce a usable change.') +
+            ' Nothing was written — re-ask with the exact record and fields.');
+        } else {
+          showNotice(meta, "couldn't apply that", meta.applyError || 'The write failed and nothing was changed.');
+        }
         return;
       }
       if (!entry.groups.length) {
@@ -905,8 +968,19 @@
         }
         return;
       }
-      // Only a COMMITTED single-estimate write earns the document pane.
-      if (meta.state === 'applied' && !meta.isDraft && entry.changeset.length === 1 &&
+      // Only a COMMITTED single-estimate write earns the document pane — AND
+      // only when surface C did not already claim the editor.
+      //
+      // When the user is standing on the very estimate that changed, the pane
+      // is a 560px read-only copy of the estimate rendered ON TOP of the real
+      // one, while the real one animates the same change underneath. Two
+      // documents, one of them fake, one of them covering the other. The
+      // editor is the document in that case; the strip stays as the ticket
+      // that names the agent, the cost impact, the ops with no row to paint,
+      // and — the reason it matters most — the DELETED lines, which C cannot
+      // show because their rows are gone.
+      var inEditor = (entry.claimedBy || []).indexOf('editor-flash') >= 0;
+      if (!inEditor && meta.state === 'applied' && !meta.isDraft && entry.changeset.length === 1 &&
           entry.changeset[0].entity_type === 'estimate' && entry.changeset[0].after &&
           getLines(entry.changeset[0].after).length) {
         showEstimatePane(entry);
@@ -925,6 +999,36 @@
   // we painted. So C is armed by the broadcast and FIRES from the editor's
   // post-hydrate refresh, against the repainted rows.
   var _pendingFlash = null;
+
+  /* The estimate the editor has open RIGHT NOW, or null when it is closed or
+   * hidden. Both the claim and the paint go through this — nothing else in
+   * this file is allowed to guess at the editor's state. */
+  function openEditorEstimateId() {
+    var view = document.getElementById('estimate-editor-view');
+    if (!view || view.offsetParent === null) return null;
+    try {
+      return (window.p86EstimateEditorCurrentId && window.p86EstimateEditorCurrentId()) || null;
+    } catch (_) { return null; }
+  }
+
+  /* Which changeset entry (if any) is the estimate on screen?
+   *
+   * Deliberately NOT meta.entityId: that is only populated when the changeset
+   * has exactly ONE entry (ingest, `first`). A write that touches the open
+   * estimate AND something else — the common "update the estimate and stamp
+   * the lead" shape — has meta.entityId === null, so the old claim silently
+   * refused the very case where the user is most obviously watching. */
+  function editorTargetEntry(entry) {
+    var open = openEditorEstimateId();
+    if (!open) return null;
+    var cs = (entry && entry.changeset) || [];
+    for (var i = 0; i < cs.length; i++) {
+      var e = cs[i];
+      if (e && e.entity_type === 'estimate' && e.id != null && String(e.id) === String(open)) return e;
+    }
+    return null;
+  }
+
   registerSurface({
     name: 'editor-flash',
     order: 10,
@@ -932,18 +1036,35 @@
     claims: function (entry) {
       var m = entry.meta;
       if (m.state !== 'applied' || m.isDraft) return false;
-      if (m.entityType !== 'estimate' || !m.entityId) return false;
-      var view = document.getElementById('estimate-editor-view');
-      if (!view || view.offsetParent === null) return false;
-      return !!(window.p86EstimateEditorCurrentId && window.p86EstimateEditorCurrentId() === m.entityId);
+      return !!editorTargetEntry(entry);
     },
     render: function (entry) {
-      var ops = [];
-      entry.groups.forEach(function (g) {
-        g.ops.forEach(function (o) { if (o.lineId) ops.push(o); });
+      var cs = editorTargetEntry(entry);
+      if (!cs) return;
+      // diffEntry is THE differ — the same function every other surface goes
+      // through. It is re-run for this ONE entry rather than indexed out of
+      // entry.groups because diffChangeset FILTERS empty groups, so group i
+      // and changeset i are not the same record.
+      var ops = diffEntry(cs).ops.filter(function (o) {
+        // A delete has no row left to paint. It is reported by the strip
+        // (which steps down to the op list precisely because C took the
+        // document), so it is left out of the count here rather than
+        // silently dropped inside the paint loop.
+        return o.lineId && o.kind !== 'delete';
       });
       if (!ops.length) return;
-      _pendingFlash = { estimateId: entry.meta.entityId, ops: ops, at: Date.now() };
+      // Two writes can land between one hydrate — merge instead of letting
+      // the second silently discard the first's rows.
+      var same = _pendingFlash && String(_pendingFlash.estimateId) === String(cs.id) &&
+                 (Date.now() - _pendingFlash.at) < 60000;
+      if (same) {
+        var byKey = Object.create(null);
+        _pendingFlash.ops.concat(ops).forEach(function (o) { byKey[o.kind + ':' + o.lineId] = o; });
+        _pendingFlash.ops = Object.keys(byKey).map(function (k) { return byKey[k]; });
+        _pendingFlash.at = Date.now();
+      } else {
+        _pendingFlash = { estimateId: cs.id, ops: ops, at: Date.now() };
+      }
     }
   });
 
@@ -953,25 +1074,36 @@
   function flashEditorRows(estimateId) {
     var p = _pendingFlash;
     if (!p) return 0;
-    if (estimateId && p.estimateId && estimateId !== p.estimateId) return 0;
+    if (estimateId && p.estimateId && String(estimateId) !== String(p.estimateId)) return 0;
     if (Date.now() - p.at > 60000) { _pendingFlash = null; return 0; }
     _pendingFlash = null;
+    // Scoped to the editor. A bare document.querySelector would happily match
+    // a [data-line-id] row in some other mounted surface and flash a row the
+    // user is not looking at.
+    var view = document.getElementById('estimate-editor-view');
+    if (!view) return 0;
     var painted = 0, i = 0;
+    function paint(o) {
+      var el = view.querySelector('[data-line-id="' + String(o.lineId).replace(/"/g, '\\"') + '"]');
+      if (!el) return;
+      var cls = 'p86lw-flash-' + (o.kind === 'add' ? 'add' : 'edit');
+      el.classList.remove(cls);
+      void el.offsetWidth;              // restart the keyframe
+      el.classList.add(cls);
+      setTimeout(function () { el.classList.remove(cls); }, 1800);
+      if (painted === 0) { try { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (_) {} }
+      painted++;
+    }
     (function step() {
+      // Past MAX_REVEALS the rest paint at once. A 400-line rewrite staggered
+      // at 180ms would animate for 72 seconds — long after the user has moved
+      // on, and long enough that the editor may have re-rendered underneath.
+      if (i >= MAX_REVEALS) { while (i < p.ops.length) paint(p.ops[i++]); return; }
       if (i >= p.ops.length) return;
-      var o = p.ops[i++];
-      if (o.kind !== 'delete') {
-        var el = document.querySelector('[data-line-id="' + String(o.lineId).replace(/"/g, '\\"') + '"]');
-        if (el) {
-          var cls = 'p86lw-flash-' + (o.kind === 'add' ? 'add' : 'edit');
-          el.classList.remove(cls);
-          void el.offsetWidth;              // restart the keyframe
-          el.classList.add(cls);
-          setTimeout(function () { el.classList.remove(cls); }, 1800);
-          if (painted === 0) { try { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (_) {} }
-          painted++;
-        }
-      }
+      // The editor closed (or swapped estimates) mid-stagger — stop, rather
+      // than decorating rows in whatever is on screen now.
+      if (String(openEditorEstimateId()) !== String(p.estimateId)) return;
+      paint(p.ops[i++]);
       setTimeout(step, STAGGER_MS);
     })();
     return p.ops.length;
@@ -1037,7 +1169,12 @@
       createdAt: row.created_at || null,
       appliedAt: row.applied_at || null,
       applyError: row.apply_error || null,
-      isDraft: state !== 'applied'
+      isDraft: state !== 'applied',
+      // A failed row with NO targets never became a payload at all — it is a
+      // recorded REFUSAL (the Scribe could not author the change), not an
+      // apply that blew up. Only the detail fetch carries targets; the lean
+      // list row does not, and `undefined` correctly reads as "don't know".
+      neverDrafted: Array.isArray(row.targets) ? row.targets.length === 0 : false
     };
   }
 
@@ -1178,6 +1315,7 @@
     clearComposing: clearComposing,
     dismiss: dismiss,
     _diffEntry: diffEntry,
+    _metaFromRow: metaFromRow,
     _usd: usd,
     _relTime: relTime,
     _agentLabel: agentLabel
