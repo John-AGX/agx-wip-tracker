@@ -4695,6 +4695,36 @@ async function initSchema() {
       CREATE INDEX IF NOT EXISTS idx_ai_sessions_summary_trgm
         ON ai_sessions USING gin (summary gin_trgm_ops)
         WHERE archived_at IS NULL AND summary IS NOT NULL;
+
+      -- Name-first session search. ai_sessions.label is human intent ONLY and
+      -- NULL for every machine-derived title (the migration further down set
+      -- it so), which means "label ILIKE ..." matches NOTHING on a thread whose
+      -- title is derived — the sidebar shows "Deal · Uptown - Dumpster Pad
+      -- Repair" and search could not find it. The fix resolves the search term
+      -- against the ENTITY the thread is named after
+      -- (findEntityIdsByName, server/services/entity-labels.js) and then
+      -- matches sessions on entity_id / lineage root. These indexes are what
+      -- keep that discovery off a sequential scan.
+      --
+      -- The indexed expressions are copied CHARACTER-FOR-CHARACTER from
+      -- queryFor() in that same file. Edit a column expression there and edit
+      -- it here, or the index silently stops being used and every keystroke
+      -- scans the jobs/estimates JSONB heaps.
+      --
+      -- Deliberately NOT indexed: (jobNumber || ' ' || title). That
+      -- composition lives only in js/job-label.js; the search AND-s the term's
+      -- whitespace tokens across the two component columns instead, which
+      -- spans the straddle without re-authoring the format.
+      --
+      -- leads.title / clients.name / subs.name already have theirs above.
+      CREATE INDEX IF NOT EXISTS idx_projects_name_trgm
+        ON projects USING gin (name gin_trgm_ops);
+      CREATE INDEX IF NOT EXISTS idx_estimates_label_trgm
+        ON estimates USING gin ((COALESCE(data->>'name', data->>'title', '')) gin_trgm_ops);
+      CREATE INDEX IF NOT EXISTS idx_jobs_number_trgm
+        ON jobs USING gin ((COALESCE(NULLIF(data->>'jobNumber',''),'')) gin_trgm_ops);
+      CREATE INDEX IF NOT EXISTS idx_jobs_title_trgm
+        ON jobs USING gin ((COALESCE(data->>'title', data->>'name', '')) gin_trgm_ops);
     `);
     console.log('[db] pg_trgm trigram indexes ready');
   } catch (e) {

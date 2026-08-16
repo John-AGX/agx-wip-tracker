@@ -83,6 +83,125 @@ function queryFor(type, ids, orgId) {
   }
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// findEntityIdsByName — the INVERSE of queryFor(). Name → candidate ids.
+// ──────────────────────────────────────────────────────────────────────────
+//
+// Why it lives here and not at the call site: it must read exactly the columns
+// queryFor() reads. A session's display title is composed from those columns
+// at READ time and stored nowhere (server/services/session-title.js), so the
+// only way to search by the name a user can SEE is to match the entity first
+// and then find the sessions pointing at it. If the two directions ever drift,
+// search stops finding threads whose titles it can render. One diff touches
+// both.
+//
+// The column expressions below are copied CHARACTER-FOR-CHARACTER from
+// queryFor(). Change one, change the other — and change the matching trigram
+// index in server/db.js, or search sequential-scans jobs/estimates.
+//
+// NOTE the deliberate absence of a `jobNumber || ' ' || title` expression.
+// That composition is owned by js/job-label.js and by nothing else (it exists
+// to end a six-way format drift), and re-authoring it in SQL would reproduce
+// only its `n && t` branch. Instead the WHERE clause AND-s the whitespace
+// tokens of the search term across the two component columns: "RV2006
+// Waterside" matches because `RV2006` hits the number column and `Waterside`
+// hits the title column, with no knowledge of how they get joined for display.
+// Token-AND is a strict SUPERSET of a contiguous ILIKE over the same columns,
+// so this can only ever add candidates.
+const SEARCH_COLUMNS = {
+  lead:     { table: 'leads',     label: 'title' },
+  client:   { table: 'clients',   label: 'name' },
+  sub:      { table: 'subs',      label: 'name' },
+  // projects has ALWAYS been strictly scoped (organization_id is NOT NULL on
+  // that table) — no OR-IS-NULL arm, matching queryFor().
+  project:  { table: 'projects',  label: 'name', strictOrg: true },
+  estimate: { table: 'estimates', label: "COALESCE(data->>'name', data->>'title', '')" },
+  job:      { table: 'jobs',      label: "COALESCE(data->>'title', data->>'name', '')",
+              num:   "COALESCE(NULLIF(data->>'jobNumber',''),'')" }
+};
+
+// A trigram GIN index cannot serve an ILIKE pattern with fewer than three
+// extractable characters, and the sidebar's search box fires on a 180ms
+// debounce with no minimum length. Tokens shorter than this are DROPPED rather
+// than matched, so every pattern this function emits is index-servable —
+// dropping a token only widens the match, never narrows it. If every token is
+// short the whole search yields no entity candidates and the caller falls back
+// to the label/summary/body branches, i.e. exactly today's behaviour.
+const MIN_TOKEN_LEN = 3;
+const MAX_TOKENS = 4;
+// Ceiling on how many entities one term may nominate. A generic term
+// ("repair", "siding") can match thousands; the sessions query that consumes
+// these ids has to stay bounded. ORDER BY id makes *which* 200 deterministic —
+// without it the set is heap order and can silently change after a VACUUM.
+const CANDIDATE_LIMIT = 200;
+
+function likeTokens(term) {
+  return String(term == null ? '' : term)
+    .trim()
+    .split(/\s+/)
+    .filter((t) => t.length >= MIN_TOKEN_LEN)
+    .slice(0, MAX_TOKENS)
+    // Same escaping the search routes already apply before an ILIKE.
+    .map((t) => '%' + t.replace(/[\\%_]/g, (m) => '\\' + m) + '%');
+}
+
+// orgId, searchTerm → Map keyed `${type}:${id}` → resolved label (composed the
+// same way resolveEntityLabels composes it, jobLabel included).
+//
+// TENANT RULE, and it is the opposite of the one orgGuard() encodes. There the
+// caller already holds the id and is only asking for its name, so an unscoped
+// legacy token keeps its old behaviour. HERE the caller supplies the NAME and
+// learns whether a row bearing it exists — an unscoped probe is a cross-tenant
+// existence oracle. So a null orgId yields ZERO candidates. That is not a
+// regression for anyone: before this function existed, searching a name
+// matched no entity at all, so the null-org fallback is precisely the previous
+// behaviour rather than a widened one.
+async function findEntityIdsByName(orgId, term, opts) {
+  const out = new Map();
+  if (orgId == null) return out;
+  const patterns = likeTokens(term);
+  if (!patterns.length) return out;
+
+  const types = (opts && Array.isArray(opts.types) && opts.types.length)
+    ? opts.types.filter((t) => SEARCH_COLUMNS[t])
+    : Object.keys(SEARCH_COLUMNS);
+
+  await Promise.all(types.map(async (type) => {
+    const spec = SEARCH_COLUMNS[type];
+    if (!spec) return;
+    // $1 = orgId, $2..$n = one pattern per token.
+    const params = [orgId].concat(patterns);
+    const cols = spec.num ? [spec.num, spec.label] : [spec.label];
+    const tokenClauses = patterns.map((_, i) => {
+      const p = '$' + (i + 2);
+      return '(' + cols.map((c) => c + ' ILIKE ' + p).join(' OR ') + ')';
+    });
+    const org = spec.strictOrg
+      ? 'organization_id = $1'
+      : '(organization_id = $1 OR organization_id IS NULL)';
+    const select = spec.num
+      ? 'id::text AS id, ' + spec.num + ' AS num, ' + spec.label + ' AS label'
+      : 'id::text AS id, ' + spec.label + ' AS label';
+    const text = 'SELECT ' + select + ' FROM ' + spec.table +
+      ' WHERE ' + tokenClauses.join(' AND ') + ' AND ' + org +
+      ' ORDER BY id LIMIT ' + CANDIDATE_LIMIT;
+    try {
+      const { rows } = await pool.query(text, params);
+      rows.forEach((r) => {
+        let label = r.label || '';
+        if (type === 'job') label = jobLabel(r.num, label);
+        out.set(type + ':' + r.id, label);
+      });
+    } catch (e) {
+      // Per-type, exactly like resolveEntityLabels: one bad column must not
+      // turn every search into a 500.
+      console.warn('[entity-labels] name search failed for type=' + type + ':', e && e.message);
+    }
+  }));
+
+  return out;
+}
+
 // items: array of { entity_type, entity_id } (extra keys ignored).
 // Returns a Map keyed `${type}:${id}` → label string.
 async function resolveEntityLabels(orgId, items) {
@@ -137,4 +256,12 @@ async function attachEntityLabels(orgId, rows) {
   return rows;
 }
 
-module.exports = { resolveEntityLabels, attachEntityLabels };
+module.exports = {
+  resolveEntityLabels,
+  attachEntityLabels,
+  findEntityIdsByName,
+  // exported for tests
+  likeTokens,
+  MIN_TOKEN_LEN,
+  CANDIDATE_LIMIT
+};

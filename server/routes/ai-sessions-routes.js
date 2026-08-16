@@ -25,6 +25,8 @@ const { requireAuth, requireOrg, resolveUserOrg } = require('../auth');
 // server/services/session-title.js for why label and display_label are two
 // different things. One batched resolve per response, org-scoped.
 const { attachSessionTitles, attachSessionTitle } = require('../services/session-title');
+// Search resolves the same way the title does — see session-search.js.
+const { searchSessions } = require('../services/session-search');
 
 const router = express.Router();
 
@@ -161,81 +163,31 @@ router.post('/:id/compact', requireAuth, async (req, res) => {
 
 // ──────────────────────────────────────────────────────────────────
 // GET /api/ai/sessions/search?q=
-//   Substring search across labels, summaries, AND message bodies.
-//   Returns up to 30 matches with a short snippet from the first
-//   matching message. The sidebar's search box hits this.
+//   Substring search across the thread's NAME (an authored label, or
+//   the entity it is named after), its summary, and message bodies.
+//   Returns up to 30 matches, strongest first, with a short snippet.
+//   The sidebar's search box hits this.
+//
+//   The entity arm is the reason this delegates: a thread's visible
+//   title is composed per response and stored nowhere, so searching
+//   the name a user can SEE means resolving that name against the
+//   entity tables first and finding the sessions pointing at it. See
+//   server/services/session-search.js — it also backs 86's
+//   search_my_sessions tool, so the sidebar and the agent can no
+//   longer disagree about what is findable.
 // ──────────────────────────────────────────────────────────────────
 router.get('/search', requireAuth, async (req, res) => {
   try {
     const q = String(req.query.q || '').trim();
     if (!q) return res.json({ results: [] });
-    const pattern = '%' + q.replace(/[\\%_]/g, m => '\\' + m) + '%';
-
-    // Sessions that match by metadata.
-    const metaRows = await pool.query(
-      `SELECT s.id, s.label, s.summary, s.entity_type, s.entity_id,
-              s.last_used_at, s.turn_count,
-              s.session_kind, s.lineage_root,
-              dm.numbers AS deal_numbers, dm.root_type AS deal_root_type,
-              'meta'::text AS match_kind,
-              NULL::text AS snippet
-         FROM ai_sessions s
-         LEFT JOIN deal_memory dm ON dm.lineage_root = s.lineage_root
-        WHERE s.user_id = $1
-          AND s.archived_at IS NULL
-          AND (s.label ILIKE $2 OR s.summary ILIKE $2)
-        ORDER BY s.pinned DESC, s.last_used_at DESC
-        LIMIT 15`,
-      [req.user.id, pattern]
-    );
-
-    // Sessions that match by message body — pull the first matching
-    // turn so the UI can show a snippet. ai_messages keyed by
-    // (user_id, entity_type, entity_id) covers the v1 thread; the
-    // v2 multi-session path will key by anthropic_session_id once
-    // the chat handler is updated. Both paths covered below.
-    const msgRows = await pool.query(
-      `WITH matches AS (
-         SELECT s.id AS session_id, s.label, s.summary, s.entity_type, s.entity_id,
-                s.last_used_at, s.turn_count,
-                s.session_kind, s.lineage_root,
-                dm.numbers AS deal_numbers, dm.root_type AS deal_root_type,
-                m.content AS snippet,
-                ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY m.created_at ASC) AS rn
-           FROM ai_sessions s
-           JOIN ai_messages m
-             ON m.user_id = s.user_id
-            AND m.entity_type = s.entity_type
-            AND COALESCE(m.estimate_id, '') = COALESCE(s.entity_id, '')
-           LEFT JOIN deal_memory dm ON dm.lineage_root = s.lineage_root
-          WHERE s.user_id = $1
-            AND s.archived_at IS NULL
-            AND m.content ILIKE $2
-       )
-       SELECT session_id AS id, label, summary, entity_type, entity_id,
-              last_used_at, turn_count,
-              session_kind, lineage_root, deal_numbers, deal_root_type,
-              'message'::text AS match_kind,
-              substr(snippet, 1, 240) AS snippet
-         FROM matches
-        WHERE rn = 1
-        ORDER BY last_used_at DESC
-        LIMIT 15`,
-      [req.user.id, pattern]
-    );
-
-    // Merge, dedupe by id, prefer message-match if both fired (the
-    // snippet is more useful than the label-only row).
-    const seen = new Set();
-    const results = [];
-    [...msgRows.rows, ...metaRows.rows].forEach(row => {
-      if (seen.has(row.id)) return;
-      seen.add(row.id);
-      results.push(row);
+    const { results, total } = await searchSessions({
+      userId: req.user.id,
+      orgId: await titleOrgId(req),
+      q,
+      limit: 30,
+      snippetLen: 240
     });
-    const trimmed = results.slice(0, 30);
-    await attachSessionTitles(await titleOrgId(req), trimmed);
-    res.json({ results: trimmed });
+    res.json({ results, total });
   } catch (e) {
     console.error('GET /api/ai/sessions/search error:', e);
     res.status(500).json({ error: 'Server error' });

@@ -9072,63 +9072,31 @@ async function execStaffTool(name, input, ctx) {
       const q = String((input && input.query) || '').trim();
       if (!q) return 'query is required.';
       const limit = Math.min(30, Math.max(1, parseInt((input && input.limit), 10) || 10));
-      const pattern = '%' + q.replace(/[\\%_]/g, m => '\\' + m) + '%';
 
-      const meta = await pool.query(
-        `SELECT s.id, s.label, s.summary, s.entity_type, s.entity_id,
-                s.last_used_at, s.turn_count, NULL::text AS snippet,
-                s.session_kind, s.lineage_root,
-                dm.numbers AS deal_numbers, dm.root_type AS deal_root_type
-           FROM ai_sessions s
-           LEFT JOIN deal_memory dm ON dm.lineage_root = s.lineage_root
-          WHERE s.user_id = $1
-            AND s.archived_at IS NULL
-            AND (s.label ILIKE $2 OR s.summary ILIKE $2)
-          ORDER BY s.pinned DESC, s.last_used_at DESC
-          LIMIT $3`,
-        [userId, pattern, limit]
-      );
-      const msgs = await pool.query(
-        `WITH matches AS (
-           SELECT s.id AS session_id, s.label, s.summary, s.entity_type, s.entity_id,
-                  s.last_used_at, s.turn_count, m.content AS snippet,
-                  s.session_kind, s.lineage_root,
-                  dm.numbers AS deal_numbers, dm.root_type AS deal_root_type,
-                  ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY m.created_at ASC) AS rn
-             FROM ai_sessions s
-             JOIN ai_messages m
-               ON m.user_id = s.user_id
-              AND m.entity_type = s.entity_type
-              AND COALESCE(m.estimate_id, '') = COALESCE(s.entity_id, '')
-             LEFT JOIN deal_memory dm ON dm.lineage_root = s.lineage_root
-            WHERE s.user_id = $1 AND s.archived_at IS NULL AND m.content ILIKE $2
-         )
-         SELECT session_id AS id, label, summary, entity_type, entity_id,
-                last_used_at, turn_count, substr(snippet, 1, 200) AS snippet,
-                session_kind, lineage_root, deal_numbers, deal_root_type
-           FROM matches WHERE rn = 1
-          ORDER BY last_used_at DESC LIMIT $3`,
-        [userId, pattern, limit]
-      );
-
-      const seen = new Set();
-      const merged = [];
-      [...msgs.rows, ...meta.rows].forEach(r => {
-        if (seen.has(r.id)) return;
-        seen.add(r.id);
-        merged.push(r);
-      });
-      if (!merged.length) return 'No prior sessions matched "' + q + '".';
+      // ONE implementation, shared with the sidebar's /api/ai/sessions/search
+      // (server/services/session-search.js). This used to be a byte-for-byte
+      // twin of that endpoint's two queries, which is how the sidebar could be
+      // taught to find a thread by its lead's name while 86 kept coming back
+      // empty on the same term. The org is resolved BEFORE the queries because
+      // the entity-name branch is org-scoped at discovery — that binding is
+      // the tenant boundary, not a nicety.
+      //
       // 86 quotes these lines back to the user verbatim, so they follow the
       // same rule the sidebar does: name the lead / job, never the id. The
       // titles are user-entered text flowing into a tool result read by an
       // agent that holds write tools — attachSessionTitles caps length and
       // strips control characters for exactly that reason.
-      const shown = merged.slice(0, limit);
       let _ssOrgId = null;
       try { _ssOrgId = await resolveOrgIdFromCtx(ctx); } catch (_) { _ssOrgId = null; }
-      try { await require('../services/session-title').attachSessionTitles(_ssOrgId, shown); } catch (_) {}
-      const lines = ['Found ' + merged.length + ' session(s) matching "' + q + '":'];
+      const _ssFound = await require('../services/session-search').searchSessions({
+        userId, orgId: _ssOrgId, q, limit, snippetLen: 200
+      });
+      const shown = _ssFound.results;
+      if (!shown.length) return 'No prior sessions matched "' + q + '".';
+      const lines = [
+        'Found ' + _ssFound.total + ' session(s) matching "' + q + '"' +
+        (_ssFound.total > shown.length ? ' (showing ' + shown.length + ')' : '') + ':'
+      ];
       shown.forEach(r => {
         const label = r.display_label || 'Untitled chat';
         const ctxStr = (r.entity_id && r.entity_id !== 'global')
