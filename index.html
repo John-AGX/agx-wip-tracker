@@ -3318,6 +3318,12 @@
     <script src="js/modal-drag.js?v=1b"></script>
     <script src="js/auth.js?v=19"></script>
     <script src="js/dialogs.js?v=2b"></script>
+    <!-- The refresh heartbeat (window.p86Refresh): the ONE place a mutation
+         turns into "patch the read-cache, then repaint the surface", in that
+         order, coalesced by entity type and never over a focused editor.
+         Every entry resolves its renderers off window at CALL time, so this
+         can load early without caring what has defined itself yet. -->
+    <script src="js/refresh.js?v=1"></script>
     <script src="js/geolocation.js?v=1"></script>
     <script src="js/assembly-formula.js?v=1"></script>
     <!-- The ONE job-label formatter (window.p86JobLabel): jobNumber + ' ' +
@@ -3364,7 +3370,7 @@
         <div id="clientDashboard_body" style="padding:20px 22px;overflow-y:auto;flex:1;"></div>
       </div>
     </div>
-    <script src="js/clients.js?v=27"></script>
+    <script src="js/clients.js?v=28"></script>
     <script src="js/clients-dashboard.js?v=7"></script>
     <!-- Folder taxonomy — default folder structure per entity type
          (lead / estimate / job / client). Loads before subs.js and
@@ -3382,7 +3388,7 @@
     <script src="js/table-enhancements.js?v=15"></script>
     <script src="js/bulk-ribbon.js?v=1"></script>
     <script src="js/job-finalize.js?v=5"></script>
-    <script src="js/leads.js?v=94"></script>
+    <script src="js/leads.js?v=95"></script>
     <script src="js/job-costs-import.js?v=14"></script>
     <script src="js/qb-costs-view.js?v=22"></script>
     <script src="js/insights.js?v=11"></script>
@@ -3393,7 +3399,7 @@
     <script src="js/entity-card.js?v=9"></script>
     <!-- Lead/estimate context card mounted into #app-sidebar (uses p86EntityCard). -->
     <script src="js/entity-subnav.js?v=3"></script>
-    <script src="js/app.js?v=138"></script>
+    <script src="js/app.js?v=139"></script>
     <script src="js/search-clear.js?v=3"></script>
     <script src="js/sidebar-brand.js?v=2"></script>
     <!-- Guided tours engine + the Help & What's New center (patch
@@ -3410,7 +3416,7 @@
     <script src="js/my-files.js?v=26"></script>
     <!-- Tasks / To-Do UI. Loads after my-files.js (reuses window.p86Toast)
          and after api.js/auth.js (p86Api.tasks + p86Auth). -->
-    <script src="js/tasks.js?v=19"></script>
+    <script src="js/tasks.js?v=20"></script>
     <!-- Google Maps JS API loader + tag-icon registry for photo pins.
          Both load before projects-map.js so the map renderer can
          reference window.p86Maps + window.p86TagIcons. -->
@@ -3453,32 +3459,32 @@
          calls into window.p86ReportTemplates. -->
     <script src="js/report-templates.js?v=1"></script>
     <script src="js/report-style-packs.js?v=2"></script>
-    <script src="js/projects.js?v=70"></script>
+    <script src="js/projects.js?v=71"></script>
     <script src="js/receipt-scanner.js?v=2"></script>
     <script src="js/receipt-cropper.js?v=1"></script>
     <script src="js/list-filter.js?v=1"></script>
-    <script src="js/cost-inbox.js?v=21"></script>
-    <script src="js/invoices.js?v=4"></script>
+    <script src="js/cost-inbox.js?v=22"></script>
+    <script src="js/invoices.js?v=5"></script>
     <script src="js/console-docs.js?v=2"></script>
     <script src="js/console.js?v=18"></script>
     <!-- Jobs Hub — cross-job index pages (Purchase Orders / Change Orders /
          RFIs / Submittals) for the Jobs sidebar dropdown. Uses p86Api +
          appData.jobs + editJob/switchJobSubTab at runtime. -->
-    <script src="js/jobs-hub.js?v=23"></script>
+    <script src="js/jobs-hub.js?v=24"></script>
     <script src="js/assembly-studio.js?v=4"></script>
     <script src="js/materials-consolidate.js?v=1"></script>
     <!-- Purchase Order editor — full-window overlay opened from the Jobs
          hub Purchase Orders list. Uses p86Api.purchaseOrders + subs. -->
     <script src="js/purchase-order-import.js?v=1"></script>
     <script src="js/sub-access-prompt.js?v=1"></script>
-    <script src="js/purchase-order-editor.js?v=16"></script>
+    <script src="js/purchase-order-editor.js?v=17"></script>
     <script src="js/pay-applications.js?v=13"></script>
     <!-- Shared pricing pipeline — math used by estimate-editor +
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->
     <script src="js/pricing-pipeline.js?v=2"></script>
     <script src="js/progress.js?v=3"></script>
-    <script src="js/jobs.js?v=220"></script>
+    <script src="js/jobs.js?v=221"></script>
     <script src="js/doc-import.js?v=4"></script>
     <script src="js/job-workflow-ui.js?v=6"></script>
     <!-- Reusable rich-text field (window.p86RichText) — shared WYSIWYG for
@@ -3487,12 +3493,12 @@
     <script src="js/rich-text.js?v=1"></script>
     <script src="js/estimates.js?v=61"></script>
     <script src="js/proposal.js?v=26"></script>
-    <script src="js/estimate-editor.js?v=94"></script>
+    <script src="js/estimate-editor.js?v=95"></script>
     <!-- Change Order editor — overlay opened from the job detail's
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which
          carries the window.p86Api.changeOrders wrapper). -->
-    <script src="js/change-order-editor.js?v=15"></script>
+    <script src="js/change-order-editor.js?v=16"></script>
     <script src="js/materials-drawer.js?v=12"></script>
     <script src="js/estimate-preview.js?v=15"></script>
     <script src="js/bt-export.js?v=6b"></script>
@@ -3508,7 +3514,7 @@
          AFTER it (live-writer is idempotent-by-existence: a re-load is a
          no-op, so registration has to go through registerSurface). -->
     <script src="js/cowork.js?v=6"></script>
-    <script src="js/ai-panel.js?v=173"></script>
+    <script src="js/ai-panel.js?v=174"></script>
     <!-- Save-from-chat bridge (Workstream ③). Owns p86SaveCodeBlock /
          p86SaveResponse / p86SaveToPicker, called by inline onclick
          handlers in ai-panel.js renderMarkdown / renderBubble. Loads

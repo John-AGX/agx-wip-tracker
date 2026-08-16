@@ -2324,6 +2324,24 @@
         }
         window.applyReadOnlyButtonGuard = applyReadOnlyButtonGuard;
 
+        // Six job subtabs had no renderer in switchJobSubTab. renderJobDetail
+        // papers over it on FIRST open by also calling several of them
+        // directly, but a later switch through switchJobSubTab — the path deep
+        // links, the Back button and Jobs-hub row clicks all take — left
+        // whatever was painted last. job-wip-report matters most: the
+        // captured-costs receipts rollup only re-mounts inside renderWipTab.
+        //
+        // Names come from workspace-layout.js's TAB_RENDERERS, which is the
+        // authoritative map; resolving off window keeps the two in step
+        // rather than duplicating the dispatch.
+        const _LATE_JOB_SUBTAB_RENDERERS = {
+            'job-wip-report':   'renderWipTab',
+            'job-changeorders': 'renderChangeOrders',
+            'job-qb-costs':     'renderJobQBCosts',
+            'job-details':      'renderJobDetails',
+            'job-estimates':    'renderJobEstimates',
+            'job-reports':      'renderJobReports'
+        };
         function switchJobSubTab(subtabName) {
             const currentJobId = appState.currentJobId;
 
@@ -2373,6 +2391,13 @@
             // Wave 3 — RFI / submittal / transmittal pane.
             else if (subtabName === 'job-workflow' && window.p86JobWorkflowUI) {
                 window.p86JobWorkflowUI.mount(currentJobId);
+            }
+            else {
+                var _late = _LATE_JOB_SUBTAB_RENDERERS[subtabName];
+                if (_late && typeof window[_late] === 'function') {
+                    try { window[_late](currentJobId); }
+                    catch (e) { console.warn('[job subtab] ' + _late + ' failed:', e && e.message); }
+                }
             }
 
             // Re-apply read-only button guard after the new sub-tab content renders.
@@ -2695,6 +2720,14 @@
         // overwrites their unsaved edits) is now closed by gating
         // editor opens on p86DataReady() — see openNewEstimateForm /
         // editEstimate / etc.
+        // One post-hydrate renderer, isolated. A throw in any single surface
+        // must never take the rest of the fan-out down with it.
+        function fanOut(name, run) {
+            if (typeof run !== 'function') return;
+            try { run(); }
+            catch (e) { console.warn('[hydrate fan-out] ' + name + ' failed:', e && e.message); }
+        }
+
         function loadData() {
             loadFromLocalStorage(); // fast first paint
             var authed = window.p86Api && window.p86Api.isAuthenticated();
@@ -2764,17 +2797,34 @@
                 // Re-render whatever's visible. Each renderer no-ops if
                 // its DOM target isn't present, so calling them all is
                 // safe regardless of which tab the user is on.
-                if (typeof renderJobsMain === 'function') renderJobsMain();
-                if (typeof renderEstimatesList === 'function') renderEstimatesList();
-                if (typeof renderInsightsDashboard === 'function') renderInsightsDashboard();
-                if (typeof renderAdminMetrics === 'function') renderAdminMetrics();
-                if (typeof renderAdminJobs === 'function') renderAdminJobs();
+                // Each is isolated: this is an unguarded SEQUENCE otherwise, so
+                // one renderer throwing on a missing element would silently
+                // skip every renderer after it — including the two post-write
+                // editor refreshes at the end, which would then latch forever
+                // with no user-visible signal.
+                fanOut('renderJobsMain',          function() { renderJobsMain(); });
+                fanOut('renderEstimatesList',     function() { renderEstimatesList(); });
+                fanOut('renderInsightsDashboard', function() { renderInsightsDashboard(); });
+                fanOut('renderAdminMetrics',      function() { renderAdminMetrics(); });
+                fanOut('renderAdminJobs',         function() { renderAdminJobs(); });
+                // The OPEN job page. p86ReloadAllData's fan-out was list views
+                // only, so an agent write to the job on screen left its money
+                // tiles (Total Income, ACCRUED, header strip, WIP) reading the
+                // pre-write numbers indefinitely. Like the estimate editor it
+                // is latch-driven — it no-ops unless a write is actually
+                // pending — and it must run HERE, post-hydrate, so it paints
+                // the objects this load just installed instead of racing them.
+                if (typeof window.p86JobDetailRefresh === 'function') {
+                    fanOut('p86JobDetailRefresh', function() { window.p86JobDetailRefresh(); });
+                }
                 // The open estimate editor is NOT in this list by accident —
                 // it re-renders only when an agent write is pending, and it
                 // must run here (post-hydrate) rather than off the
                 // p86:payload-applied event, so it repaints against the
                 // objects this load just installed instead of racing them.
-                if (typeof window.p86EstimateEditorRefresh === 'function') window.p86EstimateEditorRefresh();
+                if (typeof window.p86EstimateEditorRefresh === 'function') {
+                    fanOut('p86EstimateEditorRefresh', function() { window.p86EstimateEditorRefresh(); });
+                }
             }).catch(function(err) {
                 _serverLoadInFlight = false;
                 _serverLoadComplete = true; // mark complete so UI doesn't hang waiting

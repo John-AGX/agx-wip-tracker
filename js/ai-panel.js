@@ -1389,40 +1389,11 @@ function p86Ask(message, opts) {
     // Populate its badge/pulse now that the button exists in the DOM.
     if (window.p86AgentTasks && window.p86AgentTasks.refresh) window.p86AgentTasks.refresh();
 
-    // Listen for cross-component signals so the sidebar updates when a
-    // payload is applied (badge flip) or a fresh ready-payload arrives
-    // mid-session (re-fetch). Also dispatch entity-surface refreshes
-    // based on affected_targets so the UI reflects the new data without
-    // a manual page reload.
-    document.addEventListener('p86:payload-applied', function(ev) {
-      try {
-        // Drop the applied/rejected card from the pending strip.
-        try { refreshPendingApprovals(); } catch (_) {}
-        var targets = (ev && ev.detail && ev.detail.affected_targets) || [];
-        var types = {};
-        targets.forEach(function(t) { if (t && t.entity_type) types[t.entity_type] = true; });
-
-        // Lead changes — refresh the leads cache + list view.
-        if (types.lead && typeof window.reloadLeadsCache === 'function') {
-          try { window.reloadLeadsCache(); } catch (e) { console.warn('[payload-applied] reloadLeadsCache failed:', e); }
-        }
-        // Client changes — refresh the clients cache.
-        if (types.client && typeof window.reloadClientsCache === 'function') {
-          try { window.reloadClientsCache(); } catch (e) { console.warn('[payload-applied] reloadClientsCache failed:', e); }
-        }
-        // Job or estimate changes — re-hydrate appData (jobs +
-        // estimates + qb cost lines + subs) and re-render every
-        // surface. p86ReloadAllData handles the render fan-out.
-        if ((types.job || types.estimate) && typeof window.p86ReloadAllData === 'function') {
-          try { window.p86ReloadAllData(); } catch (e) { console.warn('[payload-applied] p86ReloadAllData failed:', e); }
-        }
-        // Schedule changes — repaint the schedule grid.
-        if (types.schedule && typeof window.renderSchedule === 'function') {
-          try { window.renderSchedule(); } catch (e) { console.warn('[payload-applied] renderSchedule failed:', e); }
-        }
-      } catch (e) {
-        console.warn('[payload-applied] surface refresh dispatch failed:', e);
-      }
+    // Drop the applied/rejected card from the pending strip. The entity-surface
+    // fan-out that used to live here has moved to module scope — see
+    // wirePayloadApplied() at the bottom of this file for why.
+    document.addEventListener('p86:payload-applied', function() {
+      try { refreshPendingApprovals(); } catch (_) {}
     });
     var trustBtn = panel.querySelector('#ai-trust');
     if (trustBtn) trustBtn.onclick = function(e) {
@@ -7758,4 +7729,40 @@ function p86Ask(message, opts) {
     }
     open({ entityType: 'intake' });
   };
+
+  /* ── the entity-surface fan-out ────────────────────────────────────────
+   * This is the ONE listener that turns an applied agent write into visible
+   * refreshes, and it is registered at MODULE SCOPE — deliberately.
+   *
+   * It used to live inside ensurePanel(), whose only callers are open() and
+   * dockInto(). So in a fresh session where the user had not opened the 86
+   * panel, a background Scribe write or an approve-in-chat landed, the Live
+   * Writer strip flashed (module scope, fires fine) and nothing else on the
+   * screen ever changed. Every downstream refresh — leads, clients, the
+   * appData hydrate, the schedule — hung off a listener that was not
+   * listening. Mobile Cowork never creates the panel at all, so that path was
+   * permanently deaf.
+   *
+   * Dispatch goes through p86Refresh rather than an if-chain here: the old
+   * chain had arms for only lead / client / job|estimate / schedule, so
+   * tasks, to-dos, reminders, calendar events, receipts, POs, COs, bills and
+   * invoices produced no refresh at all — and task creation is the single
+   * most common agent write. The registry also coalesces by type, which is
+   * what stops a 40-line estimate rewrite (one target per changed row) from
+   * firing 40 hydrates.
+   */
+  var _payloadFanoutWired = false;
+  function wirePayloadApplied() {
+    if (_payloadFanoutWired) return;   // ensurePanel can run twice; this must not
+    _payloadFanoutWired = true;
+    document.addEventListener('p86:payload-applied', function(ev) {
+      try {
+        var d = (ev && ev.detail) || {};
+        if (window.p86Refresh) window.p86Refresh.fromTargets(d.affected_targets, d.payload_id);
+      } catch (e) {
+        console.warn('[payload-applied] surface refresh dispatch failed:', e);
+      }
+    });
+  }
+  wirePayloadApplied();
 })();

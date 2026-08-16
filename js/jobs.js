@@ -687,9 +687,9 @@ function renderJobsMain() {
         // when complete. Safe to call multiple times; in-flight fetches
         // are tracked per-job so re-opening doesn't dup-fetch.
         var _coFetchInflight = {};
-        function loadChangeOrdersForJob(jobId) {
+        function loadChangeOrdersForJob(jobId, force) {   // `force` — see loadBillsForJob
             if (!jobId || !window.p86Api || !window.p86Api.changeOrders) return Promise.resolve([]);
-            if (_coFetchInflight[jobId]) return _coFetchInflight[jobId];
+            if (_coFetchInflight[jobId] && !force) return _coFetchInflight[jobId];
             _coFetchInflight[jobId] = window.p86Api.changeOrders.listForJob(jobId)
                 .then(function(r) {
                     var list = (r && r.change_orders) || [];
@@ -801,10 +801,13 @@ function renderJobsMain() {
             mount.querySelectorAll('[data-co-open]').forEach(function(tr) {
                 tr.addEventListener('click', function() {
                     var id = tr.getAttribute('data-co-open');
+                    // No onClose refetch here any more. The CO editor's own
+                    // close() fires p86Refresh('co'), which patches
+                    // appData.jobChangeOrders and repaints this tab AND the
+                    // jobs-list Total Income tile. Doing it in both places
+                    // meant two GETs and two repaints for one edit.
                     if (window.p86ChangeOrders && window.p86ChangeOrders.open) {
-                        window.p86ChangeOrders.open(id, { onClose: function() {
-                            loadChangeOrdersForJob(jobId).then(function() { paintJobChangeOrdersInto(mount, jobId); });
-                        } });
+                        window.p86ChangeOrders.open(id);
                     }
                 });
             });
@@ -813,12 +816,11 @@ function renderJobsMain() {
             // list re-paint here will pick up the new row.
             var newBtn = mount.querySelector('[data-co-new]');
             if (newBtn) newBtn.addEventListener('click', function() {
+                // The editor's close() drives the refresh (see the row handler
+                // above). Never a setTimeout — that raced the create and
+                // repainted a half-typed row.
                 if (window.p86ChangeOrders && window.p86ChangeOrders.openNew) {
-                    // Refresh THIS tab when the editor closes — real close callback now,
-                    // no more setTimeout(500) race.
-                    window.p86ChangeOrders.openNew(jobId, { onClose: function() {
-                        loadChangeOrdersForJob(jobId).then(function() { paintJobChangeOrdersInto(mount, jobId); });
-                    } });
+                    window.p86ChangeOrders.openNew(jobId);
                 }
             });
         }
@@ -969,9 +971,14 @@ function renderJobsMain() {
         // that job (the migration copied those into the table, so no drift).
         var _billFetchInflight = {};
         var _billsLoadedJobs = Object.create(null);
-        function loadBillsForJob(jobId) {
+        // `force` bypasses the in-flight join. A refresh fired straight after a
+        // write MUST NOT adopt a GET that was issued BEFORE it — that resolves
+        // with pre-write rows and then reports success, which looks exactly
+        // like "the save didn't take". Reads that merely want the data (a tab
+        // opening) still share the in-flight fetch.
+        function loadBillsForJob(jobId, force) {
             if (!jobId || !window.p86Api || !window.p86Api.bills) return Promise.resolve([]);
-            if (_billFetchInflight[jobId]) return _billFetchInflight[jobId];
+            if (_billFetchInflight[jobId] && !force) return _billFetchInflight[jobId];
             _billFetchInflight[jobId] = window.p86Api.bills.listForJob(jobId)
                 .then(function(r) {
                     var list = (r && r.bills) || [];
@@ -1007,9 +1014,9 @@ function renderJobsMain() {
             appData.jobVendorBills = kept.concat(incoming);
             appData._billsAllLoaded = !!ok;
         };
-        function loadPurchaseOrdersForJob(jobId) {
+        function loadPurchaseOrdersForJob(jobId, force) {   // `force` — see loadBillsForJob
             if (!jobId || !window.p86Api || !window.p86Api.purchaseOrders) return Promise.resolve([]);
-            if (_poFetchInflight[jobId]) return _poFetchInflight[jobId];
+            if (_poFetchInflight[jobId] && !force) return _poFetchInflight[jobId];
             _poFetchInflight[jobId] = window.p86Api.purchaseOrders.listForJob(jobId)
                 .then(function(r) {
                     var list = (r && r.purchase_orders) || [];
@@ -1197,19 +1204,20 @@ function renderJobsMain() {
             mount.querySelectorAll('[data-po-open]').forEach(function(tr) {
                 tr.addEventListener('click', function() {
                     var id = tr.getAttribute('data-po-open');
-                    if (window.p86PurchaseOrders && window.p86PurchaseOrders.open) window.p86PurchaseOrders.open(id, { onClose: function() {
-                        loadPurchaseOrdersForJob(jobId).then(function() { paintJobPurchaseOrdersInto(mount, jobId); });
-                    } });
+                    // The PO editor's close() fires p86Refresh('po'), which
+                    // patches appData.jobPurchaseOrders and repaints this tab
+                    // AND the jobs-list ACCRUED tile. Refetching here as well
+                    // meant two GETs and two repaints per edit.
+                    if (window.p86PurchaseOrders && window.p86PurchaseOrders.open) window.p86PurchaseOrders.open(id);
                 });
             });
             var newBtn = mount.querySelector('[data-po-new]');
             if (newBtn) newBtn.addEventListener('click', function() {
+                // The editor's close() drives the refresh (see the row handler
+                // above). Never a setTimeout — the old 600ms one raced the
+                // create and repainted a half-typed row.
                 if (window.p86PurchaseOrders && window.p86PurchaseOrders.openNew) {
-                    // Refresh THIS tab when the editor closes — real close callback now,
-                    // no more setTimeout(600) that raced the create + repainted a half-typed row.
-                    window.p86PurchaseOrders.openNew(jobId, { onClose: function() {
-                        loadPurchaseOrdersForJob(jobId).then(function() { paintJobPurchaseOrdersInto(mount, jobId); });
-                    } });
+                    window.p86PurchaseOrders.openNew(jobId);
                 }
             });
             var impBtn = mount.querySelector('[data-po-import]');
@@ -1217,10 +1225,11 @@ function renderJobsMain() {
                 if (window.p86PurchaseOrders && window.p86PurchaseOrders.importNew) {
                     // Extracts the PDF, matches the job from it (defaults to THIS
                     // job, confirms via picker on mismatch), then opens the PO.
+                    // The old setTimeout(1500) repaint here fired long before
+                    // Haiku vision OCR finished, so it painted a list that did
+                    // not yet contain the PO. The editor this opens refreshes on
+                    // its own close, which is when the PO actually exists.
                     window.p86PurchaseOrders.importNew(jobId);
-                    setTimeout(function() {
-                        loadPurchaseOrdersForJob(jobId).then(function() { paintJobPurchaseOrdersInto(mount, jobId); });
-                    }, 1500);
                 }
             });
         }
@@ -1931,7 +1940,12 @@ function renderJobsMain() {
         }
 
         function renderJobsTable() {
+            // Guarded because this is now reachable from a background refresh
+            // on any page, not just from the Jobs tab. It is also the FIRST
+            // call in the post-hydrate fan-out, so a throw here used to take
+            // every renderer after it down silently.
             const tbody = document.querySelector('#jobs-table tbody');
+            if (!tbody) return;
             tbody.innerHTML = '';
             if (!_jobsViewsLoaded) { _jobsViewsLoaded = true; jobsLoadViews(); }
             updateJobsFilterBtn(); updateJobsViewsBtn();
@@ -3097,6 +3111,69 @@ function renderJobsMain() {
         }
         window.renderJobDetails = renderJobDetails;
 
+        // ── the open job page's post-hydrate repaint ──────────────────────
+        // p86ReloadAllData()'s render fan-out is LIST views only, so an agent
+        // write to the job on screen left every money tile — Total Income,
+        // ACCRUED, the header strip, WIP — showing the pre-write number with
+        // nothing to indicate it. Switching tabs doesn't heal it either:
+        // switchTab('jobs') force-closes the detail and nulls currentJobId, so
+        // the user has to go back to the list and reopen a job they have no
+        // reason to think is stale.
+        //
+        // A LATCH, not a bus listener. renderJobDetail rebuilds the pane with
+        // innerHTML, so firing it off p86:payload-applied would repaint against
+        // the objects the hydrate is about to discard AND wipe a half-typed
+        // inline cell. Setting a flag and repainting from app.js's post-hydrate
+        // fan-out means it runs exactly once, against the fresh objects — the
+        // same shape the estimate editor already uses.
+        var _jobWritePending = false;
+        document.addEventListener('p86:payload-applied', function(ev) {
+            try {
+                if (!appState || !appState.currentJobId) return;
+                var targets = (ev && ev.detail && ev.detail.affected_targets) || [];
+                // Any job/estimate target triggers the hydrate that invalidates
+                // this page's objects, and PO/CO/bill/invoice all move its money
+                // tiles. Matching on this job's id alone would miss both.
+                var hit = targets.some(function(t) {
+                    if (!t || !t.entity_type) return false;
+                    return t.entity_type === 'job' || t.entity_type === 'estimate' ||
+                           t.entity_type === 'po'  || t.entity_type === 'co' ||
+                           t.entity_type === 'bill' || t.entity_type === 'invoice';
+                });
+                if (hit) _jobWritePending = true;
+            } catch (e) { console.warn('[jobs] payload-applied latch failed:', e); }
+        });
+
+        // Repaint the open job's money sections from the (already-patched)
+        // stores. Ungated, unlike p86JobDetailRefresh: this is the response to a
+        // deliberate human mutation, not a background hydrate, and it rebuilds
+        // read-only list sections rather than editable fields. Cheap when the
+        // job isn't on screen — every renderer no-ops on a missing host.
+        window.p86RepaintJobMoneyTabs = function(jobId) {
+            var cur = appState && appState.currentJobId;
+            if (!cur || (jobId && String(jobId) !== String(cur))) return false;
+            [renderPurchaseOrders, renderChangeOrders, renderInvoices, renderJobOverview].forEach(function(fn) {
+                if (typeof fn !== 'function') return;
+                try { fn(cur); } catch (e) { console.warn('[jobs] money-tab repaint:', e && e.message); }
+            });
+            return true;
+        };
+
+        // Called by app.js AFTER a hydrate has swapped appData.jobs, and by
+        // p86Refresh for the direct-REST money types. No-ops unless a write is
+        // actually pending, so a routine reload never yanks the page around.
+        window.p86JobDetailRefresh = function(jobId) {
+            if (!_jobWritePending) return false;
+            var id = jobId || (appState && appState.currentJobId);
+            if (!id) { _jobWritePending = false; return false; }
+            // The caret wins. Keep the latch SET so the next hydrate repaints
+            // rather than dropping the refresh on the floor entirely.
+            if (window.p86Refresh && window.p86Refresh.isTypingIn('#jobs-job-detail-view')) return false;
+            _jobWritePending = false;
+            try { renderJobDetail(id); return true; }
+            catch (e) { console.warn('[jobs] post-write detail refresh failed:', e); return false; }
+        };
+
         function renderJobDetail(jobId) {
             const job = appData.jobs.find(j => j.id === jobId);
             if (!job) return;
@@ -3368,8 +3445,15 @@ function renderJobsMain() {
             section.innerHTML = '<div style="font-size:12px;color:var(--text-dim);padding:4px 0;">Loading bills…</div>';
             host.appendChild(section);
             if (!window.p86Api || !window.p86Api.bills || !window.p86Api.bills.listAll) { section.innerHTML = ''; return; }
-            window.p86Api.bills.listAll({ job: jobId }).then(function(r) {
-                var bills = (r && r.bills) || [];
+            // status:'all' is deliberate and load-bearing. The server default is
+            // 'open', i.e. status IN ('open','approved') — which excludes PAID
+            // bills, so the "Paid" figure below could only ever read $0 and
+            // Outstanding always equalled Total. But 'all' also returns VOIDED
+            // bills, and a voided bill is not money owed, so it is filtered out
+            // here before anything is summed or listed. Fixing only one half
+            // would trade a $0 Paid line for an inflated Total.
+            window.p86Api.bills.listAll({ job: jobId, status: 'all' }).then(function(r) {
+                var bills = ((r && r.bills) || []).filter(function(b) { return b.status !== 'void'; });
                 if (!bills.length) { section.innerHTML = ''; return; }   // nothing owed yet — don't clutter
                 var total = 0, paid = 0;
                 bills.forEach(function(b) { var a = parseFloat(b.amount) || 0; total += a; if (b.status === 'paid') paid += a; });

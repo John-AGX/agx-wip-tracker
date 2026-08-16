@@ -206,8 +206,20 @@ function p86Ask(message, opts) {
   // After a bill create/edit/void/delete from the Bills tab, refresh the shared
   // cost-rollup store (appData.jobVendorBills) for that job so getJobPOAccrued /
   // the jobs-list accrued tiles reflect it without a full reload (Bills S3).
+  // Store-patch AND surface-repaint, in that order, both awaited. It used to be
+  // the store half only (one call to loadBillsForJob, unreturned), so every
+  // caller's own repaint ran BEFORE the refetch landed and painted the
+  // pre-write numbers — and nothing on this path ever called renderJobsMain,
+  // so marking a bill paid left the jobs-list ACCRUED tile stale until reload.
+  // Returns its promise so callers can sequence.
   function refreshBillRollup(jobId) {
-    if (jobId && typeof window.loadBillsForJob === 'function') window.loadBillsForJob(jobId);
+    if (!jobId || typeof window.loadBillsForJob !== 'function') return Promise.resolve();
+    return Promise.resolve(window.loadBillsForJob(jobId, true))   // force — never join a pre-write GET
+      .then(function () {
+        if (typeof window.renderJobsMain === 'function') { try { window.renderJobsMain(); } catch (e) {} }
+        if (typeof window.p86JobDetailRefresh === 'function') { try { window.p86JobDetailRefresh(jobId); } catch (e) {} }
+      })
+      .catch(function () {});
   }
 
   // ── Shared list scaffold ───────────────────────────────────────────
@@ -303,14 +315,23 @@ function p86Ask(message, opts) {
     // After a Bills-tab bulk status/delete, refresh the shared cost-rollup
     // store (appData.jobVendorBills) for each affected job so getJobPOAccrued /
     // the jobs-list tiles reflect it — the single-bill paths do this too.
+    // Widened from bills-only: a bulk status change or delete on the PO or CO
+    // hub lists moves committed cost and contract income just as much, and
+    // neither patched its mirror at all. Each type goes through the refresh
+    // registry, which patches the store and repaints the jobs list in that
+    // order rather than firing N unordered fetches and returning immediately.
+    var BULK_REFRESH_TYPE = { 'bills': 'bill', 'purchase-orders': 'po', 'change-orders': 'co' };
     function bulkRefreshBillStore(ids) {
-      if (cfg.key !== 'bills' || typeof window.loadBillsForJob !== 'function') return;
+      var type = BULK_REFRESH_TYPE[cfg.key];
+      if (!type || !window.p86Refresh) return;
       var jset = {};
       (ids || []).forEach(function (id) {
         var r = (_rows || []).filter(function (x) { return String(x.id) === String(id); })[0];
         if (r && r.job_id) jset[r.job_id] = true;
       });
-      Object.keys(jset).forEach(function (j) { window.loadBillsForJob(j); });
+      var jobs = Object.keys(jset);
+      if (!jobs.length) { window.p86Refresh(type); return; }
+      jobs.forEach(function (j) { window.p86Refresh(type, { jobId: j }); });
     }
     function updateBulkBar() {
       var bar = host.querySelector('#jh-bulkbar');
@@ -843,19 +864,26 @@ function p86Ask(message, opts) {
     function save() {
       var btn = foot.querySelector('.jh-be-save'); btn.disabled = true; btn.textContent = 'Saving…';
       window.p86Api.bills.update(bill.id, collect())
-        .then(function (r) { bill = (r && r.bill) || bill; refreshBillRollup(bill.job_id); close(); if (typeof onSaved === 'function') onSaved(); })
+        // onSaved repaints the hub list from appData.jobVendorBills, so it has to
+        // run AFTER refreshBillRollup's refetch lands. Running it first painted
+        // the pre-write numbers, which is why this looked unfixed.
+        .then(function (r) { bill = (r && r.bill) || bill; close(); return refreshBillRollup(bill.job_id); })
+        .then(function () { if (typeof onSaved === 'function') onSaved(); })
         .catch(function (e) { btn.disabled = false; btn.textContent = 'Save'; alert('Could not save: ' + ((e && e.message) || 'error')); });
     }
     function setStatus(s) {
       window.p86Api.bills.setStatus(bill.id, s)
-        .then(function (r) { bill = (r && r.bill) || bill; refreshBillRollup(bill.job_id); render(); if (typeof onSaved === 'function') onSaved(); })
+        .then(function (r) { bill = (r && r.bill) || bill; render(); return refreshBillRollup(bill.job_id); })
+        .then(function () { if (typeof onSaved === 'function') onSaved(); })
         .catch(function (e) { alert('Could not change status: ' + ((e && e.message) || 'error')); });
     }
     function del() {
       bulkConfirm({ title: 'Delete bill', message: 'Delete this bill? This cannot be undone.', confirmLabel: 'Delete', danger: true }).then(function (ok) {
         if (!ok) return;
         var jid = bill.job_id;
-        window.p86Api.bills.remove(bill.id).then(function () { refreshBillRollup(jid); close(); if (typeof onSaved === 'function') onSaved(); })
+        window.p86Api.bills.remove(bill.id)
+          .then(function () { close(); return refreshBillRollup(jid); })
+          .then(function () { if (typeof onSaved === 'function') onSaved(); })
           .catch(function (e) { alert('Could not delete: ' + ((e && e.message) || 'error')); });
       });
     }

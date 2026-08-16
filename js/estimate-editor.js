@@ -134,6 +134,17 @@
     return est.alternates.find(function(a) { return a.id === est.activeAlternateId; }) || est.alternates[0] || null;
   }
 
+  // Resolve an alternate by id against whatever appData holds RIGHT NOW.
+  // Long-lived closures (the scope rich-text editor) must go through this
+  // instead of holding an alternate object: a hydrate replaces every object
+  // in appData.estimates, and a closure over the old one writes into a
+  // detached orphan that is never saved and never errors.
+  function liveAlternate(altId) {
+    var est = getEstimate();
+    if (!est || !est.alternates || !altId) return null;
+    return est.alternates.find(function(a) { return a.id === altId; }) || null;
+  }
+
   // Idempotent migration. Runs every time an estimate is opened so old
   // records (no alternates array, lines without alternateId, alternates
   // missing the `scope` field) get a clean default and behave the same as
@@ -358,18 +369,36 @@
         '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:6px;">Saved per group. Rich text — used by the Preview tab and PDF/Buildertrend exports.</div>';
       var host = pane.querySelector('#ee-scope-host-' + i);
       if (host && window.p86RichText && window.p86RichText.mount) {
-        // Capture `alt` in the closure (NOT getActiveAlternate() at fire time) so a
-        // debounced change landing AFTER an alternate switch still writes to the
-        // right alternate. onChange mirrors into the other open scope editors.
+        // Capture the alternate's ID, never the alternate OBJECT, and resolve
+        // it fresh on every write.
+        //
+        // Capturing the object used to be deliberate: a debounced change
+        // landing AFTER an alternate switch must still write to the alternate
+        // it was typed into. Resolving by captured id keeps that exactly.
+        //
+        // What it also fixes: a server hydrate rebuilds appData.estimates from
+        // scratch, so a captured object becomes DETACHED. The mounted editor
+        // then wrote every keystroke into an orphan — the signature never
+        // changed, the save was skipped, and the paragraphs were lost with no
+        // error. And the hydrate fires for ANY job or estimate write, not just
+        // this estimate's, so the re-mount latch below could not have caught
+        // it. Resolving live means there is nothing to orphan.
         rts[i] = window.p86RichText.mount(host, {
           value: alt.scope || '',
           placeholder: 'Bulleted scope, narrative, or whatever the proposal needs. This is per-group.',
           minHeight: 340,
-          onChange: function(html) {
-            alt.scope = html;
-            debouncedSave();
-            rts.forEach(function(other, j) { if (j !== i && other) other.setHTML(html); });
-          }
+          onChange: (function(altId) {
+            return function(html) {
+              var target = liveAlternate(altId);
+              // The alternate was deleted out from under us. Dropping the write
+              // is correct — writing it into a detached object is what caused
+              // the silent loss this comment describes.
+              if (!target) return;
+              target.scope = html;
+              debouncedSave();
+              rts.forEach(function(other, j) { if (j !== i && other) other.setHTML(html); });
+            };
+          })(alt.id)
         });
       } else if (host) {
         // Fallback: plain textarea if the rich-text module didn't load.
@@ -379,7 +408,14 @@
         ta.style.cssText = 'width:100%;resize:vertical;font-family:inherit;font-size:13px;line-height:1.55;padding:12px 14px;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:8px;color:var(--text,#fff);';
         ta.value = (window.p86RichText && window.p86RichText.toPlainText) ? window.p86RichText.toPlainText(alt.scope || '') : (alt.scope || '');
         host.appendChild(ta);
-        ta.oninput = function() { alt.scope = ta.value; debouncedSave(); };
+        ta.oninput = (function(altId) {
+          return function() {
+            var target = liveAlternate(altId);   // same orphan guard as the rich-text path
+            if (!target) return;
+            target.scope = ta.value;
+            debouncedSave();
+          };
+        })(alt.id);
       }
     });
   }
@@ -3509,9 +3545,16 @@
   var _serverWritePending = false;
   document.addEventListener('p86:payload-applied', function(ev) {
     try {
+      if (!_currentId) return;
       var targets = (ev && ev.detail && ev.detail.affected_targets) || [];
+      // The latch has to match the HYDRATE's scope, not this estimate's id.
+      // ai-panel reloads appData for ANY job-or-estimate target, and that
+      // reload rebuilds appData.estimates wholesale — so a write to a
+      // different job, or a different estimate, leaves THIS editor painted
+      // from objects that no longer exist. An id-scoped latch stayed false in
+      // exactly those cases and the repaint never ran.
       var hit = targets.some(function(t) {
-        return t && t.entity_type === 'estimate' && _currentId && t.entity_id === _currentId;
+        return t && (t.entity_type === 'estimate' || t.entity_type === 'job');
       });
       if (!hit) return;
       // A latch, not a timer. Deliberately no fallback reload of our own:
@@ -3536,8 +3579,15 @@
   // never yanks the view out from under someone who is typing.
   window.p86EstimateEditorRefresh = function() {
     if (!_serverWritePending) return false;
+    if (!_currentId || !getEstimate()) { _serverWritePending = false; return false; }
+    // Never repaint the container holding the caret — renderLineItems()
+    // rebuilds #ee-lines-container wholesale and would wipe the row being
+    // typed into. The latch deliberately stays SET so the next hydrate (or
+    // the next open) repaints instead; clearing it here would trade one
+    // flicker for a permanently stale editor. Safe to defer now that the
+    // scope editor resolves its alternate live and can no longer be orphaned.
+    if (window.p86Refresh && window.p86Refresh.isTypingIn('#estimate-editor-view')) return false;
     _serverWritePending = false;
-    if (!_currentId || !getEstimate()) return false;
     try {
       renderHeaderChips();
       renderAlternateTabs();

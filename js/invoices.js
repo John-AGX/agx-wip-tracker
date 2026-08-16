@@ -314,14 +314,20 @@
   // AR invoices also drive the jobs-list "Invoiced / Unbilled" tiles + job WIP, which read
   // appData.arInvoices — a read-cache hydrated ONLY at boot. So a mutation here must patch
   // that store + repaint the jobs list, or those tiles stay stale until a full page refresh.
+  //
+  // This is the shape every refresh in the app should copy: refetch, patch the
+  // store, THEN repaint — all inside one .then, so the paint can never read a
+  // cache that hasn't landed. Returns its promise so callers can sequence.
   function _syncJobsWIP() {
     try {
-      api().list().then(function (r) {
+      return api().list().then(function (r) {
         if (typeof appData !== 'undefined') appData.arInvoices = (r && (r.invoices || r.rows || r)) || appData.arInvoices || [];
         if (typeof window.renderJobsMain === 'function') { try { window.renderJobsMain(); } catch (_) {} }
       }).catch(function () {});
-    } catch (_) {}
+    } catch (_) { return Promise.resolve(); }
   }
+  // The refresh registry's `invoice` store. Same function, named for the seam.
+  window.p86InvoicesSyncStore = _syncJobsWIP;
   function save() {
     var p = payload();
     var req = _cur.id ? api().update(_cur.id, p) : api().create(p);

@@ -17,6 +17,7 @@
   var _subsCache = null;
   var _pendingPOExtraction = null; // raw PDF extraction, sent once on close for training
   var _onClose = null;      // one-shot: the caller's own surface repaint, fired after close()'s save flush
+  var _closingJobId = null; // the PO's job, captured in close() before _po is dropped
 
   var STATUS_LABEL = {
     draft: 'Draft', issued: 'Issued', approved: 'Approved',
@@ -140,15 +141,24 @@
     }
     var ov = document.getElementById('po-editor-overlay');
     if (ov) ov.style.display = 'none';
+    _closingJobId = _po && _po.job_id;   // captured before _po is dropped
     _po = null;
     // Refresh AFTER the final save lands — else the re-fetch races the in-flight PUT and
     // re-renders the stale title/sub/status the user just changed. Fire BOTH the cross-job
     // Jobs Hub refresh AND the caller's own surface repaint (e.g. the job-detail PO tab,
     // which p86JobsHubRefresh does NOT cover). _onClose is one-shot.
     var _cb = _onClose; _onClose = null;
+    var _jobId = _closingJobId; _closingJobId = null;
     var _done = function () {
       if (typeof window.p86JobsHubRefresh === 'function') window.p86JobsHubRefresh();
       if (_cb) { try { _cb(); } catch (_) {} }
+      // Patch the shared cost-rollup store (appData.jobPurchaseOrders) and
+      // repaint the jobs list. Neither callback above does it, so the ACCRUED
+      // and Total Income tiles kept the pre-edit number until a page reload.
+      // Deliberately on CLOSE, not on saveNow(): saveNow is the 700ms autosave
+      // target, and hanging a per-job GET plus a full jobs-table repaint off
+      // every keystroke-debounce is its own defect.
+      if (window.p86Refresh) window.p86Refresh('po', { jobId: _jobId });
     };
     Promise.resolve(saveFlush).then(_done, _done);
   }
@@ -816,17 +826,46 @@
   function setSaved(t) { var el = document.getElementById('po-ed-saved'); if (el) el.textContent = t; }
 
   // ── status workflow ─────────────────────────────────────────────────
+  // Native prompt()/confirm() return undefined inside the installed PWA. That
+  // made this whole function misbehave there: `nm === null` was never true so
+  // an approval recorded a subcontractor e-sign with name `undefined`, and
+  // `!window.confirm(...)` was always true so every other transition silently
+  // did nothing. Both now go through the in-app dialogs, which are promises.
+  function askText(message, def) {
+    if (typeof window.p86Prompt === 'function') {
+      return window.p86Prompt({ title: 'Record acceptance', message: message, value: def || '', defaultValue: def || '' });
+    }
+    return Promise.resolve(window.prompt(message, def || ''));
+  }
+  function askYesNo(message) {
+    if (typeof window.p86Confirm === 'function') {
+      return window.p86Confirm({ title: 'Confirm', message: message, confirmText: 'Continue', confirmLabel: 'Continue' })
+        .then(function (v) { return !!v; });
+    }
+    return Promise.resolve(!!window.confirm(message));
+  }
+
   function advanceStatus() {
     var step = NEXT_STEP[_po.status || 'draft'];
     if (!step) return;
-    var acceptance = null;
-    if (step.to === 'approved') {
-      var nm = window.prompt('Record subcontractor acceptance (e-sign).\n\nSubcontractor name (as signing):', _po.sub_name || '');
-      if (nm === null) return; // cancelled
-      acceptance = { name: nm, date: new Date().toISOString().slice(0, 10) };
-    } else {
-      if (!window.confirm('Move this PO to "' + (STATUS_LABEL[step.to] || step.to) + '"?')) return;
-    }
+    var gate = (step.to === 'approved')
+      ? askText('Subcontractor name (as signing):', _po.sub_name || '').then(function (nm) {
+          // Cancel resolves null/undefined; an empty string is a real answer
+          // but is not a signature, so it is treated as a cancel too.
+          if (nm == null || !String(nm).trim()) return null;
+          return { name: String(nm).trim(), date: new Date().toISOString().slice(0, 10) };
+        })
+      : askYesNo('Move this PO to "' + (STATUS_LABEL[step.to] || step.to) + '"?')
+          .then(function (ok) { return ok ? false : null; });
+
+    gate.then(function (acceptance) {
+      if (acceptance === null) return;   // cancelled
+      if (acceptance === false) acceptance = null;   // confirmed, no e-sign
+      advanceStatusConfirmed(step, acceptance);
+    });
+  }
+
+  function advanceStatusConfirmed(step, acceptance) {
     // Flush any pending data save first so the status call sees latest body.
     // saveNow() returns its PUT promise — await it so the status POST can't
     // race the autosave (mirrors change-order-editor's flushSaveSync).
@@ -846,6 +885,10 @@
         }
         render();
         if (typeof window.p86JobsHubRefresh === 'function') window.p86JobsHubRefresh();
+        // A status change moves committed cost, so the shared store and the
+        // jobs-list ACCRUED tile have to follow — p86JobsHubRefresh only
+        // repaints the hub list.
+        if (window.p86Refresh) window.p86Refresh('po', { id: poId, jobId: _po && _po.job_id });
       })
       .catch(function (e) { alert('Could not update status: ' + ((e && e.message) || 'error')); });
   }

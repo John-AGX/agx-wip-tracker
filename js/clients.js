@@ -356,11 +356,19 @@ function p86Ask(message, opts) {
 
     if (!_clients.length) {
       listEl.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;">Loading clients…</div>';
+      var gen = _clientsGen;
       window.p86Api.clients.list().then(function(res) {
+        // Drop a response that was requested before the cache was invalidated.
+        // Without this, a GET issued just before a write lands AFTER the
+        // post-write refetch and re-installs the pre-write list — the same
+        // last-writer-wins race that made a new lead disappear.
+        if (gen !== _clientsGen) return;
         _clients = res.clients || [];
+        publishClientsToAppData();
         refreshMarketFilter();
         renderClientsList();
       }).catch(function(err) {
+        if (gen !== _clientsGen) return;
         listEl.innerHTML = '<div style="padding:20px;color:#e74c3c;text-align:center;">Failed to load clients: ' + escapeHTML(err.message) + '</div>';
       });
       return;
@@ -1099,8 +1107,21 @@ function p86Ask(message, opts) {
 
   // Force-reload from server. Used by the Refresh button and after every
   // create/edit/delete/import operation that mutates the directory.
+  // See the leads module for the reasoning: a list GET carries the generation
+  // it was issued under, and a response from a stale generation is dropped
+  // rather than installed over fresher data.
+  var _clientsGen = 0;
+
+  // appData.clients feeds the Dashboard, the map popovers, Market P&L and the
+  // proposal client block. Only projects.js wrote it before, and only when the
+  // Projects page opened — so it was undefined on a fresh session.
+  function publishClientsToAppData() {
+    try { if (window.appData) window.appData.clients = _clients; } catch (e) {}
+  }
+
   function reloadClientsCache() {
     _clients = [];
+    _clientsGen++;
     renderClientsList();
   }
 

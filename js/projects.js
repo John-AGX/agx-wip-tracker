@@ -136,12 +136,15 @@
         if (rows.length || !window.appData.clients) window.appData.clients = rows;
       }).catch(function() {}));
     }
-    if (window.p86Api && window.p86Api.jobs) {
-      promises.push(window.p86Api.jobs.list().then(function(r) {
-        var rows = (r && r.jobs) || [];
-        if (rows.length || !window.appData.jobs) window.appData.jobs = rows;
-      }).catch(function() {}));
-    }
+    // appData.jobs is NOT a plain read-cache like leads/clients — it is the
+    // dirty-tracked store behind saveData()'s bulk push, and boot deliberately
+    // flattens each job's buildings/phases/changeOrders/subs/purchaseOrders/
+    // invoices out into separate top-level arrays. Dropping raw nested rows
+    // back in here changed every job's dirty signature, so the next unrelated
+    // saveData() re-pushed ALL of them, and it discarded any edit still inside
+    // the 600ms debounce. The picker only needs id/number/title, so read the
+    // store the rest of the app maintains instead of overwriting it.
+    if (!Array.isArray(window.appData.jobs)) window.appData.jobs = [];
 
     return Promise.all(promises);
   }
@@ -5817,6 +5820,14 @@
   // Public surface
   // ──────────────────────────────────────────────────────────────────
   window.p86Projects = {
+    // Refetch + repaint the list and any linked panels. Safe to call from
+    // anywhere: with no list host mounted it is a cheap no-op.
+    refresh: function () {
+      try {
+        if (_listState.host) fetchAll().then(paintList);
+        refreshLinkedPanels();
+      } catch (e) { console.warn('[projects] refresh failed:', e); }
+    },
     setFilter: setFilter,
     setView: setView,
     openCreate: openCreate,

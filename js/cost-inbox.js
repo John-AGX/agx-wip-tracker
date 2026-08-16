@@ -1124,7 +1124,8 @@ function p86Ask(message, opts) {
           if (photoFailed) toast('Receipt saved, but the photo didn’t upload — re-open to retry', 'error');
           else toast('Receipt saved', 'success');
           close();
-          reload();
+          reload();                                  // the Cost Inbox list
+          if (window.p86Refresh) window.p86Refresh('receipt');   // the embedded rollups
         }).catch(function (e2) {
           saveBtn.disabled = false; saveBtn.textContent = 'Save';
           toast('Could not save: ' + (e2 && e2.message || 'error'), 'error');
@@ -1135,9 +1136,25 @@ function p86Ask(message, opts) {
 
   // ── Captured-cost rollup card (embed on a job/lead detail page) ────
   // Reads /api/receipts/rollup and shows COGS by cost code + a Pre-sale line.
+  // Every live rollup embed, so a receipt saved from the Cost Inbox can
+  // repaint the "Captured Costs" cards on the job WIP tab and the lead editor.
+  // Those embeds have no store to patch — mountRollup re-fetches
+  // /api/receipts/rollup on every call — so the entire gap was that nothing
+  // re-called it after a save. Entries whose host has left the document are
+  // dropped on the next sweep, so this can't leak or paint into a dead node.
+  var _rollups = [];
+  function remountRollups() {
+    _rollups = _rollups.filter(function (r) { return r.host && document.body.contains(r.host); });
+    _rollups.forEach(function (r) { try { mountRollup(r.host, r.opts); } catch (e) {} });
+  }
+
   function mountRollup(host, opts) {
     if (!host) return;
     opts = opts || {};
+    _rollups = _rollups.filter(function (r) {
+      return r.host !== host && r.host && document.body.contains(r.host);
+    });
+    _rollups.push({ host: host, opts: opts });
     var et = opts.entityType, eid = opts.entityId;
     var api = window.p86Api;
     if (!et || !eid || !api || !api.receipts || !api.receipts.rollup) { host.innerHTML = ''; return; }
@@ -1181,6 +1198,9 @@ function p86Ask(message, opts) {
     render: render,
     openNew: function () { loadEntities().then(function () { openReceiptModal(null); }); },
     mountRollup: mountRollup,
+    remountRollups: remountRollups,
     openFor: openFor
   };
+  // The refresh registry's `receipt` surface.
+  window.p86RemountReceiptRollups = remountRollups;
 })();

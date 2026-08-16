@@ -646,13 +646,23 @@ function p86Ask(message, opts) {
       // A list fetch is already running (e.g. a map-card open joined it) —
       // wait for its .then to re-render rather than stacking another GET.
       if (_leadsFetchInflight) return;
+      var gen = _leadsGen;
       var p = window.p86Api.leads.list().then(function(res) {
         if (_leadsFetchInflight === p) _leadsFetchInflight = null;
+        // This response was requested BEFORE the write that invalidated the
+        // cache, so it is a pre-write snapshot. Installing it (and setting
+        // _leadsLoaded) is exactly how a freshly created lead vanished until
+        // a page reload: reloadLeadsCache() cleared the cache, this render
+        // saw a fetch already in flight and returned, and then this .then
+        // put the OLD list back and marked it loaded so nothing refetched.
+        if (gen !== _leadsGen) { renderLeadsList(); return; }
         _leadsLoaded = true;
         _leads = res.leads || [];
+        publishLeadsToAppData();
         renderLeadsList();
       }).catch(function(err) {
         if (_leadsFetchInflight === p) _leadsFetchInflight = null;
+        if (gen !== _leadsGen) return;
         listEl.innerHTML = '<div style="padding:20px;color:#e74c3c;text-align:center;">Failed to load leads: ' + escapeHTML(err.message) + '</div>';
       });
       _leadsFetchInflight = p;
@@ -911,9 +921,25 @@ function p86Ask(message, opts) {
     } catch (e) { /* never break on a visibility refresh */ }
   });
 
+  // Bumped by every cache invalidation. A list GET captures the generation it
+  // was issued under and drops its result if the generation moved on — see
+  // the fetch in renderLeadsList for why a stale response is worse than none.
+  var _leadsGen = 0;
+
+  // appData.leads is read by the Dashboard follow-up band, the combined
+  // leads+jobs map, Market P&L and the proposal client block. Nothing in
+  // this module used to write it (only projects.js did, and only when the
+  // Projects page opened), so those surfaces read undefined on a fresh
+  // session. Publishing here means one fetch feeds both the list and them.
+  function publishLeadsToAppData() {
+    try { if (window.appData) window.appData.leads = _leads; } catch (e) {}
+  }
+
   function reloadLeadsCache() {
     _leads = [];
     _leadsLoaded = false;   // force a re-fetch (not the loaded-but-empty state)
+    _leadsGen++;            // disown any GET issued before this invalidation
+    _leadsFetchInflight = null;
     renderLeadsList();
   }
 
@@ -1869,20 +1895,22 @@ function p86Ask(message, opts) {
     // created there — the card is where the eye already is.
     function addFollowUp() {
       if (!window.p86Tasks || typeof window.p86Tasks.openQuickAdd !== 'function') return;
+      // onCreated, not a timer. The old setTimeout(1200) fired while the modal
+      // was still open for anyone who spent more than 1.2s filling it in — i.e.
+      // everyone — so the follow-up they just added stayed invisible until the
+      // next navigation. openQuickAdd has supported this callback all along.
       window.p86Tasks.openQuickAdd({
         scope: 'org',
         entity_type: 'lead',
         entity_id: l.id,
-        entity_label: l.title || 'Lead'
+        entity_label: l.title || 'Lead',
+        onCreated: function () {
+          window.p86EntityCard.loadTasks('lead', l.id, 2, function (vm) {
+            if (_currentEditingLeadId && String(_currentEditingLeadId) !== String(l.id)) return;
+            paint(vm);
+          });
+        }
       });
-      // Repaint after the modal has had time to save. Cheap, and beats
-      // leaving a just-added follow-up invisible until the next navigation.
-      setTimeout(function () {
-        window.p86EntityCard.loadTasks('lead', l.id, 2, function (vm) {
-          if (_currentEditingLeadId && String(_currentEditingLeadId) !== String(l.id)) return;
-          paint(vm);
-        });
-      }, 1200);
     }
 
     function paint(taskVm) {

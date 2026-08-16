@@ -140,6 +140,7 @@ function p86Ask(message, opts) {
         if (window.MaterialsDrawer && window.MaterialsDrawer.reset) window.MaterialsDrawer.reset();
       } catch (e) {}
     }
+    var _jobId = _state.co && _state.co.job_id;
     _state.co = null;
     _state.dirty = false;
     _state.saving = false;
@@ -150,6 +151,9 @@ function p86Ask(message, opts) {
     if (typeof window.p86JobsHubRefresh === 'function') window.p86JobsHubRefresh();
     var _cb = _onClose; _onClose = null;
     if (_cb) { try { _cb(); } catch (_) {} }
+    // Neither callback above patches appData.jobChangeOrders, so the jobs-list
+    // Total Income (contract + CO) tile kept the pre-edit number until reload.
+    if (window.p86Refresh) window.p86Refresh('co', { jobId: _jobId });
   }
 
   // ──────────────────────────────────────────────────────────────────

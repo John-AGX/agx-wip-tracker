@@ -28,6 +28,22 @@
   }
   function escAttr(s) { return esc(s); }
 
+  // Promise-returning confirm. Native confirm() silently returns undefined in
+  // the installed PWA, which turns every `if (!confirm(x)) return` guard into
+  // a no-op. Always resolves to a real boolean.
+  function askConfirm(message, opts) {
+    opts = opts || {};
+    if (typeof window.p86Confirm === 'function') {
+      return window.p86Confirm({
+        title: opts.title || 'Confirm', message: message,
+        confirmText: opts.confirmLabel || 'Confirm', confirmLabel: opts.confirmLabel || 'Confirm',
+        cancelText: 'Cancel', cancelLabel: 'Cancel',
+        destructive: opts.danger !== false, danger: opts.danger !== false
+      }).then(function (v) { return !!v; });
+    }
+    return Promise.resolve(!!window.confirm(message));
+  }
+
   function api() { return window.p86Api && window.p86Api.tasks; }
   function authed() {
     return window.p86Api && window.p86Api.isAuthenticated && window.p86Api.isAuthenticated();
@@ -883,12 +899,19 @@
     });
 
     h.modal.querySelector('#tdDelete').addEventListener('click', function () {
-      if (!window.confirm('Delete this task? It will be archived.')) return;
-      api().remove(task.id).then(function () {
-        toast('Task deleted', 'success');
-        h.close();
-        refreshOpenSurfaces();
-      }).catch(function (e) { toast((e && e.message) || 'Could not delete', 'error'); });
+      // Native confirm() returns undefined inside the installed PWA, so
+      // `if (!window.confirm(...)) return` was always true there and Delete
+      // silently did nothing. p86Confirm returns a PROMISE — which is truthy,
+      // so it must be awaited, never tested directly, or the opposite bug
+      // appears and the task is deleted without asking.
+      askConfirm('Delete this task? It will be archived.').then(function (ok) {
+        if (!ok) return;
+        api().remove(task.id).then(function () {
+          toast('Task deleted', 'success');
+          h.close();
+          refreshOpenSurfaces();
+        }).catch(function (e) { toast((e && e.message) || 'Could not delete', 'error'); });
+      });
     });
 
     // ── View ⇄ Edit gate + read-only dashboard wiring ──────────────────
@@ -1250,7 +1273,9 @@
       }
     }
 
-    return { refresh: function () { mounted.refresh(); appts.refresh(); } };
+    var ctl = { refresh: function () { mounted.refresh(); appts.refresh(); } };
+    registerTaskSurface(container, ctl);
+    return ctl;
   }
 
   // ── Tasks & Reminders page (3-tier model) ──────────────────────────
@@ -1541,12 +1566,39 @@
     return { refresh: refresh };
   }
 
-  // Refresh whatever surface is visible on the active tab after a mutation.
+  // ── every live task surface, not just the My Tasks page ─────────────
+  // The old refreshOpenSurfaces returned immediately unless #my-tasks was the
+  // active pane, so editing, deleting or ticking a punch-list item from the
+  // task modal left the embedded panel on the job / lead / client / estimate /
+  // project page behind it showing the old title, status and progress. The
+  // row's own done-toggle self-refreshed, so one control on a row updated live
+  // and the modal one row over did not.
+  var _surfaces = [];
+  function registerTaskSurface(host, ctl) {
+    _surfaces = _surfaces.filter(function (s) {
+      return s.host !== host && s.host && document.body.contains(s.host);
+    });
+    _surfaces.push({ host: host, ctl: ctl });
+  }
+
+  // Coalesced: a punch-list tick fires this on EVERY checkbox change, and each
+  // refresh blanks the panel to "Loading…" before re-listing. Without the
+  // window, ticking through a list would blank-and-repaint once per keystroke.
+  var _refreshTimer = null;
   function refreshOpenSurfaces() {
-    var pane = document.getElementById('my-tasks');
-    if (!pane || !pane.classList.contains('active')) return;
-    var ctl = _ctl[_activeTab];
-    if (ctl && ctl.refresh) ctl.refresh();
+    if (_refreshTimer) return;
+    _refreshTimer = setTimeout(function () {
+      _refreshTimer = null;
+      var pane = document.getElementById('my-tasks');
+      if (pane && pane.classList.contains('active')) {
+        var ctl = _ctl[_activeTab];
+        if (ctl && ctl.refresh) { try { ctl.refresh(); } catch (e) {} }
+      }
+      _surfaces = _surfaces.filter(function (s) { return s.host && document.body.contains(s.host); });
+      _surfaces.forEach(function (s) {
+        try { if (s.ctl && s.ctl.refresh) s.ctl.refresh(); } catch (e) {}
+      });
+    }, 250);
   }
 
   // ── Exports ────────────────────────────────────────────────────────
@@ -1556,6 +1608,9 @@
     mountList: mountList,
     mountEntityPanel: mountEntityPanel,
     renderMyTasksTab: renderMyTasksTab,
+    // The refresh registry's task/todo/reminder/calendar surface. Repaints the
+    // My Tasks page AND every mounted entity panel, coalesced.
+    refresh: refreshOpenSurfaces,
     _loadUsers: loadUsers
   };
   // Convenience global for the page-switch dispatcher.
