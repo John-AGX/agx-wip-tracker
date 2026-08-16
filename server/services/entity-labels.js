@@ -8,7 +8,12 @@
 // Mirrors the single-row resolveEntityLabel in tasks-routes.js, batched:
 //   lead → leads.title, client → clients.name, sub → subs.name,
 //   project → projects.name (org-scoped), estimate → data.name/title,
-//   job → data.title/name. Unknown types resolve to ''.
+//   job → jobNumber + ' ' + title via js/job-label. Unknown types → ''.
+//
+// The "mirrors" claim used to be false for jobs: this file prefixed
+// "[RV2006] " while tasks-routes.js dropped the number entirely, so the same
+// task rendered "[RV2006] Waterside" in-app and "Waterside" in the assignment
+// email. Both now call the one shared formatter.
 //
 // IDs are compared as text (id::text = ANY($1::text[])) so a mix of
 // text/serial id columns all work. Best-effort: a missing row yields no
@@ -17,6 +22,9 @@
 'use strict';
 
 const { pool } = require('../db');
+// Same formatter the browser loads as window.p86JobLabel — one definition of
+// `jobNumber + ' ' + title` for both sides. See js/job-label.js.
+const jobLabel = require('../../js/job-label');
 
 // type → { sql(orgId) } returning rows of { id, label }. $1 = text[] ids.
 function queryFor(type, ids, orgId) {
@@ -63,7 +71,7 @@ async function resolveEntityLabels(orgId, items) {
       const { rows } = await pool.query(q.text, q.params);
       rows.forEach((r) => {
         let label = r.label || '';
-        if (type === 'job' && r.num) label = '[' + r.num + '] ' + label;
+        if (type === 'job') label = jobLabel(r.num, label, { fallback: 'Job' });
         out.set(type + ':' + r.id, label);
       });
     } catch (e) {

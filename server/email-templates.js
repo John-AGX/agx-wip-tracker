@@ -20,6 +20,8 @@
 
 const { pool } = require('./db');
 const { getEvent } = require('./email-events');
+// One job-label formatter, shared with the browser (window.p86JobLabel).
+const jobLabelFmt = require('../js/job-label');
 
 // ─── Tiny utilities ────────────────────────────────────────────────
 
@@ -219,7 +221,10 @@ var TEMPLATE_SOURCES = {
   },
 
   job_assigned: {
-    subject: '{{subjectAction}}: {{job.jobNumber}} — {{job.title}}',
+    // One {{job.jobLabel}} token, not two fields glued by a literal dash —
+    // a job missing either part used to render "RV2006 — " / " — Waterside"
+    // right in the inbox subject line.
+    subject: '{{subjectAction}}: {{job.jobLabel}}',
     // Wave 4 — block-based default. Note: the detail "rows" used to
     // live in a <table> with conditional rows via {{{detailsRowsHtml}}}.
     // In block form we capture the canonical fields in a single text
@@ -494,7 +499,10 @@ function enrichParams(eventKey, raw) {
     if (job.community) rows += '<tr><td style="padding:4px 8px;color:#6b7280;">Community</td><td style="padding:4px 8px;">' + escapeHtml(job.community) + '</td></tr>';
     if (job.contractAmount) rows += '<tr><td style="padding:4px 8px;color:#6b7280;">Contract</td><td style="padding:4px 8px;font-weight:600;color:#059669;">' + fmtMoney(job.contractAmount) + '</td></tr>';
     if (job.status) rows += '<tr><td style="padding:4px 8px;color:#6b7280;">Status</td><td style="padding:4px 8px;">' + escapeHtml(job.status) + '</td></tr>';
-    p.job = Object.assign({}, job, { detailsRowsHtml: rows });
+    p.job = Object.assign({}, job, {
+      detailsRowsHtml: rows,
+      jobLabel: jobLabelFmt.fromJob(job, { fallback: '(untitled)' })
+    });
   }
   if (eventKey === 'schedule_entry') {
     if (!p.recipientName) p.recipientName = 'there';
@@ -510,13 +518,13 @@ function enrichParams(eventKey, raw) {
       notesRowHtml: notesHtml
     });
     var j = p.job || {};
-    p.job = Object.assign({}, j, { jobLabel: ((j.jobNumber || '') + ' — ' + (j.title || '')).trim() });
+    p.job = Object.assign({}, j, { jobLabel: jobLabelFmt.fromJob(j, { fallback: '(untitled)' }) });
   }
   if (eventKey === 'sub_assigned') {
     var s = p.sub || {};
     p.sub = Object.assign({}, s, { greetingName: s.primaryContactFirst || s.name || 'there' });
     var ja = p.job || {};
-    p.job = Object.assign({}, ja, { jobLabel: (ja.jobNumber ? ja.jobNumber + ' — ' : '') + (ja.title || '(untitled)') });
+    p.job = Object.assign({}, ja, { jobLabel: jobLabelFmt.fromJob(ja, { fallback: '(untitled)' }) });
     if (!p.assignedBy) p.assignedBy = { name: 'Project 86' };
     if (p.contractAmt) {
       p.contractAmtFmt = fmtMoney(p.contractAmt);

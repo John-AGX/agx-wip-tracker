@@ -31,6 +31,7 @@ const crypto = require('crypto');
 const { pool } = require('../db');
 const { requireAuth, isAdminish, getAttributedUserId } = require('../auth');
 const { sendEmail } = require('../email');
+const jobLabel = require('../../js/job-label');
 
 const router = express.Router();
 
@@ -90,8 +91,7 @@ async function describeThread(key) {
       const { rows } = await pool.query('SELECT data FROM jobs WHERE id = $1', [id]);
       if (rows.length) {
         const d = rows[0].data || {};
-        const num = d.jobNumber ? '[' + d.jobNumber + '] ' : '';
-        return { kind: 'job', label: num + (d.title || d.name || id) };
+        return { kind: 'job', label: jobLabel.fromJob(d, { fallback: 'Job ' + id }) };
       }
       return { kind: 'job', label: 'Job ' + id };
     }

@@ -337,7 +337,7 @@
       var addr = j.geocode_address || (jd.geocode_address) ||
         (jd.address && String(jd.address).trim()) ||
         ((Array.isArray(jd.buildings) && jd.buildings[0] && jd.buildings[0].address) || '');
-      return { id: j.id, title: num ? (num + ' — ' + name) : name,
+      return { id: j.id, title: window.p86JobLabel(num, name), bareTitle: name,
         lat: j.geocode_lat, lng: j.geocode_lng, kind: 'job', jobNumber: num, status: jstatus, address: addr };
     });
     return { leads: leads, jobs: jobs };
@@ -892,8 +892,10 @@
       var accentCol = window.p86EntityCard.pinColor(jobObj || it, 'job') || statusCol;
       openPopup(e.pos, window.p86EntityCard.render({
         kind: 'job', accent: accentCol, status: { label: it.status || 'In Progress', color: statusCol },
-        number: (jobObj && (jobObj.jobNumber || jobObj.job_number)) || '',
-        title: it.title || '(untitled)',
+        number: (jobObj && (jobObj.jobNumber || jobObj.job_number)) || it.jobNumber || '',
+        // The card renders `number` as its own mono chip, so the title here
+        // must be the BARE title — it.title carries the composed label.
+        title: (jobObj && (jobObj.title || jobObj.name)) || it.bareTitle || it.title || '(untitled)',
         subtitle: (jobObj && (jobObj.client || jobObj.client_name)) || '',
         address: it.address || '',
         ring: { pct: pct },

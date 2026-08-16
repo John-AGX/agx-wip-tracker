@@ -187,7 +187,7 @@
   function jobLabel(jobId) {
     var j = ((window.appData && window.appData.jobs) || []).find(function (x) { return x.id === jobId; });
     if (!j) return '';
-    return (j.jobNumber ? j.jobNumber + ' — ' : '') + (j.title || 'Untitled');
+    return window.p86JobLabel.fromJob(j);
   }
 
   // ---- overlay lifecycle -------------------------------------------------

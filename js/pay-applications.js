@@ -962,7 +962,7 @@
     var addr = job.address || [job.street, job.city, job.state, job.zip].filter(Boolean).join(', ');
     return {
       contractor: contractor,
-      project: (job.jobNumber ? job.jobNumber + ' — ' : '') + (job.title || job.name || 'Project'),
+      project: window.p86JobLabel.fromJob(job, { fallback: 'Project' }),
       jobNumber: job.jobNumber || '',
       address: addr || '',
       owner: job.clientName || job.client || job.ownerName || '',

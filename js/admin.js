@@ -480,7 +480,7 @@ function p86Ask(message, opts) {
           ownerOpts += '<option value="' + u.id + '"' + (j.owner_id === u.id ? ' selected' : '') + '>' +
                        escapeHTML(u.name) + (u.role === 'admin' ? ' (admin)' : '') + '</option>';
         });
-        var label = (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.id);
+        var label = window.p86JobLabel.fromJob(j, { fallback: 'Job ' + j.id });
         html += '<tr>' +
           '<td><strong>' + escapeHTML(label) + '</strong></td>' +
           '<td>' + escapeHTML(j.client || '—') + '</td>' +
@@ -562,7 +562,7 @@ function p86Ask(message, opts) {
       return;
     }
     _currentSharingJobId = jobId; // reuse the per-job sharing flow's state
-    var label = (job.jobNumber ? '[' + job.jobNumber + '] ' : '') + (job.title || jobId);
+    var label = window.p86JobLabel.fromJob(job, { fallback: 'Job ' + jobId });
     document.getElementById('manageSharing_jobLabel').textContent = label;
     // Ensure the users cache exists so the owner display + grant dropdown work.
     if (!_users.length && window.p86Api) {
@@ -4668,7 +4668,7 @@ function p86Ask(message, opts) {
     jobs.forEach(function(j) {
       var owner = users.find(function(u) { return u.id === j.owner_id; });
       var ownerName = owner ? owner.name : '—';
-      var label = (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.id);
+      var label = window.p86JobLabel.fromJob(j, { fallback: 'Job ' + j.id });
       var isLive = j.liveStatus === 'live';
       var statusBadge = isLive
         ? '<span style="display:inline-block;padding:2px 10px;border-radius:10px;background:rgba(52,211,153,0.15);color:#34d399;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Live</span>'

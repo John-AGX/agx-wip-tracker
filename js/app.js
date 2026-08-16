@@ -1825,7 +1825,7 @@
                                 if (e.job_id || e.jobId) {
                                     var jid = e.job_id || e.jobId;
                                     var job = (window.appData && window.appData.jobs || []).find(function(j) { return j.id === jid; });
-                                    if (job) jobLabel = (job.jobNumber ? '[' + job.jobNumber + '] ' : '') + (job.title || job.name || '');
+                                    if (job) jobLabel = window.p86JobLabel.fromJob(job, { fallback: '' });
                                 }
                                 html += '<div style="font-size:12px;color:var(--text,#fff);padding:3px 0;display:flex;align-items:flex-start;gap:6px;">' +
                                     '<span style="color:var(--accent,#22d3ee);flex-shrink:0;">&#9679;</span>' +

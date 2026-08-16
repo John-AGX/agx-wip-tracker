@@ -765,7 +765,7 @@ function p86Ask(message, opts) {
       var rows = openJobs.map(function(j) {
         var hasAccess = !!assignedByJob[j.id];
         var dateOpened = j.dateAdded || j.created_at || '';
-        var displayName = (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.name || j.id);
+        var displayName = window.p86JobLabel.fromJob(j, { fallback: 'Job ' + j.id });
         return '<div style="display:grid;grid-template-columns:auto 2.5fr 1fr 1.2fr;gap:10px;align-items:center;padding:8px 4px;border-bottom:1px solid var(--border,#333);">' +
           '<div style="text-align:center;">' +
             '<input type="checkbox" data-job-access="' + escapeAttr(j.id) + '" ' + (hasAccess ? 'checked' : '') + ' style="margin:0;width:16px;height:16px;cursor:pointer;" />' +
@@ -869,7 +869,7 @@ function p86Ask(message, opts) {
       function entityLabel(g) {
         if (g.entity_type === 'job' && jobById[g.entity_id]) {
           var j = jobById[g.entity_id];
-          return (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.name || j.id);
+          return window.p86JobLabel.fromJob(j, { fallback: 'Job ' + j.id });
         }
         // Resolve lead / estimate / client (and jobs not in the local map) to
         // a human name; fall back to the category word, never the raw id.
@@ -892,7 +892,7 @@ function p86Ask(message, opts) {
         var s = (j.status || '').toLowerCase();
         return s !== 'closed' && s !== 'archived';
       }).map(function(j) {
-        var label = (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.name || j.id);
+        var label = window.p86JobLabel.fromJob(j, { fallback: 'Job ' + j.id });
         return '<option value="' + escapeAttr(j.id) + '">' + escapeHTML(label) + '</option>';
       }).join('');
 

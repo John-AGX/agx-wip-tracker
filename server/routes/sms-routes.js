@@ -27,6 +27,7 @@
 const express = require('express');
 const { pool } = require('../db');
 const sms = require('../sms');
+const jobLabelFmt = require('../../js/job-label');
 
 const router = express.Router();
 
@@ -49,12 +50,7 @@ console.log('[sms-routes] mounted at /api/sms (Twilio inbound webhook)');
 // available, never the raw jobs.id. `job` is jobs.data from the LEFT JOIN,
 // so job.jobNumber is on hand; we used to fall through to the raw id.
 function jobLabelForSms(job) {
-  if (job) {
-    const t = job.title || job.name || '';
-    if (job.jobNumber) return job.jobNumber + (t ? ' — ' + t : '');
-    if (t) return t;
-  }
-  return 'your job';
+  return jobLabelFmt.fromJob(job, { fallback: 'your job' });
 }
 function formatEntryShort(entry, job) {
   const title = jobLabelForSms(job);

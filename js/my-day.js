@@ -69,8 +69,7 @@
       var j = jobs[i];
       if (String(j.id) === String(jobId)) {
         var d = j.data || j;
-        var num = d.jobNumber ? '[' + d.jobNumber + '] ' : '';
-        return num + (d.title || d.name || 'Job');
+        return window.p86JobLabel.fromJob(d, { fallback: 'Job' });
       }
     }
     return (window.entityDisplayName && window.entityDisplayName('job', jobId)) || 'Job';

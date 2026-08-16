@@ -23,6 +23,7 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, hasCapability } = require('../auth');
+const jobLabel = require('../../js/job-label');
 
 const router = express.Router();
 
@@ -66,7 +67,7 @@ router.get('/', requireAuth, async (req, res) => {
         [orgId, term, limit]
       ).then(({ rows }) => rows.map(r => {
         const title = r.title || '';
-        const name = r.job_number ? (r.job_number + ' — ' + title) : (title || ('Job ' + r.id));
+        const name = jobLabel(r.job_number, title, { fallback: 'Job ' + r.id });
         return { type: 'jobs', id: r.id, name: name, sub: null };
       }))
     );

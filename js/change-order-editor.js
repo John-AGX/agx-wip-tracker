@@ -419,7 +419,7 @@ function p86Ask(message, opts) {
           '<div class="co">CHANGE ORDER' + (coNo ? ' ' + escapeHTML(coNo) : '') + '</div></div>' +
         '<div class="ttl">' + escapeHTML(co.title || 'Change Order') + '</div>' +
         '<div class="meta">' +
-          '<div><div class="lbl">Job</div>' + escapeHTML((jobNo ? jobNo + ' — ' : '') + jobTitle) + (addr ? '<br>' + escapeHTML(addr) : '') + '</div>' +
+          '<div><div class="lbl">Job</div>' + escapeHTML(window.p86JobLabel(jobNo, jobTitle, { fallback: '' })) + (addr ? '<br>' + escapeHTML(addr) : '') + '</div>' +
           '<div style="text-align:right;">' + (client ? '<div class="lbl">Client</div>' + escapeHTML(client) + '<br>' : '') + '<span class="lbl">Date</span> ' + escapeHTML(dateStr) + '</div>' +
         '</div>' +
         '<h2 class="sec">Scope of Work</h2><div class="scope">' + toHTML(co.scope) + '</div>' +

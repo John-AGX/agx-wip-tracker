@@ -168,7 +168,7 @@
     var locked = (st === 'closed') || !!_po.is_locked;
     var canUnlock = !!_po.is_locked && st !== 'closed';
     var step = NEXT_STEP[st];
-    var jobLabel = (_po.job_number ? _po.job_number + ' — ' : '') + (_po.job_title || '');
+    var jobLabel = window.p86JobLabel(_po.job_number, _po.job_title, { fallback: '' });
 
     ov.innerHTML =
       '<div class="po-ed">' +
@@ -941,7 +941,7 @@
       '.meta{margin:2px 0;} .tot{text-align:right;font-weight:bold;}</style></head><body>' +
       '<h1>Purchase Order ' + esc(_po.po_number || '') + '</h1>' +
       '<div class="meta"><strong>' + esc(_po.title || '') + '</strong></div>' +
-      '<div class="meta">Job: ' + esc((_po.job_number ? _po.job_number + ' — ' : '') + (_po.job_title || '')) + '</div>' +
+      '<div class="meta">Job: ' + esc(window.p86JobLabel(_po.job_number, _po.job_title, { fallback: '' })) + '</div>' +
       '<div class="meta">Subcontractor: ' + esc(_po.sub_name || '') + '</div>' +
       '<div class="meta">Scheduled completion: ' + esc(_po.scheduledCompletion || '') + (_po.materialsOnly ? ' &nbsp;·&nbsp; Materials only' : '') + '</div>' +
       '<h2>Line Items</h2><table><thead><tr><th>Item</th><th>Cost type</th><th style="text-align:right">Unit cost</th><th style="text-align:right">Qty</th><th>Unit</th><th style="text-align:right">Total</th></tr></thead>' +
@@ -1002,7 +1002,7 @@
       ov.style.zIndex = '100001';
       var opts = jobs.map(function (j) {
         return '<option value="' + escAttr(j.id) + '"' + (String(j.id) === String(prefillId) ? ' selected' : '') + '>' +
-          esc((j.jobNumber ? j.jobNumber + ' — ' : '') + (j.title || j.id)) + '</option>';
+          esc(window.p86JobLabel.fromJob(j)) + '</option>';
       }).join('');
       ov.innerHTML = '<div class="po-ed" style="max-width:520px;margin:auto;padding:22px;">' +
         '<div class="po-ed-sec-title">Import into which job?</div>' +
@@ -1046,7 +1046,7 @@
         // Otherwise confirm the job with a picker.
         var hint = parsed.job_reference
           ? ('Buildertrend job reference: “' + parsed.job_reference + '”' +
-             (matched ? ' — best match: ' + ((matched.jobNumber ? matched.jobNumber + ' ' : '') + (matched.title || '')) : ' — no confident match, please pick'))
+             (matched ? ' — best match: ' + window.p86JobLabel.fromJob(matched) : ' — no confident match, please pick'))
           : 'The PDF didn’t clearly name a job — pick the one it belongs to.';
         pickJob(matched ? matched.id : defaultJobId, hint).then(proceed);
       })

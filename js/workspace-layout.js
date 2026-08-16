@@ -252,7 +252,10 @@
     // and the user menu. The legacy `.header-right` column (a stacked
     // right side of a two-row header) was removed when the header
     // collapsed to one line, so we anchor on `#user-menu` instead.
-    var name = job ? (job.jobNumber || "") + " \u2014 " + (job.name || "") : "Job Detail";
+    // `job.name` alone used to feed this \u2014 P86 job records carry `title`, so
+    // the header rendered "RV2006 \u2014 " with an empty right side. fromJob
+    // reads title first and drops the separator when there's one part.
+    var name = job ? window.p86JobLabel.fromJob(job, { fallback: "Job Detail" }) : "Job Detail";
     var userMenu = siteHeader.querySelector("#user-menu");
     if (headerContent && userMenu) {
       var jobInfo = document.createElement("div");
@@ -499,7 +502,7 @@
       var job = appData.jobs.find(function (j) { return j.id === currentJobId; });
       if (job) {
         var titleEl = document.querySelector('.jh-job-title');
-        if (titleEl) titleEl.textContent = (job.jobNumber || '') + ' \u2014 ' + (job.title || '');
+        if (titleEl) titleEl.textContent = window.p86JobLabel.fromJob(job, { fallback: 'Job Detail' });
         var statusEl = document.querySelector('.jh-status-badge');
         if (statusEl) statusEl.textContent = job.status || 'In Progress';
         // Keep the sidebar Pulse card in sync with the (correct) strip \u2014 fixes

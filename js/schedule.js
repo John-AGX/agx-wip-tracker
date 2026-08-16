@@ -722,7 +722,7 @@
 
   function jobLabel(j) {
     if (!j) return '(unknown job)';
-    return (j.jobNumber || '') + (j.jobNumber && j.title ? ' — ' : '') + (j.title || j.name || '');
+    return window.p86JobLabel.fromJob(j);
   }
 
   // ── Crew (system users) ────────────────────────────────────
@@ -2807,7 +2807,7 @@
   // Mirror server entity-labels.js: jobs prefix [jobNumber], leads use
   // title, clients/projects use name.
   function entOptionLabel(type, it) {
-    if (type === 'job') { var n = it.jobNumber ? '[' + it.jobNumber + '] ' : ''; return n + (it.title || it.name || 'Job'); }
+    if (type === 'job') return window.p86JobLabel.fromJob(it, { fallback: 'Job' });
     if (type === 'lead') return it.title || '(untitled lead)';
     return it.name || it.title || '(unnamed)';
   }
@@ -3282,7 +3282,7 @@
       }).map(function(j) {
         var sel = (j.id === entryJobId) ? ' selected' : '';
         return '<option value="' + escapeAttr(j.id) + '"' + sel + '>' +
-          escapeHTML((j.jobNumber || '') + ' — ' + (j.title || j.name || '(untitled)')) +
+          escapeHTML(window.p86JobLabel.fromJob(j, { fallback: '(untitled)' })) +
         '</option>';
       }).join('');
 

@@ -1007,7 +1007,14 @@ function p86Ask(message, opts) {
         var label = rj && rj.jobId ? String(rj.jobId) : '(unidentified)';
         // Prefer the human job number over the raw id.
         var hit = r.matched.filter(function(x) { return x.job.id === (rj && rj.jobId); })[0];
-        if (hit) label = (hit.job.jobNumber || '') + ' ' + (hit.job.title || '');
+        // Dual-mode module (browser + node under jsdom tests), so resolve the
+        // shared formatter either way rather than assuming `window`.
+        if (hit) {
+          var _jl = (typeof window !== 'undefined' && window.p86JobLabel) ||
+            (typeof require === 'function' ? require('./job-label') : null);
+          label = _jl ? _jl.fromJob(hit.job)
+            : ((hit.job.jobNumber || '') + ' ' + (hit.job.title || '')).trim();
+        }
         html += '<tr style="border-top:1px solid var(--border,#2a2a32);">' +
           '<td style="padding:8px 10px;color:var(--text,#fff);">' + escapeHTML(label) + '</td>' +
           '<td style="text-align:right;padding:8px 10px;font-family:\'SF Mono\',monospace;color:#fbbf24;">' + (Number(rj && rj.lines) || 0) + '</td>' +

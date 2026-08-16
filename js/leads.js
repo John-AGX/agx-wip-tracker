@@ -1975,7 +1975,7 @@ function p86Ask(message, opts) {
     var job = jobs.find(function(j) { return j.id === l.job_id; });
     if (labelEl) {
       labelEl.textContent = job
-        ? ((job.jobNumber ? '[' + job.jobNumber + '] ' : '') + (job.title || job.id))
+        ? window.p86JobLabel.fromJob(job, { fallback: 'Job ' + job.id })
         : ('Job ' + l.job_id + ' (not in current view — admin may have removed it)');
     }
     chip.style.display = 'flex';

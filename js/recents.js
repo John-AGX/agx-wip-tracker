@@ -79,7 +79,7 @@
         for (var i = 0; i < jobs.length; i++) {
           if (String(jobs[i].id) === sid) {
             var j = jobs[i];
-            return j.jobNumber ? (j.jobNumber + ' — ' + (j.title || '')) : (j.title || '');
+            return window.p86JobLabel.fromJob(j, { fallback: '' });
           }
         }
         var jt = txt(document.getElementById('job-detail-title'));

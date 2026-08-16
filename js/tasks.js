@@ -257,7 +257,7 @@
     return p.then(function (l) { _entOptCache[type] = l; return l; }).catch(function () { return []; });
   }
   function entOptLabel(type, it) {
-    if (type === 'job') { var n = it.jobNumber ? '[' + it.jobNumber + '] ' : ''; return n + (it.title || it.name || 'Job'); }
+    if (type === 'job') return window.p86JobLabel.fromJob(it, { fallback: 'Job' });
     if (type === 'lead') return it.title || '(untitled lead)';
     return it.name || it.title || '(unnamed)';
   }

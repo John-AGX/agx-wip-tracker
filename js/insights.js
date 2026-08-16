@@ -266,7 +266,7 @@
     sorted.forEach(function (r) {
       var bc = r.margin >= 15 ? '#34d399' : r.margin >= 0 ? '#fbbf24' : '#f87171';
       h += '<div class="ins-perf-row" style="border-left:3px solid ' + bc + ';">' +
-        '<div class="ins-perf-t" title="' + esc(r.title) + '">' + esc((r.jobNumber ? r.jobNumber + ' — ' : '') + r.title) + '</div>' +
+        '<div class="ins-perf-t" title="' + esc(r.title) + '">' + esc(window.p86JobLabel.fromJob(r)) + '</div>' +
         '<div class="ins-perf-m"><span>Income</span><b>' + fmtCurrency(r.total) + '</b></div>' +
         '<div class="ins-perf-m"><span>Earned</span><b style="color:#34d399;">' + fmtCurrency(r.earned) + '</b></div>' +
         '<div class="ins-perf-m"><span>Margin</span><b style="color:' + bc + ';">' + fmtPct(r.margin) + '</b></div>' +

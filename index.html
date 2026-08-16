@@ -3300,6 +3300,13 @@
     <script src="js/dialogs.js?v=2b"></script>
     <script src="js/geolocation.js?v=1"></script>
     <script src="js/assembly-formula.js?v=1"></script>
+    <!-- The ONE job-label formatter (window.p86JobLabel): jobNumber + ' ' +
+         title, John's standard. Loads here, ahead of every consumer — jobs,
+         schedule, PO/CO docs, pay apps, tasks, ai-panel's entityDisplayName —
+         so no call site has to guard on load order. Also require()'d by the
+         server (email templates, SMS, search, 86 tool results) so a client,
+         a sub and the crew never see three different job labels. -->
+    <script src="js/job-label.js?v=1"></script>
     <script src="js/api.js?v=84"></script>
     <!-- Multi-market M1: client-side markets cache. Must load BEFORE any
          surface whose picker calls window.p86MarketNames() (jobs.js). -->
@@ -3326,7 +3333,7 @@
     <script src="js/dash-shell.js?v=2"></script>
     <script src="js/settings-registry.js?v=3"></script>
     <script src="js/admin-dashboard.js?v=3"></script>
-    <script src="js/admin.js?v=134"></script>
+    <script src="js/admin.js?v=135"></script>
     <!-- Act-as / disguise mode: persistent "Acting as NAME — Exit" banner +
          window.p86ActAs(userId). Self-contained; re-fetches /api/auth/me. -->
     <script src="js/actas.js?v=1"></script>
@@ -3338,13 +3345,13 @@
       </div>
     </div>
     <script src="js/clients.js?v=27"></script>
-    <script src="js/clients-dashboard.js?v=6"></script>
+    <script src="js/clients-dashboard.js?v=7"></script>
     <!-- Folder taxonomy — default folder structure per entity type
          (lead / estimate / job / client). Loads before subs.js and
          my-files.js, which merge it with live folders for the grant
          dropdown and the My Files tree. -->
     <script src="js/folder-taxonomy.js?v=2"></script>
-    <script src="js/subs.js?v=15"></script>
+    <script src="js/subs.js?v=16"></script>
     <script src="js/assemblies.js?v=10"></script>
     <script src="js/job-audit.js?v=4d"></script>
     <script src="js/job-reports.js?v=2b"></script>
@@ -3355,18 +3362,18 @@
     <script src="js/table-enhancements.js?v=15"></script>
     <script src="js/bulk-ribbon.js?v=1"></script>
     <script src="js/job-finalize.js?v=5"></script>
-    <script src="js/leads.js?v=93"></script>
-    <script src="js/job-costs-import.js?v=13"></script>
+    <script src="js/leads.js?v=94"></script>
+    <script src="js/job-costs-import.js?v=14"></script>
     <script src="js/qb-costs-view.js?v=22"></script>
-    <script src="js/insights.js?v=10"></script>
-    <script src="js/schedule.js?v=50"></script>
-    <script src="js/my-day.js?v=8"></script>
+    <script src="js/insights.js?v=11"></script>
+    <script src="js/schedule.js?v=51"></script>
+    <script src="js/my-day.js?v=9"></script>
     <!-- Shared entity card (job/lead/estimate Pulse card) — window.p86EntityCard.
          Loads before its callers (entities-map.js, workspace-layout.js). -->
     <script src="js/entity-card.js?v=9"></script>
     <!-- Lead/estimate context card mounted into #app-sidebar (uses p86EntityCard). -->
     <script src="js/entity-subnav.js?v=3"></script>
-    <script src="js/app.js?v=135"></script>
+    <script src="js/app.js?v=136"></script>
     <script src="js/search-clear.js?v=3"></script>
     <script src="js/sidebar-brand.js?v=2"></script>
     <!-- Guided tours engine + the Help & What's New center (patch
@@ -3380,10 +3387,10 @@
     <script src="js/agent-tasks.js?v=11"></script>
     <script src="js/crew-chip.js?v=2"></script>
     <script src="js/file-explorer.js?v=16"></script>
-    <script src="js/my-files.js?v=25"></script>
+    <script src="js/my-files.js?v=26"></script>
     <!-- Tasks / To-Do UI. Loads after my-files.js (reuses window.p86Toast)
          and after api.js/auth.js (p86Api.tasks + p86Auth). -->
-    <script src="js/tasks.js?v=13"></script>
+    <script src="js/tasks.js?v=14"></script>
     <!-- Google Maps JS API loader + tag-icon registry for photo pins.
          Both load before projects-map.js so the map renderer can
          reference window.p86Maps + window.p86TagIcons. -->
@@ -3417,7 +3424,7 @@
          map-pins + maps-loader + geolocation and lazy-loads Google
          MarkerClusterer from CDN for pin clustering. Loads after
          map-pins.js so window.p86MapPins is available. -->
-    <script src="js/entities-map.js?v=30"></script>
+    <script src="js/entities-map.js?v=31"></script>
     <script src="js/projects-pairs.js?v=1"></script>
     <!-- Report template registry (Wave B). Eight construction report
          templates (walkthrough, daily-log, weekly-progress, etc.)
@@ -3426,33 +3433,33 @@
          calls into window.p86ReportTemplates. -->
     <script src="js/report-templates.js?v=1"></script>
     <script src="js/report-style-packs.js?v=2"></script>
-    <script src="js/projects.js?v=69"></script>
+    <script src="js/projects.js?v=70"></script>
     <script src="js/receipt-scanner.js?v=2"></script>
     <script src="js/receipt-cropper.js?v=1"></script>
     <script src="js/list-filter.js?v=1"></script>
-    <script src="js/cost-inbox.js?v=20"></script>
-    <script src="js/invoices.js?v=3"></script>
+    <script src="js/cost-inbox.js?v=21"></script>
+    <script src="js/invoices.js?v=4"></script>
     <script src="js/console-docs.js?v=2"></script>
     <script src="js/console.js?v=18"></script>
     <!-- Jobs Hub — cross-job index pages (Purchase Orders / Change Orders /
          RFIs / Submittals) for the Jobs sidebar dropdown. Uses p86Api +
          appData.jobs + editJob/switchJobSubTab at runtime. -->
-    <script src="js/jobs-hub.js?v=22"></script>
+    <script src="js/jobs-hub.js?v=23"></script>
     <script src="js/assembly-studio.js?v=4"></script>
     <script src="js/materials-consolidate.js?v=1"></script>
     <!-- Purchase Order editor — full-window overlay opened from the Jobs
          hub Purchase Orders list. Uses p86Api.purchaseOrders + subs. -->
     <script src="js/purchase-order-import.js?v=1"></script>
     <script src="js/sub-access-prompt.js?v=1"></script>
-    <script src="js/purchase-order-editor.js?v=15"></script>
-    <script src="js/pay-applications.js?v=12"></script>
+    <script src="js/purchase-order-editor.js?v=16"></script>
+    <script src="js/pay-applications.js?v=13"></script>
     <!-- Shared pricing pipeline — math used by estimate-editor +
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->
     <script src="js/pricing-pipeline.js?v=2"></script>
     <script src="js/progress.js?v=3"></script>
-    <script src="js/jobs.js?v=219"></script>
-    <script src="js/doc-import.js?v=3"></script>
+    <script src="js/jobs.js?v=220"></script>
+    <script src="js/doc-import.js?v=4"></script>
     <script src="js/job-workflow-ui.js?v=6"></script>
     <!-- Reusable rich-text field (window.p86RichText) — shared WYSIWYG for
          Scope / Terms / notes / proposals / reports. Load before the editors
@@ -3465,7 +3472,7 @@
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which
          carries the window.p86Api.changeOrders wrapper). -->
-    <script src="js/change-order-editor.js?v=14"></script>
+    <script src="js/change-order-editor.js?v=15"></script>
     <script src="js/materials-drawer.js?v=12"></script>
     <script src="js/estimate-preview.js?v=15"></script>
     <script src="js/bt-export.js?v=6b"></script>
@@ -3476,7 +3483,7 @@
     <!-- Scribe "live writer" surface — visualizes apply_changeset as an
          animated add/edit/delete diff on p86:payload-applied. -->
     <script src="js/live-writer.js?v=7"></script>
-    <script src="js/ai-panel.js?v=167"></script>
+    <script src="js/ai-panel.js?v=168"></script>
     <!-- Save-from-chat bridge (Workstream ③). Owns p86SaveCodeBlock /
          p86SaveResponse / p86SaveToPicker, called by inline onclick
          handlers in ai-panel.js renderMarkdown / renderBubble. Loads
@@ -3486,7 +3493,7 @@
 
     <script src="js/workspace.js?v=54"></script>
     <script src="js/workspace-gc.js?v=1"></script>
-    <script src="js/workspace-layout.js?v=101"></script>
+    <script src="js/workspace-layout.js?v=102"></script>
 
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
@@ -3497,7 +3504,7 @@
          router.js + the entity-open modules so it can wrap editJob /
          editEstimate / openEditLeadModal / openEditClientModal and reopen
          via window.p86Router.navigate(). -->
-    <script src="js/recents.js?v=2"></script>
+    <script src="js/recents.js?v=3"></script>
 
     <!-- Sidebar Global search — server-backed search across jobs /
          estimates / leads / clients (GET /api/search). Loads after

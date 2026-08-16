@@ -31,6 +31,7 @@
 const { pool } = require('./db');
 const { sendForEvent } = require('./email');
 const tz = require('./timezone');
+const jobLabel = require('../js/job-label');
 
 // Per-org "already sent this local week" marker so the hourly tick fires a
 // given org's digest exactly once on its local Monday morning. Keyed by
@@ -112,13 +113,15 @@ async function assemblePmDigest(orgId, weekStart) {
   return {
     jobsTouchedCount: jobsR.rows.length,
     jobsTouchedListHtml: listHtmlOf(jobsR.rows.map(function(r) {
-      return esc(r.job_number || '—') + ' — ' + esc(r.title || '(untitled)') +
+      return esc(jobLabel(r.job_number, r.title, { fallback: '(untitled)' })) +
         (r.status ? ' <span style="color:#6b7280;">(' + esc(r.status) + ')</span>' : '');
     })),
     scheduleNextWeekCount: schedR.rows.length,
     scheduleNextWeekListHtml: listHtmlOf(schedR.rows.map(function(r) {
       const d = new Date(r.start_date).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
-      return esc(d) + ' — ' + esc(r.job_number || '') + ' ' + esc(r.job_title || '(untitled)');
+      // The em dash here separates DATE from job, not number from title —
+      // it stays. Only the job part goes through the shared formatter.
+      return esc(d) + ' — ' + esc(jobLabel(r.job_number, r.job_title, { fallback: '(untitled)' }));
     }))
   };
 }

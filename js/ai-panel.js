@@ -2318,7 +2318,7 @@ function p86Ask(message, opts) {
       // "Job" and collapse into one look-alike header.
       case 'job':
         r = find(A.jobs);
-        return r ? ((r.jobNumber ? r.jobNumber + ' · ' : '') + (r.title || r.jobName || 'Job')) : null;
+        return r ? window.p86JobLabel.fromJob(r, { fallback: 'Job' }) : null;
       case 'estimate':
         r = find(A.estimates);
         return r ? (r.name || r.client || r.title || 'Estimate') : null;

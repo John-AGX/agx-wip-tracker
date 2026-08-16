@@ -33,6 +33,10 @@ const jobMoney = require('../services/money/change-order-totals');
 // Job WIP, ported from the browser's getJobWIP — QB actuals, vendor bills,
 // PO/sub accrual and the display figures the job card shows.
 const jobWip = require('../services/money/job-wip');
+// One job-label formatter, shared with the browser (window.p86JobLabel).
+// 86 quotes tool-result text straight back to users, so its job labels have
+// to read the same as the app's.
+const jobLabel = require('../../js/job-label');
 // The ONE definition of "which QB cost lines are job cost" — shared with
 // job-wip.js so the per-turn vendor rollup cannot drift from the engine.
 const { classifyCostLine } = require('../services/money/cost-line-filters');
@@ -6704,11 +6708,11 @@ async function execClientDirectoryTool(name, input, ctx) {
       rows = rows.slice(0, limit);
       if (!rows.length) return 'No jobs match the filters.';
       return rows.map(j =>
-        // Bracket leads with the canonical row id (the targeting key for
-        // writes / navigate / scribe_write) and shows the human jobNumber
-        // alongside it, e.g. "[RV2000 · j1]". Reads used to print only the
-        // jobNumber, which hid the id the write path actually needs.
-        '• [' + (j.jobNumber ? j.jobNumber + ' · ' : '') + j.id + '] ' + (j.title || '(untitled)') +
+        // The human label first (owner's standard), then the canonical row id
+        // in brackets — the targeting key for writes / navigate / scribe_write,
+        // which reads used to omit entirely. The label is what 86 repeats to
+        // the user, so it must match every other surface.
+        '• ' + jobLabel.fromJob(j, { fallback: '(untitled)' }) + ' [id ' + j.id + ']' +
         (j.client ? ' — ' + j.client : '') +
         (j.status ? ' · ' + j.status : '') +
         (j.pm ? ' · PM ' + j.pm : '') +
@@ -6834,7 +6838,7 @@ async function execClientDirectoryTool(name, input, ctx) {
         out.push('### Margin red flags (JTD margin below target, sorted worst-first)');
         redFlags.forEach(j => {
           const target = j.targetMarginPct != null ? j.targetMarginPct : 15;
-          out.push('- ' + (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + j.title +
+          out.push('- ' + jobLabel.fromJob(j, { fallback: '(untitled)' }) +
             (j.client ? ' (' + j.client + ')' : '') +
             ' — JTD margin ' + pctFmt(j.wip.jtdMargin) + ' vs target ' + pctFmt(target) +
             ' · revenue earned ' + $(j.wip.revenueEarned));
@@ -6844,7 +6848,7 @@ async function execClientDirectoryTool(name, input, ctx) {
 
       out.push('### Top ' + top.length + ' job' + (top.length === 1 ? '' : 's') + ' by ' + sortBy + (sortBy === 'margin' ? ' (worst first)' : ' (descending)'));
       top.forEach(j => {
-        out.push('- ' + (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + j.title +
+        out.push('- ' + jobLabel.fromJob(j, { fallback: '(untitled)' }) +
           (j.client ? ' (' + j.client + ')' : '') +
           (j.status ? ' · ' + j.status : '') +
           (j.pm ? ' · PM ' + j.pm : ''));
@@ -13416,7 +13420,7 @@ async function execProjectInlineTool(name, input, ctx) {
     return `${r.rows.length} schedule entries between ${fromDate} and ${toDate}:\n` +
       r.rows.map((e) => {
         const crewN = Array.isArray(e.crew) ? e.crew.length : 0;
-        const lbl = e.job_number ? `[${e.job_number}] ${e.job_title}` : e.job_title || e.job_id;
+        const lbl = jobLabel(e.job_number, e.job_title, { fallback: 'Job ' + e.job_id });
         const dateStr = (e.start_date instanceof Date) ? e.start_date.toISOString().slice(0, 10) : String(e.start_date).slice(0, 10);
         return `${dateStr} · ${lbl} · ${e.days}d · ${crewN} crew · ${e.status}` + (e.notes ? ` · ${e.notes}` : '');
       }).join('\n');

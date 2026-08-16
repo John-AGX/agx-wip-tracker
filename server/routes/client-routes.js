@@ -1,6 +1,7 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireCapability } = require('../auth');
+const jobLabel = require('../../js/job-label');
 
 const router = express.Router();
 
@@ -248,7 +249,7 @@ router.get('/:id/dashboard', requireAuth, requireCapability('ESTIMATES_VIEW'), a
 
     // Activity feed — recent jobs + leads + agent notes, newest first.
     const activity = [];
-    jobs.forEach((j) => { if (j.updatedAt) activity.push({ type: 'job', label: (j.jobNumber ? j.jobNumber + ' ' : '') + (j.title || '') + ' · ' + (j.status || ''), when: j.updatedAt }); });
+    jobs.forEach((j) => { if (j.updatedAt) activity.push({ type: 'job', label: jobLabel.fromJob(j) + ' · ' + (j.status || ''), when: j.updatedAt }); });
     leads.forEach((l) => { if (l.updatedAt) activity.push({ type: 'lead', label: (l.title || 'Lead') + ' · ' + (l.status || ''), when: l.updatedAt }); });
     try {
       const notes = Array.isArray(client.agent_notes) ? client.agent_notes : [];

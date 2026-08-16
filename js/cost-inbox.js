@@ -135,7 +135,7 @@ function p86Ask(message, opts) {
       .then(function (r) { var c = r && (r.categories || r); if (Array.isArray(c)) _categories = c; }).catch(function () {}));
     return Promise.all(tasks).then(function () { _entLoaded = true; });
   }
-  function jobLabel(j) { return (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.name || j.id); }
+  function jobLabel(j) { return window.p86JobLabel.fromJob(j, { fallback: 'Job ' + (j && j.id) }); }
   function catLabel(c) { return c.name || ('Category ' + c.id); }
   function entityLabel(type, id) {
     if (!type || !id) return '';

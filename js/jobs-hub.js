@@ -75,7 +75,7 @@ function p86Ask(message, opts) {
   }
   function jobLabel(j) {
     if (!j) return 'Job';
-    return (j.jobNumber ? j.jobNumber + ' — ' : '') + (j.title || 'Untitled job');
+    return window.p86JobLabel.fromJob(j);
   }
   function isActiveJob(j) {
     if (!j) return false;
@@ -84,7 +84,7 @@ function p86Ask(message, opts) {
   }
   function jobLabelFromRow(row) {
     if (row.job_number || row.job_title) {
-      return (row.job_number ? row.job_number + ' — ' : '') + (row.job_title || 'Job');
+      return window.p86JobLabel(row.job_number, row.job_title, { fallback: 'Job' });
     }
     var j = jobsList().find(function (x) { return String(x.id) === String(row.job_id); });
     return j ? jobLabel(j) : 'Job';

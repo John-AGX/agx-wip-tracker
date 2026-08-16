@@ -38,6 +38,8 @@ const { requireAuth, getAttributedUserId } = require('../auth');
 // (notification_prefs.task_assignment) is honored, matching the
 // job-assignment / schedule-assignment notification posture.
 const { sendEmail } = require('../email');
+// The one job-label formatter, shared with the browser (window.p86JobLabel).
+const jobLabel = require('../../js/job-label');
 
 const router = express.Router();
 
@@ -93,10 +95,17 @@ async function resolveEntityLabel(orgId, type, id) {
     else if (type === 'sub')   sql = 'SELECT name AS label FROM subs WHERE id = $1';
     else if (type === 'project') sql = 'SELECT name AS label FROM projects WHERE id = $1 AND organization_id = ' + Number(orgId);
     else if (type === 'estimate') sql = "SELECT COALESCE(data->>'name', data->>'title', 'Estimate') AS label FROM estimates WHERE id = $1";
-    else if (type === 'job')   sql = "SELECT COALESCE(data->>'title', data->>'name', 'Job') AS label FROM jobs WHERE id = $1";
+    else if (type === 'job')   sql = "SELECT COALESCE(NULLIF(data->>'jobNumber',''),'') AS num, COALESCE(data->>'title', data->>'name', '') AS label FROM jobs WHERE id = $1";
     else return '';
     const { rows } = await pool.query(sql, [String(id)]);
-    return rows.length ? (rows[0].label || '') : '';
+    if (!rows.length) return '';
+    // Jobs get the shared jobNumber + title composition. This used to return
+    // the title alone, so a task that showed "RV2006 Waterside" in the app
+    // reached the outside worker's assignment email + share link as just
+    // "Waterside" — the number, which is how the crew identifies the site,
+    // was dropped exactly where it mattered most.
+    if (type === 'job') return jobLabel(rows[0].num, rows[0].label, { fallback: 'Job' });
+    return rows[0].label || '';
   } catch (e) {
     return '';
   }

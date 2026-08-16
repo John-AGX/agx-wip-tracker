@@ -127,7 +127,7 @@
         'No invoices yet. Click <strong>+ New Invoice</strong>, or create one from a certified draw on a job&rsquo;s Billing tab.</div>';
     }
     var rows = _list.map(function (i) {
-      var who = (i.billTo && i.billTo.name) || (i.job_number ? i.job_number + (i.job_title ? ' — ' + i.job_title : '') : '') || (window.entityDisplayName && window.entityDisplayName('client', i.client_id)) || '—';
+      var who = (i.billTo && i.billTo.name) || window.p86JobLabel(i.job_number, i.job_title, { fallback: '' }) || (window.entityDisplayName && window.entityDisplayName('client', i.client_id)) || '—';
       var overdue = num(i.balance) > 0.005 && i.due_date && new Date(i.due_date).getTime() < Date.now() && i.status !== 'paid' && i.status !== 'void';
       return '<tr class="p86inv-row" data-open="' + esc(i.id) + '">' +
         '<td style="padding:9px 12px;white-space:nowrap;"><strong style="color:var(--text,#fff);font-size:13px;">' + esc(i.invoice_number || '—') + '</strong></td>' +

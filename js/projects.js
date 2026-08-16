@@ -785,7 +785,7 @@
         }).slice(0, 100);
         results.innerHTML = rows.length
           ? rows.map(function(j) {
-              var label = (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.name || j.id);
+              var label = window.p86JobLabel.fromJob(j, { fallback: 'Job ' + j.id });
               return linkPickerRowHTML('job', j.id, label, composeJobAddress(j), '');
             }).join('')
           : '<div class="p86-proj-empty-line">No jobs match.</div>';

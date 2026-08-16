@@ -1867,7 +1867,7 @@ function renderJobsMain() {
                     entityLabel: 'jobs',
                     showThumb: false,
                     getName: function(j) {
-                        return (j.jobNumber ? j.jobNumber + ' — ' : '') + (j.title || 'Untitled job');
+                        return window.p86JobLabel.fromJob(j);
                     },
                     getAddress: function(j) { return j.geocode_address || j.address || ''; },
                     getMeta: function(j) {
@@ -2023,7 +2023,7 @@ function renderJobsMain() {
                 if (readOnly) pmCell += ' <span style="font-size:9px;color:var(--text-dim,#888);margin-left:4px;">view only</span>';
                 row.innerHTML = `
                     <td class="job-check-cell" style="width:34px;text-align:center;" onclick="event.stopPropagation();"><input type="checkbox" class="job-check" data-id="${escapeHTML(job.id)}" ${_jobsSelected.has(job.id) ? 'checked' : ''} onclick="event.stopPropagation();window.p86JobsSelect('${escapeHTML(job.id)}',this.checked);"></td>
-                    <td data-col="name"><strong>${job.jobNumber ? escapeHTML(job.jobNumber) + ' — ' : ''}${escapeHTML(job.title)}</strong>${typeLabel}</td>
+                    <td data-col="name"><strong>${escapeHTML(window.p86JobLabel.fromJob(job))}</strong>${typeLabel}</td>
                     <td data-col="client">${escapeHTML(job.client) || '—'}</td>
                     <td data-col="pm">${pmCell}</td>
                     <td data-col="status"><span class="badge ${statusClass}">${escapeHTML(job.status)}</span></td>
@@ -3155,7 +3155,7 @@ function renderJobsMain() {
             // so the subtab content (incl. the RFI/Submittal workflow panel)
             // never rendered and the job detail showed a blank body.
             try {
-            document.getElementById('job-detail-title').textContent = (job.jobNumber ? job.jobNumber + ' — ' : '') + job.title;
+            document.getElementById('job-detail-title').textContent = window.p86JobLabel.fromJob(job);
             // Source back-links: if this job was created from a lead/estimate
             // (Create Job conversion stamps job.lead_id / job.estimate_id), show
             // clickable "← From lead / estimate" chips under the title so the
@@ -3553,7 +3553,7 @@ function renderJobsMain() {
                 dashSide.appendChild(taskWrap);
                 var taskHost = taskWrap.querySelector('#job-overview-tasks-host');
                 if (taskHost) {
-                    var jobLabel = (jobObj && ((jobObj.jobNumber ? jobObj.jobNumber + ' — ' : '') + (jobObj.title || ''))) || ('Job ' + jobId);
+                    var jobLabel = window.p86JobLabel.fromJob(jobObj, { fallback: 'Job ' + jobId });
                     window.p86Tasks.mountEntityPanel(taskHost, 'job', jobId, jobLabel);
                 }
             }
@@ -3599,7 +3599,7 @@ function renderJobsMain() {
                     var tkHost = document.getElementById('job-overview-tasks-host');
                     if (tkHost && /Loading/i.test(tkHost.textContent || '') && window.p86Tasks && window.p86Tasks.mountEntityPanel) {
                         var jb = appData.jobs.find(function(j) { return j.id === healJobId; });
-                        var jl = (jb && ((jb.jobNumber ? jb.jobNumber + ' — ' : '') + (jb.title || ''))) || ('Job ' + healJobId);
+                        var jl = window.p86JobLabel.fromJob(jb, { fallback: 'Job ' + healJobId });
                         try { window.p86Tasks.mountEntityPanel(tkHost, 'job', healJobId, jl); } catch (e) {}
                     }
                 }
@@ -7095,7 +7095,7 @@ function renderJobsMain() {
 
                 // Left: job info
                 html += '<div style="flex:1;min-width:0;">';
-                html += '<div style="font-size:14px;font-weight:600;margin-bottom:2px;">' + escapeHTML((job.jobNumber ? job.jobNumber + ' — ' : '') + (job.title || 'Untitled')) + '</div>';
+                html += '<div style="font-size:14px;font-weight:600;margin-bottom:2px;">' + escapeHTML(window.p86JobLabel.fromJob(job)) + '</div>';
                 html += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:6px;">' +
                     (job.client ? escapeHTML(job.client) + ' &middot; ' : '') +
                     (job.pm ? 'PM: ' + escapeHTML(job.pm) + ' &middot; ' : '') +

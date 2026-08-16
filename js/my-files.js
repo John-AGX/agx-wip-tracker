@@ -966,7 +966,7 @@ function p86Ask(message, opts) {
             '<label style="font-size:11px;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.4px;font-weight:600;display:block;margin-bottom:4px;">Destination</label>' +
             '<select id="mfDestId" style="width:100%;padding:7px 10px;font-size:13px;">' +
               jobs.map(function(j) {
-                var label = (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.name || j.id);
+                var label = window.p86JobLabel.fromJob(j, { fallback: 'Job ' + j.id });
                 return '<option value="job::' + escapeAttr(j.id) + '">' + escapeHTML(label) + '</option>';
               }).join('') +
             '</select>' +
@@ -991,7 +991,7 @@ function p86Ask(message, opts) {
       var pool = t === 'job' ? jobs : t === 'estimate' ? ests : leads;
       idEl.innerHTML = pool.map(function(item) {
         var label;
-        if (t === 'job') label = (item.jobNumber ? '[' + item.jobNumber + '] ' : '') + (item.title || item.name || item.id);
+        if (t === 'job') label = window.p86JobLabel.fromJob(item, { fallback: 'Job ' + item.id });
         else if (t === 'estimate') label = item.title || item.name || item.client || 'Estimate';
         else label = item.title || item.property_name || item.street_address || 'Lead';
         return '<option value="' + t + '::' + escapeAttr(item.id) + '">' + escapeHTML(label) + '</option>';

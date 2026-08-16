@@ -142,7 +142,7 @@
     var c = d.client || {}, s = d.summary || {}, jobs = d.jobs || [], leads = d.leads || [];
     var mapItems = {
       leads: leads.filter(function (l) { return l.lat != null && l.lng != null; }).map(function (l) { return { id: l.id, title: l.title, lat: l.lat, lng: l.lng, kind: 'lead', status: l.status }; }),
-      jobs: jobs.filter(function (j) { return j.lat != null && j.lng != null; }).map(function (j) { return { id: j.id, title: (j.jobNumber ? j.jobNumber + ' — ' : '') + (j.title || ''), lat: j.lat, lng: j.lng, kind: 'job', status: j.status, jobNumber: j.jobNumber }; })
+      jobs: jobs.filter(function (j) { return j.lat != null && j.lng != null; }).map(function (j) { return { id: j.id, title: window.p86JobLabel.fromJob(j), lat: j.lat, lng: j.lng, kind: 'job', status: j.status, jobNumber: j.jobNumber }; })
     };
     var hasMap = (mapItems.leads.length + mapItems.jobs.length) > 0 && !!window.p86EntitiesMap;
     var actHtml = (d.activity || []).length ? (d.activity || []).map(function (a) {
