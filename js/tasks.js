@@ -704,10 +704,12 @@
       var thumb = photo.thumb_url || photo.web_url || '';
       var cap = photo.caption || photo.filename || 'Photo';
       var safeCap = String(cap).replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      var html = '<div style="min-width:180px;max-width:230px;font-family:system-ui,sans-serif;">' +
-        (thumb ? '<img src="' + thumb + '" style="width:100%;max-height:130px;object-fit:cover;border-radius:5px;display:block;margin-bottom:8px;" alt="" />' : '') +
-        '<div style="font-size:12px;font-weight:600;color:#111;margin-bottom:8px;word-break:break-word;">' + safeCap + '</div>' +
-        '<button id="tdPinOpen" style="width:100%;font-size:12px;padding:7px 8px;border-radius:5px;border:1px solid #2f6df6;background:#2f6df6;color:#fff;font-weight:600;cursor:pointer;">Expand &amp; annotate</button>' +
+      // Compact card so it fits the 172px mini-map with no InfoWindow scroll:
+      // a short fixed thumbnail, one-line caption, slim button.
+      var html = '<div style="width:150px;font-family:system-ui,sans-serif;line-height:1.25;">' +
+        (thumb ? '<img src="' + thumb + '" style="width:150px;height:72px;object-fit:cover;border-radius:5px;display:block;" alt="" />' : '') +
+        '<div style="font-size:11px;font-weight:600;color:#111;margin:5px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + safeCap + '</div>' +
+        '<button id="tdPinOpen" style="width:100%;font-size:11px;padding:6px 8px;border-radius:5px;border:1px solid #2f6df6;background:#2f6df6;color:#fff;font-weight:700;cursor:pointer;">Expand &amp; annotate</button>' +
       '</div>';
       _tdInfoWin.setContent(html);
       _tdInfoWin.open(_tdMap, marker);
@@ -719,7 +721,7 @@
     function refreshMarkers() {
       if (!_tdMap || !_tdMaps) return;
       var maps = _tdMaps;
-      if (!_tdInfoWin) _tdInfoWin = new maps.InfoWindow();
+      if (!_tdInfoWin) _tdInfoWin = new maps.InfoWindow({ maxWidth: 166 });
       if (_taskCenter && !_taskMarker) {
         _taskMarker = new maps.Marker({ position: _taskCenter, map: _tdMap, title: 'Task location', zIndex: 999 });
       }
