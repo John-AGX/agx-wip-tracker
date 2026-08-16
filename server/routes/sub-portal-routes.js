@@ -32,6 +32,9 @@ const { sendEmail, isEnabled: emailIsEnabled } = require('../email');
 const { storage } = require('../storage');
 // P0-4 — same byte sniffing + SVG sanitization the PM upload path uses.
 const { sniffMimeFromBytes, sanitizeSvg, mimeFamilyMatches } = require('../util/attachment-mime');
+// Batched polymorphic label resolver. Job labels go through js/job-label.js
+// inside it, so the sub sees the same "RV2006 Waterside 1" the office does.
+const { resolveEntityLabels } = require('../services/entity-labels');
 
 const router = express.Router();
 
@@ -301,6 +304,48 @@ router.get('/sub-portal/me',
   }
 );
 
+// ── Sub-facing display projection ────────────────────────────────────
+//
+// EVERY key a subcontractor receives from the attachment list, and nothing
+// else. The query below still reads `a.*` (the folder match needs the whole
+// row shape), but only these keys are serialised, so a column added to
+// `attachments` — or a table joined into the query later — cannot reach a
+// sub by accident. That inversion is the point: the safe list is declared
+// here in code, not implied by whatever the SELECT happens to return.
+// Pinned by test/sub-portal-payload.test.js; adding a key means changing
+// that test on purpose.
+//
+// Deliberately absent: uploaded_by (an internal user id), extracted_text
+// (full OCR body), annotations, tags, anthropic_file_id, lat/lng,
+// created_at/updated_at, and every storage key. And no money field exists
+// on this payload at all — no contract, cost, margin, budget or client.
+const SUB_ATTACHMENT_FIELDS = [
+  'id', 'filename', 'mime_type', 'size_bytes',
+  'thumb_url', 'web_url', 'original_url',
+  // The grant coordinates portal.html echoes back on upload — these must
+  // stay RAW (the POST re-checks the grant on them), so they are ids, not
+  // labels, by design.
+  'entity_type', 'entity_id', 'folder',
+  'grant_entity_type', 'grant_entity_id', 'grant_folder',
+  // The human label composed from those coordinates (see below).
+  'grant_entity_label'
+];
+
+// Which grant types get a resolved label. A WHITELIST, so an unrecognised
+// or future grant type fails closed to "no label" rather than leaking.
+//   job  → jobNumber + ' ' + title, via js/job-label.js
+//   lead → the lead title
+// Deliberately NOT here: client (a client's name), sub (another
+// subcontractor's name), estimate (titles routinely carry the client).
+// Those grants render a neutral header instead.
+const PORTAL_LABEL_TYPES = new Set(['job', 'lead']);
+
+function publicAttachment(row) {
+  const out = {};
+  for (const k of SUB_ATTACHMENT_FIELDS) out[k] = row[k] === undefined ? null : row[k];
+  return out;
+}
+
 // GET /api/sub-portal/attachments — every attachment in any granted
 // folder, scoped to req.user.sub_id. Reuses the same join shape as
 // /api/subs/:subId/shared-attachments (Phase 4) but locks the sub_id
@@ -330,7 +375,30 @@ router.get('/sub-portal/attachments',
           ORDER BY g.entity_type, g.entity_id, g.folder, a.position`,
         [subId]
       );
-      res.json({ attachments: rows });
+
+      // Human folder headers. The sub used to see the raw entity_type — a
+      // folder literally titled "job". Resolve a label for the grant types
+      // on the whitelist above.
+      //
+      // Direction matters, and it is grants → jobs, never the reverse: the
+      // id list handed to the resolver is built ENTIRELY from rows the
+      // sub_id-scoped query already returned, and the resolver looks those
+      // ids up by primary key. It cannot enumerate, cannot widen, and
+      // cannot add or drop a row from `rows` — worst case a lookup fails
+      // and the header falls back to a neutral word.
+      const items = rows
+        .filter((r) => PORTAL_LABEL_TYPES.has(r.grant_entity_type))
+        .map((r) => ({ entity_type: r.grant_entity_type, entity_id: r.grant_entity_id }));
+      const labels = await resolveEntityLabels((req.user && req.user.organization_id) || null, items);
+
+      const attachments = rows.map((r) => {
+        const out = publicAttachment(r);
+        out.grant_entity_label = PORTAL_LABEL_TYPES.has(r.grant_entity_type)
+          ? (labels.get(r.grant_entity_type + ':' + String(r.grant_entity_id)) || null)
+          : null;
+        return out;
+      });
+      res.json({ attachments: attachments });
     } catch (e) {
       console.error('GET /api/sub-portal/attachments error:', e);
       res.status(500).json({ error: 'Server error: ' + e.message });

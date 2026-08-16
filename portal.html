@@ -53,16 +53,27 @@
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
     flex-wrap: wrap;
   }
+  /* The header reads job-first: the job number + title the crew actually
+     uses on site is the heading, and the folder demotes to a chip under
+     it. (It used to lead with the raw entity_type, so a sub's folder was
+     headed by the literal word "job".) */
   .portal-folder-title { font-weight: 600; font-size: 14px; }
-  .portal-folder-title .source {
-    font-size: 11px; color: var(--text-dim); text-transform: uppercase;
-    letter-spacing: 0.5px; margin-right: 6px;
+  .portal-folder-title .entity {
+    font-size: 15px; font-weight: 600; color: var(--text);
+    line-height: 1.3; word-break: break-word;
+  }
+  .portal-folder-title .folder-line {
+    display: flex; align-items: center; gap: 8px;
+    margin-top: 5px; flex-wrap: wrap;
   }
   .portal-folder-title .folder-pill {
     display: inline-block; padding: 2px 8px; border-radius: 10px;
     background: rgba(165, 180, 252, 0.15); color: #a5b4fc;
     font-size: 10px; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 0.4px; margin-left: 4px;
+    letter-spacing: 0.4px;
+  }
+  .portal-folder-title .count {
+    font-size: 11px; color: var(--text-dim); font-weight: 500;
   }
   .portal-files {
     display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
@@ -194,6 +205,11 @@
           entity_type: a.grant_entity_type || a.entity_type,
           entity_id: a.grant_entity_id || a.entity_id,
           folder: a.grant_folder || a.folder || 'general',
+          // Server-composed display label for the grant's parent record
+          // (job number + title, or the lead title). Never composed here —
+          // js/job-label.js owns the format and this page carries no
+          // script bundle. May be null; see headerLabel().
+          label: a.grant_entity_label || '',
           items: []
         };
       }
@@ -205,6 +221,17 @@
   function prettyFolder(f) {
     if (!f || f === 'general') return 'General';
     return String(f).replace(/-/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+  }
+
+  // What heads a folder card. The raw entity_type is NEVER rendered — a
+  // subcontractor was seeing a folder titled literally "job". When the
+  // server couldn't resolve a label (the record is gone, or the grant is
+  // on a type we deliberately don't name to a sub — a client, another
+  // sub, an estimate) we say "Shared files": human, and it gives away
+  // nothing about what the folder hangs off.
+  function headerLabel(g) {
+    var l = g && g.label ? String(g.label).trim() : '';
+    return l || 'Shared files';
   }
 
   function renderFolders(groups) {
@@ -236,9 +263,11 @@
       return '<section class="portal-folder">' +
         '<div class="portal-folder-header">' +
           '<div class="portal-folder-title">' +
-            '<span class="source">' + escapeHTML(g.entity_type) + '</span>' +
-            escapeHTML(prettyFolder(g.folder)) +
-            '<span class="folder-pill">' + g.items.length + ' file' + (g.items.length === 1 ? '' : 's') + '</span>' +
+            '<div class="entity">' + escapeHTML(headerLabel(g)) + '</div>' +
+            '<div class="folder-line">' +
+              '<span class="folder-pill">' + escapeHTML(prettyFolder(g.folder)) + '</span>' +
+              '<span class="count">' + g.items.length + ' file' + (g.items.length === 1 ? '' : 's') + '</span>' +
+            '</div>' +
           '</div>' +
         '</div>' +
         (g.items.length

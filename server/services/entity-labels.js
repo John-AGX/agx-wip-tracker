@@ -41,7 +41,12 @@ function queryFor(type, ids, orgId) {
     case 'estimate':
       return { text: "SELECT id::text AS id, COALESCE(data->>'name', data->>'title', 'Estimate') AS label FROM estimates WHERE id::text = ANY($1::text[])", params: [ids] };
     case 'job':
-      return { text: "SELECT id::text AS id, COALESCE(NULLIF(data->>'jobNumber',''),'') AS num, COALESCE(data->>'title', data->>'name', 'Job') AS label FROM jobs WHERE id::text = ANY($1::text[])", params: [ids] };
+      // The title COALESCE ends in '' — NOT the literal 'Job'. A synthetic
+      // word here reached jobLabel as a real title, so a numbered job with
+      // no title rendered "RV2006 Job". Empty is the honest answer; the
+      // formatter below decides what an empty pair looks like. Matches the
+      // single-row twin in tasks-routes.js.
+      return { text: "SELECT id::text AS id, COALESCE(NULLIF(data->>'jobNumber',''),'') AS num, COALESCE(data->>'title', data->>'name', '') AS label FROM jobs WHERE id::text = ANY($1::text[])", params: [ids] };
     default:
       return null;
   }
@@ -71,7 +76,12 @@ async function resolveEntityLabels(orgId, items) {
       const { rows } = await pool.query(q.text, q.params);
       rows.forEach((r) => {
         let label = r.label || '';
-        if (type === 'job') label = jobLabel(r.num, label, { fallback: 'Job' });
+        // No local fallback string — a job with neither number nor title
+        // gets js/job-label.js's own DEFAULT_FALLBACK ('Untitled job'), the
+        // one the rest of the app already renders. Forward-facing surfaces
+        // (sub portal, task share links) paint this verbatim, so it must
+        // never be a bare type word.
+        if (type === 'job') label = jobLabel(r.num, label);
         out.set(type + ':' + r.id, label);
       });
     } catch (e) {

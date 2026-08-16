@@ -29,6 +29,9 @@ const { requireAuth } = require('../auth');
 const { sendEmail, isEnabled: emailIsEnabled } = require('../email');
 const { storage } = require('../storage');
 const { sniffMimeFromBytes, sanitizeSvg, mimeFamilyMatches } = require('../util/attachment-mime');
+// Job labels go through js/job-label.js inside this resolver, so the outside
+// worker reads the same "RV2006 Waterside 1" the office does.
+const { resolveEntityLabels } = require('../services/entity-labels');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -65,6 +68,35 @@ function publicTask(t) {
     due_date: t.due_date, checklist: Array.isArray(t.checklist) ? t.checklist : [],
     lat: t.lat, lng: t.lng, directions: t.directions
   };
+}
+
+// Which linked-record types get NAMED to an outside worker. A whitelist:
+// job (jobNumber + title) and lead (its title) are the sanctioned
+// forward-facing names. A task linked to a client, sub, estimate or project
+// stays anonymous — the guest holds a token, not a login.
+//
+// This deliberately lives OUTSIDE publicTask(): entity_type / entity_id are
+// still withheld from the guest, and only the composed string ships. It is
+// also a separate top-level key rather than a field on the task, because the
+// PATCH response returns publicTask() alone — a label parked on the task
+// would vanish the moment the worker ticked a checkbox.
+const SHARE_LABEL_TYPES = new Set(['job', 'lead']);
+
+// null whenever there is nothing safe or nothing at all to say: an unlinked
+// task (tasks.entity_type is nullable), a type off the whitelist, or a
+// record that no longer resolves. The page then simply omits the line —
+// never "job", "null", or a raw id.
+async function linkedLabel(task) {
+  try {
+    if (!task || !task.entity_type || task.entity_id == null) return null;
+    if (!SHARE_LABEL_TYPES.has(task.entity_type)) return null;
+    const key = task.entity_type + ':' + String(task.entity_id);
+    const labels = await resolveEntityLabels(task.organization_id || null,
+      [{ entity_type: task.entity_type, entity_id: task.entity_id }]);
+    return labels.get(key) || null;
+  } catch (e) {
+    return null;
+  }
 }
 
 // ── PM-side ─────────────────────────────────────────────────────────────────
@@ -200,11 +232,15 @@ router.get('/task-share/:token', loadShare, async (req, res) => {
     const photos = await taskPhotos(req.task.id);
     let orgName = null;
     try { const o = await pool.query('SELECT name FROM organizations WHERE id = $1', [req.task.organization_id]); if (o.rows.length) orgName = o.rows[0].name; } catch (e) {}
+    // Which job this task belongs to. Without it a worker completing a
+    // shared task had the title and nothing else — no idea which site.
+    const linked = await linkedLabel(req.task);
     res.json({
       task: publicTask(req.task),
       photos: photos,
       share: { recipient_name: req.share.recipient_name, needs_name: !req.share.recipient_name, completed: !!req.share.completed_at, expires_at: req.share.expires_at },
       org_name: orgName,
+      linked_label: linked,
       // Client Maps key (same one the app exposes) so the guest page can show a
       // static map preview of the pin. Referrer-restricted to our domain.
       maps_key: process.env.GOOGLE_MAPS_API_KEY || null

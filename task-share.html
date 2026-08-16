@@ -13,6 +13,9 @@
   .brand { font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--dim); margin-bottom:10px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px; margin-bottom:12px; }
   h1 { font-size:19px; line-height:1.3; margin:0 0 8px; font-weight:650; }
+  /* Which job this task belongs to — the one thing an outside worker needs
+     before anything else on the page, so it sits above the title. */
+  .joblink { font-size:13px; font-weight:600; color:var(--accent); line-height:1.35; margin:0 0 5px; word-break:break-word; }
   .chips { display:flex; flex-wrap:wrap; gap:6px; }
   .chip { font-size:12px; padding:3px 10px; border-radius:20px; background:#eef2ff; color:#3730a3; }
   .chip.status { background:#e0edff; color:#1d4ed8; }
@@ -54,7 +57,11 @@
   var token = (location.pathname.split('/').filter(Boolean).pop() || '');
   var app = document.getElementById('app');
   var toastEl = document.getElementById('toast');
-  var state = { task: null, photos: [], share: null, org: 'This company', name: '', mapsKey: null, busy: false };
+  // `linked` is its own slot, NOT a field on state.task, on purpose: every
+  // PATCH (check an item, send a note, mark done) replaces state.task with
+  // the server's narrow publicTask projection, which carries no label. Same
+  // reason `org` lives out here.
+  var state = { task: null, photos: [], share: null, org: 'This company', linked: '', name: '', mapsKey: null, busy: false };
 
   function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
   function toast(m){ toastEl.textContent=m; toastEl.classList.add('on'); setTimeout(function(){toastEl.classList.remove('on');},1800); }
@@ -72,6 +79,9 @@
       if(!res.ok){ fatal(res.j&&res.j.error || 'This link is no longer valid.'); return; }
       state.task=res.j.task||{}; state.photos=res.j.photos||[]; state.share=res.j.share||{};
       state.org=res.j.org_name||'This company';
+      // Server-composed (job number + title, or the lead title). Null when
+      // the task isn't linked to one — the line is then simply omitted.
+      state.linked=res.j.linked_label||'';
       state.mapsKey=res.j.maps_key||null;
       state.name=state.share.recipient_name||'';
       render();
@@ -87,6 +97,7 @@
     h+='<div class="brand">'+esc(state.org)+' · Task</div>';
 
     h+='<div class="card">';
+    if(state.linked) h+='<div class="joblink">'+esc(state.linked)+'</div>';
     h+='<h1>'+esc(t.title||'Task')+'</h1>';
     h+='<div class="chips">';
     h+='<span class="chip status">'+esc((t.status||'open').replace('_',' '))+'</span>';
