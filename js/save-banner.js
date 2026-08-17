@@ -70,7 +70,14 @@
     // Nothing unsaved => nothing to say, whatever the last event was. This is
     // the self-clearing property: the banner is a function of the dirty set,
     // so a push that lands removes it without anyone having to remember to.
-    var view = (snap.jobs.length + snap.estimates.length) === 0 && snap.reason !== 'no-good-load'
+    //
+    // 'no-good-load' used to be exempt from this, and that exemption is what
+    // put a RED "Not saving to the server — 0 changes on this device only"
+    // in front of John on every Railway swap with nothing unsaved. The rule
+    // has no exceptions now: no unsaved rows, no banner. describeSaveState
+    // enforces the same thing from its side, so neither layer can reintroduce
+    // it alone.
+    var view = (snap.jobs.length + snap.estimates.length) === 0
       ? { level: 'none' }
       : m.describeSaveState(snap);
 

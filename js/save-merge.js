@@ -114,6 +114,25 @@
     var held = s.heldMs || 0;
     var show = n ? ['show-unsaved'] : [];
 
+    /* ── nothing unsaved ⇒ nothing to say, in EVERY state ──────────────────
+     * This function used to be reachable at n === 0 and it produced
+     * sentences with a zero in them:
+     *   "Not saving to the server — 0 changes on this device only."
+     *   "Couldn't save 0 changes"
+     * The first fired on every Railway swap with the app open and nothing
+     * unsaved — the common case, roughly twenty pushes in a day — as a RED
+     * error banner. That is not cosmetic. A red banner that appears on every
+     * deploy with a nonsense count is exactly how a user learns to ignore the
+     * banner, and the deleted-by-someone-else state depends on him reading it.
+     *
+     * The count is the whole subject of every string below: each one is a
+     * claim about rows that are on this device and not on the server. With no
+     * such rows there is no claim to make. The server being unreachable is
+     * real, but it is not the user's problem until it is holding something of
+     * his — the recovery loop is already running either way, and it announces
+     * itself the moment there is a first unsaved row. */
+    if (!n) return mk('none', '', '', [], 0);
+
     if (s.quotaFailed) {
       return mk('error', 'Out of browser storage — changes are not being saved anywhere.',
         'This device cannot cache your work and the server has not taken it. Copy anything unsaved now.',
