@@ -5080,59 +5080,10 @@
     });
   }
 
-  // Lightweight uploader — just the drop zone + upload button. Photos
-  // refresh after upload. The big grid render is handled by our custom
-  // feed above.
-  function mountUploader() {
-    var host = document.getElementById('projPhotoUploadHost');
-    if (!host) return;
-    host.innerHTML =
-      '<div class="p86-proj-upload-row">' +
-        '<button class="primary" onclick="document.getElementById(\'projPhotoFileInput\').click();">&#x2795; Upload photos</button>' +
-        '<input type="file" id="projPhotoFileInput" multiple accept="image/*,application/pdf,.xlsx,.xls,.xlsm,.csv,.tsv,.docx,.doc,.txt,.md" capture="environment" style="display:none;" />' +
-        '<span class="p86-proj-upload-hint">or drag &amp; drop photos onto this area.</span>' +
-      '</div>';
-    var fileInput = host.querySelector('#projPhotoFileInput');
-    if (fileInput) {
-      fileInput.addEventListener('change', function(e) {
-        if (e.target.files && e.target.files.length) {
-          // Walkthrough loop heuristic: if a SINGLE image file was
-          // returned (the OS camera always returns exactly one) on a
-          // touch-capable device, treat this as a walkthrough capture
-          // so the camera re-opens after the user saves. Multi-file
-          // returns or non-image files are clearly the gallery picker
-          // — don't engage the loop in that case.
-          var f = e.target.files[0];
-          var isImage = f && f.type && /^image\//.test(f.type);
-          var oneFile = e.target.files.length === 1;
-          var touch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
-          if (oneFile && isImage && touch) {
-            _walkthroughKeepOpen = true;
-          }
-          uploadFiles(e.target.files);
-        }
-        fileInput.value = '';
-      });
-    }
-    // Drag-drop on the entire fieldset.
-    var fieldset = host.closest('fieldset');
-    if (fieldset) {
-      fieldset.addEventListener('dragover', function(e) {
-        e.preventDefault();
-        fieldset.classList.add('p86-proj-drop-active');
-      });
-      fieldset.addEventListener('dragleave', function() {
-        fieldset.classList.remove('p86-proj-drop-active');
-      });
-      fieldset.addEventListener('drop', function(e) {
-        e.preventDefault();
-        fieldset.classList.remove('p86-proj-drop-active');
-        if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
-          uploadFiles(e.dataTransfer.files);
-        }
-      });
-    }
-  }
+  // (Removed: the old single-input `mountUploader` — dead/uncalled. It held
+  // the pre-d488604 mixed input (image/* + docs + capture) that forced the
+  // iOS Camera/Files sheet. The live photo toolbar's split camera/library
+  // inputs + uploadFiles() below are the one true upload path now.)
 
   // Walkthrough upload — every file goes through a preview modal
   // (Phase 1.7) where the user can dictate a caption, confirm/edit
