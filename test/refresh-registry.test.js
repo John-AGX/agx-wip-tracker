@@ -816,14 +816,31 @@ describe('registry honesty', () => {
       (s.src.match(/p86Refresh\(\s*'([a-z_]+)'/g) || [])
         .forEach((m) => clientCalls.add(m.replace(/.*'([a-z_]+)'.*/, '$1')));
     });
-    // Exactly ONE dispatch site passes the type indirectly: the Jobs Hub bulk
-    // bar maps its list key to a refresh type. Read that map rather than
-    // loosening the scan into a string search that would wave anything through.
-    const hub = SOURCES.find((s) => s.file === 'jobs-hub.js').src;
-    const bulkMap = hub.match(/BULK_REFRESH_TYPE\s*=\s*\{([\s\S]*?)\}/);
-    expect(bulkMap).not.toBeNull();
-    (bulkMap[1].match(/:\s*'([a-z_]+)'/g) || [])
-      .forEach((m) => clientCalls.add(m.replace(/.*'([a-z_]+)'.*/, '$1')));
+    // TWO files dispatch the type indirectly, through a literal map — three
+    // sites in total. Read the maps rather than loosening the scan above into
+    // a string search that would wave anything through.
+    //
+    //   jobs-hub.js:351,352   p86Refresh(type, ...)  off BULK_REFRESH_TYPE
+    //   doc-import.js:562     p86Refresh(type, ...)  off REFRESH_TYPE
+    //
+    // Reading BOTH matters, and `bill` is why. `bill` is not a dispatcher
+    // target at all — absent from DISPATCHERS and from the entity_type
+    // literals — so its only reachability evidence is a client call site. It
+    // survives today because BULK_REFRESH_TYPE happens to name it; if that hub
+    // map ever dropped 'bill', this test would call `bill` unreachable while
+    // doc-import.js was actively dispatching it. Two maps, one fact.
+    const INDIRECT = [
+      ['jobs-hub.js', /BULK_REFRESH_TYPE\s*=\s*\{([\s\S]*?)\}/],
+      ['doc-import.js', /REFRESH_TYPE\s*=\s*\{([\s\S]*?)\}/],
+    ];
+    INDIRECT.forEach(([file, re]) => {
+      const src = SOURCES.find((s) => s.file === file);
+      expect(`${file} is scanned`).toBe(src ? `${file} is scanned` : 'MISSING');
+      const map = src.src.match(re);
+      expect(map).not.toBeNull();
+      (map[1].match(/:\s*'([a-z_]+)'/g) || [])
+        .forEach((m) => clientCalls.add(m.replace(/.*'([a-z_]+)'.*/, '$1')));
+    });
     const unreachable = P.types().filter((t) => !emitted.has(t) && !clientCalls.has(t));
     // `sub` and `project` were exactly this: entries no door could ever fire.
     expect(unreachable).toEqual([]);
