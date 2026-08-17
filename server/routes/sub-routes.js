@@ -27,10 +27,24 @@
 
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireCapability } = require('../auth');
+const { requireAuth, requireCapability, requireOrgId } = require('../auth');
 const { sendForEvent } = require('../email');
 const fileFolders = require('../services/file-folders');
 const { defaultFoldersForEntity, sanitizeFolderPath } = require('../folder-taxonomy');
+// Two caller-supplied keys reach this file — job_id on the assignment doors,
+// sub_id on the directory / certificate / grant doors — and neither was proved
+// anywhere in it. See services/sub-org-scope.js for why the a243b76 stamp made
+// the job_subs case HARDER to detect rather than easier.
+const { jobInOrg, jobIdsInOrg, parentJobInOrgSql } = require('../services/job-org-scope');
+const { subInOrg, grantEntityInOrg, parentSubInOrgSql } = require('../services/sub-org-scope');
+
+// The one refusal every door in this file gives for a key that is not the
+// caller's. It is the same 404 an absent row gets: sub and job ids are guessable,
+// and a distinguishable 403 would turn each door into a cross-tenant existence
+// oracle. Absent and foreign are deliberately indistinguishable to the caller.
+function notYours(res, what) {
+  return res.status(404).json({ error: what + ' not found' });
+}
 
 const router = express.Router();
 
@@ -84,7 +98,7 @@ const KNOWN_TRADES = [
 // GET /api/subs   — full directory list with active-job counts
 // ──────────────────────────────────────────────────────────────────
 router.get('/',
-  requireAuth, requireCapability('JOBS_VIEW_ALL'),
+  requireAuth, requireCapability('JOBS_VIEW_ALL'), requireOrgId,
   async (req, res) => {
     try {
       const { rows } = await pool.query(`
@@ -103,7 +117,7 @@ router.get('/',
         ) js ON js.sub_id = s.id
         WHERE (s.organization_id = $1 OR s.organization_id IS NULL)
         ORDER BY lower(s.name) ASC
-      `, [req.user.organization_id]);
+      `, [req.orgId]);
       res.json({ subs: rows, trades: KNOWN_TRADES });
     } catch (e) {
       console.error('GET /api/subs error:', e);
@@ -114,14 +128,16 @@ router.get('/',
 
 // GET /api/subs/:id — single profile + cross-job rollup
 router.get('/:id',
-  requireAuth, requireCapability('JOBS_VIEW_ALL'),
+  requireAuth, requireCapability('JOBS_VIEW_ALL'), requireOrgId,
   async (req, res) => {
     try {
       // Wave A (A8): org-scope the sub fetch. subs.organization_id is direct +
-      // backfilled; OR-IS-NULL = no-op for AGX.
+      // backfilled; OR-IS-NULL = no-op for AGX. req.orgId rather than the raw
+      // claim: a legacy token carries no organization_id, and binding NULL here
+      // silently returned only un-stamped subs instead of resolving the tenant.
       const subRes = await pool.query(
         'SELECT * FROM subs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
-        [req.params.id, req.user.organization_id]
+        [req.params.id, req.orgId]
       );
       if (!subRes.rows.length) return res.status(404).json({ error: 'Sub not found' });
       const assignments = await pool.query(`
@@ -143,7 +159,7 @@ router.get('/:id',
 
 // POST /api/subs — create
 router.post('/',
-  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  requireAuth, requireCapability('JOBS_EDIT_ANY'), requireOrgId,
   async (req, res) => {
     try {
       const b = req.body || {};
@@ -160,9 +176,15 @@ router.post('/',
                           business_phone, cell_phone, fax,
                           street_address, city, state, zip,
                           payment_email, payment_hold,
-                          preferences, notification_prefs)
+                          preferences, notification_prefs,
+                          -- The directory has no parent row to read a tenant
+                          -- off, so the stamp comes from requireOrgId's
+                          -- server-resolved org. It was absent entirely: an
+                          -- un-stamped sub is not hidden, it is visible to
+                          -- EVERY tenant through the OR-IS-NULL arm above.
+                          organization_id)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
-                $14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
+                $14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
         RETURNING *
       `, [
         id, b.name.trim(),
@@ -187,7 +209,8 @@ router.post('/',
         b.payment_email || b.paymentEmail || null,
         !!(b.payment_hold || b.paymentHold),
         b.preferences || {},
-        b.notification_prefs || b.notificationPrefs || {}
+        b.notification_prefs || b.notificationPrefs || {},
+        req.orgId
       ]);
       res.json({ sub: result.rows[0] });
     } catch (e) {
@@ -203,7 +226,7 @@ router.post('/',
 // PUT /api/subs/:id — full profile update (PATCH-compatible: only
 // non-undefined fields applied)
 router.put('/:id',
-  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  requireAuth, requireCapability('JOBS_EDIT_ANY'), requireOrgId,
   async (req, res) => {
     try {
       const b = req.body || {};
@@ -244,11 +267,20 @@ router.put('/:id',
       if (!sets.length) return res.status(400).json({ error: 'nothing to update' });
       sets.push('updated_at = NOW()');
       vals.push(req.params.id);
+      // The tenant predicate goes in this statement, not in a pre-check: it is
+      // keyed on the row's own id, so a JS probe would be a second round-trip
+      // and a TOCTOU. This is the mirror of GET /:id, which has been scoped
+      // since Wave A — a scoped read next to an unscoped write is not half a
+      // boundary. Unscoped, an org-A admin could rewrite an org-B sub's
+      // payment_email and payment_hold, which is where their money goes.
+      vals.push(req.orgId);
       const result = await pool.query(
-        'UPDATE subs SET ' + sets.join(', ') + ' WHERE id = $' + i + ' RETURNING *',
+        'UPDATE subs SET ' + sets.join(', ') +
+        ' WHERE id = $' + i + ' AND (organization_id = $' + (i + 1) + ' OR organization_id IS NULL)' +
+        ' RETURNING *',
         vals
       );
-      if (!result.rows.length) return res.status(404).json({ error: 'Sub not found' });
+      if (!result.rows.length) return notYours(res, 'Sub');
       res.json({ sub: result.rows[0] });
     } catch (e) {
       console.error('PUT /api/subs/:id error:', e);
@@ -259,14 +291,20 @@ router.put('/:id',
 
 // DELETE /api/subs/:id — only if no job_subs assignments exist
 router.delete('/:id',
-  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  requireAuth, requireCapability('JOBS_EDIT_ANY'), requireOrgId,
   async (req, res) => {
     try {
+      // Prove the sub BEFORE the in-use probe: run the other way round, a
+      // foreign sub id answers 409-or-200 and that difference is itself a
+      // cross-tenant read ("does org B's sub have work?").
+      if (!(await subInOrg(pool, req.params.id, req.orgId))) return notYours(res, 'Sub');
       const inUse = await pool.query('SELECT 1 FROM job_subs WHERE sub_id = $1 LIMIT 1', [req.params.id]);
       if (inUse.rows.length) {
         return res.status(409).json({ error: 'Sub is assigned to one or more jobs. Unassign first or use status=closed.' });
       }
-      const result = await pool.query('DELETE FROM subs WHERE id = $1', [req.params.id]);
+      const result = await pool.query(
+        'DELETE FROM subs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+        [req.params.id, req.orgId]);
       res.json({ ok: true, deleted: result.rowCount });
     } catch (e) {
       console.error('DELETE /api/subs/:id error:', e);
@@ -285,9 +323,11 @@ router.delete('/:id',
 
 // GET /api/subs/:subId/certificates — list all certs for one sub
 router.get('/:subId/certificates',
-  requireAuth, requireCapability('JOBS_VIEW_ALL'),
+  requireAuth, requireCapability('JOBS_VIEW_ALL'), requireOrgId,
   async (req, res) => {
     try {
+      // W-9 and bank-info metadata, plus the attachment URL for the PDF.
+      if (!(await subInOrg(pool, req.params.subId, req.orgId))) return notYours(res, 'Sub');
       const { rows } = await pool.query(`
         SELECT sc.*,
                a.filename AS attachment_filename,
@@ -310,7 +350,7 @@ router.get('/:subId/certificates',
 // Body: { cert_type, attachment_id?, expiration_date?, reminder_days?,
 //         reminder_direction?, reminder_limit? }
 router.post('/:subId/certificates',
-  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  requireAuth, requireCapability('JOBS_EDIT_ANY'), requireOrgId,
   async (req, res) => {
     try {
       const b = req.body || {};
@@ -318,6 +358,7 @@ router.post('/:subId/certificates',
       if (!['gl', 'wc', 'w9', 'bank'].includes(certType)) {
         return res.status(400).json({ error: 'Invalid cert_type — must be gl, wc, w9, or bank' });
       }
+      if (!(await subInOrg(pool, req.params.subId, req.orgId))) return notYours(res, 'Sub');
       // Upsert. ON CONFLICT updates the metadata fields; attachment_id
       // is COALESCEd so a metadata-only update (e.g. user changes the
       // expiration date) doesn't wipe the existing PDF.
@@ -325,8 +366,14 @@ router.post('/:subId/certificates',
       const result = await pool.query(`
         INSERT INTO sub_certificates
           (id, sub_id, cert_type, attachment_id, expiration_date,
-           reminder_days, reminder_direction, reminder_limit)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           reminder_days, reminder_direction, reminder_limit,
+           -- F4: this insert landed organization_id NULL, and a NULL-org row
+           -- is visible to EVERY tenant through the OR-IS-NULL arm. Read off
+           -- the PARENT SUB, not off the caller — a caller-derived stamp is
+           -- forgeable through sub_id and can disagree with its parent.
+           organization_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+                (SELECT organization_id FROM subs WHERE id = $2))
         ON CONFLICT (sub_id, cert_type) DO UPDATE SET
           attachment_id = COALESCE(EXCLUDED.attachment_id, sub_certificates.attachment_id),
           expiration_date = EXCLUDED.expiration_date,
@@ -354,7 +401,7 @@ router.post('/:subId/certificates',
 // PATCH /api/subs/:subId/certificates/:certType — partial update of one cert.
 // Used for inline edits to expiration / reminder fields without re-uploading.
 router.patch('/:subId/certificates/:certType',
-  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  requireAuth, requireCapability('JOBS_EDIT_ANY'), requireOrgId,
   async (req, res) => {
     try {
       const b = req.body || {};
@@ -377,9 +424,15 @@ router.patch('/:subId/certificates/:certType',
       if (!sets.length) return res.status(400).json({ error: 'nothing to update' });
       sets.push('updated_at = NOW()');
       vals.push(req.params.subId, req.params.certType);
+      // Filtered, not pre-checked: keyed on the row's own composite key, so a
+      // probe first would be a second round-trip and a TOCTOU. RETURNING *
+      // means an unscoped form was a cross-tenant READ as well as a write.
+      vals.push(req.orgId);
       const result = await pool.query(
         'UPDATE sub_certificates SET ' + sets.join(', ') +
-        ' WHERE sub_id = $' + i++ + ' AND cert_type = $' + i + ' RETURNING *',
+        ' WHERE sub_id = $' + i++ + ' AND cert_type = $' + i++ +
+        ' AND ' + parentSubInOrgSql('sub_certificates.sub_id', '$' + i) +
+        ' RETURNING *',
         vals
       );
       if (!result.rows.length) return res.status(404).json({ error: 'Certificate not found' });
@@ -395,9 +448,12 @@ router.patch('/:subId/certificates/:certType',
 // metadata row. Also deletes the underlying attachment so the PDF
 // doesn't stay orphaned. Caller can re-upload to start fresh.
 router.delete('/:subId/certificates/:certType',
-  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  requireAuth, requireCapability('JOBS_EDIT_ANY'), requireOrgId,
   async (req, res) => {
     try {
+      // Prove the sub first: this door also deletes the underlying ATTACHMENT
+      // by id, so an unproved sub_id reached a second table on the way out.
+      if (!(await subInOrg(pool, req.params.subId, req.orgId))) return notYours(res, 'Sub');
       const cur = await pool.query(
         'SELECT attachment_id FROM sub_certificates WHERE sub_id = $1 AND cert_type = $2',
         [req.params.subId, req.params.certType]
@@ -434,9 +490,13 @@ router.delete('/:subId/certificates/:certType',
 // from the jobs table; full assignment metadata is on each row in
 // case the modal grows to surface contract amounts later.
 router.get('/:subId/jobs',
-  requireAuth, requireCapability('JOBS_VIEW_ALL'),
+  requireAuth, requireCapability('JOBS_VIEW_ALL'), requireOrgId,
   async (req, res) => {
     try {
+      // Unscoped, this returned another tenant's job NUMBERS and TITLES —
+      // exactly the identity leak a243b76 closed in notifySubAssigned, reached
+      // through the sub key instead of the job key.
+      if (!(await subInOrg(pool, req.params.subId, req.orgId))) return notYours(res, 'Sub');
       const { rows } = await pool.query(`
         SELECT js.id AS assignment_id, js.job_id, js.level, js.building_id,
                js.phase_id, js.contract_amt, js.billed_to_date, js.status,
@@ -476,9 +536,12 @@ router.get('/:subId/jobs',
 // joined with directory profile so the UI doesn't need a second
 // fetch.
 router.get('/jobs/:jobId',
-  requireAuth, requireCapability('JOBS_VIEW_ALL'),
+  requireAuth, requireCapability('JOBS_VIEW_ALL'), requireOrgId,
   async (req, res) => {
     try {
+      // The read half of the five open writes below: contract amounts, billed
+      // to date, and each sub's name, phone and email, for any guessed job id.
+      if (!(await jobInOrg(pool, req.params.jobId, req.orgId))) return notYours(res, 'Job');
       const { rows } = await pool.query(`
         SELECT js.*, s.name AS sub_name, s.trade, s.contact_name,
                s.phone, s.email, s.w9_on_file, s.insurance_expires
@@ -497,12 +560,17 @@ router.get('/jobs/:jobId',
 
 // POST /api/subs/jobs/:jobId — assign a sub to a job
 router.post('/jobs/:jobId',
-  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  requireAuth, requireCapability('JOBS_EDIT_ANY'), requireOrgId,
   async (req, res) => {
     try {
       const b = req.body || {};
       if (!b.subId && !b.sub_id) return res.status(400).json({ error: 'subId is required' });
       const subId = b.subId || b.sub_id;
+      // BOTH keys are caller-supplied, so both are proved. Proving only the job
+      // would still let an org-A sub be attached to an org-A job's roster from
+      // org B, and proving only the sub is the door this whole finding is about.
+      if (!(await jobInOrg(pool, req.params.jobId, req.orgId))) return notYours(res, 'Job');
+      if (!(await subInOrg(pool, subId, req.orgId))) return notYours(res, 'Sub');
       const id = b.id || genId('jsub');
       // Sub assignments are job-level only — building/phase
       // distribution is driven by the node graph, so we hard-code
@@ -532,7 +600,10 @@ router.post('/jobs/:jobId',
         jobId: req.params.jobId,
         contractAmt: Number(b.contract_amt || b.contractAmt || 0),
         assignedByName: (req.user && req.user.name) || (req.user && req.user.email) || 'AGX',
-        orgId: req.user && req.user.organization_id
+        // req.orgId, not the raw claim: a243b76 scoped this lookup so a foreign
+        // job id could not mail that job's identity off-platform, and a legacy
+        // token with no claim passed NULL into that predicate.
+        orgId: req.orgId
       }).catch(function(e) { console.warn('[sub_assigned] notify failed:', e && e.message); });
     } catch (e) {
       if (e.code === '23505') {
@@ -546,7 +617,7 @@ router.post('/jobs/:jobId',
 
 // PATCH /api/subs/jobs/:jobId/:assignmentId — update assignment
 router.patch('/jobs/:jobId/:assignmentId',
-  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  requireAuth, requireCapability('JOBS_EDIT_ANY'), requireOrgId,
   async (req, res) => {
     try {
       const b = req.body || {};
@@ -570,8 +641,16 @@ router.patch('/jobs/:jobId/:assignmentId',
       sets.push('updated_at = NOW()');
       vals.push(req.params.assignmentId);
       vals.push(req.params.jobId);
+      // Verified live: this rewrote an org-B sub's $400,000 contract to $1 and
+      // answered 200. The predicate goes IN the statement — keyed on the child
+      // row's own id, a JS pre-check would be a round-trip and a TOCTOU — and
+      // RETURNING * means the unscoped form read the row back as well.
+      vals.push(req.orgId);
       const result = await pool.query(
-        'UPDATE job_subs SET ' + sets.join(', ') + ' WHERE id = $' + i + ' AND job_id = $' + (i + 1) + ' RETURNING *',
+        'UPDATE job_subs SET ' + sets.join(', ') +
+        ' WHERE id = $' + i + ' AND job_id = $' + (i + 1) +
+        ' AND ' + parentJobInOrgSql('job_subs.job_id', '$' + (i + 2)) +
+        ' RETURNING *',
         vals
       );
       if (!result.rows.length) return res.status(404).json({ error: 'Assignment not found' });
@@ -584,12 +663,13 @@ router.patch('/jobs/:jobId/:assignmentId',
 );
 
 router.delete('/jobs/:jobId/:assignmentId',
-  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  requireAuth, requireCapability('JOBS_EDIT_ANY'), requireOrgId,
   async (req, res) => {
     try {
       const r = await pool.query(
-        'DELETE FROM job_subs WHERE id = $1 AND job_id = $2',
-        [req.params.assignmentId, req.params.jobId]
+        'DELETE FROM job_subs WHERE id = $1 AND job_id = $2 AND ' +
+        parentJobInOrgSql('job_subs.job_id', '$3'),
+        [req.params.assignmentId, req.params.jobId, req.orgId]
       );
       res.json({ ok: true, deleted: r.rowCount });
     } catch (e) {
@@ -613,7 +693,7 @@ router.delete('/jobs/:jobId/:assignmentId',
 // dedicated query for them.
 // ──────────────────────────────────────────────────────────────────
 router.post('/migrate-preview',
-  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  requireAuth, requireCapability('JOBS_EDIT_ANY'), requireOrgId,
   async (req, res) => {
     try {
       const { inlineSubs } = req.body || {};
@@ -639,8 +719,15 @@ router.post('/migrate-preview',
       });
       // Check existing subs for collisions
       const names = Object.values(groups).map(function(g) { return g.canonical.toLowerCase(); });
+      // Scoped: unscoped, a caller learned whether another tenant's directory
+      // holds a given company name, one probe per name, and the preview then
+      // handed back that tenant's sub id as the proposed merge target.
       const existing = names.length
-        ? (await pool.query('SELECT id, name FROM subs WHERE lower(name) = ANY($1::text[])', [names])).rows
+        ? (await pool.query(
+            `SELECT id, name FROM subs
+              WHERE lower(name) = ANY($1::text[])
+                AND (organization_id = $2 OR organization_id IS NULL)`,
+            [names, req.orgId])).rows
         : [];
       const existingByName = {};
       existing.forEach(function(e) { existingByName[e.name.toLowerCase()] = e; });
@@ -668,10 +755,24 @@ router.post('/migrate-preview',
 );
 
 router.post('/migrate-apply',
-  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  requireAuth, requireCapability('JOBS_EDIT_ANY'), requireOrgId,
   async (req, res) => {
     const { inlineSubs } = req.body || {};
     if (!Array.isArray(inlineSubs)) return res.status(400).json({ error: 'inlineSubs array required' });
+
+    // Which of the caller's job ids are actually theirs, resolved ONCE before
+    // BEGIN. Verified live, this endpoint bulk-planted $88,000 of sub contract
+    // onto an org-B job and stamped the rows org 2. One batched lookup rather
+    // than a per-record probe inside the transaction: the loop can run to a
+    // hundred records and each probe would hold the transaction open longer.
+    const wantedJobIds = [...new Set(inlineSubs.map((s) => s && s.jobId).filter(Boolean).map(String))];
+    let allowedJobIds;
+    try {
+      allowedJobIds = await jobIdsInOrg(pool, wantedJobIds, req.orgId);
+    } catch (e) {
+      console.error('POST /api/subs/migrate-apply scope lookup failed:', e && e.message);
+      return res.status(503).json({ error: 'Could not verify the jobs in this migration right now. Nothing was written — retry shortly.' });
+    }
 
     const client = await pool.connect();
     try {
@@ -690,7 +791,13 @@ router.post('/migrate-apply',
       for (const key of Object.keys(groups)) {
         const g = groups[key];
         // Look up existing sub by lowercased name
-        let subRow = (await client.query('SELECT id FROM subs WHERE lower(name) = $1', [key])).rows[0];
+        // Scoped: unscoped, this ADOPTED another tenant's directory row as the
+        // dedupe parent whenever the names matched, and every assignment below
+        // then pointed at their sub.
+        let subRow = (await client.query(
+          `SELECT id FROM subs
+            WHERE lower(name) = $1 AND (organization_id = $2 OR organization_id IS NULL)`,
+          [key, req.orgId])).rows[0];
         if (!subRow) {
           // Pick the most-frequent trade across records for the directory profile
           const tradeCounts = {};
@@ -700,8 +807,11 @@ router.post('/migrate-apply',
           const trade = Object.keys(tradeCounts).sort(function(a, b) { return tradeCounts[b] - tradeCounts[a]; })[0] || null;
           const id = genId('sub');
           await client.query(
-            'INSERT INTO subs (id, name, trade) VALUES ($1, $2, $3)',
-            [id, g.canonical, trade]
+            // F4: stamped. Un-stamped, the row this migration created was
+            // visible to every tenant AND could never be re-matched by the
+            // now-scoped dedupe lookup above.
+            'INSERT INTO subs (id, name, trade, organization_id) VALUES ($1, $2, $3, $4)',
+            [id, g.canonical, trade, req.orgId]
           );
           subRow = { id };
           stats.subsCreated++;
@@ -711,9 +821,11 @@ router.post('/migrate-apply',
         // Now create job_subs for each inline record
         for (const r of g.records) {
           if (!r.jobId) { stats.assignmentsSkipped++; continue; }
-          // Verify the job exists
-          const jobCheck = await client.query('SELECT 1 FROM jobs WHERE id = $1', [r.jobId]);
-          if (!jobCheck.rows.length) { stats.assignmentsSkipped++; continue; }
+          // "Verify the job exists" asked the wrong question — existence, not
+          // ownership. A job that is not the caller's is skipped exactly the
+          // way an absent one is, so the response cannot be read as an oracle
+          // for which job ids exist in other tenants.
+          if (!allowedJobIds.has(String(r.jobId))) { stats.assignmentsSkipped++; continue; }
           try {
             // Sub assignments are job-level only — building/phase
             // distribution is driven by the node graph, so we
@@ -777,9 +889,14 @@ function sanitizeFolder(s) {
 // (left-join so orphaned grants — entity deleted out from under us —
 // still surface so a PM can clean them up).
 router.get('/:subId/attachment-grants',
-  requireAuth, requireCapability('JOBS_VIEW_ALL'),
+  requireAuth, requireCapability('JOBS_VIEW_ALL'), requireOrgId,
   async (req, res) => {
     try {
+      // attachment_folder_grants has no organization_id of its own — it is
+      // scoped THROUGH its parent sub, which is the only tenant pointer it has
+      // and the reason the F4 scan flagged it as an un-stamped insert. Nothing
+      // lands NULL there; there is no column to land in.
+      if (!(await subInOrg(pool, req.params.subId, req.orgId))) return notYours(res, 'Sub');
       const { rows } = await pool.query(
         `SELECT g.id, g.sub_id, g.entity_type, g.entity_id, g.folder,
                 g.granted_by, g.granted_at,
@@ -804,11 +921,10 @@ router.get('/:subId/attachment-grants',
 //     folder?:    'photos' (default 'general') }
 // Idempotent — repeat grants no-op via the UNIQUE index.
 router.post('/:subId/attachment-grants',
-  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  requireAuth, requireCapability('JOBS_EDIT_ANY'), requireOrgId,
   async (req, res) => {
     try {
-      const subR = await pool.query('SELECT id FROM subs WHERE id = $1', [req.params.subId]);
-      if (!subR.rows.length) return res.status(404).json({ error: 'Sub not found' });
+      if (!(await subInOrg(pool, req.params.subId, req.orgId))) return notYours(res, 'Sub');
 
       const b = req.body || {};
       const entity_type = String(b.entity_type || '').trim();
@@ -816,6 +932,14 @@ router.post('/:subId/attachment-grants',
       if (!entity_type || !entity_id) return res.status(400).json({ error: 'entity_type and entity_id are required' });
       const VALID = ['lead', 'estimate', 'client', 'job', 'sub'];
       if (VALID.indexOf(entity_type) === -1) return res.status(400).json({ error: 'invalid entity_type' });
+      // BOTH ends of a grant are caller-supplied, and this one is broader than
+      // the job-access door below: it accepts any of five entity types. A grant
+      // is a document-visibility edge, so the entity it points at must be the
+      // caller's too — otherwise an in-tenant sub becomes a reader of another
+      // tenant's lead, estimate, client or job files.
+      if (!(await grantEntityInOrg(pool, entity_type, entity_id, req.orgId))) {
+        return notYours(res, 'Entity');
+      }
 
       const folder = sanitizeFolder(b.folder);
       const id = genId('afg');
@@ -856,12 +980,13 @@ router.post('/:subId/attachment-grants',
 
 // DELETE /api/subs/:subId/attachment-grants/:grantId — revoke.
 router.delete('/:subId/attachment-grants/:grantId',
-  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  requireAuth, requireCapability('JOBS_EDIT_ANY'), requireOrgId,
   async (req, res) => {
     try {
       const result = await pool.query(
-        'DELETE FROM attachment_folder_grants WHERE id = $1 AND sub_id = $2',
-        [req.params.grantId, req.params.subId]
+        'DELETE FROM attachment_folder_grants WHERE id = $1 AND sub_id = $2 AND ' +
+        parentSubInOrgSql('attachment_folder_grants.sub_id', '$3'),
+        [req.params.grantId, req.params.subId, req.orgId]
       );
       if (result.rowCount === 0) return res.status(404).json({ error: 'Grant not found' });
       res.json({ ok: true });
@@ -877,10 +1002,12 @@ router.delete('/:subId/attachment-grants/:grantId',
 // the full job folder taxonomy so the permissions panel renders every
 // checkbox. Powers window.p86SubAccessPrompt.
 router.get('/:subId/job-access/:jobId',
-  requireAuth, requireCapability('JOBS_VIEW_ALL'),
+  requireAuth, requireCapability('JOBS_VIEW_ALL'), requireOrgId,
   async (req, res) => {
     try {
       const { subId, jobId } = req.params;
+      if (!(await jobInOrg(pool, jobId, req.orgId))) return notYours(res, 'Job');
+      if (!(await subInOrg(pool, subId, req.orgId))) return notYours(res, 'Sub');
       const js = await pool.query(
         'SELECT 1 FROM job_subs WHERE job_id = $1 AND sub_id = $2 LIMIT 1', [jobId, subId]);
       const gr = await pool.query(
@@ -904,14 +1031,20 @@ router.get('/:subId/job-access/:jobId',
 // folder, GRANTS each wanted folder they lack, and REVOKES this job's folder
 // grants that aren't wanted. folders:[] leaves them with no visible folders.
 router.post('/:subId/job-access',
-  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  requireAuth, requireCapability('JOBS_EDIT_ANY'), requireOrgId,
   async (req, res) => {
     try {
       const subId = req.params.subId;
       const jobId = String((req.body && req.body.jobId) || '').trim();
       if (!jobId) return res.status(400).json({ error: 'jobId is required' });
-      const subR = await pool.query('SELECT id FROM subs WHERE id = $1', [subId]);
-      if (!subR.rows.length) return res.status(404).json({ error: 'Sub not found' });
+      // The exfiltration door: verified live, this granted an ORG-A
+      // subcontractor `plans/current` and `contracts` on an ORG-B job, off a
+      // guessed job id, and the sub then reads those files through the portal.
+      // The job id arrives in the BODY here rather than the path, which is why
+      // a survey of :jobId routes did not see it — the key is what matters,
+      // not where it rides.
+      if (!(await jobInOrg(pool, jobId, req.orgId))) return notYours(res, 'Job');
+      if (!(await subInOrg(pool, subId, req.orgId))) return notYours(res, 'Sub');
 
       const wantSet = new Set();
       (Array.isArray(req.body.folders) ? req.body.folders : []).forEach((f) => {
@@ -967,9 +1100,10 @@ router.post('/:subId/job-access',
 // future portal reads from this same shape). Orphan grants (entity
 // since deleted) drop out via the INNER JOIN on attachments.
 router.get('/:subId/shared-attachments',
-  requireAuth, requireCapability('JOBS_VIEW_ALL'),
+  requireAuth, requireCapability('JOBS_VIEW_ALL'), requireOrgId,
   async (req, res) => {
     try {
+      if (!(await subInOrg(pool, req.params.subId, req.orgId))) return notYours(res, 'Sub');
       // Additive match (folder STRING OR folder_id) so this PM preview
       // shows exactly what the sub portal returns — keep the two joins in
       // lockstep. See /api/sub-portal/attachments for the rationale.

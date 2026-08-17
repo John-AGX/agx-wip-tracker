@@ -125,6 +125,12 @@ describe('a guessed id no longer returns another tenant\'s label', () => {
     const fn = fnBody(SUBS, 'notifySubAssigned');
     expect(fn).toMatch(/orgId/);
     expect(fn).toMatch(/FROM jobs WHERE id = \$1 AND \(organization_id = \$2 OR organization_id IS NULL\)/);
-    expect(SUBS).toMatch(/orgId: req\.user && req\.user\.organization_id/);
+    // The caller now passes req.orgId rather than the raw JWT claim. Same
+    // source of truth, one strictly stronger: the claim is NULL on a legacy
+    // token, and binding NULL into the predicate above made the scoped lookup
+    // find nothing instead of scoping. Closing F1 put requireOrgId on this
+    // route, so req.orgId is always resolved by the time the notify fires.
+    expect(SUBS).toMatch(/orgId: req\.orgId/);
+    expect(SUBS).not.toMatch(/orgId: req\.user && req\.user\.organization_id/);
   });
 });
