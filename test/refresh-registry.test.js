@@ -45,13 +45,36 @@ const REPO = path.join(__dirname, '..');
 // does the loading: a third directory is scanned the day it is added, not the
 // day someone remembers. Absolute/protocol-relative srcs (the pdf.js CDN tag)
 // are skipped — not ours, not on disk.
+//
+// THE QUOTING IS NOT ASSUMED. This matched `src="…"` — double quotes only —
+// which is a hardcoded assumption inside the one function whose entire job is to
+// remove a hardcoded list. index.html has zero single-quoted and zero unquoted
+// srcs today, so it was latent, never live; that is exactly when it costs ten
+// characters instead of a directory-wide blind spot. Same class as the `js/`-only
+// scan this derivation replaced, and as the `//`-in-a-string stripper bug below:
+// a reader that quietly sees less than it claims to.
+//
+// ONE pattern, read by both callers. The duplicate copy in the coverage test
+// below is how the two could have drifted into disagreeing about what a script
+// tag is.
 const INDEX_HTML = fs.readFileSync(path.join(REPO, 'index.html'), 'utf8');
+const SCRIPT_SRC = '<script[^>]*\\bsrc\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\'|([^\\s"\'>]+))';
+// Every LOCAL script src the page loads, cache-buster stripped. Absolute and
+// protocol-relative are dropped here so no caller has to remember to.
+function scriptSrcs(html) {
+  const re = new RegExp(SCRIPT_SRC, 'gi');
+  const out = [];
+  let m;
+  while ((m = re.exec(String(html)))) {
+    const src = m[1] || m[2] || m[3] || '';
+    if (!src || /^(?:[a-z]+:)?\/\//i.test(src)) continue;
+    out.push(src.split('?')[0]);                 // drop the ?v= cache-buster
+  }
+  return out;
+}
 function scriptRoots(html) {
   const roots = new Set();
-  (String(html).match(/<script[^>]*\bsrc\s*=\s*"([^"]+)"/g) || []).forEach((tag) => {
-    const src = /src\s*=\s*"([^"]+)"/.exec(tag)[1];
-    if (/^(?:[a-z]+:)?\/\//i.test(src)) return;
-    const p = src.split('?')[0];                 // drop the ?v= cache-buster
+  scriptSrcs(html).forEach((p) => {
     const i = p.lastIndexOf('/');
     if (i > 0) roots.add(p.slice(0, i));
   });
@@ -254,10 +277,7 @@ describe('scanned roots', () => {
   });
 
   test('every local script index.html loads is in a scanned root', () => {
-    const loaded = (INDEX_HTML.match(/<script[^>]*\bsrc\s*=\s*"([^"]+)"/g) || [])
-      .map((t) => /src\s*=\s*"([^"]+)"/.exec(t)[1])
-      .filter((s) => !/^(?:[a-z]+:)?\/\//i.test(s))
-      .map((s) => s.split('?')[0]);
+    const loaded = scriptSrcs(INDEX_HTML);
     // No local tag may sit outside the scanned set — that is the exact failure
     // shape, one directory at a time.
     const outside = loaded.filter((p) => SCRIPT_ROOTS.indexOf(p.slice(0, p.lastIndexOf('/'))) === -1);
@@ -282,6 +302,27 @@ describe('scanned roots', () => {
       .toEqual(['js', 'widgets']);
     // A root-level script has no directory to scan and must not become "".
     expect(scriptRoots('<script src="sw.js"></script>')).toEqual([]);
+  });
+
+  test('the derivation does not assume double quotes', () => {
+    // C4. The regex required `src="…"`. index.html has no single-quoted or
+    // unquoted src today, so this was latent — but a hardcoded quoting
+    // assumption inside the function that exists to delete a hardcoded list is
+    // the same defect one level down, and it costs ten characters to close.
+    expect(scriptRoots("<script src='widgets/b.js'></script>")).toEqual(['widgets']);
+    expect(scriptRoots('<script src=widgets/b.js></script>')).toEqual(['widgets']);
+    expect(scriptRoots("<script src='js/a.js?v=3'></script>")).toEqual(['js']);
+    // Whatever the quoting, external is still external.
+    expect(scriptRoots("<script src='https://cdn.example.com/x/pdf.min.js'></script>")).toEqual([]);
+    expect(scriptRoots('<script src=//cdn.example.com/x/pdf.min.js></script>')).toEqual([]);
+    // Mixed quoting in one document, which is how it would actually arrive.
+    expect(scriptRoots('<script src="js/a.js"></script><script src=\'nodegraph/b.js\'></script>'))
+      .toEqual(['js', 'nodegraph']);
+    // And the srcs list itself — the thing the coverage test above reads.
+    expect(scriptSrcs("<script src='js/a.js?v=9'></script>")).toEqual(['js/a.js']);
+    // A tag with no src contributes nothing rather than an empty string.
+    expect(scriptSrcs('<script>var x = 1;</script>')).toEqual([]);
+    expect(scriptSrcs('<script src=""></script>')).toEqual([]);
   });
 });
 
@@ -1149,35 +1190,54 @@ describe('p86Refresh.now — the promise-returning seam', () => {
 // EVERY directory index.html loads (see SCRIPT_ROOTS above — js/ AND nodegraph/,
 // where the "every file in js/" version of this had a whole blind directory):
 //   · the five server-backed money mirrors on appData (cross-checked against
-//     the boot hydrate in js/app.js), written by assignment, by computed key,
-//     by in-place array mutation, by truncating .length, by writing a FIELD of
-//     an indexed element, through `delete`, through Object.assign's first
-//     argument, and through `?.`; a destructuring bind of one is reported too,
-//     as its own symbol, because it is the doorway to a write this scan can no
-//     longer follow;
+//     the boot hydrate in js/app.js), written by assignment — plain, compound
+//     (`+=`), or logical (`??=`/`||=`/`&&=`) — by increment at either fixity, by
+//     computed key, by in-place array mutation at any depth, by truncating
+//     .length, by writing a FIELD (or a field of a field, or a computed key) of
+//     an indexed element, by replacing an indexed element outright, through
+//     `delete`, through Object.assign's first argument whether that argument is
+//     the mirror or `appData` itself, and through `?.` before either a dotted or
+//     a computed key; a destructuring bind of one is reported too, as its own
+//     symbol, because it is the doorway to a write this scan can no longer
+//     follow;
 //   · the three load*ForJob money loaders (the whole set — scanned for, not
 //     assumed), with an UNFORCED call reported as its own separate finding;
 //   · all four repainters in refresh.js's REPAINT_JOB_MONEY_PATHS, in the
 //     `window.`-qualified and bare-global spellings alike.
 //
-// AND WHAT IT DOES NOT — three limits, all of them tested rather than implied:
+// AND WHAT IT DOES NOT — three limits, all of them tested rather than implied.
+// Each is stated at the width it actually holds, because the recurring failure
+// of this guard has not been its code: it is that every round closed a gap and
+// then wrote a sentence one size larger than the fix. Two of the three limits
+// below were previously overstated in exactly that way.
 //
-//   1. It matches TEXT. Any indirection through a VARIABLE walks past it: an
-//      aliased mirror, an aliased loader, a computed key assembled at runtime.
-//      Pinned in 'the misses are named' below.
-//   2. Granularity is per FILE per SYMBOL, not per site — one justification
-//      covers every occurrence of that symbol in that file. What it is NOT
-//      allowed to cover is a CHANGE in how many: each entry declares `sites`,
-//      the live count is derived, and a mismatch fails and prints both numbers.
-//      So excusing `admin.js -> renderJobsMain` no longer makes a second,
-//      genuinely bad renderJobsMain() in admin.js permanently invisible — it
-//      makes it a count of 2 against a declared 1. The cost is honest and worth
-//      naming: a legitimate new site in app.js/jobs.js fails the build until
-//      someone re-reads the justification, which is the point.
+//   1. It matches TEXT, so it cannot resolve VALUES. TWO classes escape, not
+//      one — this used to say "an indirection through a variable defeats it,
+//      always", which was false in both directions: nine classes of direct
+//      literal write were also escaping (now caught, see the C1 tests), and one
+//      whole class of miss is not indirection at all. Class 1 is indirection through a
+//      value (an aliased mirror or loader, a runtime-built key). Class 2 is a
+//      write through a binding the LANGUAGE creates — `forEach`/`map`/`for…of`
+//      hand an element to a name the scanner has never seen. Both are pinned in
+//      'the misses are named' below, and that list is not claimed to be
+//      complete: it is what is known to escape today.
+//   2. Granularity is per FILE per SYMBOL, not per statement. One justification
+//      covers every occurrence of that symbol in that file, and two things stop
+//      it covering a site nobody read: each entry declares `sites` (the count)
+//      and `in` (the innermost NAMED FUNCTION each site sits in, derived from
+//      source). The count catches an ADDED site; the count alone did NOT catch a
+//      REPLACED one, and the sentence here used to claim it did — disproved by
+//      injection and now closed by `in`. What remains open, precisely: a
+//      replacement INSIDE THE SAME named function. Resolution is one function,
+//      not one statement. The cost is honest and worth naming: renaming a
+//      function, or adding a legitimate site, fails the build until someone
+//      re-reads the justification — which is the point.
 //   3. It cannot check that a justification is TRUE. It checks that the author
 //      was looking at the right file — every reason must name at least one code
 //      identifier that literally occurs in the file it excuses. That replaced a
-//      `length >= 60` check, which a verbose shrug satisfied.
+//      `length >= 60` check, which a verbose shrug satisfied. This limit is the
+//      one that has never been overstated, and it is the one that predicted the
+//      four false reasons this round had to rewrite.
 describe('mutation site → registry: nothing patches a money store behind the registry', () => {
   // The read-caches the registry declares as its own `store` half. Cross-checked
   // against js/app.js, which is where the boot hydrate seeds them: these five are
@@ -1219,27 +1279,63 @@ describe('mutation site → registry: nothing patches a money store behind the r
   // `?.` is tolerated on BOTH hops — `window.appData?.arInvoices.push(r)` was an
   // undocumented miss, and optional chaining is the one syntax a defensive
   // author reaches for without thinking of it as evasion.
-  const MIRROR_REF = "(?:^|[^\\w.$])(?:window\\.)?appData\\s*\\??\\s*(?:\\.(" + MIRROR_ALT +
-                     ")|\\[\\s*['\"](" + MIRROR_ALT + ")['\"]\\s*\\])";
+  //
+  // The `\.?` before the computed form is C1's smallest fix: the `\??` tolerance
+  // sat between `appData` and a DOTTED key but not before a COMPUTED one, so
+  // `appData?.["arInvoices"]` — optional chaining and a computed key in the same
+  // expression, each of which was separately caught — walked past both.
+  const MIRROR_REF = "(?:^|[^\\w.$])(?:window\\.)?appData\\s*\\??\\s*(?:\\.\\s*(" + MIRROR_ALT +
+                     ")|\\.?\\s*\\[\\s*['\"](" + MIRROR_ALT + ")['\"]\\s*\\])";
   // In-place array mutation. doc-import.js used `= (…||[]).concat(rec)`, so the
   // `=` half is what actually shipped — but `.push(rec)` is the same defect one
   // keystroke away, and a guard that only knows the shape of the bug it already
   // found is a guard for last week.
   const MUTATORS = 'push|pop|shift|unshift|splice|sort|reverse|fill|copyWithin';
-  // The last alternative is an ELEMENT-FIELD write: `appData.jobVendorBills[0]
-  // .amount = 5` changes a money row without touching the array, so every
-  // array-shaped pattern above walks straight past it.
+  // ONE MEMBER HOP, dot or computed, `?.` tolerated. Chained below, because the
+  // number of hops between the mirror and the thing being assigned is not a
+  // property the guard should have an opinion about.
+  const ACCESS = "(?:\\s*\\??\\s*\\.\\s*[\\w$]+|\\s*\\??\\s*\\[[^\\]\\n]*\\])";
+  // EVERY assignment operator, not just `=`. `=(?!=)` and the compound forms
+  // each exclude `==`/`===` by construction; `??=`, `||=` and `&&=` are listed
+  // ahead of the single-char class so the longest form wins.
+  const ASSIGN_OP = "(?:\\*\\*=|<<=|>>>=|>>=|\\?\\?=|\\|\\|=|&&=|[+\\-*/%&|^]=(?!=)|=(?!=))";
+  // C1. The old tail hard-required `\.\s*[\w$]+\s*=(?!=)` after a single `[…]`:
+  // ONE dot hop, ONE plain `=`. So NINE CLASSES of direct, literal,
+  // indirection-free money write walked straight past it — `+=`, `++`, `['amount'] =`, a
+  // SECOND dot hop (`[0].data.buildingAllocations =`, the Site Plan's CO
+  // allocation write, which is what the round that added this tail was about)
+  // and a bare `[0] =` replacing a whole money row. It also required a plain `=`
+  // on the mirror itself, so `??=` / `||=` / `&&=` were missed a level up.
+  //
+  // Three alternatives now, and the hop count is a `*`/`+` rather than a
+  // literal: assign-or-compound on the mirror; a mutator method at the end of a
+  // chain of hops; and any assignment or increment after one or more hops.
   const WRITE_RE = new RegExp(
-    MIRROR_REF + "\\s*\\??\\s*(?:=(?!=)|\\.(?:" + MUTATORS + ")\\s*\\(|\\.length\\s*=(?!=)" +
-    "|\\[[^\\]]*\\]\\s*\\??\\s*\\.\\s*[\\w$]+\\s*=(?!=))", 'gm');
+    MIRROR_REF + "(?:" +
+      "\\s*\\??\\s*" + ASSIGN_OP +
+      "|" + ACCESS + "*\\s*\\??\\s*\\.\\s*(?:" + MUTATORS + ")\\s*\\(" +
+      "|" + ACCESS + "+\\s*(?:" + ASSIGN_OP + "|\\+\\+|--)" +
+    ")", 'gm');
+  // PREFIX increment, which has no tail to match: `--appData.arInvoices[0].qty`.
+  // Its own pattern because the token sits BEFORE the mirror, and because a
+  // trailing-nothing alternative in WRITE_RE would match every read.
+  const INCR_RE = new RegExp("(?:\\+\\+|--)\\s*(?:window\\.)?appData\\s*\\??\\s*(?:\\.\\s*(" +
+                             MIRROR_ALT + ")|\\.?\\s*\\[\\s*['\"](" + MIRROR_ALT + ")['\"]\\s*\\])", 'gm');
   // Removing the mirror wholesale is a write, and the least recoverable one:
   // every reader then sees undefined rather than a stale number.
-  const DELETE_RE = new RegExp("delete\\s+(?:window\\.)?appData\\s*\\??\\s*(?:\\.(" + MIRROR_ALT +
-                               ")|\\[\\s*['\"](" + MIRROR_ALT + ")['\"]\\s*\\])", 'gm');
+  const DELETE_RE = new RegExp("delete\\s+(?:window\\.)?appData\\s*\\??\\s*(?:\\.\\s*(" + MIRROR_ALT +
+                               ")|\\.?\\s*\\[\\s*['\"](" + MIRROR_ALT + ")['\"]\\s*\\])", 'gm');
   // Object.assign's FIRST argument is a mutation of that object. This is the
   // one write shape that reads like a read.
-  const ASSIGN_RE = new RegExp("Object\\.assign\\s*\\(\\s*(?:window\\.)?appData\\s*\\??\\s*(?:\\.(" +
-                               MIRROR_ALT + ")|\\[\\s*['\"](" + MIRROR_ALT + ")['\"]\\s*\\])", 'gm');
+  const ASSIGN_RE = new RegExp("Object\\.assign\\s*\\(\\s*(?:window\\.)?appData\\s*\\??\\s*(?:\\.\\s*(" +
+                               MIRROR_ALT + ")|\\.?\\s*\\[\\s*['\"](" + MIRROR_ALT + ")['\"]\\s*\\])", 'gm');
+  // C1. ASSIGN_RE requires `appData.<mirror>` as argument 1 — so `appData`
+  // ITSELF as argument 1 was a hole, and `Object.assign(window.appData, {
+  // arInvoices: rows })` replaces a money mirror wholesale while naming it only
+  // in argument 2. Matched here as a ROOT target; countsIn then reads the real
+  // argument list with argsAt (brace-balanced, so a nested object or a
+  // multi-line literal is handled) and reports every mirror named in it.
+  const ASSIGN_ROOT_RE = /Object\.assign\s*\(\s*(?:window\.)?appData\s*(?=[,)])/gm;
   // A destructuring bind is not itself a write — it is the ALIAS that makes the
   // next line's write invisible (limit 1 above). Reported under its own symbol
   // so the justification has to say which it is: "I only read it" or "I write
@@ -1277,30 +1373,82 @@ describe('mutation site → registry: nothing patches a money store behind the r
   // to avoid, and it is what doc-import.js did. Two symbols, two justifications:
   // "I own this loader" and "I meant to share the in-flight GET" are different
   // claims and should have to be made separately.
-  // symbol -> how many sites. The COUNT is what gives the allowlist a
-  // granularity it did not have: an entry excuses a symbol in a file at the
-  // number of places it was read at, not forever at any number.
-  function countsIn(src) {
+  // THE INNERMOST NAMED FUNCTION containing `idx` — or the literal string
+  // `<top-level>` when none does, which is an answer rather than an absence:
+  // four sites in js/jobs.js are function DEFINITIONS, whose own headers sit
+  // outside their bodies, and top-level is the correct fingerprint for them.
+  //
+  // Both spellings this tree uses: `function name(` and `name = function (` /
+  // `window.name = function (` — the latter is what js/jobs.js's
+  // hydrateBillsStore is, and without it that site fingerprinted as top-level
+  // when a real name was available.
+  //
+  // Brace-balanced over COMMENT-STRIPPED source, so its accuracy limit is a
+  // brace inside a STRING literal. That direction produces a WRONG NAME, which
+  // fails the build as a false alarm — never a silent miss. Corroborated against
+  // four independently-established facts (admin.js:267 loadUsersCache,
+  // app.js:243/2129/3109 initializeApp/switchTab/fanOutRenderers,
+  // engine.js:231-232 createDataEntry, ui.js ensureCOsThenRepaint).
+  const TOP = '<top-level>';
+  function enclosingFn(code, idx) {
+    const re = /function\s+([\w$]+)\s*\(|(?:window\s*\.\s*)?([\w$]+)\s*=\s*function\s*\(/g;
+    let m, best = null, bestOpen = -1;
+    while ((m = re.exec(code))) {
+      if (m.index > idx) break;
+      const open = code.indexOf('{', m.index + m[0].length);
+      if (open === -1 || open >= idx) continue;
+      let depth = 0, end = -1;
+      for (let i = open; i < code.length; i++) {
+        if (code[i] === '{') depth++;
+        else if (code[i] === '}' && --depth === 0) { end = i; break; }
+      }
+      // Innermost = the latest-opening body that still contains idx.
+      if (end > idx && open > bestOpen) { best = m[1] || m[2]; bestOpen = open; }
+    }
+    return best || TOP;
+  }
+
+  // symbol -> [enclosing fn per site]. The COUNT is the array length; the NAMES
+  // are what stop a replacement inheriting an excuse (see limit 2 in the header).
+  function sitesIn(src) {
     const code = codeOnly(src);
     const hits = Object.create(null);
-    const bump = (k) => { hits[k] = (hits[k] || 0) + 1; };
+    const bump = (k, i) => { (hits[k] = hits[k] || []).push(enclosingFn(code, i)); };
     let m;
-    [WRITE_RE, DELETE_RE, ASSIGN_RE].forEach((re) => {
-      re.lastIndex = 0; while ((m = re.exec(code))) bump(m[1] || m[2]);
+    [WRITE_RE, INCR_RE, DELETE_RE, ASSIGN_RE].forEach((re) => {
+      re.lastIndex = 0; while ((m = re.exec(code))) bump(m[1] || m[2], m.index);
     });
+    // `Object.assign(appData, …)` — the mirror is named in argument 2, so the
+    // real argument list is read rather than pattern-matched.
+    ASSIGN_ROOT_RE.lastIndex = 0;
+    while ((m = ASSIGN_ROOT_RE.exec(code))) {
+      const args = argsAt(code, code.indexOf('(', m.index));
+      if (args === null) continue;
+      const idx = m.index;
+      STORE_MIRRORS.forEach((k) => {
+        if (new RegExp('\\b' + k + '\\b').test(args)) bump(k, idx);
+      });
+    }
     DESTRUCT_RE.lastIndex = 0;
-    while ((m = DESTRUCT_RE.exec(code))) bump(m[1] + ' (destructured)');
+    while ((m = DESTRUCT_RE.exec(code))) bump(m[1] + ' (destructured)', m.index);
     CALL_RE.lastIndex = 0;
     while ((m = CALL_RE.exec(code))) {
       const sym = m[1];
-      bump(sym);
+      bump(sym, m.index);
       if (MONEY_LOADERS.indexOf(sym) === -1) continue;
       const open = code.indexOf('(', m.index + m[0].length - 1);
       const args = argsAt(code, open);
       // No args at all is a no-op call, not an unforced refetch.
-      if (args !== null && args.trim() !== '' && topLevelCommas(args) === 0) bump(sym + ' (no force)');
+      if (args !== null && args.trim() !== '' && topLevelCommas(args) === 0) bump(sym + ' (no force)', m.index);
     }
+    Object.keys(hits).forEach((k) => hits[k].sort());
     return hits;
+  }
+  function countsIn(src) {
+    const sites = sitesIn(src);
+    const out = Object.create(null);
+    Object.keys(sites).forEach((k) => { out[k] = sites[k].length; });
+    return out;
   }
   function bypassesIn(src) { return Object.keys(countsIn(src)).sort(); }
 
@@ -1315,62 +1463,97 @@ describe('mutation site → registry: nothing patches a money store behind the r
       .filter((t) => t !== self);
   }
 
-  // file → symbol → { sites, why }. Every entry is a claim someone had to write
-  // down; adding a file here is meant to be uncomfortable. `sites` is the number
-  // of occurrences the reason was written against — see limit 2 in the header:
-  // it is what stops one excuse from covering a site nobody has read.
+  // file → symbol → { sites, in, why }. Every entry is a claim someone had to
+  // write down; adding a file here is meant to be uncomfortable.
+  //
+  // `sites` is HOW MANY occurrences the reason was written against and `in` is
+  // WHERE each one was — the innermost named function containing it. Both are
+  // derived from source and compared, so neither is a sentence anyone has to be
+  // trusted about: `sites` fails on an added or removed site, `in` fails on a
+  // moved or replaced one. See limit 2 in the header for what the pair still
+  // does not close (a replacement inside the same named function).
+  //
+  // `why` is the half no check can verify. Line numbers inside a `why` are a
+  // reading aid, not an assertion — they are not derived, so treat a drift
+  // failure's derived `in` list as the record and the numbers as stale until
+  // re-read.
   const ALLOWED = {
     'app.js': {
-      jobPurchaseOrders: { sites: 2, why: 'The boot hydrate. loadFromLocalStorage seeds this mirror from the cache and hydrateFromServerJobs replaces it from the server — it is the read-cache the registry then patches, not a mutation behind it.' },
-      jobChangeOrders:   { sites: 3, why: 'Same boot hydrate as jobPurchaseOrders: loadFromLocalStorage plus the hydrate paths that install the server rows, which is the thing every other site must go through the registry to amend.' },
-      jobVendorBills:    { sites: 1, why: 'Same boot hydrate: loadFromLocalStorage hands the bills list to appData wholesale, before any editor exists to write through the registry.' },
-      arInvoices:        { sites: 1, why: 'Same boot hydrate: AR invoices are seeded onto appData here; the registry `invoice` entry patches them afterwards via p86InvoicesSyncStore.' },
-      subsDirectory:     { sites: 1, why: 'Same boot hydrate for the subcontractor directory on appData, which js/subs.js then owns and refetches on its own page.' },
-      renderJobsMain:    { sites: 3, why: 'app.js owns the post-hydrate fan-out. When a full appData reload lands, every list repaints from here — that IS the `job`/`estimate` registry entry running, not a bypass of it.' },
-      p86JobDetailRefresh: { sites: 1, why: 'Same post-hydrate fan-out (fanOutRenderers). The open job page must repaint AFTER the appData load installs its objects, not off an event that races it — and the call is latch-gated, so it no-ops unless an agent write is actually pending. Firing a registry type here would re-enter the hydrate that is running.' }
+      // C3.3. The old reason said "loadFromLocalStorage seeds this mirror from
+      // the cache and hydrateFromServerJobs replaces it from the server". The
+      // first half is true; the second is not. hydrateFromServerJobs (:2599+)
+      // writes the LEGACY appData.purchaseOrders = [] and touches jobChangeOrders
+      // — it never writes jobPurchaseOrders. Site 2 is :2984, in the boot
+      // Promise.all().then.
+      jobPurchaseOrders: { sites: 2, in: ['_loadDataFromServer', 'loadFromLocalStorage'], why: 'Two boot seeds of the read-cache the registry later patches, and neither is a mutation behind it. loadFromLocalStorage (:2528) primes it from the p86-jobs-jobpurchaseorders cache so ACCRUED paints its true value on the first synchronous render; _loadDataFromServer (:2984) then replaces it wholesale from purchaseOrders.listAll in the boot Promise.all. hydrateFromServerJobs is deliberately NOT named here: it writes the legacy appData.purchaseOrders and never this mirror.' },
+      jobChangeOrders:   { sites: 3, in: ['_loadDataFromServer', 'hydrateFromServerJobs', 'loadFromLocalStorage'], why: 'The same boot seeding, across three sites and all three of them real: loadFromLocalStorage (:2533) primes from cache; hydrateFromServerJobs (:2609) preserves-or-initialises it while fanning the JSONB blob back out into the flat arrays; and _loadDataFromServer (:2985) installs the changeOrders.listAll rows. This is the read-cache every other site must go through the registry to amend.' },
+      // C3.2. The old reason said "loadFromLocalStorage hands the bills list to
+      // appData wholesale". loadFromLocalStorage (:2518-2544) never writes
+      // jobVendorBills at all — the cache has no bills key.
+      jobVendorBills:    { sites: 1, in: ['_loadDataFromServer'], why: 'One site, :2999, and it is a SERVER snapshot rather than a cache seed: the `else` arm of the boot Promise.all().then, taken only when window.hydrateBillsStore is absent, installing bills.listAll plus the _billsAllLoaded trust flag. When jobs.js is loaded that arm never runs and hydrateBillsStore owns the merge instead. loadFromLocalStorage is deliberately NOT named here — it has no bills key to hand over.' },
+      arInvoices:        { sites: 1, in: ['_loadDataFromServer'], why: 'One site, :2986, in the boot Promise.all().then: the AR rows from invoices.list are installed so getJobWIP computes real Invoiced/Unbilled figures instead of the stale invoicedToDate scalar. A server seed, not a cache one; the registry `invoice` entry patches it afterwards via p86InvoicesSyncStore.' },
+      subsDirectory:     { sites: 1, in: ['_loadDataFromServer'], why: 'One site, :2982, in the same boot Promise.all().then — the subcontractor directory arriving with knownTrades from one subs.list call. js/subs.js then owns the page and refetches it on open.' },
+      // C3.4. `sites: 3` with a reason that described exactly one of them (the
+      // fan-out). Three sites, three sentences.
+      renderJobsMain:    { sites: 3, in: ['fanOutRenderers', 'initializeApp', 'switchTab'], why: 'Three sites, none of them a post-money-write repaint. :243 is the COLD BOOT paint in initializeApp — it runs after loadData() and before any server hydrate resolves, so there is no entity row yet to name a registry type for. :2129 is NAVIGATION in switchTab: returning to the Jobs tab forces the main list back over a job detail that would otherwise stay layered on top and steal clicks. :3109 is the post-hydrate fan-out (fanOutRenderers, via the isolated fanOut wrapper) — when a full appData reload lands every list repaints from here, and that IS the `job`/`estimate` registry entry running, not a bypass of it.' },
+      p86JobDetailRefresh: { sites: 1, in: ['fanOutRenderers'], why: 'The post-hydrate fan-out only (fanOutRenderers, :3122). The open job page must repaint AFTER the appData load installs its objects, not off an event that races it — and the call is latch-gated, so it no-ops unless an agent write is actually pending. Firing a registry type here would re-enter the hydrate that is running.' }
     },
     'jobs.js': {
-      loadBillsForJob:          { sites: 2, why: 'DEFINES it (the body that owns _billFetchInflight and is what the registry `bill` store resolves off window), plus one internal read in renderJobPurchaseOrdersInto — a money tab opening, which legitimately shares the in-flight GET.' },
-      loadPurchaseOrdersForJob: { sites: 2, why: 'DEFINES it — the registry `po` store resolves this very function off window — plus the paired read in renderJobPurchaseOrdersInto that fills the accrued tile on first paint.' },
-      loadChangeOrdersForJob:   { sites: 2, why: 'DEFINES it — the registry `co` store resolves this very function off window; renderJobChangeOrdersInto is the other, a first-paint read.' },
-      'loadBillsForJob (no force)':          { sites: 1, why: 'The money-tab OPEN path: the Promise.all in renderJobPurchaseOrdersInto that runs before paintJobPurchaseOrdersInto. Opening a tab is navigation, not a write, so joining an in-flight GET is the point — forcing here would issue a duplicate fetch on every tab switch.' },
-      'loadPurchaseOrdersForJob (no force)': { sites: 1, why: 'Same money-tab open: paired with loadBillsForJob in one Promise.all so the tab paints once both reads land. No write preceded it, so there is no pre-write GET to be fooled by.' },
-      'loadChangeOrdersForJob (no force)':   { sites: 1, why: 'renderJobChangeOrdersInto: a view transition reading rows it does not yet have, deliberately sharing whatever fetch is already in flight for that job.' },
-      renderJobsMain:           { sites: 3, why: 'DEFINES it, and re-paints the jobs list on its own view transitions — backToJobsMain and the create path — which are navigation, not data changes.' },
-      jobPurchaseOrders:        { sites: 2, why: 'The loader body: loadPurchaseOrdersForJob is where the mirror is legitimately replaced for a job, and it is what the registry calls to do so.' },
-      jobChangeOrders:          { sites: 2, why: 'The loader body: loadChangeOrdersForJob writes the mirror it exists to refresh.' },
-      jobVendorBills:           { sites: 3, why: 'The loader body: loadBillsForJob writes the mirror it exists to refresh, plus the whole-org boot snapshot that merges into it.' }
+      loadBillsForJob:          { sites: 2, in: ['<top-level>', 'renderJobPurchaseOrdersInto'], why: 'DEFINES it (the body that owns _billFetchInflight and is what the registry `bill` store resolves off window), plus one internal read in renderJobPurchaseOrdersInto — a money tab opening, which legitimately shares the in-flight GET.' },
+      loadPurchaseOrdersForJob: { sites: 2, in: ['<top-level>', 'renderJobPurchaseOrdersInto'], why: 'DEFINES it — the registry `po` store resolves this very function off window — plus the paired read in renderJobPurchaseOrdersInto that fills the accrued tile on first paint.' },
+      loadChangeOrdersForJob:   { sites: 2, in: ['<top-level>', 'renderJobChangeOrdersInto'], why: 'DEFINES it — the registry `co` store resolves this very function off window; renderJobChangeOrdersInto is the other, a first-paint read.' },
+      'loadBillsForJob (no force)':          { sites: 1, in: ['renderJobPurchaseOrdersInto'], why: 'The money-tab OPEN path: the Promise.all in renderJobPurchaseOrdersInto that runs before paintJobPurchaseOrdersInto. Opening a tab is navigation, not a write, so joining an in-flight GET is the point — forcing here would issue a duplicate fetch on every tab switch.' },
+      'loadPurchaseOrdersForJob (no force)': { sites: 1, in: ['renderJobPurchaseOrdersInto'], why: 'Same money-tab open: paired with loadBillsForJob in one Promise.all so the tab paints once both reads land. No write preceded it, so there is no pre-write GET to be fooled by.' },
+      'loadChangeOrdersForJob (no force)':   { sites: 1, in: ['renderJobChangeOrdersInto'], why: 'renderJobChangeOrdersInto: a view transition reading rows it does not yet have, deliberately sharing whatever fetch is already in flight for that job.' },
+      renderJobsMain:           { sites: 3, in: ['<top-level>', 'backToJobsMain', 'saveJob'], why: 'DEFINES it (:17, which is why one fingerprint is top-level rather than a function name), and re-paints the jobs list on its own view transitions — backToJobsMain and the saveJob create path — which are navigation and a local push, not server money rows.' },
+      jobPurchaseOrders:        { sites: 2, in: ['loadPurchaseOrdersForJob', 'loadPurchaseOrdersForJob'], why: 'The loader body: loadPurchaseOrdersForJob is where the mirror is legitimately replaced for a job, and it is what the registry calls to do so.' },
+      jobChangeOrders:          { sites: 2, in: ['loadChangeOrdersForJob', 'loadChangeOrdersForJob'], why: 'The loader body: loadChangeOrdersForJob writes the mirror it exists to refresh.' },
+      jobVendorBills:           { sites: 3, in: ['hydrateBillsStore', 'loadBillsForJob', 'loadBillsForJob'], why: 'The loader body: loadBillsForJob writes the mirror it exists to refresh, plus hydrateBillsStore — the whole-org boot snapshot, which keeps whatever a per-job load already pulled and merges the rest in behind the _billsAllLoaded trust flag.' }
     },
     'invoices.js': {
-      arInvoices: { sites: 1, why: 'This IS the registry `invoice` store half — p86InvoicesSyncStore refetches /invoices and patches appData.arInvoices. The registry names it in the entry`s paths.' }
+      // The fingerprint reads _syncJobsWIP, not p86InvoicesSyncStore: they are
+      // the SAME function (`window.p86InvoicesSyncStore = _syncJobsWIP`, :332),
+      // named once for the module and once for the registry seam.
+      arInvoices: { sites: 1, in: ['_syncJobsWIP'], why: 'This IS the registry `invoice` store half — _syncJobsWIP, published as window.p86InvoicesSyncStore, refetches /invoices and patches appData.arInvoices and nothing else. The registry names that alias in the entry`s paths, and the repaint deliberately stayed in js/refresh.js so one edit does not paint the jobs table twice.' }
     },
     'subs.js': {
-      subsDirectory: { sites: 1, why: 'The module`s own refresh() replaces the directory from p86Api.subs.list and then calls renderDirectory (and loadViews behind _viewsLoaded) — it owns this page and refetches it on open. `sub` was deliberately REMOVED from the registry because no door emits it, so there is no entry to route through.' }
+      subsDirectory: { sites: 1, in: ['refresh'], why: 'The module`s own refresh() replaces the directory from p86Api.subs.list and then calls renderDirectory (and loadViews behind _viewsLoaded) — it owns this page and refetches it on open. `sub` was deliberately REMOVED from the registry because no door emits it, so there is no entry to route through.' }
     },
     'nodegraph/engine.js': {
       // Found the moment the scan stopped being "every file in js/".
-      subsDirectory: { sites: 2, why: 'addNode(`sub`) creates a directory entry for a new sub NODE — it initialises appData.subsDirectory if absent, pushes the row, and fires agxApi.subs.create to persist it. Same reason as js/subs.js: `sub` is deliberately absent from the registry because no dispatcher door emits it, so there is no type to route through; the Subs page refetches the directory on open and the node itself renders from the entry just pushed.' }
+      //
+      // THE ONLY ENTRY WHOSE REASON REACHED FOR A CALLER rather than the
+      // function its site is in. It said `addNode('sub')`; both writes are at
+      // :231-232 inside createDataEntry (:193-277), and addNode (:278) reaches
+      // them by calling it. Causally accurate, one hop out — which is precisely
+      // the kind of near-miss the `in` fingerprint now settles, because the
+      // fingerprint is derived and the sentence is not. Both are named below.
+      subsDirectory: { sites: 2, in: ['createDataEntry', 'createDataEntry'], why: 'createDataEntry(`sub`) — reached from addNode when a sub NODE is dropped — initialises appData.subsDirectory if absent, pushes the row, and fires agxApi.subs.create to persist it. Same reason as js/subs.js: `sub` is deliberately absent from the registry because no dispatcher door emits it, so there is no type to route through; the Subs page refetches the directory on open and the node itself renders from the entry just pushed.' }
     },
     'nodegraph/ui.js': {
       // Also only visible once nodegraph/ was scanned. Identical in shape to the
       // allowlisted jobs.js section reads — and it would have failed the build
       // in js/ while passing silently here, which is the whole point of B1.
-      loadChangeOrdersForJob:            { sites: 1, why: 'ensureCOsThenRepaint: change orders load per job on demand and the Site Plan inspector paints before that resolves, so the Contract-allocation card rendered empty on first open. Guarded by `if(count()) return;` — a FIRST-PAINT READ, never a post-write refresh; the write path in openCoAllocEditor goes through p86Refresh.now.' },
-      'loadChangeOrdersForJob (no force)': { sites: 1, why: 'Same ensureCOsThenRepaint call, and unforced ON PURPOSE: loadChangeOrdersForJob dedups in flight, and this is a view transition sharing whatever fetch is already running for the job. No write precedes it, so there is no pre-write GET to be fooled by.' }
+      loadChangeOrdersForJob:            { sites: 1, in: ['ensureCOsThenRepaint'], why: 'ensureCOsThenRepaint: change orders load per job on demand and the Site Plan inspector paints before that resolves, so the Contract-allocation card rendered empty on first open. Guarded by `if(count()) return;` — a FIRST-PAINT READ, never a post-write refresh; the write path in openCoAllocEditor goes through p86Refresh.now.' },
+      'loadChangeOrdersForJob (no force)': { sites: 1, in: ['ensureCOsThenRepaint'], why: 'Same ensureCOsThenRepaint call, and unforced ON PURPOSE: loadChangeOrdersForJob dedups in flight, and this is a view transition sharing whatever fetch is already running for the job. No write precedes it, so there is no pre-write GET to be fooled by.' }
     },
     'purchase-order-editor.js': {
-      // B3. The old reason described syncBillsToStore's KEYSTROKE caller and
-      // nothing else, while the function has four. All four are named now.
-      jobVendorBills: { sites: 1, why: 'syncBillsToStore is the single write, reached from FOUR callers, and none of them is a surface that needs the registry: updateBillCell (a keystroke echo, before the debounced PUT); loadBills (a read mirror of bills.listAll); and the post-write pair — after bills.create and after bills.remove resolve — which patch exactly this PO`s rows from the server`s own response. The registry `bill` entry differs from the `po` entry this file DOES fire only in its store half; the surface half is literally the same repaintJobMoney, so every bill surface (the Bills hub list, which p86JobsHubRefresh refetches from the server, and the job money tabs) is repainted either way.' }
+      // C3.1. The previous reason claimed FOUR callers and described the last
+      // commit's new one as post-resolve. There are FIVE, and the fifth (:156,
+      // in close()) fires BEFORE its DELETEs resolve. Whether that optimistic
+      // ordering is itself a defect was checked rather than assumed — see the
+      // `close() syncs optimistically` test below, which pins each fact the
+      // answer rests on rather than asserting the conclusion.
+      jobVendorBills: { sites: 1, in: ['syncBillsToStore'], why: 'syncBillsToStore is the single write, reached from FIVE callers, and not one of them is a surface that needs the registry. Three are POST-RESOLVE, patching this PO`s rows from the server`s own response: after bills.create (:569), after bills.remove resolves in the row delete button (:616), and loadBills (:665), a read mirror of bills.listAll. Two are OPTIMISTIC and say so: updateBillCell (:632) is a keystroke echo ahead of the debounced PUT, and close() (:156) drops never-filled-in blank rows from the mirror while their bills.remove DELETEs are still in flight. The registry `bill` entry differs from the `po` entry this file DOES fire only in its store half; the surface half is literally the same repaintJobMoney, so every bill surface (the Bills hub list, which p86JobsHubRefresh refetches from the server, and the job money tabs) is repainted either way.' }
     },
     'admin.js': {
-      renderJobsMain: { sites: 1, why: 'loadUsersCache repaints after the USER-NAME cache lands, not after a money write. No entity row changed, so there is no registry type to fire and firing one would refetch money for nothing.' }
+      renderJobsMain: { sites: 1, in: ['loadUsersCache'], why: 'loadUsersCache repaints after the USER-NAME cache lands, not after a money write. No entity row changed, so there is no registry type to fire and firing one would refetch money for nothing.' }
     },
     'job-costs-import.js': {
-      renderJobsMain: { sites: 1, why: 'The QuickBooks cost import patches appData.qbCostLines — a store with no registry entry and no dispatcher door — and repaints the list that reads it. Wiring it would mean adding a `qb_cost` type nothing can emit.' }
+      renderJobsMain: { sites: 1, in: ['commitQBCostsImport'], why: 'commitQBCostsImport patches appData.qbCostLines — a store with no registry entry and no dispatcher door — and repaints the list that reads it. Wiring it would mean adding a `qb_cost` type nothing can emit.' }
     },
     'estimate-editor.js': {
-      renderJobsMain: { sites: 1, why: 'syncEstimateToJob mirrors contract + estimated cost onto the local job and saves. The registry `job` entry is a FULL appData hydrate, which here would race the saveData it just issued and re-seed from localStorage; the narrow repaint is deliberate.' }
+      renderJobsMain: { sites: 1, in: ['syncEstimateToJob'], why: 'syncEstimateToJob mirrors contract + estimated cost onto the local job and saves. The registry `job` entry is a FULL appData hydrate, which here would race the saveData it just issued and re-seed from localStorage; the narrow repaint is deliberate.' }
     }
   };
 
@@ -1407,9 +1590,7 @@ describe('mutation site → registry: nothing patches a money store behind the r
     // reason covers every occurrence — so once `admin.js -> renderJobsMain` was
     // excused for its user-name cache repaint, a second, genuinely bad
     // post-money-write renderJobsMain() anywhere in admin.js was permanently
-    // invisible. Declaring the COUNT does not make the allowlist per-site, but
-    // it does mean a NEW site cannot inherit an old site's excuse: the number
-    // moves and this fails, printing both, until someone re-reads the reason.
+    // invisible. Declaring the COUNT makes a NEW site fail: the number moves.
     const drift = [];
     Object.keys(ALLOWED).forEach((file) => {
       const s = SOURCES.find((x) => x.file === file);
@@ -1422,6 +1603,107 @@ describe('mutation site → registry: nothing patches a money store behind the r
       });
     });
     expect(drift.sort()).toEqual([]);
+  });
+
+  test('`sites` and `in` cannot disagree — the count is the length of the list', () => {
+    // Two declarations of the same number is two things that can rot apart.
+    // They are checked against each other so neither can be quietly wrong.
+    const mismatched = [];
+    Object.keys(ALLOWED).forEach((file) => {
+      Object.keys(ALLOWED[file]).forEach((sym) => {
+        const e = ALLOWED[file][sym];
+        if (!Array.isArray(e.in)) { mismatched.push(file + ' → ' + sym + ': no `in` list'); return; }
+        if (e.in.length !== e.sites) mismatched.push(file + ' → ' + sym + ': sites ' + e.sites + ', in[] ' + e.in.length);
+      });
+    });
+    expect(mismatched.sort()).toEqual([]);
+  });
+
+  test('an excuse covers the sites it was written against, not a REPLACEMENT of them', () => {
+    // C2. The count alone closes the ADDITIVE case and nothing else, and the
+    // sentence above it used to claim the class: "a NEW site cannot inherit an
+    // old site's excuse". Disproved by injection — remove the excused
+    // renderJobsMain() from admin.js's loadUsersCache and add a genuinely bad
+    // one (a post-bills.create repaint with no store patch and no p86Refresh)
+    // and the count is still 1, still declared 1, still green.
+    //
+    // So each site now also declares the innermost NAMED FUNCTION it sits in,
+    // and that is derived from source rather than trusted. A replacement lands
+    // in a different function, the fingerprint moves, and this fails printing
+    // both lists. Chosen over a LINE-NUMBER fingerprint deliberately: line
+    // numbers move on every unrelated edit above a site, in every allowlisted
+    // file, which trains people to bump the number without re-reading the reason
+    // — the exact way an allowlist becomes noise. (A count, not a claim: ten
+    // files carry entries today, and a line-number scheme would put a
+    // maintenance burden on all of them for a gap a function name already
+    // closes.)
+    //
+    // WHAT IT STILL DOES NOT CLOSE, precisely: a replacement INSIDE THE SAME
+    // named function. Swap admin.js's repaint for a bad one still inside
+    // loadUsersCache and the fingerprint is unchanged. Resolution is one named
+    // function, not one statement — narrower than the count-only gap it
+    // replaces, and not zero.
+    const drift = [];
+    Object.keys(ALLOWED).forEach((file) => {
+      const s = SOURCES.find((x) => x.file === file);
+      if (!s) return;
+      const live = sitesIn(s.src);
+      Object.keys(ALLOWED[file]).forEach((sym) => {
+        const want = (ALLOWED[file][sym].in || []).slice().sort();
+        const got = (live[sym] || []).slice().sort();
+        if (want.join(',') !== got.join(',')) {
+          drift.push(file + ' → ' + sym + ': declared in [' + want.join(', ') + '], found in [' + got.join(', ') + ']');
+        }
+      });
+    });
+    expect(drift.sort()).toEqual([]);
+  });
+
+  test('...and THAT check bites — the replacement admin.js injection goes red', () => {
+    // The acceptance test for C2, run as an injection exactly like every other
+    // shape in this suite: it must be RED under the new check and GREEN under
+    // the count-only one, or the fingerprint bought nothing.
+    const admin = SOURCES.find((s) => s.file === 'admin.js').src;
+    const EXCUSED = "if (typeof renderJobsMain === 'function') renderJobsMain();";
+    expect(admin.indexOf(EXCUSED)).toBeGreaterThan(-1);   // anchor
+    const replaced = admin.replace(EXCUSED, '') +
+      '\nfunction saveBillThing(){ p86Api.bills.create(j, b).then(function(){ renderJobsMain(); }); }\n';
+
+    // The count-only check cannot see it: one site before, one site after.
+    expect(countsIn(admin).renderJobsMain).toBe(1);
+    expect(countsIn(replaced).renderJobsMain).toBe(1);
+    // The fingerprint can.
+    expect(sitesIn(admin).renderJobsMain).toEqual(['loadUsersCache']);
+    expect(sitesIn(replaced).renderJobsMain).toEqual(['saveBillThing']);
+
+    // And the residual gap is real, so it is asserted rather than described:
+    // a bad repaint added INSIDE the excused function is still invisible.
+    const sameFn = admin.replace(EXCUSED, EXCUSED + ' p86Api.bills.create(j, b);');
+    expect(sitesIn(sameFn).renderJobsMain).toEqual(['loadUsersCache']);
+  });
+
+  test('the fingerprint resolves the INNERMOST named function, in both spellings', () => {
+    // Guards the guard. `enclosingFn` is what the check above rests on, so its
+    // three behaviours are pinned: nesting, `name = function (`, and top-level.
+    expect(sitesIn('function outer(){ function inner(){ renderJobsMain(); } }').renderJobsMain)
+      .toEqual(['inner']);
+    // The spelling js/jobs.js's hydrateBillsStore uses — without this it
+    // fingerprinted as top-level.
+    expect(sitesIn('window.hydrateBillsStore = function (b) { appData.jobVendorBills = b; };').jobVendorBills)
+      .toEqual(['hydrateBillsStore']);
+    expect(sitesIn('var f = function () { appData.arInvoices = r; };').arInvoices).toEqual(['f']);
+    // A site in no named function at all is labelled, not dropped.
+    expect(sitesIn('appData.arInvoices = rows;').arInvoices).toEqual([TOP]);
+    // A function DEFINITION's own header sits outside its body, so the three
+    // loader definitions in js/jobs.js legitimately fingerprint as top-level.
+    expect(sitesIn('function loadBillsForJob(id, force){ var x = 1; }').loadBillsForJob).toEqual([TOP]);
+    // A sibling function that CLOSED before the site must not be picked up.
+    expect(sitesIn('function a(){ var x = 1; }\nfunction b(){ renderJobsMain(); }').renderJobsMain)
+      .toEqual(['b']);
+    // An anonymous callback inside a named function reports the named one —
+    // the coarseness the check above discloses, asserted so it stays known.
+    expect(sitesIn('function outer(){ p.then(function(){ renderJobsMain(); }); }').renderJobsMain)
+      .toEqual(['outer']);
   });
 
   test('every justification NAMES something in the file it excuses', () => {
@@ -1486,6 +1768,55 @@ describe('mutation site → registry: nothing patches a money store behind the r
       });
     });
     expect(dupes.sort()).toEqual([]);
+  });
+
+  test('close() syncs the bill mirror OPTIMISTICALLY, and that is bounded to $0', () => {
+    // C3.1, and the one item in this round that could have been behaviour rather
+    // than prose. purchase-order-editor.js:156 calls syncBillsToStore() from
+    // close() AFTER firing bills.remove DELETEs and BEFORE they resolve, so the
+    // allowlist reason calling it post-resolve was wrong. The question that
+    // matters is whether the ordering is a defect: if a DELETE fails, what does
+    // the store hold?
+    //
+    // ANSWER: the store then lacks a row the server still has — the opposite
+    // direction from the phantom-row bug the last commit fixed — and NO DOLLAR
+    // CAN BE WRONG EITHER WAY, because the rows close() drops are $0 by the
+    // predicate that selects them and every consumer sums `amount`. The residue
+    // is a row COUNT (js/cost-buckets.js's `b.lines++`), self-healing on the next
+    // forced bill refetch. Both halves of that argument are pinned here rather
+    // than left in a sentence, because a sentence is what went wrong.
+    const po = codeOnly(SOURCES.find((s) => s.file === 'purchase-order-editor.js').src);
+
+    // FACT 1: the DELETEs are fire-and-forget and the sync does not wait.
+    expect(po).toMatch(/window\.p86Api\.bills\.remove\(b\.id\)\.catch\(function \(\) \{\}\)/);
+    expect(po).toMatch(/if \(_dropped\) syncBillsToStore\(\);/);
+    // ...and the sync is NOT chained onto them — no .then anywhere on the drop.
+    const closeBody = fnBody(po, 'close');
+    expect(closeBody).not.toBeNull();
+    expect({ then: (closeBody.match(/bills\.remove\([^)]*\)\s*\.then/g) || []).length }).toEqual({ then: 0 });
+
+    // FACT 2: only $0, contentless rows are droppable. This is what bounds the
+    // blast radius of a failed DELETE to a count.
+    expect(closeBody).toMatch(/_ephemeral\s*&&\s*num\(b\.amount\)\s*===\s*0\s*&&\s*!String\(b\.description \|\| ''\)\.trim\(\)/);
+
+    // FACT 3: the money consumers SUM amount, so a missing $0 row moves nothing.
+    const jobs = codeOnly(SOURCES.find((s) => s.file === 'jobs.js').src);
+    expect(fnBody(jobs, 'poRowBilled')).toMatch(/s \+ \(parseFloat\(b\.amount\) \|\| 0\)/);
+    expect(fnBody(jobs, 'getJobBilledCost')).toMatch(/s \+ \(Number\(b\.amount\) \|\| 0\)/);
+
+    // FACT 4: close()'s own p86Refresh is `po`, whose store half is
+    // loadPurchaseOrdersForJob — it does NOT refetch bills. So the mirror is
+    // reconciled by the next loadBillsForJob in EITHER ordering, which is why
+    // awaiting the DELETEs here would buy nothing: it would only move a $0 count
+    // patch to after the overlay is torn down and _po is null (syncBillsToStore
+    // early-returns on !_po), i.e. trade a bounded stale count for a new race.
+    expect(closeBody).toMatch(/window\.p86Refresh\('po', \{ jobId: _jobId \}\)/);
+    const refresh = codeOnly(fs.readFileSync(path.join(REPO, 'js', 'refresh.js'), 'utf8'));
+    const poEntry = /po:\s*\{[\s\S]*?\n    \}/.exec(refresh);
+    expect(poEntry).not.toBeNull();
+    expect(poEntry[0]).toContain('loadPurchaseOrdersForJob');
+    expect(poEntry[0]).not.toContain('loadBillsForJob');
+    expect(po).toMatch(/function syncBillsToStore\(\) \{\s*\n\s*if \(!_po \|\| !window\.appData\) return;/);
   });
 
   test('the scanner BITES — the exact shapes doc-import.js used are all caught', () => {
@@ -1554,6 +1885,122 @@ describe('mutation site → registry: nothing patches a money store behind the r
     expect(bypassesIn("delete appData['jobVendorBills'];")).toEqual(['jobVendorBills']);
   });
 
+  test('C1: nine more DIRECT write classes — no alias, no runtime key, all were green', () => {
+    // These are the ones the previous round's disclosure said could not exist.
+    // It asserted that every remaining miss was "one class, four spellings" of
+    // variable indirection; each shape below is literal, direct and
+    // indirection-free, and every one of them walked past the scanner. Two are
+    // the writes that round was ABOUT, in their direct form.
+    //
+    // NINE, counted honestly: classes 1-9 below are newly caught, and class 10 is
+    // a REGRESSION CHECK on something that already worked — generalising the tail
+    // must not lose `.length =`. Counting it as a tenth catch would be this
+    // guard's own recurring mistake in miniature.
+    //
+    // Zero live instances when found — verified by scanning both roots through
+    // this scanner's own stripper. Latent, which is when it is cheap.
+    //
+    // 1. COMPOUND ASSIGNMENT on a money field. The old tail required a plain
+    //    `=`, so every read-modify-write spelling was invisible — and this is
+    //    the one an author reaches for to adjust an amount rather than set it.
+    expect(bypassesIn('appData.jobVendorBills[0].amount += 5;')).toEqual(['jobVendorBills']);
+    expect(bypassesIn('appData.jobVendorBills[0].amount -= 5;')).toEqual(['jobVendorBills']);
+    expect(bypassesIn('window.appData.arInvoices[i].balance *= 1.05;')).toEqual(['arInvoices']);
+    // 2. INCREMENT, both fixities.
+    expect(bypassesIn('appData.arInvoices[0].balance++;')).toEqual(['arInvoices']);
+    expect(bypassesIn('appData.arInvoices[0].balance--;')).toEqual(['arInvoices']);
+    expect(bypassesIn('--appData.arInvoices[0].balance;')).toEqual(['arInvoices']);
+    expect(bypassesIn('++window.appData.jobVendorBills[0].amount;')).toEqual(['jobVendorBills']);
+    // 3. A COMPUTED ELEMENT KEY. The computed form was matched for the MIRROR
+    //    name and then hard-required a dot for the field.
+    expect(bypassesIn("appData.jobVendorBills[0]['amount'] = 5;")).toEqual(['jobVendorBills']);
+    // 4. A SECOND DOT HOP. One hop was allowed, two were not — and this exact
+    //    shape is the Site Plan's CO building-allocation write, which is what
+    //    the round that added the one-hop tail was about.
+    expect(bypassesIn('appData.jobChangeOrders[0].data.buildingAllocations = alloc;'))
+      .toEqual(['jobChangeOrders']);
+    expect(bypassesIn('appData.jobVendorBills[0].data.description = t;')).toEqual(['jobVendorBills']);
+    // 5. A WHOLE MONEY ROW REPLACED. No dot at all after the index — the bill
+    //    mirror patch, in direct form.
+    expect(bypassesIn('appData.jobVendorBills[0] = row;')).toEqual(['jobVendorBills']);
+    expect(bypassesIn('appData.arInvoices[idx] = fresh;')).toEqual(['arInvoices']);
+    // 6. Object.assign with appData ITSELF as argument 1. The old pattern
+    //    required `appData.<mirror>` there, so naming the mirror in argument 2
+    //    walked past it — while replacing the mirror just as wholesale.
+    expect(bypassesIn('Object.assign(window.appData, { arInvoices: rows });')).toEqual(['arInvoices']);
+    expect(bypassesIn('Object.assign(appData, { jobVendorBills: b, jobChangeOrders: c });'))
+      .toEqual(['jobChangeOrders', 'jobVendorBills']);
+    // ...and a multi-line object literal, since argsAt is brace-balanced.
+    expect(bypassesIn('Object.assign(appData, {\n  arInvoices: rows\n});')).toEqual(['arInvoices']);
+    // 7. LOGICAL ASSIGNMENT — the modern spelling of "initialise if absent",
+    //    which is exactly what a defensive author writes before pushing.
+    expect(bypassesIn('appData.jobVendorBills ??= [];')).toEqual(['jobVendorBills']);
+    expect(bypassesIn('appData.jobVendorBills ||= [];')).toEqual(['jobVendorBills']);
+    expect(bypassesIn('appData.jobVendorBills &&= [];')).toEqual(['jobVendorBills']);
+    expect(bypassesIn("appData['arInvoices'] ??= [];")).toEqual(['arInvoices']);
+    // 8. OPTIONAL CHAINING AND A COMPUTED KEY TOGETHER. Each was caught alone;
+    //    the `?.` tolerance sat between `appData` and a DOTTED key only.
+    expect(bypassesIn('appData?.["arInvoices"].push(r);')).toEqual(['arInvoices']);
+    expect(bypassesIn('window.appData?.["jobVendorBills"] = rows;')).toEqual(['jobVendorBills']);
+    // 9. A MUTATOR AT THE END OF A CHAIN, not directly on the mirror.
+    expect(bypassesIn('appData.jobChangeOrders[0].data.lines.push(l);')).toEqual(['jobChangeOrders']);
+    // 10. And `.length =` still works, now as a plain member hop rather than a
+    //     special case — the generalisation must not lose what it replaced.
+    expect(bypassesIn('appData.arInvoices.length = 0;')).toEqual(['arInvoices']);
+  });
+
+  test('C1: the widening did not make the scanner shout at reads', () => {
+    // Widening a pattern is exactly when it starts matching things that are not
+    // the defect, and a guard that cries wolf gets its allowlist padded until it
+    // means nothing. Every read spelling the tree actually contains, pinned.
+    //
+    // Measured, not assumed: run against both roots, this widening changed ZERO
+    // live counts — every allowlist entry above holds at the number it held
+    // before. The six live element-level touches in the tree
+    // (jobs.js:285/564/4599/4735, nodegraph/ui.js:2690/3993) are forEach/map
+    // accumulations into locals, and they stay green because they are reads.
+    expect(bypassesIn('appData.arInvoices.forEach(function (i) { total += i.amount; });')).toEqual([]);
+    expect(bypassesIn('appData.jobVendorBills.map(function (b) { return b.amount; });')).toEqual([]);
+    expect(bypassesIn('var n = appData.jobPurchaseOrders[0].amount;')).toEqual([]);
+    expect(bypassesIn('var d = appData.jobChangeOrders[0].data.lines;')).toEqual([]);
+    expect(bypassesIn('if (appData.arInvoices[0].status === "paid") ok();')).toEqual([]);
+    expect(bypassesIn('if (appData.arInvoices[0].amount >= 5) ok();')).toEqual([]);
+    expect(bypassesIn('if (appData.arInvoices[0].amount <= 5) ok();')).toEqual([]);
+    expect(bypassesIn('if (appData.arInvoices[0].amount != 5) ok();')).toEqual([]);
+    expect(bypassesIn('if (appData.arInvoices[0].amount !== 5) ok();')).toEqual([]);
+    // ARITHMETIC vs COMPOUND ASSIGNMENT. Now that `+=` and `-=` are matched, the
+    // bare operators must still not be — this is the specific way widening
+    // ASSIGN_OP could have started reporting every subtraction in the tree.
+    expect(bypassesIn('var d = appData.arInvoices[0].amount - 5;')).toEqual([]);
+    expect(bypassesIn('var d = appData.arInvoices[0].amount + 5;')).toEqual([]);
+    expect(bypassesIn('var d = appData.arInvoices[0].amount * 2;')).toEqual([]);
+    expect(bypassesIn('var d = appData.arInvoices[0].amount / 2;')).toEqual([]);
+    expect(bypassesIn('var d = appData.arInvoices[0].amount % 2;')).toEqual([]);
+    // A negated read, where `-` sits next to a `-` one token away.
+    expect(bypassesIn('var d = appData.arInvoices[0].amount - -1;')).toEqual([]);
+    // Increment of something ELSE, on a line that reads a mirror.
+    expect(bypassesIn('for (i++; i < appData.arInvoices.length; i++) {}')).toEqual([]);
+    // The three operators whose ASSIGNMENT forms are now matched must not match
+    // in their plain forms.
+    expect(bypassesIn('var v = appData.arInvoices || [];')).toEqual([]);
+    expect(bypassesIn('var v = appData.arInvoices ?? [];')).toEqual([]);
+    expect(bypassesIn('var v = appData.arInvoices && appData.arInvoices.length;')).toEqual([]);
+    expect(bypassesIn('var t = appData.arInvoices ? 1 : 2;')).toEqual([]);
+    // A mirror read used as someone ELSE's key or argument is not a write to it.
+    expect(bypassesIn('map[appData.jobVendorBills.length] = x;')).toEqual([]);
+    expect(bypassesIn('obj[appData.arInvoices[0].id] = v;')).toEqual([]);
+    expect(bypassesIn('foo(appData.arInvoices, appData.jobVendorBills);')).toEqual([]);
+    // A chain that produces a COPY and sorts that is not an in-place mutation.
+    expect(bypassesIn('var f = appData.arInvoices.filter(function (x) { return x; }).sort();')).toEqual([]);
+    expect(bypassesIn('return appData.jobChangeOrders.slice();')).toEqual([]);
+    expect(bypassesIn('var s = appData.jobVendorBills.reduce(function (a, b) { return a + b; }, 0);')).toEqual([]);
+    // Object.assign READING a mirror into a fresh object — the mirror is not
+    // argument 1, so nothing is mutated.
+    expect(bypassesIn('var copy = Object.assign({}, appData.arInvoices[0]);')).toEqual([]);
+    // ...and Object.assign onto appData naming NO mirror is not a mirror write.
+    expect(bypassesIn('Object.assign(appData, { knownTrades: t });')).toEqual([]);
+  });
+
   // ── THE ACCEPTANCE TEST: every shape, in every scanned root ───────────────
   // The standard this suite is held to is not "the guard passes" — a scanner
   // that mis-parses reports clean, and a scanner pointed at the wrong directory
@@ -1576,6 +2023,18 @@ describe('mutation site → registry: nothing patches a money store behind the r
       'optional chain':    { code: 'window.appData?.arInvoices.push(r);',          sym: 'arInvoices' },
       'delete':            { code: 'delete window.appData.jobPurchaseOrders;',     sym: 'jobPurchaseOrders' },
       'destructure':       { code: 'const { arInvoices } = window.appData;',       sym: 'arInvoices (destructured)' },
+      // ── C1: the nine classes (ten spellings, both increment fixities) that were
+      // green in BOTH roots while the disclosure said they could not exist
+      'compound assign':   { code: 'appData.jobVendorBills[0].amount += 5;',       sym: 'jobVendorBills' },
+      'postfix increment': { code: 'appData.arInvoices[0].balance++;',             sym: 'arInvoices' },
+      'prefix increment':  { code: '--appData.arInvoices[0].balance;',             sym: 'arInvoices' },
+      'computed elt key':  { code: "appData.jobVendorBills[0]['amount'] = 5;",     sym: 'jobVendorBills' },
+      'nested field':      { code: 'appData.jobChangeOrders[0].data.buildingAllocations = a;', sym: 'jobChangeOrders' },
+      'whole money row':   { code: 'appData.jobVendorBills[0] = row;',             sym: 'jobVendorBills' },
+      'assign onto root':  { code: 'Object.assign(window.appData, { arInvoices: rows });', sym: 'arInvoices' },
+      'logical assign':    { code: 'appData.jobVendorBills ??= [];',               sym: 'jobVendorBills' },
+      'chain + computed':  { code: 'appData?.["arInvoices"].push(r);',             sym: 'arInvoices' },
+      'nested mutator':    { code: 'appData.jobChangeOrders[0].data.lines.push(l);', sym: 'jobChangeOrders' },
       'loader (forced)':   { code: 'window.loadBillsForJob(jid, true);',           sym: 'loadBillsForJob' },
       'loader (unforced)': { code: 'loadBillsForJob(jid);',                        sym: 'loadBillsForJob (no force)' },
       'repaint bare':      { code: 'renderJobsMain();',                            sym: 'renderJobsMain' },
@@ -1627,19 +2086,49 @@ describe('mutation site → registry: nothing patches a money store behind the r
   // starts being caught, this test fails and the comment above the guard gets
   // to become less apologetic.
   //
-  // Every miss below shares one root: the scanner matches TEXT, it does not
-  // resolve VALUES. An indirection through a variable defeats it, always.
+  // TWO CLASSES, and the count matters because the previous version of this
+  // paragraph asserted ONE. It said: "Every miss below shares one root: the
+  // scanner matches TEXT, it does not resolve VALUES. An indirection through a
+  // variable defeats it, always." — and then: "this list is the whole remainder:
+  // one class, four spellings of it."
   //
-  // THIS LIST USED TO BE SHORTER THAN THE TRUTH. Five further shapes — an
-  // element-field write, Object.assign, a destructuring bind, optional chaining
-  // and `delete` — were neither caught nor named, so the paragraph above read as
-  // "only variable indirection escapes" when it was not. They are caught now
-  // (the test two above this one), and this list is the whole remainder: one
-  // class, four spellings of it.
+  // BOTH SENTENCES WERE FALSE, and the way they were false is the pattern this
+  // pass exists to break: each time the guard closed a gap it wrote a sentence
+  // one size larger than the fix. NINE CLASSES of direct, literal,
+  // indirection-free write were green at the time that claim was made — compound
+  // assignment, increment at either fixity, a computed element key, a second dot
+  // hop, a bare `[0] =`, `Object.assign` onto `appData` itself,
+  // `??=`/`||=`/`&&=`, `?.` with a computed key, and a mutator at the end of a
+  // chain — two of them the very writes that round was about. They are caught now
+  // (see the C1 tests above); none of them was variable indirection.
+  //
+  // So the remainder is stated as two classes, and neither is claimed to be the
+  // last one. It is what is known to escape today, not a proof of completeness:
+  //
+  //   CLASS 1 — INDIRECTION THROUGH A VALUE. The mirror, the loader or the key
+  //     is bound to a name first and used under that name. This one really is
+  //     unreachable for a text scan.
+  //   CLASS 2 — A WRITE THROUGH A BINDING THE LANGUAGE CREATES: a callback
+  //     parameter or a loop variable. `forEach`/`map`/`find`/`for…of` hand an
+  //     ELEMENT to a name the scanner has never seen, and the write is on that
+  //     name. This is NOT class 1 — nothing is aliased, no assignment
+  //     introduces the name, and the code is the most natural spelling there is
+  //     — which is exactly why folding it into "an indirection through a
+  //     variable" made the one-class sentence untrue.
+  //
+  // Class 2 is the more dangerous of the two, and it is named here rather than
+  // hidden because closing it needs a real parser: you have to know that the
+  // callback's parameter is bound to an element OF a watched mirror, which is
+  // type inference, not pattern matching. Someone closing it should reach for a
+  // JS AST (the receiver of the `.forEach` is right there in the tree) rather
+  // than widening a regex — a regex that matched `i.status =` inside any
+  // callback would fire on every unrelated loop in 121 files.
   test('the misses are named, not implied — this is a text scan, not a type check', () => {
+    // ── CLASS 1: indirection through a value ────────────────────────────────
     // 1. A store write through a local alias. The mirror is aliased once and
     //    then mutated under a name the scanner has never heard of.
     expect(bypassesIn('var m = appData.arInvoices; m.push(row);')).toEqual([]);
+    expect(bypassesIn('var m = appData.jobVendorBills; m[0].amount = 5;')).toEqual([]);
     // 2. A loader or repainter called through an alias, same reason.
     expect(bypassesIn('var f = window.loadBillsForJob; f(jobId);')).toEqual([]);
     expect(bypassesIn('var r = window["renderJobsMain"]; r();')).toEqual([]);
@@ -1648,13 +2137,36 @@ describe('mutation site → registry: nothing patches a money store behind the r
     expect(bypassesIn('appData[MIRROR] = rows;')).toEqual([]);
     // 4. A call assembled from a string.
     expect(bypassesIn('window["load" + "BillsForJob"](jobId);')).toEqual([]);
-    // WHY THIS IS ACCEPTABLE, stated rather than assumed: every miss requires
-    // an indirection that nobody writes by accident. The defect this guard
-    // exists to stop — doc-import.js — was written in the most direct form
-    // available, because that is what someone reaching for the read-cache
-    // naturally types. The guard is a tripwire against the ordinary mistake,
-    // not a sandbox against a determined author, and it must not be described
-    // as the second thing.
+    // 5. Object.assign onto appData whose PATCH is a variable — the mirror is
+    //    never named, so there is nothing to report it under. This is the
+    //    boundary of the C1 fix above, and it is class 1, not a new class.
+    expect(bypassesIn('Object.assign(appData, patch);')).toEqual([]);
+
+    // ── CLASS 2: a write through a binding the LANGUAGE creates ─────────────
+    // The element is handed to a callback parameter or a loop variable, and the
+    // write is on that name. Nothing is aliased by an assignment; this is the
+    // most direct spelling available, which is what makes it its own class.
+    expect(bypassesIn('appData.arInvoices.forEach(function (i) { i.status = "paid"; });')).toEqual([]);
+    expect(bypassesIn('appData.arInvoices.forEach(i => { i.status = "paid"; });')).toEqual([]);
+    expect(bypassesIn('appData.jobVendorBills.map(function (b) { b.amount = 0; return b; });')).toEqual([]);
+    expect(bypassesIn('appData.jobVendorBills.find(function (b) { return b.id === x; }).amount = 5;')).toEqual([]);
+    expect(bypassesIn('for (var b of appData.jobVendorBills) { b.amount = 0; }')).toEqual([]);
+    expect(bypassesIn('for (var i = 0; i < appData.arInvoices.length; i++) { var r = appData.arInvoices[i]; r.status = "paid"; }')).toEqual([]);
+
+    // WHY CLASS 1 IS ACCEPTABLE, stated rather than assumed: it requires an
+    // indirection nobody writes by accident. The defect this guard exists to
+    // stop — doc-import.js — was written in the most direct form available,
+    // because that is what someone reaching for the read-cache naturally types.
+    //
+    // CLASS 2 IS NOT ACCEPTABLE IN THE SAME WAY, and the honest thing is to say
+    // so rather than to file it under the same excuse: it needs no indirection
+    // and someone WILL type it. It is disclosed, not defended.
+    //
+    // The guard is a tripwire against the ordinary mistake, not a sandbox
+    // against a determined author, and it must not be described as the second
+    // thing. What it does NOT get to be described as either is complete: this
+    // list is what is known to escape, and the last two rounds each found a
+    // shape that the round before had implied could not exist.
   });
 
   test('...and does not fire on the shapes that are NOT writes or calls', () => {
