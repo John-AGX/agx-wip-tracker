@@ -147,6 +147,68 @@ describe('layer 1 · the report cannot disagree with itself', () => {
     expect(MODEL.describe(entryFor('rejected', 'estimate'), {}).kind).toBe('silent');
   });
 
+  /* REPORTABILITY IS NOT RENDERABILITY, and reading one off the other is the
+   * shape of the round-5 defect. Both directions are asserted, because a
+   * predicate that happens to agree with `kind` on the common rows is the
+   * predicate that gets quietly replaced by `kind === "silent"` next round. */
+  test('reportability is a property of the ROW, not of any rendering — and not of ctx', () => {
+    const rejected = entryFor('rejected', 'estimate');
+
+    // ← renderable, and still not news. The same rejected row comes back as a
+    //   'notice' when its detail fetch failed, and as 'silent' otherwise: kind
+    //   depends on ctx, and currency must not.
+    expect(MODEL.describe(rejected, {}).kind).toBe('silent');
+    expect(MODEL.describe(rejected, { unreadable: { message: 'HTTP 500', tries: 3 } }).kind).toBe('notice');
+    expect(MODEL.isReportable(rejected)).toBe(false);
+
+    // → news, in every ctx the surfaces can put it in.
+    const applied = entryFor('applied', 'estimate');
+    [{}, { inEditor: true }, { unreadable: { message: 'HTTP 500', tries: 3 } }].forEach((ctx) => {
+      expect(MODEL.describe(applied, ctx).kind).not.toBe('silent');
+      expect(MODEL.isReportable(applied)).toBe(true);
+    });
+
+    // The handoff placeholder is the other renderable-but-not-news row: a real
+    // moment, drawn on the strip, about a write that has not landed.
+    expect(MODEL.describe({}, { composing: { label: 'x' } }).kind).toBe('composing');
+    expect(MODEL.isReportable({ meta: {} })).toBe(false);
+
+    // An unidentified row cannot be the subject of anything, so it is not news
+    // either — that is what keeps subject() total: gen moves ⟺ subject is a
+    // real payloadId.
+    expect(MODEL.isReportable({ meta: { state: 'applied' } })).toBe(false);
+    expect(MODEL.isReportable({ meta: { state: 'applied', payloadId: 'p1' } })).toBe(true);
+    expect(MODEL.isReportable({ meta: { state: 'proposed', payloadId: 'p1' } })).toBe(true);
+    expect(MODEL.isReportable({ meta: { state: 'failed', payloadId: 'p1' } })).toBe(true);
+    expect(MODEL.isReportable({ meta: { state: 'rejected', payloadId: 'p1' } })).toBe(false);
+  });
+
+  /* And the ledger asks it ITSELF. A caller that hands over a dismissed row
+   * cannot talk the ledger into moving, however it phrases the participant
+   * list — which is the difference between a rule and a convention. */
+  test('the ledger consults the model before it reads a single claim', () => {
+    const led = MODEL.makeWriteLedger();
+    let superseded = 0;
+    led.register({ name: 'r', owner: 'nobody', supersede: () => { superseded++; } });
+
+    led.report({ meta: { payloadId: 'p1', state: 'applied' } }, ['someone']);
+    expect(led.current()).toBe(1);
+    expect(led.subject()).toBe('p1');
+    expect(superseded).toBe(1);
+
+    // Same call shape, same non-empty participant list, dismissed row.
+    led.report({ meta: { payloadId: 'p2', state: 'rejected' } }, ['someone', 'and-another']);
+    expect(led.current()).toBe(1);
+    expect(led.subject()).toBe('p1');
+    expect(superseded).toBe(1);
+
+    // Real news nobody put on screen still moves nothing — the second gate,
+    // which now lives here and nowhere else.
+    led.report({ meta: { payloadId: 'p3', state: 'applied' } }, []);
+    expect(led.current()).toBe(1);
+    expect(led.subject()).toBe('p1');
+  });
+
   test('the pane is still a settled apply, so its pill is green', () => {
     const r = MODEL.describe(entryFor('applied', 'estimate'), {});
     expect(r.kind).toBe('pane');
@@ -698,7 +760,110 @@ describe('layer 2 · after any interleaving, everything agrees with the newest',
 // Testing only the first half would be passed by an implementation that
 // deletes everything on every write, which is a different bug.
 // ────────────────────────────────────────────────────────────────────────
-describe('layer 3 · cross-surface — nothing asserts a write another surface superseded', () => {
+// ────────────────────────────────────────────────────────────────────────
+// THE MOUNTING DIMENSION — round 5.
+//
+// P8 ("a silent row moves no generation") already existed and already passed,
+// and it was still wrong, because it was written with ONE surface mounted —
+// the one that consults describe() and therefore declines the rows describe()
+// calls silent. The measured defect needed a second surface mounted to appear
+// at all. So a currency property asserted under one mounting is not asserted:
+// the mounting is a free variable of the system and it belongs in the sweep.
+//
+// Three surface SHAPES, chosen because each one answers the fan-out's
+// question differently, and the differences are exactly what round 4's rule
+// ("explicit null = declined, anything else = claimed") was reading:
+//
+//   cowork    order 20, exclusive. claims on PAGE STATE, never on the row.
+//             render() returns undefined on every branch. Registers a ledger
+//             claimant. This is the real shape of js/cowork.js and the shape
+//             that produced the defect.
+//   decliner  order 15, exclusive. Looks at every row and puts none of them on
+//             screen — an honest `return null`. The shape of surface B on a
+//             silent row. It must not suppress the surfaces behind it.
+//   stub      order 25, NON-exclusive. Implements claims/render and NOTHING
+//             else: no ledger registration, no chrome, no decisions. It claims
+//             every row and returns undefined. It is the minimum a surface can
+//             be, and under round 4's rule it made every row — dismissals
+//             included — look like a reported write.
+const SURFACE_SHAPES = ['cowork', 'decliner', 'stub'];
+
+/* All 8 subsets, for the properties that are about the LEDGER and need no
+ * particular surface to be expressible. */
+const ALL_MOUNTS = (function () {
+  const out = [];
+  for (let m = 0; m < 8; m++) {
+    out.push(SURFACE_SHAPES.filter((_, i) => (m >> i) & 1));
+  }
+  return out;
+})();
+
+/* …and the 4 in which Cowork is present. The cross-surface properties (P5, P6)
+ * are STATEMENTS ABOUT a second exclusive surface with a ledger claimant of its
+ * own — "the strip must not assert a write Cowork took", "Cowork's document
+ * must not assert a write the strip took". With no such surface mounted there
+ * is no second region and the sentence has no subject, so those runs would be
+ * vacuous rather than passing. Said plainly instead of quietly skipped: the
+ * mount sets WITHOUT cowork are covered for every ledger-level property by the
+ * ALL_MOUNTS battery below, which is where the round-5 defect lives. */
+const COWORK_MOUNTS = ALL_MOUNTS.filter((s) => s.indexOf('cowork') >= 0);
+
+const mountLabel = (s) => (s.length ? s.join('+') : 'strip only');
+
+/* Mount a set of shapes onto the freshly-booted engine. Surface B mounts
+ * itself, so "strip only" is the empty set. Returns a tally the caller can
+ * assert against, because a mounting nobody exercised proves nothing. */
+function mountSurfaces(mounts, cowork) {
+  cowork = cowork || {};
+  const tally = { stubRendered: 0, declinerLooked: 0, coworkRendered: 0 };
+  if (mounts.indexOf('decliner') >= 0) {
+    LW.registerSurface({
+      name: 'decliner', order: 15, exclusive: true,
+      claims: () => { tally.declinerLooked++; return true; },
+      // The honest decline: it looked, and it put nothing on screen. It must
+      // not stop the surfaces behind it from getting the row.
+      render: () => null
+    });
+  }
+  if (mounts.indexOf('cowork') >= 0) {
+    LW.registerSurface({
+      name: 'cowork', order: 20, exclusive: true,
+      claims: () => (cowork.active ? !!cowork.active() : false),
+      render: (entry) => {
+        tally.coworkRendered++;
+        // Pinned = the user picked a row, so a new write raises an unread
+        // marker instead of repainting. The document goes on showing an older
+        // write ON PURPOSE — which is exactly the case the stamp exists for.
+        if (cowork.onRender) cowork.onRender(entry);
+      }
+    });
+    if (cowork.onSupersede) {
+      LW.writes.register({
+        name: 'cowork-doc', owner: 'cowork',
+        keeps: cowork.keeps,
+        supersede: cowork.onSupersede
+      });
+    }
+  }
+  if (mounts.indexOf('stub') >= 0) {
+    // claims + render and NOTHING else. No ledger claimant, no chrome, no
+    // opinion about any row. Non-exclusive, so it never suppresses another
+    // surface — it only ever ADDS itself to the participant list, which is
+    // precisely how a row that is not news came to look like one.
+    LW.registerSurface({
+      name: 'stub', order: 25, exclusive: false,
+      claims: () => true,
+      render: () => { tally.stubRendered++; }
+    });
+  }
+  return tally;
+}
+
+// Wrapped in a loop rather than indented one level deeper: the body below is
+// unchanged layer-3 code and a whole-file reindent would bury the two real
+// edits in six hundred lines of whitespace diff.
+COWORK_MOUNTS.forEach(function (MOUNTS) {
+describe('layer 3 · [' + mountLabel(MOUNTS) + '] cross-surface — nothing asserts a write another surface superseded', () => {
   // The stand-in for Cowork at ENGINE level. It has to do exactly two things a
   // second surface does: claim writes when it is the active page, and register
   // a region with the ledger. It deliberately paints nothing — the property
@@ -716,21 +881,12 @@ describe('layer 3 · cross-surface — nothing asserts a write another surface s
     coworkPinned = !!opts.pinned;
     coworkShowing = opts.showing || null;
     coworkSuperseded = 0;
-    LW.registerSurface({
-      name: 'cowork', order: 20, exclusive: true,
-      claims: () => coworkActive,
-      render: (entry) => {
-        // Pinned = the user picked a row, so a new write raises an unread
-        // marker instead of repainting. The document goes on showing an older
-        // write ON PURPOSE — which is exactly the case the stamp exists for.
-        if (!coworkPinned) coworkShowing = entry.meta.payloadId;
-      }
-    });
-    LW.writes.register({
-      name: 'cowork-doc', owner: 'cowork',
+    mountSurfaces(MOUNTS, {
+      active: () => coworkActive,
+      onRender: (entry) => { if (!coworkPinned) coworkShowing = entry.meta.payloadId; },
       keeps: (by, subject) =>
         !!by['cowork'] && coworkShowing != null && String(coworkShowing) === String(subject),
-      supersede: () => { coworkSuperseded++; }
+      onSupersede: () => { coworkSuperseded++; }
     });
   }
 
@@ -892,23 +1048,53 @@ describe('layer 3 · cross-surface — nothing asserts a write another surface s
   });
 
   test('P8 · a SILENT row reports nothing, so it demotes nothing', () => {
-    // A rejection is not news (describe → kind 'silent'), so no surface puts
-    // it on screen and the ledger must not move. Under the old ingest-level
-    // clearComposing() a rejected row destroyed a drafting card it had nothing
-    // to do with.
-    boot3({ active: false });
-    fire(EVENTS.A(1));
-    const rPrev = expected(EVENTS.A(1));
-    // The strip's own report legitimately superseded the (empty) Cowork
-    // document, so the baseline is whatever that left — what must not move is
-    // the delta across the rejected row.
-    const before = coworkSuperseded;
-    LW.ingest([], { payloadId: 'rej1', state: 'rejected', title: 'Someone else\'s draft' });
-    const v = visibleClaim();
-    expect(v.pillText).toBe(rPrev.pillText);
-    expect(v.stale).toBe(false);
-    expect(coworkSuperseded).toBe(before);
-    expect(LW.writes.subject()).toBe('A1');       // the ledger did not move
+    // A rejection is not news, so the ledger must not move — no matter which
+    // surfaces are mounted or which page the user is on. THE ROUND-5 DEFECT
+    // IS THE `active: true` HALF OF THIS LOOP. Round 4's version of this test
+    // ran only with Cowork inactive, which is the one configuration in which
+    // the only mounted surface is the one that consults describe(); it passed
+    // for the whole time the bug was live.
+    [false, true].forEach((active) => {
+      boot3({ active });
+      fire(EVENTS.A(1));
+      const before = {
+        visible: JSON.stringify(visibleClaim()),
+        gen: LW.writes.current(),
+        subject: LW.writes.subject(),
+        superseded: coworkSuperseded
+      };
+      const where = 'mounts=' + mountLabel(MOUNTS) + ' coworkActive=' + active;
+      LW.ingest([], { payloadId: 'rej_' + active, state: 'rejected', title: 'Someone else\'s draft' });
+      // NOTHING moved: not the pixels, not the generation, not the subject,
+      // and nobody was told they had been superseded.
+      expect([where, JSON.stringify(visibleClaim())]).toEqual([where, before.visible]);
+      expect([where, LW.writes.current()]).toEqual([where, before.gen]);
+      expect([where, LW.writes.subject()]).toEqual([where, before.subject]);
+      expect([where, coworkSuperseded]).toEqual([where, before.superseded]);
+    });
+  });
+
+  test('P8 · THE MEASURED CASE — a dismissal does not destroy an unrelated drafting card', () => {
+    // Measured live on the deployed build, same session, same build: off
+    // Cowork the card survived; on Cowork the whole strip was removed. The
+    // difference was not the row — it was which surface happened to be
+    // mounted, which is exactly what a currency rule must not depend on.
+    [false, true].forEach((active) => {
+      boot3({ active });
+      LW.startComposing('drafting your change', {});
+      const card = M.describe({}, { composing: { label: 'drafting your change', viaScribe: true } });
+      const where = 'mounts=' + mountLabel(MOUNTS) + ' coworkActive=' + active;
+      expect([where, visibleClaim().pillText]).toEqual([where, card.pillText]);
+
+      LW.ingest([], { payloadId: 'rej_card', state: 'rejected', title: 'An unrelated dismissed draft' });
+
+      expect([where, !!document.getElementById('p86-live-writer')]).toEqual([where, true]);
+      expect([where, visibleClaim().pillText]).toEqual([where, card.pillText]);
+      // A placeholder claims no generation (P7) and a dismissal is not news,
+      // so nothing in this scenario has ever been reported.
+      expect([where, LW.writes.current()]).toEqual([where, 0]);
+      expect([where, LW.writes.subject()]).toEqual([where, null]);
+    });
   });
 
   test('P9 · the ledger actually fires across the corpus — not untested scaffolding', () => {
@@ -931,6 +1117,152 @@ describe('layer 3 · cross-surface — nothing asserts a write another surface s
     expect(reports).toBeGreaterThan(0);
     expect(supersessions).toBeGreaterThan(0);
     expect(keeps).toBeGreaterThan(0);
+  });
+});
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// LAYER 3b — THE MOUNTING IS A FREE VARIABLE OF THE SYSTEM.
+//
+// Layer 3 needs Cowork present, because its properties are sentences about a
+// second exclusive surface with a region of its own. The LEDGER-level
+// properties need nothing of the sort, and they are the ones round 5 was
+// about — so they run under all eight mountings, including the strip on its
+// own and including a surface that is nothing but claims/render.
+//
+// The claim:
+//
+//   WHETHER A WRITE HAPPENED IS A PROPERTY OF THE ROW. THE SET OF MOUNTED
+//   SURFACES, AND WHAT THEY RETURN, CANNOT CHANGE IT.
+//
+// Round 4 got the other half of this ("which write is current" is reported by
+// the fan-out, not by a surface) and left this half with the surfaces: a row
+// counted as a write iff some render() had not returned null. The one surface
+// that consults describe() declined the silent rows, so the invariant held
+// wherever that surface was alone — which is every configuration the tests
+// booted, and not the one the user was looking at.
+// ────────────────────────────────────────────────────────────────────────
+describe('layer 3b · whether a write happened does not depend on what is mounted', () => {
+  let tally = null;
+  let coworkActive = false, coworkShowing = null, coworkSuperseded = 0;
+
+  function bootM(mounts, opts) {
+    opts = opts || {};
+    bootEngine();
+    coworkActive = !!opts.active;
+    coworkShowing = null;
+    coworkSuperseded = 0;
+    tally = mountSurfaces(mounts, {
+      active: () => coworkActive,
+      onRender: (entry) => { coworkShowing = entry.meta.payloadId; },
+      keeps: (by, subject) =>
+        !!by['cowork'] && coworkShowing != null && String(coworkShowing) === String(subject),
+      onSupersede: () => { coworkSuperseded++; }
+    });
+  }
+
+  /* A dismissed draft: a real row, in a real state, that is not news. */
+  const DISMISSED = (n) => ({
+    kind: 'ingest', cs: [],
+    meta: { payloadId: 'D' + n, state: 'rejected', title: 'a draft someone dismissed' }
+  });
+
+  const MOUNTINGS = [];
+  ALL_MOUNTS.forEach((m) => { MOUNTINGS.push([m, false]); MOUNTINGS.push([m, true]); });
+  const label = (m, a) => 'mounts=' + mountLabel(m) + ' coworkActive=' + a;
+
+  test('P10 · subject() is ONLY ever the id of a row the model calls reportable', () => {
+    // The second, worse form of the defect: subject() is documented as "the
+    // payloadId of the newest REPORTED write" and it was measured holding
+    // pl_1784314336678_l5rn453j — a REJECTION — while a pinned Cowork document
+    // read "A newer write has landed since." That is the UI asserting
+    // something happened that did not.
+    let checked = 0, everSet = 0;
+    MOUNTINGS.forEach(([mounts, active]) => LETTERS.forEach((a) => {
+      bootM(mounts, { active });
+      const other = (a === 'A') ? 'G' : 'A';
+      const seq = [EVENTS[a](1), DISMISSED(2), EVENTS[other](3), DISMISSED(4)];
+      const reportable = new Set();
+      seq.forEach((ev) => {
+        fire(ev);
+        if (ev.kind === 'ingest' && M.isReportable({ meta: ev.meta })) reportable.add(String(ev.meta.payloadId));
+        const s = LW.writes.subject();
+        const where = label(mounts, active) + ' seq=' + a;
+        if (s != null) {
+          everSet++;
+          expect([where, 'subject=' + s, reportable.has(String(s))]).toEqual([where, 'subject=' + s, true]);
+        }
+        checked++;
+      });
+    }));
+    expect(checked).toBe(MOUNTINGS.length * LETTERS.length * 4);
+    expect(everSet).toBeGreaterThan(0);           // not vacuously true
+  });
+
+  test('P11 · a row the model does not call news moves NOTHING, under every mounting', () => {
+    let moved = 0;
+    MOUNTINGS.forEach(([mounts, active]) => {
+      bootM(mounts, { active });
+      fire(EVENTS.A(1));                          // real news first, so gen > 0
+      const g0 = LW.writes.current(), s0 = LW.writes.subject(), c0 = coworkSuperseded;
+      if (g0 > 0) moved++;
+      const where = label(mounts, active);
+      fire(DISMISSED(2));
+      expect([where, LW.writes.current()]).toEqual([where, g0]);
+      expect([where, LW.writes.subject()]).toEqual([where, s0]);
+      expect([where, coworkSuperseded]).toEqual([where, c0]);
+    });
+    // …and the reportable row DID move it somewhere, or the assertions above
+    // are about a ledger that never does anything.
+    expect(moved).toBeGreaterThan(0);
+  });
+
+  test('P11 · the drafting card survives a dismissal under every mounting', () => {
+    MOUNTINGS.forEach(([mounts, active]) => {
+      bootM(mounts, { active });
+      LW.startComposing('drafting your change', {});
+      const card = M.describe({}, { composing: { label: 'drafting your change', viaScribe: true } });
+      const where = label(mounts, active);
+      expect([where, visibleClaim().pillText]).toEqual([where, card.pillText]);
+      fire(DISMISSED(3));
+      expect([where, !!document.getElementById('p86-live-writer')]).toEqual([where, true]);
+      expect([where, visibleClaim().pillText]).toEqual([where, card.pillText]);
+      expect([where, LW.writes.current()]).toEqual([where, 0]);
+    });
+  });
+
+  test('P12 · the mountings are not vacuous — a surface really did draw the dismissed row', () => {
+    // Without this, P10/P11 could pass because no surface ever touched the
+    // dismissed row in any configuration, which is the state of affairs that
+    // let P8 pass for a whole round.
+    let drawn = 0;
+    ALL_MOUNTS.forEach((mounts) => {
+      const active = mounts.indexOf('cowork') >= 0;
+      bootM(mounts, { active });
+      fire(DISMISSED(1));
+      const where = label(mounts, active);
+      if (mounts.indexOf('stub') >= 0) {
+        expect([where, tally.stubRendered > 0]).toEqual([where, true]);
+        drawn++;
+      }
+      if (active) {
+        expect([where, tally.coworkRendered > 0]).toEqual([where, true]);
+        drawn++;
+      }
+    });
+    expect(drawn).toBeGreaterThan(0);
+  });
+
+  test('P12 · a declining surface does not suppress the surfaces behind it', () => {
+    // The decliner is exclusive and claims everything. If `return null` were
+    // treated as a claim it would silently swallow every write in this suite
+    // and every property above would be about an engine that reports nothing.
+    bootM(['decliner'], { active: false });
+    fire(EVENTS.A(1));
+    expect(tally.declinerLooked).toBeGreaterThan(0);
+    expect(document.getElementById('p86-live-writer')).not.toBeNull();   // B still got it
+    expect(LW.writes.current()).toBe(1);
+    expect(LW.writes.subject()).toBe('A1');
   });
 });
 
@@ -1069,6 +1401,69 @@ describe('layer 4 · S7 as measured, with the real Cowork page', () => {
     expect(doc.textContent).toContain('Set Base group scope on Uptown');   // not yanked
     expect(doc.querySelector('.cw-stale')).not.toBeNull();                 // and not passed off as latest
     expect(doc.textContent).toContain(STALE_MARK);
+  }, 20000);
+
+  /* THE ROUND-5 MEASUREMENT, both halves, against the real js/cowork.js.
+   *
+   * Layer 3b proves it against surface SHAPES. This proves it against the
+   * actual file whose `claims` never reads entry.meta.state and whose render()
+   * returns undefined on every branch — the two facts round 4 had to trust and
+   * which are no longer load-bearing. */
+  test('CASE 1 / CASE 2 · a rejected row destroys no drafting card, ON or OFF Cowork', async () => {
+    ROWS.rej = Object.assign(row('rej', 'A draft someone dismissed'),
+      { status: 'rejected', apply_changeset: null, applied_at: null });
+    LIST = [];
+    for (const onCowork of [false, true]) {
+      bootBoth();
+      active(onCowork);
+      await settle();
+
+      LW.startComposing('drafting your change', {});
+      const card = LW.model.describe({}, { composing: { label: 'drafting your change', viaScribe: true } });
+      const where = onCowork ? 'CASE 2 (on Cowork)' : 'CASE 1 (off Cowork)';
+      expect([where, pill().textContent]).toEqual([where, card.pillText]);
+
+      // The measured event: an unrelated dismissed draft is ingested. Off
+      // Cowork this always survived; on Cowork the whole strip was removed.
+      LW.ingest([], {
+        payloadId: 'pl_1784314336678_l5rn453j', state: 'rejected',
+        title: 'A draft someone dismissed', emittingAgentKey: 'scribe'
+      });
+      await settle();
+
+      expect([where, !!document.getElementById('p86-live-writer')]).toEqual([where, true]);
+      expect([where, pill().textContent]).toEqual([where, card.pillText]);
+      // …and the rejection never became the subject of anything.
+      expect([where, LW.writes.current()]).toEqual([where, 0]);
+      expect([where, LW.writes.subject()]).toEqual([where, null]);
+    }
+  }, 20000);
+
+  test('a pinned document is never told a REJECTION superseded it', async () => {
+    // The second, worse form: subject() held a rejected payload id while the
+    // document read "A newer write has landed since. This is the one you
+    // picked — it is not the latest." Nothing had landed.
+    ROWS.w1 = row('w1', 'Set Base group scope on Uptown');
+    LIST = [ROWS.w1];
+    bootBoth();
+    active(true);
+    await settle();
+
+    CW.open('w1');
+    await settle();
+    const doc = document.getElementById('cw-doc');
+    expect(doc.textContent).toContain('Set Base group scope on Uptown');
+    expect(doc.querySelector('.cw-stale')).toBeNull();
+
+    LW.ingest([], {
+      payloadId: 'pl_1784314336678_l5rn453j', state: 'rejected',
+      title: 'A draft someone dismissed', emittingAgentKey: 'scribe'
+    });
+    await settle();
+
+    expect(doc.querySelector('.cw-stale')).toBeNull();          // no false staleness
+    expect(LW.writes.subject()).not.toBe('pl_1784314336678_l5rn453j');
+    expect(LW.model.isReportable({ meta: { payloadId: 'pl_1784314336678_l5rn453j', state: 'rejected' } })).toBe(false);
   }, 20000);
 
   test('surface C is not a claimant — a row flash survives any number of writes', () => {

@@ -43,6 +43,18 @@
  * ledger is the epoch above the region: any write anyone puts on screen
  * supersedes every region that is not displaying it. See makeWriteLedger for
  * the three remedies and for why a PINNED document is stamped, not cleared.
+ *
+ * Round 4 moved WHICH write is current into the ledger and left WHETHER A
+ * WRITE HAPPENED with the surfaces — report() fired whenever some surface's
+ * render() had not returned null. That held only because the ONE surface that
+ * consults describe() declined the rows describe() calls silent. Mount a
+ * surface that does not (Cowork: `claims` is isActive(), `render` returns
+ * undefined) and a REJECTED row moved the generation, became subject(), and
+ * destroyed an unrelated drafting card. So isReportable() is the fourth
+ * export: a ctx-free, surface-free property of the ROW, asked by the ledger
+ * itself before it reads a single claim. Reportability and renderability are
+ * deliberately two predicates — see isReportable for the rows that separate
+ * them.
  * ──────────────────────────────────────────────────────────────────────── */
 (function () {
   'use strict';
@@ -159,7 +171,51 @@
    * reported, never by the surfaces themselves. That is the round-3 lesson
    * applied one level up: an invariant a leaf has to remember is an invariant
    * the next leaf will not.
+   *
+   * ROUND 5 — and it is the same lesson a THIRD time, one level further out.
+   * Round 4 took WHICH write is current away from the surfaces. It left
+   * WHETHER A WRITE HAPPENED AT ALL with them: report() moved a generation
+   * whenever the participant list was non-empty, and a surface got onto that
+   * list by not returning null from render(). So "a rejection is not news"
+   * held only because the ONE surface that consults describe() declined it.
+   * Measured live: with Cowork mounted (its `claims` is isActive(), which
+   * never reads entry.meta.state, and its render() returns undefined on every
+   * branch) an ingested REJECTED row moved the generation, made a rejection
+   * the subject(), and destroyed an unrelated in-flight drafting card.
+   *
+   * So report() now asks isReportable(entry) FIRST, before it looks at a
+   * single claim, and it asks the model rather than being told: the caller
+   * hands over the ENTRY, not a verdict and not a subject id. A row the model
+   * does not call news moves no generation and sets no subject no matter which
+   * surfaces are mounted or what they return.
    */
+  /* REPORTABILITY — a property of the ROW, and NOT the same property as
+   * renderability. It is tempting to read it off describe()'s `kind === silent`
+   * and that would be wrong in both directions:
+   *
+   *   renderable but not news  a REJECTED row is a real ledger row. Cowork
+   *                            lists it, and selecting it renders a perfectly
+   *                            good document. It is still not news, and it must
+   *                            not demote a drafting card or a pinned document.
+   *                            The handoff placeholder is the second case: a
+   *                            real moment, drawn on the strip, about a write
+   *                            that has not landed (P7).
+   *   news but not silent-free `kind` depends on CTX — the same rejected row
+   *                            comes back as a 'notice' when its detail fetch
+   *                            failed (ctx.unreadable), and as 'silent'
+   *                            otherwise. Currency must not depend on whose
+   *                            fetch broke or on which surface is asking.
+   *
+   * So it is its own predicate over meta alone, ctx-free and surface-free: a
+   * row is news iff there is an identified row to BE the subject and its state
+   * is one that actually happened. Nothing here can be reached by a surface. */
+  var NOT_NEWS = { rejected: true };
+  function isReportable(entry) {
+    var meta = (entry && entry.meta) || {};
+    if (!meta.payloadId) return false;     // nothing that could be the subject
+    return !NOT_NEWS[meta.state || 'applied'];
+  }
+
   function makeWriteLedger() {
     var gen = 0;
     var subject = null;          // payloadId of the newest REPORTED write
@@ -195,19 +251,41 @@
         return function () { claimants = claimants.filter(function (x) { return x !== c; }); };
       },
 
-      /* A write was put on screen by `reporters` (surface names) and is about
-       * `subjectId`. It claims the next generation; every claimant not
-       * displaying it stops asserting currency.
+      /* THE predicate, exposed so nobody has to re-derive it. Callers may ask;
+       * they may not answer — report() re-asks it below regardless. */
+      reportable: isReportable,
+
+      /* An ENTRY reached the surfaces in `reporters`. Takes the entry and not
+       * a (subjectId, verdict) pair on purpose: the two questions are
        *
-       * Called with an EMPTY reporter list, this does nothing at all: a write
-       * nobody put on screen is not news, and must not demote what is. */
-      report: function (reporters, subjectId) {
+       *   WHETHER a write happened   — a property of the row. Decided HERE, by
+       *                                the model, before any claim is read.
+       *   WHO is displaying it       — a property of the fan-out. That is the
+       *                                only half a surface is competent to
+       *                                answer, and the only half it is asked.
+       *
+       * Two ways this does nothing at all, and they are different facts:
+       *
+       *   not reportable  the row is not news (a dismissal; an unidentified
+       *                   row). No generation, no subject, no supersession —
+       *                   however many surfaces drew it and whatever they
+       *                   returned. This is the round-5 fix, and it is why
+       *                   `subject` can only ever be a reportable payloadId:
+       *                   there is exactly one assignment to it and it sits
+       *                   below this gate.
+       *   unwitnessed     real news that nobody put on screen. A write no
+       *                   surface displayed must not demote what one did. This
+       *                   check used to sit in the CALLER as well; it lives
+       *                   here only now — two mechanisms for one invariant is
+       *                   how round 3 became necessary. */
+      report: function (entry, reporters) {
+        if (!isReportable(entry)) { note('not-news', null); return gen; }
         reporters = reporters || [];
-        if (!reporters.length) return gen;
+        if (!reporters.length) { note('unwitnessed', null); return gen; }
         var by = Object.create(null);
         reporters.forEach(function (n) { by[n] = true; });
         gen++;
-        subject = (subjectId == null) ? null : subjectId;
+        subject = entry.meta.payloadId;
         note('report', reporters.join('+'));
         claimants.slice().forEach(function (c) {
           var kept = c.keeps ? !!c.keeps(by, subject) : !!by[c.owner];
@@ -538,6 +616,7 @@
     DRAFT_RECORDER_SINCE: DRAFT_RECORDER_SINCE,
     makeOwner: makeOwner,
     makeWriteLedger: makeWriteLedger,
+    isReportable: isReportable,
     setDev: setDev, paintLog: paintLog, resetPaintLog: resetPaintLog,
     claimLog: claimLog, resetClaimLog: resetClaimLog,
     agentLabel: agentLabel,

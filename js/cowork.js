@@ -481,9 +481,15 @@
    * pinned document by definition is not — so pinning falls out of the general
    * rule instead of being an exception carved into it.
    *
-   * writes.subject() is null until this session has SEEN a write reported.
-   * Null must not stamp anything: "a newer write has landed" is a claim, and
-   * this view would have no evidence for it. */
+   * writes.subject() is null until this session has seen a REPORTABLE write
+   * reported, and it is only ever the id of one — the ledger sets it below a
+   * gate that rejects everything the model does not call news, so a dismissed
+   * row can never end up here. It could, and did: a rejected payload id sat in
+   * subject() while this column read "A newer write has landed since", which is
+   * this view asserting something happened that did not.
+   *
+   * Null must not stamp anything either: "a newer write has landed" is a
+   * claim, and with no subject this view would have no evidence for it. */
   function newestReported() {
     var lw = LW();
     try { return (lw && lw.writes) ? lw.writes.subject() : null; } catch (_) { return null; }
@@ -742,11 +748,33 @@
       name: 'cowork',
       order: 20,
       exclusive: true,
+      /* This predicate reads the PAGE, never the row — Cowork is the ledger,
+       * so it shows every row there is, including the dismissed ones surface B
+       * calls silent. That is correct and it stays correct. It was also, for
+       * one round, load-bearing in a place it had no business being: because
+       * `claims` never looked at entry.meta.state and `render` returned
+       * undefined on every branch, the fan-out counted a REJECTED row as a
+       * reported write, moved the write generation onto it and cleared an
+       * unrelated drafting card. Whether a row is news is now decided by the
+       * model (isReportable) inside the ledger, before any claim is read, so
+       * this surface is free to go on rendering rows that are not news. */
       claims: function () { return isActive(); },
+      /* What this returns means exactly one thing: "I put this row on screen."
+       * Nothing here says a write happened — that is not a question a surface
+       * is competent to answer, and it is no longer asked of one.
+       *
+       * The PINNED branch returns undefined on purpose and it is not a lie:
+       * the row went on screen in the rail, with an unread marker. That claim
+       * is what makes `keeps` below evaluate _selectedId ≠ subject and stamp
+       * the pinned document — declining here would leave a pinned document
+       * silently asserting it is the latest. */
       render: function (entry) {
         loadLedger({});
         var id = entry.meta.payloadId;
-        if (!id) return;
+        // Nothing to select and nothing to mark unread — an honest decline, so
+        // surface B gets its turn instead of being blocked by a claim this
+        // page cannot back with a paint.
+        if (!id) return null;
         if (_pinned && _selectedId && _selectedId !== id) { _unread++; renderRail(); return; }
         selectRow(id, false);
       }

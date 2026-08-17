@@ -64,6 +64,17 @@
  * a surface: a surface cannot skip a call it does not make. Surface C is
  * deliberately not a claimant — it tints a row and says nothing about which
  * write is latest.
+ *
+ * WHETHER a write happened is a separate question from WHICH one is current,
+ * and round 4 only moved the second. broadcast() fired the ledger whenever the
+ * participant list was non-empty, and a surface joined that list by not
+ * returning null — so "a rejection is not news" held only while the sole
+ * mounted surface was the one that consults describe(). On Cowork (claims =
+ * isActive(), render returns undefined) a rejected row moved the generation
+ * and destroyed an unrelated drafting card. broadcast() now hands the ENTRY to
+ * the ledger, which asks the model's isReportable() before it reads a single
+ * claim. A surface's return value means "I am displaying this row" and
+ * nothing more.
  * ──────────────────────────────────────────────────────────────────────── */
 (function () {
   'use strict';
@@ -493,9 +504,17 @@
      * up: this is precisely where round 3's model could not see, because a
      * per-region epoch is only ever claimed by the region's own writer.
      *
-     * An empty claimedBy is not a write: a row nobody put on screen (a
-     * rejection, which describe() calls silent) must not demote what is. */
-    if (entry.claimedBy.length) WRITES.report(entry.claimedBy, entry.meta && entry.meta.payloadId);
+     * ROUND 5. The ENTRY is handed over, not a subject id and not a verdict.
+     * What a surface returns says who is DISPLAYING the row — the only half a
+     * surface can honestly answer — and says nothing about whether the row is
+     * news. That is the model's call and the ledger asks it directly, before
+     * it reads a claim. The `if (entry.claimedBy.length)` test that used to
+     * gate this line is GONE, not moved alongside: the same rule lives inside
+     * report(), and one invariant with two mechanisms is how round 3 became
+     * necessary. Round 4's version of this comment claimed an empty claimedBy
+     * was what stopped a rejection demoting a drafting card. It was true of
+     * surface B alone; with Cowork mounted, claimedBy was ['cowork']. */
+    WRITES.report(entry, entry.claimedBy);
     return reported;
   }
 
@@ -546,9 +565,14 @@
      * is to clear. Deleted rather than kept alongside — two mechanisms for one
      * invariant is how round 3 became necessary.
      *
-     * It also fixes a case the old call got wrong: a REJECTED row is silent,
-     * so nobody reports it, so it no longer destroys a drafting card that has
-     * nothing to do with it. */
+     * A REJECTED row must therefore not destroy a drafting card it has nothing
+     * to do with, and the reason it does not is that the MODEL does not call it
+     * news — isReportable(entry) is false, so report() returns before it looks
+     * at who drew it. Round 4 wrote this same sentence with "nobody reports it"
+     * as the reason, which was only true of surface B: Cowork claims on
+     * isActive() and returns undefined, so it reported the rejection, moved the
+     * generation, and cleared the card. Never re-state the reason as a fact
+     * about which surfaces are mounted. */
     return entry;   // nobody may have claimed it; it is still a valid entry
   }
 
@@ -920,7 +944,13 @@
    *
    * Returns the report it painted, or null when it claimed nothing. */
   function reportToStrip(entry, report) {
-    if (!report || report.kind === 'silent') return null;   // claim nothing, disturb nothing
+    /* B did not put this row on screen, and says so. That is ALL this line
+     * means now. It used to double as the guard on the write ledger — a
+     * rejection moved no generation because THIS surface declined it — and
+     * that is exactly the guard round 5 retired: it spoke for every surface
+     * while living inside one. Whether the row is news is decided by
+     * isReportable() inside the ledger; this is a statement about surface B. */
+    if (!report || report.kind === 'silent') return null;   // paint nothing, claim nothing
     /* `if (report.kind !== 'pane') dismissPane();` used to sit here as its own
      * inline rule, and it only ever covered the half of the problem this
      * surface can see: a pane left standing while COWORK reported the next
