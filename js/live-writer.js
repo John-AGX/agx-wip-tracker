@@ -112,6 +112,20 @@
   if (!M && typeof require === 'function') { try { M = require('./live-writer-model.js'); } catch (_) {} }
   if (!M) { console.warn('[live-writer] decision layer missing — engine not started'); return; }
 
+  /* A lookup table with NO prototype — see live-writer-model.js's bare() for
+   * the full reasoning. Short version: `{ lines: 1 }` inherits every key on
+   * Object.prototype, so TABLE['constructor'] is truthy for a key nobody
+   * declared. Every table below is indexed by a string this file did not
+   * choose — a server record's field names, an op kind — so every one of them
+   * is built here. Deliberately a local four-liner rather than an import: the
+   * tables are evaluated at module scope and a load-order regression that made
+   * a shared helper undefined would empty them silently. */
+  function bare(src) {
+    var t = Object.create(null);
+    Object.keys(src || {}).forEach(function (k) { t[k] = src[k]; });
+    return t;
+  }
+
   // Four owned regions. Per-region, not one global counter: a Cowork selection
   // must not supersede a strip stagger loop, and vice versa. The strip CARD and
   // the strip PILL share one owner on purpose — they are two renderings of one
@@ -320,7 +334,7 @@
     var bd = before && before.data, ad = after && after.data;
     if (!bd || !ad || typeof bd !== 'object' || typeof ad !== 'object') return [];
     var out = [];
-    var SKIP = { lines: 1 };
+    var SKIP = bare({ lines: 1 });
     function short(v) {
       if (v == null || v === '') return '∅';
       var s = String(v).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -386,7 +400,7 @@
   // BOTH diffFields and diffEstimate use it — a status/title move has to be
   // visible on every entity type, not only the ones without a bespoke differ.
   function scalarFieldOps(before, after) {
-    var SKIP = { id: 1, created_at: 1, updated_at: 1, organization_id: 1, user_id: 1, data: 1, lines: 1 };
+    var SKIP = bare({ id: 1, created_at: 1, updated_at: 1, organization_id: 1, user_id: 1, data: 1, lines: 1 });
     if (!before || !after) return [];   // create/delete framed by the caller
     var out = [];
     Object.keys(after).forEach(function (k) {
@@ -943,7 +957,7 @@
     });
   }
 
-  var ICON = { add: '+', edit: '~', delete: '−' };
+  var ICON = bare({ add: '+', edit: '~', delete: '−' });
 
   // Per-state chrome and the "why is there no diff" copy both live in the
   // model now — the first because `settle:'wrote'` hanging off the applied
@@ -1042,7 +1056,7 @@
       for (var oi = 0; oi < g.ops.length && shownOps < MAX_OPS; oi++, shownOps++) {
         var o = g.ops[oi];
         rows += '<div class="p86lw-op p86lw-' + o.kind + '" data-idx="' + shownOps + '">' +
-          '<span class="p86lw-i">' + ICON[o.kind] + '</span>' +
+          '<span class="p86lw-i">' + (ICON[o.kind] || '') + '</span>' +
           '<span class="p86lw-lbl"><div class="l1">' + esc(o.label) + '</div>' +
           (o.detail ? '<div class="l2">' + esc(o.detail) + '</div>' : '') + '</span>' +
           (o.amount != null ? '<span class="p86lw-amt">' + usd(o.amount) + '</span>' : '') +

@@ -93,15 +93,29 @@
     return !!(el && el.classList.contains('active'));
   }
 
+  /* A lookup table with NO prototype — see live-writer-model.js's bare() for
+   * the full reasoning. It matters more here than anywhere else in the
+   * feature: STATE_META is indexed by row.status, which is a string THE SERVER
+   * chooses, and on Object.prototype's six key names the `|| { key: 'unknown' }`
+   * fallback below never fires — stateOf() returns the inherited FUNCTION, and
+   * the document header renders `undefined` for the label a user reads. Kept
+   * local rather than imported because these tables are evaluated at module
+   * scope, before LWM() is guaranteed to resolve. */
+  function bare(src) {
+    var t = Object.create(null);
+    Object.keys(src || {}).forEach(function (k) { t[k] = src[k]; });
+    return t;
+  }
+
   // Five real states. Every one is a column value, not a mood — and each has
   // a defined rendering, including the ones that used to render as silence.
-  var STATE_META = {
+  var STATE_META = bare({
     ready:    { key: 'proposed', label: 'Proposed', tone: 'warn' },
     applying: { key: 'applying', label: 'Applying…', tone: 'info' },
     applied:  { key: 'applied',  label: 'Applied',  tone: 'ok' },
     failed:   { key: 'failed',   label: 'Failed',   tone: 'bad' },
     rejected: { key: 'rejected', label: 'Dismissed', tone: 'mute' }
-  };
+  });
   function stateOf(row) { return STATE_META[row && row.status] || { key: 'unknown', label: String((row && row.status) || '—'), tone: 'mute' }; }
 
   // ── styles ───────────────────────────────────────────────────────────────
@@ -416,14 +430,14 @@
   }
 
   function opsHtml(groups) {
-    var ICON = { add: '+', edit: '~', delete: '−' };
+    var ICON = bare({ add: '+', edit: '~', delete: '−' });
     var html = '';
     groups.forEach(function (g) {
       if (groups.length > 1) html += '<div class="p86lw-grpname">' + esc(g.name) + '</div>';
       html += '<div class="p86lw-grp">';
       g.ops.forEach(function (o) {
         html += '<div class="p86lw-op p86lw-' + o.kind + ' p86lw-shown">' +
-          '<span class="p86lw-i">' + ICON[o.kind] + '</span>' +
+          '<span class="p86lw-i">' + (ICON[o.kind] || '') + '</span>' +
           '<span class="p86lw-lbl"><div class="l1">' + esc(o.label) + '</div>' +
           (o.detail ? '<div class="l2">' + esc(o.detail) + '</div>' : '') + '</span>' +
           (o.amount != null ? '<span class="p86lw-amt">' + usd(o.amount) + '</span>' : '') +

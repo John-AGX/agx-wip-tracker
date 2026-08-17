@@ -80,6 +80,28 @@
 (function () {
   'use strict';
 
+  /* ── bare(): a lookup table with NO prototype ─────────────────────────────
+   *
+   * `{ rejected: true }` inherits every key on Object.prototype, so
+   * TABLE['constructor'] — and toString, valueOf, hasOwnProperty, isPrototypeOf,
+   * __proto__ — are all TRUTHY for a key the table never declared. NOT_NEWS
+   * below is asked `NOT_NEWS[meta.state]` with a state string that arrives from
+   * outside this file, and answered "yes, a dismissal, not news" for six state
+   * names nobody wrote down. report() twelve lines further on already built its
+   * reporter map with Object.create(null) for exactly this reason; the rule is
+   * now the same in both places, and in every sibling table in live-writer.js
+   * and cowork.js that is indexed by a string this code did not choose.
+   *
+   * Not reachable through today's poller — stateOf() maps five statuses and
+   * returns null for everything else — so this is a latent shape, not a live
+   * defect. It is the shape that matters: the tables are the ones that get a
+   * new key added to them. */
+  function bare(src) {
+    var t = Object.create(null);
+    Object.keys(src || {}).forEach(function (k) { t[k] = src[k]; });
+    return t;
+  }
+
   // The one palette. Every colour any surface paints comes from here, so a
   // "which green?" question can only ever have one answer.
   var GREEN = '#1d9e75';   // a clean, committed apply — and NOTHING else
@@ -248,7 +270,7 @@
    * identified moment in some write's life? Everything except a dismissal and
    * a row with no id to be the subject. This is what decides who steps down,
    * and it is what `subject` is allowed to hold. */
-  var NOT_NEWS = { rejected: true };
+  var NOT_NEWS = bare({ rejected: true });
   function supersedesOnScreen(entry) {
     var meta = (entry && entry.meta) || {};
     if (!meta.payloadId) return false;     // nothing that could be the subject

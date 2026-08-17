@@ -1619,70 +1619,208 @@ describe('layer 4 · S7 as measured, with the real Cowork page', () => {
 // ────────────────────────────────────────────────────────────────────────
 // LAYER 5 — THE MATRIX.
 //
-// Five rounds, five fixes, five times the general form left standing. Each
-// round enumerated the thing that had just bitten — call sites (2), async
-// continuations (3), regions (4), mountings (5) — fixed exactly that, and
-// verified against exactly that. Round 5's own verification said so in as
-// many words: "precisely the round-2 → round-3 pattern repeating."
+// Six rounds, six fixes, six times the general form left standing. Each round
+// enumerated the thing that had just bitten — call sites (2), async
+// continuations (3), regions (4), mountings (5), the two questions one
+// predicate was answering (6) — fixed exactly that, and verified against
+// exactly that.
 //
-// The reason it kept repeating is that every round asserted a property over a
-// set it had discovered by measurement. This layer asserts it over a set
-// enumerated FROM THE CODE:
+// Round 6 built a matrix over rows × mountings × paths and shipped it. An
+// independent read then found the matrix a dimension and a half short of what
+// it claimed. NONE of the shortfalls were behaviour defects — every triple
+// probed outside the grid behaved correctly. They were places the grid could
+// not look, which is a different and worse thing than a bug:
 //
-//   ROWS      every distinct row the engine can produce, read off stateOf(),
-//             metaFromRow() and describe()'s branches — not off the last bug
-//             report.
-//   MOUNTINGS every subset of the surface shapes, × Cowork active, × Cowork
-//             pinned. Round 5's machinery, reused, not rebuilt.
-//   PATHS     every route by which anything can reach the strip or the ledger.
+//   · the PATH axis was ['broadcast','unreadable','composing','backstop'] —
+//     exactly the four routes that had already bitten — under a heading
+//     claiming "every route by which anything can reach the strip or the
+//     ledger". flashEditorRows(), Cowork's rail click, the strip's own deep
+//     link and the two teardowns were all outside it.
+//   · the MOUNTING axis was three engine-level stand-ins. The real surface C —
+//     which registers at order 10, is NON-exclusive, joins claimedBy, and
+//     paints rows the fan-out never draws — was not a dimension at all, so the
+//     participant list ['editor-flash','cowork'] was unreachable.
+//   · the ROW axis PAIRED each state with one changeset shape by hand, so
+//     `estimate` existed only under `applied` and `unknown-state` only with a
+//     lead changeset. `unknown-state` with an empty changeset — the exact arm
+//     round 5's defect lived in — was not a cell.
+//   · and the PAINT PROBE asked the fan-out whether a surface had painted.
 //
-// and the count is stated, so "we covered it" is auditable rather than felt.
+// The last one is the one that decided whether any of the cells meant
+// anything, so it is fixed first and it is described where it lives, below.
+//
+// WHAT THIS LAYER ASSERTS OVER, all four axes enumerated from source:
+//
+//   ROWS      STATE × CHANGESET SHAPE, crossed — states read off stateOf(),
+//             metaFromRow() and the public API; shapes read off diffChangeset
+//             and describe()'s arbitration.
+//   MOUNTINGS every subset of four surface shapes, two of which are the REAL
+//             js/cowork.js and the REAL surface C, × Cowork active × pinned.
+//   PATHS     every route that puts something on screen about a write,
+//             enumerated by grep WITH COUNTS.
+//   PROBE     the DOM, and nothing that the fan-out produced.
+//
+// NINE invariants, not six: modelling the two browse paths and the two
+// teardowns made three sentences assertable that previously had nowhere to
+// live (I7 surface C's provenance, I8 a browsed row's honesty, I9 the
+// placeholder's survival).
+//
+// Per-path and per-invariant coverage are stated as numbers at the bottom of
+// this layer and asserted EXACTLY, so "we covered it" is arithmetic rather
+// than felt — including the invariants that only fire in a fraction of cells,
+// which are named with their fraction rather than folded into one headline
+// count.
+//
+// THE ACCEPTANCE TEST THIS LAYER WAS BUILT AGAINST. A matrix is only worth the
+// bypass it catches, so nine deliberate bypasses were injected one at a time,
+// each one a plausible edit rather than a strawman, and each was confirmed to
+// turn this test red:
+//
+//   a new unregistered container, skipping the seam        → I5 (elsewhere)
+//   painting ONLY Cowork's document, never the strip       → I5 (cowork-doc)
+//   surface C tinting a row nothing armed                  → I7
+//   the rail click dropping its staleness stamp            → I8
+//   the deep link painting the document itself             → I8
+//   dismiss() reporting the teardown as a write            → I1
+//   startComposing() claiming a write                      → I1
+//   clearComposing() left as a no-op                       → I9
+//   noticeUnreadable() painting the strip directly
+//     (round 5's ninth defect, verbatim)                   → I5 (strip)
+//
+// The second of those is the one that mattered: re-run against round 6's
+// evidence — the strip's text and an array the fan-out filled in — I5 does not
+// fire on it at all.
 // ────────────────────────────────────────────────────────────────────────
 
-/* ── the ROW dimension ──────────────────────────────────────────────────
+/* ── THE PAINT PROBE — the evidence, and why it is not the fan-out's ─────
  *
- * Enumerated from the code. stateOf() maps five statuses onto five states and
- * returns null for everything else; metaFromRow() adds neverDrafted; describe()
- * then splits `applied` and `proposed` again on whether the changeset breaks
- * into listable ops. Every leaf of that tree is a row here, plus the two the
- * public API can produce that no poller ever will (an unidentified row, an
- * unrecognised state).
+ * Round 6's probe was
+ *
+ *     stripText().indexOf(token) >= 0 || coworkSaw.indexOf(token) >= 0
+ *
+ * and `coworkSaw` was pushed BY THE FAN-OUT calling Cowork's render. Half the
+ * evidence for "did anything paint this?" was manufactured by the mechanism
+ * under test: a route that painted Cowork's document without going through the
+ * seam left no trace in it, so the probe could only ever witness paints the
+ * fan-out already knew about. Its own comment claimed "a path added next round
+ * that skips the seam fails HERE", which was true only for a bypass that
+ * happened to paint surface B. Structurally that is round 2's "every path that
+ * fills this card calls setPill" — literally true, and blind to the thing it
+ * exists to catch.
+ *
+ * This probe reads the DOM and nothing else. It does NOT enumerate containers:
+ * it scans the whole <body>, so a route added next round that invents its own
+ * region is seen without anyone remembering to add it here. The named regions
+ * below exist only to make a failure legible; `elsewhere` is the bucket that
+ * catches a container this file has never heard of.
+ *
+ * Two kinds of evidence, because surfaces leave two kinds of mark:
+ *
+ *   TEXT   the row's token — its own title — which reaches the strip through
+ *          the op list's group name, a notice's record name, Cowork's rail and
+ *          Cowork's document.
+ *   CLASS  surface C paints no text whatsoever. It tints a row. So the flash
+ *          class is looked for directly, or C would be invisible to a text
+ *          probe and its whole path would read as "painted nothing".
+ *
+ * The one thing that makes this work: NOTHING THE HARNESS ITSELF WRITES
+ * CONTAINS A TOKEN. The estimate-editor scaffold is built from fixed line
+ * descriptions and Cowork's shell is empty markup, so any token anywhere in
+ * the document was put there by a surface. */
+const MX_FLASH_SEL = '.p86lw-flash-add, .p86lw-flash-edit';
+const MX_REGIONS = [
+  ['strip', 'p86-live-writer'],
+  ['pane', 'p86-live-pane'],
+  ['cowork-doc', 'cw-doc'],
+  ['cowork-rail', 'cw-ledger-body']
+];
+function paintRegions(token) {
+  const hit = [];
+  let known = false;
+  MX_REGIONS.forEach(([name, id]) => {
+    const el = document.getElementById(id);
+    if (el && el.textContent.indexOf(token) >= 0) { hit.push(name); known = true; }
+  });
+  const body = document.body ? document.body.textContent : '';
+  // The whole point of the probe. A paint into a container nobody enumerated
+  // still counts, and says so by name.
+  if (!known && body.indexOf(token) >= 0) hit.push('elsewhere');
+  if (document.querySelector(MX_FLASH_SEL)) hit.push('flash');
+  return hit;
+}
+
+/* ── the ROW dimension: STATE × CHANGESET SHAPE, CROSSED ────────────────
+ *
+ * Round 6 wrote fifteen rows out by hand and, in doing so, PAIRED each state
+ * with one changeset shape: `estimate` appeared only under `applied`,
+ * `unlistable` only under `applied`, `unknown-state` only with a lead
+ * changeset. So `unknown-state` with an empty changeset — describe()'s silent
+ * arm, which is exactly where round 5's defect lived — was not a cell, and
+ * neither were the other seventeen combinations. A hand-written list is a set
+ * discovered by measurement wearing a table's clothes. The two axes cross.
+ *
+ * STATES, read off the code: stateOf() maps five statuses onto five states and
+ * returns null for anything else; metaFromRow() adds neverDrafted; and the
+ * public API can produce two more that no poller ever will — a row with no
+ * payloadId, and a state this codebase has never heard of.
  *
  * `supersedes` and `landed` are the ANSWERS, written down by hand from what is
- * true of the row — not read from the model, or this table would agree with
- * any implementation including the broken one. */
-const ROW_KINDS = [
-  // key                  state       changeset     supersedes  landed   via noticeUnreadable?
-  ['applied-ops',         'applied',  'lead',       true,       true,    false],
-  ['applied-pane',        'applied',  'estimate',   true,       true,    false],
-  ['applied-unlistable',  'applied',  'unlistable', true,       true,    false],
-  ['applied-no-record',   'applied',  'none',       true,       true,    true],
-  ['applying-ops',        'applying', 'lead',       true,       false,   false],
-  ['applying-no-ops',     'applying', 'none',       true,       false,   true],
-  ['failed-apply',        'failed',   'none',       true,       false,   true],
-  ['failed-refusal',      'failed',   'none',       true,       false,   true],
-  ['proposed-ops',        'proposed', 'lead',       true,       false,   false],
-  ['proposed-no-ops',     'proposed', 'none',       true,       false,   true],
-  ['rejected-silent',     'rejected', 'none',       false,      false,   true],
-  ['rejected-ops',        'rejected', 'lead',       false,      false,   false],
-  ['unidentified',        'applied',  'lead',       false,      false,   false],
-  ['unknown-state',       'queued',   'lead',       true,       false,   false],
-  // The two paths below carry no row at all. It is a member of this dimension
-  // so the rectangle stays a rectangle and the mask has something to exclude
-  // BY NAME rather than by silence.
-  ['no-row',              null,       'none',       false,      false,   false]
-].map(([key, state, cs, supersedes, landed, viaUnreadable]) => ({
-  key: key, state: state, cs: cs, supersedes: supersedes, landed: landed,
-  viaUnreadable: viaUnreadable,
-  noRow: key === 'no-row',
-  anonymous: key === 'unidentified',
-  neverDrafted: key === 'failed-refusal',
-  id: key === 'unidentified' ? null : ('ID-' + key),
-  // A token unique to this row that appears wherever the row is DRAWN — it is
-  // the entity's own title, so it reaches the strip through the op list's group
-  // name, through a notice's record name, and through Cowork's render.
-  token: 'TOK-' + key
+ * true of the STATE — never read from the model, or this table would agree
+ * with any implementation including the broken one. Writing them once per
+ * state rather than once per row is itself an assertion, and the one the
+ * crossing exists to make: THE CHANGESET SHAPE CANNOT CHANGE WHETHER A WRITE
+ * LANDED. Round 6's table could not state that, because it never had one state
+ * under two shapes. */
+const MX_STATES = [
+  // key             state        never  anon   supersedes  landed  viaPoller
+  ['applied',       'applied',    false, false, true,       true,   true],
+  ['applying',      'applying',   false, false, true,       false,  true],
+  ['proposed',      'proposed',   false, false, true,       false,  true],
+  ['failed',        'failed',     false, false, true,       false,  true],
+  ['refusal',       'failed',     true,  false, true,       false,  true],
+  ['rejected',      'rejected',   false, false, false,      false,  true],
+  ['unknown-state', 'queued',     false, false, true,       false,  false],
+  ['unidentified',  'applied',    false, true,  false,      false,  false]
+].map(([key, state, never, anon, supersedes, landed, viaPoller]) => ({
+  key: key, state: state, neverDrafted: never, anonymous: anon,
+  supersedes: supersedes, landed: landed,
+  // Can a real /api/payloads row carry this state? Two cannot: stateOf()
+  // returns null for an unrecognised status (the row is dropped before any
+  // fetch) and every list row has an id. They exist because the PUBLIC API can
+  // produce them, and they are excluded BY NAME from the poller-fed paths.
+  viaPoller: viaPoller
 }));
+
+/* CHANGESET SHAPES — the four the differ can be handed, read off
+ * diffChangeset() and describe()'s pane/op arbitration. */
+const MX_CS_KINDS = ['lead', 'estimate', 'unlistable', 'none'];
+
+const ROW_KINDS = [];
+MX_STATES.forEach((s) => MX_CS_KINDS.forEach((cs) => {
+  const n = String(ROW_KINDS.length).padStart(2, '0');
+  ROW_KINDS.push({
+    key: s.key + '/' + cs,
+    state: s.state, cs: cs,
+    supersedes: s.supersedes, landed: s.landed,
+    neverDrafted: s.neverDrafted, anonymous: s.anonymous, viaPoller: s.viaPoller,
+    noRow: false,
+    id: s.anonymous ? null : ('ID-' + n),
+    /* A token unique to this row that appears wherever the row is DRAWN — it
+     * is the entity's own title, so it reaches the strip through the op list's
+     * group name, through a notice's record name, and through Cowork's rail
+     * and document. FIXED WIDTH on purpose: the probe uses indexOf, and
+     * 'TOKEN1' would match inside 'TOKEN12'. */
+    token: 'TOKEN' + n
+  });
+}));
+// The row-less paths carry nothing at all. It is a member of this dimension so
+// the rectangle stays a rectangle and the masks exclude it BY NAME rather than
+// by silence. Its token is one no surface can ever paint.
+ROW_KINDS.push({
+  key: 'no-row', state: null, cs: 'none', supersedes: false, landed: false,
+  neverDrafted: false, anonymous: false, viaPoller: false, noRow: true,
+  id: null, token: 'TOKEN-NEVER-DRAWN'
+});
 
 const MX_CS = {
   lead: (tok) => [{
@@ -1725,79 +1863,367 @@ const mxListRow = (k) => {
   return r;
 };
 
-/* ── the PATH dimension ─────────────────────────────────────────────────
- *
- * Every route by which anything can reach reportToStrip or the write ledger,
- * enumerated the way round 3 enumerated the 32 async continuations:
- * explicitly, with a count, so the list is auditable rather than implicit.
- * Confirmed by grep over js/live-writer.js and js/cowork.js — FOUR call sites
- * of reportToStrip, ONE call site of WRITES.report, none anywhere else.
- *
- *   broadcast   the fan-out seam. THE only caller of WRITES.report. Reached
- *               from ingest() (client event + poller) and — since round 6 —
- *               from noticeUnreadable(). Surface B's own render() is the
- *               fourth reportToStrip call site and lives inside this one.
- *   unreadable  ingestRow's exhausted detail retry. Round 5 shipped it calling
- *               reportToStrip DIRECTLY, so it painted a surface without ever
- *               reaching the ledger. It is a separate path in this matrix
- *               precisely BECAUSE it used to be one; if it is ever folded away
- *               its cells go with it.
- *   composing   the handoff placeholder. No row exists, so it must move
- *               nothing (P7).
- *   backstop    the 180s "nothing came back" notice. Same.
- */
-const MX_PATHS = ['broadcast', 'unreadable', 'composing', 'backstop'];
+/* …and the DETAIL row GET /api/payloads/:id serves, which is what the real
+ * js/cowork.js renders its document from. Separate from the list row because
+ * the two really are different shapes — the list is lean and carries no
+ * changeset, which is the whole reason noticeUnreadable exists — and because
+ * a document painted from a row with no changeset would paint no token and
+ * make the probe read "nothing was drawn". */
+const mxDetailRow = (k) => {
+  const r = Object.assign(mxListRow(k), {
+    emitting_agent_key: 'scribe',
+    apply_summary: k.token,
+    targets: k.neverDrafted ? [] : [{ entity_type: 'lead', id: 'ent_' + k.token }]
+  });
+  const cs = MX_CS[k.cs](k.token);
+  // An APPLIED row's document comes from apply_changeset; everything else's
+  // from draft_changeset. cowork.js refuses to fall back between them, so
+  // putting the changeset on the wrong column would silently paint the "no
+  // before/after recorded" arm for every cell.
+  if (k.state === 'applied') r.apply_changeset = cs;
+  else r.draft_changeset = cs;
+  return r;
+};
 
-/* ── THE MASK, named and justified — never by silence ─────────────────── */
-const MATRIX_EXCLUSIONS = [
-  { path: 'broadcast', rows: ['no-row'],
-    why: 'broadcast takes an entry built from a row; there is no such thing as broadcasting nothing.' },
-  { path: 'unreadable', rows: ROW_KINDS.filter((k) => !k.viaUnreadable).map((k) => k.key),
-    why: 'reachable only for the five statuses stateOf() recognises — a row it does not is dropped ' +
-         'before the fetch — and only with an empty changeset, since an unreadable detail is exactly ' +
-         'the case where there is no changeset to carry. Rows whose identity IS their changeset shape, ' +
-         'and the unidentified / unrecognised rows no poller can produce, are unreachable here.' },
-  { path: 'composing', rows: ROW_KINDS.filter((k) => !k.noRow).map((k) => k.key),
-    why: 'the handoff placeholder is reported BEFORE any row exists — there is nothing to vary.' },
-  { path: 'backstop', rows: ROW_KINDS.filter((k) => !k.noRow).map((k) => k.key),
-    why: 'same as composing: a statement that nothing came back is not a statement about a row.' }
+/* ── the PATH dimension, ENUMERATED FROM SOURCE ─────────────────────────
+ *
+ * Round 6's axis was ['broadcast','unreadable','composing','backstop'] — the
+ * four routes that had already bitten — under a heading claiming "every route
+ * by which anything can reach the strip or the ledger". The narrower claim
+ * those four CAN back is the one in js/live-writer.js's own header, and it is
+ * true: grepped at HEAD,
+ *
+ *     reportToStrip(…)        3 call sites   live-writer.js 1219, 1237, 1389
+ *     WRITES.report(…)        1 call site    live-writer.js 543
+ *
+ * and nothing else in either file reaches them. But that is a claim about two
+ * FUNCTION NAMES, and the property the user cares about is about anything that
+ * PUTS SOMETHING ON SCREEN ABOUT A WRITE. Grepping for that instead:
+ *
+ *     flashEditorRows(…)      1 definition   live-writer.js 1485
+ *                             1 export       live-writer.js 1847
+ *                             1 caller       estimate-editor.js 3619
+ *     selectRow(…)            5 call sites   cowork.js 255 (rail click),
+ *                                            344 (first ledger page),
+ *                                            767 (after approve/reject),
+ *                                            813 (from the fan-out),
+ *                                            854 (the deep link)
+ *     p86Cowork.open(…)       2 callers      live-writer.js 965 (the strip's
+ *                                            own "Open in Cowork" button),
+ *                                            agent-tasks.js 298
+ *     dismiss / clearComposing
+ *                             teardown; both exported, neither tells the ledger
+ *
+ * Folding the ones that are the same route counted twice, that is NINE routes,
+ * and all nine are members of this axis. Each is DRIVEN — the cell performs
+ * it — never merely asserted about.
+ *
+ * `userAsked` is the one distinction that cannot be read off the engine and
+ * must not be: it says whether THE HARNESS just simulated a user action. A
+ * document the user opened from the rail is not an announcement, and holding
+ * it to "the fan-out must have seen this" would be asserting that browsing
+ * history is a write. It is the test recording what it itself did, which is
+ * exactly the kind of evidence the paint probe above is allowed to use — the
+ * kind the fan-out did not produce. */
+const MX_PATHS = [
+  {
+    key: 'broadcast', userAsked: false,
+    rows: (k) => !k.noRow, mounts: () => true,
+    why: 'ingest() → the fan-out seam. THE only caller of WRITES.report, reached from the ' +
+         'p86:payload-applied event and from the 5s sweep. Surface B\'s own render() is a ' +
+         'reportToStrip call site and lives inside this one.'
+  },
+  {
+    key: 'unreadable', userAsked: false,
+    rows: (k) => !k.noRow && k.viaPoller && k.cs === 'none', mounts: () => true,
+    why: 'ingestRow\'s exhausted detail retry. Round 5 shipped it calling reportToStrip DIRECTLY, ' +
+         'so it painted a surface without ever reaching the ledger; it is still a separate path ' +
+         'precisely BECAUSE it used to be one. Reachable only for the five statuses stateOf() ' +
+         'recognises — a row it does not is dropped before the fetch — and only with an empty ' +
+         'changeset, since an unreadable detail is exactly the case where there is none to carry.'
+  },
+  {
+    key: 'composing', userAsked: false,
+    rows: (k) => k.noRow, mounts: () => true,
+    why: 'the handoff placeholder, reported BEFORE any row exists. There is nothing to vary.'
+  },
+  {
+    key: 'backstop', userAsked: false,
+    rows: (k) => k.noRow, mounts: () => true,
+    why: 'the 180s "nothing came back" notice. A statement that nothing came back is not a ' +
+         'statement about a row.'
+  },
+  {
+    key: 'flash', userAsked: false,
+    rows: (k) => !k.noRow, mounts: () => true,
+    why: 'surface C\'s ACTUAL paint. The broadcast only ARMS it; the paint fires later, from the ' +
+         'estimate editor\'s post-hydrate refresh, through the exported flashEditorRows() — ' +
+         'entirely outside the fan-out and callable from any other file. Every mounting is kept, ' +
+         'including the ones with no editor: "it paints nothing when there is no editor" is the ' +
+         'other half of the property and it is worth a cell.'
+  },
+  {
+    key: 'cowork-select', userAsked: true,
+    rows: (k) => !k.noRow && k.viaPoller,
+    mounts: (mt) => mt.mounts.indexOf('cowork') >= 0 && mt.active,
+    why: 'a rail click — cowork.js:255 → selectRow(id, true). It paints a document about a write ' +
+         'with no fan-out involvement whatsoever. Rows: only the ones a real ledger row can carry. ' +
+         'Mountings: only where Cowork exists AND is the page on screen, because a rail nobody can ' +
+         'see is a rail nobody clicks.'
+  },
+  {
+    key: 'cowork-open', userAsked: true,
+    rows: (k) => !k.noRow && k.viaPoller,
+    mounts: (mt) => mt.mounts.indexOf('cowork') >= 0 && mt.active,
+    why: 'the strip\'s own deep link — live-writer.js:965 → p86Cowork.open(id) → cowork.js:854. ' +
+         'Same masking as the rail click, and a separate path rather than a duplicate of it ' +
+         'because it is a separate entry point that a change to open() alone can break.'
+  },
+  {
+    key: 'dismiss', userAsked: false,
+    rows: (k) => !k.noRow, mounts: () => true,
+    why: 'the row is broadcast, then the user closes the card. dismiss() tears the strip down and ' +
+         'tells the ledger nothing — which is CORRECT, and the property is that it stays that way: ' +
+         'a pinned Cowork document must not lose its stamp because someone shut a card.'
+  },
+  {
+    key: 'composing-then-row', userAsked: false,
+    rows: (k) => !k.noRow, mounts: () => true,
+    why: 'the placeholder is up and the row lands underneath it — clearComposing()\'s only real ' +
+         'trigger, and the transition round 5\'s defect lived in: a dismissed draft destroying an ' +
+         'unrelated drafting card.'
+  }
 ];
-const mxCarries = (path, k) => !MATRIX_EXCLUSIONS.some((x) => x.path === path && x.rows.indexOf(k.key) >= 0);
+const MX_PATH = {};
+MX_PATHS.forEach((p) => { MX_PATH[p.key] = p; });
+
+/* The handoff placeholder's own claim, taken from the model rather than
+ * spelled out here, so a copy edit cannot silently make I9 unfalsifiable. */
+const MX_COMPOSING = MODEL.describe({}, { composing: { label: 'drafting your change', viaScribe: true } });
+
+/* ── COVERAGE, AS A NUMBER PER INVARIANT ────────────────────────────────
+ *
+ * Round 6's headline was "704 cells × six invariants". One of those six — the
+ * one that checks THE SENTENCE THE USER ACTUALLY READS on the strip — fired in
+ * 12 of 704 cells. 1.7%. Everything it said was true; what it implied was not.
+ *
+ * So every invariant reports the number of cells it actually fired in, and
+ * those numbers are asserted EXACTLY. Two things follow. The claim in this
+ * file is checkable rather than remembered. And an edit that makes an
+ * invariant stop firing — the way a matrix quietly goes vacuous while staying
+ * green — fails here instead of shrinking the claim in silence. */
+const MX_COVERAGE = (s) => ({
+  cells: s.cells,
+  'I1·I2·I3 · the ledger arithmetic': s.i1,
+  'I4  · claimant stamps carry the ledger fact': s.i4,
+  'I4b · the sentence on the STRIP': s.stripStamped,
+  'I5  · paint provenance, DOM evidence': s.i5,
+  'I6  · a pinned document keeps its row': s.i6,
+  'I7  · a flash means the fan-out armed C': s.i7,
+  'I8  · a browsed row says it is not the latest': s.i8,
+  'I9  · the drafting card survives iff nothing superseded it': s.i9,
+  '— writes that really landed': s.moved,
+  '— rows that superseded without landing': s.newsWithoutLanding,
+  '— supersede events observed': s.stamped,
+  '— cells where a surface really painted': s.painted,
+  '— cells where the real Cowork document painted': s.coworkDoc,
+  '— cells where an UNKNOWN container painted': s.elsewhere,
+  '— pinned documents really stamped': s.pinnedStamped
+});
+
+/* MEASURED. Not aspirational, and not rounded up.
+ *
+ *   invariant                                        cells    of 14592
+ *   I1·I2·I3  the ledger arithmetic                  14592     100 %
+ *   I4        claimant stamps carry the ledger fact   9184    62.9 %
+ *   I4b       the sentence on the STRIP               1104     7.6 %
+ *   I5        paint provenance, DOM evidence          6600    45.2 %
+ *   I6        a pinned document keeps its row         2176    14.9 %
+ *   I7        a flash means the fan-out armed C         96     0.7 %
+ *   I8        a browsed row says it is not latest     1536    10.5 %
+ *   I9        the drafting card survives iff …        1600    11.0 %
+ *
+ * READ THAT HONESTLY. Five of these are minority invariants and two are
+ * small, and the reasons are properties of the feature rather than gaps:
+ *
+ *   I4b fires only where the strip is HOLDING a card that somebody else's
+ *       write supersedes — which needs Cowork to become the page AFTER the
+ *       seed. That arrangement is now a mounting (activation: 'after-seed'),
+ *       which took this from round 6's 12/704 (1.7%) to 1104/14592 (7.6%). It
+ *       is still a minority and it will stay one: with Cowork off, the strip
+ *       paints the write itself and is not stamped; with Cowork on from the
+ *       start, the strip has no card to stamp.
+ *   I6  fires only in the pinned × Cowork-on-screen mountings, by definition.
+ *   I7  fires in 96 cells because there are exactly two rows a flash can be
+ *       about (an APPLIED write to the estimate the editor has open, with and
+ *       without a payloadId) × the 48 mountings that have an editor. 96 is the
+ *       whole reachable set, not a sample of it.
+ *   I8  fires only on the two browse paths, which is where browsing happens.
+ *   I9  fires only where the placeholder is still what the strip shows when
+ *       the row arrives — i.e. where some OTHER surface took the row. Where
+ *       surface B renders it, the strip is legitimately repainted with the
+ *       row's own card and there is no placeholder question to answer.
+ *
+ * The counts are asserted EXACTLY rather than as lower bounds. An edit that
+ * makes an invariant stop firing — the way a matrix quietly goes vacuous while
+ * staying green — fails here instead of shrinking the claim in silence. */
+const MX_COVERAGE_EXPECTED = {
+  cells: 14592,
+  'I1·I2·I3 · the ledger arithmetic': 14592,
+  'I4  · claimant stamps carry the ledger fact': 9184,
+  'I4b · the sentence on the STRIP': 1104,
+  'I5  · paint provenance, DOM evidence': 6600,
+  'I6  · a pinned document keeps its row': 2176,
+  'I7  · a flash means the fan-out armed C': 96,
+  'I8  · a browsed row says it is not the latest': 1536,
+  'I9  · the drafting card survives iff nothing superseded it': 1600,
+  '— writes that really landed': 1632,
+  '— rows that superseded without landing': 7552,
+  '— supersede events observed': 9184,
+  '— cells where a surface really painted': 8136,
+  '— cells where the real Cowork document painted': 3328,
+  // ZERO, and it must stay zero on a correct build: `elsewhere` is the probe's
+  // catch-all for a token painted into a container this file has never heard
+  // of. It is the counter that goes non-zero the day somebody adds a surface
+  // and forgets the seam — and the one an injected bypass lights up.
+  '— cells where an UNKNOWN container painted': 0,
+  '— pinned documents really stamped': 1616
+};
 
 describe('layer 5 · THE MATRIX — every currency property, every row, every mounting, every path', () => {
   const SEED = 'A0';                      // a real applied write, fired first in every cell
-  let seen, coworkSaw, superseded;
-  let coworkActive = false, coworkPinned = false, coworkShowing = null;
-  // What the Cowork document was displaying at the moment it was pinned. Null
-  // whenever no Cowork surface is mounted, or it is mounted but not the active
-  // page — there is nothing pinned in either case, and asserting SEED there
-  // would be asserting about a document that does not exist.
-  let seedShowing = null;
+  const SEED_TITLE = 'Stamp the lead';    // …and the text its document paints
+  let seen, superseded;
+  let hasCowork = false, hasEditor = false;
+  // The fixture the URL-aware fetch below serves. LIST is what the LEDGER
+  // lists; ROWS is what the DETAIL endpoint can serve; BROKEN is the set whose
+  // detail 500s. They are three sets and not one because a row visible in the
+  // list is a row the 5s sweep may ingest FIRST, silently turning the drive's
+  // own ingest into a dedupe no-op that reports nothing.
+  let MX_ROWS = {}, MX_LIST = [], MX_BROKEN = {};
 
-  /* ROUND 5's mounting machinery, reused. The one addition is an OBSERVER
-   * surface: order 99 (after every real surface), non-exclusive, and it
-   * DECLINES every row — so it adds nothing to claimedBy and suppresses
-   * nothing, which is the `decliner` shape this suite already proves is inert
-   * (P12). What it does is record the fan-out's own participant list, which is
-   * how "did this reach the seam at all?" becomes assertable without asking a
-   * surface to self-report. */
-  function bootMx(mounts, opts) {
-    opts = opts || {};
-    bootEngine();
-    seen = []; coworkSaw = []; superseded = [];
-    coworkActive = !!opts.active;
-    coworkPinned = false;                 // set AFTER the seed, so the doc has a row to pin
-    coworkShowing = null;
-    mountSurfaces(mounts, {
-      active: () => coworkActive,
-      onRender: (entry) => {
-        coworkSaw.push(entry.meta.title);
-        if (!coworkPinned) coworkShowing = entry.meta.payloadId;
-      },
-      keeps: (by, subject) =>
-        !!by['cowork'] && coworkShowing != null && String(coworkShowing) === String(subject),
-      onSupersede: (ev) => { superseded.push(ev); }
+  const mxSeedRow = () => ({
+    id: SEED, status: 'applied', title: SEED_TITLE, summary: SEED_TITLE,
+    apply_summary: SEED_TITLE, emitting_agent_key: 'scribe',
+    created_at: '2026-08-17T10:00:00Z', applied_at: '2026-08-17T10:00:00Z',
+    activity_at: '2026-08-17T10:00:00Z',
+    targets: [{ entity_type: 'lead', id: 'lead_0' }],
+    apply_changeset: EVENTS.A(0).cs
+  });
+
+  /* Cowork's document arrives through TWO awaits (the ledger page, then the
+   * per-row detail) behind a setTimeout(0), so a cell that asserted
+   * synchronously would be testing the loading placeholder. Draining ticks is
+   * the only honest way to reach the painted state under fake timers. The
+   * count is halved when no real surface is mounted, because the whole cost of
+   * this matrix is this loop times nine thousand cells. */
+  const settle = async () => {
+    // ONE timer advance — Cowork's deep link is the only setTimeout in any of
+    // these chains — then microtask ticks, which is where the awaits live.
+    // advanceTimersByTimeAsync does both at once and is roughly forty times
+    // dearer per call; at nine thousand cells that is the difference between a
+    // suite and an overnight job.
+    jest.advanceTimersByTime(1);
+    // Enough ticks for the deepest await chain in play: the 180s backstop
+    // awaits a sweep, which awaits a fetch, which awaits its .json(); Cowork's
+    // document awaits a ledger page and then a per-row detail behind a
+    // setTimeout(0). Too few and a cell asserts against a loading placeholder,
+    // which passes every "nothing moved" invariant for the wrong reason.
+    const n = hasCowork ? 16 : 10;
+    for (let i = 0; i < n; i++) await Promise.resolve();
+  };
+
+  /* Boot one cell. Unlike round 5's, this mounts the REAL js/cowork.js and the
+   * REAL surface C rather than engine-level stand-ins — a stand-in can only
+   * prove things about the engine, and both of the surfaces that matter live
+   * in files of their own.
+   *
+   * The OBSERVER surface is round 6's and it stays: order 99 (after every real
+   * surface), non-exclusive, and it DECLINES every row, so it adds nothing to
+   * claimedBy and suppresses nothing. It records the fan-out's participant
+   * list, which is the CLAIM under test — never the evidence. The evidence is
+   * paintRegions(), which reads the DOM. */
+  async function bootMx(mt, k, path) {
+    jest.resetModules();
+    delete window.p86LiveWriter;
+    delete window.p86LiveWriterModel;
+    delete window.p86Cowork;
+    delete window.p86EstimateEditorCurrentId;
+    jest.clearAllTimers();
+
+    hasCowork = mt.mounts.indexOf('cowork') >= 0;
+    hasEditor = mt.mounts.indexOf('editor') >= 0;
+
+    MX_ROWS = {}; MX_LIST = []; MX_BROKEN = {};
+    MX_ROWS[SEED] = mxSeedRow();
+    MX_LIST = [MX_ROWS[SEED]];
+    if (!k.noRow && k.id) {
+      MX_ROWS[k.id] = mxDetailRow(k);
+      // k joins the LIST only where a rail row is the thing being clicked.
+      if (path.userAsked) MX_LIST = MX_LIST.concat([MX_ROWS[k.id]]);
+    }
+
+    /* The scaffold, built BEFORE the engine so the strip's own append does not
+     * land in markup that is about to be replaced. Not one character of it
+     * contains a token — that is what makes the paint probe evidence. */
+    document.body.innerHTML =
+      (hasCowork
+        ? '<div id="cowork" class="tab-content' + (mt.activation === 'always' ? ' active' : '') + '">' +
+          '<div id="coworkHost"></div></div>'
+        : '') +
+      (hasEditor
+        ? '<div id="estimate-editor-view">' +
+          '<div data-line-id="l1">Framing</div><div data-line-id="l2">Paint</div></div>'
+        : '');
+    if (hasEditor) {
+      const view = document.getElementById('estimate-editor-view');
+      // jsdom does no layout, so offsetParent is null for everything. The
+      // engine uses it as its "is the editor actually on screen" probe.
+      Object.defineProperty(view, 'offsetParent', { get: () => document.body, configurable: true });
+      // Open on the very estimate this row changes, when this row changes one.
+      // For every other changeset shape the editor is open on something else,
+      // which is the arm where C must decline and B must keep the pane.
+      window.p86EstimateEditorCurrentId = () => (k.cs === 'estimate' ? 'est_' + k.token : 'est_elsewhere');
+    }
+
+    global.fetch = jest.fn((url) => {
+      const u = String(url);
+      const m = u.match(/\/api\/payloads\/([^/?]+)$/);
+      if (m) {
+        if (MX_BROKEN[m[1]]) return Promise.resolve({ ok: false, status: 500 });
+        if (MX_ROWS[m[1]]) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve({ payload: MX_ROWS[m[1]] }) });
+        }
+        return Promise.resolve({ ok: false, status: 404 });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ payloads: MX_LIST.slice() }) });
     });
+    global.localStorage = { getItem: () => null, setItem: () => {} };
+    require('../js/live-writer-model.js');
+    require('../js/live-writer.js');
+    LW = window.p86LiveWriter;
+    M = (LW && LW.model) || window.p86LiveWriterModel;
+    M.setDev(true);
+    M.resetPaintLog();
+    if (M.resetClaimLog) M.resetClaimLog();
+
+    seen = []; superseded = [];
+    if (hasCowork) {
+      require('../js/cowork.js');
+      window.p86Cowork.render();          // mounts the shell, registers the surface + claimant
+    }
+    if (mt.mounts.indexOf('decliner') >= 0) {
+      LW.registerSurface({
+        name: 'decliner', order: 15, exclusive: true,
+        claims: () => true, render: () => null      // the honest decline
+      });
+    }
+    if (mt.mounts.indexOf('stub') >= 0) {
+      LW.registerSurface({
+        name: 'stub', order: 25, exclusive: false,
+        claims: () => true, render: () => {}        // the minimum a surface can be
+      });
+    }
     LW.registerSurface({
       name: '__observer', order: 99, exclusive: false,
       claims: () => true,
@@ -1806,45 +2232,87 @@ describe('layer 5 · THE MATRIX — every currency property, every row, every mo
         return null;                      // declines: adds nothing, suppresses nothing
       }
     });
+    LW.writes.register({
+      name: '__observer-claimant', owner: '__nobody',
+      supersede: (ev) => { superseded.push(ev); }
+    });
+
     // A real landed write first, so gen / subject / landed() are all non-null
     // before the row under test arrives. A matrix run against a virgin ledger
     // would let "moves nothing" pass by accident.
     fire(EVENTS.A(0));
-    coworkPinned = !!opts.pinned;
-    seedShowing = coworkShowing;
-    seen = []; coworkSaw = []; superseded = [];
-    return { gen: LW.writes.current(), subject: LW.writes.subject(), landed: LW.writes.landed() };
+    await settle();
+    // …and NOW the user walks over to Cowork. This is the S7 arrangement: the
+    // strip is holding write one when write two is taken by somebody else.
+    if (hasCowork && mt.activation === 'after-seed') {
+      document.getElementById('cowork').classList.add('active');
+      await settle();
+    }
+    // The pin is the user picking a row BY HAND, which is what open() does.
+    if (mt.pinned && hasCowork && mt.active) { window.p86Cowork.open(SEED); await settle(); }
+    seen = []; superseded = [];
+    return ledger();
   }
 
   const ledger = () => ({ gen: LW.writes.current(), subject: LW.writes.subject(), landed: LW.writes.landed() });
-  const stripText = () => { const r = document.getElementById('p86-live-writer'); return r ? r.textContent : ''; };
   const staleText = () => { const m = document.querySelector('.p86lw-stale'); return m ? m.textContent : ''; };
-  const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
 
   /* Fire one row down one path. Returns nothing — everything the assertions
-   * need is read back off the engine, never returned by the driver. */
-  async function drive(path, k) {
-    if (path === 'broadcast') { LW.ingest(MX_CS[k.cs](k.token), mxMeta(k)); return; }
-    if (path === 'unreadable') {
-      const prev = global.fetch;
-      global.fetch = jest.fn((url) => (/\/api\/payloads\/[^/?]+$/.test(String(url))
-        ? Promise.resolve({ ok: false, status: 500 })
-        : Promise.resolve({ ok: true, json: () => Promise.resolve({ payloads: [] }) })));
-      const row = mxListRow(k);
-      for (let i = 0; i < 3; i++) { await LW.ingestRow(row); }   // MAX_DETAIL_RETRIES
-      global.fetch = prev;
+   * need is read back off the DOM and the engine, never returned by the
+   * driver. */
+  async function drive(pathKey, k) {
+    const send = () => LW.ingest(MX_CS[k.cs](k.token), mxMeta(k));
+    if (pathKey === 'broadcast') { send(); await settle(); return; }
+    if (pathKey === 'unreadable') {
+      MX_BROKEN[k.id] = true;             // this row's DETAIL is permanently broken
+      for (let i = 0; i < 3; i++) { await LW.ingestRow(mxListRow(k)); }   // MAX_DETAIL_RETRIES
+      await settle();
       return;
     }
-    if (path === 'composing') { LW.startComposing('drafting your change', {}); return; }
-    // backstop: the placeholder, then past its 180s deadline.
+    if (pathKey === 'composing') { LW.startComposing('drafting your change', {}); await settle(); return; }
+    if (pathKey === 'backstop') {
+      LW.startComposing('drafting your change', {});
+      jest.advanceTimersByTime(180100);
+      await settle();
+      return;
+    }
+    if (pathKey === 'flash') {
+      send(); await settle();
+      // The editor's post-hydrate refresh. Driven with NO argument as well as
+      // with one, because estimate-editor.js:3619 passes its _currentId and
+      // the export takes it as optional — both are real call shapes.
+      LW.flashEditorRows(k.cs === 'estimate' ? 'est_' + k.token : undefined);
+      await settle();
+      return;
+    }
+    if (pathKey === 'cowork-select') {
+      // The RAIL CLICK, through the delegated handler cowork.js installs —
+      // not selectRow(), which is private and reaching it directly would be
+      // this test inventing an entry point the app does not have.
+      const el = document.querySelector('[data-cwrow="' + k.id + '"]');
+      // A missing rail row is a fixture failure, not a passing cell.
+      expect([k.key, 'the rail has a row to click', !!el]).toEqual([k.key, 'the rail has a row to click', true]);
+      el.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+      await settle();
+      return;
+    }
+    if (pathKey === 'cowork-open') { window.p86Cowork.open(k.id); await settle(); return; }
+    if (pathKey === 'dismiss') { send(); await settle(); LW.dismiss(); await settle(); return; }
+    // composing-then-row: the placeholder is up when the row lands under it.
     LW.startComposing('drafting your change', {});
-    jest.advanceTimersByTime(180100);
-    await flush();
+    send();
+    await settle();
   }
 
   /* THE INVARIANTS. Every one of them is a sentence that has been false on a
-   * shipped build at some point in this arc. */
-  function assertCell(where, k, before, stats) {
+   * shipped build at some point in this arc — except I7 and I8, which are the
+   * sentences the two newly-modelled kinds of path make assertable at all.
+   *
+   * Each one increments its own counter, and the counters are asserted against
+   * exact numbers at the bottom. That is the honest form of "704 cells × six
+   * invariants": an invariant that fires in 1.7% of cells covers 1.7% of
+   * cells, and the file says which. */
+  function assertCell(where, k, path, mt, before, stats) {
     const after = ledger();
     const rec = seen.filter((r) => r.token === k.token).pop();
     const witnessed = !!(rec && rec.by.length);
@@ -1854,6 +2322,7 @@ describe('layer 5 · THE MATRIX — every currency property, every row, every mo
     if (news && !landed) stats.newsWithoutLanding++;
 
     // I1 · gen moves IFF a write landed.
+    stats.i1++;
     expect([where, 'gen', after.gen]).toEqual([where, 'gen', before.gen + (landed ? 1 : 0)]);
 
     // I2 · subject() is the row just reported, or unchanged. Never a dismissal
@@ -1866,13 +2335,22 @@ describe('layer 5 · THE MATRIX — every currency property, every row, every mo
     expect([where, 'landed()', after.landed]).toEqual([where, 'landed()', landed ? k.id : before.landed]);
 
     // I4 · NO SURFACE ASSERTS CURRENCY FOR A WRITE THAT DID NOT HAPPEN.
-    //      Every supersession carries the ledger's own fact, and the sentence
-    //      the user actually reads follows it.
+    //      Every supersession carries the ledger's own fact. The claimant that
+    //      records these is registered with an owner NO surface ever reports
+    //      under, so it steps down on every reported row rather than only on
+    //      the ones a mounted Cowork happened to decline — which is why this
+    //      now fires on every news cell instead of a corner of them.
     superseded.forEach((ev, i) => {
       expect([where, 'supersede[' + i + '].landed', !!ev.landed])
         .toEqual([where, 'supersede[' + i + '].landed', !!k.landed]);
       stats.stamped++;
     });
+    if (superseded.length) stats.i4++;
+
+    // I4b · …AND THE SENTENCE THE USER ACTUALLY READS FOLLOWS IT. This is the
+    //       narrowest invariant in the file — the strip is only STAMPED when
+    //       another surface took the write out from under it — so it is
+    //       counted separately rather than folded into I4's headline.
     const stale = staleText();
     if (stale) {
       stats.stripStamped++;
@@ -1886,15 +2364,33 @@ describe('layer 5 · THE MATRIX — every currency property, every row, every mo
       }
     }
 
-    // I5 · NO GENUINE LANDED WRITE GOES UNREPORTED — stated as the general
-    //      structural property rather than as "noticeUnreadable calls
-    //      broadcast": anything that reached a surface reached the fan-out.
-    //      A path added next round that skips the seam fails HERE.
-    const painted = (stripText().indexOf(k.token) >= 0) || (coworkSaw.indexOf(k.token) >= 0);
-    if (painted) {
-      stats.painted++;
-      expect([where, 'the fan-out saw what a surface drew', !!rec])
-        .toEqual([where, 'the fan-out saw what a surface drew', true]);
+    /* ── the paint, read off the DOM ────────────────────────────────────── */
+    const regions = paintRegions(k.token);
+    const painted = regions.length > 0;
+    if (painted) stats.painted++;
+    // Counted per REGION, off the DOM, so "the real Cowork column really drew
+    // rows in this matrix" is a measurement rather than an assumption. Round 6
+    // counted this by asking the fan-out.
+    if (regions.indexOf('cowork-doc') >= 0) stats.coworkDoc++;
+    if (regions.indexOf('elsewhere') >= 0) stats.elsewhere++;
+    const flashed = regions.indexOf('flash') >= 0;
+
+    // I5 · THE APP DOES NOT TELL YOU ABOUT A WRITE BEHIND THE LEDGER'S BACK.
+    //      If something the user did not ask for is on screen about row k,
+    //      then the fan-out saw k; and if k landed, the ledger names it.
+    //
+    //      Round 6 stated the first half and could not test it, because the
+    //      only thing that could witness a paint outside surface B was an
+    //      array the fan-out itself filled in. `regions` above is the DOM.
+    //
+    //      The `userAsked` gate is not a loophole, it is the actual rule: a
+    //      document the user opened from the rail is history, not news, and
+    //      the ledger is right not to have it. Those cells are held to I8
+    //      instead, which is the harder half.
+    if (painted && !path.userAsked) {
+      stats.i5++;
+      expect([where, 'the fan-out saw what a surface drew', { rec: !!rec, regions: regions }])
+        .toEqual([where, 'the fan-out saw what a surface drew', { rec: true, regions: regions }]);
       if (k.landed) {
         expect([where, 'a drawn landed write is on the ledger', after.landed])
           .toEqual([where, 'a drawn landed write is on the ledger', k.id]);
@@ -1902,94 +2398,239 @@ describe('layer 5 · THE MATRIX — every currency property, every row, every mo
     }
 
     // I6 · PINNING STILL PINS. A pinned document keeps the row the user picked
-    //      — it is stamped, never yanked — and the stamp is counted so "still
-    //      stamps when it should" is not vacuously true.
-    if (coworkPinned) {
-      expect([where, 'pinned doc kept its row', coworkShowing])
-        .toEqual([where, 'pinned doc kept its row', seedShowing]);
-      if (news && seedShowing === SEED) stats.pinnedStamped++;
+    //      — stamped, never yanked. Asserted against the real Cowork column's
+    //      own text rather than against a stand-in's variable. Skipped where
+    //      the user's own click is what moved the document, which is not the
+    //      pin failing but the pin being replaced.
+    if (mt.pinned && hasCowork && mt.active && !path.userAsked) {
+      const doc = document.getElementById('cw-doc');
+      const kept = !!(doc && doc.textContent.indexOf(SEED_TITLE) >= 0);
+      stats.i6++;
+      expect([where, 'pinned doc kept its row', kept]).toEqual([where, 'pinned doc kept its row', true]);
+      if (news) {
+        const mark = doc.querySelector('.cw-stale');
+        stats.pinnedStamped++;
+        expect([where, 'pinned doc was stamped', !!mark]).toEqual([where, 'pinned doc was stamped', true]);
+        expect([where, 'pinned doc stamp says a write landed', mark.textContent.indexOf(STALE_MARK) >= 0])
+          .toEqual([where, 'pinned doc stamp says a write landed', !!landed]);
+      }
+    }
+
+    // I7 · A ROW FLASH MEANS THE FAN-OUT ARMED SURFACE C. C paints no text, so
+    //      no text probe can see it; it is the one surface whose entire output
+    //      is a CSS class, and the one the matrix could not previously reach at
+    //      all. _pendingFlash is only ever set inside the broadcast, so a tint
+    //      on a row is a claim about provenance and this is the claim.
+    if (flashed) {
+      stats.i7++;
+      expect([where, 'a flash means the fan-out armed C',
+        { armed: !!(rec && rec.by.indexOf('editor-flash') >= 0), state: k.state, cs: k.cs }])
+        .toEqual([where, 'a flash means the fan-out armed C',
+          { armed: true, state: 'applied', cs: 'estimate' }]);
+    }
+
+    // I8 · A ROW THE USER OPENED BY HAND, THAT IS NOT THE LEDGER'S SUBJECT,
+    //      SAYS SO. This is the whole honesty story for the two browse paths:
+    //      Cowork may paint any write in history, and the moment it does it
+    //      must consult the ledger rather than let the document read as the
+    //      latest. The stamp's WORDING is asserted too — round 6's defect was
+    //      a region choosing that sentence for itself.
+    // I9 · THE HANDOFF PLACEHOLDER SURVIVES IFF NOTHING SUPERSEDED IT.
+    //      Asserted only where surface B did NOT render the row, because when
+    //      B renders it the strip is legitimately repainted with the row's own
+    //      card and there is no placeholder question to answer. Where another
+    //      surface took it, the placeholder is what the strip is still
+    //      showing, and then there are exactly two ways to be wrong: destroy
+    //      it for a row that is not news (round 5's measured defect — a
+    //      dismissed draft killing an unrelated drafting card), or leave it
+    //      standing after a write really landed, which is a false in-flight
+    //      claim on screen. This is the one invariant clearComposing() is the
+    //      whole subject of, and without it that path had no assertion of its
+    //      own at all.
+    if (path.key === 'composing-then-row' && !(rec && rec.by.indexOf('notification') >= 0)) {
+      stats.i9++;
+      const strip = document.getElementById('p86-live-writer');
+      const drafting = !!(strip && strip.textContent.indexOf(MX_COMPOSING.pillText) >= 0);
+      expect([where, 'the drafting card survives iff nothing superseded it', drafting])
+        .toEqual([where, 'the drafting card survives iff nothing superseded it', !news]);
+    }
+
+    if (path.userAsked && painted) {
+      const doc = document.getElementById('cw-doc');
+      const showsK = !!(doc && doc.textContent.indexOf(k.token) >= 0);
+      if (showsK) {
+        stats.i8++;
+        const mark = doc.querySelector('.cw-stale');
+        expect([where, 'a browsed row that is not the subject says so', !!mark])
+          .toEqual([where, 'a browsed row that is not the subject says so', true]);
+        // The seed landed and it is not this row, so the ledger's answer to
+        // "has a write landed since?" is yes, and the sentence must be the
+        // landed one rather than the weaker "newer activity".
+        expect([where, 'and says a write landed, because one did',
+          mark.textContent.indexOf(STALE_MARK) >= 0])
+          .toEqual([where, 'and says a write landed, because one did', true]);
+      }
     }
   }
 
-  /* ── the sweep ─────────────────────────────────────────────────────────
-   * 8 surface subsets × Cowork active × Cowork pinned. The two flags are inert
-   * in the 4 subsets with no Cowork surface mounted; those runs are kept so the
-   * dimension is rectangular and the count below is arithmetic rather than a
-   * story. */
+  /* ── the MOUNTING dimension ────────────────────────────────────────────
+   *
+   * FOUR surface shapes now, and two of them are the real files:
+   *
+   *   cowork    THE REAL js/cowork.js. Order 20, exclusive, claims on PAGE
+   *             STATE and never on the row, render() returns undefined on
+   *             every branch, registers a ledger claimant of its own. Round 5
+   *             modelled this as an engine-level stand-in; the stand-in could
+   *             only ever prove things about the engine, and the two paths
+   *             added this round (a rail click, a deep link) live in the file,
+   *             not in the engine.
+   *   editor    THE REAL surface C. It is registered by js/live-writer.js
+   *             unconditionally, so what is MOUNTED here is the thing that
+   *             arms it: an #estimate-editor-view open on an estimate. C is
+   *             order 10 and NON-exclusive, so with Cowork also mounted the
+   *             participant list is ['editor-flash','cowork'] — a list round
+   *             5's three shapes could not produce at all.
+   *   decliner  order 15, exclusive, looks at every row and honestly returns
+   *             null. It must not suppress the surfaces behind it.
+   *   stub      order 25, NON-exclusive, claims everything and implements
+   *             nothing else. The minimum a surface can be, and the shape that
+   *             made every row — dismissals included — look like a write.
+   *
+   * 16 subsets × THREE Cowork activations × Cowork pinned = 96.
+   *
+   * The activation axis has three values and not two, and the third one is the
+   * whole reason the S7 defect was ever visible:
+   *
+   *   never       Cowork is mounted but is not the page on screen. It declines
+   *               every row and surface B keeps everything.
+   *   always      Cowork is the page from the first write onward. It takes
+   *               everything, including the seed — so the strip never paints a
+   *               card at all and has nothing to be stamped.
+   *   after-seed  THE MEASURED ARRANGEMENT. The strip reports write one; the
+   *               user then moves to Cowork; write two arrives and Cowork
+   *               takes it. That is the only shape in which the strip is
+   *               holding a card that someone else's write can supersede, and
+   *               therefore the only shape in which the SENTENCE THE USER
+   *               READS on the strip exists to be checked.
+   *
+   * Round 6 had the two-value axis, which is why its strip-stamp invariant
+   * fired in 12 of 704 cells: the arrangement it needed was not a mounting.
+   *
+   * The flags are inert in the 8 subsets with no Cowork mounted; those runs
+   * are kept so the dimension is rectangular and the count is arithmetic
+   * rather than a story. */
+  const MX_SHAPES = ['cowork', 'decliner', 'stub', 'editor'];
+  const MX_ACTIVATIONS = ['never', 'always', 'after-seed'];
+  const MX_SUBSETS = [];
+  for (let m = 0; m < (1 << MX_SHAPES.length); m++) {
+    MX_SUBSETS.push(MX_SHAPES.filter((_, i) => (m >> i) & 1));
+  }
   const MX_MOUNTINGS = [];
-  ALL_MOUNTS.forEach((m) => [false, true].forEach((active) => [false, true].forEach((pinned) => {
-    MX_MOUNTINGS.push({ mounts: m, active: active, pinned: pinned });
+  MX_SUBSETS.forEach((m) => MX_ACTIVATIONS.forEach((act) => [false, true].forEach((pinned) => {
+    MX_MOUNTINGS.push({ mounts: m, activation: act, active: act !== 'never', pinned: pinned });
   })));
 
-  const N = ROW_KINDS.length, MM = MX_MOUNTINGS.length, P = MX_PATHS.length;
+  /* ── THE MASK. Every cell that is NOT asserted is excluded by a predicate
+   * that carries a reason, and the reasons are the `why` strings on MX_PATHS
+   * — there is no second list to drift from the first. */
   const CELLS = [];
-  MX_PATHS.forEach((path) => ROW_KINDS.forEach((k) => {
-    if (mxCarries(path, k)) MX_MOUNTINGS.forEach((mt) => CELLS.push({ path: path, k: k, mt: mt }));
-  }));
+  const PER_PATH = {};
+  MX_PATHS.forEach((p) => {
+    PER_PATH[p.key] = 0;
+    ROW_KINDS.forEach((k) => {
+      if (!p.rows(k)) return;
+      MX_MOUNTINGS.forEach((mt) => {
+        if (!p.mounts(mt)) return;
+        CELLS.push({ path: p, k: k, mt: mt });
+        PER_PATH[p.key]++;
+      });
+    });
+  });
 
   test('the matrix is the size it says it is', () => {
-    // N × M × P is the full rectangle; the mask takes cells out of it BY NAME.
-    expect(N).toBe(15);
-    expect(MM).toBe(32);
-    expect(P).toBe(4);
-    const full = N * MM * P;
-    const excluded = MATRIX_EXCLUSIONS.reduce((n, x) => n + x.rows.length * MM, 0);
-    expect(full - excluded).toBe(CELLS.length);
-    // Stated as numbers so "we covered it" is checkable arithmetic:
-    //   full rectangle   15 × 32 × 4 = 1920
-    //   masked, by name                1216   (4 rules, each with a reason)
-    //   ASSERTED                        704
-    expect(full).toBe(1920);
-    expect(excluded).toBe(1216);
-    expect(CELLS.length).toBe(704);
-    // Every exclusion carries a reason. A silent exclusion is the failure mode
-    // this list exists to prevent.
-    MATRIX_EXCLUSIONS.forEach((x) => expect(x.why.length).toBeGreaterThan(40));
+    expect(ROW_KINDS.length).toBe(33);        // 8 states × 4 changeset shapes, + no-row
+    expect(MX_MOUNTINGS.length).toBe(96);     // 16 subsets × 3 activations × pinned
+    expect(MX_PATHS.length).toBe(9);          // enumerated from source, with counts
+    // The full rectangle is 33 × 96 × 9 = 28512. It is not asserted, because
+    // most of it is not reachable — a rail click on a row no rail can carry is
+    // not a cell anyone skipped, it is not a thing. What IS asserted is the
+    // per-path count, so the shape of the mask is visible rather than a single
+    // subtraction that hides which path lost what.
+    expect(PER_PATH).toEqual({
+      'broadcast':          3072,   // 32 rows × 96 mountings
+      'unreadable':          576,   //  6 rows × 96   (poller-reachable × empty changeset)
+      'composing':            96,   //  1 row  × 96
+      'backstop':             96,   //  1 row  × 96
+      'flash':              3072,   // 32 rows × 96
+      'cowork-select':       768,   // 24 rows × 32   (Cowork mounted AND on screen)
+      'cowork-open':         768,   // 24 rows × 32
+      'dismiss':            3072,   // 32 rows × 96
+      'composing-then-row': 3072    // 32 rows × 96
+    });
+    expect(CELLS.length).toBe(14592);
+    // Every path carries a reason for what it excludes. A silent exclusion is
+    // the failure mode this list exists to prevent.
+    MX_PATHS.forEach((p) => expect(p.why.length).toBeGreaterThan(60));
   });
 
   test('every cell holds every invariant', async () => {
-    const stats = { moved: 0, newsWithoutLanding: 0, stamped: 0, stripStamped: 0, painted: 0, pinnedStamped: 0, cells: 0 };
+    const stats = {
+      cells: 0, moved: 0, newsWithoutLanding: 0, stamped: 0,
+      painted: 0, coworkDoc: 0, elsewhere: 0, pinnedStamped: 0, stripStamped: 0,
+      i1: 0, i4: 0, i5: 0, i6: 0, i7: 0, i8: 0, i9: 0
+    };
     const warn = console.warn;
     console.warn = () => {};                 // the unreadable path warns 3× per cell
     try {
       for (let i = 0; i < CELLS.length; i++) {
         const cell = CELLS[i];
-        const k = cell.k, mt = cell.mt;
-        const where = cell.path + ' · ' + k.key + ' · [' + mountLabel(mt.mounts) + ']' +
-                      (mt.active ? ' active' : '') + (mt.pinned ? ' pinned' : '');
-        const before = bootMx(mt.mounts, { active: mt.active, pinned: mt.pinned });
+        const k = cell.k, mt = cell.mt, path = cell.path;
+        const where = path.key + ' · ' + k.key + ' · [' + (mt.mounts.join('+') || 'strip only') + ']' +
+                      ' active:' + mt.activation + (mt.pinned ? ' pinned' : '');
+        const before = await bootMx(mt, k, path);
         expect([where, 'seed', before]).toEqual([where, 'seed', { gen: 1, subject: SEED, landed: SEED }]);
-        await drive(cell.path, k);
-        assertCell(where, k, before, stats);
+        await drive(path.key, k);
+        assertCell(where, k, path, mt, before, stats);
         stats.cells++;
       }
     } finally { console.warn = warn; }
 
-    expect(stats.cells).toBe(704);
-    // NON-VACUITY. Every one of these was zero at some point while this file
-    // was being written, and a matrix whose cells never do anything is 704
-    // green ticks over an engine that reports nothing.
-    expect(stats.moved).toBeGreaterThan(0);              // writes really landed
-    expect(stats.newsWithoutLanding).toBeGreaterThan(0); // …and rows really superseded WITHOUT landing
-    expect(stats.stamped).toBeGreaterThan(0);            // claimants really stepped down
-    expect(stats.stripStamped).toBeGreaterThan(0);       // the strip really wrote a sentence
-    expect(stats.painted).toBeGreaterThan(0);            // surfaces really drew rows
-    expect(stats.pinnedStamped).toBeGreaterThan(0);      // pinned documents really got stamped
-  }, 600000);
+    expect(stats.cells).toBe(14592);
+
+    /* ── COVERAGE, STATED AS NUMBERS RATHER THAN IMPLIED ─────────────────
+     *
+     * "9472 cells × eight invariants" would be false, and round 6's "704 cells
+     * × six invariants" was: its strip-stamp invariant fired in 12 of 704
+     * cells, 1.7%, while the sentence read as though every cell checked the
+     * sentence the user sees. So every invariant's firing count is asserted
+     * EXACTLY here. If a change makes one of them stop firing — the way a
+     * matrix quietly goes vacuous — this test fails rather than staying green
+     * with a smaller claim.
+     *
+     * These are also the non-vacuity checks. Every one was zero at some point
+     * while this file was being written, and a matrix whose cells never do
+     * anything is nine thousand green ticks over an engine that reports
+     * nothing. */
+    expect(MX_COVERAGE(stats)).toEqual(MX_COVERAGE_EXPECTED);
+  }, 900000);
 
   test('the two row-less paths really put their card on screen', async () => {
-    // I1–I5 say composing and backstop move nothing. That is satisfied by an
+    // I1–I8 say composing and backstop move nothing. That is satisfied by an
     // engine where startComposing does nothing at all, so say what they DO.
     const card = MODEL.describe({}, { composing: { label: 'drafting your change', viaScribe: true } });
+    const noRow = ROW_KINDS[ROW_KINDS.length - 1];
+    expect(noRow.key).toBe('no-row');
     for (let i = 0; i < MX_MOUNTINGS.length; i++) {
       const mt = MX_MOUNTINGS[i];
-      const where = '[' + mountLabel(mt.mounts) + ']' + (mt.active ? ' active' : '');
-      bootMx(mt.mounts, { active: mt.active, pinned: mt.pinned });
+      const where = '[' + (mt.mounts.join('+') || 'strip only') + '] active:' + mt.activation;
+      await bootMx(mt, noRow, MX_PATH.composing);
       LW.startComposing('drafting your change', {});
       expect([where, 'composing', visibleClaim().pillText]).toEqual([where, 'composing', card.pillText]);
       jest.advanceTimersByTime(180100);
-      await flush();
-      expect(stripText()).toContain('come back');
+      await settle();
+      const strip = document.getElementById('p86-live-writer');
+      expect([where, 'backstop', strip ? strip.textContent.indexOf('come back') >= 0 : false])
+        .toEqual([where, 'backstop', true]);
     }
-  }, 120000);
+  }, 300000);
 });
