@@ -54,6 +54,9 @@
       heldMs: _state.at ? (Date.now() - _state.at) : 0,
       retryAttempt: s.retryAttempt || 0,
       escalate: !!d.escalate,
+      // Carried from the 'partial' status: the ids the server refused because
+      // the row is GONE, not because it moved on. Different fact, different copy.
+      deleted: d.deleted || [],
       quotaFailed: !!(window.appData && window.appData._cacheWriteFailed)
     };
   }

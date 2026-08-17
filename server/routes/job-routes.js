@@ -645,7 +645,33 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, re
         const existing = await client.query(
           'SELECT owner_id, updated_at FROM jobs WHERE id = $1 FOR UPDATE', [job.id]
         );
-        if (existing.rows.length) {
+        const base = bv[job.id];
+        // ── the row is GONE and the client believes it exists ────────────────
+        // A baseVersions entry means exactly one thing: "I loaded this row and
+        // I expect it to be there." If it is not there, somebody deleted it —
+        // and an INSERT here puts a record a human deliberately removed back
+        // into a live database, on screen, with nothing saying so.
+        //
+        // That is not hypothetical and it is not rare. The client holds a
+        // hydrate open while it carries an unpushed change (the whole point of
+        // the hold is to keep a dirty id alive across a refresh), so a delete
+        // landing inside a Railway deploy window arrives at this INSERT with a
+        // base attached. Silent data loss became silent resurrection.
+        //
+        // The correct answer to "the row you loaded is gone" is a CONFLICT, not
+        // a create. The client reloads, the row stays deleted, and the user is
+        // told which row it was and that the change to it could not be saved.
+        //
+        // A genuinely NEW job sends no base (it has never been loaded, so there
+        // is no _updatedAt to send), falls through this branch, and inserts
+        // exactly as before. That asymmetry is the whole design: absence of a
+        // base means "create", presence of a base means "must already exist".
+        if (!existing.rows.length) {
+          if (base) {
+            conflicts.push({ id: job.id, reason: 'deleted', serverUpdatedAt: null });
+            continue;
+          }
+        } else {
           let canEdit = false;
           if (isAdminish(req.user)) canEdit = true;
           else if (req.user.role === 'corporate') canEdit = false;
@@ -662,12 +688,11 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, re
           // Compare at millisecond ISO precision (both sides serialize a JS Date
           // the same way), so no sub-millisecond mismatch. If they differ, the
           // row moved on since the client loaded it — record a conflict, skip.
-          var base = bv[job.id];
           if (base) {
-            var serverTs = existing.rows[0].updated_at
+            const serverTs = existing.rows[0].updated_at
               ? new Date(existing.rows[0].updated_at).toISOString() : null;
             if (serverTs && serverTs !== base) {
-              conflicts.push({ id: job.id, serverUpdatedAt: serverTs });
+              conflicts.push({ id: job.id, reason: 'stale', serverUpdatedAt: serverTs });
               continue;
             }
           }

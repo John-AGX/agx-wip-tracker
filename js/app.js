@@ -3256,17 +3256,38 @@
         // plainly, then converge on the server's version so the client stops
         // resending a stale base. Debounced so a burst reloads once.
         var _conflictReloadPending = false;
+        // Rows already announced as deleted, so a reload that cannot land does
+        // not re-announce the same row on every retry. Said once, per row, per
+        // session — the convergence keeps trying, the dialog does not.
+        var _announcedDeleted = {};
         function handleSaveConflicts(conflicts) {
             try {
                 // Snapshot what THIS client was holding for each rejected job so
                 // we can tell, after the reload, whether anything the user
                 // actually typed was lost.
-                var beforeSig = {};
-                conflicts.forEach(function(c) { beforeSig[c.id] = jobSliceSig(c.id); });
-                var names = conflicts.map(function(c) {
+                //
+                // NAMES ARE CAPTURED HERE, before the reload. A row the server
+                // reports as DELETED is not in appData once the hydrate lands,
+                // and "your change to j17f3b was not saved" is not a sentence a
+                // person can act on.
+                var beforeSig = {}, nameOf = {};
+                conflicts.forEach(function(c) {
+                    beforeSig[c.id] = jobSliceSig(c.id);
                     var j = (appData.jobs || []).find(function(x) { return x.id === c.id; });
-                    return (j && (j.title || j.name)) || c.id;
+                    nameOf[c.id] = (j && (j.title || j.name)) || c.id;
                 });
+                // Two different events wear the word "conflict" and they need
+                // different sentences. STALE means the row moved on and the
+                // current version is being loaded — recoverable, often not even
+                // a real loss. DELETED means somebody removed the row while this
+                // client was holding a change to it: the server refused to
+                // re-create it (that refusal is the whole point), the row is
+                // about to disappear from the screen, and the change to it is
+                // gone. Announcing that as "changed by someone else" would be
+                // false about the one fact that matters.
+                var deleted = conflicts.filter(function(c) { return c.reason === 'deleted'; });
+                var stale = conflicts.filter(function(c) { return c.reason !== 'deleted'; });
+                var names = conflicts.map(function(c) { return nameOf[c.id]; });
                 console.warn('[save-conflict]', names.join(', '));
 
                 if (!_conflictReloadPending) {
@@ -3281,6 +3302,34 @@
                         // before/after comparison below is what says out loud
                         // whether anything the user typed was actually lost.
                         Promise.resolve().then(function() { return loadData({ fromConflict: true }); }).then(function() {
+                            // ── deleted rows ────────────────────────────────
+                            // Not a toast. A toast is a moment, it can fire while
+                            // the tab is in the background, and this is the one
+                            // outcome in the whole save path that is not
+                            // recoverable by waiting: the record is gone, the
+                            // change to it is gone with it, and the row is
+                            // vanishing from the screen as the dialog opens.
+                            // p86Alert is also the only one of the three that
+                            // actually renders inside the installed PWA.
+                            var fresh = deleted.filter(function(c) { return !_announcedDeleted[c.id]; });
+                            if (fresh.length) {
+                                fresh.forEach(function(c) { _announcedDeleted[c.id] = 1; });
+                                var dn = fresh.map(function(c) { return nameOf[c.id]; });
+                                var dmsg = (dn.length === 1
+                                        ? ('“' + dn[0] + '” was deleted by someone else while you had an unsaved change to it.')
+                                        : (dn.length + ' jobs were deleted by someone else while you had unsaved changes to them: ' + dn.join(', ') + '.')) +
+                                    ' That change could not be saved, and ' +
+                                    (dn.length === 1 ? 'the job was' : 'the jobs were') +
+                                    ' NOT re-created. If ' + (dn.length === 1 ? 'it' : 'they') +
+                                    ' should still exist, re-create ' + (dn.length === 1 ? 'it' : 'them') + ' from scratch.';
+                                if (typeof window.p86Alert === 'function') {
+                                    try { window.p86Alert({ title: 'Deleted by someone else', message: dmsg }); } catch (e) {}
+                                } else if (window.p86Toast) {
+                                    try { window.p86Toast(dmsg, 'error'); } catch (e) {}
+                                }
+                                console.warn('[save-conflict] deleted on the server, not resurrected:', dn.join(', '));
+                            }
+                            if (!stale.length) return;
                             // Only NOW do we know whether the user lost anything.
                             //
                             // A rejected push is not automatically a lost edit. The
@@ -3295,18 +3344,15 @@
                             // Compare the slice we were holding against the server's
                             // truth. Same → silent converge. Different → the user
                             // really did lose something and must be told.
-                            var lost = conflicts.filter(function(c) {
+                            var lost = stale.filter(function(c) {
                                 return beforeSig[c.id] !== jobSliceSig(c.id);
                             });
                             if (!lost.length) {
-                                console.log('[save-conflict] ' + conflicts.length +
+                                console.log('[save-conflict] ' + stale.length +
                                     ' job(s) rejected but identical to the server after reload — nothing was lost, converged silently.');
                                 return;
                             }
-                            var lostNames = lost.map(function(c) {
-                                var j = (appData.jobs || []).find(function(x) { return x.id === c.id; });
-                                return (j && (j.title || j.name)) || c.id;
-                            });
+                            var lostNames = lost.map(function(c) { return nameOf[c.id]; });
                             var msg = (lostNames.length === 1
                                     ? ('“' + lostNames[0] + '” was changed by someone else — your edit to it was NOT saved.')
                                     : (lostNames.length + ' jobs were changed by someone else — your edits to them were NOT saved.')) +
@@ -3434,7 +3480,14 @@
                     // for rows the server had just REFUSED to write. The
                     // sentence handleSaveConflicts eventually shows is correct;
                     // the status fired 1200ms earlier was not.
-                    notifyPushStatus('partial', { ids: conflicts.map(function(c) { return c.id; }) });
+                    notifyPushStatus('partial', {
+                        ids: conflicts.map(function(c) { return c.id; }),
+                        // The banner covers the ~1.2s between the refusal and the
+                        // conflict reload, and "another session changed a record
+                        // you were editing" is false when the record was DELETED.
+                        deleted: conflicts.filter(function(c) { return c.reason === 'deleted'; })
+                                          .map(function(c) { return c.id; })
+                    });
                 } else {
                     _blockedSince = 0;
                     notifyPushStatus('saved');

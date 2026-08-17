@@ -14,148 +14,23 @@
 //
 // WHY A MODEL SERVER AND NOT THE REAL ROUTES
 // server/routes/* pulls express + pg + JWT_SECRET, which is the documented
-// reason pure logic belongs outside them. The model below reproduces the two
-// route behaviours this path depends on, and the `route fidelity` group at the
-// bottom asserts those behaviours are still what the real routes do — so if
-// the server changes, this file fails rather than quietly testing fiction.
+// reason pure logic belongs outside them. test/helpers/save-harness.js
+// reproduces the two route behaviours this path depends on, and the
+// `route fidelity` group at the bottom asserts those behaviours are still what
+// the real routes do — so if the server changes, this file fails rather than
+// quietly testing fiction. The model lives in ONE file because a second copy
+// is a second thing to keep faithful, and the copy nobody pinned is the one
+// that starts testing fiction.
 
 const fs = require('fs');
 const path = require('path');
+const { makeServer, defer, boot, settle, jobRow } = require('./helpers/save-harness');
 
 const JOB_ROUTES = fs.readFileSync(
   path.join(__dirname, '..', 'server', 'routes', 'job-routes.js'), 'utf8');
 const EST_ROUTES = fs.readFileSync(
   path.join(__dirname, '..', 'server', 'routes', 'estimate-routes.js'), 'utf8');
 const APP_SRC = fs.readFileSync(path.join(__dirname, '..', 'js', 'app.js'), 'utf8');
-
-/* ── the model server ──────────────────────────────────────────────────────
- * jobs   bulk save: per-row UPSERT, never a delete, with a version guard that
- *                   only fires when the client supplied a base for that row.
- * estim. bulk save: per-row UPSERT with NO version guard at all, and an INSERT
- *                   that re-creates any id it does not find. That asymmetry is
- *                   real and is the reason estimates are scoped client-side.  */
-function makeServer() {
-  let clock = 1000;
-  const stamp = () => new Date(clock++).toISOString();
-  const jobs = new Map();
-  const estimates = new Map();
-  const wire = { jobPayloads: [], jobBaseVersions: [], estPayloads: [] };
-
-  function seedJob(id, blob) { jobs.set(id, { data: { id, ...blob }, updated_at: stamp() }); }
-  function seedEstimate(id, blob) { estimates.set(id, { data: { id, ...blob }, updated_at: stamp() }); }
-
-  function listJobs() {
-    return {
-      jobs: [...jobs.entries()].map(([id, row]) => ({
-        ...row.data, id, _canEdit: true, _updatedAt: row.updated_at
-      }))
-    };
-  }
-  function listEstimates() {
-    return {
-      estimates: [...estimates.entries()].map(([id, row]) => ({
-        ...row.data, id, updated_at: row.updated_at
-      }))
-    };
-  }
-
-  function bulkSaveJobs(body, baseVersions) {
-    wire.jobPayloads.push(JSON.parse(JSON.stringify(body)));
-    wire.jobBaseVersions.push(JSON.parse(JSON.stringify(baseVersions || {})));
-    const conflicts = [], versions = {};
-    const ordered = [...(body.jobs || [])].sort((a, b) =>
-      String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0);
-    for (const job of ordered) {
-      const existing = jobs.get(job.id);
-      if (existing) {
-        const base = baseVersions && baseVersions[job.id];
-        if (base && existing.updated_at !== base) {
-          conflicts.push({ id: job.id, serverUpdatedAt: existing.updated_at });
-          continue;
-        }
-      }
-      const blob = { ...job };
-      ['buildings', 'phases', 'changeOrders', 'subs', 'purchaseOrders', 'invoices']
-        .forEach((k) => { blob[k] = (body[k] || []).filter((r) => r.jobId === job.id); });
-      delete blob._canEdit; delete blob._notify; delete blob.owner_id;
-      delete blob.market_id; delete blob._updatedAt;
-      jobs.set(job.id, { data: blob, updated_at: stamp() });
-      versions[job.id] = jobs.get(job.id).updated_at;
-    }
-    return Promise.resolve({ saved: ordered.length - conflicts.length, conflicts, versions });
-  }
-
-  function bulkSaveEstimates(body) {
-    wire.estPayloads.push(JSON.parse(JSON.stringify(body)));
-    for (const est of (body.estimates || [])) {
-      const blob = { ...est, lines: (body.estimateLines || []).filter((l) => l.estimateId === est.id) };
-      delete blob.updated_at; delete blob.created_at; delete blob.owner_id; delete blob.market_id;
-      const prev = estimates.get(est.id);
-      const changed = !prev || JSON.stringify(prev.data) !== JSON.stringify(blob);
-      estimates.set(est.id, { data: blob, updated_at: changed ? stamp() : prev.updated_at });
-    }
-    return Promise.resolve({ ok: true });
-  }
-
-  return { jobs, estimates, wire, seedJob, seedEstimate, listJobs, listEstimates, bulkSaveJobs, bulkSaveEstimates };
-}
-
-/* Deferred promise so a test can hold a GET open and edit "mid-flight". */
-function defer() {
-  let resolve, reject;
-  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
-  return { promise, resolve, reject };
-}
-
-/* Boot a FRESH copy of js/app.js against a given server. Module state
- * (_serverLoadOk, the baselines) lives in the module scope, so every scenario
- * gets its own instance rather than inheriting the previous test's history. */
-function boot(server, opts) {
-  opts = opts || {};
-  jest.resetModules();
-  window.localStorage.clear();
-  if (opts.seedCache) opts.seedCache(window.localStorage);
-
-  const api = {
-    isAuthenticated: () => true,
-    jobs: {
-      list: opts.jobsList || (() => Promise.resolve(server.listJobs())),
-      bulkSave: (payload, baseVersions) => server.bulkSaveJobs(payload.appData || payload, baseVersions),
-      remove: () => Promise.resolve({ ok: true })
-    },
-    estimates: {
-      list: opts.estimatesList || (() => Promise.resolve(server.listEstimates())),
-      bulkSave: (payload) => server.bulkSaveEstimates(payload),
-      remove: () => Promise.resolve({ ok: true })
-    },
-    qbCosts: { list: () => Promise.resolve({ lines: [] }) },
-    subs: { list: () => Promise.resolve({ subs: [], trades: [] }) },
-    purchaseOrders: { listAll: () => Promise.resolve({ purchase_orders: [] }) },
-    changeOrders: { listAll: () => Promise.resolve({ change_orders: [] }) },
-    bills: { listAll: () => Promise.resolve({ bills: [] }) },
-    invoices: { list: () => Promise.resolve({ invoices: [] }) }
-  };
-  window.p86Api = api;
-  window.p86Auth = { getToken: () => 't', isOffline: () => false };
-  global.fetch = jest.fn(() => Promise.resolve({ ok: true, text: () => Promise.resolve('{}') }));
-  delete window.p86Refresh;   // no registry in the harness; loadData is called directly
-
-  require('../js/save-merge.js');
-  require('../js/app.js');
-  return { api };
-}
-
-/* The real client wraps bulkSave as put('/api/jobs/bulk/save', { appData, baseVersions }),
- * so the harness above unwraps `payload.appData`. Drain microtasks between steps. */
-const settle = async (n = 8) => { for (let i = 0; i < n; i++) await Promise.resolve(); };
-
-function jobRow(id, over) {
-  return Object.assign({
-    id, jobNumber: 'S' + id, title: 'Job ' + id, client: 'C', status: 'In Progress',
-    contractAmount: 100000, estimatedCosts: 60000, pctComplete: 10,
-    buildings: [], phases: [], changeOrders: [], subs: [], purchaseOrders: [], invoices: []
-  }, over || {});
-}
 
 beforeEach(() => { jest.useRealTimers(); });
 
@@ -648,8 +523,17 @@ describe('route fidelity', () => {
 
   test('jobs bulk save guards on baseVersions under FOR UPDATE', () => {
     expect(jobsBulk).toMatch(/FOR UPDATE/);
-    expect(jobsBulk).toMatch(/var base = bv\[job\.id\];/);
+    expect(jobsBulk).toMatch(/const base = bv\[job\.id\];/);
     expect(jobsBulk).toMatch(/conflicts\.push\(/);
+  });
+
+  test('a base version supplied for a row that no longer exists is a conflict, never an INSERT', () => {
+    // THE resurrection guard. If this assertion ever has to be deleted, read
+    // the comment above it in the route first: a client supplies a base only
+    // for a row it LOADED, so a missing row means somebody deleted it, and the
+    // INSERT below would put it back.
+    expect(jobsBulk).toMatch(
+      /if \(!existing\.rows\.length\) \{\s*if \(base\) \{\s*conflicts\.push\(\{ id: job\.id, reason: 'deleted'/);
   });
 
   test('estimates bulk save still has NO version guard — the reason estimates are scoped client-side', () => {

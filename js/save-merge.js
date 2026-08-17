@@ -119,11 +119,12 @@
         'This device cannot cache your work and the server has not taken it. Copy anything unsaved now.',
         show.concat(['try-now']), n);
     }
-    // NOTE — there is deliberately no "was deleted by someone else" state here.
-    // Telling the user that requires knowing the row is absent from the server
-    // response, which requires the cross-session pending ledger that is NOT in
-    // this change. Writing the copy first and the machinery later is how a
-    // banner ends up asserting something nothing checks.
+    // The "was deleted by someone else" state is real now, and it is backed by
+    // machinery rather than by hope: PUT /api/jobs/bulk/save refuses to INSERT a
+    // row for which the client supplied a base version (a base means "I loaded
+    // this and expect it to exist"), and reports it as conflict reason
+    // 'deleted'. `s.deleted` is that id list, carried through the 'partial'
+    // status. This branch therefore asserts only what the server actually said.
     switch (s.reason) {
       case 'no-good-load':
         if (held >= STILL_DOWN_MS) {
@@ -155,6 +156,16 @@
           plural(n) + ' queued behind it. Nothing is lost.', show, n);
 
       case 'partial':
+        if (s.deleted && s.deleted.length) {
+          // Deliberately NOT reassuring. Every other state in this file is
+          // recoverable by waiting; this one is not, and the copy has to stop
+          // the user rather than soothe them.
+          return mk('error', 'Deleted by someone else',
+            (s.deleted.length === 1 ? 'A record' : s.deleted.length + ' records') +
+            ' you were editing had already been deleted. Your change to ' +
+            (s.deleted.length === 1 ? 'it was' : 'them was') +
+            ' not saved and nothing was re-created.', show, n);
+        }
         return mk('warn', 'Some changes were rejected',
           'Another session changed ' + (n === 1 ? 'a record' : 'records') +
           ' you were editing. The current version is being loaded.', show, n);
