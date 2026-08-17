@@ -109,6 +109,21 @@ function p86Ask(message, opts) {
   }
   window.renderJobReports = renderJobReports;
 
+  // Refresh seam for js/refresh.js (`report` entry). renderJobReports() resets
+  // mode to 'list' and drops _state.editingReport, so calling it while the
+  // editor is open would silently discard an in-progress report — the same
+  // "never repaint over the thing being typed into" rule the registry enforces
+  // for the caret. Refuses in that case and returns false rather than
+  // pretending it refreshed.
+  window.p86JobReportsRefresh = function (jobId) {
+    if (_state.mode !== 'list') return false;
+    if (!document.getElementById('job-reports-content')) return false;
+    var id = jobId || _state.jobId;
+    if (!id) return false;
+    renderJobReports(id);
+    return true;
+  };
+
   // ── Render dispatch ──
   function _paint() {
     var host = document.getElementById('job-reports-content');

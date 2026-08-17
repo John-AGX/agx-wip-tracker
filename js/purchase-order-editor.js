@@ -144,17 +144,17 @@
     _closingJobId = _po && _po.job_id;   // captured before _po is dropped
     _po = null;
     // Refresh AFTER the final save lands — else the re-fetch races the in-flight PUT and
-    // re-renders the stale title/sub/status the user just changed. Fire BOTH the cross-job
-    // Jobs Hub refresh AND the caller's own surface repaint (e.g. the job-detail PO tab,
-    // which p86JobsHubRefresh does NOT cover). _onClose is one-shot.
+    // re-renders the stale title/sub/status the user just changed. _onClose is one-shot.
     var _cb = _onClose; _onClose = null;
     var _jobId = _closingJobId; _closingJobId = null;
     var _done = function () {
-      if (typeof window.p86JobsHubRefresh === 'function') window.p86JobsHubRefresh();
       if (_cb) { try { _cb(); } catch (_) {} }
-      // Patch the shared cost-rollup store (appData.jobPurchaseOrders) and
-      // repaint the jobs list. Neither callback above does it, so the ACCRUED
-      // and Total Income tiles kept the pre-edit number until a page reload.
+      // ONE refresh call, and it does everything: patches the shared cost-rollup
+      // store (appData.jobPurchaseOrders), then repaints the jobs list, the Jobs
+      // Hub list and this job's money sections — in that order. This used to
+      // call p86JobsHubRefresh() itself first, so one edit ran two hub refetches
+      // and two repaints 200ms apart. The hub refresh belongs to the registry;
+      // see repaintJobMoney in js/refresh.js.
       // Deliberately on CLOSE, not on saveNow(): saveNow is the 700ms autosave
       // target, and hanging a per-job GET plus a full jobs-table repaint off
       // every keystroke-debounce is its own defect.
@@ -884,10 +884,9 @@
           _po.sub_name = picked ? picked.name : '';
         }
         render();
-        if (typeof window.p86JobsHubRefresh === 'function') window.p86JobsHubRefresh();
         // A status change moves committed cost, so the shared store and the
-        // jobs-list ACCRUED tile have to follow — p86JobsHubRefresh only
-        // repaints the hub list.
+        // jobs-list ACCRUED tile have to follow. One call — the registry also
+        // refreshes the Jobs Hub list, which this used to do a second time.
         if (window.p86Refresh) window.p86Refresh('po', { id: poId, jobId: _po && _po.job_id });
       })
       .catch(function (e) { alert('Could not update status: ' + ((e && e.message) || 'error')); });
@@ -908,13 +907,23 @@
     _po = po;
     return true;
   }
+  // Unlock / addendum / re-lock all change what the money sections read (an
+  // addendum changes the committed total outright), so each goes through the
+  // ONE refresh call instead of poking the Jobs Hub directly. The registry
+  // patches appData.jobPurchaseOrders FIRST and then repaints the hub, the
+  // jobs-list ACCRUED tile and this job's money sections — exactly once each.
+  // A bare p86JobsHubRefresh() repainted the hub from a store nothing had
+  // updated, so an addendum's new total showed only after a page reload.
+  function refreshAfterPOAction() {
+    if (window.p86Refresh) window.p86Refresh('po', { id: _po && _po.id, jobId: _po && _po.job_id });
+  }
   function doUnlock() {
     if (!_po || !(window.p86Api && window.p86Api.purchaseOrders.unlock)) return;
     if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
     var poId = _po.id;
     saveNow()
       .then(function () { return window.p86Api.purchaseOrders.unlock(poId); })
-      .then(function (r) { applyServerPO(r); render(); if (typeof window.p86JobsHubRefresh === 'function') window.p86JobsHubRefresh(); })
+      .then(function (r) { applyServerPO(r); render(); refreshAfterPOAction(); })
       .catch(function (e) { alert('Could not unlock: ' + ((e && e.message) || 'error')); });
   }
   // Record the pending price change as an addendum + re-lock. approve=true signs
@@ -935,7 +944,7 @@
     // Flush the edited lines FIRST so the server measures the delta from them.
     saveNow()
       .then(function () { return window.p86Api.purchaseOrders.addendum(poId, { reason: reason, approve: !!approve, acceptance: acceptance }); })
-      .then(function (r) { applyServerPO(r); render(); if (typeof window.p86JobsHubRefresh === 'function') window.p86JobsHubRefresh(); })
+      .then(function (r) { applyServerPO(r); render(); refreshAfterPOAction(); })
       .catch(function (e) { alert('Could not record the addendum: ' + ((e && e.message) || 'error')); });
   }
   // Re-lock a revised PO that had NO price change (edited only title/sub/notes/
@@ -947,7 +956,7 @@
     var poId = _po.id;
     saveNow()
       .then(function () { return window.p86Api.purchaseOrders.relock(poId); })
-      .then(function (r) { applyServerPO(r); render(); if (typeof window.p86JobsHubRefresh === 'function') window.p86JobsHubRefresh(); })
+      .then(function (r) { applyServerPO(r); render(); refreshAfterPOAction(); })
       .catch(function (e) {
         var msg = (e && e.message) || 'error';
         alert(/price|addendum|delta/i.test(msg)
@@ -960,7 +969,7 @@
     var nm = window.prompt('Record subcontractor acceptance of this addendum (e-sign).\n\nSubcontractor name:', _po.sub_name || '');
     if (nm === null) return;
     window.p86Api.purchaseOrders.addendum(_po.id, { addendumId: addId, approve: true, acceptance: { name: nm, date: new Date().toISOString().slice(0, 10) } })
-      .then(function (r) { applyServerPO(r); render(); if (typeof window.p86JobsHubRefresh === 'function') window.p86JobsHubRefresh(); })
+      .then(function (r) { applyServerPO(r); render(); refreshAfterPOAction(); })
       .catch(function (e) { alert('Could not approve the addendum: ' + ((e && e.message) || 'error')); });
   }
 

@@ -315,33 +315,48 @@
   // appData.arInvoices — a read-cache hydrated ONLY at boot. So a mutation here must patch
   // that store + repaint the jobs list, or those tiles stay stale until a full page refresh.
   //
-  // This is the shape every refresh in the app should copy: refetch, patch the
-  // store, THEN repaint — all inside one .then, so the paint can never read a
-  // cache that hasn't landed. Returns its promise so callers can sequence.
+  // This is the STORE HALF ONLY: refetch and patch appData.arInvoices, nothing
+  // else. It used to repaint the jobs list itself, and the refresh registry's
+  // `invoice` surface repainted it a second time straight after — two paints of
+  // the same table for one edit. The repaint belongs to js/refresh.js, which is
+  // the one place that knows the full set of surfaces an invoice moves.
+  // Returns its promise so the registry can sequence store-before-surface.
   function _syncJobsWIP() {
     try {
       return api().list().then(function (r) {
         if (typeof appData !== 'undefined') appData.arInvoices = (r && (r.invoices || r.rows || r)) || appData.arInvoices || [];
-        if (typeof window.renderJobsMain === 'function') { try { window.renderJobsMain(); } catch (_) {} }
       }).catch(function () {});
     } catch (_) { return Promise.resolve(); }
   }
   // The refresh registry's `invoice` store. Same function, named for the seam.
   window.p86InvoicesSyncStore = _syncJobsWIP;
+  // The `invoice` entry had no call site at all — nothing in js/ ever fired it
+  // and the payload dispatcher has no invoice op — so it was unreachable table
+  // decoration. These three mutations are its doors.
+  function _refreshInvoice() {
+    if (window.p86Refresh) window.p86Refresh('invoice', { id: _cur && _cur.id, jobId: _cur && _cur.job_id });
+    else _syncJobsWIP();
+  }
   function save() {
     var p = payload();
     var req = _cur.id ? api().update(_cur.id, p) : api().create(p);
-    req.then(function (r) { _cur = r && r.invoice; toast('Invoice saved.'); showEditor(); _syncJobsWIP(); })
+    req.then(function (r) { _cur = r && r.invoice; toast('Invoice saved.'); showEditor(); _refreshInvoice(); })
       .catch(function (e) { toast((e && e.message) || 'Save failed.', true); });
   }
   function setStatus(s) {
     if (!_cur.id) { toast('Save the invoice first.', true); return; }
-    api().setStatus(_cur.id, s).then(function (r) { _cur = r && r.invoice; toast('Status → ' + s + '.'); showEditor(); _syncJobsWIP(); })
+    api().setStatus(_cur.id, s).then(function (r) { _cur = r && r.invoice; toast('Status → ' + s + '.'); showEditor(); _refreshInvoice(); })
       .catch(function (e) { toast((e && e.message) || 'Could not change status.', true); });
   }
   function del() {
-    api().remove(_cur.id).then(function () { toast('Invoice deleted.'); closeEditor(); _syncJobsWIP(); })
-      .catch(function (e) { toast((e && e.message) || 'Delete failed.', true); });
+    // Capture the job BEFORE closeEditor() drops _cur, or the refresh loses
+    // which job's money sections to repaint.
+    var _jid = _cur && _cur.job_id;
+    api().remove(_cur.id).then(function () {
+      toast('Invoice deleted.'); closeEditor();
+      if (window.p86Refresh) window.p86Refresh('invoice', { jobId: _jid });
+      else _syncJobsWIP();
+    }).catch(function (e) { toast((e && e.message) || 'Delete failed.', true); });
   }
 
   // ── payments ──────────────────────────────────────────────

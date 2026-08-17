@@ -686,27 +686,61 @@ function renderJobsMain() {
         // into appData.jobChangeOrders. Refreshes the rendered list
         // when complete. Safe to call multiple times; in-flight fetches
         // are tracked per-job so re-opening doesn't dup-fetch.
+        // ── the money-loader generation stamp ──────────────────────────
+        // Three per-job money mirrors (jobChangeOrders / jobVendorBills /
+        // jobPurchaseOrders) are refetched with `force` right after a write.
+        // `force` on its own was NOT enough: it bypassed the in-flight join and
+        // overwrote _xxFetchInflight[jobId], but the PRE-WRITE promise's .then
+        // still ran — it still concat'd its stale rows into appData, and it
+        // still deleted the in-flight key belonging to the fetch that replaced
+        // it. If the pre-write GET resolved second, stale rows landed on top of
+        // fresh AFTER the surface had painted, so nothing ever corrected it.
+        //
+        // Same fix as the leads/clients `_leadsGen` stamp: a forced fetch bumps
+        // the job's generation, and any response carrying an older generation is
+        // dropped instead of installed.
+        function bumpMoneyGen(gens, jobId, force) {
+            if (force) gens[jobId] = (gens[jobId] || 0) + 1;
+            return gens[jobId] || 0;
+        }
+        // True when this response must be DISCARDED. Also releases the in-flight
+        // slot, but only if it still holds THIS promise — a disowned .then must
+        // never delete the key belonging to the fresh fetch that superseded it.
+        function moneyGETSuperseded(inflight, gens, jobId, gen, p) {
+            if (inflight[jobId] === p) delete inflight[jobId];
+            return gen !== (gens[jobId] || 0);
+        }
+        function rowsForJob(mirror, jobId) {
+            return (Array.isArray(appData[mirror]) ? appData[mirror] : [])
+                .filter(function(r) { return r.job_id === jobId; });
+        }
+
         var _coFetchInflight = {};
+        var _coGen = {};
         function loadChangeOrdersForJob(jobId, force) {   // `force` — see loadBillsForJob
             if (!jobId || !window.p86Api || !window.p86Api.changeOrders) return Promise.resolve([]);
             if (_coFetchInflight[jobId] && !force) return _coFetchInflight[jobId];
-            _coFetchInflight[jobId] = window.p86Api.changeOrders.listForJob(jobId)
+            var gen = bumpMoneyGen(_coGen, jobId, force);
+            var p = window.p86Api.changeOrders.listForJob(jobId)
                 .then(function(r) {
                     var list = (r && r.change_orders) || [];
+                    // Disowned: return what the store actually holds, never the
+                    // pre-write body this response is carrying.
+                    if (moneyGETSuperseded(_coFetchInflight, _coGen, jobId, gen, p)) return rowsForJob('jobChangeOrders', jobId);
                     // Replace this job's rows in the cache.
                     if (!Array.isArray(appData.jobChangeOrders)) appData.jobChangeOrders = [];
                     appData.jobChangeOrders = appData.jobChangeOrders
                         .filter(function(c) { return c.job_id !== jobId; })
                         .concat(list);
-                    delete _coFetchInflight[jobId];
                     return list;
                 })
                 .catch(function(e) {
-                    delete _coFetchInflight[jobId];
+                    moneyGETSuperseded(_coFetchInflight, _coGen, jobId, gen, p);
                     console.warn('loadChangeOrdersForJob failed:', e);
                     return [];
                 });
-            return _coFetchInflight[jobId];
+            _coFetchInflight[jobId] = p;
+            return p;
         }
         window.loadChangeOrdersForJob = loadChangeOrdersForJob;
 
@@ -976,26 +1010,29 @@ function renderJobsMain() {
         // with pre-write rows and then reports success, which looks exactly
         // like "the save didn't take". Reads that merely want the data (a tab
         // opening) still share the in-flight fetch.
+        var _billGen = {};
         function loadBillsForJob(jobId, force) {
             if (!jobId || !window.p86Api || !window.p86Api.bills) return Promise.resolve([]);
             if (_billFetchInflight[jobId] && !force) return _billFetchInflight[jobId];
-            _billFetchInflight[jobId] = window.p86Api.bills.listForJob(jobId)
+            var gen = bumpMoneyGen(_billGen, jobId, force);
+            var p = window.p86Api.bills.listForJob(jobId)
                 .then(function(r) {
                     var list = (r && r.bills) || [];
+                    if (moneyGETSuperseded(_billFetchInflight, _billGen, jobId, gen, p)) return rowsForJob('jobVendorBills', jobId);
                     if (!Array.isArray(appData.jobVendorBills)) appData.jobVendorBills = [];
                     appData.jobVendorBills = appData.jobVendorBills
                         .filter(function(b) { return b.job_id !== jobId; })
                         .concat(list);
                     _billsLoadedJobs[jobId] = true;
-                    delete _billFetchInflight[jobId];
                     return list;
                 })
                 .catch(function(e) {
-                    delete _billFetchInflight[jobId];
+                    moneyGETSuperseded(_billFetchInflight, _billGen, jobId, gen, p);
                     console.warn('loadBillsForJob failed:', e);
                     return [];
                 });
-            return _billFetchInflight[jobId];
+            _billFetchInflight[jobId] = p;
+            return p;
         }
         window.loadBillsForJob = loadBillsForJob;
         // Boot hydration for the whole-org bills snapshot (called once from
@@ -1014,25 +1051,28 @@ function renderJobsMain() {
             appData.jobVendorBills = kept.concat(incoming);
             appData._billsAllLoaded = !!ok;
         };
+        var _poGen = {};
         function loadPurchaseOrdersForJob(jobId, force) {   // `force` — see loadBillsForJob
             if (!jobId || !window.p86Api || !window.p86Api.purchaseOrders) return Promise.resolve([]);
             if (_poFetchInflight[jobId] && !force) return _poFetchInflight[jobId];
-            _poFetchInflight[jobId] = window.p86Api.purchaseOrders.listForJob(jobId)
+            var gen = bumpMoneyGen(_poGen, jobId, force);
+            var req = window.p86Api.purchaseOrders.listForJob(jobId)
                 .then(function(r) {
                     var list = (r && r.purchase_orders) || [];
+                    if (moneyGETSuperseded(_poFetchInflight, _poGen, jobId, gen, req)) return rowsForJob('jobPurchaseOrders', jobId);
                     if (!Array.isArray(appData.jobPurchaseOrders)) appData.jobPurchaseOrders = [];
                     appData.jobPurchaseOrders = appData.jobPurchaseOrders
                         .filter(function(p) { return p.job_id !== jobId; })
                         .concat(list);
-                    delete _poFetchInflight[jobId];
                     return list;
                 })
                 .catch(function(e) {
-                    delete _poFetchInflight[jobId];
+                    moneyGETSuperseded(_poFetchInflight, _poGen, jobId, gen, req);
                     console.warn('loadPurchaseOrdersForJob failed:', e);
                     return [];
                 });
-            return _poFetchInflight[jobId];
+            _poFetchInflight[jobId] = req;
+            return req;
         }
         window.loadPurchaseOrdersForJob = loadPurchaseOrdersForJob;
 
@@ -3391,18 +3431,20 @@ function renderJobsMain() {
             document.getElementById('job-summary-margin').textContent = jtdMarginStr;
             } catch (e) { console.warn('[job detail] legacy field render skipped (missing element):', e && e.message); }
 
-            // Re-render the currently active subtab
+            // Re-render the currently active subtab — switchJobSubTab is THE
+            // dispatcher for "paint subtab X" and covers every one of them
+            // (job-wip-report, job-changeorders, job-purchaseorders and
+            // job-invoices included). This used to call renderWipTab,
+            // renderChangeOrders, renderPurchaseOrders and renderInvoices
+            // directly straight afterwards, so whichever of those four was the
+            // ACTIVE tab got painted twice on every job open and on every
+            // post-write detail refresh: a flicker, a possible focus steal, and
+            // a half-typed row dropped. The other three are inactive panes —
+            // nothing is on screen to keep fresh, and switching to one paints it.
+            // Isolated because a missing legacy element must not blank the body.
             const activeSubTab = document.querySelector('.sub-tab-btn-job.active');
             const activeTabName = activeSubTab ? activeSubTab.getAttribute('data-subtab') : 'job-overview';
-            // Each sub-render writes to its own subtab's elements; some
-            // legacy elements can be absent after the overview redesign, so
-            // isolate each call — one throwing on a missing element must NOT
-            // abort the others (or leave the detail body blank).
             try { switchJobSubTab(activeTabName); } catch (e) { console.warn('[job detail] subtab render:', e && e.message); }
-            try { renderWipTab(jobId); } catch (e) { console.warn('[job detail] wip render:', e && e.message); }
-            try { renderChangeOrders(jobId); } catch (e) { console.warn('[job detail] CO render:', e && e.message); }
-            try { renderPurchaseOrders(jobId); } catch (e) { console.warn('[job detail] PO render:', e && e.message); }
-            try { renderInvoices(jobId); } catch (e) { console.warn('[job detail] invoices render:', e && e.message); }
 
             // Refresh sticky header metrics strip
             if (typeof refreshHeaderMetrics === 'function') refreshHeaderMetrics();

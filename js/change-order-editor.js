@@ -145,14 +145,15 @@ function p86Ask(message, opts) {
     _state.dirty = false;
     _state.saving = false;
     _state.saveError = null;
-    // The hub list underneath may show stale title/status — refresh it. Also fire the
-    // caller's own surface repaint (e.g. the job-detail CO tab, which the hub refresh does
-    // NOT cover). _onClose is one-shot.
-    if (typeof window.p86JobsHubRefresh === 'function') window.p86JobsHubRefresh();
+    // The caller's own surface repaint (e.g. a host list the editor was opened
+    // from). _onClose is one-shot.
     var _cb = _onClose; _onClose = null;
     if (_cb) { try { _cb(); } catch (_) {} }
-    // Neither callback above patches appData.jobChangeOrders, so the jobs-list
-    // Total Income (contract + CO) tile kept the pre-edit number until reload.
+    // ONE refresh call: it patches appData.jobChangeOrders and then repaints
+    // the jobs-list Total Income (contract + CO) tile, the Jobs Hub list and
+    // this job's money sections. This used to call p86JobsHubRefresh() itself
+    // as well, so closing the editor ran two hub refetches and two repaints
+    // 200ms apart for a single edit.
     if (window.p86Refresh) window.p86Refresh('co', { jobId: _jobId });
   }
 
@@ -1078,9 +1079,12 @@ function p86Ask(message, opts) {
       paintStatusPill();
       applyCoLockState();
       paintSaveStatus();
-      // Keep the Jobs-hub CO list behind the overlay in sync (no-ops
-      // harmlessly when the hub isn't mounted).
-      if (typeof window.p86JobsHubRefresh === 'function') window.p86JobsHubRefresh();
+      // Approving a CO moves contract income, so the shared store has to be
+      // patched before anything repaints from it. A bare p86JobsHubRefresh()
+      // repainted the hub off an appData.jobChangeOrders nothing had updated,
+      // which left the jobs-list Total Income tile on the pre-approval number
+      // until a page reload. One call covers store + hub + jobs list + tabs.
+      if (window.p86Refresh) window.p86Refresh('co', { id: co.id, jobId: co.job_id });
     }).catch(function(e) {
       alert('Status change failed: ' + (e.message || e));
     });

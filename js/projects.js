@@ -5828,6 +5828,12 @@
         refreshLinkedPanels();
       } catch (e) { console.warn('[projects] refresh failed:', e); }
     },
+    // Refetch + repaint the open project's Reports tab. This is the refresh
+    // registry's `report` surface: the registry used to point at
+    // `window.p86Reports.refresh`, a namespace that exists nowhere in the
+    // codebase, so every agent-written report refreshed nothing while the
+    // table claimed it was covered. No-ops when no project detail is mounted.
+    refreshReports: paintReportsTab,
     setFilter: setFilter,
     setView: setView,
     openCreate: openCreate,

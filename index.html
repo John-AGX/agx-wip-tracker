@@ -3323,7 +3323,7 @@
          order, coalesced by entity type and never over a focused editor.
          Every entry resolves its renderers off window at CALL time, so this
          can load early without caring what has defined itself yet. -->
-    <script src="js/refresh.js?v=1"></script>
+    <script src="js/refresh.js?v=2"></script>
     <script src="js/geolocation.js?v=1"></script>
     <script src="js/assembly-formula.js?v=1"></script>
     <!-- The ONE job-label formatter (window.p86JobLabel): jobNumber + ' ' +
@@ -3380,7 +3380,7 @@
     <script src="js/subs.js?v=16"></script>
     <script src="js/assemblies.js?v=10"></script>
     <script src="js/job-audit.js?v=4d"></script>
-    <script src="js/job-reports.js?v=2b"></script>
+    <script src="js/job-reports.js?v=3"></script>
     <!-- Shared table enhancements (reorder / resize / freeze first column /
          internal scroll / persisted layout) for the Jobs, Estimates and
          Leads lists. Loads BEFORE those renderers so window.p86Tables is
@@ -3459,12 +3459,12 @@
          calls into window.p86ReportTemplates. -->
     <script src="js/report-templates.js?v=1"></script>
     <script src="js/report-style-packs.js?v=2"></script>
-    <script src="js/projects.js?v=71"></script>
+    <script src="js/projects.js?v=72"></script>
     <script src="js/receipt-scanner.js?v=2"></script>
     <script src="js/receipt-cropper.js?v=1"></script>
     <script src="js/list-filter.js?v=1"></script>
     <script src="js/cost-inbox.js?v=22"></script>
-    <script src="js/invoices.js?v=5"></script>
+    <script src="js/invoices.js?v=6"></script>
     <script src="js/console-docs.js?v=2"></script>
     <script src="js/console.js?v=18"></script>
     <!-- Jobs Hub — cross-job index pages (Purchase Orders / Change Orders /
@@ -3477,14 +3477,14 @@
          hub Purchase Orders list. Uses p86Api.purchaseOrders + subs. -->
     <script src="js/purchase-order-import.js?v=1"></script>
     <script src="js/sub-access-prompt.js?v=1"></script>
-    <script src="js/purchase-order-editor.js?v=17"></script>
+    <script src="js/purchase-order-editor.js?v=18"></script>
     <script src="js/pay-applications.js?v=13"></script>
     <!-- Shared pricing pipeline — math used by estimate-editor +
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->
     <script src="js/pricing-pipeline.js?v=2"></script>
     <script src="js/progress.js?v=3"></script>
-    <script src="js/jobs.js?v=221"></script>
+    <script src="js/jobs.js?v=222"></script>
     <script src="js/doc-import.js?v=4"></script>
     <script src="js/job-workflow-ui.js?v=6"></script>
     <!-- Reusable rich-text field (window.p86RichText) — shared WYSIWYG for
@@ -3498,7 +3498,7 @@
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which
          carries the window.p86Api.changeOrders wrapper). -->
-    <script src="js/change-order-editor.js?v=16"></script>
+    <script src="js/change-order-editor.js?v=17"></script>
     <script src="js/materials-drawer.js?v=12"></script>
     <script src="js/estimate-preview.js?v=15"></script>
     <script src="js/bt-export.js?v=6b"></script>

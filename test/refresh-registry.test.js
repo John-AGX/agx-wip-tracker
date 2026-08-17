@@ -318,3 +318,182 @@ describe('job resolution for the per-job money mirrors', () => {
     expect(window.p86RepaintJobMoneyTabs).not.toHaveBeenCalled();
   });
 });
+
+// ── exactly ONCE per mutation ───────────────────────────────────────────────
+// A double repaint is a defect, not a cost: it flickers, it can steal focus and
+// it can drop a half-typed row — the same reason the old setTimeout repaints
+// were deleted. So these assert COUNTS, never truthiness.
+describe('one mutation repaints each surface exactly once', () => {
+  test('a PO edit refetches once and repaints the jobs list + hub once each', async () => {
+    window.loadPurchaseOrdersForJob = jest.fn(() => Promise.resolve());
+    window.renderJobsMain = jest.fn();
+    window.p86JobsHubRefresh = jest.fn();
+
+    P('po', { jobId: 'job_1' });
+    await settle();
+
+    expect(window.loadPurchaseOrdersForJob).toHaveBeenCalledTimes(1);
+    expect(window.renderJobsMain).toHaveBeenCalledTimes(1);
+    expect(window.p86JobsHubRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  test('a CO edit repaints the hub once', async () => {
+    window.loadChangeOrdersForJob = jest.fn(() => Promise.resolve());
+    window.p86JobsHubRefresh = jest.fn();
+
+    P('co', { jobId: 'job_1' });
+    await settle();
+
+    expect(window.p86JobsHubRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  test('an invoice edit repaints the jobs list once — the store half must not paint it too', async () => {
+    // p86InvoicesSyncStore refetches /invoices and patches appData.arInvoices.
+    // When it ALSO called renderJobsMain, this ran twice for one edit.
+    window.p86InvoicesSyncStore = jest.fn(() => Promise.resolve());
+    window.renderJobsMain = jest.fn();
+
+    P('invoice', { jobId: 'job_1' });
+    await settle();
+
+    expect(window.p86InvoicesSyncStore).toHaveBeenCalledTimes(1);
+    expect(window.renderJobsMain).toHaveBeenCalledTimes(1);
+  });
+
+  test('a full job-detail refresh SUPPRESSES the narrow money repaint — it is a superset', async () => {
+    window.appState.currentJobId = 'job_open';
+    window.loadPurchaseOrdersForJob = jest.fn(() => Promise.resolve());
+    window.p86JobDetailRefresh = jest.fn(() => true);    // the latch fired
+    window.p86RepaintJobMoneyTabs = jest.fn();
+
+    P('po', { jobId: 'job_open' });
+    await settle();
+
+    expect(window.p86JobDetailRefresh).toHaveBeenCalledTimes(1);
+    // renderJobDetail already repaints the money sections. Running both painted
+    // renderPurchaseOrders / renderChangeOrders / renderInvoices twice.
+    expect(window.p86RepaintJobMoneyTabs).not.toHaveBeenCalled();
+  });
+
+  test('...but a human edit (latch not set) still gets its ONE repaint', async () => {
+    window.appState.currentJobId = 'job_open';
+    window.loadPurchaseOrdersForJob = jest.fn(() => Promise.resolve());
+    window.p86JobDetailRefresh = jest.fn(() => false);   // no pending write
+    window.p86RepaintJobMoneyTabs = jest.fn();
+
+    P('po', { jobId: 'job_open' });
+    await settle();
+
+    expect(window.p86RepaintJobMoneyTabs).toHaveBeenCalledTimes(1);
+  });
+
+  test('the money editors do not fire the hub refresh themselves — the registry owns it', () => {
+    // The regression this guards is a CALL-SITE one: both editors used to call
+    // window.p86JobsHubRefresh() and THEN p86Refresh(...), whose surface calls
+    // it again. Two hub refetches and two repaints, 200ms apart, per edit.
+    const fs = require('fs');
+    const path = require('path');
+    ['purchase-order-editor.js', 'change-order-editor.js'].forEach((f) => {
+      const src = fs.readFileSync(path.join(__dirname, '..', 'js', f), 'utf8');
+      const calls = src.match(/window\.p86JobsHubRefresh\s*\(/g) || [];
+      expect({ file: f, calls: calls.length }).toEqual({ file: f, calls: 0 });
+    });
+  });
+});
+
+// ── a bulk action touches N jobs, not just the last one ─────────────────────
+describe('coalescing keeps every job, not the last', () => {
+  test('three jobs changed in one window all get their store patched', async () => {
+    window.loadBillsForJob = jest.fn(() => Promise.resolve());
+
+    P('bill', { jobId: 'job_a' });
+    P('bill', { jobId: 'job_b' });
+    P('bill', { jobId: 'job_c' });
+    await settle();
+
+    const jobs = window.loadBillsForJob.mock.calls.map((c) => c[0]).sort();
+    // Collapsing opts.jobId last-wins meant job_a and job_b silently kept their
+    // pre-write rows while the surface repainted and reported success.
+    expect(jobs).toEqual(['job_a', 'job_b', 'job_c']);
+  });
+});
+
+// ── every entry must be REACHABLE and point at something REAL ───────────────
+describe('registry honesty', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const JS_DIR = path.join(__dirname, '..', 'js');
+  const SOURCES = fs.readdirSync(JS_DIR)
+    .filter((f) => f.endsWith('.js'))
+    .map((f) => ({ file: f, src: fs.readFileSync(path.join(JS_DIR, f), 'utf8') }));
+
+  // A path is "published" when some module in js/ assigns its root onto window
+  // (or declares it as a top-level function), and — for a dotted path — that
+  // same module names the member. This is deliberately a SOURCE check: the
+  // defect it exists to catch is `report -> p86Reports.refresh`, a namespace no
+  // module has ever created, which no runtime stub could ever reveal.
+  function publishedBy(dotted) {
+    const [root, member] = String(dotted).split('.');
+    const rootRe = new RegExp('(?:window\\.' + root + '\\s*=)|(?:^\\s*function\\s+' + root + '\\s*\\()', 'm');
+    const owners = SOURCES.filter((s) => rootRe.test(s.src));
+    if (!owners.length) return null;
+    if (!member) return owners.map((o) => o.file);
+    const memberRe = new RegExp('(?:^|[^\\w.$])' + member + '\\s*[:=]', 'm');
+    const withMember = owners.filter((o) => memberRe.test(o.src));
+    return withMember.length ? withMember.map((o) => o.file) : null;
+  }
+
+  test('every path the registry can call is actually published by a module', () => {
+    const dead = P.paths().filter((p) => !publishedBy(p));
+    expect(dead).toEqual([]);
+  });
+
+  test('the check is real — a path nobody publishes is reported dead', () => {
+    // The exact entry that shipped: window.p86Reports does not exist anywhere.
+    expect(publishedBy('p86Reports.refresh')).toBeNull();
+    expect(publishedBy('renderJobsMain')).not.toBeNull();
+  });
+
+  test('every type is reachable — a dispatcher target or a p86Refresh() call site', () => {
+    const dispatcher = fs.readFileSync(
+      path.join(__dirname, '..', 'server', 'services', 'payload-dispatcher.js'), 'utf8');
+    const emitted = new Set((dispatcher.match(/entity_type:\s*'([a-z_]+)'/g) || [])
+      .map((m) => m.replace(/.*'([a-z_]+)'.*/, '$1')));
+    const clientCalls = new Set();
+    SOURCES.filter((s) => s.file !== 'refresh.js').forEach((s) => {
+      (s.src.match(/p86Refresh\(\s*'([a-z_]+)'/g) || [])
+        .forEach((m) => clientCalls.add(m.replace(/.*'([a-z_]+)'.*/, '$1')));
+    });
+    // Exactly ONE dispatch site passes the type indirectly: the Jobs Hub bulk
+    // bar maps its list key to a refresh type. Read that map rather than
+    // loosening the scan into a string search that would wave anything through.
+    const hub = SOURCES.find((s) => s.file === 'jobs-hub.js').src;
+    const bulkMap = hub.match(/BULK_REFRESH_TYPE\s*=\s*\{([\s\S]*?)\}/);
+    expect(bulkMap).not.toBeNull();
+    (bulkMap[1].match(/:\s*'([a-z_]+)'/g) || [])
+      .forEach((m) => clientCalls.add(m.replace(/.*'([a-z_]+)'.*/, '$1')));
+    const unreachable = P.types().filter((t) => !emitted.has(t) && !clientCalls.has(t));
+    // `sub` and `project` were exactly this: entries no door could ever fire.
+    expect(unreachable).toEqual([]);
+  });
+
+  test('every entry declares at least one path', () => {
+    const bare = P.types().filter((t) => P.paths(t).length === 0);
+    expect(bare).toEqual([]);
+  });
+
+  test('the report entry refreshes both surfaces a report can live on', async () => {
+    window.appState.currentJobId = 'job_open';
+    window.p86Projects = { refreshReports: jest.fn() };
+    window.p86JobReportsRefresh = jest.fn();
+
+    P('report', { id: 'rep_1' });
+    await settle();
+
+    expect(window.p86Projects.refreshReports).toHaveBeenCalledTimes(1);
+    expect(window.p86JobReportsRefresh).toHaveBeenCalledTimes(1);
+
+    delete window.p86Projects;
+    delete window.p86JobReportsRefresh;
+  });
+});

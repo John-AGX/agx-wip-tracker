@@ -121,7 +121,13 @@
    * be right on its next natural load. Documented rather than papered over. */
   function jobIdsFor(mirror, ids, explicit) {
     var out = {};
-    if (explicit) out[String(explicit)] = true;
+    // `explicit` is EVERY jobId the coalesced window collected, not just the
+    // last one. A bulk status change across three jobs used to arrive as three
+    // p86Refresh calls that overwrote a single opts.jobId, so two of the three
+    // jobs never had their store patched — while the surface repainted and
+    // reported success for all three.
+    (Array.isArray(explicit) ? explicit : (explicit != null ? [explicit] : []))
+      .forEach(function (j) { if (j != null) out[String(j)] = true; });
     var rows = (window.appData && window.appData[mirror]) || [];
     (ids || []).forEach(function (id) {
       for (var i = 0; i < rows.length; i++) {
@@ -150,22 +156,69 @@
   // Doing all three HERE is what lets the ~10 mutation sites be a single
   // p86Refresh(...) line instead of each remembering the full set — and what
   // stops two of them accidentally both refreshing the same thing.
+  //
+  // THE HUB REFRESH LIVES HERE AND NOWHERE ELSE. Every mutation site used to
+  // call p86JobsHubRefresh() itself AND then p86Refresh(...), so one edit ran
+  // two hub refetches and two repaints — the exact defect the registry was
+  // built to remove, reintroduced one layer up. Call sites now fire p86Refresh
+  // only; this is the single place that decides what a money write repaints.
+  var REPAINT_JOB_MONEY_PATHS = [
+    'renderJobsMain', 'p86JobsHubRefresh', 'p86JobDetailRefresh', 'p86RepaintJobMoneyTabs'
+  ];
+  var TASK_PATHS = ['p86Tasks.refresh', 'p86MyDay.render', 'renderSchedule', 'renderSummaryDashboard'];
   function repaintJobMoney(jobs) {
     call('renderJobsMain');
     call('p86JobsHubRefresh');
     var cur = window.appState && window.appState.currentJobId;
     if (!cur) return;
     if (jobs.length && jobs.indexOf(String(cur)) === -1) return;   // a different job changed
+    // p86JobDetailRefresh re-renders the WHOLE job detail, which is a strict
+    // superset of the money sections — so running both painted every money
+    // section twice. It is latch-gated (a background write sets the latch; a
+    // human edit does not) and returns true only when it actually rendered,
+    // which is the signal to skip the narrow repaint.
+    if (call('p86JobDetailRefresh', [String(cur)]) === true) return;
     call('p86RepaintJobMoneyTabs', [String(cur)]);
-    call('p86JobDetailRefresh', [String(cur)]);   // latch-gated; no-ops for human edits
   }
 
-  var APPDATA_ENTRY = { bucket: 'appdata', store: function () { reloadAppData(); } };
+  var APPDATA_ENTRY = {
+    bucket: 'appdata',
+    store: function () { reloadAppData(); },
+    paths: ['p86ReloadAllData', 'p86DataLoading']
+  };
+
+  // Build a surface from a list of dotted paths, so the declared `paths` and
+  // the code that runs CANNOT drift apart. Entries whose surface is
+  // conditional declare `paths` by hand; p86Refresh.paths() exposes the list
+  // and a test asserts every one of them is actually published by a module.
+  // (`window.p86Reports.refresh` sat in this table for a whole release
+  // pointing at a namespace that does not exist anywhere in the codebase —
+  // a surface reporting that it refreshed something it never touched.)
+  function callPaths(paths) {
+    return function () { paths.forEach(function (p) { call(p); }); };
+  }
+  function surfaceEntry(paths, extra) {
+    var e = extra || {};
+    e.paths = paths;
+    e.surface = callPaths(paths);
+    return e;
+  }
 
   /* ── the table ─────────────────────────────────────────────────────────
    * `bucket` groups types that MUST NOT run concurrently (see note 2).
    * `store` patches the read-cache and may return a promise.
-   * `surface` repaints, and always runs AFTER store settles. */
+   * `surface` repaints, and always runs AFTER store settles.
+   * `paths` lists every dotted window path the entry can call.
+   *
+   * REACHABILITY IS PART OF THE CONTRACT. A type only belongs here if
+   * something can actually emit it: the payload dispatcher's
+   * affected_targets vocabulary (job, estimate, lead, client, report, task,
+   * todo, reminder, calendar_event, schedule) or a direct p86Refresh() call
+   * site in js/ (po, co, bill, invoice, receipt). `sub` and `project` were
+   * removed because neither door can produce them — an entry nothing can
+   * reach is a claim of coverage that is never tested and never true. When
+   * the dispatcher grows a sub/project op, add the entry back WITH its
+   * emitter. */
   var ENTRIES = {
     // Jobs and estimates are the appData half. p86ReloadAllData patches the
     // store AND fans out the renderers, so it is both halves at once.
@@ -176,48 +229,64 @@
     job:      APPDATA_ENTRY,
     estimate: APPDATA_ENTRY,
 
-    lead:   { surface: function () { call('reloadLeadsCache'); } },
-    client: { surface: function () { call('reloadClientsCache'); } },
-    sub:    { surface: function () { call('p86Subs.refresh'); } },
+    lead:   surfaceEntry(['reloadLeadsCache']),
+    client: surfaceEntry(['reloadClientsCache']),
 
     po: {
-      store:   function (ids, o) { return loadAll('loadPurchaseOrdersForJob', jobIdsFor('jobPurchaseOrders', ids, o.jobId)); },
-      surface: function (ids, o) { repaintJobMoney(jobIdsFor('jobPurchaseOrders', ids, o.jobId)); }
+      paths:   ['loadPurchaseOrdersForJob'].concat(REPAINT_JOB_MONEY_PATHS),
+      store:   function (ids, o) { return loadAll('loadPurchaseOrdersForJob', jobIdsFor('jobPurchaseOrders', ids, o.jobIds)); },
+      surface: function (ids, o) { repaintJobMoney(jobIdsFor('jobPurchaseOrders', ids, o.jobIds)); }
     },
     co: {
-      store:   function (ids, o) { return loadAll('loadChangeOrdersForJob', jobIdsFor('jobChangeOrders', ids, o.jobId)); },
-      surface: function (ids, o) { repaintJobMoney(jobIdsFor('jobChangeOrders', ids, o.jobId)); }
+      paths:   ['loadChangeOrdersForJob'].concat(REPAINT_JOB_MONEY_PATHS),
+      store:   function (ids, o) { return loadAll('loadChangeOrdersForJob', jobIdsFor('jobChangeOrders', ids, o.jobIds)); },
+      surface: function (ids, o) { repaintJobMoney(jobIdsFor('jobChangeOrders', ids, o.jobIds)); }
     },
     bill: {
-      store:   function (ids, o) { return loadAll('loadBillsForJob', jobIdsFor('jobVendorBills', ids, o.jobId)); },
-      surface: function (ids, o) { repaintJobMoney(jobIdsFor('jobVendorBills', ids, o.jobId)); }
+      paths:   ['loadBillsForJob'].concat(REPAINT_JOB_MONEY_PATHS),
+      store:   function (ids, o) { return loadAll('loadBillsForJob', jobIdsFor('jobVendorBills', ids, o.jobIds)); },
+      surface: function (ids, o) { repaintJobMoney(jobIdsFor('jobVendorBills', ids, o.jobIds)); }
     },
+    // AR invoices. p86InvoicesSyncStore is the STORE half only — it refetches
+    // /invoices and patches appData.arInvoices. It used to repaint the jobs
+    // list itself as well, so the surface half here painted it a second time;
+    // the repaint now belongs to this table alone. Reached from the three
+    // invoice mutation sites in js/invoices.js (save / status / delete).
     invoice: {
+      paths:   ['p86InvoicesSyncStore'].concat(REPAINT_JOB_MONEY_PATHS),
       store:   function () { return call('p86InvoicesSyncStore'); },
-      surface: function (ids, o) { repaintJobMoney(jobIdsFor('arInvoices', ids, o.jobId)); }
+      surface: function (ids, o) { repaintJobMoney(jobIdsFor('arInvoices', ids, o.jobIds)); }
     },
     // Receipts have no client store at all — mountRollup re-fetches on every
     // call. The whole gap was that nothing re-called it.
-    receipt: { surface: function () { call('p86RemountReceiptRollups'); } },
+    receipt: surfaceEntry(['p86RemountReceiptRollups']),
 
-    task:           { bucket: 'tasks', surface: refreshTaskSurfaces },
-    todo:           { bucket: 'tasks', surface: refreshTaskSurfaces },
-    reminder:       { bucket: 'tasks', surface: refreshTaskSurfaces },
-    calendar_event: { bucket: 'tasks', surface: refreshTaskSurfaces },
-    schedule:       { bucket: 'tasks', surface: refreshTaskSurfaces },
+    task:           { bucket: 'tasks', paths: TASK_PATHS, surface: refreshTaskSurfaces },
+    todo:           { bucket: 'tasks', paths: TASK_PATHS, surface: refreshTaskSurfaces },
+    reminder:       { bucket: 'tasks', paths: TASK_PATHS, surface: refreshTaskSurfaces },
+    calendar_event: { bucket: 'tasks', paths: TASK_PATHS, surface: refreshTaskSurfaces },
+    schedule:       { bucket: 'tasks', paths: TASK_PATHS, surface: refreshTaskSurfaces },
 
-    project: { surface: function () { call('p86Projects.refresh'); } },
-    report:  { surface: function () { call('p86Reports.refresh'); } }
+    // Reports are polymorphic: the same row shows on a project's Reports tab
+    // and on a job's. p86Projects.refreshReports refetches + repaints the
+    // project tab; p86JobReportsRefresh does the job tab but REFUSES while its
+    // editor is open, because renderJobReports() resets the pane to list mode
+    // and would eat an in-progress draft.
+    report: {
+      paths: ['p86Projects.refreshReports', 'p86JobReportsRefresh'],
+      surface: function () {
+        call('p86Projects.refreshReports');
+        var cur = window.appState && window.appState.currentJobId;
+        if (cur) call('p86JobReportsRefresh', [String(cur)]);
+      }
+    }
   };
 
   // Tasks, to-dos, reminders and calendar events all land on the same four
   // surfaces, so they share a bucket: ticking three punch-list items in a row
   // repaints once, not three times.
   function refreshTaskSurfaces() {
-    call('p86Tasks.refresh');
-    call('p86MyDay.render');
-    call('renderSchedule');
-    call('renderSummaryDashboard');
+    TASK_PATHS.forEach(function (p) { call(p); });
   }
 
   /* ── coalescing dispatcher ─────────────────────────────────────────────── */
@@ -231,8 +300,9 @@
   function runBucket(key) {
     var b = _buckets[key];
     if (!b) return Promise.resolve();
-    var types = Object.keys(b.types), ids = Object.keys(b.ids), opts = b.opts;
-    b.types = Object.create(null); b.ids = Object.create(null); b.opts = {};
+    var types = Object.keys(b.types), ids = Object.keys(b.ids);
+    var opts = { jobIds: Object.keys(b.jobIds) };
+    b.types = Object.create(null); b.ids = Object.create(null); b.jobIds = Object.create(null);
 
     // One pass per distinct entry in the bucket. Types sharing a bucket AND
     // an entry function (task/todo/reminder) collapse to a single run.
@@ -257,10 +327,13 @@
 
   function schedule(type, opts) {
     var key = bucketKey(type);
-    var b = _buckets[key] || (_buckets[key] = { types: Object.create(null), ids: Object.create(null), opts: {}, timer: null });
+    var b = _buckets[key] || (_buckets[key] = { types: Object.create(null), ids: Object.create(null), jobIds: Object.create(null), timer: null });
     b.types[type] = true;
     if (opts && opts.id != null) b.ids[String(opts.id)] = true;
-    if (opts && opts.jobId != null) b.opts.jobId = opts.jobId;
+    // A SET, not last-wins: a bulk action fires one call per job into the same
+    // coalescing window, and overwriting a single jobId silently dropped every
+    // job but the last from the store patch.
+    if (opts && opts.jobId != null) b.jobIds[String(opts.jobId)] = true;
     if (b.timer) return;                       // already queued — this is the coalesce
     b.timer = setTimeout(function () { b.timer = null; runBucket(key); }, COALESCE_MS);
   }
@@ -293,6 +366,18 @@
   p86Refresh.isTyping = isTyping;
   p86Refresh.isTypingIn = isTypingIn;
   p86Refresh.types = function () { return Object.keys(ENTRIES); };
+  // Every dotted window path an entry can call. This is the seam a test uses
+  // to assert that each one is actually PUBLISHED by a module — the check that
+  // was missing when `report` pointed at `window.p86Reports`, a namespace that
+  // exists nowhere in the codebase.
+  p86Refresh.paths = function (type) {
+    if (type) return ((ENTRIES[type] && ENTRIES[type].paths) || []).slice();
+    var all = {};
+    Object.keys(ENTRIES).forEach(function (t) {
+      (ENTRIES[t].paths || []).forEach(function (p) { all[p] = true; });
+    });
+    return Object.keys(all);
+  };
   // Test/debug seam: run every queued bucket now instead of on its timer.
   p86Refresh.flush = function () {
     return Promise.all(Object.keys(_buckets).map(function (k) {
