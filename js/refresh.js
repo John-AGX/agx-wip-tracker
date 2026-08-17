@@ -157,11 +157,23 @@
   // p86Refresh(...) line instead of each remembering the full set — and what
   // stops two of them accidentally both refreshing the same thing.
   //
-  // THE HUB REFRESH LIVES HERE AND NOWHERE ELSE. Every mutation site used to
-  // call p86JobsHubRefresh() itself AND then p86Refresh(...), so one edit ran
-  // two hub refetches and two repaints — the exact defect the registry was
-  // built to remove, reintroduced one layer up. Call sites now fire p86Refresh
-  // only; this is the single place that decides what a money write repaints.
+  // NO MUTATION SITE MAY REFRESH THE HUB ITSELF. Mutation sites used to call
+  // p86JobsHubRefresh() AND THEN p86Refresh(...), so one edit ran two hub
+  // refetches and two repaints — the exact defect the registry was built to
+  // remove, reintroduced one layer up. This is the one place that decides what
+  // a money write repaints.
+  //
+  // js/jobs-hub.js is the single exception, and only because it OWNS the
+  // function: it publishes window.p86JobsHubRefresh, and its own bill editor
+  // reloads the list it just wrote to. That path does not also fire
+  // p86Refresh, so a write is never refreshed from both.
+  //
+  // ENFORCED, NOT REMEMBERED. test/refresh-registry.test.js scans EVERY file
+  // in js/ and fails on a call outside those two. The earlier version of that
+  // test named two editor files by hand — and a third call site, in
+  // estimate-editor.js, sat outside the list untouched for a whole release.
+  // That is what "an invariant enforced by enumerating call sites will leak"
+  // looks like, so the check is a scan now and must stay one.
   var REPAINT_JOB_MONEY_PATHS = [
     'renderJobsMain', 'p86JobsHubRefresh', 'p86JobDetailRefresh', 'p86RepaintJobMoneyTabs'
   ];
@@ -210,15 +222,22 @@
    * `surface` repaints, and always runs AFTER store settles.
    * `paths` lists every dotted window path the entry can call.
    *
-   * REACHABILITY IS PART OF THE CONTRACT. A type only belongs here if
-   * something can actually emit it: the payload dispatcher's
-   * affected_targets vocabulary (job, estimate, lead, client, report, task,
-   * todo, reminder, calendar_event, schedule) or a direct p86Refresh() call
-   * site in js/ (po, co, bill, invoice, receipt). `sub` and `project` were
-   * removed because neither door can produce them — an entry nothing can
-   * reach is a claim of coverage that is never tested and never true. When
-   * the dispatcher grows a sub/project op, add the entry back WITH its
-   * emitter. */
+   * REACHABILITY IS PART OF THE CONTRACT, IN BOTH DIRECTIONS.
+   *
+   *   registry → door: a type only belongs here if something can actually
+   *   emit it — the payload dispatcher's affected_targets vocabulary or a
+   *   direct p86Refresh() call site in js/ (po, co, bill, invoice, receipt).
+   *   `sub` and `project` were removed because neither door produced them; an
+   *   entry nothing can reach is a claim of coverage that is never true.
+   *
+   *   door → registry: every entity type the SERVER dispatcher can emit must
+   *   have an entry here, or be named in the test's meta-exclusion list with
+   *   a reason. This half was missing, and `assembly` slipped through a sweep
+   *   whose stated goal was "everywhere" — an agent could write a recipe and
+   *   no surface moved. Both directions are tested against the real sources
+   *   (js/ for one, server/services/payload-dispatcher.js for the other), so
+   *   adding a dispatcher target with no plan for the screen fails the suite
+   *   rather than shipping quiet. */
   var ENTRIES = {
     // Jobs and estimates are the appData half. p86ReloadAllData patches the
     // store AND fans out the renderers, so it is both halves at once.
@@ -260,6 +279,35 @@
     // Receipts have no client store at all — mountRollup re-fetches on every
     // call. The whole gap was that nothing re-called it.
     receipt: surfaceEntry(['p86RemountReceiptRollups']),
+
+    // Cost assemblies (recipes). The dispatcher emits assembly create / update
+    // / delete targets (payload-dispatcher.js, dispatchAssembly), and this
+    // entry was missing entirely — so an agent building a recipe from a
+    // research packet updated no list at all.
+    //
+    // p86Assemblies.renderList() is BOTH halves at once, like p86ReloadAllData:
+    // it re-fetches /api/assemblies into the module's `_list` and then paints.
+    // Called bare it keeps whatever host prefix and view filter are currently
+    // active, so the one call covers all three hosts the recipe list can
+    // render into — Assembly Studio → Assemblies, Assembly Studio → Parametric,
+    // and the classic Estimates → Assemblies pane — and no-ops when none of
+    // them is mounted. Declared as `store` because that is what it is; adding
+    // a `surface` that repainted again would be the double this table exists
+    // to prevent.
+    //
+    // Deliberately NOT wired here, each for a reason:
+    //   · the Assembly Studio cockpit (research inbox + tuning queue) already
+    //     has its own visibility-gated p86:payload-applied listener in
+    //     js/console.js that calls loadResearchInbox + loadAssemblyTuning.
+    //     Listing them here would refresh them TWICE per applied card.
+    //   · the materials drawer re-fetches /api/assemblies on open and on every
+    //     keystroke, so it holds no cache that can go stale.
+    //   · the sheet-editor's parametric catalog is loaded per open and sits
+    //     under a canvas being drawn on — note 3 above.
+    assembly: {
+      paths: ['p86Assemblies.renderList'],
+      store: function () { return call('p86Assemblies.renderList'); }
+    },
 
     task:           { bucket: 'tasks', paths: TASK_PATHS, surface: refreshTaskSurfaces },
     todo:           { bucket: 'tasks', paths: TASK_PATHS, surface: refreshTaskSurfaces },

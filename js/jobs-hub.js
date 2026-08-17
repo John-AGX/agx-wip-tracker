@@ -199,7 +199,15 @@ function p86Ask(message, opts) {
     if (view === 'submittals')      return renderWorkflow(host, 'submittal', 'Submittals');
   }
 
-  // Lets the PO editor refresh the hub list after a status change.
+  // The refresh registry's ONE hook into the hub. js/refresh.js calls this from
+  // repaintJobMoney for every po / co / bill / invoice write; nothing else in
+  // js/ may call it (test/refresh-registry.test.js scans ALL of js/ for that,
+  // rather than the two files it used to name by hand).
+  //
+  // It refetches QUIETLY. A refresh arriving here is a data-changed refresh —
+  // the user did not ask for a load, and blanking the list to "Loading…" while
+  // rows are already on screen is a visible flicker for no information. Only a
+  // user-initiated load (first paint, filter change, saved view, + New) blanks.
   var _currentRefetch = null;
   window.p86JobsHubRefresh = function () { if (typeof _currentRefetch === 'function') _currentRefetch(); };
 
@@ -320,18 +328,40 @@ function p86Ask(message, opts) {
     // neither patched its mirror at all. Each type goes through the refresh
     // registry, which patches the store and repaints the jobs list in that
     // order rather than firing N unordered fetches and returning immediately.
+    //
+    // Returns TRUE only when the write was actually handed to the registry —
+    // which means the registry WILL refetch this list (its surface calls
+    // p86JobsHubRefresh -> _currentRefetch -> refetch, the very function below).
+    // The callers use that answer to decide whether they still owe a refetch.
+    // Returning false on the un-mapped / registry-missing paths is the whole
+    // point: a hub that refreshes zero times is worse than one that flickers.
     var BULK_REFRESH_TYPE = { 'bills': 'bill', 'purchase-orders': 'po', 'change-orders': 'co' };
     function bulkRefreshBillStore(ids) {
       var type = BULK_REFRESH_TYPE[cfg.key];
-      if (!type || !window.p86Refresh) return;
+      if (!type || !window.p86Refresh) return false;
       var jset = {};
       (ids || []).forEach(function (id) {
         var r = (_rows || []).filter(function (x) { return String(x.id) === String(id); })[0];
         if (r && r.job_id) jset[r.job_id] = true;
       });
       var jobs = Object.keys(jset);
-      if (!jobs.length) { window.p86Refresh(type); return; }
+      if (!jobs.length) { window.p86Refresh(type); return true; }
       jobs.forEach(function (j) { window.p86Refresh(type, { jobId: j }); });
+      return true;
+    }
+    // Every bulk action ends the same way: drop the selection, hide the ribbon
+    // NOW (so the bar doesn't sit there claiming N selected while the refetch
+    // is in flight), and refresh the list EXACTLY ONCE.
+    //
+    // The bug this replaces: `bulkRefreshBillStore(ids); _selected.clear();
+    // refetch();` ran cfg.fetch twice ~200ms apart — once here and once when
+    // the registry's surface reached p86JobsHubRefresh() -> this same closure.
+    // Unlike the other double-fires, refetch() blanks the list first, so the
+    // second one was a flicker the user could see.
+    function afterBulk(ids) {
+      _selected.clear();
+      updateBulkBar();                 // ribbon only — does NOT repaint the list
+      if (!bulkRefreshBillStore(ids)) refetch(true);
     }
     function updateBulkBar() {
       var bar = host.querySelector('#jh-bulkbar');
@@ -347,8 +377,7 @@ function p86Ask(message, opts) {
             .then(function (res) {
               var okc = res.filter(Boolean).length, fail = res.length - okc;
               if (typeof window.p86Toast === 'function') window.p86Toast('Status set on ' + okc + (fail ? ', ' + fail + ' failed' : '') + '.', fail ? 'error' : 'success');
-              bulkRefreshBillStore(ids);
-              _selected.clear(); refetch();
+              afterBulk(ids);
             });
         });
       }
@@ -360,8 +389,7 @@ function p86Ask(message, opts) {
             .then(function (res) {
               var okc = res.filter(Boolean).length, fail = res.length - okc;
               if (typeof window.p86Toast === 'function') window.p86Toast('Deleted ' + okc + (fail ? ', ' + fail + ' failed (locked or no access)' : '') + '.', fail ? 'error' : 'success');
-              bulkRefreshBillStore(ids);
-              _selected.clear(); refetch();
+              afterBulk(ids);
             });
         });
       }
@@ -468,27 +496,39 @@ function p86Ask(message, opts) {
       // so nothing sticky overlaps that checkbox).
       if (window.p86Tables && cfg.enhanceKey) window.p86Tables.enhance(cfg.enhanceKey);
     }
-    function refetch() {
+    // `quiet` = a DATA-CHANGED refresh (the refresh registry, an editor save).
+    // Those must not blank the list: the rows on screen are the previous truth,
+    // the replacement lands in a few hundred ms, and "Loading…" in between is a
+    // flicker the user reads as the page breaking. A USER-INITIATED load (first
+    // paint, filter change, saved view, + New) keeps the blank — there the wait
+    // is the answer to something the user just asked for.
+    // The error branch still paints, quiet or not: a silent failure that leaves
+    // stale rows on screen is the one thing worse than a flicker.
+    function refetch(quiet) {
       var listEl = host.querySelector('#jh-list');
-      if (listEl) listEl.innerHTML = '<div class="jobshub-loading">Loading…</div>';
+      if (listEl && !quiet) listEl.innerHTML = '<div class="jobshub-loading">Loading…</div>';
       cfg.fetch(st).then(function (rows) { _rows = rows || []; repaint(); })
         .catch(function (err) {
           if (listEl) listEl.innerHTML = '<div class="jobshub-error">Failed to load: ' + esc((err && err.message) || 'error') + '</div>';
         });
     }
-    _currentRefetch = refetch;
+    // Wrapped, not assigned directly: p86JobsHubRefresh() and the create-modal
+    // callback both hand their own arguments to whatever they call, and a stray
+    // truthy first argument silently deciding `quiet` is exactly the kind of
+    // accident this seam must not have.
+    _currentRefetch = function () { refetch(true); };
     var searchEl = host.querySelector('#jh-search');
     var jobEl = host.querySelector('#jh-job');
     var statusEl = host.querySelector('#jh-status');
     var newBtn = host.querySelector('#jh-new');
     if (searchEl) searchEl.addEventListener('input', function () { st.q = searchEl.value; repaint(); });
-    if (jobEl) jobEl.addEventListener('change', function () { st.job = jobEl.value; try { if (HUBVK) localStorage.removeItem(HUBVK); } catch (e) {} refetch(); });
-    if (statusEl) statusEl.addEventListener('change', function () { st.status = statusEl.value; try { if (HUBVK) localStorage.removeItem(HUBVK); } catch (e) {} refetch(); });
-    if (newBtn) newBtn.addEventListener('click', function () { openCreateModal(cfg.createKind, refetch); });
+    if (jobEl) jobEl.addEventListener('change', function () { st.job = jobEl.value; try { if (HUBVK) localStorage.removeItem(HUBVK); } catch (e) {} refetch(false); });
+    if (statusEl) statusEl.addEventListener('change', function () { st.status = statusEl.value; try { if (HUBVK) localStorage.removeItem(HUBVK); } catch (e) {} refetch(false); });
+    if (newBtn) newBtn.addEventListener('click', function () { openCreateModal(cfg.createKind, function () { refetch(false); }); });
     var viewsBtn = host.querySelector('#jh-views');
     if (viewsBtn) viewsBtn.addEventListener('click', function () { openViewsPopover(viewsBtn); });
     if (typeof cfg.wireExtra === 'function') cfg.wireExtra(host);
-    refetch();
+    refetch(false);   // first paint — the user opened this list, so show the wait
     // Restore the last-applied (or default) saved view once per page load —
     // hub filters live in _state (memory) and reset on refresh, so re-apply
     // from the server + localStorage so a saved view survives a reload.

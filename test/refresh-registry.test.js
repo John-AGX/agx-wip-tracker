@@ -19,6 +19,93 @@ beforeAll(() => {
   P = window.p86Refresh;
 });
 
+// ── shared source seams ─────────────────────────────────────────────────────
+// Several checks here are SOURCE checks, not runtime ones, because the defects
+// they catch are invisible at runtime: a registry path pointing at a namespace
+// no module creates, a dispatcher target with no client entry, a mutation site
+// that refreshes a surface twice. Hoisted to module scope so both the
+// registry-honesty and door-coverage groups read the same files.
+const fs = require('fs');
+const path = require('path');
+const JS_DIR = path.join(__dirname, '..', 'js');
+const SOURCES = fs.readdirSync(JS_DIR)
+  .filter((f) => f.endsWith('.js'))
+  .map((f) => ({ file: f, src: fs.readFileSync(path.join(JS_DIR, f), 'utf8') }));
+const DISPATCHER_PATH = path.join(__dirname, '..', 'server', 'services', 'payload-dispatcher.js');
+const DISPATCHER_SRC = fs.readFileSync(DISPATCHER_PATH, 'utf8');
+
+// Strip `//` comments before scanning for call sites. Several modules quote the
+// exact call they document as forbidden, and a scan that counted prose would
+// fail on the explanation of the fix rather than on the defect.
+//
+// LINE COMMENTS ONLY, deliberately. The first version of this also stripped
+// /* … */ and that was a silent hole: js/estimate-editor.js contains the string
+// "application/pdf,image/*", whose `/*` opened a phantom block comment that ate
+// every line up to the next real `*/` — including a live window.p86JobsHubRefresh()
+// call, which the scan then reported as absent. A checker that quietly stops
+// seeing things is worse than no checker, so this only removes what it can
+// remove safely, and `codeOnly` has its own test below.
+function codeOnly(src) {
+  return String(src)
+    .split('\n')
+    .map((line) => line.replace(/(^|[^:"'`\\])\/\/.*$/, '$1'))
+    .join('\n');
+}
+
+// The body of `function <name>(...) { ... }`, brace-balanced, so a check can
+// count calls INSIDE one function instead of across a 1,200-line module where
+// a legitimate call elsewhere would mask the one that matters. Run it on
+// comment-stripped source: a prose brace would throw the balance off.
+function fnBody(src, name) {
+  const head = new RegExp('function\\s+' + name + '\\s*\\(');
+  const m = head.exec(src);
+  if (!m) return null;
+  const open = src.indexOf('{', m.index + m[0].length);
+  if (open === -1) return null;
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}' && --depth === 0) return src.slice(open + 1, i);
+  }
+  return null;
+}
+
+// Every entity_type string that can reach the client in an applied payload's
+// affected_targets. DERIVED FROM THE SERVER SOURCE, never hand-copied: a
+// literal list here would go stale the first time someone adds a dispatcher
+// target, which is precisely the failure these checks exist to catch.
+//
+// Two contributions, because the dispatcher has two shapes:
+//   1. the DISPATCHERS map — the authoritative set of types that can be
+//      WRITTEN. The bulk / conditional / skipped result rows echo
+//      `target.entity_type` back verbatim, so every key here can surface.
+//   2. `entity_type: '<literal>'` in the returned result objects — this also
+//      picks up 'move', which is a target-level op with no DISPATCHERS key.
+function emittedEntityTypes() {
+  const out = new Set();
+  const map = DISPATCHER_SRC.match(/const DISPATCHERS\s*=\s*\{([\s\S]*?)\n\};/);
+  if (map) (map[1].match(/^\s*([a-z_]+)\s*:/gm) || [])
+    .forEach((m) => out.add(m.replace(/[\s:]/g, '')));
+  (DISPATCHER_SRC.match(/entity_type:\s*'([a-z_]+)'/g) || [])
+    .forEach((m) => out.add(m.replace(/.*'([a-z_]+)'.*/, '$1')));
+  return out;
+}
+
+// Emitted types that deliberately refresh NOTHING. Each carries its reason,
+// because "we forgot to wire it" and "there is nothing on screen to wire"
+// look identical from the outside — that ambiguity is how `assembly` sat
+// unwired through a sweep whose stated goal was "everywhere".
+const META_TYPES = {
+  move: 'A summary receipt pushed AFTER both halves of the move have already ' +
+        'emitted their own concrete targets (runTarget in payload-dispatcher.js). ' +
+        'Refreshing on it would repaint those surfaces a second time.',
+  system: 'Org/system settings multi-op. Not a row: it has no single backing ' +
+        'table (it is absent from TABLE_FOR_ENTITY for the same reason) and no ' +
+        'client read-cache to patch.',
+  deal_memory: 'Append-only notes on a deal lineage, read server-side when a ' +
+        'deal thread assembles its context. No client surface renders them.',
+};
+
 // Drain the coalescing window AND any promise microtasks the run chains on.
 async function settle() {
   jest.advanceTimersByTime(300);
@@ -387,17 +474,45 @@ describe('one mutation repaints each surface exactly once', () => {
     expect(window.p86RepaintJobMoneyTabs).toHaveBeenCalledTimes(1);
   });
 
-  test('the money editors do not fire the hub refresh themselves — the registry owns it', () => {
-    // The regression this guards is a CALL-SITE one: both editors used to call
+  test('NO module outside the registry fires the hub refresh — scanned, not enumerated', () => {
+    // The regression this guards is a CALL-SITE one: an editor calls
     // window.p86JobsHubRefresh() and THEN p86Refresh(...), whose surface calls
     // it again. Two hub refetches and two repaints, 200ms apart, per edit.
-    const fs = require('fs');
-    const path = require('path');
-    ['purchase-order-editor.js', 'change-order-editor.js'].forEach((f) => {
-      const src = fs.readFileSync(path.join(__dirname, '..', 'js', f), 'utf8');
-      const calls = src.match(/window\.p86JobsHubRefresh\s*\(/g) || [];
-      expect({ file: f, calls: calls.length }).toEqual({ file: f, calls: 0 });
-    });
+    //
+    // This used to name purchase-order-editor.js and change-order-editor.js by
+    // hand — and estimate-editor.js sat outside that list with a live call for
+    // a whole release. An invariant enforced by enumerating call sites leaks,
+    // so the check now walks EVERY file in js/.
+    //
+    // jobs-hub.js is the one exclusion, and it is structural rather than a
+    // grandfather clause: that module DEFINES window.p86JobsHubRefresh, and
+    // its own bill editor uses it to reload the list it just wrote to on a
+    // path that does not also call p86Refresh.
+    const OWNER = 'jobs-hub.js';
+    const offenders = SOURCES
+      .filter((s) => s.file !== 'refresh.js' && s.file !== OWNER)
+      .map((s) => ({ file: s.file, calls: (codeOnly(s.src).match(/window\.p86JobsHubRefresh\s*\(/g) || []).length }))
+      .filter((s) => s.calls > 0);
+    expect(offenders).toEqual([]);
+  });
+
+  test('...and that scan can actually see a call — it is not matching nothing', () => {
+    // Guards the guard: if codeOnly() or the pattern ever stopped matching, the
+    // test above would pass on a codebase full of offenders.
+    expect(codeOnly('window.p86JobsHubRefresh();').match(/window\.p86JobsHubRefresh\s*\(/g)).toHaveLength(1);
+    // Comments in the money editors deliberately quote the old bad call, so the
+    // scan must read code only or it would fail on prose describing the fix.
+    expect(codeOnly('// used to call window.p86JobsHubRefresh() itself')).not.toContain('p86JobsHubRefresh');
+    // The regression that made this scan blind: a `/*` inside a STRING must not
+    // hide the code that follows it. This is the exact shape in
+    // estimate-editor.js — accept="application/pdf,image/*" — which swallowed a
+    // live call and made the scan report a clean file.
+    const trap = 'var a = "application/pdf,image/*";\nwindow.p86JobsHubRefresh();';
+    expect(codeOnly(trap).match(/window\.p86JobsHubRefresh\s*\(/g)).toHaveLength(1);
+    // And the owner really does still contain one, so OWNER is a live
+    // exclusion rather than a leftover.
+    const owner = SOURCES.find((s) => s.file === 'jobs-hub.js');
+    expect(codeOnly(owner.src).match(/window\.p86JobsHubRefresh\s*\(/g) || []).toHaveLength(1);
   });
 });
 
@@ -420,13 +535,6 @@ describe('coalescing keeps every job, not the last', () => {
 
 // ── every entry must be REACHABLE and point at something REAL ───────────────
 describe('registry honesty', () => {
-  const fs = require('fs');
-  const path = require('path');
-  const JS_DIR = path.join(__dirname, '..', 'js');
-  const SOURCES = fs.readdirSync(JS_DIR)
-    .filter((f) => f.endsWith('.js'))
-    .map((f) => ({ file: f, src: fs.readFileSync(path.join(JS_DIR, f), 'utf8') }));
-
   // A path is "published" when some module in js/ assigns its root onto window
   // (or declares it as a top-level function), and — for a dotted path — that
   // same module names the member. This is deliberately a SOURCE check: the
@@ -455,10 +563,7 @@ describe('registry honesty', () => {
   });
 
   test('every type is reachable — a dispatcher target or a p86Refresh() call site', () => {
-    const dispatcher = fs.readFileSync(
-      path.join(__dirname, '..', 'server', 'services', 'payload-dispatcher.js'), 'utf8');
-    const emitted = new Set((dispatcher.match(/entity_type:\s*'([a-z_]+)'/g) || [])
-      .map((m) => m.replace(/.*'([a-z_]+)'.*/, '$1')));
+    const emitted = emittedEntityTypes();
     const clientCalls = new Set();
     SOURCES.filter((s) => s.file !== 'refresh.js').forEach((s) => {
       (s.src.match(/p86Refresh\(\s*'([a-z_]+)'/g) || [])
@@ -495,5 +600,174 @@ describe('registry honesty', () => {
 
     delete window.p86Projects;
     delete window.p86JobReportsRefresh;
+  });
+});
+
+// ── the Jobs Hub bulk bar: one refresh per action, and no visible blank ─────
+// The registry surface reaches p86JobsHubRefresh() -> _currentRefetch() ->
+// the hub's own refetch. A bulk handler that ALSO called refetch() therefore
+// ran cfg.fetch twice ~200ms apart — and because refetch blanks the list to
+// "Loading…" first, this double was the one the user could see.
+//
+// These are source checks that COUNT, because the two failure modes are
+// "twice" and "zero" and both pass a truthiness check. They are scoped to a
+// single function body rather than the whole module, so an unrelated refetch
+// elsewhere can neither mask a regression nor cause a false alarm.
+describe('the Jobs Hub bulk bar', () => {
+  const HUB = codeOnly(SOURCES.find((s) => s.file === 'jobs-hub.js').src);
+
+  test('both bulk actions funnel through afterBulk — neither refreshes on its own', () => {
+    ['bulkSetStatus', 'bulkDelete'].forEach((name) => {
+      const body = fnBody(HUB, name);
+      expect({ fn: name, found: body !== null }).toEqual({ fn: name, found: true });
+      // Anchor: prove we extracted the right function before counting in it.
+      expect(body).toContain('bulkConfirm(');
+      expect({ fn: name, refetch: (body.match(/\brefetch\s*\(/g) || []).length })
+        .toEqual({ fn: name, refetch: 0 });
+      expect({ fn: name, storeRefresh: (body.match(/\bbulkRefreshBillStore\s*\(/g) || []).length })
+        .toEqual({ fn: name, storeRefresh: 0 });
+      expect({ fn: name, afterBulk: (body.match(/\bafterBulk\s*\(/g) || []).length })
+        .toEqual({ fn: name, afterBulk: 1 });
+    });
+  });
+
+  test('afterBulk refreshes the list exactly once, and only when the registry will not', () => {
+    const body = fnBody(HUB, 'afterBulk');
+    expect(body).not.toBeNull();
+    expect({ refetch: (body.match(/\brefetch\s*\(/g) || []).length }).toEqual({ refetch: 1 });
+    // The surviving call is the FALLBACK, not the primary. This is the half
+    // that matters most: bulkRefreshBillStore returns false when the list has
+    // no refresh type or the registry isn't loaded, and a hub that refreshes
+    // zero times is worse than one that refreshes twice.
+    expect(body).toMatch(/if\s*\(\s*!\s*bulkRefreshBillStore\s*\(\s*ids\s*\)\s*\)\s*refetch\s*\(/);
+  });
+
+  test('bulkRefreshBillStore reports whether the registry actually took the write', () => {
+    const body = fnBody(HUB, 'bulkRefreshBillStore');
+    expect(body).not.toBeNull();
+    // Every early exit that skips the registry must answer false, or afterBulk
+    // would trust a refresh that never happens.
+    expect(body).toMatch(/if\s*\(!type\s*\|\|\s*!window\.p86Refresh\)\s*return false;/);
+    expect({ falses: (body.match(/return false;/g) || []).length }).toEqual({ falses: 1 });
+    expect({ trues: (body.match(/return true;/g) || []).length }).toEqual({ trues: 2 });
+  });
+
+  test('a data-changed refetch does not blank the list to Loading…', () => {
+    // p86JobsHubRefresh -> _currentRefetch, which must ask for the quiet form.
+    expect(HUB).toMatch(/_currentRefetch\s*=\s*function\s*\(\s*\)\s*\{\s*refetch\(true\);\s*\}/);
+    const body = fnBody(HUB, 'refetch');
+    expect(body).not.toBeNull();
+    expect(body).toMatch(/if\s*\(listEl\s*&&\s*!quiet\)/);
+    // Exactly one place can paint the spinner, and it is behind that gate.
+    expect({ blanks: (body.match(/jobshub-loading/g) || []).length }).toEqual({ blanks: 1 });
+  });
+
+  test('user-initiated loads still show the wait — quiet must not become the default', () => {
+    // First paint, both filter selects, and the create modal: four explicit
+    // loud loads. Losing these would trade a flicker for a dead-looking page.
+    expect({ loud: (HUB.match(/\brefetch\(false\)/g) || []).length }).toEqual({ loud: 4 });
+  });
+});
+
+// ── THE INVERSE DIRECTION: door → registry ──────────────────────────────────
+// Everything above walks registry → door: each declared entry must be real and
+// reachable. Nothing checked the other way — that every entity type the SERVER
+// dispatcher can emit HAS an entry. That blind spot is exactly why `assembly`
+// slipped through a sweep whose stated goal was "everywhere": an agent could
+// create, retune or delete a cost recipe and not one surface moved, and every
+// registry→door test still passed, because the missing entry was not there to
+// be wrong about.
+//
+// The list of doors is derived from server/services/payload-dispatcher.js, not
+// written down here. A hardcoded expectation would rot the first time someone
+// added a target — which is the failure this exists to catch.
+describe('door → registry: every type the dispatcher can emit is handled', () => {
+  // Pure so the "does the check bite" test can run it against a mutilated
+  // registry without touching the real one.
+  function unhandled(emitted, registered) {
+    return [...emitted].filter((t) => !registered.has(t) && !META_TYPES[t]).sort();
+  }
+
+  test('the derivation really reads the dispatcher — an empty scrape must not pass silently', () => {
+    const emitted = emittedEntityTypes();
+    // Both contributions have to be alive: the DISPATCHERS map and the literal
+    // result rows. If either regex rots, one of these goes missing and the
+    // coverage test below would start passing vacuously.
+    expect(emitted.has('assembly')).toBe(true);      // DISPATCHERS key + 3 literals
+    expect(emitted.has('deal_memory')).toBe(true);   // DISPATCHERS key
+    expect(emitted.has('move')).toBe(true);          // literal only — no DISPATCHERS key
+    expect(emitted.has('job')).toBe(true);
+    expect(emitted.size).toBeGreaterThanOrEqual(13);
+  });
+
+  test('every emitted entity type has a registry entry, or a stated reason not to', () => {
+    // `assembly` was the one that failed this: three emit sites in
+    // payload-dispatcher.js (create / update / delete) and no entry at all.
+    expect(unhandled(emittedEntityTypes(), new Set(P.types()))).toEqual([]);
+  });
+
+  test('the check bites — drop the entry that was missing and it is named', () => {
+    const without = new Set(P.types());
+    without.delete('assembly');
+    expect(unhandled(emittedEntityTypes(), without)).toEqual(['assembly']);
+  });
+
+  test('the exclusion list is not a place to hide a real type', () => {
+    // A type cannot be BOTH excluded as meta and registered — that means
+    // somebody added the entry and left the excuse behind, and the next reader
+    // cannot tell which one is the truth.
+    const both = Object.keys(META_TYPES).filter((t) => P.types().indexOf(t) !== -1);
+    expect(both).toEqual([]);
+  });
+
+  test('every exclusion is still emitted — no rotted excuses', () => {
+    // If the dispatcher stops emitting one of these, the entry here is dead
+    // documentation pointing at a door that no longer exists.
+    const emitted = emittedEntityTypes();
+    const rotted = Object.keys(META_TYPES).filter((t) => !emitted.has(t));
+    expect(rotted).toEqual([]);
+  });
+
+  test('every exclusion carries a real reason, not an empty string', () => {
+    const unjustified = Object.keys(META_TYPES)
+      .filter((t) => !META_TYPES[t] || String(META_TYPES[t]).trim().length < 40);
+    expect(unjustified).toEqual([]);
+  });
+
+  test('an agent assembly write refreshes the recipe list exactly once', async () => {
+    // COUNT, not truthiness. The two failure modes are "zero" (what shipped)
+    // and "twice" (what a careless fix produces).
+    window.p86Assemblies = { renderList: jest.fn() };
+
+    P.fromTargets([
+      { entity_type: 'assembly', entity_id: 11 },
+      { entity_type: 'assembly', entity_id: 12 },
+      { entity_type: 'assembly', entity_id: 13 }
+    ], 'pay_asm');
+    await settle();
+
+    expect(window.p86Assemblies.renderList).toHaveBeenCalledTimes(1);
+    // Bare call: renderList keeps whichever host prefix and view filter the
+    // visible Assembly Studio tab set. Passing a prefix here would yank the
+    // user's Parametric filter off under them.
+    expect(window.p86Assemblies.renderList).toHaveBeenCalledWith();
+
+    delete window.p86Assemblies;
+  });
+
+  test('an assembly write does NOT also drive the Studio cockpit — console.js already does', async () => {
+    // js/console.js has its own visibility-gated p86:payload-applied listener
+    // for the research inbox + tuning queue. Naming them in the registry too
+    // would refresh them twice per applied card.
+    window.p86Assemblies = { renderList: jest.fn() };
+    window.p86Console = { loadAssemblyStudio: jest.fn() };
+
+    P('assembly', { id: 9 });
+    await settle();
+
+    expect(window.p86Console.loadAssemblyStudio).not.toHaveBeenCalled();
+
+    delete window.p86Assemblies;
+    delete window.p86Console;
   });
 });

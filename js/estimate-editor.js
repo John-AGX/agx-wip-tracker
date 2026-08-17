@@ -1220,9 +1220,18 @@
         job.estimate_id = est.id;
         if (typeof window.saveData === 'function') { try { window.saveData(); } catch (e) {} }
       }
-      // Refresh any open job surfaces so the fresh contract/cost show without a reload.
-      if (typeof window.renderJobsList === 'function') { try { window.renderJobsList(); } catch (e) {} }
-      if (typeof window.p86JobsHubRefresh === 'function') { try { window.p86JobsHubRefresh(); } catch (e) {} }
+      // Refresh the job surfaces that actually show what changed. Two of the
+      // three calls that used to sit here moved nothing:
+      //   · renderJobsList — no module in js/ publishes that name. The jobs
+      //     list and its money tiles are painted by renderJobsMain, so a
+      //     contract sync left the jobs-list tiles on the old number until a
+      //     reload. Replaced with the real painter.
+      //   · p86JobsHubRefresh — the Jobs Hub lists are CO / PO / Bills / RFIs
+      //     / Submittals; not one of them renders a job's contract or
+      //     estimated cost, so refetching them showed the user nothing. It was
+      //     also the call site that escaped a test naming two editor files by
+      //     hand. The hub refresh belongs to js/refresh.js alone.
+      if (typeof window.renderJobsMain === 'function') { try { window.renderJobsMain(); } catch (e) {} }
       if (typeof window.p86RerenderJobCards === 'function') { try { window.p86RerenderJobCards(); } catch (e) {} }
       function money(n) { return Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
       if (typeof window.p86Toast === 'function') window.p86Toast('Synced to job — contract $' + money(contractAmount) + ' · est. cost $' + money(estimatedCosts) + '.');
