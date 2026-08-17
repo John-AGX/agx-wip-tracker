@@ -986,22 +986,113 @@ describe('p86Refresh.now — the promise-returning seam', () => {
 // The allowlist below is NAMED AND JUSTIFIED, per file per symbol, exactly like
 // META_TYPES — not a loosened pattern. A pattern that quietly matches the
 // legitimate sites would also quietly match the next doc-import.js.
+//
+// WHAT IT WATCHES, all three derived from source and not from a brief:
+//   · the five server-backed money mirrors on appData (cross-checked against
+//     the boot hydrate in js/app.js), written by assignment, by computed key,
+//     by in-place array mutation, or by truncating .length;
+//   · the three load*ForJob money loaders (the whole set — scanned for, not
+//     assumed), with an UNFORCED call reported as its own separate finding;
+//   · all four repainters in refresh.js's REPAINT_JOB_MONEY_PATHS, in the
+//     `window.`-qualified and bare-global spellings alike.
+//
+// AND WHAT IT DOES NOT: it matches text, so any indirection through a variable
+// walks past it. That is not left to be discovered — the misses are pinned as
+// a test of their own further down, so the guard cannot quietly imply a reach
+// it does not have.
 describe('mutation site → registry: nothing patches a money store behind the registry', () => {
-  // The read-caches the registry declares as its own `store` half.
+  // The read-caches the registry declares as its own `store` half. Cross-checked
+  // against js/app.js, which is where the boot hydrate seeds them: these five are
+  // the SERVER-backed per-job money mirrors, and they are exactly the four the
+  // registry's jobIdsFor() reads plus the subs directory.
+  //
+  // DELIBERATELY NOT LISTED, and this is a distinction the guard would be wrong
+  // to blur: appData.purchaseOrders / changeOrders / invoices / subs. Those are
+  // the LEGACY localStorage blobs (app.js seeds them from
+  // safeLoadJSON('p86-jobs-purchaseorders') and friends) — the dead-store bug
+  // class, not tables. No registry entry owns them, no dispatcher target names
+  // them, and folding them in here would light up a dozen legacy filter/splice
+  // sites that have nothing to do with the refresh heartbeat, which is how an
+  // allowlist becomes noise nobody reads.
   const STORE_MIRRORS = ['jobPurchaseOrders', 'jobChangeOrders', 'jobVendorBills', 'arInvoices', 'subsDirectory'];
-  // The loaders + painter the registry drives. Calling one directly is doing by
-  // hand what the registry exists to do in one place, in the right order.
-  const REGISTRY_LOADERS = ['loadBillsForJob', 'loadPurchaseOrdersForJob', 'loadChangeOrdersForJob', 'renderJobsMain'];
+  // The money loaders the registry drives as its `store` half. Calling one
+  // directly is doing by hand what the registry exists to do in one place, in
+  // the right order.
+  //
+  // These three are the whole set, checked by scanning js/ for load*ForJob.
+  // The one other match — loadPOsForJob in js/jobs-hub.js — is a LOCAL closure
+  // inside the create-bill overlay that fills a <select> from the API and
+  // touches no store, so it is not a sibling and is not listed. (Noted because
+  // a future "just widen it to load\w+ForJob" would sweep it in and teach the
+  // next reader that the allowlist is full of things that don't matter.)
+  const MONEY_LOADERS = ['loadBillsForJob', 'loadPurchaseOrdersForJob', 'loadChangeOrdersForJob'];
+  // The repainters the registry owns — REPAINT_JOB_MONEY_PATHS in js/refresh.js,
+  // verbatim. Only renderJobsMain used to be checked here, which left three of
+  // the four unwatched; p86JobsHubRefresh had its own single-name scan above and
+  // p86JobDetailRefresh / p86RepaintJobMoneyTabs had nothing at all.
+  const REPAINTERS = ['renderJobsMain', 'p86JobsHubRefresh', 'p86JobDetailRefresh', 'p86RepaintJobMoneyTabs'];
+  const CALLABLES = MONEY_LOADERS.concat(REPAINTERS);
 
-  const WRITE_RE = new RegExp('(?:^|[^\\w.$])(?:window\\.)?appData\\.(' + STORE_MIRRORS.join('|') + ')\\s*=(?!=)', 'gm');
-  const CALL_RE = new RegExp('(?:^|[^\\w.$])(?:window\\.)?(' + REGISTRY_LOADERS.join('|') + ')\\s*\\(', 'gm');
+  // A reference to a mirror, in BOTH spellings: `appData.jobVendorBills` and the
+  // computed `appData['jobVendorBills']`. The computed form is the obvious way
+  // to walk past a dot-only pattern, so it is matched rather than left as a
+  // documented hole.
+  const MIRROR_ALT = STORE_MIRRORS.join('|');
+  const MIRROR_REF = "(?:^|[^\\w.$])(?:window\\.)?appData\\s*(?:\\.(" + MIRROR_ALT +
+                     ")|\\[\\s*['\"](" + MIRROR_ALT + ")['\"]\\s*\\])";
+  // In-place array mutation. doc-import.js used `= (…||[]).concat(rec)`, so the
+  // `=` half is what actually shipped — but `.push(rec)` is the same defect one
+  // keystroke away, and a guard that only knows the shape of the bug it already
+  // found is a guard for last week.
+  const MUTATORS = 'push|pop|shift|unshift|splice|sort|reverse|fill|copyWithin';
+  const WRITE_RE = new RegExp(
+    MIRROR_REF + "\\s*(?:=(?!=)|\\.(?:" + MUTATORS + ")\\s*\\(|\\.length\\s*=(?!=))", 'gm');
+  const CALL_RE = new RegExp('(?:^|[^\\w.$])(?:window\\.)?(' + CALLABLES.join('|') + ')\\s*\\(', 'gm');
 
+  // The argument list of the call whose `(` is at `openIdx`, brace-balanced.
+  function argsAt(code, openIdx) {
+    let depth = 0;
+    for (let i = openIdx; i < code.length; i++) {
+      const c = code[i];
+      if (c === '(' || c === '[' || c === '{') depth++;
+      else if (c === ')' || c === ']' || c === '}') { if (--depth === 0) return code.slice(openIdx + 1, i); }
+    }
+    return null;
+  }
+  function topLevelCommas(args) {
+    let depth = 0, n = 0;
+    for (const c of args) {
+      if ('([{'.indexOf(c) !== -1) depth++;
+      else if (')]}'.indexOf(c) !== -1) depth--;
+      else if (c === ',' && depth === 0) n++;
+    }
+    return n;
+  }
+
+  // Every symbol a file touches behind the registry's back. A money loader called
+  // with a SINGLE argument reports twice — once as a direct call, and once as
+  // `<loader> (no force)`, because omitting `force` is a defect in its own right:
+  // every load*ForJob is in-flight deduped per job, so an unforced call issued
+  // after a write JOINS the GET that was issued before it and resolves with
+  // pre-write rows. That is the exact trap refresh.js's loadAll() passes `true`
+  // to avoid, and it is what doc-import.js did. Two symbols, two justifications:
+  // "I own this loader" and "I meant to share the in-flight GET" are different
+  // claims and should have to be made separately.
   function bypassesIn(src) {
     const code = codeOnly(src);
     const hits = new Set();
     let m;
-    WRITE_RE.lastIndex = 0; while ((m = WRITE_RE.exec(code))) hits.add(m[1]);
-    CALL_RE.lastIndex = 0; while ((m = CALL_RE.exec(code))) hits.add(m[1]);
+    WRITE_RE.lastIndex = 0; while ((m = WRITE_RE.exec(code))) hits.add(m[1] || m[2]);
+    CALL_RE.lastIndex = 0;
+    while ((m = CALL_RE.exec(code))) {
+      const sym = m[1];
+      hits.add(sym);
+      if (MONEY_LOADERS.indexOf(sym) === -1) continue;
+      const open = code.indexOf('(', m.index + m[0].length - 1);
+      const args = argsAt(code, open);
+      // No args at all is a no-op call, not an unforced refetch.
+      if (args !== null && args.trim() !== '' && topLevelCommas(args) === 0) hits.add(sym + ' (no force)');
+    }
     return [...hits].sort();
   }
 
@@ -1014,12 +1105,16 @@ describe('mutation site → registry: nothing patches a money store behind the r
       jobVendorBills:    'Same boot hydrate: the bills list is fetched once at load and handed to appData wholesale, before any editor exists to write through the registry.',
       arInvoices:        'Same boot hydrate: AR invoices are seeded here; the registry `invoice` entry patches them afterwards via p86InvoicesSyncStore.',
       subsDirectory:     'Same boot hydrate for the subcontractor directory, which js/subs.js then owns.',
-      renderJobsMain:    'app.js owns the post-hydrate fan-out. When a full appData reload lands, every list repaints from here — that IS the `job`/`estimate` registry entry running, not a bypass of it.'
+      renderJobsMain:    'app.js owns the post-hydrate fan-out. When a full appData reload lands, every list repaints from here — that IS the `job`/`estimate` registry entry running, not a bypass of it.',
+      p86JobDetailRefresh: 'Same post-hydrate fan-out (fanOutRenderers). The open job page must repaint AFTER the appData load installs its objects, not off an event that races it — and the call is latch-gated, so it no-ops unless an agent write is actually pending. Firing a registry type here would re-enter the hydrate that is running.'
     },
     'jobs.js': {
       loadBillsForJob:          'DEFINES it, and is the module the registry `bill` store calls. Its own internal reads (a money tab opening) legitimately share the in-flight GET.',
       loadPurchaseOrdersForJob: 'DEFINES it — the registry `po` store resolves this very function off window.',
       loadChangeOrdersForJob:   'DEFINES it — the registry `co` store resolves this very function off window.',
+      'loadBillsForJob (no force)':          'The money-tab OPEN path (Promise.all at the top of the bills/PO tab render). Opening a tab is navigation, not a write, so joining an in-flight GET is the point — it is a shared read, and forcing here would issue a duplicate fetch on every tab switch.',
+      'loadPurchaseOrdersForJob (no force)': 'Same money-tab open: paired with loadBillsForJob in one Promise.all so the tab paints once both reads land. No write preceded it, so there is no pre-write GET to be fooled by.',
+      'loadChangeOrdersForJob (no force)':   'The change-order tab open, same shape and same reason: a view transition reading rows it does not yet have, deliberately sharing whatever fetch is already in flight for that job.',
       renderJobsMain:           'DEFINES it, and re-paints the jobs list on its own view transitions (opening/closing the list), which are navigation, not data changes.',
       jobPurchaseOrders:        'The loader body: loadPurchaseOrdersForJob is where the mirror is legitimately replaced for a job, and it is what the registry calls to do so.',
       jobChangeOrders:          'The loader body: loadChangeOrdersForJob writes the mirror it exists to refresh.',
@@ -1087,10 +1182,71 @@ describe('mutation site → registry: nothing patches a money store behind the r
     expect(bypassesIn('window.appData.jobPurchaseOrders = (window.appData.jobPurchaseOrders || []).concat(rec);'))
       .toEqual(['jobPurchaseOrders']);
     expect(bypassesIn('appData.jobChangeOrders = [];')).toEqual(['jobChangeOrders']);
-    expect(bypassesIn('window.loadBillsForJob(it.jobId);')).toEqual(['loadBillsForJob']);
+    expect(bypassesIn('window.loadBillsForJob(it.jobId);'))
+      .toEqual(['loadBillsForJob', 'loadBillsForJob (no force)']);
     expect(bypassesIn('  renderJobsMain();')).toEqual(['renderJobsMain']);
     expect(bypassesIn('if (typeof window.renderJobsMain === "function") window.renderJobsMain();'))
       .toEqual(['renderJobsMain']);
+    // The unforced loader call is doc-import's OTHER defect and reports as its
+    // own symbol, so it cannot be waved through by an excuse written about
+    // owning the loader.
+    expect(bypassesIn('loadBillsForJob(it.jobId);'))
+      .toEqual(['loadBillsForJob', 'loadBillsForJob (no force)']);
+    expect(bypassesIn('loadBillsForJob(jobId, true);')).toEqual(['loadBillsForJob']);
+    // A nested call in the first argument is still ONE argument — the comma
+    // scan is depth-aware, or `f(pick(a, b))` would read as forced.
+    expect(bypassesIn('loadBillsForJob(pick(a, b));'))
+      .toEqual(['loadBillsForJob', 'loadBillsForJob (no force)']);
+  });
+
+  test('the scanner catches the shapes doc-import did NOT use but the next one might', () => {
+    // Widened beyond the bug that was found. None of these exists in js/ today
+    // (verified: the whole tree's mirror writes are plain assignments), so every
+    // one of them is here to fail the FIRST time someone writes it.
+    expect(bypassesIn('appData.jobPurchaseOrders.push(rec);')).toEqual(['jobPurchaseOrders']);
+    expect(bypassesIn('window.appData.jobVendorBills.splice(i, 1);')).toEqual(['jobVendorBills']);
+    expect(bypassesIn('appData.arInvoices.unshift(row);')).toEqual(['arInvoices']);
+    expect(bypassesIn('appData.jobChangeOrders.length = 0;')).toEqual(['jobChangeOrders']);
+    // The computed property name — the obvious way around a dot-only pattern.
+    expect(bypassesIn("appData['jobPurchaseOrders'] = rows;")).toEqual(['jobPurchaseOrders']);
+    expect(bypassesIn('window.appData["arInvoices"].push(r);')).toEqual(['arInvoices']);
+    // The three repainters that were NOT watched before this widening.
+    expect(bypassesIn('p86JobsHubRefresh();')).toEqual(['p86JobsHubRefresh']);
+    expect(bypassesIn('window.p86JobDetailRefresh(jobId);')).toEqual(['p86JobDetailRefresh']);
+    expect(bypassesIn('p86RepaintJobMoneyTabs(String(cur));')).toEqual(['p86RepaintJobMoneyTabs']);
+    // A call built inside a template literal is still source text, and is caught
+    // for the same reason the `image/*` one is: nothing is being pre-stripped.
+    expect(bypassesIn('var s = `${renderJobsMain()}`;')).toEqual(['renderJobsMain']);
+  });
+
+  // ── WHAT THIS SCANNER DOES NOT CATCH ──────────────────────────────────────
+  // A source scan is only as good as its parser, and the honest failure of a
+  // guard like this is not "it broke" — it is "it kept passing". So the misses
+  // are pinned as tests rather than left to be discovered. If one of these ever
+  // starts being caught, this test fails and the comment above the guard gets
+  // to become less apologetic.
+  //
+  // Every miss below shares one root: the scanner matches TEXT, it does not
+  // resolve VALUES. An indirection through a variable defeats it, always.
+  test('the misses are named, not implied — this is a text scan, not a type check', () => {
+    // 1. A store write through a local alias. The mirror is aliased once and
+    //    then mutated under a name the scanner has never heard of.
+    expect(bypassesIn('var m = appData.arInvoices; m.push(row);')).toEqual([]);
+    // 2. A loader or repainter called through an alias, same reason.
+    expect(bypassesIn('var f = window.loadBillsForJob; f(jobId);')).toEqual([]);
+    expect(bypassesIn('var r = window["renderJobsMain"]; r();')).toEqual([]);
+    // 3. A computed key built at runtime rather than written as a literal.
+    expect(bypassesIn("appData['job' + 'VendorBills'] = rows;")).toEqual([]);
+    expect(bypassesIn('appData[MIRROR] = rows;')).toEqual([]);
+    // 4. A call assembled from a string.
+    expect(bypassesIn('window["load" + "BillsForJob"](jobId);')).toEqual([]);
+    // WHY THIS IS ACCEPTABLE, stated rather than assumed: every miss requires
+    // an indirection that nobody writes by accident. The defect this guard
+    // exists to stop — doc-import.js — was written in the most direct form
+    // available, because that is what someone reaching for the read-cache
+    // naturally types. The guard is a tripwire against the ordinary mistake,
+    // not a sandbox against a determined author, and it must not be described
+    // as the second thing.
   });
 
   test('...and does not fire on the shapes that are NOT writes or calls', () => {
@@ -1118,9 +1274,16 @@ describe('mutation site → registry: nothing patches a money store behind the r
     // opens a block comment that swallows every line to the next `*/`, so the
     // scan reports a clean file and the bite test passes when it should fail.
     const trap = 'var a = "application/pdf,image/*";\nwindow.loadBillsForJob(jobId);';
-    expect(bypassesIn(trap)).toEqual(['loadBillsForJob']);
+    expect(bypassesIn(trap)).toEqual(['loadBillsForJob', 'loadBillsForJob (no force)']);
     const trapCrlf = 'var a = "application/pdf,image/*";\r\nappData.jobVendorBills = rows;\r\n';
     expect(bypassesIn(trapCrlf)).toEqual(['jobVendorBills']);
+    // The same trap against the widened patterns, because widening a scanner is
+    // exactly when its stripper stops being re-checked. js/jobs-hub.js:838 also
+    // carries `image/*`, and the bulk-bar checks below sit downstream of it —
+    // one real `*/` away from having been swallowed too.
+    expect(bypassesIn('accept="application/pdf,image/*"\np86RepaintJobMoneyTabs(id);'))
+      .toEqual(['p86RepaintJobMoneyTabs']);
+    expect(bypassesIn("accept=\"image/*\"\nappData['arInvoices'].push(r);")).toEqual(['arInvoices']);
   });
 
   test('Bulk Document Import goes through the registry and nowhere else', () => {
