@@ -3399,7 +3399,14 @@
     <script src="js/entity-card.js?v=9"></script>
     <!-- Lead/estimate context card mounted into #app-sidebar (uses p86EntityCard). -->
     <script src="js/entity-subnav.js?v=3"></script>
-    <script src="js/app.js?v=139"></script>
+    <!-- The pure decision core of the job/estimate save path. MUST load before
+         app.js: loadData consults p86SaveMerge.shouldVetoHydrate() on the very
+         first hydrate. -->
+    <script src="js/save-merge.js?v=1"></script>
+    <script src="js/app.js?v=140"></script>
+    <!-- The visible signal for a write that has not reached the server.
+         Loads AFTER app.js so window.p86PushStatus exists to subscribe to. -->
+    <script src="js/save-banner.js?v=1"></script>
     <script src="js/search-clear.js?v=3"></script>
     <script src="js/sidebar-brand.js?v=2"></script>
     <!-- Guided tours engine + the Help & What's New center (patch

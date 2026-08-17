@@ -2560,6 +2560,11 @@
                 localStorage.setItem(key, value);
                 return true;
             } catch (e) {
+                // Surface it, don't just warn. A full store means the edit has
+                // no server copy AND no durable local copy — the one state
+                // where "keep this tab open" is not enough advice. The banner
+                // reads this flag.
+                try { appData._cacheWriteFailed = true; } catch (e2) {}
                 if (!_cacheWarned) {
                     _cacheWarned = true;
                     console.warn('[p86] Local cache write failed (' + key + '): ' + ((e && e.name) || e) +
@@ -2666,7 +2671,22 @@
         // rewriting every job from its cache. See the dirty filter in
         // pushToServer for why that mattered.
         var _jobBaseline = {};
-        var _estimatesBaseline = null;
+        // Per-ESTIMATE baseline, the same shape as _jobBaseline. This used to
+        // be one portfolio-wide signature, which meant a single line edit on a
+        // single estimate marked every estimate dirty and shipped the WHOLE
+        // portfolio to an endpoint that has no version guard at all — a plain
+        // last-writer-wins upsert. That is the widest silent-clobber surface in
+        // the save path (it can overwrite an agent's write, and re-create an
+        // estimate another session deleted), and scoping the push to the rows
+        // this client actually touched is what closes it.
+        var _estimateBaseline = {};
+        // Where the current baselines came from: null (none yet), 'cache' (read
+        // off localStorage at boot, before/without a good GET) or 'server'.
+        // Provenance matters because a cache baseline is what lets a session
+        // whose boot GET failed still name exactly which rows the user changed
+        // — and still push them with a real base version, because the cache was
+        // itself written from a previous successful load and carries _updatedAt.
+        var _baselineSource = null;
         // Per-job server version (updated_at ISO) this client last loaded or
         // pushed — the BASE for optimistic concurrency. Sent with each save; the
         // server rejects (conflicts) any job whose row is newer, so a second
@@ -2696,11 +2716,46 @@
                 return 'unserializable:' + Date.now() + ':' + Math.random();
             }
         }
-        function estimatesSig() {
-            try { return JSON.stringify([appData.estimates, appData.estimateLines]); }
-            catch (e) { return 'unserializable:' + Date.now() + ':' + Math.random(); }
+        function estimateSliceSig(estId) {
+            var e = (appData.estimates || []).find(function(x) { return x.id === estId; });
+            if (!e) return '';
+            try {
+                return JSON.stringify([
+                    _stripPrivate(e),
+                    (appData.estimateLines || []).filter(function(l) { return l.estimateId === estId; })
+                ]);
+            } catch (err) {
+                // Same rule as jobSliceSig: a serialize failure must never mark a
+                // row CLEAN and skip its save.
+                return 'unserializable:' + Date.now() + ':' + Math.random();
+            }
         }
-        function _estimatesDirty() { return _estimatesBaseline !== estimatesSig(); }
+        // ── the dirty set ───────────────────────────────────────────────────
+        // ONE definition of "this client is holding a change the server does not
+        // have", derived from state rather than accumulated by call sites.
+        //
+        // Everything downstream keys on this: what gets pushed, whether a
+        // hydrate is held, what the banner counts, and what "Show what's
+        // unsaved" lists. The alternative — a counter incremented wherever a
+        // save was refused — cannot work here, because saveData() is also
+        // called on VIEW (prepJobForView and renderJobDetail write derived
+        // pctComplete/recalcSubCosts; migrateBudgetFields fires during the boot
+        // window with no auth guard). Such a counter is pinned high by merely
+        // opening a job and never comes down. A recomputed set is immune: a
+        // derived write that lands on the same values is not dirty, and a
+        // successful push clears the set by construction.
+        function dirtyJobIds() {
+            return (appData.jobs || [])
+                .filter(function(j) { return j && j._canEdit !== false; })
+                .filter(function(j) { return _jobBaseline[j.id] !== jobSliceSig(j.id); })
+                .map(function(j) { return j.id; });
+        }
+        function dirtyEstimateIds() {
+            return (appData.estimates || [])
+                .filter(function(e) { return e && _estimateBaseline[e.id] !== estimateSliceSig(e.id); })
+                .map(function(e) { return e.id; });
+        }
+        function _estimatesDirty() { return dirtyEstimateIds().length > 0; }
         function rebuildBaselines() {
             _jobBaseline = {};
             (appData.jobs || []).forEach(function(j) {
@@ -2708,10 +2763,58 @@
                 // Capture the server version the moment we're in sync with it.
                 if (j._updatedAt) _jobVersion[j.id] = j._updatedAt;
             });
-            _estimatesBaseline = estimatesSig();
+            _estimateBaseline = {};
+            (appData.estimates || []).forEach(function(e) {
+                _estimateBaseline[e.id] = estimateSliceSig(e.id);
+            });
+            _baselineSource = 'server';
+        }
+        // Baseline the localStorage cache as it stood at BOOT, once, before any
+        // server answer. Two things depend on this and neither works without it:
+        //
+        //  - A session whose boot GET failed has no server baseline, so under
+        //    the old code EVERY job read dirty. The dirty set would then name
+        //    the whole portfolio instead of the one row the user edited, and
+        //    anything keyed on it (the hydrate hold, the banner count) would be
+        //    both useless and alarming.
+        //  - The cache was written by a PREVIOUS successful load, so its job
+        //    objects still carry `_updatedAt`. Capturing those gives the failed
+        //    boot real base versions — which is what lets its edits be pushed
+        //    later with the server's FOR UPDATE + baseVersions check as referee
+        //    instead of as an unguarded bulk replace.
+        //
+        // ONCE, deliberately. loadFromLocalStorage() runs at the top of EVERY
+        // load and re-seeds appData from a cache that saveData keeps in step
+        // with memory — so re-baselining here on a later load would compare
+        // memory against itself, report CLEAN, and erase the very signal the
+        // hold depends on.
+        function captureCacheBaselines() {
+            if (_baselineSource !== null) return;
+            (appData.jobs || []).forEach(function(j) {
+                _jobBaseline[j.id] = jobSliceSig(j.id);
+                if (j._updatedAt) _jobVersion[j.id] = j._updatedAt;
+            });
+            (appData.estimates || []).forEach(function(e) {
+                _estimateBaseline[e.id] = estimateSliceSig(e.id);
+            });
+            _baselineSource = 'cache';
         }
         window.p86DataReady = function() { return _serverLoadComplete; };
-        window.p86DataLoading = function() { return _serverLoadInFlight; };
+        // p86DataLoading gates three editor-entry points and the refresh
+        // registry's never-concurrent-hydrate rule. js/api.js has no timeout and
+        // no AbortController, so a hung fetch leaves _serverLoadInFlight true
+        // forever — and a permanently-true flag turns those gates into a
+        // permanent lockout ("Still loading from server — try again in a
+        // moment", indefinitely). Treat a load that has been in flight past the
+        // ceiling as not-in-flight; js/refresh.js already carries the same
+        // escape hatch (HYDRATE_MAX_WAIT) for the same flag.
+        var _loadStartedAt = 0;
+        var LOAD_WEDGE_MS = 60000;
+        window.p86DataLoading = function() {
+            if (!_serverLoadInFlight) return false;
+            if (_loadStartedAt && (Date.now() - _loadStartedAt) > LOAD_WEDGE_MS) return false;
+            return true;
+        };
 
         // loadData is called once at startup. We paint the localStorage
         // cache immediately so first paint is instant, then fetch fresh
@@ -2728,15 +2831,72 @@
             catch (e) { console.warn('[hydrate fan-out] ' + name + ' failed:', e && e.message); }
         }
 
-        function loadData() {
-            loadFromLocalStorage(); // fast first paint
+        // How many hydrates in a row we have held because this client was
+        // holding an unpushed change. Drives the banner's escalation only —
+        // never the decision, and never a timer.
+        var _consecutiveHolds = 0;
+        var _holdRetryArmed = false;
+
+        function loadData(opts) {
+            opts = opts || {};
             var authed = window.p86Api && window.p86Api.isAuthenticated();
             if (!authed) {
+                loadFromLocalStorage(); // fast first paint
+                captureCacheBaselines();
                 _serverLoadComplete = true;
                 _serverLoadOk = true;   // local-only mode: no server state to clobber
                 return Promise.resolve();
             }
+            // ── flush BEFORE hydrating ───────────────────────────────────────
+            // The in-flight class in one line: an edit made while a GET is on
+            // the wire used to be blocked by saveData's guard, never scheduled,
+            // and then destroyed by the hydrate. Pushing first turns that
+            // sequence into push-then-hydrate.
+            //
+            // JOBS ONLY, and that restriction is not an oversight. This runs
+            // immediately before every hydrate — including the hydrate that
+            // follows an agent write, i.e. at the exact moment we have positive
+            // evidence the server just changed. Jobs have a referee for that:
+            // PUT /api/jobs/bulk/save re-reads each row FOR UPDATE and rejects
+            // a stale base. Estimates have none — their bulk save is a plain
+            // upsert with no version check — so force-pushing estimates here
+            // would deterministically overwrite the newer server copy we are
+            // about to read. Dirty estimates are carried by the hold below
+            // instead, and go out on the normal (now row-scoped) push.
+            //
+            // _serverLoadInFlight is set BEFORE the await, not after. It is the
+            // only signal p86DataLoading() has, and js/refresh.js's
+            // never-concurrent-hydrate rule plus the three editor-entry gates
+            // all read it. Leaving it false across a network round trip would
+            // reopen both windows this whole change exists to close.
+            var preflush = Promise.resolve();
+            var canPreflush = !opts.fromConflict && _serverLoadOk && !_serverLoadInFlight;
+            if (canPreflush && dirtyJobIds().length) {
+                _serverLoadInFlight = true;
+                _loadStartedAt = Date.now();
+                if (_serverPushTimer) { clearTimeout(_serverPushTimer); _serverPushTimer = null; }
+                preflush = pushToServer({ jobsOnly: true }).catch(function() {});
+            }
+            return preflush.then(function() { return _loadDataFromServer(opts); });
+        }
+
+        var _everSeeded = false;
+        function _loadDataFromServer(opts) {
+            // Seed from the cache ONLY on the very first load of the session.
+            //
+            // This line used to run on every load, and on a reload it is a pure
+            // liability: it replaces live memory — which by then includes edits
+            // the user has made and any hold this client is carrying — with the
+            // cache, and swaps every object identity while it does so. That is
+            // the mechanism behind both the boot-push clobber (a stale cache
+            // re-seeded and then pushed back over newer server rows) and the
+            // orphaned-reference class js/refresh.js documents. Its one real
+            // job is a fast first paint before the boot GET returns; after that
+            // memory is strictly better than the cache.
+            if (!_everSeeded) { _everSeeded = true; loadFromLocalStorage(); }
+            captureCacheBaselines();
             _serverLoadInFlight = true;
+            _loadStartedAt = Date.now();
             return Promise.all([
                 window.p86Api.jobs.list(),
                 window.p86Api.estimates.list(),
@@ -2766,8 +2926,6 @@
                 // partial/paid/overdue) instead of the stale job.invoicedToDate scalar.
                 window.p86Api.invoices.list().catch(function() { return { invoices: [] }; })
             ]).then(function(results) {
-                hydrateFromServerJobs(results[0].jobs);
-                hydrateFromServerEstimates(results[1].estimates);
                 appData.qbCostLines = (results[2] && results[2].lines) || [];
                 appData.subsDirectory = (results[3] && results[3].subs) || [];
                 appData.knownTrades = (results[3] && results[3].trades) || [];
@@ -2789,11 +2947,92 @@
                     appData.jobVendorBills = _billsList;
                     appData._billsAllLoaded = _billsOk;
                 }
-                writeToLocalStorage();
                 _serverLoadComplete = true;
-                _serverLoadOk = true;   // a real GET landed — safe to push from here
                 _serverLoadInFlight = false;
+                // A real GET landed. Set this UNCONDITIONALLY, and before the
+                // hold decision below — it is the flag that authorises a push,
+                // and the first draft of the hold left it inside the block it
+                // skipped. That version could never become pushable again: the
+                // recovery load would land, hold, and leave pushes disabled, so
+                // the retry loop "succeeded" forever while nothing reached
+                // Postgres and the only exit was to discard the work.
+                _serverLoadOk = true;
+                _pushRetryCount = 0;    // a reachable server re-arms the push ladder
+
+                // ── the hold ────────────────────────────────────────────────
+                // Everything above this line is direct-REST state (QB costs,
+                // subs, POs, COs, AR invoices, bills). Those stores are NOT on
+                // the appData+saveData path, are never dirty on this client, and
+                // are what the money tiles read — holding them back would put
+                // wrong money on screen with nothing to explain it. So they
+                // hydrate either way, and only the four job/estimate lines
+                // below are subject to the hold.
+                var _held = window.p86SaveMerge.shouldVetoHydrate({
+                    dirtyJobIds: dirtyJobIds(),
+                    dirtyEstimateIds: dirtyEstimateIds(),
+                    fromConflict: !!(opts && opts.fromConflict),
+                    consecutiveVetoes: _consecutiveHolds
+                });
+                if (_held.veto) {
+                    _consecutiveHolds++;
+                    // Mirror the held memory into the cache. The cache is a
+                    // mirror of memory for these two stores, and after a hold
+                    // it is the only durable copy of the change — a tab closed
+                    // here has to be able to come back to it. It is safe in a
+                    // way the hydrate is not: this writes THIS CLIENT'S intent,
+                    // not server truth, and it leaves the baselines (the
+                    // evidence of what is dirty) completely untouched.
+                    writeToLocalStorage();
+                    notifyPushStatus('blocked', {
+                        reason: 'unpushed-changes', escalate: _held.escalate,
+                        jobs: _held.jobs, estimates: _held.estimates
+                    });
+                    // Push DIRECTLY. Re-firing p86Refresh('job') from here would
+                    // resolve to p86ReloadAllData → loadData: a reload loop, not
+                    // a handoff, and one that re-seeds appData from localStorage
+                    // on every turn. One push, then at most ONE follow-up load,
+                    // and only once the push has actually cleared the dirty set.
+                    if (!_activePush && !_holdRetryArmed) {
+                        _holdRetryArmed = true;
+                        pushToServer().then(function() {
+                            _holdRetryArmed = false;
+                            if (!dirtyJobIds().length && !dirtyEstimateIds().length) {
+                                loadData({ fromHold: true });
+                            }
+                        }).catch(function() { _holdRetryArmed = false; });
+                    }
+                    fanOutRenderers();
+                    return;
+                }
+                _consecutiveHolds = 0;
+                hydrateFromServerJobs(results[0].jobs);
+                hydrateFromServerEstimates(results[1].estimates);
+                writeToLocalStorage();
                 rebuildBaselines();     // this IS the server's state — nothing is dirty yet
+                notifyPushStatus('idle');
+                fanOutRenderers();
+            }).catch(function(err) {
+                _serverLoadInFlight = false;
+                _serverLoadComplete = true; // mark complete so UI doesn't hang waiting
+                // ...but do NOT set _serverLoadOk. "Complete" only unblocks
+                // rendering; it must never authorize a push. When the boot GET
+                // fails (a 502 mid-deploy, a network blip) memory is the stale
+                // localStorage cache, and pushing it as a full bulk replace
+                // overwrites whatever is actually on the server. That is exactly
+                // how a corrected Fairways scope split got reverted during a
+                // deploy window.
+                console.warn('Server load failed, staying on localStorage cache (pushes disabled until a good load):', err.message);
+                // 'load-failed', NOT 'failed'. They are different events with
+                // different truths: a failed GET has saved nothing and lost
+                // nothing, while 'failed' means a PUSH was refused after its
+                // retries. Emitting one for the other is why the estimate
+                // editor showed "Save failed — will retry on next edit" at boot,
+                // before the user had typed a character.
+                notifyPushStatus('load-failed', err);
+                armLoadRecovery();
+            });
+
+            function fanOutRenderers() {
                 // Re-render whatever's visible. Each renderer no-ops if
                 // its DOM target isn't present, so calling them all is
                 // safe regardless of which tab the user is on.
@@ -2825,19 +3064,7 @@
                 if (typeof window.p86EstimateEditorRefresh === 'function') {
                     fanOut('p86EstimateEditorRefresh', function() { window.p86EstimateEditorRefresh(); });
                 }
-            }).catch(function(err) {
-                _serverLoadInFlight = false;
-                _serverLoadComplete = true; // mark complete so UI doesn't hang waiting
-                // ...but do NOT set _serverLoadOk. "Complete" only unblocks
-                // rendering; it must never authorize a push. When the boot GET
-                // fails (a 502 mid-deploy, a network blip) memory is the stale
-                // localStorage cache, and pushing it as a full bulk replace
-                // overwrites whatever is actually on the server. That is exactly
-                // how a corrected Fairways scope split got reverted during a
-                // deploy window.
-                console.warn('Server load failed, staying on localStorage cache (pushes disabled until a good load):', err.message);
-                notifyPushStatus('failed', err);
-            });
+            }
         }
 
         // saveData writes to localStorage immediately (cheap, synchronous) so the
@@ -2852,6 +3079,9 @@
         var _serverPushTimer = null;
         var _activePush = null;          // Promise of the in-flight push
         var _pushRetryCount = 0;
+        // Push retry ladder, in ms. Sized to outlast a Railway deploy swap
+        // (~2-3 min) rather than the ~7 seconds the old 1s/2s/4s ladder covered.
+        var PUSH_BACKOFF = [1000, 2000, 4000, 8000, 15000, 30000, 45000];
         var _pushStatusListeners = [];
         function notifyPushStatus(status, err) {
             _pushStatusListeners.forEach(function(fn) {
@@ -2881,10 +3111,144 @@
             // to an even split repeatedly by exactly this, because a boot pushed
             // localStorage's old copy back over it. The server is the source of
             // truth; localStorage is only a paint accelerator.
-            if (!_serverLoadOk || _serverLoadInFlight) return;
+            if (!_serverLoadOk || _serverLoadInFlight) {
+                // NOT a silent return any more. This branch is where every
+                // dropped write went: no push scheduled, no retry armed, no
+                // signal, and then the next hydrate overwrote both memory AND
+                // the localStorage cache that was the edit's last copy.
+                //
+                // Nothing is queued here on purpose. The edit is already in
+                // appData and in the cache; what the rest of the machinery
+                // guarantees is that a hydrate cannot destroy it (the hold in
+                // loadData) and that the server becomes reachable again (the
+                // recovery loop below). A queue of row snapshots would be a
+                // second source of truth and, replayed naively, the documented
+                // way to resurrect a row somebody deleted.
+                var _reason = _serverLoadOk ? 'hydrate-in-flight' : 'no-good-load';
+                if (!_blockedSince) _blockedSince = Date.now();
+                notifyPushStatus('blocked', {
+                    reason: _reason,
+                    jobs: dirtyJobIds(), estimates: dirtyEstimateIds(),
+                    heldMs: Date.now() - _blockedSince
+                });
+                // ...and then 'retrying', which is true in BOTH blocked states
+                // (a load-recovery probe is armed, or the post-hydrate push is).
+                // The estimate editor's indicator predates 'blocked' and ignores
+                // statuses it does not know, which is how a save that was never
+                // scheduled left it reading "Saving…" indefinitely. This makes
+                // that surface honest without this change having to edit a file
+                // another workstream is currently holding.
+                notifyPushStatus('retrying', { reason: _reason });
+                if (!_serverLoadOk) armLoadRecovery();
+                return;
+            }
+            _blockedSince = 0;
+            // New user intent re-arms the push ladder. _pushRetryCount was only
+            // ever reset in the success branch, so after one terminal failure
+            // every later push in the session — including one the user asks for
+            // by hand — got zero retries and failed instantly.
+            _pushRetryCount = 0;
             if (_serverPushTimer) clearTimeout(_serverPushTimer);
             _serverPushTimer = setTimeout(function() { pushToServer(); }, 600);
         }
+        var _blockedSince = 0;
+
+        /* ── the recovery loop ───────────────────────────────────────────────
+         * There was none. pushToServer backs off and retries; loadData's catch
+         * cleared its flags, logged a warning, and stopped forever — so a 502
+         * during a ~2-3 minute Railway swap disabled every job and estimate
+         * push for the REST OF THE SESSION, and the only signal was a
+         * console.warn.
+         *
+         * It probes /api/health rather than speculatively re-running loadData,
+         * because loadData's first act is loadFromLocalStorage(), which
+         * re-seeds appData and swaps every object identity — a background
+         * reload every few seconds would repeatedly orphan an open editor's
+         * captured references. Health is cheap and runs none of that.
+         *
+         * Bounded by STATE, not by an attempt cap: it stops when a load
+         * succeeds. What is capped is the noise — the banner escalates its
+         * wording, the timer does not escalate its rate. Paused while the tab
+         * is hidden, and fired immediately on `online` and on regaining
+         * visibility, because a closed laptop needs the focus trigger and a
+         * deploy window needs the timer. */
+        var _recoveryTimer = null, _recoveryAttempt = 0, _recoveryInFlight = false;
+        var RECOVERY_BACKOFF = [2000, 5000, 10000, 20000, 30000];
+        function armLoadRecovery() {
+            if (_serverLoadOk || _recoveryTimer) return;
+            var wait = RECOVERY_BACKOFF[Math.min(_recoveryAttempt, RECOVERY_BACKOFF.length - 1)];
+            _recoveryTimer = setTimeout(function() {
+                _recoveryTimer = null;
+                runLoadRecovery();
+            }, wait);
+        }
+        function runLoadRecovery() {
+            if (_serverLoadOk) return;
+            if (_recoveryInFlight || _serverLoadInFlight) { armLoadRecovery(); return; }
+            if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+                // Paused, not abandoned: the visibilitychange listener re-arms.
+                return;
+            }
+            if (!window.p86Api || !window.p86Api.isAuthenticated()) return;
+            _recoveryInFlight = true;
+            _recoveryAttempt++;
+            notifyPushStatus('blocked', {
+                reason: 'no-good-load', retryAttempt: _recoveryAttempt,
+                jobs: dirtyJobIds(), estimates: dirtyEstimateIds(),
+                heldMs: _blockedSince ? (Date.now() - _blockedSince) : 0
+            });
+            fetch('/api/health', { cache: 'no-store', credentials: 'same-origin' })
+                .then(function(r) { if (!r.ok) throw new Error('health ' + r.status); })
+                .then(function() {
+                    _recoveryInFlight = false;
+                    // The server answered. Route the real load through the
+                    // refresh registry when it is present so it serialises
+                    // behind js/refresh.js's never-concurrent-hydrate rule
+                    // instead of racing whatever else is reloading.
+                    if (typeof window.p86Refresh === 'function') return window.p86Refresh('job');
+                    return loadData();
+                })
+                .catch(function() { _recoveryInFlight = false; })
+                .then(function() { if (!_serverLoadOk) armLoadRecovery(); });
+        }
+        window.p86TryReconnect = function() {
+            _recoveryAttempt = 0;
+            if (_recoveryTimer) { clearTimeout(_recoveryTimer); _recoveryTimer = null; }
+            runLoadRecovery();
+        };
+        if (typeof window !== 'undefined' && window.addEventListener) {
+            window.addEventListener('online', function() { if (!_serverLoadOk) window.p86TryReconnect(); });
+            document.addEventListener('visibilitychange', function() {
+                if (document.visibilityState === 'visible' && !_serverLoadOk) armLoadRecovery();
+            });
+        }
+
+        /* ── the one public read of "where are my bytes" ─────────────────────
+         * Counts are ENTITY counts off the dirty set, never a count of blocked
+         * saveData() calls — one edit fires many, and "your last 47 changes are
+         * on this device only" for one edited field is both alarming and false.
+         * Names come from the same set, which is why "Show what's unsaved" can
+         * list actual rows instead of a number. */
+        window.p86SaveState = function() {
+            var jobIds = [], estIds = [];
+            try { jobIds = dirtyJobIds(); estIds = dirtyEstimateIds(); } catch (e) {}
+            var name = function(arr, id, fb) {
+                var r = (arr || []).find(function(x) { return x.id === id; });
+                return (r && (r.title || r.name || r.jobNumber)) || fb || id;
+            };
+            return {
+                writable: !!_serverLoadOk,
+                loading: !!_serverLoadInFlight,
+                baselineSource: _baselineSource,
+                since: _blockedSince || 0,
+                heldMs: _blockedSince ? (Date.now() - _blockedSince) : 0,
+                retryAttempt: _recoveryAttempt,
+                holds: _consecutiveHolds,
+                jobs: jobIds.map(function(id) { return name(appData.jobs, id); }),
+                estimates: estIds.map(function(id) { return name(appData.estimates, id); }),
+                jobIds: jobIds, estimateIds: estIds
+            };
+        };
 
         // A save conflict = the server rejected our write because someone else
         // changed that job since we loaded it. We must NOT overwrite (that is the
@@ -2909,7 +3273,14 @@
                     _conflictReloadPending = true;
                     setTimeout(function() {
                         _conflictReloadPending = false;
-                        Promise.resolve().then(function() { return loadData(); }).then(function() {
+                        // fromConflict is a HARD override of the hydrate hold.
+                        // The rows in `conflicts` are rows the server has
+                        // already refused at this base — holding the hydrate to
+                        // push them again would re-conflict and re-hold, on a
+                        // loop. The server's version has to land, and the
+                        // before/after comparison below is what says out loud
+                        // whether anything the user typed was actually lost.
+                        Promise.resolve().then(function() { return loadData({ fromConflict: true }); }).then(function() {
                             // Only NOW do we know whether the user lost anything.
                             //
                             // A rejected push is not automatically a lost edit. The
@@ -2948,7 +3319,8 @@
             } catch (e) {}
         }
 
-        function pushToServer() {
+        function pushToServer(opts) {
+            opts = opts || {};
             if (!window.p86Api || !window.p86Api.isAuthenticated()) return Promise.resolve();
             // THE guard lives here, at the single chokepoint, not only in
             // saveData(). flushPendingSave() (pagehide/beforeunload/visibility)
@@ -2995,12 +3367,27 @@
                 purchaseOrders: appData.purchaseOrders.filter(function(p) { return editableIds[p.jobId]; }),
                 invoices: appData.invoices.filter(function(i) { return editableIds[i.jobId]; })
             };
-            // Estimates: alternates ride INLINE on each estimate now;
-            // legacy `estimateAlternates: []` stays empty for back-compat
-            // with older server builds that read it as a fallback.
+            // Estimates: ONLY the rows this client actually changed.
+            //
+            // This used to be `estimates: appData.estimates` — every estimate,
+            // every time, gated on one portfolio-wide signature. Against an
+            // endpoint that has NO version guard (a plain last-writer-wins
+            // upsert that re-INSERTs any id it does not find) that means a
+            // single line edit re-writes the whole portfolio from this client's
+            // memory: it silently overwrites a newer row another session or an
+            // agent just wrote, and it re-creates an estimate somebody deleted.
+            // The route is a per-row upsert loop, so a subset is not merely
+            // safe, it is strictly better.
+            //
+            // Alternates ride INLINE on each estimate now; legacy
+            // `estimateAlternates: []` stays empty for back-compat with older
+            // server builds that read it as a fallback.
+            var dirtyEstIds = opts.jobsOnly ? [] : dirtyEstimateIds();
+            var estIdSet = {};
+            dirtyEstIds.forEach(function(id) { estIdSet[id] = true; });
             var estimatesPayload = {
-                estimates: appData.estimates,
-                estimateLines: appData.estimateLines,
+                estimates: appData.estimates.filter(function(e) { return estIdSet[e.id]; }),
+                estimateLines: appData.estimateLines.filter(function(l) { return estIdSet[l.estimateId]; }),
                 estimateAlternates: []
             };
 
@@ -3009,7 +3396,17 @@
             // Base version per pushed job for optimistic concurrency.
             var baseVersions = {};
             pushedIds.forEach(function(id) { if (_jobVersion[id]) baseVersions[id] = _jobVersion[id]; });
-            var estimatesGo = appData.estimates.length && _estimatesDirty();
+            var estimatesGo = dirtyEstIds.length > 0;
+            // Snapshot the signature of what we are ABOUT TO SEND, per row.
+            // The re-baseline below must advance to THIS, not to whatever
+            // memory holds when the response lands — reading live memory at
+            // completion marks a keystroke that arrived mid-flight as already
+            // saved, so it is never pushed and is dropped by the next hydrate.
+            // That is the same "lost an edit it claimed to have saved" defect
+            // this whole path exists to kill, one level down.
+            var sentJobSig = {}, sentEstSig = {};
+            pushedIds.forEach(function(id) { sentJobSig[id] = jobSliceSig(id); });
+            dirtyEstIds.forEach(function(id) { sentEstSig[id] = estimateSliceSig(id); });
             _activePush = Promise.all([
                 editableJobs.length ? window.p86Api.jobs.bulkSave(jobsPayload, baseVersions) : Promise.resolve(),
                 estimatesGo ? window.p86Api.estimates.bulkSave(estimatesPayload) : Promise.resolve()
@@ -3028,21 +3425,40 @@
                 // base version stays put (a conflict never advances the version).
                 var rejected = {};
                 if (conflicts) conflicts.forEach(function(c) { rejected[c.id] = 1; });
-                pushedIds.forEach(function(id) { if (!rejected[id]) _jobBaseline[id] = jobSliceSig(id); });
-                if (estimatesGo) _estimatesBaseline = estimatesSig();
-                if (conflicts) { handleSaveConflicts(conflicts); }
-                notifyPushStatus('saved');
+                pushedIds.forEach(function(id) { if (!rejected[id]) _jobBaseline[id] = sentJobSig[id]; });
+                dirtyEstIds.forEach(function(id) { _estimateBaseline[id] = sentEstSig[id]; });
+                if (conflicts) {
+                    handleSaveConflicts(conflicts);
+                    // NOT 'saved'. A partial-conflict response used to emit
+                    // 'saved' — a green ✓ in the estimate editor and no banner —
+                    // for rows the server had just REFUSED to write. The
+                    // sentence handleSaveConflicts eventually shows is correct;
+                    // the status fired 1200ms earlier was not.
+                    notifyPushStatus('partial', { ids: conflicts.map(function(c) { return c.id; }) });
+                } else {
+                    _blockedSince = 0;
+                    notifyPushStatus('saved');
+                }
                 return r;
             }).catch(function(err) {
                 console.warn('Server push failed (attempt ' + (_pushRetryCount + 1) + '):', err.message);
                 _activePush = null;
-                if (_pushRetryCount < 3) {
+                // Six attempts ≈ 60s of coverage, not ~7s. A Railway swap is a
+                // 2-3 minute window, and a ladder that gave up inside ten
+                // seconds meant the push retry was decorative during exactly
+                // the failure it was written for. saveData() re-arms the count
+                // on new user intent, so this is a per-burst bound.
+                if (_pushRetryCount < PUSH_BACKOFF.length) {
+                    var backoff = PUSH_BACKOFF[_pushRetryCount];
                     _pushRetryCount++;
-                    var backoff = Math.pow(2, _pushRetryCount - 1) * 1000; // 1s, 2s, 4s
                     notifyPushStatus('retrying', err);
                     setTimeout(function() { pushToServer(); }, backoff);
                 } else {
-                    notifyPushStatus('failed', err);
+                    if (!_blockedSince) _blockedSince = Date.now();
+                    notifyPushStatus('failed', {
+                        reason: 'push-failed', error: err,
+                        jobs: dirtyJobIds(), estimates: dirtyEstimateIds()
+                    });
                 }
                 throw err;
             });
@@ -3058,9 +3474,16 @@
         // copy won and the change vanished. That is how a hand-entered scope
         // budget on Fairways reverted to an even split more than once.
         function flushPendingSave() {
-            if (!_serverPushTimer) return _activePush || Promise.resolve();
-            clearTimeout(_serverPushTimer);
-            _serverPushTimer = null;
+            // The `if (!_serverPushTimer) return` that used to open this
+            // function made all three listeners below permanent no-ops in the
+            // case that mattered: when saveData's guard was shut the timer was
+            // never armed, so pagehide / beforeunload / visibilitychange had
+            // nothing to flush and the edit went away with the tab. Ask the
+            // dirty set instead of a timer. pushToServer's own guards make this
+            // a cheap no-op when there is genuinely nothing to send.
+            if (_serverPushTimer) { clearTimeout(_serverPushTimer); _serverPushTimer = null; }
+            if (!_serverLoadOk || _serverLoadInFlight) return _activePush || Promise.resolve();
+            if (!dirtyJobIds().length && !_estimatesDirty()) return _activePush || Promise.resolve();
             return pushToServer();
         }
         // Cover every way a page can go away: pagehide fires on navigation and
