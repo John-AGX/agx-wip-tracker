@@ -3480,7 +3480,23 @@
                             };
                             var isLocked = function(c) { return c.reason === 'locked'; };
                             var isUnver = function(c) { return c.reason === 'unverifiable'; };
-                            var isStale = function(c) { return !isLocked(c) && !isUnver(c); };
+                            // Two refusals that are NOT races and were both
+                            // landing in the isStale bucket — which says "changed
+                            // by someone else", a sentence that is false about
+                            // both of them and sends the user looking for a
+                            // colleague who did nothing.
+                            //   not_in_org    — the row belongs to another
+                            //                   organization. Nothing of this
+                            //                   user's was overwritten or lost.
+                            //   invalid_owner — the owner named for this row is
+                            //                   not in this organization. The
+                            //                   fix is a different owner, not a
+                            //                   reload.
+                            var isNotInOrg = function(c) { return c.reason === 'not_in_org'; };
+                            var isBadOwner = function(c) { return c.reason === 'invalid_owner'; };
+                            var isStale = function(c) {
+                                return !isLocked(c) && !isUnver(c) && !isNotInOrg(c) && !isBadOwner(c);
+                            };
 
                             var lostChanged = pick(isStale);
                             if (lostChanged.length) {
@@ -3503,8 +3519,23 @@
                                         : (lostLocked.length + ' ' + nounFor(isLocked) + ' are locked — they were sold on a job and cannot be changed.')) +
                                     ' Your edit was NOT saved. An admin can unlock it.');
                             }
+                            var lostForeign = pick(isNotInOrg);
+                            if (lostForeign.length) {
+                                say((lostForeign.length === 1
+                                        ? ('“' + lostForeign[0] + '” is not in your organization — it was not saved.')
+                                        : (lostForeign.length + ' ' + nounFor(isNotInOrg) + ' are not in your organization — they were not saved.')) +
+                                    ' Nothing about ' + (lostForeign.length === 1 ? 'it' : 'them') + ' was changed.');
+                            }
+                            var lostOwner = pick(isBadOwner);
+                            if (lostOwner.length) {
+                                say((lostOwner.length === 1
+                                        ? ('“' + lostOwner[0] + '” was not saved: the owner it names is not in your organization.')
+                                        : (lostOwner.length + ' ' + nounFor(isBadOwner) + ' were not saved: the owners they name are not in your organization.')) +
+                                    ' Assign an owner from your own team and save again.');
+                            }
                             console.warn('[save-conflict] genuinely lost edits on:',
-                                lostChanged.concat(lostUnver).concat(lostLocked).join(', '));
+                                lostChanged.concat(lostUnver).concat(lostLocked)
+                                    .concat(lostForeign).concat(lostOwner).join(', '));
                         }).catch(function () {});
                     }, 1200);
                 }

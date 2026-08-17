@@ -1,6 +1,6 @@
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireRole, requireOrgId, isAdminish } = require('../auth');
+const { requireAuth, requireRole, requireOrgId, resolveOrgId, isAdminish } = require('../auth');
 const { sendEmail } = require('../email');
 const { jobAssigned } = require('../email-templates');
 const markets = require('../services/markets');
@@ -55,19 +55,65 @@ async function maybeNotifyJobAssigned({ ownerId, job, action, fromUserName }) {
   }
 }
 
-async function canAccess(userId, userRole, jobId) {
+// ── ORG FIRST, THEN ROLE ────────────────────────────────────────────────────
+// These three gates used to answer `true` for any adminish (and, in canAccess,
+// corporate) caller BEFORE touching the database. That short-circuit is why
+// putting an org predicate on the `jobs` statements below would have fixed
+// nothing: for the callers that matter the statement never ran at all.
+//
+// Every route in this file that takes a caller-supplied :id and then reads or
+// writes a JOB-KEYED table — node_graphs, job_access — is gated by one of
+// these and by nothing else. So the tenant check has to live here, ahead of
+// the role check, or an org-A admin reaches an org-B job's site plan and share
+// list through a guessable id.
+//
+// Tolerance arm unchanged: a NULL organization_id is legacy and still passes,
+// exactly as `OR organization_id IS NULL` does on every read in this file.
+// A row with no org is not this commit's business; a row with SOMEONE ELSE'S
+// org is.
+function orgAllows(rowOrg, callerOrg) {
+  if (rowOrg == null) return true;                 // legacy / un-stamped
+  if (callerOrg == null) return false;             // caller has no tenant: a stamped row is not theirs
+  return Number(rowOrg) === Number(callerOrg);
+}
+
+// The caller's tenant, server-derived. requireOrgId is not on the read routes
+// (adding it would turn a 403/404 into a 409 for callers who work today), so
+// resolve the same way it does — from the verified token, with the users-row
+// fallback for legacy claim-less tokens. Never from the body.
+async function callerOrgId(req) {
+  if (req.orgId != null) return req.orgId;
+  try {
+    const o = await resolveOrgId(req);
+    if (o != null) req.orgId = o;
+    return o;
+  } catch (e) {
+    // "I cannot tell" — refuse rather than guess. Reads only; the write
+    // routes carry requireOrgId, which answers 503 for this case.
+    console.warn('[jobs] caller org resolution failed:', e && e.message);
+    return null;
+  }
+}
+
+async function canAccess(userId, userRole, jobId, req) {
+  const { rows } = await pool.query(
+    'SELECT owner_id, organization_id FROM jobs WHERE id = $1', [jobId]);
+  // Tenant before role. A missing row is left to the route (which answers 404
+  // rather than 403, so existence is not leaked by the gate either way).
+  if (rows.length && !orgAllows(rows[0].organization_id, await callerOrgId(req))) return false;
   if (isAdminish(userRole) || userRole === 'corporate') return true;
-  const { rows } = await pool.query('SELECT owner_id FROM jobs WHERE id = $1', [jobId]);
   if (!rows.length) return false;
   if (rows[0].owner_id === userId) return true;
   const access = await pool.query('SELECT 1 FROM job_access WHERE job_id = $1 AND user_id = $2', [jobId, userId]);
   return access.rows.length > 0;
 }
 
-async function canEdit(userId, userRole, jobId) {
+async function canEdit(userId, userRole, jobId, req) {
+  const { rows } = await pool.query(
+    'SELECT owner_id, organization_id FROM jobs WHERE id = $1', [jobId]);
+  if (rows.length && !orgAllows(rows[0].organization_id, await callerOrgId(req))) return false;
   if (isAdminish(userRole)) return true;
   if (userRole === 'corporate') return false;
-  const { rows } = await pool.query('SELECT owner_id FROM jobs WHERE id = $1', [jobId]);
   if (!rows.length) return false;
   if (rows[0].owner_id === userId) return true;
   const access = await pool.query("SELECT access_level FROM job_access WHERE job_id = $1 AND user_id = $2", [jobId, userId]);
@@ -123,7 +169,7 @@ router.get('/', requireAuth, async (req, res) => {
 // GET /api/jobs/:id
 router.get('/:id', requireAuth, async (req, res) => {
   try {
-    if (!(await canAccess(req.user.id, req.user.role, req.params.id))) {
+    if (!(await canAccess(req.user.id, req.user.role, req.params.id, req))) {
       return res.status(403).json({ error: 'Access denied' });
     }
     // Wave 1.A Phase 2 — org filter at the SQL layer. Cross-org access
@@ -322,7 +368,7 @@ router.post('/convert', requireAuth, requireOrgId, requireRole('admin', 'pm'), a
 router.post('/:id/link-estimate', requireAuth, async (req, res) => {
   const client = await pool.connect();
   try {
-    if (!(await canEdit(req.user.id, req.user.role, req.params.id))) {
+    if (!(await canEdit(req.user.id, req.user.role, req.params.id, req))) {
       return res.status(403).json({ error: 'No edit access' });
     }
     const estimateId = req.body && req.body.estimate_id;
@@ -377,7 +423,7 @@ router.post('/:id/link-estimate', requireAuth, async (req, res) => {
 // PUT /api/jobs/:id
 router.put('/:id', requireAuth, async (req, res) => {
   try {
-    if (!(await canEdit(req.user.id, req.user.role, req.params.id))) {
+    if (!(await canEdit(req.user.id, req.user.role, req.params.id, req))) {
       return res.status(403).json({ error: 'No edit access' });
     }
     // Wave 1.A Phase 2 — org-scoped UPDATE. Returns affected row count
@@ -408,7 +454,7 @@ router.put('/:id', requireAuth, async (req, res) => {
 // GET /api/jobs/:id/workbook
 router.get('/:id/workbook', requireAuth, async (req, res) => {
   try {
-    if (!(await canAccess(req.user.id, req.user.role, req.params.id))) {
+    if (!(await canAccess(req.user.id, req.user.role, req.params.id, req))) {
       return res.status(403).json({ error: 'No access' });
     }
     const { rows } = await pool.query(
@@ -429,7 +475,7 @@ router.get('/:id/workbook', requireAuth, async (req, res) => {
 // PUT /api/jobs/:id/workbook — body is the workbook JSON itself.
 router.put('/:id/workbook', requireAuth, async (req, res) => {
   try {
-    if (!(await canEdit(req.user.id, req.user.role, req.params.id))) {
+    if (!(await canEdit(req.user.id, req.user.role, req.params.id, req))) {
       return res.status(403).json({ error: 'No edit access' });
     }
     const wb = req.body;
@@ -516,17 +562,25 @@ router.delete('/:id', requireAuth, requireRole('admin'), async (req, res) => {
 });
 
 // Helper: only admin or job owner can manage access for a given job.
+//
+// Org first, then role — same reason as canAccess/canEdit above, and the stake
+// here is higher: what this gates is an INSERT INTO job_access, a DURABLE
+// cross-tenant edit grant that outlives any predicate later added to `jobs`.
+// A job in another tenant reads as "not found" (null), never as 403, so the
+// answer is identical to a job id that does not exist.
 async function canManageAccess(req, jobId) {
-  if (isAdminish(req.user)) return true;
-  const { rows } = await pool.query('SELECT owner_id FROM jobs WHERE id = $1', [jobId]);
+  const { rows } = await pool.query(
+    'SELECT owner_id, organization_id FROM jobs WHERE id = $1', [jobId]);
   if (!rows.length) return null; // job not found
+  if (!orgAllows(rows[0].organization_id, await callerOrgId(req))) return null;
+  if (isAdminish(req.user)) return true;
   return rows[0].owner_id === req.user.id;
 }
 
 // GET /api/jobs/:id/access — list users with explicit access plus the owner
 router.get('/:id/access', requireAuth, async (req, res) => {
   try {
-    if (!(await canAccess(req.user.id, req.user.role, req.params.id))) {
+    if (!(await canAccess(req.user.id, req.user.role, req.params.id, req))) {
       return res.status(403).json({ error: 'Access denied' });
     }
     const { rows: jobRows } = await pool.query(
@@ -556,6 +610,15 @@ router.post('/:id/access', requireAuth, async (req, res) => {
 
     const { userId, accessLevel } = req.body;
     if (!userId) return res.status(400).json({ error: 'userId required' });
+    // The GRANTEE is a tenancy decision too, and it arrived from the body with
+    // no check of any kind — not existence, not active, not org. Both ends of
+    // a share have to be inside the caller's tenant or the grant is a
+    // cross-tenant one, and it survives everything done to `jobs`.
+    const grantee = await pool.query(
+      'SELECT id FROM users WHERE id = $1 AND organization_id = $2',
+      [userId, await callerOrgId(req)]
+    );
+    if (!grantee.rows.length) return res.status(400).json({ error: 'Invalid userId' });
     const level = accessLevel === 'view' ? 'view' : 'edit';
     await pool.query(
       'INSERT INTO job_access (job_id, user_id, access_level) VALUES ($1, $2, $3) ON CONFLICT (job_id, user_id) DO UPDATE SET access_level = $3',
@@ -695,9 +758,39 @@ router.put('/bulk/save', requireAuth, requireOrgId, requireRole('admin', 'pm'), 
         // explicit job_access edit grant; corporate is read-only.
         // FOR UPDATE locks the row for the txn so the version check below cannot
         // race a concurrent write between the read and the UPDATE.
+        // organization_id rides in the PROJECTION, not in the WHERE clause.
+        //
+        // Filtering the read (`AND (organization_id = $2 OR IS NULL)`) looks
+        // like the smaller change and is strictly worse: a filtered SELECT can
+        // only say "no rows", and "no rows" is already load-bearing here. A
+        // foreign-tenant row would land in the `!existing.rows.length` branch —
+        //   with a base → conflict 'deleted', which the client escalates to the
+        //     unrecoverable-data-loss modal, for a row that is alive and
+        //     untouched in another tenant;
+        //   with no base → straight through to INSERT … ON CONFLICT (id) DO
+        //     UPDATE, which finds the foreign row BY PRIMARY KEY and overwrites
+        //     it anyway.
+        // The predicate on the SELECT does not close this. It relocates it into
+        // the arm that has no guard at all. So the read stays unfiltered and
+        // the tenant becomes data that the branch below decides on, under the
+        // same lock, with no second round-trip and no TOCTOU.
         const existing = await client.query(
-          'SELECT owner_id, updated_at FROM jobs WHERE id = $1 FOR UPDATE', [job.id]
+          'SELECT owner_id, updated_at, organization_id FROM jobs WHERE id = $1 FOR UPDATE', [job.id]
         );
+        // ── the row belongs to ANOTHER TENANT ────────────────────────────────
+        // Terminal, and deliberately NOT 'deleted': the two carry the same
+        // serverUpdatedAt: null, so the reason string is the only discriminator
+        // on the wire and they mean opposite things. 'deleted' = the row you
+        // loaded is gone and your edit is unrecoverable. 'not_in_org' = this row
+        // was never yours, nothing of yours was lost, and no data-loss modal is
+        // warranted.
+        if (existing.rows.length) {
+          const rowOrg = existing.rows[0].organization_id;
+          if (rowOrg != null && Number(rowOrg) !== Number(orgId)) {
+            conflicts.push({ id: job.id, reason: 'not_in_org', serverUpdatedAt: null });
+            continue;
+          }
+        }
         const base = bv[job.id];
         // ── the row is GONE and the client believes it exists ────────────────
         // A baseVersions entry means exactly one thing: "I loaded this row and
@@ -828,16 +921,30 @@ router.put('/bulk/save', requireAuth, requireOrgId, requireRole('admin', 'pm'), 
           // organization_id NULL, and every read in this file admits NULL
           // ("OR organization_id IS NULL"), so the row was visible to every
           // tenant rather than hidden from all of them.
+          //
+          // The WHERE on DO UPDATE is the second layer under the JS branch
+          // above, and it should be unreachable — that is the point of it.
           `INSERT INTO jobs (id, owner_id, data, organization_id, market_id) VALUES ($1, $2, $3, $4, $5)
            ON CONFLICT (id) DO UPDATE SET data = $3,
                  market_id = COALESCE(EXCLUDED.market_id, jobs.market_id),
                  updated_at = NOW()
+             WHERE jobs.organization_id = $4 OR jobs.organization_id IS NULL
            RETURNING updated_at`,
           [job.id, ownerId, JSON.stringify(jobBlob), orgId, jobMarketId]
         );
+        // A DO UPDATE whose WHERE filters the row out returns ZERO rows — and
+        // `saved++` below runs unconditionally, so without this the row would
+        // be reported to the client as saved while nothing was written. Throw
+        // rather than conflict: reaching here means a row passed the JS tenant
+        // branch and was then refused by SQL, which is a server bug and should
+        // read as one (500 + ROLLBACK), not as something the user did.
+        if (!up.rows[0]) {
+          throw new Error('bulk/save: job ' + job.id + ' passed the tenant branch but the ' +
+            'DO UPDATE org guard refused it — the two disagree, nothing was written');
+        }
         // Hand back the new version so the client can advance its base and not
         // false-conflict on its own next save.
-        if (up.rows[0]) versions[job.id] = new Date(up.rows[0].updated_at).toISOString();
+        versions[job.id] = new Date(up.rows[0].updated_at).toISOString();
         // Notify the owner when the saving client opted in via the
         // _notify flag on this specific job. Only fires on creation
         // OR explicit reassignment — silent for routine field edits.
@@ -881,7 +988,7 @@ router.put('/bulk/save', requireAuth, requireOrgId, requireRole('admin', 'pm'), 
 // Node graph routes
 router.get('/:id/graph', requireAuth, async (req, res) => {
   try {
-    if (!(await canAccess(req.user.id, req.user.role, req.params.id))) {
+    if (!(await canAccess(req.user.id, req.user.role, req.params.id, req))) {
       return res.status(403).json({ error: 'Access denied' });
     }
     const { rows } = await pool.query('SELECT data FROM node_graphs WHERE job_id = $1', [req.params.id]);
@@ -905,7 +1012,7 @@ function graphGeomCount(g) {
 
 router.put('/:id/graph', requireAuth, async (req, res) => {
   try {
-    if (!(await canEdit(req.user.id, req.user.role, req.params.id))) {
+    if (!(await canEdit(req.user.id, req.user.role, req.params.id, req))) {
       return res.status(403).json({ error: 'No edit access' });
     }
     const incoming = req.body || {};
@@ -929,17 +1036,34 @@ router.put('/:id/graph', requireAuth, async (req, res) => {
         });
       }
     }
-    await pool.query(
+    const g = await pool.query(
       // organization_id derived from the PARENT JOB, not from the caller: a
       // graph belongs to whatever tenant its job belongs to, and reading it
       // off the row makes the stamp unforgeable and correct even here, where
       // the route is requireAuth-only. A missing job yields NULL exactly as
-      // before, so the row-count semantics of this statement are unchanged.
+      // before, so the row-count semantics of the INSERT arm are unchanged.
+      //
+      // The DO UPDATE arm carried NO tenant predicate, which made this the
+      // bulk save's defect a second time and on the same shape: an ON CONFLICT
+      // that finds the foreign row by primary key and rewrites it wholesale —
+      // here a whole Site Plan, footprints, geo anchors, building money lines
+      // and photo pins — while the org stamp is left alone, so the row stays
+      // the other tenant's carrying this caller's contents.
+      //
+      // canEdit above is now org-first and should already have refused. This
+      // is the second layer, and 0 rows means the two disagree.
       `INSERT INTO node_graphs (job_id, data, organization_id)
        VALUES ($1, $2, (SELECT organization_id FROM jobs WHERE id = $1))
-       ON CONFLICT (job_id) DO UPDATE SET data = $2, updated_at = NOW()`,
-      [req.params.id, JSON.stringify(incoming)]
+       ON CONFLICT (job_id) DO UPDATE SET data = $2, updated_at = NOW()
+         WHERE node_graphs.organization_id IS NULL OR node_graphs.organization_id = $3`,
+      [req.params.id, JSON.stringify(incoming), await callerOrgId(req)]
     );
+    if (!g.rowCount) {
+      return res.status(409).json({
+        error: 'not_in_org',
+        message: 'That site plan belongs to a different organization. Nothing was saved, and nothing about it was changed.'
+      });
+    }
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: 'Server error' });

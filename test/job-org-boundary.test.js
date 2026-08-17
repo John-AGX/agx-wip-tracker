@@ -103,9 +103,37 @@ async function call(method, path, user, body) {
   return { status: res.status, body: json };
 }
 
+// The bulk save's locked read. Matched on FOR UPDATE rather than on the
+// projection, so adding a column to it does not silently unhook every handler
+// in this file (which is what the projection-shaped key used to do).
+const LOCKED_READ = 'FOR UPDATE';
+
 // The jobs INSERT, whichever route emitted it.
 function jobInsert() {
   return queries.find((q) => /INSERT INTO jobs\b/i.test(q.sql));
+}
+
+// Any write landing on a JOB-KEYED table. The N4 property is not "the response
+// said no" — it is "no write was reached". Asserting only on jobInsert() proves
+// nothing about node_graphs or job_access, which is exactly how the site plan
+// and the share list stayed open.
+function jobKeyedWrite() {
+  return queries.find((q) =>
+    /\b(INSERT INTO|UPDATE|DELETE FROM)\s+(jobs|node_graphs|job_access)\b/i.test(q.sql));
+}
+
+// The source text of one top-level function, from its `async function NAME(`
+// through its closing brace at column 0. CRLF-tolerant on purpose: this repo's
+// server files are CRLF, and a '\n}\n' probe silently matches nothing there and
+// hands back the rest of the FILE, which makes any `not.toMatch` assertion pass
+// or fail on unrelated code.
+function fnBody(src, name) {
+  const start = src.indexOf('async function ' + name + '(');
+  if (start === -1) throw new Error('no such function: ' + name);
+  const rest = src.slice(start);
+  const end = rest.search(/\r?\n\}\r?\n/);
+  if (end === -1) throw new Error('unterminated function: ' + name);
+  return rest.slice(0, end);
 }
 
 // Bind an INSERT's column list to its parameters, so a test can ask what value
@@ -133,7 +161,7 @@ const ONE_JOB = {
  * ══════════════════════════════════════════════════════════════════════════*/
 describe('a new job carries the caller org', () => {
   test('bulk save stamps organization_id from the token, not from the body', async () => {
-    handlers['SELECT owner_id, updated_at FROM jobs'] = () => ({ rows: [] });
+    handlers[LOCKED_READ] =() => ({ rows: [] });
     handlers['ON CONFLICT (id) DO UPDATE'] = () => ({ rows: [{ updated_at: new Date() }] });
 
     const r = await call('PUT', '/api/jobs/bulk/save',
@@ -147,7 +175,7 @@ describe('a new job carries the caller org', () => {
   });
 
   test('an organization_id in the request body cannot become the row org', async () => {
-    handlers['SELECT owner_id, updated_at FROM jobs'] = () => ({ rows: [] });
+    handlers[LOCKED_READ] =() => ({ rows: [] });
     handlers['ON CONFLICT (id) DO UPDATE'] = () => ({ rows: [{ updated_at: new Date() }] });
 
     const body = JSON.parse(JSON.stringify(ONE_JOB));
@@ -166,7 +194,7 @@ describe('a new job carries the caller org', () => {
   });
 
   test('the org is NOT derived from market — market is the operating dimension', async () => {
-    handlers['SELECT owner_id, updated_at FROM jobs'] = () => ({ rows: [] });
+    handlers[LOCKED_READ] =() => ({ rows: [] });
     handlers['ON CONFLICT (id) DO UPDATE'] = () => ({ rows: [{ updated_at: new Date() }] });
 
     await call('PUT', '/api/jobs/bulk/save',
@@ -179,14 +207,21 @@ describe('a new job carries the caller org', () => {
   });
 
   test('ON CONFLICT never rewrites an existing row org — a save is not a tenant move', async () => {
-    handlers['SELECT owner_id, updated_at FROM jobs'] = () => ({ rows: [] });
+    handlers[LOCKED_READ] =() => ({ rows: [] });
     handlers['ON CONFLICT (id) DO UPDATE'] = () => ({ rows: [{ updated_at: new Date() }] });
 
     await call('PUT', '/api/jobs/bulk/save',
       { id: 10, role: 'admin', organization_id: 7 }, ONE_JOB);
 
+    // The SET list, up to the guard's own WHERE. organization_id must not be
+    // assignable here — no EXCLUDED, no COALESCE, nothing — because a save that
+    // could rewrite an org would make every bulk save a potential tenant move.
+    // (It DOES appear in the arm's WHERE, as the second layer under the JS
+    // tenant branch; that is a filter, not an assignment.)
     const doUpdate = jobInsert().sql.split(/DO UPDATE/i)[1];
-    expect(doUpdate).not.toMatch(/organization_id/);
+    const setList = doUpdate.split(/\bWHERE\b/i)[0];
+    expect(setList).not.toMatch(/organization_id/);
+    expect(doUpdate).toMatch(/WHERE jobs\.organization_id = \$4 OR jobs\.organization_id IS NULL/);
     // market_id, by contrast, SHOULD be updatable — a market can change.
     expect(doUpdate).toMatch(/market_id = COALESCE/i);
   });
@@ -235,7 +270,7 @@ describe('a write with no determinable org is refused', () => {
       expect(params[0]).toBe(10);           // the token subject, not a body field
       return { rows: [{ organization_id: 42 }] };
     };
-    handlers['SELECT owner_id, updated_at FROM jobs'] = () => ({ rows: [] });
+    handlers[LOCKED_READ] =() => ({ rows: [] });
     handlers['ON CONFLICT (id) DO UPDATE'] = () => ({ rows: [{ updated_at: new Date() }] });
 
     const r = await call('PUT', '/api/jobs/bulk/save',
@@ -272,7 +307,7 @@ describe('a write with no determinable org is refused', () => {
 describe('owner_id cannot point a new job at another tenant', () => {
   test('an owner outside the caller org is refused, not written', async () => {
     handlers['SELECT id FROM users WHERE id = ANY'] = () => ({ rows: [] });  // not in org
-    handlers['SELECT owner_id, updated_at FROM jobs'] = () => ({ rows: [] });
+    handlers[LOCKED_READ] =() => ({ rows: [] });
     handlers['ON CONFLICT (id) DO UPDATE'] = () => ({ rows: [{ updated_at: new Date() }] });
 
     const body = JSON.parse(JSON.stringify(ONE_JOB));
@@ -293,7 +328,7 @@ describe('owner_id cannot point a new job at another tenant', () => {
       seen = { sql, params };
       return { rows: [{ id: 999 }] };
     };
-    handlers['SELECT owner_id, updated_at FROM jobs'] = () => ({ rows: [] });
+    handlers[LOCKED_READ] =() => ({ rows: [] });
     handlers['ON CONFLICT (id) DO UPDATE'] = () => ({ rows: [{ updated_at: new Date() }] });
 
     const body = JSON.parse(JSON.stringify(ONE_JOB));
@@ -313,7 +348,7 @@ describe('owner_id cannot point a new job at another tenant', () => {
     // Enforcing on every save would break admins editing jobs whose owner was
     // since deactivated or predates org stamping. Only creates and actual
     // owner CHANGES are validated.
-    handlers['SELECT owner_id, updated_at FROM jobs'] = () => ({
+    handlers[LOCKED_READ] =() => ({
       rows: [{ owner_id: 999, updated_at: null }]
     });
     handlers['SELECT id FROM users WHERE id = ANY'] = () => ({ rows: [] });  // 999 not in org
@@ -355,7 +390,7 @@ describe('a stamped row is scoped; an un-stamped row is the leak', () => {
   });
 
   test('a row stamped with the creator org is NOT returned to a different org', async () => {
-    handlers['SELECT owner_id, updated_at FROM jobs'] = () => ({ rows: [] });
+    handlers[LOCKED_READ] =() => ({ rows: [] });
     handlers['ON CONFLICT (id) DO UPDATE'] = () => ({ rows: [{ updated_at: new Date() }] });
 
     await call('PUT', '/api/jobs/bulk/save',
@@ -462,5 +497,248 @@ describe('user creation stamps an org', () => {
     expect(stmt.slice(0, 300)).toMatch(/organization_id/);
     // no ORDER BY id LIMIT 1 style "pick the first org" anywhere in this path
     expect(src).not.toMatch(/ORDER BY u\.id ASC\s+LIMIT 1/);
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 7. N4 — a job that belongs to ANOTHER TENANT cannot be overwritten.
+ *
+ *    The bulk save's locked read carried no org predicate at all, so an org-A
+ *    admin reached the `DO UPDATE` arm on an org-B row and replaced its `data`
+ *    blob wholesale, money included. DO UPDATE correctly leaves
+ *    organization_id alone, so the row stayed org B's CARRYING ORG A's
+ *    CONTENTS — and stamping the INSERT (46b63e9) removed the orphaned-NULL
+ *    tell that was previously the only evidence it had happened.
+ *
+ *    The property asserted is not "the response said no". It is that NO WRITE
+ *    WAS REACHED on any job-keyed table.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('a foreign-tenant job cannot be overwritten', () => {
+  const withBase = () => {
+    const b = JSON.parse(JSON.stringify(ONE_JOB));
+    b.baseVersions = { job_new_1: new Date('2026-01-01T00:00:00.000Z').toISOString() };
+    return b;
+  };
+
+  test('the locked read reports the tenant instead of filtering on it', () => {
+    // Filtering the WHERE can only say "no rows", and "no rows" already means
+    // 'deleted' here (client -> unrecoverable-data-loss modal) or, with no base,
+    // falls through to INSERT ... ON CONFLICT, which matches by PRIMARY KEY and
+    // overwrites the foreign row anyway. The predicate has to be data the
+    // branch decides on, under the same lock.
+    const src = require('fs').readFileSync(
+      require('path').join(__dirname, '..', 'server', 'routes', 'job-routes.js'), 'utf8');
+    expect(src).toMatch(
+      /SELECT owner_id, updated_at, organization_id FROM jobs WHERE id = \$1 FOR UPDATE/);
+    expect(src).not.toMatch(/updated_at FROM jobs WHERE id = \$1 AND \(organization_id/);
+  });
+
+  test('org A saving an org B row: not_in_org, and the upsert is never reached', async () => {
+    handlers[LOCKED_READ] = () => ({
+      rows: [{ owner_id: 10, updated_at: null, organization_id: 9 }]   // org B
+    });
+    handlers['ON CONFLICT (id) DO UPDATE'] = () => ({ rows: [{ updated_at: new Date() }] });
+
+    const r = await call('PUT', '/api/jobs/bulk/save',
+      { id: 10, role: 'admin', organization_id: 7 }, ONE_JOB);
+
+    expect(r.status).toBe(200);
+    expect(r.body.conflicts.map((c) => c.reason)).toEqual(['not_in_org']);
+    expect(r.body.count).toBe(0);
+    expect(jobInsert()).toBeUndefined();
+    expect(jobKeyedWrite()).toBeUndefined();
+  });
+
+  test('not_in_org is NOT deleted — the reason string is the only discriminator', async () => {
+    // Both carry serverUpdatedAt: null. 'deleted' routes the client to the
+    // unrecoverable-data-loss dialog; this row is alive and untouched in
+    // another tenant and nothing of the caller's was lost.
+    handlers[LOCKED_READ] = () => ({
+      rows: [{ owner_id: 10, updated_at: null, organization_id: 9 }]
+    });
+
+    const r = await call('PUT', '/api/jobs/bulk/save',
+      { id: 10, role: 'admin', organization_id: 7 }, withBase());
+
+    expect(r.body.conflicts[0].reason).toBe('not_in_org');
+    expect(r.body.conflicts[0].reason).not.toBe('deleted');
+    expect(jobKeyedWrite()).toBeUndefined();
+  });
+
+  test('the client tells the two apart, and calls neither "changed by someone else"', () => {
+    const app = require('fs').readFileSync(
+      require('path').join(__dirname, '..', 'js', 'app.js'), 'utf8');
+    // not_in_org and invalid_owner both used to fall into isStale, which says
+    // "changed by someone else — your edit was NOT saved". False about both.
+    expect(app).toMatch(/c\.reason === 'not_in_org'/);
+    expect(app).toMatch(/c\.reason === 'invalid_owner'/);
+    expect(app).toMatch(/!isLocked\(c\) && !isUnver\(c\) && !isNotInOrg\(c\) && !isBadOwner\(c\)/);
+    expect(app).toMatch(/is not in your organization/);
+  });
+
+  test('the tolerance arm is intact: a NULL-org row still saves', async () => {
+    handlers[LOCKED_READ] = () => ({
+      rows: [{ owner_id: 10, updated_at: null, organization_id: null }]
+    });
+    handlers['ON CONFLICT (id) DO UPDATE'] = () => ({ rows: [{ updated_at: new Date() }] });
+
+    const r = await call('PUT', '/api/jobs/bulk/save',
+      { id: 10, role: 'admin', organization_id: 7 }, ONE_JOB);
+
+    expect(r.body.count).toBe(1);
+    expect(r.body.conflicts).toHaveLength(0);
+  });
+
+  test('a row in the caller own org still saves', async () => {
+    handlers[LOCKED_READ] = () => ({
+      rows: [{ owner_id: 10, updated_at: null, organization_id: 7 }]
+    });
+    handlers['ON CONFLICT (id) DO UPDATE'] = () => ({ rows: [{ updated_at: new Date() }] });
+
+    const r = await call('PUT', '/api/jobs/bulk/save',
+      { id: 10, role: 'admin', organization_id: 7 }, ONE_JOB);
+
+    expect(r.body.count).toBe(1);
+    expect(r.body.conflicts).toHaveLength(0);
+  });
+
+  test('the DO UPDATE carries the guard too, and a refusal is a 500 not a silent save', async () => {
+    handlers[LOCKED_READ] = () => ({ rows: [] });
+    // The SQL layer refuses what the JS branch let through — they disagree.
+    handlers['ON CONFLICT (id) DO UPDATE'] = () => ({ rows: [] });
+
+    const r = await call('PUT', '/api/jobs/bulk/save',
+      { id: 10, role: 'admin', organization_id: 7 }, ONE_JOB);
+
+    // `saved++` runs unconditionally, so a filtered DO UPDATE used to be
+    // counted as saved. It must not be reported as a save.
+    expect(r.status).toBe(500);
+    const q = jobInsert();
+    expect(q.sql).toMatch(/WHERE jobs\.organization_id = \$4 OR jobs\.organization_id IS NULL/);
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 8. The job-keyed doors — same defect, tables the `jobs` survey never named.
+ *
+ *    canAccess / canEdit / canManageAccess answered `true` for any adminish
+ *    caller BEFORE touching the database. So an org predicate on their `jobs`
+ *    statement would have fixed nothing: for the callers that matter the
+ *    statement never ran. The gates are now ORG FIRST, THEN ROLE.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('job-keyed child tables are behind the same boundary', () => {
+  const FOREIGN = () => ({ rows: [{ owner_id: 10, organization_id: 9 }] });
+
+  test('PUT /:id/graph cannot overwrite another tenant site plan', async () => {
+    handlers['SELECT owner_id, organization_id FROM jobs'] = FOREIGN;
+    handlers['SELECT data FROM node_graphs'] = () => ({ rows: [] });
+    handlers['INSERT INTO node_graphs'] = () => ({ rowCount: 1 });
+
+    const r = await call('PUT', '/api/jobs/jobB/graph',
+      { id: 10, role: 'admin', organization_id: 7 },
+      { nodes: [{ id: 'n1', polygon: [[0, 0]] }] });
+
+    expect(r.status).toBe(403);
+    expect(jobKeyedWrite()).toBeUndefined();
+  });
+
+  test('...and its DO UPDATE arm carries the guard as the second layer', () => {
+    const src = require('fs').readFileSync(
+      require('path').join(__dirname, '..', 'server', 'routes', 'job-routes.js'), 'utf8');
+    // lastIndexOf: /convert carries the lead's survey graph forward with the
+    // same INSERT, and that one is a create with no conflict arm to guard.
+    const upsert = src.slice(src.lastIndexOf('INSERT INTO node_graphs (job_id, data, organization_id)'));
+    expect(upsert.slice(0, 400)).toMatch(
+      /ON CONFLICT \(job_id\) DO UPDATE[\s\S]*WHERE node_graphs\.organization_id IS NULL OR node_graphs\.organization_id = \$3/);
+  });
+
+  test('GET /:id/access does not hand another tenant its staff directory', async () => {
+    // The share list carries user_id, name, EMAIL and role — a cross-tenant
+    // staff directory read keyed on a guessable job id.
+    handlers['SELECT owner_id, organization_id FROM jobs'] = FOREIGN;
+    handlers['FROM job_access ja'] = () => ({ rows: [{ user_id: 1, email: 'b@orgb.test' }] });
+
+    const r = await call('GET', '/api/jobs/jobB/access',
+      { id: 10, role: 'admin', organization_id: 7 });
+
+    expect(r.status).toBe(403);
+    expect(queries.some((q) => /FROM job_access ja/i.test(q.sql))).toBe(false);
+  });
+
+  test('POST /:id/access cannot plant a durable cross-tenant grant', async () => {
+    handlers['SELECT owner_id, organization_id FROM jobs'] = FOREIGN;
+    handlers['INSERT INTO job_access'] = () => ({ rows: [] });
+
+    const r = await call('POST', '/api/jobs/jobB/access',
+      { id: 10, role: 'admin', organization_id: 7 }, { userId: 55, accessLevel: 'edit' });
+
+    expect(r.status).toBe(404);      // another tenant's job reads as absent
+    expect(jobKeyedWrite()).toBeUndefined();
+  });
+
+  test('...and the GRANTEE must be in the caller org too (it was unvalidated)', async () => {
+    handlers['SELECT owner_id, organization_id FROM jobs'] =
+      () => ({ rows: [{ owner_id: 10, organization_id: 7 }] });   // our own job
+    handlers['SELECT id FROM users WHERE id = $1 AND organization_id'] = () => ({ rows: [] });
+    handlers['INSERT INTO job_access'] = () => ({ rows: [] });
+
+    const r = await call('POST', '/api/jobs/jobA/access',
+      { id: 10, role: 'admin', organization_id: 7 }, { userId: 55, accessLevel: 'edit' });
+
+    expect(r.status).toBe(400);
+    expect(jobKeyedWrite()).toBeUndefined();
+  });
+
+  test('DELETE /:id/access/:userId cannot revoke another tenant share', async () => {
+    handlers['SELECT owner_id, organization_id FROM jobs'] = FOREIGN;
+    handlers['DELETE FROM job_access'] = () => ({ rows: [] });
+
+    const r = await call('DELETE', '/api/jobs/jobB/access/55',
+      { id: 10, role: 'admin', organization_id: 7 }, {});
+
+    expect(r.status).toBe(404);
+    expect(jobKeyedWrite()).toBeUndefined();
+  });
+
+  test('the gates read the tenant BEFORE the role short-circuit', () => {
+    const src = require('fs').readFileSync(
+      require('path').join(__dirname, '..', 'server', 'routes', 'job-routes.js'), 'utf8');
+    for (const fn of ['canAccess', 'canEdit', 'canManageAccess']) {
+      const head = fnBody(src, fn);
+      expect(head.indexOf('orgAllows')).toBeGreaterThan(-1);
+      expect(head.indexOf('isAdminish')).toBeGreaterThan(-1);
+      expect(head.indexOf('orgAllows')).toBeLessThan(head.indexOf('isAdminish'));
+    }
+  });
+
+  test('the caller org is never read from the body', () => {
+    const src = require('fs').readFileSync(
+      require('path').join(__dirname, '..', 'server', 'routes', 'job-routes.js'), 'utf8');
+    expect(fnBody(src, 'callerOrgId')).not.toMatch(/req\.body/);
+  });
+
+  test('an in-org job still reaches its own site plan', async () => {
+    handlers['SELECT owner_id, organization_id FROM jobs'] =
+      () => ({ rows: [{ owner_id: 10, organization_id: 7 }] });
+    handlers['INSERT INTO node_graphs'] = () => ({ rowCount: 1 });
+
+    const r = await call('PUT', '/api/jobs/jobA/graph',
+      { id: 10, role: 'admin', organization_id: 7 },
+      { nodes: [{ id: 'n1', polygon: [[0, 0]] }] });
+
+    expect(r.status).toBe(200);
+    expect(queries.some((q) => /INSERT INTO node_graphs/i.test(q.sql))).toBe(true);
+  });
+
+  test('a legacy NULL-org job is still reachable by everyone, as before', async () => {
+    handlers['SELECT owner_id, organization_id FROM jobs'] =
+      () => ({ rows: [{ owner_id: 10, organization_id: null }] });
+    handlers['INSERT INTO node_graphs'] = () => ({ rowCount: 1 });
+
+    const r = await call('PUT', '/api/jobs/jobLegacy/graph',
+      { id: 10, role: 'admin', organization_id: 7 },
+      { nodes: [{ id: 'n1', polygon: [[0, 0]] }] });
+
+    expect(r.status).toBe(200);
   });
 });
