@@ -16,6 +16,9 @@
  *     - per-row UPSERT, never a delete
  *     - a base version that does not match the row's updated_at ⇒ conflict
  *       {reason:'stale'}, row untouched
+ *     - a base that CANNOT BE COMPARED — the UNVERSIONED_BASE sentinel, or a
+ *       row whose own updated_at is null ⇒ conflict {reason:'unverifiable'}.
+ *       A guard that falls through when it cannot compare is not a guard.
  *     - a base version supplied for a row that DOES NOT EXIST ⇒ conflict
  *       {reason:'deleted'}. It is NOT re-inserted. A base means "I loaded this
  *       row and expect it to exist"; if it is gone, somebody deleted it, and
@@ -30,6 +33,10 @@
  *       skipped silently.
  * ────────────────────────────────────────────────────────────────────────── */
 'use strict';
+
+/* The sentinel the client sends for a row it holds but cannot version. It is
+ * not a timestamp, so no comparison can ever accept it — which is the point. */
+const UNVERSIONED_BASE = 'unversioned';
 
 function makeServer() {
   let clock = 1000;
@@ -68,9 +75,15 @@ function makeServer() {
       const base = baseVersions && baseVersions[job.id];
       if (!existing) {
         if (base) { conflicts.push({ id: job.id, reason: 'deleted', serverUpdatedAt: null }); continue; }
-      } else if (base && existing.updated_at !== base) {
-        conflicts.push({ id: job.id, reason: 'stale', serverUpdatedAt: existing.updated_at });
-        continue;
+      } else if (base) {
+        if (base === UNVERSIONED_BASE || !existing.updated_at) {
+          conflicts.push({ id: job.id, reason: 'unverifiable', serverUpdatedAt: existing.updated_at || null });
+          continue;
+        }
+        if (existing.updated_at !== base) {
+          conflicts.push({ id: job.id, reason: 'stale', serverUpdatedAt: existing.updated_at });
+          continue;
+        }
       }
       const blob = { ...job };
       ['buildings', 'phases', 'changeOrders', 'subs', 'purchaseOrders', 'invoices']
@@ -191,4 +204,4 @@ function cacheSeeder(snapshotJobs, estimates) {
   };
 }
 
-module.exports = { makeServer, defer, boot, settle, jobRow, cacheSeeder };
+module.exports = { makeServer, defer, boot, settle, jobRow, cacheSeeder, UNVERSIONED_BASE };

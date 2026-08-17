@@ -2692,6 +2692,40 @@
         // server rejects (conflicts) any job whose row is newer, so a second
         // user's concurrent edit is never silently overwritten.
         var _jobVersion = {};
+        // ── which job ids the SERVER last said it has ────────────────────────
+        // Recorded off every GET that resolved, INCLUDING one the hold refused
+        // to apply — existence is server truth even when the row's contents are
+        // not ours to take. It exists to answer one question at push time that
+        // nothing else can: "does this row already exist over there?"
+        //
+        // That question is what stops the version guard from being opt-in. The
+        // guard only ever fired `if (base)`, and the only thing supplying a base
+        // was `if (j._updatedAt)`, so a copy that had lost its _updatedAt went
+        // out with baseVersions {} and force-overwrote whatever was there. But
+        // "no version" cannot simply mean "refuse", because a job this client
+        // just CREATED has no version either and must be allowed to insert.
+        //
+        // The server's own list separates the two with no guessing:
+        //   in the list, no version  → it exists and we cannot prove we are
+        //                              current → send UNVERSIONED_BASE, which
+        //                              the server cannot match, so it conflicts
+        //   not in the list          → it does not exist over there → a create
+        // A push is only ever possible after a GET has resolved, so this map is
+        // always populated by the time it is read.
+        //
+        // The one case it cannot resolve: a row deleted on the server whose
+        // local copy never carried an _updatedAt at all. It reads as a create.
+        // That needs a cache written before _updatedAt was ever handed to the
+        // client, and it self-heals on the first good load; the alternative —
+        // refusing every unversioned row — would destroy genuinely new jobs,
+        // which is the bug this whole path exists to stop, pointed the other way.
+        var _serverJobIds = {};
+        // The sentinel. Deliberately not a timestamp and deliberately not
+        // absent: absent means "create", a non-comparable value means "this
+        // must already exist and I cannot prove I am current". The server
+        // refuses it, which is the point — including an OLD server mid-swap,
+        // which compares it against an ISO string and conflicts anyway.
+        var UNVERSIONED_BASE = 'unversioned';
         // Drop server-injected/per-save hints so they can't register as changes.
         function _stripPrivate(o) {
             if (!o || typeof o !== 'object') return o;
@@ -2958,6 +2992,17 @@
                 // Postgres and the only exit was to discard the work.
                 _serverLoadOk = true;
                 _pushRetryCount = 0;    // a reachable server re-arms the push ladder
+                // Existence, and ONLY existence, from this response. Recorded
+                // before the hold decision so the held branch's own push can
+                // use it.
+                //
+                // It must NOT also adopt these rows' _updatedAt as our base.
+                // The base has to describe the version OUR copy came from; a
+                // base copied out of a response we just refused to apply would
+                // claim we are current when we are exactly not, and would turn
+                // the guard into a rubber stamp on the newer row.
+                _serverJobIds = {};
+                (results[0].jobs || []).forEach(function(j) { if (j && j.id) _serverJobIds[j.id] = true; });
 
                 // ── the hold ────────────────────────────────────────────────
                 // Everything above this line is direct-REST state (QB costs,
@@ -3352,13 +3397,33 @@
                                     ' job(s) rejected but identical to the server after reload — nothing was lost, converged silently.');
                                 return;
                             }
-                            var lostNames = lost.map(function(c) { return nameOf[c.id]; });
-                            var msg = (lostNames.length === 1
-                                    ? ('“' + lostNames[0] + '” was changed by someone else — your edit to it was NOT saved.')
-                                    : (lostNames.length + ' jobs were changed by someone else — your edits to them were NOT saved.')) +
-                                ' The current version has been loaded.';
-                            if (window.p86Toast) { try { window.p86Toast(msg, 'error'); } catch (e) {} }
-                            console.warn('[save-conflict] genuinely lost edits on:', lostNames.join(', '));
+                            // "Changed by someone else" is true of a STALE
+                            // rejection and false of an UNVERIFIABLE one —
+                            // nobody necessarily touched that row; this device
+                            // simply could not prove which version it was
+                            // holding, so the server refused rather than
+                            // overwrite. Two facts, two sentences.
+                            var lostChanged = lost.filter(function(c) { return c.reason !== 'unverifiable'; })
+                                                  .map(function(c) { return nameOf[c.id]; });
+                            var lostUnver = lost.filter(function(c) { return c.reason === 'unverifiable'; })
+                                                .map(function(c) { return nameOf[c.id]; });
+                            var say = function(msg) {
+                                if (window.p86Toast) { try { window.p86Toast(msg, 'error'); } catch (e) {} }
+                            };
+                            if (lostChanged.length) {
+                                say((lostChanged.length === 1
+                                        ? ('“' + lostChanged[0] + '” was changed by someone else — your edit to it was NOT saved.')
+                                        : (lostChanged.length + ' jobs were changed by someone else — your edits to them were NOT saved.')) +
+                                    ' The current version has been loaded.');
+                            }
+                            if (lostUnver.length) {
+                                say((lostUnver.length === 1
+                                        ? ('“' + lostUnver[0] + '” was not saved: this device could not tell which version it was editing.')
+                                        : (lostUnver.length + ' jobs were not saved: this device could not tell which version it was editing.')) +
+                                    ' They were refused rather than risk overwriting newer work. The current version has been loaded.');
+                            }
+                            console.warn('[save-conflict] genuinely lost edits on:',
+                                lostChanged.concat(lostUnver).join(', '));
                         }).catch(function () {});
                     }, 1200);
                 }
@@ -3440,8 +3505,16 @@
             notifyPushStatus('saving');
             var pushedIds = editableJobs.map(function(j) { return j.id; });
             // Base version per pushed job for optimistic concurrency.
+            // Every row that EXISTS on the server carries one, so the guard is
+            // no longer opt-in: a real version when we have one, the sentinel
+            // when we know the row is there but cannot say which version we
+            // hold. Only a row the server does not have goes out bare — that
+            // absence is what says "create", and it is the only thing that may.
             var baseVersions = {};
-            pushedIds.forEach(function(id) { if (_jobVersion[id]) baseVersions[id] = _jobVersion[id]; });
+            pushedIds.forEach(function(id) {
+                if (_jobVersion[id]) baseVersions[id] = _jobVersion[id];
+                else if (_serverJobIds[id]) baseVersions[id] = UNVERSIONED_BASE;
+            });
             var estimatesGo = dirtyEstIds.length > 0;
             // Snapshot the signature of what we are ABOUT TO SEND, per row.
             // The re-baseline below must advance to THIS, not to whatever

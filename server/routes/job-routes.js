@@ -587,12 +587,21 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, re
   try {
     const { appData, baseVersions } = req.body;
     if (!appData || !appData.jobs) return res.status(400).json({ error: 'Invalid appData' });
-    // Optimistic concurrency (opt-in, backward-compatible): the client MAY send
-    // baseVersions = { jobId: updatedAtISO } — the updated_at it loaded for each
-    // job. A job whose server row is now NEWER than that base was changed by
-    // someone else since the client loaded it, so we must NOT overwrite it (that
-    // is the silent cross-user clobber). We skip it and report it as a conflict.
-    // A client that sends no baseVersions writes exactly as before.
+    // Optimistic concurrency. The client sends baseVersions = { jobId: base }
+    // for every job it believes already exists here, where base is either the
+    // updated_at it loaded, or UNVERSIONED_BASE when it holds the row but not
+    // its version. Three answers, and only the third writes:
+    //   the row is GONE          → conflict 'deleted'      (never re-create it)
+    //   the base cannot be
+    //     compared to the row    → conflict 'unverifiable' (never force it)
+    //   the base does not match  → conflict 'stale'
+    // A job with NO entry is a job the client is CREATING — that absence is the
+    // only thing that authorises an INSERT of a new id.
+    //
+    // An old client that sends no baseVersions at all still writes as before.
+    // That is deliberate back-compat for the deploy swap, not a standing
+    // permission: every shipped client build sends them.
+    const UNVERSIONED_BASE = 'unversioned';
     const bv = (baseVersions && typeof baseVersions === 'object') ? baseVersions : {};
     const conflicts = [];
     const versions = {};
@@ -691,7 +700,22 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, re
           if (base) {
             const serverTs = existing.rows[0].updated_at
               ? new Date(existing.rows[0].updated_at).toISOString() : null;
-            if (serverTs && serverTs !== base) {
+            // A base we cannot COMPARE is not a base. Both directions of that
+            // used to fall through to the write:
+            //   - the client sends UNVERSIONED_BASE, meaning "this row exists
+            //     and I cannot prove which version I am holding"
+            //   - the row's own updated_at is NULL (the column is nullable —
+            //     server/db.js, jobs.updated_at TIMESTAMPTZ DEFAULT NOW())
+            // In both, the previous `if (serverTs && serverTs !== base)` did
+            // nothing and a stale copy overwrote a newer row wholesale, money
+            // fields included. Refusing is the only honest answer: the client
+            // reloads, learns the current version, and the user is told the
+            // write was refused rather than finding a reverted budget later.
+            if (!serverTs || base === UNVERSIONED_BASE) {
+              conflicts.push({ id: job.id, reason: 'unverifiable', serverUpdatedAt: serverTs });
+              continue;
+            }
+            if (serverTs !== base) {
               conflicts.push({ id: job.id, reason: 'stale', serverUpdatedAt: serverTs });
               continue;
             }

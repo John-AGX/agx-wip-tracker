@@ -166,9 +166,14 @@
             (s.deleted.length === 1 ? 'it was' : 'them was') +
             ' not saved and nothing was re-created.', show, n);
         }
+        // Covers BOTH non-deleted refusals — a row that moved on, and a row
+        // whose version this device could not prove. "Another session changed
+        // it" is only true of the first, so the copy says what is true of both:
+        // the server would not take the write without risking newer work.
         return mk('warn', 'Some changes were rejected',
-          'Another session changed ' + (n === 1 ? 'a record' : 'records') +
-          ' you were editing. The current version is being loaded.', show, n);
+          'The server would not take ' + (n === 1 ? 'a record' : 'records') +
+          ' you were editing without overwriting newer work. The current version is being loaded.',
+          show, n);
 
       default:
         return mk('none', '', '', [], n);
