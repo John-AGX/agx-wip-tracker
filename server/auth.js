@@ -273,6 +273,85 @@ async function resolveUserOrg(req) {
   }
 }
 
+// ── resolveOrgId / requireOrgId ────────────────────────────────────────────
+// The org id a WRITE must stamp, and the gate that refuses the write when
+// there isn't one.
+//
+// WHY NOT resolveUserOrg + requireOrg (they already exist, and they are the
+// wrong tool for a write path — deliberately not reused):
+//
+//   1. resolveUserOrg loads the organizations ROW, so it also enforces
+//      `archived_at IS NULL`. Archiving an org would then 403 every job write
+//      in that tenant, including plain edits to rows that already exist. The
+//      question a write needs answered is "which tenant does this row belong
+//      to", and an archived org still answers it.
+//   2. resolveUserOrg swallows query errors into `return null`, which
+//      requireOrg then renders as "User is not associated with an
+//      organization." A pool blip on the hottest write in the app would
+//      surface as a permanent-looking authorization failure. This route holds
+//      FOR UPDATE on ~25 rows per transaction and has a documented deadlock
+//      history (see qb-cost-routes.js) — contention here is not hypothetical.
+//   3. It costs an extra organizations SELECT on a route that fires on a
+//      600ms debounce, to answer a null check the JWT already answers.
+//
+// So: resolve the ID, from server-derived sources only. The JWT claim is
+// signed at login from the users row and hard-picked in signToken(), so a
+// client can never set it; the fallback is keyed on the VERIFIED user id.
+// The request body is never consulted — an org read out of the body would
+// replace a missing boundary with a forgeable one.
+//
+// A DB failure THROWS rather than returning null: "I could not tell whether
+// this user has an org" is not "this user has no org", and only one of those
+// is the caller's fault.
+async function resolveOrgId(req) {
+  if (!req || !req.user) return null;
+  if (req.user.organization_id != null) return req.user.organization_id;
+  // No pool wired (index.js calls setRolePool at boot) means the fallback
+  // cannot run. That is "I cannot tell", not "this user has no org" — throwing
+  // routes it to the retryable answer instead of blaming the caller for a
+  // wiring problem.
+  if (!_pool) throw new Error('org resolution unavailable: auth pool not initialised');
+  const r = await _pool.query(
+    'SELECT organization_id FROM users WHERE id = $1',
+    [req.user.id]
+  );
+  const orgId = r.rows.length ? r.rows[0].organization_id : null;
+  // Repair the request for everything downstream (loadMarketMap and friends
+  // read req.user.organization_id directly).
+  if (orgId != null) req.user.organization_id = orgId;
+  return orgId;
+}
+
+// Named refusal codes. The client can tell these apart from each other and
+// from a deploy-window 502 — which a bare 403 could not.
+const ORG_UNRESOLVED = 'ORG_UNRESOLVED';
+const ORG_LOOKUP_FAILED = 'ORG_LOOKUP_FAILED';
+
+// requireOrgId — fail CLOSED on a write whose tenant cannot be determined.
+// Sets req.orgId. Use AFTER requireAuth on any route that INSERTs a
+// tenant-scoped row: inserting NULL instead is what put un-stamped rows into
+// every org's reads in the first place.
+async function requireOrgId(req, res, next) {
+  let orgId;
+  try {
+    orgId = await resolveOrgId(req);
+  } catch (e) {
+    // Retryable, and it must not look like a permission problem.
+    return res.status(503).json({
+      error: 'Could not determine your organization right now. Nothing was saved — retry shortly.',
+      code: ORG_LOOKUP_FAILED
+    });
+  }
+  if (orgId == null) {
+    return res.status(409).json({
+      error: 'This account is not attached to an organization. The write was refused rather than saved without one — an administrator must set your organization.',
+      code: ORG_UNRESOLVED
+    });
+  }
+  req.orgId = orgId;
+  next();
+}
+
 function requireRole(...roles) {
   return function(req, res, next) {
     if (!req.user) return res.status(401).json({ error: 'Not authenticated' });
@@ -339,6 +418,9 @@ async function requireOrg(req, res, next) {
 
 module.exports = {
   signToken, requireAuth, requireRole, requireOrg, requireSystemAdmin, resolveUserOrg, getAttributedUserId, JWT_SECRET,
+  // Org id resolution for WRITES (see the block comment above resolveOrgId
+  // for why these are not requireOrg).
+  resolveOrgId, requireOrgId, ORG_UNRESOLVED, ORG_LOOKUP_FAILED,
   // Roles / capabilities
   CAPABILITY_KEYS, setRolePool, refreshRoleCache, hasCapability, requireCapability,
   isAdminish,

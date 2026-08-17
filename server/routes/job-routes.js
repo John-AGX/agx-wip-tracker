@@ -1,6 +1,6 @@
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireRole, isAdminish } = require('../auth');
+const { requireAuth, requireRole, requireOrgId, isAdminish } = require('../auth');
 const { sendEmail } = require('../email');
 const { jobAssigned } = require('../email-templates');
 const markets = require('../services/markets');
@@ -144,7 +144,7 @@ router.get('/:id', requireAuth, async (req, res) => {
 // POST /api/jobs
 // Admins can assign ownership to any user via body.owner_id; PMs always own
 // the jobs they create (the field is ignored from non-admin callers).
-router.post('/', requireAuth, requireRole('admin', 'pm'), async (req, res) => {
+router.post('/', requireAuth, requireOrgId, requireRole('admin', 'pm'), async (req, res) => {
   try {
     const id = req.body.id || 'job' + Date.now();
     let ownerId = req.user.id;
@@ -189,7 +189,7 @@ router.post('/', requireAuth, requireRole('admin', 'pm'), async (req, res) => {
 //   • leads.job_id + lead.status = 'sold'
 //   • estimate.data.job_id            (powers the Estimates "Won" filter)
 // Body: { job: {…full job blob incl contractAmount + workbook}, lead_id?, estimate_id? }
-router.post('/convert', requireAuth, requireRole('admin', 'pm'), async (req, res) => {
+router.post('/convert', requireAuth, requireOrgId, requireRole('admin', 'pm'), async (req, res) => {
   const client = await pool.connect();
   try {
     const job = (req.body && req.body.job) || {};
@@ -260,10 +260,13 @@ router.post('/convert', requireAuth, requireRole('admin', 'pm'), async (req, res
       // the salesperson's field survey becomes the PM's starting site plan.
       // No-op when the lead has no survey (SELECT returns 0 rows).
       await client.query(
-        `INSERT INTO node_graphs (job_id, data)
-         SELECT $1, data FROM lead_graphs WHERE lead_id = $2
+        // Stamp the org too — node_graphs carries organization_id and this
+        // insert was leaving it NULL, which lands the site plan of a brand-new
+        // job outside the tenant boundary the job itself is inside.
+        `INSERT INTO node_graphs (job_id, data, organization_id)
+         SELECT $1, data, $3 FROM lead_graphs WHERE lead_id = $2
          ON CONFLICT (job_id) DO NOTHING`,
-        [id, leadId]
+        [id, leadId, orgId]
       );
     }
     if (estimateId) {
@@ -583,7 +586,7 @@ router.delete('/:id/access/:userId', requireAuth, async (req, res) => {
 });
 
 // PUT /api/jobs/bulk/save
-router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, res) => {
+router.put('/bulk/save', requireAuth, requireOrgId, requireRole('admin', 'pm'), async (req, res) => {
   try {
     const { appData, baseVersions } = req.body;
     if (!appData || !appData.jobs) return res.status(400).json({ error: 'Invalid appData' });
@@ -611,11 +614,52 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, re
     // saves through here), so without it the FK would be correct only
     // until the first re-market and the backfill would never repair it
     // (the backfill only fills NULLs, by design).
+    // The tenant this batch writes into. requireOrgId guarantees it is
+    // non-null and server-derived; the handler is unreachable otherwise.
+    // market is the OPERATING dimension and never stands in for this.
+    const orgId = req.orgId;
+
     let marketMap = null;
     try {
-      marketMap = await markets.loadMarketMap(req.user.organization_id);
+      marketMap = await markets.loadMarketMap(orgId);
     } catch (e) {
       console.warn('[jobs] bulk market map load failed:', e && e.message);
+    }
+
+    // ── owner_id is a SECOND tenancy pointer, and it comes from the body ──
+    // jobs has two org sources, not one:
+    //   • the organization_id COLUMN — what job-routes.js reads
+    //   • owner_id -> users.organization_id — what org-access.js reads
+    //     ("Scoping source of truth" in its header), which is how
+    //     assertEntityInOrg('job') gates change-orders and schedule entries.
+    // Stamping the column alone would leave the second one caller-chosen:
+    // `job.owner_id` is request data, and the strip at `delete jobBlob.owner_id`
+    // CANNOT reach it (jobBlob is a copy; the assignment below reads `job`).
+    // An admin could then create a job stamped to their own org while pointing
+    // owner_id at another tenant's user, and the two sources would disagree —
+    // a divergence no NULL check, and no future NOT NULL, could ever see.
+    //
+    // POST / and PUT /:id/owner already validate this ("would orphan the job
+    // into the wrong tenant"). This path was the door that didn't.
+    //
+    // Validated once for the batch rather than per row. Membership only, NOT
+    // `active = true`: tenancy is the security property, and a deactivated
+    // user still has an org — refusing there would block admins from saving
+    // jobs whose owner was since deactivated, which is not this fix's business.
+    const wantedOwnerIds = [];
+    if (isAdminish(req.user)) {
+      for (const j of appData.jobs) {
+        const n = Number(j && j.owner_id);
+        if (Number.isInteger(n) && n > 0 && n !== Number(req.user.id)) wantedOwnerIds.push(n);
+      }
+    }
+    const ownerIdsInOrg = new Set();
+    if (wantedOwnerIds.length) {
+      const ow = await pool.query(
+        'SELECT id FROM users WHERE id = ANY($1::int[]) AND organization_id = $2',
+        [[...new Set(wantedOwnerIds)], orgId]
+      );
+      for (const r of ow.rows) ownerIdsInOrg.add(Number(r.id));
     }
 
     const client = await pool.connect();
@@ -745,24 +789,51 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, re
         // label while the FK — and therefore the market's P&L — silently
         // stayed put. Strip it so the name is what resolves.
         delete jobBlob.market_id;
+        // organization_id is the TENANT boundary and it lives on the column,
+        // stamped from the caller's token below. A copy in the JSONB would be
+        // client-supplied and would shadow the column for anything reading the
+        // blob — same failure mode as owner_id and market_id above.
+        delete jobBlob.organization_id;
         // For new jobs, admins can specify owner_id to assign a PM. Non-admins
         // (PMs creating their own jobs) always own what they create. ON CONFLICT
         // never touches owner_id, so existing jobs keep their original PM.
-        const ownerId = (isAdminish(req.user) && job.owner_id) ? job.owner_id : req.user.id;
         const isNewJob = !existing.rows.length;
         const priorOwnerId = isNewJob ? null : existing.rows[0].owner_id;
+        const ownerId = (isAdminish(req.user) && job.owner_id) ? job.owner_id : req.user.id;
+        // Enforce the org check only where an owner is actually being
+        // ASSIGNED — a create, or a change of owner on an existing row. A
+        // routine save that merely echoes the row's current owner back is not
+        // an assignment and must not start failing because of historical data.
+        if (isNewJob || Number(ownerId) !== Number(priorOwnerId)) {
+          if (Number(ownerId) !== Number(req.user.id) && !ownerIdsInOrg.has(Number(ownerId))) {
+            conflicts.push({ id: job.id, reason: 'invalid_owner', serverUpdatedAt: null });
+            continue;
+          }
+        }
         // Resolve from the blob's market NAME. A blob that names no
         // market resolves to null, and COALESCE below keeps whatever the
         // row already had rather than blanking it — the same
         // never-un-assign-by-omission rule the estimates bulk save uses.
         const jobMarketId = marketMap ? markets.resolveMarketId(marketMap, jobBlob) : null;
         const up = await client.query(
-          `INSERT INTO jobs (id, owner_id, data, market_id) VALUES ($1, $2, $3, $4)
+          // organization_id is stamped on the INSERT arm and DELIBERATELY
+          // absent from DO UPDATE. A row's org is its tenancy: letting a save
+          // rewrite it would make every bulk save a potential tenant move, so
+          // not EXCLUDED and not COALESCE — nothing. (Contrast market_id
+          // immediately below, which correctly COALESCEs, because a market is
+          // an operating dimension and CAN legitimately change.)
+          //
+          // Until this stamp existed, a genuinely new job — the create path
+          // the resurrection guard above deliberately preserves — landed with
+          // organization_id NULL, and every read in this file admits NULL
+          // ("OR organization_id IS NULL"), so the row was visible to every
+          // tenant rather than hidden from all of them.
+          `INSERT INTO jobs (id, owner_id, data, organization_id, market_id) VALUES ($1, $2, $3, $4, $5)
            ON CONFLICT (id) DO UPDATE SET data = $3,
                  market_id = COALESCE(EXCLUDED.market_id, jobs.market_id),
                  updated_at = NOW()
            RETURNING updated_at`,
-          [job.id, ownerId, JSON.stringify(jobBlob), jobMarketId]
+          [job.id, ownerId, JSON.stringify(jobBlob), orgId, jobMarketId]
         );
         // Hand back the new version so the client can advance its base and not
         // false-conflict on its own next save.
@@ -859,7 +930,13 @@ router.put('/:id/graph', requireAuth, async (req, res) => {
       }
     }
     await pool.query(
-      `INSERT INTO node_graphs (job_id, data) VALUES ($1, $2)
+      // organization_id derived from the PARENT JOB, not from the caller: a
+      // graph belongs to whatever tenant its job belongs to, and reading it
+      // off the row makes the stamp unforgeable and correct even here, where
+      // the route is requireAuth-only. A missing job yields NULL exactly as
+      // before, so the row-count semantics of this statement are unchanged.
+      `INSERT INTO node_graphs (job_id, data, organization_id)
+       VALUES ($1, $2, (SELECT organization_id FROM jobs WHERE id = $1))
        ON CONFLICT (job_id) DO UPDATE SET data = $2, updated_at = NOW()`,
       [req.params.id, JSON.stringify(incoming)]
     );

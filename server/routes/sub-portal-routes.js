@@ -221,9 +221,16 @@ router.get('/sub-portal/accept', async (req, res) => {
     if (!token) return res.status(400).send('Missing token.');
 
     const inviteR = await pool.query(
-      `SELECT i.*, s.name AS sub_name
+      // sub_org_id / inviter_org_id: the two pieces of EVIDENCE for which
+      // tenant a claimed sub login belongs to. sub_invites has no org column
+      // of its own, so the org comes from the sub record the invite is for,
+      // or failing that from the user who sent it. Neither is a guess.
+      `SELECT i.*, s.name AS sub_name,
+              s.organization_id AS sub_org_id,
+              cu.organization_id AS inviter_org_id
          FROM sub_invites i
          LEFT JOIN subs s ON s.id = i.sub_id
+         LEFT JOIN users cu ON cu.id = i.created_by
         WHERE i.token = $1`,
       [token]
     );
@@ -253,11 +260,17 @@ router.get('/sub-portal/accept', async (req, res) => {
       // users never log in with a password, so we store a dummy
       // unguessable hash that no real password could match.
       const dummyHash = '!sub-portal-no-password!' + crypto.randomBytes(16).toString('hex');
+      // Stamp the tenant from the invite's own evidence (sub record first,
+      // inviting user second). If neither carries an org this stays NULL
+      // rather than picking one — an un-stamped sub is visible and fixable,
+      // a wrongly-stamped one is a silent cross-tenant move.
+      const subOrgId = inv.sub_org_id != null ? inv.sub_org_id
+        : (inv.inviter_org_id != null ? inv.inviter_org_id : null);
       const ins = await pool.query(
-        `INSERT INTO users (email, password_hash, name, role, sub_id, active)
-         VALUES ($1, $2, $3, 'sub', $4, true)
+        `INSERT INTO users (email, password_hash, name, role, sub_id, active, organization_id)
+         VALUES ($1, $2, $3, 'sub', $4, true, $5)
          RETURNING *`,
-        [inv.email, dummyHash, inv.sub_name || inv.email, inv.sub_id]
+        [inv.email, dummyHash, inv.sub_name || inv.email, inv.sub_id, subOrgId]
       );
       user = ins.rows[0];
     }

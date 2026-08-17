@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { pool, getOrgById } = require('../db');
-const { signToken, requireAuth, requireRole, requireSystemAdmin, resolveUserOrg, hasCapability } = require('../auth');
+const { signToken, requireAuth, requireRole, requireOrgId, requireSystemAdmin, resolveUserOrg, hasCapability } = require('../auth');
 const { ipLoginLimiter } = require('../rate-limit');
 const { auditLog } = require('../audit');
 
@@ -210,7 +210,14 @@ router.post('/act-as/exit', requireAuth, async (req, res) => {
 });
 
 // POST /api/auth/register (admin only)
-router.post('/register', requireAuth, requireRole('admin'), async (req, res) => {
+//
+// requireOrgId is a PREREQUISITE for the org gate on the job write routes,
+// not decoration. This insert used to leave organization_id NULL, so the
+// admins and PMs it mints — exactly the roles that write jobs — carried a
+// null org in their JWT and stamped NULL through every write path that was
+// otherwise correct. Creating an org-less user is now refused here rather
+// than discovered later at their first save.
+router.post('/register', requireAuth, requireOrgId, requireRole('admin'), async (req, res) => {
   try {
     const { email, password, name, role, phone_number } = req.body;
     if (!email || !password || !name) {
@@ -236,8 +243,10 @@ router.post('/register', requireAuth, requireRole('admin'), async (req, res) => 
 
     const hash = bcrypt.hashSync(password, 10);
     const result = await pool.query(
-      'INSERT INTO users (email, password_hash, name, role, phone_number) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-      [email.toLowerCase().trim(), hash, name, userRole, normalizedPhone]
+      // organization_id from the CREATING ADMIN's token — never from the body.
+      // An admin can only ever mint users into their own tenant.
+      'INSERT INTO users (email, password_hash, name, role, phone_number, organization_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
+      [email.toLowerCase().trim(), hash, name, userRole, normalizedPhone, req.orgId]
     );
 
     // Fire the invite email — fire-and-forget so a flaky email

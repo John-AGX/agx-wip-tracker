@@ -5275,25 +5275,55 @@ async function initSchema() {
     // duplicate admin row.
     const adminEmail = String(process.env.ADMIN_EMAIL).trim().toLowerCase();
     const hash = bcrypt.hashSync(process.env.ADMIN_PASSWORD, 10);
+    // organization_id: this seed runs AFTER the users backfill inside the
+    // schema statement above, so an admin inserted here used to stay org-less
+    // for the whole life of the process — and with the org gate on the job
+    // write routes that is a locked-out administrator on a fresh install, a
+    // restored snapshot, or a rotated ADMIN_EMAIL, with no in-app way out.
+    //
+    // The org is taken ONLY when exactly one live organization exists, which
+    // is precisely the fresh-install case. With two or more tenants there is
+    // no evidence saying which one owns the env admin, so it stays NULL and
+    // says so — a visible un-stamped row beats a silent wrong-tenant one.
+    //
+    // COALESCE on conflict heals an existing NULL-org admin in place without
+    // ever overwriting an org that is already set.
     const result = await pool.query(
-      `INSERT INTO users (email, password_hash, name, role)
-       VALUES ($1, $2, 'Admin', 'admin')
-       ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash
-       RETURNING (xmax = 0) AS inserted, id, role`,
+      `INSERT INTO users (email, password_hash, name, role, organization_id)
+       VALUES ($1, $2, 'Admin', 'admin', (
+         SELECT id FROM organizations
+          WHERE archived_at IS NULL
+            AND (SELECT COUNT(*) FROM organizations WHERE archived_at IS NULL) = 1
+       ))
+       ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash,
+             organization_id = COALESCE(users.organization_id, EXCLUDED.organization_id)
+       RETURNING (xmax = 0) AS inserted, id, role, organization_id`,
       [adminEmail, hash]
     );
     const row = result.rows[0] || {};
     if (row.inserted) {
-      console.log(`Created admin user from env (id=${row.id}): ${adminEmail}`);
+      console.log(`Created admin user from env (id=${row.id}, org=${row.organization_id}): ${adminEmail}`);
     } else {
-      console.log(`Refreshed admin password from env (id=${row.id}, role=${row.role}): ${adminEmail}`);
+      console.log(`Refreshed admin password from env (id=${row.id}, role=${row.role}, org=${row.organization_id}): ${adminEmail}`);
+    }
+    if (row.organization_id == null) {
+      console.warn(`[org] Admin ${adminEmail} (id=${row.id}) has NO organization — job writes will be refused with ORG_UNRESOLVED until one is set. More than one organization exists, so the seed will not choose for you.`);
     }
   } else {
     const { rows } = await pool.query('SELECT COUNT(*)::int as c FROM users');
     if (rows[0].c === 0) {
       const hash = bcrypt.hashSync('changeme', 10);
+      // Same sole-live-org rule as the env admin above. This branch only
+      // fires on a completely empty users table, i.e. a fresh install, where
+      // exactly one organization exists — so the dev admin is born stamped
+      // rather than locked out of its own job writes.
       await pool.query(
-        'INSERT INTO users (email, password_hash, name, role) VALUES ($1, $2, $3, $4)',
+        `INSERT INTO users (email, password_hash, name, role, organization_id)
+         VALUES ($1, $2, $3, $4, (
+           SELECT id FROM organizations
+            WHERE archived_at IS NULL
+              AND (SELECT COUNT(*) FROM organizations WHERE archived_at IS NULL) = 1
+         ))`,
         ['admin@local', hash, 'Admin', 'admin']
       );
       console.log('Seeded dev admin: admin@local / changeme — set ADMIN_EMAIL and ADMIN_PASSWORD env vars in production');
