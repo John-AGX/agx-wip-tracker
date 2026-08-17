@@ -444,9 +444,37 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.16';
+const APP_VERSION = '1.17';
 
 const releases = [
+  {
+    version: '1.17',
+    date: '2026-08-17',
+    name: 'Say So',
+    summary: 'Records called by their names, changes that show up the moment they happen, and an app that tells you when it cannot do something instead of failing quietly.',
+    changes: [
+      { type: 'fixed', text: 'Subcontractors see the job, not the word "job". The share portal used to head every shared folder with the literal record type; it now reads the real job — "RV2006 Waterside 1 Siding Replacement" — and a shared task names the job it belongs to.' },
+      { type: 'improved', text: 'One job name everywhere. Job number and title now render the same way on every screen, export and email: "RV2006 Waterside 1 Siding Replacement", no dash.' },
+      { type: 'fixed', text: 'Chat threads are named after the lead or job they are about. Threads that read "Deal · lead_1786497735707_d39nqj" now read "Deal · Uptown - Dumpster Pad Repair", and they follow the record if you rename it. Existing threads fixed themselves — nothing to run.' },
+      { type: 'improved', text: 'Search finds a thread by the name you can see. Typing a job or lead name in chat search now finds its thread even when the title is drawn from the record rather than typed by hand.' },
+      { type: 'new', text: 'Cowork — a full page for watching the Scribe work. The live diff, a document view of the estimate being changed, and a ledger of everything the Scribe has done, with 86 docked alongside.' },
+      { type: 'new', text: 'The Writes ledger records the times the Scribe could not, not only the times it could. A refusal, a failed apply and a write with nothing to show are each their own row with their own reason.' },
+      { type: 'improved', text: 'When you are already looking at the estimate, the change animates in the real editor instead of opening a second copy of it beside the one you are reading.' },
+      { type: 'fixed', text: 'Scope written by an agent now lands where the app reads it. A scope set through chat was being saved to a field nothing displays — it applied cleanly, reported success, and was invisible on every screen. Text stranded that way comes back on the next save.' },
+      { type: 'improved', text: 'An agent that cannot find the scope or section you named now says so by name, listing what does exist, instead of quietly putting the line somewhere else and reporting a success.' },
+      { type: 'new', text: 'A change that cannot reach the server is held, not thrown away — and the app says so. During a deploy or a network drop, edits to jobs and estimates are kept and sent when the connection returns, with a banner telling you how many are waiting.' },
+      { type: 'fixed', text: 'A job somebody deleted is not put back. If a record is removed while your tab is holding an unsent change to it, the change is refused and you are told by name — the job is not re-created behind you.' },
+      { type: 'improved', text: 'A change you make is a change you see. Purchase orders, change orders, bills, invoices, tasks, reminders and calendar entries now update the lists and the money tiles the moment they are saved, from every place they can be saved — including bulk document import.' },
+      { type: 'fixed', text: 'The Bills card could only ever show $0 paid. It was asking for open bills only, so "Paid" was always zero and Outstanding always equalled the total.' },
+      { type: 'fixed', text: 'Deleting a task and approving a purchase order work in the installed app. Both sat behind a confirmation dialog that does nothing when the app is installed to a home screen — delete silently did nothing, and approval recorded a signature with no name on it.' },
+      { type: 'new', text: 'Weekly cost flow on QuickBooks costs — a twelve-week grid of what each bucket cost per week, with the change from the week before, and cost lines groupable by week with a running subtotal.' },
+      { type: 'new', text: '86 can put an assembly on an estimate whole. Ask for a recipe and it lands as one priced line that remembers what it is made of, so you can explode it into its parts later if you want to.' },
+      { type: 'new', text: 'Send a task to someone without an account. Share a task by email and an outside worker can open it, see the location and photos, and mark it complete from a link that expires and can be revoked.' },
+      { type: 'improved', text: 'The task view opens read-first with an edit gate, a mini-map on the location, larger photos, and geo-pinned photos on the map that open full screen.' },
+      { type: 'improved', text: 'The share portal sends only what the folder view needs. It was also shipping the full extracted text of every PDF and internal record ids alongside the file list.' },
+      { type: 'fixed', text: 'Uploading several photos at once puts them all in the folder you have open, and camera and library are separate buttons instead of one prompt that asked every time.' },
+    ],
+  },
   {
     version: '1.16',
     date: '2026-08-07',
