@@ -12,12 +12,34 @@
 //
 // Capability gate: JOBS_VIEW for read, JOBS_EDIT for write. Same
 // audience that can touch the job's data can author reports.
+//
+// THIS FEATURE WAS DEAD IN PRODUCTION. All five endpoints gated on a
+// space-separated capability list ("JOBS_EDIT_ANY JOBS_EDIT_OWN") — a
+// documented convention elsewhere in this repo — but requireCapability passed
+// the whole string to an exact `caps.has()` lookup. No such capability exists,
+// so every caller got 403, up to and including a capability-complete system
+// admin. Job Reports has been unreachable since the gate was written.
+//
+// It was also unscoped: ensureJobExists asked whether a job EXISTED, not whose
+// it was. The dead gate was the only thing holding that closed, so the gate and
+// the tenant predicate had to be fixed in the same change — repairing the gate
+// alone would have opened the hole the day it shipped.
 
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireCapability, getAttributedUserId } = require('../auth');
+const { requireAuth, requireCapability, getAttributedUserId, requireOrgId } = require('../auth');
+// job_reports has no organization_id of its own — the org ALTER in db.js is
+// guarded on a table named `reports`, and this table is still `job_reports`.
+// Its only tenant pointer is the parent job, so that is what every statement
+// here proves.
+const { jobInOrg, parentJobInOrgSql } = require('../services/job-org-scope');
 
 const router = express.Router({ mergeParams: true });
+
+// Every endpoint in this file is keyed on a job id from the URL. One gate,
+// applied identically, so a new endpoint cannot be added without it.
+const READ_CAP = 'JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN';
+const WRITE_CAP = 'JOBS_EDIT_ANY JOBS_EDIT_OWN';
 
 function newId(prefix) {
   return prefix + '_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
@@ -45,12 +67,18 @@ function normalizeSections(raw) {
   }).filter(Boolean).slice(0, 50);
 }
 
-// Look up the job and confirm it exists. Reports cannot exist for a
-// missing job (FK would block insert) but we want a clear 404 rather
-// than a SQL constraint error.
-async function ensureJobExists(jobId) {
-  const r = await pool.query('SELECT id FROM jobs WHERE id = $1', [jobId]);
-  return r.rowCount > 0;
+// The job this request names, and whether it is the CALLER'S job.
+//
+// This used to be ensureJobExists: `SELECT id FROM jobs WHERE id = $1`, which
+// answered the wrong question. Existence is not permission. It was holding
+// only because the capability gate above it was broken for everyone — fixing
+// that gate alone would have opened a tenancy hole the same day, which is why
+// the gate and the predicate move together in one change.
+//
+// A foreign job answers exactly like an absent one: job ids are guessable, and
+// a distinguishable refusal is a cross-tenant existence oracle.
+async function jobIsReachable(jobId, orgId) {
+  return jobInOrg(pool, jobId, orgId);
 }
 
 // Hydrate sections: for each photo_id in each section, look up the
@@ -58,7 +86,12 @@ async function ensureJobExists(jobId) {
 // thumb_url, web_url, original_url }. Photos that no longer exist
 // (attachment was deleted after the report was saved) are dropped
 // silently rather than rendering as broken images.
-async function hydrateSections(sections) {
+// orgId is required, not optional: photo_ids are written from the request body
+// (normalizeSections keeps any string), so a report could be saved holding
+// another tenant's attachment ids and this function would then hand back their
+// thumb_url and web_url. The stored id is caller-supplied data, so it is
+// scoped on the way out as well as being refused on the way in.
+async function hydrateSections(sections, orgId) {
   const allIds = new Set();
   sections.forEach(function(s) {
     (s.photo_ids || []).forEach(function(pid) { allIds.add(pid); });
@@ -73,8 +106,9 @@ async function hydrateSections(sections) {
     'SELECT id, entity_type, entity_id, filename, mime_type, ' +
     '       size_bytes, thumb_url, web_url, original_url, ' +
     '       folder, uploaded_at ' +
-    '  FROM attachments WHERE id = ANY($1::text[])',
-    [idList]
+    '  FROM attachments WHERE id = ANY($1::text[]) ' +
+    '   AND (organization_id = $2 OR organization_id IS NULL)',
+    [idList, orgId]
   );
   const byId = new Map(rows.map(function(r) { return [r.id, r]; }));
   return sections.map(function(s) {
@@ -101,10 +135,11 @@ async function hydrateSections(sections) {
 // GET /api/jobs/:jobId/reports
 // List reports for a job. Lightweight — no photo hydration, just the
 // title / summary / counts so the list view can render fast.
-router.get('/', requireAuth, requireCapability('JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN'),
+router.get('/', requireAuth, requireCapability(READ_CAP), requireOrgId,
   async (req, res) => {
     try {
       const jobId = req.params.jobId;
+      if (!(await jobIsReachable(jobId, req.orgId))) return res.status(404).json({ error: 'Job not found' });
       const { rows } = await pool.query(
         'SELECT r.id, r.job_id, r.title, r.summary, r.sections, ' +
         '       r.created_at, r.updated_at, u.name AS created_by_name ' +
@@ -143,10 +178,12 @@ router.get('/', requireAuth, requireCapability('JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED
 // Single report, fully hydrated. Sections come back with each photo
 // expanded into { id, filename, thumb_url, web_url, caption } so the
 // client can render the editor / print view in one pass.
-router.get('/:reportId', requireAuth,
-  requireCapability('JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN'),
+router.get('/:reportId', requireAuth, requireCapability(READ_CAP), requireOrgId,
   async (req, res) => {
     try {
+      if (!(await jobIsReachable(req.params.jobId, req.orgId))) {
+        return res.status(404).json({ error: 'Job not found' });
+      }
       const { rows } = await pool.query(
         'SELECT r.*, u.name AS created_by_name FROM job_reports r ' +
         ' LEFT JOIN users u ON u.id = r.created_by ' +
@@ -156,7 +193,7 @@ router.get('/:reportId', requireAuth,
       if (!rows.length) return res.status(404).json({ error: 'Report not found' });
       const r = rows[0];
       const sections = Array.isArray(r.sections) ? r.sections : [];
-      const hydrated = await hydrateSections(sections);
+      const hydrated = await hydrateSections(sections, req.orgId);
       res.json({
         report: {
           id: r.id,
@@ -181,11 +218,11 @@ router.get('/:reportId', requireAuth,
 
 // POST /api/jobs/:jobId/reports
 // Create a new report. Body: { title?, summary?, sections? }
-router.post('/', requireAuth, requireCapability('JOBS_EDIT_ANY JOBS_EDIT_OWN'),
+router.post('/', requireAuth, requireCapability(WRITE_CAP), requireOrgId,
   async (req, res) => {
     try {
       const jobId = req.params.jobId;
-      const ok = await ensureJobExists(jobId);
+      const ok = await jobIsReachable(jobId, req.orgId);
       if (!ok) return res.status(404).json({ error: 'Job not found' });
       const id = newId('rpt');
       const title = (req.body && typeof req.body.title === 'string')
@@ -217,7 +254,7 @@ router.post('/', requireAuth, requireCapability('JOBS_EDIT_ANY JOBS_EDIT_OWN'),
 // PATCH /api/jobs/:jobId/reports/:reportId
 // Partial update. Any of title / summary / sections may be omitted —
 // only the supplied fields are written.
-router.patch('/:reportId', requireAuth, requireCapability('JOBS_EDIT_ANY JOBS_EDIT_OWN'),
+router.patch('/:reportId', requireAuth, requireCapability(WRITE_CAP), requireOrgId,
   async (req, res) => {
     try {
       const sets = [];
@@ -237,10 +274,14 @@ router.patch('/:reportId', requireAuth, requireCapability('JOBS_EDIT_ANY JOBS_ED
       }
       if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
       sets.push('updated_at = NOW()');
-      params.push(req.params.reportId, req.params.jobId);
+      params.push(req.params.reportId, req.params.jobId, req.orgId);
+      // Filtered rather than pre-checked: keyed on the report's own id, so a
+      // probe first is a round-trip and a TOCTOU. The tenant comes off the
+      // PARENT JOB — job_reports has no org column of its own.
       const sql =
         'UPDATE job_reports SET ' + sets.join(', ') +
-        ' WHERE id = $' + (p++) + ' AND job_id = $' + (p++);
+        ' WHERE id = $' + (p++) + ' AND job_id = $' + (p++) +
+        ' AND ' + parentJobInOrgSql('job_reports.job_id', '$' + (p++));
       const r = await pool.query(sql, params);
       if (!r.rowCount) return res.status(404).json({ error: 'Report not found' });
       res.json({ ok: true });
@@ -252,12 +293,13 @@ router.patch('/:reportId', requireAuth, requireCapability('JOBS_EDIT_ANY JOBS_ED
 );
 
 // DELETE /api/jobs/:jobId/reports/:reportId
-router.delete('/:reportId', requireAuth, requireCapability('JOBS_EDIT_ANY JOBS_EDIT_OWN'),
+router.delete('/:reportId', requireAuth, requireCapability(WRITE_CAP), requireOrgId,
   async (req, res) => {
     try {
       const r = await pool.query(
-        'DELETE FROM job_reports WHERE id = $1 AND job_id = $2',
-        [req.params.reportId, req.params.jobId]
+        'DELETE FROM job_reports WHERE id = $1 AND job_id = $2 AND ' +
+        parentJobInOrgSql('job_reports.job_id', '$3'),
+        [req.params.reportId, req.params.jobId, req.orgId]
       );
       if (!r.rowCount) return res.status(404).json({ error: 'Report not found' });
       res.json({ ok: true });

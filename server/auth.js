@@ -97,10 +97,33 @@ function hasCapability(user, capKey) {
   return !!(caps && caps.has(capKey));
 }
 
+// requireCapability — gate a route on the caller holding a capability.
+//
+// A space-separated list means ANY of them grants access. Never AND: there is
+// no route in this repo that wants "holds both", and reading it as AND would
+// silently TIGHTEN every existing single-cap gate's meaning if one were ever
+// added. Single-cap callers are unaffected — the split yields one element.
+//
+// WHY THE LIST FORM EXISTS, AND WHY IT DID NOT WORK.
+// Two files already document this as the convention ("Returning a
+// space-separated list is the convention used in report-routes /
+// qb-cost-routes", attachment-routes.js), and attachment-routes hand-rolled
+// requireDynamicCapability to implement it. This function did not: it passed
+// the whole string to hasCapability, which does an exact `caps.has(capKey)`.
+// No capability is named "JOBS_EDIT_ANY JOBS_EDIT_OWN", so every route written
+// in the documented style returned 403 to EVERYONE, including a
+// capability-complete system admin. Job Reports — all five endpoints — was
+// unreachable in production for that reason.
+//
+// Capability keys are underscore-cased by construction (see CAPABILITY_KEYS),
+// so no existing key can contain a space and the split cannot loosen one.
 function requireCapability(capKey) {
+  const keys = String(capKey == null ? '' : capKey).split(/\s+/).filter(Boolean);
   return function(req, res, next) {
     if (!req.user) return res.status(401).json({ error: 'Not authenticated' });
-    if (!hasCapability(req.user, capKey)) {
+    // An empty gate is a closed gate: a missing capability name must never
+    // read as "no capability required".
+    if (!keys.length || !keys.some((k) => hasCapability(req.user, k))) {
       return res.status(403).json({ error: 'Missing capability: ' + capKey });
     }
     next();
