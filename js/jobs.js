@@ -220,20 +220,40 @@ function renderJobsMain() {
             if (!opts.force && _subCostHash[jobId] === hash) return;
             _subCostHash[jobId] = hash;
 
+            // ── write only what actually CHANGED ────────────────────────────
+            // This ran on VIEW, unconditionally, and an unconditional write is
+            // not free even when the value is identical: `sub` absent and
+            // `sub: 0` are different JSON, so materialising the key changes the
+            // job's save signature and marks the job DIRTY with no user edit.
+            //
+            // That is not theoretical. A job created by lead→job convert has no
+            // `sub` key at all (see the newJob blob in js/estimate-editor.js),
+            // so the first time anyone OPENED a converted job it went dirty,
+            // raised the unsaved banner, and pushed — for a recompute that
+            // changed nothing. The save path's whole safety argument is that
+            // "a derived recompute that lands on the same value is not dirty";
+            // that sentence was false until this loop stopped writing zeroes
+            // over absent keys.
+            //
+            // `(x || 0) !== v` is the comparison that makes absent and 0 the
+            // same number, which is what they mean here. A real change still
+            // writes, and still persists — this narrows the write, never the
+            // correction.
+            const setIfChanged = (obj, key, v) => { if ((obj[key] || 0) !== v) obj[key] = v; };
             // Update phases
             appData.phases.filter(p => p.jobId === jobId).forEach(p => {
-                p.sub = getSubCostForPhase(p.id);
+                setIfChanged(p, 'sub', getSubCostForPhase(p.id));
             });
             // Update buildings
             appData.buildings.filter(b => b.jobId === jobId).forEach(b => {
-                b.sub = getSubCostForBuilding(b.id, jobId);
+                setIfChanged(b, 'sub', getSubCostForBuilding(b.id, jobId));
             });
             // Update job-level sub cost
             const job = appData.jobs.find(j => j.id === jobId);
             if (job) {
                 // Sub assignments are job-level only — sum every sub's billed-to-date.
-                job.sub = appData.subs.filter(s => s.jobId === jobId)
-                    .reduce((sum, s) => sum + (s.billedToDate || 0), 0);
+                setIfChanged(job, 'sub', appData.subs.filter(s => s.jobId === jobId)
+                    .reduce((sum, s) => sum + (s.billedToDate || 0), 0));
             }
         }
         // Expose so save/import paths that DO need fresh numbers can force a
@@ -2626,19 +2646,15 @@ function renderJobsMain() {
             // tab, opened on demand — no longer auto-opened over the page.
         }
 
-        // The job-level side effects renderJobDetail performs, WITHOUT building the classic
-        // DOM — so the map view (left card + Inspector) reads accurate numbers.
-        function prepJobForView(jobId) {
-            const job = appData.jobs.find(j => j.id === jobId);
-            if (!job || job._canEdit === false) return;
-            recalcSubCosts(jobId, { force: true });
-            if (!job.pctCompleteManual) {
-                const hasPhases = appData.phases.filter(p => p.jobId === jobId).length > 0;
-                const hasBuildings = appData.buildings.filter(b => b.jobId === jobId).length > 0;
-                if (hasPhases || hasBuildings) job.pctComplete = Math.round(calcJobPctComplete(jobId) * 10) / 10;
-            }
-            saveData();
-        }
+        // prepJobForView lived here: an unreferenced copy of the derived-write
+        // block above ("the job-level side effects renderJobDetail performs,
+        // without building the classic DOM"). It had no call sites anywhere in
+        // the repo and was not exported, so it wrote nothing — but it was a
+        // second, unfixed copy of a write that marks a job dirty by being
+        // opened, sitting one call away from being wired back up. Deleted
+        // rather than fixed twice. renderJobDetail is the live path; if the map
+        // view ever needs the side effects without the DOM, factor them OUT of
+        // renderJobDetail instead of copying them again.
 
         // The classic card detail page — now an "Edit details" editor reached from the map
         // (job meta: name / client / address / dates / notes). Closes the map overlay if open.
@@ -3287,12 +3303,19 @@ function renderJobsMain() {
                 // version for cheap per-row paints.
                 recalcSubCosts(jobId, { force: true });
 
-                // Auto-calculate % complete from phases/buildings (unless manual override)
+                // Auto-calculate % complete from phases/buildings (unless manual
+                // override). Same rule as recalcSubCosts above: assign only on a
+                // real change, so opening a job whose stored % already agrees
+                // with its scopes does not mark it dirty. When it DISAGREES the
+                // write still happens and still persists — the jobs-list sort
+                // and the progress filter read this stored value, so a stale one
+                // is a real defect worth correcting.
                 if (!job.pctCompleteManual) {
                     const hasPhases = appData.phases.filter(p => p.jobId === jobId).length > 0;
                     const hasBuildings = appData.buildings.filter(b => b.jobId === jobId).length > 0;
                     if (hasPhases || hasBuildings) {
-                        job.pctComplete = Math.round(calcJobPctComplete(jobId) * 10) / 10;
+                        const _pct = Math.round(calcJobPctComplete(jobId) * 10) / 10;
+                        if ((job.pctComplete || 0) !== _pct) job.pctComplete = _pct;
                     }
                 }
                 saveData();

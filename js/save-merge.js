@@ -42,8 +42,8 @@
    *
    * Keyed on the DIRTY SET, not on a counter of blocked saveData() calls.
    * That distinction is the whole safety argument:
-   *   - saveData() is called on VIEW as well as on edit (prepJobForView and
-   *     renderJobDetail write derived pctComplete/recalcSubCosts; app.js's own
+   *   - saveData() is called on VIEW as well as on edit (renderJobDetail
+   *     writes derived pctComplete + recalcSubCosts; app.js's own
    *     migrateBudgetFields fires during the boot window with no auth guard).
    *     A counter incremented at the guard would be pinned high by merely
    *     opening a job, and would then freeze a healthy app on stale cache

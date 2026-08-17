@@ -2778,12 +2778,18 @@
         // hydrate is held, what the banner counts, and what "Show what's
         // unsaved" lists. The alternative — a counter incremented wherever a
         // save was refused — cannot work here, because saveData() is also
-        // called on VIEW (prepJobForView and renderJobDetail write derived
-        // pctComplete/recalcSubCosts; migrateBudgetFields fires during the boot
-        // window with no auth guard). Such a counter is pinned high by merely
-        // opening a job and never comes down. A recomputed set is immune: a
-        // derived write that lands on the same values is not dirty, and a
-        // successful push clears the set by construction.
+        // called on VIEW (renderJobDetail writes derived pctComplete +
+        // recalcSubCosts; migrateBudgetFields fires during the boot window with
+        // no auth guard). Such a counter is pinned high by merely opening a job
+        // and never comes down. A recomputed set is immune: a derived write
+        // that lands on the same values is not dirty, and a successful push
+        // clears the set by construction.
+        //
+        // "Lands on the same values" is load-bearing, and it was not free: an
+        // unconditional `p.sub = 0` onto a phase that had no `sub` key at all
+        // is DIFFERENT JSON, so the recompute dirtied the job. js/jobs.js now
+        // assigns the derived values only when they actually change, which is
+        // what makes the sentence above true rather than merely intended.
         function dirtyJobIds() {
             return (appData.jobs || [])
                 .filter(function(j) { return j && j._canEdit !== false; })
