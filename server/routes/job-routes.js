@@ -136,7 +136,7 @@ router.get('/', requireAuth, async (req, res) => {
       FROM jobs j
       LEFT JOIN job_access ja ON ja.job_id = j.id AND ja.user_id = $1
       WHERE j.organization_id = $2 OR j.organization_id IS NULL
-    `, [req.user.id, req.user.organization_id]);
+    `, [req.user.id, await callerOrgId(req)]);
     const result = rows.map(j => {
       let canEdit = false;
       if (isAdminish(req.user)) canEdit = true;
@@ -176,7 +176,7 @@ router.get('/:id', requireAuth, async (req, res) => {
     // returns 404 (not 403) so we don't leak existence info.
     const { rows } = await pool.query(
       'SELECT * FROM jobs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
-      [req.params.id, req.user.organization_id]
+      [req.params.id, await callerOrgId(req)]
     );
     if (!rows.length) return res.status(404).json({ error: 'Job not found' });
     // Same shape rule as the list endpoint: spread the JSONB first so
@@ -195,7 +195,26 @@ router.post('/', requireAuth, requireOrgId, requireRole('admin', 'pm'), async (r
     const id = req.body.id || 'job' + Date.now();
     let ownerId = req.user.id;
     if (isAdminish(req.user) && req.body.owner_id) {
-      const { rows } = await pool.query('SELECT id FROM users WHERE id = $1 AND active = true', [req.body.owner_id]);
+      // The owner is the SECOND tenancy pointer (org-access.js scopes a job by
+      // owner_id -> users.organization_id and calls that its scoping source of
+      // truth), and it arrives from the body. This lookup checked existence and
+      // liveness and nothing else, so an admin could create a job stamped to
+      // their own org while pointing owner_id at another tenant's user: the job
+      // lists in org A while its change orders, schedule entries and AI entity
+      // context resolve to org B. That divergence survives NOT NULL and survives
+      // dropping every tolerance arm, because both pointers are populated — they
+      // just disagree.
+      //
+      // `active = true` stays. The bulk save deliberately omits it (a routine
+      // save echoing a since-deactivated owner must not start failing); a create
+      // is always an assignment, with no legacy row to protect. The two rules
+      // differ for good reasons and are not to be tidied into agreement.
+      //
+      // Response stays a flat 400. "That user exists, but elsewhere" is not a
+      // sentence this tenant is entitled to.
+      const { rows } = await pool.query(
+        'SELECT id FROM users WHERE id = $1 AND active = true AND organization_id = $2',
+        [req.body.owner_id, req.orgId]);
       if (!rows.length) return res.status(400).json({ error: 'Invalid owner_id' });
       ownerId = req.body.owner_id;
     }
@@ -203,10 +222,14 @@ router.post('/', requireAuth, requireOrgId, requireRole('admin', 'pm'), async (r
     // org-filtering routes (next commit) find this row immediately.
     // Multi-market — stamp market_id at birth so a new job never has to
     // wait on the backfill to show up in its market's P&L.
-    const marketId = await marketIdForJob(req.body, req.user.organization_id);
+    // req.orgId, not req.user.organization_id. The two agree only because
+    // resolveOrgId repairs that field as a side effect; two create paths
+    // sourcing tenancy from two places is the same shape as the divergence
+    // above, one level down.
+    const marketId = await marketIdForJob(req.body, req.orgId);
     await pool.query(
       'INSERT INTO jobs (id, owner_id, data, organization_id, market_id) VALUES ($1, $2, $3, $4, $5)',
-      [id, ownerId, JSON.stringify(req.body), req.user.organization_id, marketId]
+      [id, ownerId, JSON.stringify(req.body), req.orgId, marketId]
     );
 
     // Notify the new owner if the saving client opted in. Skip when
@@ -248,12 +271,19 @@ router.post('/convert', requireAuth, requireOrgId, requireRole('admin', 'pm'), a
     if (!/^(S|RV)\d{1,6}$/i.test(String((job && job.jobNumber) || '').trim())) {
       return res.status(400).json({ error: 'A job number (S#### or RV####) is required to create a job.' });
     }
-    const orgId = req.user.organization_id;
+    // req.orgId — server-derived and the same source the INSERT and the bulk
+    // save use. This read req.user.organization_id, correct only because
+    // resolveOrgId happens to repair that field.
+    const orgId = req.orgId;
 
     // Resolve owner (mirror POST /): admins may assign, others own their own.
+    // Org-scoped for the reason spelled out at POST / — and this path carries a
+    // CONTRACT AMOUNT, so the divergent job it could create is a money row.
     let ownerId = req.user.id;
     if (isAdminish(req.user) && job.owner_id) {
-      const u = await pool.query('SELECT id FROM users WHERE id = $1 AND active = true', [job.owner_id]);
+      const u = await pool.query(
+        'SELECT id FROM users WHERE id = $1 AND active = true AND organization_id = $2',
+        [job.owner_id, orgId]);
       if (!u.rows.length) return res.status(400).json({ error: 'Invalid owner_id' });
       ownerId = job.owner_id;
     }
@@ -373,7 +403,7 @@ router.post('/:id/link-estimate', requireAuth, async (req, res) => {
     }
     const estimateId = req.body && req.body.estimate_id;
     if (!estimateId) return res.status(400).json({ error: 'estimate_id is required' });
-    const orgId = req.user.organization_id;
+    const orgId = await callerOrgId(req);
     const contractAmount = req.body.contractAmount;
     const estimatedCosts = req.body.estimatedCosts;
     const workbook = req.body.workbook;
@@ -430,7 +460,7 @@ router.put('/:id', requireAuth, async (req, res) => {
     // so we can 404 cross-org writes instead of silently no-op'ing.
     const u = await pool.query(
       "UPDATE jobs SET data = $1, updated_at = NOW() WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)",
-      [JSON.stringify(req.body), req.params.id, req.user.organization_id]
+      [JSON.stringify(req.body), req.params.id, await callerOrgId(req)]
     );
     if (u.rowCount === 0) return res.status(404).json({ error: 'Job not found' });
     res.json({ ok: true });
@@ -462,7 +492,7 @@ router.get('/:id/workbook', requireAuth, async (req, res) => {
          FROM jobs
         WHERE id = $1
           AND (organization_id = $2 OR organization_id IS NULL)`,
-      [req.params.id, req.user.organization_id]
+      [req.params.id, await callerOrgId(req)]
     );
     if (!rows.length) return res.status(404).json({ error: 'Job not found' });
     res.json({ workbook: rows[0].workbook || null });
@@ -488,7 +518,7 @@ router.put('/:id/workbook', requireAuth, async (req, res) => {
               updated_at = NOW()
         WHERE id = $2
           AND (organization_id = $3 OR organization_id IS NULL)`,
-      [JSON.stringify(wb), req.params.id, req.user.organization_id]
+      [JSON.stringify(wb), req.params.id, await callerOrgId(req)]
     );
     if (u.rowCount === 0) return res.status(404).json({ error: 'Job not found' });
     res.json({ ok: true });
@@ -503,7 +533,15 @@ router.put('/:id/workbook', requireAuth, async (req, res) => {
 // edit/view access still has it after a reassignment. The previous owner
 // loses their implicit ownership; if you want them to keep access, add them
 // as a share separately.
-router.put('/:id/owner', requireAuth, requireRole('admin'), async (req, res) => {
+// This is the THIRD door that assigns an owner, and it was the only one whose
+// org check existed — but it compared the new owner's org against the JWT CLAIM
+// (`req.user.organization_id`) with no requireOrgId ahead of it to repair that
+// claim. signToken emits `organization_id || null`, so on a legacy claim-less
+// token the comparison is `<someOrg> !== null` and EVERY reassignment was
+// refused with "Cannot reassign job to a user in a different organization" — a
+// false sentence — while a both-null pair passed. requireOrgId + req.orgId, the
+// same source as the other two doors.
+router.put('/:id/owner', requireAuth, requireRole('admin'), requireOrgId, async (req, res) => {
   try {
     const { ownerId } = req.body;
     if (!ownerId) return res.status(400).json({ error: 'ownerId required' });
@@ -514,17 +552,17 @@ router.put('/:id/owner', requireAuth, requireRole('admin'), async (req, res) => 
     // in a DIFFERENT org (would orphan the job into the wrong tenant).
     const jobCheck = await pool.query(
       'SELECT id, owner_id, data FROM jobs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
-      [req.params.id, req.user.organization_id]
+      [req.params.id, req.orgId]
     );
     if (!jobCheck.rows.length) return res.status(404).json({ error: 'Job not found' });
     const newOwnerOrg = await pool.query('SELECT organization_id FROM users WHERE id = $1', [ownerId]);
-    if (!newOwnerOrg.rows.length || newOwnerOrg.rows[0].organization_id !== req.user.organization_id) {
+    if (!newOwnerOrg.rows.length || Number(newOwnerOrg.rows[0].organization_id) !== Number(req.orgId)) {
       return res.status(400).json({ error: 'Cannot reassign job to a user in a different organization' });
     }
     const priorOwnerId = jobCheck.rows[0].owner_id;
     await pool.query(
       'UPDATE jobs SET owner_id = $1, updated_at = NOW() WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)',
-      [ownerId, req.params.id, req.user.organization_id]
+      [ownerId, req.params.id, req.orgId]
     );
 
     // Notify the new owner of the reassignment when the client opted
@@ -552,7 +590,7 @@ router.delete('/:id', requireAuth, requireRole('admin'), async (req, res) => {
     // Wave 1.A Phase 2 — org-scoped DELETE. 404 cross-org.
     const d = await pool.query(
       'DELETE FROM jobs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
-      [req.params.id, req.user.organization_id]
+      [req.params.id, await callerOrgId(req)]
     );
     if (d.rowCount === 0) return res.status(404).json({ error: 'Job not found' });
     res.json({ ok: true });
@@ -702,8 +740,12 @@ router.put('/bulk/save', requireAuth, requireOrgId, requireRole('admin', 'pm'), 
     // owner_id at another tenant's user, and the two sources would disagree —
     // a divergence no NULL check, and no future NOT NULL, could ever see.
     //
-    // POST / and PUT /:id/owner already validate this ("would orphan the job
-    // into the wrong tenant"). This path was the door that didn't.
+    // 46b63e9's commit message said "POST / and PUT /:id/owner already validate
+    // this". That was true of ONE door in three: only PUT /:id/owner compared
+    // orgs, and it compared against the raw JWT claim. POST / and /convert
+    // checked existence and liveness with no org filter at all, so the same
+    // divergence this guard closes was reachable through both of them. All
+    // three now bind req.orgId. Do not restore the original sentence.
     //
     // Validated once for the batch rather than per row. Membership only, NOT
     // `active = true`: tenancy is the security property, and a deactivated

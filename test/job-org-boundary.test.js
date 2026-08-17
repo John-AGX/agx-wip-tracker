@@ -742,3 +742,135 @@ describe('job-keyed child tables are behind the same boundary', () => {
     expect(r.status).toBe(200);
   });
 });
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 9. N1 — the create doors, and the SECOND tenancy pointer.
+ *
+ *    46b63e9's message said "POST / and PUT /:id/owner already validate this".
+ *    That was true of one door in three. POST / and POST /convert checked
+ *    `id = $1 AND active = true` and nothing else, so an org-A admin could
+ *    create a job with organization_id = A (column) and owner_id = an org-B
+ *    user. org-access.js scopes a job by owner_id -> users.organization_id and
+ *    calls that its scoping source of truth, so the job's change orders,
+ *    schedule entries and AI entity context resolve to org B while the job
+ *    itself lists in org A. Both pointers are populated, so the divergence
+ *    survives NOT NULL and survives dropping every tolerance arm. /convert
+ *    carries a contract amount.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('a create cannot point a job at another tenant', () => {
+  test('POST /: an owner outside the caller org is refused, nothing written', async () => {
+    handlers['SELECT id FROM users WHERE id = $1 AND active = true AND organization_id'] =
+      () => ({ rows: [] });                       // exists, but elsewhere
+
+    const r = await call('POST', '/api/jobs',
+      { id: 10, role: 'admin', organization_id: 7 },
+      { name: 'x', owner_id: 999 });
+
+    expect(r.status).toBe(400);
+    expect(r.body.error).toBe('Invalid owner_id');
+    // and the refusal does not disclose that the user exists in another tenant
+    expect(JSON.stringify(r.body)).not.toMatch(/organization|tenant|org/i);
+    expect(jobKeyedWrite()).toBeUndefined();
+  });
+
+  test('POST /: the owner lookup binds the CALLER org, server-derived', async () => {
+    let seen = null;
+    handlers['SELECT id FROM users WHERE id = $1 AND active = true AND organization_id'] =
+      (sql, params) => { seen = { sql, params }; return { rows: [{ id: 999 }] }; };
+    handlers['INSERT INTO jobs'] = () => ({ rows: [] });
+
+    const r = await call('POST', '/api/jobs',
+      { id: 10, role: 'admin', organization_id: 7 },
+      { name: 'x', owner_id: 999, organization_id: 999 });
+
+    expect(r.status).toBe(200);
+    expect(seen.sql).toMatch(/organization_id = \$2/);
+    expect(seen.params[1]).toBe(7);
+    // liveness is KEPT on a create — it is always an assignment, with no
+    // legacy row to protect. (The bulk save deliberately omits it; the two
+    // rules differ for good reasons.)
+    expect(seen.sql).toMatch(/active = true/);
+    expect(insertedValue(jobInsert(), 'owner_id')).toBe(999);
+    expect(insertedValue(jobInsert(), 'organization_id')).toBe(7);
+  });
+
+  test('/convert: an owner outside the caller org is refused before BEGIN', async () => {
+    handlers['SELECT job_id, market_id FROM leads'] =
+      () => ({ rows: [{ job_id: null, market_id: null }] });
+    handlers['SELECT id FROM users WHERE id = $1 AND active = true AND organization_id'] =
+      () => ({ rows: [] });
+
+    const r = await call('POST', '/api/jobs/convert',
+      { id: 10, role: 'admin', organization_id: 7 },
+      { lead_id: 'lead_1', job: { jobNumber: 'S1234', owner_id: 999, contractAmount: 250000 } });
+
+    expect(r.status).toBe(400);
+    expect(jobKeyedWrite()).toBeUndefined();
+    expect(queries.some((q) => /^BEGIN$/i.test(q.sql.trim()))).toBe(false);
+  });
+
+  test('both create doors filter on org — a source check, so neither can drift back', () => {
+    const src = require('fs').readFileSync(
+      require('path').join(__dirname, '..', 'server', 'routes', 'job-routes.js'), 'utf8');
+    // Exactly two — POST / and /convert. Both filter, both keep liveness.
+    const filtered = src.match(
+      /SELECT id FROM users WHERE id = \$1 AND active = true AND organization_id = \$2/g) || [];
+    expect(filtered.length).toBe(2);
+    // The third door, PUT /:id/owner, keeps its two-step shape on purpose: a
+    // separate org comparison lets it say "Cannot reassign job to a user in a
+    // different organization", which an in-tenant admin can act on, instead of
+    // collapsing into "Invalid or inactive user". It must still bind req.orgId.
+    expect(src).toMatch(
+      /Number\(newOwnerOrg\.rows\[0\]\.organization_id\) !== Number\(req\.orgId\)/);
+  });
+
+  test('the repo no longer repeats the commit message that was wrong', () => {
+    const src = require('fs').readFileSync(
+      require('path').join(__dirname, '..', 'server', 'routes', 'job-routes.js'), 'utf8');
+    expect(src).not.toMatch(/POST \/ and PUT \/:id\/owner already validate this/);
+    expect(src).toMatch(/true of ONE door in three/);
+  });
+
+  test('all three doors source the org from ONE place', () => {
+    const src = require('fs').readFileSync(
+      require('path').join(__dirname, '..', 'server', 'routes', 'job-routes.js'), 'utf8');
+    // req.user.organization_id is the raw JWT claim; it is only ever correct
+    // because resolveOrgId repairs it as a side effect. Nothing in this file
+    // binds it any more — req.orgId / callerOrgId(req) is the single source.
+    const code = src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+    expect(code).not.toMatch(/req\.user\.organization_id/);
+  });
+
+  test('PUT /:id/owner no longer refuses every reassignment on a legacy token', async () => {
+    // signToken emits `organization_id || null`. The comparison was against
+    // that raw claim, so a claim-less token made `<someOrg> !== null` true for
+    // every candidate owner and the route answered "Cannot reassign job to a
+    // user in a different organization" — a false sentence — to all of them.
+    handlers['SELECT organization_id FROM users WHERE id = $1'] =
+      (sql, params) => ({ rows: [{ organization_id: 42 }] });
+    handlers['SELECT id FROM users WHERE id = $1 AND active = true'] = () => ({ rows: [{ id: 55 }] });
+    handlers['SELECT id, owner_id, data FROM jobs'] =
+      () => ({ rows: [{ id: 'jobA', owner_id: 10, data: {} }] });
+    handlers['UPDATE jobs SET owner_id'] = () => ({ rows: [] });
+
+    const r = await call('PUT', '/api/jobs/jobA/owner',
+      { id: 10, role: 'admin', organization_id: null }, { ownerId: 55 });
+
+    expect(r.status).toBe(200);
+    expect(queries.some((q) => /UPDATE jobs SET owner_id/i.test(q.sql))).toBe(true);
+  });
+
+  test('PUT /:id/owner still refuses a genuinely foreign owner', async () => {
+    handlers['SELECT id FROM users WHERE id = $1 AND active = true'] = () => ({ rows: [{ id: 55 }] });
+    handlers['SELECT id, owner_id, data FROM jobs'] =
+      () => ({ rows: [{ id: 'jobA', owner_id: 10, data: {} }] });
+    handlers['SELECT organization_id FROM users WHERE id = $1'] = () => ({ rows: [{ organization_id: 9 }] });
+    handlers['UPDATE jobs SET owner_id'] = () => ({ rows: [] });
+
+    const r = await call('PUT', '/api/jobs/jobA/owner',
+      { id: 10, role: 'admin', organization_id: 7 }, { ownerId: 55 });
+
+    expect(r.status).toBe(400);
+    expect(queries.some((q) => /UPDATE jobs SET owner_id/i.test(q.sql))).toBe(false);
+  });
+});
