@@ -112,11 +112,31 @@ describe('fail closed without locking anyone out', () => {
   });
 
   test('the org is ADOPTED from the calling admin, never taken from the body', () => {
+    // The adoption used to read the calling admin's org with its own SELECT.
+    // Closing F2 put a tenant guard on this same handler, and that guard must
+    // resolve the caller's org to reach its verdict — leaving one fact answered
+    // by two reads, which is the two-pointer disagreement this wave exists to
+    // remove. There is now ONE read and the adoption uses it. The property is
+    // unchanged; it is asserted at both ends instead of at the SQL.
     const seg = AUTH_ROUTES.slice(AUTH_ROUTES.indexOf('let adoptOrgId = null;'));
     const head = seg.slice(0, seg.indexOf('UPDATE users SET name'));
-    expect(head).toMatch(/SELECT organization_id FROM users WHERE id = \$1/);
-    expect(head).toMatch(/req\.user\.id/);
+    expect(head).toMatch(/scope\.callerOrg/);
     expect(head).not.toMatch(/req\.body/);
+
+    // …and scope.callerOrg is the guard's, whose only org source is resolveOrgId.
+    const SCOPE_SRC = fs.readFileSync(
+      path.join(__dirname, '..', 'server', 'services', 'user-org-scope.js'), 'utf8');
+    expect(AUTH_ROUTES).toMatch(/const scope = await guardUserTarget\(req, res, user\);/);
+    expect(SCOPE_SRC).toMatch(/callerOrg = await resolveOrgId\(req\)/);
+    expect(SCOPE_SRC).not.toMatch(/req\.body/);
+
+    // resolveOrgId reads the signed claim, else the users row keyed on the
+    // VERIFIED caller id. The same guarantee the separate SELECT gave, one hop
+    // out — and the claim is hard-picked in signToken, so it is not forgeable.
+    const resolve = fnBody(AUTH_SRC, 'resolveOrgId');
+    expect(resolve).toMatch(/SELECT organization_id FROM users WHERE id = \$1/);
+    expect(resolve).toMatch(/req\.user\.id/);
+    expect(resolve).not.toMatch(/req\.body/);
   });
 
   test('it can only ever FILL a null — an admin cannot move a user between tenants', () => {

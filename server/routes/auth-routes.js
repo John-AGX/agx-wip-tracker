@@ -4,6 +4,23 @@ const { pool, getOrgById } = require('../db');
 const { signToken, requireAuth, requireRole, requireOrgId, requireSystemAdmin, resolveUserOrg, hasCapability } = require('../auth');
 const { ipLoginLimiter } = require('../rate-limit');
 const { auditLog } = require('../audit');
+// The tenant boundary on a caller-supplied USER id. See the block comment in
+// that file: four admin doors here are keyed on users.id, which is SERIAL.
+const { guardUserTarget } = require('../services/user-org-scope');
+
+// Record a SYSTEM_ADMIN deliberately reaching into another tenant through one
+// of the by-id user doors. Nothing else may reach one — see guardUserTarget —
+// so this is the whole cross-tenant trail for the users table.
+function auditCrossTenant(req, scope, action, targetId) {
+  if (!scope || !scope.crossTenant) return;
+  auditLog(req, {
+    action: 'user.cross_tenant_write',
+    targetType: 'user',
+    targetId,
+    organizationId: scope.targetOrg,
+    detail: { door: action, actor_org: scope.callerOrg, target_org: scope.targetOrg },
+  });
+}
 
 const router = express.Router();
 
@@ -462,8 +479,11 @@ router.put('/users/:id/notification-prefs', requireAuth, requireRole('admin'), a
       : {};
     const prefsJson = JSON.stringify(prefs); // P3 — cap JSONB size (see /me handler)
     if (prefsJson.length > 16384) return res.status(400).json({ error: 'Notification preferences too large' });
-    const { rows } = await pool.query('SELECT id FROM users WHERE id = $1', [req.params.id]);
+    const { rows } = await pool.query('SELECT id, organization_id FROM users WHERE id = $1', [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'User not found' });
+    const scope = await guardUserTarget(req, res, rows[0]);
+    if (!scope) return;                        // refused; guard answered
+    auditCrossTenant(req, scope, 'notification_prefs', req.params.id);
     await pool.query(
       'UPDATE users SET notification_prefs = $1::jsonb, updated_at = NOW() WHERE id = $2',
       [prefsJson, req.params.id]
@@ -500,6 +520,15 @@ router.put('/users/:id', requireAuth, requireRole('admin'), async (req, res) => 
     const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.params.id]);
     const user = rows[0];
     if (!user) return res.status(404).json({ error: 'User not found' });
+
+    // ── The tenant boundary, before anything is validated or written ────────
+    // This handler changes email (→ password reset → account takeover), role
+    // (→ privilege escalation inside the target's tenant) and active (→ a
+    // cross-tenant lockout). Prove the target is reachable first; a SYSTEM_ADMIN
+    // may cross, and that crossing is audited. See services/user-org-scope.js.
+    const scope = await guardUserTarget(req, res, user);
+    if (!scope) return;                        // refused; guard answered
+    auditCrossTenant(req, scope, 'user_update', req.params.id);
 
     // P0-3 — gate the role field: reject unknown roles (400) and block a
     // non-system-admin from assigning any SYSTEM_ADMIN-carrying role (403).
@@ -569,14 +598,15 @@ router.put('/users/:id', requireAuth, requireRole('admin'), async (req, res) => 
     // user who already belongs to a tenant — that would be a tenancy move
     // performed as a side effect of an HR edit, which is the shape this whole
     // wave exists to remove.
+    //
+    // The org is scope.callerOrg — the SAME resolved value the tenant guard
+    // above reached its verdict with, and resolveOrgId's only sources are the
+    // signed claim and a lookup keyed on the verified user id. It used to be a
+    // second, separate SELECT here; one fact read twice is the two-pointer
+    // disagreement this wave exists to remove, so there is now one read.
     let adoptOrgId = null;
     if (user.organization_id == null) {
-      try {
-        const admin = await pool.query('SELECT organization_id FROM users WHERE id = $1', [req.user.id]);
-        adoptOrgId = (admin.rows[0] && admin.rows[0].organization_id) || null;
-      } catch (e) {
-        console.warn('[auth] org adoption lookup failed:', e && e.message);
-      }
+      adoptOrgId = scope.callerOrg != null ? scope.callerOrg : null;
     }
 
     await pool.query(
@@ -631,9 +661,15 @@ router.put('/users/:id/password', requireAuth, requireRole('admin'), async (req,
     if (!newPassword || newPassword.length < 8) {
       return res.status(400).json({ error: 'New password required (min 8 chars)' });
     }
-    const { rows } = await pool.query('SELECT id, email, name FROM users WHERE id = $1', [req.params.id]);
+    const { rows } = await pool.query('SELECT id, email, name, organization_id FROM users WHERE id = $1', [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'User not found' });
     const targetUser = rows[0];
+    // The sharpest of the four: this sets a credential and then MAILS it. An
+    // unscoped form is account takeover in one call, with no email change and
+    // no reset link needed. Prove the tenant before the hash is written.
+    const scope = await guardUserTarget(req, res, targetUser);
+    if (!scope) return;                        // refused; guard answered
+    auditCrossTenant(req, scope, 'password_reset', req.params.id);
     await pool.query(
       'UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2',
       [bcrypt.hashSync(newPassword, 10), req.params.id]
@@ -689,6 +725,9 @@ router.delete('/users/:id', requireAuth, requireRole('admin'), async (req, res) 
     }
     const { rows } = await pool.query('SELECT id, email, role, organization_id FROM users WHERE id = $1', [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'User not found' });
+    const scope = await guardUserTarget(req, res, rows[0]);
+    if (!scope) return;                        // refused; guard answered
+    auditCrossTenant(req, scope, 'user_delete', req.params.id);
     await pool.query('DELETE FROM users WHERE id = $1', [req.params.id]);
     auditLog(req, {
       action: 'user.delete', targetType: 'user', targetId: req.params.id,
