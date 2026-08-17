@@ -84,11 +84,16 @@ function isForbiddenDm(key, userId) {
 // Friendly label for a thread used by the inbox widget. Best-effort —
 // looks up the entity title from the obvious table; falls back to the
 // raw id when the entity is gone.
-async function describeThread(key) {
+// orgId is REQUIRED. A thread key is caller-supplied, so an unscoped lookup
+// turned a guessed id into another tenant's job or lead title. Unresolvable
+// falls back to the raw id, exactly as a deleted entity already did.
+async function describeThread(key, orgId) {
   try {
     if (key.startsWith('job:')) {
       const id = key.slice(4);
-      const { rows } = await pool.query('SELECT data FROM jobs WHERE id = $1', [id]);
+      const { rows } = await pool.query(
+        'SELECT data FROM jobs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+        [id, orgId]);
       if (rows.length) {
         const d = rows[0].data || {};
         return { kind: 'job', label: jobLabel.fromJob(d, { fallback: 'Job ' + id }) };
@@ -97,7 +102,9 @@ async function describeThread(key) {
     }
     if (key.startsWith('lead:')) {
       const id = key.slice(5);
-      const { rows } = await pool.query('SELECT data FROM leads WHERE id = $1', [id]);
+      const { rows } = await pool.query(
+        'SELECT data FROM leads WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+        [id, orgId]);
       if (rows.length) {
         const d = rows[0].data || {};
         return { kind: 'lead', label: d.title || d.name || ('Lead ' + id) };
@@ -289,7 +296,7 @@ router.get('/recent', async (req, res) => {
     );
     // Annotate each thread with a friendly label.
     const threads = await Promise.all(rows.map(async (r) => {
-      const desc = await describeThread(r.thread_key);
+      const desc = await describeThread(r.thread_key, req.user && req.user.organization_id);
       return {
         thread_key: r.thread_key,
         kind: desc.kind,
@@ -332,7 +339,7 @@ router.get('/:threadKey', async (req, res) => {
         LIMIT 1000`,
       [key]
     );
-    const desc = await describeThread(key);
+    const desc = await describeThread(key, req.user && req.user.organization_id);
     res.json({ thread_key: key, kind: desc.kind, label: desc.label, messages: rows });
   } catch (e) {
     console.error('GET /api/messages/:threadKey error:', e);

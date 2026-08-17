@@ -5356,7 +5356,11 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   // Joined data sits alongside the jobs JSONB blob — the bulk save splits
   // them into separate appData arrays on the client. Read all of them
   // here and filter to this job.
-  const jobsRes = await pool.query(`SELECT id, data FROM jobs`);
+  // (A `SELECT id, data FROM jobs` stood here — every job blob in the
+  // database, on the hottest agent path, materialised into JS and then thrown
+  // away by a discard a few lines down. Not a disclosure, because nothing
+  // reached the model; a full-table JSONB read doing nothing. Deleted rather
+  // than given a predicate — a query no one reads does not need one.)
   // Each job row's data may contain its OWN buildings/phases/etc. arrays,
   // OR the client may have flattened them across the appData blob. Try the
   // job-local arrays first.
@@ -5372,7 +5376,6 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   const changeOrders = await jobMoney.changeOrdersForJob(pool, jobId, job.changeOrders);
   const purchaseOrders = await jobMoney.purchaseOrdersForJob(pool, jobId, job.purchaseOrders);
   const invoices = await jobMoney.invoicesForJob(pool, jobId, job.invoices);
-  void jobsRes; // future use if cross-job analysis is needed
 
   // QB cost lines, vendor bills and POs live in their own tables — the WIP
   // math needs all three for actual + accrued cost.
@@ -6632,20 +6635,29 @@ async function execClientDirectoryTool(name, input, ctx) {
       let jobClearedCount = 0;
       try {
         await dbClient.query('BEGIN');
+        // These two matched on a VALUE, not on an id, and carried no tenant
+        // predicate — so deleting an org-A client stripped clientId from EVERY
+        // tenant's rows carrying that value. The blast radius was bounded by
+        // how many rows happen to hold the string, which is not a bound. The
+        // DELETE on the line below was already org-scoped; these were the two
+        // statements above it that were not.
+        const _cdDelOrg = _cdRequireOrg('delete a client');
         const er = await dbClient.query(
           `UPDATE estimates SET data = data - 'clientId',
                                 updated_at = NOW()
             WHERE data->>'clientId' = $1
+              AND (organization_id = $2 OR organization_id IS NULL)
             RETURNING id`,
-          [input.client_id]
+          [input.client_id, _cdDelOrg]
         );
         estClearedCount = er.rowCount;
         const jr = await dbClient.query(
           `UPDATE jobs SET data = data - 'clientId',
                            updated_at = NOW()
             WHERE data->>'clientId' = $1
+              AND (organization_id = $2 OR organization_id IS NULL)
             RETURNING id`,
-          [input.client_id]
+          [input.client_id, _cdDelOrg]
         );
         jobClearedCount = jr.rowCount;
         // Now safe to delete the client row — leads.client_id FK and
@@ -11361,15 +11373,22 @@ async function execProposeCreateLead(input, userId) {
 // edits on the same row don't clobber each other. Returns a string
 // summary that 86 sees as the tool result.
 
-async function execLinkJobToClient(input) {
+// orgId is REQUIRED. Both statements below were unscoped, so one call could
+// point an org-B job at an org-A client — divergence in two tables at once,
+// from the agent, on a caller-supplied pair of ids. A row outside the caller's
+// tenant reads as "does not exist", the same as one that never did.
+async function execLinkJobToClient(input, orgId) {
   const jobId = String(input.job_id || '').trim();
   const clientId = String(input.client_id || '').trim();
   if (!jobId) throw new Error('job_id is required');
   if (!clientId) throw new Error('client_id is required');
+  if (orgId == null) throw new Error('Cannot link a job to a client without a signed-in user context.');
 
   // Verify the client exists — silently linking to a stale id would
   // pollute downstream reads with broken pointers.
-  const c = await pool.query('SELECT id, name FROM clients WHERE id = $1', [clientId]);
+  const c = await pool.query(
+    'SELECT id, name FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+    [clientId, orgId]);
   if (!c.rows.length) throw new Error('client_id "' + clientId + '" does not exist');
   const clientName = c.rows[0].name;
 
@@ -11378,8 +11397,9 @@ async function execLinkJobToClient(input) {
         SET data = jsonb_set(COALESCE(data, '{}'::jsonb), '{clientId}', to_jsonb($2::text), true),
             updated_at = NOW()
       WHERE id = $1
+        AND (organization_id = $3 OR organization_id IS NULL)
       RETURNING data->>'jobNumber' AS job_number, data->>'title' AS title`,
-    [jobId, clientId]
+    [jobId, clientId, orgId]
   );
   if (!j.rows.length) throw new Error('job_id "' + jobId + '" does not exist');
   const r = j.rows[0];
@@ -11388,8 +11408,10 @@ async function execLinkJobToClient(input) {
   return 'Linked ' + jobLabel + titlePart + ' to client "' + clientName + '" (' + clientId + ').';
 }
 
-async function execBulkLinkJobsToClients(input) {
+// Same as execLinkJobToClient, up to 100 pairs in one transaction.
+async function execBulkLinkJobsToClients(input, orgId) {
   const links = Array.isArray(input.links) ? input.links : [];
+  if (orgId == null) throw new Error('Cannot link jobs to clients without a signed-in user context.');
   if (!links.length) throw new Error('links is required and must be non-empty');
   if (links.length > 100) throw new Error('Up to 100 links per call. Got ' + links.length + '.');
 
@@ -11400,12 +11422,16 @@ async function execBulkLinkJobsToClients(input) {
   const clientIds = [...new Set(links.map(l => String(l.client_id || '')))].filter(Boolean);
   if (!jobIds.length || !clientIds.length) throw new Error('links must include job_id and client_id on every entry');
 
-  const jr = await pool.query(`SELECT id FROM jobs WHERE id = ANY($1::text[])`, [jobIds]);
+  const jr = await pool.query(
+    `SELECT id FROM jobs WHERE id = ANY($1::text[])
+       AND (organization_id = $2 OR organization_id IS NULL)`, [jobIds, orgId]);
   const knownJobs = new Set(jr.rows.map(r => r.id));
   const missingJobs = jobIds.filter(id => !knownJobs.has(id));
   if (missingJobs.length) throw new Error('Unknown job_id(s): ' + missingJobs.slice(0, 5).join(', ') + (missingJobs.length > 5 ? ' (+' + (missingJobs.length - 5) + ' more)' : ''));
 
-  const cr = await pool.query(`SELECT id, name FROM clients WHERE id = ANY($1::text[])`, [clientIds]);
+  const cr = await pool.query(
+    `SELECT id, name FROM clients WHERE id = ANY($1::text[])
+       AND (organization_id = $2 OR organization_id IS NULL)`, [clientIds, orgId]);
   const clientNameById = new Map(cr.rows.map(r => [r.id, r.name]));
   const missingClients = clientIds.filter(id => !clientNameById.has(id));
   if (missingClients.length) throw new Error('Unknown client_id(s): ' + missingClients.slice(0, 5).join(', ') + (missingClients.length > 5 ? ' (+' + (missingClients.length - 5) + ' more)' : ''));
@@ -11417,11 +11443,14 @@ async function execBulkLinkJobsToClients(input) {
     await client.query('BEGIN');
     for (const link of links) {
       await client.query(
+        // Belt and braces under the up-front validation: every id in this loop
+        // already passed the org-scoped existence checks above.
         `UPDATE jobs
             SET data = jsonb_set(COALESCE(data, '{}'::jsonb), '{clientId}', to_jsonb($2::text), true),
                 updated_at = NOW()
-          WHERE id = $1`,
-        [String(link.job_id), String(link.client_id)]
+          WHERE id = $1
+            AND (organization_id = $3 OR organization_id IS NULL)`,
+        [String(link.job_id), String(link.client_id), orgId]
       );
     }
     await client.query('COMMIT');
@@ -14826,10 +14855,10 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
         try { summary = await execProposeCreateLead(r.input || {}, req.user.id); }
         catch (e) { summary = 'Error: ' + (e.message || 'failed'); isError = true; }
       } else if (r.name === 'propose_link_job_to_client') {
-        try { summary = await execLinkJobToClient(r.input || {}); }
+        try { summary = await execLinkJobToClient(r.input || {}, req.organization && req.organization.id); }
         catch (e) { summary = 'Error: ' + (e.message || 'failed'); isError = true; }
       } else if (r.name === 'propose_bulk_link_jobs_to_clients') {
-        try { summary = await execBulkLinkJobsToClients(r.input || {}); }
+        try { summary = await execBulkLinkJobsToClients(r.input || {}, req.organization && req.organization.id); }
         catch (e) { summary = 'Error: ' + (e.message || 'failed'); isError = true; }
       } else if (r.name === 'propose_create_field_tool'
               || r.name === 'propose_update_field_tool'

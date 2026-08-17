@@ -89,15 +89,24 @@ function normalizeChecklist(raw) {
 async function resolveEntityLabel(orgId, type, id) {
   if (!type || !id || !LINKABLE_ENTITY_TYPES.has(type)) return '';
   try {
+    // Every branch org-scoped on the table's own column. These reached a
+    // caller-supplied id with no tenant predicate, so a guessed id returned
+    // another tenant's LEAD TITLE, CLIENT NAME, SUB NAME or JOB NUMBER + TITLE
+    // — the whole guess-an-id-read-the-label probe, and the cheapest class in
+    // the survey to close. ai-routes.js resolveEntityLabel already appends
+    // exactly this guard; this is that pattern, applied where it was missing.
+    // Tolerant OR-IS-NULL, as everywhere else.
+    if (orgId == null) return '';
+    const orgGuard = ' AND (organization_id = $2 OR organization_id IS NULL)';
     let sql;
-    if (type === 'lead')      sql = 'SELECT title AS label FROM leads WHERE id = $1';
-    else if (type === 'client') sql = 'SELECT name AS label FROM clients WHERE id = $1';
-    else if (type === 'sub')   sql = 'SELECT name AS label FROM subs WHERE id = $1';
-    else if (type === 'project') sql = 'SELECT name AS label FROM projects WHERE id = $1 AND organization_id = ' + Number(orgId);
-    else if (type === 'estimate') sql = "SELECT COALESCE(data->>'name', data->>'title', 'Estimate') AS label FROM estimates WHERE id = $1";
-    else if (type === 'job')   sql = "SELECT COALESCE(NULLIF(data->>'jobNumber',''),'') AS num, COALESCE(data->>'title', data->>'name', '') AS label FROM jobs WHERE id = $1";
+    if (type === 'lead')      sql = 'SELECT title AS label FROM leads WHERE id = $1' + orgGuard;
+    else if (type === 'client') sql = 'SELECT name AS label FROM clients WHERE id = $1' + orgGuard;
+    else if (type === 'sub')   sql = 'SELECT name AS label FROM subs WHERE id = $1' + orgGuard;
+    else if (type === 'project') sql = 'SELECT name AS label FROM projects WHERE id = $1 AND organization_id = $2';
+    else if (type === 'estimate') sql = "SELECT COALESCE(data->>'name', data->>'title', 'Estimate') AS label FROM estimates WHERE id = $1" + orgGuard;
+    else if (type === 'job')   sql = "SELECT COALESCE(NULLIF(data->>'jobNumber',''),'') AS num, COALESCE(data->>'title', data->>'name', '') AS label FROM jobs WHERE id = $1" + orgGuard;
     else return '';
-    const { rows } = await pool.query(sql, [String(id)]);
+    const { rows } = await pool.query(sql, [String(id), orgId]);
     if (!rows.length) return '';
     // Jobs get the shared jobNumber + title composition. This used to return
     // the title alone, so a task that showed "RV2006 Waterside" in the app

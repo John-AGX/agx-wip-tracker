@@ -40,7 +40,10 @@ console.log('[sub-routes] mounted at /api/subs (Phase A — sub directory + job_
 // and hand it to sendForEvent. Looks up sub/job after the assignment
 // insert so the email reflects current data even if the request body
 // only had ids.
-async function notifySubAssigned({ subId, jobId, contractAmt, assignedByName }) {
+// orgId is REQUIRED: this puts the job's number and title into an email to an
+// outside subcontractor. Unscoped, an assignment against a foreign job id
+// mailed that job's identity off-platform.
+async function notifySubAssigned({ subId, jobId, contractAmt, assignedByName, orgId }) {
   var subRow = await pool.query(
     'SELECT id, name, email, primary_contact_first FROM subs WHERE id = $1',
     [subId]
@@ -49,7 +52,9 @@ async function notifySubAssigned({ subId, jobId, contractAmt, assignedByName }) 
   var sub = subRow.rows[0];
   var jobData = {};
   if (jobId) {
-    var j = await pool.query('SELECT data FROM jobs WHERE id = $1', [jobId]);
+    var j = await pool.query(
+      'SELECT data FROM jobs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [jobId, orgId]);
     if (j.rows.length) jobData = j.rows[0].data || {};
   }
   return sendForEvent('sub_assigned', {
@@ -526,7 +531,8 @@ router.post('/jobs/:jobId',
         subId: subId,
         jobId: req.params.jobId,
         contractAmt: Number(b.contract_amt || b.contractAmt || 0),
-        assignedByName: (req.user && req.user.name) || (req.user && req.user.email) || 'AGX'
+        assignedByName: (req.user && req.user.name) || (req.user && req.user.email) || 'AGX',
+        orgId: req.user && req.user.organization_id
       }).catch(function(e) { console.warn('[sub_assigned] notify failed:', e && e.message); });
     } catch (e) {
       if (e.code === '23505') {
