@@ -17,7 +17,8 @@
 
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireCapability, getAttributedUserId } = require('../auth');
+const { requireAuth, requireCapability, getAttributedUserId, requireOrgId } = require('../auth');
+const { jobInOrg } = require('../services/job-org-scope');
 const { assertEntityInOrg } = require('../org-access');
 const { sendEmail } = require('../email');
 const { scheduleAssigned } = require('../email-templates');
@@ -29,7 +30,11 @@ console.log('[schedule-routes] mounted at /api/schedule (Phase 2 — production-
 // Fire schedule-assignment emails to newly-added crew. Fire-and-forget;
 // email failures land in email_log but don't block the save. Respects
 // each user's notification_prefs.schedule_assignment opt-out.
-async function notifyScheduleCrew({ entry, addedUserIds, jobId, fromUserName }) {
+// orgId is REQUIRED, not optional. This function reads the parent job's whole
+// data blob and hands it to scheduleAssigned(), which posts it off-platform by
+// email. Unscoped, an org-A caller creating an entry against an org-B job id
+// mailed that job's contents to org-A recipients — not a title leak, the blob.
+async function notifyScheduleCrew({ entry, addedUserIds, jobId, fromUserName, orgId }) {
   if (!addedUserIds || !addedUserIds.length) return;
   try {
     const { rows: users } = await pool.query(
@@ -37,8 +42,11 @@ async function notifyScheduleCrew({ entry, addedUserIds, jobId, fromUserName }) 
       [addedUserIds]
     );
     let job = null;
-    if (jobId) {
-      const j = await pool.query('SELECT id, data FROM jobs WHERE id = $1', [jobId]);
+    if (jobId && orgId != null) {
+      const j = await pool.query(
+        `SELECT id, data FROM jobs
+          WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)`,
+        [jobId, orgId]);
       if (j.rows.length) job = Object.assign({ id: j.rows[0].id }, j.rows[0].data || {});
     }
     users.forEach((u) => {
@@ -230,7 +238,7 @@ router.get('/',
 
 // POST /api/schedule  — create
 router.post('/',
-  requireAuth, requireCapability('JOBS_VIEW_ALL'),
+  requireAuth, requireCapability('JOBS_VIEW_ALL'), requireOrgId,
   async (req, res) => {
     try {
       const parsed = await readEntry(req.body, false);
@@ -238,13 +246,25 @@ router.post('/',
       const v = parsed.value;
       // Confirm the job exists so we don't leave orphan rows. ON DELETE
       // CASCADE handles the reverse direction (job removed → entries gone).
-      const jobChk = await pool.query('SELECT id FROM jobs WHERE id = $1', [v.jobId]);
-      if (!jobChk.rows.length) return res.status(404).json({ error: 'job not found' });
+      //
+      // And confirm it is THIS TENANT'S job. This existence check was the only
+      // gate on the create, so an org-A caller could attach a schedule entry to
+      // an org-B job by id — which then travelled onward through
+      // notifyScheduleCrew, mailing that job's data blob to org-A crew. A job
+      // in another tenant answers "job not found", the same as one that does
+      // not exist, because those two must be indistinguishable from outside.
+      if (!(await jobInOrg(pool, v.jobId, req.orgId))) {
+        return res.status(404).json({ error: 'job not found' });
+      }
       const id = genId();
       const ins = await pool.query(
+        // organization_id off the PARENT JOB, not off the caller: unforgeable,
+        // and it used to land NULL and wait for a boot backfill that no longer
+        // runs once a second tenant exists.
         `INSERT INTO schedule_entries
-           (id, job_id, start_date, days, crew, includes_weekends, status, notes, created_by)
-         VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)
+           (id, job_id, start_date, days, crew, includes_weekends, status, notes, created_by, organization_id)
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9,
+                 (SELECT organization_id FROM jobs WHERE id = $2))
          RETURNING *, to_char(start_date, 'YYYY-MM-DD') AS start_date_iso`,
         [
           id,
@@ -271,7 +291,8 @@ router.post('/',
           entry: entry,
           addedUserIds: v.crew,
           jobId: v.jobId,
-          fromUserName: req.user && req.user.name
+          fromUserName: req.user && req.user.name,
+          orgId: req.orgId
         });
       }
 
@@ -378,7 +399,8 @@ router.patch('/:id',
             entry: entry,
             addedUserIds: added,
             jobId: entry.jobId,
-            fromUserName: req.user && req.user.name
+            fromUserName: req.user && req.user.name,
+            orgId: req.user.organization_id
           });
         }
       }

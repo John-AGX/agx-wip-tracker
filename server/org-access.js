@@ -39,16 +39,27 @@ async function assertEntityInOrg(entityType, entityId, orgId) {
              WHERE co.id = $1 AND (u.organization_id = $2 OR u.organization_id IS NULL) LIMIT 1`;
       break;
     case 'schedule_entry':
-      // Job-linked entries scope through the job's owner; entries with no job
-      // fall back to their own creator's org so standalone entries aren't lost.
+      // `OR s.job_id IS NULL` was an UNCONDITIONAL open arm: it named neither
+      // the caller nor the caller's org, so every standalone schedule entry in
+      // every tenant passed this check for everybody — and this gates PUT and
+      // DELETE on schedule-routes. The two arms are now explicitly disjoint on
+      // s.job_id, which also stops the LEFT JOIN from re-creating the same hole
+      // (a job-less entry makes j.organization_id NULL, and the tolerance arm
+      // would then pass it unconditionally all over again).
+      //
+      // Job-linked entries scope through the JOB'S COLUMN — the canonical
+      // pointer — rather than through the job owner's org. Entries with no job
+      // fall back to their own stamped column, then to their creator's org, so
+      // standalone entries created before that column was stamped aren't lost.
       sql = `SELECT 1 FROM schedule_entries s
                LEFT JOIN jobs j ON j.id = s.job_id
-               LEFT JOIN users uj ON uj.id = j.owner_id
                LEFT JOIN users uc ON uc.id = s.created_by
              WHERE s.id = $1 AND (
-                   uj.organization_id = $2 OR uj.organization_id IS NULL
-                OR uc.organization_id = $2 OR uc.organization_id IS NULL
-                OR s.job_id IS NULL
+                   (s.job_id IS NOT NULL AND
+                      (j.organization_id = $2 OR j.organization_id IS NULL))
+                OR (s.job_id IS NULL AND
+                      (s.organization_id = $2 OR s.organization_id IS NULL
+                       OR uc.organization_id = $2 OR uc.organization_id IS NULL))
              ) LIMIT 1`;
       break;
     case 'project':

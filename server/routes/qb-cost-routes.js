@@ -17,7 +17,8 @@
 
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireCapability } = require('../auth');
+const { requireAuth, requireCapability, requireOrgId } = require('../auth');
+const { jobIdsInOrg, parentJobInOrgSql } = require('../services/job-org-scope');
 const { hashLineId, staleZeroLineId } = require('../util/qb-line-id');
 
 const router = express.Router();
@@ -124,12 +125,19 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // ON CONFLICT update — but only the mutable fields (memo etc. can change
 // between exports if the user edits in QB). Keep imported_at fresh so we
 // know the row was seen this round.
+// organization_id is read off the PARENT JOB, not off the caller -- a cost line
+// belongs to whatever tenant its job belongs to, which makes the stamp
+// unforgeable. It used to land NULL and be healed by the boot backfill; gating
+// that backfill (9c1626a) was correct and turned this into a standing NULL, so
+// it has to be stamped at insert instead. Left alone on DO UPDATE, for the same
+// reason the jobs upsert leaves it alone: a re-import is not a tenant move.
 const UPSERT_LINE_SQL = `INSERT INTO qb_cost_lines (
      id, job_id, vendor, txn_date, txn_type, num,
      account, account_type, klass, memo, amount,
-     raw_data, source_file, report_date, imported_at
+     raw_data, source_file, report_date, imported_at, organization_id
    ) VALUES (
-     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW()
+     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(),
+     (SELECT organization_id FROM jobs WHERE id = $2)
    )
    ON CONFLICT (id) DO UPDATE SET
      vendor = EXCLUDED.vendor,
@@ -220,7 +228,7 @@ async function writeChunk(rows) {
 //              klass, memo, amount }
 // ──────────────────────────────────────────────────────────────────
 router.post('/import',
-  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  requireAuth, requireCapability('JOBS_EDIT_ANY'), requireOrgId,
   async (req, res) => {
     const { reportDate, sourceFile, jobs } = req.body || {};
     if (!Array.isArray(jobs)) {
@@ -254,13 +262,12 @@ router.post('/import',
       const wanted = [...new Set(
         jobs.filter((j) => j && j.jobId).map((j) => String(j.jobId))
       )];
-      let known = new Set();
-      if (wanted.length) {
-        const found = await pool.query(
-          'SELECT id FROM jobs WHERE id = ANY($1::text[])', [wanted]
-        );
-        known = new Set(found.rows.map((r) => r.id));
-      }
+      // The parent-job gate is also the TENANT gate. Unscoped, this let an
+      // org-A caller inject QB cost lines onto org-B jobs: the rows land keyed
+      // to a foreign job and show up in that tenant's cost rollups as actuals.
+      // A job in another tenant is simply not "known" here, so it takes the
+      // existing rejection path with its existing message.
+      const known = await jobIdsInOrg(pool, wanted, req.orgId);
 
       // ── Flatten + validate before anything is written ─────────────
       // Every rejection below is decided with no database work at all, so
@@ -451,15 +458,19 @@ router.get('/',
       // Wave A (A2): scope cost lines to the caller's org via job -> owner -> org.
       // LEFT JOIN + OR-IS-NULL (org tolerance) = no-op for AGX today; tighten by
       // dropping the IS NULL clause once data is fully org-stamped.
+      // Scoped through the parent job's organization_id COLUMN. This used to
+      // join owner_id -> users.organization_id, which is a THIRD scoping
+      // mechanism on the same table family: the column (job-routes,
+      // assertTargetOrg), the owner join (org-access, this read), and nothing
+      // at all (every write below, until this commit). The column is canonical.
       const orgId = req.user.organization_id;
       let rows;
       if (jobId) {
         const r = await pool.query(
           `SELECT q.* FROM qb_cost_lines q
              LEFT JOIN jobs j ON j.id = q.job_id
-             LEFT JOIN users u ON u.id = j.owner_id
             WHERE q.job_id = $1
-              AND (u.organization_id = $2 OR u.organization_id IS NULL)
+              AND (j.organization_id = $2 OR j.organization_id IS NULL)
             ORDER BY q.txn_date DESC NULLS LAST, q.amount DESC`,
           [jobId, orgId]
         );
@@ -468,8 +479,7 @@ router.get('/',
         const r = await pool.query(
           `SELECT q.* FROM qb_cost_lines q
              LEFT JOIN jobs j ON j.id = q.job_id
-             LEFT JOIN users u ON u.id = j.owner_id
-            WHERE (u.organization_id = $1 OR u.organization_id IS NULL)
+            WHERE (j.organization_id = $1 OR j.organization_id IS NULL)
             ORDER BY q.txn_date DESC NULLS LAST, q.amount DESC LIMIT 5000`,
           [orgId]
         );
@@ -489,7 +499,7 @@ router.get('/',
 // (memo override) can be added if needed.
 // ──────────────────────────────────────────────────────────────────
 router.patch('/:id',
-  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  requireAuth, requireCapability('JOBS_EDIT_ANY'), requireOrgId,
   async (req, res) => {
     try {
       const { linkedNodeId, memo, bucket, buildingId } = req.body || {};
@@ -516,9 +526,16 @@ router.patch('/:id',
       if (!sets.length) return res.status(400).json({ error: 'nothing to update' });
       sets.push(`updated_at = NOW()`);
       vals.push(req.params.id);
+      vals.push(req.orgId);
       // SAFE: column names come from req.body destructuring (linkedNodeId / memo); never user-key iteration.
+      // The parent-job tenant predicate is part of the WHERE, not a pre-check:
+      // this statement RETURNS * -- vendor, amount, account, memo -- so an
+      // unscoped update was a cross-tenant read as well as a cross-tenant write.
       const result = await pool.query(
-        `UPDATE qb_cost_lines SET ${sets.join(', ')} WHERE id = $${i} RETURNING *`,
+        `UPDATE qb_cost_lines SET ${sets.join(', ')}
+          WHERE id = $${i}
+            AND ${parentJobInOrgSql('qb_cost_lines.job_id', '$' + (i + 1))}
+          RETURNING *`,
         vals
       );
       if (!result.rows.length) return res.status(404).json({ error: 'Line not found' });
@@ -537,7 +554,7 @@ router.patch('/:id',
 // in `ids` that the user can edit. Returns the updated count.
 // ──────────────────────────────────────────────────────────────────
 router.post('/bulk-link',
-  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  requireAuth, requireCapability('JOBS_EDIT_ANY'), requireOrgId,
   async (req, res) => {
     try {
       const { ids, linkedNodeId } = req.body || {};
@@ -554,8 +571,9 @@ router.post('/bulk-link',
         `UPDATE qb_cost_lines
             SET linked_node_id = $1, updated_at = NOW()
           WHERE id = ANY($2::text[])
+            AND ${parentJobInOrgSql('qb_cost_lines.job_id', '$3')}
           RETURNING id`,
-        [target, ids]
+        [target, ids, req.orgId]
       );
       res.json({ ok: true, updated: result.rowCount });
     } catch (e) {
@@ -573,7 +591,7 @@ router.post('/bulk-link',
 // null to clear it; omit a field to leave it untouched. Returns count.
 // ──────────────────────────────────────────────────────────────────
 router.post('/bulk-assign',
-  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  requireAuth, requireCapability('JOBS_EDIT_ANY'), requireOrgId,
   async (req, res) => {
     try {
       const { ids, bucket, buildingId } = req.body || {};
@@ -591,9 +609,17 @@ router.post('/bulk-assign',
       if (!sets.length) return res.status(400).json({ error: 'nothing to assign (bucket or buildingId required)' });
       sets.push(`updated_at = NOW()`);
       vals.push(ids);
+      vals.push(req.orgId);
       // SAFE: column list is a fixed whitelist (bucket / building_id); ids passed as a param array.
+      // This one re-attributes ACTUAL COSTS across buildings and cost buckets.
+      // It changes no amount, so "money is out of scope" does not catch it --
+      // and it still moved money between line items in another tenant's
+      // rollups, 1000 rows per call.
       const result = await pool.query(
-        `UPDATE qb_cost_lines SET ${sets.join(', ')} WHERE id = ANY($${i}::text[]) RETURNING id`,
+        `UPDATE qb_cost_lines SET ${sets.join(', ')}
+          WHERE id = ANY($${i}::text[])
+            AND ${parentJobInOrgSql('qb_cost_lines.job_id', '$' + (i + 1))}
+          RETURNING id`,
         vals
       );
       res.json({ ok: true, updated: result.rowCount });
@@ -613,7 +639,7 @@ router.post('/bulk-assign',
 // auto-fired after node deletion if we want to keep the data clean.
 // ──────────────────────────────────────────────────────────────────
 router.post('/cleanup-orphans',
-  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  requireAuth, requireCapability('JOBS_EDIT_ANY'), requireOrgId,
   async (req, res) => {
     try {
       const { jobId, validNodeIds } = req.body || {};
@@ -632,8 +658,9 @@ router.post('/cleanup-orphans',
           WHERE job_id = $1
             AND linked_node_id IS NOT NULL
             AND NOT (linked_node_id = ANY($2::text[]))
+            AND ${parentJobInOrgSql('qb_cost_lines.job_id', '$3')}
           RETURNING id`,
-        [jobId, validList]
+        [jobId, validList, req.orgId]
       );
       res.json({ ok: true, cleared: result.rowCount });
     } catch (e) {
@@ -647,10 +674,14 @@ router.post('/cleanup-orphans',
 // DELETE /api/qb-costs/:id   — manual cleanup
 // ──────────────────────────────────────────────────────────────────
 router.delete('/:id',
-  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  requireAuth, requireCapability('JOBS_EDIT_ANY'), requireOrgId,
   async (req, res) => {
     try {
-      const r = await pool.query('DELETE FROM qb_cost_lines WHERE id = $1', [req.params.id]);
+      const r = await pool.query(
+        `DELETE FROM qb_cost_lines
+          WHERE id = $1
+            AND ${parentJobInOrgSql('qb_cost_lines.job_id', '$2')}`,
+        [req.params.id, req.orgId]);
       res.json({ ok: true, deleted: r.rowCount });
     } catch (e) {
       console.error('DELETE /api/qb-costs/:id error:', e);

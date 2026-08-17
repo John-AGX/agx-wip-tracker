@@ -803,7 +803,15 @@ const ORG_SCOPED_TABLE = Object.freeze({
   client: 'clients', estimate: 'estimates', job: 'jobs', lead: 'leads',
 });
 async function assertTargetOrg(dbClient, entityType, entityId, orgId) {
-  if (!orgId || !entityId || isRef(entityId)) return;
+  if (!entityId || isRef(entityId)) return;      // no concrete row yet
+  // A NULL org used to `return` here — a fail-OPEN guard sitting underneath two
+  // fail-closed ones. Both live apply doors do refuse without an org today
+  // (payload-routes uses requireOrg; applyPayloadForUser returns an error), so
+  // this was not reachable — but agent contexts resolve their org through
+  // _cdOrgId / ctx.orgId and several can be null by construction, which is
+  // exactly the input this opened on. "I have no tenant" is the case the guard
+  // exists for, not an exemption from it.
+  if (!orgId) throw new Error(`${entityType} not found: ${entityId}`);
   const table = ORG_SCOPED_TABLE[entityType];
   if (!table) return;
   const ok = await dbClient.query(
@@ -2155,7 +2163,14 @@ async function dispatchJob(dbClient, target, refTable, ctx) {
   id = await resolveJobTarget(dbClient, id, ctx && ctx.organizationId);
   await assertTargetOrg(dbClient, 'job', id, ctx && ctx.organizationId);
 
-  const r = await dbClient.query('SELECT data FROM jobs WHERE id = $1', [id]);
+  // Second layer under assertTargetOrg. Same shape the bulk save now carries:
+  // the JS guard should already have refused, and a wholesale `data` rewrite is
+  // not a statement to leave unpredicated on the strength of a guard one call
+  // frame up.
+  const r = await dbClient.query(
+    `SELECT data FROM jobs WHERE id = $1
+       AND (organization_id = $2 OR organization_id IS NULL)`,
+    [id, ctx && ctx.organizationId]);
   if (!r.rows.length) throw new Error(`Job not found: ${id}`);
   const data = r.rows[0].data || {};
 
@@ -2280,10 +2295,12 @@ async function dispatchJob(dbClient, target, refTable, ctx) {
   }
 
   // Write the job blob back atomically.
-  await dbClient.query(
-    `UPDATE jobs SET data = $1, updated_at = NOW() WHERE id = $2`,
-    [JSON.stringify(data), id]
+  const wrote = await dbClient.query(
+    `UPDATE jobs SET data = $1, updated_at = NOW() WHERE id = $2
+       AND (organization_id = $3 OR organization_id IS NULL)`,
+    [JSON.stringify(data), id, ctx && ctx.organizationId]
   );
+  if (!wrote.rowCount) throw new Error(`Job not found: ${id}`);
 
   // (node_graphs + qb_cost_lines.linked_node_id writes removed here —
   // see the RETIRED_JOB_OPS guard at the top of this function.)
@@ -2684,14 +2701,19 @@ async function dispatchSystem(dbClient, target, refTable, ctx) {
         await assertTargetOrg(dbClient, 'job', jobId, ctx && ctx.organizationId);
         await assertTargetOrg(dbClient, 'client', clientId, ctx && ctx.organizationId);
         // Jobs store linked client_id inside the data JSONB blob.
-        const jr = await dbClient.query('SELECT data FROM jobs WHERE id = $1', [jobId]);
+        const jr = await dbClient.query(
+          `SELECT data FROM jobs WHERE id = $1
+             AND (organization_id = $2 OR organization_id IS NULL)`,
+          [jobId, ctx && ctx.organizationId]);
         if (!jr.rows.length) throw new Error(`job ${jobId} not found`);
         const data = jr.rows[0].data || {};
         data.client_id = clientId;
-        await dbClient.query(
-          'UPDATE jobs SET data = $1, updated_at = NOW() WHERE id = $2',
-          [JSON.stringify(data), jobId]
+        const lw = await dbClient.query(
+          `UPDATE jobs SET data = $1, updated_at = NOW() WHERE id = $2
+             AND (organization_id = $3 OR organization_id IS NULL)`,
+          [JSON.stringify(data), jobId, ctx && ctx.organizationId]
         );
+        if (!lw.rowCount) throw new Error(`job ${jobId} not found`);
         updated.push({ kind: 'job_client_link', job_id: jobId, client_id: clientId });
       } else if (lk.op === 'link_property_to_parent') {
         const propId = resolveRef(lk.property_id, refTable);

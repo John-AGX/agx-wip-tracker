@@ -140,7 +140,11 @@ jest.mock('../server/db', () => ({
 
 jest.mock('../server/auth', () => ({
   requireAuth: (req, res, next) => next(),
-  requireCapability: () => (req, res, next) => next()
+  requireCapability: () => (req, res, next) => next(),
+  // The real one refuses, before anything is written, a write whose tenant
+  // cannot be determined; that refusal has its own coverage. Here it is a
+  // pass-through so these cases measure the import's OWN behaviour.
+  requireOrgId: (req, res, next) => { req.orgId = 7; next(); }
 }));
 
 const router = require('../server/routes/qb-cost-routes');
@@ -164,7 +168,8 @@ function fakeRes() {
 
 async function runImport(body) {
   const res = fakeRes();
-  await importHandler()({ body }, res);
+  // req.orgId is what requireOrgId sets and what the job gate now binds.
+  await importHandler()({ body, orgId: 7 }, res);
   return res;
 }
 
