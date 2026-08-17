@@ -152,6 +152,13 @@
       '.cw-dsub{font-size:11px;color:var(--text-dim,#9a9aa2);margin-top:2px;display:flex;align-items:center;gap:7px;flex-wrap:wrap;}',
       '.cw-dbody{padding:6px 8px 12px;max-height:calc(100vh - 300px);overflow-y:auto;}',
       '.cw-note{padding:14px 16px;font-size:12.5px;line-height:1.6;color:var(--text-dim,#9a9aa2);}',
+      /* The supersession stamp. Quiet on purpose: it is not an outcome and not
+       * a warning. It says only that this document has stopped being the news
+       * — which is the one thing a pinned reading position cannot say for
+       * itself, and the whole difference between showing an old write on
+       * purpose and asserting an old write is the latest. */
+      '.cw-stale{margin:0 12px 8px;padding:7px 11px;border-radius:8px;font-size:11.5px;line-height:1.45;',
+      'color:var(--text-dim,#9a9aa2);background:rgba(255,255,255,0.045);font-style:italic;}',
       '.cw-err{padding:12px 16px;margin:10px 12px;border-radius:10px;background:rgba(226,75,74,0.12);color:#f0a9a8;',
       'font-size:12px;line-height:1.55;}',
       '.cw-actions{display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid var(--border,rgba(255,255,255,0.08));flex-wrap:wrap;}',
@@ -190,6 +197,7 @@
       'body.light-mode .cw-lrow.sel{background:rgba(55,138,221,0.10);}',
       'body.light-mode .cw-lmeta,body.light-mode .cw-lsaid,body.light-mode .cw-dsub,body.light-mode .cw-note,body.light-mode .cw-more{color:#6b6b76;}',
       'body.light-mode .cw-err{background:rgba(226,75,74,0.10);color:#a33;}',
+      'body.light-mode .cw-stale{background:rgba(0,0,0,0.04);color:#6b6b76;}',
       'body.light-mode .cw-pill.ok{color:#0f6e56;} body.light-mode .cw-pill.warn{color:#8a5c0d;}',
       'body.light-mode .cw-pill.info{color:#1e6fb8;} body.light-mode .cw-pill.bad{color:#a33;}',
       'body.light-mode .cw-btn.gho{border-color:rgba(0,0,0,0.18);color:#44444a;}',
@@ -459,6 +467,42 @@
     return html;
   }
 
+  /* ── the document's CURRENCY ──────────────────────────────────────────
+   *
+   * This column is the one region in the whole feature that shows an older
+   * write ON PURPOSE. Pinning is a feature: pick a row by hand and a new write
+   * raises an unread marker in the rail rather than yanking the page out from
+   * under you. So the document is never cleared and never demoted — it is
+   * STAMPED, and the stamp is the entire difference between "showing an old
+   * write on purpose" and "asserting an old write is the latest".
+   *
+   * There is deliberately no `pinned` flag in the currency test. A claimant is
+   * current iff it is displaying the write that was just reported, and a
+   * pinned document by definition is not — so pinning falls out of the general
+   * rule instead of being an exception carved into it.
+   *
+   * writes.subject() is null until this session has SEEN a write reported.
+   * Null must not stamp anything: "a newer write has landed" is a claim, and
+   * this view would have no evidence for it. */
+  function newestReported() {
+    var lw = LW();
+    try { return (lw && lw.writes) ? lw.writes.subject() : null; } catch (_) { return null; }
+  }
+  function docIsCurrent(id) {
+    var newest = newestReported();
+    return newest == null || String(id) === String(newest);
+  }
+  function stampDocStale(doc) {
+    doc = doc || document.getElementById('cw-doc');
+    var head = doc && doc.querySelector('.cw-dhead');
+    if (!head || doc.querySelector('.cw-stale')) return;
+    // insertAdjacentHTML, never `innerHTML +=`: the latter reparses the whole
+    // column and orphans the Approve/Reject listeners wireActions attached.
+    head.insertAdjacentHTML('afterend',
+      '<div class="cw-stale">A newer write has landed since. This is the one you picked — ' +
+      'it is not the latest.</div>');
+  }
+
   function renderDoc(row) {
     var doc = document.getElementById('cw-doc');
     var lw = LW();
@@ -603,6 +647,11 @@
 
     doc.innerHTML = head + bodyHtml + actions;
     wireActions(doc, row);
+    // A repaint is a fresh chance to lie. Coming back to Cowork and picking an
+    // older row from the rail paints a document with no supersession history
+    // at all, so the stamp is re-applied from the ledger rather than being
+    // treated as something that only ever arrives by callback.
+    if (!docIsCurrent(row.id)) stampDocStale(doc);
   }
 
   function wireActions(doc, row) {
@@ -701,6 +750,22 @@
         if (_pinned && _selectedId && _selectedId !== id) { _unread++; renderRail(); return; }
         selectRow(id, false);
       }
+    });
+    /* The document as a ledger CLAIMANT. Registering it is what closes S7 in
+     * the other direction: the strip reporting a write must stop this column
+     * from reading as the latest, and this column reporting one must stop the
+     * strip's pill from doing the same.
+     *
+     * `keeps` is the general rule, not a pinning special case — the document
+     * is current only while it is displaying the write just reported. Note it
+     * is checked against _selectedId AFTER render() ran, so an unpinned
+     * document that just auto-followed the write is correctly kept. */
+    if (lw.writes) lw.writes.register({
+      name: 'cowork-doc', owner: 'cowork',
+      keeps: function (by, subject) {
+        return !!by['cowork'] && _selectedId != null && String(_selectedId) === String(subject);
+      },
+      supersede: function () { stampDocStale(); }
     });
   }
 

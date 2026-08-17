@@ -53,6 +53,17 @@
  * themselves. Inside this file a bare setTimeout / requestAnimationFrame that
  * touches DOM is a defect; use OWNER.after / OWNER.frame. The two legitimate
  * exceptions are both non-DOM: initPoll's retry and the poll interval.
+ *
+ * CURRENCY is a second, higher question, and ownership could not answer it.
+ * An epoch is per-REGION; a write is GLOBAL. Measured live: the strip's pill
+ * asserted write one while Cowork showed write two — no region was broken,
+ * nothing had written to the strip, so it went on faithfully asserting a write
+ * that was no longer the news. broadcast() now reports every write to a WRITE
+ * LEDGER with the participant list it already builds, and the ledger supersedes
+ * every claimant not displaying that write. Reported by the FAN-OUT, never by
+ * a surface: a surface cannot skip a call it does not make. Surface C is
+ * deliberately not a claimant — it tints a row and says nothing about which
+ * write is latest.
  * ──────────────────────────────────────────────────────────────────────── */
 (function () {
   'use strict';
@@ -72,6 +83,15 @@
   var STRIP = M.makeOwner('strip');
   var PANE  = M.makeOwner('pane');
   var FLASH = M.makeOwner('editor-flash');
+
+  /* The epoch ABOVE the region. The owners above answer "am I still painting
+   * this region?"; they cannot answer "is the write I am asserting still the
+   * current one?", because a region is only superseded by a write that lands
+   * IN it and a write is global. broadcast() reports every write to this
+   * ledger and it supersedes every claimant not displaying it — see
+   * makeWriteLedger in the model for the three remedies. Owned by the engine
+   * and exported, so Cowork registers against the SAME ledger. */
+  var WRITES = M.makeWriteLedger();
 
   var COLLAPSE_MS = 14000;  // auto-collapse the notification to a pill
   var STAGGER_MS = 180;     // per-op reveal delay for the "writing" feel
@@ -465,6 +485,17 @@
       }
       catch (e) { console.warn('[live-writer] surface "' + s.name + '" failed:', e); }
     }
+    /* THE CROSS-SURFACE BOUNDARY. Every write that reached a surface claims a
+     * global generation HERE, in the fan-out, using the participant list the
+     * fan-out already built — never in a surface's own render(). A surface
+     * cannot skip a call it does not make, which is the same structural
+     * property that stopped a chrome from skipping setPill, applied one level
+     * up: this is precisely where round 3's model could not see, because a
+     * per-region epoch is only ever claimed by the region's own writer.
+     *
+     * An empty claimedBy is not a write: a row nobody put on screen (a
+     * rejection, which describe() calls silent) must not demote what is. */
+    if (entry.claimedBy.length) WRITES.report(entry.claimedBy, entry.meta && entry.meta.payloadId);
     return reported;
   }
 
@@ -507,17 +538,17 @@
       rows: function () { return first ? buildEstimateRows(first) : null; }
     };
     broadcast(entry);
-    // The "handed to the Scribe" placeholder is stale the moment a state
-    // change lands, whoever reports it.
-    //
-    // This used to run BEFORE broadcast and unconditionally remove the strip
-    // root — which destroyed the strip even for writes Cowork claimed (a
-    // report landing somewhere else entirely), and produced a visible
-    // remove-then-rebuild flash when the strip DID claim. Running it after,
-    // and guarding it on the strip epoch, fixes both: if surface B repainted
-    // the strip it already superseded the placeholder and this is a no-op; if
-    // the write was reported elsewhere the strip has nothing left to say.
-    clearComposing();
+    /* clearComposing() used to be called here — "the handed-to-the-Scribe
+     * placeholder is stale the moment a state change lands, whoever reports
+     * it". That is a WRITE-LEVEL supersession hand-rolled at the ingest level,
+     * and it is now exactly what the ledger does: broadcast reports the write,
+     * the strip is not displaying it, and the strip's remedy for a placeholder
+     * is to clear. Deleted rather than kept alongside — two mechanisms for one
+     * invariant is how round 3 became necessary.
+     *
+     * It also fixes a case the old call got wrong: a REJECTED row is silent,
+     * so nobody reports it, so it no longer destroys a drafting card that has
+     * nothing to do with it. */
     return entry;   // nobody may have claimed it; it is still a valid entry
   }
 
@@ -591,6 +622,12 @@
       'padding:3px 9px;font-size:11px;cursor:pointer;}',
       '.p86lw-view:hover{border-color:rgba(255,255,255,0.4);color:#fff;}',
       '.p86lw-err{padding:11px 13px;font-size:12px;line-height:1.5;color:#f0a9a8;}',
+      /* The supersession stamp. Deliberately quiet — it is not an error and
+       * not an outcome; it says only that this anchored card has stopped
+       * being the news, which is the one thing the pill can no longer say
+       * because the pill has reverted to claiming nothing. */
+      '.p86lw-stale{padding:7px 13px;border-top:1px solid rgba(255,255,255,0.08);',
+      'font-size:11px;line-height:1.45;color:#9a9aa5;font-style:italic;}',
       // light mode
       'body.light-mode #p86-live-writer{color:#1a1a1f;}',
       'body.light-mode #p86-live-writer .p86lw-card,body.light-mode #p86-live-writer .p86lw-pill{background:#fff;border-color:rgba(0,0,0,0.10);box-shadow:0 12px 40px rgba(0,0,0,0.14);}',
@@ -599,6 +636,7 @@
       'body.light-mode .p86lw-amt{color:#44444a;}',
       'body.light-mode .p86lw-delete .l1{color:#a33;}',
       'body.light-mode .p86lw-view{border-color:rgba(0,0,0,0.18);color:#44444a;}',
+      'body.light-mode .p86lw-stale{border-color:rgba(0,0,0,0.08);color:#6b6b76;}',
       // Light twins for the op fills: the dark rgba washes read as muddy
       // smears on white, and the +/~/− glyph colors lose contrast.
       'body.light-mode .p86lw-add{background:rgba(29,158,117,0.10);} body.light-mode .p86lw-add .p86lw-i{color:#0f6e56;}',
@@ -758,6 +796,76 @@
     if (d) d.style.background = (report && report.pillColor) || PILL_NEUTRAL;
   }
 
+  /* ── the strip's remedy when a write it is NOT showing claims the floor ──
+   *
+   * S7, measured live: pill "Scribe wrote · 3 edited" (write one) sitting at
+   * 1514,836 in full health while Cowork's document showed write two. No
+   * region was broken; the strip simply had no way to learn that its write had
+   * stopped being the news.
+   *
+   * The two halves of this region are treated differently because they carry
+   * different things, and the split IS the answer to "clear, or keep the
+   * content and drop the claim?":
+   *
+   *   THE PILL is currency with no content. It has no record name and no
+   *   timestamp — a bare "Scribe wrote · 3 edited" — which is precisely why it
+   *   reads as the latest thing that happened. There is nothing in it to
+   *   preserve, so it REVERTS to the neutral default ensureRoot builds. That
+   *   default is reused, never re-derived: two neutrals is how two greens
+   *   started.
+   *
+   *   THE CARD is anchored content — it names the record it is about — and the
+   *   user may be halfway through reading it. Yanking it would be the same
+   *   clobber this whole feature exists to stop, so it is KEPT and STAMPED.
+   *   Its own header dot keeps its own colour on purpose: that write's outcome
+   *   has not changed and recolouring it would erase a true fact. What changed
+   *   is that it is no longer current, and that is exactly what the stamp says.
+   *
+   *   THE HANDOFF PLACEHOLDER is the exception, and it is the one case that
+   *   clears. It holds no anchored content ("Handed to the Scribe — drafting")
+   *   and a landing write is the evidence that the handoff came back, so
+   *   stamping it would leave a false in-flight claim on screen. This is
+   *   clearComposing(), which used to live in ingest() one level too low.
+   */
+  var _stripReport = null;        // what the strip is currently asserting
+  var _stripSuperseded = false;   // …and whether it has already stepped down
+
+  /* THE PANE'S CURRENCY, written once.
+   *
+   * The pane is current only while the strip's own report IS that pane report.
+   * Two genuinely different events can falsify that — this surface reporting
+   * something else, and another surface reporting a write — so it is CHECKED
+   * at both. That is one invariant with two triggers, not two mechanisms: the
+   * predicate and the remedy each exist exactly once, and neither caller gets
+   * to decide anything.
+   *
+   * The property test found the need for the second trigger immediately: on
+   * P→C the estimate document sat under a "Handed to the Scribe — drafting"
+   * card, because a placeholder deliberately claims no write generation (no
+   * write has landed) and so never reaches the ledger. */
+  function paneIsCurrent(by) {
+    if (by && !by['notification']) return false;
+    return !!_stripReport && _stripReport.kind === 'pane';
+  }
+
+  function supersedeStrip() {
+    if (!root) return;
+    if (_stripReport && _stripReport.kind === 'composing') { clearComposing(); return; }
+    if (_stripSuperseded) return;
+    _stripSuperseded = true;
+    var t = root.querySelector('.p86lw-pilltext');
+    if (t) t.textContent = 'Live Writer';
+    var d = root.querySelector('.p86lw-pill .p86lw-dot');
+    if (d) { d.style.animation = 'none'; d.style.background = PILL_NEUTRAL; }
+    var card = root.querySelector('.p86lw-card');
+    // insertAdjacentHTML, never `innerHTML +=` — the latter reparses every
+    // child and would orphan the listeners renderOps/renderNotice attached.
+    if (card && card.firstChild && !card.querySelector('.p86lw-stale')) {
+      card.insertAdjacentHTML('beforeend',
+        '<div class="p86lw-stale">A newer write has landed since — this is the earlier one.</div>');
+    }
+  }
+
   /* Collapsing is itself a claim — the pill it collapses to is the thing the
    * user reads for the rest of the session — so it carries an epoch like any
    * other paint. There is no separate cancellation mechanism: a newer claim
@@ -813,15 +921,21 @@
    * Returns the report it painted, or null when it claimed nothing. */
   function reportToStrip(entry, report) {
     if (!report || report.kind === 'silent') return null;   // claim nothing, disturb nothing
-    // The pane belongs to this surface too, so a report that is NOT a pane
-    // supersedes any pane still standing. Found by the interleaving property,
-    // not by inspection: after applied-estimate → applied-lead, the estimate
-    // DOCUMENT sat on screen under a pill describing a different write — the
-    // exact inverse of F3, one region asserting an older report than another.
-    if (report.kind !== 'pane') dismissPane();
+    /* `if (report.kind !== 'pane') dismissPane();` used to sit here as its own
+     * inline rule, and it only ever covered the half of the problem this
+     * surface can see: a pane left standing while COWORK reported the next
+     * write was never touched by it. It is now one call to paneIsCurrent()
+     * below — the same predicate the ledger asks — so the cross-surface half
+     * is covered by construction rather than by remembering. */
     ensureRoot();
     var ep = STRIP.claim();                                  // AFTER the silent decision
     root.classList.remove('p86lw-collapsed');
+    // What the strip asserts, recorded BEFORE any chrome runs, for the same
+    // reason setPill is called before one: the ledger asks this question, and
+    // a chrome must not be able to answer it differently.
+    _stripReport = report;
+    _stripSuperseded = false;
+    if (!paneIsCurrent()) dismissPane();                     // the same predicate, from inside
     setPill(ep, report);                                     // ALWAYS, and first
     var card = root.querySelector('.p86lw-card');
     if (report.kind === 'composing') { renderComposing(ep, card, report); return report; }
@@ -975,9 +1089,27 @@
     STRIP.claim();
     collapseTimer = null;
     composingTimer = null;
+    _stripReport = null;
+    _stripSuperseded = false;
     if (root) { root.remove(); root = null; }
     dismissPane();
   }
+
+  /* ── the two claimants surface B owns ───────────────────────────────────
+   *
+   * The STRIP is kept current by any report from this surface: reportToStrip
+   * has just repainted it, so the default owner rule is exactly right.
+   *
+   * The PANE is not, and it is the reason `keeps` exists. This surface can
+   * report a write WITHOUT putting it in the pane — every 'ops' report does —
+   * so ownership alone would leave a superseded document standing. Its
+   * currency is paneIsCurrent(), the same predicate reportToStrip asks. */
+  WRITES.register({ name: 'strip', owner: 'notification', supersede: supersedeStrip });
+  WRITES.register({
+    name: 'pane', owner: 'notification',
+    keeps: paneIsCurrent,
+    supersede: function () { dismissPane(); }
+  });
 
   // ── the handoff placeholder ──────────────────────────────────────────────
   // Fires on the existing tool_started SSE event. That IS a real moment —
@@ -999,14 +1131,20 @@
   // clauses false, about a write the code had already reported. As an EPOCH,
   // anything that repaints or destroys the strip supersedes the backstop
   // automatically, including paths nobody has written yet.
-  var composingTimer = null, composingEpoch = 0;
+  // composingEpoch is gone: "is the placeholder still what the strip shows?"
+  // is now asked of _stripReport, which the ledger has to know anyway. Two
+  // variables tracking one fact is two variables that can disagree.
+  var composingTimer = null;
   function startComposing(label, opts) {
     opts = opts || {};
     var viaScribe = opts.tool !== 'emit_payload_file';
     var report = M.describe({}, { composing: { label: label, viaScribe: viaScribe } });
+    // Deliberately does NOT claim a write generation: the placeholder is about
+    // a write that has not landed, so nothing about which write is current has
+    // changed. Only broadcast() — a write that actually reached a surface —
+    // moves the ledger.
     reportToStrip({ meta: {} }, report);
     var ep = STRIP.current();
-    composingEpoch = ep;
     composingTimer = setTimeout(async function () {
       // Superseded: something else has taken the strip — a result landed, the
       // user dismissed the card, a newer draft started. There is no longer a
@@ -1027,13 +1165,19 @@
     }, 180000);
   }
   /* Retire the placeholder — but ONLY if it is still what the strip is
-   * showing. Under epochs this is the whole check: if any other report has
-   * claimed the strip since, the placeholder is already gone and tearing the
-   * root down here would destroy someone else's card. */
+   * showing, which is now asked of _stripReport rather than of a private
+   * composingEpoch. Same question, one fewer thing tracking the answer: the
+   * ledger has to know what the strip asserts anyway, so a second variable
+   * saying the same thing is a second variable to get out of step.
+   *
+   * This IS the strip's supersede remedy for the placeholder case;
+   * supersedeStrip() calls it rather than re-implementing it. */
   function clearComposing() {
-    if (!STRIP.holds(composingEpoch)) return;
+    if (!_stripReport || _stripReport.kind !== 'composing') return;
     STRIP.claim();                    // supersede everything the placeholder scheduled
     composingTimer = null;
+    _stripReport = null;
+    _stripSuperseded = false;
     if (root) { root.remove(); root = null; }
   }
 
@@ -1596,6 +1740,10 @@
      * and the same sentences rather than re-deriving them. Cowork calling
      * anything else here is how R5 grew a copy in the first place. */
     model: M,
+    /* THE write ledger — one instance, owned here, shared. Cowork registers
+     * its document against THIS object; a second ledger would be two answers
+     * to "which write is current", which is the defect wearing a new hat. */
+    writes: WRITES,
     /* Fired by the estimate editor's post-hydrate refresh (surface C). */
     flashEditorRows: flashEditorRows,
     /* The handoff placeholder. */

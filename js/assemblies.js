@@ -101,15 +101,25 @@
   // (the exact pair the /:id/explode parametric-insert path keys on — see
   // assembly-routes.js GET '/'). Used by the Assembly Studio → Parametric tab.
   function isParametric(a) { return !!((a.params && a.params.length) || a.has_formulas); }
+  // opts.quiet = a DATA-CHANGED refresh (the refresh registry, a post-save
+  // repaint). Those must NOT blank the list: the rows on screen are the
+  // previous truth, the replacement lands in a few hundred ms, and "Loading…"
+  // in between is a flicker the user reads as the page breaking. A
+  // USER-INITIATED load (opening the pane, switching to Parametric) keeps the
+  // blank — there the wait is the answer to something they just asked for.
+  // Same rule, and the same shape, as the Jobs Hub's refetch(quiet).
   function renderList(prefix, opts) {
     if (prefix) _hostPrefix = String(prefix);
-    // Reset the view filter only on a deliberate view switch (a prefix or
-    // opts were passed). A bare renderList() — the post-save/delete refresh —
-    // preserves whatever filter the current view set (e.g. Parametric).
-    if (prefix || opts) _filterFn = (opts && opts.parametricOnly) ? isParametric : null;
+    // Reset the view filter only on a deliberate VIEW SWITCH. Keyed on the
+    // parametricOnly key being present rather than on `opts` being truthy: a
+    // refresh that passes only { quiet: true } is not a view switch, and
+    // treating it as one would silently drop the user's Parametric filter.
+    if (prefix || (opts && Object.prototype.hasOwnProperty.call(opts, 'parametricOnly'))) {
+      _filterFn = (opts && opts.parametricOnly) ? isParametric : null;
+    }
     var host = document.getElementById(_hostPrefix + '-list');
     if (!host) return;
-    host.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;">Loading assemblies…</div>';
+    if (!(opts && opts.quiet)) host.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;">Loading assemblies…</div>';
     Promise.all([window.p86Api.assemblies.list(), ensureTaxonomy()]).then(function (r) {
       _list = (r[0] && r[0].assemblies) || [];
       paintList();
@@ -817,7 +827,7 @@
     p.then(function (res) {
       if (res && res.error) throw new Error(res.error);
       closeEditor();
-      renderList();
+      renderList(null, { quiet: true });   // data-changed — never blank rows already on screen
       if (window.MaterialsDrawer && window.MaterialsDrawer.refresh) window.MaterialsDrawer.refresh();
     }).catch(function (err) {
       notify('Save failed: ' + (err.message || 'unknown'));
@@ -829,7 +839,7 @@
     var doDelete = function () {
       window.p86Api.assemblies.remove(id).then(function (res) {
         if (res && res.error) { alert(res.error); return; }
-        renderList();
+        renderList(null, { quiet: true });   // data-changed — see renderList
       }).catch(function (err) { alert('Delete failed: ' + (err.message || (err.error || 'unknown'))); });
     };
     if (window.p86Confirm) {
@@ -1073,7 +1083,7 @@
           return '<div style="font-size:12px;color:#f87171;padding:2px 0;">✕ ' + esc(x.variant || '') + ' — ' + esc(x.error || 'failed') + '</div>';
         }).join('') + '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:8px;padding-top:8px;border-top:1px solid var(--border,#2a2f3a);">' + (r.created || 0) + ' created' + (r.failed ? ', ' + r.failed + ' failed' : '') + '. New sized materials show ⚠ until you price them (Fix links or the editor).</div>';
       }
-      if (window.p86Assemblies) window.p86Assemblies.renderList();
+      if (window.p86Assemblies) window.p86Assemblies.renderList(null, { quiet: true });
       if (btn) { btn.disabled = false; btn.textContent = 'Spin variants'; }
     }).catch(function (err) { if (btn) { btn.disabled = false; btn.textContent = 'Spin variants'; } notify('Spin failed: ' + (err.message || 'unknown')); });
   }

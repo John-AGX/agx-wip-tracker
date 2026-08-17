@@ -45,12 +45,29 @@ const DISPATCHER_SRC = fs.readFileSync(DISPATCHER_PATH, 'utf8');
 // call, which the scan then reported as absent. A checker that quietly stops
 // seeing things is worse than no checker, so this only removes what it can
 // remove safely, and `codeOnly` has its own test below.
+//
+// CRLF IS NORMALISED FIRST, and that is not cosmetic. Every file in js/ is
+// checked out with CRLF endings (core.autocrlf), and JS `.` does not match \r —
+// so `//.*$` could never reach the end of a real line and this function stripped
+// NOTHING on any actual source file in the repo. It only looked correct because
+// its own fixtures were LF and because the one pattern it fed was
+// `window.`-qualified while the prose that quotes the forbidden call uses the
+// bare form. The moment the scan below widened to the bare form, every comment
+// describing the fix would have been reported as an offender. Same failure
+// shape as the phantom comment: a stripper that silently does nothing.
 function codeOnly(src) {
   return String(src)
+    .replace(/\r\n?/g, '\n')
     .split('\n')
     .map((line) => line.replace(/(^|[^:"'`\\])\/\/.*$/, '$1'))
     .join('\n');
 }
+
+// A CALL to the hub refresh, in either form it can be written: `window.`-
+// qualified or the bare global. The leading class excludes `.` and `$`/word
+// chars so `foo.p86JobsHubRefresh(` is not counted, and requiring `(` means the
+// assignment that DEFINES it is not counted either.
+const HUB_CALL = /(^|[^\w.$])(?:window\.)?p86JobsHubRefresh\s*\(/g;
 
 // The body of `function <name>(...) { ... }`, brace-balanced, so a check can
 // count calls INSIDE one function instead of across a 1,200-line module where
@@ -81,14 +98,30 @@ function fnBody(src, name) {
 //      `target.entity_type` back verbatim, so every key here can surface.
 //   2. `entity_type: '<literal>'` in the returned result objects — this also
 //      picks up 'move', which is a target-level op with no DISPATCHERS key.
-function emittedEntityTypes() {
+//
+// The two are kept SEPARATE rather than merged in one pass, because their union
+// cannot tell you whether both are alive. Today every DISPATCHERS key also
+// appears as a literal, so the map contributes nothing UNIQUE to the union: if
+// its regex rots the union does not shrink by a single type, and an assertion
+// on the union (or on named canaries like `assembly` / `job`) still passes on
+// the literals alone. Proven by breaking the map regex and adding a map-only
+// target — the whole group stayed green. So each contribution is asserted on
+// its OWN size below.
+function dispatcherMapKeys() {
   const out = new Set();
   const map = DISPATCHER_SRC.match(/const DISPATCHERS\s*=\s*\{([\s\S]*?)\n\};/);
   if (map) (map[1].match(/^\s*([a-z_]+)\s*:/gm) || [])
     .forEach((m) => out.add(m.replace(/[\s:]/g, '')));
+  return out;
+}
+function dispatcherLiteralTypes() {
+  const out = new Set();
   (DISPATCHER_SRC.match(/entity_type:\s*'([a-z_]+)'/g) || [])
     .forEach((m) => out.add(m.replace(/.*'([a-z_]+)'.*/, '$1')));
   return out;
+}
+function emittedEntityTypes() {
+  return new Set([...dispatcherMapKeys(), ...dispatcherLiteralTypes()]);
 }
 
 // Emitted types that deliberately refresh NOTHING. Each carries its reason,
@@ -476,22 +509,27 @@ describe('one mutation repaints each surface exactly once', () => {
 
   test('NO module outside the registry fires the hub refresh — scanned, not enumerated', () => {
     // The regression this guards is a CALL-SITE one: an editor calls
-    // window.p86JobsHubRefresh() and THEN p86Refresh(...), whose surface calls
-    // it again. Two hub refetches and two repaints, 200ms apart, per edit.
+    // p86JobsHubRefresh() and THEN p86Refresh(...), whose surface calls it
+    // again. Two hub refetches and two repaints, 200ms apart, per edit.
     //
     // This used to name purchase-order-editor.js and change-order-editor.js by
     // hand — and estimate-editor.js sat outside that list with a live call for
     // a whole release. An invariant enforced by enumerating call sites leaks,
     // so the check now walks EVERY file in js/.
     //
-    // jobs-hub.js is the one exclusion, and it is structural rather than a
-    // grandfather clause: that module DEFINES window.p86JobsHubRefresh, and
-    // its own bill editor uses it to reload the list it just wrote to on a
-    // path that does not also call p86Refresh.
-    const OWNER = 'jobs-hub.js';
+    // js/refresh.js is now the ONLY exclusion. jobs-hub.js used to be a second
+    // one because its own bill editor reloaded the list it had just written to;
+    // that path routes through p86Refresh.now('bill') instead, so the exception
+    // is gone rather than grandfathered — the module that DEFINES the function
+    // is held to the same rule as everything else.
+    //
+    // The pattern matches the BARE global as well as the window.-qualified
+    // form. p86JobsHubRefresh IS a global, so `p86JobsHubRefresh()` on its own
+    // was a call this scan could not see: "enforced, not remembered" was only
+    // three-quarters true.
     const offenders = SOURCES
-      .filter((s) => s.file !== 'refresh.js' && s.file !== OWNER)
-      .map((s) => ({ file: s.file, calls: (codeOnly(s.src).match(/window\.p86JobsHubRefresh\s*\(/g) || []).length }))
+      .filter((s) => s.file !== 'refresh.js')
+      .map((s) => ({ file: s.file, calls: (codeOnly(s.src).match(HUB_CALL) || []).length }))
       .filter((s) => s.calls > 0);
     expect(offenders).toEqual([]);
   });
@@ -499,20 +537,30 @@ describe('one mutation repaints each surface exactly once', () => {
   test('...and that scan can actually see a call — it is not matching nothing', () => {
     // Guards the guard: if codeOnly() or the pattern ever stopped matching, the
     // test above would pass on a codebase full of offenders.
-    expect(codeOnly('window.p86JobsHubRefresh();').match(/window\.p86JobsHubRefresh\s*\(/g)).toHaveLength(1);
+    expect('window.p86JobsHubRefresh();'.match(HUB_CALL)).toHaveLength(1);
+    // The bare global — the form the old pattern was blind to.
+    expect('  p86JobsHubRefresh();'.match(HUB_CALL)).toHaveLength(1);
+    expect('if (x) p86JobsHubRefresh();'.match(HUB_CALL)).toHaveLength(1);
+    // ...but the DEFINITION is not a call, or the owner would report itself.
+    expect('window.p86JobsHubRefresh = function () { refetch(true); };'.match(HUB_CALL)).toBeNull();
     // Comments in the money editors deliberately quote the old bad call, so the
     // scan must read code only or it would fail on prose describing the fix.
     expect(codeOnly('// used to call window.p86JobsHubRefresh() itself')).not.toContain('p86JobsHubRefresh');
+    expect(codeOnly('  // a bare p86JobsHubRefresh() repainted from a stale store')).not.toContain('p86JobsHubRefresh');
+    // CRLF: every file in js/ is checked out with \r\n, and JS `.` does not
+    // match \r — so `//.*$` could not reach end-of-line and codeOnly stripped
+    // nothing at all on real source. With the bare form now in the pattern,
+    // that hole would have failed this suite on prose in four modules.
+    expect(codeOnly('  // calls p86JobsHubRefresh() itself\r\nvar x = 1;')).not.toContain('p86JobsHubRefresh');
     // The regression that made this scan blind: a `/*` inside a STRING must not
     // hide the code that follows it. This is the exact shape in
     // estimate-editor.js — accept="application/pdf,image/*" — which swallowed a
     // live call and made the scan report a clean file.
     const trap = 'var a = "application/pdf,image/*";\nwindow.p86JobsHubRefresh();';
-    expect(codeOnly(trap).match(/window\.p86JobsHubRefresh\s*\(/g)).toHaveLength(1);
-    // And the owner really does still contain one, so OWNER is a live
-    // exclusion rather than a leftover.
-    const owner = SOURCES.find((s) => s.file === 'jobs-hub.js');
-    expect(codeOnly(owner.src).match(/window\.p86JobsHubRefresh\s*\(/g) || []).toHaveLength(1);
+    expect(codeOnly(trap).match(HUB_CALL)).toHaveLength(1);
+    // And with the trap in CRLF, which is how it actually sits on disk.
+    const trapCrlf = 'var a = "application/pdf,image/*";\r\nwindow.p86JobsHubRefresh();\r\n';
+    expect(codeOnly(trapCrlf).match(HUB_CALL)).toHaveLength(1);
   });
 });
 
@@ -689,15 +737,25 @@ describe('door → registry: every type the dispatcher can emit is handled', () 
   }
 
   test('the derivation really reads the dispatcher — an empty scrape must not pass silently', () => {
+    // EACH CONTRIBUTION IS ASSERTED ON ITS OWN SIZE. The previous version of
+    // this test asserted on the UNION and claimed "if either regex rots, one of
+    // these goes missing" — which was false. Every DISPATCHERS key is ALSO an
+    // `entity_type: '<literal>'` in a result row, so the map contributes zero
+    // unique types: with the map regex broken the union is unchanged and all
+    // four named canaries (assembly / deal_memory / move / job) survive on the
+    // literals alone. Verified by breaking the map regex AND adding a map-only
+    // target — the whole group stayed 8/8 green.
+    expect(dispatcherMapKeys().size).toBeGreaterThanOrEqual(13);
+    expect(dispatcherLiteralTypes().size).toBeGreaterThanOrEqual(14);
+    // And each half must carry a type the other half cannot supply, so neither
+    // can be satisfied by the other's output.
+    expect(dispatcherMapKeys().has('assembly')).toBe(true);
+    expect([...dispatcherLiteralTypes()].filter((t) => !dispatcherMapKeys().has(t)))
+      .toEqual(['move']);   // target-level op — a literal with no DISPATCHERS key
     const emitted = emittedEntityTypes();
-    // Both contributions have to be alive: the DISPATCHERS map and the literal
-    // result rows. If either regex rots, one of these goes missing and the
-    // coverage test below would start passing vacuously.
-    expect(emitted.has('assembly')).toBe(true);      // DISPATCHERS key + 3 literals
-    expect(emitted.has('deal_memory')).toBe(true);   // DISPATCHERS key
-    expect(emitted.has('move')).toBe(true);          // literal only — no DISPATCHERS key
+    expect(emitted.has('deal_memory')).toBe(true);
     expect(emitted.has('job')).toBe(true);
-    expect(emitted.size).toBeGreaterThanOrEqual(13);
+    expect(emitted.size).toBeGreaterThanOrEqual(14);
   });
 
   test('every emitted entity type has a registry entry, or a stated reason not to', () => {
@@ -747,12 +805,33 @@ describe('door → registry: every type the dispatcher can emit is handled', () 
     await settle();
 
     expect(window.p86Assemblies.renderList).toHaveBeenCalledTimes(1);
-    // Bare call: renderList keeps whichever host prefix and view filter the
+    // NULL PREFIX: renderList keeps whichever host prefix and view filter the
     // visible Assembly Studio tab set. Passing a prefix here would yank the
     // user's Parametric filter off under them.
-    expect(window.p86Assemblies.renderList).toHaveBeenCalledWith();
+    //
+    // QUIET: renderList blanks its host to "Loading assemblies…" before it
+    // fetches, so a data-changed refresh was blanking a list the user was
+    // already reading — the exact rule this same pass had just enforced for the
+    // Jobs Hub, broken one entry away. The mode lives in renderList; this only
+    // asks for it.
+    expect(window.p86Assemblies.renderList).toHaveBeenCalledWith(null, { quiet: true });
 
     delete window.p86Assemblies;
+  });
+
+  test('renderList really HAS a quiet mode — asking for one it ignores is worse than not asking', () => {
+    // Source check: the registry passing { quiet: true } proves nothing unless
+    // the blank is actually behind that flag.
+    const asm = codeOnly(SOURCES.find((s) => s.file === 'assemblies.js').src);
+    const body = fnBody(asm, 'renderList');
+    expect(body).not.toBeNull();
+    expect(body).toMatch(/if\s*\(!\(opts\s*&&\s*opts\.quiet\)\)\s*host\.innerHTML\s*=/);
+    // Exactly one place can paint the spinner, and it is behind that gate.
+    expect({ blanks: (body.match(/Loading assemblies/g) || []).length }).toEqual({ blanks: 1 });
+    // And a quiet refresh must not be mistaken for a VIEW SWITCH: keying the
+    // filter reset on `opts` being truthy would drop the user's Parametric
+    // filter every time a recipe was saved.
+    expect(body).toMatch(/hasOwnProperty\.call\(opts,\s*'parametricOnly'\)/);
   });
 
   test('an assembly write does NOT also drive the Studio cockpit — console.js already does', async () => {
@@ -769,5 +848,342 @@ describe('door → registry: every type the dispatcher can emit is handled', () 
 
     delete window.p86Assemblies;
     delete window.p86Console;
+  });
+});
+
+// ── the sequencing seam: p86Refresh.now ─────────────────────────────────────
+// p86Refresh() coalesces on a timer and returns nothing, so a caller that has
+// to hand control back to a callback AFTER the store patch lands could not use
+// it — and js/jobs-hub.js's bill editor therefore hand-rolled its own
+// store-then-surface pair, which then drifted from the registry and lost the
+// p86RepaintJobMoneyTabs fallback entirely. `now` closes that gap so the copy
+// can be deleted rather than kept in sync.
+describe('p86Refresh.now — the promise-returning seam', () => {
+  test('resolves only AFTER the store patch lands, so a caller can sequence on it', async () => {
+    const order = [];
+    let release;
+    window.loadBillsForJob = jest.fn(() => {
+      order.push('store-start');
+      return new Promise((res) => { release = () => { order.push('store-done'); res(); }; });
+    });
+    window.renderJobsMain = jest.fn(() => { order.push('surface'); });
+
+    let settled = false;
+    const p = P.now('bill', { jobId: 'job_1' }).then(() => { order.push('onSaved'); settled = true; });
+
+    await Promise.resolve();
+    expect(order).toEqual(['store-start']);
+    expect(settled).toBe(false);          // onSaved has NOT fired
+
+    release();
+    await p;
+
+    // The exact ordering the bill editor depends on: the refetch, then the
+    // repaint, then the caller's callback. Firing onSaved first is what painted
+    // the pre-write numbers and made a saved bill look unsaved.
+    expect(order).toEqual(['store-start', 'store-done', 'surface', 'onSaved']);
+  });
+
+  test('runs immediately — it does not wait out the coalescing window', async () => {
+    window.loadBillsForJob = jest.fn(() => Promise.resolve());
+    P.now('bill', { jobId: 'job_1' });
+    await Promise.resolve();
+    // No jest.advanceTimersByTime: a user pressing Save must not sit through a
+    // 200ms debounce before the list they are looking at is refetched.
+    expect(window.loadBillsForJob).toHaveBeenCalledWith('job_1', true);
+  });
+
+  test('takes the SAME registry path — forced refetch, then the money surfaces', async () => {
+    window.appState.currentJobId = 'job_open';
+    window.loadBillsForJob = jest.fn(() => Promise.resolve());
+    window.renderJobsMain = jest.fn();
+    window.p86JobsHubRefresh = jest.fn();
+    window.p86JobDetailRefresh = jest.fn(() => false);   // human edit — latch not set
+    window.p86RepaintJobMoneyTabs = jest.fn();
+
+    await P.now('bill', { jobId: 'job_open' });
+
+    expect(window.loadBillsForJob).toHaveBeenCalledWith('job_open', true);
+    expect(window.renderJobsMain).toHaveBeenCalledTimes(1);
+    expect(window.p86JobsHubRefresh).toHaveBeenCalledTimes(1);
+    // THE F0 DEFECT: the hand-rolled copy called p86JobDetailRefresh and stopped
+    // there. It is latch-gated and returns false for a human edit, so a bill
+    // edited from the Bills tab repainted the open job's money tabs ZERO times.
+    expect(window.p86RepaintJobMoneyTabs).toHaveBeenCalledTimes(1);
+  });
+
+  test('an unknown type is a resolved promise, never a throw and never a hang', async () => {
+    await expect(P.now('wormhole', { jobId: 'x' })).resolves.toBeUndefined();
+    await expect(P.now(null)).resolves.toBeUndefined();
+  });
+
+  test('a rejecting store still resolves — a failed refetch must not strand onSaved', async () => {
+    window.loadBillsForJob = jest.fn(() => Promise.reject(new Error('offline')));
+    window.renderJobsMain = jest.fn();
+    await P.now('bill', { jobId: 'job_1' });
+    expect(window.renderJobsMain).toHaveBeenCalled();
+  });
+
+  test('it absorbs anything already queued in the window rather than running twice', async () => {
+    window.loadBillsForJob = jest.fn(() => Promise.resolve());
+    window.renderJobsMain = jest.fn();
+
+    P('bill', { jobId: 'job_a' });          // queued on the timer
+    await P.now('bill', { jobId: 'job_b' }); // flushes the bucket, both jobs
+    await settle();                          // and the timer must find nothing left
+
+    const jobs = window.loadBillsForJob.mock.calls.map((c) => c[0]).sort();
+    expect(jobs).toEqual(['job_a', 'job_b']);
+    expect(window.renderJobsMain).toHaveBeenCalledTimes(1);
+  });
+
+  test('refreshBillRollup is the registry, not a copy of it', () => {
+    // Source check. The runtime tests above prove `now` behaves; this proves the
+    // bill editor actually goes through it. A second implementation that merely
+    // happens to agree today is what produced F0 in the first place.
+    const hub = codeOnly(SOURCES.find((s) => s.file === 'jobs-hub.js').src);
+    const body = fnBody(hub, 'refreshBillRollup');
+    expect(body).not.toBeNull();
+    expect(body).toMatch(/window\.p86Refresh\.now\('bill',\s*\{\s*jobId:\s*jobId\s*\}\)/);
+    // And it no longer hand-rolls any of the three halves.
+    expect({ loader: (body.match(/loadBillsForJob\s*\(/g) || []).length }).toEqual({ loader: 0 });
+    expect({ paint: (body.match(/renderJobsMain\s*\(/g) || []).length }).toEqual({ paint: 0 });
+    expect({ detail: (body.match(/p86JobDetailRefresh\s*\(/g) || []).length }).toEqual({ detail: 0 });
+  });
+
+  test('every bill mutation still AWAITS the rollup before handing back onSaved', () => {
+    // save / setStatus / del / create — all four must chain, not fire-and-forget.
+    // submitCreate was the one that did not: it called refreshBillRollup and
+    // then onSaved on the next line.
+    const hub = codeOnly(SOURCES.find((s) => s.file === 'jobs-hub.js').src);
+    // `(?<!function )` so the declaration is not counted as a call site.
+    const calls = hub.match(/(?<!function )refreshBillRollup\(/g) || [];
+    expect(calls.length).toBe(4);
+    // Each one is either returned into a .then chain or has .then( on it.
+    const orphaned = hub
+      .split('\n')
+      .filter((l) => /refreshBillRollup\(/.test(l) && !/function refreshBillRollup\(/.test(l))
+      .filter((l) => !/return\s+refreshBillRollup\(/.test(l) && !/refreshBillRollup\([^)]*\)\.then\(/.test(l));
+    expect(orphaned).toEqual([]);
+  });
+});
+
+// ── THE THIRD DIRECTION: client mutation sites → registry ───────────────────
+// The two existing guards walk registry → door and door → registry. BOTH are
+// blind to the same thing: client code that mutates a known store or drives a
+// known loader/painter WITHOUT going through p86Refresh at all. Such a site has
+// no registry entry to be wrong about and emits no dispatcher target, so it is
+// invisible to every check above.
+//
+// js/doc-import.js was exactly that. Bulk Document Import creates purchase
+// orders, change orders and vendor bills — contract and committed-cost dollars —
+// and contained ZERO p86Refresh calls. It hand-concated create responses into
+// appData.jobPurchaseOrders / jobChangeOrders, called loadBillsForJob() unforced
+// and unawaited (so it could join a GET issued before the write), and finished
+// with one bare renderJobsMain(). It went through a sweep whose stated goal was
+// "everywhere" untouched, because nothing was looking in this direction.
+//
+// The allowlist below is NAMED AND JUSTIFIED, per file per symbol, exactly like
+// META_TYPES — not a loosened pattern. A pattern that quietly matches the
+// legitimate sites would also quietly match the next doc-import.js.
+describe('mutation site → registry: nothing patches a money store behind the registry', () => {
+  // The read-caches the registry declares as its own `store` half.
+  const STORE_MIRRORS = ['jobPurchaseOrders', 'jobChangeOrders', 'jobVendorBills', 'arInvoices', 'subsDirectory'];
+  // The loaders + painter the registry drives. Calling one directly is doing by
+  // hand what the registry exists to do in one place, in the right order.
+  const REGISTRY_LOADERS = ['loadBillsForJob', 'loadPurchaseOrdersForJob', 'loadChangeOrdersForJob', 'renderJobsMain'];
+
+  const WRITE_RE = new RegExp('(?:^|[^\\w.$])(?:window\\.)?appData\\.(' + STORE_MIRRORS.join('|') + ')\\s*=(?!=)', 'gm');
+  const CALL_RE = new RegExp('(?:^|[^\\w.$])(?:window\\.)?(' + REGISTRY_LOADERS.join('|') + ')\\s*\\(', 'gm');
+
+  function bypassesIn(src) {
+    const code = codeOnly(src);
+    const hits = new Set();
+    let m;
+    WRITE_RE.lastIndex = 0; while ((m = WRITE_RE.exec(code))) hits.add(m[1]);
+    CALL_RE.lastIndex = 0; while ((m = CALL_RE.exec(code))) hits.add(m[1]);
+    return [...hits].sort();
+  }
+
+  // file → symbol → why this one is NOT a bypass. Every entry is a claim someone
+  // had to write down; adding a file here is meant to be uncomfortable.
+  const ALLOWED = {
+    'app.js': {
+      jobPurchaseOrders: 'The boot hydrate. loadData()/p86ReloadAllData SEED these mirrors from the server and from the localStorage cache — they are the read-cache the registry then patches, not a mutation behind it.',
+      jobChangeOrders:   'Same boot hydrate as jobPurchaseOrders: the initial seed of the mirror, which is the thing every other site must go through the registry to amend.',
+      jobVendorBills:    'Same boot hydrate: the bills list is fetched once at load and handed to appData wholesale, before any editor exists to write through the registry.',
+      arInvoices:        'Same boot hydrate: AR invoices are seeded here; the registry `invoice` entry patches them afterwards via p86InvoicesSyncStore.',
+      subsDirectory:     'Same boot hydrate for the subcontractor directory, which js/subs.js then owns.',
+      renderJobsMain:    'app.js owns the post-hydrate fan-out. When a full appData reload lands, every list repaints from here — that IS the `job`/`estimate` registry entry running, not a bypass of it.'
+    },
+    'jobs.js': {
+      loadBillsForJob:          'DEFINES it, and is the module the registry `bill` store calls. Its own internal reads (a money tab opening) legitimately share the in-flight GET.',
+      loadPurchaseOrdersForJob: 'DEFINES it — the registry `po` store resolves this very function off window.',
+      loadChangeOrdersForJob:   'DEFINES it — the registry `co` store resolves this very function off window.',
+      renderJobsMain:           'DEFINES it, and re-paints the jobs list on its own view transitions (opening/closing the list), which are navigation, not data changes.',
+      jobPurchaseOrders:        'The loader body: loadPurchaseOrdersForJob is where the mirror is legitimately replaced for a job, and it is what the registry calls to do so.',
+      jobChangeOrders:          'The loader body: loadChangeOrdersForJob writes the mirror it exists to refresh.',
+      jobVendorBills:           'The loader body: loadBillsForJob writes the mirror it exists to refresh.'
+    },
+    'invoices.js': {
+      arInvoices: 'This IS the registry `invoice` store half — p86InvoicesSyncStore refetches /invoices and patches appData.arInvoices. The registry names it in the entry`s paths.'
+    },
+    'subs.js': {
+      subsDirectory: 'Owns the subcontractor directory and refetches it on its own page. `sub` was deliberately REMOVED from the registry because no door emits it, so there is no entry to route through.'
+    },
+    'purchase-order-editor.js': {
+      jobVendorBills: 'syncBillsToStore mirrors the PO editor`s LIVE, not-yet-saved bill rows into the store so the %-billed rollup reflects typing. It is a local echo of unsaved edits, not a post-write refresh; the editor`s save path does call p86Refresh.'
+    },
+    'admin.js': {
+      renderJobsMain: 'loadUsersCache repaints after the USER-NAME cache lands, not after a money write. No entity row changed, so there is no registry type to fire and firing one would refetch money for nothing.'
+    },
+    'job-costs-import.js': {
+      renderJobsMain: 'The QuickBooks cost import patches appData.qbCostLines — a store with no registry entry and no dispatcher door — and repaints the list that reads it. Wiring it would mean adding a `qb_cost` type nothing can emit.'
+    },
+    'estimate-editor.js': {
+      renderJobsMain: 'syncEstimateToJob mirrors contract + estimated cost onto the local job and saves. The registry `job` entry is a FULL appData hydrate, which here would race the saveData it just issued and re-seed from localStorage; the narrow repaint is deliberate.'
+    }
+  };
+
+  test('every client bypass of the refresh registry is named and justified', () => {
+    const unjustified = [];
+    SOURCES.filter((s) => s.file !== 'refresh.js').forEach((s) => {
+      bypassesIn(s.src).forEach((sym) => {
+        if (!ALLOWED[s.file] || !ALLOWED[s.file][sym]) unjustified.push(s.file + ' → ' + sym);
+      });
+    });
+    // js/doc-import.js was this list, four entries long, on a money surface.
+    expect(unjustified.sort()).toEqual([]);
+  });
+
+  test('the allowlist is not a graveyard — every entry is still a real site', () => {
+    // An excuse for a call that no longer exists is dead documentation, and it
+    // is how an allowlist turns into a place to hide the next one.
+    const rotted = [];
+    Object.keys(ALLOWED).forEach((file) => {
+      const s = SOURCES.find((x) => x.file === file);
+      if (!s) { rotted.push(file + ' (no such file)'); return; }
+      const live = bypassesIn(s.src);
+      Object.keys(ALLOWED[file]).forEach((sym) => {
+        if (live.indexOf(sym) === -1) rotted.push(file + ' → ' + sym);
+      });
+    });
+    expect(rotted.sort()).toEqual([]);
+  });
+
+  test('every justification is a real reason, not a shrug', () => {
+    const thin = [];
+    Object.keys(ALLOWED).forEach((file) => {
+      Object.keys(ALLOWED[file]).forEach((sym) => {
+        const why = ALLOWED[file][sym];
+        if (!why || String(why).trim().length < 60) thin.push(file + ' → ' + sym);
+      });
+    });
+    expect(thin).toEqual([]);
+  });
+
+  test('the scanner BITES — the exact shapes doc-import.js used are all caught', () => {
+    // Guards the guard. Every pattern below is copied from what shipped.
+    expect(bypassesIn('window.appData.jobPurchaseOrders = (window.appData.jobPurchaseOrders || []).concat(rec);'))
+      .toEqual(['jobPurchaseOrders']);
+    expect(bypassesIn('appData.jobChangeOrders = [];')).toEqual(['jobChangeOrders']);
+    expect(bypassesIn('window.loadBillsForJob(it.jobId);')).toEqual(['loadBillsForJob']);
+    expect(bypassesIn('  renderJobsMain();')).toEqual(['renderJobsMain']);
+    expect(bypassesIn('if (typeof window.renderJobsMain === "function") window.renderJobsMain();'))
+      .toEqual(['renderJobsMain']);
+  });
+
+  test('...and does not fire on the shapes that are NOT writes or calls', () => {
+    // A comparison is not an assignment.
+    expect(bypassesIn('if (appData.arInvoices == null) return;')).toEqual([]);
+    expect(bypassesIn('if (appData.jobVendorBills === undefined) return;')).toEqual([]);
+    // A capability probe is not a call.
+    expect(bypassesIn('if (typeof window.loadBillsForJob === "function") ok();')).toEqual([]);
+    // A registry `paths` entry is a STRING naming the loader, not an invocation.
+    expect(bypassesIn("var paths = ['loadBillsForJob'].concat(REPAINT);")).toEqual([]);
+    // A read is not a write.
+    expect(bypassesIn('var n = appData.jobPurchaseOrders.length;')).toEqual([]);
+  });
+
+  test('...and comments are not code — including in the CRLF the tree actually uses', () => {
+    // Every module that was FIXED now documents in prose exactly what it used to
+    // do. If the stripper stopped working, each of those explanations would be
+    // reported as the defect it describes — which is how a guard starts failing
+    // on the fix instead of the bug.
+    expect(bypassesIn('// called loadBillsForJob(jobId) with no force')).toEqual([]);
+    expect(bypassesIn('  // hand-concated into appData.jobPurchaseOrders = ... and repainted')).toEqual([]);
+    expect(bypassesIn('  // one bare renderJobsMain() that painted first\r\nvar x = 1;\r\n')).toEqual([]);
+    // THE PHANTOM-COMMENT TRAP, as a first-class fixture. A naive /* */ strip is
+    // broken by this exact string in js/estimate-editor.js: the `/*` inside it
+    // opens a block comment that swallows every line to the next `*/`, so the
+    // scan reports a clean file and the bite test passes when it should fail.
+    const trap = 'var a = "application/pdf,image/*";\nwindow.loadBillsForJob(jobId);';
+    expect(bypassesIn(trap)).toEqual(['loadBillsForJob']);
+    const trapCrlf = 'var a = "application/pdf,image/*";\r\nappData.jobVendorBills = rows;\r\n';
+    expect(bypassesIn(trapCrlf)).toEqual(['jobVendorBills']);
+  });
+
+  test('Bulk Document Import goes through the registry and nowhere else', () => {
+    // The positive half: not merely "no bypass" (deleting the refresh entirely
+    // would pass that), but that it actually fires p86Refresh — once per JOB for
+    // the whole batch, not once per document.
+    const di = codeOnly(SOURCES.find((s) => s.file === 'doc-import.js').src);
+    expect(bypassesIn(SOURCES.find((s) => s.file === 'doc-import.js').src)).toEqual([]);
+    const body = fnBody(di, 'refreshCreated');
+    expect(body).not.toBeNull();
+    expect(body).toMatch(/window\.p86Refresh\(type,\s*\{\s*jobId:\s*j\s*\}\)/);
+    // Mapped from the import's own entity vocabulary — `invoice` is a vendor
+    // Bill, so it must refresh `bill` and not a type that does not exist.
+    expect(di).toMatch(/REFRESH_TYPE\s*=\s*\{\s*po:\s*'po',\s*co:\s*'co',\s*invoice:\s*'bill'\s*\}/);
+    // Fired ONCE, from the batch's completion arm — not from createOne.
+    expect({ calls: (di.match(/refreshCreated\s*\(/g) || []).length }).toEqual({ calls: 2 });  // 1 def + 1 call
+    const one = fnBody(di, 'createOne');
+    expect(one).not.toBeNull();
+    expect({ inCreateOne: (one.match(/refreshCreated\s*\(|p86Refresh\s*\(/g) || []).length })
+      .toEqual({ inCreateOne: 0 });
+  });
+});
+
+// ── the bulk ribbon and the rows must agree ─────────────────────────────────
+describe('a cleared bulk selection is cleared on screen too', () => {
+  const HUB = codeOnly(SOURCES.find((s) => s.file === 'jobs-hub.js').src);
+
+  test('afterBulk drops the selection in the DOM, not only in the model', () => {
+    // afterBulk cleared `_selected` and hid the ribbon but left the checkboxes
+    // ticked, so for the ~200ms until the refetch repainted, rows sat selected
+    // with no ribbon. It self-corrected on repaint, which is exactly why it
+    // survived review — and exactly why it needs a test rather than a memory.
+    const body = fnBody(HUB, 'afterBulk');
+    expect(body).not.toBeNull();
+    expect({ clear: (body.match(/\bclearSelection\s*\(/g) || []).length }).toEqual({ clear: 1 });
+    // And the helper really unchecks, rather than being a rename of _selected.clear().
+    const helper = fnBody(HUB, 'clearSelection');
+    expect(helper).not.toBeNull();
+    expect(helper).toMatch(/_selected\.clear\(\)/);
+    expect(helper).toMatch(/\.jh-check.*b\.checked\s*=\s*false/);
+    expect(helper).toMatch(/indeterminate\s*=\s*false/);
+  });
+
+  test('the ribbon Clear button and afterBulk use the SAME helper', () => {
+    // Two copies of "drop the selection" is how they came to disagree.
+    // `(?<!function )` so the declaration is not counted as one of the uses.
+    expect({ uses: (HUB.match(/(?<!function )\bclearSelection\s*\(\s*\)/g) || []).length })
+      .toEqual({ uses: 2 });   // afterBulk + the ribbon's onClear
+  });
+});
+
+// ── a repaint called with no id repaints nothing ────────────────────────────
+describe('the job-card repaint is given the job it is meant to repaint', () => {
+  test('syncEstimateToJob passes est.job_id to p86RerenderJobCards', () => {
+    // p86RerenderJobCards(jobId) hands its argument straight to
+    // renderJobBuildings(jobId, host) and to the phases filter. Called bare it
+    // ran both with `undefined`, matched nothing, and left the building + phase
+    // cards on the pre-sync contract — a repaint that reported success and
+    // moved no pixel. Every other call site in js/jobs.js passes an id; this
+    // was the only one that did not.
+    const ee = codeOnly(SOURCES.find((s) => s.file === 'estimate-editor.js').src);
+    const bare = ee.match(/p86RerenderJobCards\(\s*\)/g) || [];
+    expect(bare).toEqual([]);
+    expect(ee).toMatch(/window\.p86RerenderJobCards\(est\.job_id\)/);
   });
 });

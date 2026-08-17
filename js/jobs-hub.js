@@ -211,23 +211,26 @@ function p86Ask(message, opts) {
   var _currentRefetch = null;
   window.p86JobsHubRefresh = function () { if (typeof _currentRefetch === 'function') _currentRefetch(); };
 
-  // After a bill create/edit/void/delete from the Bills tab, refresh the shared
+  // After a bill create/edit/void/delete from the Bills tab: patch the shared
   // cost-rollup store (appData.jobVendorBills) for that job so getJobPOAccrued /
-  // the jobs-list accrued tiles reflect it without a full reload (Bills S3).
-  // Store-patch AND surface-repaint, in that order, both awaited. It used to be
-  // the store half only (one call to loadBillsForJob, unreturned), so every
-  // caller's own repaint ran BEFORE the refetch landed and painted the
-  // pre-write numbers — and nothing on this path ever called renderJobsMain,
-  // so marking a bill paid left the jobs-list ACCRUED tile stale until reload.
-  // Returns its promise so callers can sequence.
+  // the jobs-list accrued tiles reflect it without a full reload, then repaint.
+  //
+  // This is ONE line into the refresh registry, and that is the whole fix. It
+  // used to hand-roll the pair — loadBillsForJob(force) then renderJobsMain then
+  // p86JobDetailRefresh — which is the registry's `bill` entry copied out by
+  // hand, minus one branch: p86JobDetailRefresh is LATCH-GATED and returns false
+  // for a human edit, and this copy had no p86RepaintJobMoneyTabs fallback
+  // behind it. So editing a bill from the Bills tab while its job was open
+  // repainted that job's money tabs ZERO times. A parallel money refresh does
+  // not stay in sync with the one it was copied from; the only durable answer
+  // is not to have one.
+  //
+  // `now` rather than plain p86Refresh because three callers in js/jobs.js pass
+  // an `onSaved` that repaints from appData.jobVendorBills, so it must not fire
+  // until the store patch has landed. See the seam's note in js/refresh.js.
   function refreshBillRollup(jobId) {
-    if (!jobId || typeof window.loadBillsForJob !== 'function') return Promise.resolve();
-    return Promise.resolve(window.loadBillsForJob(jobId, true))   // force — never join a pre-write GET
-      .then(function () {
-        if (typeof window.renderJobsMain === 'function') { try { window.renderJobsMain(); } catch (e) {} }
-        if (typeof window.p86JobDetailRefresh === 'function') { try { window.p86JobDetailRefresh(jobId); } catch (e) {} }
-      })
-      .catch(function () {});
+    if (!jobId || !window.p86Refresh || typeof window.p86Refresh.now !== 'function') return Promise.resolve();
+    return window.p86Refresh.now('bill', { jobId: jobId }).catch(function () {});
   }
 
   // ── Shared list scaffold ───────────────────────────────────────────
@@ -358,8 +361,19 @@ function p86Ask(message, opts) {
     // the registry's surface reached p86JobsHubRefresh() -> this same closure.
     // Unlike the other double-fires, refetch() blanks the list first, so the
     // second one was a flicker the user could see.
-    function afterBulk(ids) {
+    // Dropping the selection is TWO things: the model (`_selected`) and the
+    // DOM the user is looking at. afterBulk cleared only the model, so for the
+    // ~200ms between hiding the ribbon and the refetch repainting, the rows
+    // still sat there with their boxes ticked — a selection with no ribbon.
+    // It self-corrected on repaint, which is exactly why it survived review.
+    function clearSelection() {
       _selected.clear();
+      host.querySelectorAll('.jh-check').forEach(function (b) { b.checked = false; });
+      var all = host.querySelector('#jh-check-all');
+      if (all) { all.checked = false; all.indeterminate = false; }
+    }
+    function afterBulk(ids) {
+      clearSelection();
       updateBulkBar();                 // ribbon only — does NOT repaint the list
       if (!bulkRefreshBillStore(ids)) refetch(true);
     }
@@ -414,10 +428,7 @@ function p86Ask(message, opts) {
       window.p86BulkRibbon.render(bar, {
         count: n,
         onClear: function () {
-          _selected.clear();
-          host.querySelectorAll('.jh-check').forEach(function (b) { b.checked = false; });
-          var all = host.querySelector('#jh-check-all');
-          if (all) { all.checked = false; all.indeterminate = false; }
+          clearSelection();
           updateBulkBar();
         },
         actions: actions
@@ -524,7 +535,16 @@ function p86Ask(message, opts) {
     if (searchEl) searchEl.addEventListener('input', function () { st.q = searchEl.value; repaint(); });
     if (jobEl) jobEl.addEventListener('change', function () { st.job = jobEl.value; try { if (HUBVK) localStorage.removeItem(HUBVK); } catch (e) {} refetch(false); });
     if (statusEl) statusEl.addEventListener('change', function () { st.status = statusEl.value; try { if (HUBVK) localStorage.removeItem(HUBVK); } catch (e) {} refetch(false); });
-    if (newBtn) newBtn.addEventListener('click', function () { openCreateModal(cfg.createKind, function () { refetch(false); }); });
+    // A BILL create already refreshes this list through the registry
+    // (submitCreate -> refreshBillRollup -> p86Refresh.now('bill'), whose
+    // surface reaches p86JobsHubRefresh -> _currentRefetch -> refetch(true)).
+    // Handing a second refetch in as onSaved would run cfg.fetch twice per
+    // create — and loudly, so it would be the visible flicker. PO / CO / RFI /
+    // submittal creates do NOT route through the registry, so they still need
+    // this callback; that is why it is per-kind and not simply deleted.
+    if (newBtn) newBtn.addEventListener('click', function () {
+      openCreateModal(cfg.createKind, cfg.createKind === 'bill' ? null : function () { refetch(false); });
+    });
     var viewsBtn = host.querySelector('#jh-views');
     if (viewsBtn) viewsBtn.addEventListener('click', function () { openViewsPopover(viewsBtn); });
     if (typeof cfg.wireExtra === 'function') cfg.wireExtra(host);
@@ -744,7 +764,11 @@ function p86Ask(message, opts) {
       },
       onRow: function (tr) {
         var id = tr.getAttribute('data-bill-id');
-        if (id) openBillEditor(id, function () { if (typeof window.p86JobsHubRefresh === 'function') window.p86JobsHubRefresh(); });
+        // NO onSaved. Every save / status change / delete in that editor ends in
+        // refreshBillRollup -> p86Refresh.now('bill'), and the registry's `bill`
+        // surface already reaches p86JobsHubRefresh -> this list. Handing a
+        // second refetch in here ran cfg.fetch twice per edit.
+        if (id) openBillEditor(id);
       },
       statusOptions: [
         { v: 'open', label: 'Open (unpaid)' }, { v: 'all', label: 'All' },
@@ -1122,10 +1146,15 @@ function p86Ask(message, opts) {
       window.p86Api.bills.create(jobId, billPayload)
         .then(function (res) {
           close();
-          refreshBillRollup(jobId);
-          if (typeof onSaved === 'function') onSaved();
           var id = res && res.bill && res.bill.id;
-          if (id) openBillEditor(id, function () { if (typeof onSaved === 'function') onSaved(); });
+          // AWAITED, like save()/setStatus()/del() below. onSaved repaints from
+          // appData.jobVendorBills, so firing it before the refetch lands paints
+          // the pre-write numbers — this was the one bill path still calling it
+          // straight after an unsequenced refreshBillRollup.
+          return refreshBillRollup(jobId).then(function () {
+            if (typeof onSaved === 'function') onSaved();
+            if (id) openBillEditor(id, onSaved);
+          });
         })
         .catch(function (err) { saveBtn.disabled = false; saveBtn.textContent = 'Create'; alert('Could not create the bill: ' + ((err && err.message) || 'error')); });
       return;

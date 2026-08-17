@@ -534,37 +534,54 @@
       var rec = res && (res.purchase_order || res.change_order || res.bill);
       it.status = 'done';
       it.createdNumber = rec && (rec.po_number || rec.co_number || rec.bill_number) || '';
-      // Push into the live caches so the job metrics reflect it without a reload.
-      try {
-        if (t === 'po' && rec) { window.appData.jobPurchaseOrders = (window.appData.jobPurchaseOrders || []).concat(rec); }
-        if (t === 'co' && rec) { window.appData.jobChangeOrders = (window.appData.jobChangeOrders || []).concat(rec); }
-        // Bill → refresh the unified rollup store so %-billed / accrued update.
-        if (t === 'invoice' && rec && typeof window.loadBillsForJob === 'function') { window.loadBillsForJob(it.jobId); }
-      } catch (_) {}
+      // NO store patch and NO repaint here. Both belong to the refresh registry
+      // and are fired ONCE for the whole batch in createAll() below — see the
+      // note there for what this used to do and why every part of it was wrong.
     }).catch(function (err) {
       it.status = 'error';
       it.error = 'Create failed: ' + (err && err.message ? err.message : 'server error');
     });
   }
 
+  // A bulk import creates PO / CO / Bill rows — real contract and committed-cost
+  // dollars — and used to refresh NOTHING through the registry. It hand-concated
+  // the create response into appData.jobPurchaseOrders / jobChangeOrders, called
+  // loadBillsForJob(jobId) with no `force` (so it could JOIN a GET issued before
+  // the write and resolve with pre-write rows), and finished with one bare
+  // renderJobsMain() that was free to paint before any of that landed. The Bills
+  // hub list and the open job's money sections were never touched at all, so
+  // importing a dozen vendor invoices left both stale.
+  //
+  // Now: one p86Refresh per affected JOB, which the registry coalesces into a
+  // single forced refetch-then-repaint per type — not one per document — and
+  // whose store half always settles before any surface paints.
+  var REFRESH_TYPE = { po: 'po', co: 'co', invoice: 'bill' };   // invoice → a vendor Bill (AP)
+  function refreshCreated(jobIds) {
+    var type = REFRESH_TYPE[state && state.entityType];
+    if (!type || !window.p86Refresh) return;
+    Object.keys(jobIds).forEach(function (j) { window.p86Refresh(type, { jobId: j }); });
+  }
+
   function createAll() {
     if (!state) return;
     var queue = state.items.filter(function (it) { return it.status === 'review' && it.jobId; });
     if (!queue.length) return;
-    var i = 0;
+    var i = 0, touched = {};
     (function step() {
       if (i >= queue.length) {
         render();
         var ok = state.items.filter(function (it) { return it.status === 'done'; }).length;
         var fail = state.items.filter(function (it) { return it.status === 'error'; }).length;
-        // Refresh whatever list/metrics are on screen.
-        try { if (typeof window.renderJobsMain === 'function') window.renderJobsMain(); } catch (_) {}
+        refreshCreated(touched);   // once for the batch, per job — see above
         setTimeout(function () { alert('Created ' + ok + ' record' + (ok === 1 ? '' : 's') + (fail ? ' · ' + fail + ' failed (see the list).' : '.')); }, 60);
         return;
       }
       var it = queue[i++];
       it.status = 'creating'; render();
-      createOne(it).then(function () { render(); step(); });
+      // Only jobs that actually took a row are refreshed: a failed create has
+      // nothing new to read, and refetching for it would claim work that the
+      // list above is simultaneously reporting as failed.
+      createOne(it).then(function () { if (it.status === 'done') touched[it.jobId] = true; render(); step(); });
     })();
   }
 

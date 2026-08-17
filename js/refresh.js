@@ -163,17 +163,20 @@
   // remove, reintroduced one layer up. This is the one place that decides what
   // a money write repaints.
   //
-  // js/jobs-hub.js is the single exception, and only because it OWNS the
-  // function: it publishes window.p86JobsHubRefresh, and its own bill editor
-  // reloads the list it just wrote to. That path does not also fire
-  // p86Refresh, so a write is never refreshed from both.
+  // js/jobs-hub.js used to be an exception, because its own bill editor
+  // reloaded the list it had just written to. It no longer is: that editor's
+  // refreshBillRollup now goes through p86Refresh.now('bill'), whose surface is
+  // this function — so the hub is refreshed from here like every other module,
+  // and NOTHING in js/ outside this file calls it. The exception is gone rather
+  // than grandfathered.
   //
   // ENFORCED, NOT REMEMBERED. test/refresh-registry.test.js scans EVERY file
-  // in js/ and fails on a call outside those two. The earlier version of that
+  // in js/ and fails on a call outside this one. The earlier version of that
   // test named two editor files by hand — and a third call site, in
   // estimate-editor.js, sat outside the list untouched for a whole release.
   // That is what "an invariant enforced by enumerating call sites will leak"
-  // looks like, so the check is a scan now and must stay one.
+  // looks like, so the check is a scan now and must stay one — and it matches
+  // the BARE global too, not just the `window.`-qualified form.
   var REPAINT_JOB_MONEY_PATHS = [
     'renderJobsMain', 'p86JobsHubRefresh', 'p86JobDetailRefresh', 'p86RepaintJobMoneyTabs'
   ];
@@ -304,9 +307,18 @@
     //     keystroke, so it holds no cache that can go stale.
     //   · the sheet-editor's parametric catalog is loaded per open and sits
     //     under a canvas being drawn on — note 3 above.
+    //
+    // QUIET, for the same reason the Jobs Hub refetch is quiet: renderList()
+    // blanks its host to "Loading assemblies…" before it fetches, and a
+    // data-changed refresh must never blank a list the user is already looking
+    // at. `quiet` is a mode on renderList itself, not a special case here — a
+    // user-initiated load (opening the pane, switching to Parametric) still
+    // shows the wait, because there the wait answers something they just asked
+    // for. The leading null is the prefix: passing one would yank whichever
+    // host/filter the visible Assembly Studio tab set.
     assembly: {
       paths: ['p86Assemblies.renderList'],
-      store: function () { return call('p86Assemblies.renderList'); }
+      store: function () { return call('p86Assemblies.renderList', [null, { quiet: true }]); }
     },
 
     task:           { bucket: 'tasks', paths: TASK_PATHS, surface: refreshTaskSurfaces },
@@ -409,6 +421,36 @@
       if (t && t.entity_type) p86Refresh(t.entity_type, { id: t.entity_id, jobId: t.job_id });
     });
     return true;
+  };
+
+  // ── the sequencing seam ────────────────────────────────────────────────
+  // p86Refresh() is fire-and-forget by design: it coalesces on a timer, so it
+  // cannot tell a caller when the store patch landed. Some callers genuinely
+  // need that answer — js/jobs-hub.js's bill editor hands control back to an
+  // `onSaved` callback that repaints FROM appData.jobVendorBills, and firing it
+  // before the refetch resolves paints the pre-write numbers. That is the exact
+  // regression documented at the bill editor's save(), and it is why that path
+  // hand-rolled its own store-then-surface pair for a release — a parallel
+  // money refresh that then went on to miss the p86RepaintJobMoneyTabs
+  // fallback, so a human bill edit repainted the open job's money tabs ZERO
+  // times.
+  //
+  // So `now` exists rather than a second copy of the registry: same entry, same
+  // store-before-surface ordering, same jobIds set, same repaint fallback, with
+  // two differences — the bucket runs immediately instead of on the coalescing
+  // timer, and the run's promise comes back. A caller that needs sequencing
+  // must not have to leave the registry to get it.
+  //
+  // It still SCHEDULES first, so anything already queued in this window runs in
+  // the same pass rather than twice.
+  p86Refresh.now = function (type, opts) {
+    if (!type || !ENTRIES[String(type)]) return Promise.resolve();
+    type = String(type);
+    schedule(type, opts || {});
+    var key = bucketKey(type);
+    var b = _buckets[key];
+    if (b && b.timer) { clearTimeout(b.timer); b.timer = null; }
+    return runBucket(key);
   };
 
   p86Refresh.isTyping = isTyping;

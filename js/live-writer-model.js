@@ -33,6 +33,16 @@
  * _detailRetry). The two written as IDENTITY checks were correct and never
  * produced a defect; the one written as a BOOLEAN produced two. makeOwner is
  * the generalization of the two that work.
+ *
+ * The third export is makeWriteLedger(), and it exists because makeOwner was
+ * the right idea at the wrong altitude. Epochs are PER-REGION; a write is
+ * GLOBAL. Measured live on the deployed round-3 build: the strip pill said
+ * "Scribe wrote · 3 edited" about write one while Cowork showed write two.
+ * The strip's region had never been superseded — nothing had written to it —
+ * so it was still, correctly by its own rules, asserting the wrong write. The
+ * ledger is the epoch above the region: any write anyone puts on screen
+ * supersedes every region that is not displaying it. See makeWriteLedger for
+ * the three remedies and for why a PINNED document is stamped, not cleared.
  * ──────────────────────────────────────────────────────────────────────── */
 (function () {
   'use strict';
@@ -70,10 +80,13 @@
    * paint call, never at the top of the promise chain. */
   var _dev = false;
   var _paints = [];   // dev-mode ledger: every guarded paint attempt
+  var _claims = [];   // dev-mode ledger: every currency claim + supersession
 
-  function setDev(on) { _dev = !!on; if (!_dev) _paints = []; }
+  function setDev(on) { _dev = !!on; if (!_dev) { _paints = []; _claims = []; } }
   function paintLog() { return _paints.slice(); }
   function resetPaintLog() { _paints = []; }
+  function claimLog() { return _claims.slice(); }
+  function resetClaimLog() { _claims = []; }
 
   function makeOwner(name) {
     var gen = 0;
@@ -99,6 +112,114 @@
           ? requestAnimationFrame : function (f) { return setTimeout(f, 16); };
         return raf(function () { if (!self.guard(e, 'frame')) return; fn(); });
       }
+    };
+    return self;
+  }
+
+  // ── currency ────────────────────────────────────────────────────────────
+  /* THE WRITE LEDGER — the epoch ABOVE the region.
+   *
+   * makeOwner answers "am I still the one painting this region?". It cannot
+   * answer "is the write I am asserting still the current one?", because a
+   * region is only ever superseded by a write that lands IN it — and a write
+   * is GLOBAL. Measured on the live build after round 3: the strip's pill read
+   * "Scribe wrote · 3 edited" about write one while Cowork's document showed
+   * write two. Nothing was broken at the region level. Every region correctly
+   * owned its own continuations; nothing owned the STATEMENT ABOUT WHICH WRITE
+   * IS CURRENT, so the strip went on faithfully asserting a write that was no
+   * longer the news.
+   *
+   * A CLAIMANT is a region that renders a report's WORDS — a pill, a verb, a
+   * colour-coded dot. Surface C is deliberately not one: it tints a row for
+   * 1.8 seconds and says nothing about any write being the latest.
+   *
+   * Every claimant is superseded by every reported write it is not currently
+   * displaying. NO EXEMPTIONS — only the REMEDY varies, and the remedy is a
+   * property of what the region physically contains:
+   *
+   *   revert  an element that carries CURRENCY AND NO CONTENT — the strip's
+   *           pill is a bare status line with no record name and no timestamp,
+   *           which is exactly why it reads as "the latest thing that
+   *           happened" — goes back to the neutral default that claims nothing
+   *   stamp   ANCHORED CONTENT the user may be mid-read of — the strip card, a
+   *           Cowork document pinned to a row the user picked — is KEPT and
+   *           marked no-longer-current
+   *   clear   a TRANSIENT OVERLAY whose content is losslessly available
+   *           elsewhere — the estimate pane, the handoff placeholder
+   *
+   * PINNING CHANGES THE REMEDY, NEVER THE OBLIGATION. A Cowork document pinned
+   * to a row is showing an older write ON PURPOSE and must not be yanked out
+   * from under the reader — but it must not be captioned as the latest either.
+   * There is no "pinned" flag here for that: a claimant is current iff it is
+   * DISPLAYING THE WRITE THAT WAS JUST REPORTED, which a pinned document by
+   * definition is not. "Showing an old write on purpose" and "asserting an old
+   * write is the latest" differ by exactly one thing — the stamp.
+   *
+   * report() is called by the engine's FAN-OUT with the list of surfaces that
+   * reported, never by the surfaces themselves. That is the round-3 lesson
+   * applied one level up: an invariant a leaf has to remember is an invariant
+   * the next leaf will not.
+   */
+  function makeWriteLedger() {
+    var gen = 0;
+    var subject = null;          // payloadId of the newest REPORTED write
+    var claimants = [];
+
+    function note(event, name) {
+      if (_dev) _claims.push({ event: event, claimant: name, gen: gen, subject: subject });
+    }
+
+    var self = {
+      current: function () { return gen; },
+      /* The newest write anyone put on screen this session, or null. Null is
+       * not "nothing is stale" — it is "this view has not seen a write", and
+       * a surface must not stamp anything on the strength of it. */
+      subject: function () { return subject; },
+
+      /* spec: { name, owner, keeps(by, subject), supersede(gen, subject) }
+       *
+       * `owner` is the SURFACE whose reports keep this region current, and the
+       * default `keeps` is exactly that. A region overrides `keeps` only when
+       * its surface can report a write WITHOUT displaying it in that region —
+       * true of the estimate pane (its surface may report into the op strip
+       * instead) and of the Cowork document (pinned). */
+      register: function (spec) {
+        if (!spec || typeof spec.supersede !== 'function') return function () {};
+        var c = {
+          name: spec.name,
+          owner: spec.owner || spec.name,
+          keeps: typeof spec.keeps === 'function' ? spec.keeps : null,
+          supersede: spec.supersede
+        };
+        claimants = claimants.filter(function (x) { return x.name !== c.name; }).concat([c]);
+        return function () { claimants = claimants.filter(function (x) { return x !== c; }); };
+      },
+
+      /* A write was put on screen by `reporters` (surface names) and is about
+       * `subjectId`. It claims the next generation; every claimant not
+       * displaying it stops asserting currency.
+       *
+       * Called with an EMPTY reporter list, this does nothing at all: a write
+       * nobody put on screen is not news, and must not demote what is. */
+      report: function (reporters, subjectId) {
+        reporters = reporters || [];
+        if (!reporters.length) return gen;
+        var by = Object.create(null);
+        reporters.forEach(function (n) { by[n] = true; });
+        gen++;
+        subject = (subjectId == null) ? null : subjectId;
+        note('report', reporters.join('+'));
+        claimants.slice().forEach(function (c) {
+          var kept = c.keeps ? !!c.keeps(by, subject) : !!by[c.owner];
+          if (kept) { note('keep', c.name); return; }
+          note('supersede', c.name);
+          try { c.supersede(gen, subject); }
+          catch (e) { console.warn('[live-writer] supersede "' + c.name + '" failed:', e); }
+        });
+        return gen;
+      },
+
+      _claimants: function () { return claimants.map(function (c) { return c.name; }); }
     };
     return self;
   }
@@ -416,7 +537,9 @@
     PILL_NEUTRAL: PILL_NEUTRAL,
     DRAFT_RECORDER_SINCE: DRAFT_RECORDER_SINCE,
     makeOwner: makeOwner,
+    makeWriteLedger: makeWriteLedger,
     setDev: setDev, paintLog: paintLog, resetPaintLog: resetPaintLog,
+    claimLog: claimLog, resetClaimLog: resetClaimLog,
     agentLabel: agentLabel,
     predatesDraftRecorder: predatesDraftRecorder,
     noDiffExplanation: noDiffExplanation,

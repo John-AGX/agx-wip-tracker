@@ -1232,7 +1232,13 @@
       //     also the call site that escaped a test naming two editor files by
       //     hand. The hub refresh belongs to js/refresh.js alone.
       if (typeof window.renderJobsMain === 'function') { try { window.renderJobsMain(); } catch (e) {} }
-      if (typeof window.p86RerenderJobCards === 'function') { try { window.p86RerenderJobCards(); } catch (e) {} }
+      // p86RerenderJobCards TAKES a jobId and passes it straight into
+      // renderJobBuildings(jobId, host) / the phases filter. Called bare it ran
+      // both with `undefined`, so the building + phase cards it exists to
+      // repaint matched nothing and the sync left them on the old contract.
+      // Every other call site in js/jobs.js passes one; this was the only one
+      // that did not.
+      if (typeof window.p86RerenderJobCards === 'function') { try { window.p86RerenderJobCards(est.job_id); } catch (e) {} }
       function money(n) { return Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
       if (typeof window.p86Toast === 'function') window.p86Toast('Synced to job — contract $' + money(contractAmount) + ' · est. cost $' + money(estimatedCosts) + '.');
       else alert('Synced to the job.');
