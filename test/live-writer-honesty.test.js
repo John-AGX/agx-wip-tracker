@@ -81,13 +81,26 @@ describe('D1 · the collapsed pill says what actually happened', () => {
     expect(pillDot()).not.toMatch(GREEN);
   });
 
-  test('a NO-DIFF notice collapses to the same words the card used', () => {
+  test('a NO-DIFF notice collapses to the same words the card used — and to AMBER', () => {
     // Applied with an empty changeset: real write, nothing this view can list.
-    // Green is honest here — it applied — but the TEXT must not claim a diff.
+    //
+    // AMENDED IN ROUND 3, and the original assertion was the bug. This test
+    // used to assert GREEN with the reasoning "green is honest here — it
+    // applied". That is the same argument stateChrome's `settle:'wrote'` made,
+    // and the live card it produced wore three colours at once: a BLUE header
+    // dot, a GREEN pill, and copy saying nobody could read the write. The pill
+    // is the part that survives, so the pill was the part that lied.
+    //
+    // noticeUnreadable already had the right policy, in its own comment: "a
+    // glance at a green pill would read as 'nothing to see here'". An applied
+    // write with nothing listable is the same class of degraded report and now
+    // gets the same amber. Green means a clean apply with something to show —
+    // nothing else.
     LW.ingest([], { payloadId: 'd1c', state: 'applied', title: 'Reschedule crew' });
     collapse();
     expect(pillText()).toContain("can't break down");
-    expect(pillDot()).toMatch(GREEN);
+    expect(pillDot()).toMatch(AMBER);
+    expect(pillDot()).not.toMatch(GREEN);
   });
 
   test('a PROPOSAL collapses amber and says it needs approval — not "wrote"', () => {

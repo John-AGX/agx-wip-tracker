@@ -55,6 +55,28 @@
       .replace(/"/g, '&quot;');
   }
   function LW() { return window.p86LiveWriter || null; }
+  /* The DECISION layer — the same one the strip uses. Cowork owns no copy and
+   * no colour policy of its own: the moment it does, the two surfaces drift
+   * and tell the user two different stories about one row, which is exactly
+   * what happened to the pre-recorder sentence. */
+  function LWM() {
+    var lw = LW();
+    return (lw && lw.model) || window.p86LiveWriterModel || null;
+  }
+  /* The document column is shared mutable DOM with several async writers
+   * (selectRow's fetch, the ledger refresh, approve/reject's refreshAndReselect
+   * — and the reject handler awaits an unbounded confirm dialog first). One
+   * owner, claimed by whoever takes the column over. */
+  var DOC = (function () {
+    var m = LWM();
+    if (m && m.makeOwner) return m.makeOwner('cowork-doc');
+    // index.html loads the model before this file, so this branch is a
+    // standalone-load safety net rather than a real path. Same semantics,
+    // no dev ledger.
+    var gen = 0;
+    return { name: 'cowork-doc', claim: function () { return ++gen; }, current: function () { return gen; },
+             holds: function (e) { return e === gen; }, guard: function (e) { return e === gen; } };
+  })();
   function usd(n) {
     var lw = LW();
     if (lw && lw._usd) return lw._usd(n);
@@ -356,12 +378,14 @@
 
   // ── document column ──────────────────────────────────────────────────────
   function renderEmptyDoc() {
+    DOC.claim();
     var doc = document.getElementById('cw-doc');
     if (doc) doc.innerHTML = '<div class="cw-note">Pick a write from the list to see exactly what changed.</div>';
   }
 
   async function selectRow(id, byHand) {
     if (!id) return;
+    var ep = DOC.claim();
     _selectedId = id;
     if (byHand) { _pinned = true; _unread = 0; if (isMobile()) setMobileView('doc'); }
     renderRail();
@@ -371,9 +395,14 @@
     if (!lw || !lw.fetchPayload) { if (doc) doc.innerHTML = '<div class="cw-note">Live Writer engine not loaded.</div>'; return; }
     try {
       var row = await lw.fetchPayload(id);
-      if (_selectedId !== id) return;   // a newer selection won the race
+      // A newer selection won the race. This was already here as an identity
+      // check on _selectedId and it was correct — it is now the SAME mechanism
+      // the rest of the feature uses, so there is one idea to understand
+      // rather than one idea and three lookalikes.
+      if (!DOC.guard(ep, 'cowork-doc')) return;
       renderDoc(row);
     } catch (e) {
+      if (!DOC.guard(ep, 'cowork-doc-err')) return;
       if (doc) doc.innerHTML = '<div class="cw-err">Couldn\'t load this write: ' + esc(e && e.message || 'network error') + '</div>';
     }
   }
@@ -455,6 +484,17 @@
     var groups = lw.diff(cs);
     var impact = groups.reduce(function (s, g) { return s + (g.impact || 0); }, 0);
 
+    // ONE colour policy, and it is the same one the strip applies. An APPLIED
+    // row nobody could break down is DEGRADED — it landed, but this is a
+    // degraded report of it — so it must not wear the same green "ok" pill as
+    // a clean apply. The label still says "Applied", because it did.
+    //
+    // Scoped to the document deliberately. The RAIL row is built from the lean
+    // list row, which carries no changeset, so the rail genuinely cannot tell
+    // a degraded apply from a clean one and must not pretend to.
+    var degraded = (row.status === 'applied') && !groups.length;
+    var tone = degraded ? 'warn' : st.tone;
+
     var when = row.applied_at || row.draft_changeset_at || row.created_at;
     var head =
       '<div class="cw-dhead">' +
@@ -462,13 +502,31 @@
         '<div style="min-width:0;flex:1;">' +
           '<div class="cw-dttl">' + esc(row.title || row.summary || 'a change') + '</div>' +
           '<div class="cw-dsub">' +
-            '<span class="cw-pill ' + st.tone + '">' + esc(st.label) + '</span>' +
+            '<span class="cw-pill ' + tone + '">' + esc(st.label) + '</span>' +
             '<span>' + esc(who) + '</span>' +
             '<span>' + esc(relTime(when)) + '</span>' +
             (row.status === 'ready' ? '<span>proposed — nothing has changed yet</span>' : '') +
           '</div>' +
         '</div>' +
       '</div>';
+
+    /* THE explanation, from the shared model, for every arm that needs one.
+     * It used to be computed inside the `!groups.length` branch AND gated on
+     * `row.status === 'ready'` — so production's ten REJECTED rows, all of
+     * them pre-recorder with has_draft false, were told "this view can't tell
+     * whether the write type is one the recorder doesn't snapshot", about a
+     * fact their created_at proves. The predicate is a property of created_at,
+     * not of one status. */
+    function whyNoDiff() {
+      var m = LWM();
+      if (!m || !m.noDiffExplanation) return '';
+      return m.noDiffExplanation({
+        state: st.key,
+        createdAt: row.created_at,
+        hasChangeset: cs.length > 0,
+        appliedNoDiffWithDraft: !!(appliedNoDiff && draft)
+      });
+    }
 
     var bodyHtml = '';
     if (row.status === 'failed') {
@@ -490,44 +548,25 @@
           esc(row.apply_error || 'The dispatcher rejected it; no reason was recorded.') + '</div>';
         if (groups.length) bodyHtml += '<div class="cw-note" style="padding-bottom:4px;">What it would have done:</div>' +
           '<div class="cw-dbody">' + opsHtml(groups) + '</div>';
+        // A failed row with no diff said NOTHING about why — the same silence
+        // the ready arm was fixed for, in a status arm that never reached the
+        // explanation because it returns above it.
+        else bodyHtml += '<div class="cw-note">' + esc(whyNoDiff()) + '</div>';
       }
     } else if (row.status === 'applying') {
       bodyHtml = '<div class="cw-note">This write is being applied right now. The result — applied or failed — ' +
         'lands here within a few seconds. If it is still here in five minutes the apply was abandoned ' +
         '(a deploy mid-flight will do it) and the claim releases itself so it can be approved again.</div>';
       if (groups.length) bodyHtml += '<div class="cw-dbody">' + opsHtml(groups) + '</div>';
+      else bodyHtml += '<div class="cw-note" style="padding-top:0;">' + esc(whyNoDiff()) + '</div>';
     } else if (!groups.length) {
-      // FOUR different silences, and they are four different claims. Saying
-      // the wrong one is the same defect as showing the wrong diff.
-      // (a) applied, no committed changeset, but a draft exists — the draft is
-      //     a rolled-back simulation and must not be shown under "Applied".
-      // (b) a changeset exists but breaks into no listable ops.
-      // (c) a DRAFT with nothing recorded — see draftNoDiffWhy: a row that
-      //     predates the recorder and a write type the recorder can't snapshot
-      //     are DIFFERENT FACTS and get different sentences. The old copy here
-      //     asserted the second about every row, which is false for all 14
-      //     drafts currently in the approval queue: they are ordinary writes
-      //     made before the column existed.
-      // (d) anything else with nothing recorded — cause not knowable, so not
-      //     claimed.
-      var why;
-      if (appliedNoDiff && draft) {
-        why = 'This write applied, but the server didn\'t record a before/after for it, so what you\'d ' +
-              'see here would be the Scribe\'s draft — a simulation that was rolled back, not what ' +
-              'actually landed. It isn\'t shown for that reason.';
-      } else if (cs.length) {
-        why = 'The server did record a before/after for this write, but nothing in it comes out as a ' +
-              'change this view can list. Only what it says it did is shown.';
-      } else if (row.status === 'ready' && lw.draftNoDiffWhy) {
-        why = lw.draftNoDiffWhy(row.created_at);
-      } else {
-        why = 'No before/after was recorded for this write. This view can\'t tell whether the write type ' +
-              'is one the recorder doesn\'t snapshot or whether recording it failed, so it isn\'t going ' +
-              'to guess — only what it says it did is shown.';
-      }
+      // Four different silences, and they are four different claims. Saying
+      // the wrong one is the same defect as showing the wrong diff — so the
+      // branch tree lives in ONE place, shared with the strip, rather than
+      // being reproduced here where it drifted.
       bodyHtml = '<div class="cw-note">' +
         esc(row.apply_summary || row.summary || 'No line-level detail was recorded for this write.') +
-        '<br><br>' + why + '</div>';
+        '<br><br>' + esc(whyNoDiff()) + '</div>';
     } else if (isApplied && cs.length === 1 && cs[0].entity_type === 'estimate' &&
                cs[0].after && cs[0].after.data && Array.isArray(cs[0].after.data.lines) && cs[0].after.data.lines.length) {
       // The document highlights the rows that moved — but ops WITHOUT a

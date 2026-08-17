@@ -3506,14 +3506,19 @@
          BEFORE ai-panel.js so window.PayloadArtifact exists when the
          panel mounts. -->
     <script src="js/payload-artifact.js?v=10"></script>
+    <!-- The Live Writer DECISION layer — pure: an entry in, the complete
+         honest claim out (every word, every colour), plus the per-region
+         ownership primitive every async continuation is guarded by. MUST load
+         before the engine, which refuses to start without it. -->
+    <script src="js/live-writer-model.js?v=1"></script>
     <!-- The Live Writer ENGINE — ingest + dedupe + the one differ + the one
          estimate row model, plus surface B (the docked notification). Every
-         other surface registers against it. -->
-    <script src="js/live-writer.js?v=13"></script>
+         other surface registers against it. It DRAWS; the model above decides. -->
+    <script src="js/live-writer.js?v=14"></script>
     <!-- Surface A — the Cowork page. Consumes the engine, so it must load
          AFTER it (live-writer is idempotent-by-existence: a re-load is a
          no-op, so registration has to go through registerSurface). -->
-    <script src="js/cowork.js?v=6"></script>
+    <script src="js/cowork.js?v=7"></script>
     <script src="js/ai-panel.js?v=174"></script>
     <!-- Save-from-chat bridge (Workstream ③). Owns p86SaveCodeBlock /
          p86SaveResponse / p86SaveToPicker, called by inline onclick

@@ -35,10 +35,43 @@
  *
  * Nothing here writes anything except through the SAME apply/reject
  * endpoints the chat approval card uses.
+ *
+ * TWO LAYERS, and the split is load-bearing. js/live-writer-model.js DECIDES
+ * (pure: entry → the complete claim, every word and every colour). This file
+ * DRAWS. A chrome in here cannot disagree with the pill, because a chrome
+ * cannot reach the pill; and it cannot decide to stay silent, because silence
+ * is a `kind` the model returns. That boundary is the round-3 fix: the old
+ * invariant ("every path that fills this card calls setPill") was a statement
+ * about leaves, and a new leaf silently opts out of a call it does not make.
+ *
+ * OWNERSHIP. The strip, the pane, the editor flash and Cowork's document
+ * column are shared mutable DOM that several independent async continuations
+ * write to. Each is an OWNER with a generation counter: whoever takes over a
+ * region claims a new epoch before its first write, and every timer, frame and
+ * awaited continuation it schedules captures that epoch and no-ops once it has
+ * been superseded — checked at every tick, because the reveal loops reschedule
+ * themselves. Inside this file a bare setTimeout / requestAnimationFrame that
+ * touches DOM is a defect; use OWNER.after / OWNER.frame. The two legitimate
+ * exceptions are both non-DOM: initPoll's retry and the poll interval.
  * ──────────────────────────────────────────────────────────────────────── */
 (function () {
   'use strict';
   if (window.p86LiveWriter) return;
+
+  // The decision layer. Loaded as a plain script before this one in the app;
+  // required directly under jest.
+  var M = (typeof window !== 'undefined' && window.p86LiveWriterModel) || null;
+  if (!M && typeof require === 'function') { try { M = require('./live-writer-model.js'); } catch (_) {} }
+  if (!M) { console.warn('[live-writer] decision layer missing — engine not started'); return; }
+
+  // Four owned regions. Per-region, not one global counter: a Cowork selection
+  // must not supersede a strip stagger loop, and vice versa. The strip CARD and
+  // the strip PILL share one owner on purpose — they are two renderings of one
+  // claim, and a design that lets them be claimed separately is the original
+  // defect wearing a different hat.
+  var STRIP = M.makeOwner('strip');
+  var PANE  = M.makeOwner('pane');
+  var FLASH = M.makeOwner('editor-flash');
 
   var COLLAPSE_MS = 14000;  // auto-collapse the notification to a pill
   var STAGGER_MS = 180;     // per-op reveal delay for the "writing" feel
@@ -76,14 +109,10 @@
   var _draftFirstSeen = Object.create(null);
   var DRAFT_SETTLE_MS = 20000;   // ~4 sweeps; the composing backstop is at 180s
 
-  // The recorder that stores a draft's before/after (payloads.draft_changeset)
-  // shipped in commit 369553a, authored 2026-08-16T21:49:41Z. That is a fixed
-  // historical fact rather than configuration, so a constant is the right shape
-  // and it will never need updating. It is deliberately the COMMIT time: the
-  // deploy is necessarily later, so a row created before this instant is
-  // CERTAINLY older than the recorder, while a row in the commit→deploy gap
-  // falls through to the "can't tell" wording instead of being asserted about.
-  var DRAFT_RECORDER_SINCE = Date.parse('2026-08-16T21:49:41Z');
+  // DRAFT_RECORDER_SINCE and the copy that reasons about it live in the model
+  // — five render sites across two files share ONE predicate now, because
+  // gating it inside a per-status arm is what told production's ten rejected
+  // pre-recorder rows "this view can't tell" about a fact created_at proves.
 
   // _draftBaselineTs is its own clock on purpose. _appliedBaselineTs is
   // derived from applied_at and advances on every apply; comparing a draft's
@@ -151,13 +180,7 @@
     if (s < 86400) return Math.round(s / 3600) + 'h ago';
     return Math.round(s / 86400) + 'd ago';
   }
-  function agentLabel(k) {
-    if (!k) return 'Scribe';
-    if (k === 'scribe') return 'Scribe';
-    if (k === 'job' || k === '86') return '86';
-    if (k === 'assistant') return 'Assistant';
-    return String(k);
-  }
+  var agentLabel = M.agentLabel;
 
   // ── diff one changeset entry into a list of ops ──────────────────────────
   // Returns { entity_type, name, ops:[{kind, label, detail, amount, lineId}], impact }
@@ -429,7 +452,17 @@
       var ok = false;
       try { ok = !!s.claims(entry); } catch (e) { ok = false; }
       if (!ok) continue;
-      try { s.render(entry); entry.claimedBy.push(s.name); if (s.exclusive) reported = true; }
+      // A surface that returns an explicit null DECLINED — it looked and had
+      // nothing to put on screen. Anything else (including undefined, which is
+      // what A and C return) is a claim, exactly as before. This is the
+      // smallest honest step on the claim≠paint gap: surface B now reports its
+      // own silence instead of being credited with a paint it never made.
+      try {
+        var out = s.render(entry);
+        if (out === null) continue;
+        entry.claimedBy.push(s.name);
+        if (s.exclusive) reported = true;
+      }
       catch (e) { console.warn('[live-writer] surface "' + s.name + '" failed:', e); }
     }
     return reported;
@@ -473,15 +506,24 @@
       // lazily-built row model — only the surfaces that need it pay for it
       rows: function () { return first ? buildEstimateRows(first) : null; }
     };
-    // A state change supersedes any "handed to the Scribe" placeholder.
+    broadcast(entry);
+    // The "handed to the Scribe" placeholder is stale the moment a state
+    // change lands, whoever reports it.
+    //
+    // This used to run BEFORE broadcast and unconditionally remove the strip
+    // root — which destroyed the strip even for writes Cowork claimed (a
+    // report landing somewhere else entirely), and produced a visible
+    // remove-then-rebuild flash when the strip DID claim. Running it after,
+    // and guarding it on the strip epoch, fixes both: if surface B repainted
+    // the strip it already superseded the placeholder and this is a no-op; if
+    // the write was reported elsewhere the strip has nothing left to say.
     clearComposing();
-    if (!broadcast(entry)) return entry;   // nobody claimed it; still a valid entry
-    return entry;
+    return entry;   // nobody may have claimed it; it is still a valid entry
   }
 
   // ── DOM (surface B — the notification) ───────────────────────────────────
   var root = null, collapseTimer = null;
-  var PILL_NEUTRAL = '#9a9aa5';   // the pill's "claims nothing" colour
+  var PILL_NEUTRAL = M.PILL_NEUTRAL;   // the pill's "claims nothing" colour
 
   function ensureStyle() {
     if (document.getElementById('p86lw-style')) return;
@@ -669,6 +711,9 @@
     document.head.appendChild(st);
   }
 
+  /* Build the strip root if it is missing. Deliberately does NOT claim an
+   * epoch: callers claim immediately afterwards, and a rebuilt root is
+   * superseded by that claim anyway. */
   function ensureRoot() {
     ensureStyle();
     if (root && document.body.contains(root)) return;
@@ -678,92 +723,60 @@
     // It used to be hardcoded "Scribe wrote" on a success-green dot: after the
     // 14s auto-collapse, a refusal card reading "The Scribe did not produce a
     // valid payload. Nothing was written" became a green pill asserting the
-    // opposite. Every path that fills this card now calls setPill; this markup
-    // is only what shows if one ever forgets, so it must claim nothing.
+    // opposite. This markup is now only what shows before the first report —
+    // reportToStrip sets the pill BEFORE it picks a chrome, so no chrome can
+    // skip it — and it must claim nothing.
     root.innerHTML =
       '<div class="p86lw-full"><div class="p86lw-card"></div></div>' +
       '<div class="p86lw-pill"><span class="p86lw-dot" style="animation:none;background:' + PILL_NEUTRAL + '"></span>' +
       '<span class="p86lw-pilltext">Live Writer</span></div>';
     document.body.appendChild(root);
     root.querySelector('.p86lw-pill').addEventListener('click', function () {
+      // Uncollapsing re-arms under the CURRENT epoch, not the one that was
+      // live when this handler was attached: the user is re-opening whatever
+      // the strip says now.
       root.classList.remove('p86lw-collapsed');
-      armCollapse();
+      armCollapse(STRIP.current());
     });
   }
 
-  // A COLLAPSED pill is a claim, and it is the claim most people actually read
-  // — the card is gone 14 seconds after it appears, the pill can sit there for
-  // the rest of the session. So the pill carries the state: text AND colour.
-  function setPill(text, color) {
-    if (!root) return;
+  /* A COLLAPSED pill is a claim, and it is the claim most people actually read
+   * — the card is gone 14 seconds after it appears, the pill can sit there for
+   * the rest of the session. So the pill carries the state: text AND colour.
+   *
+   * Takes the whole report, not a text/colour pair. The colour is decided in
+   * ONE place (the model's finish()), which is what stops a card from wearing
+   * a blue header dot over a green pill. */
+  function setPill(ep, report) {
+    if (!root || !STRIP.guard(ep, 'pill')) return;
     var t = root.querySelector('.p86lw-pilltext');
-    if (t) t.textContent = text || 'Live Writer';
+    if (t) t.textContent = (report && report.pillText) || 'Live Writer';
     // Scoped to the PILL. A bare '.p86lw-dot' matches the CARD's header dot
     // first (the card is the earlier sibling), so an unscoped write would
     // recolour the wrong element and leave the pill exactly as green as it was.
     var d = root.querySelector('.p86lw-pill .p86lw-dot');
-    if (d) d.style.background = color || PILL_NEUTRAL;
+    if (d) d.style.background = (report && report.pillColor) || PILL_NEUTRAL;
   }
 
-  function armCollapse() {
-    if (collapseTimer) clearTimeout(collapseTimer);
-    collapseTimer = setTimeout(function () {
+  /* Collapsing is itself a claim — the pill it collapses to is the thing the
+   * user reads for the rest of the session — so it carries an epoch like any
+   * other paint. There is no separate cancellation mechanism: a newer claim
+   * invalidates this timer by definition. */
+  function armCollapse(ep) {
+    if (collapseTimer) { clearTimeout(collapseTimer); collapseTimer = null; }
+    collapseTimer = STRIP.after(ep, COLLAPSE_MS, function () {
       if (root) root.classList.add('p86lw-collapsed');
-    }, COLLAPSE_MS);
+    });
   }
 
   var ICON = { add: '+', edit: '~', delete: '−' };
 
-  // Per-state chrome for the notification header. Every one of these is a
-  // real row state, not a mood: proposed = status 'ready' with a persisted
-  // draft diff, applying = the claim is held, applied = committed, failed =
-  // apply_error is set.
-  function stateChrome(meta) {
-    var who = agentLabel(meta && meta.emittingAgentKey);
-    switch (meta && meta.state) {
-      case 'proposed': return { verb: 'drafted — needs approval', who: who, dot: '#d98a1f', pulse: false, settle: null };
-      case 'applying': return { verb: 'is applying…', who: who, dot: '#378add', pulse: true, settle: null };
-      case 'failed':   return { verb: "couldn't apply that", who: who, dot: '#e24b4a', pulse: false, settle: null };
-      case 'rejected': return { verb: 'draft dismissed', who: who, dot: '#9a9aa5', pulse: false, settle: null };
-      default:         return { verb: 'is writing', who: who, dot: '#378add', pulse: true, settle: 'wrote' };
-    }
-  }
-
-  /* Why a draft has no before/after to show — and, much more to the point,
-   * which parts of that this code actually KNOWS.
-   *
-   * The old sentence was "This kind of write doesn't record a before/after
-   * diff yet". That is a claim about the write TYPE, and for every draft
-   * currently sitting in the approval queue it is false: they are ordinary
-   * writes made before the recorder existed. Two different facts, so two
-   * different sentences — they must not collapse into one.
-   *
-   *   · created before DRAFT_RECORDER_SINCE → provable. The recorder was not
-   *     deployed yet. Say exactly that, and say that it cannot be backfilled:
-   *     the dry run was rolled back, so re-simulating now would describe
-   *     TODAY's data, not what the Scribe saw. A reconstructed "before" here
-   *     would be a simulation presented as a record — the precise lie this
-   *     whole feature exists to end.
-   *   · anything later → NOT provable. It could be a write type the recorder
-   *     doesn't snapshot (schedule / system / assembly / deal_memory produce
-   *     an empty changeset that changeset-guard rejects), or a persist that
-   *     failed, or a row from the commit→deploy gap. So say that it isn't
-   *     known, rather than picking the likeliest cause and asserting it.
-   *
-   * Returns the WHY only — no call to action. Each surface appends its own
-   * ("Open it in Cowork" is nonsense when you are already on Cowork).
-   */
-  function draftNoDiffWhy(createdAt) {
-    var ct = Date.parse(createdAt || '');
-    if (isFinite(ct) && ct < DRAFT_RECORDER_SINCE) {
-      return 'This draft was made before the app started recording what a draft proposes ' +
-             '(16 Aug 2026), so there is no before/after to show. It can’t be reconstructed either — ' +
-             'the dry run it came from was rolled back, and re-running it now would describe today’s ' +
-             'data rather than what the Scribe saw.';
-    }
-    return 'No before/after was recorded for this draft. This view can’t tell whether the write type is ' +
-           'one the recorder doesn’t snapshot or whether recording it failed, so it isn’t going to guess.';
-  }
+  // Per-state chrome and the "why is there no diff" copy both live in the
+  // model now — the first because `settle:'wrote'` hanging off the applied
+  // default arm was the exact wire a green pill leaked down onto a degraded
+  // write, the second because gating the pre-recorder predicate inside one
+  // status arm is what produced R5.
+  var draftNoDiffWhy = M.draftNoDiffWhy;
 
   function openInCoworkBtn(meta) {
     if (!meta || !meta.payloadId) return '';
@@ -781,20 +794,57 @@
     });
   }
 
-  // Render a set of diffed groups into the compact strip.
-  function show(groups, meta) {
+  /* ── THE reporting boundary ────────────────────────────────────────────
+   *
+   * Surface B reports a write HERE and nowhere else. Three properties make a
+   * silent-pill bypass structurally impossible rather than conventionally
+   * forbidden:
+   *
+   *   1. setPill is called by this wrapper, BEFORE a chrome is chosen. A new
+   *      chrome cannot skip a call it does not make. (Round 2's invariant —
+   *      "every path that fills this card calls setPill" — was literally true
+   *      and still let six paths lie, because it was a rule about leaves.)
+   *   2. Renderers receive the CARD element, not the root. .p86lw-pilltext is
+   *      not reachable from inside a chrome. Physical, not documentary.
+   *   3. Renderers have no decision-making early-returns. "Nothing to show" is
+   *      decided by the model (kind 'silent'), never discovered by a renderer.
+   *      A renderer that cannot decide cannot disagree with the pill.
+   *
+   * Returns the report it painted, or null when it claimed nothing. */
+  function reportToStrip(entry, report) {
+    if (!report || report.kind === 'silent') return null;   // claim nothing, disturb nothing
+    // The pane belongs to this surface too, so a report that is NOT a pane
+    // supersedes any pane still standing. Found by the interleaving property,
+    // not by inspection: after applied-estimate → applied-lead, the estimate
+    // DOCUMENT sat on screen under a pill describing a different write — the
+    // exact inverse of F3, one region asserting an older report than another.
+    if (report.kind !== 'pane') dismissPane();
     ensureRoot();
-    var totalOps = groups.reduce(function (n, g) { return n + g.ops.length; }, 0);
-    if (!totalOps) return; // nothing meaningful to show
+    var ep = STRIP.claim();                                  // AFTER the silent decision
     root.classList.remove('p86lw-collapsed');
-
-    var netImpact = groups.reduce(function (s, g) { return s + (g.impact || 0); }, 0);
-    var counts = { add: 0, edit: 0, delete: 0 };
-    groups.forEach(function (g) { g.ops.forEach(function (o) { counts[o.kind]++; }); });
-
+    setPill(ep, report);                                     // ALWAYS, and first
     var card = root.querySelector('.p86lw-card');
-    var name = (groups.length === 1) ? groups[0].name : (groups.length + ' records');
-    var chrome = stateChrome(meta);
+    if (report.kind === 'composing') { renderComposing(ep, card, report); return report; }
+    if (report.kind === 'notice') { renderNotice(ep, card, entry, report); return report; }
+    // 'ops' and 'pane' share the op list. The pane case renders it too — as
+    // truthful content behind the pill, so re-opening the collapsed strip
+    // shows this write rather than the previous one — then collapses, because
+    // the pane is where the detail lives and the pill is where the claim does.
+    renderOps(ep, card, entry, report);
+    if (report.kind === 'pane') {
+      root.classList.add('p86lw-collapsed');
+      showEstimatePane(entry, report);
+    }
+    return report;
+  }
+
+  // Render a set of diffed groups into the compact strip.
+  function renderOps(ep, card, entry, report) {
+    var groups = entry.groups || [];
+    var meta = entry.meta || {};
+    var netImpact = report.impact || 0;
+    var totalOps = report.totalOps || 0;
+    var name = report.name;
 
     var rows = '';
     var shownOps = 0;
@@ -815,12 +865,7 @@
     }
     if (totalOps > MAX_OPS) rows += '<div class="p86lw-grpname">+' + (totalOps - MAX_OPS) + ' more…</div>';
 
-    var summ = [];
-    if (counts.add) summ.push('+' + counts.add + ' added');
-    if (counts.edit) summ.push(counts.edit + ' edited');
-    if (counts.delete) summ.push('−' + counts.delete + ' removed');
-    // A proposal has not happened yet, so it must not be phrased as if it had.
-    if (meta && meta.state === 'proposed') summ = summ.map(function (s) { return s.replace(' added', ' to add').replace(' edited', ' to edit').replace(' removed', ' to remove'); });
+    var summ = report.summary || [];
 
     var impHtml = '';
     if (netImpact) {
@@ -830,10 +875,10 @@
 
     card.innerHTML =
       '<div class="p86lw-head">' +
-        '<span class="p86lw-av">' + esc(chrome.who.charAt(0)) + '</span>' +
-        '<div><div class="p86lw-ttl">' + esc(chrome.who) + ' <span class="p86lw-verb">' + esc(chrome.verb) + '</span></div>' +
+        '<span class="p86lw-av">' + esc(report.who.charAt(0)) + '</span>' +
+        '<div><div class="p86lw-ttl">' + esc(report.who) + ' <span class="p86lw-verb">' + esc(report.verb) + '</span></div>' +
         '<div class="p86lw-sub">' + esc(name) + '</div></div>' +
-        '<span class="p86lw-dot" style="background:' + chrome.dot + (chrome.pulse ? '' : ';animation:none') + '"></span>' +
+        '<span class="p86lw-dot" style="background:' + report.dot + (report.pulse ? '' : ';animation:none') + '"></span>' +
         '<button class="p86lw-x" title="Dismiss">×</button>' +
       '</div>' +
       '<div class="p86lw-body">' + rows + '</div>' +
@@ -842,14 +887,26 @@
     card.querySelector('.p86lw-x').addEventListener('click', dismiss);
     wireCoworkBtn(card);
 
-    requestAnimationFrame(function () { card.classList.add('p86lw-in'); });
+    STRIP.frame(ep, function () { card.classList.add('p86lw-in'); });
 
-    // staggered reveal → the "writing" feel, then settle. Capped: past
+    // Staggered reveal → the "writing" feel, then settle. Capped: past
     // MAX_REVEALS the remaining rows paint at once instead of animating for
     // longer than the card's own lifetime.
+    //
+    // THE ORPHAN. This loop used to capture `card` — the PERSISTENT
+    // .p86lw-card element, which every other chrome overwrites via innerHTML
+    // rather than replacing — and nothing cancelled it. So after a failure
+    // notice took the card, this loop kept ticking against the same node for
+    // up to ops × 180ms and then repainted .p86lw-verb to "wrote" on a green
+    // dot, over a body that still read "Nothing was written". Same mechanism
+    // re-armed the collapse that startComposing had deliberately cleared.
+    //
+    // The guard is the FIRST line of each tick, not a wrapper around the first
+    // call, because the loop reschedules itself.
     var opEls = card.querySelectorAll('.p86lw-op');
     var i = 0;
     (function reveal() {
+      if (!STRIP.guard(ep, 'reveal')) return;
       if (i >= MAX_REVEALS) {
         for (var k = i; k < opEls.length; k++) opEls[k].classList.add('p86lw-shown');
         i = opEls.length;
@@ -857,59 +914,67 @@
       if (i < opEls.length) {
         opEls[i].classList.add('p86lw-shown');
         i++;
-        setTimeout(reveal, STAGGER_MS);
+        STRIP.after(ep, STAGGER_MS, reveal);
       } else {
-        var dot = card.querySelector('.p86lw-head .p86lw-dot');
-        if (chrome.settle) {
+        if (report.settles) {
           var verb = card.querySelector('.p86lw-verb');
-          if (verb) verb.textContent = chrome.settle;
-          if (dot) { dot.style.animation = 'none'; dot.style.background = '#1d9e75'; }
+          if (verb) verb.textContent = report.settleVerb;
+          var dot = card.querySelector('.p86lw-head .p86lw-dot');
+          if (dot) { dot.style.animation = 'none'; dot.style.background = report.settleDot; }
         }
-        armCollapse();
+        armCollapse(ep);
       }
     })();
-
-    // The pill reflects the last write's STATE, not a fixed "wrote". Only a
-    // state that actually settles — the applied default, the one branch above
-    // that turns the header dot green — earns success-green here; a proposal
-    // stays amber, a failure red, an in-flight apply blue.
-    setPill(chrome.who + ' ' + (chrome.settle || chrome.verb) + (summ.length ? ' · ' + summ.join(', ') : ''),
-            chrome.settle ? '#1d9e75' : chrome.dot);
   }
 
-  // A write that FAILED, or a payload whose entity type records no diff.
-  // Both are real outcomes that used to render as silence.
-  // opts.dot overrides the state colour for a DEGRADED outcome — a row we
-  // know reached 'applied' but whose content we could not read is not the
-  // same as a clean apply, and painting it success-green would let a glance
-  // at the pill say "fine" about something that needs a second look.
-  function showNotice(meta, headline, bodyText, opts) {
-    ensureRoot();
-    root.classList.remove('p86lw-collapsed');
-    var chrome = stateChrome(meta);
-    if (opts && opts.dot) chrome = { who: chrome.who, verb: chrome.verb, dot: opts.dot, pulse: false, settle: null };
-    var card = root.querySelector('.p86lw-card');
+  // A write that FAILED, a refusal, or a real write this view cannot break
+  // down. All are real outcomes that used to render as silence — and the
+  // colour they wear is the model's call, not this function's: an APPLIED
+  // write nobody could read is amber, exactly like an unreadable detail fetch,
+  // because a green pill would read at a glance as "nothing to see here".
+  function renderNotice(ep, card, entry, report) {
+    var meta = (entry && entry.meta) || {};
     card.innerHTML =
-      '<div class="p86lw-head"><span class="p86lw-av">' + esc(chrome.who.charAt(0)) + '</span>' +
-      '<div><div class="p86lw-ttl">' + esc(chrome.who) + ' <span class="p86lw-verb">' + esc(headline) + '</span></div>' +
-      '<div class="p86lw-sub">' + esc(meta.title || '') + '</div></div>' +
-      '<span class="p86lw-dot" style="background:' + chrome.dot + ';animation:none"></span>' +
+      '<div class="p86lw-head"><span class="p86lw-av">' + esc(report.who.charAt(0)) + '</span>' +
+      '<div><div class="p86lw-ttl">' + esc(report.who) + ' <span class="p86lw-verb">' + esc(report.headline) + '</span></div>' +
+      '<div class="p86lw-sub">' + esc(report.name || '') + '</div></div>' +
+      '<span class="p86lw-dot" style="background:' + report.dot + ';animation:none"></span>' +
       '<button class="p86lw-x" title="Dismiss">×</button></div>' +
-      '<div class="p86lw-err">' + esc(bodyText) + '</div>' +
+      '<div class="p86lw-err">' + esc(report.bodyText) + '</div>' +
       '<div class="p86lw-foot">' + openInCoworkBtn(meta) + '</div>';
     card.querySelector('.p86lw-x').addEventListener('click', dismiss);
     wireCoworkBtn(card);
-    requestAnimationFrame(function () { card.classList.add('p86lw-in'); });
-    // The whole reason this function exists is that a refusal, a failed apply
-    // and a no-diff notice are real outcomes rather than silence — so they must
-    // survive the collapse too. This arms the SAME 14s timer show() does, and
-    // without this line the notice collapsed into "Scribe wrote" on a green dot.
-    setPill(chrome.who + ' ' + headline, chrome.settle ? '#1d9e75' : chrome.dot);
-    armCollapse();
+    STRIP.frame(ep, function () { card.classList.add('p86lw-in'); });
+    armCollapse(ep);
+  }
+
+  /* The handoff placeholder's chrome. Deliberately arms NO collapse timer:
+   * this card ends when the draft lands (or when its own backstop fires), not
+   * on someone else's clock — and any collapse timer armed by the PREVIOUS
+   * card was invalidated by reportToStrip's claim before this ran, so there is
+   * no second cancellation mechanism to keep in step with the first. */
+  function renderComposing(ep, card, report) {
+    card.innerHTML =
+      '<div class="p86lw-head"><span class="p86lw-av">' + esc(report.avatar) + '</span>' +
+      '<div><div class="p86lw-ttl">' +
+      (report.viaScribe ? 'Handed to the Scribe <span style="color:' + M.BLUE + '">— drafting</span>'
+                        : '86 <span style="color:' + M.BLUE + '">is writing the change</span>') +
+      '</div><div class="p86lw-sub">' + esc(report.label) + '</div></div>' +
+      '<span class="p86lw-dot"></span><button class="p86lw-x" title="Dismiss">×</button></div>' +
+      '<div class="p86lw-body" style="padding:12px 12px 14px;color:#9a9aa5;font-size:12px;line-height:1.5;">' +
+      esc(report.bodyText) + '</div>';
+    card.querySelector('.p86lw-x').addEventListener('click', dismiss);
+    STRIP.frame(ep, function () { card.classList.add('p86lw-in'); });
   }
 
   function dismiss() {
-    if (collapseTimer) clearTimeout(collapseTimer);
+    // Claiming is the cancellation. It invalidates the collapse timer, any
+    // in-flight reveal loop AND the composing backstop in one move — which is
+    // why dismissing the "Handed to the Scribe" card by hand no longer has it
+    // rebuild itself three minutes later to announce that nothing arrived.
+    STRIP.claim();
+    collapseTimer = null;
+    composingTimer = null;
     if (root) { root.remove(); root = null; }
     dismissPane();
   }
@@ -924,60 +989,52 @@
   //
   // The timer is a FAILURE BACKSTOP, not the thing that ends the card: the
   // draft usually lands after the old 45s window, which is why the card used
-  // to delete itself just before the change existed. The poller's draft arm
-  // clears it when the row actually appears.
-  var composingTimer = null, _composing = false;
+  // to delete itself just before the change existed.
+  //
+  // _composing WAS a boolean, and that is precisely why it produced two
+  // defects. Five entry points can take the strip and only one of them
+  // remembered to clear the flag, so noticeUnreadable's truthful amber notice
+  // ("wrote something this view could not read") was overwritten 180s later by
+  // "hasn't come back / Nothing has landed here in three minutes" — both
+  // clauses false, about a write the code had already reported. As an EPOCH,
+  // anything that repaints or destroys the strip supersedes the backstop
+  // automatically, including paths nobody has written yet.
+  var composingTimer = null, composingEpoch = 0;
   function startComposing(label, opts) {
-    ensureRoot();
     opts = opts || {};
-    _composing = true;
     var viaScribe = opts.tool !== 'emit_payload_file';
-    root.classList.remove('p86lw-collapsed');
-    var card = root.querySelector('.p86lw-card');
-    card.innerHTML =
-      '<div class="p86lw-head"><span class="p86lw-av">' + (viaScribe ? 'S' : '8') + '</span>' +
-      '<div><div class="p86lw-ttl">' +
-      (viaScribe ? 'Handed to the Scribe <span style="color:#378add">— drafting</span>'
-                 : '86 <span style="color:#378add">is writing the change</span>') +
-      '</div><div class="p86lw-sub">' + esc(label || 'drafting your change') + '</div></div>' +
-      '<span class="p86lw-dot"></span><button class="p86lw-x" title="Dismiss">×</button></div>' +
-      '<div class="p86lw-body" style="padding:12px 12px 14px;color:#9a9aa5;font-size:12px;line-height:1.5;">' +
-      (viaScribe
-        ? 'The Scribe drafts in the background — usually under a minute. The diff appears here the moment the draft lands.'
-        : 'The diff appears here the moment the change lands.') +
-      '</div>';
-    card.querySelector('.p86lw-x').addEventListener('click', dismiss);
-    requestAnimationFrame(function () { card.classList.add('p86lw-in'); });
-    // A collapse timer armed by the PREVIOUS card is still running: 14s from
-    // now it would hide this one behind a pill describing a write that is
-    // already history. This card ends when the draft lands (or when its own
-    // backstop fires), not on someone else's clock.
-    if (collapseTimer) { clearTimeout(collapseTimer); collapseTimer = null; }
-    setPill(viaScribe ? 'Handed to the Scribe — drafting' : '86 is writing the change', '#378add');
-    if (composingTimer) clearTimeout(composingTimer);
+    var report = M.describe({}, { composing: { label: label, viaScribe: viaScribe } });
+    reportToStrip({ meta: {} }, report);
+    var ep = STRIP.current();
+    composingEpoch = ep;
     composingTimer = setTimeout(async function () {
-      if (!_composing) return;
+      // Superseded: something else has taken the strip — a result landed, the
+      // user dismissed the card, a newer draft started. There is no longer a
+      // placeholder to back up, so this says nothing at all. (The 5s sweep
+      // keeps running regardless, so nothing is lost by not sweeping here.)
+      if (!STRIP.guard(ep, 'composing-backstop')) return;
       // Before concluding that nothing landed, LOOK. The sweep is the only
       // path that ever sees a background draft and it does not run while the
       // tab is hidden — so "no draft has landed" can easily mean "nobody
-      // checked". If the sweep finds the row, ingest() calls clearComposing()
-      // and this branch never speaks at all.
+      // checked". If the sweep finds the row, ingest() reports it, which
+      // claims the strip, and the re-check below silences this branch.
       var swept = false;
       try { swept = await pollApplies(true); } catch (_) { swept = false; }
-      if (!_composing) return;
-      _composing = false;
-      showNotice({ state: 'failed', emittingAgentKey: viaScribe ? 'scribe' : 'job', title: label || '' },
-        "hasn't come back",
-        'Nothing has landed here in three minutes. ' +
-        (swept
-          ? 'The writes feed was just checked and this write is not in it — it may still be running.'
-          : 'The writes feed could not be checked just now, so this view does not know whether it landed.') +
-        ' Check Pending approvals above the chat box, or the Cowork page.');
+      if (!STRIP.guard(ep, 'composing-backstop-post')) return;
+      composingTimer = null;
+      var entry = { meta: { state: 'failed', emittingAgentKey: viaScribe ? 'scribe' : 'job', title: label || '' } };
+      reportToStrip(entry, M.describe(entry, { backstop: { viaScribe: viaScribe, label: label, swept: swept } }));
     }, 180000);
   }
+  /* Retire the placeholder — but ONLY if it is still what the strip is
+   * showing. Under epochs this is the whole check: if any other report has
+   * claimed the strip since, the placeholder is already gone and tearing the
+   * root down here would destroy someone else's card. */
   function clearComposing() {
-    if (composingTimer) { clearTimeout(composingTimer); composingTimer = null; }
-    if (_composing) { _composing = false; if (root) { root.remove(); root = null; } }
+    if (!STRIP.holds(composingEpoch)) return;
+    STRIP.claim();                    // supersede everything the placeholder scheduled
+    composingTimer = null;
+    if (root) { root.remove(); root = null; }
   }
 
   // ── the estimate "document" pane (surface B, applied writes only) ────────
@@ -994,11 +1051,20 @@
     document.body.appendChild(paneRoot);
   }
   function dismissPane() {
-    if (paneTimer) clearTimeout(paneTimer);
+    PANE.claim();
+    paneTimer = null;
     if (paneRoot) { paneRoot.remove(); paneRoot = null; }
   }
-  function showEstimatePane(entry) {
+  /* Called ONLY from reportToStrip, never from the surface directly. That is
+   * the F3 fix and it is structural rather than a missing call: the pane used
+   * to be routed to INSTEAD of the strip, so it touched neither the pill nor
+   * the card nor the collapse timer — and a successful pane could paint
+   * bottom-left while a stale failure card and a red pill sat bottom-right,
+   * for the rest of the session. A report is now delivered in one place; the
+   * pane is a chrome that place chooses, not a way around it. */
+  function showEstimatePane(entry, report) {
     ensurePane();
+    var ep = PANE.claim();
     var cs0 = entry.changeset[0];
     var model = buildEstimateRows(cs0);
     var diff = entry.groups[0] || { ops: [], impact: 0 };
@@ -1057,20 +1123,28 @@
     card.querySelector('.p86lp-x').addEventListener('click', dismissPane);
     wireCoworkBtn(card);
 
-    requestAnimationFrame(function () { card.classList.add('in'); });
+    PANE.frame(ep, function () { card.classList.add('in'); });
+    // Same orphan shape as the strip's, and until now benign only by luck:
+    // two pane renders without an intervening dismissPane reuse the same
+    // .p86lp-card node, so render #1's loop finished into render #2's header
+    // and — the real damage — set paneTimer from its OWN completion, dismissing
+    // the newer pane early.
     var chgEls = card.querySelectorAll('.chg');
     var i = 0;
     (function reveal() {
+      if (!PANE.guard(ep, 'pane-reveal')) return;
       if (i >= MAX_REVEALS) {
         for (var k = i; k < chgEls.length; k++) chgEls[k].classList.add('on');
         i = chgEls.length;
       }
-      if (i < chgEls.length) { chgEls[i].classList.add('on'); i++; setTimeout(reveal, STAGGER_MS); }
+      if (i < chgEls.length) { chgEls[i].classList.add('on'); i++; PANE.after(ep, STAGGER_MS, reveal); }
       else {
-        var v = card.querySelector('.p86lp-verb'); if (v) v.textContent = 'wrote';
-        var d = card.querySelector('.p86lp-head .p86lw-dot'); if (d) { d.style.animation = 'none'; d.style.background = '#1d9e75'; }
-        if (paneTimer) clearTimeout(paneTimer);
-        paneTimer = setTimeout(dismissPane, COLLAPSE_MS + 8000);
+        if (report && report.settles) {
+          var v = card.querySelector('.p86lp-verb'); if (v) v.textContent = report.settleVerb;
+          var d = card.querySelector('.p86lp-head .p86lw-dot');
+          if (d) { d.style.animation = 'none'; d.style.background = report.settleDot; }
+        }
+        paneTimer = PANE.after(ep, COLLAPSE_MS + 8000, dismissPane);
       }
     })();
   }
@@ -1081,68 +1155,23 @@
     order: 90,
     exclusive: true,
     claims: function () { return true; },
+    /* One line, on purpose. Every decision this used to make — rejected is not
+     * news, a refusal is not a failed apply, which silence is which, whether
+     * the document pane or the op strip renders it — is now in the model, and
+     * every paint goes through the one boundary that always sets the pill.
+     *
+     * The pane's arbitration still lives in describe(): only a COMMITTED
+     * single-estimate write earns it, and only when surface C has not already
+     * claimed the editor. Standing on the very estimate that changed, the pane
+     * would be a 560px read-only copy painted on top of the real one while the
+     * real one animates the same change underneath — two documents, one of
+     * them fake, one covering the other. The strip stays as the ticket naming
+     * the agent, the cost impact, and the DELETED lines, which C cannot show
+     * because their rows are gone. */
     render: function (entry) {
-      var meta = entry.meta;
-      if (meta.state === 'rejected') return;            // a dismissal is not news
-      if (meta.state === 'failed') {
-        // A refusal and a failed apply are different claims. "Couldn't apply
-        // that" on a write that never got as far as a draft would send the
-        // user hunting for a card that does not exist.
-        if (meta.neverDrafted) {
-          showNotice(meta, "couldn't draft that",
-            (meta.applyError || 'The Scribe did not produce a usable change.') +
-            ' Nothing was written — re-ask with the exact record and fields.');
-        } else {
-          showNotice(meta, "couldn't apply that", meta.applyError || 'The write failed and nothing was changed.');
-        }
-        return;
-      }
-      if (!entry.groups.length) {
-        // A DRAFT with nothing to render is still a draft that landed. This
-        // arm used to not exist, so the poller's `proposed` filter had to
-        // refuse such rows outright — and refusing them meant ingest() never
-        // ran, clearComposing() never fired, and the "Handed to the Scribe —
-        // drafting" card ran its full 180s and concluded "No draft has landed
-        // in three minutes" about a draft sitting in Pending approvals.
-        if (meta.state === 'proposed' && meta.payloadId) {
-          showNotice(meta, 'drafted — needs approval',
-            draftNoDiffWhy(meta.createdAt) + ' Open it in Cowork to read the change itself.');
-          return;
-        }
-        // Two different silences, and they are NOT the same claim.
-        //   no changeset at all → nothing was recorded; WHY is not knowable
-        //     from here, so it isn't guessed at
-        //   changeset present, no ops → it recorded a before/after we can't
-        //     break into ops. Saying "doesn't record a diff" here would be
-        //     false, and it was: a live scope write hit exactly this path.
-        if (meta.state === 'applied' && meta.payloadId) {
-          showNotice(meta, 'wrote something this view can\'t break down',
-            (meta.summary || meta.title || 'The change was applied.') +
-            (entry.changeset.length
-              ? ' — the server recorded a before/after for it, but not as changes this view can list.'
-              : ' — the server recorded no before/after for it, so what changed is not known here.'));
-        }
-        return;
-      }
-      // Only a COMMITTED single-estimate write earns the document pane — AND
-      // only when surface C did not already claim the editor.
-      //
-      // When the user is standing on the very estimate that changed, the pane
-      // is a 560px read-only copy of the estimate rendered ON TOP of the real
-      // one, while the real one animates the same change underneath. Two
-      // documents, one of them fake, one of them covering the other. The
-      // editor is the document in that case; the strip stays as the ticket
-      // that names the agent, the cost impact, the ops with no row to paint,
-      // and — the reason it matters most — the DELETED lines, which C cannot
-      // show because their rows are gone.
-      var inEditor = (entry.claimedBy || []).indexOf('editor-flash') >= 0;
-      if (!inEditor && meta.state === 'applied' && !meta.isDraft && entry.changeset.length === 1 &&
-          entry.changeset[0].entity_type === 'estimate' && entry.changeset[0].after &&
-          getLines(entry.changeset[0].after).length) {
-        showEstimatePane(entry);
-      } else {
-        show(entry.groups, meta);
-      }
+      return reportToStrip(entry, M.describe(entry, {
+        inEditor: (entry.claimedBy || []).indexOf('editor-flash') >= 0
+      }));
     }
   });
 
@@ -1219,6 +1248,9 @@
         _pendingFlash.ops = Object.keys(byKey).map(function (k) { return byKey[k]; });
         _pendingFlash.at = Date.now();
       } else {
+        // A DIFFERENT estimate's flash replaces this one: claim, so any
+        // stagger loop still running for the old one stops scheduling.
+        FLASH.claim();
         _pendingFlash = { estimateId: cs.id, ops: ops, at: Date.now() };
       }
     }
@@ -1238,6 +1270,7 @@
     // user is not looking at.
     var view = document.getElementById('estimate-editor-view');
     if (!view) return 0;
+    var ep = FLASH.claim();
     var painted = 0, i = 0;
     function paint(o) {
       var el = view.querySelector('[data-line-id="' + String(o.lineId).replace(/"/g, '\\"') + '"]');
@@ -1251,16 +1284,19 @@
       painted++;
     }
     (function step() {
+      // Two checks, and they catch different things. The EPOCH catches
+      // supersession — a newer flash took the region. The IDENTITY check
+      // catches the editor closing or swapping estimates, which no claim
+      // anywhere would signal, so folding it into the owner would lose it.
+      if (!FLASH.guard(ep, 'flash')) return;
       // Past MAX_REVEALS the rest paint at once. A 400-line rewrite staggered
       // at 180ms would animate for 72 seconds — long after the user has moved
       // on, and long enough that the editor may have re-rendered underneath.
       if (i >= MAX_REVEALS) { while (i < p.ops.length) paint(p.ops[i++]); return; }
       if (i >= p.ops.length) return;
-      // The editor closed (or swapped estimates) mid-stagger — stop, rather
-      // than decorating rows in whatever is on screen now.
       if (String(openEditorEstimateId()) !== String(p.estimateId)) return;
       paint(p.ops[i++]);
-      setTimeout(step, STAGGER_MS);
+      FLASH.after(ep, STAGGER_MS, step);
     })();
     return p.ops.length;
   }
@@ -1341,17 +1377,16 @@
   // broke.
   function noticeUnreadable(row, state, err) {
     try {
-      showNotice(metaFromRow(row, state),
-        state === 'applied' ? 'wrote something this view could not read'
-                            : 'left a write this view could not read',
-        (row.title ? '“' + row.title + '” — ' : '') +
-        'the server would not return its details (' + ((err && err.message) || 'fetch failed') +
-        ') after ' + MAX_DETAIL_RETRIES + ' tries, so what it changed is not known here. ' +
-        'Open it in Cowork, which fetches it again.',
-        // Amber, not the state's own green: the write did land — that much the
-        // list row proves — but this is a degraded report of it, and a glance
-        // at a green pill would read as "nothing to see here".
-        { dot: '#d98a1f' });
+      // Goes through the SAME boundary as every other report, which is what
+      // makes it supersede the composing placeholder. It used to call
+      // showNotice directly and never touch _composing, so 180 seconds after
+      // this truthful amber notice rendered, the backstop replaced it with
+      // "hasn't come back / Nothing has landed here in three minutes" — both
+      // clauses false, about a write this very function had just reported.
+      var entry = { meta: metaFromRow(row, state), groups: [], changeset: [] };
+      reportToStrip(entry, M.describe(entry, {
+        unreadable: { message: (err && err.message) || 'fetch failed', tries: MAX_DETAIL_RETRIES }
+      }));
     } catch (e) { console.warn('[live-writer] unreadable notice failed', e); }
   }
 
@@ -1427,8 +1462,19 @@
    * card's backstop needs to distinguish "checked, not there" from "couldn't
    * check", and a swallowed catch cannot tell it apart. `force` runs the sweep
    * even in a hidden tab, which is exactly the case that backstop is for. */
+  var _pollInFlight = null;
   async function pollApplies(force) {
     if (document.hidden && !force) return false;
+    // NOT an epoch problem, and deliberately not solved with one: the 5s
+    // interval, the composing backstop's forced sweep and _pollOnce can all
+    // start a sweep, and three overlapping `for … await ingestRow` loops
+    // interleave their baseline arithmetic arbitrarily. One sweep at a time;
+    // a caller that arrives mid-sweep joins the one already running.
+    if (_pollInFlight) return _pollInFlight;
+    _pollInFlight = pollOnce();
+    try { return await _pollInFlight; } finally { _pollInFlight = null; }
+  }
+  async function pollOnce() {
     try {
       var j = await fetchJson('/api/payloads/?limit=12&order=activity');
       var rows = j.payloads || j.rows || j || [];
@@ -1546,6 +1592,10 @@
      * the strip cannot drift into telling the user two different stories about
      * the same row. */
     draftNoDiffWhy: draftNoDiffWhy,
+    /* THE decision layer, re-exported so surface A reaches the same predicate
+     * and the same sentences rather than re-deriving them. Cowork calling
+     * anything else here is how R5 grew a copy in the first place. */
+    model: M,
     /* Fired by the estimate editor's post-hydrate refresh (surface C). */
     flashEditorRows: flashEditorRows,
     /* The handoff placeholder. */
