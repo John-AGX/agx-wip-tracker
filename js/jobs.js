@@ -1794,27 +1794,20 @@ function renderJobsMain() {
             if (!ids.length) return;
             bulkConfirm({ title: 'Delete jobs', message: 'Permanently delete ' + ids.length + ' job(s) and all their data? This cannot be undone.', confirmLabel: 'Delete', danger: true }).then(function(ok) {
                 if (!ok) return;
-                var idSet = new Set(ids);
-                appData.jobs = appData.jobs.filter(function(j) { return !idSet.has(j.id); });
-                appData.buildings = appData.buildings.filter(function(b) { return !idSet.has(b.jobId); });
-                appData.phases = appData.phases.filter(function(p) { return !idSet.has(p.jobId); });
-                appData.changeOrders = appData.changeOrders.filter(function(c) { return !idSet.has(c.jobId); });
-                appData.subs = appData.subs.filter(function(s) { return !idSet.has(s.jobId); });
-                appData.purchaseOrders = (appData.purchaseOrders || []).filter(function(p) { return !idSet.has(p.jobId); });
-                appData.invoices = (appData.invoices || []).filter(function(i) { return !idSet.has(i.jobId); });
-                try {
-                    var all = JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}');
-                    ids.forEach(function(id) { delete all[id]; });
-                    localStorage.setItem('p86-nodegraphs', JSON.stringify(all));
-                } catch (e) {}
-                saveData();
-                // bulk-save only upserts — server-side delete per id or they resurrect.
-                if (window.p86Api && window.p86Api.isAuthenticated()) {
-                    ids.forEach(function(id) { window.p86Api.jobs.remove(id).catch(function(err) { console.warn('Server delete failed for ' + id + ':', err.message); }); });
-                }
-                _jobsSelected.clear();
-                if (typeof window.p86Toast === 'function') window.p86Toast('Deleted ' + ids.length + ' job(s).', 'success');
-                renderJobsTable();
+                // Server first, and the toast is computed from the RESULT. It
+                // used to say "Deleted N job(s)." before a single DELETE had
+                // resolved — a success message for an outcome nobody had
+                // checked, which is the same defect as a silent failure with
+                // better manners.
+                return deleteJobsOnServer(ids).then(function(res) {
+                    if (res.ok.length) purgeJobsLocally(res.ok);
+                    _jobsSelected.clear();
+                    if (res.ok.length && typeof window.p86Toast === 'function') {
+                        window.p86Toast('Deleted ' + res.ok.length + ' job(s).', 'success');
+                    }
+                    reportJobDeleteFailures(res.failed);
+                    renderJobsTable();
+                });
             });
         }
         function p86JobsExportSelected() {
@@ -2737,30 +2730,81 @@ function renderJobsMain() {
               _deleteJobConfirmed(jobId);
             });
         }
-        function _deleteJobConfirmed(jobId) {
-            // Remove all related data locally
-            appData.buildings = appData.buildings.filter(b => b.jobId !== jobId);
-            appData.phases = appData.phases.filter(p => p.jobId !== jobId);
-            appData.subs = appData.subs.filter(s => s.jobId !== jobId);
-            appData.changeOrders = appData.changeOrders.filter(c => c.jobId !== jobId);
-            appData.purchaseOrders = (appData.purchaseOrders || []).filter(p => p.jobId !== jobId);
-            appData.invoices = (appData.invoices || []).filter(i => i.jobId !== jobId);
-            appData.jobs = appData.jobs.filter(j => j.id !== jobId);
-            // Remove workspace data
-            var allWs = safeLoadJSON('p86-workspaces', {});
-            delete allWs[jobId];
-            localStorage.setItem('p86-workspaces', JSON.stringify(allWs));
-            // Persist locally + push to server. The bulk-save endpoint only
-            // upserts present jobs, so we also need an explicit DELETE
-            // /api/jobs/:id call — without this the server keeps the job
-            // and it reappears on the next page reload.
-            saveData();
-            if (window.p86Api && window.p86Api.isAuthenticated()) {
-                window.p86Api.jobs.remove(jobId).catch(function(err) {
-                    console.warn('Server delete failed for ' + jobId + ':', err.message);
-                });
+        /* ── deleting a job ─────────────────────────────────────────────────
+         * SERVER FIRST, always. All three delete paths used to filter appData,
+         * call saveData(), navigate away, and fire the DELETE as
+         * forget-and-swallow into a console.warn. Two things go wrong with that
+         * and both are silent:
+         *
+         *   - A DELETE that fails (a 502 in a deploy window, a 403 on a job
+         *     this user cannot edit) leaves the row gone from the screen and
+         *     present in Postgres. It comes back on the next hydrate, looking
+         *     like the app undid the user's action.
+         *   - Nothing can ever be built on top of "this row was deleted"
+         *     while the claim is unverified. Estimates already do this
+         *     correctly (js/estimates.js: remove → then removeLocal, 404
+         *     tolerated); jobs did it backwards.
+         *
+         * A 404 counts as success: the row is gone, which is what was asked
+         * for. Anything else is reported by name, and the row stays. */
+        function deleteJobsOnServer(ids) {
+            if (!window.p86Api || !window.p86Api.isAuthenticated()) {
+                return Promise.resolve({ ok: ids.slice(), failed: [] });
             }
-            backToJobsMain();
+            var ok = [], failed = [];
+            return Promise.all(ids.map(function(id) {
+                return window.p86Api.jobs.remove(id)
+                    .then(function() { ok.push(id); })
+                    .catch(function(err) {
+                        if (err && err.status === 404) { ok.push(id); return; }   // already gone
+                        failed.push({ id: id, message: (err && err.message) || 'unknown error' });
+                    });
+            })).then(function() { return { ok: ok, failed: failed }; });
+        }
+        function reportJobDeleteFailures(failed) {
+            if (!failed || !failed.length) return;
+            var lines = failed.map(function(f) {
+                var j = (appData.jobs || []).find(function(x) { return x.id === f.id; });
+                return '• ' + ((j && (j.title || j.name)) || f.id) + ' — ' + f.message;
+            });
+            var msg = (failed.length === 1 ? 'This job was not deleted:' : failed.length + ' jobs were not deleted:') +
+                '\n\n' + lines.join('\n') + '\n\nThey are still on the server and still yours.';
+            if (typeof window.p86Alert === 'function') window.p86Alert({ title: 'Delete failed', message: msg });
+            else if (typeof window.p86Toast === 'function') window.p86Toast(msg, 'error');
+            else console.warn('[job-delete] ' + msg);
+        }
+        // Local teardown for jobs the server has CONFIRMED are gone.
+        function purgeJobsLocally(ids) {
+            var idSet = new Set(ids);
+            appData.buildings = appData.buildings.filter(b => !idSet.has(b.jobId));
+            appData.phases = appData.phases.filter(p => !idSet.has(p.jobId));
+            appData.subs = appData.subs.filter(s => !idSet.has(s.jobId));
+            appData.changeOrders = appData.changeOrders.filter(c => !idSet.has(c.jobId));
+            appData.purchaseOrders = (appData.purchaseOrders || []).filter(p => !idSet.has(p.jobId));
+            appData.invoices = (appData.invoices || []).filter(i => !idSet.has(i.jobId));
+            appData.jobs = appData.jobs.filter(j => !idSet.has(j.id));
+            try {
+                var allWs = safeLoadJSON('p86-workspaces', {});
+                ids.forEach(function(id) { delete allWs[id]; });
+                localStorage.setItem('p86-workspaces', JSON.stringify(allWs));
+            } catch (e) {}
+            try {
+                var graphs = JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}');
+                ids.forEach(function(id) { delete graphs[id]; });
+                localStorage.setItem('p86-nodegraphs', JSON.stringify(graphs));
+            } catch (e) {}
+            saveData();
+        }
+
+        function _deleteJobConfirmed(jobId) {
+            return deleteJobsOnServer([jobId]).then(function(res) {
+                if (res.ok.length) {
+                    purgeJobsLocally(res.ok);
+                    backToJobsMain();
+                }
+                reportJobDeleteFailures(res.failed);
+                return res;
+            });
         }
 
         // Edit the Job Information card. Layout-agnostic: instead of rebuilding
@@ -7264,28 +7308,12 @@ function renderJobsMain() {
                 .then(function (ok) { if (ok) _deleteArchivedJobConfirmed(jobId); });
         }
         function _deleteArchivedJobConfirmed(jobId) {
-            appData.jobs = appData.jobs.filter(function(j) { return j.id !== jobId; });
-            appData.buildings = appData.buildings.filter(function(b) { return b.jobId !== jobId; });
-            appData.phases = appData.phases.filter(function(p) { return p.jobId !== jobId; });
-            appData.changeOrders = appData.changeOrders.filter(function(c) { return c.jobId !== jobId; });
-            appData.subs = appData.subs.filter(function(s) { return s.jobId !== jobId; });
-            appData.purchaseOrders = (appData.purchaseOrders || []).filter(function(p) { return p.jobId !== jobId; });
-            appData.invoices = (appData.invoices || []).filter(function(i) { return i.jobId !== jobId; });
-            // Remove node graph
-            try {
-                var all = JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}');
-                delete all[jobId];
-                localStorage.setItem('p86-nodegraphs', JSON.stringify(all));
-            } catch (e) {}
-            saveData();
-            // Server-side delete (bulk-save only upserts; without this the
-            // job comes back on next page reload).
-            if (window.p86Api && window.p86Api.isAuthenticated()) {
-                window.p86Api.jobs.remove(jobId).catch(function(err) {
-                    console.warn('Server delete failed for ' + jobId + ':', err.message);
-                });
-            }
-            renderArchivedJobs();
+            return deleteJobsOnServer([jobId]).then(function(res) {
+                if (res.ok.length) purgeJobsLocally(res.ok);
+                reportJobDeleteFailures(res.failed);
+                renderArchivedJobs();
+                return res;
+            });
         }
 
 
