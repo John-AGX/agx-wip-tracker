@@ -472,7 +472,10 @@ describe('user creation stamps an org', () => {
     const src = read('routes/auth-routes.js');
     const stmt = src.slice(src.indexOf('INSERT INTO users'));
     expect(stmt.slice(0, 200)).toMatch(/organization_id/);
-    expect(src).toMatch(/router\.post\('\/register',\s*requireAuth,\s*requireOrgId/);
+    // requireRole BEFORE requireOrgId: an org-less non-admin must be stopped by
+    // the role gate, not told about their org state by a 409 for a request that
+    // would never have succeeded at any org.
+    expect(src).toMatch(/router\.post\('\/register',\s*requireAuth,\s*requireRole\('admin'\),\s*requireOrgId/);
     // from the creating admin's resolved org, never from the request body
     expect(stmt.slice(0, 400)).toMatch(/req\.orgId/);
     expect(stmt.slice(0, 400)).not.toMatch(/req\.body\.organization_id/);
@@ -482,9 +485,13 @@ describe('user creation stamps an org', () => {
     const src = read('db.js');
     const seed = src.slice(src.indexOf("VALUES ($1, $2, 'Admin', 'admin'"));
     expect(seed.slice(0, 500)).toMatch(/organization_id/);
-    // never a guess: one live org, or nothing
+    // never a guess: one org EVER, or nothing. "Live" reopened on archive —
+    // archive the second tenant and the seed would stamp the env admin into
+    // the first one, which is the same guess the backfill gate refuses.
     expect(seed.slice(0, 500))
-      .toMatch(/SELECT COUNT\(\*\) FROM organizations WHERE archived_at IS NULL\) = 1/);
+      .toMatch(/SELECT COUNT\(\*\) FROM organizations\) = 1/);
+    expect(seed.slice(0, 500))
+      .not.toMatch(/COUNT\(\*\) FROM organizations WHERE archived_at IS NULL\) = 1/);
     // and an existing admin keeps whatever org it already has
     expect(seed.slice(0, 700)).toMatch(/COALESCE\(users\.organization_id/);
   });

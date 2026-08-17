@@ -217,7 +217,7 @@ router.post('/act-as/exit', requireAuth, async (req, res) => {
 // null org in their JWT and stamped NULL through every write path that was
 // otherwise correct. Creating an org-less user is now refused here rather
 // than discovered later at their first save.
-router.post('/register', requireAuth, requireOrgId, requireRole('admin'), async (req, res) => {
+router.post('/register', requireAuth, requireRole('admin'), requireOrgId, async (req, res) => {
   try {
     const { email, password, name, role, phone_number } = req.body;
     if (!email || !password || !name) {
@@ -554,10 +554,46 @@ router.put('/users/:id', requireAuth, requireRole('admin'), async (req, res) => 
       }
     }
 
+    // ── The remediation requireOrgId's 409 promises ──────────────────────────
+    // "An administrator must set your organization" named an action no endpoint
+    // performed: nothing in this repo wrote users.organization_id after insert.
+    // The only three writes are /register, the org-creation seed admin, and the
+    // boot backfill — and 9c1626a correctly gated that backfill, so the moment a
+    // second organization exists an org-less user is permanently unable to save
+    // a job, behind a hard-closed 409, told to ask an admin with no button.
+    // Fail closed, but do not lock anyone out; that needed a door.
+    //
+    // ADOPT, never MOVE. The org is taken from the calling admin's own resolved
+    // tenant (the same rule /register uses) and never from the body, and it is
+    // only ever written onto a user who has NONE. An admin cannot reassign a
+    // user who already belongs to a tenant — that would be a tenancy move
+    // performed as a side effect of an HR edit, which is the shape this whole
+    // wave exists to remove.
+    let adoptOrgId = null;
+    if (user.organization_id == null) {
+      try {
+        const admin = await pool.query('SELECT organization_id FROM users WHERE id = $1', [req.user.id]);
+        adoptOrgId = (admin.rows[0] && admin.rows[0].organization_id) || null;
+      } catch (e) {
+        console.warn('[auth] org adoption lookup failed:', e && e.message);
+      }
+    }
+
     await pool.query(
-      'UPDATE users SET name = $1, role = $2, active = $3, phone_number = $4, email = $5, timezone = $6, updated_at = NOW() WHERE id = $7',
-      [name || user.name, role || user.role, active != null ? active : user.active, phoneUpdate, emailUpdate, timezoneUpdate, req.params.id]
+      'UPDATE users SET name = $1, role = $2, active = $3, phone_number = $4, email = $5, timezone = $6, ' +
+      // Bare column = the OLD value, so this can only ever fill a NULL.
+      'organization_id = COALESCE(organization_id, $8), updated_at = NOW() WHERE id = $7',
+      [name || user.name, role || user.role, active != null ? active : user.active, phoneUpdate, emailUpdate, timezoneUpdate, req.params.id, adoptOrgId]
     );
+    if (adoptOrgId != null) {
+      auditLog(req, {
+        action: 'user.org_adopted',
+        targetType: 'user',
+        targetId: req.params.id,
+        organizationId: adoptOrgId,
+        detail: { organization_id_after: adoptOrgId, source: 'calling admin' },
+      });
+    }
 
     // Audit — role change is the privileged one; record before/after.
     auditLog(req, {

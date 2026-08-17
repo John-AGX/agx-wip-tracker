@@ -3707,6 +3707,33 @@
                 // seconds meant the push retry was decorative during exactly
                 // the failure it was written for. saveData() re-arms the count
                 // on new user intent, so this is a per-burst bound.
+                // A PERMANENT refusal must not ride the ladder. The server
+                // already did the hard part by naming its codes apart; this
+                // was not reading them, so 409 ORG_UNRESOLVED — "an
+                // administrator must attach your account to an organization",
+                // which no amount of waiting changes — spent 105 seconds
+                // pretending to retry before it said anything at all. Same for
+                // a 403. 503 ORG_LOOKUP_FAILED keeps all seven rungs: it is
+                // exactly the Railway-swap case the ladder was written for.
+                //
+                // handleResponse attaches err.status and err.data, so the
+                // server's own sentence is what the user sees.
+                var _st = err && err.status;
+                var _permanent = (_st === 409 || _st === 403);
+                if (_permanent) {
+                    if (!_blockedSince) _blockedSince = Date.now();
+                    notifyPushStatus('failed', {
+                        reason: (err.data && err.data.code) || 'refused',
+                        permanent: true,
+                        message: (err.data && err.data.error) || err.message,
+                        error: err,
+                        jobs: dirtyJobIds(), estimates: dirtyEstimateIds()
+                    });
+                    if (window.p86Toast) {
+                        try { window.p86Toast((err.data && err.data.error) || err.message, 'error'); } catch (e) {}
+                    }
+                    throw err;
+                }
                 if (_pushRetryCount < PUSH_BACKOFF.length) {
                     var backoff = PUSH_BACKOFF[_pushRetryCount];
                     _pushRetryCount++;

@@ -190,7 +190,7 @@ router.get('/:id', requireAuth, async (req, res) => {
 // POST /api/jobs
 // Admins can assign ownership to any user via body.owner_id; PMs always own
 // the jobs they create (the field is ignored from non-admin callers).
-router.post('/', requireAuth, requireOrgId, requireRole('admin', 'pm'), async (req, res) => {
+router.post('/', requireAuth, requireRole('admin', 'pm'), requireOrgId, async (req, res) => {
   try {
     const id = req.body.id || 'job' + Date.now();
     let ownerId = req.user.id;
@@ -258,7 +258,7 @@ router.post('/', requireAuth, requireOrgId, requireRole('admin', 'pm'), async (r
 //   • leads.job_id + lead.status = 'sold'
 //   • estimate.data.job_id            (powers the Estimates "Won" filter)
 // Body: { job: {…full job blob incl contractAmount + workbook}, lead_id?, estimate_id? }
-router.post('/convert', requireAuth, requireOrgId, requireRole('admin', 'pm'), async (req, res) => {
+router.post('/convert', requireAuth, requireRole('admin', 'pm'), requireOrgId, async (req, res) => {
   const client = await pool.connect();
   try {
     const job = (req.body && req.body.job) || {};
@@ -687,7 +687,7 @@ router.delete('/:id/access/:userId', requireAuth, async (req, res) => {
 });
 
 // PUT /api/jobs/bulk/save
-router.put('/bulk/save', requireAuth, requireOrgId, requireRole('admin', 'pm'), async (req, res) => {
+router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), requireOrgId, async (req, res) => {
   try {
     const { appData, baseVersions } = req.body;
     if (!appData || !appData.jobs) return res.status(400).json({ error: 'Invalid appData' });

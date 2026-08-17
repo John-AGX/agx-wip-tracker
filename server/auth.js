@@ -344,7 +344,11 @@ async function requireOrgId(req, res, next) {
   }
   if (orgId == null) {
     return res.status(409).json({
-      error: 'This account is not attached to an organization. The write was refused rather than saved without one — an administrator must set your organization.',
+      // Names an action an admin can actually take: opening this user in
+      // Admin → Users and saving adopts them into the admin's own tenant
+      // (auth-routes PUT /users/:id). Before that door existed, this sentence
+      // pointed at nothing.
+      error: 'This account is not attached to an organization. The write was refused rather than saved without one — ask an administrator to open your user in Admin → Users and save it, which attaches you to their organization.',
       code: ORG_UNRESOLVED
     });
   }

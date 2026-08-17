@@ -30,8 +30,36 @@ const pool = new Pool({
 // not by calling that helper because these statements live inside one big
 // multi-statement query where there is no JS control flow to hang a condition
 // on (and db.js <- org-reset.js is a require cycle besides).
-const SOLE_ORG_ONLY =
-  '(SELECT COUNT(*) FROM organizations WHERE archived_at IS NULL) <= 1';
+//
+// EVER existed, not currently LIVE. The predicate used to read
+// `WHERE archived_at IS NULL`, and archiving an org is a live feature
+// (DELETE /api/admin/organizations/:id is a soft archive — "data stays for
+// audit"). Archiving touches neither the org's users nor their
+// organization_id, nor its jobs, so the gate's premise — "nothing left to
+// guess between" — was false the moment a second org had ever existed.
+// Onboard org B, archive it, restart: the live count drops to 1, all 21 gated
+// guesses resume, and org B's NULL rows get stamped into org A on the next
+// boot.
+//
+// There is no restore endpoint: `archived_at = NULL` appears nowhere in this
+// repo for organizations, so archive is one-way through the API. A gate that
+// swings back open on an irreversible action is the whole finding. Dropping
+// the filter makes it a LATCH instead: COUNT(*) over organizations only ever
+// rises (no hard delete exists, and users.organization_id is ON DELETE
+// RESTRICT, which blocks one while any user references the org), so once this
+// closes it is closed for good.
+//
+// Fresh DB unaffected: the migration seeds exactly one org (slug='agx') before
+// any gated statement runs, so the count is 1 and AGX's boot is byte-identical.
+// Zero orgs also satisfies <= 1, and the `(SELECT id … WHERE slug='agx')`
+// subquery is then NULL, making the UPDATE a no-op. Fails safe both ways.
+//
+// The name says what it answers — "has this database ever had something to
+// guess between" — and it is not a general "live orgs" helper. Billing and
+// entitlements may legitimately want a different question; they must not
+// borrow this predicate.
+const NEVER_MULTI_ORG =
+  '(SELECT COUNT(*) FROM organizations) <= 1';
 
 async function initSchema() {
   await pool.query(`
@@ -282,7 +310,7 @@ async function initSchema() {
     -- Backfill: every existing user belongs to AGX. Safe re-run
     -- (only touches NULL rows; explicit assignments stay).
     --
-    -- GATED (SOLE_ORG_ONLY). This is the most consequential guess in the file and
+    -- GATED (NEVER_MULTI_ORG). This is the most consequential guess in the file and
     -- it was the least obvious, because it is one table upstream of the ones
     -- anyone audits. A hardcoded slug turned ANY org-less user into an AGX
     -- user on the next boot -- and the jobs backfill further down, the one
@@ -292,7 +320,7 @@ async function initSchema() {
     UPDATE users
        SET organization_id = (SELECT id FROM organizations WHERE slug = 'agx')
      WHERE organization_id IS NULL
-       AND ${SOLE_ORG_ONLY};
+       AND ${NEVER_MULTI_ORG};
 
     -- ───────────────────────────────────────────────────────────────
     -- Per-org skill packs. Replaces the global app_settings.agent_skills
@@ -564,7 +592,7 @@ async function initSchema() {
     -- install. If Project 86 ever onboards a second org BEFORE this
     -- backfill runs, the per-client assignment will need a manual
     -- pass (admin UI) before opening the second tenant.
-    -- GATED (SOLE_ORG_ONLY). clients is the genuinely undecidable table: it
+    -- GATED (NEVER_MULTI_ORG). clients is the genuinely undecidable table: it
     -- has no owner column at all, so this is a pure guess with nothing to
     -- check it against. With a second tenant present it does not run, and
     -- un-assignable clients stay NULL and are counted at boot.
@@ -576,13 +604,13 @@ async function initSchema() {
           LIMIT 1
        )
      WHERE c.organization_id IS NULL
-       AND ${SOLE_ORG_ONLY};
+       AND ${NEVER_MULTI_ORG};
 
     -- Single-tenant fallback for remaining nulls on jobs/estimates/leads
     -- (e.g. legacy rows where owner_id pointed to a deleted user).
     -- Same source as the clients backfill — pick a stable org from the
     -- first user. Idempotent via the NULL guard.
-    -- GATED (SOLE_ORG_ONLY) -- both. These carry CONTRACT MONEY, which makes
+    -- GATED (NEVER_MULTI_ORG) -- both. These carry CONTRACT MONEY, which makes
     -- them the worst place in the schema to guess: a job assigned to the
     -- wrong tenant is a silent cross-tenant move of a contract amount that
     -- nobody would ever notice. The evidence-based owner join above is what
@@ -590,15 +618,15 @@ async function initSchema() {
     UPDATE jobs SET organization_id = (
       SELECT u.organization_id FROM users u
        WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1
-    ) WHERE organization_id IS NULL AND ${SOLE_ORG_ONLY};
+    ) WHERE organization_id IS NULL AND ${NEVER_MULTI_ORG};
     UPDATE estimates SET organization_id = (
       SELECT u.organization_id FROM users u
        WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1
-    ) WHERE organization_id IS NULL AND ${SOLE_ORG_ONLY};
+    ) WHERE organization_id IS NULL AND ${NEVER_MULTI_ORG};
     UPDATE leads SET organization_id = (
       SELECT u.organization_id FROM users u
        WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1
-    ) WHERE organization_id IS NULL AND ${SOLE_ORG_ONLY};
+    ) WHERE organization_id IS NULL AND ${NEVER_MULTI_ORG};
 
     -- ──────────────────────────────────────────────────────────────────
     -- Wave 1.A Phase 3 — multi-tenancy completion for the remaining
@@ -649,6 +677,26 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_subs_org              ON subs              (organization_id) WHERE organization_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_sub_certificates_org  ON sub_certificates  (organization_id) WHERE organization_id IS NOT NULL;
 
+    -- The stamp auditor asks the OPPOSITE question (organization_id IS NULL),
+    -- and every index above is PARTIAL on IS NOT NULL, so by construction none
+    -- of them can serve it — each audited table costs one sequential scan, and
+    -- the audit runs twice per boot, before listen(), inside the deploy swap
+    -- window. These are the mirror image, and they are the right shape here:
+    -- they cover only the un-stamped population, so they shrink toward empty
+    -- as that population drains and cost nothing to maintain once it is zero.
+    -- Only for the tables the auditor actually reads (see
+    -- ORG_STAMP_AUDIT_TABLES); adding a table there without one of these puts
+    -- a full scan in front of the port opening.
+    CREATE INDEX IF NOT EXISTS idx_jobs_org_null          ON jobs              (id) WHERE organization_id IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_estimates_org_null     ON estimates         (id) WHERE organization_id IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_leads_org_null         ON leads             (id) WHERE organization_id IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_clients_org_null       ON clients           (id) WHERE organization_id IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_users_org_null         ON users             (id) WHERE organization_id IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_node_graphs_org_null   ON node_graphs       (job_id) WHERE organization_id IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_jco_org_null           ON job_change_orders (id) WHERE organization_id IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_qb_cost_lines_org_null ON qb_cost_lines     (id) WHERE organization_id IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_job_subs_org_null      ON job_subs          (id) WHERE organization_id IS NULL;
+
     -- Job-anchored backfills (5 tables). jobs.organization_id is already
     -- populated from Phase 1.
     UPDATE node_graphs n SET organization_id = j.organization_id
@@ -677,11 +725,11 @@ async function initSchema() {
         AND m.organization_id IS NULL AND u.organization_id IS NOT NULL;
 
     -- subs: no parent. First-user fallback (matches clients pattern).
-    -- GATED (SOLE_ORG_ONLY) -- same reasoning as clients.
+    -- GATED (NEVER_MULTI_ORG) -- same reasoning as clients.
     UPDATE subs SET organization_id = (
       SELECT u.organization_id FROM users u
        WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1
-    ) WHERE organization_id IS NULL AND ${SOLE_ORG_ONLY};
+    ) WHERE organization_id IS NULL AND ${NEVER_MULTI_ORG};
 
     -- sub_certificates: anchor on the parent sub (subs is now backfilled).
     UPDATE sub_certificates sc SET organization_id = s.organization_id
@@ -693,25 +741,25 @@ async function initSchema() {
     -- the reports table doesn't exist yet.
     DO $$ BEGIN
       IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'reports') THEN
-        -- GATED (SOLE_ORG_ONLY), same as the other first-user picks.
+        -- GATED (NEVER_MULTI_ORG), same as the other first-user picks.
         EXECUTE 'UPDATE reports r SET organization_id = (
           SELECT u.organization_id FROM users u
            WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1
-        ) WHERE organization_id IS NULL AND ${SOLE_ORG_ONLY}';
+        ) WHERE organization_id IS NULL AND ${NEVER_MULTI_ORG}';
       END IF;
     END $$;
 
     -- Final single-tenant fallback for any remaining nulls across these
     -- 10 tables (orphaned rows where the parent has no org_id, etc.).
-    UPDATE node_graphs       SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL AND ${SOLE_ORG_ONLY};
-    UPDATE job_change_orders SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL AND ${SOLE_ORG_ONLY};
-    UPDATE schedule_entries  SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL AND ${SOLE_ORG_ONLY};
-    UPDATE qb_cost_lines     SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL AND ${SOLE_ORG_ONLY};
-    UPDATE job_subs          SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL AND ${SOLE_ORG_ONLY};
-    UPDATE attachments       SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL AND ${SOLE_ORG_ONLY};
-    UPDATE ai_messages       SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL AND ${SOLE_ORG_ONLY};
-    UPDATE messages          SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL AND ${SOLE_ORG_ONLY};
-    UPDATE sub_certificates  SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL AND ${SOLE_ORG_ONLY};
+    UPDATE node_graphs       SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL AND ${NEVER_MULTI_ORG};
+    UPDATE job_change_orders SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL AND ${NEVER_MULTI_ORG};
+    UPDATE schedule_entries  SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL AND ${NEVER_MULTI_ORG};
+    UPDATE qb_cost_lines     SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL AND ${NEVER_MULTI_ORG};
+    UPDATE job_subs          SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL AND ${NEVER_MULTI_ORG};
+    UPDATE attachments       SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL AND ${NEVER_MULTI_ORG};
+    UPDATE ai_messages       SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL AND ${NEVER_MULTI_ORG};
+    UPDATE messages          SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL AND ${NEVER_MULTI_ORG};
+    UPDATE sub_certificates  SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL AND ${NEVER_MULTI_ORG};
 
     CREATE TABLE IF NOT EXISTS job_access (
       job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
@@ -2092,10 +2140,10 @@ async function initSchema() {
         FROM organizations
        WHERE archived_at IS NULL
        ORDER BY id ASC LIMIT 1;
-      -- GATED (SOLE_ORG_ONLY). bootstrap_org_id is the lowest-id live org --
+      -- GATED (NEVER_MULTI_ORG). bootstrap_org_id is the lowest-id live org --
       -- a guess with no per-row evidence behind it. Harmless with one tenant,
       -- a silent cross-tenant move with two.
-      IF bootstrap_org_id IS NOT NULL AND ${SOLE_ORG_ONLY} THEN
+      IF bootstrap_org_id IS NOT NULL AND ${NEVER_MULTI_ORG} THEN
         UPDATE materials
            SET organization_id = bootstrap_org_id
          WHERE organization_id IS NULL;
@@ -2188,10 +2236,10 @@ async function initSchema() {
         FROM organizations
        WHERE archived_at IS NULL
        ORDER BY id ASC LIMIT 1;
-      -- GATED (SOLE_ORG_ONLY). bootstrap_org_id is the lowest-id live org --
+      -- GATED (NEVER_MULTI_ORG). bootstrap_org_id is the lowest-id live org --
       -- a guess with no per-row evidence behind it. Harmless with one tenant,
       -- a silent cross-tenant move with two.
-      IF bootstrap_org_id IS NOT NULL AND ${SOLE_ORG_ONLY} THEN
+      IF bootstrap_org_id IS NOT NULL AND ${NEVER_MULTI_ORG} THEN
         UPDATE material_purchases mp
            SET organization_id = COALESCE(
                  (SELECT m.organization_id FROM materials m WHERE m.id = mp.material_id),
@@ -2617,10 +2665,10 @@ async function initSchema() {
         FROM organizations
        WHERE archived_at IS NULL
        ORDER BY id ASC LIMIT 1;
-      -- GATED (SOLE_ORG_ONLY). bootstrap_org_id is the lowest-id live org --
+      -- GATED (NEVER_MULTI_ORG). bootstrap_org_id is the lowest-id live org --
       -- a guess with no per-row evidence behind it. Harmless with one tenant,
       -- a silent cross-tenant move with two.
-      IF bootstrap_org_id IS NOT NULL AND ${SOLE_ORG_ONLY} THEN
+      IF bootstrap_org_id IS NOT NULL AND ${NEVER_MULTI_ORG} THEN
         UPDATE email_template_overrides
            SET organization_id = bootstrap_org_id
          WHERE organization_id IS NULL;
@@ -2786,13 +2834,13 @@ async function initSchema() {
     ALTER TABLE managed_agent_registry
       ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE;
     -- Backfill: existing rows belong to AGX (the only tenant so far).
-    -- GATED (SOLE_ORG_ONLY). Same hardcoded-slug guess as the users backfill,
+    -- GATED (NEVER_MULTI_ORG). Same hardcoded-slug guess as the users backfill,
     -- and it also runs on every boot, so it would keep catching rows created
     -- after a second tenant existed.
     UPDATE managed_agent_registry
        SET organization_id = (SELECT id FROM organizations WHERE slug = 'agx')
      WHERE organization_id IS NULL
-       AND ${SOLE_ORG_ONLY};
+       AND ${NEVER_MULTI_ORG};
     -- Re-key: drop the old single-column PK and replace with the
     -- composite (agent_key, organization_id). Wrapped in DO so a
     -- re-run (where the PK is already composite) doesn't error.
@@ -2945,10 +2993,10 @@ async function initSchema() {
         FROM organizations
        WHERE archived_at IS NULL
        ORDER BY id ASC LIMIT 1;
-      -- GATED (SOLE_ORG_ONLY). bootstrap_org_id is the lowest-id live org --
+      -- GATED (NEVER_MULTI_ORG). bootstrap_org_id is the lowest-id live org --
       -- a guess with no per-row evidence behind it. Harmless with one tenant,
       -- a silent cross-tenant move with two.
-      IF bootstrap_org_id IS NOT NULL AND ${SOLE_ORG_ONLY} THEN
+      IF bootstrap_org_id IS NOT NULL AND ${NEVER_MULTI_ORG} THEN
         UPDATE agent_reference_links
            SET organization_id = bootstrap_org_id
          WHERE organization_id IS NULL;
@@ -5363,7 +5411,7 @@ async function initSchema() {
        VALUES ($1, $2, 'Admin', 'admin', (
          SELECT id FROM organizations
           WHERE archived_at IS NULL
-            AND (SELECT COUNT(*) FROM organizations WHERE archived_at IS NULL) = 1
+            AND (SELECT COUNT(*) FROM organizations) = 1   -- EVER, not live: see NEVER_MULTI_ORG
        ))
        ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash,
              organization_id = COALESCE(users.organization_id, EXCLUDED.organization_id)
@@ -5392,7 +5440,7 @@ async function initSchema() {
          VALUES ($1, $2, $3, $4, (
            SELECT id FROM organizations
             WHERE archived_at IS NULL
-              AND (SELECT COUNT(*) FROM organizations WHERE archived_at IS NULL) = 1
+              AND (SELECT COUNT(*) FROM organizations) = 1   -- EVER, not live: see NEVER_MULTI_ORG
          ))`,
         ['admin@local', hash, 'Admin', 'admin']
       );
@@ -5416,7 +5464,25 @@ async function initSchema() {
 // those stay NULL by design rather than being guessed into a tenant. What it
 // must never do is GROW between boots: that means a write path is still
 // creating them.
-const ORG_STAMP_AUDIT_TABLES = ['users', 'jobs', 'estimates', 'leads', 'clients'];
+// The five anchor tables, plus the job-scoped money tables the boot backfill
+// used to heal and no longer does. Gating the guessing backfill (9c1626a) was
+// correct and it turned a self-healing NULL into a permanent one for every
+// insert site that never names organization_id — so the standing exposure that
+// change created was invisible to the one auditor whose job is to see it.
+// Counting it is not the fix; it is what turns an unknown into a number.
+//
+// Deliberately NOT extended to attachments / ai_messages / messages: those are
+// the highest-row tables in the database and every count here is a guaranteed
+// sequential scan (idx_*_org are PARTIAL, `WHERE organization_id IS NOT NULL`,
+// so by construction none of them can serve `IS NULL`). This runs twice per
+// boot, before listen(), inside the Railway swap window. When those tables are
+// added, they need matching `ON t (id) WHERE organization_id IS NULL` partial
+// indexes — which shrink to nothing as the population drains — or the audit
+// moves after listen().
+const ORG_STAMP_AUDIT_TABLES = [
+  'users', 'jobs', 'estimates', 'leads', 'clients',
+  'job_change_orders', 'job_subs', 'qb_cost_lines', 'node_graphs',
+];
 
 async function reportOrgStampAudit(phase) {
   const counts = {};
@@ -5463,25 +5529,52 @@ async function reportOrgStampAudit(phase) {
 // different tenants through two different code paths. Nothing should be able
 // to create one now that owner is validated on assignment, which is exactly
 // why it is worth counting — if this is ever non-zero, a write path is wrong.
+// COUNT first, sample second — the shape reportOrgStampAudit already uses ten
+// lines up. This used to be one `ORDER BY j.id LIMIT 20` whose `r.rows.length`
+// was returned as the number, so 500 divergent jobs reported as 20. The one
+// failure mode the whole endgame is blind to was measured with a ruler that
+// stopped at 20 — and the composite-FK constraint that would make divergence
+// unrepresentable cannot be added until this count is PROVABLY zero.
+//
+// Cost: no index can ever serve a `<>` across a join, so this was always a
+// sequential scan and LIMIT 20 only let it stop early. The planner needs id,
+// owner_id and organization_id — all fixed-width — so it is a heap scan of
+// tuple headers that never detoasts the JSONB blobs, plus a PK probe into the
+// small users table. It runs ONCE, at boot, after initSchema has already built
+// indexes and run multi-table backfills over the same tables. Not per request.
+// ACCESS SHARE only; it blocks nothing.
+//
+// Returns the count, or NULL when it could not be measured. Those are not the
+// same fact and returning 0 for both is exactly the trap a gating constraint
+// would fall into.
 async function reportOrgOwnerDivergence() {
+  const PRED = `
+      FROM jobs j JOIN users u ON u.id = j.owner_id
+     WHERE j.organization_id IS NOT NULL
+       AND u.organization_id IS NOT NULL
+       AND j.organization_id <> u.organization_id`;
   try {
     const reg = await pool.query("SELECT to_regclass('public.jobs') AS t");
     if (!reg.rows.length || reg.rows[0].t == null) return 0;
-    const r = await pool.query(`
-      SELECT j.id, j.organization_id AS col_org, u.organization_id AS owner_org
-        FROM jobs j JOIN users u ON u.id = j.owner_id
-       WHERE j.organization_id IS NOT NULL
-         AND u.organization_id IS NOT NULL
-         AND j.organization_id <> u.organization_id
+    const c = await pool.query(`SELECT COUNT(*)::int AS n ${PRED}`);
+    const n = Number(c.rows[0].n);
+    if (!n) {
+      console.log('[org] divergence: 0 — every job\'s organization_id column agrees with its owner\'s org.');
+      return 0;
+    }
+    const r = await pool.query(
+      `SELECT j.id, j.organization_id AS col_org, u.organization_id AS owner_org ${PRED}
        ORDER BY j.id LIMIT 20`);
-    if (!r.rows.length) return 0;
-    console.error('[org] DIVERGENCE — jobs whose organization_id column disagrees with their ' +
+    console.error(`[org] DIVERGENCE — ${n} job(s) whose organization_id column disagrees with their ` +
       'owner\'s org. Each is readable by two different tenants through two different code paths, ' +
       'and no NULL check or NOT NULL constraint can see it: ' +
-      r.rows.map((x) => `${x.id}(col=${x.col_org},owner=${x.owner_org})`).join(' '));
-    return r.rows.length;
+      r.rows.map((x) => `${x.id}(col=${x.col_org},owner=${x.owner_org})`).join(' ') +
+      (n > r.rows.length ? ` … and ${n - r.rows.length} more` : ''));
+    return n;
   } catch (e) {
-    return 0;
+    // NOT 0. "I could not measure it" and "there are zero" are different facts.
+    console.warn('[org] divergence: could not be measured —', e && e.message);
+    return null;
   }
 }
 

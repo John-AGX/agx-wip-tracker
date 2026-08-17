@@ -67,12 +67,20 @@ function polyPred(types, incNull) {
 }
 const ALL4 = ['lead', 'estimate', 'job', 'project'];
 
-// Sweep legacy NULL-org rows ONLY when there is a single active org — so a
-// second tenant's un-tagged rows can never be caught. Fails CLOSED (strict
-// equality) if the org count can't be read.
+// Sweep legacy NULL-org rows ONLY when this database has NEVER had a second
+// organization — so a second tenant's un-tagged rows can never be caught.
+// Fails CLOSED (strict equality) if the org count can't be read.
+//
+// EVER existed, not currently LIVE. This is the JS twin of db.js
+// NEVER_MULTI_ORG and moves with it; the reason is there in full. The
+// consequence is worse on this side: the predicate decides whether the Danger
+// Zone reset HARD-DELETES NULL-org rows. Under the old `archived_at IS NULL`
+// form, archiving org B (a one-way soft archive, with no restore endpoint)
+// dropped the live count to 1 — and a reset of org A would then destroy org
+// B's un-stamped rows rather than merely mis-stamping them.
 async function shouldIncludeNullOrg(runner) {
   try {
-    const r = await runner.query('SELECT COUNT(*)::int AS n FROM organizations WHERE archived_at IS NULL');
+    const r = await runner.query('SELECT COUNT(*)::int AS n FROM organizations');
     return Number(r.rows[0].n) <= 1;
   } catch (e) { return false; }
 }

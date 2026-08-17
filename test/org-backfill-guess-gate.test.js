@@ -34,7 +34,7 @@ const vm = require('vm');
 const DB_PATH = path.join(__dirname, '..', 'server', 'db.js');
 const SRC = fs.readFileSync(DB_PATH, 'utf8');
 
-// Render initSchema's template literal with the real SOLE_ORG_ONLY value.
+// Render initSchema's template literal with the real NEVER_MULTI_ORG value.
 function renderSchemaSql() {
   const lines = SRC.split(/\r?\n/);
   const start = lines.findIndex((l) => /await pool\.query\(`/.test(l));
@@ -45,13 +45,13 @@ function renderSchemaSql() {
   }
   expect(end).toBeGreaterThan(start);
 
-  const soleOrg = (SRC.match(/const SOLE_ORG_ONLY\s*=\s*\n?\s*'([^']+)'/) || [])[1];
+  const soleOrg = (SRC.match(/const NEVER_MULTI_ORG\s*=\s*\n?\s*'([^']+)'/) || [])[1];
   expect(soleOrg).toBeTruthy();
 
   const body = lines.slice(start + 1, end).join('\n');
   const script = new vm.Script(
-    'SOLE_ORG_ONLY = ' + JSON.stringify(soleOrg) + '; OUT = `' + body + '`;');
-  const ctx = { SOLE_ORG_ONLY: null, OUT: null };
+    'NEVER_MULTI_ORG = ' + JSON.stringify(soleOrg) + '; OUT = `' + body + '`;');
+  const ctx = { NEVER_MULTI_ORG: null, OUT: null };
   vm.createContext(ctx);
   script.runInContext(ctx);
   return { sql: ctx.OUT, gate: soleOrg };
@@ -96,12 +96,60 @@ function label(stmt) {
 }
 
 describe('the guess gate', () => {
-  test('SOLE_ORG_ONLY is the single-live-org predicate, matching org-reset', () => {
-    expect(GATE).toMatch(/COUNT\(\*\)\s*FROM organizations WHERE archived_at IS NULL\)\s*<=\s*1/);
-    // services/org-reset.js computes the same thing for the same reason.
+  test('the gate is a LATCH: EVER multi-org, not currently live', () => {
+    // Archiving an org is a live, one-way, system-admin feature
+    // (DELETE /api/admin/organizations/:id sets archived_at = NOW(); no restore
+    // endpoint exists anywhere in this repo — `archived_at = NULL` appears once,
+    // on a different table). Under the old "WHERE archived_at IS NULL" form:
+    // onboard org B, archive it, restart — the live count drops back to 1,
+    // every gated guess resumes, and org B's NULL rows are stamped into org A on
+    // the next boot. A gate that swings back open on an irreversible action is a
+    // one-way door into a guess.
+    //
+    // COUNT(*) over organizations only ever rises (no hard delete exists, and
+    // users.organization_id is ON DELETE RESTRICT, which blocks one while any
+    // user references the org), so the ungated form is a latch: once closed,
+    // closed forever.
+    expect(GATE).toBe('(SELECT COUNT(*) FROM organizations) <= 1');
+    expect(GATE).not.toMatch(/archived_at/);
+
+    // services/org-reset.js computes the same thing for the same reason, and
+    // the stake there is higher: that predicate decides whether the Danger Zone
+    // reset HARD-DELETES NULL-org rows. Archive org B, reset org A, and org B's
+    // un-stamped rows are destroyed rather than merely mis-stamped.
     const reset = fs.readFileSync(
       path.join(__dirname, '..', 'server', 'services', 'org-reset.js'), 'utf8');
-    expect(reset).toMatch(/COUNT\(\*\)::int AS n FROM organizations WHERE archived_at IS NULL/);
+    const fn = reset.slice(reset.indexOf('async function shouldIncludeNullOrg'));
+    const body = fn.slice(0, fn.search(/\r?\n\}/));
+    expect(body).toMatch(/COUNT\(\*\)::int AS n FROM organizations'/);
+    expect(body).not.toMatch(/archived_at/);
+  });
+
+  test('archiving the second org does not reopen the gate', () => {
+    // The two forms, as predicates over the counts each one sees.
+    const latch = (everCreated) => everCreated <= 1;
+    const oldGate = (liveNow) => liveNow <= 1;
+
+    // One tenant, always: unchanged. AGX's boot is byte-identical, because the
+    // migration seeds exactly one org before any gated statement runs.
+    expect(latch(1)).toBe(true);
+    expect(oldGate(1)).toBe(true);
+
+    // Org B onboarded, then archived. The archive touches neither its users,
+    // nor their organization_id, nor its jobs — the data is all still there,
+    // still belonging to a tenant that still exists as a row.
+    expect(oldGate(1)).toBe(true);    // reopened. this is the defect.
+    expect(latch(2)).toBe(false);     // stays shut, and stays shut forever.
+  });
+
+  test('a fresh database, and an empty one, both stay safe', () => {
+    // Zero orgs also satisfies <= 1 — and the `(SELECT id … WHERE slug='agx')`
+    // subquery every guess uses is then NULL, so the UPDATE is a no-op.
+    expect(GATE).toMatch(/<= 1$/);
+    const guesses = ORG_WRITES.filter((s) => GUESS.test(s));
+    for (const g of guesses) {
+      expect(g).toMatch(/SELECT id FROM organizations|SELECT organization_id FROM users|organizations/i);
+    }
   });
 
   test('there is something to gate (the fixture found the real statements)', () => {
