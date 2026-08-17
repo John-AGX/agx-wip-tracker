@@ -132,12 +132,28 @@
     var saveFlush = (_po && (hadTimer || _pendingPOExtraction)) ? saveNow(!!_pendingPOExtraction) : null;
     // Discard freshly-added bills the user never filled in — a $0 blank row
     // would otherwise orphan on the Bills tab / AP aging.
+    //
+    // AND DROP THEM FROM THE ROLLUP STORE. This used to fire the DELETEs and
+    // stop there: syncBillsToStore() had already mirrored each blank row into
+    // appData.jobVendorBills when it was created (the `bills.create` arm), so
+    // deleting it server-side without re-syncing left a PHANTOM bill in the
+    // read-cache for the rest of the session — and the p86Refresh below then
+    // repainted every money surface from a store holding a row that no longer
+    // exists. It is a $0 row, so no dollar was ever wrong; it was a row count
+    // that disagreed with the server until the next forced bill refetch.
+    // Optimistic, like every other write in this file: if a DELETE fails the
+    // row comes back on the next loadBillsForJob.
     if (_po && Array.isArray(_po._billRows) && window.p86Api && window.p86Api.bills) {
-      _po._billRows.forEach(function (b) {
+      var _dropped = 0;
+      _po._billRows = _po._billRows.filter(function (b) {
         if (b && b._ephemeral && num(b.amount) === 0 && !String(b.description || '').trim()) {
           window.p86Api.bills.remove(b.id).catch(function () {});
+          _dropped++;
+          return false;
         }
+        return true;
       });
+      if (_dropped) syncBillsToStore();
     }
     var ov = document.getElementById('po-editor-overlay');
     if (ov) ov.style.display = 'none';

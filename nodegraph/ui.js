@@ -5351,15 +5351,44 @@ function openCoAllocEditor(coId){
     var sv=ov.querySelector('#caeSave'); if(sv){ sv.disabled=true; sv.textContent='Saving…'; }
     p86Api.changeOrders.setAllocations(c.id, allocations, opts).then(function(){
       // Reflect on the in-memory record (both top-level and in data — shapeRow
-      // spreads data, so future reloads see them top-level too).
+      // spreads data, so future reloads see them top-level too). Kept as the
+      // OFFLINE belt: if the forced refetch below fails, the mirror is already
+      // right rather than showing the pre-write split.
       c.buildingAllocations=allocations;
       c.completionMode=opts.completionMode; c.riderScopeName=opts.riderScopeName;
       if(!c.data||typeof c.data!=='object') c.data={};
       c.data.buildingAllocations=allocations; c.data.completionMode=opts.completionMode; c.data.riderScopeName=opts.riderScopeName;
       try{ localStorage.setItem('p86-jobs-jobchangeorders', JSON.stringify(appData.jobChangeOrders||[])); }catch(e){}
       close();
-      if(typeof render==='function') render();
-      if(typeof window.p86RerenderJobCards==='function') try{ window.p86RerenderJobCards(jid); }catch(e){}
+      // A CO's building allocation is contract dollars: it feeds coCompletion()
+      // -> getJobWIP().revenueEarned -> gross profit -> margin. So this is a
+      // money write and it goes through the ONE registry (js/refresh.js) like
+      // every other one — forced CO refetch first, then the jobs list, the Jobs
+      // Hub and the open job's money sections, in that order — and only THEN
+      // the two repaints the Site Plan needs on top of it.
+      //
+      // It used to be a hand-rolled store-then-surface pair: patch the mirror
+      // element, hand-write the localStorage cache, then render() +
+      // p86RerenderJobCards(). Those two DO cover everything visible while this
+      // overlay is up (render() -> pushToJobSilent -> refreshHeaderMetrics
+      // repaints the sticky metrics strip and the sidebar Pulse card;
+      // renderInspector's job-detail branch repaints the metric tiles, the KPI
+      // ribbon, the accordion sums and this very Contract-allocation card), so
+      // nothing was demonstrably stale. It was off the registry, which is the
+      // part that does not survive the next edit: repaintJobMoney's three
+      // surfaces were reached only by accident of navigation.
+      //
+      // `.now` rather than p86Refresh(): the Site Plan repaint has to run AFTER
+      // the refetch replaces this job's rows, or render() reads the mirror
+      // element we just patched and is then overwritten by the server rows a
+      // beat later. Same seam the bill editor uses. Errors resolve too, so an
+      // offline save still repaints from the belt above.
+      var _paint=function(){
+        if(typeof render==='function') try{ render(); }catch(e){}
+        if(typeof window.p86RerenderJobCards==='function') try{ window.p86RerenderJobCards(jid); }catch(e){}
+      };
+      if(window.p86Refresh && window.p86Refresh.now) window.p86Refresh.now('co',{ id:c.id, jobId:jid }).then(_paint,_paint);
+      else _paint();
     }).catch(function(err){
       if(sv){ sv.disabled=false; sv.textContent='✗ '+((err&&err.message)||'Save failed'); }
     });
