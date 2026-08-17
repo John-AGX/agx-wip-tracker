@@ -49,7 +49,18 @@ const MAX_OPS = 24;
 
 // The exact sentence supersedeStrip / stampDocStale write. Asserted on rather
 // than snapshotted, so a copy edit is a one-line change here and nowhere else.
+//
+// ROUND 6 — there are TWO of them, and which one is correct is a fact about
+// the superseding row, not about the region. A single constant here is exactly
+// how "A newer write has landed since" came to sit under a pinned document
+// about a rolled-back draft: the test asserted the false sentence.
 const STALE_MARK = 'A newer write has landed since';
+const STALE_ACTIVITY = 'There is newer activity since';
+const staleMark = (landed) => (landed ? STALE_MARK : STALE_ACTIVITY);
+/* Did the row this event carries actually change data? Read from the model, so
+ * the test cannot drift from the engine's own answer. */
+const landedBy = (ev) =>
+  ev.kind === 'ingest' && MODEL.didWriteLand({ meta: ev.meta });
 
 // ── colour comparison ───────────────────────────────────────────────────
 // jsdom normalises style.background to rgb(); the markup writes hex.
@@ -159,28 +170,65 @@ describe('layer 1 · the report cannot disagree with itself', () => {
     //   depends on ctx, and currency must not.
     expect(MODEL.describe(rejected, {}).kind).toBe('silent');
     expect(MODEL.describe(rejected, { unreadable: { message: 'HTTP 500', tries: 3 } }).kind).toBe('notice');
-    expect(MODEL.isReportable(rejected)).toBe(false);
+    expect(MODEL.supersedesOnScreen(rejected)).toBe(false);
 
     // → news, in every ctx the surfaces can put it in.
     const applied = entryFor('applied', 'estimate');
     [{}, { inEditor: true }, { unreadable: { message: 'HTTP 500', tries: 3 } }].forEach((ctx) => {
       expect(MODEL.describe(applied, ctx).kind).not.toBe('silent');
-      expect(MODEL.isReportable(applied)).toBe(true);
+      expect(MODEL.supersedesOnScreen(applied)).toBe(true);
     });
 
     // The handoff placeholder is the other renderable-but-not-news row: a real
     // moment, drawn on the strip, about a write that has not landed.
     expect(MODEL.describe({}, { composing: { label: 'x' } }).kind).toBe('composing');
-    expect(MODEL.isReportable({ meta: {} })).toBe(false);
+    expect(MODEL.supersedesOnScreen({ meta: {} })).toBe(false);
 
     // An unidentified row cannot be the subject of anything, so it is not news
-    // either — that is what keeps subject() total: gen moves ⟺ subject is a
-    // real payloadId.
-    expect(MODEL.isReportable({ meta: { state: 'applied' } })).toBe(false);
-    expect(MODEL.isReportable({ meta: { state: 'applied', payloadId: 'p1' } })).toBe(true);
-    expect(MODEL.isReportable({ meta: { state: 'proposed', payloadId: 'p1' } })).toBe(true);
-    expect(MODEL.isReportable({ meta: { state: 'failed', payloadId: 'p1' } })).toBe(true);
-    expect(MODEL.isReportable({ meta: { state: 'rejected', payloadId: 'p1' } })).toBe(false);
+    // either — that is what keeps subject() total: subject is always a real
+    // payloadId or null.
+    expect(MODEL.supersedesOnScreen({ meta: { state: 'applied' } })).toBe(false);
+    expect(MODEL.supersedesOnScreen({ meta: { state: 'applied', payloadId: 'p1' } })).toBe(true);
+    expect(MODEL.supersedesOnScreen({ meta: { state: 'proposed', payloadId: 'p1' } })).toBe(true);
+    expect(MODEL.supersedesOnScreen({ meta: { state: 'failed', payloadId: 'p1' } })).toBe(true);
+    expect(MODEL.supersedesOnScreen({ meta: { state: 'rejected', payloadId: 'p1' } })).toBe(false);
+  });
+
+  /* ROUND 6 — THE SECOND QUESTION, and the four rows on which it disagrees
+   * with the first. Round 5 shipped one predicate and only ever asked it about
+   * `rejected`, where both answers happen to be no. Asserted as a TABLE, in
+   * both directions, so a future "these are the same thing really" collapse
+   * has to delete a row rather than quietly widen a switch. */
+  test('did a write LAND is a different question from does it SUPERSEDE', () => {
+    const ROWS = [
+      // state,        payloadId, supersedes, landed
+      ['applied',      'p1',      true,       true],
+      ['proposed',     'p1',      true,       false],   // a dry run, rolled back
+      ['applying',     'p1',      true,       false],   // still in flight
+      ['failed',       'p1',      true,       false],   // the apply blew up
+      ['queued',       'p1',      true,       false],   // a state this file has never heard of
+      ['rejected',     'p1',      false,      false],   // a dismissal
+      ['applied',      null,      false,      false]    // nothing to be the subject of
+    ];
+    let diverged = 0;
+    ROWS.forEach(([state, payloadId, supersedes, landed]) => {
+      const entry = { meta: { state, payloadId } };
+      expect([state, payloadId, 'supersedes', MODEL.supersedesOnScreen(entry)])
+        .toEqual([state, payloadId, 'supersedes', supersedes]);
+      expect([state, payloadId, 'landed', MODEL.didWriteLand(entry)])
+        .toEqual([state, payloadId, 'landed', landed]);
+      if (supersedes !== landed) diverged++;
+    });
+    // The whole point: they are not the same predicate wearing two names.
+    expect(diverged).toBe(4);
+    // A refusal is a failed row with nothing authored — same answers, and it
+    // is one of the two forms measured live saying "a newer write has landed".
+    const refusal = { meta: { state: 'failed', payloadId: 'p1', neverDrafted: true } };
+    expect(MODEL.supersedesOnScreen(refusal)).toBe(true);
+    expect(MODEL.didWriteLand(refusal)).toBe(false);
+    // …and the sentence a superseded region shows follows question (b) alone.
+    expect(MODEL.supersededLead(true)).toContain('landed');
+    expect(MODEL.supersededLead(false)).not.toContain('A newer write has landed');
   });
 
   /* And the ledger asks it ITSELF. A caller that hands over a dismissed row
@@ -891,7 +939,7 @@ describe('layer 3 · [' + mountLabel(MOUNTS) + '] cross-surface — nothing asse
   }
 
   /* Y = the strip. After X reported, what may the strip still say? */
-  function stripAssertsNothingStale(rPrev, where) {
+  function stripAssertsNothingStale(rPrev, where, landed) {
     const v = visibleClaim();
     try {
       // 1 · the CURRENCY carrier is back to claiming nothing.
@@ -912,7 +960,10 @@ describe('layer 3 · [' + mountLabel(MOUNTS) + '] cross-surface — nothing asse
       } else {
         expect(v.stripPresent).toBe(true);
         expect(v.stale).toBe(true);
-        expect(v.bodyText).toContain(STALE_MARK);
+        // …and the stamp says what actually happened. A superseding row that
+        // did NOT land must not be described as one that did.
+        expect(v.bodyText).toContain(staleMark(landed));
+        if (!landed) expect(v.bodyText).not.toContain(STALE_MARK);
         if (rPrev.name) expect(v.subject).toBe(rPrev.name);
       }
     } catch (e) {
@@ -943,13 +994,14 @@ describe('layer 3 · [' + mountLabel(MOUNTS) + '] cross-surface — nothing asse
       fire(evB);
 
       const where = 'strip:' + a + ' → cowork:' + b + ' @' + off + 'ms';
-      stripAssertsNothingStale(rPrev, where + ' t=0');
+      const landed = landedBy(evB);
+      stripAssertsNothingStale(rPrev, where + ' t=0', landed);
       // And it stays stepped down. An orphan stagger loop from the old report
       // still holds the strip's REGION epoch and may finish painting its own
       // card — that is anchored content and allowed — but it must never put
       // the pill back.
       jest.advanceTimersByTime(200000);
-      stripAssertsNothingStale(rPrev, where + ' t=200s');
+      stripAssertsNothingStale(rPrev, where + ' t=200s', landed);
       cases++;
     })));
     expect(cases).toBe(LETTERS.length * LETTERS.length * X_OFFSETS.length);
@@ -1185,7 +1237,7 @@ describe('layer 3b · whether a write happened does not depend on what is mounte
       const reportable = new Set();
       seq.forEach((ev) => {
         fire(ev);
-        if (ev.kind === 'ingest' && M.isReportable({ meta: ev.meta })) reportable.add(String(ev.meta.payloadId));
+        if (ev.kind === 'ingest' && M.supersedesOnScreen({ meta: ev.meta })) reportable.add(String(ev.meta.payloadId));
         const s = LW.writes.subject();
         const where = label(mounts, active) + ' seq=' + a;
         if (s != null) {
@@ -1463,7 +1515,92 @@ describe('layer 4 · S7 as measured, with the real Cowork page', () => {
 
     expect(doc.querySelector('.cw-stale')).toBeNull();          // no false staleness
     expect(LW.writes.subject()).not.toBe('pl_1784314336678_l5rn453j');
-    expect(LW.model.isReportable({ meta: { payloadId: 'pl_1784314336678_l5rn453j', state: 'rejected' } })).toBe(false);
+    expect(LW.model.supersedesOnScreen({ meta: { payloadId: 'pl_1784314336678_l5rn453j', state: 'rejected' } })).toBe(false);
+  }, 20000);
+
+  /* ROUND 6, MEASURED — the same document, the same sentence, and the three
+   * rows round 5's single predicate let through. Each of these was confirmed
+   * live on 2fa18b79 against a real pinned Cowork document. */
+  [
+    ['a rolled-back DRAFT', { payloadId: 'pl_NINTH_proposed', state: 'proposed', isDraft: true,
+                              title: 'A draft that was rolled back' }],
+    ['a REFUSAL the Scribe never authored', { payloadId: 'pl_NINTH_refusal', state: 'failed',
+                              neverDrafted: true, title: 'The Scribe never authored a payload',
+                              applyError: 'The Scribe did not produce a usable change.' }],
+    ['an APPLYING row still in flight', { payloadId: 'pl_NINTH_applying', state: 'applying',
+                              title: 'Still committing' }]
+  ].forEach(([label, meta]) => {
+    test('a pinned document is not told ' + label + ' landed', async () => {
+      ROWS.w1 = row('w1', 'Set Base group scope on Uptown');
+      LIST = [ROWS.w1];
+      bootBoth();
+      active(true);
+      await settle();
+
+      CW.open('w1');
+      await settle();
+      const doc = document.getElementById('cw-doc');
+      expect(doc.querySelector('.cw-stale')).toBeNull();
+
+      LW.ingest([], Object.assign({ emittingAgentKey: 'scribe' }, meta));
+      await settle();
+
+      // It IS superseded — something newer happened and a pinned document must
+      // not read as the latest. That half was never in question.
+      const mark = doc.querySelector('.cw-stale');
+      expect(mark).not.toBeNull();
+      // …but nothing LANDED, so it must not say one did. This is the exact
+      // sentence measured under a pinned document about a write that did not
+      // happen.
+      expect(mark.textContent).not.toContain(STALE_MARK);
+      expect(mark.textContent).toContain(STALE_ACTIVITY);
+      // And the ledger agrees: a moment, not a landing.
+      expect(LW.writes.subject()).toBe(meta.payloadId);
+      expect(LW.writes.landed()).toBeNull();
+      expect(LW.writes.current()).toBe(0);
+    }, 20000);
+  });
+
+  test('an unreadable APPLIED row reaches the ledger — the fourth form', async () => {
+    /* MEASURED by 500-ing one real applied row's detail fetch: the strip read
+     * "Scribe wrote something this view could not read" — truthful, a write
+     * DID land — while gen stayed 0, subject() stayed null and the pinned
+     * document went on reading as the latest. Two surfaces on one screen
+     * disagreeing about whether a write landed, through the one report path
+     * that skipped the fan-out. */
+    ROWS.w1 = row('w1', 'Set Base group scope on Uptown');
+    LIST = [ROWS.w1];
+    bootBoth();
+    active(true);
+    await settle();
+    CW.open('w1');
+    await settle();
+    const doc = document.getElementById('cw-doc');
+    expect(doc.querySelector('.cw-stale')).toBeNull();
+
+    // A second applied row whose DETAIL fetch is permanently broken.
+    const broken = row('w2', 'A write nobody can read');
+    global.fetch.mockImplementation((url) => {
+      const u = String(url);
+      if (/\/api\/payloads\/w2$/.test(u)) return Promise.resolve({ ok: false, status: 500 });
+      const m = u.match(/\/api\/payloads\/([^/?]+)$/);
+      if (m && ROWS[m[1]]) return Promise.resolve({ ok: true, json: () => Promise.resolve({ payload: ROWS[m[1]] }) });
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ payloads: LIST.slice() }) });
+    });
+    const warn = console.warn;
+    console.warn = () => {};                 // the bounded retry warns once per attempt
+    try { for (let i = 0; i < 3; i++) { await LW.ingestRow(broken); } }
+    finally { console.warn = warn; }
+    await settle();
+
+    // The write landed and this view could not read it. Both facts, on every
+    // surface, or the two disagree again.
+    expect(LW.writes.landed()).toBe('w2');
+    expect(LW.writes.subject()).toBe('w2');
+    expect(LW.writes.current()).toBe(1);
+    const mark = doc.querySelector('.cw-stale');
+    expect(mark).not.toBeNull();
+    expect(mark.textContent).toContain(STALE_MARK);
   }, 20000);
 
   test('surface C is not a claimant — a row flash survives any number of writes', () => {
@@ -1477,4 +1614,382 @@ describe('layer 4 · S7 as measured, with the real Cowork page', () => {
     expect(LW.writes._claimants()).toEqual(expect.arrayContaining(['strip', 'pane', 'cowork-doc']));
     expect(LW.writes._claimants()).not.toContain('editor-flash');
   });
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// LAYER 5 — THE MATRIX.
+//
+// Five rounds, five fixes, five times the general form left standing. Each
+// round enumerated the thing that had just bitten — call sites (2), async
+// continuations (3), regions (4), mountings (5) — fixed exactly that, and
+// verified against exactly that. Round 5's own verification said so in as
+// many words: "precisely the round-2 → round-3 pattern repeating."
+//
+// The reason it kept repeating is that every round asserted a property over a
+// set it had discovered by measurement. This layer asserts it over a set
+// enumerated FROM THE CODE:
+//
+//   ROWS      every distinct row the engine can produce, read off stateOf(),
+//             metaFromRow() and describe()'s branches — not off the last bug
+//             report.
+//   MOUNTINGS every subset of the surface shapes, × Cowork active, × Cowork
+//             pinned. Round 5's machinery, reused, not rebuilt.
+//   PATHS     every route by which anything can reach the strip or the ledger.
+//
+// and the count is stated, so "we covered it" is auditable rather than felt.
+// ────────────────────────────────────────────────────────────────────────
+
+/* ── the ROW dimension ──────────────────────────────────────────────────
+ *
+ * Enumerated from the code. stateOf() maps five statuses onto five states and
+ * returns null for everything else; metaFromRow() adds neverDrafted; describe()
+ * then splits `applied` and `proposed` again on whether the changeset breaks
+ * into listable ops. Every leaf of that tree is a row here, plus the two the
+ * public API can produce that no poller ever will (an unidentified row, an
+ * unrecognised state).
+ *
+ * `supersedes` and `landed` are the ANSWERS, written down by hand from what is
+ * true of the row — not read from the model, or this table would agree with
+ * any implementation including the broken one. */
+const ROW_KINDS = [
+  // key                  state       changeset     supersedes  landed   via noticeUnreadable?
+  ['applied-ops',         'applied',  'lead',       true,       true,    false],
+  ['applied-pane',        'applied',  'estimate',   true,       true,    false],
+  ['applied-unlistable',  'applied',  'unlistable', true,       true,    false],
+  ['applied-no-record',   'applied',  'none',       true,       true,    true],
+  ['applying-ops',        'applying', 'lead',       true,       false,   false],
+  ['applying-no-ops',     'applying', 'none',       true,       false,   true],
+  ['failed-apply',        'failed',   'none',       true,       false,   true],
+  ['failed-refusal',      'failed',   'none',       true,       false,   true],
+  ['proposed-ops',        'proposed', 'lead',       true,       false,   false],
+  ['proposed-no-ops',     'proposed', 'none',       true,       false,   true],
+  ['rejected-silent',     'rejected', 'none',       false,      false,   true],
+  ['rejected-ops',        'rejected', 'lead',       false,      false,   false],
+  ['unidentified',        'applied',  'lead',       false,      false,   false],
+  ['unknown-state',       'queued',   'lead',       true,       false,   false],
+  // The two paths below carry no row at all. It is a member of this dimension
+  // so the rectangle stays a rectangle and the mask has something to exclude
+  // BY NAME rather than by silence.
+  ['no-row',              null,       'none',       false,      false,   false]
+].map(([key, state, cs, supersedes, landed, viaUnreadable]) => ({
+  key: key, state: state, cs: cs, supersedes: supersedes, landed: landed,
+  viaUnreadable: viaUnreadable,
+  noRow: key === 'no-row',
+  anonymous: key === 'unidentified',
+  neverDrafted: key === 'failed-refusal',
+  id: key === 'unidentified' ? null : ('ID-' + key),
+  // A token unique to this row that appears wherever the row is DRAWN — it is
+  // the entity's own title, so it reaches the strip through the op list's group
+  // name, through a notice's record name, and through Cowork's render.
+  token: 'TOK-' + key
+}));
+
+const MX_CS = {
+  lead: (tok) => [{
+    entity_type: 'lead', id: 'lead_' + tok,
+    before: { id: 'lead_' + tok, title: tok, status: 'new' },
+    after: { id: 'lead_' + tok, title: tok, status: 'quoted' }
+  }],
+  estimate: (tok) => [{
+    entity_type: 'estimate', id: 'est_' + tok,
+    before: { id: 'est_' + tok, title: tok, data: { lines: [L('l1', 'Framing', 10, 100)] } },
+    after: { id: 'est_' + tok, title: tok, data: { lines: [L('l1', 'Framing', 12, 100), L('l2', 'Paint', 1, 10)] } }
+  }],
+  // A changeset that EXISTS and breaks into no listable ops — the applied-
+  // degraded arm, which is a different fact from "no changeset at all".
+  unlistable: (tok) => [{ entity_type: 'schedule', id: 'sch_' + tok, before: { id: 'sch_' + tok }, after: { id: 'sch_' + tok } }],
+  none: () => []
+};
+
+const mxMeta = (k) => ({
+  payloadId: k.anonymous ? null : k.id,
+  state: k.state, title: k.token, summary: k.token,
+  emittingAgentKey: 'scribe',
+  isDraft: k.state !== 'applied',
+  neverDrafted: k.neverDrafted,
+  applyError: k.state === 'failed' ? 'Unresolved ref $new_id:line_2' : null,
+  createdAt: '2026-08-17T10:00:00Z'
+});
+
+/* The list row noticeUnreadable is reached with. status, not state — this is
+ * what /api/payloads/ actually serves — and no changeset, because the whole
+ * premise of that path is that the detail could not be read. */
+const MX_STATUS = { applied: 'applied', applying: 'applying', failed: 'failed', proposed: 'ready', rejected: 'rejected' };
+const mxListRow = (k) => {
+  const r = {
+    id: k.id, status: MX_STATUS[k.state], title: k.token, summary: k.token,
+    created_at: '2026-08-17T10:00:00Z', applied_at: '2026-08-17T10:00:00Z',
+    activity_at: '2026-08-17T10:00:00Z'
+  };
+  if (k.neverDrafted) r.targets = [];      // the refusal's own evidence
+  return r;
+};
+
+/* ── the PATH dimension ─────────────────────────────────────────────────
+ *
+ * Every route by which anything can reach reportToStrip or the write ledger,
+ * enumerated the way round 3 enumerated the 32 async continuations:
+ * explicitly, with a count, so the list is auditable rather than implicit.
+ * Confirmed by grep over js/live-writer.js and js/cowork.js — FOUR call sites
+ * of reportToStrip, ONE call site of WRITES.report, none anywhere else.
+ *
+ *   broadcast   the fan-out seam. THE only caller of WRITES.report. Reached
+ *               from ingest() (client event + poller) and — since round 6 —
+ *               from noticeUnreadable(). Surface B's own render() is the
+ *               fourth reportToStrip call site and lives inside this one.
+ *   unreadable  ingestRow's exhausted detail retry. Round 5 shipped it calling
+ *               reportToStrip DIRECTLY, so it painted a surface without ever
+ *               reaching the ledger. It is a separate path in this matrix
+ *               precisely BECAUSE it used to be one; if it is ever folded away
+ *               its cells go with it.
+ *   composing   the handoff placeholder. No row exists, so it must move
+ *               nothing (P7).
+ *   backstop    the 180s "nothing came back" notice. Same.
+ */
+const MX_PATHS = ['broadcast', 'unreadable', 'composing', 'backstop'];
+
+/* ── THE MASK, named and justified — never by silence ─────────────────── */
+const MATRIX_EXCLUSIONS = [
+  { path: 'broadcast', rows: ['no-row'],
+    why: 'broadcast takes an entry built from a row; there is no such thing as broadcasting nothing.' },
+  { path: 'unreadable', rows: ROW_KINDS.filter((k) => !k.viaUnreadable).map((k) => k.key),
+    why: 'reachable only for the five statuses stateOf() recognises — a row it does not is dropped ' +
+         'before the fetch — and only with an empty changeset, since an unreadable detail is exactly ' +
+         'the case where there is no changeset to carry. Rows whose identity IS their changeset shape, ' +
+         'and the unidentified / unrecognised rows no poller can produce, are unreachable here.' },
+  { path: 'composing', rows: ROW_KINDS.filter((k) => !k.noRow).map((k) => k.key),
+    why: 'the handoff placeholder is reported BEFORE any row exists — there is nothing to vary.' },
+  { path: 'backstop', rows: ROW_KINDS.filter((k) => !k.noRow).map((k) => k.key),
+    why: 'same as composing: a statement that nothing came back is not a statement about a row.' }
+];
+const mxCarries = (path, k) => !MATRIX_EXCLUSIONS.some((x) => x.path === path && x.rows.indexOf(k.key) >= 0);
+
+describe('layer 5 · THE MATRIX — every currency property, every row, every mounting, every path', () => {
+  const SEED = 'A0';                      // a real applied write, fired first in every cell
+  let seen, coworkSaw, superseded;
+  let coworkActive = false, coworkPinned = false, coworkShowing = null;
+  // What the Cowork document was displaying at the moment it was pinned. Null
+  // whenever no Cowork surface is mounted, or it is mounted but not the active
+  // page — there is nothing pinned in either case, and asserting SEED there
+  // would be asserting about a document that does not exist.
+  let seedShowing = null;
+
+  /* ROUND 5's mounting machinery, reused. The one addition is an OBSERVER
+   * surface: order 99 (after every real surface), non-exclusive, and it
+   * DECLINES every row — so it adds nothing to claimedBy and suppresses
+   * nothing, which is the `decliner` shape this suite already proves is inert
+   * (P12). What it does is record the fan-out's own participant list, which is
+   * how "did this reach the seam at all?" becomes assertable without asking a
+   * surface to self-report. */
+  function bootMx(mounts, opts) {
+    opts = opts || {};
+    bootEngine();
+    seen = []; coworkSaw = []; superseded = [];
+    coworkActive = !!opts.active;
+    coworkPinned = false;                 // set AFTER the seed, so the doc has a row to pin
+    coworkShowing = null;
+    mountSurfaces(mounts, {
+      active: () => coworkActive,
+      onRender: (entry) => {
+        coworkSaw.push(entry.meta.title);
+        if (!coworkPinned) coworkShowing = entry.meta.payloadId;
+      },
+      keeps: (by, subject) =>
+        !!by['cowork'] && coworkShowing != null && String(coworkShowing) === String(subject),
+      onSupersede: (ev) => { superseded.push(ev); }
+    });
+    LW.registerSurface({
+      name: '__observer', order: 99, exclusive: false,
+      claims: () => true,
+      render: (entry) => {
+        seen.push({ token: (entry.meta || {}).title, by: (entry.claimedBy || []).slice() });
+        return null;                      // declines: adds nothing, suppresses nothing
+      }
+    });
+    // A real landed write first, so gen / subject / landed() are all non-null
+    // before the row under test arrives. A matrix run against a virgin ledger
+    // would let "moves nothing" pass by accident.
+    fire(EVENTS.A(0));
+    coworkPinned = !!opts.pinned;
+    seedShowing = coworkShowing;
+    seen = []; coworkSaw = []; superseded = [];
+    return { gen: LW.writes.current(), subject: LW.writes.subject(), landed: LW.writes.landed() };
+  }
+
+  const ledger = () => ({ gen: LW.writes.current(), subject: LW.writes.subject(), landed: LW.writes.landed() });
+  const stripText = () => { const r = document.getElementById('p86-live-writer'); return r ? r.textContent : ''; };
+  const staleText = () => { const m = document.querySelector('.p86lw-stale'); return m ? m.textContent : ''; };
+  const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
+
+  /* Fire one row down one path. Returns nothing — everything the assertions
+   * need is read back off the engine, never returned by the driver. */
+  async function drive(path, k) {
+    if (path === 'broadcast') { LW.ingest(MX_CS[k.cs](k.token), mxMeta(k)); return; }
+    if (path === 'unreadable') {
+      const prev = global.fetch;
+      global.fetch = jest.fn((url) => (/\/api\/payloads\/[^/?]+$/.test(String(url))
+        ? Promise.resolve({ ok: false, status: 500 })
+        : Promise.resolve({ ok: true, json: () => Promise.resolve({ payloads: [] }) })));
+      const row = mxListRow(k);
+      for (let i = 0; i < 3; i++) { await LW.ingestRow(row); }   // MAX_DETAIL_RETRIES
+      global.fetch = prev;
+      return;
+    }
+    if (path === 'composing') { LW.startComposing('drafting your change', {}); return; }
+    // backstop: the placeholder, then past its 180s deadline.
+    LW.startComposing('drafting your change', {});
+    jest.advanceTimersByTime(180100);
+    await flush();
+  }
+
+  /* THE INVARIANTS. Every one of them is a sentence that has been false on a
+   * shipped build at some point in this arc. */
+  function assertCell(where, k, before, stats) {
+    const after = ledger();
+    const rec = seen.filter((r) => r.token === k.token).pop();
+    const witnessed = !!(rec && rec.by.length);
+    const news = k.supersedes && witnessed;
+    const landed = k.landed && witnessed;
+    if (landed) stats.moved++;
+    if (news && !landed) stats.newsWithoutLanding++;
+
+    // I1 · gen moves IFF a write landed.
+    expect([where, 'gen', after.gen]).toEqual([where, 'gen', before.gen + (landed ? 1 : 0)]);
+
+    // I2 · subject() is the row just reported, or unchanged. Never a dismissal
+    //      and never an unidentified row — there is one assignment to it and it
+    //      sits below the news gate.
+    expect([where, 'subject', after.subject]).toEqual([where, 'subject', news ? k.id : before.subject]);
+
+    // I3 · landed() names only a row that actually changed data. This is the
+    //      field the word "landed" in every stamp refers to.
+    expect([where, 'landed()', after.landed]).toEqual([where, 'landed()', landed ? k.id : before.landed]);
+
+    // I4 · NO SURFACE ASSERTS CURRENCY FOR A WRITE THAT DID NOT HAPPEN.
+    //      Every supersession carries the ledger's own fact, and the sentence
+    //      the user actually reads follows it.
+    superseded.forEach((ev, i) => {
+      expect([where, 'supersede[' + i + '].landed', !!ev.landed])
+        .toEqual([where, 'supersede[' + i + '].landed', !!k.landed]);
+      stats.stamped++;
+    });
+    const stale = staleText();
+    if (stale) {
+      stats.stripStamped++;
+      expect([where, 'strip stamp says a write landed', stale.indexOf(STALE_MARK) >= 0])
+        .toEqual([where, 'strip stamp says a write landed', !!landed]);
+      // …and if it does say so, a write really did land AFTER the one the card
+      // is about, which is the seed.
+      if (stale.indexOf(STALE_MARK) >= 0) {
+        expect([where, 'a newer write really landed', after.landed])
+          .not.toEqual([where, 'a newer write really landed', SEED]);
+      }
+    }
+
+    // I5 · NO GENUINE LANDED WRITE GOES UNREPORTED — stated as the general
+    //      structural property rather than as "noticeUnreadable calls
+    //      broadcast": anything that reached a surface reached the fan-out.
+    //      A path added next round that skips the seam fails HERE.
+    const painted = (stripText().indexOf(k.token) >= 0) || (coworkSaw.indexOf(k.token) >= 0);
+    if (painted) {
+      stats.painted++;
+      expect([where, 'the fan-out saw what a surface drew', !!rec])
+        .toEqual([where, 'the fan-out saw what a surface drew', true]);
+      if (k.landed) {
+        expect([where, 'a drawn landed write is on the ledger', after.landed])
+          .toEqual([where, 'a drawn landed write is on the ledger', k.id]);
+      }
+    }
+
+    // I6 · PINNING STILL PINS. A pinned document keeps the row the user picked
+    //      — it is stamped, never yanked — and the stamp is counted so "still
+    //      stamps when it should" is not vacuously true.
+    if (coworkPinned) {
+      expect([where, 'pinned doc kept its row', coworkShowing])
+        .toEqual([where, 'pinned doc kept its row', seedShowing]);
+      if (news && seedShowing === SEED) stats.pinnedStamped++;
+    }
+  }
+
+  /* ── the sweep ─────────────────────────────────────────────────────────
+   * 8 surface subsets × Cowork active × Cowork pinned. The two flags are inert
+   * in the 4 subsets with no Cowork surface mounted; those runs are kept so the
+   * dimension is rectangular and the count below is arithmetic rather than a
+   * story. */
+  const MX_MOUNTINGS = [];
+  ALL_MOUNTS.forEach((m) => [false, true].forEach((active) => [false, true].forEach((pinned) => {
+    MX_MOUNTINGS.push({ mounts: m, active: active, pinned: pinned });
+  })));
+
+  const N = ROW_KINDS.length, MM = MX_MOUNTINGS.length, P = MX_PATHS.length;
+  const CELLS = [];
+  MX_PATHS.forEach((path) => ROW_KINDS.forEach((k) => {
+    if (mxCarries(path, k)) MX_MOUNTINGS.forEach((mt) => CELLS.push({ path: path, k: k, mt: mt }));
+  }));
+
+  test('the matrix is the size it says it is', () => {
+    // N × M × P is the full rectangle; the mask takes cells out of it BY NAME.
+    expect(N).toBe(15);
+    expect(MM).toBe(32);
+    expect(P).toBe(4);
+    const full = N * MM * P;
+    const excluded = MATRIX_EXCLUSIONS.reduce((n, x) => n + x.rows.length * MM, 0);
+    expect(full - excluded).toBe(CELLS.length);
+    // Stated as numbers so "we covered it" is checkable arithmetic:
+    //   full rectangle   15 × 32 × 4 = 1920
+    //   masked, by name                1216   (4 rules, each with a reason)
+    //   ASSERTED                        704
+    expect(full).toBe(1920);
+    expect(excluded).toBe(1216);
+    expect(CELLS.length).toBe(704);
+    // Every exclusion carries a reason. A silent exclusion is the failure mode
+    // this list exists to prevent.
+    MATRIX_EXCLUSIONS.forEach((x) => expect(x.why.length).toBeGreaterThan(40));
+  });
+
+  test('every cell holds every invariant', async () => {
+    const stats = { moved: 0, newsWithoutLanding: 0, stamped: 0, stripStamped: 0, painted: 0, pinnedStamped: 0, cells: 0 };
+    const warn = console.warn;
+    console.warn = () => {};                 // the unreadable path warns 3× per cell
+    try {
+      for (let i = 0; i < CELLS.length; i++) {
+        const cell = CELLS[i];
+        const k = cell.k, mt = cell.mt;
+        const where = cell.path + ' · ' + k.key + ' · [' + mountLabel(mt.mounts) + ']' +
+                      (mt.active ? ' active' : '') + (mt.pinned ? ' pinned' : '');
+        const before = bootMx(mt.mounts, { active: mt.active, pinned: mt.pinned });
+        expect([where, 'seed', before]).toEqual([where, 'seed', { gen: 1, subject: SEED, landed: SEED }]);
+        await drive(cell.path, k);
+        assertCell(where, k, before, stats);
+        stats.cells++;
+      }
+    } finally { console.warn = warn; }
+
+    expect(stats.cells).toBe(704);
+    // NON-VACUITY. Every one of these was zero at some point while this file
+    // was being written, and a matrix whose cells never do anything is 704
+    // green ticks over an engine that reports nothing.
+    expect(stats.moved).toBeGreaterThan(0);              // writes really landed
+    expect(stats.newsWithoutLanding).toBeGreaterThan(0); // …and rows really superseded WITHOUT landing
+    expect(stats.stamped).toBeGreaterThan(0);            // claimants really stepped down
+    expect(stats.stripStamped).toBeGreaterThan(0);       // the strip really wrote a sentence
+    expect(stats.painted).toBeGreaterThan(0);            // surfaces really drew rows
+    expect(stats.pinnedStamped).toBeGreaterThan(0);      // pinned documents really got stamped
+  }, 600000);
+
+  test('the two row-less paths really put their card on screen', async () => {
+    // I1–I5 say composing and backstop move nothing. That is satisfied by an
+    // engine where startComposing does nothing at all, so say what they DO.
+    const card = MODEL.describe({}, { composing: { label: 'drafting your change', viaScribe: true } });
+    for (let i = 0; i < MX_MOUNTINGS.length; i++) {
+      const mt = MX_MOUNTINGS[i];
+      const where = '[' + mountLabel(mt.mounts) + ']' + (mt.active ? ' active' : '');
+      bootMx(mt.mounts, { active: mt.active, pinned: mt.pinned });
+      LW.startComposing('drafting your change', {});
+      expect([where, 'composing', visibleClaim().pillText]).toEqual([where, 'composing', card.pillText]);
+      jest.advanceTimersByTime(180100);
+      await flush();
+      expect(stripText()).toContain('come back');
+    }
+  }, 120000);
 });

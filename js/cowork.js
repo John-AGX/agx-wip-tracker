@@ -481,32 +481,65 @@
    * pinned document by definition is not — so pinning falls out of the general
    * rule instead of being an exception carved into it.
    *
-   * writes.subject() is null until this session has seen a REPORTABLE write
-   * reported, and it is only ever the id of one — the ledger sets it below a
-   * gate that rejects everything the model does not call news, so a dismissed
-   * row can never end up here. It could, and did: a rejected payload id sat in
+   * writes.subject() is null until this session has seen a row the model calls
+   * news, and it is only ever the id of one — the ledger sets it below a gate
+   * that rejects everything the model does not call news, so a dismissed row
+   * can never end up here. It could, and did: a rejected payload id sat in
    * subject() while this column read "A newer write has landed since", which is
    * this view asserting something happened that did not.
    *
    * Null must not stamp anything either: "a newer write has landed" is a
-   * claim, and with no subject this view would have no evidence for it. */
+   * claim, and with no subject this view would have no evidence for it.
+   *
+   * ROUND 6 — AND "NEWER" IS NOT "LANDED". Fixing the rejected row left the
+   * general form: a `proposed` dry run that was rolled back, a `failed`
+   * refusal the Scribe never authored, and an `applying` row still in flight
+   * all became subject() and put this exact sentence under a pinned document,
+   * about writes that did not happen. Two facts are needed and the ledger now
+   * answers both — writes.staleness(id) returns null when this row is still
+   * the latest, and otherwise says whether a WRITE landed since. The sentence
+   * itself comes from the model, so this column and the strip's card cannot
+   * drift into telling two different stories about one supersession. */
   function newestReported() {
     var lw = LW();
     try { return (lw && lw.writes) ? lw.writes.subject() : null; } catch (_) { return null; }
+  }
+  /* null when `id` is still the latest; otherwise { landed: bool }. */
+  function staleness(id) {
+    var lw = LW();
+    try {
+      if (lw && lw.writes && lw.writes.staleness) return lw.writes.staleness(id);
+    } catch (_) {}
+    return null;
   }
   function docIsCurrent(id) {
     var newest = newestReported();
     return newest == null || String(id) === String(newest);
   }
-  function stampDocStale(doc) {
+  /* `landed` is the ledger's fact, never this column's inference. The mark is
+   * UPGRADED from "newer activity" to "a newer write landed" if a real write
+   * arrives after a draft did, and never downgraded — once a write has landed
+   * behind the row you are reading, that stays true. */
+  function stampDocStale(doc, landed) {
     doc = doc || document.getElementById('cw-doc');
     var head = doc && doc.querySelector('.cw-dhead');
-    if (!head || doc.querySelector('.cw-stale')) return;
+    if (!head) return;
+    var m = LWM();
+    var lead = (m && m.supersededLead) ? m.supersededLead(!!landed)
+                                       : 'A newer write has landed since.';
+    var text = lead + ' This is the one you picked — it is not the latest.';
+    var mark = doc.querySelector('.cw-stale');
+    if (mark) {
+      if (landed && mark.getAttribute('data-landed') !== '1') {
+        mark.textContent = text;
+        mark.setAttribute('data-landed', '1');
+      }
+      return;
+    }
     // insertAdjacentHTML, never `innerHTML +=`: the latter reparses the whole
     // column and orphans the Approve/Reject listeners wireActions attached.
     head.insertAdjacentHTML('afterend',
-      '<div class="cw-stale">A newer write has landed since. This is the one you picked — ' +
-      'it is not the latest.</div>');
+      '<div class="cw-stale"' + (landed ? ' data-landed="1"' : '') + '>' + esc(text) + '</div>');
   }
 
   function renderDoc(row) {
@@ -657,7 +690,8 @@
     // older row from the rail paints a document with no supersession history
     // at all, so the stamp is re-applied from the ledger rather than being
     // treated as something that only ever arrives by callback.
-    if (!docIsCurrent(row.id)) stampDocStale(doc);
+    var stale = staleness(row.id);
+    if (stale) stampDocStale(doc, stale.landed);
   }
 
   function wireActions(doc, row) {
@@ -756,7 +790,7 @@
        * undefined on every branch, the fan-out counted a REJECTED row as a
        * reported write, moved the write generation onto it and cleared an
        * unrelated drafting card. Whether a row is news is now decided by the
-       * model (isReportable) inside the ledger, before any claim is read, so
+       * model (supersedesOnScreen) inside the ledger, before any claim is read, so
        * this surface is free to go on rendering rows that are not news. */
       claims: function () { return isActive(); },
       /* What this returns means exactly one thing: "I put this row on screen."
@@ -793,7 +827,11 @@
       keeps: function (by, subject) {
         return !!by['cowork'] && _selectedId != null && String(_selectedId) === String(subject);
       },
-      supersede: function () { stampDocStale(); }
+      /* `ev` is the ledger's whole reported fact — { gen, subject, landed,
+       * state }. The remedy reads `landed` from it rather than inferring a
+       * landing from the mere fact of being superseded, which is round 6's
+       * defect in one line. */
+      supersede: function (ev) { stampDocStale(null, !!(ev && ev.landed)); }
     });
   }
 

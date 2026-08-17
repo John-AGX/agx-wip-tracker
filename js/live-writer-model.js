@@ -50,11 +50,32 @@
  * consults describe() declined the rows describe() calls silent. Mount a
  * surface that does not (Cowork: `claims` is isActive(), `render` returns
  * undefined) and a REJECTED row moved the generation, became subject(), and
- * destroyed an unrelated drafting card. So isReportable() is the fourth
- * export: a ctx-free, surface-free property of the ROW, asked by the ledger
- * itself before it reads a single claim. Reportability and renderability are
- * deliberately two predicates — see isReportable for the rows that separate
- * them.
+ * destroyed an unrelated drafting card. So round 5 added isReportable(): a
+ * ctx-free, surface-free property of the ROW, asked by the ledger itself
+ * before it reads a single claim.
+ *
+ * ROUND 6 — isReportable was TWO QUESTIONS WEARING ONE PREDICATE, and it was
+ * only ever asked of the rows where the two answers agree. It bundled
+ *
+ *   (a) does this supersede what is on screen?   supersedesOnScreen()
+ *   (b) did a write actually land?               didWriteLand()
+ *
+ * For a REJECTED row both answers are no, which is exactly why deleting that
+ * one entry fixed round 5's measured case and left the general form standing.
+ * The rows where they DIVERGE are the ones nobody asked: a rolled-back
+ * `proposed` dry run, a `failed` refusal the Scribe never authored, an
+ * `applying` row still in flight, an unrecognised state. All three are real
+ * moments — they supersede — and NONE of them landed, yet each became
+ * subject() and moved the generation, so a pinned Cowork document captioned
+ * itself "A newer write has landed since" about a write that did not happen.
+ * That is the eighth's second form: the UI asserting something happened that
+ * did not.
+ *
+ * So there are two predicates with two names, and they drive two different
+ * things: (a) decides who must step down, (b) decides the generation, the
+ * subject of the word "landed", and — via supersededLead() — the SENTENCE a
+ * superseded region shows. A region can no longer pick that sentence itself;
+ * that was how two regions came to write the same false clause.
  * ──────────────────────────────────────────────────────────────────────── */
 (function () {
   'use strict';
@@ -183,56 +204,124 @@
    * branch) an ingested REJECTED row moved the generation, made a rejection
    * the subject(), and destroyed an unrelated in-flight drafting card.
    *
-   * So report() now asks isReportable(entry) FIRST, before it looks at a
-   * single claim, and it asks the model rather than being told: the caller
-   * hands over the ENTRY, not a verdict and not a subject id. A row the model
-   * does not call news moves no generation and sets no subject no matter which
-   * surfaces are mounted or what they return.
+   * So report() now asks the model FIRST, before it looks at a single claim,
+   * and it asks rather than being told: the caller hands over the ENTRY, not a
+   * verdict and not a subject id. A row the model does not call news moves no
+   * generation and sets no subject no matter which surfaces are mounted or
+   * what they return.
+   *
+   * ROUND 6 asks TWO questions there instead of one — see supersedesOnScreen
+   * and didWriteLand above. The first decides who steps down; the second
+   * decides the generation and whether the word "landed" may be used at all.
    */
-  /* REPORTABILITY — a property of the ROW, and NOT the same property as
-   * renderability. It is tempting to read it off describe()'s `kind === silent`
-   * and that would be wrong in both directions:
+  /* ── THE TWO QUESTIONS ───────────────────────────────────────────────────
+   *
+   * Both are properties of the ROW: ctx-free, surface-free, over meta alone.
+   * Neither is renderability. It is tempting to read currency off describe()'s
+   * `kind === 'silent'` and that is wrong in both directions:
    *
    *   renderable but not news  a REJECTED row is a real ledger row. Cowork
    *                            lists it, and selecting it renders a perfectly
    *                            good document. It is still not news, and it must
    *                            not demote a drafting card or a pinned document.
-   *                            The handoff placeholder is the second case: a
-   *                            real moment, drawn on the strip, about a write
-   *                            that has not landed (P7).
    *   news but not silent-free `kind` depends on CTX — the same rejected row
    *                            comes back as a 'notice' when its detail fetch
    *                            failed (ctx.unreadable), and as 'silent'
    *                            otherwise. Currency must not depend on whose
    *                            fetch broke or on which surface is asking.
    *
-   * So it is its own predicate over meta alone, ctx-free and surface-free: a
-   * row is news iff there is an identified row to BE the subject and its state
-   * is one that actually happened. Nothing here can be reached by a surface. */
+   * They are TWO functions because they have two different answers on four
+   * kinds of row, and round 5 shipped them as one because it only ever asked
+   * about the fifth (rejected), where they happen to agree.
+   *
+   *   row                              supersedes?   landed?
+   *   applied                              yes         yes
+   *   proposed  (a dry run, rolled back)   yes         NO
+   *   applying  (still in flight)          yes         NO
+   *   failed / failed+neverDrafted         yes         NO
+   *   an unrecognised meta.state           yes         NO
+   *   rejected  (a dismissal)              NO          NO
+   *   no payloadId at all                  NO          NO
+   */
+
+  /* (a) DOES THIS SUPERSEDE WHAT IS ON SCREEN? — is this row a real,
+   * identified moment in some write's life? Everything except a dismissal and
+   * a row with no id to be the subject. This is what decides who steps down,
+   * and it is what `subject` is allowed to hold. */
   var NOT_NEWS = { rejected: true };
-  function isReportable(entry) {
+  function supersedesOnScreen(entry) {
     var meta = (entry && entry.meta) || {};
     if (!meta.payloadId) return false;     // nothing that could be the subject
     return !NOT_NEWS[meta.state || 'applied'];
   }
 
+  /* (b) DID A WRITE ACTUALLY LAND? — did the user's data change? ONLY an
+   * applied row has. A draft was rolled back, a refusal never authored
+   * anything, a failed apply changed nothing, an 'applying' row has not
+   * finished, and an unrecognised state is not something to assert about.
+   * DEFAULT-DENY on the state, deliberately: a state this file has never heard
+   * of must not be able to claim a landing by falling through a switch. */
+  function didWriteLand(entry) {
+    var meta = (entry && entry.meta) || {};
+    if (!meta.payloadId) return false;
+    return (meta.state || 'applied') === 'applied';
+  }
+
+  /* THE SENTENCE a superseded region shows, and the reason it lives here.
+   * TWO regions write it — the strip's card and Cowork's document — and both
+   * of them hard-coded "A newer write has landed since", which is a claim
+   * about (b) made by a mechanism that only ever consulted (a). Returns the
+   * LEAD CLAUSE only; each region appends its own tail, exactly as
+   * noDiffExplanation does, because "this is the earlier one" and "this is the
+   * one you picked" are different sentences about the same fact. */
+  var SUPERSEDED_LEAD = {
+    landed: 'A newer write has landed since.',
+    activity: 'There is newer activity since — but nothing newer has actually landed.'
+  };
+  function supersededLead(landed) {
+    return landed ? SUPERSEDED_LEAD.landed : SUPERSEDED_LEAD.activity;
+  }
+
   function makeWriteLedger() {
+    /* gen moves IFF A WRITE LANDED. subject is the newest row that superseded
+     * the screen, which is a strictly larger set — a `keeps` predicate asks
+     * "am I displaying the row that was just reported?", and the row just
+     * reported is often a draft. Keeping them in one counter is what let a
+     * draft be described as a landing. */
     var gen = 0;
-    var subject = null;          // payloadId of the newest REPORTED write
+    var subject = null;          // newest row that SUPERSEDED (question a)
+    var landedId = null;         // newest row that LANDED     (question b)
     var claimants = [];
 
     function note(event, name) {
-      if (_dev) _claims.push({ event: event, claimant: name, gen: gen, subject: subject });
+      if (_dev) _claims.push({ event: event, claimant: name, gen: gen, subject: subject, landed: landedId });
     }
 
     var self = {
+      /* How many writes have LANDED this session. */
       current: function () { return gen; },
-      /* The newest write anyone put on screen this session, or null. Null is
+      /* The newest row anyone put on screen this session, or null. Null is
        * not "nothing is stale" — it is "this view has not seen a write", and
        * a surface must not stamp anything on the strength of it. */
       subject: function () { return subject; },
+      /* …and the newest row that actually CHANGED DATA. Only this one may be
+       * described with the word "landed". */
+      landed: function () { return landedId; },
 
-      /* spec: { name, owner, keeps(by, subject), supersede(gen, subject) }
+      /* Is `id` still the latest, and if not, has a WRITE landed since?
+       * The two facts a stamp needs, answered in one place so a region never
+       * has to derive "landed" from "superseded" — which is the round-6
+       * defect. Returns null when `id` is current. */
+      staleness: function (id) {
+        if (subject == null || String(subject) === String(id)) return null;
+        return { landed: landedId != null && String(landedId) !== String(id) };
+      },
+
+      /* spec: { name, owner, keeps(by, subject, ev), supersede(ev) }
+       *
+       * `ev` is { gen, subject, landed, state } — the whole reported fact. A
+       * remedy that needs to say something about the write gets the write's
+       * properties handed to it; it does not get to infer them.
        *
        * `owner` is the SURFACE whose reports keep this region current, and the
        * default `keeps` is exactly that. A region overrides `keeps` only when
@@ -251,9 +340,10 @@
         return function () { claimants = claimants.filter(function (x) { return x !== c; }); };
       },
 
-      /* THE predicate, exposed so nobody has to re-derive it. Callers may ask;
-       * they may not answer — report() re-asks it below regardless. */
-      reportable: isReportable,
+      /* THE two predicates, exposed so nobody has to re-derive them. Callers
+       * may ask; they may not answer — report() re-asks both below. */
+      supersedesOnScreen: supersedesOnScreen,
+      didWriteLand: didWriteLand,
 
       /* An ENTRY reached the surfaces in `reporters`. Takes the entry and not
        * a (subjectId, verdict) pair on purpose: the two questions are
@@ -266,32 +356,42 @@
        *
        * Two ways this does nothing at all, and they are different facts:
        *
-       *   not reportable  the row is not news (a dismissal; an unidentified
-       *                   row). No generation, no subject, no supersession —
-       *                   however many surfaces drew it and whatever they
-       *                   returned. This is the round-5 fix, and it is why
-       *                   `subject` can only ever be a reportable payloadId:
-       *                   there is exactly one assignment to it and it sits
-       *                   below this gate.
+       *   not news        a dismissal, or an unidentified row. No generation,
+       *                   no subject, no supersession — however many surfaces
+       *                   drew it and whatever they returned. This is the
+       *                   round-5 fix, and it is why `subject` can only ever
+       *                   be a payloadId supersedesOnScreen() accepted: there
+       *                   is exactly one assignment to it and it sits below
+       *                   this gate.
        *   unwitnessed     real news that nobody put on screen. A write no
        *                   surface displayed must not demote what one did. This
        *                   check used to sit in the CALLER as well; it lives
        *                   here only now — two mechanisms for one invariant is
-       *                   how round 3 became necessary. */
+       *                   how round 3 became necessary.
+       *
+       * ROUND 6. Past those two gates the row supersedes, and only THEN is the
+       * second question asked: did it land? gen and landedId move only if it
+       * did, so `gen` counts writes rather than moments and nothing downstream
+       * can turn "something newer happened" into "a newer write landed". */
       report: function (entry, reporters) {
-        if (!isReportable(entry)) { note('not-news', null); return gen; }
+        if (!supersedesOnScreen(entry)) { note('not-news', null); return gen; }
         reporters = reporters || [];
         if (!reporters.length) { note('unwitnessed', null); return gen; }
         var by = Object.create(null);
         reporters.forEach(function (n) { by[n] = true; });
-        gen++;
+        var landed = didWriteLand(entry);
         subject = entry.meta.payloadId;
-        note('report', reporters.join('+'));
+        if (landed) { gen++; landedId = subject; }
+        var ev = {
+          gen: gen, subject: subject, landed: landed,
+          state: (entry.meta.state || 'applied')
+        };
+        note(landed ? 'report' : 'report-nothing-landed', reporters.join('+'));
         claimants.slice().forEach(function (c) {
-          var kept = c.keeps ? !!c.keeps(by, subject) : !!by[c.owner];
+          var kept = c.keeps ? !!c.keeps(by, subject, ev) : !!by[c.owner];
           if (kept) { note('keep', c.name); return; }
           note('supersede', c.name);
-          try { c.supersede(gen, subject); }
+          try { c.supersede(ev); }
           catch (e) { console.warn('[live-writer] supersede "' + c.name + '" failed:', e); }
         });
         return gen;
@@ -616,7 +716,12 @@
     DRAFT_RECORDER_SINCE: DRAFT_RECORDER_SINCE,
     makeOwner: makeOwner,
     makeWriteLedger: makeWriteLedger,
-    isReportable: isReportable,
+    /* The two questions round 5 shipped as one. isReportable is GONE rather
+     * than aliased: an alias is a third name for a distinction whose whole
+     * purpose is that it has two. */
+    supersedesOnScreen: supersedesOnScreen,
+    didWriteLand: didWriteLand,
+    supersededLead: supersededLead,
     setDev: setDev, paintLog: paintLog, resetPaintLog: resetPaintLog,
     claimLog: claimLog, resetClaimLog: resetClaimLog,
     agentLabel: agentLabel,

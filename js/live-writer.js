@@ -72,9 +72,35 @@
  * mounted surface was the one that consults describe(). On Cowork (claims =
  * isActive(), render returns undefined) a rejected row moved the generation
  * and destroyed an unrelated drafting card. broadcast() now hands the ENTRY to
- * the ledger, which asks the model's isReportable() before it reads a single
- * claim. A surface's return value means "I am displaying this row" and
- * nothing more.
+ * the ledger, which asks the model before it reads a single claim. A surface's
+ * return value means "I am displaying this row" and nothing more.
+ *
+ * ROUND 6 closes the seam in both directions.
+ *
+ *   INWARD  the ledger asks TWO questions instead of one (supersedesOnScreen,
+ *           didWriteLand). Round 5's single predicate answered "is this a
+ *           moment?" and was read as "did a write land?", so a rolled-back
+ *           draft, a refusal and an in-flight row each became subject() and
+ *           captioned a pinned document "A newer write has landed since".
+ *   OUTWARD noticeUnreadable() called reportToStrip() directly and therefore
+ *           never reached WRITES.report at all — the one path that skipped the
+ *           fan-out, and so the one write that landed and went unreported. It
+ *           goes through broadcast() now.
+ *
+ * THE REPORT PATHS, enumerated, because "there is exactly one" is the kind of
+ * claim round 2 made about setPill:
+ *
+ *   1 broadcast()          the fan-out seam. The ONLY caller of WRITES.report.
+ *                          Reached from ingest() and from noticeUnreadable().
+ *   2 startComposing()     → reportToStrip. No row exists yet, so it reports
+ *                          no write and must move nothing (P7).
+ *   3 the 180s backstop    → reportToStrip. Same: a statement that nothing
+ *                          came back is not a write.
+ *   4 surface B's render() → reportToStrip, from inside (1).
+ *
+ * Nothing else in this file or in cowork.js reaches reportToStrip or the
+ * ledger. (2) and (3) are the only paths that paint the strip from outside the
+ * fan-out, and both are about a write that has not landed.
  * ──────────────────────────────────────────────────────────────────────── */
 (function () {
   'use strict';
@@ -567,8 +593,8 @@
      *
      * A REJECTED row must therefore not destroy a drafting card it has nothing
      * to do with, and the reason it does not is that the MODEL does not call it
-     * news — isReportable(entry) is false, so report() returns before it looks
-     * at who drew it. Round 4 wrote this same sentence with "nobody reports it"
+     * news — supersedesOnScreen(entry) is false, so report() returns before it
+     * looks at who drew it. Round 4 wrote this same sentence with "nobody reports it"
      * as the reason, which was only true of surface B: Cowork claims on
      * isActive() and returns undefined, so it reported the rejection, moved the
      * generation, and cleared the card. Never re-state the reason as a fact
@@ -847,12 +873,23 @@
    *
    *   THE HANDOFF PLACEHOLDER is the exception, and it is the one case that
    *   clears. It holds no anchored content ("Handed to the Scribe — drafting")
-   *   and a landing write is the evidence that the handoff came back, so
-   *   stamping it would leave a false in-flight claim on screen. This is
+   *   and a newer row is the evidence that the handoff came back, so stamping
+   *   it would leave a false in-flight claim on screen. This is
    *   clearComposing(), which used to live in ingest() one level too low.
+   *
+   * ROUND 6 — WHAT THE STAMP SAYS. It read "A newer write has landed since",
+   * hard-coded, on a region that steps down for every row the ledger calls a
+   * moment — including drafts, refusals and in-flight rows, none of which
+   * landed. The sentence now comes from the model (supersededLead) given the
+   * ledger's own `landed` fact, so this region cannot make a claim about
+   * question (b) using a mechanism that only answers question (a).
+   *
+   * _stripSuperseded records WHICH sentence is up, not just "stamped", so a
+   * draft followed by a real apply UPGRADES the wording. It never downgrades:
+   * once a write has landed behind this card, that stays true.
    */
   var _stripReport = null;        // what the strip is currently asserting
-  var _stripSuperseded = false;   // …and whether it has already stepped down
+  var _stripSuperseded = null;    // null | 'activity' | 'landed'
 
   /* THE PANE'S CURRENCY, written once.
    *
@@ -872,22 +909,27 @@
     return !!_stripReport && _stripReport.kind === 'pane';
   }
 
-  function supersedeStrip() {
+  function supersedeStrip(ev) {
     if (!root) return;
     if (_stripReport && _stripReport.kind === 'composing') { clearComposing(); return; }
-    if (_stripSuperseded) return;
-    _stripSuperseded = true;
+    var kind = (ev && ev.landed) ? 'landed' : 'activity';
+    // Already stepped down, and not an upgrade from "something happened" to
+    // "a write landed" → nothing left to do.
+    if (_stripSuperseded === kind || _stripSuperseded === 'landed') return;
+    var upgrade = _stripSuperseded === 'activity';
+    _stripSuperseded = kind;
     var t = root.querySelector('.p86lw-pilltext');
     if (t) t.textContent = 'Live Writer';
     var d = root.querySelector('.p86lw-pill .p86lw-dot');
     if (d) { d.style.animation = 'none'; d.style.background = PILL_NEUTRAL; }
     var card = root.querySelector('.p86lw-card');
+    if (!card || !card.firstChild) return;
+    var text = M.supersededLead(kind === 'landed') + ' This is the earlier one.';
+    var mark = card.querySelector('.p86lw-stale');
+    if (mark) { if (upgrade) mark.textContent = text; return; }
     // insertAdjacentHTML, never `innerHTML +=` — the latter reparses every
     // child and would orphan the listeners renderOps/renderNotice attached.
-    if (card && card.firstChild && !card.querySelector('.p86lw-stale')) {
-      card.insertAdjacentHTML('beforeend',
-        '<div class="p86lw-stale">A newer write has landed since — this is the earlier one.</div>');
-    }
+    card.insertAdjacentHTML('beforeend', '<div class="p86lw-stale">' + esc(text) + '</div>');
   }
 
   /* Collapsing is itself a claim — the pill it collapses to is the thing the
@@ -949,7 +991,8 @@
      * rejection moved no generation because THIS surface declined it — and
      * that is exactly the guard round 5 retired: it spoke for every surface
      * while living inside one. Whether the row is news is decided by
-     * isReportable() inside the ledger; this is a statement about surface B. */
+     * supersedesOnScreen() inside the ledger, and whether a write landed by
+     * didWriteLand(); this is a statement about surface B and nothing else. */
     if (!report || report.kind === 'silent') return null;   // paint nothing, claim nothing
     /* `if (report.kind !== 'pane') dismissPane();` used to sit here as its own
      * inline rule, and it only ever covered the half of the problem this
@@ -964,7 +1007,7 @@
     // reason setPill is called before one: the ledger asks this question, and
     // a chrome must not be able to answer it differently.
     _stripReport = report;
-    _stripSuperseded = false;
+    _stripSuperseded = null;
     if (!paneIsCurrent()) dismissPane();                     // the same predicate, from inside
     setPill(ep, report);                                     // ALWAYS, and first
     var card = root.querySelector('.p86lw-card');
@@ -1120,7 +1163,7 @@
     collapseTimer = null;
     composingTimer = null;
     _stripReport = null;
-    _stripSuperseded = false;
+    _stripSuperseded = null;
     if (root) { root.remove(); root = null; }
     dismissPane();
   }
@@ -1207,7 +1250,7 @@
     STRIP.claim();                    // supersede everything the placeholder scheduled
     composingTimer = null;
     _stripReport = null;
-    _stripSuperseded = false;
+    _stripSuperseded = null;
     if (root) { root.remove(); root = null; }
   }
 
@@ -1344,7 +1387,13 @@
      * because their rows are gone. */
     render: function (entry) {
       return reportToStrip(entry, M.describe(entry, {
-        inEditor: (entry.claimedBy || []).indexOf('editor-flash') >= 0
+        inEditor: (entry.claimedBy || []).indexOf('editor-flash') >= 0,
+        // The detail fetch gave up on this row. Carried ON THE ENTRY rather
+        // than passed at one call site, so noticeUnreadable can go through
+        // broadcast() like everything else instead of around it — see the
+        // round-6 note there. `undefined` reads as "readable", which is what
+        // every other row is.
+        unreadable: entry.unreadable || null
       }));
     }
   });
@@ -1551,16 +1600,36 @@
   // broke.
   function noticeUnreadable(row, state, err) {
     try {
-      // Goes through the SAME boundary as every other report, which is what
-      // makes it supersede the composing placeholder. It used to call
-      // showNotice directly and never touch _composing, so 180 seconds after
-      // this truthful amber notice rendered, the backstop replaced it with
-      // "hasn't come back / Nothing has landed here in three minutes" — both
-      // clauses false, about a write this very function had just reported.
-      var entry = { meta: metaFromRow(row, state), groups: [], changeset: [] };
-      reportToStrip(entry, M.describe(entry, {
+      /* ROUND 6 — THE FOURTH FORM, AND IT POINTS THE OTHER WAY.
+       *
+       * This used to call reportToStrip() DIRECTLY, so it reached surface B's
+       * chrome without passing through broadcast(), and WRITES.report() was
+       * therefore never called for it. Measured live by 500-ing one real
+       * applied row's detail fetch: the strip said "Scribe wrote something
+       * this view could not read" — truthful, a write DID land — while the
+       * ledger stayed at gen 0 / subject null and a pinned Cowork document
+       * went on reading as the latest. Two surfaces on one screen disagreeing
+       * about whether a write landed: S7, round 4's own defect, reopened
+       * through the one report path that skipped the seam.
+       *
+       * broadcast()'s comment says "a surface cannot skip a call it does not
+       * make". This function did not make it. So it makes it now: the
+       * unreadable fact rides on the ENTRY rather than being handed to
+       * describe() at one call site, and this goes through the fan-out like
+       * every other row. Cowork gets first refusal (it re-fetches the detail
+       * itself, which is the honest thing to offer), surface B paints the same
+       * amber notice it painted before when Cowork is not up, and the ledger
+       * hears about it either way.
+       *
+       * ingest() is deliberately NOT the entry point: ingestRow marked this
+       * key seen before calling here, so ingest() would dedupe it to null and
+       * the write would go unreported — which is the defect, restored. */
+      var entry = {
+        meta: metaFromRow(row, state), groups: [], changeset: [],
+        rows: function () { return null; },
         unreadable: { message: (err && err.message) || 'fetch failed', tries: MAX_DETAIL_RETRIES }
-      }));
+      };
+      broadcast(entry);
     } catch (e) { console.warn('[live-writer] unreadable notice failed', e); }
   }
 
