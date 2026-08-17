@@ -287,8 +287,13 @@ async function createChangeOrder(db, { jobId, orgId, ownerId, fields }) {
   const coNumber = (body.co_number && String(body.co_number).trim()) || await nextCoNumber(db, jobId);
   const data = cleanCoData(body);
   const { rows } = await db.query(
-    `INSERT INTO job_change_orders (id, job_id, owner_id, status, co_number, data)
-     VALUES ($1, $2, $3, 'draft', $4, $5)
+    // organization_id off the PARENT JOB, never off the caller — and this is
+    // the shared financials service the AGENT write path lands in, so it is the
+    // highest-traffic un-stamped money insert of the set. See the note in
+    // change-order-routes.js.
+    `INSERT INTO job_change_orders (id, job_id, owner_id, status, co_number, data, organization_id)
+     VALUES ($1, $2, $3, 'draft', $4, $5,
+             (SELECT organization_id FROM jobs WHERE id = $2))
      RETURNING ${CO_RETURNING}`,
     [id, jobId, ownerId || null, coNumber, JSON.stringify(data)]
   );

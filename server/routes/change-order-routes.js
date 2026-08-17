@@ -217,9 +217,16 @@ router.post('/jobs/:jobId/change-orders', requireAuth, requireCapability('ESTIMA
     if (!Array.isArray(data.lines)) data.lines = [];
 
     const { rows } = await pool.query(
+      // organization_id off the PARENT JOB, never off the caller. A change order
+      // row belongs to whatever tenant its job belongs to, so reading the stamp
+      // from the row makes it unforgeable. It used to land NULL and be healed by
+      // the boot backfill; gating that backfill (9c1626a) was correct and turned
+      // this into a STANDING null, visible to every tenant through the tolerance
+      // arm on every read. Stamp at insert instead — never un-gate the backfill.
       `INSERT INTO job_change_orders
-         (id, job_id, owner_id, status, co_number, data)
-       VALUES ($1, $2, $3, 'draft', $4, $5)
+         (id, job_id, owner_id, status, co_number, data, organization_id)
+       VALUES ($1, $2, $3, 'draft', $4, $5,
+               (SELECT organization_id FROM jobs WHERE id = $2))
        RETURNING id, job_id, owner_id, status, co_number, data, approved_at,
                  approved_by, linked_node_id, is_locked, created_at, updated_at`,
       [id, jobId, req.user.id, coNumber, JSON.stringify(data)]

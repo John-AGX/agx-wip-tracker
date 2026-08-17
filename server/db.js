@@ -696,6 +696,7 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_jco_org_null           ON job_change_orders (id) WHERE organization_id IS NULL;
     CREATE INDEX IF NOT EXISTS idx_qb_cost_lines_org_null ON qb_cost_lines     (id) WHERE organization_id IS NULL;
     CREATE INDEX IF NOT EXISTS idx_job_subs_org_null      ON job_subs          (id) WHERE organization_id IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_sched_entries_org_null ON schedule_entries  (id) WHERE organization_id IS NULL;
 
     -- Job-anchored backfills (5 tables). jobs.organization_id is already
     -- populated from Phase 1.
@@ -5482,6 +5483,7 @@ async function initSchema() {
 const ORG_STAMP_AUDIT_TABLES = [
   'users', 'jobs', 'estimates', 'leads', 'clients',
   'job_change_orders', 'job_subs', 'qb_cost_lines', 'node_graphs',
+  'schedule_entries',
 ];
 
 async function reportOrgStampAudit(phase) {

@@ -549,9 +549,15 @@ router.post('/import', requireAuth, requireCapability('ESTIMATES_EDIT'), async (
         if (byName.has(key)) continue;
         const id = 'client_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
         await client.query(
-          `INSERT INTO clients (id, name, company_name, client_type)
-           VALUES ($1, $2, $2, 'Property Mgmt')`,
-          [id, company]
+          // The parent-company stub created by the import. Every other client
+          // insert in this file builds its column list dynamically and already
+          // emits organization_id; this fixed list did not, so a re-import
+          // seeded un-stamped parents that the dedup index above (correctly
+          // org-scoped) would then never match again from another tenant.
+          // req.user.organization_id is what the surrounding read already binds.
+          `INSERT INTO clients (id, name, company_name, client_type, organization_id)
+           VALUES ($1, $2, $2, 'Property Mgmt', $3)`,
+          [id, company, req.user.organization_id]
         );
         byName.set(key, id);
         parentsCreated++;

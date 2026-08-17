@@ -44,9 +44,16 @@ async function syncSubAccessForPO(poRow, userId) {
     const subId = poRow.sub_id, jobId = poRow.job_id;
     // (a) idempotent job-level assignment (building/phase stay node-driven)
     await pool.query(
+      // organization_id off the PARENT JOB, never off the caller. A job_subs
+      // row belongs to whatever tenant its job belongs to, so reading the stamp
+      // from the row makes it unforgeable. It used to land NULL and be healed by
+      // the boot backfill; gating that backfill (9c1626a) was correct and turned
+      // this into a STANDING null, visible to every tenant through the tolerance
+      // arm on every read. Stamp at insert instead — never un-gate the backfill.
       `INSERT INTO job_subs (id, job_id, sub_id, level, building_id, phase_id,
-                             contract_amt, billed_to_date, status, notes)
-       VALUES ($1, $2, $3, 'job', NULL, NULL, 0, 0, 'active', NULL)
+                             contract_amt, billed_to_date, status, notes, organization_id)
+       VALUES ($1, $2, $3, 'job', NULL, NULL, 0, 0, 'active', NULL,
+               (SELECT organization_id FROM jobs WHERE id = $2))
        ON CONFLICT (job_id, sub_id) DO NOTHING`,
       ['jsub_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8), jobId, subId]
     );

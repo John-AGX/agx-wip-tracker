@@ -504,9 +504,11 @@ router.post('/jobs/:jobId',
       // level='job' and ignore any building_id/phase_id from the body.
       // Legacy callers passing those fields silently no-op.
       const result = await pool.query(`
+        -- organization_id off the PARENT JOB, never off the caller.
         INSERT INTO job_subs (id, job_id, sub_id, level, building_id, phase_id,
-                              contract_amt, billed_to_date, status, notes)
-        VALUES ($1,$2,$3,'job',NULL,NULL,$4,$5,$6,$7)
+                              contract_amt, billed_to_date, status, notes, organization_id)
+        VALUES ($1,$2,$3,'job',NULL,NULL,$4,$5,$6,$7,
+                (SELECT organization_id FROM jobs WHERE id = $2))
         RETURNING *
       `, [
         id, req.params.jobId, subId,
@@ -712,8 +714,9 @@ router.post('/migrate-apply',
             // ignore r.level / r.buildingId / r.phaseId from legacy
             // inline records and collapse to one (job, sub) row.
             await client.query(
-              `INSERT INTO job_subs (id, job_id, sub_id, level, building_id, phase_id, contract_amt, billed_to_date, status, notes)
-               VALUES ($1,$2,$3,'job',NULL,NULL,$4,$5,'active',$6)
+              `INSERT INTO job_subs (id, job_id, sub_id, level, building_id, phase_id, contract_amt, billed_to_date, status, notes, organization_id)
+               VALUES ($1,$2,$3,'job',NULL,NULL,$4,$5,'active',$6,
+                       (SELECT organization_id FROM jobs WHERE id = $2))
                ON CONFLICT (job_id, sub_id) DO UPDATE
                  SET contract_amt = job_subs.contract_amt + EXCLUDED.contract_amt,
                      billed_to_date = job_subs.billed_to_date + EXCLUDED.billed_to_date,
@@ -913,8 +916,9 @@ router.post('/:subId/job-access',
       if (wantSet.size) {
         await pool.query(
           `INSERT INTO job_subs (id, job_id, sub_id, level, building_id, phase_id,
-                                 contract_amt, billed_to_date, status, notes)
-           VALUES ($1,$2,$3,'job',NULL,NULL,0,0,'active',NULL)
+                                 contract_amt, billed_to_date, status, notes, organization_id)
+           VALUES ($1,$2,$3,'job',NULL,NULL,0,0,'active',NULL,
+                   (SELECT organization_id FROM jobs WHERE id = $2))
            ON CONFLICT (job_id, sub_id) DO NOTHING`,
           [genId('jsub'), jobId, subId]);
       }
