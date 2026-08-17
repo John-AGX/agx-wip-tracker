@@ -123,7 +123,14 @@
 
   var estimates = {
     list: function() { return get('/api/estimates'); },
-    bulkSave: function(payload) { return put('/api/estimates/bulk/save', payload); },
+    // baseVersions rides INSIDE the body here (the route destructures it off
+    // req.body), unlike jobs.bulkSave where it is a sibling of appData. Same
+    // contract either way: { id: updatedAtISO | 'unversioned' } for every row
+    // the client believes already exists, nothing for a row it is creating.
+    bulkSave: function(payload, baseVersions) {
+      return put('/api/estimates/bulk/save',
+        baseVersions ? Object.assign({}, payload, { baseVersions: baseVersions }) : payload);
+    },
     remove: function(id) { return del('/api/estimates/' + encodeURIComponent(id)); },
     // Record/clear that a proposal was sent (the "sent vs created" tracker).
     markSent: function(id, sent) { return post('/api/estimates/' + encodeURIComponent(id) + '/sent', { sent: sent !== false }); },

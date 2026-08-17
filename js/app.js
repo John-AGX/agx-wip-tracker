@@ -2720,6 +2720,12 @@
         // refusing every unversioned row — would destroy genuinely new jobs,
         // which is the bug this whole path exists to stop, pointed the other way.
         var _serverJobIds = {};
+        // The estimate half of both maps. Estimates now have a real server-side
+        // version guard (PUT /api/estimates/bulk/save), so they get the same
+        // referee jobs have had: a base per row, a conflict when it does not
+        // match, and no INSERT for a row the client expected to find.
+        var _estimateVersion = {};
+        var _serverEstimateIds = {};
         // The sentinel. Deliberately not a timestamp and deliberately not
         // absent: absent means "create", a non-comparable value means "this
         // must already exist and I cannot prove I am current". The server
@@ -2800,6 +2806,7 @@
             _estimateBaseline = {};
             (appData.estimates || []).forEach(function(e) {
                 _estimateBaseline[e.id] = estimateSliceSig(e.id);
+                if (e.updated_at) _estimateVersion[e.id] = e.updated_at;
             });
             _baselineSource = 'server';
         }
@@ -2830,6 +2837,11 @@
             });
             (appData.estimates || []).forEach(function(e) {
                 _estimateBaseline[e.id] = estimateSliceSig(e.id);
+                // Same reason as the job side: the cache was written by a
+                // previous SUCCESSFUL load, so its rows still carry the
+                // server's updated_at — which is what gives a failed boot a
+                // real base instead of a forced write.
+                if (e.updated_at) _estimateVersion[e.id] = e.updated_at;
             });
             _baselineSource = 'cache';
         }
@@ -3003,6 +3015,8 @@
                 // the guard into a rubber stamp on the newer row.
                 _serverJobIds = {};
                 (results[0].jobs || []).forEach(function(j) { if (j && j.id) _serverJobIds[j.id] = true; });
+                _serverEstimateIds = {};
+                (results[1].estimates || []).forEach(function(e) { if (e && e.id) _serverEstimateIds[e.id] = true; });
 
                 // ── the hold ────────────────────────────────────────────────
                 // Everything above this line is direct-REST state (QB costs,
@@ -3305,9 +3319,30 @@
         // not re-announce the same row on every retry. Said once, per row, per
         // session — the convergence keeps trying, the dialog does not.
         var _announcedDeleted = {};
-        function handleSaveConflicts(conflicts) {
+        // Conflicts waiting on the one debounced reload, from BOTH stores.
+        var _pendingConflicts = [];
+        // Jobs and estimates are the same story with different nouns, and the
+        // copy has to name the right one — "2 jobs were deleted" for two
+        // estimates is the kind of wrong that makes a user distrust the rest.
+        function _conflictKind(kind) {
+            if (kind === 'estimate') {
+                return {
+                    one: 'estimate', many: 'estimates',
+                    sig: estimateSliceSig,
+                    row: function(id) { return (appData.estimates || []).find(function(x) { return x.id === id; }); }
+                };
+            }
+            return {
+                one: 'job', many: 'jobs',
+                sig: jobSliceSig,
+                row: function(id) { return (appData.jobs || []).find(function(x) { return x.id === id; }); }
+            };
+        }
+        function handleSaveConflicts(conflicts, kind) {
             try {
-                // Snapshot what THIS client was holding for each rejected job so
+                kind = kind === 'estimate' ? 'estimate' : 'job';
+                var K = _conflictKind(kind);
+                // Snapshot what THIS client was holding for each rejected row so
                 // we can tell, after the reload, whether anything the user
                 // actually typed was lost.
                 //
@@ -3317,9 +3352,9 @@
                 // person can act on.
                 var beforeSig = {}, nameOf = {};
                 conflicts.forEach(function(c) {
-                    beforeSig[c.id] = jobSliceSig(c.id);
-                    var j = (appData.jobs || []).find(function(x) { return x.id === c.id; });
-                    nameOf[c.id] = (j && (j.title || j.name)) || c.id;
+                    beforeSig[c.id] = K.sig(c.id);
+                    var rec = K.row(c.id);
+                    nameOf[c.id] = (rec && (rec.title || rec.name)) || c.id;
                 });
                 // Two different events wear the word "conflict" and they need
                 // different sentences. STALE means the row moved on and the
@@ -3330,17 +3365,31 @@
                 // about to disappear from the screen, and the change to it is
                 // gone. Announcing that as "changed by someone else" would be
                 // false about the one fact that matters.
-                var deleted = conflicts.filter(function(c) { return c.reason === 'deleted'; });
-                var stale = conflicts.filter(function(c) { return c.reason !== 'deleted'; });
                 var names = conflicts.map(function(c) { return nameOf[c.id]; });
-                console.warn('[save-conflict]', names.join(', '));
+                console.warn('[save-conflict][' + kind + ']', names.join(', '));
 
+                // QUEUE, don't drop. The old shape did the announcement inside
+                // `if (!_conflictReloadPending)`, so a second burst arriving
+                // inside the 1.2s window was debounced away entirely — the
+                // reload covered it, nothing ever said what happened. That is
+                // now reachable on every push, because jobs and estimates can
+                // both conflict in the same response.
+                conflicts.forEach(function(c) {
+                    _pendingConflicts.push({
+                        kind: kind, id: c.id, reason: c.reason,
+                        name: nameOf[c.id], beforeSig: beforeSig[c.id]
+                    });
+                });
                 if (!_conflictReloadPending) {
                     _conflictReloadPending = true;
                     setTimeout(function() {
                         _conflictReloadPending = false;
+                        var batch = _pendingConflicts;
+                        _pendingConflicts = [];
+                        var deleted = batch.filter(function(c) { return c.reason === 'deleted'; });
+                        var stale = batch.filter(function(c) { return c.reason !== 'deleted'; });
                         // fromConflict is a HARD override of the hydrate hold.
-                        // The rows in `conflicts` are rows the server has
+                        // The rows in `batch` are rows the server has
                         // already refused at this base — holding the hydrate to
                         // push them again would re-conflict and re-hold, on a
                         // loop. The server's version has to land, and the
@@ -3356,15 +3405,18 @@
                             // vanishing from the screen as the dialog opens.
                             // p86Alert is also the only one of the three that
                             // actually renders inside the installed PWA.
-                            var fresh = deleted.filter(function(c) { return !_announcedDeleted[c.id]; });
+                            var fresh = deleted.filter(function(c) { return !_announcedDeleted[c.kind + ':' + c.id]; });
                             if (fresh.length) {
-                                fresh.forEach(function(c) { _announcedDeleted[c.id] = 1; });
-                                var dn = fresh.map(function(c) { return nameOf[c.id]; });
+                                fresh.forEach(function(c) { _announcedDeleted[c.kind + ':' + c.id] = 1; });
+                                var dn = fresh.map(function(c) { return c.name; });
+                                var dk = _conflictKind(fresh[0].kind);
+                                var noun = fresh.every(function(c) { return c.kind === fresh[0].kind; })
+                                    ? (dn.length === 1 ? dk.one : dk.many) : 'records';
                                 var dmsg = (dn.length === 1
                                         ? ('“' + dn[0] + '” was deleted by someone else while you had an unsaved change to it.')
-                                        : (dn.length + ' jobs were deleted by someone else while you had unsaved changes to them: ' + dn.join(', ') + '.')) +
+                                        : (dn.length + ' ' + noun + ' were deleted by someone else while you had unsaved changes to them: ' + dn.join(', ') + '.')) +
                                     ' That change could not be saved, and ' +
-                                    (dn.length === 1 ? 'the job was' : 'the jobs were') +
+                                    (dn.length === 1 ? ('the ' + noun + ' was') : ('the ' + noun + ' were')) +
                                     ' NOT re-created. If ' + (dn.length === 1 ? 'it' : 'they') +
                                     ' should still exist, re-create ' + (dn.length === 1 ? 'it' : 'them') + ' from scratch.';
                                 if (typeof window.p86Alert === 'function') {
@@ -3390,40 +3442,63 @@
                             // truth. Same → silent converge. Different → the user
                             // really did lose something and must be told.
                             var lost = stale.filter(function(c) {
-                                return beforeSig[c.id] !== jobSliceSig(c.id);
+                                return c.beforeSig !== _conflictKind(c.kind).sig(c.id);
                             });
                             if (!lost.length) {
                                 console.log('[save-conflict] ' + stale.length +
-                                    ' job(s) rejected but identical to the server after reload — nothing was lost, converged silently.');
+                                    ' row(s) rejected but identical to the server after reload — nothing was lost, converged silently.');
                                 return;
                             }
-                            // "Changed by someone else" is true of a STALE
-                            // rejection and false of an UNVERIFIABLE one —
-                            // nobody necessarily touched that row; this device
-                            // simply could not prove which version it was
-                            // holding, so the server refused rather than
-                            // overwrite. Two facts, two sentences.
-                            var lostChanged = lost.filter(function(c) { return c.reason !== 'unverifiable'; })
-                                                  .map(function(c) { return nameOf[c.id]; });
-                            var lostUnver = lost.filter(function(c) { return c.reason === 'unverifiable'; })
-                                                .map(function(c) { return nameOf[c.id]; });
+                            // Three refusals, three facts, three sentences.
+                            //   stale        — the row moved on under us
+                            //   unverifiable — nobody necessarily touched it; this
+                            //                  device could not prove which version
+                            //                  it held, so the server refused
+                            //   locked       — the estimate is SOLD and immutable,
+                            //                  which is not a race at all
+                            // Collapsing them into "changed by someone else" would
+                            // be a guess in two of the three, and a guess in this
+                            // sentence is how a user learns to ignore the rest.
                             var say = function(msg) {
                                 if (window.p86Toast) { try { window.p86Toast(msg, 'error'); } catch (e) {} }
                             };
+                            var pick = function(fn) {
+                                return lost.filter(fn).map(function(c) { return c.name; });
+                            };
+                            var nounFor = function(rows) {
+                                var ks = lost.filter(rows);
+                                if (!ks.length) return 'records';
+                                var k = _conflictKind(ks[0].kind);
+                                return ks.every(function(c) { return c.kind === ks[0].kind; })
+                                    ? (ks.length === 1 ? k.one : k.many) : 'records';
+                            };
+                            var isLocked = function(c) { return c.reason === 'locked'; };
+                            var isUnver = function(c) { return c.reason === 'unverifiable'; };
+                            var isStale = function(c) { return !isLocked(c) && !isUnver(c); };
+
+                            var lostChanged = pick(isStale);
                             if (lostChanged.length) {
                                 say((lostChanged.length === 1
                                         ? ('“' + lostChanged[0] + '” was changed by someone else — your edit to it was NOT saved.')
-                                        : (lostChanged.length + ' jobs were changed by someone else — your edits to them were NOT saved.')) +
+                                        : (lostChanged.length + ' ' + nounFor(isStale) + ' were changed by someone else — your edits to them were NOT saved.')) +
                                     ' The current version has been loaded.');
                             }
+                            var lostUnver = pick(isUnver);
                             if (lostUnver.length) {
                                 say((lostUnver.length === 1
                                         ? ('“' + lostUnver[0] + '” was not saved: this device could not tell which version it was editing.')
-                                        : (lostUnver.length + ' jobs were not saved: this device could not tell which version it was editing.')) +
+                                        : (lostUnver.length + ' ' + nounFor(isUnver) + ' were not saved: this device could not tell which version it was editing.')) +
                                     ' They were refused rather than risk overwriting newer work. The current version has been loaded.');
                             }
+                            var lostLocked = pick(isLocked);
+                            if (lostLocked.length) {
+                                say((lostLocked.length === 1
+                                        ? ('“' + lostLocked[0] + '” is locked — it was sold on a job and cannot be changed.')
+                                        : (lostLocked.length + ' ' + nounFor(isLocked) + ' are locked — they were sold on a job and cannot be changed.')) +
+                                    ' Your edit was NOT saved. An admin can unlock it.');
+                            }
                             console.warn('[save-conflict] genuinely lost edits on:',
-                                lostChanged.concat(lostUnver).join(', '));
+                                lostChanged.concat(lostUnver).concat(lostLocked).join(', '));
                         }).catch(function () {});
                     }, 1200);
                 }
@@ -3481,14 +3556,12 @@
             // Estimates: ONLY the rows this client actually changed.
             //
             // This used to be `estimates: appData.estimates` — every estimate,
-            // every time, gated on one portfolio-wide signature. Against an
-            // endpoint that has NO version guard (a plain last-writer-wins
-            // upsert that re-INSERTs any id it does not find) that means a
-            // single line edit re-writes the whole portfolio from this client's
-            // memory: it silently overwrites a newer row another session or an
-            // agent just wrote, and it re-creates an estimate somebody deleted.
-            // The route is a per-row upsert loop, so a subset is not merely
-            // safe, it is strictly better.
+            // every time, gated on one portfolio-wide signature, against an
+            // endpoint that had no version guard at all. Scoping is still right
+            // (a row you never touched has no business on the wire) but it was
+            // never sufficient: it controls WHICH rows are at risk, never what
+            // happens to a row that IS sent. The route now referees each one
+            // against a base version, same as jobs.
             //
             // Alternates ride INLINE on each estimate now; legacy
             // `estimateAlternates: []` stays empty for back-compat with older
@@ -3515,6 +3588,15 @@
                 if (_jobVersion[id]) baseVersions[id] = _jobVersion[id];
                 else if (_serverJobIds[id]) baseVersions[id] = UNVERSIONED_BASE;
             });
+            // …and the same base per estimate. Identical rule to the job side:
+            // a real version when we have one, the sentinel when the server's
+            // list says the row exists but we cannot say which version we hold,
+            // nothing at all for a row the server does not have (a create).
+            var estBaseVersions = {};
+            dirtyEstIds.forEach(function(id) {
+                if (_estimateVersion[id]) estBaseVersions[id] = _estimateVersion[id];
+                else if (_serverEstimateIds[id]) estBaseVersions[id] = UNVERSIONED_BASE;
+            });
             var estimatesGo = dirtyEstIds.length > 0;
             // Snapshot the signature of what we are ABOUT TO SEND, per row.
             // The re-baseline below must advance to THIS, not to whatever
@@ -3528,7 +3610,7 @@
             dirtyEstIds.forEach(function(id) { sentEstSig[id] = estimateSliceSig(id); });
             _activePush = Promise.all([
                 editableJobs.length ? window.p86Api.jobs.bulkSave(jobsPayload, baseVersions) : Promise.resolve(),
-                estimatesGo ? window.p86Api.estimates.bulkSave(estimatesPayload) : Promise.resolve()
+                estimatesGo ? window.p86Api.estimates.bulkSave(estimatesPayload, estBaseVersions) : Promise.resolve()
             ]).then(function(r) {
                 _pushRetryCount = 0;
                 _activePush = null;
@@ -3545,21 +3627,35 @@
                 var rejected = {};
                 if (conflicts) conflicts.forEach(function(c) { rejected[c.id] = 1; });
                 pushedIds.forEach(function(id) { if (!rejected[id]) _jobBaseline[id] = sentJobSig[id]; });
-                dirtyEstIds.forEach(function(id) { _estimateBaseline[id] = sentEstSig[id]; });
-                if (conflicts) {
-                    handleSaveConflicts(conflicts);
+                // The estimate side of the same rule. It used to re-baseline
+                // every pushed estimate unconditionally, because the endpoint
+                // could not refuse anything — so a row the route SKIPPED (a
+                // locked, sold estimate) was marked saved and the edit was gone.
+                var estResp = (r && r[1]) || {};
+                var estConflicts = (estResp.conflicts && estResp.conflicts.length) ? estResp.conflicts : null;
+                if (estResp.versions) {
+                    Object.keys(estResp.versions).forEach(function(id) { _estimateVersion[id] = estResp.versions[id]; });
+                }
+                var estRejected = {};
+                if (estConflicts) estConflicts.forEach(function(c) { estRejected[c.id] = 1; });
+                dirtyEstIds.forEach(function(id) { if (!estRejected[id]) _estimateBaseline[id] = sentEstSig[id]; });
+
+                if (conflicts) handleSaveConflicts(conflicts, 'job');
+                if (estConflicts) handleSaveConflicts(estConflicts, 'estimate');
+                if (conflicts || estConflicts) {
                     // NOT 'saved'. A partial-conflict response used to emit
                     // 'saved' — a green ✓ in the estimate editor and no banner —
                     // for rows the server had just REFUSED to write. The
                     // sentence handleSaveConflicts eventually shows is correct;
                     // the status fired 1200ms earlier was not.
+                    var _all = (conflicts || []).concat(estConflicts || []);
                     notifyPushStatus('partial', {
-                        ids: conflicts.map(function(c) { return c.id; }),
+                        ids: _all.map(function(c) { return c.id; }),
                         // The banner covers the ~1.2s between the refusal and the
                         // conflict reload, and "another session changed a record
                         // you were editing" is false when the record was DELETED.
-                        deleted: conflicts.filter(function(c) { return c.reason === 'deleted'; })
-                                          .map(function(c) { return c.id; })
+                        deleted: _all.filter(function(c) { return c.reason === 'deleted'; })
+                                     .map(function(c) { return c.id; })
                     });
                 } else {
                     _blockedSince = 0;

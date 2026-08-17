@@ -3333,7 +3333,7 @@
          server (email templates, SMS, search, 86 tool results) so a client,
          a sub and the crew never see three different job labels. -->
     <script src="js/job-label.js?v=1"></script>
-    <script src="js/api.js?v=84"></script>
+    <script src="js/api.js?v=85"></script>
     <!-- Multi-market M1: client-side markets cache. Must load BEFORE any
          surface whose picker calls window.p86MarketNames() (jobs.js). -->
     <script src="js/markets.js?v=7"></script>
@@ -3403,7 +3403,7 @@
          app.js: loadData consults p86SaveMerge.shouldVetoHydrate() on the very
          first hydrate. -->
     <script src="js/save-merge.js?v=3"></script>
-    <script src="js/app.js?v=142"></script>
+    <script src="js/app.js?v=143"></script>
     <!-- The visible signal for a write that has not reached the server.
          Loads AFTER app.js so window.p86PushStatus exists to subscribe to. -->
     <script src="js/save-banner.js?v=2"></script>
@@ -3517,7 +3517,7 @@
          honest claim out (every word, every colour), plus the per-region
          ownership primitive every async continuation is guarded by. MUST load
          before the engine, which refuses to start without it. -->
-    <script src="js/live-writer-model.js?v=2"></script>
+    <script src="js/live-writer-model.js?v=3"></script>
     <!-- The Live Writer ENGINE — ingest + dedupe + the one differ + the one
          estimate row model, plus surface B (the docked notification). Every
          other surface registers against it. It DRAWS; the model above decides. -->

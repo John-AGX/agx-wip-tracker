@@ -487,11 +487,24 @@ describe('source invariants in js/app.js', () => {
     expect(fn).not.toMatch(/if \(!_serverPushTimer\) return/);
   });
 
-  test('a partial-conflict response does not report success', () => {
+  test('a partial-conflict response does not report success — from EITHER store', () => {
     expect(code).toMatch(/notifyPushStatus\('partial'/);
-    const push = code.slice(code.indexOf('if (conflicts) {\n                    handleSaveConflicts'),
+    const push = code.slice(code.indexOf("if (conflicts) handleSaveConflicts(conflicts, 'job');"),
                             code.indexOf('return r;'));
+    expect(push.length).toBeGreaterThan(200);
+    // An estimate conflict must reach the same branch a job conflict does. It
+    // did not before: the estimates response was not read at all, so a refused
+    // estimate reported a green check.
+    expect(push).toMatch(/if \(estConflicts\) handleSaveConflicts\(estConflicts, 'estimate'\)/);
+    expect(push).toMatch(/if \(conflicts \|\| estConflicts\) \{/);
     expect(push).toMatch(/else \{[\s\S]*notifyPushStatus\('saved'\)/);
+  });
+
+  test('a rejected estimate is not re-baselined as saved', () => {
+    // `dirtyEstIds.forEach(id => _estimateBaseline[id] = sentEstSig[id])` with
+    // no rejection filter marks a refused row clean, and the edit is gone on
+    // the next hydrate with nothing having reported a failure.
+    expect(code).toMatch(/dirtyEstIds\.forEach\(function\(id\) \{ if \(!estRejected\[id\]\) _estimateBaseline\[id\] = sentEstSig\[id\]; \}\);/);
   });
 
   test('the pushToServer guard is intact — nothing bypasses it', () => {
@@ -536,12 +549,26 @@ describe('route fidelity', () => {
       /if \(!existing\.rows\.length\) \{\s*if \(base\) \{\s*conflicts\.push\(\{ id: job\.id, reason: 'deleted'/);
   });
 
-  test('estimates bulk save still has NO version guard — the reason estimates are scoped client-side', () => {
+  test('estimates bulk save now guards on baseVersions under FOR UPDATE, exactly like jobs', () => {
+    // It used to have NO version check of any kind, which is why estimates were
+    // scoped client-side as the only mitigation. Scoping still applies — a row
+    // you never touched has no business on the wire — but it is no longer the
+    // ONLY thing standing between a held estimate and an agent's newer write.
     const estBulk = EST_ROUTES.slice(EST_ROUTES.indexOf("router.put('/bulk/save'"));
     expect(estBulk).toMatch(/INSERT INTO estimates[\s\S]*ON CONFLICT \(id\) DO UPDATE/);
-    expect(estBulk).not.toMatch(/baseVersions/);
-    // If this ever starts failing, a server-side guard has landed and the
-    // client-only scoping can be relaxed — deliberately, not by accident.
+    expect(estBulk).toMatch(/const ebv = \(baseVersions && typeof baseVersions === 'object'\)/);
+    expect(estBulk).toMatch(/SELECT updated_at FROM estimates WHERE id = \$1 FOR UPDATE/);
+    expect(estBulk).toMatch(/reason: 'deleted'/);
+    expect(estBulk).toMatch(/reason: 'unverifiable'/);
+    expect(estBulk).toMatch(/reason: 'stale'/);
+  });
+
+  test('a locked estimate is REPORTED, not skipped in silence', () => {
+    // `continue` left the client re-baselining the row as saved, which turned
+    // "this estimate is sold and immutable" into a dropped edit.
+    const estBulk = EST_ROUTES.slice(EST_ROUTES.indexOf("router.put('/bulk/save'"));
+    expect(estBulk).toMatch(/if \(lockedIds\.has\(est\.id\)\) \{[\s\S]{0,600}?reason: 'locked'/);
+    expect(estBulk).not.toMatch(/if \(lockedIds\.has\(est\.id\)\) continue;/);
   });
 
   test('the jobs blob is rebuilt by filtering the payload arrays on jobId', () => {

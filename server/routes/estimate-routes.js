@@ -199,10 +199,33 @@ router.get('/', requireAuth, async (req, res) => {
 // users, view-only field crew when that exists) are now correctly blocked.
 router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
   try {
-    const { estimates, estimateLines, estimateAlternates } = req.body;
+    const { estimates, estimateLines, estimateAlternates, baseVersions } = req.body;
     if (!Array.isArray(estimates)) {
       return res.status(400).json({ error: 'estimates array required' });
     }
+    // ── optimistic concurrency, same contract as PUT /api/jobs/bulk/save ────
+    // This endpoint had NO version check of any kind. It was a plain
+    // last-writer-wins upsert whose INSERT re-created any id it did not find,
+    // which made it the widest silent-clobber surface in the save path: it
+    // could overwrite an agent's write and resurrect a deleted estimate, and
+    // in both cases report success. The client worked around it by never
+    // sending a row it had not touched — real mitigation, but scoping controls
+    // only WHICH rows are at risk, never what happens to a row that IS sent.
+    // The hold made that gap load-bearing: it pushes a held estimate minutes
+    // after the copy went stale, at the moment an agent is most likely to have
+    // written, with no referee.
+    //
+    //   the row is GONE          → conflict 'deleted'      (never re-create it)
+    //   the base cannot be
+    //     compared to the row    → conflict 'unverifiable' (never force it)
+    //   the base does not match  → conflict 'stale'
+    //   the row is LOCKED (sold) → conflict 'locked'
+    // No entry for a row = the client is CREATING it, and that absence is the
+    // only thing that authorises an INSERT of a new id.
+    const UNVERSIONED_BASE = 'unversioned';
+    const ebv = (baseVersions && typeof baseVersions === 'object') ? baseVersions : {};
+    const conflicts = [];
+    const versions = {};
     // P3 — cap bulk sizes before opening the txn. These are far above any
     // realistic full-portfolio save (the handler sends every estimate on
     // each save), so they only stop a runaway / abusive payload.
@@ -238,8 +261,46 @@ router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), async
         );
         _lr.rows.forEach(function (r) { lockedIds.add(r.id); });
       } catch (_) { /* if the column/query fails, fall through (no gate) */ }
-      for (const est of estimates) {
-        if (lockedIds.has(est.id)) continue;
+      // Deterministic lock order — the same rule the jobs bulk save follows,
+      // for the same reason: two writers walking the same rows in different
+      // orders under FOR UPDATE form a cycle and Postgres kills one of them.
+      const orderedEstimates = [...estimates].sort((a, b) => {
+        const x = String((a && a.id) || '');
+        const y = String((b && b.id) || '');
+        return x < y ? -1 : x > y ? 1 : 0;
+      });
+      for (const est of orderedEstimates) {
+        // FOR UPDATE holds the row to COMMIT, so the check below cannot race a
+        // concurrent write between the read and the upsert.
+        const existing = await client.query(
+          'SELECT updated_at FROM estimates WHERE id = $1 FOR UPDATE', [est.id]
+        );
+        const base = ebv[est.id];
+        if (lockedIds.has(est.id)) {
+          // Reported, not skipped. A silent `continue` re-baselined the row on
+          // the client as though it had been written, which turned "this
+          // estimate is sold and immutable" into a dropped edit.
+          conflicts.push({
+            id: est.id, reason: 'locked',
+            serverUpdatedAt: existing.rows.length && existing.rows[0].updated_at
+              ? new Date(existing.rows[0].updated_at).toISOString() : null
+          });
+          continue;
+        }
+        if (!existing.rows.length) {
+          if (base) { conflicts.push({ id: est.id, reason: 'deleted', serverUpdatedAt: null }); continue; }
+        } else if (base) {
+          const serverTs = existing.rows[0].updated_at
+            ? new Date(existing.rows[0].updated_at).toISOString() : null;
+          if (!serverTs || base === UNVERSIONED_BASE) {
+            conflicts.push({ id: est.id, reason: 'unverifiable', serverUpdatedAt: serverTs });
+            continue;
+          }
+          if (serverTs !== base) {
+            conflicts.push({ id: est.id, reason: 'stale', serverUpdatedAt: serverTs });
+            continue;
+          }
+        }
         const blob = {
           ...est,
           lines: (estimateLines || []).filter(l => l.estimateId === est.id),
@@ -294,7 +355,7 @@ router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), async
         // Wave 1.A — include organization_id on new estimates so the
         // org-filtering routes (next commit) find them. Existing rows
         // keep their backfilled value through the ON CONFLICT path.
-        await client.query(
+        const _up = await client.query(
           `INSERT INTO estimates (id, owner_id, data, organization_id, market_id) VALUES ($1, $2, $3, $4, $5)
            ON CONFLICT (id) DO UPDATE
              SET data = EXCLUDED.data,
@@ -309,12 +370,16 @@ router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), async
                  updated_at = CASE
                    WHEN estimates.data IS DISTINCT FROM EXCLUDED.data THEN NOW()
                    ELSE estimates.updated_at
-                 END`,
+                 END
+           RETURNING updated_at`,
           // owner_id = attributed user (acted-as target when disguised). Set
           // on CREATE only (ON CONFLICT DO UPDATE doesn't re-stamp owner). The
           // DELETE /:id 403 guard keeps comparing owner_id to req.user.id.
           [est.id, getAttributedUserId(req), JSON.stringify(blob), req.user.organization_id, estMarketId]
         );
+        // Hand back the new version so the client can advance its base and not
+        // false-conflict on its own next save.
+        if (_up.rows[0]) versions[est.id] = new Date(_up.rows[0].updated_at).toISOString();
       }
       await client.query('COMMIT');
     } catch (e) {
@@ -335,7 +400,10 @@ router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), async
       }
     } catch (_) { /* never let geocoding affect the save response */ }
 
-    res.json({ ok: true, count: estimates.length });
+    res.json({
+      ok: true, count: estimates.length - conflicts.length,
+      conflicts: conflicts, versions: versions
+    });
   } catch (e) {
     console.error('PUT /api/estimates/bulk/save error:', e);
     res.status(500).json({ error: 'Server error' });
