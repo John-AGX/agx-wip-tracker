@@ -405,6 +405,33 @@ router.patch('/:entityType/:entityId/:reportId', requireAuth, async (req, res) =
   const cap = writeCapFor(entityType);
   return requireCapability(cap)(req, res, async () => {
     try {
+      // ── The scoped-read / unscoped-write split, closed ────────────────────
+      // ensureEntityVisible() is this file's OWN tenancy proof
+      // (WHERE id = $1 AND organization_id = $2). GET list, GET one and POST
+      // create all called it. PATCH and DELETE did not, and their statements
+      // key on (reportId, entity_type, entity_id) with no org term — so a
+      // plain PM in org A, holding nothing but LEADS_EDIT, got 200 rewriting
+      // org B's report title, summary, sections and cover_page, and 200
+      // deleting the row.
+      //
+      // The predicate is the ENTITY's, not the report's, and that is the point:
+      // job_reports carries no organization_id of its own, so the only thing
+      // that can answer "is this row mine" is the project it hangs on — the
+      // same anchor the three sibling doors already use, and the same
+      // parent-not-own-column shape as services/attachment-org-scope.js.
+      //
+      // 404, identical to the answer an ABSENT project gets, and identical to
+      // the rowCount-driven 404 below. A distinguishable 403 here would turn
+      // the pair into an existence oracle over enumerable project ids.
+      //
+      // Asked inside the capability gate rather than before it, matching the
+      // three siblings in this file: the gate that runs first is LEADS_EDIT,
+      // which is a fact about the CALLER, not about the row, so it leaks
+      // nothing the caller does not already know about themselves. The
+      // ordering that matters — predicate before the STATEMENT — holds.
+      if (!(await ensureEntityVisible(entityType, entityId, req))) {
+        return res.status(404).json({ error: entityType + ' not found' });
+      }
       const sets = [];
       const params = [];
       let p = 1;
@@ -460,6 +487,11 @@ router.delete('/:entityType/:entityId/:reportId', requireAuth, async (req, res) 
   const cap = writeCapFor(entityType);
   return requireCapability(cap)(req, res, async () => {
     try {
+      // Same proof as PATCH above, for the same reason — and this door
+      // destroys the row rather than rewriting it. See the block there.
+      if (!(await ensureEntityVisible(entityType, entityId, req))) {
+        return res.status(404).json({ error: entityType + ' not found' });
+      }
       const r = await pool.query(
         'DELETE FROM job_reports WHERE id = $1 AND entity_type = $2 AND entity_id = $3',
         [reportId, entityType, entityId]
