@@ -136,11 +136,37 @@ const KEY_CLASSES = {
 // in both directions, so nothing below can grant it.
 const NEVER_SERVED = new Set(['vapid_keys']);
 
+// LOOK UP A DECLARED KEY, AND ONLY A DECLARED KEY.
+//
+// `KEY_CLASSES[key]` is not the same question as "is this key on the list".
+// KEY_CLASSES is an ordinary object literal, so it inherits from
+// Object.prototype, and the caller supplies the key. `KEY_CLASSES['constructor']`
+// returns a function — truthy — and so did 'toString', 'valueOf',
+// 'hasOwnProperty', '__proto__'. classOf then read `.klass` off it and
+// returned UNDEFINED for those five, in flat contradiction of the sentence
+// three lines above it and of the property the whole file exists to state:
+// a key that is not named here is 'internal'.
+//
+// It was not exploitable — readCapabilityFor and writeCapabilityFor both go on
+// to demand klass === 'shared' || 'platform', which undefined fails, so the
+// route refused those keys anyway. But it was safe by ACCIDENT: the guard that
+// saved it was written for a different reason, and any future caller that
+// trusts classOf's stated contract (a permissive `if (classOf(k) !== 'secret')`
+// would be the obvious one) inherits a hole. An allowlist that answers
+// "undefined" for an input is not closed, whatever the callers happen to do.
+//
+// So the lookup asks for an OWN property, and the answer for everything else
+// is the documented default.
+function lookup(key) {
+  if (typeof key !== 'string') return null;
+  return Object.prototype.hasOwnProperty.call(KEY_CLASSES, key) ? KEY_CLASSES[key] : null;
+}
+
 // The class of a key. An unknown key is 'internal': the allowlist is CLOSED,
 // which is what makes `PUT /api/settings/brand_new_key` and pre-creating a
 // db.js migration sentinel impossible rather than merely unlikely.
 function classOf(key) {
-  const entry = KEY_CLASSES[key];
+  const entry = lookup(key);
   return entry ? entry.klass : 'internal';
 }
 
@@ -149,7 +175,7 @@ function classOf(key) {
 // 'secret', 'internal', 'own_door', and every key not on the list.
 function readCapabilityFor(key) {
   if (NEVER_SERVED.has(key)) return null;
-  const entry = KEY_CLASSES[key];
+  const entry = lookup(key);
   if (!entry) return null;
   if (entry.klass !== 'shared' && entry.klass !== 'platform') return null;
   return entry.read || null;
@@ -159,7 +185,7 @@ function readCapabilityFor(key) {
 // or null when the route must never write it.
 function writeCapabilityFor(key) {
   if (NEVER_SERVED.has(key)) return null;
-  const entry = KEY_CLASSES[key];
+  const entry = lookup(key);
   if (!entry) return null;
   if (entry.klass !== 'shared' && entry.klass !== 'platform') return null;
   return entry.write || null;

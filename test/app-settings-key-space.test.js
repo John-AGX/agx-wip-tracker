@@ -433,3 +433,56 @@ describe('the admin UIs still work end to end for the keys they legitimately own
     expect(r.status).toBe(401);
   });
 });
+
+// ── The allowlist answers for EVERY input, including the ones JavaScript
+//    supplies for free ────────────────────────────────────────────────────
+//
+// KEY_CLASSES is an object literal, so it inherits Object.prototype, and the
+// key is the caller's. `KEY_CLASSES['constructor']` is a function — truthy —
+// so classOf read `.klass` off it and returned UNDEFINED for 'constructor',
+// 'toString', 'valueOf', 'hasOwnProperty' and '__proto__', contradicting the
+// contract stated in its own comment: not-on-the-list means 'internal'.
+//
+// It was not exploitable, and that is exactly why it is worth a test.
+// readCapabilityFor and writeCapabilityFor were saved by a klass check written
+// for an unrelated reason; the module was safe by accident. A property that
+// holds by luck holds until someone edits the lucky line.
+describe('classOf keeps its own contract, for prototype keys too', () => {
+  const PROTOTYPE_KEYS = ['constructor', 'toString', 'valueOf', 'hasOwnProperty',
+                          '__proto__', 'isPrototypeOf', 'propertyIsEnumerable'];
+
+  test('every prototype key classifies as internal, like any undeclared key', () => {
+    const got = {};
+    PROTOTYPE_KEYS.forEach((k) => { got[k] = keySpace.classOf(k); });
+    const want = {};
+    PROTOTYPE_KEYS.forEach((k) => { want[k] = 'internal'; });
+    expect(got).toEqual(want);
+    // And identical to a plainly-undeclared key, which is the real property:
+    // no input is special.
+    expect(keySpace.classOf('brand_new_key')).toBe('internal');
+  });
+
+  test('and they are unreadable and unwritable, deliberately rather than by luck', () => {
+    PROTOTYPE_KEYS.forEach((k) => {
+      expect({ k, read: keySpace.readCapabilityFor(k), write: keySpace.writeCapabilityFor(k) })
+        .toEqual({ k, read: null, write: null });
+    });
+  });
+
+  test('a non-string key is internal, not a crash and not a lookup', () => {
+    [null, undefined, 42, {}, [], true].forEach((k) => {
+      expect(keySpace.classOf(k)).toBe('internal');
+      expect(keySpace.readCapabilityFor(k)).toBeNull();
+      expect(keySpace.writeCapabilityFor(k)).toBeNull();
+    });
+  });
+
+  test('declared keys are unaffected — the fix narrows lookup, not the list', () => {
+    expect(keySpace.classOf('agent_skills')).toBe('platform');
+    expect(keySpace.classOf('proposal_template')).toBe('shared');
+    expect(keySpace.classOf('email')).toBe('own_door');
+    expect(keySpace.classOf('vapid_keys')).toBe('secret');
+    expect(keySpace.readCapabilityFor('proposal_template')).toBe('ESTIMATES_VIEW');
+    expect(keySpace.writeCapabilityFor('agent_skills')).toBe('SYSTEM_ADMIN');
+  });
+});
