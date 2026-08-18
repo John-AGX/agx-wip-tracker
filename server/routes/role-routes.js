@@ -95,11 +95,49 @@ router.get('/capabilities', requireAuth, (req, res) => {
   res.json({ capabilities: CAPABILITY_KEYS });
 });
 
-// GET /api/roles — list all roles (any authenticated user; useful for the
-// "New User" role dropdown). Capability arrays come back too so the admin
-// Roles UI can render them inline.
+// GET /api/roles — the role list.
+//
+// WHAT WAS OPEN. `requireAuth` and nothing else, over a table with no
+// organization_id. Verified live: an org-A PM received a seeded org-B CUSTOM
+// role by name, label, description and full capability array. A `sub` in the
+// contractor portal got the same list. That is another tenant's internal
+// org-design handed to anyone with a login — and, for an attacker, a map of
+// exactly which named role to aim the (now-closed) escalation at.
+//
+// WHAT CLOSES WITHOUT PER-ORG ROLES. The leak is not the table being global —
+// that needs a schema change — it is that the FULL list goes to callers who
+// have no use for it. Only two consumers exist, and they want different things:
+//
+//   js/auth.js loadCapabilities()  finds the caller's OWN role by name and
+//                                  reads its capability array. One row.
+//   js/admin.js Roles tab (ROLES_MANAGE) and the New/Edit User role dropdown
+//                                  (USERS_MANAGE) want the whole list.
+//
+// So: an administrator of either kind gets the list unchanged, and everyone
+// else — PM, corporate, field crew, sub — gets exactly their own role. Nobody
+// loses a capability they could act on, and the recon surface goes to zero for
+// every non-admin session, which is nearly all of them.
+//
+// WHAT THIS DOES NOT REACH. `roles` is still global, so two org admins still
+// see each other's custom roles. Filtering that needs an organization_id on the
+// table and a re-keyed _roleCache — per-org roles, deliberately not attempted
+// here. See the report.
 router.get('/', requireAuth, async (req, res) => {
   try {
+    // Predicate before gate: decide WHICH rows this caller may see, then ask
+    // the database for those and no others. A narrowed caller never causes a
+    // read of another tenant's row at all.
+    const isRoleAdmin = hasCapability(req.user, 'ROLES_MANAGE') ||
+                        hasCapability(req.user, 'USERS_MANAGE');
+    if (!isRoleAdmin) {
+      // An absent / unknown role yields an empty list, which is what
+      // loadCapabilities already treats as "no capabilities" — a closed gate.
+      const own = await pool.query(
+        'SELECT name, label, description, builtin, capabilities, created_at, updated_at FROM roles WHERE name = $1',
+        [req.user && req.user.role ? req.user.role : '']
+      );
+      return res.json({ roles: own.rows });
+    }
     const { rows } = await pool.query(
       'SELECT name, label, description, builtin, capabilities, created_at, updated_at FROM roles ORDER BY builtin DESC, label'
     );
@@ -212,10 +250,35 @@ router.delete('/:name', requireAuth, requireCapability('ROLES_MANAGE'), async (r
     if (rows[0].builtin) {
       return res.status(400).json({ error: 'Built-in roles cannot be deleted.' });
     }
+    // ── The 409 body was a cross-tenant headcount ──────────────────────────
+    //
+    // `roles` is global, so the refusal has to be decided on the GLOBAL count:
+    // deleting a row another tenant's users are sitting on would strip their
+    // capabilities. But the NUMBER that came back was that global count, which
+    // turned this endpoint into a free headcount oracle — an org-A admin could
+    // name any role and read how many users exist across every tenant, and by
+    // repeating it, watch another org's hiring.
+    //
+    // Split the two: refuse on the global count, report only the caller's own
+    // organization's. When the assignment is entirely outside the caller's org
+    // the message carries no number at all — the refusal is unavoidable (the
+    // row genuinely cannot go) but nothing about the size or shape of the other
+    // tenant crosses with it.
     const usage = await pool.query('SELECT COUNT(*)::int AS c FROM users WHERE role = $1', [req.params.name]);
     if (usage.rows[0].c > 0) {
+      const callerOrg = (req.user && req.user.organization_id) || null;
+      let mine = 0;
+      if (callerOrg) {
+        const ownUsage = await pool.query(
+          'SELECT COUNT(*)::int AS c FROM users WHERE role = $1 AND organization_id = $2',
+          [req.params.name, callerOrg]
+        );
+        mine = ownUsage.rows[0].c;
+      }
       return res.status(409).json({
-        error: 'Cannot delete: ' + usage.rows[0].c + ' user(s) are still assigned this role. Reassign them first.'
+        error: mine > 0
+          ? 'Cannot delete: ' + mine + ' user(s) in your organization are still assigned this role. Reassign them first.'
+          : 'Cannot delete: this role is still assigned to at least one user. Reassign them first.'
       });
     }
     await pool.query('DELETE FROM roles WHERE name = $1', [req.params.name]);
