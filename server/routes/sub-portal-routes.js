@@ -35,8 +35,27 @@ const { sniffMimeFromBytes, sanitizeSvg, mimeFamilyMatches } = require('../util/
 // Batched polymorphic label resolver. Job labels go through js/job-label.js
 // inside it, so the sub sees the same "RV2006 Waterside 1" the office does.
 const { resolveEntityLabels } = require('../services/entity-labels');
+// Tenancy on the PM-side invite doors. The rule is already stated on this key
+// in services/sub-org-scope.js — subInOrg — for sub-routes.js; these three
+// endpoints are keyed on the same subId and were never asked.
+const { subInOrg } = require('../services/sub-org-scope');
 
 const router = express.Router();
+
+// The caller's tenant, or null. Mirrors the helper in every other scoped file.
+function callerOrgId(req) {
+  const oid = req.user && req.user.organization_id;
+  return (oid === 0 || oid) ? oid : null;
+}
+
+// A sub id that is another tenant's gets the SAME 404 an absent one gets.
+// sub ids are enumerable and the invite doors sit in front of ACCOUNT
+// PROVISIONING; a distinguishable 403 would make this a cross-tenant
+// vendor-directory oracle on top of everything else. Matches the decision
+// already shipped in services/user-org-scope.js (guardUserTarget).
+async function subReachable(req, subId) {
+  return await subInOrg(pool, subId, callerOrgId(req));
+}
 
 // Multer config mirrors attachment-routes.js — memory storage so we
 // can hand the buffer to the storage backend (R2). 50MB cap matches
@@ -84,6 +103,21 @@ router.post('/subs/:subId/invite',
   requireAuth, requireCapability('JOBS_EDIT_ANY'),
   async (req, res) => {
     try {
+      // PREDICATE FIRST. This is the highest-consequence door in the file: it
+      // mints a 64-hex magic-link token for a CALLER-SUPPLIED email address,
+      // and /sub-portal/accept turns that token into a real users row with
+      // role='sub', an auth cookie, and read access to every folder the sub
+      // was granted. Unscoped it was cross-tenant account provisioning in two
+      // HTTP calls, with the accept link handed back in the response body so
+      // no email delivery was even needed.
+      //
+      // Note the accept side ALREADY stamps the new user's organization_id off
+      // the sub record — so a forged invite produced a correctly-stamped
+      // foreign-tenant login, indistinguishable from a real one. Stamp without
+      // door, one more time. The door is here.
+      if (!(await subReachable(req, req.params.subId))) {
+        return res.status(404).json({ error: 'Sub not found' });
+      }
       const subR = await pool.query('SELECT id, name, email, primary_contact_first FROM subs WHERE id = $1', [req.params.subId]);
       if (!subR.rows.length) return res.status(404).json({ error: 'Sub not found' });
       const sub = subR.rows[0];
@@ -164,6 +198,13 @@ router.get('/subs/:subId/invites',
   requireAuth, requireCapability('JOBS_VIEW_ALL'),
   async (req, res) => {
     try {
+      // PREDICATE FIRST — the whole invite LIFECYCLE keys on subId, not just
+      // the door that was reported. This one hands back the email addresses of
+      // everyone another tenant has invited into their portal, plus who
+      // claimed and when.
+      if (!(await subReachable(req, req.params.subId))) {
+        return res.status(404).json({ error: 'Sub not found' });
+      }
       const { rows } = await pool.query(
         `SELECT id, email, created_at, expires_at, used_at, used_user_id
            FROM sub_invites
@@ -188,6 +229,12 @@ router.delete('/subs/:subId/invites/:inviteId',
   requireAuth, requireCapability('JOBS_EDIT_ANY'),
   async (req, res) => {
     try {
+      // PREDICATE FIRST — third door on the same key. Reported LOW because it
+      // needs the opaque invite id, but "needs another id first" is a cost, not
+      // a boundary, and GET /invites above was handing that id out.
+      if (!(await subReachable(req, req.params.subId))) {
+        return res.status(404).json({ error: 'Invite not found or already claimed' });
+      }
       const r = await pool.query(
         'DELETE FROM sub_invites WHERE id = $1 AND sub_id = $2 AND used_at IS NULL',
         [req.params.inviteId, req.params.subId]

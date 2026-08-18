@@ -440,7 +440,18 @@ router.post('/:id/notes', requireAuth, requireCapability('ESTIMATES_EDIT'), asyn
     if (sourceAgent && sourceAgent !== 'ag' && sourceAgent !== 'cra') {
       return res.status(400).json({ error: 'source_agent must be "ag", "cra", or omitted' });
     }
-    const exists = await pool.query('SELECT id FROM clients WHERE id = $1', [req.params.id]);
+    // PREDICATE BOTH STATEMENTS. The scoped-read/unscoped-write shape is not
+    // available here — the read was unscoped too — so both get the predicate
+    // the sibling DELETE /:id has carried since Wave 1.A Phase 2. The UPDATE
+    // repeats it rather than trusting the SELECT: a pre-check alone is a
+    // TOCTOU, and this endpoint is also the one 86 writes through ("the agent
+    // path goes through tool execution, which uses these same endpoints under
+    // the hood"), so a prompt-injected client id would have arrived here.
+    const orgId = req.user.organization_id;
+    const exists = await pool.query(
+      'SELECT id FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [req.params.id, orgId]
+    );
     if (!exists.rows.length) return res.status(404).json({ error: 'Client not found' });
     const note = {
       id: newNoteId(),
@@ -449,13 +460,14 @@ router.post('/:id/notes', requireAuth, requireCapability('ESTIMATES_EDIT'), asyn
       created_by_user_id: req.user ? req.user.id : null,
       source_agent: sourceAgent
     };
-    await pool.query(
+    const w = await pool.query(
       `UPDATE clients
          SET agent_notes = COALESCE(agent_notes, '[]'::jsonb) || $1::jsonb,
              updated_at = NOW()
-       WHERE id = $2`,
-      [JSON.stringify([note]), req.params.id]
+       WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)`,
+      [JSON.stringify([note]), req.params.id, orgId]
     );
+    if (!w.rowCount) return res.status(404).json({ error: 'Client not found' });
     res.json({ ok: true, note });
   } catch (e) {
     console.error('POST /api/clients/:id/notes error:', e);
@@ -465,7 +477,14 @@ router.post('/:id/notes', requireAuth, requireCapability('ESTIMATES_EDIT'), asyn
 
 router.delete('/:id/notes/:noteId', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
   try {
-    const exists = await pool.query('SELECT id FROM clients WHERE id = $1', [req.params.id]);
+    // Same shape as POST above — predicate on the read AND on the write.
+    // Reported as source-traced only (the jsonb_agg didn't translate in the
+    // harness); it is the identical defect and gets the identical fix.
+    const orgId = req.user.organization_id;
+    const exists = await pool.query(
+      'SELECT id FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [req.params.id, orgId]
+    );
     if (!exists.rows.length) return res.status(404).json({ error: 'Client not found' });
     const r = await pool.query(
       `UPDATE clients
@@ -474,10 +493,14 @@ router.delete('/:id/notes/:noteId', requireAuth, requireCapability('ESTIMATES_ED
             WHERE elem->>'id' <> $1
          ), '[]'::jsonb),
              updated_at = NOW()
-       WHERE id = $2
+       WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)
        RETURNING agent_notes`,
-      [req.params.noteId, req.params.id]
+      [req.params.noteId, req.params.id, orgId]
     );
+    // The UPDATE can still match nothing even after the SELECT did — another
+    // request may have moved the row between the two. Answer that the same way
+    // an absent client is answered rather than dereferencing rows[0].
+    if (!r.rows.length) return res.status(404).json({ error: 'Client not found' });
     res.json({ ok: true, agent_notes: r.rows[0].agent_notes });
   } catch (e) {
     console.error('DELETE /api/clients/:id/notes/:noteId error:', e);

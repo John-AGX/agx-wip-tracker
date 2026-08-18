@@ -550,11 +550,32 @@ function ensureOrgAttachmentScope(req, entityId) {
 // OR-style usage in report-routes / qb-cost-routes, accepts a single
 // cap OR a space-separated list. ANY match passes.
 const { hasCapability } = require('../auth');
+// Tenancy. See server/services/attachment-org-scope.js for the rule; this file
+// only enforces it. The predicate is asked BEFORE the capability on every door
+// below, because a capability answers "may this ROLE do this KIND of thing" and
+// never "is this ROW yours" — reading the first as the second is the defect
+// every guard in this file shared.
+const { attachmentEntityInOrg, attachmentInOrg } = require('../services/attachment-org-scope');
+function callerOrgId(req) {
+  const oid = req.user && req.user.organization_id;
+  return (oid === 0 || oid) ? oid : null;
+}
+// One refusal shape for "that key is not yours" and for "that key is nothing",
+// deliberately identical. Attachment ids and entity ids are enumerable; a
+// distinguishable 403 would turn every door here into an existence oracle,
+// which is the decision already shipped on the users side (guardUserTarget).
+function notFound(res) { return res.status(404).json({ error: 'Not found' }); }
+
 function requireDynamicCapability(getCap) {
   return async function(req, res, next) {
     const cap = getCap(req);
     if (!cap) return res.status(400).json({ error: 'Bad entity type' });
     try {
+      // PREDICATE FIRST. Covers the attachment list + upload here, and all
+      // five file-folders-routes.js doors, which import this middleware.
+      if (!(await attachmentEntityInOrg(pool, req.params.entityType, req.params.entityId, callerOrgId(req)))) {
+        return notFound(res);
+      }
       // Owner sentinel — used by the user-type bucket. Skips the
       // role/cap check; the route body still has to do the per-row
       // owner verification via ensureUserAttachmentOwner.
@@ -622,6 +643,10 @@ router.get('/raw/:id', requireAuth, async (req, res) => {
     if (!rows.length) return res.status(404).json({ error: 'Not found' });
     const att = rows[0];
 
+    // PREDICATE FIRST — this door streams the BYTES back. Verified open at
+    // 79b52ed: an org-A admin got 200 and org B's file contents.
+    if (!(await attachmentInOrg(pool, att, callerOrgId(req)))) return notFound(res);
+
     const cap = readCapForEntity(att.entity_type);
     if (cap === '__owner__') {
       if (!ensureUserAttachmentOwner(req, att.entity_id)) {
@@ -661,6 +686,17 @@ router.get('/raw/:id', requireAuth, async (req, res) => {
   }
 });
 
+// Registered BEFORE the two-segment catch-all below, for the same reason
+// GET /raw/:id is: `/tags/suggest` is two segments, so the catch-all was
+// capturing it as entityType='tags', failing entityTypeOk, and answering 400
+// "Bad entity type". The photo tag-editor's autocomplete has therefore been
+// dead in production too — the SECOND feature lost to this ordering hazard in
+// one file, after My Files' move/copy. Its body stays below with its siblings
+// (search for suggestTags); it is a hoisted declaration, so only the
+// registration's position matters. Safe to un-shadow because the tenancy
+// predicate inside it landed first.
+router.get('/tags/suggest', requireAuth, (req, res) => suggestTags(req, res));
+
 // GET /api/attachments/:entityType/:entityId — list. Ordered by `position`
 // so reorder later (drag-drop) is just a column update.
 router.get('/:entityType/:entityId',
@@ -694,7 +730,8 @@ router.get('/:entityType/:entityId',
 // the entity's attachments matching the prefix. Scoped to the entity
 // so the user sees a relevant tag history rather than the org-wide
 // firehose.
-router.get('/tags/suggest', requireAuth, async (req, res) => {
+// REGISTERED EARLIER — see the ordering note above the list route.
+async function suggestTags(req, res) {
   try {
     const entityType = String(req.query.entity_type || '').trim();
     const entityId = String(req.query.entity_id || '').trim();
@@ -703,6 +740,12 @@ router.get('/tags/suggest', requireAuth, async (req, res) => {
     }
     if (!entityTypeOk(entityType)) {
       return res.status(400).json({ error: 'Invalid entity_type' });
+    }
+    // PREDICATE FIRST. This door takes the entity off the QUERY STRING rather
+    // than the path, so it never passed through requireDynamicCapability and
+    // needs the same tenancy proof stated here.
+    if (!(await attachmentEntityInOrg(pool, entityType, entityId, callerOrgId(req)))) {
+      return notFound(res);
     }
     // Same capability gate as the per-entity attachments list — if
     // you can see the attachments, you can see their tags.
@@ -726,7 +769,7 @@ router.get('/tags/suggest', requireAuth, async (req, res) => {
     console.error('GET /api/attachments/tags/suggest error:', e);
     res.status(500).json({ error: 'Server error' });
   }
-});
+}
 
 // POST /api/attachments/bulk-tag
 // Body: { ids: [string], add?: [string], remove?: [string] }
@@ -760,7 +803,7 @@ router.post('/bulk-tag', requireAuth, async (req, res) => {
     if (!add.length && !remove.length) return res.status(400).json({ error: 'nothing to do' });
 
     const { rows } = await pool.query(
-      'SELECT id, entity_type, entity_id, tags, filename FROM attachments WHERE id = ANY($1::text[])',
+      'SELECT id, entity_type, entity_id, organization_id, uploaded_by, tags, filename FROM attachments WHERE id = ANY($1::text[])',
       [ids]
     );
     if (rows.length !== ids.length) {
@@ -772,6 +815,18 @@ router.post('/bulk-tag', requireAuth, async (req, res) => {
     for (let i = 0; i < rows.length; i++) {
       if (rows[i].entity_type !== firstType || rows[i].entity_id !== firstId) {
         return res.status(400).json({ error: 'All attachments must belong to the same entity' });
+      }
+    }
+
+    // PREDICATE FIRST, on EVERY row — not just the first. The same-entity rule
+    // above is a capability convenience, not a boundary: it is checked against
+    // rows[0], so proving only rows[0] would let a batch inherit its verdict.
+    // Every id must clear the boundary on its own, and one foreign id fails the
+    // whole batch with the same 404 an absent id already gets two lines up.
+    const orgId = callerOrgId(req);
+    for (let i = 0; i < rows.length; i++) {
+      if (!(await attachmentInOrg(pool, rows[i], orgId))) {
+        return res.status(404).json({ error: 'One or more attachments not found' });
       }
     }
 
@@ -886,6 +941,29 @@ router.get('/recent', requireAuth, async (req, res) => {
   }
 });
 
+
+// ── Route ORDER, and why these two are registered here ────────────────
+// Express matches in declaration order, and `POST /:entityType/:entityId`
+// below is a two-segment pattern that swallows `/att_x/move` and
+// `/att_x/copy` as entityType='att_x' — which failed entityTypeOk and
+// answered 400 "Bad entity type". My Files' "Move to" and "Copy to
+// job/estimate" have therefore been unreachable in production, for
+// everyone, in-tenant included.
+//
+// The file already knew this hazard: the comment above GET /raw/:id spells
+// out the identical trap and gets it right there. Same remedy, stated the
+// same way: REGISTER BEFORE the catch-all. The handler BODIES stay down with
+// their siblings (search for moveAttachment / copyAttachment) — they are
+// hoisted function declarations, so position of the body is irrelevant and
+// position of the registration is everything.
+//
+// Un-shadowing these re-exposes an `UPDATE attachments SET entity_type,
+// entity_id` and an INSERT that copies bytes to a caller-named destination.
+// Both prove tenancy on the SOURCE row and on the DESTINATION entity before
+// they write — see the guards in the bodies. Predicate first, then the route
+// order; the reverse would have opened an unscoped write.
+router.post('/:id/move', requireAuth, (req, res) => moveAttachment(req, res));
+router.post('/:id/copy', requireAuth, (req, res) => copyAttachment(req, res));
 
 // POST /api/attachments/:entityType/:entityId — upload one file as form-data
 // field `file`. Returns the inserted attachment row.
@@ -1032,14 +1110,23 @@ router.post('/:entityType/:entityId',
       // tab, and marking one up uploads the result into the estimate).
       // Validated only to confirm the source exists; the FK enforces
       // referential integrity beyond that.
+      // markup_of is a caller-supplied ATTACHMENT id and so is subject to the
+      // same rule as every other one. Unscoped, this "validated only to
+      // confirm the source exists" probe answered that question about another
+      // tenant's rows, and a match linked their row into this org's FK.
       let markupOf = null;
       if (req.body && typeof req.body.markup_of === 'string' && req.body.markup_of.trim()) {
         const srcId = req.body.markup_of.trim();
         const srcRes = await pool.query(
-          'SELECT id FROM attachments WHERE id = $1',
+          'SELECT id, entity_type, entity_id, organization_id, uploaded_by FROM attachments WHERE id = $1',
           [srcId]
         );
-        if (srcRes.rows.length) markupOf = srcId;
+        // Silently unlinked rather than refused: an unreachable markup source
+        // is not a reason to fail the upload, and the caller learns nothing
+        // either way — exactly what it already did for an id that isn't there.
+        if (srcRes.rows.length && await attachmentInOrg(pool, srcRes.rows[0], callerOrgId(req))) {
+          markupOf = srcId;
+        }
       }
       // Optional include_in_proposal flag from upload (markup save dialog
       // can pre-set this on the new attachment so the user doesn't have
@@ -1089,6 +1176,18 @@ router.post('/:entityType/:entityId',
       const initialTags = (req.body && req.body.tags != null) ? normalizeTagsInput(req.body.tags) : [];
       const initialAnnotations = (req.body && req.body.annotations != null) ? normalizeAnnotationsInput(req.body.annotations) : [];
 
+      // organization_id is stamped from the AUTHOR's users row — the same
+      // anchor db.js's own backfill for this table uses (uploaded_by ->
+      // organization_id), written as a subselect so the two pointers cannot
+      // disagree. Until now the column was only ever as current as the last
+      // boot's backfill, which is why the tenancy predicates above anchor on
+      // the PARENT ENTITY and treat this column as the fallback.
+      //
+      // The stamp lands in the same commit as those predicates and NOT before
+      // them, on purpose: a stamped INSERT behind an unscoped door is strictly
+      // worse than an unstamped one, because a forged row arrives correctly
+      // stamped and becomes indistinguishable from real data. That is what
+      // 79b52ed did to `messages` and a243b76 did to `job_subs`.
       const ins = await pool.query(
         `INSERT INTO attachments
          (id, entity_type, entity_id, filename, mime_type, size_bytes,
@@ -1098,8 +1197,10 @@ router.post('/:entityType/:entityId',
           position, uploaded_by, extracted_text, extracted_text_at,
           markup_of, include_in_proposal, folder,
           caption, tags, annotations,
-          lat, lng, geo_accuracy, geo_source, taken_at, folder_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23::jsonb,$24::jsonb,$25,$26,$27,$28,$29,$30)
+          lat, lng, geo_accuracy, geo_source, taken_at, folder_id,
+          organization_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23::jsonb,$24::jsonb,$25,$26,$27,$28,$29,$30,
+                 (SELECT organization_id FROM users WHERE id = $16))
          RETURNING *`,
         [
           id, entityType, entityId,
@@ -1168,6 +1269,13 @@ router.delete('/:id', requireAuth, async (req, res) => {
     if (!rows.length) return res.status(404).json({ error: 'Attachment not found' });
     const att = rows[0];
 
+    // PREDICATE FIRST, and this is the door where that ordering is load-bearing:
+    // below, storage.delete() destroys the blob before the row goes. A wrong
+    // refusal costs a retry; a wrong allow costs another tenant their file.
+    if (!(await attachmentInOrg(pool, att, callerOrgId(req)))) {
+      return res.status(404).json({ error: 'Attachment not found' });
+    }
+
     // Capability check — same write rule as the parent entity.
     const cap = writeCapForEntity(att.entity_type);
     if (cap === '__owner__') {
@@ -1211,6 +1319,11 @@ router.put('/:id', requireAuth, async (req, res) => {
     const { rows } = await pool.query('SELECT * FROM attachments WHERE id = $1', [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'Attachment not found' });
     const att = rows[0];
+    // PREDICATE FIRST — verified open at 79b52ed: caption on org B's row set
+    // to HIJACKED with a 200.
+    if (!(await attachmentInOrg(pool, att, callerOrgId(req)))) {
+      return res.status(404).json({ error: 'Attachment not found' });
+    }
     const cap = writeCapForEntity(att.entity_type);
     if (cap === '__owner__') {
       if (!ensureUserAttachmentOwner(req, att.entity_id)) {
@@ -1338,7 +1451,8 @@ router.put('/:id', requireAuth, async (req, res) => {
 // change, so URLs stay stable. Position is appended at MAX+1 of the
 // destination so newly-moved attachments don't shuffle existing
 // order at the new home.
-router.post('/:id/move', requireAuth, async (req, res) => {
+// REGISTERED EARLIER — see the ordering note above the upload route.
+async function moveAttachment(req, res) {
   try {
     const { rows } = await pool.query('SELECT * FROM attachments WHERE id = $1', [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'Attachment not found' });
@@ -1350,6 +1464,20 @@ router.post('/:id/move', requireAuth, async (req, res) => {
     const VALID = ['lead', 'estimate', 'client', 'job', 'sub', 'user'];
     if (VALID.indexOf(newType) === -1) return res.status(400).json({ error: 'invalid entity_type' });
     if (!entityIdOk(newId)) return res.status(400).json({ error: 'Invalid entity_id' }); // P1-4
+
+    // PREDICATE FIRST, both keys, before either capability is consulted.
+    // The tenancy refusal and the capability refusal are deliberately DIFFERENT
+    // answers: "not yours / not there" is the 404 an absent id already gets two
+    // lines up, while "yours, but you may not" stays the 403 it always was. A
+    // 403 for a foreign key would make this an existence oracle; a 404 for a
+    // capability miss would make an in-tenant permissions problem unreadable.
+    const orgId = callerOrgId(req);
+    if (!(await attachmentInOrg(pool, att, orgId))) {
+      return res.status(404).json({ error: 'Attachment not found' });
+    }
+    if (!(await attachmentEntityInOrg(pool, newType, newId, orgId))) {
+      return notFound(res);
+    }
 
     // Owner-or-cap gate on the SOURCE — must be allowed to move
     // files away from the current home.
@@ -1383,7 +1511,7 @@ router.post('/:id/move', requireAuth, async (req, res) => {
     console.error('POST /api/attachments/:id/move error:', e);
     res.status(500).json({ error: 'Server error: ' + e.message });
   }
-});
+}
 
 // POST /api/attachments/:id/copy — cross-entity duplicate. Body:
 //   { entity_type, entity_id, folder? }
@@ -1392,7 +1520,8 @@ router.post('/:id/move', requireAuth, async (req, res) => {
 // row referencing them. That way deleting either the source or the
 // copy is independent — no shared-key bookkeeping needed. Driven by
 // the My Files "Copy to job/estimate" action.
-router.post('/:id/copy', requireAuth, async (req, res) => {
+// REGISTERED EARLIER — see the ordering note above the upload route.
+async function copyAttachment(req, res) {
   try {
     const srcR = await pool.query('SELECT * FROM attachments WHERE id = $1', [req.params.id]);
     if (!srcR.rows.length) return res.status(404).json({ error: 'Attachment not found' });
@@ -1404,6 +1533,19 @@ router.post('/:id/copy', requireAuth, async (req, res) => {
     const VALID = ['lead', 'estimate', 'client', 'job', 'sub', 'user'];
     if (VALID.indexOf(newType) === -1) return res.status(400).json({ error: 'invalid entity_type' });
     if (!entityIdOk(newId)) return res.status(400).json({ error: 'Invalid entity_id' }); // P1-4
+
+    // PREDICATE FIRST, both keys. This door reads the SOURCE BYTES out of
+    // storage and writes them to a caller-named destination — unscoped it was
+    // both an exfiltration path out of another tenant and an injection path
+    // into one. Same split of refusals as move: 404 for the boundary, 403 for
+    // the capability.
+    const orgId = callerOrgId(req);
+    if (!(await attachmentInOrg(pool, src, orgId))) {
+      return res.status(404).json({ error: 'Attachment not found' });
+    }
+    if (!(await attachmentEntityInOrg(pool, newType, newId, orgId))) {
+      return notFound(res);
+    }
 
     // Read on source + write on destination.
     if (!(await canReadAttachment(req, src))) {
@@ -1455,14 +1597,20 @@ router.post('/:id/copy', requireAuth, async (req, res) => {
     );
     const startPos = (posR.rows[0] && posR.rows[0].max_pos != null) ? Number(posR.rows[0].max_pos) + 1 : 0;
 
+    // Stamped off the copier's users row, same as the upload path above and
+    // the same anchor db.js's backfill uses. A copy lands in the tenant that
+    // made it, which — the destination having been proved above — is the same
+    // tenant the destination entity is in.
     const ins = await pool.query(
       `INSERT INTO attachments
          (id, entity_type, entity_id, folder, filename, mime_type, size_bytes,
           width, height,
           thumb_url, web_url, original_url,
           thumb_key, web_key, original_key,
-          position, uploaded_by, extracted_text, extracted_text_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+          position, uploaded_by, extracted_text, extracted_text_at,
+          organization_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
+               (SELECT organization_id FROM users WHERE id = $17))
        RETURNING *`,
       [
         newAttId, newType, newId, folder,
@@ -1479,21 +1627,29 @@ router.post('/:id/copy', requireAuth, async (req, res) => {
     console.error('POST /api/attachments/:id/copy error:', e);
     res.status(500).json({ error: 'Server error: ' + e.message });
   }
-});
+}
 
-// Owner-or-cap helpers. Centralized so move + copy + future row-keyed
-// routes stay consistent on the gating logic.
+// Tenancy-then-capability helpers. Centralized so move + copy + future
+// row-keyed routes stay consistent on the gating logic.
+//
+// These used to resolve to hasCapability() alone, which is a capability answer
+// standing where a tenancy answer belongs. Each now proves the KEY first and
+// only then asks the capability, so the capability can only ever narrow a
+// decision the boundary has already made — never widen one.
 async function canReadAttachment(req, att) {
+  if (!(await attachmentInOrg(pool, att, callerOrgId(req)))) return false;
   const cap = readCapForEntity(att.entity_type);
   if (cap === '__owner__') return ensureUserAttachmentOwner(req, att.entity_id);
   return await hasCapability(req.user, cap);
 }
 async function canWriteAttachment(req, att) {
+  if (!(await attachmentInOrg(pool, att, callerOrgId(req)))) return false;
   const cap = writeCapForEntity(att.entity_type);
   if (cap === '__owner__') return ensureUserAttachmentOwner(req, att.entity_id);
   return await hasCapability(req.user, cap);
 }
 async function canWriteEntity(req, entityType, entityId) {
+  if (!(await attachmentEntityInOrg(pool, entityType, entityId, callerOrgId(req)))) return false;
   const cap = writeCapForEntity(entityType);
   if (cap === '__owner__') return ensureUserAttachmentOwner(req, entityId);
   return await hasCapability(req.user, cap);
@@ -1533,15 +1689,32 @@ router.post('/extract-text', requireAuth, async (req, res) => {
   let where;
   if (req.query.mime) {
     params.push(req.query.mime);
-    where = `mime_type = $1`;
+    where = `a.mime_type = $1`;
   } else {
     params.push(supportedMimes);
-    where = `mime_type = ANY($1)`;
+    where = `a.mime_type = ANY($1)`;
   }
-  if (!force) where += ` AND extracted_text IS NULL`;
+  if (!force) where += ` AND a.extracted_text IS NULL`;
+
+  // PREDICATE on the SCAN — the fifth open door in this file, and the one the
+  // four named findings did not name. This was an unbounded
+  // `SELECT ... FROM attachments` with no org term at all, behind ROLES_MANAGE
+  // (which every org admin holds), and it both REWRITES extracted_text on
+  // every tenant's rows and streams every tenant's FILENAMES back down the
+  // progress stream. Scoped the same way GET /recent already is: the row's own
+  // stamp when it has one, the uploader's org when it does not.
+  params.push(callerOrgId(req));
+  const orgParam = '$' + params.length;
+  where += ` AND (a.organization_id = ${orgParam}
+                  OR (a.organization_id IS NULL
+                      AND (u.organization_id = ${orgParam} OR u.organization_id IS NULL)))`;
 
   const { rows } = await pool.query(
-    `SELECT id, original_key, filename, mime_type FROM attachments WHERE ${where} ORDER BY uploaded_at`,
+    `SELECT a.id, a.original_key, a.filename, a.mime_type
+       FROM attachments a
+       LEFT JOIN users u ON u.id = a.uploaded_by
+      WHERE ${where}
+      ORDER BY a.uploaded_at`,
     params
   );
 

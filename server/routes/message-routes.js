@@ -433,14 +433,43 @@ router.post('/:threadKey/read', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const id = String(req.params.id || '');
-    const { rows } = await pool.query('SELECT user_id FROM messages WHERE id = $1', [id]);
+    const { rows } = await pool.query('SELECT user_id, organization_id FROM messages WHERE id = $1', [id]);
     if (!rows.length) return res.status(404).json({ error: 'Message not found' });
+
+    // PREDICATE FIRST, and it goes ahead of the author-or-admin test rather
+    // than beside it. `isAdminish` is a ROLE answer — true for an org-A admin
+    // standing in front of an org-B row — so "author OR adminish" resolved to
+    // "any admin, any tenant" and the DELETE below was keyed on id alone.
+    //
+    // Third recurrence of the same interaction, and this file is the reason it
+    // is named: 79b52ed edited THIS file to stamp the INSERT with
+    // `(SELECT organization_id FROM users WHERE id = $3)` and left this door
+    // unscoped. A stamp is where a row says which tenant it is in; it is not a
+    // boundary, and adding one without the door makes forged rows land
+    // correctly stamped and harder to find, not easier.
+    //
+    // Foreign gets the same 404 absent gets — message ids are generated, but
+    // the author/admin split already answers 403 vs 404 differently and a
+    // tenancy 403 here would let an admin enumerate another tenant's threads.
+    const orgId = req.user && req.user.organization_id;
+    const rowOrg = rows[0].organization_id;
+    const inOrg = rowOrg == null ? true : (orgId != null && String(rowOrg) === String(orgId));
+    if (!inOrg) return res.status(404).json({ error: 'Message not found' });
+
     const isAdmin = isAdminish(req.user);
     const isAuthor = rows[0].user_id === req.user.id;
     if (!isAdmin && !isAuthor) {
       return res.status(403).json({ error: 'Only the author or an admin can delete a message.' });
     }
-    await pool.query('DELETE FROM messages WHERE id = $1', [id]);
+    // Predicated again on the write. The `OR IS NULL` arm is the same legacy
+    // tolerance the read above applies — it is the pre-stamp population, not a
+    // gap — and repeating the term here closes the window between the two
+    // statements.
+    const del = await pool.query(
+      'DELETE FROM messages WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [id, orgId]
+    );
+    if (!del.rowCount) return res.status(404).json({ error: 'Message not found' });
     res.json({ ok: true });
   } catch (e) {
     console.error('DELETE /api/messages/:id error:', e);
