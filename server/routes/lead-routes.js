@@ -1,6 +1,10 @@
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireCapability } = require('../auth');
+// requireOrgId — see the note in client-routes.js. POST /api/leads bound
+// req.user.organization_id straight into the INSERT with no gate, on the plain
+// HTTP path, no agent involved: an org-less caller landed a NULL-org lead that
+// every tenant could then read through the tolerance arm.
+const { requireAuth, requireCapability, requireOrgId } = require('../auth');
 const { sendForEvent } = require('../email');
 const { geocodeAddress, geocodeViaGoogle, geocodeViaCensus } = require('../geocoder');
 // Training flywheel — PDF-extraction-vs-saved pairs (see POST / create).
@@ -145,7 +149,7 @@ router.get('/:id', requireAuth, requireCapability('LEADS_VIEW'), async (req, res
   }
 });
 
-router.post('/', requireAuth, requireCapability('LEADS_EDIT'), async (req, res) => {
+router.post('/', requireAuth, requireCapability('LEADS_EDIT'), requireOrgId, async (req, res) => {
   try {
     const fields = pickEditable(req.body || {});
     if (!fields.title) return res.status(400).json({ error: 'title is required' });
@@ -155,7 +159,7 @@ router.post('/', requireAuth, requireCapability('LEADS_EDIT'), async (req, res) 
     // Wave 1.A — include organization_id on new leads so org-filtering
     // (next commit) finds them. Prepended to the cols/vals arrays.
     const cols = ['id', 'created_by', 'organization_id'].concat(Object.keys(fields));
-    const vals = [id, req.user.id, req.user.organization_id].concat(Object.keys(fields).map(k => fields[k]));
+    const vals = [id, req.user.id, req.orgId].concat(Object.keys(fields).map(k => fields[k]));
     const placeholders = cols.map((_, i) => '$' + (i + 1)).join(', ');
     await pool.query(
       `INSERT INTO leads (${cols.join(', ')}) VALUES (${placeholders})`,
@@ -312,7 +316,7 @@ async function notifyLeadStatusChange(leadId, newStatus, changedByUser, body) {
 //
 // Body: { rows: [{ title, status, confidence, client_name, ... }] }
 // Returns: { inserted, skipped, total, errors[] }
-router.post('/import', requireAuth, requireCapability('LEADS_EDIT'), async (req, res) => {
+router.post('/import', requireAuth, requireCapability('LEADS_EDIT'), requireOrgId, async (req, res) => {
   try {
     const incoming = Array.isArray(req.body && req.body.rows) ? req.body.rows : null;
     if (!incoming || !incoming.length) {
@@ -390,7 +394,7 @@ router.post('/import', requireAuth, requireCapability('LEADS_EDIT'), async (req,
         // Wave A (A7): stamp organization_id on import so re-imported BT rows
         // carry the right tenant from the start (don't wait for a boot backfill).
         const cols = ['id', 'created_by', 'organization_id'].concat(Object.keys(fields));
-        const vals = [id, req.user.id, req.user.organization_id].concat(Object.keys(fields).map(k => fields[k]));
+        const vals = [id, req.user.id, req.orgId].concat(Object.keys(fields).map(k => fields[k]));
         const placeholders = cols.map((_, idx) => '$' + (idx + 1)).join(', ');
         try {
           await client.query(

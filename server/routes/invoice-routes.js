@@ -24,7 +24,12 @@
 
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireCapability } = require('../auth');
+// requireOrgId — see the note in client-routes.js. These are MONEY rows:
+// an un-stamped invoice or payment is visible to every tenant through the
+// tolerance arm, and nextInvoiceNumber's predicate
+// `($1 IS NULL AND organization_id IS NULL)` puts the NULL-org rows in their
+// own numbering space, so a run of them silently forks the invoice sequence.
+const { requireAuth, requireCapability, requireOrgId } = require('../auth');
 const jobFin = require('../services/job-financials');
 
 const router = express.Router();
@@ -166,10 +171,10 @@ router.get('/invoices/:id', requireAuth, requireCapability('FINANCIALS_VIEW'), a
 });
 
 // ── create invoice ──────────────────────────────────────────────────
-router.post('/invoices', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+router.post('/invoices', requireAuth, requireCapability('ESTIMATES_EDIT'), requireOrgId, async (req, res) => {
   try {
     const b = req.body || {};
-    const org = req.user.organization_id;
+    const org = req.orgId;
     const data = { lines: Array.isArray(b.lines) ? b.lines : [], notes: b.notes || '', billTo: b.billTo || null };
     const t = computeTotals(data, b.tax_pct, b.retainage_amount);
     const id = genId('inv');
@@ -192,9 +197,9 @@ router.post('/invoices', requireAuth, requireCapability('ESTIMATES_EDIT'), async
 // Bills the current period's draw (Σ this-period work) less this-period
 // retainage, so the invoice total equals the pay app's Current Payment Due.
 router.post('/jobs/:jobId/invoices/from-pay-application/:payAppId',
-  requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+  requireAuth, requireCapability('ESTIMATES_EDIT'), requireOrgId, async (req, res) => {
     try {
-      const org = req.user.organization_id;
+      const org = req.orgId;
       const job = await ownedJob(req.params.jobId, org);
       if (!job) return res.status(404).json({ error: 'Job not found' });
       const pa = await pool.query(
@@ -323,9 +328,9 @@ router.get('/payments', requireAuth, requireCapability('FINANCIALS_VIEW'), async
 
 // Record a payment and apply it across invoices. Body: { client_id?, payment_date,
 // amount, method, reference, applications:[{invoice_id, amount}], notes }.
-router.post('/payments', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+router.post('/payments', requireAuth, requireCapability('ESTIMATES_EDIT'), requireOrgId, async (req, res) => {
   try {
-    const b = req.body || {}, org = req.user.organization_id;
+    const b = req.body || {}, org = req.orgId;
     const apps = Array.isArray(b.applications) ? b.applications
       .filter(a => a && a.invoice_id).map(a => ({ invoice_id: a.invoice_id, amount: round2(a.amount) })) : [];
     const data = { applications: apps, notes: b.notes || '' };

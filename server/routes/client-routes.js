@@ -1,6 +1,12 @@
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireCapability } = require('../auth');
+// requireOrgId — fail CLOSED on a create whose tenant cannot be determined.
+// Binding req.user.organization_id straight into an INSERT with no gate is how
+// un-stamped rows got into every org's reads: an org-less caller is a state
+// this system explicitly supports (db.js logs "Admin … has NO organization" by
+// name, and services/user-org-scope.js's whole tolerance rationale is that
+// such users must stay reachable), so the null was never hypothetical.
+const { requireAuth, requireCapability, requireOrgId } = require('../auth');
 const jobLabel = require('../../js/job-label');
 
 const router = express.Router();
@@ -335,7 +341,9 @@ router.get('/:id/nearby-safety', requireAuth, requireCapability('ESTIMATES_VIEW'
 
 // POST /api/clients — create. parent_client_id is validated against the
 // existing set so we don't end up with dangling parents.
-router.post('/', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+// requireOrgId AFTER the capability gate: an org-less caller who would have
+// been 403'd anyway must not be told about their org state instead.
+router.post('/', requireAuth, requireCapability('ESTIMATES_EDIT'), requireOrgId, async (req, res) => {
   try {
     const fields = pickEditable(req.body || {});
     if (!fields.name) return res.status(400).json({ error: 'name is required' });
@@ -351,7 +359,7 @@ router.post('/', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, r
     // Wave 1.A — include organization_id on new clients so org-filtering
     // (next commit) finds them. Prepended to the cols/vals arrays.
     const cols = ['id', 'parent_client_id', 'organization_id'].concat(Object.keys(fields));
-    const vals = [id, parentId, req.user.organization_id].concat(Object.keys(fields).map(k => fields[k]));
+    const vals = [id, parentId, req.orgId].concat(Object.keys(fields).map(k => fields[k]));
     const placeholders = cols.map((_, i) => '$' + (i + 1)).join(', ');
     await pool.query(
       `INSERT INTO clients (${cols.join(', ')}) VALUES (${placeholders})`,
@@ -534,7 +542,7 @@ router.delete('/:id', requireAuth, requireCapability('ESTIMATES_EDIT'), async (r
 //
 // Body: { rows: [{ name, company_name?, community_name?, ... }] }
 // Returns: { inserted, updated, parentsCreated, total, errors[] }
-router.post('/import', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+router.post('/import', requireAuth, requireCapability('ESTIMATES_EDIT'), requireOrgId, async (req, res) => {
   try {
     const incoming = Array.isArray(req.body && req.body.rows) ? req.body.rows : null;
     if (!incoming || !incoming.length) {
@@ -580,7 +588,7 @@ router.post('/import', requireAuth, requireCapability('ESTIMATES_EDIT'), async (
           // req.user.organization_id is what the surrounding read already binds.
           `INSERT INTO clients (id, name, company_name, client_type, organization_id)
            VALUES ($1, $2, $2, 'Property Mgmt', $3)`,
-          [id, company, req.user.organization_id]
+          [id, company, req.orgId]
         );
         byName.set(key, id);
         parentsCreated++;
@@ -640,7 +648,7 @@ router.post('/import', requireAuth, requireCapability('ESTIMATES_EDIT'), async (
           const id = 'client_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
           // Wave A (A7): stamp organization_id on import (clients has the column).
           const cols = ['id', 'name', 'parent_client_id', 'organization_id'];
-          const vals = [id, name, parentId, req.user.organization_id];
+          const vals = [id, name, parentId, req.orgId];
           for (const k of Object.keys(fields)) {
             if (k === 'name') continue;
             if (fields[k] === '' || fields[k] == null) continue;

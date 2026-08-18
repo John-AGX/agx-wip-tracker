@@ -1,6 +1,11 @@
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireRole, requireCapability, getAttributedUserId } = require('../auth');
+// requireOrgId — see the note in client-routes.js. /bulk/save is the estimate
+// CREATE door (INSERT ... ON CONFLICT DO UPDATE) and bound
+// req.user.organization_id with no gate, so an org-less caller's estimates
+// landed NULL — and payload-dispatcher.js's own comment on the twin statement
+// says what that means: "a NULL-org estimate is visible to every tenant".
+const { requireAuth, requireRole, requireCapability, getAttributedUserId, requireOrgId } = require('../auth');
 const { geocodeAddress } = require('../geocoder');
 const asm = require('../services/assemblies');
 const estLines = require('../services/estimate-lines');
@@ -197,7 +202,7 @@ router.get('/', requireAuth, async (req, res) => {
 // capability is the canonical permission and what the rest of the app's
 // admin/role tooling assigns. Roles without ESTIMATES_EDIT (read-only
 // users, view-only field crew when that exists) are now correctly blocked.
-router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), requireOrgId, async (req, res) => {
   try {
     const { estimates, estimateLines, estimateAlternates, baseVersions } = req.body;
     if (!Array.isArray(estimates)) {
@@ -375,7 +380,7 @@ router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), async
           // owner_id = attributed user (acted-as target when disguised). Set
           // on CREATE only (ON CONFLICT DO UPDATE doesn't re-stamp owner). The
           // DELETE /:id 403 guard keeps comparing owner_id to req.user.id.
-          [est.id, getAttributedUserId(req), JSON.stringify(blob), req.user.organization_id, estMarketId]
+          [est.id, getAttributedUserId(req), JSON.stringify(blob), req.orgId, estMarketId]
         );
         // Hand back the new version so the client can advance its base and not
         // false-conflict on its own next save.

@@ -46,6 +46,27 @@ function genId(p) { return p + '_' + Date.now() + '_' + Math.random().toString(3
 function num(v) { const n = Number(v); return isFinite(n) ? n : 0; }
 function round2(n) { return Math.round(num(n) * 100) / 100; }
 
+// Money rows are born inside a tenant, or they are not born.
+//
+// This service is reached from BOTH the HTTP routes and the agent's payload
+// dispatcher, so it is the last place that can refuse — and refusing is the
+// only correct answer. A NULL organization_id on a money row is not a
+// cosmetic gap: the row is visible to every tenant through the `OR
+// organization_id IS NULL` arm on every read, and the numbering helpers put
+// NULL-org rows in their own sequence space, so a run of them silently forks
+// the invoice/PO series. Throwing surfaces as a 500 at worst and aborts the
+// dispatcher's transaction at best; both beat a permanently un-tenanted
+// invoice that nothing will ever be able to attribute.
+function requireOrgForMoney(orgId, kind) {
+  if (orgId == null) {
+    throw new Error(
+      'Refusing to create a ' + kind + ' with no organization. Money rows are born inside a ' +
+      'tenant: an un-stamped one is readable by every tenant and lands outside the numbering ' +
+      'sequence. Nothing was saved.');
+  }
+  return orgId;
+}
+
 // AGX's standard subcontract agreement — editable per-org in the Command
 // Center / org settings. Intentionally plain text so it renders in a
 // textarea and in print; the org can paste richer/exact legal language.
@@ -370,7 +391,10 @@ async function createPurchaseOrder(db, { jobId, orgId, ownerId, fields }) {
     `INSERT INTO job_purchase_orders (id, job_id, organization_id, owner_id, sub_id, status, po_number, data)
      VALUES ($1, $2, $3, $4, $5, 'draft', $6, $7)
      RETURNING ${PO_RETURNING}`,
-    [id, jobId, orgId == null ? null : orgId, ownerId || null, subId, poNumber, JSON.stringify(data)]
+    // Same refusal as createInvoice. The other `orgId == null ? null : orgId`
+    // sites in this file are READ predicates, where a null parameter is a
+    // lookup value; these two are STAMPS, where a null is a permanent row.
+    [id, jobId, requireOrgForMoney(orgId, 'purchase order'), ownerId || null, subId, poNumber, JSON.stringify(data)]
   );
   return rows[0];
 }
@@ -455,7 +479,15 @@ async function createInvoice(db, { jobId, orgId, ownerId, fields }) {
         subtotal, tax_pct, tax_amount, retainage_amount, total, amount_paid, data)
      VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8,$9,$10,$11,$12,$13,$14,$15,0,$16)
      RETURNING ${INV_RETURNING}`,
-    [id, orgId == null ? null : orgId, ownerId || null, jobId || null,
+    // `orgId == null ? null : orgId` was a NULL-stamp written out longhand.
+    // This is the shared financials service the AGENT write path lands in as
+    // well as the HTTP one, so it is the highest-traffic un-stamped money
+    // insert of the set — and a NULL-org invoice is both visible to every
+    // tenant AND placed in nextInvoiceNumber's separate NULL numbering space,
+    // which silently forks the invoice sequence. Refuse instead: every live
+    // caller has an org (the routes are behind requireOrgId as of this commit,
+    // and the dispatcher refuses without ctx.organizationId).
+    [id, requireOrgForMoney(orgId, 'invoice'), ownerId || null, jobId || null,
      b.client_id != null ? String(b.client_id) : null, b.pay_application_id || null,
      number, b.issue_date || null, b.due_date || null, b.terms || null,
      t.subtotal, num(b.tax_pct), t.taxAmount, t.retainageAmount, t.total,

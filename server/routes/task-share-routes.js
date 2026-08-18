@@ -322,9 +322,19 @@ router.post('/task-share/:token/photo', loadShare, upload.single('file'), async 
     const posR = await pool.query("SELECT COALESCE(MAX(position), -1) AS max_pos FROM attachments WHERE entity_type = 'task' AND entity_id = $1", [req.task.id]);
     const position = (posR.rows[0] && posR.rows[0].max_pos != null) ? Number(posR.rows[0].max_pos) + 1 : 0;
     const ins = await pool.query(
-      `INSERT INTO attachments (id, entity_type, entity_id, folder, filename, mime_type, size_bytes, width, height, thumb_url, web_url, original_url, thumb_key, web_key, original_key, position, uploaded_by)
-       VALUES ($1,'task',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id, filename, thumb_url, web_url, original_url`,
-      [id, req.task.id, 'general', req.file.originalname, mime, buf.length, width, height, thumbUrl, webUrl, originalUrl, thumbKey, webKey, originalKey, position, null]
+      // uploaded_by is NULL by design — this door is a logged-out crew member
+      // completing a shared task, so there is no user to attribute. That made
+      // it look like the one attachment population whose tenant could never be
+      // derived: no uploader (rung 3) and no stamp (rung 2).
+      //
+      // It is derivable after all, and the value was already in hand. The
+      // parent is a TASK, tasks.organization_id is NOT NULL (server/db.js), and
+      // loadShare already SELECTed the whole row onto req.task before this
+      // handler ran. So the row is stamped from evidence — the same evidence
+      // attachmentInOrg's rung 1 uses to resolve it on read.
+      `INSERT INTO attachments (id, entity_type, entity_id, folder, filename, mime_type, size_bytes, width, height, thumb_url, web_url, original_url, thumb_key, web_key, original_key, position, uploaded_by, organization_id)
+       VALUES ($1,'task',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id, filename, thumb_url, web_url, original_url`,
+      [id, req.task.id, 'general', req.file.originalname, mime, buf.length, width, height, thumbUrl, webUrl, originalUrl, thumbKey, webKey, originalKey, position, null, req.task.organization_id]
     );
     pool.query('UPDATE task_shares SET last_used_at = NOW() WHERE id = $1', [req.share.id]).catch(function () {});
     res.json({ ok: true, attachment: ins.rows[0] });

@@ -556,14 +556,35 @@ router.post('/sub-portal/attachments',
       );
       const position = (posR.rows[0] && posR.rows[0].max_pos != null) ? Number(posR.rows[0].max_pos) + 1 : 0;
 
+      // organization_id DERIVED FROM THE PARENT, never from the caller. A sub
+      // portal user's own org is the wrong source here: the file belongs to
+      // whatever tenant owns the job/lead/estimate it hangs on, and the sub is
+      // a guest with a grant, not a member. The parent is also the anchor
+      // attachmentInOrg reads it back through (rung 1). This INSERT named no
+      // organization_id at all, so every sub-portal upload landed un-stamped.
+      let parentOrgId = null;
+      try {
+        const { ENTITY_TABLES } = require('../services/attachment-org-scope');
+        const parentTable = ENTITY_TABLES[entity_type];
+        if (parentTable) {
+          const pr = await pool.query(
+            'SELECT organization_id FROM ' + parentTable + ' WHERE id = $1 LIMIT 1', [entity_id]);
+          if (pr.rows.length) parentOrgId = pr.rows[0].organization_id;
+        }
+      } catch (e) {
+        // Not fatal and not a guess: an unresolvable parent leaves NULL, which
+        // rung 1 still resolves on read, and the row is COUNTED by
+        // GET /api/admin/console/org-boundary rather than stamped on a hunch.
+        console.warn('[sub-portal] could not derive org from parent ' + entity_type + ':', e && e.message);
+      }
       const ins = await pool.query(
         `INSERT INTO attachments
            (id, entity_type, entity_id, folder, filename, mime_type, size_bytes,
             width, height,
             thumb_url, web_url, original_url,
             thumb_key, web_key, original_key,
-            position, uploaded_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+            position, uploaded_by, organization_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
          RETURNING *`,
         [
           id, entity_type, entity_id, folder,
@@ -571,7 +592,7 @@ router.post('/sub-portal/attachments',
           width, height,
           thumbUrl, webUrl, originalUrl,
           thumbKey, webKey, originalKey,
-          position, req.user.id
+          position, req.user.id, parentOrgId
         ]
       );
       res.json({ attachment: ins.rows[0] });

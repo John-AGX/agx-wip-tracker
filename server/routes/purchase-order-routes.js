@@ -22,7 +22,8 @@
 
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireCapability, hasCapability } = require('../auth');
+// requireOrgId — see the note in client-routes.js. A PO is a subcontract.
+const { requireAuth, requireCapability, hasCapability, requireOrgId } = require('../auth');
 const { captureExample, TASKS } = require('../services/training-capture');
 const jobFin = require('../services/job-financials');
 const fileFolders = require('../services/file-folders');
@@ -281,24 +282,30 @@ router.get('/purchase-orders/:id', requireAuth, async (req, res) => {
 // ── create draft ────────────────────────────────────────────────────
 // Body: { title?, sub_id?, scope?, lines?, materialsOnly?, scheduledCompletion?,
 //         internalNotes?, po_number? }. Scope defaults to the org template.
-router.post('/jobs/:jobId/purchase-orders', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+router.post('/jobs/:jobId/purchase-orders', requireAuth, requireCapability('ESTIMATES_EDIT'), requireOrgId, async (req, res) => {
   try {
     const jobId = req.params.jobId;
     const job = await pool.query(
       `SELECT id, data->>'jobNumber' AS job_number, data->>'title' AS job_title
          FROM jobs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)`,
-      [jobId, req.user.organization_id]
+      [jobId, req.orgId]
     );
     if (!job.rowCount) return res.status(404).json({ error: 'Job not found' });
 
     const id = 'po_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-    const poNumber = req.body.po_number || await nextPoNumber(req.user.organization_id);
+    const poNumber = req.body.po_number || await nextPoNumber(req.orgId);
     const subId = req.body.sub_id || null;
+    // A caller-supplied sub id is proved HERE, not just where the grant is
+    // written — a PO addressed to another tenant's sub should never exist,
+    // let alone be issued. See the block comment above syncSubAccessForPO.
+    if (subId && !(await subInOrg(pool, subId, req.orgId))) {
+      return res.status(404).json({ error: 'Subcontractor not found' });
+    }
 
     const data = cleanData(req.body);
     // Seed scope from the org template when the caller didn't supply one.
     if (!data.scope || !String(data.scope).trim()) {
-      data.scope = await orgScopeTemplate(req.user.organization_id);
+      data.scope = await orgScopeTemplate(req.orgId);
     }
 
     const { rows } = await pool.query(
@@ -307,7 +314,7 @@ router.post('/jobs/:jobId/purchase-orders', requireAuth, requireCapability('ESTI
        VALUES ($1, $2, $3, $4, $5, 'draft', $6, $7)
        RETURNING id, job_id, owner_id, sub_id, status, po_number, data,
                  approved_at, approved_by, created_at, updated_at`,
-      [id, jobId, req.user.organization_id, req.user.id, subId, poNumber, JSON.stringify(data)]
+      [id, jobId, req.orgId, req.user.id, subId, poNumber, JSON.stringify(data)]
     );
     res.json({
       purchase_order: Object.assign(shapeRow(rows[0]), {

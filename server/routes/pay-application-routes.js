@@ -17,7 +17,9 @@
 
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireCapability } = require('../auth');
+// requireOrgId — see the note in client-routes.js. A pay application is the
+// AIA G702/G703 draw: money, signed, sent to an owner.
+const { requireAuth, requireCapability, requireOrgId } = require('../auth');
 
 const router = express.Router();
 
@@ -136,10 +138,10 @@ router.get('/pay-applications/:id',
 // (matched by line id) so the G703 D/E split is correct without the client
 // tracking history.
 router.post('/jobs/:jobId/pay-applications',
-  requireAuth, requireCapability('ESTIMATES_EDIT'),
+  requireAuth, requireCapability('ESTIMATES_EDIT'), requireOrgId,
   async (req, res) => {
     try {
-      const job = await ownedJob(req.params.jobId, req.user.organization_id);
+      const job = await ownedJob(req.params.jobId, req.orgId);
       if (!job) return res.status(404).json({ error: 'Job not found' });
 
       // Prior app → next number + per-line previous map.
@@ -172,7 +174,7 @@ router.post('/jobs/:jobId/pay-applications',
            (id, job_id, organization_id, owner_id, app_no, status, period_to, retainage_pct, data)
          VALUES ($1, $2, $3, $4, $5, 'draft', $6, $7, $8)
          RETURNING *`,
-        [id, req.params.jobId, req.user.organization_id, req.user.id, nextNo, periodTo, retPct, JSON.stringify(data)]
+        [id, req.params.jobId, req.orgId, req.user.id, nextNo, periodTo, retPct, JSON.stringify(data)]
       );
       const shaped = shapeRow(rows[0]);
       shaped.job_number = job.job_number; shaped.job_title = job.job_title;
