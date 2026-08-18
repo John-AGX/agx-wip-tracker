@@ -4010,7 +4010,13 @@ async function resyncDriftedAgents(force) {
         // system(+model) and the tool list are hashed SEPARATELY so a tool
         // change re-fires the push on its own; the <2% "noise" filter still
         // suppresses SharePoint system-prompt jitter but never suppresses tools.
-        const sysHash = _sha1(composed + ' ' + (model || ''));
+        // NOTE: the separator below is the two-character ESCAPE '\0', not a raw
+        // 0x00 byte in the source. Both denote U+0000, so the hash domain is
+        // byte-identical — but a raw NUL made ripgrep abandon this file mid-scan
+        // (see test/no-nul-bytes.test.js), hiding everything past this line from
+        // every directory-recursive search. The escape keeps the semantics and
+        // gives the file back to grep.
+        const sysHash = _sha1(composed + '\0' + (model || ''));
         const toolsHash = _sha1(JSON.stringify(toolList));
         const prev = _lastSyncState.get(row.anthropic_agent_id);
 

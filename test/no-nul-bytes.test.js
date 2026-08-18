@@ -37,16 +37,32 @@ const GIT_BINARY_SNIFF_BYTES = 8000;
 /* Files whose NUL is intentional. Each entry states WHY, because an allowlist
  * without reasons becomes a place to put things.
  *
- *   server/routes/admin-agents-routes.js
- *     `_sha1(composed + '\0' + (model || ''))` — a NUL domain separator so
- *     that ("ab", "c") and ("a", "bc") cannot hash to the same sync-state key.
- *     A real technique, and the byte IS the semantics: replacing it with any
- *     printable separator would make the collision it prevents possible again.
- *     It sits far past the sniff window, so the file still diffs as text —
- *     which the first assertion below keeps true. */
-const ALLOWED = new Set([
-  'server/routes/admin-agents-routes.js'
-]);
+ * CURRENTLY EMPTY, and that is the finding.
+ *
+ * The entry that used to sit here was server/routes/admin-agents-routes.js:
+ *   `_sha1(composed + <raw 0x00> + (model || ''))` — a NUL domain separator so
+ *   that ("ab", "c") and ("a", "bc") cannot hash to the same sync-state key.
+ * The TECHNIQUE was right. The claim that the byte itself was load-bearing was
+ * wrong: `'\0'` — the two-character escape — denotes the same U+0000, produces
+ * a byte-identical separator, and keeps the collision guard exactly as strong.
+ * Proven digest-for-digest before the byte was removed.
+ *
+ * And the reasoning that waved it through ("far past the sniff window, so the
+ * file still diffs as text") checked the wrong tool. git was indeed fine. But
+ * RIPGREP — what every code-search tool in this repo's workflow actually runs —
+ * applies binary detection with no sniff window at all: it reads until it hits
+ * a NUL and then abandons the file. Pointed at the file directly it still
+ * prints matches found before the byte, plus a warning. Recursed over a
+ * DIRECTORY, which is how a scan is really run, a match that lives past the
+ * byte comes back as silence — no hit, no warning, exit 0. That file is 4879
+ * lines; the NUL sat at line 4013; 866 lines containing six ROLES_MANAGE-gated
+ * routes were unsearchable, and a scan over them returned "clean".
+ *
+ * So the bar for a future entry is higher than "the byte is deliberate". It is:
+ * the byte is deliberate AND no escape sequence expresses the same value AND
+ * you have checked what a recursive ripgrep returns for text below it. In a
+ * JS/JSON/SQL source file the second condition is essentially never met. */
+const ALLOWED = new Set([]);
 
 // Extensions a human reads and a reviewer diffs. Binary assets (png, ico,
 // xlsx, pdf, woff) are excluded because a NUL there is the format.
@@ -98,5 +114,38 @@ describe('tracked source files stay diffable', () => {
     // entry — and its explanation — goes with it.
     const withNul = new Set(found.anywhere.map((hit) => hit.split(' @')[0]));
     ALLOWED.forEach((rel) => expect(withNul.has(rel)).toBe(true));
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────
+ * The separator kept its MEANING when it lost its raw byte.
+ *
+ * Removing the 0x00 from admin-agents-routes.js was safe only because `'\0'`
+ * denotes the identical character. Nothing in the file says so, and the next
+ * reader sees a lonely escape that looks like tidy-up bait — replace it with
+ * ':' or '|' and the sync-state key silently regains the collision it was
+ * written to prevent, with no test failing. This is that test.
+ * ──────────────────────────────────────────────────────────────────────── */
+describe('the managed-agent sync-state hash keeps its NUL domain separator', () => {
+  const REL = 'server/routes/admin-agents-routes.js';
+  const src = fs.readFileSync(path.join(REPO, REL), 'utf8');
+  const m = src.match(/const sysHash = _sha1\(composed \+ (.+?) \+ \(model/);
+
+  test('the sysHash separator literal is still present in the source', () => {
+    expect(m).not.toBeNull();
+  });
+
+  test('it evaluates to exactly one U+0000, however it is spelled', () => {
+    // Spelled '\0' today, a raw byte before. Either is fine; ':' is not.
+    const sep = new Function('return ' + m[1])();
+    expect([...sep].map((c) => c.codePointAt(0))).toEqual([0]);
+  });
+
+  test('and it still separates the domains it was written to separate', () => {
+    const sep = new Function('return ' + m[1])();
+    const sha1 = (s) => require('crypto').createHash('sha1')
+      .update(String(s || ''), 'utf8').digest('hex');
+    // The whole point: ("ab","c") and ("a","bc") must not collide.
+    expect(sha1('ab' + sep + 'c')).not.toBe(sha1('a' + sep + 'bc'));
   });
 });
