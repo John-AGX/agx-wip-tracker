@@ -1767,7 +1767,12 @@ async function initSchema() {
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_subs_name_lower ON subs(lower(name));
+    -- Name uniqueness lives at the END of this block now, as
+    -- idx_subs_org_name_lower — per TENANT rather than global. It cannot be
+    -- stated here: subs.organization_id is added by the Wave 1.A Phase 2 ALTER
+    -- above, which sits earlier in the FILE but is not guaranteed to have run
+    -- against an older database by this point. Creating the global index here
+    -- and dropping it 3000 lines later would also do both on every single boot.
     CREATE INDEX IF NOT EXISTS idx_subs_trade ON subs(trade);
     CREATE INDEX IF NOT EXISTS idx_subs_status ON subs(status);
     CREATE INDEX IF NOT EXISTS idx_subs_parent ON subs(parent_sub_id);
@@ -4714,6 +4719,57 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_plan_versions_plan
       ON plan_versions(plan_id, created_at DESC);
+
+    -- ──────────────────────────────────────────────────────────────────
+    -- The sub directory's name uniqueness is PER TENANT, not global.
+    --
+    -- idx_subs_name_lower (created with the table, ~line 1770) is
+    -- UNIQUE(lower(name)) across every organization. Two things follow, and
+    -- the second is the reason this is a schema change and not a comment:
+    --
+    --   1. It is a cross-tenant existence oracle. POST /api/subs catches
+    --      23505 and answers 409 "A sub with that name already exists", so an
+    --      org-A admin learns, one probe per name, exactly which companies are
+    --      in org B's vendor directory. Every route-level lookup around it is
+    --      already org-scoped (sub-routes.js:728, :799 both carry
+    --      "AND (organization_id = $n OR organization_id IS NULL)"), so the
+    --      index is the only thing still answering across the boundary.
+    --
+    --   2. It is a hard functional collision. Two tenants cannot both carry
+    --      "ABC Drywall" — a name collision no operator can resolve, on the
+    --      single most collision-prone string in a construction directory. The
+    --      leak is the smaller half of this finding; the second tenant simply
+    --      cannot onboard.
+    --
+    -- field_tools already got this treatment (idx_field_tools_org_name); subs
+    -- did not. This is the same shape.
+    --
+    -- COALESCE(organization_id, 0) rather than a plain (organization_id,
+    -- lower(name)) pair: in a multicolumn UNIQUE, NULLs compare as DISTINCT, so
+    -- the plain form would let UNLIMITED same-named rows exist while
+    -- organization_id is NULL — which is the entire legacy population until the
+    -- backfill runs. COALESCE buckets every un-stamped row into one namespace,
+    -- so today's constraint is preserved exactly for them and only STAMPED rows
+    -- gain a per-tenant namespace. This tightens nothing and loosens nothing
+    -- for existing data.
+    --
+    -- ORDER AND COST. The new index is created BEFORE the old one is dropped:
+    -- the old is strictly stricter, so any data satisfying it satisfies the new
+    -- one and the CREATE cannot fail while it is still in place. Both
+    -- statements are idempotent (IF NOT EXISTS / IF EXISTS). CREATE UNIQUE
+    -- INDEX takes a SHARE lock that blocks writes to the subs table for its duration
+    -- and DROP INDEX takes a brief ACCESS EXCLUSIVE; the subs table is a directory
+    -- table in the hundreds of rows, so both are milliseconds, and this runs at
+    -- boot before listen() alongside every other index here. Not CONCURRENTLY:
+    -- that cannot run inside this transaction, and the lock it would avoid is
+    -- shorter than the deploy swap that already surrounds it.
+    --
+    -- Placed at the END of this block on purpose — the subs table is created ~line 1753
+    -- and its organization_id column is added ~line 658, and both must have
+    -- executed before this runs.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_subs_org_name_lower
+      ON subs (COALESCE(organization_id, 0), lower(name));
+    DROP INDEX IF EXISTS idx_subs_name_lower;
   `);
 
   // ── Performance indexes: 86's read-tool surface (2026-05-23) ──────
