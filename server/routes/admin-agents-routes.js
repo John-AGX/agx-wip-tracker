@@ -19,7 +19,7 @@
 
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireCapability, requireSystemAdmin } = require('../auth');
+const { requireAuth, requireCapability, requireSystemAdmin, hasCapability } = require('../auth');
 
 const router = express.Router();
 
@@ -34,6 +34,7 @@ const router = express.Router();
 // is how an alarm ends up disagreeing with the page it is alarming on.
 const { MODEL_COSTS, DEFAULT_MODEL_COST } = require('../services/ai-pricing');
 const { deleteSkillDeep } = require('../services/anthropic-skills');
+const { auditLog } = require('../audit');
 // The managed-agents 1024-char tool-description cap, and the loud warning
 // that used to be a silent slice(). See the module header for the incident.
 const { capToolDescription } = require('../services/agent-tool-description');
@@ -933,11 +934,66 @@ function pushPackToAnthropic(anthropic, pack) {
   return pushPackToAnthropicCore(anthropic, pack, { toFile, repointAgentSkills });
 }
 
+// ── WHO MAY OPERATE THE PLATFORM PLAYBOOK ────────────────────────────────
+//
+// The three routes below (sync-all, sync-one, unsync-one) all address the
+// SAME single global row — app_settings('agent_skills') — and all three push
+// to or delete from the ANTHROPIC ACCOUNT, which is one account for the whole
+// platform. None of them has an organization_id to filter on, because neither
+// app_settings nor managed_agent_skills has that column.
+//
+// They were gated requireCapability('ROLES_MANAGE'), which every org admin in
+// every tenant holds.
+//
+// THE RULE, WHICH THIS FILE AND ITS NEIGHBOUR ALREADY STATED
+// It is not a new policy. admin-anthropic-routes.js is requireSystemAdmin on
+// every route in the file — that is the direct door to the same Anthropic
+// account resources. In THIS file /skills/versions*, /evals*, /training-data
+// and /training-export are all requireSystemAdmin, and the training pair says
+// why in a comment: "account-level IP, same tier as the other cross-org
+// Anthropic resources (CC-3 precedent)". And app-settings-keys.js classifies
+// `agent_skills` as 'platform' — SYSTEM_ADMIN to read and to write — so
+// PUT /api/settings/agent_skills already refuses an org admin.
+//
+// So the classification was right and these three handlers simply never asked
+// it: they reach the classified row with a direct pool.query in a different
+// router. Closing the generic key route without closing these left the front
+// door locked and three side doors open onto the same row — and the side doors
+// are the destructive ones.
+//
+// WHY 'SYNC' COUNTS AS DESTRUCTIVE, WHICH IS WHAT THE LAST PASS GOT WRONG
+// sync-all was deliberately left at ROLES_MANAGE on the reasoning that with
+// prompt injection closed it only "pushes existing content". It does not.
+// pushPackToAnthropic -> services/anthropic-skills.js creates the new skill,
+// re-points managed_agent_skills, and then calls deleteSkillDeep(priorId) on
+// the previous one. Every re-sync of an already-mirrored pack DELETES an
+// upstream skill. sync-all is unsync-one in a loop, once per changed pack.
+//
+// WHAT AN ORG ADMIN LOSES: nothing they could use. The Skills view saves
+// through PUT /api/settings/agent_skills, which is SYSTEM_ADMIN since the key
+// space was classified, so an org admin cannot edit this row in the first
+// place; sync-one and unsync-one are invoked from the UI only after that save
+// succeeds. Their per-tenant surface is org_skill_packs under
+// /api/admin/organizations/:id/skill-packs, which stays ROLES_MANAGE and is
+// untouched.
+//
+// A destructive upstream operation gets more than a gate. Deleting an
+// Anthropic skill is not undoable — beta.skills.delete refuses while versions
+// exist, so deleteSkillDeep enumerates and removes every version first, and
+// nothing puts them back. So the irreversible door also takes a typed
+// confirmation (an accident is not a privilege problem) and writes an
+// admin_audit_log row (broad authority is only safe if it is recorded — the
+// audit convention already names 'anthropic.skill_delete', and the SYSTEM_ADMIN
+// door in admin-anthropic-routes.js already writes it; these did not).
+// ─────────────────────────────────────────────────────────────────────────
+
 // POST /api/admin/agents/skills/sync-all-to-anthropic
 //   For each local pack without anthropic_skill_id, packages SKILL.md,
 //   uploads via beta.skills.create, persists the returned id back into
 //   the agent_skills row. Returns per-pack summary.
-router.post('/skills/sync-all-to-anthropic', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+//   SYSTEM_ADMIN: writes the platform playbook row and deletes the prior
+//   upstream skill for every pack whose body changed.
+router.post('/skills/sync-all-to-anthropic', requireAuth, requireSystemAdmin, async (req, res) => {
   try {
     const anthropic = getAnthropic();
     if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set on this deployment.' });
@@ -979,6 +1035,24 @@ router.post('/skills/sync-all-to-anthropic', requireAuth, requireCapability('ROL
           agent_rows_repointed: pushed.repointed,
           old_delete_error: pushed.oldDeleteError
         });
+        // `replaced` means the prior upstream skill was deleted, not
+        // superseded — record it under the same action name the direct
+        // SYSTEM_ADMIN delete door uses, so one query finds every upstream
+        // skill this platform has destroyed regardless of which door did it.
+        if (pushed.replaced) {
+          auditLog(req, {
+            action: 'anthropic.skill_delete',
+            targetType: 'anthropic_skill',
+            targetId: pushed.replaced,
+            detail: {
+              via: 'agents/skills/sync-all-to-anthropic',
+              pack_name: pack.name,
+              replaced_by: pushed.id,
+              deleted: pushed.oldDeleted,
+              delete_error: pushed.oldDeleteError || null
+            }
+          });
+        }
       } catch (e) {
         summary.push({ idx: i, name: pack.name, status: 'failed', error: e.message });
       }
@@ -1008,7 +1082,10 @@ router.post('/skills/sync-all-to-anthropic', requireAuth, requireCapability('ROL
 // POST /api/admin/agents/skills/:idx/sync-to-anthropic
 //   Sync one specific pack by its array index. Useful for debugging
 //   a sync failure or refreshing a single pack after an edit.
-router.post('/skills/:idx/sync-to-anthropic', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+//   SYSTEM_ADMIN: same global row, same account-wide push, and the retire
+//   step inside pushPackToAnthropic deletes the pack's previous upstream
+//   skill. See the block above /skills/sync-all-to-anthropic.
+router.post('/skills/:idx/sync-to-anthropic', requireAuth, requireSystemAdmin, async (req, res) => {
   try {
     const anthropic = getAnthropic();
     if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set on this deployment.' });
@@ -1054,6 +1131,21 @@ router.post('/skills/:idx/sync-to-anthropic', requireAuth, requireCapability('RO
     // (deleteSkillDeep, which clears versions first — a bare skills.delete
     // fails on every skill we have ever created). Non-fatal: an orphan
     // upstream is untidy, a missing skill is an outage.
+    if (pushed.replaced) {
+      auditLog(req, {
+        action: 'anthropic.skill_delete',
+        targetType: 'anthropic_skill',
+        targetId: pushed.replaced,
+        detail: {
+          via: 'agents/skills/:idx/sync-to-anthropic',
+          pack_name: pack.name,
+          replaced_by: pushed.id,
+          deleted: pushed.oldDeleted,
+          delete_error: pushed.oldDeleteError || null
+        }
+      });
+    }
+
     res.json({
       ok: true,
       anthropic_skill_id: pushed.id,
@@ -1074,7 +1166,14 @@ router.post('/skills/:idx/sync-to-anthropic', requireAuth, requireCapability('RO
 //   when re-syncing after a body edit (delete + sync = fresh upload
 //   with the new content). Future enhancement: use beta.skills
 //   .versions to push a new version instead of full delete-recreate.
-router.post('/skills/:idx/unsync-from-anthropic', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+//   SYSTEM_ADMIN + typed confirmation. This is the irreversible one: it
+//   deletes the Anthropic-side skill for the whole account and detaches it
+//   from every agent row. Body must carry { confirm: <the pack's name> } —
+//   an exact, case-sensitive match — so the operation cannot be reached by a
+//   mis-click, a replayed request, or an agent that guessed a URL. Privilege
+//   answers "may you"; the confirmation answers "did you mean to", and an
+//   undoable delete needs both.
+router.post('/skills/:idx/unsync-from-anthropic', requireAuth, requireSystemAdmin, async (req, res) => {
   try {
     const anthropic = getAnthropic();
     if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set on this deployment.' });
@@ -1090,6 +1189,18 @@ router.post('/skills/:idx/unsync-from-anthropic', requireAuth, requireCapability
 
     const pack = skills[idx];
     if (!pack.anthropic_skill_id) return res.status(400).json({ error: 'Pack is not currently synced.' });
+
+    // Checked BEFORE the detach, not between the detach and the delete: a
+    // refusal must leave the row exactly as it found it.
+    const confirm = (req.body && typeof req.body.confirm === 'string') ? req.body.confirm : null;
+    if (confirm !== String(pack.name || '')) {
+      return res.status(400).json({
+        error: 'Confirmation required. This deletes the Anthropic-side skill for the ' +
+               'entire account and cannot be undone. Re-send with { "confirm": "<pack name>" }.',
+        required_confirmation: 'name',
+        pack_name: pack.name || null
+      });
+    }
 
     // Detach BEFORE deleting. managed_agent_skills is source 1 in
     // collectSkillsFor, so a row left behind keeps feeding the skill id
@@ -1124,6 +1235,18 @@ router.post('/skills/:idx/unsync-from-anthropic', requireAuth, requireCapability
          SET value = EXCLUDED.value, updated_at = NOW()`,
       [JSON.stringify(Object.assign({}, cfg, { skills }))]
     );
+    auditLog(req, {
+      action: 'anthropic.skill_delete',
+      targetType: 'anthropic_skill',
+      targetId: pack.anthropic_skill_id,
+      detail: {
+        via: 'agents/skills/:idx/unsync-from-anthropic',
+        pack_name: pack.name || null,
+        agent_rows_detached: detached,
+        delete_error: deleteError
+      }
+    });
+
     res.json({ ok: true, delete_error: deleteError, agent_rows_detached: detached });
   } catch (e) {
     console.error('POST /api/admin/agents/skills/:idx/unsync-from-anthropic error:', e);
@@ -4151,7 +4274,16 @@ setInterval(backgroundRefreshAll, REFRESH_INTERVAL_MS);
 //   the admin asks "is p86job up to date?" — the response includes
 //   the version, last updated_at, tool/skill counts on Anthropic vs
 //   local, and a list of fields that drifted.
-router.get('/managed/:agentKey/anthropic-state', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+//
+//   SCOPED, for the same reason as the DELETE below: the registry holds one
+//   row per (agent_key, organization_id), and `WHERE agent_key = $1` then
+//   rows[0] handed the caller whichever tenant's row the planner returned
+//   first — normally the oldest, i.e. not theirs. An org with no row of its
+//   own did not see "not registered"; it saw another tenant's agent, and this
+//   handler went on to retrieve that agent from Anthropic and report its
+//   state. The empty case already answers `registered: false`, so scoping
+//   costs the caller nothing they were entitled to.
+router.get('/managed/:agentKey/anthropic-state', requireAuth, requireCapability('ROLES_MANAGE'), require('../auth').requireOrg, async (req, res) => {
   try {
     const agentKey = String(req.params.agentKey || '').toLowerCase();
     const liveKeys = ['job', 'assistant', 'scribe'];
@@ -4162,8 +4294,8 @@ router.get('/managed/:agentKey/anthropic-state', requireAuth, requireCapability(
     if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set on this deployment.' });
 
     const reg = await pool.query(
-      `SELECT * FROM managed_agent_registry WHERE agent_key = $1`,
-      [agentKey]
+      `SELECT * FROM managed_agent_registry WHERE agent_key = $1 AND organization_id = $2`,
+      [agentKey, req.organization.id]
     );
     if (!reg.rows.length) {
       return res.json({
@@ -4434,13 +4566,22 @@ router.post('/managed/:agentKey/sync',
 //   the Anthropic-side agent — that has its own delete/archive flow.
 //   Use this when the local registry has a row whose agent_key was
 //   retired (e.g. 'intake' after the merge into 86).
-router.delete('/managed/:agentKey', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+//
+//   SCOPED TO THE CALLER'S ORG. managed_agent_registry started life with
+//   `agent_key TEXT PRIMARY KEY` — one row per agent for the platform — and
+//   was migrated to the composite PRIMARY KEY (agent_key, organization_id),
+//   so it holds one row per tenant per agent today. This DELETE was never
+//   updated and still matched on agent_key alone, which meant an org admin
+//   tidying their own stale 'intake' row deleted EVERY tenant's row for that
+//   key, unregistering their agents. Unlike the skills tables this one does
+//   have an organization_id, so the fix is the WHERE clause, not the gate.
+router.delete('/managed/:agentKey', requireAuth, requireCapability('ROLES_MANAGE'), require('../auth').requireOrg, async (req, res) => {
   try {
     const agentKey = String(req.params.agentKey || '').toLowerCase();
     if (!agentKey) return res.status(400).json({ error: 'agentKey is required' });
     const r = await pool.query(
-      `DELETE FROM managed_agent_registry WHERE agent_key = $1 RETURNING anthropic_agent_id`,
-      [agentKey]
+      `DELETE FROM managed_agent_registry WHERE agent_key = $1 AND organization_id = $2 RETURNING anthropic_agent_id`,
+      [agentKey, req.organization.id]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'No registry row for that agent_key.' });
     res.json({ ok: true, agent_key: agentKey, freed_anthropic_agent_id: r.rows[0].anthropic_agent_id });
@@ -4468,9 +4609,32 @@ router.post('/managed/sync-all',
     const anthropic = getAnthropic();
     if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set on this deployment.' });
 
-    // Default to syncing only the caller's org. Future: a platform-
-    // owner role can pass ?all_orgs=true to sync every tenant.
-    const targetOrgId = (req.body && req.body.organization_id) || req.organization.id;
+    // The "future" guard in the comment that used to sit here was never
+    // written, so `organization_id` in the body was simply believed. An org-A
+    // admin could POST { organization_id: <org-B> } and this route would read
+    // org-B's name, description and identity_body out of the join below and
+    // push them to org-B's Anthropic agents — a cross-tenant read and a
+    // cross-tenant upstream write, under a capability every tenant holds.
+    // That is the caller-supplied-key shape again, with an org id as the key.
+    //
+    // The body param stays, because the platform owner does use it to sync a
+    // named tenant; it just has to be earned now. Anyone else asking for an
+    // org other than their own is refused rather than silently downgraded to
+    // their own, so a script targeting the wrong tenant fails loudly.
+    const requestedOrgId = (req.body && req.body.organization_id != null)
+      ? Number(req.body.organization_id)
+      : null;
+    if (requestedOrgId != null && !Number.isFinite(requestedOrgId)) {
+      return res.status(400).json({ error: 'organization_id must be a number.' });
+    }
+    if (requestedOrgId != null &&
+        requestedOrgId !== req.organization.id &&
+        !hasCapability(req.user, 'SYSTEM_ADMIN')) {
+      return res.status(403).json({
+        error: 'Cross-organization sync denied. You can only sync your own organization.'
+      });
+    }
+    const targetOrgId = requestedOrgId != null ? requestedOrgId : req.organization.id;
     const reg = await pool.query(
       `SELECT r.agent_key, r.organization_id, r.anthropic_agent_id,
               o.slug AS org_slug, o.name AS org_name, o.description AS org_description, o.identity_body AS org_identity_body
@@ -4748,7 +4912,17 @@ router.get('/:agentKey/native-skills',
 //   Body: { skill_id: string, position?: number }
 //   Attaches the skill_id to this agent. Idempotent: re-attaching an
 //   already-attached skill returns ok without error.
-router.post('/:agentKey/native-skills', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+//
+//   SYSTEM_ADMIN. managed_agent_skills is PRIMARY KEY (agent_key, skill_id)
+//   with no organization_id column, so there is exactly one attachment list
+//   per agent for the entire platform — an attach here changes what every
+//   tenant's 86 loads. Not a scoping bug that a WHERE clause could fix: the
+//   table has no tenant dimension to scope by. The gate is the only lever
+//   available without a schema change.
+//
+//   Reading stays ROLES_MANAGE (GET above) — an org admin may see which
+//   skills their agent runs; only changing the platform's list is restricted.
+router.post('/:agentKey/native-skills', requireAuth, requireSystemAdmin, async (req, res) => {
   try {
     const agentKey = String(req.params.agentKey || '').trim();
     const skillId = String(req.body && req.body.skill_id || '').trim();
@@ -4785,7 +4959,9 @@ router.post('/:agentKey/native-skills', requireAuth, requireCapability('ROLES_MA
 //   Detaches the skill from this agent. Does NOT delete the skill
 //   from Anthropic — that's a separate operation
 //   (DELETE /api/admin/anthropic/skills/:id).
-router.delete('/:agentKey/native-skills/:skillId', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+//   SYSTEM_ADMIN, for the same reason as the POST: one attachment list for
+//   the whole platform, no tenant column to scope the DELETE by.
+router.delete('/:agentKey/native-skills/:skillId', requireAuth, requireSystemAdmin, async (req, res) => {
   try {
     const agentKey = String(req.params.agentKey || '').trim();
     const skillId = String(req.params.skillId || '').trim();

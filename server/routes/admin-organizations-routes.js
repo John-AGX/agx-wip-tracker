@@ -24,7 +24,9 @@ const { requireAuth, requireCapability, requireOrg, requireSystemAdmin, signToke
 const { sendForEvent } = require('../email');
 const { auditLog } = require('../audit');
 const { deleteSkillDeep, anthropicDisplayTitle } = require('../services/anthropic-skills');
-const { dropPackByName } = require('../services/skill-pack-lifecycle');
+// NOTE: dropPackByName is deliberately NOT imported any more. It was the only
+// caller, and matching a global row by a caller-chosen name was the defect —
+// see the block above the prune in the skill-pack DELETE handler.
 
 const router = express.Router();
 
@@ -795,21 +797,63 @@ router.delete('/:id/skill-packs/:packId', requireAuth, requireOrg, requireCapabi
     // brand-new Anthropic skill minted for it and re-attached to the
     // agent. That is exactly how five packs archived out of this table
     // came back upstream on 2026-08-16, all reported status:"synced".
+    // NAME IS NOT AN IDENTITY ACROSS THIS BOUNDARY.
+    //
+    // This prune used to run dropPackByName(cfg, <the pack's name>) against
+    // the GLOBAL app_settings('agent_skills') array. assertOrgScope above
+    // correctly refuses to target another org's pack — and then the prune
+    // reached past the org dimension entirely and matched on a string the
+    // caller chose. org_skill_packs is UNIQUE(organization_id, name), which
+    // constrains names WITHIN a tenant and says nothing ACROSS tenants, so
+    // nothing stopped an org from naming a pack after a platform one:
+    //   create org pack "estimating" -> delete it -> the PLATFORM's
+    //   "estimating" entry disappears from the global playbook.
+    // Verified live: agent_skills_entries_removed:1, global packs went from
+    // ["estimating","scheduling"] to ["scheduling"], as an org-A admin.
+    //
+    // The key is now anthropic_skill_id: minted by Anthropic, unique across
+    // the account, and never chosen by the caller. Matching on it makes
+    // "this global entry IS the mirror of the pack you just deleted" provable
+    // instead of assumed, which is the whole reason the prune is allowed to
+    // touch a global row from a tenant-scoped door at all.
+    //
+    // WHEN THERE IS NO ID, NOTHING IS PRUNED. A pack that was never mirrored
+    // has no non-collidable identity, so the safe answer is to leave the
+    // global row alone and SAY SO, rather than guess by name. That is
+    // reported in the response instead of being silently skipped, because
+    // the case it protects — the 2026-08-16 resurrection, where an entry left
+    // in this array got a brand-new upstream skill minted on the next
+    // sync-all — is exactly the case an admin needs to know about.
     let legacyRemoved = 0;
+    let legacyPruneSkipped = null;
     try {
       const legacy = await pool.query(
         `SELECT value FROM app_settings WHERE key = 'agent_skills'`
       );
       if (legacy.rows.length) {
         const cfg = legacy.rows[0].value || {};
-        const dropped = dropPackByName(cfg, r.rows[0].name);
-        if (dropped.removed.length) {
-          await pool.query(
-            `UPDATE app_settings SET value = $1::jsonb, updated_at = NOW()
-              WHERE key = 'agent_skills'`,
-            [JSON.stringify(dropped.value)]
+        if (!pack.anthropic_skill_id) {
+          const skills = Array.isArray(cfg.skills) ? cfg.skills : [];
+          const nameCollision = skills.some(
+            (p) => p && String(p.name || '') === String(r.rows[0].name || '')
           );
-          legacyRemoved = dropped.removed.length;
+          legacyPruneSkipped = nameCollision
+            ? 'A platform playbook entry shares this pack\'s name. It was NOT removed — ' +
+              'this pack was never mirrored, so there is no id proving the two are the same pack.'
+            : 'Pack was never mirrored to Anthropic; nothing to prune from the platform playbook.';
+        } else {
+          const skills = Array.isArray(cfg.skills) ? cfg.skills : [];
+          const kept = skills.filter(
+            (p) => !(p && p.anthropic_skill_id === pack.anthropic_skill_id)
+          );
+          legacyRemoved = skills.length - kept.length;
+          if (legacyRemoved > 0) {
+            await pool.query(
+              `UPDATE app_settings SET value = $1::jsonb, updated_at = NOW()
+                WHERE key = 'agent_skills'`,
+              [JSON.stringify(Object.assign({}, cfg, { skills: kept }))]
+            );
+          }
         }
       }
     } catch (e) {
@@ -822,7 +866,8 @@ router.delete('/:id/skill-packs/:packId', requireAuth, requireOrg, requireCapabi
       name: r.rows[0].name,
       anthropic_delete_error: anthropicDeleteError,
       agent_rows_detached: detached,
-      agent_skills_entries_removed: legacyRemoved
+      agent_skills_entries_removed: legacyRemoved,
+      agent_skills_prune_skipped: legacyPruneSkipped
     });
   } catch (e) {
     const status = e.status || 500;
