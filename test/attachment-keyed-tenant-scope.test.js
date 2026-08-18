@@ -414,56 +414,58 @@ describe('POST /extract-text scans one tenant', () => {
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * 5. In-tenant work still works — as far as the GATE currently allows.
+ * 5. In-tenant work works.
  *
- *    THE DOORS BELOW ARE THE ONES hasCapability() 403s TODAY, and pinning that
- *    here is the point of this block, not an accident.
+ *    THE SIX DOORS BELOW ARE THE ONES hasCapability() USED TO 403.
  *    readCapForEntity/writeCapForEntity return a SPACE-SEPARATED LIST for
- *    job/sub/task — the documented house convention — and hasCapability() does
+ *    job/sub/task — the documented house convention — and hasCapability() did
  *    an exact `caps.has(key)`. No capability is named
- *    "JOBS_EDIT_ANY JOBS_EDIT_OWN", so these answer 403 to EVERYONE, including
- *    the capability-complete admin below. Job/sub/task attachments have been
- *    dead in production for that reason, and the dead gate has been holding the
- *    tenancy hole above shut by accident.
+ *    "JOBS_EDIT_ANY JOBS_EDIT_OWN", so these answered 403 to EVERYONE,
+ *    including the capability-complete admin below, and job/sub/task
+ *    attachments were dead in production. The dead gate was also the only
+ *    thing holding the tenancy hole in section 2 shut.
  *
- *    That is why the predicates land in THIS commit and the gate in the NEXT
- *    one, in that order: repairing the gate first would flip these six doors to
- *    allowed while they were still unscoped. The follow-up commit changes each
- *    403 below to 200.
+ *    Which is why these assertions read 403 in b3257ae and read 200 here: the
+ *    predicates landed FIRST, in their own commit, and the gate was repaired
+ *    only once every door it un-403s had one. Section 2 above is the proof
+ *    that opening them did not open the boundary with them — those tests were
+ *    green before this change and are green after it.
  * ══════════════════════════════════════════════════════════════════════════*/
 describe('nobody is locked out of their own tenant', () => {
-  test('GET /raw/:id — reaches the gate, which is what still refuses it', async () => {
+  test('GET /raw/:id returns my own bytes', async () => {
     const r = await call('GET', '/api/attachments/raw/att_A?variant=original', ORG_A_ADMIN);
-    expect(r.status).toBe(403);          // gate, not boundary — 404 would be the boundary
-    expect(r.text).not.toContain('BYTES:');
+    expect(r.status).toBe(200);
+    expect(r.text).toContain('BYTES:');
   });
 
-  test('DELETE /:id — the boundary passes; the gate refuses', async () => {
+  test('DELETE /:id removes my own row and its blob', async () => {
     const r = await call('DELETE', '/api/attachments/att_A', ORG_A_ADMIN);
-    expect(r.status).toBe(403);
-    expect(storageCalls).toEqual([]);
+    expect(r.status).toBe(200);
+    expect(tables.attachments.some((a) => a.id === 'att_A')).toBe(false);
+    expect(storageCalls.some((c) => c[0] === 'delete')).toBe(true);
   });
 
-  test('PUT /:id — the boundary passes; the gate refuses', async () => {
+  test('PUT /:id edits my own caption', async () => {
     const r = await call('PUT', '/api/attachments/att_A', ORG_A_ADMIN, { caption: 'fine' });
-    expect(r.status).toBe(403);
+    expect(r.status).toBe(200);
   });
 
-  test('POST /bulk-tag — the boundary passes; the gate refuses', async () => {
+  test('POST /bulk-tag tags my own rows', async () => {
     const r = await call('POST', '/api/attachments/bulk-tag', ORG_A_ADMIN, {
       ids: ['att_A'], add: ['ok']
     });
-    expect(r.status).toBe(403);
+    expect(r.status).toBe(200);
+    expect(r.body.changed).toBe(1);
   });
 
-  test('GET /tags/suggest — the boundary passes; the gate refuses', async () => {
+  test('GET /tags/suggest answers for my own entity', async () => {
     const r = await call('GET', '/api/attachments/tags/suggest?entity_type=job&entity_id=jobA', ORG_A_ADMIN);
-    expect(r.status).toBe(403);
+    expect(r.status).toBe(200);
   });
 
   // These two never touched the list-cap path — they were gated by
   // requireDynamicCapability, which has hand-rolled the split correctly all
-  // along. They work now and must keep working.
+  // along. They worked before and must keep working.
   test('GET /:entityType/:entityId lists my own entity', async () => {
     const r = await call('GET', '/api/attachments/job/jobA', ORG_A_ADMIN);
     expect(r.status).toBe(200);
@@ -477,8 +479,8 @@ describe('nobody is locked out of their own tenant', () => {
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * 6. Route order. Three routes were unreachable for EVERYONE, in-tenant
- *    included. Reachable now means they get as far as the gate — the 403s
- *    below are that same gate, and they become 200s in the follow-up commit.
+ *    included — two of them behind BOTH the shadow and the broken gate, which
+ *    is why "My Files move is broken" never looked like a security finding.
  * ══════════════════════════════════════════════════════════════════════════*/
 describe('the shadowed routes are reachable at all', () => {
   test('POST /:id/move is no longer swallowed as entityType="att_A"', async () => {
@@ -486,7 +488,7 @@ describe('the shadowed routes are reachable at all', () => {
       entity_type: 'job', entity_id: 'jobA'
     });
     expect(r.body).not.toEqual({ error: 'Bad entity type' });
-    expect(r.status).toBe(403);
+    expect(r.status).toBe(200);
   });
 
   test('POST /:id/copy is no longer swallowed either', async () => {
@@ -494,7 +496,7 @@ describe('the shadowed routes are reachable at all', () => {
       entity_type: 'job', entity_id: 'jobA'
     });
     expect(r.body).not.toEqual({ error: 'Bad entity type' });
-    expect(r.status).toBe(403);
+    expect(r.status).toBe(200);
   });
 
   test('GET /tags/suggest is no longer swallowed as entityType="tags"', async () => {

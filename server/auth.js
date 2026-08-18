@@ -91,10 +91,53 @@ async function refreshRoleCache() {
   _roleCache = next;
 }
 
+// hasCapability — does this user hold this capability?
+//
+// A space-separated list means ANY of them. Never AND, and never the whole
+// string as one key. Same reading requireCapability was given in cc60e4c, for
+// the same reason: two files document the list form as the house convention
+// ("Returning a space-separated list is the convention used in report-routes /
+// qb-cost-routes", attachment-routes.js), and attachment-routes hand-rolled
+// requireDynamicCapability to implement it because THIS function did not.
+//
+// cc60e4c taught requireCapability to split and stopped there. This function
+// is the other half, and leaving it out meant every call site passing the
+// documented list form did `caps.has('JOBS_EDIT_ANY JOBS_EDIT_OWN')` — a key no
+// role can ever hold — and answered 403 to EVERYONE, a capability-complete
+// system admin included.
+//
+// WHAT THAT KILLED, AND WHAT IT WAS ACCIDENTALLY HOLDING SHUT.
+// readCapForEntity / writeCapForEntity return the list form for job, sub and
+// task. Six doors in attachment-routes.js resolved through them —
+// GET /raw/:id, GET /tags/suggest, POST /bulk-tag, DELETE /:id, PUT /:id, and
+// the move/copy pair via canRead/canWriteAttachment/canWriteEntity — so job,
+// sub and task attachments have been dead in production, and the dead gate was
+// the only thing keeping those doors from being reachable across tenants.
+// Every one of them was given a tenancy predicate in b3257ae, BEFORE this
+// change, precisely so repairing the gate cannot open anything.
+//
+// Five more sites read the same way — email-folders-routes.js:37,
+// email-labels-routes.js:36, email-snippets-routes.js:37,
+// folder-templates-routes.js:47, org-tags-routes.js:41, all
+// 'USERS_MANAGE ROLES_MANAGE SYSTEM_ADMIN'. Each sits behind a
+// `role === 'admin' || 'system_admin'` short-circuit, so the impact was
+// confined to CUSTOM roles holding USERS_MANAGE without a built-in role name —
+// an adminish short-circuit masking a broken lookup, which is the thing to
+// check for. All five key their statements on the CALLER's org id, never on a
+// request value, so they are scoped by construction and the split cannot widen
+// them past their own tenant.
+//
+// Capability keys are underscore-cased by construction (see CAPABILITY_KEYS),
+// so no existing key can contain a space and the split cannot loosen one.
+// An empty or absent gate is a CLOSED gate: a missing capability name must
+// never read as "no capability required".
 function hasCapability(user, capKey) {
   if (!user || !user.role) return false;
   const caps = _roleCache.get(user.role);
-  return !!(caps && caps.has(capKey));
+  if (!caps) return false;
+  const keys = String(capKey == null ? '' : capKey).split(/\s+/).filter(Boolean);
+  if (!keys.length) return false;
+  return keys.some((k) => caps.has(k));
 }
 
 // requireCapability — gate a route on the caller holding a capability.
