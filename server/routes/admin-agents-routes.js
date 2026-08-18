@@ -19,7 +19,7 @@
 
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireCapability } = require('../auth');
+const { requireAuth, requireCapability, requireSystemAdmin } = require('../auth');
 
 const router = express.Router();
 
@@ -787,11 +787,25 @@ router.get('/config', requireAuth, requireCapability('ROLES_MANAGE'), async (req
 // agent_skills_versions before overwriting. These endpoints let the
 // admin see the snapshot list, view a specific version's full body,
 // and restore (= re-save) a prior version.
+//
+// ── PLATFORM-LEVEL, NOT TENANT-LEVEL. Gate moved ROLES_MANAGE -> SYSTEM_ADMIN.
+//
+// agent_skills_versions has no organization_id, and it must not get one: it
+// snapshots app_settings.agent_skills, and app_settings is
+// `key TEXT PRIMARY KEY` with no tenant at all. A CHILD CANNOT CARRY A TENANT
+// ITS PARENT DOES NOT HAVE — adding a column here would invent one. So there
+// is no predicate to write and nothing to stamp; the only available control is
+// the capability, and ROLES_MANAGE is the wrong one because every ORG ADMIN
+// holds it. That let any tenant's admin read the history of, and RESTORE, a
+// platform-global setting shared by every tenant.
+//
+// See services/org-table-classification.js (PLATFORM) for the full list and
+// the reason recorded per table.
 
 // GET /api/admin/agents/skills/versions
 //   Returns most recent N versions (default 50). Each row carries
 //   saved_at + saved_by name + comment + skill count summary.
-router.get('/skills/versions', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.get('/skills/versions', requireAuth, requireSystemAdmin, async (req, res) => {
   try {
     const limit = Math.max(1, Math.min(200, parseInt(req.query.limit, 10) || 50));
     const r = await pool.query(
@@ -821,7 +835,7 @@ router.get('/skills/versions', requireAuth, requireCapability('ROLES_MANAGE'), a
 
 // GET /api/admin/agents/skills/versions/:id
 //   Returns the full snapshot for one version.
-router.get('/skills/versions/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.get('/skills/versions/:id', requireAuth, requireSystemAdmin, async (req, res) => {
   try {
     const r = await pool.query(
       `SELECT v.id, v.saved_at, v.comment, v.value,
@@ -843,7 +857,7 @@ router.get('/skills/versions/:id', requireAuth, requireCapability('ROLES_MANAGE'
 //   Re-applies the snapshot's value as the current agent_skills config.
 //   The current value gets snapshotted first (via the PUT path's
 //   snapshot side-effect — restore round-trips through PUT).
-router.post('/skills/versions/:id/restore', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.post('/skills/versions/:id/restore', requireAuth, requireSystemAdmin, async (req, res) => {
   try {
     const r = await pool.query(
       `SELECT value FROM agent_skills_versions WHERE id = $1`,
@@ -1590,7 +1604,16 @@ router.get('/preview-prompt', requireAuth, requireCapability('ROLES_MANAGE'), as
   }
 });
 
-router.get('/evals', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+// ── ai_evals / ai_eval_runs: PLATFORM-LEVEL. Gate moved ROLES_MANAGE ->
+// SYSTEM_ADMIN. Neither table carries organization_id, and every statement
+// below is a bare `WHERE id = $1` — so an org admin in any tenant could read,
+// edit, DELETE and run another tenant's evals, and there was no predicate to
+// tighten and no column to stamp that would have changed it. The defect is the
+// CAPABILITY, not the missing column: ROLES_MANAGE is held by every org admin.
+// Whether a tenant should be able to author its own evals is a product
+// question; until it is answered, these are the platform owner's.
+// See services/org-table-classification.js (PLATFORM).
+router.get('/evals', requireAuth, requireSystemAdmin, async (req, res) => {
   try {
     const r = await pool.query(
       `SELECT e.id, e.name, e.kind, e.description, e.created_at, e.updated_at,
@@ -1609,7 +1632,7 @@ router.get('/evals', requireAuth, requireCapability('ROLES_MANAGE'), async (req,
   }
 });
 
-router.get('/evals/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.get('/evals/:id', requireAuth, requireSystemAdmin, async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM ai_evals WHERE id = $1', [req.params.id]);
     if (!r.rows.length) return res.status(404).json({ error: 'Eval not found' });
@@ -1626,7 +1649,7 @@ router.get('/evals/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (
   }
 });
 
-router.post('/evals', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.post('/evals', requireAuth, requireSystemAdmin, async (req, res) => {
   try {
     const body = req.body || {};
     if (!body.name || typeof body.name !== 'string') return res.status(400).json({ error: 'name is required' });
@@ -1645,7 +1668,7 @@ router.post('/evals', requireAuth, requireCapability('ROLES_MANAGE'), async (req
   }
 });
 
-router.put('/evals/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.put('/evals/:id', requireAuth, requireSystemAdmin, async (req, res) => {
   try {
     const body = req.body || {};
     const sets = [];
@@ -1667,7 +1690,7 @@ router.put('/evals/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (
   }
 });
 
-router.delete('/evals/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.delete('/evals/:id', requireAuth, requireSystemAdmin, async (req, res) => {
   try {
     await pool.query('DELETE FROM ai_evals WHERE id = $1', [req.params.id]);
     res.json({ ok: true });
@@ -1677,7 +1700,7 @@ router.delete('/evals/:id', requireAuth, requireCapability('ROLES_MANAGE'), asyn
   }
 });
 
-router.post('/evals/:id/run', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.post('/evals/:id/run', requireAuth, requireSystemAdmin, async (req, res) => {
   const t0 = Date.now();
   let runId = 'run_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
   try {
@@ -1815,8 +1838,48 @@ router.post('/evals/:id/run', requireAuth, requireCapability('ROLES_MANAGE'), as
 // Stored in ai_replays. NEVER writes to ai_messages.
 // ══════════════════════════════════════════════════════════════════════
 
-router.get('/conversations/:key/replays', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+// TENANT ISOLATION — audit finding C1, applied to the two doors it missed.
+//
+// `GET /conversations` and `GET /conversations/:key` each carry requireOrg
+// plus an explicit `SELECT 1 FROM users WHERE id = $1 AND organization_id = $2`
+// check, with a comment naming C1 and saying the key is forgeable. Their two
+// siblings below carried requireCapability('ROLES_MANAGE') and NOTHING ELSE.
+//
+// ROLES_MANAGE is held by every ORG ADMIN, not just the platform owner. The
+// conversation key is `entity_type|entity_id|user_id`, users.id is SERIAL, and
+// the replay handler splits it off the URL and runs a bare
+// `SELECT role, content, model FROM ai_messages WHERE entity_type=$1 AND
+// estimate_id=$2 AND user_id=$3`. So any org admin could read any tenant's
+// full 86 conversation content, verbatim, and re-run the model on it — billing
+// tokens against that transcript and writing an ai_replays row keyed to it.
+//
+// This is the one class the rest of the endgame is structurally blind to:
+// there is no predicate here to tighten and no column to stamp. Stamping every
+// row in the database and dropping every tolerance arm would not have moved
+// it. It costs one middleware and one SELECT, and it is gated on no count.
+async function assertConversationOwnerInOrg(req, res, userId) {
+  const orgCheck = await pool.query(
+    'SELECT 1 FROM users WHERE id = $1 AND organization_id = $2',
+    [userId, req.organization.id]);
+  if (!orgCheck.rows.length) {
+    // 404, not 403 — matching the sibling at /conversations/:key, so the
+    // response does not confirm that the conversation exists.
+    res.status(404).json({ error: 'Conversation not found.' });
+    return false;
+  }
+  return true;
+}
+
+router.get('/conversations/:key/replays', requireAuth, require('../auth').requireOrg,
+  requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
+    const parts = String(req.params.key || '').split('|');
+    if (parts.length !== 3) return res.status(400).json({ error: 'Bad key — expected entity_type|entity_id|user_id' });
+    const replaysUserId = Number(parts[2]);
+    if (!Number.isFinite(replaysUserId)) {
+      return res.status(400).json({ error: 'Bad key — non-numeric user_id' });
+    }
+    if (!(await assertConversationOwnerInOrg(req, res, replaysUserId))) return;
     const r = await pool.query(
       `SELECT id, conversation_key, from_index, model_override, effort_override,
               system_prefix, run_at, run_by, input_tokens, output_tokens,
@@ -1834,7 +1897,8 @@ router.get('/conversations/:key/replays', requireAuth, requireCapability('ROLES_
   }
 });
 
-router.post('/conversations/:key/replay', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.post('/conversations/:key/replay', requireAuth, require('../auth').requireOrg,
+  requireCapability('ROLES_MANAGE'), async (req, res) => {
   const t0 = Date.now();
   const replayId = 'rep_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
   const key = req.params.key || '';
@@ -1846,6 +1910,9 @@ router.post('/conversations/:key/replay', requireAuth, requireCapability('ROLES_
     if (!entityType || !entityId || !Number.isFinite(userId)) {
       return res.status(400).json({ error: 'Bad conversation key components' });
     }
+    // The same C1 guard the two /conversations doors carry. Without it this
+    // handler read — and re-ran the model over — any tenant's transcript.
+    if (!(await assertConversationOwnerInOrg(req, res, userId))) return;
 
     const body = req.body || {};
     const modelOverride  = (body.model_override || '').trim() || null;

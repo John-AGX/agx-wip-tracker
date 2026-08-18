@@ -191,9 +191,28 @@ router.get('/',
     try {
       const params = [];
       const where = [];
-      // Wave A (A5): scope to the caller's org via job -> owner -> org. LEFT
-      // JOINs + OR-IS-NULL (org tolerance) + "s.job_id IS NULL" (standalone
-      // entries) keep this a no-op for AGX today.
+      // `OR s.job_id IS NULL` was an UNCONDITIONAL OPEN ARM, and it is the one
+      // shape that draining organization_id to zero can never close: it names
+      // neither the caller nor the caller's org, so EVERY standalone schedule
+      // entry in EVERY tenant passed this filter for everybody, stamped or
+      // not. org-access.js:41-63 already fixed exactly this on the PUT/DELETE
+      // gate — with the reasoning written out — and the LIST READ was never
+      // converted. This is that same rewrite, applied to the read.
+      //
+      // The two arms are now explicitly DISJOINT on s.job_id, which also stops
+      // the LEFT JOIN from re-creating the hole (a job-less entry makes
+      // j.organization_id NULL, and a tolerance arm would then pass it
+      // unconditionally all over again). Job-linked entries scope through the
+      // JOB'S COLUMN — the canonical pointer, per services/job-org-scope.js —
+      // rather than through the job owner's org, which is also the two-pointer
+      // convergence. Standalone entries fall back to their own stamp, then to
+      // their creator's org.
+      //
+      // WHAT THIS HIDES TODAY: nothing. The only rows it removes are standalone
+      // entries stamped to ANOTHER tenant, or created by another tenant's user
+      // — and AGX is the only organization, so that set is empty. A NULL-org
+      // standalone entry created by a NULL-org user still passes both tolerance
+      // arms.
       params.push(req.user.organization_id);
       const orgParam = '$' + params.length;
       if (req.query.from) {
@@ -216,15 +235,21 @@ router.get('/',
         params.push(String(req.query.jobId));
         where.push('s.job_id = $' + params.length);
       }
-      where.push('(u.organization_id = ' + orgParam +
-                 ' OR u.organization_id IS NULL OR s.job_id IS NULL)');
+      // OR-IS-NULL (org tolerance) on each arm; the arms themselves are disjoint.
+      where.push(
+        '((s.job_id IS NOT NULL AND (j.organization_id = ' + orgParam +
+        ' OR j.organization_id IS NULL))' +
+        ' OR (s.job_id IS NULL AND (s.organization_id = ' + orgParam +
+        ' OR s.organization_id IS NULL' +
+        ' OR uc.organization_id = ' + orgParam +
+        ' OR uc.organization_id IS NULL)))');
       // Cast start_date through to_char to dodge pg's timezone-aware
       // Date parsing for the DATE column (see rowToJson comment).
       const sql =
         "SELECT s.*, to_char(s.start_date, 'YYYY-MM-DD') AS start_date_iso " +
         'FROM schedule_entries s ' +
         'LEFT JOIN jobs j ON j.id = s.job_id ' +
-        'LEFT JOIN users u ON u.id = j.owner_id ' +
+        'LEFT JOIN users uc ON uc.id = s.created_by ' +
         'WHERE ' + where.join(' AND ') + ' ' +
         'ORDER BY s.start_date ASC, s.created_at ASC';
       const { rows } = await pool.query(sql, params);
