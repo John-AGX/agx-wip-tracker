@@ -2459,19 +2459,21 @@ async function runStream({ anthropic, res, system, messages, persistAssistantTex
 
 // Persist a final assistant text response. Used as the callback on the
 // run helper so persistence stays inside this module.
-async function saveAssistantMessage({ estimateId, userId, text, usage, packsLoaded }) {
+// NOTE: currently unreferenced. Stamped anyway — an un-stamped INSERT left
+// lying in the tree is a trap for whoever revives it.
+async function saveAssistantMessage({ estimateId, userId, orgId, text, usage, packsLoaded }) {
   const id = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
   const packsJson = (Array.isArray(packsLoaded) && packsLoaded.length) ? JSON.stringify(packsLoaded) : null;
   await pool.query(
     `INSERT INTO ai_messages (id, estimate_id, user_id, role, content, model,
                               input_tokens, output_tokens,
                               cache_creation_input_tokens, cache_read_input_tokens,
-                              packs_loaded)
-     VALUES ($1, $2, $3, 'assistant', $4, $5, $6, $7, $8, $9, $10::jsonb)`,
+                              packs_loaded, organization_id)
+     VALUES ($1, $2, $3, 'assistant', $4, $5, $6, $7, $8, $9, $10::jsonb, $11)`,
     [id, estimateId, userId, text, MODEL,
      usage.input_tokens, usage.output_tokens,
      usage.cache_creation_input_tokens || null, usage.cache_read_input_tokens || null,
-     packsJson]
+     packsJson, orgId == null ? null : orgId]
   );
 }
 
@@ -5898,17 +5900,20 @@ const FLAG_AGENT_MODE_86 = (process.env.AGENT_MODE_86 || '').toLowerCase() === '
 // Persist the assistant text response for an 86 turn into ai_messages
 // (entity_type='job'). Mirrors the v1 inline insert so the messages
 // table stays canonical regardless of which path produced the row.
-async function saveJobAssistantMessage({ jobId, userId, text, usage }) {
+// NOTE: currently unreferenced. Stamped anyway, same reasoning as above.
+async function saveJobAssistantMessage({ jobId, userId, orgId, text, usage }) {
   if (!text) return;
   const aid = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
   await pool.query(
     `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
                               input_tokens, output_tokens,
-                              cache_creation_input_tokens, cache_read_input_tokens)
-     VALUES ($1, 'job', $2, $3, 'assistant', $4, $5, $6, $7, $8, $9)`,
+                              cache_creation_input_tokens, cache_read_input_tokens,
+                              organization_id)
+     VALUES ($1, 'job', $2, $3, 'assistant', $4, $5, $6, $7, $8, $9, $10)`,
     [aid, jobId, userId, text, MODEL,
      usage.input_tokens, usage.output_tokens,
-     usage.cache_creation_input_tokens || null, usage.cache_read_input_tokens || null]
+     usage.cache_creation_input_tokens || null, usage.cache_read_input_tokens || null,
+     orgId == null ? null : orgId]
   );
 }
 
@@ -6894,7 +6899,15 @@ async function execClientDirectoryTool(name, input, ctx) {
       // Org scope — keep the directory readable (assignment picker) but
       // never surface another tenant's staff. Tolerant OR-IS-NULL so
       // legacy un-stamped users stay visible to AGX.
-      if (_cdOrgId) { where.push('(organization_id = $' + (n++) + ' OR organization_id IS NULL)'); args.push(_cdOrgId); }
+      // UNCONDITIONAL. This used to be `if (_cdOrgId) { … }`, and the FALSE
+      // branch of that `if` emitted no predicate at all — the full cross-org
+      // staff roster, from a tool whose whole purpose is an assignment picker.
+      // requireTurnOrg now refuses the turn before any executor is reached, so
+      // _cdOrgId cannot be null here and the branch was dead code whose only
+      // reachable behaviour was the leak. A dead defensive branch on a
+      // boundary is how this class regrows.
+      // OR-IS-NULL (org tolerance) — legacy un-stamped users stay visible.
+      where.push('(organization_id = $' + (n++) + ' OR organization_id IS NULL)'); args.push(_cdOrgId);
       const sql =
         'SELECT id, name, email, role, active, last_seen_at FROM users ' +
         (where.length ? 'WHERE ' + where.join(' AND ') + ' ' : '') +
@@ -7000,11 +7013,16 @@ async function execClientDirectoryToolWithCtx(name, input, ctx) {
     originalUrl = await storage.put(originalKey, buf, picked.mime || 'image/jpeg');
   }
   await pool.query(
+    // organization_id is now named. The row's tenant was already knowable —
+    // _wcRequireOrg() resolved it four statements up to scope the client
+    // lookup — and it was simply not written, so every business card the agent
+    // attached landed un-stamped.
     `INSERT INTO attachments
        (id, entity_type, entity_id, filename, mime_type, size_bytes,
         width, height, thumb_url, web_url, original_url,
-        thumb_key, web_key, original_key, caption, position, uploaded_by)
-     VALUES ($1, 'client', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, $15)`,
+        thumb_key, web_key, original_key, caption, position, uploaded_by,
+        organization_id)
+     VALUES ($1, 'client', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, $15, $16)`,
     [id, input.client_id,
      (input.caption || 'Business card').slice(0, 80) + '.jpg',
      picked.mime || 'image/jpeg', buf.length,
@@ -7012,7 +7030,7 @@ async function execClientDirectoryToolWithCtx(name, input, ctx) {
      thumbUrl, webUrl, originalUrl,
      thumbKey, webKey, originalKey,
      input.caption || null,
-     userId]
+     userId, _wcRequireOrg()]
   );
   return `Attached business card to "${exists.rows[0].name}".`;
 }
@@ -9325,13 +9343,23 @@ async function execStaffTool(name, input, ctx) {
       const subgroup = (input && input.subgroup || '').trim();
       const category = (input && input.category || '').trim();
       const limit = Math.max(1, Math.min(100, Number(input && input.limit) || 20));
-      // Per-org catalog (John's call). Tolerant OR-IS-NULL during rollout.
-      let _matOrgId = null;
-      try { _matOrgId = await resolveOrgIdFromCtx(ctx); } catch (_) {}
+      // Per-org catalog (John's call). The NULL arm here is SHARED-CATALOG
+      // SEMANTICS, not tenancy tolerance: a NULL-org material IS the platform
+      // catalog row every tenant prices from (services/materials.js orders
+      // `organization_id NULLS LAST` to prefer the org's own row and fall back
+      // to the global one). Removing it would not tighten a boundary, it would
+      // make 86 answer "no material matches" and price from nothing. It is
+      // marked so a sweep for tenancy arms cannot mistake it:
+      // ORG-SHARED-CATALOG (not tolerance) — see org-table-classification.js.
+      //
+      // The scoping half is now UNCONDITIONAL. It used to be
+      // `try { … } catch (_) {}` then `if (_matOrgId)`, so a lookup failure
+      // silently produced a query with no org predicate at all.
+      const _matOrgId = ctx.orgId;
       const where = ['is_hidden = false'];
       const params = [];
       let p = 1;
-      if (_matOrgId) { where.push('(organization_id = $' + p++ + ' OR organization_id IS NULL)'); params.push(_matOrgId); }
+      where.push('(organization_id = $' + p++ + ' OR organization_id IS NULL)'); params.push(_matOrgId);
       if (subgroup) { where.push('agx_subgroup = $' + p++); params.push(subgroup); }
       if (category) { where.push('category = $' + p++); params.push(category); }
       if (q) {
@@ -9377,12 +9405,15 @@ async function execStaffTool(name, input, ctx) {
     case 'read_purchase_history': {
       const days = Math.max(1, Math.min(730, Number(input && input.days) || 365));
       const limit = Math.max(1, Math.min(200, Number(input && input.limit) || 30));
-      let _mphOrgId = null;
-      try { _mphOrgId = await resolveOrgIdFromCtx(ctx); } catch (_) {}
+      // Unconditional (was `if (_mphOrgId)` behind a silent catch — a lookup
+      // failure emitted an unscoped purchase history across every tenant).
+      // ORG-SHARED-CATALOG (not tolerance): material_purchases hangs off the
+      // shared materials catalog, so its NULL arm carries the same global rows.
+      const _mphOrgId = ctx.orgId;
       const where = [`purchase_date >= NOW() - INTERVAL '${days} days'`];
       const params = [];
       let p = 1;
-      if (_mphOrgId) { where.push('(mp.organization_id = $' + p++ + ' OR mp.organization_id IS NULL)'); params.push(_mphOrgId); }
+      where.push('(mp.organization_id = $' + p++ + ' OR mp.organization_id IS NULL)'); params.push(_mphOrgId);
       if (input && input.material_id) {
         params.push(Number(input.material_id));
         where.push('mp.material_id = $' + p++);
@@ -10022,9 +10053,13 @@ async function execStaffTool(name, input, ctx) {
       if (input && input.status) { where.push('l.status = $' + p++); params.push(input.status); }
       // Org scope — tolerant OR-IS-NULL (no-op for single-tenant AGX,
       // closes the cross-org lead leak before org #2 onboards).
-      let leadOrgId = null;
-      try { leadOrgId = await resolveOrgIdFromCtx(ctx); } catch (_) {}
-      if (leadOrgId) { where.push('(l.organization_id = $' + p++ + ' OR l.organization_id IS NULL)'); params.push(leadOrgId); }
+      // Unconditional. This was the worst-shaped of the nine: a silent catch
+      // feeding an `if (leadOrgId)`, so ONE failed lookup returned every
+      // tenant's entire lead pipeline — names, addresses and revenue ranges —
+      // to the model, with no error anywhere.
+      // OR-IS-NULL (org tolerance) — legacy un-stamped leads stay visible.
+      const leadOrgId = ctx.orgId;
+      where.push('(l.organization_id = $' + p++ + ' OR l.organization_id IS NULL)'); params.push(leadOrgId);
       params.push(limit);
       const r = await pool.query(
         `SELECT l.id, l.title, l.status, l.market,
@@ -11241,8 +11276,33 @@ async function execFieldToolApproval(name, input, userId, orgId) {
 // `filenamePrefix` becomes `<prefix>-<idx>.jpg` in the attachments
 // table — useful for showing where the file came from in lists
 // ("intake-photo-1", "chat-photo-3", etc.).
-async function attachBase64PhotosToEntity(entityType, entityId, photos, userId, filenamePrefix) {
+// `orgId` is optional because it does not need to be supplied: an attachment's
+// tenant is its PARENT ENTITY's tenant (services/attachment-org-scope.js — the
+// parent is the anchor, the row's own column is only rung 2 of the ladder), and
+// entity_type/entity_id are NOT NULL on every row. So the org is DERIVED from
+// the parent here rather than guessed or passed down four call sites. That is
+// evidence, not inference: it is the same anchor the read path already uses,
+// and it means these rows stop landing un-stamped without any caller changing.
+async function attachBase64PhotosToEntity(entityType, entityId, photos, userId, filenamePrefix, orgId) {
   if (!photos || !photos.length) return 0;
+  if (orgId == null) {
+    try {
+      const { ENTITY_TABLES } = require('../services/attachment-org-scope');
+      const parentTable = ENTITY_TABLES[entityType];
+      if (parentTable) {
+        const pr = await pool.query(
+          'SELECT organization_id FROM ' + parentTable + ' WHERE id = $1 LIMIT 1', [entityId]);
+        if (pr.rows.length) orgId = pr.rows[0].organization_id;
+      }
+    } catch (e) {
+      // Deliberately NOT fatal, and deliberately NOT a guess: an unresolved
+      // parent leaves organization_id NULL, which attachmentInOrg still
+      // resolves through the parent (rung 1) or the uploader (rung 3). The row
+      // is counted by GET /api/admin/console/org-boundary rather than stamped
+      // with a tenant nothing evidenced.
+      console.warn('[attach] could not derive org from parent ' + entityType + ' ' + entityId + ':', e && e.message);
+    }
+  }
   // Append at the end of the existing attachment order so newly
   // uploaded photos don't shuffle positions.
   const posR = await pool.query(
@@ -11288,15 +11348,16 @@ async function attachBase64PhotosToEntity(entityType, entityId, photos, userId, 
         `INSERT INTO attachments
            (id, entity_type, entity_id, filename, mime_type, size_bytes,
             width, height, thumb_url, web_url, original_url,
-            thumb_key, web_key, original_key, position, uploaded_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+            thumb_key, web_key, original_key, position, uploaded_by,
+            organization_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
         [id, entityType, entityId,
          (filenamePrefix || 'photo') + '-' + (i + 1) + '.jpg',
          mime, buf.length,
          width, height,
          thumbUrl, webUrl, originalUrl,
          thumbKey, webKey, originalKey,
-         startPos + i, userId]
+         startPos + i, userId, orgId == null ? null : orgId]
       );
       saved++;
     } catch (e) {
@@ -12215,7 +12276,14 @@ function aiToolCapabilityDenial(name, input, user, verb) {
          'their role doesn\'t have access, and suggest they contact an admin if they need it.';
 }
 
-function make86OnCustomToolUse(userId, parentSession, turnContextText, gateUser) {
+// `authoritativeOrgId` — the requireOrgId equivalent for a path that has no
+// request. See requireTurnOrg below. Callers that already KNOW the tenant from
+// a server-side row (agent_jobs.organization_id is NOT NULL and was stamped at
+// enqueue time by a live request that had already passed requireOrgId) pass it
+// here rather than letting the turn re-derive it from the user — the
+// re-derivation can fail, and after an adoption it can produce a DIFFERENT
+// answer than the one the user actually asked under.
+function make86OnCustomToolUse(userId, parentSession, turnContextText, gateUser, authoritativeOrgId) {
   // Per-request dedupe cache. Scoped to ONE /86/chat (or /chat/continue)
   // call — closes over this Map. If the model calls e.g.
   // read_materials({q:"PT 2x4"}) twice in the same turn (which it
@@ -12252,6 +12320,14 @@ function make86OnCustomToolUse(userId, parentSession, turnContextText, gateUser)
   // capability gate and org-scoping below have what they need.
   let _capUser = gateUser || null;
   let _capUserLoaded = !!gateUser;
+  // "I could not look the user up" is NOT "this user has no org", and only one
+  // of those is the caller's fault. The bare `catch (_) { _capUser = null; }`
+  // that used to be here collapsed both into the same value — so on the agent
+  // path a pool blip became "no tenant", and "no tenant" then flowed into nine
+  // conditional org arms that each emitted NO PREDICATE AT ALL. That is the
+  // exact collapse auth.js:resolveOrgId was written to prevent, on the one path
+  // that has no request to hang requireOrgId off.
+  let _capUserError = null;
   async function resolveCapUser() {
     if (_capUserLoaded) return _capUser;
     _capUserLoaded = true;
@@ -12259,9 +12335,69 @@ function make86OnCustomToolUse(userId, parentSession, turnContextText, gateUser)
       try {
         const r = await pool.query('SELECT id, role, organization_id FROM users WHERE id = $1', [userId]);
         _capUser = r.rows[0] || null;
-      } catch (_) { _capUser = null; }
+      } catch (e) { _capUserError = e; _capUser = null; }
     }
     return _capUser;
+  }
+
+  // ── requireTurnOrg — the requireOrgId equivalent for the agent path ──────
+  //
+  // Every HTTP write door can hang requireOrgId off a request. The agent path
+  // has no request, so it resolved the tenant per-tool, inline, with
+  // `try { orgId = await resolveOrgIdFromCtx(ctx) } catch (_) {}` — and then
+  // `if (orgId) { where.push(arm) }`. The false branch of that `if` is an
+  // UNSCOPED QUERY. Not a degraded read: the leak itself.
+  //
+  // THREE outcomes, not two. The two-outcome version is what made a lookup
+  // failure indistinguishable from a genuinely org-less user:
+  //
+  //   resolved            -> ctx.orgId is non-null for the rest of the turn,
+  //                          so every downstream site may name it with no null
+  //                          check and every arm becomes unconditional.
+  //   ORG_UNRESOLVED      -> the user genuinely has no tenant. REFUSE, reads
+  //                          included. A read with no org is the leak.
+  //   ORG_LOOKUP_FAILED   -> we could not tell. REFUSE, and say it is
+  //                          retryable, so a pool blip never runs org-less.
+  //
+  // Resolution order, strictly: the authoritative row a caller already holds,
+  // then the request user threaded in by the chat doors (zero DB cost), then
+  // one lookup keyed on the VERIFIED user id. Nothing is ever read from tool
+  // input — an org taken from the model's arguments would replace a missing
+  // boundary with a forgeable one.
+  let _turnOrg;                     // undefined = not yet resolved
+  async function requireTurnOrg() {
+    if (_turnOrg !== undefined) return _turnOrg;
+    if (authoritativeOrgId != null) return (_turnOrg = { ok: true, orgId: authoritativeOrgId });
+    const u = await resolveCapUser();
+    if (_capUserError) {
+      return (_turnOrg = { ok: false, code: 'ORG_LOOKUP_FAILED', detail: _capUserError.message });
+    }
+    const org = u && u.organization_id;
+    if (org == null) return (_turnOrg = { ok: false, code: 'ORG_UNRESOLVED' });
+    return (_turnOrg = { ok: true, orgId: org });
+  }
+
+  // The refusal the model relays to the user, plus the one log line that tells
+  // an operator whether this gate ever fires. A silently refused agent write
+  // looks to a user exactly like an agent that chose not to write — this repo
+  // already has a recorded incident of 86 narrating queued writes that produced
+  // zero payloads. A refusal nobody can see is worse than a NULL row, because
+  // at least the NULL row is countable.
+  function turnOrgRefusal(verdict, toolName) {
+    console.warn('[org] agent tool refused — ' + verdict.code +
+      ' user=' + (userId == null ? 'none' : userId) + ' tool=' + toolName +
+      (verdict.detail ? ' detail=' + verdict.detail : ''));
+    if (verdict.code === 'ORG_LOOKUP_FAILED') {
+      return { tier: 'auto', error:
+        'Could not determine which organization this account belongs to right now, so "' + toolName +
+        '" was refused rather than run without a tenant scope. NOTHING was read or written. This is ' +
+        'temporary — tell the user to try again in a moment.' };
+    }
+    return { tier: 'auto', error:
+      'This account is not attached to an organization, so "' + toolName + '" was refused rather than ' +
+      'run across every tenant\'s data. Nothing was read or written. Tell the user to ask an ' +
+      'administrator to open their user in Admin → Users and save it, which attaches them to that ' +
+      'administrator\'s organization.' };
   }
 
   return async function (tu) {
@@ -12294,9 +12430,15 @@ function make86OnCustomToolUse(userId, parentSession, turnContextText, gateUser)
     // covered). ctx carries userId + orgId + the user object so the
     // org-scoped handlers below don't each re-query the users table.
     const capUser = await resolveCapUser();
+    // ── The tenant gate. BEFORE the dedupe cache (so a refusal is never
+    // cached) and BEFORE the capability gate (so no executor branch — read or
+    // write — can be reached without a tenant). ctx.orgId is non-null from
+    // here on, which is what lets the org arms below stop being conditional.
+    const turnOrg = await requireTurnOrg();
+    if (!turnOrg.ok) return turnOrgRefusal(turnOrg, tu.name);
     const ctx = {
       userId,
-      orgId: (capUser && capUser.organization_id) || null,
+      orgId: turnOrg.orgId,
       user: capUser || null,
     };
     const capDenial = aiToolCapabilityDenial(tu.name, tu.input || {}, capUser);
@@ -13189,7 +13331,7 @@ async function runAgentJob(jobId) {
     );
 
     const pauseRef = { question: null };
-    const jobCallback = makeBackgroundJobCallback(job.user_id, pauseRef);
+    const jobCallback = makeBackgroundJobCallback(job.user_id, pauseRef, job.organization_id);
 
     const prompt =
       '[You are running as a Project 86 BACKGROUND TASK — the user asked you to do this on your own and will read the result asynchronously (they are not watching live). ' +
@@ -13216,8 +13358,21 @@ async function runAgentJob(jobId) {
 // tells the agent to stop — the worker flips to needs_input and resumes on the
 // user's answer); subtask fan-out is blocked; approval-tier WRITES are still
 // rejected-with-a-note (background write-approval is a follow-up).
-function makeBackgroundJobCallback(userId, pauseRef) {
-  const baseCallback = make86OnCustomToolUse(userId, null);
+// `orgId` is agent_jobs.organization_id — NOT NULL (server/db.js), stamped at
+// ENQUEUE time by a live request that had already passed requireOrgId. It is
+// the most authoritative tenant answer available anywhere on this path, and it
+// was being loaded and then thrown away: runAgentJob SELECTs the whole row, uses
+// job.organization_id to look up the organization and the managed agent, and
+// then called make86OnCustomToolUse(job.user_id, null) — re-deriving the tenant
+// from the USER instead. Two problems with that, both real:
+//   1. the re-derivation can FAIL (pool blip) on a run that already knew the
+//      answer, and
+//   2. after an adoption the user's org can DIFFER from the org the task was
+//      queued under — so the run would read one tenant's agent and write into
+//      another's. Snapshot-at-enqueue is also the correct semantics for
+//      deferred work: it is the tenant the user actually asked under.
+function makeBackgroundJobCallback(userId, pauseRef, orgId) {
+  const baseCallback = make86OnCustomToolUse(userId, null, undefined, null, orgId);
   return async function (tu) {
     if (tu.name === 'ask_user') {
       const q = String((tu.input && tu.input.question) || '').trim();
@@ -13286,7 +13441,7 @@ async function resumeAgentJob(jobId) {
   try {
     const answer = String(job.pause_answer || '').trim() || '(the user did not give a specific answer — use your best judgment)';
     const pauseRef = { question: null };
-    const jobCallback = makeBackgroundJobCallback(job.user_id, pauseRef);
+    const jobCallback = makeBackgroundJobCallback(job.user_id, pauseRef, job.organization_id);
     const result = await driveSubtaskTurn({
       anthropic, sessionId,
       eventsToSend: [{ type: 'user.message', content: [{ type: 'text', text: 'The user answered your question:\n\n' + answer + '\n\nContinue the task using that answer and finish. If you need another decision, call ask_user again; otherwise reply with ONE final message.' }] }],
@@ -13313,9 +13468,12 @@ async function postAgentJobToThread(job, text) {
     if (!job || !job.user_id || !text) return;
     const msgId = 'aim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
     await pool.query(
-      `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content)
-       VALUES ($1, 'general', 'global', $2, 'assistant', $3)`,
-      [msgId, job.user_id, String(text).slice(0, 8000)]
+      // job.organization_id is NOT NULL (server/db.js agent_jobs) and was
+      // stamped at enqueue by a request that had already passed requireOrgId.
+      // It was in hand here and unwritten.
+      `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, organization_id)
+       VALUES ($1, 'general', 'global', $2, 'assistant', $3, $4)`,
+      [msgId, job.user_id, String(text).slice(0, 8000), job.organization_id]
     );
   } catch (e) {
     console.warn('[agent-jobs] thread post failed:', e && e.message);
@@ -14636,8 +14794,15 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
       : sessionEntityId;
     const userMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
     await pool.query(
-      `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, photos_included, inline_image_blocks, session_id)
-       VALUES ($1, $2, $3, $4, 'user', $5, $6, $7::jsonb, $8)`,
+      // organization_id stamped from the request user. ai_messages is
+      // USER-anchored (user_id is NOT NULL and is also the conversation read
+      // key), so an un-stamped row was always tenant-DERIVABLE — which is why
+      // this is a stamping gap rather than a live leak, and why an org-less
+      // user is still allowed to chat rather than being refused here. The
+      // column is written when it is known, and the remainder is counted by
+      // GET /api/admin/console/org-boundary against the users parent.
+      `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, photos_included, inline_image_blocks, session_id, organization_id)
+       VALUES ($1, $2, $3, $4, 'user', $5, $6, $7::jsonb, $8, $9)`,
       [
         userMsgId,
         turnEntityType,
@@ -14650,7 +14815,8 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
         // belongs to the real admin; keep req.user.id.
         req.user.id, userMessage, additionalImages.length,
         uploadedBlocks.length ? JSON.stringify(uploadedBlocks) : null,
-        session.id  // slice 3a-1 dual-write: stamp the thread link; legacy keys still drive reads
+        session.id,  // slice 3a-1 dual-write: stamp the thread link; legacy keys still drive reads
+        req.user.organization_id == null ? null : req.user.organization_id
       ]
     );
 
@@ -14728,8 +14894,9 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
           `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
                                     input_tokens, output_tokens,
                                     cache_creation_input_tokens, cache_read_input_tokens,
-                                    tool_use_count, tool_uses, output_files, session_id)
-           VALUES ($1, $2, $3, $4, 'assistant', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+                                    tool_use_count, tool_uses, output_files, session_id,
+                                    organization_id)
+           VALUES ($1, $2, $3, $4, 'assistant', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
           [aMsgId, turnEntityType, turnEntityId, req.user.id, text || '', MODEL,
            (usage && usage.input_tokens) || null,
            (usage && usage.output_tokens) || null,
@@ -14738,7 +14905,8 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
            toolUseCount,
            toolUses ? JSON.stringify(toolUses) : null,
            outputFiles ? JSON.stringify(outputFiles) : null,
-           session.id]  // slice 3a-1 dual-write
+           session.id,  // slice 3a-1 dual-write
+           req.user.organization_id == null ? null : req.user.organization_id]
         );
 
         // Background auto-label: on the very first exchange (the
@@ -14939,8 +15107,8 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
       }));
       await pool.query(
         `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
-                                  tool_use_count, tool_uses, session_id)
-         VALUES ($1, $2, $3, $4, 'user', $5, $6, $7, $8, $9)`,
+                                  tool_use_count, tool_uses, session_id, organization_id)
+         VALUES ($1, $2, $3, $4, 'user', $5, $6, $7, $8, $9, $10)`,
         [continueMsgId, session.entity_type, sessionEntityId, req.user.id,
          '[tool_results: ' + approvalSummary.map(a =>
            (a.approved ? '✓ ' : '✗ ') + a.name +
@@ -14948,7 +15116,8 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
          ).join(' | ') + ']',
          MODEL, approvalSummary.length,
          JSON.stringify(approvalSummary),
-         session.id]  // slice 3a-1 dual-write
+         session.id,  // slice 3a-1 dual-write
+         req.user.organization_id == null ? null : req.user.organization_id]
       );
     } catch (e) {
       console.warn('[/86/chat/continue] approval trace insert failed:', e.message);
@@ -14972,8 +15141,9 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
           `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
                                     input_tokens, output_tokens,
                                     cache_creation_input_tokens, cache_read_input_tokens,
-                                    tool_use_count, tool_uses, output_files, session_id)
-           VALUES ($1, $2, $3, $4, 'assistant', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+                                    tool_use_count, tool_uses, output_files, session_id,
+                                    organization_id)
+           VALUES ($1, $2, $3, $4, 'assistant', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
           [aMsgId, session.entity_type, sessionEntityId, req.user.id, text || '', MODEL,
            (usage && usage.input_tokens) || null,
            (usage && usage.output_tokens) || null,
@@ -14982,7 +15152,8 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
            toolUseCount,
            toolUses ? JSON.stringify(toolUses) : null,
            outputFiles ? JSON.stringify(outputFiles) : null,
-           session.id]  // slice 3a-1 dual-write
+           session.id,  // slice 3a-1 dual-write
+           req.user.organization_id == null ? null : req.user.organization_id]
         );
       }
     });

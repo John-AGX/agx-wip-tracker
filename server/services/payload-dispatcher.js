@@ -2461,7 +2461,19 @@ async function dispatchSchedule(dbClient, target, refTable, ctx) {
 
   // P0-2 org scope — tolerant OR-IS-NULL (no-op for AGX). Scopes the
   // create-time job check + the update/delete by entry org.
+  //
+  // REFUSED rather than defaulted to null. Every live caller already has one:
+  // POST /api/payloads/:id/apply is behind requireOrg, and applyPayloadForUser
+  // refuses outright without `user.organization_id`. So `|| null` never
+  // described a real caller — it described the shape of the bug, because the
+  // `if (schedOrgId)` guards below then emitted UPDATE and DELETE statements
+  // with NO tenant predicate. A write arm that silently widens is worse than a
+  // read arm that does: it returns 200 with 0 rows matched, or matches the
+  // wrong tenant's row, and nothing about the response says so.
   const schedOrgId = (ctx && ctx.organizationId) || null;
+  if (schedOrgId == null) {
+    throw new Error('schedule_ops requires a resolved organization — the payload apply was refused rather than run unscoped.');
+  }
 
   const created = [];
   const updated = [];
@@ -2521,7 +2533,9 @@ async function dispatchSchedule(dbClient, target, refTable, ctx) {
       sets.push('updated_at = NOW()');
       params.push(id);
       let schedWhere = `id = $${params.length}`;
-      if (schedOrgId) { params.push(schedOrgId); schedWhere += ` AND (organization_id = $${params.length} OR organization_id IS NULL)`; }
+      // Unconditional — schedOrgId cannot be null (refused above).
+      // OR-IS-NULL (org tolerance).
+      params.push(schedOrgId); schedWhere += ` AND (organization_id = $${params.length} OR organization_id IS NULL)`;
       const r = await dbClient.query(
         `UPDATE schedule_entries SET ${sets.join(', ')} WHERE ${schedWhere}`,
         params
@@ -2532,7 +2546,9 @@ async function dispatchSchedule(dbClient, target, refTable, ctx) {
       const id = resolveRef(b.entry_id, refTable);
       const delParams = [id];
       let delWhere = 'id = $1';
-      if (schedOrgId) { delParams.push(schedOrgId); delWhere += ' AND (organization_id = $2 OR organization_id IS NULL)'; }
+      // Unconditional — schedOrgId cannot be null (refused above).
+      // OR-IS-NULL (org tolerance).
+      delParams.push(schedOrgId); delWhere += ' AND (organization_id = $2 OR organization_id IS NULL)';
       const r = await dbClient.query(
         `DELETE FROM schedule_entries WHERE ${delWhere}`, delParams
       );
@@ -2692,8 +2708,17 @@ async function dispatchSystem(dbClient, target, refTable, ctx) {
         // (built-in) tools via payload. Tolerant OR-IS-NULL for legacy
         // un-stamped org tools; no-op for AGX.
         const ftOrgId = (ctx && ctx.organizationId) || null;
+        // Unconditional, and note WHAT the false branch was dropping: not just
+        // the tenant predicate but `AND is_system = false` with it. An org-less
+        // apply could therefore edit a BUILT-IN field tool — the one thing the
+        // comment above says this guard exists to prevent. The guard and the
+        // tenant scope were welded to the same `if`, so losing one lost both.
+        if (ftOrgId == null) {
+          throw new Error('field_tool_ops edit requires a resolved organization — refused rather than run unscoped (which would also have bypassed the is_system guard).');
+        }
         let ftWhere = `id = $${p}`;
-        if (ftOrgId) { vals.push(ftOrgId); ftWhere += ` AND (organization_id = $${vals.length} OR organization_id IS NULL) AND is_system = false`; }
+        // OR-IS-NULL (org tolerance).
+        vals.push(ftOrgId); ftWhere += ` AND (organization_id = $${vals.length} OR organization_id IS NULL) AND is_system = false`;
         const r = await dbClient.query(
           `UPDATE field_tools SET ${sets.join(', ')} WHERE ${ftWhere}`,
           vals
@@ -2705,9 +2730,16 @@ async function dispatchSystem(dbClient, target, refTable, ctx) {
         if (!id) throw new Error('field_tool_ops delete requires tool_id');
         // P0-2 — scope to the caller's org and never delete system tools.
         const ftDelOrgId = (ctx && ctx.organizationId) || null;
+        // Same weld as the edit above, and DELETE is the worse half: without
+        // an org the statement became `DELETE FROM field_tools WHERE id = $1`,
+        // which reaches another tenant's tool and every built-in one.
+        if (ftDelOrgId == null) {
+          throw new Error('field_tool_ops delete requires a resolved organization — refused rather than run unscoped (which would also have bypassed the is_system guard).');
+        }
         const ftDelParams = [id];
         let ftDelWhere = 'id = $1';
-        if (ftDelOrgId) { ftDelParams.push(ftDelOrgId); ftDelWhere += ' AND (organization_id = $2 OR organization_id IS NULL) AND is_system = false'; }
+        // OR-IS-NULL (org tolerance).
+        ftDelParams.push(ftDelOrgId); ftDelWhere += ' AND (organization_id = $2 OR organization_id IS NULL) AND is_system = false';
         const r = await dbClient.query(`DELETE FROM field_tools WHERE ${ftDelWhere}`, ftDelParams);
         if (!r.rowCount) throw new Error(`field_tool ${id} not found`);
         archived.push({ kind: 'field_tool', id });

@@ -1,7 +1,8 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { pool, getOrgById } = require('../db');
-const { signToken, requireAuth, requireRole, requireOrgId, requireSystemAdmin, resolveUserOrg, hasCapability } = require('../auth');
+const { signToken, requireAuth, requireRole, requireOrgId, requireSystemAdmin, resolveUserOrg, hasCapability,
+  resolveOrgId, ORG_UNRESOLVED, ORG_LOOKUP_FAILED } = require('../auth');
 const { ipLoginLimiter } = require('../rate-limit');
 const { auditLog } = require('../audit');
 // The tenant boundary on a caller-supplied USER id. See the block comment in
@@ -319,10 +320,33 @@ router.get('/users', requireAuth, async (req, res) => {
     if (req.user && (req.user.sub_id || req.user.role === 'sub')) {
       return res.status(403).json({ error: 'Forbidden' });
     }
-    const orgId = req.user && req.user.organization_id;
+    //
+    // The org scope is now UNCONDITIONAL, and it uses resolveOrgId rather than
+    // the raw claim. `if (orgId) { … }` meant an org-less caller — a state
+    // this system explicitly supports, which db.js:5485 logs by name — got the
+    // FULL cross-tenant staff directory including every email and phone
+    // number, because the false branch of that `if` emitted no predicate at
+    // all. A caller whose tenant cannot be resolved gets a refusal, not
+    // everybody's roster: 503 when the lookup failed (retryable) and 409 when
+    // they genuinely have no org, matching requireOrgId's two codes exactly so
+    // the client's existing ladder handles both.
+    let orgId;
+    try {
+      orgId = await resolveOrgId(req);
+    } catch (e) {
+      return res.status(503).json({
+        error: 'Could not determine your organization right now — retry shortly.',
+        code: ORG_LOOKUP_FAILED });
+    }
+    if (orgId == null) {
+      return res.status(409).json({
+        error: 'This account is not attached to an organization, so the staff directory cannot be scoped to one. Ask an administrator to open your user in Admin → Users and save it.',
+        code: ORG_UNRESOLVED });
+    }
     const params = [];
     let where = "WHERE role <> 'sub'";
-    if (orgId) { params.push(orgId); where += ' AND (organization_id = $1 OR organization_id IS NULL)'; }
+    // OR-IS-NULL (org tolerance) — legacy un-stamped users stay visible.
+    params.push(orgId); where += ' AND (organization_id = $1 OR organization_id IS NULL)';
     const { rows } = await pool.query(
       'SELECT id, email, name, role, active, phone_number, timezone, title, notification_prefs, created_at, last_seen_at FROM users ' +
       where + ' ORDER BY name ASC',

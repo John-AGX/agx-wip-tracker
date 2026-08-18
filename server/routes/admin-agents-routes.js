@@ -2814,7 +2814,8 @@ router.post('/staff/seed', requireAuth, requireCapability('ROLES_MANAGE'), requi
 //   1024-char limit, or when adding a new tool. Sessions bound to
 //   the OLD agent id keep working but won't see the new tool/prompt;
 //   start a fresh chat to pick up the new agent.
-router.post('/managed/reregister', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.post('/managed/reregister', requireAuth, requireCapability('ROLES_MANAGE'),
+  require('../auth').requireOrgId, async (req, res) => {
   try {
     const key = String(req.query.key || '').toLowerCase();
     const liveKeys = ['job', 'assistant', 'scribe'];
@@ -2844,16 +2845,27 @@ router.post('/managed/reregister', requireAuth, requireCapability('ROLES_MANAGE'
     // is left active on Anthropic's side (sessions bound to it keep
     // working) but new sessions point at the new agent id.
     await pool.query(
+      // TWO defects, both fatal, both fixed here — this statement could not
+      // have succeeded since managed_agent_registry was re-keyed:
+      //   1. organization_id is part of the table's composite PRIMARY KEY
+      //      (agent_key, organization_id), so it is implicitly NOT NULL. This
+      //      INSERT never named it -> 23502.
+      //   2. `ON CONFLICT (agent_key)` no longer matches any unique
+      //      constraint on the table -> 42P10.
+      // So the route 500'd rather than leaked — but the shape is the same one
+      // the rest of this wave is closing: a write that does not name its
+      // tenant. It is now scoped to the caller's org (requireOrgId above), so
+      // a reregister touches that tenant's row and no other's.
       `INSERT INTO managed_agent_registry
-         (agent_key, anthropic_agent_id, model, tool_count, skill_count, updated_at)
-       VALUES ($1, $2, $3, $4, $5, NOW())
-       ON CONFLICT (agent_key) DO UPDATE SET
+         (agent_key, organization_id, anthropic_agent_id, model, tool_count, skill_count, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW())
+       ON CONFLICT (agent_key, organization_id) DO UPDATE SET
          anthropic_agent_id = EXCLUDED.anthropic_agent_id,
          model = EXCLUDED.model,
          tool_count = EXCLUDED.tool_count,
          skill_count = EXCLUDED.skill_count,
          updated_at = NOW()`,
-      [key, created.id, model, customTools.length + builtinTools.length, skills.length]
+      [key, req.orgId, created.id, model, customTools.length + builtinTools.length, skills.length]
     );
 
     res.json({
