@@ -11123,7 +11123,19 @@ async function execFieldToolRead(name, input) {
 // Approval-tier executor — runs when the user approves a
 // propose_*_field_tool card. Returns a summary string for the
 // tool_result event. is_error is set in the caller's catch block.
-async function execFieldToolApproval(name, input, userId) {
+// orgId is REQUIRED. This is the second of field_tools' two agent doors — the
+// human door (field-tools-routes.js) stamps organization_id, and neither agent
+// door did, which is why that table already holds non-uniform data. Worse than
+// the F4 scan reported: the update and delete arms below were entirely
+// unscoped, while the dispatcher's copy of the same three operations has
+// carried `AND (organization_id = $n OR organization_id IS NULL) AND
+// is_system = false` since P0-2. So one agent path could edit — or DELETE — a
+// system tool, or another tenant's tool, by id.
+//
+// The org comes from req.organization (requireOrg attaches it), the same
+// server-derived source the sibling approval executors on this route already
+// use, and never from the tool input.
+async function execFieldToolApproval(name, input, userId, orgId) {
   if (name === 'propose_create_field_tool') {
     const n = String((input && input.name) || '').trim();
     const html = String((input && input.html_body) || '').trim();
@@ -11136,11 +11148,12 @@ async function execFieldToolApproval(name, input, userId) {
     }
     const desc = input && input.description ? String(input.description).trim() : null;
     const id = 'ft_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+    if (!orgId) throw new Error('Could not determine your organization — the tool was not created.');
     try {
       await pool.query(
-        `INSERT INTO field_tools (id, name, description, category, html_body, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [id, n, desc, cat, html, userId]
+        `INSERT INTO field_tools (id, name, description, category, html_body, created_by, organization_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [id, n, desc, cat, html, userId, orgId]
       );
     } catch (e) {
       if (e.code === '23505') throw new Error('A field tool named "' + n + '" already exists. Use propose_update_field_tool to edit it.');
@@ -11175,11 +11188,18 @@ async function execFieldToolApproval(name, input, userId) {
     if (!sets.length) return 'No fields specified to update for tool "' + id + '".';
     sets.push('updated_at = NOW()');
     params.push(id);
+    // Scope + system guard, matching the dispatcher's P0-2 arm exactly. Without
+    // them this edited any tool in any tenant, including a built-in.
+    let where = `id = $${p}`;
+    if (orgId) {
+      params.push(orgId);
+      where += ` AND (organization_id = $${params.length} OR organization_id IS NULL) AND is_system = false`;
+    }
     let r;
     try {
       // SAFE: column names hardcoded above (name / description / category / html_body); no user-keys loop.
       r = await pool.query(
-        `UPDATE field_tools SET ${sets.join(', ')} WHERE id = $${p} RETURNING id, name`,
+        `UPDATE field_tools SET ${sets.join(', ')} WHERE ${where} RETURNING id, name`,
         params
       );
     } catch (e) {
@@ -11193,7 +11213,13 @@ async function execFieldToolApproval(name, input, userId) {
   if (name === 'propose_delete_field_tool') {
     const id = String((input && input.id) || '').trim();
     if (!id) throw new Error('id is required');
-    const r = await pool.query(`DELETE FROM field_tools WHERE id = $1 RETURNING name`, [id]);
+    const delParams = [id];
+    let delWhere = 'id = $1';
+    if (orgId) {
+      delParams.push(orgId);
+      delWhere += ' AND (organization_id = $2 OR organization_id IS NULL) AND is_system = false';
+    }
+    const r = await pool.query(`DELETE FROM field_tools WHERE ${delWhere} RETURNING name`, delParams);
     if (!r.rows.length) throw new Error('No field tool with id "' + id + '"');
     return 'Deleted field tool "' + r.rows[0].name + '" (id=' + id + ').';
   }
@@ -13470,7 +13496,10 @@ async function execProjectInlineTool(name, input, ctx) {
 
     const msgId = 'msg_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
     await pool.query(
-      `INSERT INTO messages (id, thread_key, user_id, body) VALUES ($1, $2, $3, $4)`,
+      // F4 — same stamp as the human door in message-routes.js, read off the
+      // author's users row (the anchor db.js's backfill for this table uses).
+      `INSERT INTO messages (id, thread_key, user_id, body, organization_id)
+       VALUES ($1, $2, $3, $4, (SELECT organization_id FROM users WHERE id = $3))`,
       [msgId, `attachment:${attId}`, userId, body]
     );
     // Auto-mark read for the poster (mirrors message-routes.js POST
@@ -14863,7 +14892,7 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
       } else if (r.name === 'propose_create_field_tool'
               || r.name === 'propose_update_field_tool'
               || r.name === 'propose_delete_field_tool') {
-        try { summary = await execFieldToolApproval(r.name, r.input || {}, req.user.id); }
+        try { summary = await execFieldToolApproval(r.name, r.input || {}, req.user.id, req.organization && req.organization.id); }
         catch (e) { summary = 'Error: ' + (e.message || 'failed'); isError = true; }
       } else if (r.name === 'propose_skill_pack_add'
               || r.name === 'propose_skill_pack_edit'

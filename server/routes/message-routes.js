@@ -372,7 +372,12 @@ router.post('/:threadKey', async (req, res) => {
     const isDm = key.indexOf('dm:') === 0;
     const authorId = isDm ? req.user.id : getAttributedUserId(req);
     await pool.query(
-      `INSERT INTO messages (id, thread_key, user_id, body) VALUES ($1, $2, $3, $4)`,
+      // F4 — stamped off the AUTHOR's users row, which is exactly the anchor
+      // db.js's own backfill for this table uses (user_id -> organization_id).
+      // A subselect rather than a caller-derived value so the two pointers
+      // cannot disagree, and it needs no context plumbing to be correct.
+      `INSERT INTO messages (id, thread_key, user_id, body, organization_id)
+       VALUES ($1, $2, $3, $4, (SELECT organization_id FROM users WHERE id = $3))`,
       [id, key, authorId, body]
     );
     // Auto-mark read for the poster so they don't see their own

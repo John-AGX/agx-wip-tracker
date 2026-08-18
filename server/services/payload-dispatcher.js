@@ -834,7 +834,22 @@ async function assertTargetOrg(dbClient, entityType, entityId, orgId) {
 // A $ref or an id that already resolves to a row is passed through untouched.
 async function resolveJobTarget(dbClient, rawId, orgId) {
   if (!rawId || isRef(rawId)) return rawId;
-  const direct = await dbClient.query('SELECT 1 FROM jobs WHERE id = $1 LIMIT 1', [rawId]);
+  // F5. This probe used to be `SELECT 1 FROM jobs WHERE id = $1` with no
+  // predicate. Every downstream write already carries one, so it was never a
+  // write — but "is this a real row id" answered TRUE for another tenant's job
+  // and FALSE for a string that is nothing, and that difference is an existence
+  // oracle over the whole jobs table, reachable from an agent payload.
+  //
+  // Scoped, it also reads better: the question this function is actually asking
+  // is "is this already a canonical id I can use", and another tenant's id is
+  // not one. A foreign id now falls through to the jobNumber branch (which has
+  // been org-scoped since it was written) and out to "Job not found", exactly
+  // like a typo.
+  const direct = orgId
+    ? await dbClient.query(
+        `SELECT 1 FROM jobs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL) LIMIT 1`,
+        [rawId, orgId])
+    : await dbClient.query('SELECT 1 FROM jobs WHERE id = $1 LIMIT 1', [rawId]);
   if (direct.rowCount) return rawId;             // already a canonical row id
   // jobNumber fallback is ORG-SCOPED only — never resolve a number across the
   // whole table. Without an orgId we decline to guess (the row-id lookup above
@@ -2636,10 +2651,26 @@ async function dispatchSystem(dbClient, target, refTable, ctx) {
         const id = ft.tool_id && !isRef(ft.tool_id)
           ? ft.tool_id
           : ('tool_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8));
+        const ftCreateOrg = (ctx && ctx.organizationId) || null;
+        if (!ftCreateOrg) {
+          throw new Error('field_tool_ops create: could not determine your organization — nothing was written.');
+        }
         await dbClient.query(
-          `INSERT INTO field_tools (id, name, description, category, html_body, created_by)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [id, f.name, f.description || null, f.category || null, f.html_body, ctx.userId || null]
+          // F4 — the tell. field_tools has THREE create doors: the human one
+          // (field-tools-routes.js) stamps organization_id, and both AGENT
+          // doors did not, so the table already holds non-uniform data. Two
+          // consequences, not one: an un-stamped tool is visible to every
+          // tenant through the OR-IS-NULL arm the edit/delete below carry, AND
+          // the unique index is on (organization_id, name) — NULLs never
+          // collide in Postgres, so agent-created tools could pile up under one
+          // name and could never conflict with a real org's tool.
+          //
+          // Stamped from ctx, never from the payload's fields, and refused
+          // rather than written NULL: the org is the boundary, so "I could not
+          // tell" has to stop the write.
+          `INSERT INTO field_tools (id, name, description, category, html_body, created_by, organization_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [id, f.name, f.description || null, f.category || null, f.html_body, ctx.userId || null, ftCreateOrg]
         );
         if (isRef(ft.tool_id)) refTable[ft.tool_id] = id;
         created.push({ kind: 'field_tool', id, name: f.name });
@@ -3841,6 +3872,11 @@ module.exports = {
     // be provable to fire BEFORE any SQL runs, which needs the raw handler.
     dispatchJob,
     RETIRED_JOB_OPS,
+    // Exported for test/agent-write-org-scope.test.js — the job-id probe and
+    // the field_tools arms both have to be provable against a runner rather
+    // than by reading the source for a substring.
+    resolveJobTarget,
+    dispatchSystem,
     dispatchTask,
     dispatchTodo,
     dispatchReminder,

@@ -8,6 +8,7 @@
     "dev": "node server/index.js",
     "test": "jest"
   },
+  "jest": { "testPathIgnorePatterns": ["/node_modules/", "/\\.claude/"] },
   "keywords": [],
   "author": "",
   "license": "ISC",
