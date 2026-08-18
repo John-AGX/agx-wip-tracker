@@ -4,9 +4,17 @@
 // data that only the platform owner may see. Org admins (ROLES_MANAGE)
 // never reach this surface — that's the whole point of the two-tier split.
 //
-// Read-only by design for Phase 1 (audit feed, cross-org metrics, headline
-// counts). Mutating platform ops live behind their own deliberate endpoints
-// (org create/archive in admin-organizations-routes), each already audited.
+// Read-only by design (audit feed, cross-org metrics, headline counts, the
+// org-boundary audit). Mutating platform ops live behind their own deliberate
+// endpoints (org create/archive in admin-organizations-routes), each already
+// audited.
+//
+// ONE EXCEPTION, and it is deliberate: POST /org-boundary/backfill. It belongs
+// here rather than beside the org-lifecycle routes because it is meaningless
+// without the audit it is paired with — you read the count, you stamp what is
+// derivable, you read the count again. It is dry-by-default, evidence-only,
+// idempotent, and logs its actor when applied. Nothing else mutating should
+// join it without the same argument.
 
 const express = require('express');
 const { pool } = require('../db');
@@ -293,6 +301,53 @@ router.get('/org-boundary', requireAuth, requireSystemAdmin, async (req, res) =>
     res.json(report);
   } catch (e) {
     console.error('GET /api/admin/console/org-boundary error:', e);
+    res.status(500).json({ error: e.message || 'Server error' });
+  }
+});
+
+// POST /api/admin/console/org-boundary/backfill — step 2 of the safety
+// property: stamp the existing NULLs FROM EVIDENCE, never from a guess.
+//
+// DRY BY DEFAULT. Without `{"dry_run": false}` this counts what COULD be
+// stamped, rolls back, and writes nothing — the same shape
+// services/org-reset.js:previewOrgData uses to preview a destructive
+// operation, so the operator sees the blast radius before authorising it.
+//
+// Every statement reads the tenant off a row that ALREADY STATES IT: the
+// attachment's parent entity, the cost line's job, the message's user. That is
+// what makes it different from the backfills in db.js, which are gated on
+// NEVER_MULTI_ORG because they guess (lowest-numbered org, slug='agx') — a
+// guess that is correct only while one tenant exists, and whose gate switches
+// off at exactly the moment the boundary starts to matter. Nothing here is
+// gated on the org count, because nothing here can be wrong.
+//
+// It cannot invent a tenant: `<source> IS NOT NULL` is half of every
+// predicate, so a row whose parent is itself un-stamped or absent is left
+// alone, stays NULL, and stays counted by GET /org-boundary. It is idempotent
+// by construction (`WHERE organization_id IS NULL` re-checks on every run), and
+// it is deliberately NOT on the boot path — index.js only calls listen() if
+// init() resolved, so a migration that hangs on a lock never opens the port and
+// never logs why.
+//
+// It also stamps NOTHING on users / jobs / estimates / leads / clients / subs.
+// Those tables ARE the anchor: no other row states their tenant, so any value
+// would be a guess by definition.
+router.post('/org-boundary/backfill', requireAuth, requireSystemAdmin, async (req, res) => {
+  try {
+    const { backfillFromEvidence } = require('../services/org-backfill-evidence');
+    const body = req.body || {};
+    const report = await backfillFromEvidence(pool, {
+      dryRun: body.dry_run !== false,
+      tables: Array.isArray(body.tables) ? body.tables : null,
+      timeoutMs: body.timeout_ms ? parseInt(body.timeout_ms, 10) : undefined,
+    });
+    if (!report.dry_run) {
+      console.log('[org] evidence backfill APPLIED by user=' + (req.user && req.user.id) + ' — ' +
+        report.results.filter((r) => r.updated).map((r) => r.label + '=' + r.updated).join(' ') || '(nothing to stamp)');
+    }
+    res.json(report);
+  } catch (e) {
+    console.error('POST /api/admin/console/org-boundary/backfill error:', e);
     res.status(500).json({ error: e.message || 'Server error' });
   }
 });

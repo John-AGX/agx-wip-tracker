@@ -324,8 +324,15 @@ describe('the endpoint', () => {
   test('is SYSTEM_ADMIN and read-only, like every other route in this file', () => {
     expect(CONSOLE_SRC).toMatch(
       /router\.get\('\/org-boundary', requireAuth, requireSystemAdmin/);
-    // No mutating verb was added to the platform console alongside it.
-    expect(CONSOLE_SRC.match(/router\.(post|put|delete|patch)\(/g)).toBeNull();
+    // The AUDIT itself stays a pure read. The console gained exactly ONE
+    // mutating route — the evidence backfill — and it is SYSTEM_ADMIN and dry
+    // by default. Anything else appearing here should fail this test and be
+    // argued for on its own terms.
+    const mutators = CONSOLE_SRC.match(/router\.(post|put|delete|patch)\('([^']+)'/g) || [];
+    expect(mutators).toEqual(["router.post('/org-boundary/backfill'"]);
+    expect(CONSOLE_SRC).toMatch(
+      /router\.post\('\/org-boundary\/backfill', requireAuth, requireSystemAdmin/);
+    expect(CONSOLE_SRC).toMatch(/dryRun: body\.dry_run !== false/);
   });
 
   test('it is not on the boot path — that is the whole reason it can be complete', () => {
