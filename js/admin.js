@@ -2697,12 +2697,22 @@ function p86Ask(message, opts) {
     var s = _emailSettings || {};
     var qh = s.quietHours || { enabled: false, start: '21:00', end: '07:00' };
     box.innerHTML =
-      // Global BCC.
+      // Global BCC. Read-only unless the caller is the platform owner: this
+      // is ONE row for every tenant, so an address here receives every
+      // organization's mail and PUT /api/email/settings refuses to change it
+      // without SYSTEM_ADMIN. Showing an editable box that can only 403 is
+      // what wedged this panel; say who owns the field instead.
       '<div style="display:flex;flex-direction:column;gap:4px;">' +
         '<label style="font-weight:600;color:var(--text);">Global BCC</label>' +
-        '<div style="color:var(--text-dim,#888);font-size:11px;">Always BCC these addresses on every outbound email. Comma-separated.</div>' +
+        '<div style="color:var(--text-dim,#888);font-size:11px;">' +
+          (isPlatformOwner()
+            ? 'Always BCC these addresses on every outbound email. Comma-separated.'
+            : 'Platform-wide &mdash; one record for every organization, so this is the platform owner\'s to set. The other settings on this panel are yours.') +
+        '</div>' +
         '<input type="text" id="email-global-bcc" value="' + escapeHTML(s.globalBcc || '').replace(/"/g, '&quot;') + '" placeholder="ops@agxco.com, owner@agxco.com" ' +
-          'style="background:var(--input-bg,#141419);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:7px 10px;font-size:13px;" />' +
+          (isPlatformOwner() ? '' : 'readonly ') +
+          'style="background:var(--input-bg,#141419);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:7px 10px;font-size:13px;' +
+          (isPlatformOwner() ? '' : 'opacity:0.65;cursor:not-allowed;') + '" />' +
       '</div>' +
       // Digest mode (placeholder — pending implementation in E3).
       '<div style="display:flex;align-items:center;gap:10px;">' +
@@ -2746,6 +2756,24 @@ function p86Ask(message, opts) {
 
   // Coalesce rapid changes into a single PUT so the user can flip
   // multiple toggles without hammering the API.
+  //
+  // A REFUSAL HAS TO BE RECOVERABLE, WHICH THIS PANEL DID NOT MANAGE.
+  // app_settings('email') is one global row, so PUT /api/email/settings
+  // refuses an org admin who ADDS or CHANGES a BCC address. The refusal was
+  // right; what happened next was not. Every control on this panel calls the
+  // same syncAndSave(), which re-reads the BCC input and PUTs the WHOLE blob.
+  // After a 403 the rejected address was still sitting in the input and still
+  // on _emailSettings, so the next save of an unrelated control — digest
+  // mode, quiet hours — re-sent it and got refused again. And again. The
+  // panel was stuck refusing saves the caller was entitled to make, with a
+  // red line that never explained why, until a reload re-fetched the row.
+  //
+  // So on a refusal: put the stored value back on both the model and the
+  // input, then say what happened. The user keeps whatever else they were
+  // editing and the panel works again on the next change. The BCC field is
+  // also rendered read-only for non-platform-owners (see renderEmailGlobals),
+  // so ordinarily this path is a backstop rather than the normal experience —
+  // but it is the authoritative one, because only the server knows the answer.
   var _emailSaveTimer = null;
   function saveEmailSettings() {
     var statusEl = document.getElementById('email-globals-status');
@@ -2753,12 +2781,42 @@ function p86Ask(message, opts) {
     if (_emailSaveTimer) clearTimeout(_emailSaveTimer);
     _emailSaveTimer = setTimeout(function() {
       window.p86Api.put('/api/email/settings', _emailSettings).then(function(r) {
+        // Trust the server's echo over the local draft — it is the row.
+        if (r && r.settings) _emailSettings = r.settings;
         if (statusEl) {
           statusEl.innerHTML = '<span style="color:#34d399;">&#x2713; Saved ' + new Date().toLocaleTimeString() + '</span>';
           setTimeout(function() { if (statusEl) statusEl.textContent = ''; }, 3000);
         }
       }).catch(function(err) {
-        if (statusEl) statusEl.innerHTML = '<span style="color:#f87171;">Save failed: ' + escapeHTML(err.message || '') + '</span>';
+        var msg = (err && err.message) || '';
+        var refused = (err && err.status === 403) || /system administrator/i.test(msg);
+        if (!refused) {
+          if (statusEl) statusEl.innerHTML = '<span style="color:#f87171;">Save failed: ' + escapeHTML(msg) + '</span>';
+          return;
+        }
+        // Re-fetch rather than trusting a remembered value: the refusal means
+        // this client's idea of the row is the thing that was wrong.
+        window.p86Api.get('/api/email/settings').then(function(fresh) {
+          var stored = (fresh && fresh.settings) || {};
+          _emailSettings.globalBcc = stored.globalBcc || '';
+          _emailSettings.events = stored.events || _emailSettings.events;
+          var input = document.getElementById('email-global-bcc');
+          if (input) input.value = _emailSettings.globalBcc;
+        }).catch(function() {
+          // Even if the re-read fails, do not leave the rejected address in
+          // the outgoing payload — an empty string still saves, a rejected
+          // one never will.
+          _emailSettings.globalBcc = '';
+          var input = document.getElementById('email-global-bcc');
+          if (input) input.value = '';
+        }).then(function() {
+          if (statusEl) {
+            statusEl.innerHTML = '<span style="color:#fbbf24;">' +
+              'BCC not changed &mdash; email settings are a single platform-wide record, so BCC recipients are the platform owner\'s. ' +
+              'The address has been restored and your other changes still save normally.' +
+            '</span>';
+          }
+        });
       });
     }, 250);
   }
@@ -8149,9 +8207,26 @@ function p86Ask(message, opts) {
     loadAnthropicBatches();
   }
 
+  // Does this caller hold SYSTEM_ADMIN? UX only — every endpoint named below
+  // enforces its own gate server-side. This exists so the page does not offer
+  // a control whose only possible outcome is a 403, which is how the Email
+  // settings panel wedged itself.
+  function isPlatformOwner() {
+    return !!(window.p86Auth &&
+      typeof window.p86Auth.isSystemAdmin === 'function' &&
+      window.p86Auth.isSystemAdmin());
+  }
+
   // Per-agent native skill assignment panel. Renders one card per
   // managed agent showing assigned skills + a picker to attach more.
   // Backed by GET/POST/DELETE /api/admin/agents/:agentKey/native-skills.
+  //
+  // READ is ROLES_MANAGE — an org admin may see which skills their 86 runs.
+  // ATTACH/DETACH is SYSTEM_ADMIN, because managed_agent_skills has no
+  // organization_id: there is one attachment list for the whole platform, so
+  // a detach here changes what every tenant's agent loads. The controls are
+  // therefore rendered only for the platform owner; everyone else gets the
+  // list plus a line saying who owns it.
   function loadAgentSkillAssignments() {
     var host = document.getElementById('agent-skill-assignments-panel');
     if (!host) return;
@@ -8192,14 +8267,22 @@ function p86Ask(message, opts) {
             '<td style="padding:3px 6px 3px 0;">' + escapeHTML(title) + missing + '</td>' +
             '<td style="padding:3px 0;font-family:\'SF Mono\',monospace;font-size:10px;color:var(--text-dim,#aaa);">' + escapeHTML(sid) + '</td>' +
             '<td style="padding:3px 0;text-align:right;width:1%;white-space:nowrap;">' +
-              '<button type="button" onclick="window.detachAgentSkill && window.detachAgentSkill(\'' + escapeAttr(agentKey) + '\', \'' + escapeAttr(sid) + '\')" ' +
-                'style="font-size:11px;padding:3px 8px;border-radius:4px;border:1px solid #f87171;background:transparent;color:#f87171;cursor:pointer;">Detach</button>' +
+              (isPlatformOwner()
+                ? '<button type="button" onclick="window.detachAgentSkill && window.detachAgentSkill(\'' + escapeAttr(agentKey) + '\', \'' + escapeAttr(sid) + '\')" ' +
+                    'style="font-size:11px;padding:3px 8px;border-radius:4px;border:1px solid #f87171;background:transparent;color:#f87171;cursor:pointer;">Detach</button>'
+                : '') +
             '</td>' +
           '</tr>';
         });
         html += '</tbody></table>';
       }
-      if (available.length) {
+      if (!isPlatformOwner()) {
+        html += '<div style="margin-top:6px;font-size:11px;color:var(--text-dim,#888);line-height:1.5;">' +
+          'This list is platform-wide — <code>managed_agent_skills</code> has no organization column, so the same skills load for every tenant. ' +
+          'Attaching and detaching is the platform owner\'s. Your tenant\'s own instruction packs live under ' +
+          '<strong>Organization &rarr; Skill Packs</strong>.' +
+        '</div>';
+      } else if (available.length) {
         html += '<div style="display:flex;gap:6px;align-items:center;margin-top:6px;">' +
           '<select id="agent-skill-picker-' + agentKey + '" style="flex:1;padding:5px;border-radius:4px;border:1px solid var(--border,#333);background:var(--bg,#0a0a0a);color:var(--text,#fff);font-size:12px;">' +
             '<option value="">Choose a native skill to attach…</option>' +
@@ -8666,13 +8749,22 @@ function p86Ask(message, opts) {
   }
 
   async function unsyncSkillFromAnthropic(idx) {
-    if (!(await p86Ask('Delete the Anthropic-side mirror for this pack?\n\nThe local pack stays. The next time you click Mirror, a fresh copy goes up — useful when the body has changed and you want to refresh the mirror.'))) return;
+    // The pack NAME is the typed confirmation the server now requires. Read
+    // it from the draft the user is looking at, so a mismatch between what
+    // the screen shows and what the server holds is a refusal rather than a
+    // delete of the wrong pack.
+    var pack = (_skillsDraft && _skillsDraft.skills && _skillsDraft.skills[idx]) || null;
+    if (!pack) { alert('Pack not found in the current draft — refresh and try again.'); return; }
+    var packName = String(pack.name || '');
+    if (!(await p86Ask('Delete the Anthropic-side mirror for "' + packName + '"?\n\n' +
+      'This deletes the skill from the Anthropic ACCOUNT — every version of it — and detaches it from every agent. It cannot be undone.\n\n' +
+      'The local pack stays. The next time you click Mirror, a fresh copy goes up.'))) return;
     // Save BEFORE unsyncing. The route addresses packs by ARRAY INDEX, so an
     // unsaved add/delete in the draft shifts the client's idx off the server's
     // array and this deletes the mirror of a DIFFERENT pack. Mirror (above)
     // already saves first; this path never did.
     saveAgentsSkillsThen(function() {
-    window.p86Api.post('/api/admin/agents/skills/' + encodeURIComponent(idx) + '/unsync-from-anthropic', {}).then(function(resp) {
+    window.p86Api.post('/api/admin/agents/skills/' + encodeURIComponent(idx) + '/unsync-from-anthropic', { confirm: packName }).then(function(resp) {
       if (resp.delete_error) {
         alert('Local link cleared.\n\nNote: Anthropic-side delete also reported: ' + resp.delete_error);
       }
@@ -8834,7 +8926,13 @@ function p86Ask(message, opts) {
         '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:8px;">' +
           '<div style="font-size:13px;font-weight:600;color:var(--text,#fff);">Per-agent skill attachments</div>' +
           '<div style="display:flex;gap:8px;">' +
-            '<button class="ee-btn secondary" onclick="window.openCreateNativeSkill && window.openCreateNativeSkill()" title="Upload a new SKILL.md to Anthropic. Once created it appears in the picker on each agent card.">&#x2795; Create new skill</button>' +
+            // Creating a native skill is POST /api/admin/anthropic/skills —
+            // requireSystemAdmin for the whole of that router. Offering the
+            // button to an org admin only ever produced a 403 alert.
+            (!_isPlatformOwner ? '' :
+            '<button class="ee-btn secondary" onclick="window.openCreateNativeSkill && window.openCreateNativeSkill()" title="Upload a new SKILL.md to Anthropic. Once created it appears in the picker on each agent card.">&#x2795; Create new skill</button>') +
+            // Stays for everyone: /managed/sync-all syncs the CALLER'S OWN
+            // org's agents and is ROLES_MANAGE by design.
             '<button class="ee-btn primary" onclick="syncManagedAgentsAfterSkillEdit()" title="Push attach/detach changes to the registered Anthropic agent definitions. Required after changing assignments so the agent actually sees the new skill list.">&#x1F4E1; Sync agents now</button>' +
             '<button class="ee-btn secondary" onclick="renderAgentsSkillsView()" title="Refresh">&#x21BB; Refresh</button>' +
           '</div>' +
