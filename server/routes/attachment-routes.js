@@ -652,6 +652,36 @@ router.get('/raw/:id', requireAuth, async (req, res) => {
       if (!ensureUserAttachmentOwner(req, att.entity_id)) {
         return res.status(403).json({ error: 'Forbidden' });
       }
+    } else if (cap === '__org_member__') {
+      // ── A half-implemented sentinel is a dead feature ────────────────────
+      // readCapForEntity('org') returns the sentinel '__org_member__'. Four
+      // places consume that value; only two interpreted it. This was one of
+      // the two that did not, so the sentinel fell through to
+      // hasCapability(user, '__org_member__') — no capability is named that,
+      // so the answer was false for EVERYONE. Observed in-tenant on an
+      // org-bucket file: system_admin 403, admin 403, pm 403.
+      //
+      // /raw/:id is what js/pdf-viewer.js and js/markup-viewer.js fetch, so
+      // the company knowledge base could not be opened by anybody, and an
+      // org-bucket file could not be a copy source. Fail-closed, so never a
+      // breach — the same dead-feature class 45ac226 revived for the job /
+      // sub / task attachment doors.
+      //
+      // Safe to interpret here because the door already PROVES TENANCY: the
+      // attachmentInOrg() call above compares the caller's org id against the
+      // bucket's entity_id (which IS the organizations.id) with no lookup and
+      // no bypass. Interpreting the sentinel widens who may read a file the
+      // boundary has already agreed is theirs — it does not widen which files
+      // the boundary agrees to. That ordering is the one that has misfired
+      // twice in this arc, so it is stated rather than assumed.
+      //
+      // ensureOrgAttachmentScope is asked anyway, for the same reason
+      // requireDynamicCapability asks it after its own predicate: two
+      // independent statements of one rule, and the stricter one (the
+      // predicate, which has no system_admin arm) is the one that already ran.
+      if (!ensureOrgAttachmentScope(req, att.entity_id)) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
     } else {
       const ok = await hasCapability(req.user, cap);
       if (!ok) return res.status(403).json({ error: 'Forbidden' });
@@ -1640,6 +1670,14 @@ async function canReadAttachment(req, att) {
   if (!(await attachmentInOrg(pool, att, callerOrgId(req)))) return false;
   const cap = readCapForEntity(att.entity_type);
   if (cap === '__owner__') return ensureUserAttachmentOwner(req, att.entity_id);
+  // The sentinel's second un-interpreted site. Without this it fell through to
+  // hasCapability(user, '__org_member__') — always false — which made an
+  // org-bucket file unusable as a move/copy SOURCE for everyone. Same
+  // reasoning as /raw/:id above: the tenancy predicate on the line before has
+  // already proved the row is the caller's, so this only decides WHO in that
+  // tenant may read it, and for the company knowledge base the answer is
+  // "any member", which is what the sentinel was written to say.
+  if (cap === '__org_member__') return ensureOrgAttachmentScope(req, att.entity_id);
   return await hasCapability(req.user, cap);
 }
 async function canWriteAttachment(req, att) {
