@@ -92,8 +92,9 @@ async function assemblePmDigest(orgId, weekStart) {
   const jobsR = await pool.query(
     "SELECT j.id, j.data->>'jobNumber' AS job_number, j.data->>'title' AS title, " +
     "       j.data->>'status' AS status " +
-    "  FROM jobs j JOIN users u ON u.id = j.owner_id " +
-    " WHERE u.organization_id = $1 AND j.updated_at >= $2 " +
+    // Column, not owner join — the convergence; see assembleSalesDigest.
+    "  FROM jobs j " +
+    " WHERE j.organization_id = $1 AND j.updated_at >= $2 " +
     " ORDER BY j.updated_at DESC LIMIT 25",
     [orgId, sinceISO]
   );
@@ -102,8 +103,7 @@ async function assemblePmDigest(orgId, weekStart) {
     "SELECT s.start_date, s.job_id, j.data->>'title' AS job_title, j.data->>'jobNumber' AS job_number " +
     "  FROM schedule_entries s " +
     "  JOIN jobs j ON j.id = s.job_id " +
-    "  JOIN users u ON u.id = j.owner_id " +
-    " WHERE u.organization_id = $1 " +
+    " WHERE j.organization_id = $1 " +
     "   AND s.start_date >= CURRENT_DATE " +
     "   AND s.start_date <  CURRENT_DATE + INTERVAL '7 days' " +
     " ORDER BY s.start_date ASC LIMIT 25",
@@ -126,23 +126,38 @@ async function assemblePmDigest(orgId, weekStart) {
   };
 }
 
+// ⚠ BEHAVIOUR CHANGE — READ THIS BEFORE THE NEXT MONDAY.
+//
+// THE SALES DIGEST HAS NEVER SENT, TO ANYONE. Its first two queries joined
+// `users u ON u.id = l.owner_id`, and leads has NO owner_id column — so every
+// call raised 42703, sendOrgDigests' per-role
+// `catch (e) { console.warn('[weekly-digest][sales] …') }` swallowed it, and
+// the sales digest was skipped every single week while the PM and Ops digests
+// went out normally. The failure was one warn line in the boot-adjacent log
+// and nothing anywhere else.
+//
+// Repairing it means salespeople start receiving a Monday email they have
+// never received. That is the feature working as designed, but it is not a
+// silent cleanup: it is new outbound mail, so it ships announced.
 async function assembleSalesDigest(orgId, weekStart) {
   const sinceISO = isoDate(weekStart);
   const leadsR = await pool.query(
     "SELECT l.id, l.data->>'title' AS title, l.data->>'status' AS status, l.data->>'client_company' AS client_company " +
-    "  FROM leads l JOIN users u ON u.id = l.owner_id " +
-    " WHERE u.organization_id = $1 AND l.updated_at >= $2 " +
+    "  FROM leads l " +
+    " WHERE l.organization_id = $1 AND l.updated_at >= $2 " +
     " ORDER BY l.updated_at DESC LIMIT 25",
     [orgId, sinceISO]
   );
   const wonR = await pool.query(
-    "SELECT COUNT(*)::int AS c FROM leads l JOIN users u ON u.id = l.owner_id " +
-    " WHERE u.organization_id = $1 AND l.updated_at >= $2 AND l.data->>'status' = 'Sold'",
+    "SELECT COUNT(*)::int AS c FROM leads l " +
+    " WHERE l.organization_id = $1 AND l.updated_at >= $2 AND l.data->>'status' = 'Sold'",
     [orgId, sinceISO]
   );
+  // Converged onto the column with the rest of this wave. estimates.owner_id
+  // is NULLABLE, so the INNER JOIN also dropped every ownerless estimate.
   const estR = await pool.query(
-    "SELECT COUNT(*)::int AS c FROM estimates e JOIN users u ON u.id = e.owner_id " +
-    " WHERE u.organization_id = $1 AND e.updated_at >= $2 " +
+    "SELECT COUNT(*)::int AS c FROM estimates e " +
+    " WHERE e.organization_id = $1 AND e.updated_at >= $2 " +
     "   AND COALESCE(e.data->>'bt_export_status','') IN ('sent','accepted')",
     [orgId, sinceISO]
   );
@@ -176,8 +191,7 @@ async function assembleOpsDigest(orgId) {
     "SELECT COUNT(DISTINCT j.id)::int AS c " +
     "  FROM schedule_entries s " +
     "  JOIN jobs j ON j.id = s.job_id " +
-    "  JOIN users u ON u.id = j.owner_id " +
-    " WHERE u.organization_id = $1 " +
+    " WHERE j.organization_id = $1 " +
     "   AND s.start_date >= CURRENT_DATE " +
     "   AND s.start_date <  CURRENT_DATE + INTERVAL '7 days'",
     [orgId]

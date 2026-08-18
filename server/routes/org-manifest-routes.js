@@ -8,10 +8,33 @@
 //
 // Mounted at /api/org/manifest.
 //
-// All counts are organization-scoped. Tables with a direct
-// organization_id column use it; tables that join through users
-// (jobs, leads, estimates, job_change_orders, schedule_entries) use
-// owner_id → users → organization_id.
+// All counts are organization-scoped, through the ENTITY'S OWN
+// organization_id column. They used to scope through
+// owner_id → users.organization_id — the OTHER of this repo's two tenancy
+// pointers — which had three consequences on this surface alone:
+//
+//   * EVERY LEAD COUNT WAS A SQL ERROR RENDERED AS ZERO. leads has no
+//     owner_id column (server/db.js declares client_id, salesperson_id,
+//     job_id, created_by, and no ALTER adds one), so every
+//     `JOIN users u ON u.id = l.owner_id` raised 42703 — and safeCount /
+//     `.catch(() => ({ rows: [] }))` turned that into a clean 0. The lead
+//     histogram, the leads-this-week tile and the four photo tiles have been
+//     reporting zero since they were written, with a warning in the log and
+//     nothing on the screen.
+//   * Jobs and estimates whose OWNER has a NULL org were silently excluded.
+//     Those rows exist: db.js's own boot backfill skips jobs whose owner has
+//     no org and then stamps them from the sole org anyway, so the column is
+//     set while the owner's is not.
+//   * POST /next-job-number computed MAX(jobNumber) over that same reduced
+//     set. A job whose owner had no org did not raise the ceiling, so the
+//     counter could hand out a number that is already in use. Scoping on the
+//     column widens the max and closes that.
+//
+// This is the two-pointer convergence services/job-org-scope.js declares
+// ("The COLUMN is canonical") and server/org-access.js now agrees with. It
+// only ever WIDENS what this org can see — stamping widens, tightening hides
+// — but it does change numbers on the Command Center, and it changes them
+// upward. That is intended.
 //
 // Capability: any authenticated user in the org can read. No tier
 // gating — this is a summary view, not record-level data.
@@ -126,10 +149,10 @@ router.get('/manifest', requireAuth, async (req, res) => {
 
   try {
     // Run all counts in parallel — they're independent.
-    // Jobs / leads / estimates / change_orders / schedule_entries
-    // join through users (owner_id → users.organization_id).
-    // Projects / job_reports / attachments either have direct
-    // organization_id or join via the entity's owning user.
+    // Every one scopes on the entity's own organization_id column; the
+    // job-scoped children (job_change_orders, schedule_entries, job_reports)
+    // scope through their PARENT JOB'S column. See the header for what the
+    // previous owner-join was doing to the lead counts.
     const [
       orgRow,
       jobsActive, jobsCompleted, jobsArchived, jobsLast7d,
@@ -145,52 +168,52 @@ router.get('/manifest', requireAuth, async (req, res) => {
 
       // ── Jobs ─────────────────────────────────────────────────
       safeCount(
-        "SELECT COUNT(*)::int c FROM jobs j JOIN users u ON u.id = j.owner_id " +
-        " WHERE u.organization_id = $1 " +
+        "SELECT COUNT(*)::int c FROM jobs j " +
+        " WHERE j.organization_id = $1 " +
         "   AND COALESCE(j.data->>'status','') NOT IN ('Completed','Archived')",
         [orgId]
       ),
       safeCount(
-        "SELECT COUNT(*)::int c FROM jobs j JOIN users u ON u.id = j.owner_id " +
-        " WHERE u.organization_id = $1 AND j.data->>'status' = 'Completed'",
+        "SELECT COUNT(*)::int c FROM jobs j " +
+        " WHERE j.organization_id = $1 AND j.data->>'status' = 'Completed'",
         [orgId]
       ),
       safeCount(
-        "SELECT COUNT(*)::int c FROM jobs j JOIN users u ON u.id = j.owner_id " +
-        " WHERE u.organization_id = $1 AND j.data->>'status' = 'Archived'",
+        "SELECT COUNT(*)::int c FROM jobs j " +
+        " WHERE j.organization_id = $1 AND j.data->>'status' = 'Archived'",
         [orgId]
       ),
       safeCount(
-        "SELECT COUNT(*)::int c FROM jobs j JOIN users u ON u.id = j.owner_id " +
-        " WHERE u.organization_id = $1 AND j.created_at >= NOW() - INTERVAL '7 days'",
+        "SELECT COUNT(*)::int c FROM jobs j " +
+        " WHERE j.organization_id = $1 AND j.created_at >= NOW() - INTERVAL '7 days'",
         [orgId]
       ),
 
       // ── Leads (status histogram) ─────────────────────────────
       pool.query(
         "SELECT COALESCE(l.data->>'status','new') AS status, COUNT(*)::int AS c " +
-        "  FROM leads l JOIN users u ON u.id = l.owner_id " +
-        " WHERE u.organization_id = $1 " +
+        "  FROM leads l " +
+        " WHERE l.organization_id = $1 " +
         " GROUP BY 1",
         [orgId]
       ).catch(() => ({ rows: [] })),
       safeCount(
-        "SELECT COUNT(*)::int c FROM leads l JOIN users u ON u.id = l.owner_id " +
-        " WHERE u.organization_id = $1 AND l.created_at >= NOW() - INTERVAL '7 days'",
+        "SELECT COUNT(*)::int c FROM leads l " +
+        " WHERE l.organization_id = $1 AND l.created_at >= NOW() - INTERVAL '7 days'",
         [orgId]
       ),
 
       // ── Estimates (BT export status histogram) ───────────────
       pool.query(
         "SELECT COALESCE(e.data->>'bt_export_status','pending') AS status, COUNT(*)::int AS c " +
-        "  FROM estimates e JOIN users u ON u.id = e.owner_id " +
-        " WHERE u.organization_id = $1 " +
+        "  FROM estimates e " +
+        " WHERE e.organization_id = $1 " +
         " GROUP BY 1",
         [orgId]
       ).catch(() => ({ rows: [] })),
       safeCount(
-        "SELECT COUNT(*)::int c FROM estimates e JOIN users u ON u.id = e.owner_id " +
-        " WHERE u.organization_id = $1 AND e.created_at >= NOW() - INTERVAL '7 days'",
+        "SELECT COUNT(*)::int c FROM estimates e " +
+        " WHERE e.organization_id = $1 AND e.created_at >= NOW() - INTERVAL '7 days'",
         [orgId]
       ),
 
@@ -221,8 +244,8 @@ router.get('/manifest', requireAuth, async (req, res) => {
         " WHERE (r.entity_type = 'project' AND r.entity_id IN ( " +
         "          SELECT id FROM projects WHERE organization_id = $1 ) " +
         "       ) OR ( r.entity_type IS NULL AND r.job_id IN ( " +
-        "          SELECT j.id FROM jobs j JOIN users u ON u.id = j.owner_id " +
-        "           WHERE u.organization_id = $1 ) " +
+        "          SELECT j.id FROM jobs j " +
+        "           WHERE j.organization_id = $1 ) " +
         "       )",
         [orgId]
       ),
@@ -232,8 +255,8 @@ router.get('/manifest', requireAuth, async (req, res) => {
         "   AND ( (r.entity_type = 'project' AND r.entity_id IN ( " +
         "            SELECT id FROM projects WHERE organization_id = $1)) " +
         "      OR (r.entity_type IS NULL AND r.job_id IN ( " +
-        "            SELECT j.id FROM jobs j JOIN users u ON u.id = j.owner_id " +
-        "             WHERE u.organization_id = $1)) " +
+        "            SELECT j.id FROM jobs j " +
+        "             WHERE j.organization_id = $1)) " +
         "       )",
         [orgId]
       ),
@@ -243,8 +266,8 @@ router.get('/manifest', requireAuth, async (req, res) => {
         " WHERE (r.entity_type = 'project' AND r.entity_id IN ( " +
         "         SELECT id FROM projects WHERE organization_id = $1)) " +
         "    OR (r.entity_type IS NULL AND r.job_id IN ( " +
-        "         SELECT j.id FROM jobs j JOIN users u ON u.id = j.owner_id " +
-        "          WHERE u.organization_id = $1)) " +
+        "         SELECT j.id FROM jobs j " +
+        "          WHERE j.organization_id = $1)) " +
         " GROUP BY 1",
         [orgId]
       ).catch(() => ({ rows: [] })),
@@ -254,16 +277,14 @@ router.get('/manifest', requireAuth, async (req, res) => {
         "SELECT co.status, COUNT(*)::int AS c " +
         "  FROM job_change_orders co " +
         "  JOIN jobs j ON j.id = co.job_id " +
-        "  JOIN users u ON u.id = j.owner_id " +
-        " WHERE u.organization_id = $1 " +
+        " WHERE j.organization_id = $1 " +
         " GROUP BY 1",
         [orgId]
       ).catch(() => ({ rows: [] })),
       safeCount(
         "SELECT COUNT(*)::int c FROM job_change_orders co " +
         "  JOIN jobs j ON j.id = co.job_id " +
-        "  JOIN users u ON u.id = j.owner_id " +
-        " WHERE u.organization_id = $1 AND co.created_at >= NOW() - INTERVAL '7 days'",
+        " WHERE j.organization_id = $1 AND co.created_at >= NOW() - INTERVAL '7 days'",
         [orgId]
       ),
 
@@ -273,8 +294,8 @@ router.get('/manifest', requireAuth, async (req, res) => {
         " WHERE a.mime_type LIKE 'image/%' " +
         "   AND a.entity_id IN ( " +
         "     SELECT id::text FROM projects WHERE organization_id = $1 " +
-        "     UNION ALL SELECT id FROM leads l JOIN users u ON u.id = l.owner_id WHERE u.organization_id = $1 " +
-        "     UNION ALL SELECT id FROM jobs j JOIN users u ON u.id = j.owner_id WHERE u.organization_id = $1 " +
+        "     UNION ALL SELECT id FROM leads l WHERE l.organization_id = $1 " +
+        "     UNION ALL SELECT id FROM jobs j WHERE j.organization_id = $1 " +
         "   )",
         [orgId]
       ),
@@ -284,8 +305,8 @@ router.get('/manifest', requireAuth, async (req, res) => {
         "   AND jsonb_array_length(COALESCE(a.annotations, '[]'::jsonb)) > 0 " +
         "   AND a.entity_id IN ( " +
         "     SELECT id::text FROM projects WHERE organization_id = $1 " +
-        "     UNION ALL SELECT id FROM leads l JOIN users u ON u.id = l.owner_id WHERE u.organization_id = $1 " +
-        "     UNION ALL SELECT id FROM jobs j JOIN users u ON u.id = j.owner_id WHERE u.organization_id = $1 " +
+        "     UNION ALL SELECT id FROM leads l WHERE l.organization_id = $1 " +
+        "     UNION ALL SELECT id FROM jobs j WHERE j.organization_id = $1 " +
         "   )",
         [orgId]
       ),
@@ -295,8 +316,8 @@ router.get('/manifest', requireAuth, async (req, res) => {
         "   AND jsonb_array_length(COALESCE(a.tags, '[]'::jsonb)) > 0 " +
         "   AND a.entity_id IN ( " +
         "     SELECT id::text FROM projects WHERE organization_id = $1 " +
-        "     UNION ALL SELECT id FROM leads l JOIN users u ON u.id = l.owner_id WHERE u.organization_id = $1 " +
-        "     UNION ALL SELECT id FROM jobs j JOIN users u ON u.id = j.owner_id WHERE u.organization_id = $1 " +
+        "     UNION ALL SELECT id FROM leads l WHERE l.organization_id = $1 " +
+        "     UNION ALL SELECT id FROM jobs j WHERE j.organization_id = $1 " +
         "   )",
         [orgId]
       ),
@@ -306,8 +327,8 @@ router.get('/manifest', requireAuth, async (req, res) => {
         "   AND a.uploaded_at >= NOW() - INTERVAL '7 days' " +
         "   AND a.entity_id IN ( " +
         "     SELECT id::text FROM projects WHERE organization_id = $1 " +
-        "     UNION ALL SELECT id FROM leads l JOIN users u ON u.id = l.owner_id WHERE u.organization_id = $1 " +
-        "     UNION ALL SELECT id FROM jobs j JOIN users u ON u.id = j.owner_id WHERE u.organization_id = $1 " +
+        "     UNION ALL SELECT id FROM leads l WHERE l.organization_id = $1 " +
+        "     UNION ALL SELECT id FROM jobs j WHERE j.organization_id = $1 " +
         "   )",
         [orgId]
       ),
@@ -316,8 +337,7 @@ router.get('/manifest', requireAuth, async (req, res) => {
       safeCount(
         "SELECT COUNT(*)::int c FROM schedule_entries s " +
         "  JOIN jobs j ON j.id = s.job_id " +
-        "  JOIN users u ON u.id = j.owner_id " +
-        " WHERE u.organization_id = $1 " +
+        " WHERE j.organization_id = $1 " +
         "   AND s.start_date >= date_trunc('week', CURRENT_DATE) " +
         "   AND s.start_date <  date_trunc('week', CURRENT_DATE) + INTERVAL '7 days'",
         [orgId]
@@ -325,8 +345,7 @@ router.get('/manifest', requireAuth, async (req, res) => {
       safeCount(
         "SELECT COUNT(*)::int c FROM schedule_entries s " +
         "  JOIN jobs j ON j.id = s.job_id " +
-        "  JOIN users u ON u.id = j.owner_id " +
-        " WHERE u.organization_id = $1 " +
+        " WHERE j.organization_id = $1 " +
         "   AND s.start_date >= date_trunc('week', CURRENT_DATE) + INTERVAL '7 days' " +
         "   AND s.start_date <  date_trunc('week', CURRENT_DATE) + INTERVAL '14 days'",
         [orgId]
@@ -348,8 +367,8 @@ router.get('/manifest', requireAuth, async (req, res) => {
              AND ( (r.entity_type = 'project' AND r.entity_id IN (
                        SELECT id FROM projects WHERE organization_id = $1))
                 OR (r.entity_type IS NULL AND r.job_id IN (
-                       SELECT j.id FROM jobs j JOIN users u ON u.id = j.owner_id
-                        WHERE u.organization_id = $1)))
+                       SELECT j.id FROM jobs j 
+                        WHERE j.organization_id = $1)))
            ORDER BY created_at DESC LIMIT 10)
          UNION ALL
          (SELECT 'change_order_opened'::text AS kind,
@@ -357,8 +376,8 @@ router.get('/manifest', requireAuth, async (req, res) => {
                  co.created_at AS at, co.id::text AS link_id
             FROM job_change_orders co
             JOIN jobs j ON j.id = co.job_id
-            JOIN users u ON u.id = j.owner_id
-           WHERE u.organization_id = $1 AND co.created_at >= NOW() - INTERVAL '14 days'
+            
+           WHERE j.organization_id = $1 AND co.created_at >= NOW() - INTERVAL '14 days'
            ORDER BY co.created_at DESC LIMIT 10)
          UNION ALL
          (SELECT 'project_created'::text AS kind,
@@ -600,8 +619,8 @@ router.post('/next-job-number', requireAuth, requireOrg, async (req, res) => {
     // so the regex params are safe.
     const maxRow = await client.query(
       "SELECT MAX((substring(j.data->>'jobNumber' from $2))::int) AS m " +
-      "  FROM jobs j JOIN users u ON u.id = j.owner_id " +
-      " WHERE u.organization_id = $1 AND j.data->>'jobNumber' ~ $3",
+      "  FROM jobs j " +
+      " WHERE j.organization_id = $1 AND j.data->>'jobNumber' ~ $3",
       [orgId, '^' + t.prefix + '([0-9]+)$', '^' + t.prefix + '[0-9]+$']
     );
     const maxExisting = Number((maxRow.rows[0] && maxRow.rows[0].m) || 0);
