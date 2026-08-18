@@ -8802,8 +8802,22 @@ function p86Ask(message, opts) {
     // Local packs are the SOURCE copies only — they reach the model
     // exclusively as native Anthropic Skills after a mirror/sync; no
     // server-side injection or loading path remains.
+    // app_settings('agent_skills') is a SINGLE GLOBAL row that becomes the
+    // platform's Anthropic-account-wide native Skills, and whose retire path
+    // detaches managed_agent_skills for every agent in every tenant. It is
+    // classified 'platform' server-side (services/app-settings-keys.js) and
+    // answers 404 — the same answer an absent key gets — to anyone without
+    // SYSTEM_ADMIN. So don't ask for it unless the caller holds that, and don't
+    // render the local-pack editor they could no longer save.
+    //
+    // The per-tenant skill surface is org_skill_packs / org memory, both of
+    // which stay on this page for org admins. Only this one block is gated.
+    var _isPlatformOwner = !!(window.p86Auth &&
+      typeof window.p86Auth.isSystemAdmin === 'function' && window.p86Auth.isSystemAdmin());
     Promise.all([
-      window.p86Api.settings.get('agent_skills'),
+      _isPlatformOwner
+        ? window.p86Api.settings.get('agent_skills').catch(function() { return null; })
+        : Promise.resolve(null),
       fetchOverridableSections()
     ]).then(function(results) {
       var res = results[0];
@@ -8833,6 +8847,7 @@ function p86Ask(message, opts) {
         '<div id="org-memory-panel" style="margin-bottom:18px;">' +
           '<div style="padding:14px;text-align:center;color:var(--text-dim,#888);font-size:12px;">Loading org memory…</div>' +
         '</div>' +
+        (!_isPlatformOwner ? '' :
         '<details style="margin-top:14px;border-top:1px solid var(--border,#333);padding-top:12px;">' +
           '<summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--text,#fff);">Local skill packs (' + _skillsDraft.skills.length + ' — on-demand only, edit body / agents here)</summary>' +
           '<p style="margin:10px 0 12px 0;font-size:11px;color:var(--text-dim,#888);line-height:1.55;">' +
@@ -8846,7 +8861,7 @@ function p86Ask(message, opts) {
             '<button class="ee-btn secondary" onclick="renderAgentsSkillsView()">Discard changes</button>' +
             '<button class="ee-btn primary" onclick="saveAgentsSkills()">&#x1F4BE; Save packs</button>' +
           '</div>' +
-        '</details>';
+        '</details>');
 
       // Load the per-agent native skill cards (existing loader, panel id
       // matches its container above).

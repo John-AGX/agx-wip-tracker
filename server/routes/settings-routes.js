@@ -1,22 +1,47 @@
-// Site-wide settings (key/JSONB). Currently used for the proposal template
-// (company header, intro/about text, exclusion list, signature line) so admins
-// can edit boilerplate without a code change. Reads are open to anyone with
-// ESTIMATES_VIEW (they need it to render the preview); writes require
-// ROLES_MANAGE (a proxy for "admin", same as the Roles UI).
+// Site-wide settings (key/JSONB) — an allowlisted key space, not a free one.
+//
+// `app_settings` is GLOBAL: `key TEXT PRIMARY KEY`, no organization_id, one row
+// per key for the whole platform. This router used to address it by a
+// caller-supplied key with NO allowlist — read on ESTIMATES_VIEW (every PM),
+// write on ROLES_MANAGE (every org admin) — which made the key space itself the
+// attack surface: the platform's VAPID private key, the agent playbook that
+// rides upstream to Anthropic, the cron dedupe ledgers, and db.js's one-shot
+// migration sentinels all lived one caller-supplied string away.
+//
+// services/app-settings-keys.js is now the authority on what may be addressed
+// and by whom; the full argument, the verified findings, and the residuals live
+// in that file's header. Two rules hold here:
+//
+//   1. PREDICATE BEFORE GATE. The key is classified BEFORE the database is
+//      touched, so an unauthorised caller never causes a read of the row.
+//   2. ONE ANSWER FOR "NOT YOURS". A key that is unknown, secret, internal,
+//      owned by another door, or simply above the caller's tier gets exactly
+//      the answer an ABSENT key gets — 404, same body, both verbs. No
+//      existence oracle: `vapid_keys`, `reminders_log` and `nonsense_key` are
+//      indistinguishable to anyone not entitled to them.
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireCapability } = require('../auth');
+const { requireAuth, hasCapability } = require('../auth');
 const { removedPacks } = require('../services/skill-pack-lifecycle');
+const { readCapabilityFor, writeCapabilityFor } = require('../services/app-settings-keys');
 
 const router = express.Router();
 
-router.get('/:key', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, res) => {
+// The single "not yours" answer. Byte-identical to the absent-key response on
+// purpose — see rule 2 above. Nothing about the key or its value is echoed.
+function notFound(res) {
+  return res.status(404).json({ error: 'Setting not found' });
+}
+
+router.get('/:key', requireAuth, async (req, res) => {
   try {
+    const cap = readCapabilityFor(req.params.key);
+    if (!cap || !hasCapability(req.user, cap)) return notFound(res);
     const { rows } = await pool.query(
       'SELECT key, value, updated_at FROM app_settings WHERE key = $1',
       [req.params.key]
     );
-    if (!rows.length) return res.status(404).json({ error: 'Setting not found' });
+    if (!rows.length) return notFound(res);
     res.json({ setting: rows[0] });
   } catch (e) {
     console.error('GET /api/settings/:key error:', e);
@@ -82,6 +107,22 @@ function preserveSkillIds(incoming, prior) {
 //
 // Best-effort by design. A failure to detach must not fail the admin's
 // save; it is reported back instead.
+//
+// THE DELETE BELOW IS UNSCOPED, AND THAT IS NOW THE GATE'S JOB.
+// `managed_agent_skills` is PRIMARY KEY (agent_key, skill_id) with no org
+// column, and collectSkillsFor Source 1 reads it — so this statement detaches
+// a skill from the platform's agents for EVERY tenant, with no sync required.
+// The org_skill_packs archive immediately below it IS org-scoped and its
+// comment explains why; this one was never given the same treatment, because
+// it cannot be: there is no tenant on either side of the join.
+//
+// It was reachable by any org admin, because PUT /:key was gated on
+// ROLES_MANAGE. It is now reachable only by a SYSTEM_ADMIN — see
+// services/app-settings-keys.js, where `agent_skills` is classified 'platform'
+// for exactly this reason. A platform-wide statement run by the platform
+// operator is correct; the same statement run by a tenant was the finding.
+// Scoping the row rather than the caller would need an organization_id on
+// managed_agent_skills, i.e. a schema change.
 async function retireRemovedPacks(removed, orgId) {
   const report = [];
   for (const pack of removed) {
@@ -126,8 +167,14 @@ async function retireRemovedPacks(removed, orgId) {
   return report;
 }
 
-router.put('/:key', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.put('/:key', requireAuth, async (req, res) => {
   try {
+    // Predicate before gate, and before the 400: a caller who may not address
+    // this key must not learn from the shape of the refusal that the key is
+    // real and merely wants a `value`. Classify, refuse, then validate.
+    const cap = writeCapabilityFor(req.params.key);
+    if (!cap || !hasCapability(req.user, cap)) return notFound(res);
+
     let value = req.body && req.body.value;
     if (value == null) return res.status(400).json({ error: 'value is required' });
     let retired = null;
