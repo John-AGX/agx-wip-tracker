@@ -262,4 +262,39 @@ router.get('/usage-forensics', requireAuth, requireSystemAdmin, async (req, res)
   }
 });
 
+// GET /api/admin/console/org-boundary — the tenant-boundary audit.
+//
+// WHY THIS EXISTS. The tenant-boundary endgame has exactly one gating
+// question — "which rows would become invisible if the tolerance came out?"
+// — and nothing in this repo could answer it. The two boot reporters in
+// db.js cover 10 tables of ~75, run twice per boot inside the Railway swap
+// window (which is why the three highest-row tables were deliberately
+// excluded), and are read out of scrollback. This is the same measurement
+// with none of those constraints: catalog-driven, complete, on demand, and
+// able to say "I could not measure that" instead of "zero".
+//
+// It hides nothing and changes nothing. Every statement runs inside a
+// READ ONLY transaction that is ROLLBACKed, under SET LOCAL
+// statement_timeout — because server/db.js creates the pool with
+// connectionString and ssl only, with NO statement_timeout and NO
+// lock_timeout, and every count in here is a guaranteed sequential scan
+// (the idx_*_org indexes are PARTIAL on `organization_id IS NOT NULL`, so
+// none of them can serve `IS NULL`). Without that timeout one admin click
+// could pin a pool connection on the attachments table indefinitely.
+// Aborting a read costs nothing, so the bound is free.
+//
+// ?timeout_ms= overrides the per-statement bound (1s..120s, default 20s).
+router.get('/org-boundary', requireAuth, requireSystemAdmin, async (req, res) => {
+  try {
+    const { auditOrgBoundary } = require('../services/org-boundary-audit');
+    const report = await auditOrgBoundary(pool, {
+      timeoutMs: req.query.timeout_ms ? parseInt(req.query.timeout_ms, 10) : undefined,
+    });
+    res.json(report);
+  } catch (e) {
+    console.error('GET /api/admin/console/org-boundary error:', e);
+    res.status(500).json({ error: e.message || 'Server error' });
+  }
+});
+
 module.exports = router;

@@ -283,6 +283,20 @@ async function validateAgainstRegistry(db, orgId, header, opts) {
   return { ok: true, code, trade, system: system || null, variant: variant || null };
 }
 
+// The tables seedGlobalTaxonomy() INSERTS `organization_id = NULL` into, on
+// every boot. Declared HERE, next to the code that writes the NULLs, and
+// imported by services/org-table-classification.js — so a table added to the
+// seeder is classified `shared` by the same edit that starts seeding it.
+//
+// This is not documentation. A NULL in one of these tables is CORRECT DATA:
+// it is the platform-wide catalog every tenant reads. If the org-boundary
+// audit ever counted one of these as "un-stamped", the fix would be a backfill
+// that splits the shared catalog per tenant and deletes it from every other
+// org — and `SET NOT NULL` on one of these columns would be violated by the
+// same init() that added it, which is a boot crash loop, not a failed
+// migration. Keep this list in step with the INSERTs below.
+const SHARED_NULL_ORG_TABLES = ['assembly_trades', 'assembly_systems', 'assembly_variants'];
+
 // Idempotent seed of the global (NULL-org) taxonomy — trades, systems, and the
 // variant catalog. NOT-EXISTS guards make it safe on every boot / racing boots.
 // It also RECONCILES: for a trade the library covers, any GLOBAL system/variant
@@ -788,4 +802,6 @@ module.exports = {
   // Code protocol
   normalizeCode, parseCode, loadRegistry, validateAgainstRegistry,
   seedGlobalTaxonomy, backfillAssemblyTaxonomy,
+  // The tables whose NULL org is load-bearing platform data, not a leak.
+  SHARED_NULL_ORG_TABLES,
 };

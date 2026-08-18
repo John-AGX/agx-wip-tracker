@@ -5544,19 +5544,40 @@ const ORG_STAMP_AUDIT_TABLES = [
 
 async function reportOrgStampAudit(phase) {
   const counts = {};
+  // "I could not count it" and "there are zero" are DIFFERENT FACTS, and this
+  // function used to render both as absence. A table that threw (column not
+  // added yet, permission, timeout) simply fell out of `counts`, and the
+  // all-clear line below then named ALL TEN TABLES as clean regardless of how
+  // many were actually measured. A gate built on a measurement that cannot
+  // fail loudly is not a gate — so unmeasured tables are now named.
+  const unmeasured = [];
   for (const t of ORG_STAMP_AUDIT_TABLES) {
     try {
       const reg = await pool.query('SELECT to_regclass($1) AS t', ['public.' + t]);
-      if (!reg.rows.length || reg.rows[0].t == null) continue;   // fresh DB
+      if (!reg.rows.length || reg.rows[0].t == null) { unmeasured.push(t + '(absent)'); continue; }
       // Table names come from the hardcoded list above, never from input.
       const r = await pool.query(
         'SELECT COUNT(*)::int AS n FROM ' + t + ' WHERE organization_id IS NULL');
       counts[t] = Number(r.rows[0].n);
-    } catch (e) { /* column not added yet on this boot — nothing to report */ }
+    } catch (e) {
+      unmeasured.push(t + '(' + ((e && e.code) || 'error') + ')');
+    }
   }
   const hits = Object.keys(counts).filter((t) => counts[t] > 0);
+  const measured = Object.keys(counts);
+  if (unmeasured.length) {
+    console.warn(`[org] ${phase}: NOT MEASURED — ` + unmeasured.join(' ') +
+      '. These are absent from the count below; they are not zero.');
+  }
   if (!hits.length) {
-    console.log(`[org] ${phase}: every row in ${ORG_STAMP_AUDIT_TABLES.join('/')} carries an organization_id.`);
+    // Name only what was actually counted. This line is the one an operator
+    // reads as "the boundary is clean", and it must never claim a table it
+    // never touched. It is also only ever 10 tables of ~75 — the complete
+    // answer is GET /api/admin/console/org-boundary.
+    console.log(`[org] ${phase}: every row in ${measured.length ? measured.join('/') : '(nothing measured)'} ` +
+      'carries an organization_id. NOTE: this covers 10 tables of ~75 — attachments/ai_messages/messages ' +
+      'and every other org-stamped table are NOT counted here. Run GET /api/admin/console/org-boundary ' +
+      'for the complete, catalog-driven answer.');
     return counts;
   }
   console.warn(`[org] ${phase}: rows with NO organization_id — ` +
@@ -5613,7 +5634,13 @@ async function reportOrgOwnerDivergence() {
        AND j.organization_id <> u.organization_id`;
   try {
     const reg = await pool.query("SELECT to_regclass('public.jobs') AS t");
-    if (!reg.rows.length || reg.rows[0].t == null) return 0;
+    if (!reg.rows.length || reg.rows[0].t == null) {
+      // NOT 0 — and it must say so. A missing jobs table used to return a
+      // bare, unlogged 0 from here, so "the table isn't there" read as a
+      // measured zero to the one caller whose job is to gate on this number.
+      console.warn('[org] divergence: could not be measured — public.jobs does not exist yet.');
+      return null;
+    }
     const c = await pool.query(`SELECT COUNT(*)::int AS n ${PRED}`);
     const n = Number(c.rows[0].n);
     if (!n) {
