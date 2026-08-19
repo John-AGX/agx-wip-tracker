@@ -39,6 +39,7 @@ const { resolveEntityLabels } = require('../services/entity-labels');
 // in services/sub-org-scope.js — subInOrg — for sub-routes.js; these three
 // endpoints are keyed on the same subId and were never asked.
 const { subInOrg } = require('../services/sub-org-scope');
+const { auditActor, actorFromRequest, hashId } = require('../audit');
 
 const router = express.Router();
 
@@ -281,10 +282,56 @@ router.get('/sub-portal/accept', async (req, res) => {
         WHERE i.token = $1`,
       [token]
     );
-    if (!inviteR.rows.length) return res.status(404).send('Invalid invite link.');
+    // ── THE CLAIM IS AN AUTH EVENT, AND IT MINTS A LOGIN ──────────────────
+    //
+    // This route is unauthenticated by construction — the token IS the
+    // credential, and the file's own header says a leaked link is the same as
+    // a leaked password. So it is exactly the shape that has to leave a
+    // record: a `users` row appears, a cookie is signed, and until now nothing
+    // anywhere said who or when.
+    //
+    // There is no req.user and never will be, so the actor is stated
+    // explicitly and TYPED as 'invite' rather than logged as a NULL user id
+    // that would read as coverage. The identity is not a guess: it is the
+    // email on the invite row this handler just read.
+    //
+    // The REFUSALS are recorded too, and they are the more useful half. A
+    // replayed link — already used, or expired — is what a leaked invite looks
+    // like from the server side, and the one-time `used_at` flag is the only
+    // mitigation there is. Without a row, a replay is invisible.
+    if (!inviteR.rows.length) {
+      auditActor(actorFromRequest(req, { actorKind: 'anonymous' }), {
+        action: 'auth.magic_link_claim', outcome: 'denied', reason: 'no_such_token', tier: 'B',
+        targetType: 'sub_invite',
+        // Never the token, and not even a key NAMED for one: the redaction
+        // denylist in server/audit.js drops any detail key matching /token/, and
+        // it is right to. This is a live credential for as long as it is valid,
+        // and this one is not even known to be ours.
+        detail: { link_sha8: hashId(token) },
+      });
+      return res.status(404).send('Invalid invite link.');
+    }
     const inv = inviteR.rows[0];
-    if (inv.used_at) return res.status(410).send('This invite has already been used. Ask the PM to send a fresh one.');
-    if (new Date(inv.expires_at) < new Date()) return res.status(410).send('This invite has expired. Ask the PM to send a fresh one.');
+    const inviteOrg = inv.sub_org_id != null ? inv.sub_org_id
+      : (inv.inviter_org_id != null ? inv.inviter_org_id : null);
+    function auditClaim(outcome, reason, extra) {
+      auditActor(actorFromRequest(req, {
+        actorKind: 'invite', actorLabel: inv.email,
+        actorOrgId: inviteOrg, orgId: inviteOrg,
+      }), Object.assign({
+        action: 'auth.magic_link_claim', outcome: outcome, reason: reason, tier: 'B',
+        targetType: 'sub_invite', targetId: String(inv.id),
+        organizationId: inviteOrg,
+      }, extra || {}));
+    }
+    if (inv.used_at) {
+      auditClaim('denied', 'already_used', { detail: { sub_id: inv.sub_id, used_user_id: inv.used_user_id } });
+      return res.status(410).send('This invite has already been used. Ask the PM to send a fresh one.');
+    }
+    if (new Date(inv.expires_at) < new Date()) {
+      auditClaim('denied', 'token_expired', { detail: { sub_id: inv.sub_id } });
+      return res.status(410).send('This invite has expired. Ask the PM to send a fresh one.');
+    }
 
     // Find-or-create the sub user. Match by (email, sub_id) so a sub
     // who got invited under two different sub records ends up with
@@ -326,6 +373,21 @@ router.get('/sub-portal/accept', async (req, res) => {
       'UPDATE sub_invites SET used_at = NOW(), used_user_id = $1 WHERE id = $2',
       [user.id, inv.id]
     );
+
+    // `created` is the part that matters: a claim that MINTS a login is a
+    // different event from one that reactivates an existing sub, and an
+    // un-stamped tenant (organization_id NULL — the invite carried no evidence
+    // either way) is a thing you want to find from the trail rather than from
+    // a support ticket.
+    auditClaim('ok', null, {
+      detail: {
+        sub_id: inv.sub_id,
+        user_id: user.id,
+        created: !existing.rows.length,
+        reactivated: !!(existing.rows.length && existing.rows[0].active === false),
+        org_stamped: user.organization_id != null,
+      },
+    });
 
     const tokenJwt = signToken(user);
     res.cookie('token', tokenJwt, {
