@@ -148,8 +148,11 @@ app.use('/api/live', require('./routes/live-routes'));
 // P1-2 — global per-IP rate guard for /api (200 req/min/IP). It was
 // defined + exported in rate-limit.js but never mounted. Sits in front
 // of the /api routers; the per-route limiters (login, AI chat) still
-// apply independently on top of this. trust proxy=1 means req.ip is the
-// real client, so this is keyed per actual client IP.
+// apply independently on top of this. `trust proxy` is 2 (line 87, and the
+// comment here said 1 until 2026-08-19), so req.ip is the real client and
+// this is keyed per actual client IP. The depth is not a detail: req.ip is
+// what the audit trail records as "from where", so a wrong number here is a
+// wrong answer to the only question the trail exists to answer.
 app.use('/api', ipGenericLimiter);
 
 // API routes
