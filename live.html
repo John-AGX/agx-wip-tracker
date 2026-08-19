@@ -7,73 +7,72 @@
 <meta name="referrer" content="no-referrer" />
 <title>Live session</title>
 <!--
-  Live Rooms phase 01 — the guest page.
+  Live Rooms phase 02 — the guest page.
 
-  THIS IS NOT THE APP. It is a bespoke minimal page in the task-share.html
-  shape: a room title, a roster, and a cursor surface. Mirroring the host's
-  navigation into a stripped read-only shell is PHASE 02, and building it here
-  would let one feature shape the foundation before the foundation exists.
-  Phase 02 changes what this page renders; it does not change how it is routed
-  or how it authenticates.
+  THIS IS STILL NOT THE APP, and that is the point. index.html carries 124
+  script tags, and js/app.js loadData() opens with eight ORG-WIDE GETs in one
+  Promise.all — every job, every estimate, every QB cost line, the whole sub
+  directory, every PO, CO, bill and AR invoice. A guest shell that booted the
+  SPA would download the company before it rendered anything. So this page loads
+  exactly two of the app's files: js/live-rooms.js for the session core (whose
+  boot() refuses to run here — see isGuestPage there) and js/live-view.js for
+  the typed renderer.
 
-  The token in the path IS the credential. This page therefore loads no app
-  bundle, sets no cookie, provisions no user, and talks to exactly four
-  endpoints: join, stream, beat, leave (plus the status probe). It cannot
-  reach the job, any attachment, any list, or any other room.
+  What it renders IS the app's real surfaces, built server-side under the room's
+  own policy: the app's tables and type, not a video of them, and a few KB per
+  navigation rather than a video stream.
+
+  The token in the path IS the credential. It lives in JS memory only — never
+  localStorage, never a cookie — so a reload is a rejoin and nothing survives
+  the meeting. This page sets no cookie, provisions no user, and talks to
+  exactly six endpoints: status, join, stream, view, beat, leave.
+
+  ── THE HOST'S POINTER IS NOT DRAWN HERE, AND THAT IS DELIBERATE ───────────
+  Phase 01 normalises a cursor to 0..10000 of the DOCUMENT it was measured
+  against. The host measures against index.html's workspace; this page is a
+  bespoke single column with different content in a different order. Proportional
+  tracking across two unrelated documents lands nowhere in particular, and a
+  confident arrow pointing at the wrong row is exactly the kind of claim this
+  whole feature has been corrected against. Anchoring a cursor to a DOM element
+  is phase 03's mechanism and it is not being smuggled in early. So: no remote
+  pointer on the guest shell, said out loud in the bar rather than quietly wrong.
 -->
+<link rel="stylesheet" href="/css/live-view.css?v=1" />
 <style>
-  :root { --bg:#0e1014; --card:#171a1f; --line:#2a2e35; --ink:#e8eaed; --dim:#9aa1ac; --accent:#4c8dff; --warn:#d99b28; --bad:#e5484d; --radius:14px; }
-  @media (prefers-color-scheme: light) {
-    :root { --bg:#f5f6f8; --card:#ffffff; --line:#e2e5ea; --ink:#131519; --dim:#69707c; }
-  }
-  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-  html,body { margin:0; padding:0; min-height:100%; background:var(--bg); color:var(--ink);
-    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
-  .wrap { max-width:640px; margin:0 auto; padding:18px 14px calc(40px + env(safe-area-inset-bottom,0px)); }
-  .brand { font-size:11px; letter-spacing:.07em; text-transform:uppercase; color:var(--dim); margin-bottom:10px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:15px 16px; margin-bottom:12px; }
-  h1 { font-size:19px; line-height:1.3; margin:0 0 6px; font-weight:650; overflow-wrap:anywhere; }
-  .sub { font-size:13px; color:var(--dim); }
-  .sec-h { font-size:11px; letter-spacing:.05em; text-transform:uppercase; color:var(--dim); margin:0 0 9px; }
-
-  .status { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; }
-  .dot { width:9px; height:9px; border-radius:50%; background:var(--dim); flex:none; }
-  .status[data-kind="asserted"] .dot { background:#3fb950; }
-  .status[data-kind="caveated"] .dot { background:var(--warn); }
-  .status[data-kind="unknown"]  .dot { background:var(--bad); }
-  .status[data-kind="ended"]    .dot { background:var(--dim); }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; min-height: 100%; background: var(--lv-bg); color: var(--lv-ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .wrap { max-width: 640px; margin: 0 auto; padding: 16px 14px calc(var(--lv-bar) + 24px); }
+  .brand { font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--lv-dim); margin-bottom: 10px; }
+  .card { background: var(--lv-card); border: 1px solid var(--lv-line); border-radius: var(--lv-radius);
+          padding: 15px 16px; margin-bottom: 12px; }
+  h1 { font-size: 19px; line-height: 1.3; margin: 0 0 6px; font-weight: 650; overflow-wrap: anywhere; }
+  .sub { font-size: 13px; color: var(--lv-dim); }
+  .sec-h { font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--lv-dim); margin: 0 0 9px; }
 
   /* A caveat is dimmed. "We can't tell" is NOT dimmed — it is a plain
      statement, and dimming it would read as decoration rather than as the
      surface admitting it does not know. */
-  .roster.is-dim { opacity:.55; }
-  .note { font-size:13px; color:var(--dim); font-style:italic; margin:8px 0 0; }
-  .row { display:flex; align-items:center; gap:8px; padding:8px 0; border-top:1px solid var(--line); font-size:14px; }
-  .row:first-child { border-top:0; }
-  .row.is-stale { opacity:.5; }
-  .who { flex:1 1 auto; min-width:0; overflow-wrap:anywhere; }
-  .flag { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--dim);
-          border:1px solid var(--line); border-radius:4px; padding:1px 5px; }
+  .roster.is-dim { opacity: .55; }
+  .note { font-size: 13px; color: var(--lv-dim); font-style: italic; margin: 8px 0 0; }
+  .row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid var(--lv-line); font-size: 14px; }
+  .row:first-child { border-top: 0; }
+  .row.is-stale { opacity: .5; }
+  .who { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  .flag { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--lv-dim);
+          border: 1px solid var(--lv-line); border-radius: 4px; padding: 1px 5px; }
 
-  .stage { position:relative; height:52vh; min-height:260px; border:1px solid var(--line);
-           border-radius:var(--radius); background:var(--card); overflow:hidden; }
-  .stage-hint { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
-                text-align:center; padding:20px; color:var(--dim); font-size:13px; line-height:1.5; }
-  .cur { position:absolute; top:0; left:0; display:flex; align-items:flex-start; gap:3px;
-         will-change:transform; pointer-events:none; }
-  .cur svg { fill:var(--accent); stroke:#06101f; stroke-width:.8; flex:none; }
-  .cur span { background:var(--accent); color:#06101f; font-size:11px; font-weight:600; line-height:1;
-              padding:3px 6px; border-radius:4px; white-space:nowrap; transform:translateY(6px); }
-
-  label { display:block; font-size:13px; color:var(--dim); margin-bottom:6px; }
-  input[type=text] { width:100%; font:inherit; font-size:16px; padding:12px; border:1px solid var(--line);
-                     border-radius:10px; background:var(--bg); color:var(--ink); }
-  .btn { display:inline-flex; align-items:center; justify-content:center; font:inherit; font-size:16px;
-         font-weight:600; padding:13px 16px; border-radius:11px; border:1px solid var(--accent);
-         background:var(--accent); color:#06101f; cursor:pointer; width:100%; margin-top:10px; }
-  .btn[disabled] { opacity:.55; }
-  .ended { text-align:center; padding:26px 16px; }
-  .ended h2 { font-size:17px; margin:0 0 6px; }
+  label { display: block; font-size: 13px; color: var(--lv-dim); margin-bottom: 6px; }
+  input[type=text] { width: 100%; font: inherit; font-size: 16px; padding: 12px; border: 1px solid var(--lv-line);
+                     border-radius: 10px; background: var(--lv-bg); color: var(--lv-ink); }
+  .btn { display: inline-flex; align-items: center; justify-content: center; font: inherit; font-size: 16px;
+         font-weight: 600; padding: 13px 16px; border-radius: 11px; border: 1px solid var(--lv-accent);
+         background: var(--lv-accent); color: #06101f; cursor: pointer; width: 100%; margin-top: 10px; }
+  .btn[disabled] { opacity: .55; }
+  .ended { text-align: center; padding: 26px 16px; }
+  .ended h2 { font-size: 17px; margin: 0 0 6px; }
+  details.roster-fold summary { cursor: pointer; list-style: none; }
+  details.roster-fold summary::-webkit-details-marker { display: none; }
 </style>
 </head>
 <body>
@@ -91,24 +90,17 @@
   </div>
 
   <div id="live" style="display:none">
+    <div class="lv-tabs" id="tabs"></div>
     <div class="card">
-      <h1 id="title">Live session</h1>
-      <div class="status" id="status" data-kind="unknown">
-        <span class="dot"></span><span id="status-text">Connecting&hellip;</span>
-      </div>
+      <p class="lv-stamp" id="stamp" style="display:none"></p>
+      <div id="surface"></div>
     </div>
 
-    <div class="card">
-      <div class="sec-h">In this session</div>
+    <details class="card roster-fold" id="roster-card">
+      <summary class="sec-h" id="roster-summary">In this session</summary>
       <div class="roster" id="roster"></div>
       <div class="note" id="roster-note"></div>
-    </div>
-
-    <div class="stage" id="stage">
-      <div class="stage-hint" id="stage-hint">
-        Cursors from everyone in this session appear here.<br />Move your pointer to show yours.
-      </div>
-    </div>
+    </details>
   </div>
 
   <div id="dead" class="card ended" style="display:none">
@@ -117,31 +109,82 @@
   </div>
 </div>
 
-<script src="/js/live-rooms.js?v=1"></script>
+<!-- The guest bar. Whose screen this is, that it is read-only, when the link
+     stops working, and whether we are actually following. Always visible,
+     always at most a few lines, and it never claims more than it knows. -->
+<div class="lv-bar" id="bar" data-kind="following" style="display:none">
+  <div class="lv-bar-main">
+    <div class="lv-bar-who"><span class="lv-dot"></span><span id="bar-claim">Connecting&hellip;</span></div>
+    <div class="lv-bar-sub" id="bar-sub">Read-only</div>
+  </div>
+  <button type="button" class="lv-follow" id="follow" aria-pressed="true">Following</button>
+  <button type="button" class="is-primary" id="back" style="display:none">Back</button>
+  <div class="lv-bar-note" id="bar-note" style="display:none"></div>
+</div>
+
+<script src="/js/live-rooms.js?v=2"></script>
+<script src="/js/live-view.js?v=1"></script>
 <script>
 (function () {
   'use strict';
   var Core = window.p86LiveCore;
+  var View = window.p86LiveView;
   var token = (location.pathname.split('/')[2] || '').trim();
   var session = null;
+
+  // Guest state. NONE of it is persisted: a credential in localStorage on a
+  // guest's phone outlives the meeting, and "must not persist beyond the
+  // session" is the standard.
+  var following = true;
+  var mySurface = null;
+  var lastDoc = null;
+  var lastFetchAt = null;
+  // A request counter rather than an in-flight LOCK. A lock drops the host's
+  // next navigation whenever one is already in the air — which is exactly when
+  // he is moving fast and the mirror matters most. A counter lets the newest
+  // request always win and simply discards a stale answer.
+  var reqSeq = 0;
+  // Signatures, so a 1Hz repaint does not rewrite innerHTML every second:
+  // that would fight text selection, reset scroll inside a table, and blow away
+  // focus on the tab strip.
+  var docSig = null;
+  var rosterSig = null;
 
   var $ = function (id) { return document.getElementById(id); };
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
-      return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
 
+  function hostName() {
+    var ps = (session && session.participants) || [];
+    for (var i = 0; i < ps.length; i++) if (ps[i].role === 'host') return ps[i].name;
+    return 'the host';
+  }
+
+  function surfaceLabel(key) {
+    var list = (session && session.surfaces) || [];
+    for (var i = 0; i < list.length; i++) if (list[i].key === key) return list[i].label;
+    return key || '';
+  }
+
+  // A dead link says so BEFORE a name box is offered, and a terminal state
+  // CLEARS the document. "Don't blank a stale mirror" and "the link is dead"
+  // are different rules and this is where they meet: a revoked link that left
+  // the WIP table on screen would be persisting past a kick.
   function showDead(reason) {
     $('gate').style.display = 'none';
     $('live').style.display = 'none';
+    $('bar').style.display = 'none';
     $('dead').style.display = '';
+    $('surface').innerHTML = '';
+    lastDoc = null;
+    docSig = null;
     $('dead-h').textContent = Core.endReasonText(reason);
     $('dead-sub').textContent = 'You can close this page.';
   }
 
-  // Probe before showing a join form, so a dead link says so instead of
-  // offering an action that cannot work.
   fetch('/api/live/' + encodeURIComponent(token) + '/status', { cache: 'no-store' })
     .then(function (r) {
       if (r.status === 404) { showDead('not_found'); return null; }
@@ -161,36 +204,197 @@
     var name = $('nm').value.trim();
     if (!name) { $('nm').focus(); return; }
     $('go').disabled = true;
-    session = new window.p86Live.Session({ token: token, displayName: name, onChange: paint });
+    session = new window.p86Live.Session({ token: token, displayName: name, onChange: onChange });
     $('gate').style.display = 'none';
     $('live').style.display = '';
+    $('bar').style.display = '';
     session.start();
   });
 
-  var nodes = {};
+  // ── The document ───────────────────────────────────────────────────────
+  // One fetch per surface change, from the ONE door that serves a guest a
+  // document. There is no parameter here that could name a record: the server
+  // reads the entity from the room row.
+  function loadSurface(surface, force) {
+    if (!session || !session.roomId || !session.streamKey || !surface) return;
+    if (!force && surface === mySurface && lastDoc) { paint(); return; }
+    var mine = ++reqSeq;
+    var url = '/api/live/' + encodeURIComponent(session.roomId) + '/view/' +
+              encodeURIComponent(session.streamKey) + '/' + encodeURIComponent(surface);
+    fetch(url, { cache: 'no-store', credentials: 'omit' })
+      .then(function (r) {
+        if (r.status === 404 || r.status === 410) {
+          // The credential died under us (rejoined, kicked, room over). The
+          // session's own recovery is the authority on which; do not guess.
+          return null;
+        }
+        if (!r.ok) return null;
+        return r.json();
+      })
+      .then(function (j) {
+        if (mine !== reqSeq) return;   // a newer navigation already won
+        if (!j) { paint(); return; }
+        mySurface = j.surface;
+        lastDoc = j.view;
+        lastFetchAt = j.at;
+        paint();
+      })
+      .catch(function () { if (mine === reqSeq) paint(); });
+  }
+
+  function followHost(force) {
+    var hv = (session && session.hostView) || {};
+    if (!hv.surface) { paint(); return; }
+    loadSurface(hv.surface, force);
+  }
+
+  // ── Reacting to the session ────────────────────────────────────────────
+  var lastPolicyMoney = null;
+  var lastHostSurface = null;
+
+  function onChange() {
+    if (!session) return;
+    if (session.terminal) { showDead(session.terminalReason); return; }
+
+    // The arrangement changed. DISCARD and refetch — never patch. Flipping the
+    // toggle off must not be a client-side unhide of data the client does not
+    // have, and flipping it on must not leave live numbers in memory.
+    var money = !!(session.policy && session.policy.money);
+    if (lastPolicyMoney !== null && lastPolicyMoney !== money) {
+      lastDoc = null;
+      $('surface').innerHTML = '';
+      if (mySurface) loadSurface(mySurface, true);
+    }
+    lastPolicyMoney = money;
+
+    var hv = session.hostView || {};
+    if (hv.surface !== lastHostSurface) {
+      lastHostSurface = hv.surface;
+      if (following) followHost(true);
+    }
+    // First document, once the stream has told us where he is.
+    if (!lastDoc && following && hv.surface) followHost(false);
+    paint();
+  }
+
+  // ── Painting ───────────────────────────────────────────────────────────
   function paint() {
     if (!session) return;
     var st = session.state();
-
     if (st.kind === 'ended') { showDead(session.terminalReason); return; }
 
-    if (session.room && session.room.title) $('title').textContent = session.room.title;
+    paintTabs();
+    paintBar(st);
+    paintRoster(st);
+    // Only when the DOCUMENT changed. A 1Hz innerHTML rewrite would fight text
+    // selection and reset the horizontal scroll inside a wide table on every
+    // tick — on the one device this feature is for.
+    if (lastDoc) {
+      var sig = lastFetchAt + '|' + lastDoc.surface;
+      if (sig !== docSig) { docSig = sig; View.render($('surface'), lastDoc); }
+    }
+  }
 
-    $('status').setAttribute('data-kind', st.kind);
-    $('status-text').textContent =
-      st.kind === 'asserted' ? 'Live' :
-      st.kind === 'caveated' ? 'Reconnecting' : "Disconnected";
+  function paintTabs() {
+    var list = (session && session.surfaces) || [];
+    var el = $('tabs');
+    var html = '';
+    for (var i = 0; i < list.length; i++) {
+      html += '<button type="button" class="lv-tab' + (list[i].key === mySurface ? ' is-active' : '') +
+              '" data-surface="' + esc(list[i].key) + '">' + esc(list[i].label) + '</button>';
+    }
+    if (el.getAttribute('data-sig') !== html) { el.innerHTML = html; el.setAttribute('data-sig', html); }
+  }
 
-    // The roster obeys ONE rule: never show a face we cannot currently verify.
+  // The guest's own tab strip is what makes Following a TOGGLE rather than a
+  // jail. An unfollowed guest may move among the SAME allow-listed surfaces of
+  // the SAME room — so breaking off reaches nothing a following guest could
+  // not. The toggle changes WHEN they fetch, never WHAT they may fetch.
+  $('tabs').addEventListener('click', function (ev) {
+    var b = ev.target && ev.target.closest ? ev.target.closest('[data-surface]') : null;
+    if (!b) return;
+    var s = b.getAttribute('data-surface');
+    var hv = (session && session.hostView) || {};
+    if (s !== hv.surface) setFollowing(false);
+    loadSurface(s, true);
+  });
+
+  function setFollowing(on) {
+    following = !!on;
+    $('follow').setAttribute('aria-pressed', following ? 'true' : 'false');
+    $('follow').textContent = following ? 'Following' : 'Follow';
+    if (following) followHost(true);
+    else paint();
+  }
+  $('follow').addEventListener('click', function () { setFollowing(!following); });
+  $('back').addEventListener('click', function () { setFollowing(true); });
+
+  function paintBar(rosterSt) {
+    var hv = (session && session.hostView) || {};
+    var who = hostName();
+    var m = View.mirrorState({
+      terminal: session.terminal,
+      multiInstance: session.multiInstance,
+      msSinceFrame: session.lastFrameAt ? (Date.now() - session.lastFrameAt) : null,
+      attempts: session.attempts,
+      following: following,
+      hostSurface: hv.surface,
+      hostReason: hv.reason,
+      hostSurfaceLabel: surfaceLabel(hv.surface),
+      mySurface: mySurface,
+      hostName: who
+    });
+
+    var bar = $('bar');
+    bar.setAttribute('data-kind', m.kind);
+    $('bar-claim').textContent = m.claim || (who + "'s screen");
+
+    // Whose screen · read-only · when the link dies. Three facts, one line. If
+    // it needs another line, cut a word, not a fact.
+    var bits = [who + "'s screen", 'read-only'];
+    if (session.room && session.room.expires_at) {
+      var exp = View.expiryText(session.room.expires_at);
+      if (exp) bits.push(exp);
+    }
+    $('bar-sub').textContent = bits.join(' · ');
+
+    var note = m.note || '';
+    // The pointer limitation, stated once rather than drawn wrongly.
+    if (!note && m.kind === 'following') note = "You see " + who + "'s screens, not their pointer.";
+    $('bar-note').textContent = note;
+    $('bar-note').style.display = note ? '' : 'none';
+
+    $('back').style.display = m.showBack ? '' : 'none';
+    if (m.showBack) $('back').textContent = m.backLabel;
+
+    // A stale document keeps its numbers — they were real when fetched — but
+    // it stops claiming to be current, and says WHEN it was true.
+    var stampEl = $('stamp');
+    if (m.stamp && lastFetchAt) {
+      stampEl.textContent = View.stampText(lastFetchAt);
+      stampEl.style.display = '';
+    } else {
+      stampEl.style.display = 'none';
+    }
+
+    if (rosterSt) { /* roster health is painted separately */ }
+  }
+
+  function paintRoster(st) {
     var list = Core.visibleParticipants(session.participants, st);
     var r = $('roster');
     r.className = 'roster' + (st.dim ? ' is-dim' : '');
+    $('roster-summary').textContent = st.showRoster
+      ? ('In this session (' + list.length + ')')
+      : 'In this session';
+    var out = '';
     if (!st.showRoster) {
-      r.innerHTML = '';
+      // NOT a stale roster with an apology attached: if we cannot verify who is
+      // watching, we must not draw their faces. Phase 01's rule, unchanged.
+      out = '';
     } else if (!list.length) {
-      r.innerHTML = '<div class="row"><span class="who">Just you so far.</span></div>';
+      out = '<div class="row"><span class="who">Just you so far.</span></div>';
     } else {
-      var out = '';
       for (var i = 0; i < list.length; i++) {
         var p = list[i];
         out += '<div class="row' + (p.presence === 'stale' ? ' is-stale' : '') + '">' +
@@ -199,62 +403,25 @@
                (p.role === 'host' ? '<span class="flag">host</span>' : '') +
                '</div>';
       }
-      r.innerHTML = out;
     }
+    if (out !== rosterSig) { rosterSig = out; r.innerHTML = out; }
     $('roster-note').textContent = st.message || '';
-
-    paintCursors(st);
   }
 
-  function paintCursors(st) {
-    var stage = $('stage');
-    var w = stage.clientWidth, h = stage.clientHeight;
-    var byId = {};
-    for (var i = 0; i < session.participants.length; i++) byId[session.participants[i].id] = session.participants[i];
-
-    var seen = {}, any = false;
-    for (var pid in session.cursors) {
-      if (!Object.prototype.hasOwnProperty.call(session.cursors, pid)) continue;
-      if (pid === session.participantId) continue;
-      // Same honesty rule as the roster, one layer down. A frozen named cursor
-      // sitting beside "we can't tell who's watching" is the same defect.
-      if (!Core.cursorVisible(byId[pid], st)) continue;
-      any = true; seen[pid] = true;
-      var c = session.cursors[pid];
-      var n = nodes[pid];
-      if (!n) {
-        n = document.createElement('div');
-        n.className = 'cur';
-        n.innerHTML = '<svg viewBox="0 0 16 16" width="16" height="16"><path d="M2 1 L2 13 L5.5 9.8 L7.7 14.5 L9.8 13.5 L7.6 9 L12 9 Z"/></svg><span></span>';
-        stage.appendChild(n);
-        nodes[pid] = n;
-      }
-      n.querySelector('span').textContent = c.name || 'Someone';
-      var shown = c.shown || c.target;
-      shown = [shown[0] + (c.target[0] - shown[0]) * 0.35, shown[1] + (c.target[1] - shown[1]) * 0.35];
-      c.shown = shown;
-      var pos = Core.fromDocCoords(shown[0], shown[1], w, h);
-      n.style.transform = 'translate(' + Math.round(pos.left) + 'px,' + Math.round(pos.top) + 'px)';
-    }
-    for (var old in nodes) {
-      if (!Object.prototype.hasOwnProperty.call(nodes, old)) continue;
-      if (!seen[old]) { if (nodes[old].parentNode) nodes[old].parentNode.removeChild(nodes[old]); delete nodes[old]; }
-    }
-    $('stage-hint').style.display = any ? 'none' : '';
-  }
-
-  // A guest's own cursor is the ONLY thing they send besides their name.
-  // Sampled relative to the stage, in the same 0..10000 document space.
-  $('stage').addEventListener('pointermove', function (ev) {
+  // Coming back from another app is the most common mobile interaction there
+  // is, and the host has moved while we were gone. Refetch rather than trust a
+  // stale document — without this, "check a text, come back" shows a
+  // confidently wrong page.
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState !== 'visible') return;
     if (!session || session.terminal) return;
-    var b = $('stage').getBoundingClientRect();
-    // Normalised against the STAGE, because that is what was measured.
-    session.sampleCursor(ev.clientX - b.left, ev.clientY - b.top, b.width, b.height);
-  }, { passive: true });
+    if (following) followHost(true);
+    else if (mySurface) loadSurface(mySurface, true);
+  });
 
-  // Interpolation tick, and the repaint that lets "we can't tell" arrive on
-  // its own — it is a state reached by the ABSENCE of news, so no event fires.
-  setInterval(function () { try { paint(); } catch (e) {} }, 1000);
+  // The repaint that lets "we can't tell" arrive on its own — it is a state
+  // reached by the ABSENCE of news, so no event fires to announce it.
+  setInterval(function () { try { if (session) paint(); } catch (e) {} }, 1000);
 
   window.addEventListener('pagehide', function () { if (session) session.stop('pagehide'); });
 })();

@@ -148,6 +148,73 @@
 .p86-live-acts { display: flex; gap: 4px; flex-wrap: wrap; }
 .p86-live-acts button { font-size: 11px; padding: 5px 7px; min-height: 30px; }
 
+/* ── The presenter panel (phase 02) ────────────────────────────────────────
+   The strip's `is-open` state grown into a panel: the link, when it dies, what
+   viewers can see, and who is watching. Still inside the body-fixed strip —
+   .job-detail-header is display:none unconditionally, so a panel mounted in
+   the job header would be invisible to everyone. On a narrow screen the strip
+   is already bottom-docked, which makes this a bottom sheet for free. */
+.p86-live-panel { flex-basis: 100%; }
+
+.p86-live-linkrow {
+  display: flex; align-items: center; gap: 6px;
+  margin: 6px 0 4px;
+}
+/* Shown in full: a host in a meeting sometimes reads it aloud, and a
+   credential you cannot see is one you cannot audit. */
+.p86-live-link {
+  flex: 1 1 auto; min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; line-height: 1.4;
+  overflow-wrap: anywhere;
+  padding: 5px 7px; border-radius: 6px;
+  background: var(--input-bg, #26282d);
+  border: 1px solid var(--border-color, #33363c);
+}
+.p86-live-meta { font-size: 11px; opacity: 0.75; padding: 2px 2px 4px; }
+
+.p86-live-toggle {
+  border-top: 1px solid var(--border-color, #2b2e33);
+  border-bottom: 1px solid var(--border-color, #2b2e33);
+  margin: 6px 0; padding: 7px 0;
+}
+.p86-live-switch {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; text-align: left;
+}
+.p86-live-switch-knob {
+  flex: none; width: 30px; height: 17px; border-radius: 99px;
+  background: var(--border-color, #3a3d44); position: relative;
+  transition: background 0.15s ease;
+}
+.p86-live-switch-knob::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 13px; height: 13px; border-radius: 50%; background: #e8e8ea;
+  transition: transform 0.15s ease;
+}
+.p86-live-switch.is-on .p86-live-switch-knob { background: #3fb950; }
+.p86-live-switch.is-on .p86-live-switch-knob::after { transform: translateX(13px); }
+.p86-live-switch-label { font-weight: 600; }
+@media (prefers-reduced-motion: reduce) {
+  .p86-live-switch-knob, .p86-live-switch-knob::after { transition: none; }
+}
+
+/* What each viewer is actually looking at. A safety property, not decoration:
+   it is what tells the host someone stopped following BEFORE he says "as you
+   can see here". */
+.p86-live-where {
+  display: block; font-size: 10.5px; opacity: 0.7; margin-top: 1px;
+}
+
+/* Stated PERMANENTLY, not only inside a confirm dialog someone dismisses on
+   reflex. A kick kills the session, not the link. */
+.p86-live-standing {
+  flex-basis: 100%;
+  margin-top: 6px; padding-top: 6px;
+  border-top: 1px solid var(--border-color, #2b2e33);
+  font-size: 10.5px; opacity: 0.7; line-height: 1.4;
+}
+
 /* ── Cursor layer ─────────────────────────────────────────────────────────
    Positioned over the DOCUMENT, not the viewport, so a cursor stays on the
    thing it is pointing at while the page scrolls. Never interactive. */
@@ -198,3 +265,11 @@ body.light-mode .p86-live-btn.is-end {
 }
 body.light-mode .p86-live-warn { color: #8a5a00; }
 body.light-mode .p86-live-cursor-name { color: #ffffff; }
+/* The panel's own literals need a light twin for the same reason the strip's
+   do: these colors are hardcoded by necessity, so a var-only rule would
+   inherit the dark surface here. */
+body.light-mode .p86-live-link {
+  background: #f5f6f8; border-color: #d9dce2; color: #1b1d21;
+}
+body.light-mode .p86-live-switch-knob { background: #cdd2da; }
+body.light-mode .p86-live-switch-knob::after { background: #ffffff; }

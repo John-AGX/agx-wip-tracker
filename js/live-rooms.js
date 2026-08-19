@@ -227,6 +227,29 @@
     this.terminalReason = null;
     this.multiInstance = false;
 
+    // ── Phase 02 ──────────────────────────────────────────────────────────
+    // Where the HOST is, as the server reports it: a surface and a reason,
+    // never a record. `hostView.surface === null` with a reason is the honest
+    // "he is somewhere this room does not share" state, and the guest bar says
+    // which of the three it is rather than freezing on a stale screen.
+    this.hostView = { surface: null, reason: null };
+    // What this recipient may be shown, said by the server on `hello` rather
+    // than assumed by the client. A client-side guess here is how a bar ends up
+    // claiming numbers are hidden while they sit in the response.
+    this.policy = { money: false };
+    this.surfaces = [];
+    // Freshness of the MIRROR specifically. Any frame — including the SSE
+    // keepalive's sibling events — refreshes it; "we can't tell what he is
+    // looking at" is a state reached by the ABSENCE of news.
+    this.lastFrameAt = 0;
+    // The host's own outgoing route. Deduped here so an unchanged route costs
+    // zero bytes and burns no seq. `_routeKey` stays null until the host
+    // surface has actually reported once, so a fresh session does not announce
+    // "away" before anybody has looked at anything.
+    this._route = null;
+    this._routeKey = null;
+    this._routeFlush = null;
+
     this._es = null;
     this._beatTimer = null;
     this._retryTimer = null;
@@ -329,11 +352,15 @@
     if (!msg || !msg.type) return;
     if (typeof msg.seq === 'number' && msg.seq > this.lastSeq) this.lastSeq = msg.seq;
     var now = Date.now();
+    this.lastFrameAt = now;
     switch (msg.type) {
       case 'hello':
         this.room = msg.room;
         this.participants = msg.participants || [];
         this.multiInstance = !!msg.multi_instance_suspected;
+        if (msg.policy) this.policy = { money: !!msg.policy.money };
+        if (msg.view) this.hostView = { surface: msg.view.surface || null, reason: msg.view.reason || null };
+        if (Array.isArray(msg.surfaces)) this.surfaces = msg.surfaces;
         if (msg.timings && msg.timings.beat_ms) this.beatMs = msg.timings.beat_ms;
         this.lastSnapshotAt = now; this.lastConfirmAt = now; this.attempts = 0;
         if (!msg.resumed) this.cursors = {};   // a reset is a reset
@@ -354,6 +381,20 @@
         break;
       case 'cursor':
         this._ingestCursor(msg);
+        break;
+      case 'view':
+        // A route, not a screen. The surface is the whole payload; there is
+        // deliberately no record id to act on.
+        this.hostView = { surface: msg.surface || null, reason: msg.reason || null };
+        this._changed();
+        break;
+      case 'policy':
+        // The arrangement changed. The listener DISCARDS its document and
+        // refetches — it never patches. Flipping off must not become a
+        // client-side unhide of data the client already lacks; flipping on must
+        // not leave a document with live numbers sitting in memory.
+        this.policy = { money: !msg.hide_financials };
+        this._changed();
         break;
       case 'kicked':
         this._terminate('kicked');
@@ -447,16 +488,47 @@
     this._beatTimer = setInterval(function () { self._postBeat(); }, this.beatMs);
   };
 
+  // ── The host's route, out ───────────────────────────────────────────────
+  // EDGE-TRIGGERED, not sampled, and it rides the beat that already exists:
+  // zero new bytes on the wire, zero new connections, zero new endpoints.
+  //
+  // But the beat interval is 5s and the study says "within a beat", so a route
+  // change FLUSHES a beat immediately instead of waiting for the next tick.
+  // Debounced, because nav functions call each other in quick succession
+  // (switchTab -> activateTab -> ...) and only the final state matters.
+  //
+  // The route is sent as claimed; the SERVER decides whether it is inside the
+  // room. That is the only correct split: a client that filtered its own route
+  // would be the authorization.
+  LiveSession.prototype.setRoute = function (route) {
+    if (this.role !== 'host') return;
+    var key = route ? (String(route.entity_type) + '|' + String(route.entity_id) + '|' + String(route.surface)) : 'null';
+    if (key === this._routeKey) return;
+    this._routeKey = key;
+    this._route = route || null;
+    var self = this;
+    if (this._routeFlush) return;
+    this._routeFlush = setTimeout(function () {
+      self._routeFlush = null;
+      self._postBeat();
+    }, 120);
+  };
+
   LiveSession.prototype._postBeat = function () {
     var self = this;
     if (this._stopped || this.terminal || !this.roomId || !this.streamKey) return Promise.resolve('gone');
     var batch = this._samples.splice(0, 12);
+    var body = { cursor: batch };
+    // Only a host sends a route at all. The server drops one from a viewer
+    // anyway — authorize at execution, not at proposal — but there is no
+    // reason to send bytes that exist only to be refused.
+    if (this.role === 'host' && this._routeKey != null) body.view = this._route;
     return fetch('/api/live/' + encodeURIComponent(this.roomId) + '/beat/' + encodeURIComponent(this.streamKey), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
       cache: 'no-store',
-      body: JSON.stringify({ cursor: batch })
+      body: JSON.stringify(body)
     }).then(function (r) {
       if (r.status === 200) {
         return r.json().then(function (j) {
@@ -605,8 +677,54 @@
     endedUntil: 0,
     lastEndReason: null,
     jobId: null,
+    // Default ON. The link is a bearer credential this feature explicitly
+    // designs for being pasted into a group chat, and the safe default for a
+    // forwardable credential is the narrow one. The server's column carries the
+    // same default, so this is a mirror of the row and never the authority.
+    hideFinancials: true,
     _tick: null
   };
+
+  // ── The host's route, read from the DOM ────────────────────────────────
+  // The same signals js/router.js captureRouteFromDOM reads, deliberately NOT
+  // by calling into it: that module is the URL's business and it is being
+  // edited by other work. Precedence follows the current nav model — the Site
+  // Map overlay, then the right-tab strip's data-panel, then the legacy
+  // sub-tab button — and NOT js/app.js captureNavState, which is the older twin
+  // with no job-sub at all.
+  //
+  // The surface is reported AS FOUND. This function does not filter it against
+  // the shared set, because the server decides what is shared: a client that
+  // filtered its own route would be the authorization.
+  function captureHostRoute() {
+    try {
+      var topBtn = document.querySelector('.tab-btn.active');
+      var top = topBtn ? topBtn.getAttribute('data-tab') : null;
+      var jobId = currentJobId();
+      if (top !== 'jobs' || !jobId) return { entity_type: null, entity_id: null, surface: null };
+      var surface = null;
+      var ng = document.getElementById('nodeGraphTab');
+      if (ng && ng.classList.contains('active')) {
+        surface = 'job-site-map';
+      } else {
+        var rTab = document.querySelector('.ws-right-tab.active');
+        surface = rTab ? rTab.getAttribute('data-panel') : null;
+        if (!surface) {
+          var subBtn = document.querySelector('.sub-tab-btn-job.active');
+          surface = subBtn ? subBtn.getAttribute('data-subtab') : null;
+        }
+      }
+      return { entity_type: 'job', entity_id: jobId, surface: surface };
+    } catch (e) {
+      return { entity_type: null, entity_id: null, surface: null };
+    }
+  }
+
+  function pushRoute() {
+    var s = host.session;
+    if (!s || s.terminal) return;
+    try { s.setRoute(captureHostRoute()); } catch (e) {}
+  }
 
   function currentJobId() {
     try {
@@ -631,6 +749,7 @@
       else if (a === 'end') endHosting();
       else if (a === 'kick') kickParticipant(act.getAttribute('data-pid'), act.getAttribute('data-revoke') === '1');
       else if (a === 'copy') copyLink();
+      else if (a === 'policy') setHideFinancials(act.getAttribute('data-hide') === '1');
       else if (a === 'roster') { el.classList.toggle('is-open'); paintStrip(); }
     });
     host.el = el;
@@ -666,8 +785,11 @@
 
     var html = '';
     if (view.kind === 'idle') {
+      // "One click mints the link and you're live — no room to create first."
+      // That is already what this does: startHosting() mints and copies in one
+      // action. The button says so.
       html = '<button type="button" class="p86-live-btn" data-live-act="start">' +
-             '<span class="p86-live-dot"></span>Go live</button>';
+             '<span class="p86-live-dot"></span>Present</button>';
     } else if (view.kind === 'ended') {
       html = '<span class="p86-live-label">Ended</span>' +
              '<span class="p86-live-detail">' + esc(view.detail) + '</span>';
@@ -685,31 +807,115 @@
       if (s && s.multiInstance) {
         html += '<div class="p86-live-warn">This session keeps moving between servers — some viewers may be seeing a different room.</div>';
       }
-      if (el.classList.contains('is-open')) html += rosterHtml(s);
+      if (el.classList.contains('is-open')) html += panelHtml(s);
     }
-    el.innerHTML = html;
+    // Repainted on a 1Hz tick, so only write when something actually changed:
+    // an unconditional innerHTML would blow away focus on the panel's toggle
+    // and make the viewer link impossible to select by hand.
+    if (html !== host._html) { host._html = html; el.innerHTML = html; }
   }
 
-  function rosterHtml(s) {
+  // ── The presenter panel ────────────────────────────────────────────────
+  // The strip's `is-open` state, grown into the panel. Same element, same
+  // delegation, same 1Hz repaint — and still body-fixed, because
+  // workspace-layout.js sets .job-detail-header to display:none
+  // unconditionally, so anything mounted in the job header is invisible.
+  function surfaceLabel(key) {
+    var s = host.session;
+    var list = (s && s.surfaces) || [];
+    for (var i = 0; i < list.length; i++) if (list[i].key === key) return list[i].label;
+    return key || '';
+  }
+
+  function durationText(iso) {
+    var t = Date.parse(iso);
+    if (!isFinite(t)) return '';
+    var mins = Math.max(0, Math.round((Date.now() - t) / 60000));
+    if (mins < 1) return 'just joined';
+    if (mins < 60) return 'watching ' + mins + ' min';
+    var h = Math.floor(mins / 60);
+    return 'watching ' + h + 'h ' + (mins % 60) + 'm';
+  }
+
+  function panelHtml(s) {
     if (!s) return '';
-    var st = s.state();
-    var list = visibleParticipants(s.participants, st);
-    var out = '<div class="p86-live-roster' + (st.dim ? ' is-dim' : '') + '">';
-    if (st.message) out += '<div class="p86-live-roster-note">' + esc(st.message) + '</div>';
-    if (!st.showRoster) { return out + '</div>'; }
-    if (!list.length) { return out + '<div class="p86-live-roster-note">Nobody is watching yet.</div></div>'; }
-    for (var i = 0; i < list.length; i++) {
-      var p = list[i];
-      out += '<div class="p86-live-row' + (p.presence === 'stale' ? ' is-stale' : '') + '">' +
-             '<span class="p86-live-who">' + esc(p.name) + (p.guest ? ' <em>guest</em>' : '') + '</span>' +
-             (p.presence === 'stale' ? '<span class="p86-live-flag">not responding</span>' : '') +
-             (p.role === 'host' ? '<span class="p86-live-flag">host</span>' :
-               '<span class="p86-live-acts">' +
-               '<button type="button" data-live-act="kick" data-pid="' + esc(p.id) + '">Remove</button>' +
-               '<button type="button" data-live-act="kick" data-pid="' + esc(p.id) + '" data-revoke="1">Remove &amp; revoke link</button>' +
-               '</span>') +
+    var out = '<div class="p86-live-panel">';
+
+    // The link, in full. A host in a meeting sometimes reads it aloud, and a
+    // credential you cannot see is one you cannot audit.
+    if (host.token) {
+      var url = location.origin + '/live/' + host.token;
+      out += '<div class="p86-live-linkrow">' +
+             '<code class="p86-live-link">' + esc(url) + '</code>' +
+             '<button type="button" class="p86-live-btn is-ghost" data-live-act="copy">Copy</button>' +
              '</div>';
     }
+
+    // Exactly WHEN the link stops working — a clock time and a countdown. Not
+    // "expires in 8 hours": that is not a time anyone can plan around.
+    if (s.room && s.room.expires_at && window.p86LiveView) {
+      out += '<div class="p86-live-meta">' + esc(window.p86LiveView.expiryText(s.room.expires_at)) + '</div>';
+    }
+
+    // The toggle. The label states the MECHANISM, because the mechanism IS the
+    // feature — it is what separates this from a CSS blur someone can peel off
+    // in dev tools. No blur language anywhere.
+    var hidden = host.hideFinancials !== false;
+    out += '<div class="p86-live-toggle">' +
+           '<button type="button" class="p86-live-switch' + (hidden ? ' is-on' : '') + '" ' +
+             'role="switch" aria-checked="' + (hidden ? 'true' : 'false') + '" ' +
+             'data-live-act="policy" data-hide="' + (hidden ? '0' : '1') + '">' +
+             '<span class="p86-live-switch-knob"></span>' +
+             '<span class="p86-live-switch-label">Hide financials</span>' +
+           '</button>' +
+           '<div class="p86-live-meta">' + (hidden
+             ? 'The server does not send margins, cost or contract values to viewers.'
+             : 'Viewers can see margins, cost and contract values.') + '</div>' +
+           '</div>';
+
+    // The watcher list.
+    var st = s.state();
+    var list = visibleParticipants(s.participants, st);
+    out += '<div class="p86-live-roster' + (st.dim ? ' is-dim' : '') + '">';
+    if (st.message) out += '<div class="p86-live-roster-note">' + esc(st.message) + '</div>';
+    if (!st.showRoster) {
+      out += '</div>';
+    } else if (!list.length) {
+      out += '<div class="p86-live-roster-note">Nobody is watching yet.</div></div>';
+    } else {
+      for (var i = 0; i < list.length; i++) {
+        var p = list[i];
+        var where = '';
+        if (p.role !== 'host') {
+          // What each viewer is looking at. A SAFETY property, not decoration:
+          // it tells the host someone stopped following BEFORE he says "as you
+          // can see here". Observed from their own fetch, never self-reported.
+          where = p.surface
+            ? (p.following ? esc(surfaceLabel(p.surface)) : 'broke off — ' + esc(surfaceLabel(p.surface)))
+            : 'not loaded yet';
+        }
+        out += '<div class="p86-live-row' + (p.presence === 'stale' ? ' is-stale' : '') + '">' +
+               '<span class="p86-live-who">' + esc(p.name) + (p.guest ? ' <em>guest</em>' : '') +
+                 (where ? '<span class="p86-live-where">' + where + '</span>' : '') +
+                 (p.joined_at && p.role !== 'host' ? '<span class="p86-live-where">' + esc(durationText(p.joined_at)) + '</span>' : '') +
+               '</span>' +
+               (p.presence === 'stale' ? '<span class="p86-live-flag">not responding</span>' : '') +
+               (p.role === 'host' ? '<span class="p86-live-flag">host</span>' :
+                 '<span class="p86-live-acts">' +
+                 '<button type="button" data-live-act="kick" data-pid="' + esc(p.id) + '">Remove</button>' +
+                 '<button type="button" data-live-act="kick" data-pid="' + esc(p.id) + '" data-revoke="1">Remove &amp; revoke link</button>' +
+                 '</span>') +
+               '</div>';
+      }
+      out += '</div>';
+    }
+
+    // Stated PERMANENTLY, not only inside a confirm dialog someone dismisses
+    // on reflex. A kick kills the session, not the link; the API says so in
+    // words and the surface must not claim more.
+    out += '<div class="p86-live-standing">Removing someone ends their session. ' +
+           'They still hold the link — revoking is the removal that holds.</div>';
+
     return out + '</div>';
   }
 
@@ -730,8 +936,12 @@
     }).then(function (res) {
       if (!res.ok) { toast(res.body && res.body.error ? res.body.error : 'Could not start the live session.'); return; }
       host.endedUntil = 0;
+      host.hideFinancials = res.body.hide_financials !== false;
       attachSession(res.body.token, true);
       copyLink();
+      // Send where the host already is, immediately, so the first guest to
+      // arrive is not looking at a default while he talks about something else.
+      pushRoute();
     }).catch(function () { toast('Could not start the live session.'); });
   }
 
@@ -764,18 +974,61 @@
     });
   }
 
+  // Native confirm() returns undefined inside an installed PWA, so every
+  // `if (!confirm(x)) return` guard silently does nothing there: the dialog
+  // never appears and the action never runs. Kick was therefore broken on the
+  // one device this feature is mostly used from. p86Confirm is the in-app
+  // overlay; native is the fallback for a plain browser tab.
+  function ask(message, confirmLabel) {
+    if (typeof window.p86Confirm === 'function') {
+      return window.p86Confirm({
+        title: 'Confirm', message: message,
+        confirmLabel: confirmLabel, confirmText: confirmLabel,
+        cancelLabel: 'Cancel', cancelText: 'Cancel',
+        danger: true, destructive: true
+      });
+    }
+    return Promise.resolve(window.confirm(message));
+  }
+
   function kickParticipant(pid, revoke) {
     var s = host.session;
     if (!s || !s.roomId || !pid) return;
-    if (!revoke && !window.confirm('Remove this person from the session?\n\nThey still hold the link and can rejoin. Use "Remove & revoke link" to stop that.')) return;
-    if (revoke && !window.confirm('Revoke the link?\n\nThis ends the session for everyone and the link stops working.')) return;
-    fetch('/api/live/rooms/' + encodeURIComponent(s.roomId) + '/kick', {
+    var msg = revoke
+      ? 'Revoke the link?\n\nThis ends the session for everyone and the link stops working.'
+      : 'Remove this person from the session?\n\nThey still hold the link and can rejoin. Use "Remove & revoke link" to stop that.';
+    ask(msg, revoke ? 'Revoke link' : 'Remove').then(function (ok) {
+      if (!ok) return;
+      fetch('/api/live/rooms/' + encodeURIComponent(s.roomId) + '/kick', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ participant_id: pid, revoke: !!revoke })
+      }).then(function (r) { return r.json(); })
+        // The server's own sentence, verbatim. Never a second copy: the door
+        // states the honest limitation and the surface must not soften it.
+        .then(function (j) { if (j && j.note) toast(j.note); })
+        .catch(function () { toast('Could not remove that participant.'); });
+    });
+  }
+
+  function setHideFinancials(hide) {
+    var s = host.session;
+    if (!s || !s.roomId) return;
+    fetch('/api/live/rooms/' + encodeURIComponent(s.roomId) + '/policy', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      body: JSON.stringify({ participant_id: pid, revoke: !!revoke })
-    }).then(function (r) { return r.json(); })
-      .then(function (j) { if (j && j.note) toast(j.note); })
-      .catch(function () { toast('Could not remove that participant.'); });
+      credentials: 'same-origin', cache: 'no-store',
+      body: JSON.stringify({ hide_financials: !!hide })
+    }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
+      // The local flag follows the SERVER's answer, never the click. Nothing is
+      // hidden or revealed until the row changes, so a panel that flipped
+      // optimistically would be claiming a redaction that had not happened.
+      .then(function (res) {
+        if (!res.ok) { toast((res.body && res.body.error) || 'Could not change what viewers can see.'); return; }
+        host.hideFinancials = !!res.body.hide_financials;
+        if (res.body.note) toast(res.body.note);
+        paintStrip();
+      })
+      .catch(function () { toast('Could not change what viewers can see.'); });
   }
 
   function copyLink() {
@@ -799,23 +1052,56 @@
       .then(function (j) {
         if (!j || !j.rooms || !j.rooms.length) return;
         if (host.session && !host.session.terminal) return;
+        host.hideFinancials = j.rooms[0].hide_financials !== false;
         attachSession(j.rooms[0].token, true);
       }).catch(function () {});
   }
 
   function wireCursorSampling() {
+    // A COARSE pointer does not have a hover position — pointermove fires on
+    // touch-DRAG, so a phone scrolling with a finger broadcasts a cursor trail
+    // that means nothing. Gate the SENDING, not the receiving: this device
+    // still shows everyone else's.
+    try {
+      if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) return;
+    } catch (e) { /* no matchMedia: keep phase 01 behaviour */ }
     var last = 0;
     document.addEventListener('pointermove', function (ev) {
       var s = host.session;
       if (!s || s.terminal || !s.roomId) return;
       var now = Date.now();
-      if (now - last < 100) return;   // 10 Hz sampling, shipped at 1 Hz
+      if (now - last < 100) return;   // 10 Hz sampling, shipped on the beat
       last = now;
       s.sampleCursor(ev.pageX, ev.pageY);
     }, { passive: true });
   }
 
+  // THE GUEST PAGE MUST NOT BOOT THE HOST SURFACE.
+  //
+  // live.html loads this same file (it needs LiveSession and the pure core), and
+  // phase 01's boot() ran unconditionally. On the guest page that meant:
+  // stripEl() appended a HOST strip to the body, wireCursorSampling() bound a
+  // document-level pointermove, and adoptExistingRooms() fired
+  // GET /api/live/mine with credentials — so a SIGNED-IN visitor opening a
+  // viewer link got their own room TOKENS delivered to the guest page, and
+  // attachSession() then joined that room AS HOST from the guest tab.
+  //
+  // Which breaks the presenter's own app by ordinary QA behaviour: the first
+  // thing anyone does after clicking Present is open the link they just copied.
+  // That second host join trips the one-host-row supersede rule, writes
+  // `superseded` to the PRESENTING tab and terminates it — and in phase 02 the
+  // presenting tab is the mirror source, so the room then dies at the 120s
+  // host-beat backstop.
+  //
+  // The gate is here rather than in live.html because it must hold for any
+  // future page that loads this file for its core.
+  function isGuestPage() {
+    try { return String(location.pathname || '').indexOf('/live/') === 0; }
+    catch (e) { return false; }
+  }
+
   function boot() {
+    if (isGuestPage()) return;
     stripEl();
     wireCursorSampling();
     adoptExistingRooms();
@@ -823,8 +1109,19 @@
     // reached by the ABSENCE of news, so nothing will fire an event to
     // announce it.
     host._tick = setInterval(function () {
-      try { paintStrip(); if (host.session) host.layer.render(host.session); } catch (e) {}
+      try { paintStrip(); pushRoute(); if (host.session) host.layer.render(host.session); } catch (e) {}
     }, 1000);
+    // The route is read on the 1Hz tick AND right after any click. The tick is
+    // the backstop that matters: history.pushState fires no event, and the
+    // router wraps a fixed list of nav functions — an unwrapped navigation path
+    // would silently freeze the mirror with no error anywhere. The click hook
+    // is what makes the common case land in under a second instead of up to
+    // one. Both are free; neither couples this file to js/router.js, which
+    // other work is editing.
+    document.addEventListener('click', function () {
+      setTimeout(pushRoute, 160);
+      setTimeout(pushRoute, 500);
+    }, true);
     // Closing the tab stops the broadcast on the fast path. The 120s host
     // beacon backstop covers the case where this never lands.
     window.addEventListener('pagehide', function () {

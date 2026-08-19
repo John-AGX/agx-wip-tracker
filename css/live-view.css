@@ -1,0 +1,131 @@
+/* Live Rooms phase 02 — the guest shell.
+   MOBILE FIRST, because "a phone in a truck" is the stated case and the guest
+   shell has to be usable there before it is pretty anywhere else.
+
+   ── WHY THIS IS NOT css/styles.css ─────────────────────────────────────────
+   The design called for linking the app's own stylesheet "for content only".
+   Two reasons that did not survive contact:
+
+     1. The app's job page is a desktop three-column workspace. Its global
+        `input`, `table` and `.card` rules are written for that shell, and this
+        repo has already been bitten by exactly that — a new single-class rule
+        losing to `.p86-enhanced td`, and hardcoded hex needing a light twin.
+        Importing a 450 KB desktop stylesheet into a bespoke single column to
+        borrow four type rules is how a guest page ends up debugging someone
+        else's specificity.
+     2. It ships class names for every surface a guest cannot reach. That is a
+        leak of feature NAMES rather than of data — the same exposure
+        index.html already has — but it is free to not do.
+
+   So this file reproduces the app's type scale and table treatment in the
+   ~140 lines the three shared surfaces actually need. */
+
+:root {
+  --lv-bg: #0e1014;
+  --lv-card: #171a1f;
+  --lv-line: #2a2e35;
+  --lv-ink: #e8eaed;
+  --lv-dim: #9aa1ac;
+  --lv-accent: #4c8dff;
+  --lv-warn: #d99b28;
+  --lv-bad: #e5484d;
+  --lv-good: #3fb950;
+  --lv-radius: 14px;
+  --lv-bar: 74px;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --lv-bg: #f5f6f8; --lv-card: #ffffff; --lv-line: #e2e5ea;
+    --lv-ink: #131519; --lv-dim: #69707c;
+  }
+}
+
+/* ── Surfaces ─────────────────────────────────────────────────────────── */
+.lv-title {
+  font-size: 15px; font-weight: 650; margin: 0 0 12px;
+  overflow-wrap: anywhere; line-height: 1.35;
+}
+
+.lv-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
+.lv-tile { border: 1px solid var(--lv-line); border-radius: 10px; padding: 10px 11px; min-width: 0; }
+.lv-tile-k { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--lv-dim); }
+.lv-tile-v { font-size: 17px; font-weight: 650; margin-top: 3px; overflow-wrap: anywhere; }
+
+/* A redacted cell is a DASH, not a blur. There is nothing underneath it to
+   reveal: the number never left the server. Styling it as "hidden content"
+   would be a lie about the mechanism. */
+.lv-money.is-redacted { color: var(--lv-dim); font-weight: 500; letter-spacing: .08em; }
+
+.lv-progress { display: flex; align-items: center; gap: 9px; margin: 0 0 14px; font-size: 13px; }
+.lv-progress-k { color: var(--lv-dim); flex: none; }
+.lv-progress-bar { flex: 1 1 auto; height: 7px; border-radius: 99px; background: var(--lv-line); overflow: hidden; }
+.lv-progress-bar span { display: block; height: 100%; background: var(--lv-accent); }
+.lv-progress-v { flex: none; font-weight: 650; font-variant-numeric: tabular-nums; }
+
+.lv-facts { margin: 0; display: grid; grid-template-columns: minmax(90px, auto) 1fr; gap: 6px 12px; font-size: 13px; }
+.lv-fact { display: contents; }
+.lv-facts dt { color: var(--lv-dim); }
+.lv-facts dd { margin: 0; overflow-wrap: anywhere; }
+
+.lv-sec { margin-bottom: 16px; }
+.lv-sec h3 { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--lv-dim); margin: 0 0 7px; }
+
+/* Wide content scrolls INSIDE ITSELF. A page body that scrolls sideways on a
+   phone is unusable in a truck, which is the whole stated case. */
+.lv-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.lv-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.lv-table th, .lv-table td { padding: 8px 6px; border-top: 1px solid var(--lv-line); text-align: left; vertical-align: top; }
+.lv-table tr:first-child th, .lv-table tr:first-child td { border-top: 0; }
+.lv-table th[scope="row"] { font-weight: 400; color: var(--lv-dim); }
+.lv-table td { font-variant-numeric: tabular-nums; }
+.lv-table .lv-num { text-align: right; white-space: nowrap; }
+.lv-co thead th { font-size: 10px; letter-spacing: .05em; text-transform: uppercase; color: var(--lv-dim); border-top: 0; }
+.lv-co { min-width: 460px; }
+.lv-prose { color: var(--lv-ink); overflow-wrap: anywhere; min-width: 150px; }
+.lv-chip {
+  display: inline-block; font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+  border: 1px solid var(--lv-line); border-radius: 4px; padding: 1px 5px; color: var(--lv-dim);
+}
+.lv-sub { display: block; font-size: 11px; color: var(--lv-dim); margin-top: 3px; }
+.lv-empty { color: var(--lv-dim); font-size: 13px; margin: 4px 0; }
+
+/* ── Tab strip ────────────────────────────────────────────────────────── */
+.lv-tabs { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; margin-bottom: 10px; }
+.lv-tab {
+  flex: none; font: inherit; font-size: 13px; font-weight: 600;
+  padding: 9px 13px; min-height: 40px; border-radius: 9px;
+  border: 1px solid var(--lv-line); background: transparent; color: var(--lv-dim); cursor: pointer;
+}
+.lv-tab.is-active { background: var(--lv-card); border-color: var(--lv-accent); color: var(--lv-ink); }
+
+/* ── The guest bar ────────────────────────────────────────────────────── */
+/* Bottom, because that is where a thumb is and because the top of a mobile
+   browser already belongs to the URL bar. It carries, always: whose screen this
+   is, that it is read-only, and when the link stops working. */
+.lv-bar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+  padding: 9px 12px calc(9px + env(safe-area-inset-bottom, 0px));
+  background: var(--lv-card); border-top: 1px solid var(--lv-line);
+  display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+  font-size: 12px; line-height: 1.35;
+}
+.lv-bar-main { flex: 1 1 180px; min-width: 0; }
+.lv-bar-who { font-weight: 650; overflow-wrap: anywhere; }
+.lv-bar-sub { color: var(--lv-dim); }
+.lv-bar-note { flex-basis: 100%; color: var(--lv-warn); }
+.lv-bar[data-kind="broken"] .lv-bar-note { color: var(--lv-bad); }
+.lv-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--lv-dim); margin-right: 5px; }
+.lv-bar[data-kind="following"] .lv-dot { background: var(--lv-good); }
+.lv-bar[data-kind="unconfirmed"] .lv-dot { background: var(--lv-warn); }
+.lv-bar[data-kind="broken"] .lv-dot { background: var(--lv-bad); }
+
+/* Real touch targets, in the bar, never a floating pill that covers content. */
+.lv-bar button {
+  font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+  min-height: 44px; padding: 10px 13px; border-radius: 10px;
+  border: 1px solid var(--lv-line); background: transparent; color: var(--lv-ink);
+}
+.lv-bar button.is-primary { border-color: var(--lv-accent); background: var(--lv-accent); color: #06101f; }
+.lv-follow[aria-pressed="true"] { border-color: var(--lv-accent); color: var(--lv-ink); }
+
+.lv-stamp { font-size: 11px; color: var(--lv-dim); margin: 0 0 8px; }
