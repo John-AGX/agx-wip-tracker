@@ -271,6 +271,10 @@ app.use('/api/email', emailRoutes);
 app.use('/api/admin/agents', adminAgentsRoutes);
 // Danger Zone — system-admin org "clean slate" hard reset (preview + execute).
 app.use('/api/admin/org-reset', adminOrgResetRoutes);
+// Platform push-key rotation — SYSTEM_ADMIN + typed confirmation + audited.
+// Its own deliberate endpoint rather than a second mutating route inside the
+// read-only Command Center router, per that router's stated doctrine.
+app.use('/api/admin/push', require('./routes/admin-push-routes'));
 app.use('/api/admin/context-registry', contextRegistryRoutes);
 // Wave 3 — RFI / submittal / transmittal workflow items.
 // Two mounts: global endpoints at /api/workflow-items/* and nested

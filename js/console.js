@@ -141,6 +141,7 @@
         '<div id="cc-email"     class="cc-section" style="display:none;"></div>' +
         '<div id="cc-btmapping" class="cc-section" style="display:none;"></div>' +
         '<div id="cc-settings"  class="cc-section" style="display:none;"></div>' +
+        '<div id="cc-boundary"  class="cc-section" style="display:none;"></div>' +
         '<div id="cc-danger"    class="cc-section" style="display:none;"></div>' +
       '</div>';
     // Land on the last-viewed section (persisted) or the grouped DASHBOARD by
@@ -152,7 +153,7 @@
   }
 
   // The platform sub-views, in sidebar order.
-  var CONSOLE_VIEWS = ['dashboard', 'overview', 'docs', 'metrics', 'forensics', 'tenants', 'audit', 'anthropic', 'email', 'btmapping', 'settings', 'danger'];
+  var CONSOLE_VIEWS = ['dashboard', 'overview', 'docs', 'metrics', 'forensics', 'tenants', 'audit', 'anthropic', 'email', 'btmapping', 'settings', 'boundary', 'danger'];
 
   // Eleven platform views, four groups — the same shape Admin uses, via the
   // shared p86Dash shell. Grouping is data; the shell owns the layout, so
@@ -160,7 +161,8 @@
   var CC_LABELS = {
     overview: 'Overview', docs: 'Docs', metrics: 'Metrics', forensics: 'Forensics',
     tenants: 'Tenants', audit: 'Audit', anthropic: 'Anthropic', email: 'Email',
-    btmapping: 'BT mapping', settings: 'Settings', danger: 'Danger Zone'
+    btmapping: 'BT mapping', settings: 'Settings', boundary: 'Tenant boundary',
+    danger: 'Danger Zone'
   };
 
   function ccGo(view) { return function () { switchConsoleSubTab(view); }; }
@@ -181,7 +183,7 @@
         { label: 'Tenants',  value: '1' },
         { label: 'Status',   value: 'ok', tone: 'ok' },
         { label: 'Services', value: '3' },
-        { label: 'Views',    value: '11' }
+        { label: 'Views',    value: '12' }
       ],
       attn: [],
       bands: [{
@@ -190,7 +192,7 @@
           g('health',   'Health',   '4 views',   ['Status', 'live'],  ['overview', 'metrics', 'forensics', 'audit']),
           g('tenants',  'Tenants',  'orgs',      ['Orgs', '1'],       ['tenants']),
           g('services', 'Services', '3 vendors', ['Vendors', '3'],    ['anthropic', 'email', 'btmapping']),
-          g('platform', 'Platform', '3 views',   ['Docs', 'live'],    ['docs', 'settings', 'danger'])
+          g('platform', 'Platform', '4 views',   ['Docs', 'live'],    ['docs', 'settings', 'boundary', 'danger'])
         ]
       }]
     };
@@ -234,6 +236,7 @@
     if (view === 'email') return mountSystem('cc-email', 'cc-email-host', '✉ Email provider', window.renderSystemEmailProvider);
     if (view === 'btmapping') return mountSystem('cc-btmapping', 'cc-btmapping-host', '🔗 Buildertrend cost-code mapping', window.renderSystemBTMapping);
     if (view === 'settings') return mountSystem('cc-settings', 'cc-settings-host', '🔧 Platform settings', window.renderSystemSettings);
+    if (view === 'boundary') return loadBoundary();
     if (view === 'danger') return mountSystem('cc-danger', 'cc-danger-host', '⚠ Danger Zone — reset workspace data', window.renderSystemDanger);
   }
 
@@ -1347,6 +1350,275 @@
     }).catch(function (e) { el.innerHTML = sectionTitle('Audit trail') + errBox('audit log', e); });
   }
 
+  // ── Tenant boundary — GET /api/admin/console/org-boundary, made readable ──
+  //
+  // The endpoint is the instrument that decides whether the ~385 tolerance
+  // arms can come out and whether NOT NULL is safe. It shipped answering as
+  // raw JSON nobody was going to fetch by hand. This renders it.
+  //
+  // THE ONE PROPERTY THIS VIEW MUST NOT BREAK. The audit's most important
+  // guarantee is that `null` means NOT MEASURED and is never reported as 0 —
+  // the exact bug it was written to replace in the two boot reporters. A
+  // renderer that does `Number(v) || 0` on the way to the screen re-creates
+  // that bug on the last inch, after the service went to the trouble of
+  // savepointing every statement to preserve the distinction. bnum() below is
+  // the whole defence: null renders as "unknown", visibly, in a different
+  // colour, and never as a digit.
+  function bnum(v) {
+    if (v === null || v === undefined) {
+      return '<span class="cc-unknown" title="NOT MEASURED — the count could not be taken. This is not zero." ' +
+        'style="color:#fbbf24;font-weight:600;">unknown</span>';
+    }
+    return esc(num(v));
+  }
+  function bbool(v, yes, no) {
+    if (v === null || v === undefined) return bnum(null);
+    return v ? esc(yes) : esc(no);
+  }
+  function bth() {
+    var cells = Array.prototype.slice.call(arguments).map(function (h) {
+      return '<th style="padding:7px 10px;text-align:left;white-space:nowrap;">' + esc(h) + '</th>';
+    }).join('');
+    return '<tr style="font-size:10.5px;color:var(--text-dim,#9a9aa2);text-transform:uppercase;letter-spacing:.03em;">' + cells + '</tr>';
+  }
+  function btd(html, extra) {
+    return '<td style="padding:6px 10px;border-top:1px solid var(--border,#2c2c33);' + (extra || '') + '">' + html + '</td>';
+  }
+  function btable(head, rows, empty) {
+    return panel('<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;">' +
+      head + (rows || '<tr>' + btd('<span style="color:var(--text-dim,#888);">' + esc(empty || 'Nothing to report.') + '</span>') + '</tr>') +
+      '</table></div>');
+  }
+  function bsub(t, note) {
+    return '<div style="margin:18px 2px 7px;">' +
+      '<div style="font-size:13px;font-weight:600;color:var(--text,#e8e8ea);">' + esc(t) + '</div>' +
+      (note ? '<div style="font-size:11.5px;color:var(--text-dim,#9a9aa2);margin-top:2px;line-height:1.5;">' + esc(note) + '</div>' : '') +
+      '</div>';
+  }
+
+  var BUCKET_META = {
+    direct:       ['Direct', 'Own organization_id IS the scope. A NULL here is a leak, and these are the tables NOT NULL is for.'],
+    parent:       ['Parent-scoped', 'Scoped through a parent row. The child\'s own NULL count is the WRONG number — see the parent families table.'],
+    shared:       ['Shared', 'A NULL here is CORRECT data — the platform-wide catalog every tenant reads. Do not "fix" these.'],
+    mixed_shared: ['Mixed shared', 'Platform rows (NULL) and tenant rows coexist by design. NOT NULL would delete the platform half.'],
+    platform:     ['Platform', 'Platform-owned. No tenant dimension.'],
+    unclassified: ['Unclassified', 'Carries organization_id and is named nowhere in org-table-classification.js. This is where the next hole lives.']
+  };
+
+  // Pure: report object in, HTML string out. Exposed on window.p86Console so
+  // the "unknown is never rendered as zero" property is testable without a
+  // browser or a database.
+  function boundaryReportHtml(r) {
+    if (!r) return errBox('the tenant-boundary audit', new Error('empty report'));
+    var h = '';
+
+    // ── the measurement's own health, FIRST. A reader who scrolls to a
+    // number without knowing three counts timed out is reading a fiction.
+    var nm = r.not_measured || [];
+    if (nm.length) {
+      h += '<div style="padding:12px 14px;margin:0 2px 14px;border-radius:9px;background:rgba(251,191,36,0.09);' +
+        'border:1px solid rgba(251,191,36,0.38);">' +
+        '<div style="font-weight:700;color:#fbbf24;font-size:12.5px;">' + esc(nm.length) + ' measurement' + (nm.length === 1 ? '' : 's') + ' could not be taken</div>' +
+        '<div style="font-size:11.5px;color:var(--text-dim,#bbb);margin-top:4px;line-height:1.55;">' +
+          'Each of these reads <strong>unknown</strong> below, not 0. A table whose count timed out may hold any number of ' +
+          'un-stamped rows; treating it as clean is exactly the mistake this audit exists to prevent.</div>' +
+        '<div style="margin-top:7px;font-size:11px;color:var(--text-dim,#9a9aa2);font-family:ui-monospace,Menlo,monospace;line-height:1.7;">' +
+          nm.slice(0, 40).map(function (m) {
+            return esc(m.what) + (m.code ? ' [' + esc(m.code) + ']' : '') + ' — ' + esc(String(m.error || '').slice(0, 160));
+          }).join('<br>') +
+          (nm.length > 40 ? '<br>… and ' + esc(nm.length - 40) + ' more' : '') +
+        '</div></div>';
+    } else {
+      h += '<div style="padding:9px 13px;margin:0 2px 14px;border-radius:9px;background:rgba(52,211,153,0.08);' +
+        'border:1px solid rgba(52,211,153,0.30);font-size:11.5px;color:#6ee7b7;">' +
+        'Every measurement in this run completed. No count below is standing in for a failure.</div>';
+    }
+
+    // ── the gate note: whether the guessing backfills are still healing.
+    h += '<div style="display:flex;gap:10px;flex-wrap:wrap;margin:0 2px 12px;">' +
+      card('Organizations', r.organizations === null || r.organizations === undefined ? 'unknown' : num(r.organizations)) +
+      card('Tables with organization_id', r.tables_with_org_column === null || r.tables_with_org_column === undefined ? 'unknown' : num(r.tables_with_org_column)) +
+      card('Ready for NOT NULL', String((r.ready_for_not_null || []).length), 'measured zero only') +
+      card('Blocked', String((r.blocked || []).length), 'un-stamped or unknown') +
+      '</div>';
+    if (r.gate_note) {
+      h += '<div style="padding:11px 14px;margin:0 2px 6px;border-radius:9px;background:rgba(124,58,237,0.10);' +
+        'border:1px solid rgba(124,58,237,0.30);font-size:11.5px;line-height:1.6;color:var(--text-dim,#bbb);">' +
+        esc(r.gate_note) + '</div>';
+    }
+    h += '<div style="margin:0 2px 4px;font-size:11px;color:var(--text-dim,#888);">Generated ' + esc(r.generated_at || '—') + '</div>';
+
+    // ── verdict.
+    h += bsub('Verdict', 'A table is listed ready ONLY on a measured zero. "unknown" never counts as zero.');
+    var vRows = (r.ready_for_not_null || []).map(function (t) {
+      return '<tr>' + btd('<code>' + esc(t) + '</code>') + btd('<span style="color:#6ee7b7;">ready</span>') +
+        btd('<span style="color:var(--text-dim,#999);">0 un-stamped rows, measured</span>') + '</tr>';
+    }).join('') + (r.blocked || []).map(function (b) {
+      return '<tr>' + btd('<code>' + esc(b.table) + '</code>') +
+        btd('<span style="color:' + (b.nulls === null ? '#fbbf24' : '#f87171') + ';">' + (b.nulls === null ? 'unknown' : 'blocked') + '</span>') +
+        btd(bnum(b.nulls) + ' <span style="color:var(--text-dim,#999);">— ' + esc(b.reason || '') + '</span>') + '</tr>';
+    }).join('');
+    h += btable(bth('Table', 'NOT NULL?', 'Why'), vRows, 'No direct tables reported.');
+
+    if ((r.unclassified || []).length) {
+      h += '<div style="padding:11px 14px;margin:10px 2px 0;border-radius:9px;background:rgba(248,113,113,0.09);' +
+        'border:1px solid rgba(248,113,113,0.34);font-size:11.5px;line-height:1.6;color:var(--text-dim,#bbb);">' +
+        '<strong style="color:#f87171;">Unclassified: ' + esc((r.unclassified || []).join(', ')) + '</strong><br>' +
+        esc(r.unclassified_warning || '') + '</div>';
+    }
+
+    // ── per-table NULL counts, bucketed. Summing the buckets is the mistake.
+    var buckets = r.buckets || {};
+    Object.keys(BUCKET_META).forEach(function (k) {
+      var list = buckets[k];
+      if (!list || !list.length) return;
+      var meta = BUCKET_META[k];
+      h += bsub(meta[0] + ' — ' + list.length + ' table' + (list.length === 1 ? '' : 's'), meta[1]);
+      h += btable(
+        bth('Table', 'Nullable', 'NULLs', 'Total', 'Note'),
+        list.map(function (t) {
+          var warn = t.nullable && t.nulls !== 0;
+          return '<tr>' + btd('<code>' + esc(t.table) + '</code>') +
+            btd(bbool(t.nullable, 'nullable', 'NOT NULL')) +
+            btd(bnum(t.nulls), warn ? 'font-weight:600;' : '') +
+            btd(bnum(t.total)) +
+            btd('<span style="color:var(--text-dim,#999);">' + esc(t.note || '') + '</span>') + '</tr>';
+        }).join(''));
+    });
+
+    // ── the per-arm simulation: the gating question, answered per arm.
+    var sim = r.simulation || {};
+    h += bsub('Dropping an arm — what would become invisible',
+      'Each row is one tolerance arm. "Hides" is how many rows disappear from that surface the moment the arm comes out.');
+    h += btable(
+      bth('Arm', 'Site / table', 'Hides', 'Sample ids'),
+      (sim.would_hide || []).map(function (w) {
+        return '<tr>' +
+          btd('<code>' + esc(w.arm) + '</code>') +
+          btd('<span style="color:var(--text-dim,#999);">' + esc(w.table) + '</span>') +
+          btd('<strong style="color:' + (w.rows === null ? '#fbbf24' : '#f87171') + ';">' + bnum(w.rows) + '</strong>') +
+          btd('<span style="font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:var(--text-dim,#999);">' +
+            ((w.sample || []).length ? esc((w.sample || []).join(', ')) : '—') + '</span>' +
+            (w.note ? '<div style="font-size:10.5px;color:var(--text-dim,#888);margin-top:3px;line-height:1.5;">' + esc(w.note) + '</div>' : '')) +
+          '</tr>';
+      }).join(''),
+      'No arm would hide a row. (If measurements failed above, this is not the same as none.)');
+
+    h += bsub('Already hidden — no arm to drop',
+      'These surfaces are ALREADY strict. Nothing is dropped, so an arm-diff reports zero for them — while the rows below are invisible from that surface right now.');
+    h += btable(
+      bth('Site', 'Table', 'Hidden now', 'Note'),
+      (sim.already_hidden || []).map(function (a) {
+        return '<tr>' + btd('<code>' + esc(a.site) + '</code>') + btd('<span style="color:var(--text-dim,#999);">' + esc(a.table) + '</span>') +
+          btd('<strong>' + bnum(a.rows) + '</strong>') +
+          btd('<span style="font-size:10.5px;color:var(--text-dim,#888);line-height:1.5;">' + esc(a.note || '') + '</span>') + '</tr>';
+      }).join(''),
+      'None reported.');
+
+    // ── parent families.
+    h += bsub('Parent-scoped families',
+      'A child vanishes when the PARENT\'s stamp is NULL, not when its own is. Orphans have no parent row at all — that population cannot be derived and must stay tolerant.');
+    h += btable(
+      bth('Child', 'Parent', 'FK', 'Parent stamped', 'Parent NULL', 'Orphan'),
+      (r.parent_families || []).map(function (p) {
+        return '<tr>' + btd('<code>' + esc(p.table) + '</code>') + btd('<code>' + esc(p.parent) + '</code>') +
+          btd('<span style="color:var(--text-dim,#999);">' + esc(p.fk) + '</span>') +
+          btd(bnum(p.parent_stamped)) +
+          btd('<span style="color:' + (p.parent_null ? '#f87171' : 'inherit') + ';">' + bnum(p.parent_null) + '</span>') +
+          btd('<span style="color:' + (p.orphan ? '#fbbf24' : 'inherit') + ';">' + bnum(p.orphan) + '</span>') + '</tr>';
+      }).join(''),
+      'No parent families reported.');
+
+    // ── attachments ladder: four rungs, four different fates.
+    var att = r.attachments || {};
+    var RUNGS = [
+      ['rung1_parent_stamped', 'Rung 1 — parent entity stamped', 'Resolved through the parent. Safe.'],
+      ['rung1_parent_null', 'Rung 1 — parent exists but un-stamped', 'Waits for the parent to be stamped.'],
+      ['rung2_own_stamp', 'Rung 2 — own stamp, no parent', 'Carries its own organization_id.'],
+      ['rung3_uploader', 'Rung 3 — orphan, uploader names a tenant', 'DERIVABLE from the uploader.'],
+      ['rung4_nothing', 'Rung 4 — nothing states a tenant', 'The only genuinely un-derivable population.']
+    ];
+    h += bsub('attachments — the four rungs',
+      'Rungs 2-4 live in JavaScript, not in a WHERE clause. There is no SQL arm to diff for this table, so an arm-only simulator reports zero for the largest table in the database. These counts are that table\'s substitute.');
+    h += btable(
+      bth('Rung', 'Rows', 'Fate under tightening'),
+      RUNGS.map(function (x) {
+        return '<tr>' + btd(esc(x[1])) + btd('<strong>' + bnum(att[x[0]]) + '</strong>') +
+          btd('<span style="color:var(--text-dim,#999);">' + esc(x[2]) + '</span>') + '</tr>';
+      }).join(''));
+
+    // ── pointer shapes.
+    var ptr = r.pointers || {};
+    h += bsub('Pointer shapes', 'Where a row\'s own stamp and its owner\'s stamp disagree, or the owner is gone.');
+    h += btable(
+      bth('Shape', 'Rows'),
+      Object.keys(ptr).map(function (k) {
+        return '<tr>' + btd('<code>' + esc(k) + '</code>') + btd('<strong>' + bnum(ptr[k]) + '</strong>') + '</tr>';
+      }).join(''),
+      'No pointer measurements reported.');
+
+    return h;
+  }
+
+  function boundaryBackfillHtml(b) {
+    if (!b) return '';
+    var dry = b.dry_run !== false;
+    var rows = (b.results || []).map(function (x) {
+      return '<tr>' + btd('<code>' + esc(x.label) + '</code>') +
+        btd('<strong>' + bnum(x.derivable) + '</strong>') +
+        btd(dry ? '<span style="color:var(--text-dim,#888);">not written</span>' : '<strong style="color:#6ee7b7;">' + bnum(x.updated) + '</strong>') +
+        btd('<span style="font-size:10.5px;color:var(--text-dim,#888);line-height:1.5;">' + esc(x.error ? 'ERROR: ' + x.error : (x.why || '')) + '</span>') + '</tr>';
+    }).join('');
+    return '<div style="margin-top:12px;">' +
+      '<div style="padding:10px 13px;border-radius:9px;margin:0 2px 10px;font-size:11.5px;line-height:1.6;' +
+        (dry
+          ? 'background:rgba(79,140,255,0.10);border:1px solid rgba(79,140,255,0.34);color:#9dc0ff;">' +
+            '<strong>DRY RUN — nothing was written.</strong> The transaction was rolled back. "Derivable" is how many rows COULD be stamped from evidence.'
+          : 'background:rgba(52,211,153,0.10);border:1px solid rgba(52,211,153,0.34);color:#6ee7b7;">' +
+            '<strong>APPLIED.</strong> Rows were written.') +
+      '</div>' +
+      btable(bth('Rule', 'Derivable', dry ? 'Written' : 'Updated', 'Evidence'), rows, 'No rules ran.') +
+      (b.note ? '<div style="margin:8px 2px 0;font-size:11px;color:var(--text-dim,#888);line-height:1.55;">' + esc(b.note) + '</div>' : '') +
+      '</div>';
+  }
+
+  function loadBoundary() {
+    var el = document.getElementById('cc-boundary');
+    if (!el) return;
+    el.innerHTML = sectionTitle('Tenant boundary audit',
+      ghostBtn('Run backfill (dry run)', 'id="cc-bf-run"') + ' ' + ghostBtn('Re-run audit', 'id="cc-ob-run"')) +
+      '<div style="margin:0 2px 12px;font-size:11.5px;color:var(--text-dim,#9a9aa2);line-height:1.6;">' +
+        'A pure read. Every statement runs inside a READ ONLY transaction that is rolled back, under a statement timeout — ' +
+        'so a count that takes too long is reported as <span style="color:#fbbf24;font-weight:600;">unknown</span>, never as zero.' +
+      '</div>' +
+      '<div id="cc-ob-body" style="color:var(--text-dim,#888);font-size:12.5px;padding:10px 2px;">Loading the audit… (this runs sequential scans and can take a while)</div>' +
+      '<div id="cc-bf-body"></div>';
+
+    var bfBtn = document.getElementById('cc-bf-run');
+    if (bfBtn) bfBtn.addEventListener('click', function () {
+      var out = document.getElementById('cc-bf-body');
+      bfBtn.disabled = true;
+      if (out) out.innerHTML = '<div style="padding:10px 2px;color:var(--text-dim,#888);font-size:12px;">Running the dry run…</div>';
+      // dry_run TRUE, explicitly. The endpoint is dry by default; sending it
+      // anyway means a future default flip cannot silently make this button
+      // write. Nothing in this view can call it with dry_run:false.
+      cpost('/api/admin/console/org-boundary/backfill', { dry_run: true })
+        .then(function (b) { if (out) out.innerHTML = boundaryBackfillHtml(b); })
+        .catch(function (e) { if (out) out.innerHTML = errBox('the backfill dry run', e); })
+        .then(function () { bfBtn.disabled = false; });
+    });
+    var obBtn = document.getElementById('cc-ob-run');
+    if (obBtn) obBtn.addEventListener('click', function () { loadBoundary(); });
+
+    cget('/api/admin/console/org-boundary').then(function (r) {
+      var body = document.getElementById('cc-ob-body');
+      if (body) body.innerHTML = boundaryReportHtml(r);
+    }).catch(function (e) {
+      var body = document.getElementById('cc-ob-body');
+      if (body) body.innerHTML = errBox('the tenant-boundary audit', e);
+    });
+  }
+
   window.renderConsoleInto = renderConsoleInto;
   window.switchConsoleSubTab = switchConsoleSubTab;
   // Assembly Studio build/tune cockpit — shared renderer for the new
@@ -1355,4 +1627,9 @@
   // + research-inbox + tuning-center machinery + this closure's state.
   window.p86Console = window.p86Console || {};
   window.p86Console.loadAssemblyStudio = loadAssemblyTuning;
+  // Pure renderers, exposed so the property that matters — an unmeasured count
+  // renders as "unknown" and never as a digit — is asserted in the suite
+  // rather than eyeballed. See test/org-boundary-report-view.test.js.
+  window.p86Console.boundaryReportHtml = boundaryReportHtml;
+  window.p86Console.boundaryBackfillHtml = boundaryBackfillHtml;
 })();

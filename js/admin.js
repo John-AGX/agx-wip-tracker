@@ -6574,8 +6574,158 @@ function p86Ask(message, opts) {
         '</div>' +
         '<button class="ee-btn" id="dz-load" onclick="dzLoadPreview()" style="font-size:12px;">Load preview of what will be deleted</button>' +
         '<div id="dz-body" style="margin-top:16px;"></div>' +
+        pkRotateBlock() +
       '</div>';
+    pkLoadStatus();
   }
+
+  // ── Rotate the Web Push signing key (VAPID) ──────────────────────────────
+  //
+  // WHY THE COPY BELOW IS THIS BLUNT. server/push.js says rotating means
+  // "users just re-enable notifications". Read against the rest of the code
+  // that is not true, and a destructive button that repeats it would be the
+  // exact defect this surface exists to avoid — a control claiming less than
+  // the codebase knows. What actually happens, each traceable to a file:
+  //
+  //   · push.js caches the pair in module scope and ensureInit() returns
+  //     before it reads the table, so deleting the row does NOTHING until the
+  //     process restarts. The old key keeps signing until then.
+  //   · Every push_subscriptions row was minted against the OLD public key.
+  //     After the restart they are all unusable.
+  //   · sendPush prunes a subscription only on 404/410. A key mismatch is
+  //     neither, so the dead rows are never swept.
+  //   · sw.js has no pushsubscriptionchange handler, and the only
+  //     re-subscribe control (the Crew activity bell in js/agent-tasks.js)
+  //     is revealed ONLY when the browser reports no subscription. After
+  //     rotation it still reports one, so the bell never appears — and
+  //     pushManager.subscribe() with a different applicationServerKey throws
+  //     InvalidStateError, which enablePush() swallows silently.
+  //
+  // Net: push stops for every subscribed device, silently, and each device
+  // needs a manual browser-level reset. The panel says so before the click.
+  var ROTATE_PHRASE = 'ROTATE PUSH KEYS';
+
+  function pkRotateBlock() {
+    return '<div style="margin-top:26px;padding:14px 16px;background:rgba(251,191,36,0.07);' +
+        'border:1px solid rgba(251,191,36,0.35);border-radius:10px;">' +
+      '<div style="font-weight:700;color:#fbbf24;font-size:14px;margin-bottom:6px;">&#x26A0; Rotate the push signing key (VAPID)</div>' +
+      '<div style="font-size:12.5px;line-height:1.65;color:var(--text-dim,#bbb);">' +
+        'Until 2026-08-17 any PM in any tenant could read this <strong>private key</strong> through the generic ' +
+        'settings endpoint. That read is closed; the key itself is still the one that leaked, so it should be replaced.' +
+      '</div>' +
+      '<div style="margin-top:12px;padding:11px 13px;border-radius:8px;background:rgba(248,113,113,0.09);' +
+        'border:1px solid rgba(248,113,113,0.34);font-size:12.5px;line-height:1.7;color:var(--text-dim,#ddd);">' +
+        '<strong style="color:#fca5a5;">This is not a quiet maintenance action. Read before clicking.</strong>' +
+        '<ol style="margin:8px 0 0;padding-left:19px;">' +
+          '<li><strong>Nothing changes until you restart the server.</strong> The running process keeps the current key ' +
+            'in memory and will go on signing with it. Deleting the row only takes effect on the next boot, which ' +
+            'generates and stores a new pair by itself.</li>' +
+          '<li><strong>After that restart, push notifications stop for every subscribed device.</strong> ' +
+            'Every subscription was created against the old key and none of them survive.</li>' +
+          '<li><strong>Nothing re-subscribes on its own, and users cannot fix it from inside the app.</strong> ' +
+            'There is no automatic recovery, and the "Enable notifications" bell stays hidden because the browser ' +
+            'still believes it is subscribed. Push simply goes silent — no error, no prompt, nothing to click.</li>' +
+          '<li><strong>The dead subscription rows are never cleaned up</strong> and every later send keeps failing ' +
+            'against them.</li>' +
+        '</ol>' +
+        '<div style="margin-top:9px;"><strong style="color:#fca5a5;">Recovery is manual, per device:</strong> ' +
+          'open the site in that browser, clear its notification permission / site data (or unregister the service ' +
+          'worker), reload, then click the bell in the Crew activity panel and grant permission again. ' +
+          'Until someone does that on a given device, that device gets no notifications.</div>' +
+      '</div>' +
+      '<div id="pk-status" style="margin-top:13px;font-size:12.5px;color:var(--text-dim,#999);">Checking push key status…</div>' +
+      '<div id="pk-gate" style="margin-top:12px;"></div>' +
+      '<div id="pk-result" style="margin-top:13px;"></div>' +
+    '</div>';
+  }
+
+  // Every count this panel prints can come back unknown, and unknown is shown
+  // as unknown. "0 devices affected" because a COUNT failed is precisely how
+  // somebody clicks a destructive button on a false premise.
+  function pkNum(v) {
+    if (v === null || v === undefined) {
+      return '<span title="Not measured — this is NOT zero." style="color:#fbbf24;font-weight:600;">unknown</span>';
+    }
+    return '<strong>' + escapeHTML(String(v)) + '</strong>';
+  }
+
+  window.pkLoadStatus = function() {
+    var el = document.getElementById('pk-status');
+    var gate = document.getElementById('pk-gate');
+    if (!el) return;
+    window.p86Api.get('/api/admin/push/vapid-status').then(function(s) {
+      s = s || {};
+      var lines =
+        'Devices that would stop receiving notifications: ' + pkNum(s.subscriptions) +
+        ' &nbsp;·&nbsp; people affected: ' + pkNum(s.users_affected);
+      if (s.env_override) {
+        lines += '<div style="margin-top:7px;color:#fbbf24;">VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY are set in the ' +
+          'environment, so the server signs with those and never reads the stored row. Deleting the row would ' +
+          'rotate <strong>nothing</strong> — change the Railway variables instead.</div>';
+      } else if (s.stored_row_present === false) {
+        lines += '<div style="margin-top:7px;color:var(--text-dim,#999);">No stored keypair exists right now. ' +
+          'The next boot will generate one.</div>';
+      } else if (s.stored_row_present === null) {
+        lines += '<div style="margin-top:7px;color:#fbbf24;">Could not determine whether a stored keypair exists.</div>';
+      }
+      el.innerHTML = lines;
+      if (!gate) return;
+      gate.innerHTML =
+        '<div style="font-size:12px;color:var(--text-dim,#bbb);margin-bottom:6px;">To proceed, type ' +
+          '<code style="color:#fca5a5;background:rgba(248,113,113,0.1);padding:1px 6px;border-radius:4px;">' +
+          escapeHTML(ROTATE_PHRASE) + '</code> exactly:</div>' +
+        '<input id="pk-confirm" type="text" autocomplete="off" oninput="pkSyncConfirm()" placeholder="' +
+          escapeAttr(ROTATE_PHRASE) + '" style="width:100%;max-width:360px;font:inherit;padding:9px 12px;' +
+          'border:1px solid var(--border,#444);border-radius:8px;background:var(--input-bg,#1a1a2e);' +
+          'color:var(--text,#fff);margin-bottom:12px;" />' +
+        '<div><button class="ee-btn" id="pk-exec" disabled onclick="pkRotate()" style="font-size:12px;' +
+          'background:#78350f;border-color:#b45309;color:#fff;opacity:0.5;cursor:not-allowed;">' +
+          '&#x1F511; Delete the stored keypair</button></div>';
+    }).catch(function(err) {
+      el.innerHTML = '<span style="color:#f87171;">Could not read push key status: ' +
+        escapeHTML((err && err.message) || 'error') + '</span>';
+    });
+  };
+
+  window.pkSyncConfirm = function() {
+    var inp = document.getElementById('pk-confirm');
+    var btn = document.getElementById('pk-exec');
+    if (!inp || !btn) return;
+    var ok = inp.value === ROTATE_PHRASE;
+    btn.disabled = !ok;
+    btn.style.opacity = ok ? '1' : '0.5';
+    btn.style.cursor = ok ? 'pointer' : 'not-allowed';
+  };
+
+  window.pkRotate = function() {
+    var inp = document.getElementById('pk-confirm');
+    var btn = document.getElementById('pk-exec');
+    var out = document.getElementById('pk-result');
+    // The typed phrase IS the confirmation. No native confirm() here: it is a
+    // silent no-op inside the installed PWA, which would make this button
+    // appear dead exactly where it matters most.
+    if (!inp || inp.value !== ROTATE_PHRASE) return;
+    if (btn) { btn.disabled = true; btn.textContent = 'Rotating…'; }
+    window.p86Api.post('/api/admin/push/rotate-vapid', { confirm: ROTATE_PHRASE }).then(function(res) {
+      res = res || {};
+      if (out) out.innerHTML =
+        '<div style="padding:12px 14px;background:rgba(251,191,36,0.09);border:1px solid rgba(251,191,36,0.35);' +
+          'border-radius:8px;font-size:12.5px;line-height:1.7;color:var(--text,#fff);">' +
+          '<strong style="color:#fbbf24;">Stored keypair deleted' +
+            (res.rows_removed === 0 ? ' (there was none to delete).' : '.') + '</strong><br>' +
+          '<span style="color:var(--text-dim,#bbb);">' + escapeHTML(res.note || '') + '</span><br><br>' +
+          '<strong>Next:</strong> restart or redeploy the server to generate the new key. ' +
+          'Then expect ' + pkNum(res.subscriptions_invalidated) + ' device subscription(s) to stop working, ' +
+          'silently, until each one is re-enabled by hand.' +
+        '</div>';
+      if (btn) { btn.innerHTML = '&#x1F511; Delete the stored keypair'; }
+      pkLoadStatus();
+    }).catch(function(err) {
+      if (btn) { btn.disabled = false; btn.innerHTML = '&#x1F511; Delete the stored keypair'; }
+      if (out) out.innerHTML = '<div style="color:#f87171;font-size:12px;">Rotation failed: ' +
+        escapeHTML((err && err.message) || 'error') + '</div>';
+    });
+  };
   // Exposed so the Command Center (js/console.js) can mount it as a section,
   // same pattern as the other renderSystem* renderers.
   window.renderSystemDanger = renderSystemDanger;
