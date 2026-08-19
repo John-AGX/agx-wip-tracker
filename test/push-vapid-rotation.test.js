@@ -42,9 +42,12 @@ const SCHEMA = `
   );
   CREATE TABLE admin_audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    actor_kind TEXT,
     actor_user_id INTEGER, actor_email TEXT, actor_role TEXT, action TEXT,
+    outcome TEXT DEFAULT 'ok', reason TEXT, tier TEXT, scope TEXT,
+    on_behalf_of_user_id INTEGER, on_behalf_of_email TEXT,
     target_type TEXT, target_id TEXT, organization_id INTEGER, actor_org_id INTEGER,
-    detail TEXT, ip TEXT
+    detail TEXT, ip TEXT, user_agent TEXT, request_id TEXT
   );
 `;
 

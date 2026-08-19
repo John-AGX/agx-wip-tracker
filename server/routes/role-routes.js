@@ -4,9 +4,40 @@ const {
   requireAuth, requireRole, CAPABILITY_KEYS,
   refreshRoleCache, requireCapability, hasCapability
 } = require('../auth');
-const { auditLog } = require('../audit');
+const { auditLog, auditedTransaction } = require('../audit');
 
 const router = express.Router();
+
+// ── THE REFUSAL IS THE ROW THAT MATTERS NOW ────────────────────────────────
+//
+// systemAdminRoleGuard closed the escalation door: a plain org admin PUTting
+// `capabilities: [...,'SYSTEM_ADMIN']` at /api/roles/admin gets a 403 before
+// the handler's own audit line is ever reached. So the only OBSERVABLE event
+// on the door this codebase most needs to watch was… nothing. Door shut, room
+// dark — the same shape as the VAPID key.
+//
+// Every guard refusal in this file now writes outcome='denied' at tier A, and
+// the successful writes are wrapped in auditedTransaction so the row and the
+// capability change commit together or not at all. `roles` is a GLOBAL table
+// with no organization_id, so all of these are scope='platform' — which also
+// means an org admin cannot see that one of their own people tried this. That
+// gap is real and is reported, not papered over with a NULL-org read arm.
+function auditRoleDenied(req, roleName, submittedCaps, existingCaps) {
+  auditLog(req, {
+    action: 'role.escalation_denied',
+    outcome: 'denied',
+    reason: 'not_entitled',
+    tier: 'A',
+    targetType: 'role',
+    targetId: roleName,
+    scope: 'platform',
+    // Capability arrays are the ONE case where the contents ARE the point.
+    detail: {
+      capabilities_submitted: submittedCaps || undefined,
+      capabilities_existing: existingCaps || undefined,
+    },
+  });
+}
 
 // ── A privilege gate must not be settable by the privilege it gates ────────
 //
@@ -167,14 +198,23 @@ router.post('/', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res
     // hopeful one — an unrecognized key can't smuggle the cap past it, and a
     // recognized one can't survive the filter and skip it.
     const capErr = systemAdminRoleGuard(req.user, caps, null);
-    if (capErr) return res.status(capErr.status).json({ error: capErr.error });
-    await pool.query(
-      `INSERT INTO roles (name, label, description, builtin, capabilities)
-       VALUES ($1, $2, $3, false, $4::jsonb)`,
-      [name, label, description || null, JSON.stringify(caps)]
-    );
+    if (capErr) {
+      auditRoleDenied(req, name, caps, null);
+      return res.status(capErr.status).json({ error: capErr.error });
+    }
+    await auditedTransaction(req, {
+      action: 'role.create', tier: 'A', scope: 'platform',
+      targetType: 'role', targetId: name, detail: { label, capabilities: caps },
+    }, async (client) => {
+      await client.query(
+        `INSERT INTO roles (name, label, description, builtin, capabilities)
+         VALUES ($1, $2, $3, false, $4::jsonb)`,
+        [name, label, description || null, JSON.stringify(caps)]
+      );
+    });
+    // After COMMIT: the cache reads through the pool, not the transaction's
+    // connection, so refreshing inside would have read the pre-write rows.
     await refreshRoleCache();
-    auditLog(req, { action: 'role.create', targetType: 'role', targetId: name, detail: { label, capabilities: caps } });
     res.json({ ok: true, name });
   } catch (e) {
     if (e.code === '23505') {
@@ -205,7 +245,10 @@ router.put('/:name', requireAuth, requireCapability('ROLES_MANAGE'), async (req,
     // relabelling the platform-owner role is not something a tenant admin has
     // any business doing either.
     const capErr = systemAdminRoleGuard(req.user, caps, rows[0].capabilities);
-    if (capErr) return res.status(capErr.status).json({ error: capErr.error });
+    if (capErr) {
+      auditRoleDenied(req, req.params.name, caps, rows[0].capabilities);
+      return res.status(capErr.status).json({ error: capErr.error });
+    }
 
     const sets = [];
     const params = [];
@@ -216,16 +259,18 @@ router.put('/:name', requireAuth, requireCapability('ROLES_MANAGE'), async (req,
     if (!sets.length) return res.json({ ok: true, unchanged: true });
     sets.push('updated_at = NOW()');
     params.push(req.params.name);
-    // SAFE: column names come from req.body destructuring (label / description / capabilities); never user-key iteration.
-    await pool.query(
-      `UPDATE roles SET ${sets.join(', ')} WHERE name = $${p}`,
-      params
-    );
-    await refreshRoleCache();
-    auditLog(req, {
-      action: 'role.update', targetType: 'role', targetId: req.params.name,
+    await auditedTransaction(req, {
+      action: 'role.update', tier: 'A', scope: 'platform',
+      targetType: 'role', targetId: req.params.name,
       detail: { capabilities_before: rows[0].capabilities, capabilities_after: caps != null ? caps : '(unchanged)' },
+    }, async (client) => {
+      // SAFE: column names come from req.body destructuring (label / description / capabilities); never user-key iteration.
+      await client.query(
+        `UPDATE roles SET ${sets.join(', ')} WHERE name = $${p}`,
+        params
+      );
     });
+    await refreshRoleCache();
     res.json({ ok: true });
   } catch (e) {
     console.error('PUT /api/roles/:name error:', e);
@@ -246,7 +291,10 @@ router.delete('/:name', requireAuth, requireCapability('ROLES_MANAGE'), async (r
     // rule as the two write doors, asked before the builtin check so the
     // answer does not depend on which branch happens to fire first.
     const capErr = systemAdminRoleGuard(req.user, null, rows[0].capabilities);
-    if (capErr) return res.status(capErr.status).json({ error: capErr.error });
+    if (capErr) {
+      auditRoleDenied(req, req.params.name, null, rows[0].capabilities);
+      return res.status(capErr.status).json({ error: capErr.error });
+    }
     if (rows[0].builtin) {
       return res.status(400).json({ error: 'Built-in roles cannot be deleted.' });
     }
@@ -281,9 +329,17 @@ router.delete('/:name', requireAuth, requireCapability('ROLES_MANAGE'), async (r
           : 'Cannot delete: this role is still assigned to at least one user. Reassign them first.'
       });
     }
-    await pool.query('DELETE FROM roles WHERE name = $1', [req.params.name]);
+    await auditedTransaction(req, {
+      action: 'role.delete', tier: 'A', scope: 'platform',
+      targetType: 'role', targetId: req.params.name,
+      // The one delete where the CONTENTS are the point: without the
+      // before-snapshot the row says a privilege set vanished and nothing
+      // about what it was. This was the gap the design named.
+      detail: { capabilities_before: rows[0].capabilities, builtin: !!rows[0].builtin },
+    }, async (client) => {
+      await client.query('DELETE FROM roles WHERE name = $1', [req.params.name]);
+    });
     await refreshRoleCache();
-    auditLog(req, { action: 'role.delete', targetType: 'role', targetId: req.params.name });
     res.json({ ok: true });
   } catch (e) {
     console.error('DELETE /api/roles/:name error:', e);

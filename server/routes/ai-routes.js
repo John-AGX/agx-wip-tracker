@@ -27,6 +27,7 @@ const { aiChatLimiter, aiChatHourlyLimiter } = require('../rate-limit');
 // Wave 1.B context registry — fire-and-forget event logger for
 // memory recalls, entity reads, and any other layer we observe.
 const { logContextLoad } = require('../services/context-registry');
+const { auditActor, auditActorCritical } = require('../audit');
 // COs/POs/invoices live in their own tables; this reads them and derives CO
 // money through the same pricing pipeline the browser uses.
 const jobMoney = require('../services/money/change-order-totals');
@@ -10915,25 +10916,75 @@ async function execStaffApprovalTool(name, input, ctx) {
       // was removed whether or not it was.
       let mirrorNote = '';
       if (pack.anthropic_skill_id) {
+        // ── WHY THE AGENT PATH IS AUDITED HERE AND NOT LEFT TO /api/payloads ─
+        //
+        // The obvious exclusion — "agent writes are already recorded in the
+        // payloads table, don't duplicate them" — is true for payload-shaped
+        // ENTITY operations and false for this one. /api/payloads records a
+        // proposed change to a lead/job/estimate row. It does not record a
+        // tool reaching past the entity model to run `deleteSkillDeep` against
+        // the Anthropic account and an UNSCOPED `DELETE FROM
+        // managed_agent_skills` — a platform-wide table with no org column.
+        //
+        // An org admin reaches this by ASKING 86. The capability map puts it
+        // behind ROLES_MANAGE, the same gate as the HTTP door, and it does the
+        // same irreversible upstream thing — so it gets the same action name
+        // and the same tier, or the "one query finds every destroyed upstream
+        // skill" property is a fiction.
+        //
+        // There is no req here (ctx = {userId, orgId} from the exec-tool
+        // dispatcher), so the actor is stated explicitly rather than resolved
+        // from a request that does not exist. The actor IS determinable — it
+        // is the user whose session ran the tool — so this is a real row, not
+        // a NULL-actor placeholder.
+        const actor = {
+          actorKind: 'user',
+          actorUserId: (ctx && ctx.userId) || null,
+          actorLabel: (ctx && ctx.userEmail) || null,
+          actorOrgId: orgId, orgId: orgId,
+        };
+        await auditActorCritical(actor, {
+          action: 'anthropic.skill_delete', outcome: 'attempted', tier: 'A',
+          targetType: 'anthropic_skill', targetId: pack.anthropic_skill_id,
+          organizationId: orgId,
+          detail: { via: 'agent tool propose_skill_pack_delete', pack_name: pack.name },
+        });
         const anthropic = getAnthropic();
+        let upstreamError = null;
         if (anthropic) {
           const del = await deleteSkillDeep(anthropic, pack.anthropic_skill_id);
           if (del.ok) {
             mirrorNote = ' + Anthropic mirror removed';
           } else {
+            upstreamError = del.error;
             mirrorNote = ' — WARNING: the Anthropic mirror (' + pack.anthropic_skill_id +
               ') could NOT be deleted (' + del.error + ') and is still live upstream';
             console.warn('[propose_skill_pack_delete] Anthropic-side delete failed:', del.error);
           }
         } else {
+          upstreamError = 'no_anthropic_key';
           mirrorNote = ' — WARNING: no Anthropic key on this deployment, mirror left upstream';
         }
+        let detached = 0;
         try {
-          await pool.query(`DELETE FROM managed_agent_skills WHERE skill_id = $1`,
+          const d = await pool.query(`DELETE FROM managed_agent_skills WHERE skill_id = $1`,
             [pack.anthropic_skill_id]);
+          detached = d.rowCount || 0;
         } catch (e) {
           console.warn('[propose_skill_pack_delete] managed_agent_skills detach failed:', e.message);
         }
+        auditActor(actor, {
+          action: 'anthropic.skill_delete',
+          outcome: upstreamError ? 'error' : 'ok',
+          reason: upstreamError ? 'upstream_delete_failed' : undefined,
+          tier: 'A',
+          targetType: 'anthropic_skill', targetId: pack.anthropic_skill_id,
+          organizationId: orgId,
+          detail: {
+            via: 'agent tool propose_skill_pack_delete', pack_name: pack.name,
+            agents_detached: detached, upstream_error: upstreamError,
+          },
+        });
       }
 
       await pool.query(

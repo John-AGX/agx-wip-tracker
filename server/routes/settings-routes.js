@@ -23,7 +23,8 @@ const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, hasCapability } = require('../auth');
 const { removedPacks } = require('../services/skill-pack-lifecycle');
-const { readCapabilityFor, writeCapabilityFor } = require('../services/app-settings-keys');
+const { readCapabilityFor, writeCapabilityFor, classOf, isDeclaredKey } = require('../services/app-settings-keys');
+const { auditLog, auditCritical, hashId } = require('../audit');
 
 const router = express.Router();
 
@@ -33,15 +34,83 @@ function notFound(res) {
   return res.status(404).json({ error: 'Setting not found' });
 }
 
+// ── THE ACCEPTANCE TEST LIVES ON THIS ROUTE ────────────────────────────────
+//
+// "If no one got the keys yet, is it safe now?" was unanswerable because a
+// privileged read of `vapid_keys` left NOTHING: the classification refuses it
+// before the pool is touched, and the refusal was silent. The door is shut and
+// the room is dark. Both halves of the trail are written here:
+//
+//   · the REFUSAL, because a walk of the key space is the enumeration signal
+//     and it is the only thing left to see now that the key is unreachable;
+//   · the SUCCESS, because the historical version of the question ("who read
+//     it during the seven weeks it WAS served?") is answerable only by a row
+//     per read. A query that comes back empty is then a positive, evidenced
+//     "nobody touched it" rather than "we have no idea".
+//
+// TWO NARROWINGS, both deliberate:
+//
+// 1. A SUCCESSFUL read of a 'shared' key is NOT recorded. `proposal_template`
+//    is read by the estimate preview and `bt_export_mapping` by the exporter,
+//    both on ESTIMATES_VIEW — so auditing those would write a row naming the
+//    PM, their IP and their browser every time somebody opens an estimate.
+//    That is the surveillance tool the privacy line disclaims, and it buys
+//    nothing: vapid_keys is 'secret' and agent_skills is 'platform', so the
+//    acceptance test is untouched. Refusals are recorded for every class.
+//
+// 2. The caller-controlled key never lands raw. An UNDECLARED key is somebody
+//    walking the key space, so target_id is the literal '(undeclared)' and the
+//    attempted string survives only as a sha8 in detail. Enumeration stays
+//    detectable and aggregatable; the trail does not become a log-injection
+//    surface, and a value typed into the wrong field does not become a
+//    permanent record.
+//
+// The 404 is unchanged in every case. The row is server-side and readable only
+// by SYSTEM_ADMIN, so it creates no oracle for the caller — this task records,
+// it does not gate.
+function settingsAuditTarget(key) {
+  const declared = isDeclaredKey(key);
+  return {
+    targetType: 'app_setting',
+    targetId: declared ? key : '(undeclared)',
+    declared: declared,
+    keyClass: classOf(key),
+    keySha8: declared ? undefined : hashId(key),
+  };
+}
+
+function auditSettingsRead(req, key, outcome, reason) {
+  const t = settingsAuditTarget(key);
+  // Narrowing 1: successful reads of ordinary shared config are ordinary work.
+  if (outcome === 'ok' && t.keyClass === 'shared') return;
+  auditLog(req, {
+    action: 'settings.read',
+    outcome: outcome,
+    reason: reason,
+    tier: 'B',
+    targetType: t.targetType,
+    targetId: t.targetId,
+    detail: { key_class: t.keyClass, declared: t.declared, key_sha8: t.keySha8 },
+  });
+}
+
 router.get('/:key', requireAuth, async (req, res) => {
   try {
     const cap = readCapabilityFor(req.params.key);
-    if (!cap || !hasCapability(req.user, cap)) return notFound(res);
+    if (!cap || !hasCapability(req.user, cap)) {
+      auditSettingsRead(req, req.params.key, 'denied',
+        cap ? 'not_entitled' : (isDeclaredKey(req.params.key) ? 'never_served' : 'undeclared_key'));
+      return notFound(res);
+    }
     const { rows } = await pool.query(
       'SELECT key, value, updated_at FROM app_settings WHERE key = $1',
       [req.params.key]
     );
-    if (!rows.length) return notFound(res);
+    if (!rows.length) {
+      auditSettingsRead(req, req.params.key, 'ok', 'absent');
+      return notFound(res);
+    }
+    auditSettingsRead(req, req.params.key, 'ok', null);
     res.json({ setting: rows[0] });
   } catch (e) {
     console.error('GET /api/settings/:key error:', e);
@@ -173,7 +242,28 @@ router.put('/:key', requireAuth, async (req, res) => {
     // this key must not learn from the shape of the refusal that the key is
     // real and merely wants a `value`. Classify, refuse, then validate.
     const cap = writeCapabilityFor(req.params.key);
-    if (!cap || !hasCapability(req.user, cap)) return notFound(res);
+    const t = settingsAuditTarget(req.params.key);
+    // A platform/secret-class key is tier A: the write leaves the platform
+    // (agent_skills rides upstream to Anthropic account-wide) and its retire
+    // path detaches managed_agent_skills for every tenant. A refused write of
+    // ANY class is recorded — that is the enumeration signal, and it is the
+    // only trace a walk of the key space now leaves.
+    const critical = t.keyClass !== 'shared';
+    const auditBase = {
+      action: 'settings.write',
+      tier: critical ? 'A' : 'B',
+      targetType: t.targetType,
+      targetId: t.targetId,
+    };
+    if (!cap || !hasCapability(req.user, cap)) {
+      auditLog(req, Object.assign({}, auditBase, {
+        tier: 'B',                                    // a refusal never fails closed
+        outcome: 'denied',
+        reason: cap ? 'not_entitled' : (t.declared ? 'never_served' : 'undeclared_key'),
+        detail: { key_class: t.keyClass, declared: t.declared, key_sha8: t.keySha8 },
+      }));
+      return notFound(res);
+    }
 
     let value = req.body && req.body.value;
     if (value == null) return res.status(400).json({ error: 'value is required' });
@@ -224,6 +314,24 @@ router.put('/:key', requireAuth, async (req, res) => {
       }
     }
 
+    // FAIL CLOSED, BEFORE THE POINT OF NO RETURN. retireRemovedPacks below
+    // runs an UNSCOPED `DELETE FROM managed_agent_skills` and the value itself
+    // rides upstream on the next sync; neither is rollback-able, so an
+    // unrecordable write is refused rather than performed unrecorded. The
+    // 'attempted' row is the authorised intent; the 'ok' row below is the
+    // execution. An 'attempted' with no partner means the process died
+    // mid-write, which is itself worth seeing.
+    if (critical) {
+      try {
+        await auditCritical(req, Object.assign({}, auditBase, {
+          outcome: 'attempted',
+          detail: { key_class: t.keyClass, declared: t.declared },
+        }));
+      } catch (auditErr) {
+        return res.status(503).json({ error: 'Action refused: it could not be recorded.' });
+      }
+    }
+
     await pool.query(
       `INSERT INTO app_settings (key, value, updated_at)
        VALUES ($1, $2::jsonb, NOW())
@@ -238,6 +346,22 @@ router.put('/:key', requireAuth, async (req, res) => {
     const retiredReport = retired
       ? await retireRemovedPacks(retired, (req.user && req.user.organization_id) || null)
       : null;
+
+    // The terminal row. SHAPE, NOT CONTENTS: counts and the retired pack NAMES,
+    // never the playbook blob. The blast radius of this write is "how many
+    // packs went away and how many agent attachments that detached", and that
+    // is exactly what a reader needs.
+    auditLog(req, Object.assign({}, auditBase, {
+      outcome: 'ok',
+      detail: {
+        key_class: t.keyClass,
+        declared: t.declared,
+        packs_after: Array.isArray(value && value.skills) ? value.skills.length : null,
+        packs_retired: retiredReport ? retiredReport.length : 0,
+        agents_detached: retiredReport ? retiredReport.reduce((n, r) => n + (r.detached || 0), 0) : 0,
+        retired_names: retiredReport ? retiredReport.map((r) => r.name) : undefined,
+      },
+    }));
 
     res.json(retiredReport ? { ok: true, retired: retiredReport } : { ok: true });
   } catch (e) {

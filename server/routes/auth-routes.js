@@ -4,7 +4,7 @@ const { pool, getOrgById } = require('../db');
 const { signToken, requireAuth, requireRole, requireOrgId, requireSystemAdmin, resolveUserOrg, hasCapability,
   resolveOrgId, ORG_UNRESOLVED, ORG_LOOKUP_FAILED } = require('../auth');
 const { ipLoginLimiter } = require('../rate-limit');
-const { auditLog } = require('../audit');
+const { auditLog, auditCritical, auditActor, actorFromRequest, hashId } = require('../audit');
 // The tenant boundary on a caller-supplied USER id. See the block comment in
 // that file: four admin doors here are keyed on users.id, which is SERIAL.
 const { guardUserTarget } = require('../services/user-org-scope');
@@ -12,10 +12,21 @@ const { guardUserTarget } = require('../services/user-org-scope');
 // Record a SYSTEM_ADMIN deliberately reaching into another tenant through one
 // of the by-id user doors. Nothing else may reach one — see guardUserTarget —
 // so this is the whole cross-tenant trail for the users table.
-function auditCrossTenant(req, scope, action, targetId) {
+//
+// RECORD AT EXECUTION, NOT AT PROPOSAL. This used to fire the moment the tenant
+// guard let the caller through, which is BEFORE validateRoleAssignment can
+// refuse the write. With no outcome column that row was merely ambiguous; with
+// one it would have been a false statement — `user.cross_tenant_write / ok` on
+// a role escalation that was refused three lines later. Every caller now
+// invokes this after the last guard and immediately before the write, and the
+// refusal path calls it with outcome 'denied' instead.
+function auditCrossTenant(req, scope, action, targetId, outcome, reason) {
   if (!scope || !scope.crossTenant) return;
   auditLog(req, {
     action: 'user.cross_tenant_write',
+    outcome: outcome || 'ok',
+    reason: reason,
+    tier: 'A',
     targetType: 'user',
     targetId,
     organizationId: scope.targetOrg,
@@ -31,13 +42,45 @@ router.post('/login', ipLoginLimiter, async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
 
-    const { rows } = await pool.query('SELECT * FROM users WHERE email = $1 AND active = true', [email.toLowerCase().trim()]);
+    const normalized = email.toLowerCase().trim();
+    const { rows } = await pool.query('SELECT * FROM users WHERE email = $1 AND active = true', [normalized]);
     const user = rows[0];
-    if (!user) return res.status(401).json({ error: 'Invalid credentials' });
-
-    if (!bcrypt.compareSync(password, user.password_hash)) {
+    if (!user) {
+      // THE ONE FIELD A STRANGER CONTROLS, AND WHERE CLEARTEXT PASSWORDS GO.
+      // Typing a password into the email box is the canonical way an audit
+      // table acquires a credential, and this identifier did not resolve to a
+      // user — so nothing about it is known to be an email at all. Store a
+      // sha8 (so repeat attempts still aggregate) plus the domain (so a
+      // credential-stuffing run against one tenant is still visible), and
+      // NEVER the string. actor_kind 'anonymous' says why there is no user id
+      // instead of leaving a NULL that reads as coverage.
+      auditActor(actorFromRequest(req, { actorKind: 'anonymous' }), {
+        action: 'auth.login', outcome: 'denied', reason: 'no_such_user', tier: 'B',
+        targetType: 'user',
+        detail: { identifier_sha8: hashId(normalized), domain: normalized.split('@')[1] || null },
+      });
       return res.status(401).json({ error: 'Invalid credentials' });
     }
+
+    if (!bcrypt.compareSync(password, user.password_hash)) {
+      auditActor(actorFromRequest(req, {
+        actorKind: 'anonymous', actorUserId: user.id, actorLabel: user.email,
+        actorOrgId: user.organization_id || null, orgId: user.organization_id || null,
+      }), {
+        action: 'auth.login', outcome: 'denied', reason: 'bad_password', tier: 'B',
+        targetType: 'user', targetId: String(user.id),
+      });
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    auditActor(actorFromRequest(req, {
+      actorKind: 'user', actorUserId: user.id, actorLabel: user.email,
+      actorOrgId: user.organization_id || null, orgId: user.organization_id || null,
+    }), {
+      action: 'auth.login', outcome: 'ok', tier: 'B',
+      targetType: 'user', targetId: String(user.id),
+      detail: { role: user.role },
+    });
 
     const token = signToken(user);
     res.cookie('token', token, { httpOnly: true, sameSite: 'lax', maxAge: 7 * 24 * 60 * 60 * 1000 });
@@ -51,6 +94,16 @@ router.post('/login', ipLoginLimiter, async (req, res) => {
 });
 
 // POST /api/auth/logout
+//
+// DELIBERATELY NOT AUDITED, and named rather than quietly skipped. This route
+// has no requireAuth — it only clears a cookie, and it must keep working for a
+// caller whose token has already expired (see the sub-portal logout loop: a
+// logout that can fail is a trap). So there is no verified actor here. Wiring
+// it to the audit would write actor_user_id NULL on every row, which looks
+// like coverage and is not. Recording a logout would need this route to verify
+// the token first, which is a behaviour change to a route that must not have
+// one — and a logout is not a privileged action. auth.login carries the
+// session-boundary signal.
 router.post('/logout', (req, res) => {
   res.clearCookie('token');
   res.json({ ok: true });
@@ -178,17 +231,26 @@ router.post('/act-as', requireAuth, requireSystemAdmin, async (req, res) => {
     const admin = (await pool.query('SELECT * FROM users WHERE id = $1 AND active = true', [req.user.id])).rows[0];
     if (!admin) return res.status(401).json({ error: 'Admin account not found or inactive' });
     const token = signToken(admin, { acting_as_user_id: target.id });
-    res.cookie('token', token, { httpOnly: true, sameSite: 'lax', maxAge: 7 * 24 * 60 * 60 * 1000 });
 
-    // Audit the start. req.user is still the REAL admin, so auditLog
-    // snapshots the true operator as actor — accountability is preserved.
-    auditLog(req, {
-      action: 'user.act_as_start',
-      targetType: 'user',
-      targetId: String(target.id),
-      organizationId: target.organization_id || null,
-      detail: { target_email: target.email, target_role: target.role },
-    });
+    // FAIL CLOSED, AND BEFORE THE COOKIE. req.user is still the REAL admin, so
+    // the row snapshots the true operator as actor. Impersonation is the one
+    // operation where an unrecorded success is indistinguishable from the
+    // target acting for themselves — so if it cannot be recorded, the disguise
+    // is not issued. The cost is a retry for one admin; the cost of the other
+    // choice is permanent.
+    try {
+      await auditCritical(req, {
+        action: 'user.act_as_start',
+        tier: 'A',
+        targetType: 'user',
+        targetId: String(target.id),
+        organizationId: target.organization_id || null,
+        detail: { target_email: target.email, target_role: target.role },
+      });
+    } catch (auditErr) {
+      return res.status(503).json({ error: 'Action refused: it could not be recorded.' });
+    }
+    res.cookie('token', token, { httpOnly: true, sameSite: 'lax', maxAge: 7 * 24 * 60 * 60 * 1000 });
 
     // Do NOT echo the token in the body — the httpOnly cookie carries auth.
     // Returning it here would expose the disguise token to any page-level XSS.
@@ -212,10 +274,20 @@ router.post('/act-as/exit', requireAuth, async (req, res) => {
     res.cookie('token', token, { httpOnly: true, sameSite: 'lax', maxAge: 7 * 24 * 60 * 60 * 1000 });
 
     if (wasActingAs) {
+      // organizationId is NOT decoration here. The privacy statement promises
+      // staff that impersonation is "recorded when they start and when they
+      // stop, and you can ask to see that record" — and the org-tier reader has
+      // NO `organization_id IS NULL` arm, deliberately. The start row was
+      // org-stamped and the exit row was not, so half of a promise made to
+      // staff was invisible to the admin who would have to show it to them.
+      // The disguise can only target a user in the admin's own org (enforced
+      // above), so the actor's org IS the target's org.
       auditLog(req, {
         action: 'user.act_as_exit',
+        tier: 'B',
         targetType: 'user',
         targetId: String(wasActingAs),
+        organizationId: (req.user && req.user.organization_id) || null,
         detail: {},
       });
     }
@@ -266,6 +338,16 @@ router.post('/register', requireAuth, requireRole('admin'), requireOrgId, async 
       'INSERT INTO users (email, password_hash, name, role, phone_number, organization_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
       [email.toLowerCase().trim(), hash, name, userRole, normalizedPhone, req.orgId]
     );
+
+    // `user.create` has been IN the naming convention since the table was
+    // built and was emitted nowhere — an operator reading the convention would
+    // have believed account creation was covered.
+    auditLog(req, {
+      action: 'user.create', tier: 'B',
+      targetType: 'user', targetId: String(result.rows[0].id),
+      organizationId: req.orgId || null,
+      detail: { email: email.toLowerCase().trim(), role: userRole },
+    });
 
     // Fire the invite email — fire-and-forget so a flaky email
     // service never blocks user creation. Failures land in email_log
@@ -477,6 +559,19 @@ router.put('/me', requireAuth, async (req, res) => {
     // Re-sign the cookie (mirrors POST /refresh-token) so name/email changes
     // take effect immediately without re-login.
     const fresh = (await pool.query('SELECT * FROM users WHERE id = $1', [req.user.id])).rows[0];
+    // Only the EMAIL change. Name, phone and title are ordinary work and are
+    // not recorded — but email is the login identifier, so changing it changes
+    // who can sign in as this account. `fields_changed` names the field, never
+    // the value; the target's own identity is the record.
+    if (emailUpdate !== user.email) {
+      auditLog(req, {
+        action: 'user.self_update', tier: 'B',
+        targetType: 'user', targetId: String(user.id),
+        organizationId: user.organization_id || null,
+        detail: { fields_changed: ['email'], email_before: user.email, email_after: emailUpdate },
+      });
+    }
+
     if (fresh) {
       // Preserve an active act-as disguise across this profile-edit re-sign.
       const extra = (req.actingAs && req.actingAs.id) ? { acting_as_user_id: req.actingAs.id } : {};
@@ -552,12 +647,32 @@ router.put('/users/:id', requireAuth, requireRole('admin'), async (req, res) => 
     // may cross, and that crossing is audited. See services/user-org-scope.js.
     const scope = await guardUserTarget(req, res, user);
     if (!scope) return;                        // refused; guard answered
-    auditCrossTenant(req, scope, 'user_update', req.params.id);
 
     // P0-3 — gate the role field: reject unknown roles (400) and block a
     // non-system-admin from assigning any SYSTEM_ADMIN-carrying role (403).
+    //
+    // THE CROSS-TENANT ROW MOVED BELOW THIS GUARD. It used to fire above, at
+    // the moment the tenant guard let the caller through — i.e. at PROPOSAL.
+    // A refused escalation would then have recorded `cross_tenant_write / ok`:
+    // a row asserting a write that never happened. Authorization is checked at
+    // execution in this codebase; the audit now agrees with it.
     const roleErr = await validateRoleAssignment(role, req.user);
-    if (roleErr) return res.status(roleErr.status).json({ error: roleErr.error });
+    if (roleErr) {
+      auditLog(req, {
+        action: 'user.role_change',
+        outcome: 'denied',
+        reason: roleErr.status === 403 ? 'not_entitled' : 'unknown_role',
+        tier: 'A',
+        targetType: 'user',
+        targetId: req.params.id,
+        organizationId: user.organization_id || null,
+        detail: { role_before: user.role, role_attempted: role },
+      });
+      auditCrossTenant(req, scope, 'user_update', req.params.id, 'denied',
+        roleErr.status === 403 ? 'not_entitled' : 'unknown_role');
+      return res.status(roleErr.status).json({ error: roleErr.error });
+    }
+    auditCrossTenant(req, scope, 'user_update', req.params.id);
 
     // phone_number is optional. If present in the body:
     //   - empty string clears it (sets NULL)
@@ -652,9 +767,10 @@ router.put('/users/:id', requireAuth, requireRole('admin'), async (req, res) => 
     // Audit — role change is the privileged one; record before/after.
     auditLog(req, {
       action: (role && role !== user.role) ? 'user.role_change' : 'user.update',
+      tier: (role && role !== user.role) ? 'A' : 'B',
       targetType: 'user',
       targetId: req.params.id,
-      organizationId: user.organization_id || null,
+      organizationId: user.organization_id || adoptOrgId || null,
       detail: {
         email: emailUpdate,
         role_before: user.role,
@@ -698,8 +814,15 @@ router.put('/users/:id/password', requireAuth, requireRole('admin'), async (req,
       'UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2',
       [bcrypt.hashSync(newPassword, 10), req.params.id]
     );
-    // Audit — record the reset (NEVER the password itself).
-    auditLog(req, { action: 'user.password_reset', targetType: 'user', targetId: req.params.id, detail: { email: targetUser.email } });
+    // Audit — record the reset (NEVER the password itself). organizationId is
+    // load-bearing: without it this row is scope='platform' and the org admin
+    // who performed the reset cannot see it in their own tenant's trail.
+    auditLog(req, {
+      action: 'user.password_reset', tier: 'B',
+      targetType: 'user', targetId: req.params.id,
+      organizationId: targetUser.organization_id || null,
+      detail: { email: targetUser.email },
+    });
 
     // Email the user their new password — security tradeoff is
     // deliberate: Project 86 is small + admin-driven. Auth flow is "admin
@@ -754,7 +877,7 @@ router.delete('/users/:id', requireAuth, requireRole('admin'), async (req, res) 
     auditCrossTenant(req, scope, 'user_delete', req.params.id);
     await pool.query('DELETE FROM users WHERE id = $1', [req.params.id]);
     auditLog(req, {
-      action: 'user.delete', targetType: 'user', targetId: req.params.id,
+      action: 'user.delete', tier: 'A', targetType: 'user', targetId: req.params.id,
       organizationId: rows[0].organization_id || null,
       detail: { email: rows[0].email, role: rows[0].role },
     });
@@ -779,11 +902,25 @@ router.put('/password', requireAuth, async (req, res) => {
 
     const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.user.id]);
     if (!bcrypt.compareSync(currentPassword, rows[0].password_hash)) {
+      // A run of these against one account is somebody sitting at an unlocked
+      // session guessing, which is exactly what the denial index is for.
+      auditLog(req, {
+        action: 'user.password_change', outcome: 'denied', reason: 'bad_password', tier: 'B',
+        targetType: 'user', targetId: String(req.user.id),
+        organizationId: (req.user && req.user.organization_id) || null,
+      });
       return res.status(401).json({ error: 'Current password incorrect' });
     }
 
     await pool.query('UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2',
       [bcrypt.hashSync(newPassword, 10), req.user.id]);
+
+    auditLog(req, {
+      action: 'user.password_change', tier: 'B',
+      targetType: 'user', targetId: String(req.user.id),
+      organizationId: (req.user && req.user.organization_id) || null,
+      detail: { self: true },
+    });
 
     res.json({ ok: true });
   } catch (e) {

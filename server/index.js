@@ -296,6 +296,10 @@ app.use('/api/email', emailRoutes);
 app.use('/api/admin/agents', adminAgentsRoutes);
 // Danger Zone — system-admin org "clean slate" hard reset (preview + execute).
 app.use('/api/admin/org-reset', adminOrgResetRoutes);
+// The ORG tier of the audit read path. Deliberately NOT a parameter on the
+// SYSTEM_ADMIN console router: a separate route with its own gate and its own
+// projection, so no query-string mistake can widen one into the other.
+app.use('/api/org', require('./routes/org-audit-routes'));
 // Platform push-key rotation — SYSTEM_ADMIN + typed confirmation + audited.
 // Its own deliberate endpoint rather than a second mutating route inside the
 // read-only Command Center router, per that router's stated doctrine.
@@ -503,6 +507,22 @@ function startServer() {
         require('./cert-expiry-cron').start();
       } catch (e) {
         console.warn('[cert-expiry] failed to start scanner:', e && e.message);
+      }
+      // Audit retention. Daily, and deliberately unhurried — this table needs
+      // its indexes long before it needs retention (the arithmetic puts a
+      // million rows five to eight years out), so the job exists to keep the
+      // promise made in the privacy statement that ageing-out is on a published
+      // schedule, not to reclaim space. Tier A rows are never eligible; the
+      // purge audits ITSELF fail-closed before it deletes anything.
+      try {
+        const { purgeExpiredAudit } = require('./services/audit-retention');
+        const dayMs = 24 * 60 * 60 * 1000;
+        // 90s after boot so it never competes with the first requests, then
+        // daily. unref() so it cannot hold the process open.
+        setTimeout(() => { purgeExpiredAudit().catch(() => {}); }, 90 * 1000).unref();
+        setInterval(() => { purgeExpiredAudit().catch(() => {}); }, dayMs).unref();
+      } catch (e) {
+        console.warn('[audit-purge] failed to schedule:', e && e.message);
       }
       // Weekly digest cron — Monday 7am local. Self-gated by event toggles
       // in admin settings; sendForEvent skips disabled events. Each digest

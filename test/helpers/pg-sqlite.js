@@ -43,6 +43,18 @@ function translate(sql) {
     (_m, param, col) => 'EXISTS (SELECT 1 FROM json_each(' + col + ') WHERE json_each.value = ' + param + ')'
   );
 
+  // The other direction of the same idiom: `col = ANY($n::text[])`, i.e. "is
+  // this column one of the values in the array parameter". The org-tier audit
+  // read uses it for its action ALLOWLIST, and the property under test there is
+  // that an action NOT on the list is not served — so a rule that quietly
+  // reduced this to TRUE would make the assertion meaningless. encodeParam
+  // already JSON-stringifies array parameters, which is exactly what json_each
+  // wants.
+  s = s.replace(
+    /([a-z_][a-z_0-9]*(?:\.[a-z_][a-z_0-9]*)?)\s*=\s*ANY\s*\(\s*(\$\d+)(?:::[a-z_]+(?:\[\])?)?\s*\)/gi,
+    (_m, col, param) => 'EXISTS (SELECT 1 FROM json_each(' + param + ') WHERE json_each.value = ' + col + ')'
+  );
+
   // Casts. Postgres-only, and meaningless to a dynamically typed engine.
   s = s.replace(/::text\[\]/g, '').replace(/::jsonb/g, '').replace(/::json/g, '')
        .replace(/::int\b/g, '').replace(/::integer\b/g, '').replace(/::text\b/g, '');

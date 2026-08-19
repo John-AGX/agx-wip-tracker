@@ -191,10 +191,21 @@ function writeCapabilityFor(key) {
   return entry.write || null;
 }
 
+// Is this key ON the list at all? classOf() answers 'internal' for both a
+// DECLARED internal key (cert_expiry_log) and a key nobody has ever heard of,
+// which is exactly right for the gate and exactly wrong for the audit row: one
+// is a known server-owned key, the other is somebody walking the key space. The
+// audit records the difference (and hashes the undeclared string rather than
+// storing it — see server/audit.js hashId).
+function isDeclaredKey(key) {
+  return lookup(key) !== null;
+}
+
 module.exports = {
   KEY_CLASSES,
   NEVER_SERVED,
   classOf,
+  isDeclaredKey,
   readCapabilityFor,
   writeCapabilityFor
 };

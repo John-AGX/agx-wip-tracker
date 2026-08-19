@@ -2615,8 +2615,13 @@ async function initSchema() {
     -- actor_role are SNAPSHOTTED so the record survives the user being
     -- deleted. organization_id = the TARGET org the action touched
     -- (nullable for platform-level ops); actor_org_id = the actor's home
-    -- org. Written fire-and-forget by server/audit.js — never blocks the
-    -- request. Append-only by convention (no UPDATE/DELETE paths).
+    -- org. Written by server/audit.js — the ONE writer — in two failure modes:
+    -- tier A refuses the operation when the row cannot be written, tier B
+    -- proceeds and screams to stdout. Never fail-silent. Append-only, enforced
+    -- by the trigger below rather than by convention.
+    --
+    -- NOT touched by services/org-reset.js, deliberately: a Danger Zone tenant
+    -- wipe must leave the trail of who wiped it. Do not "fix" that.
     CREATE TABLE IF NOT EXISTS admin_audit_log (
       id BIGSERIAL PRIMARY KEY,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -2631,10 +2636,92 @@ async function initSchema() {
       detail JSONB,
       ip TEXT
     );
+    -- ── The evidence dimensions the original 12 columns could not carry ────
+    -- outcome: the table could only record things that HAPPENED. The question
+    --   that prompted this ("did anyone read that key?") is mostly about things
+    --   that were ATTEMPTED, so a refusal is a row. 'attempted' is the
+    --   fail-closed pre-row for an irreversible op with no joinable
+    --   transaction; a paired ok/error row follows it.
+    -- scope: roles and app_settings are GLOBAL (no organization_id), so
+    --   every capability change logs organization_id = NULL. An org-scoped
+    --   reader must not need OR organization_id IS NULL to see its own
+    --   events — that arm would hand every org admin the platform trail.
+    -- on_behalf_of_*: without it, a role change made under an act-as disguise
+    --   is byte-identical to one made openly.
+    -- actor_kind: types a NULL actor instead of leaving it ambiguous. The
+    --   invite-accept that creates an org AND its first admin has no req.user
+    --   and never will.
+    ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS outcome TEXT NOT NULL DEFAULT 'ok';
+    ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS reason TEXT;
+    ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS tier CHAR(1);
+    ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS scope TEXT;
+    ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS actor_kind TEXT;
+    ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS on_behalf_of_user_id INTEGER;
+    ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS on_behalf_of_email TEXT;
+    ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS request_id TEXT;
+    ALTER TABLE admin_audit_log ADD COLUMN IF NOT EXISTS user_agent TEXT;
+
+    -- ── The FKs have to go, and not for tidiness ───────────────────────────
+    -- actor_user_id REFERENCES users(id) ON DELETE SET NULL is implemented by
+    -- Postgres as an UPDATE on THIS table, and row triggers fire on it. The
+    -- append-only trigger below would therefore abort every DELETE FROM users
+    -- and every org archive-delete — a boundary turning into an outage, which
+    -- is the exact shape this codebase has already had to unwind once.
+    --
+    -- Losing the FK costs nothing the row needs: actor_email / actor_role are
+    -- SNAPSHOTTED precisely so the record outlives the user. And ON DELETE SET
+    -- NULL was itself a partial suppression primitive — delete a user and their
+    -- rows' actor_user_id quietly became NULL. Dropping it also removes a
+    -- FOR KEY SHARE lock on users from the hot path of every privileged
+    -- action.
+    ALTER TABLE admin_audit_log DROP CONSTRAINT IF EXISTS admin_audit_log_actor_user_id_fkey;
+    ALTER TABLE admin_audit_log DROP CONSTRAINT IF EXISTS admin_audit_log_organization_id_fkey;
+
+    -- ── Indexes: REPLACE, don't add ────────────────────────────────────────
+    -- Every query this table will ever serve ends ORDER BY created_at DESC
+    -- LIMIT n. A leading-column-only index finds the rows and then SORTS ALL OF
+    -- THEM to satisfy the limit. context_load_events and payloads already
+    -- solved this with the composite/partial shapes below; this table got none
+    -- of it, and ai_messages carries the written-down lesson from the time an
+    -- hourly range query could use no index and seq-scanned the largest table
+    -- once an hour forever.
+    --
+    -- Each index is write amplification on the hot path of every privileged
+    -- action, hence six replacing four rather than ten alongside them. No GIN
+    -- on detail: a searchable detail column is a standing invitation to start
+    -- putting business data in it, which is rule 1 running backwards.
+    DROP INDEX IF EXISTS idx_admin_audit_actor;
+    DROP INDEX IF EXISTS idx_admin_audit_action;
+    DROP INDEX IF EXISTS idx_admin_audit_org;
     CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit_log(created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_admin_audit_actor ON admin_audit_log(actor_user_id);
-    CREATE INDEX IF NOT EXISTS idx_admin_audit_action ON admin_audit_log(action);
-    CREATE INDEX IF NOT EXISTS idx_admin_audit_org ON admin_audit_log(organization_id);
+    -- actor filter: exact lower(email), not a leading-wildcard ILIKE.
+    CREATE INDEX IF NOT EXISTS idx_admin_audit_actor_time ON admin_audit_log(lower(actor_email), created_at DESC);
+    -- "everything about record Y" — the acceptance-test query. Had NO index.
+    CREATE INDEX IF NOT EXISTS idx_admin_audit_target ON admin_audit_log(target_type, target_id, created_at DESC) WHERE target_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_admin_audit_action_time ON admin_audit_log(action, created_at DESC);
+    -- the org-tier read, with no NULL arm to leak platform rows into a tenant.
+    CREATE INDEX IF NOT EXISTS idx_admin_audit_org_time ON admin_audit_log(organization_id, created_at DESC) WHERE scope = 'org';
+    -- the enumeration-hunting index. Tiny, because denials are rare.
+    CREATE INDEX IF NOT EXISTS idx_admin_audit_denied ON admin_audit_log(created_at DESC) WHERE outcome <> 'ok';
+
+    -- ── Append-only, actually ──────────────────────────────────────────────
+    -- It was append-only BY CONVENTION — no trigger, no revoked grant. Railway
+    -- runs a single role so GRANTs are not available, but a trigger converts
+    -- the convention into enforcement for eight lines: a stray DELETE in a
+    -- future migration now fails loudly instead of quietly. The retention purge
+    -- is the ONE legitimate deleter and identifies itself with a session GUC.
+    CREATE OR REPLACE FUNCTION admin_audit_log_append_only() RETURNS trigger AS $aal$
+    BEGIN
+      IF current_setting('app.audit_purge', true) = 'on' THEN
+        RETURN COALESCE(NEW, OLD);
+      END IF;
+      RAISE EXCEPTION 'admin_audit_log is append-only (attempted %)', TG_OP;
+    END;
+    $aal$ LANGUAGE plpgsql;
+    DROP TRIGGER IF EXISTS trg_admin_audit_append_only ON admin_audit_log;
+    CREATE TRIGGER trg_admin_audit_append_only
+      BEFORE UPDATE OR DELETE ON admin_audit_log
+      FOR EACH ROW EXECUTE FUNCTION admin_audit_log_append_only();
 
     -- Per-event template overrides. The codebase ships baked-in defaults
     -- in server/email-templates.js; admins can customize subject + body

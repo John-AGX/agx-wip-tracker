@@ -34,7 +34,7 @@ const router = express.Router();
 // is how an alarm ends up disagreeing with the page it is alarming on.
 const { MODEL_COSTS, DEFAULT_MODEL_COST } = require('../services/ai-pricing');
 const { deleteSkillDeep } = require('../services/anthropic-skills');
-const { auditLog } = require('../audit');
+const { auditLog, auditCritical } = require('../audit');
 // The managed-agents 1024-char tool-description cap, and the loud warning
 // that used to be a silent slice(). See the module header for the incident.
 const { capToolDescription } = require('../services/agent-tool-description');
@@ -4966,10 +4966,21 @@ router.delete('/:agentKey/native-skills/:skillId', requireAuth, requireSystemAdm
     const agentKey = String(req.params.agentKey || '').trim();
     const skillId = String(req.params.skillId || '').trim();
     if (!agentKey || !skillId) return res.status(400).json({ error: 'agentKey and skill_id are required' });
-    await pool.query(
+    const d = await pool.query(
       `DELETE FROM managed_agent_skills WHERE agent_key = $1 AND skill_id = $2`,
       [agentKey, skillId]
     );
+    // NOT `anthropic.skill_delete`, and the distinction is the point of that
+    // action name. This statement is scoped to one (agent_key, skill_id) pair
+    // and the route's own header says it "does NOT delete the skill from
+    // Anthropic". Filing it under the upstream-delete name would put a
+    // reversible detach in the query an operator runs to find what has been
+    // destroyed at the account. Tier B: recoverable by re-attaching.
+    auditLog(req, {
+      action: 'agent.skill_detach', tier: 'B',
+      targetType: 'managed_agent_skill', targetId: skillId,
+      detail: { agent_key: agentKey, rows_removed: d.rowCount || 0 },
+    });
     res.json({ ok: true, agent_key: agentKey, skill_id: skillId });
   } catch (e) {
     console.error('DELETE /agents/:agentKey/native-skills/:skillId error:', e);
@@ -5026,6 +5037,24 @@ router.get('/training-export', requireAuth, require('../auth').requireSystemAdmi
         ORDER BY created_at ASC
         LIMIT 50000`;
     const r = await pool.query(sql, params);
+
+    // CROSS-TENANT BULK EGRESS OF ACCOUNT-LEVEL IP, and it left no record.
+    // ai_training_examples has no org filter on this query by design (the
+    // whole point is a platform-wide corpus), so one call takes up to 50,000
+    // rows of every tenant's work off the platform in a file. Fail closed
+    // BEFORE the first byte is written: once the stream starts there is no
+    // taking it back, and the response is already committed to 200.
+    // detail is the SHAPE of the export — row count and filters — never a row.
+    try {
+      await auditCritical(req, {
+        action: 'platform.data_export', tier: 'A',
+        targetType: 'training_corpus', targetId: task || 'all',
+        detail: { rows: r.rows.length, task: task, since: since && !isNaN(since) ? since.toISOString() : null, include_rejected: includeRejected },
+      });
+    } catch (auditErr) {
+      return res.status(503).json({ error: 'Export refused: it could not be recorded.' });
+    }
+
     res.setHeader('Content-Type', 'application/jsonl');
     res.setHeader('Content-Disposition',
       'attachment; filename="p86-training-' + (task || 'all') + '-' + new Date().toISOString().slice(0, 10) + '.jsonl"');

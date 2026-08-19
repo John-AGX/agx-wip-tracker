@@ -22,7 +22,7 @@ const { toFile } = require('@anthropic-ai/sdk');
 const { pool, listOrganizations, getOrgById } = require('../db');
 const { requireAuth, requireCapability, requireOrg, requireSystemAdmin, signToken } = require('../auth');
 const { sendForEvent } = require('../email');
-const { auditLog } = require('../audit');
+const { auditLog, auditCritical, auditActorCritical, actorFromRequest } = require('../audit');
 const { deleteSkillDeep, anthropicDisplayTitle } = require('../services/anthropic-skills');
 // NOTE: dropPackByName is deliberately NOT imported any more. It was the only
 // caller, and matching a global row by a caller-chosen name was the defect —
@@ -197,7 +197,17 @@ router.post('/invites', requireAuth, requireSystemAdmin, async (req, res) => {
       [email, orgName, token, req.user.id, expiresAt]
     );
     const invite = ins.rows[0];
-    auditLog(req, { action: 'org.invite', targetType: 'org_invitation', targetId: invite.id, detail: { email, org_name: orgName } });
+    // scope='platform', and that is CORRECT rather than an oversight: the
+    // organisation this invitation will create does not exist yet, so there is
+    // no tenant for the row to belong to. It is therefore not in the org-tier
+    // reader's allowlist — inventing an organization_id to make it visible
+    // there would be a guess on an evidence row. The paired org.invite_accept
+    // row IS org-stamped, and that is where a tenant sees its own founding.
+    auditLog(req, {
+      action: 'org.invite', tier: 'B', scope: 'platform',
+      targetType: 'org_invitation', targetId: invite.id,
+      detail: { email, org_name: orgName },
+    });
     const acceptUrl = appUrl().replace(/\/$/, '') + '/accept-org-invite?token=' + token;
     // Fire-and-forget email. The endpoint always returns the invite
     // (with token + accept URL) so the admin can copy/paste even if
@@ -327,6 +337,32 @@ router.post('/invites/:token/accept', async (req, res) => {
         WHERE id = $3`,
       [org.id, user.id, inv.id]
     );
+    // ── THE HIGHEST-VALUE UNAUDITED EVENT IN THE CODEBASE ──────────────────
+    //
+    // Unauthenticated, and it creates an ORGANISATION plus its FIRST ADMIN in
+    // one transaction. There is no req.user and there never will be — the
+    // token IS the credential — so wiring it through the req-shaped entry
+    // point would have written actor_user_id NULL and called it coverage.
+    // auditActorCritical takes an explicit, TYPED actor instead: actor_kind
+    // 'invite', labelled with the invited address the locked row above proves,
+    // and carrying who issued the invitation.
+    //
+    // Written on THIS client, inside the same transaction as the org and the
+    // user: the row and the tenant commit together or neither exists. That is
+    // the only shape that cannot produce an org with no record of its birth,
+    // or a record of an org that rolled back.
+    await auditActorCritical(actorFromRequest(req, {
+      actorKind: 'invite', actorLabel: inv.email, actorUserId: user.id,
+      actorOrgId: org.id, orgId: org.id,
+    }), {
+      action: 'org.invite_accept', tier: 'A',
+      targetType: 'organization', targetId: String(org.id), organizationId: org.id,
+      detail: {
+        org_slug: org.slug, invitation_id: inv.id,
+        invited_by: inv.invited_by_user_id || null,
+        owner_user_id: user.id, owner_email: user.email,
+      },
+    }, { client: client });
     await client.query('COMMIT');
     // Sign an auth token so the new owner lands logged in.
     const authToken = signToken({ id: user.id, email: user.email, role: user.role, organization_id: org.id });
@@ -759,6 +795,33 @@ router.delete('/:id/skill-packs/:packId', requireAuth, requireOrg, requireCapabi
     let anthropicDeleteError = null;
     let detached = 0;
     if (pack.anthropic_skill_id) {
+      // ── THE TIER IS SET BY THE BLAST RADIUS, NOT BY THE ROUTE'S ADDRESS ──
+      //
+      // This door is gated on ROLES_MANAGE — an ORG ADMIN — and from here it
+      // (a) deletes a skill from the Anthropic account, upstream and for real,
+      // and (b) runs an UNSCOPED `DELETE FROM managed_agent_skills`, a table
+      // whose primary key is (agent_key, skill_id) with no org column, which
+      // detaches the skill from EVERY tenant's agents.
+      //
+      // It uses the SAME action name as the three SYSTEM_ADMIN-gated upstream
+      // deletes, deliberately: those siblings share one name precisely so a
+      // single query finds every upstream skill this platform has destroyed
+      // regardless of which door did it. Filing the one org-admin-reachable
+      // door under a different name (a generic 'skill_pack_write', say) would
+      // reproduce the enumeration failure inside the fix for it.
+      //
+      // Fail closed on 'attempted' first: an upstream delete cannot be rolled
+      // back, so if it cannot be recorded it does not happen.
+      try {
+        await auditCritical(req, {
+          action: 'anthropic.skill_delete', outcome: 'attempted', tier: 'A',
+          targetType: 'anthropic_skill', targetId: pack.anthropic_skill_id,
+          organizationId: targetId,
+          detail: { via: 'organizations/:id/skill-packs/:packId', pack_name: pack.name, gate: 'ROLES_MANAGE' },
+        });
+      } catch (auditErr) {
+        return res.status(503).json({ error: 'Action refused: it could not be recorded.' });
+      }
       const anthropic = getAnthropic();
       if (anthropic) {
         const del = await deleteSkillDeep(anthropic, pack.anthropic_skill_id);
@@ -780,6 +843,22 @@ router.delete('/:id/skill-packs/:packId', requireAuth, requireOrg, requireCapabi
       } catch (e) {
         console.warn('[skill-pack delete] managed_agent_skills detach failed:', e.message);
       }
+      // The terminal row. `agents_detached` is the cross-tenant blast radius
+      // the unscoped DELETE just produced — a count, not the rows.
+      auditLog(req, {
+        action: 'anthropic.skill_delete',
+        outcome: anthropicDeleteError ? 'error' : 'ok',
+        reason: anthropicDeleteError ? 'upstream_delete_failed' : undefined,
+        tier: 'A',
+        targetType: 'anthropic_skill', targetId: pack.anthropic_skill_id,
+        organizationId: targetId,
+        detail: {
+          via: 'organizations/:id/skill-packs/:packId',
+          pack_name: pack.name,
+          agents_detached: detached,
+          upstream_error: anthropicDeleteError || null,
+        },
+      });
     }
 
     const r = await pool.query(

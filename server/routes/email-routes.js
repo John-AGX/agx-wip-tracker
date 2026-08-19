@@ -16,6 +16,7 @@ const { pool } = require('../db');
 const { requireAuth, requireRole, hasCapability } = require('../auth');
 const { sendEmail, isEnabled, isDryRun, getEmailSettings, setEmailSettings } = require('../email');
 const { EVENTS } = require('../email-events');
+const { auditLog, auditCritical } = require('../audit');
 
 const router = express.Router();
 
@@ -193,13 +194,48 @@ router.put('/settings',
       // Compared as SETS of addresses, so reordering or recasing is not a
       // change and cannot be used to smuggle one past the guard either.
       const settings = submitted;
-      if (bccFingerprint(submitted) !== bccFingerprint(stored) &&
-          !hasCapability(req.user, 'SYSTEM_ADMIN')) {
+      // ── The BCC gate refuses the wrong caller and recorded NOTHING when the
+      // right one changed it — a change that BCCs every organisation's mail.
+      // Same shape as the VAPID key: door closed, room dark.
+      //
+      // This is the ONE place the design permits addresses in `detail` rather
+      // than a count, because the addresses ARE the change: "three recipients"
+      // does not tell you whether the platform's outbound mail is being copied
+      // to somebody it should not be. Only the DELTA is recorded, never the
+      // rest of the config blob.
+      const bccChanged = bccFingerprint(submitted) !== bccFingerprint(stored);
+      if (bccChanged && !hasCapability(req.user, 'SYSTEM_ADMIN')) {
+        auditLog(req, {
+          action: 'email.settings_write', outcome: 'denied', reason: 'not_entitled', tier: 'A',
+          targetType: 'app_setting', targetId: 'email',
+          detail: { bcc_change_attempted: true },
+        });
         return res.status(403).json({
           error: 'Only a system administrator can change BCC recipients. ' +
                  'Email settings are a single platform-wide record, so a BCC ' +
                  'address here receives every organization\'s mail.'
         });
+      }
+
+      if (bccChanged) {
+        const before = new Set(bccFingerprint(stored).split('|').filter(Boolean));
+        const after = new Set(bccFingerprint(submitted).split('|').filter(Boolean));
+        // Fail closed: an unrecordable change to who receives every tenant's
+        // mail is refused rather than performed unrecorded.
+        try {
+          await auditCritical(req, {
+            action: 'email.settings_write', tier: 'A',
+            targetType: 'app_setting', targetId: 'email',
+            detail: {
+              bcc_added: [...after].filter((a) => !before.has(a)),
+              bcc_removed: [...before].filter((a) => !after.has(a)),
+              bcc_count_before: before.size,
+              bcc_count_after: after.size,
+            },
+          });
+        } catch (auditErr) {
+          return res.status(503).json({ error: 'Action refused: it could not be recorded.' });
+        }
       }
 
       await setEmailSettings(settings);
