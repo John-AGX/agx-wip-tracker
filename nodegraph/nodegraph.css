@@ -1020,10 +1020,9 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 .ng-lu-ghead{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:5px;font-size:11px;color:#aab6c9}
 .ng-lu-cubes{display:flex;flex-wrap:wrap;gap:6px}
 .ng-lu-none{font-size:11px;color:#6b7689}
-.ng-lu-cube{display:inline-block;width:24px;height:24px;border-radius:5px;cursor:pointer;box-sizing:border-box;background:#2a2c34;border:1px solid rgba(255,255,255,.05);box-shadow:none;transition:background .12s,border-color .12s}
-.ng-lu-cube.done{background:#4f8cff;border-color:#5f97ff;box-shadow:none}
+.ng-lu-cube{display:inline-block;width:24px;height:24px;border-radius:5px;cursor:pointer;box-sizing:border-box;background:#131e30;border:1px solid rgba(255,255,255,.14);box-shadow:inset 0 -2px 3px rgba(0,0,0,.22)}
+.ng-lu-cube.done{background:#1e9e75;border-color:#2fbe8e;box-shadow:inset 0 2px 0 rgba(255,255,255,.22),inset 0 -3px 5px rgba(0,0,0,.3)}
 .ng-lu-cube:hover{border-color:#4f8cff}
-.ng-lu-cube.done:hover{background:#6ea0ff;border-color:#6ea0ff}
 /* Read-only building cubes (completion is tracked per scope) + compact scope
    check-off cubes rendered on the scope card's per-building rows. */
 .ng-lu-cube-ro{cursor:default;opacity:.4}

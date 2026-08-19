@@ -1290,9 +1290,13 @@ function renderNestedOverlay(){
     area.appendChild(obtn);
   }
   var on=!!window._p86Nested;
-  btn.classList.toggle('ng-nc-on', !!window._p86NcDefault);   // "Cards" now toggles the docked cost-cards-on-map mode
-  // Survey mode (lead Site Plan) has no cost cards — hide the Cards toggle.
-  btn.style.display = (E.isSurvey && E.isSurvey()) ? 'none' : '';
+  btn.classList.toggle('ng-nc-on', !!window._p86NcDefault);
+  // Cards toggle RETIRED — always hidden. Cost cards stay docked on the map
+  // (window._p86NcDefault defaults true), so the legacy wire/node view that
+  // the toggle used to reveal is never shown. Kept in the DOM (not deleted)
+  // so the later btn references don't break.
+  window._p86NcDefault = true;
+  btn.style.display = 'none';
   obtn.style.display = on ? '' : 'none';
   obtn.classList.toggle('ng-nc-on', !!window._p86NcOutline);
   host.classList.toggle('ng-outline', !!window._p86NcOutline);
@@ -4300,7 +4304,7 @@ function renderBuildingStructure(panel, sel){
   function bwUnits(){ return un.filter(function(u){ return !luById(lv, u.levelId); }); } // null OR orphaned level
   // A level's % is the average of its units', or its own typed pct when it has none.
   function lPct(L){ var lu=lUnits(L.id); if(lu.length){ var s=0; lu.forEach(function(u){ s+=uPct(u); }); return Math.round(s/lu.length); } return (L.pct!=null)?Math.max(0,Math.min(100,Math.round(L.pct))):(L.done?100:0); }
-  function col(p){ return p>=70?'#1e9e75':p>=40?'#e0a13a':p>0?'#d1594a':''; } // green / amber / red / empty
+  function col(p){ return p>=70?'#4f8cff':p>=40?'#e0a13a':p>0?'#d1594a':''; } // blue (done) / amber / red / empty
   // When a SCOPE (phase) tracks THIS building by its own units, the building's
   // cubes are just the count (the denominator) — completion is set per scope, so
   // render them read-only + neutral so they aren't mistaken for editable progress.
@@ -4375,7 +4379,7 @@ function renderBuildingStructure(panel, sel){
   }
   h+='<div class="ng-lu-legend">'+(scopesDrive
     ? '<span class="ng-lu-hint">Completion is tracked per scope — set % on each scope.</span>'
-    : '<span class="ng-lu-hint"><i class="ng-th-mini"><i style="height:100%;background:#1e9e75;"></i></i>tap a unit or level to set its %</span>')+'</div>';
+    : '<span class="ng-lu-hint"><i class="ng-th-mini"><i style="height:100%;background:#4f8cff;"></i></i>tap a unit or level to set its %</span>')+'</div>';
   el.innerHTML=h;
 }
 
