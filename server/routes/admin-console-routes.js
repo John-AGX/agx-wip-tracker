@@ -35,40 +35,150 @@ router.get('/overview', requireAuth, requireSystemAdmin, async (req, res) => {
         (SELECT COUNT(*)::int FROM estimates)                              AS estimates,
         (SELECT COUNT(*)::int FROM leads)                                   AS leads,
         (SELECT COUNT(*)::int FROM admin_audit_log
-           WHERE created_at >= NOW() - INTERVAL '7 days')                   AS audit_events_7d
+           WHERE created_at >= NOW() - INTERVAL '7 days')                   AS audit_events_7d,
+        -- Denials in the same window. This is the enumeration signal: a walk
+        -- of the settings key space, a run of failed logins, a refused
+        -- escalation. It has its own partial index and it is the number worth
+        -- looking at on a dashboard.
+        (SELECT COUNT(*)::int FROM admin_audit_log
+           WHERE created_at >= NOW() - INTERVAL '7 days'
+             AND outcome <> 'ok')                                           AS audit_denied_7d
     `);
-    res.json({ overview: q.rows[0] });
+    // Beside the counts, whether the trail itself is healthy. A non-zero
+    // write_failures means rows are going to stdout instead of the table right
+    // now — the one condition under which the numbers above are understated.
+    let health = null;
+    try { health = require('../audit').auditHealth(); } catch (e) { /* never break the tile */ }
+    res.json({ overview: q.rows[0], audit_health: health });
   } catch (e) {
     console.error('GET /api/admin/console/overview error:', e);
     res.status(500).json({ error: e.message || 'Server error' });
   }
 });
 
-// GET /api/admin/console/audit?limit=100&action=&actor= — the privileged-
-// action trail captured by server/audit.js, newest first.
+// GET /api/admin/console/audit — the PLATFORM tier of the audit read path.
+//
+//   ?limit=  1..500      ?before_id=  keyset cursor
+//   ?action= exact, or ?action_prefix= for a family ('settings.')
+//   ?actor=  exact email (?actor_prefix= for a partial)
+//   ?target_type= ?target_id=   ?outcome= ?tier= ?scope= ?org=
+//   ?from= ?to=  ISO timestamps
+//
+// FOUR THINGS WERE WRONG WITH THIS ENDPOINT AND ALL FOUR WERE CHEAP.
+//
+// 1. NO PAGINATION. A fixed LIMIT meant you could see the newest 500 rows and
+//    there was no way to reach row 501 — on the one table whose whole value is
+//    "what happened seven weeks ago". Keyset (`id < cursor`) rather than
+//    OFFSET: at a million rows OFFSET 900000 reads 900,000 rows to discard
+//    them, and id is BIGSERIAL so it orders identically to created_at.
+//
+// 2. UNINDEXABLE ACTOR FILTER. `actor_email ILIKE '%x%'` is a leading wildcard,
+//    so it full-scans and then sorts before the limit can apply. Exact
+//    lower(email) matches the new expression index; `actor_prefix` keeps the
+//    partial search for the times you want it, and says out loud that it scans.
+//
+// 3. NO FILTER FOR THE QUESTION ACTUALLY ASKED. "Who touched this record" —
+//    target_type + target_id — had neither a parameter nor an index. That is
+//    THE acceptance-test query:
+//      ?target_type=app_setting&target_id=vapid_keys&from=2026-07-01
+//
+// 4. THE API RETURNED MORE THAN THE UI SHOWED. `detail` and `ip` crossed the
+//    wire on every row while the table painted four columns. Dead exposure of
+//    the two most sensitive fields on the row. The list is now lean and the
+//    full row is one click and one deliberate request away, below.
 router.get('/audit', requireAuth, requireSystemAdmin, async (req, res) => {
   try {
     const limit = Math.max(1, Math.min(500, parseInt(req.query.limit, 10) || 100));
     const where = [];
     const params = [];
     let p = 1;
-    if (req.query.action) { where.push('a.action = $' + p++); params.push(String(req.query.action)); }
-    if (req.query.actor)  { where.push('a.actor_email ILIKE $' + p++); params.push('%' + String(req.query.actor) + '%'); }
+    const q = req.query;
+    if (q.action) { where.push('a.action = $' + p++); params.push(String(q.action)); }
+    if (q.action_prefix) { where.push('a.action LIKE $' + p++); params.push(String(q.action_prefix) + '%'); }
+    if (q.actor) { where.push('lower(a.actor_email) = lower($' + p++ + ')'); params.push(String(q.actor)); }
+    // Deliberately separate from `actor`: this one cannot use the index, and
+    // naming it differently is how a caller knows which they asked for.
+    if (q.actor_prefix) { where.push('lower(a.actor_email) LIKE lower($' + p++ + ')'); params.push(String(q.actor_prefix) + '%'); }
+    if (q.target_type) { where.push('a.target_type = $' + p++); params.push(String(q.target_type)); }
+    if (q.target_id) { where.push('a.target_id = $' + p++); params.push(String(q.target_id)); }
+    if (q.outcome) { where.push('a.outcome = $' + p++); params.push(String(q.outcome)); }
+    if (q.tier) { where.push('a.tier = $' + p++); params.push(String(q.tier).toUpperCase().slice(0, 1)); }
+    if (q.scope) { where.push('a.scope = $' + p++); params.push(String(q.scope)); }
+    if (q.org) {
+      const orgId = parseInt(q.org, 10);
+      if (!Number.isFinite(orgId)) return res.status(400).json({ error: 'Bad org' });
+      where.push('a.organization_id = $' + p++); params.push(orgId);
+    }
+    if (q.from) {
+      const d = new Date(q.from);
+      if (isNaN(d)) return res.status(400).json({ error: 'Bad from' });
+      where.push('a.created_at >= $' + p++); params.push(d.toISOString());
+    }
+    if (q.to) {
+      const d = new Date(q.to);
+      if (isNaN(d)) return res.status(400).json({ error: 'Bad to' });
+      where.push('a.created_at <= $' + p++); params.push(d.toISOString());
+    }
+    if (q.before_id) {
+      const before = parseInt(q.before_id, 10);
+      if (!Number.isFinite(before)) return res.status(400).json({ error: 'Bad before_id' });
+      where.push('a.id < $' + p++); params.push(before);
+    }
     params.push(limit);
     const { rows } = await pool.query(
-      `SELECT a.id, a.created_at, a.actor_user_id, a.actor_email, a.actor_role,
-              a.action, a.target_type, a.target_id, a.organization_id, a.actor_org_id,
-              a.detail, a.ip, o.name AS org_name
+      `SELECT a.id, a.created_at, a.actor_kind, a.actor_user_id, a.actor_email, a.actor_role,
+              a.on_behalf_of_user_id, a.action, a.outcome, a.reason, a.tier, a.scope,
+              a.target_type, a.target_id, a.organization_id, a.actor_org_id,
+              (a.detail IS NOT NULL) AS has_detail, o.name AS org_name
          FROM admin_audit_log a
          LEFT JOIN organizations o ON o.id = a.organization_id
         ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-        ORDER BY a.created_at DESC
+        ORDER BY a.id DESC
         LIMIT $${p}`,
       params
     );
-    res.json({ entries: rows });
+    res.json({
+      entries: rows,
+      next_before_id: rows.length === limit ? rows[rows.length - 1].id : null,
+    });
   } catch (e) {
     console.error('GET /api/admin/console/audit error:', e);
+    res.status(500).json({ error: e.message || 'Server error' });
+  }
+});
+
+// GET /api/admin/console/audit/:id — the full row, including `detail`, `ip` and
+// `user_agent`. Same gate; a separate request so the two most sensitive fields
+// on the row are fetched deliberately rather than shipped on every list page.
+router.get('/audit/:id', requireAuth, requireSystemAdmin, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'Bad id' });
+    const { rows } = await pool.query(
+      `SELECT a.*, o.name AS org_name
+         FROM admin_audit_log a
+         LEFT JOIN organizations o ON o.id = a.organization_id
+        WHERE a.id = $1`,
+      [id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    res.json({ entry: rows[0] });
+  } catch (e) {
+    console.error('GET /api/admin/console/audit/:id error:', e);
+    res.status(500).json({ error: e.message || 'Server error' });
+  }
+});
+
+// GET /api/admin/console/audit-health — is the trail itself working?
+//
+// A failing audit that only appears in scrollback is a failing audit nobody
+// notices. write_failures is the number of rows that went to stdout instead of
+// the table since this process started; anything above zero means the platform
+// log is currently the only copy.
+router.get('/audit-health', requireAuth, requireSystemAdmin, (req, res) => {
+  try {
+    res.json({ health: require('../audit').auditHealth() });
+  } catch (e) {
     res.status(500).json({ error: e.message || 'Server error' });
   }
 });

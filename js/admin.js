@@ -4520,7 +4520,77 @@ function p86Ask(message, opts) {
     }).catch(function(err) {
       listEl.innerHTML = '<div style="padding:15px;color:#e74c3c;">Failed to load roles: ' + escapeHTML(err.message) + '</div>';
     });
+    try { renderOrgAuditTrail(); } catch (e) { /* the roles list is independent of the trail */ }
   }
+
+  // ── The ORG tier of the audit trail ───────────────────────────────────────
+  //
+  // GET /api/org/audit. Deliberately NOT the Command Center's feed: a different
+  // route, a different gate (ROLES_MANAGE, not SYSTEM_ADMIN), a different
+  // WHERE clause and a different projection. What an org admin sees is
+  // privilege events INSIDE THEIR OWN COMPANY and nothing else — never another
+  // tenant, never platform configuration, never anyone's IP outside their org.
+  //
+  // Two things this pane says out loud rather than leaving to be discovered:
+  //   · a platform operator reaching into this tenant appears as "platform
+  //     operator" with no name, org or IP. Hiding it entirely would be the
+  //     worse failure — the point of handing a tenant a trail is trust;
+  //   · role and capability CHANGES are missing, because `roles` is a global
+  //     table with no organization_id. This pane covers who holds which role,
+  //     not what that role is allowed to do. Saying so beats an admin
+  //     concluding their trail is complete when it is not.
+  function renderOrgAuditTrail() {
+    var host = document.getElementById('admin-org-audit');
+    if (!host) return;
+    var esc = function (s) { return (typeof escapeHTML === 'function') ? escapeHTML(String(s == null ? '' : s)) : String(s == null ? '' : s); };
+    function when(ts) { var d = new Date(ts); return isNaN(d) ? '—' : d.toLocaleString(); }
+    function pill(o) {
+      var c = o === 'ok' ? '#34c77b' : o === 'denied' ? '#ff6b6b' : o === 'error' ? '#f0a020' : '#888';
+      return '<span style="font-size:10px;text-transform:uppercase;letter-spacing:.04em;padding:2px 8px;' +
+        'border-radius:9px;background:' + c + '22;color:' + c + ';">' + esc(o || '—') + '</span>';
+    }
+    var header =
+      '<h3 style="margin:0 0 4px;font-size:15px;">Privilege activity in your organization</h3>' +
+      '<p style="margin:0 0 12px;color:var(--text-dim,#888);font-size:12px;max-width:760px;">' +
+      'Who changed access, who signed in, who reset a password — for your company only. ' +
+      'Records cannot be edited or deleted by anyone, including you. ' +
+      'Ordinary work (opening a job, editing an estimate, reading a client) is never recorded. ' +
+      'Changes to what a <em>role</em> can do are platform-wide and are not listed here.' +
+      '</p>';
+    host.innerHTML = header + '<div style="padding:12px;color:var(--text-dim,#888);font-size:12px;">Loading…</div>';
+    window.p86Api.get('/api/org/audit?limit=50').then(function (r) {
+      var rows = (r && r.entries) || [];
+      if (!rows.length) {
+        host.innerHTML = header +
+          '<div style="padding:14px;color:var(--text-dim,#888);font-size:12.5px;">No privilege events recorded yet.</div>';
+        return;
+      }
+      var body = rows.map(function (a) {
+        var actor = a.actor_email || (a.actor_kind ? '(' + a.actor_kind + ')' : '—');
+        var target = (a.target_type || '') + (a.target_id ? ' ' + a.target_id : '');
+        return '<tr style="border-top:1px solid var(--border,#2a2a30);">' +
+          '<td style="padding:7px 10px;white-space:nowrap;color:var(--text-dim,#9a9aa2);">' + esc(when(a.created_at)) + '</td>' +
+          '<td style="padding:7px 10px;">' + esc(actor) +
+            (a.on_behalf_of_user_id ? '<span style="color:#f0a020;font-size:10.5px;"> acting as user ' + esc(a.on_behalf_of_user_id) + '</span>' : '') +
+            '</td>' +
+          '<td style="padding:7px 10px;"><code style="font-size:11.5px;">' + esc(a.action) + '</code></td>' +
+          '<td style="padding:7px 10px;">' + pill(a.outcome) + '</td>' +
+          '<td style="padding:7px 10px;color:var(--text-dim,#bbb);">' + esc(target) + '</td>' +
+          '</tr>';
+      }).join('');
+      host.innerHTML = header +
+        '<div style="overflow-x:auto;border:1px solid var(--border,#2a2a30);border-radius:10px;">' +
+        '<table style="width:100%;border-collapse:collapse;font-size:12.5px;">' +
+        '<tr style="font-size:10.5px;color:var(--text-dim,#9a9aa2);text-transform:uppercase;letter-spacing:.04em;">' +
+        '<th style="padding:8px 10px;text-align:left;">When</th><th style="padding:8px 10px;text-align:left;">Who</th>' +
+        '<th style="padding:8px 10px;text-align:left;">Action</th><th style="padding:8px 10px;text-align:left;">Outcome</th>' +
+        '<th style="padding:8px 10px;text-align:left;">Target</th></tr>' + body + '</table></div>';
+    }).catch(function (e) {
+      host.innerHTML = header + '<div style="padding:14px;color:#ff6b6b;font-size:12.5px;">Couldn\'t load activity: ' +
+        esc((e && e.message) || String(e)) + '</div>';
+    });
+  }
+  window.renderOrgAuditTrail = renderOrgAuditTrail;
 
   function openNewRoleModal() {
     Promise.all([loadCapsMeta(), loadRolesCache()]).then(function() {

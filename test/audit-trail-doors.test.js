@@ -170,6 +170,7 @@ beforeAll(async () => {
   app.use('/api/roles', require('../server/routes/role-routes'));
   app.use('/api/auth', require('../server/routes/auth-routes'));
   app.use('/api/org', require('../server/routes/org-audit-routes'));
+  app.use('/api/admin/console', require('../server/routes/admin-console-routes'));
   await new Promise((done) => {
     server = http.createServer(app);
     server.listen(0, '127.0.0.1', () => { baseUrl = 'http://127.0.0.1:' + server.address().port; done(); });
@@ -466,6 +467,118 @@ describe('an org admin cannot read another tenant’s rows', () => {
     expect(second.body.entries.length).toBe(5);
     const ids = new Set(first.body.entries.concat(second.body.entries).map((e) => e.id));
     expect(ids.size).toBe(10);              // no overlap, no gap
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 3b. THE PLATFORM READ PATH — the query John actually runs.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('the platform tier answers the question in one call', () => {
+  // Seven weeks of ordinary traffic, so a filter that does not filter is a
+  // filter that fails. Without this a one-row table makes every query look
+  // correct.
+  function noise(n) {
+    const ins = engine.db.prepare(
+      `INSERT INTO admin_audit_log (actor_kind,actor_email,action,outcome,tier,scope,target_type,target_id,organization_id)
+       VALUES ('user','someone@a.test',?,?,?,'org','user',?,1)`);
+    for (let i = 0; i < (n || 40); i++) {
+      ins.run(i % 2 ? 'auth.login' : 'user.update', i % 5 ? 'ok' : 'denied', 'B', String(i));
+    }
+    engine.db.prepare(
+      `INSERT INTO admin_audit_log (actor_kind,actor_email,action,outcome,tier,scope,target_type,target_id)
+       VALUES ('user','someone@a.test','settings.read','ok','B','platform','app_setting','agent_skills')`).run();
+  }
+
+  test('THE ACCEPTANCE QUERY: target_type + target_id + from, over HTTP', async () => {
+    noise();
+    await call('GET', '/api/settings/vapid_keys', A_PM);
+    const r = await call('GET',
+      '/api/admin/console/audit?target_type=app_setting&target_id=vapid_keys&from=2020-01-01', OWNER);
+    expect(r.status).toBe(200);
+    // One row out of 40-plus. The filter is what makes this an answer rather
+    // than a haystack, and it is the query the new partial index serves.
+    expect(r.body.entries.length).toBe(1);
+    expect(r.body.entries[0].actor_email).toBe('pm-a@a.test');
+    expect(r.body.entries[0].outcome).toBe('denied');
+    expect(r.body.entries[0].target_id).toBe('vapid_keys');
+  });
+
+  test('the empty result is a POSITIVE answer, delivered by the same query', async () => {
+    noise();
+    const r = await call('GET',
+      '/api/admin/console/audit?target_type=app_setting&target_id=vapid_keys', OWNER);
+    expect(r.status).toBe(200);
+    // Rows exist — dozens of them. None is a read of this key, and THAT is the
+    // finding: an evidenced "nobody touched it" rather than "we have no idea".
+    expect(r.body.entries).toEqual([]);
+    const unfiltered = await call('GET', '/api/admin/console/audit', OWNER);
+    expect(unfiltered.body.entries.length).toBeGreaterThan(10);
+  });
+
+  test('outcome=denied is the enumeration hunt, and it excludes the successes', async () => {
+    noise();
+    await call('GET', '/api/settings/vapid_keys', A_PM);
+    const r = await call('GET', '/api/admin/console/audit?outcome=denied&limit=500', OWNER);
+    expect(r.body.entries.length).toBeGreaterThan(0);
+    expect(r.body.entries.every((e) => e.outcome === 'denied')).toBe(true);
+    const all = await call('GET', '/api/admin/console/audit?limit=500', OWNER);
+    expect(all.body.entries.length).toBeGreaterThan(r.body.entries.length);
+  });
+
+  test('the list ships no detail and no ip — that was exposure the UI never painted', async () => {
+    await call('GET', '/api/settings/vapid_keys', A_PM);
+    const r = await call('GET', '/api/admin/console/audit', OWNER);
+    const row = r.body.entries[0];
+    expect(row.detail).toBeUndefined();
+    expect(row.ip).toBeUndefined();
+    expect(row.user_agent).toBeUndefined();
+    expect(row.has_detail).toBeTruthy();      // there IS one; fetch it deliberately
+  });
+
+  test('the full row is one deliberate request away', async () => {
+    await call('GET', '/api/settings/vapid_keys', A_PM);
+    const list = await call('GET', '/api/admin/console/audit', OWNER);
+    const one = await call('GET', '/api/admin/console/audit/' + list.body.entries[0].id, OWNER);
+    expect(one.status).toBe(200);
+    expect(one.body.entry.ip).toBeTruthy();
+    expect(one.body.entry.user_agent).toContain('P86Test');
+    expect(dtl(one.body.entry).key_class).toBe('secret');
+  });
+
+  test('row 501 is reachable — pagination, on the table whose value is what happened weeks ago', async () => {
+    const ins = engine.db.prepare(
+      `INSERT INTO admin_audit_log (actor_kind,action,outcome,tier,scope,target_type,target_id)
+       VALUES ('user','auth.login','ok','B','platform','user',?)`);
+    for (let i = 0; i < 20; i++) ins.run(String(i));
+    const p1 = await call('GET', '/api/admin/console/audit?limit=8', OWNER);
+    expect(p1.body.entries.length).toBe(8);
+    const p2 = await call('GET', '/api/admin/console/audit?limit=8&before_id=' + p1.body.next_before_id, OWNER);
+    const p3 = await call('GET', '/api/admin/console/audit?limit=8&before_id=' + p2.body.next_before_id, OWNER);
+    const ids = p1.body.entries.concat(p2.body.entries, p3.body.entries).map((e) => e.id);
+    expect(new Set(ids).size).toBe(20);       // every row reachable, none twice
+  });
+
+  test('an action FAMILY search works — settings. finds read and write alike', async () => {
+    noise();                                   // auth.login / user.update rows to exclude
+    await call('GET', '/api/settings/vapid_keys', A_PM);
+    await call('PUT', '/api/settings/proposal_template', A_ADMIN, { value: { intro: 'x' } });
+    const r = await call('GET', '/api/admin/console/audit?action_prefix=settings.&limit=500', OWNER);
+    const actions = new Set(r.body.entries.map((e) => e.action));
+    expect([...actions].sort()).toEqual(['settings.read', 'settings.write']);
+    expect(r.body.entries.length).toBeLessThan(10);   // the family, not the table
+  });
+
+  test('the platform trail is SYSTEM_ADMIN only — an org admin gets nothing, not a filtered view', async () => {
+    const r = await call('GET', '/api/admin/console/audit', A_ADMIN);
+    expect(r.status).toBe(403);
+    const one = await call('GET', '/api/admin/console/audit/1', A_ADMIN);
+    expect(one.status).toBe(403);
+  });
+
+  test('audit-health is readable, so a failing trail is visible on a dashboard', async () => {
+    const r = await call('GET', '/api/admin/console/audit-health', OWNER);
+    expect(r.status).toBe(200);
+    expect(typeof r.body.health.write_failures).toBe('number');
   });
 });
 

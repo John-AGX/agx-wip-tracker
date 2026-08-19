@@ -2056,6 +2056,12 @@
                             Built-in roles can be edited but not renamed or deleted. Custom roles can be deleted only when no users are assigned to them. New users get the role you pick when creating them.
                         </p>
                         <div id="admin-roles-list" style="display:flex;flex-direction:column;gap:10px;"></div>
+                        <!-- The ORG tier of the audit trail. It sits in the Roles
+                             pane because ROLES_MANAGE is the capability that gates
+                             GET /api/org/audit — the surface and the gate are the
+                             same predicate. Never the platform trail: that lives in
+                             the Command Center behind SYSTEM_ADMIN. -->
+                        <div id="admin-org-audit" style="margin-top:26px;"></div>
                     </div>
 
                     <!-- Phase F: Templates / Materials / Email / Job Assignments
@@ -3376,7 +3382,7 @@
     <script src="js/dash-shell.js?v=2"></script>
     <script src="js/settings-registry.js?v=3"></script>
     <script src="js/admin-dashboard.js?v=3"></script>
-    <script src="js/admin.js?v=138"></script>
+    <script src="js/admin.js?v=139"></script>
     <!-- Act-as / disguise mode: persistent "Acting as NAME — Exit" banner +
          window.p86ActAs(userId). Self-contained; re-fetches /api/auth/me. -->
     <script src="js/actas.js?v=1"></script>
@@ -3490,7 +3496,7 @@
     <script src="js/cost-inbox.js?v=22"></script>
     <script src="js/invoices.js?v=6"></script>
     <script src="js/console-docs.js?v=2"></script>
-    <script src="js/console.js?v=19"></script>
+    <script src="js/console.js?v=20"></script>
     <!-- Jobs Hub — cross-job index pages (Purchase Orders / Change Orders /
          RFIs / Submittals) for the Jobs sidebar dropdown. Uses p86Api +
          appData.jobs + editJob/switchJobSubTab at runtime. -->

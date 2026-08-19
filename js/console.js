@@ -1067,6 +1067,7 @@
     el.innerHTML = sectionTitle('Platform overview') + '<div style="color:var(--text-dim,#888);font-size:12px;padding:4px;">Loading…</div>';
     cget('/api/admin/console/overview').then(function (d) {
       var o = (d && d.overview) || {};
+      var h = d && d.audit_health;
       el.innerHTML = sectionTitle('Platform overview') +
         '<div style="display:flex;gap:10px;flex-wrap:wrap;">' +
           card('Organizations', num(o.orgs)) +
@@ -1075,7 +1076,22 @@
           card('Estimates', num(o.estimates)) +
           card('Leads', num(o.leads)) +
           card('Audit events', num(o.audit_events_7d), 'last 7 days') +
-        '</div>';
+          // The enumeration signal, beside the volume. A walk of the settings
+          // key space, a run of failed logins, a refused escalation — the
+          // things a trail exists to surface, rather than the things it
+          // happens to count.
+          card('Refused', num(o.audit_denied_7d), 'denied, last 7 days') +
+        '</div>' +
+        // A failing audit that only appears in scrollback is a failing audit
+        // nobody notices. Shown only when there is something to say.
+        (h && h.write_failures
+          ? '<div style="margin-top:10px;padding:10px 12px;border-radius:8px;font-size:12.5px;' +
+            'background:rgba(230,102,102,.10);border:1px solid var(--danger,#e66);color:var(--danger,#e66);">' +
+            '<b>' + num(h.write_failures) + ' audit row(s) could not be written</b> since this process started' +
+            (h.last_failure_action ? ' — last: <code>' + esc(h.last_failure_action) + '</code>' : '') +
+            '. Those events went to the platform log under <code>[AUDIT-FAIL]</code> instead of the table.' +
+            '</div>'
+          : '');
     }).catch(function (e) { el.innerHTML = sectionTitle('Platform overview') + errBox('overview', e); });
   }
 
@@ -1326,27 +1342,191 @@
     catch (e) { host.innerHTML = errBox(title, e); }
   }
 
+  // ── Audit trail — how John actually answers "who did that" ────────────────
+  //
+  // The view this replaces could show the newest 100 rows and nothing else: no
+  // filters for the question anyone actually asks, no way to reach row 101, and
+  // it shipped `detail` and `ip` across the wire on every row while painting
+  // four columns — dead exposure of the two most sensitive fields on the row.
+  //
+  // The shape here follows the one question that started all of this: "did
+  // anyone read that key, and when?" So the target filter is first-class, the
+  // date range is first-class, and OLDER keeps going back rather than stopping
+  // at a page boundary — the answer was seven weeks old.
+  var auditState = { filters: {}, entries: [], nextBefore: null };
+
+  function auditFilterBar() {
+    function inp(id, ph, w) {
+      return '<input id="' + id + '" placeholder="' + esc(ph) + '" style="width:' + w + ';font-size:11.5px;padding:4px 7px;' +
+        'border-radius:6px;background:var(--panel-2,#16161b);color:var(--text,#e8e8ea);border:1px solid var(--border,#44444c);">';
+    }
+    return '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 2px 10px;">' +
+      inp('cc-au-action', 'action (settings. …)', '150px') +
+      inp('cc-au-actor', 'actor email (exact)', '170px') +
+      inp('cc-au-ttype', 'target type', '110px') +
+      inp('cc-au-tid', 'target id', '130px') +
+      '<select id="cc-au-outcome" style="font-size:11.5px;padding:4px 7px;border-radius:6px;background:var(--panel-2,#16161b);color:var(--text,#e8e8ea);border:1px solid var(--border,#44444c);">' +
+        '<option value="">any outcome</option><option value="ok">ok</option><option value="denied">denied</option>' +
+        '<option value="error">error</option><option value="attempted">attempted</option></select>' +
+      inp('cc-au-from', 'from (YYYY-MM-DD)', '135px') +
+      inp('cc-au-to', 'to (YYYY-MM-DD)', '135px') +
+      btn('Search', 'id="cc-au-go"') + ghostBtn('Clear', 'id="cc-au-clear"') +
+      '</div>';
+  }
+
+  function auditQuery(before) {
+    var f = auditState.filters;
+    var qs = ['limit=100'];
+    // `action` with a trailing dot is a family search ('settings.'), which the
+    // (action, created_at DESC) index still serves as a range scan.
+    if (f.action) qs.push((/\.$/.test(f.action) ? 'action_prefix=' : 'action=') + encodeURIComponent(f.action));
+    if (f.actor) qs.push('actor=' + encodeURIComponent(f.actor));
+    if (f.target_type) qs.push('target_type=' + encodeURIComponent(f.target_type));
+    if (f.target_id) qs.push('target_id=' + encodeURIComponent(f.target_id));
+    if (f.outcome) qs.push('outcome=' + encodeURIComponent(f.outcome));
+    if (f.from) qs.push('from=' + encodeURIComponent(f.from));
+    if (f.to) qs.push('to=' + encodeURIComponent(f.to));
+    if (before) qs.push('before_id=' + before);
+    return '/api/admin/console/audit?' + qs.join('&');
+  }
+
+  function outcomePill(o) {
+    var map = { ok: ['#3a9', 'ok'], denied: ['#e66', 'denied'], error: ['#e93', 'error'], attempted: ['#c9a', 'attempted'] };
+    var m = map[o] || ['#888', o || '—'];
+    return '<span style="font-size:10px;padding:1px 6px;border-radius:20px;border:1px solid ' + m[0] + ';color:' + m[0] + ';">' + esc(m[1]) + '</span>';
+  }
+
+  function auditRowsHtml(entries) {
+    return entries.map(function (a) {
+      var tgt = a.target_type ? (a.target_type + (a.target_id ? ' ' + a.target_id : '')) : '';
+      var actor = a.actor_email || (a.actor_kind && a.actor_kind !== 'user' ? '(' + a.actor_kind + ')' : 'user ' + (a.actor_user_id == null ? '—' : a.actor_user_id));
+      return '<tr data-audit-id="' + a.id + '" style="cursor:pointer;">' +
+        '<td style="padding:7px 10px;color:var(--text-dim,#9a9aa2);white-space:nowrap;" title="' + esc(a.created_at) + '">' + esc(ago(a.created_at)) + '</td>' +
+        '<td style="padding:7px 10px;">' + esc(actor) +
+          // The disguise, on the row. Without it a role change made under
+          // act-as looks exactly like one made openly.
+          (a.on_behalf_of_user_id ? '<span style="font-size:10px;color:var(--warn,#e93);"> as user ' + esc(a.on_behalf_of_user_id) + '</span>' : '') +
+          '<div style="font-size:10.5px;color:var(--text-dim,#888);">' + esc(a.actor_role || a.actor_kind || '') + '</div></td>' +
+        '<td style="padding:7px 10px;"><code style="font-size:11.5px;color:var(--accent,#7c9cff);">' + esc(a.action) + '</code>' +
+          (a.tier === 'A' ? '<span style="font-size:9.5px;color:var(--text-dim,#888);"> A</span>' : '') + '</td>' +
+        '<td style="padding:7px 10px;">' + outcomePill(a.outcome) +
+          (a.reason ? '<div style="font-size:10px;color:var(--text-dim,#888);">' + esc(a.reason) + '</div>' : '') + '</td>' +
+        '<td style="padding:7px 10px;color:var(--text-dim,#bbb);">' + esc(tgt) +
+          (a.org_name ? '<div style="font-size:10.5px;color:var(--text-dim,#888);">' + esc(a.org_name) + '</div>'
+            : (a.scope === 'platform' ? '<div style="font-size:10.5px;color:var(--text-dim,#666);">platform</div>' : '')) + '</td>' +
+        '</tr>';
+    }).join('');
+  }
+
+  function renderAudit() {
+    var el = document.getElementById('cc-audit');
+    if (!el) return;
+    var e = auditState.entries;
+    el.innerHTML = sectionTitle('Audit trail',
+      '<span style="font-size:11.5px;color:var(--text-dim,#888);">' + e.length + ' shown</span>') +
+      auditFilterBar() +
+      panel('<table style="width:100%;border-collapse:collapse;font-size:12.5px;" id="cc-au-table">' +
+        '<tr style="font-size:11px;color:var(--text-dim,#9a9aa2);text-transform:uppercase;letter-spacing:.03em;">' +
+        '<th style="padding:8px 10px;text-align:left;">When</th><th style="padding:8px 10px;text-align:left;">Actor</th>' +
+        '<th style="padding:8px 10px;text-align:left;">Action</th><th style="padding:8px 10px;text-align:left;">Outcome</th>' +
+        '<th style="padding:8px 10px;text-align:left;">Target</th></tr>' +
+        (auditRowsHtml(e) ||
+          // An empty result is an ANSWER, not a failure — that is the whole
+          // point of recording refusals as well as successes.
+          '<tr><td colspan="5" style="padding:14px;color:var(--text-dim,#888);">' +
+          'Nothing matches. With a filter set, that is a positive result: no privileged action of this shape was recorded.' +
+          '</td></tr>') + '</table>') +
+      (auditState.nextBefore
+        ? '<div style="margin-top:10px;text-align:center;">' + ghostBtn('Older ↓', 'id="cc-au-more"') + '</div>'
+        : '') +
+      '<div id="cc-au-drawer"></div>';
+
+    var f = auditState.filters;
+    ['action', 'actor', 'ttype', 'tid', 'from', 'to'].forEach(function (k) {
+      var node = document.getElementById('cc-au-' + k);
+      var key = { ttype: 'target_type', tid: 'target_id' }[k] || k;
+      if (node && f[key]) node.value = f[key];
+    });
+    var sel = document.getElementById('cc-au-outcome');
+    if (sel && f.outcome) sel.value = f.outcome;
+
+    function readFilters() {
+      return {
+        action: (document.getElementById('cc-au-action') || {}).value || '',
+        actor: (document.getElementById('cc-au-actor') || {}).value || '',
+        target_type: (document.getElementById('cc-au-ttype') || {}).value || '',
+        target_id: (document.getElementById('cc-au-tid') || {}).value || '',
+        outcome: (document.getElementById('cc-au-outcome') || {}).value || '',
+        from: (document.getElementById('cc-au-from') || {}).value || '',
+        to: (document.getElementById('cc-au-to') || {}).value || ''
+      };
+    }
+    var go = document.getElementById('cc-au-go');
+    if (go) go.addEventListener('click', function () { auditState.filters = readFilters(); loadAudit(); });
+    var clr = document.getElementById('cc-au-clear');
+    if (clr) clr.addEventListener('click', function () { auditState.filters = {}; loadAudit(); });
+    var more = document.getElementById('cc-au-more');
+    if (more) more.addEventListener('click', function () {
+      more.disabled = true;
+      cget(auditQuery(auditState.nextBefore)).then(function (d) {
+        auditState.entries = auditState.entries.concat((d && d.entries) || []);
+        auditState.nextBefore = d && d.next_before_id;
+        renderAudit();
+      }).catch(function (err) { more.textContent = 'Older failed: ' + (err.message || 'error'); });
+    });
+    var table = document.getElementById('cc-au-table');
+    if (table) table.addEventListener('click', function (ev) {
+      var tr = ev.target && ev.target.closest ? ev.target.closest('tr[data-audit-id]') : null;
+      if (tr) openAuditDetail(tr.getAttribute('data-audit-id'));
+    });
+  }
+
+  // detail / ip / user_agent are fetched ONE ROW AT A TIME, deliberately. They
+  // are the most sensitive fields on the record; shipping them with every list
+  // page was exposure the UI never even painted.
+  function openAuditDetail(id) {
+    var host = document.getElementById('cc-au-drawer');
+    if (!host) return;
+    host.innerHTML = '<div style="margin-top:10px;color:var(--text-dim,#888);font-size:12px;">Loading row ' + esc(id) + '…</div>';
+    cget('/api/admin/console/audit/' + encodeURIComponent(id)).then(function (d) {
+      var a = (d && d.entry) || {};
+      function line(k, v) {
+        if (v == null || v === '') return '';
+        return '<div style="display:flex;gap:10px;padding:3px 0;font-size:12px;">' +
+          '<div style="min-width:150px;color:var(--text-dim,#9a9aa2);">' + esc(k) + '</div>' +
+          '<div style="color:var(--text,#e8e8ea);word-break:break-word;">' + esc(v) + '</div></div>';
+      }
+      host.innerHTML = '<div style="margin-top:12px;">' + panel(
+        '<div style="padding:12px 14px;">' +
+        '<div style="font-size:13px;font-weight:600;margin-bottom:8px;">' + esc(a.action) + ' · ' + esc(a.outcome) + '</div>' +
+        line('when', a.created_at) + line('actor', a.actor_email) + line('actor id', a.actor_user_id) +
+        line('actor kind', a.actor_kind) + line('actor role', a.actor_role) +
+        line('acting as (user id)', a.on_behalf_of_user_id) +
+        line('reason', a.reason) + line('tier', a.tier) + line('scope', a.scope) +
+        line('target', (a.target_type || '') + ' ' + (a.target_id || '')) +
+        line('organization', a.org_name || a.organization_id) +
+        line('ip', a.ip) + line('browser', a.user_agent) + line('request', a.request_id) +
+        (a.detail
+          // Rendered as TEXT, never as markup: target_id and parts of detail can
+          // carry caller-controlled strings, and an evidence viewer must not be
+          // an injection surface.
+          ? '<div style="margin-top:8px;font-size:11.5px;color:var(--text-dim,#9a9aa2);">detail</div>' +
+            '<pre style="margin:2px 0 0;padding:8px 10px;background:var(--panel-2,#16161b);border-radius:6px;' +
+            'font-size:11.5px;white-space:pre-wrap;word-break:break-word;color:var(--text,#e8e8ea);">' +
+            esc(JSON.stringify(a.detail, null, 2)) + '</pre>'
+          : '') +
+        '</div>') + '</div>';
+    }).catch(function (e) { host.innerHTML = errBox('that audit row', e); });
+  }
+
   function loadAudit() {
     var el = document.getElementById('cc-audit');
     if (!el) return;
     el.innerHTML = sectionTitle('Audit trail') + '<div style="color:var(--text-dim,#888);font-size:12px;padding:4px;">Loading…</div>';
-    cget('/api/admin/console/audit?limit=100').then(function (d) {
-      var entries = (d && d.entries) || [];
-      var rows = entries.map(function (a) {
-        var tgt = a.target_type ? (a.target_type + (a.target_id ? ' ' + a.target_id : '')) : '';
-        return '<tr>' +
-          '<td style="padding:7px 10px;color:var(--text-dim,#9a9aa2);white-space:nowrap;" title="' + esc(a.created_at) + '">' + esc(ago(a.created_at)) + '</td>' +
-          '<td style="padding:7px 10px;">' + esc(a.actor_email || ('user ' + (a.actor_user_id == null ? '—' : a.actor_user_id))) + '<div style="font-size:10.5px;color:var(--text-dim,#888);">' + esc(a.actor_role || '') + '</div></td>' +
-          '<td style="padding:7px 10px;"><code style="font-size:11.5px;color:var(--accent,#7c9cff);">' + esc(a.action) + '</code></td>' +
-          '<td style="padding:7px 10px;color:var(--text-dim,#bbb);">' + esc(tgt) + (a.org_name ? '<div style="font-size:10.5px;color:var(--text-dim,#888);">' + esc(a.org_name) + '</div>' : '') + '</td>' +
-          '</tr>';
-      }).join('');
-      el.innerHTML = sectionTitle('Audit trail', '<span style="font-size:11.5px;color:var(--text-dim,#888);">' + entries.length + ' recent</span>') +
-        panel('<table style="width:100%;border-collapse:collapse;font-size:12.5px;">' +
-          '<tr style="font-size:11px;color:var(--text-dim,#9a9aa2);text-transform:uppercase;letter-spacing:.03em;">' +
-          '<th style="padding:8px 10px;text-align:left;">When</th><th style="padding:8px 10px;text-align:left;">Actor</th>' +
-          '<th style="padding:8px 10px;text-align:left;">Action</th><th style="padding:8px 10px;text-align:left;">Target</th></tr>' +
-          (rows || '<tr><td colspan="4" style="padding:14px;color:var(--text-dim,#888);">No privileged actions recorded yet.</td></tr>') + '</table>');
+    cget(auditQuery(null)).then(function (d) {
+      auditState.entries = (d && d.entries) || [];
+      auditState.nextBefore = d && d.next_before_id;
+      renderAudit();
     }).catch(function (e) { el.innerHTML = sectionTitle('Audit trail') + errBox('audit log', e); });
   }
 
