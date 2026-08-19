@@ -262,14 +262,17 @@
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 11px;
+  /* gap/padding matched EXACTLY to .app-nav .tab-btn's effective values
+     (css/styles.css:1796 override → 6px 10px, gap 10px). This list sits
+     directly under the main nav and must read as the same control, not a
+     slightly looser one. */
+  gap: 10px;
   width: 100%;
   flex: 0 0 auto;
-  padding: 7px 11px;
+  padding: 6px 10px;
   border-radius: 8px;
   text-align: left;
-  /* 13px, matching .app-nav .tab-btn — this list sits directly under the
-     main nav and should read as the same control, not a half-pixel off it. */
+  /* 13px, matching .app-nav .tab-btn. */
   font-size: 13px;
   font-weight: 500;
   position: relative;
@@ -349,8 +352,10 @@
   flex: 0 0 auto;
 }
 .app-jobnav .ws-right-tab .p86-icon {
-  width: 19px;
-  height: 19px;
+  /* 17px to match .app-nav .tab-btn .p86-icon (css/styles.css:1804) — the
+     job nav's icons were a touch larger, which read as a different control. */
+  width: 17px;
+  height: 17px;
 }
 /* Accent-tint the active subtab's icon to match the main nav. */
 .app-jobnav .ws-right-tab.active .p86-icon {

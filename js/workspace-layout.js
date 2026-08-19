@@ -46,7 +46,13 @@
     { id: 'job-invoices',      label: 'Invoices',  icon: 'exports' },
     { id: 'job-payapps',       label: 'Billing',   icon: 'exports' },
     { id: 'job-subs',          label: 'Subs',      icon: 'subs' },
-    { id: 'job-reports',       label: 'Reports',   icon: 'photos' }
+    // Field / document cluster — the job's photos, files and (Slice 2) daily
+    // logs, grouped next to Reports. Photos reuses the attachments manager
+    // (window.p86Attachments); Files reuses the folder-tree explorer
+    // (window.p86Explorer). Renderers live in js/job-media.js.
+    { id: 'job-photos',        label: 'Photos',    icon: 'photos' },
+    { id: 'job-files',         label: 'Files',     icon: 'folder' },
+    { id: 'job-reports',       label: 'Reports',   icon: 'document-text' }
   ];
 
   // Workspace toggle state. Tracked at module scope so the toggle can
@@ -1361,6 +1367,8 @@
       'job-purchaseorders': 'renderPurchaseOrders',
       'job-invoices': 'renderInvoices',
       'job-wip-report': 'renderWipTab',
+      'job-photos': 'renderJobPhotos',
+      'job-files': 'renderJobFiles',
       'job-reports': 'renderJobReports'
     };
     safeRenderTabContent(targetId, target, jobId, renderers[targetId]);
@@ -1733,6 +1741,8 @@
       'job-purchaseorders': 'renderPurchaseOrders',
       'job-invoices': 'renderInvoices',
       'job-wip-report': 'renderWipTab',
+      'job-photos': 'renderJobPhotos',
+      'job-files': 'renderJobFiles',
       'job-reports': 'renderJobReports'
     };
 

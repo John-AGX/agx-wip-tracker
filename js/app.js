@@ -2340,6 +2340,8 @@
             'job-qb-costs':     'renderJobQBCosts',
             'job-details':      'renderJobDetails',
             'job-estimates':    'renderJobEstimates',
+            'job-photos':       'renderJobPhotos',
+            'job-files':        'renderJobFiles',
             'job-reports':      'renderJobReports'
         };
         function switchJobSubTab(subtabName) {

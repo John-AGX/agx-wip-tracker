@@ -252,7 +252,7 @@
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&display=swap">
     <link rel="stylesheet" href="css/styles.css?v=268">
     <link rel="stylesheet" href="css/report-style-packs.css?v=4">
-    <link rel="stylesheet" href="css/workspace-layout.css?v=67">
+    <link rel="stylesheet" href="css/workspace-layout.css?v=68">
     <link rel="stylesheet" href="css/workspace.css?v=41">
     <link rel="stylesheet" href="css/schedule.css?v=38">
     <!-- Accidental-edit protection layer. Two attribute-driven gates
@@ -1330,6 +1330,17 @@
                         <div id="job-buildings" class="sub-tab-content-job">
                             <div id="job-buildings-content"></div>
                         </div>
+
+                        <!-- Job Photos — the photo-forward attachments manager
+                             (window.p86Attachments) scoped to this job, promoted
+                             to its own tab. Render driver: window.renderJobPhotos
+                             (js/job-media.js). -->
+                        <div id="job-photos" class="sub-tab-content-job"></div>
+
+                        <!-- Job Files — the folder-tree file explorer
+                             (window.p86Explorer) scoped to this job. Render
+                             driver: window.renderJobFiles (js/job-media.js). -->
+                        <div id="job-files" class="sub-tab-content-job"></div>
 
                         <!-- Job Reports — Project 86 "report" feature.
                              Photo collection grouped into named
@@ -3404,7 +3415,7 @@
          app.js: loadData consults p86SaveMerge.shouldVetoHydrate() on the very
          first hydrate. -->
     <script src="js/save-merge.js?v=5"></script>
-    <script src="js/app.js?v=146"></script>
+    <script src="js/app.js?v=147"></script>
     <!-- The visible signal for a write that has not reached the server.
          Loads AFTER app.js so window.p86PushStatus exists to subscribe to. -->
     <script src="js/save-banner.js?v=3"></script>
@@ -3495,6 +3506,10 @@
     <script src="js/jobs.js?v=224"></script>
     <script src="js/doc-import.js?v=5"></script>
     <script src="js/job-workflow-ui.js?v=6"></script>
+    <!-- Job sidebar Files + Photos tabs (renderJobFiles / renderJobPhotos).
+         Loads after api.js, attachments.js, file-explorer.js and jobs.js so
+         window.p86Explorer / p86Attachments / appData are all available. -->
+    <script src="js/job-media.js?v=1"></script>
     <!-- Reusable rich-text field (window.p86RichText) — shared WYSIWYG for
          Scope / Terms / notes / proposals / reports. Load before the editors
          that mount it. -->
@@ -3537,7 +3552,7 @@
 
     <script src="js/workspace.js?v=54"></script>
     <script src="js/workspace-gc.js?v=1"></script>
-    <script src="js/workspace-layout.js?v=102"></script>
+    <script src="js/workspace-layout.js?v=103"></script>
 
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
