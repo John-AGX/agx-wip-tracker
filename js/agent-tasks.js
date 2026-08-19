@@ -7,6 +7,26 @@
 // here lands in S5; for now the panel points the user at their 86 chat.
 (function () {
   'use strict';
+
+  // ══ PUSH KEY RECOVERY — exported core ═══════════════════════════════════
+  // The decision ("is this device's subscription still minted against the key
+  // the server signs with?") and the repair are pure/injected so they are
+  // provable in Jest without a browser. Everything below the Node bail is the
+  // DOM half. See the long note above keyState() for the defect this closes.
+  var PUSH_PENDING_KEY = 'p86-push-resub';
+  var VAPID_KEY_BYTES = 65;   // uncompressed P-256 point; VAPID is P-256 only
+
+  var PushRecovery = {
+    PENDING_KEY: PUSH_PENDING_KEY,
+    VAPID_KEY_BYTES: VAPID_KEY_BYTES,
+    urlB64ToU8: urlB64ToU8,
+    keyState: keyState,
+    reconcile: reconcile
+  };
+  if (typeof module !== 'undefined' && module.exports) module.exports = PushRecovery;
+  if (typeof window === 'undefined') return;   // Node: the pure recovery core only.
+  window.p86PushRecovery = PushRecovery;
+
   if (window.p86AgentTasks) return;
 
   var POLL_MS = 20000;
@@ -192,6 +212,229 @@
     for (var i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
     return arr;
   }
+  // ── Key-rotation recovery ────────────────────────────────────────────────
+  // Rotating the platform VAPID pair (server/routes/admin-push-routes.js)
+  // invalidates every subscription in existence, because each one was minted
+  // by the browser against the OLD public key. Nothing in the product noticed:
+  // the bell reveals itself only when getSubscription() resolves EMPTY, and
+  // after a rotation the browser still holds its (now unusable) subscription,
+  // so push went silent on every device with no error surfaced anywhere.
+  //
+  // The repair is to compare the key the subscription was minted with against
+  // the key the server currently serves, and re-mint on a mismatch.
+  //
+  // THE DANGEROUS DIRECTION IS FALSE POSITIVES. Almost every device reaching
+  // this code is fine, and a spurious "repair" would break push for everyone
+  // to fix it for nobody. So the only state that touches anything is a
+  // POSITIVELY PROVEN mismatch — "I could not tell" is a no-op, deliberately.
+  function keyState(subOptions, serverKeyB64) {
+    if (!serverKeyB64 || typeof serverKeyB64 !== 'string') return 'unknown';
+    // PushSubscription.options is not populated on every engine. When it is
+    // absent there is no evidence of a mismatch, so there is no mandate to
+    // destroy a subscription that may well be working.
+    if (!subOptions) return 'unknown';
+    var raw = subOptions.applicationServerKey;
+    if (!raw || typeof raw !== 'object' || typeof raw.byteLength !== 'number' || raw.byteLength === 0) return 'unknown';
+    var have, want;
+    // Compare RAW BYTES, never re-encoded strings. Going the other way — turning
+    // the ArrayBuffer back into base64 — means choosing a padding convention and
+    // an alphabet, and getting either wrong produces a silent false mismatch,
+    // which is precisely the failure mode that must not exist here.
+    try { have = (raw instanceof Uint8Array) ? raw : new Uint8Array(raw); } catch (e) { return 'unknown'; }
+    try { want = urlB64ToU8(serverKeyB64); } catch (e) { return 'unknown'; }
+    // VAPID is P-256 only (RFC 8292), so both sides are an uncompressed EC
+    // point: exactly 65 bytes. Anything else on EITHER side means the
+    // comparison is not trustworthy — a truncated or garbled key from the
+    // server must read as "cannot tell", never as "mismatch", or one bad
+    // response would unsubscribe every device in the fleet at once.
+    if (have.length !== VAPID_KEY_BYTES || want.length !== VAPID_KEY_BYTES) return 'unknown';
+    var diff = 0;
+    for (var i = 0; i < have.length; i++) diff |= have[i] ^ want[i];
+    return diff === 0 ? 'match' : 'mismatch';
+  }
+
+  // Every effect is injected, so this is the whole decision tree and it runs
+  // headlessly. Resolves to { action, ... } naming exactly what happened.
+  function reconcile(io) {
+    function R(action, extra) {
+      var o = { action: action };
+      if (extra) { for (var k in extra) if (Object.prototype.hasOwnProperty.call(extra, k)) o[k] = extra[k]; }
+      return o;
+    }
+    return Promise.resolve().then(function () {
+      // Someone who never granted notification permission has nothing to
+      // repair, and a background reconcile must never raise a prompt.
+      if (io.permission !== 'granted') return R('skipped-permission');
+      if (!io.configured || !io.serverKey) return R('skipped-unconfigured');
+      return io.getSubscription().then(function (sub) {
+        var pending = !!io.isPending();
+        if (!sub) {
+          // Either someone who never enabled push — the bell owns that, leave
+          // it alone — or a device that unsubscribed and then failed to
+          // re-subscribe. The marker tells those two apart, and the second is
+          // repaired here, automatically, on the very next page load.
+          if (!pending) return R('no-subscription');
+          return resubscribe(io, null);
+        }
+        var state = keyState(sub.options, io.serverKey);
+        if (state === 'unknown') {
+          // Defined, safe, non-looping: say so once and change nothing.
+          io.log('warn', 'this subscription does not expose applicationServerKey, so a key ' +
+            'rotation cannot be detected on this device; leaving the subscription untouched');
+          return R('unknown');
+        }
+        if (state === 'match') {
+          // ── THE OVERWHELMINGLY COMMON CASE ──
+          // Zero network calls, zero subscription changes, nothing at all —
+          // unless this device is mid-repair, meaning the browser half already
+          // succeeded and only the server row is missing.
+          if (!pending) return R('noop');
+          return io.saveSubscription(sub.toJSON()).then(function () {
+            io.setPending(false);
+            return R('server-row-repaired', { endpoint: sub.endpoint });
+          }, function (e) {
+            io.log('error', 'could not save the re-minted subscription to the server; ' +
+              'the next page load retries', e);
+            return R('server-row-repair-failed', { recoverable: true });
+          });
+        }
+        // ── PROVEN MISMATCH ──
+        // pushManager.subscribe() rejects with InvalidStateError while a
+        // subscription with a DIFFERENT applicationServerKey is held, so the
+        // unsubscribe is forced to come first — that ordering is the browser's,
+        // not a choice. What is a choice is the marker, written BEFORE the
+        // destructive step, so a crash, a closed tab, or a failed subscribe
+        // between the two is still repairable on the next load rather than a
+        // device silently stranded with no subscription.
+        io.setPending(true);
+        var oldEndpoint = sub.endpoint;
+        return io.unsubscribe(sub).then(null, function (e) {
+          io.log('warn', 'unsubscribe of the stale subscription failed; re-subscribing anyway', e);
+          return false;
+        }).then(function () {
+          return resubscribe(io, oldEndpoint);
+        });
+      });
+    }).then(null, function (e) {
+      io.log('error', 'push reconcile threw', e);
+      return R('error', { recoverable: true });
+    });
+  }
+
+  function resubscribe(io, oldEndpoint) {
+    var keyBytes;
+    try { keyBytes = urlB64ToU8(io.serverKey); }
+    catch (e) {
+      io.log('error', 'the server push key did not decode; not re-subscribing', e);
+      return Promise.resolve({ action: 'resubscribe-failed', recoverable: true });
+    }
+    function attempt() { return io.subscribe(keyBytes); }
+    return attempt().then(null, function (e1) {
+      io.log('warn', 're-subscribe attempt failed, retrying once', e1);
+      return attempt();
+    }).then(function (fresh) {
+      if (!fresh) {
+        io.log('error', 'RE-SUBSCRIBE FAILED (browser returned no subscription). This device ' +
+          'has no push subscription right now; the bell in Crew activity re-enables it and ' +
+          'the next page load retries automatically.');
+        return { action: 'resubscribe-failed', recoverable: true };
+      }
+      // NEW ROW FIRST, old row second. Reversed, a failure here would leave the
+      // user with no subscription row at all; this way the worst case is one
+      // duplicate dead row, which is cosmetic.
+      return io.saveSubscription(fresh.toJSON()).then(function () {
+        io.setPending(false);
+        if (oldEndpoint && oldEndpoint !== fresh.endpoint) {
+          // sendPush prunes only on 404/410 and a VAPID mismatch is neither, so
+          // without this the old row sits in push_subscriptions forever and
+          // every future send retries and logs against it. Best-effort, and
+          // deliberately only after the replacement row is safely stored.
+          io.dropSubscription(oldEndpoint).then(null, function (e) {
+            io.log('warn', 'stale subscription row not dropped for ' + oldEndpoint, e);
+          });
+        }
+        return { action: 'healed', oldEndpoint: oldEndpoint || null, endpoint: fresh.endpoint };
+      }, function (e) {
+        io.log('error', 're-subscribed, but saving the new subscription to the server failed; ' +
+          'the marker stays set so the next page load retries the save', e);
+        return { action: 'save-failed', recoverable: true, endpoint: fresh.endpoint };
+      });
+    }, function (e) {
+      // The device is genuinely unsubscribed at this point. That is LOUD, not
+      // silent: the marker stays set (next load retries), getSubscription() now
+      // resolves empty so the existing bell reveals itself, and this is an
+      // error in the console rather than an empty .catch().
+      io.log('error', 'RE-SUBSCRIBE FAILED. This device has no push subscription right now; ' +
+        'the bell in Crew activity re-enables it and the next page load retries automatically.', e);
+      return { action: 'resubscribe-failed', recoverable: true };
+    });
+  }
+
+  // ── Browser wiring for the core above ────────────────────────────────────
+  var _recoveryRan = false;
+
+  function pushLog(level, msg, err) {
+    try {
+      var line = '[p86-push] ' + msg +
+        (err && err.name ? ' (' + err.name + ': ' + (err.message || '') + ')' : '');
+      if (level === 'error') console.error(line); else console.warn(line);
+    } catch (e) { /* console unavailable — nothing else to do */ }
+  }
+  // localStorage can be full or blocked (see the quota class of bugs); a marker
+  // we cannot write degrades to "no auto-retry", never to a thrown reconcile.
+  function pushPending() {
+    try { return localStorage.getItem(PUSH_PENDING_KEY) === '1'; } catch (e) { return false; }
+  }
+  function setPushPending(v) {
+    try { if (v) localStorage.setItem(PUSH_PENDING_KEY, '1'); else localStorage.removeItem(PUSH_PENDING_KEY); }
+    catch (e) { pushLog('warn', 'could not persist the re-subscribe marker', e); }
+  }
+  function postSubscription(json) {
+    return fetch('/api/push/subscribe', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(json)
+    }).then(function (r) { if (!r.ok) throw new Error('subscribe HTTP ' + r.status); return r; });
+  }
+  function postUnsubscribe(endpoint) {
+    return fetch('/api/push/unsubscribe', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: endpoint })
+    }).then(function (r) { if (!r.ok) throw new Error('unsubscribe HTTP ' + r.status); return r; });
+  }
+
+  // `sub` and `serverKey` are the ones updateBellVisibility already holds, so a
+  // healthy device reaches and leaves this function having made NO additional
+  // network request and NO subscription call. Latched to one run per page load
+  // so the destructive branch can never re-enter.
+  function runPushRecovery(reg, sub, serverKey, bell) {
+    if (_recoveryRan) return Promise.resolve(null);
+    _recoveryRan = true;
+    return reconcile({
+      permission: Notification.permission,
+      configured: true,
+      serverKey: serverKey,
+      isPending: pushPending,
+      setPending: setPushPending,
+      getSubscription: function () { return Promise.resolve(sub); },
+      subscribe: function (keyBytes) {
+        return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes });
+      },
+      unsubscribe: function (s) { return s.unsubscribe(); },
+      saveSubscription: postSubscription,
+      dropSubscription: postUnsubscribe,
+      log: pushLog
+    }).then(function (r) {
+      if (!r) return r;
+      if (r.action === 'healed') {
+        if (bell) bell.style.display = 'none';
+        pushLog('warn', 'the platform push key changed; this device re-subscribed automatically');
+      } else if (r.recoverable && bell) {
+        bell.style.display = '';   // always leave a one-click manual path visible
+      }
+      return r;
+    });
+  }
+
   function updateBellVisibility() {
     var bell = document.querySelector('.p86-bgt-bell'); if (!bell) return;
     if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return;
@@ -201,10 +444,13 @@
       .then(function (d) {
         if (!d || !d.configured || !d.key) return;   // VAPID not set yet — stay hidden
         navigator.serviceWorker.ready.then(function (reg) {
-          return reg.pushManager.getSubscription();
-        }).then(function (sub) {
-          if (!sub) bell.style.display = '';         // configured + not subscribed → show
-        }).catch(function () {});
+          return reg.pushManager.getSubscription().then(function (sub) {
+            if (!sub) bell.style.display = '';       // configured + not subscribed → show
+            // Reuses the key and the subscription fetched just above; adds no
+            // request of its own on a device whose key already matches.
+            return runPushRecovery(reg, sub, d.key, bell);
+          });
+        }).catch(function (e) { pushLog('warn', 'bell/recovery pass failed', e); });
       }).catch(function () {});
   }
   function enablePush() {
@@ -216,21 +462,47 @@
         .then(function (d) {
           if (!d || !d.key) return null;
           return navigator.serviceWorker.ready.then(function (reg) {
-            return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToU8(d.key) });
+            // Clear a stale subscription BEFORE subscribing. subscribe() rejects
+            // with InvalidStateError while one minted against a different
+            // applicationServerKey is held, which is what made this button
+            // useless after a rotation. Doing it here — and not in the
+            // background reconcile — is the point: an explicit click is what
+            // authorizes discarding a subscription we cannot prove is stale,
+            // which covers the engines that never expose `options` at all.
+            return reg.pushManager.getSubscription().then(function (old) {
+              if (!old || keyState(old.options, d.key) === 'match') return old ? old.endpoint : null;
+              setPushPending(true);
+              return old.unsubscribe().then(function () { return old.endpoint; },
+                function (e) { pushLog('warn', 'could not clear the stale subscription', e); return old.endpoint; });
+            }).then(function (oldEndpoint) {
+              return reg.pushManager
+                .subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToU8(d.key) })
+                .then(function (sub) { return { sub: sub, oldEndpoint: oldEndpoint }; });
+            });
           });
         })
-        .then(function (sub) {
-          if (!sub) return;
-          return fetch('/api/push/subscribe', {
-            method: 'POST', credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(sub.toJSON())
-          }).then(function () {
+        .then(function (out) {
+          if (!out || !out.sub) return;
+          return postSubscription(out.sub.toJSON()).then(function () {
+            setPushPending(false);
+            if (out.oldEndpoint && out.oldEndpoint !== out.sub.endpoint) {
+              postUnsubscribe(out.oldEndpoint).then(null, function (e) {
+                pushLog('warn', 'stale subscription row not dropped for ' + out.oldEndpoint, e);
+              });
+            }
             if (bell) { bell.textContent = '🔔 Notifications on'; setTimeout(function () { bell.style.display = 'none'; }, 1800); }
           });
         })
-        .catch(function () {});
-    }).catch(function () {});
+        // NOT an empty catch. The previous one swallowed the InvalidStateError
+        // that pushManager.subscribe() throws when a subscription minted with a
+        // different applicationServerKey is still held — which is exactly why a
+        // key rotation was invisible to everyone. Failures are now visible in
+        // the console and on the button.
+        .catch(function (e) {
+          pushLog('error', 'enabling notifications failed', e);
+          if (bell) { bell.textContent = '🔔 Couldn\'t enable — try again'; bell.style.display = ''; }
+        });
+    }).catch(function (e) { pushLog('error', 'notification permission request failed', e); });
   }
 
   function submitAnswerFor(jid, listEl) {
