@@ -30,7 +30,9 @@ jest.mock('../server/rate-limit', () => ({
   aiChatHourlyLimiter: (req, res, next) => next(),
   ingestLimiter: (req, res, next) => next(),
   liveJoinLimiter: (req, res, next) => next(),
-  liveStreamLimiter: (req, res, next) => next()
+  liveStreamLimiter: (req, res, next) => next(),
+  liveViewLimiter: (req, res, next) => next(),
+  liveRoomViewLimiter: (req, res, next) => next()
 }));
 
 // Forward-facing names come from here. Stubbed to a fixed string so that if a
@@ -867,26 +869,86 @@ describe('the mount and the limiters', () => {
   });
 });
 
-describe('phase 01 does not build phase 02, 03 or 04', () => {
+// The phase-01 drift guard, REWRITTEN into its phase-02 form rather than
+// deleted. Two of its four clauses were "phase 02 has not been designed yet"
+// and are now false by construction; the other two are still true and stay
+// exactly as they were. Deleting the whole block would have thrown away the
+// only thing standing between phase 03/04 and a foundation shaped by a feature
+// nobody has designed.
+describe('phase 02 is built; phase 03 and 04 are still not', () => {
   const fs = require('fs');
   const path = require('path');
   const read = (...p) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
-  const SRC = read('server', 'routes', 'live-routes.js') + read('js', 'live-rooms.js') + read('live.html');
+  const ROUTES = read('server', 'routes', 'live-routes.js');
+  const VIEW = read('server', 'services', 'live-view.js');
+  const SRC = ROUTES + read('js', 'live-rooms.js') + read('js', 'live-view.js') + read('live.html') + VIEW;
 
-  test('no redaction toggle, no follow-me, no stroke work, no guest writes', () => {
-    // A guard against the exact drift the brief warns about: the foundation
-    // getting shaped by one feature that has not been designed yet.
-    expect(SRC).not.toMatch(/hide_?financials|hideFinancials/i);
-    expect(SRC).not.toMatch(/follow_?me|followMe/i);
+  test('no stroke work and no guest writes — 03 and 04 are untouched', () => {
+    // UNCHANGED from phase 01. A whiteboard and a guest write capability are
+    // still not being built, and the guard that says so must not weaken just
+    // because the file next to it grew.
     expect(SRC).not.toMatch(/allow_?draw|allowDraw|viewers_can_draw/i);
     expect(SRC).not.toMatch(/\bstroke_id\b|applyStroke/i);
   });
 
-  test('the projection seam exists so phase 02 edits one function, not the fan-out', () => {
-    const ROUTES = read('server', 'routes', 'live-routes.js');
-    expect(ROUTES).toMatch(/function project\(/);
-    // Every fan-out write goes through it.
-    expect(ROUTES).toMatch(/writeFrame\(sub, project\(ev, pid\)\)/);
+  test('no guest JWT is ever minted — the ~40 money endpoints stay unreachable', () => {
+    // THE STANDING PROHIBITION. requireAuth is JWT-only, which is the ONLY
+    // reason a room token cannot reach a money endpoint. Mint a guest JWT and
+    // every one of those doors opens at once, and the field list stops being a
+    // spec and becomes a breach surface.
+    expect(ROUTES).not.toMatch(/signToken/);
+    expect(ROUTES).not.toMatch(/res\.cookie\(/);
+    expect(ROUTES).not.toMatch(/INSERT INTO users/i);
+  });
+
+  test('hide_financials is a ROOM COLUMN with a fail-closed reader', () => {
+    expect(read('server', 'db.js')).toMatch(/ALTER TABLE live_rooms ADD COLUMN IF NOT EXISTS hide_financials BOOLEAN NOT NULL DEFAULT TRUE/);
+    // Fail-closed by SHAPE: the permissive branch tests `=== false`, so NULL,
+    // undefined, 'f', 0 and anything a future build writes mean HIDDEN.
+    expect(VIEW).toMatch(/room\.hide_financials === false/);
+    // And it is not a scope value: overloading normalizeScope would make "may
+    // draw" and "may see margin" one dimension, and phase 04 would need
+    // 'draw' x {money on, money off} the day it lands. The comment explaining
+    // that is allowed to name the function; the CODE must never call it.
+    expect(VIEW).not.toMatch(/normalizeScope\(/);
+    // And it stays PURE: a module that require()s server/routes/* only loads
+    // where JWT_SECRET is set, which would make the redactor the hardest thing
+    // here to test. (The prose above is allowed to say the word.)
+    expect(VIEW).not.toMatch(/^\s*(?:const|let|var|import)\b[^\n]*require\(/m);
+  });
+
+  test('the projection seam takes the SUB, not a participant id', () => {
+    expect(ROUTES).toMatch(/function project\(event, sub\)/);
+    // Every fan-out write still goes through it, and now carries the recipient
+    // itself: redaction cannot be decided from an id without a query, and a
+    // query inside emit() is a query storm across every open stream.
+    expect(ROUTES).toMatch(/writeFrame\(sub, project\(ev, sub\)\)/);
+    // hello goes through it TOO, so there is one seam and not two.
+    expect(ROUTES).toMatch(/writeFrame\(sub, project\(\{[\s\S]*?\}, sub\)\)/);
+    expect(ROUTES).toMatch(/for \(const ev of backlog\) writeFrame\(sub, project\(ev, sub\)\)/);
+  });
+
+  test('the off-room filter runs on the HOST BEAT, before the replay ring', () => {
+    // emit() pushes onto h.ring BEFORE any projection, so filtering a foreign
+    // entity id at the seam would already have written it into shared room
+    // memory for every ?after= reconnect to replay.
+    const beat = ROUTES.slice(ROUTES.indexOf("router.post('/:roomId/beat/:streamKey'"));
+    const check = beat.indexOf('LV.hostViewEvent');
+    const emitView = beat.indexOf("emit(ctx.room.id, 'view'");
+    expect(check).toBeGreaterThan(-1);
+    expect(emitView).toBeGreaterThan(-1);
+    expect(check).toBeLessThan(emitView);
+    // And it is host-only.
+    expect(beat.slice(0, check)).toMatch(/ctx\.role === 'host'/);
+  });
+
+  test('the read proxy names its param :streamKey, or the limiter falls back to the IP', () => {
+    // rate-limit.js reads req.params.streamKey and silently keys on 'ip:'
+    // otherwise — which would put every guest behind one NAT in one bucket.
+    expect(ROUTES).toMatch(/router\.get\('\/:roomId\/view\/:streamKey\/:surface'/);
+    const RL = read('server', 'rate-limit.js');
+    expect(RL).toMatch(/liveViewLimiter/);
+    expect(RL).toMatch(/req\.params && req\.params\.streamKey/);
   });
 
   test('scope is a column with a fail-closed reader, so phase 04 is a value', () => {

@@ -213,6 +213,66 @@ const liveStreamLimiter = rateLimit({
   },
 });
 
+// 8. The guest READ proxy (phase 02). This is the first door under /api/live
+// that returns a DOCUMENT rather than a control frame, so its 429 ceiling stops
+// being a politeness budget and starts being a data-exfiltration bound. It is
+// therefore stated as one, and it is TWO limiters rather than one.
+//
+// Why not the stream budget: a 429 on the beacon ends a participant's session,
+// and sharing 180/min between a 5s heartbeat and a document fetch would let a
+// scrape starve the thing that keeps the room alive.
+//
+// Why not a stream_key bucket ALONE, which was the first answer here: a stream
+// key is not scarce. POST /:token/join mints a fresh one, liveJoinLimiter allows
+// 12/min per IP, and POST /leave clears left_at immediately so the
+// MAX_PARTICIPANTS row-count ceiling never binds. One IP could rotate its way to
+// ~360 fetches a minute and N IPs would be unbounded. A per-key bucket bounds a
+// POLITE client, not a determined one.
+//
+// So the bound that actually holds is keyed on the ROOM — a room is minted only
+// through requireAuth, so it is the one identifier in this chain a link-holder
+// cannot manufacture. The per-key bucket stays as the fast individual limit
+// (express-rate-limit middleware is additive: both run).
+//
+// Honest residue: a guest can burn the room's shared budget for everyone in it.
+// That is a nuisance available to someone who already holds the link, and the
+// alternative — no real bound at all — is worse. The ceilings that actually stop
+// a scrape are the three-surface allow-list and expires_at.
+const liveViewLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: function (req) {
+    // MUST read req.params.streamKey. The route param has to be named
+    // :streamKey or this silently falls back to the IP and every guest behind
+    // one NAT shares a single bucket.
+    const k = (req.params && req.params.streamKey) || '';
+    return k ? ('lvk:' + k) : ('ip:' + (req.ip || 'unknown'));
+  },
+  handler: function (req, res) {
+    const retryAfter = Math.ceil(res.getHeader('Retry-After') || 60);
+    console.warn('[rate-limit] live view throttle on', req.originalUrl, '(retry in', retryAfter, 's)');
+    jsonHandler(res, retryAfter);
+  },
+});
+
+const liveRoomViewLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 300,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: function (req) {
+    const r = (req.params && req.params.roomId) || '';
+    return r ? ('lvr:' + r) : ('ip:' + (req.ip || 'unknown'));
+  },
+  handler: function (req, res) {
+    const retryAfter = Math.ceil(res.getHeader('Retry-After') || 60);
+    console.warn('[rate-limit] live room view throttle on', req.originalUrl, '(retry in', retryAfter, 's)');
+    jsonHandler(res, retryAfter);
+  },
+});
+
 module.exports = {
   ipLoginLimiter,
   ipGenericLimiter,
@@ -221,4 +281,6 @@ module.exports = {
   ingestLimiter,
   liveJoinLimiter,
   liveStreamLimiter,
+  liveViewLimiter,
+  liveRoomViewLimiter,
 };

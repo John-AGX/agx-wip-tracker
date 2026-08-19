@@ -4931,6 +4931,30 @@ async function initSchema() {
       -- the host surface says so rather than quietly showing half a room.
       takeover_count    INTEGER NOT NULL DEFAULT 0
     );
+    -- Phase 02 — "hide financials". A ROOM-level policy, not a scope value and
+    -- not a client flag.
+    --
+    -- Not scope: normalizeScope is fail-closed toward phase 04's DRAW
+    -- capability, and "may draw" is orthogonal to "may see margin" — phase 04
+    -- would immediately need 'draw' x {money on, money off} and this column
+    -- would have to split anyway.
+    --
+    -- Not a client flag: js/auth.js:351's goOffline() fabricates {role:'admin'}
+    -- and hasCapability returns true unconditionally in that mode, so any
+    -- client-side redaction predicate keyed on a capability answers TRUE for a
+    -- guest. The redactor keys off this column or it is not a redactor.
+    --
+    -- DEFAULT TRUE, deliberately. The link is a bearer credential the feature
+    -- explicitly designs for being pasted into a group chat; the safe default
+    -- for a forwardable credential is the narrow one. The host can flip it in
+    -- the presenter panel, and flipping it re-stamps every open stream.
+    --
+    -- ADD COLUMN with a non-volatile default is metadata-only on PG11+, so this
+    -- takes no table rewrite and no long lock on a boot migration that gates
+    -- listen(). Read fail-closed: services/live-view.js viewPolicy() tests
+    -- strict-equals-false, so NULL or anything a future build writes means
+    -- HIDDEN.
+    ALTER TABLE live_rooms ADD COLUMN IF NOT EXISTS hide_financials BOOLEAN NOT NULL DEFAULT TRUE;
     CREATE INDEX IF NOT EXISTS idx_live_rooms_entity
       ON live_rooms(entity_type, entity_id, created_at DESC);
     -- One live room per entity. Without this a double-tapped button, or a

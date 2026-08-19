@@ -1,10 +1,32 @@
-// Live Rooms — phase 01. The room primitive: a room exists, it knows who is in
-// it, and it moves cursors between them. Nothing else.
+// Live Rooms — phase 01 (the room primitive: a room exists, it knows who is in
+// it, and it moves cursors between them) plus phase 02 (the viewer link:
+// mirrored navigation and a redacted read proxy).
 //
-// NOT IN THIS FILE, ON PURPOSE: no Present popover, no hide-financials, no
-// follow-me navigation, no mirrored routing, no whiteboard, and no guest write
-// capability of any kind. A phase-01 guest observes; the only bytes they send
-// are their own cursor and their own name.
+// STILL NOT IN THIS FILE, ON PURPOSE: no whiteboard (03) and no guest WRITE
+// capability of any kind (04). A phase-02 guest observes; the only bytes they
+// send are their own name and a beacon.
+//
+// ── PHASE 02: MIRROR A ROUTE, NOT A SNAPSHOT ───────────────────────────────
+// The host's browser sends four strings — entity type, entity id, surface — and
+// no money at all. The server then builds the guest's document FROM THE
+// DATABASE, under the guest's own policy, from a hand-written allow-list in
+// services/live-view.js.
+//
+// That single choice is what makes "the server never sends those numbers"
+// testable rather than hopeful. A snapshot would put the HOST'S BROWSER on the
+// sending side of the redactor, and that browser has already run getJobWIP: it
+// holds every number the guest must not have, in a tab this process does not
+// control.
+//
+// Two rules fall out and both are enforced below rather than documented:
+//   • THE MIRROR MAY MOVE THE GUEST WITHIN THE ROOM; IT MAY NEVER MOVE THE
+//     ROOM. The host's claimed route is checked against the room row — the sole
+//     tenancy authority — on the HOST'S BEAT, before the event enters the replay
+//     ring. Filtering it later at the projection seam would already have written
+//     a foreign entity id into shared room memory.
+//   • THE GUEST NEVER NAMES AN ENTITY. The read proxy takes a surface and reads
+//     the entity from ctx.room. It has no parameter that could carry a job id,
+//     which is what preserves publicRoom's deliberate omission of entity_id.
 //
 // ── TRANSPORT ──────────────────────────────────────────────────────────────
 // EventSource (GET) down, batched POST up. Chosen for one reason that survives
@@ -64,12 +86,15 @@ const crypto = require('crypto');
 const { pool } = require('../db');
 const { requireAuth, resolveOrgId, ORG_LOOKUP_FAILED } = require('../auth');
 const { resolveEntityLabels } = require('../services/entity-labels');
-const { liveJoinLimiter, liveStreamLimiter } = require('../rate-limit');
+const { liveJoinLimiter, liveStreamLimiter, liveViewLimiter, liveRoomViewLimiter } = require('../rate-limit');
 const L = require('../services/live-rooms');
+const LV = require('../services/live-view');
+const jobMoney = require('../services/money/change-order-totals');
+const jobWip = require('../services/money/job-wip');
 
 const router = express.Router();
 
-console.log('[live-routes] mounted at /api/live (phase 01: rooms, presence, cursors)');
+console.log('[live-routes] mounted at /api/live (phase 01: rooms, presence, cursors; phase 02: mirrored routing + redacted views)');
 
 // Which process is fanning rooms out. Fan-out is in-memory, so a room is served
 // by exactly one instance at a time; this id is how a reconnect notices it
@@ -96,10 +121,20 @@ function hub(roomId) {
       id: roomId,
       seq: 0,
       ring: [],                 // last RING_MAX CONTROL events, for resume
-      subs: new Map(),          // participantId -> { res, streamKey, connectedAt, fails }
+      subs: new Map(),          // participantId -> { res, streamKey, role, policy, connectedAt, fails }
       beats: new Map(),         // participantId -> epoch ms of last beacon
       cursors: new Map(),       // participantId -> [t, x, y]
-      presence: new Map()       // participantId -> last emitted presence state
+      presence: new Map(),      // participantId -> last emitted presence state
+      // Phase 02. `view` is where the host currently is, in the room's own
+      // terms: a SURFACE and a reason, never an entity id. Shipped in `hello`
+      // for the same reason current cursor positions already are — without it a
+      // mid-session joiner stares at the default until the host next moves.
+      view: { surface: LV.DEFAULT_SURFACE, reason: null },
+      // What each participant is actually LOOKING AT, observed from their own
+      // view fetch rather than self-reported. Presenter-only: it is what tells
+      // the host someone stopped following BEFORE they say "as you can see
+      // here", and project() strips it from every guest's copy.
+      at: new Map()             // participantId -> surface key
     };
     _rooms.set(roomId, h);
   }
@@ -120,18 +155,31 @@ function destroyHub(roomId, reason) {
   for (const [, sub] of h.subs) {
     try { sub.res.end(); } catch (_) {}
   }
-  h.subs.clear(); h.beats.clear(); h.cursors.clear(); h.presence.clear(); h.ring.length = 0;
+  h.subs.clear(); h.beats.clear(); h.cursors.clear(); h.presence.clear(); h.at.clear(); h.ring.length = 0;
   _rooms.delete(roomId);
   console.log('[live] hub destroyed', roomId, reason || '');
 }
 
 // ── The projection seam ─────────────────────────────────────────────────────
 // EVERY event passes through here before serialization, for every subscriber
-// individually. Phase 01 ships the identity projection. This exists now because
-// phase 02's redaction is a change to this ONE function, whereas retrofitting a
-// per-subscriber seam means rewriting the fan-out. It is not a redaction toggle
-// and it does not read any capability — it is the shape, not the feature.
-function project(event /*, participant */) { return event; }
+// individually. Phase 01 shipped the identity projection precisely so phase
+// 02's redaction would be a change to this ONE function rather than a fan-out
+// rewrite. It is now that change, and it does two kinds of redaction:
+//
+//   1. `view` is REBUILT rather than filtered, so no field a future build adds
+//      to the host's beat body can ride along by accident. The entity id in
+//      particular never reaches a guest: publicRoom withholds it deliberately
+//      (services/live-rooms.js:157) and re-leaking it through the mirror would
+//      undo a shipped, tested invariant.
+//   2. Per-participant `surface` is PRESENTER-ONLY. The host needs to see who
+//      broke off; a guest must not learn what the other guests are reading.
+//
+// The second argument is the SUB, not a participant id. Redaction cannot be
+// decided from an id without a DB query, and a query inside emit() turns a
+// per-second feature into a query storm across every open stream. The sub
+// carries {role, policy}, stamped at stream open and re-stamped when the host
+// flips the policy.
+function project(event, sub) { return LV.projectEvent(event, sub); }
 
 function writeFrame(sub, payload) {
   try {
@@ -166,7 +214,7 @@ function emit(roomId, type, data, opts) {
   const except = (opts && opts.except) || null;
   for (const [pid, sub] of h.subs) {
     if (except && pid === except) continue;
-    const ok = writeFrame(sub, project(ev, pid));
+    const ok = writeFrame(sub, project(ev, sub));
     if (!ok && sub.fails >= MAX_CONSEC_WRITE_FAILS) {
       // The TCP stream is clearly broken. Close it rather than waiting for the
       // OS to notice — ai-routes.js:3841 learned this the hard way, where empty
@@ -204,7 +252,19 @@ async function rosterFor(roomId, now) {
     // instance just took over) is reported by its DB last_seen_at, which the
     // join wrote. It ages out on the same clock as everyone else.
     const seen = beat != null ? beat : (p.joined_at instanceof Date ? p.joined_at.getTime() : Date.parse(p.joined_at));
-    out.push(L.publicParticipant(Object.assign({}, p, { last_seen_at: seen }), now));
+    const pub = L.publicParticipant(Object.assign({}, p, { last_seen_at: seen }), now);
+    // PRESENTER-ONLY, and stripped for every other recipient by project(). It
+    // is a safety property rather than decoration: it is what tells the host
+    // that someone stopped following BEFORE they say "as you can see here".
+    // Observed from the guest's own view fetch, never self-reported — a
+    // cooperative client could otherwise claim to be following while reading
+    // something else.
+    if (h) {
+      const at = h.at.get(p.id) || null;
+      pub.surface = at;
+      pub.following = (pub.role === 'host') ? null : (at != null && at === (h.view && h.view.surface));
+    }
+    out.push(pub);
   }
   return out;
 }
@@ -217,6 +277,59 @@ async function entityTitle(room) {
     return labels.get(room.entity_type + ':' + String(room.entity_id)) || null;
   } catch (e) { return null; }
 }
+
+// ── View inputs (phase 02) ──────────────────────────────────────────────────
+// Everything a projection needs, loaded from the tables, for the entity the
+// ROOM names. The request has no say in which entity this is — there is no
+// parameter that could carry one — which is what preserves publicRoom's
+// deliberate omission of entity_id.
+//
+// STRICT org equality on the parent row. Not jobInOrg(), not GET
+// /api/jobs/:id's `OR organization_id IS NULL`, not entity-labels.js's
+// tolerance: every one of those passes an UNSTAMPED row, and a guest read is
+// the last place to inherit a tolerance arm written for a backfill. mintVerdict
+// already refuses an unstamped parent BY NAME at mint time, so a room whose
+// parent is unstamped cannot exist and strict equality here can never lock out
+// a legitimate room.
+//
+// This is a NEW read path, not a retrofit of the ~40 money endpoints. It has to
+// be: requireAuth is JWT-only and a guest holds a room token, so those doors are
+// unreachable to them — which is exactly why phase 02 must never mint a JWT for
+// a guest. sub-portal-routes.js:392 is the scar.
+async function loadJobViewInputs(room) {
+  const jr = await pool.query(
+    'SELECT id, organization_id, data FROM jobs WHERE id = $1',
+    [room.entity_id]
+  );
+  if (!jr.rows.length) return null;
+  const row = jr.rows[0];
+  if (row.organization_id == null || String(row.organization_id) !== String(room.organization_id)) return null;
+
+  const job = row.data || {};
+  const phases = Array.isArray(job.phases) ? job.phases : [];
+  const buildings = Array.isArray(job.buildings) ? job.buildings : [];
+  const subs = Array.isArray(job.subs) ? job.subs : [];
+
+  const changeOrders = await jobMoney.changeOrdersForJob(pool, room.entity_id, job.changeOrders);
+  const invoices = await jobMoney.invoicesForJob(pool, room.entity_id, job.invoices);
+  const wi = (await jobWip.loadWipInputs(pool, [room.entity_id])).get(room.entity_id) || {};
+
+  // computeJobWIP runs on the REAL inputs, server-side, and redaction happens
+  // after. Derive first, redact last: pctComplete is not money and a guest
+  // legitimately sees progress, but it can only be computed from figures they
+  // must not have. Recomputing it from redacted inputs would produce a wrong
+  // number rather than a hidden one.
+  const wip = jobWip.computeJobWIP(job, {
+    phases, buildings, subs, changeOrders, invoices,
+    qbCostLines: wi.qbCostLines || [],
+    vendorBills: wi.vendorBills || [],
+    purchaseOrders: wi.purchaseOrders || []
+  });
+
+  return { job, wip, changeOrders, title: await entityTitle(room) };
+}
+
+const VIEW_INPUT_LOADERS = Object.freeze({ job: loadJobViewInputs });
 
 // ── Room row helpers ────────────────────────────────────────────────────────
 async function endRoom(roomId, reason) {
@@ -252,6 +365,7 @@ async function sweepOnce() {
       if (now - beat < L.GONE_MS) continue;
       h.beats.delete(pid);
       h.cursors.delete(pid);
+      h.at.delete(pid);
       const sub = h.subs.get(pid);
       if (sub) { try { sub.res.end(); } catch (_) {} h.subs.delete(pid); }
       try {
@@ -395,7 +509,13 @@ router.post('/rooms', requireAuth, async (req, res) => {
       if (L.roomIsUsable(state)) {
         if (String(ex.host_user_id) === String(req.user.id)) {
           const title = await entityTitle(ex);
-          return res.json({ room: L.publicRoom(ex, title, Date.now()), token: ex.token, reused: true });
+          return res.json({
+            room: L.publicRoom(ex, title, Date.now()), token: ex.token, reused: true,
+            // The host's own copy of the policy. Not on publicRoom: that
+            // projection is what a GUEST is allowed to see, and phase 01 keeps
+            // it to the smallest set that works.
+            hide_financials: ex.hide_financials !== false
+          });
         }
         // Someone else is already presenting this entity. Refusing is honest —
         // they can join the existing session — and it is not a lockout.
@@ -428,7 +548,10 @@ router.post('/rooms', requireAuth, async (req, res) => {
     hub(room.id);
     const title = await entityTitle(room);
     console.log('[live] room minted', room.id, 'org', verdict.orgId, body.entity_type + ':' + entityId);
-    res.json({ room: L.publicRoom(room, title, Date.now()), token: token, reused: false });
+    res.json({
+      room: L.publicRoom(room, title, Date.now()), token: token, reused: false,
+      hide_financials: room.hide_financials !== false
+    });
   } catch (e) {
     // A UNIQUE violation on the one-live-room-per-entity index means someone
     // won the race. That is the constraint doing its job, not a server fault.
@@ -470,7 +593,8 @@ router.get('/mine', requireAuth, async (req, res) => {
         room: L.publicRoom(room, title, now),
         token: room.token,
         entity_type: room.entity_type,
-        entity_id: room.entity_id
+        entity_id: room.entity_id,
+        hide_financials: room.hide_financials !== false
       });
     }
     res.json({ rooms: out });
@@ -527,6 +651,58 @@ router.post('/rooms/:id/beat', requireAuth, async (req, res) => {
     res.json({ ok: true, state: 'live', watching: h ? h.subs.size : 0 });
   } catch (e) {
     res.status(500).json({ error: 'beat failed' });
+  }
+});
+
+// POST /api/live/rooms/:id/policy  { hide_financials: boolean }
+//
+// Flipping the toggle mid-session. Three things happen, and the third is the
+// one that matters:
+//
+//   1. the ROW changes — the row is where redaction is decided, so nothing is
+//      hidden or revealed until this lands;
+//   2. every OPEN SUB is re-stamped, so the fan-out seam stops needing a query
+//      it never had;
+//   3. a `policy` event goes out and the guest DISCARDS its current document
+//      and refetches. It never patches. Flipping OFF must not become a
+//      client-side unhide of data the client already lacks; flipping ON must
+//      not leave a document with live numbers sitting in a guest's memory.
+//
+// And the bar says the arrangement changed. The guest bar's whole job is honesty
+// about the arrangement; a silent change of arrangement is the same lie one
+// level up.
+router.post('/rooms/:id/policy', requireAuth, async (req, res) => {
+  try {
+    const room = await loadOwnedRoom(req, res);
+    if (!room) return;
+    const body = req.body || {};
+    if (typeof body.hide_financials !== 'boolean') {
+      return res.status(400).json({ error: 'hide_financials must be true or false.' });
+    }
+    const hide = body.hide_financials;
+    await pool.query('UPDATE live_rooms SET hide_financials = $2 WHERE id = $1', [room.id, hide]);
+    const next = Object.assign({}, room, { hide_financials: hide });
+
+    const h = _rooms.get(room.id);
+    if (h) {
+      for (const [, sub] of h.subs) {
+        sub.policy = LV.viewPolicy(next, { role: sub.role });
+      }
+    }
+    emit(room.id, 'policy', { hide_financials: hide, at: new Date().toISOString() });
+
+    res.json({
+      ok: true,
+      hide_financials: hide,
+      // The mechanism, not a reassurance. It is the difference between this and
+      // a CSS blur, and it is the only claim the surface is allowed to make.
+      note: hide
+        ? 'Viewers no longer receive margins, cost or contract values — the server stops sending them.'
+        : 'Viewers can now see margins, cost and contract values.'
+    });
+  } catch (e) {
+    console.error('[live] policy failed:', e && e.message);
+    res.status(500).json({ error: 'Could not change what viewers can see.' });
   }
 });
 
@@ -591,7 +767,7 @@ router.post('/rooms/:id/kick', requireAuth, async (req, res) => {
         try { sub.res.end(); } catch (_) {}
         h.subs.delete(pid);
       }
-      h.beats.delete(pid); h.cursors.delete(pid); h.presence.delete(pid);
+      h.beats.delete(pid); h.cursors.delete(pid); h.presence.delete(pid); h.at.delete(pid);
       const fp = sub && sub.fingerprint;
       if (fp && !revoke) {
         let m = _softBans.get(room.id);
@@ -725,7 +901,7 @@ router.post('/:token/join', liveJoinLimiter, async (req, res) => {
         if (h0) {
           const s = h0.subs.get(row.id);
           if (s) { writeFrame(s, { type: 'superseded', at: new Date().toISOString() }); try { s.res.end(); } catch (_) {} h0.subs.delete(row.id); }
-          h0.beats.delete(row.id); h0.cursors.delete(row.id); h0.presence.delete(row.id);
+          h0.beats.delete(row.id); h0.cursors.delete(row.id); h0.presence.delete(row.id); h0.at.delete(row.id);
         }
         emit(room.id, 'leave', { participant_id: row.id, reason: 'superseded', at: new Date().toISOString() });
       }
@@ -832,7 +1008,15 @@ router.get('/:roomId/stream/:streamKey', liveStreamLimiter, async (req, res) => 
   // One stream per participant. A reconnect replaces the old handle.
   const prev = h.subs.get(pid);
   if (prev) { try { prev.res.end(); } catch (_) {} }
-  const sub = { res: res, streamKey: req.params.streamKey, connectedAt: Date.now(), fails: 0, fingerprint: fingerprint(req) };
+  // The sub carries its own ROLE and its own POLICY. Both are stamped here,
+  // where ctx.role is already in scope, so the fan-out never needs a query to
+  // decide what a given recipient may be shown.
+  const sub = {
+    res: res, streamKey: req.params.streamKey, connectedAt: Date.now(), fails: 0,
+    fingerprint: fingerprint(req),
+    role: ctx.role,
+    policy: LV.viewPolicy(room, { role: ctx.role })
+  };
   h.subs.set(pid, sub);
   h.beats.set(pid, Date.now());
 
@@ -850,18 +1034,30 @@ router.get('/:roomId/stream/:streamKey', liveStreamLimiter, async (req, res) => 
   try {
     const now = Date.now();
     const title = await entityTitle(room);
-    writeFrame(sub, {
+    // hello goes through project() TOO, so there is one seam and not two. The
+    // design first left it outside; that is how a per-participant field the
+    // seam strips everywhere else would have shipped intact on the very first
+    // frame every guest receives.
+    writeFrame(sub, project({
       type: 'hello',
       room: L.publicRoom(room, title, now),
       you: { participant_id: pid, role: ctx.role },
       participants: await rosterFor(room.id, now),
       seq: h.seq,
       resumed: resumed,
+      // What this recipient may be shown, said out loud. The guest shell paints
+      // its bar from this rather than assuming.
+      policy: { money: !!(sub.policy && sub.policy.money) },
+      // Where the host is right now, in surfaces. Without it a mid-session
+      // joiner stares at the default until the host next navigates — the same
+      // gap current cursor positions were already fixed for below.
+      view: { surface: h.view.surface || null, reason: h.view.reason || null },
+      surfaces: LV.surfacesFor(room.entity_type),
       // Surfaced rather than swallowed. The host's strip says so.
       multi_instance_suspected: multiInstance,
       timings: { beat_ms: L.BEAT_MS, stale_ms: L.STALE_MS, gone_ms: L.GONE_MS }
-    });
-    for (const ev of backlog) writeFrame(sub, project(ev, pid));
+    }, sub));
+    for (const ev of backlog) writeFrame(sub, project(ev, sub));
     // Current cursor positions, so a joiner does not stare at an empty screen
     // until someone moves.
     for (const [otherPid, s] of h.cursors) {
@@ -893,10 +1089,22 @@ router.get('/:roomId/stream/:streamKey', liveStreamLimiter, async (req, res) => 
   });
 });
 
-// POST /api/live/:roomId/beat/:streamKey  { cursor: [[t,x,y], ...], away? }
-// The up-channel, which doubles as the liveness beacon. One request per second
-// carrying up to ten samples; receivers interpolate, so 1Hz on the wire looks
-// like continuous motion at roughly 13 KB/min per moving participant.
+// POST /api/live/:roomId/beat/:streamKey
+//   { cursor: [[t,x,y], ...], view?: { entity_type, entity_id, surface } }
+//
+// The up-channel, which doubles as the liveness beacon. Cursor samples are
+// batched; receivers interpolate, so a 5s wire cadence still reads as motion at
+// roughly 13 KB/min per moving participant.
+//
+// `view` rides this existing request rather than getting a door of its own:
+// zero new bytes, zero new connections, and the host's client flushes a beat
+// immediately on a route change so the latency is a round trip rather than a
+// beat interval. (`away`, which phase 01's signature named and nothing ever
+// read, is gone: a signature that lies is how the next phase gets a bug.)
+//
+// A `view` in a VIEWER's body is DROPPED. Authorize at execution, not at
+// proposal — /86/chat/continue ran writes with no capability check for exactly
+// this shape of reason. Without the role test, any guest steers the room.
 router.post('/:roomId/beat/:streamKey', liveStreamLimiter, async (req, res) => {
   let ctx;
   try { ctx = await loadStreamContext(req, res); }
@@ -922,6 +1130,32 @@ router.post('/:roomId/beat/:streamKey', liveStreamLimiter, async (req, res) => {
     try { emit(ctx.room.id, 'presence', { participants: await rosterFor(ctx.room.id, now), at: new Date().toISOString() }); } catch (e) {}
   }
 
+  // ── Mirrored navigation ───────────────────────────────────────────────
+  // HOST ONLY, and validated HERE rather than at the projection seam. emit()
+  // pushes onto h.ring BEFORE any projection runs, so a foreign entity id
+  // filtered downstream would already be sitting in shared room memory waiting
+  // to be replayed to every ?after= reconnect. The filter has to run before the
+  // event exists.
+  //
+  // hostViewEvent compares the claimed route against ctx.room — the room row is
+  // the sole tenancy authority — and returns a SURFACE and a reason, never an
+  // entity id. Three refusals, each with its own honest reason for the guest
+  // bar to say: off_room (the host opened a different record), not_shared (a
+  // surface this room does not serve), away (the host left the job entirely).
+  if (ctx.role === 'host' && req.body && Object.prototype.hasOwnProperty.call(req.body, 'view')) {
+    const next = LV.hostViewEvent(req.body.view, ctx.room);
+    if (!LV.viewEq(next, h.view)) {
+      h.view = next;
+      // A CONTROL event, not a cursor frame: it takes a seq and a ring slot, so
+      // a guest reconnecting with ?after= lands on the right page. Cursor
+      // frames are deliberately never replayed; a route must be.
+      emit(ctx.room.id, 'view', { surface: next.surface, reason: next.reason, at: new Date().toISOString() });
+      // Who is still with him changed meaning, so the roster is re-emitted:
+      // `following` is derived from this comparison.
+      try { emit(ctx.room.id, 'presence', { participants: await rosterFor(ctx.room.id, now), at: new Date().toISOString() }); } catch (e) {}
+    }
+  }
+
   // The host's beat also keeps the ROOM alive. Throttled to once per ~15s so
   // this is not a 1Hz write.
   if (ctx.role === 'host') {
@@ -934,6 +1168,86 @@ router.post('/:roomId/beat/:streamKey', liveStreamLimiter, async (req, res) => {
 
   res.set('Cache-Control', 'no-store');
   res.json({ ok: true, watching: h.subs.size, state: ctx.state });
+});
+
+// GET /api/live/:roomId/view/:streamKey/:surface — THE READ PROXY.
+//
+// The one door in this file that returns a document. Everything about its shape
+// is a consequence of "a guest is not a user":
+//
+//   • The param is named :streamKey EXACTLY. liveViewLimiter's keyGenerator
+//     reads req.params.streamKey and silently falls back to 'ip:' otherwise —
+//     name it :key and every guest behind one NAT shares one bucket.
+//   • TWO limiters. Per-key bounds a polite client; per-ROOM is the bound that
+//     actually holds, because a stream key can be rotated by rejoining and a
+//     room id cannot be manufactured without requireAuth. See rate-limit.js.
+//   • The credential is checked FIRST (loadStreamContext), so a caller who does
+//     not hold one learns nothing about the room.
+//   • The entity comes from ctx.room. There is no parameter that could carry an
+//     entity id, so "a guest cannot reach any record but the presented one" is
+//     a property of the ROUTE SHAPE rather than of a check someone must
+//     remember to write.
+//   • The surface must be in the frozen allow-list AND must belong to the
+//     room's entity type. Both refusals answer the same 400.
+//   • no-store. This response is a redacted copy of someone's private job.
+router.get('/:roomId/view/:streamKey/:surface', liveRoomViewLimiter, liveViewLimiter, async (req, res) => {
+  let ctx;
+  try { ctx = await loadStreamContext(req, res); }
+  catch (e) { return res.status(503).json({ error: 'Could not load that view right now.' }); }
+  if (!ctx) return;
+
+  const room = ctx.room;
+  const surface = String(req.params.surface || '');
+  const spec = LV.surfaceSpec(surface);
+  // Unknown surface and wrong-entity surface get the SAME answer: a
+  // distinguishable refusal would turn the allow-list into an oracle.
+  if (!spec || spec.entity !== room.entity_type) {
+    return res.status(400).json({ error: 'That view is not shared.', code: 'NOT_SHARED' });
+  }
+
+  const loader = Object.prototype.hasOwnProperty.call(VIEW_INPUT_LOADERS, room.entity_type)
+    ? VIEW_INPUT_LOADERS[room.entity_type] : null;
+  if (!loader) return res.status(400).json({ error: 'That view is not shared.', code: 'NOT_SHARED' });
+
+  try {
+    const inputs = await loader(room);
+    // A room whose parent vanished or whose org stopped matching answers the
+    // same "not shared" rather than naming what changed.
+    if (!inputs) return res.status(404).json({ error: 'Not found' });
+
+    const policy = LV.viewPolicy(room, { role: ctx.role });
+    const doc = LV.buildView(surface, inputs, policy);
+    if (!doc) return res.status(400).json({ error: 'That view is not shared.', code: 'NOT_SHARED' });
+
+    // The guard that makes a builder bug LOUD instead of quiet. A surviving
+    // internal tag means a container redact() could not walk, and shipping one
+    // would ship a raw number under a name nothing renders. 500 rather than
+    // send: a redactor that misses one field is worse than no redactor,
+    // because the toggle says the numbers are gone.
+    if (LV.containsRawTag(doc)) {
+      console.error('[live] view builder leaked a raw cell tag; refusing to send', surface);
+      return res.status(500).json({ error: 'Could not build that view.' });
+    }
+
+    // Observed, not self-reported: what the host's roster shows this guest is
+    // reading comes from the fetch they actually made.
+    const h = _rooms.get(room.id);
+    if (h) h.at.set(ctx.participantId, surface);
+
+    res.set('Cache-Control', 'no-store');
+    res.set('Referrer-Policy', 'no-referrer');
+    res.json({
+      surface: surface,
+      view: doc,
+      // Said out loud on every document, so the guest bar can never drift out
+      // of step with what the bytes actually contain.
+      money_visible: !!policy.money,
+      at: new Date().toISOString()
+    });
+  } catch (e) {
+    console.error('[live] view failed:', e && e.message);
+    res.status(500).json({ error: 'Could not load that view.' });
+  }
 });
 
 // POST /api/live/:roomId/leave/:streamKey — sent with keepalive:true on
@@ -957,7 +1271,7 @@ router.post('/:roomId/leave/:streamKey', liveStreamLimiter, async (req, res) => 
     if (h) {
       const sub = h.subs.get(ctx.participantId);
       if (sub) { try { sub.res.end(); } catch (_) {} h.subs.delete(ctx.participantId); }
-      h.beats.delete(ctx.participantId); h.cursors.delete(ctx.participantId); h.presence.delete(ctx.participantId);
+      h.beats.delete(ctx.participantId); h.cursors.delete(ctx.participantId); h.presence.delete(ctx.participantId); h.at.delete(ctx.participantId);
     }
     emit(ctx.room.id, 'leave', { participant_id: ctx.participantId, reason: 'left', at: new Date().toISOString() });
     // The host leaving ends the room. Ending must be as reliable as starting,
