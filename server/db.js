@@ -2674,8 +2674,26 @@ async function initSchema() {
     -- rows' actor_user_id quietly became NULL. Dropping it also removes a
     -- FOR KEY SHARE lock on users from the hot path of every privileged
     -- action.
+    -- Dropped BY DISCOVERY, not by guessed name. Postgres auto-names an inline
+    -- REFERENCES constraint <table>_<column>_fkey, and both of these should
+    -- carry that name — but "should" is not a property you want between the
+    -- append-only trigger below and every DELETE FROM users. A DROP IF EXISTS
+    -- against a name that is off by one character succeeds silently and leaves
+    -- the outage in place. This asks the catalog instead.
     ALTER TABLE admin_audit_log DROP CONSTRAINT IF EXISTS admin_audit_log_actor_user_id_fkey;
     ALTER TABLE admin_audit_log DROP CONSTRAINT IF EXISTS admin_audit_log_organization_id_fkey;
+    DO $aal_fk$
+    DECLARE c RECORD;
+    BEGIN
+      FOR c IN
+        SELECT conname FROM pg_constraint
+         WHERE conrelid = 'admin_audit_log'::regclass AND contype = 'f'
+      LOOP
+        EXECUTE 'ALTER TABLE admin_audit_log DROP CONSTRAINT ' || quote_ident(c.conname);
+        RAISE NOTICE 'dropped stray FK % on admin_audit_log', c.conname;
+      END LOOP;
+    END;
+    $aal_fk$;
 
     -- ── Indexes: REPLACE, don't add ────────────────────────────────────────
     -- Every query this table will ever serve ends ORDER BY created_at DESC

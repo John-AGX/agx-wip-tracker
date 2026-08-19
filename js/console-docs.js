@@ -371,6 +371,132 @@
               '<p>Tier 2 would be 2.5D (height-aware); Tier 3 is true 3D BIM, which means <b>integrating</b> an existing engine (OpenCascade / web-ifc), never writing one. For estimating, ~95% of the value already lands at this 2D tier — the drawing’s footprint is what prices the work.</p>')
         }
       ]
+    },
+    {
+      id: 'audit-trail',
+      title: 'The privileged-action trail',
+      category: 'Platform',
+      icon: '🧾',
+      updated: '2026-08-19',
+      summary: 'What is recorded, what deliberately is not, and how you answer “who did that” — built to answer the question that could not be answered.',
+      sections: [
+        {
+          h: 'The question this exists to answer',
+          html:
+            '<p>The platform’s VAPID <b>private key</b> sat in ' + code('app_settings') + ', readable by any PM, for seven weeks. ' +
+            'Asked <i>“if no one got the keys yet, is it safe now?”</i>, the honest answer was <b>we cannot tell</b>: there was no request ' +
+            'logging, no audit row on the settings GET, and Railway’s platform log does not reach back that far. The security answer had to be ' +
+            'reasoned from who could plausibly have bothered, not from evidence.</p>' +
+            '<p>Every design decision in the trail is judged against one sentence: <b>would this have produced a row?</b> ' +
+            'A privileged read of a secret key now writes a row naming actor, IP, browser and time — whether it <b>succeeded</b> or was ' +
+            '<b>refused</b> — so the query comes back with either N rows naming exactly who, or an <b>evidenced empty set</b>. Both are answers.</p>' +
+            callout('key', 'The query',
+              '<p>' + code('GET /api/admin/console/audit?target_type=app_setting&target_id=vapid_keys&from=2026-07-01') + '</p>' +
+              '<p>Served by a partial index on ' + code('(target_type, target_id, created_at DESC)') + '. That index did not exist before; ' +
+              '“everything about record Y” was a sequential scan.</p>')
+        },
+        {
+          h: 'Targeted, not total',
+          html:
+            '<p>The trigger is <b>the authority used, not the person</b>. An action is recorded when it requires SYSTEM_ADMIN, changes who can ' +
+            'do what, crosses a tenant boundary, reads or writes a credential or platform setting, destroys data irreversibly, or changes who ' +
+            'can log in. Opening a job, reading an estimate, editing a line item, viewing a client — <b>never</b>.</p>' +
+            '<p>“Log everything” produces noise nobody reads, and here it would produce a second hazard: request bodies carry contract money, ' +
+            'client PII and estimate detail. <b>An audit trail that copies sensitive payloads into a second table has moved the exposure, not ' +
+            'reduced it</b> — and unlike ' + code('app_settings') + ', this is a table an operator legitimately reads all day.</p>' +
+            callout('warn', 'What is never stored',
+              '<p>Key material, passwords, hashes, tokens, cookies, JWTs. Money figures. Third-party PII. Request or response bodies. ' +
+              'Full URLs with query strings. The writer enforces this with a denylist over ' + code('detail') + ' keys, because the next twenty ' +
+              'call sites will not be written by whoever wrote the first twenty.</p>' +
+              '<p>Caller-controlled strings never land raw: an undeclared settings key and an unrecognised login identifier are both stored as a ' +
+              'sha8. Typing a password into the email box is the canonical way an audit table acquires a cleartext credential.</p>')
+        },
+        {
+          h: 'The row',
+          html:
+            table(['Field', 'Why it is there'], [
+              [code('outcome'), 'ok / denied / error / attempted. The table could previously only record what <b>happened</b>; the seven-week question is mostly about what was <b>attempted</b>. A denial is the enumeration signal.'],
+              [code('attempted'), 'The fail-closed pre-row for an irreversible operation with no joinable transaction — an upstream Anthropic delete, a hard org reset. A paired ok/error follows. An <i>attempted</i> with no partner means the process died mid-operation, which is itself worth seeing.'],
+              [code('scope'), '<code>roles</code> and <code>app_settings</code> are GLOBAL tables with no org column, so capability changes log a NULL org. Without <code>scope</code>, a tenant-scoped read either misses its own events or needs an <code>OR organization_id IS NULL</code> arm that hands every org admin the whole platform trail.'],
+              [code('on_behalf_of_user_id'), 'Act-as. Without it, a role change made under a disguise was byte-identical to one made openly. The <b>actor stays the real human</b>, always.'],
+              [code('actor_kind'), 'Types a NULL actor instead of leaving it ambiguous. The unauthenticated invite-accept creates an org AND its first admin and has no <code>req.user</code>. A row that logs a null actor is worse than no row — it looks like coverage.'],
+              [code('tier'), 'A or B. Retention and failure policy as a predicate on the row, not an action-name allowlist in a purge script that drifts the moment somebody adds an action.']
+            ])
+        },
+        {
+          h: 'Never fail silent',
+          html:
+            '<p>An audit insert that throws while the operation proceeds gives you an <b>unlogged privileged action</b> — worse than no trail, ' +
+            'because the empty log then reads as “nothing happened”.</p>' +
+            '<ul>' +
+            '<li><b>Tier A — fail closed.</b> The row is written inside the operation’s transaction, or awaited immediately before the ' +
+            'irreversible step. If it cannot be written the operation is <b>refused</b> (503). Safe because every tier-A action is rare, ' +
+            'operator-initiated, with a human present: the cost of refusing is a retry; the cost of the alternative is permanent.</li>' +
+            '<li><b>Tier B — fail loud.</b> The operation proceeds; the failure prints the <b>complete redacted row</b> to stdout under ' +
+            code('[AUDIT-FAIL]') + ' and bumps a counter the overview tile shows. Blocking a <b>login</b> because an insert failed is a ' +
+            'self-inflicted outage and an availability attack on anyone who can pressure the pool.</li>' +
+            '</ul>' +
+            '<p>Every audited event also mirrors to stdout as ' + code('[AUDIT] {json}') + ' at write time, whatever the database then does. ' +
+            'Railway’s retention did not reach seven weeks, so stdout is the <b>fallback</b>, never the trail.</p>'
+        },
+        {
+          h: 'Two tiers of reader, two different routes',
+          html:
+            table(['', 'Platform owner (SYSTEM_ADMIN)', 'Org admin (ROLES_MANAGE)'], [
+              ['Own tenant privilege events', 'yes, full', 'yes, full'],
+              ['Other tenants', 'yes', '<b>never</b>'],
+              ['Platform config / secret access', 'yes', '<b>never</b>'],
+              ['Role &amp; capability changes', 'yes', 'no — see below'],
+              ['A platform operator reaching in', 'yes, full', 'yes, as “platform operator”: no email, no org, no IP'],
+              ['<code>detail</code> / IP / browser', 'one row at a time, via <code>/audit/:id</code>', 'own-tenant actors only']
+            ]) +
+            '<p>' + code('GET /api/org/audit') + ' is a <b>separate router</b>, not a parameter on the console endpoint — a different gate, a ' +
+            'different WHERE clause and a different projection, so no query-string mistake can widen one into the other. Its predicate is ' +
+            code("scope = 'org' AND organization_id = <caller>") + ' with <b>no NULL arm, ever</b>, over a closed action allowlist.</p>' +
+            callout('warn', 'The gap, stated rather than papered over',
+              '<p>Because <code>roles</code> is a global table with no org column, every capability change is <code>scope=platform</code> — so an ' +
+              'org admin cannot see what the role their staff hold is now allowed to do, or that one of their own people tried to escalate. ' +
+              'Org tier covers <b>who holds which role</b>, not <b>what that role can do</b>. The honest fix is a per-org roles model, which is a ' +
+              'different project.</p>')
+        },
+        {
+          h: 'Append-only, and what it costs',
+          html:
+            '<p>It was append-only <b>by convention</b> — no trigger, no revoked grant. Railway runs a single database role so GRANTs are not ' +
+            'available, but a ' + code('BEFORE UPDATE OR DELETE') + ' trigger that raises unless a transaction-local GUC is set converts the ' +
+            'convention into enforcement. The retention purge is the one legitimate deleter and identifies itself with ' +
+            code("SET LOCAL app.audit_purge = 'on'") + ' — <code>SET LOCAL</code>, not <code>SET</code>, so the escape hatch cannot ride a pooled ' +
+            'connection to the next borrower.</p>' +
+            callout('note', 'Why the foreign keys had to go',
+              '<p><code>actor_user_id REFERENCES users(id) ON DELETE SET NULL</code> is implemented by Postgres as an <b>UPDATE on this table</b>, ' +
+              'and row triggers fire on it — so the FK plus the trigger would have aborted every <code>DELETE FROM users</code>. The FK bought ' +
+              'nothing (actor email/role are snapshotted precisely so the row outlives the user) and was itself a partial suppression primitive: ' +
+              'delete a user and their rows’ actor quietly became NULL.</p>') +
+            '<p><b>Retention.</b> Tier A is never deleted. Tier B denials keep 3 years; tier B successes keep 400 days — eight times the seven ' +
+            'weeks that prompted all of this, because any window shorter than the longest plausible investigation reintroduces the exact failure. ' +
+            'Rows written before the tier column existed have no recorded class and are never deleted rather than guessed at. ' +
+            '<b>The purge writes its own tier-A row, fail-closed, before it deletes anything</b> — the one path that can erase evidence must leave evidence.</p>' +
+            '<p><b>Cost.</b> ~200 bytes a row, six indexes, ~110k rows a year from auth events. A million rows is five to eight years out and ' +
+            'about 400 MB. This table needed its indexes long before it needed retention.</p>'
+        },
+        {
+          h: 'What staff are told',
+          html:
+            '<p>The trail is a surveillance tool as well as a security control, and recording every action of every employee would be ' +
+            'disproportionate and resented. The disclosure, in plain words:</p>' +
+            '<ul>' +
+            '<li>Privileged actions are recorded permanently: who you are, what you did, which record, when, your IP and your browser, and ' +
+            'whether it succeeded or was refused.</li>' +
+            '<li><b>Ordinary work is not.</b> No record of what you read, how long you spent, or what you looked at.</li>' +
+            '<li><b>Contents are never recorded</b> — the record says <i>which fields</i> changed, not what they changed to. One exception: ' +
+            'changes to permissions record before and after, because that is the entire point.</li>' +
+            '<li><b>Logins</b> — every success and failure, with time, IP and browser. This is how someone using your account would be detected.</li>' +
+            '<li><b>Impersonation</b> — if an administrator uses “act as” to view the system as you, the start and the stop are recorded, and ' +
+            'every action taken while wearing your identity is recorded as <b>theirs</b>. You can ask to see that record.</li>' +
+            '<li>Nobody can edit or delete a record. Ageing-out follows the published schedule above, and the deletion itself is recorded.</li>' +
+            '</ul>'
+        }
+      ]
     }
   ];
 

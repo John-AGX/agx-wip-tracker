@@ -736,6 +736,12 @@ describe('append-only, and enforced rather than asserted', () => {
     const db = fs.readFileSync(path.join(__dirname, '..', 'server', 'db.js'), 'utf8');
     expect(db).toMatch(/ALTER TABLE admin_audit_log DROP CONSTRAINT IF EXISTS admin_audit_log_actor_user_id_fkey/);
     expect(db).toMatch(/ALTER TABLE admin_audit_log DROP CONSTRAINT IF EXISTS admin_audit_log_organization_id_fkey/);
+    // And by DISCOVERY, not only by guessed name: a DROP IF EXISTS against a
+    // name that is off by one character succeeds silently and leaves the
+    // outage in place. Between the append-only trigger and every
+    // `DELETE FROM users`, "the name should be the default one" is not a
+    // property worth betting the door on.
+    expect(db).toMatch(/FROM pg_constraint[\s\S]*?conrelid = 'admin_audit_log'::regclass AND contype = 'f'/);
   });
 
   test('no read endpoint exposes a mutation of the trail', () => {
