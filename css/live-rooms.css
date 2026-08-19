@@ -1,0 +1,200 @@
+/* Live Rooms — phase 01.
+   Two surfaces: the host's own awareness strip, and the cursor layer.
+
+   The strip is body-fixed on purpose. workspace-layout.js sets
+   .job-detail-header to display:none unconditionally, so anything mounted
+   inside the job header is invisible to everyone — and the one surface whose
+   entire job is "you are broadcasting right now" must not be hideable by a
+   layout pass it does not control.
+
+   Mobile is the stated case for this feature (a viewer on a phone in a truck),
+   so the strip docks to the bottom on narrow screens where it cannot collide
+   with the header, and every control is a real touch target. */
+
+.p86-live-strip {
+  position: fixed;
+  z-index: 9500;
+  top: 10px;
+  right: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  max-width: min(420px, calc(100vw - 24px));
+  padding: 6px;
+  border-radius: 10px;
+  background: var(--card-bg, #1b1d21);
+  border: 1px solid var(--border-color, #33363c);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text-primary, #e8e8ea);
+}
+
+@media (max-width: 768px) {
+  .p86-live-strip {
+    top: auto;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    right: 10px;
+    left: 10px;
+    max-width: none;
+  }
+}
+
+.p86-live-strip button {
+  font: inherit;
+  cursor: pointer;
+  border-radius: 7px;
+  border: 1px solid var(--border-color, #3a3d44);
+  background: var(--input-bg, #26282d);
+  color: var(--text-primary, #e8e8ea);
+  padding: 7px 10px;
+  min-height: 34px;
+}
+.p86-live-strip button:hover { filter: brightness(1.12); }
+
+.p86-live-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.p86-live-btn.is-end {
+  border-color: #7b2d2d;
+  background: #3a1c1c;
+  color: #ffbdbd;
+}
+.p86-live-btn.is-ghost { background: transparent; }
+
+/* The dot is a status light, not decoration: it only pulses while the server
+   has actually confirmed the session inside the last 20 seconds. */
+.p86-live-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #8a8f98;
+  flex: none;
+}
+.p86-live-strip[data-state="live"] .p86-live-dot {
+  background: #e5484d;
+  animation: p86-live-pulse 1.8s ease-in-out infinite;
+}
+.p86-live-strip[data-state="unconfirmed"] .p86-live-dot { background: #d99b28; }
+.p86-live-strip[data-state="ended"] .p86-live-dot { background: #6b6f78; }
+
+@keyframes p86-live-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(229, 72, 77, 0.55); }
+  50%      { box-shadow: 0 0 0 5px rgba(229, 72, 77, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .p86-live-strip[data-state="live"] .p86-live-dot { animation: none; }
+}
+
+.p86-live-label { font-weight: 700; }
+.p86-live-detail { opacity: 0.8; font-weight: 400; }
+
+/* The "can't confirm" copy is deliberately given real estate rather than being
+   compressed into a tooltip. It is the state a pretty pill is tempted to hide,
+   and it is the one the host most needs to read. */
+.p86-live-warn {
+  flex-basis: 100%;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(217, 155, 40, 0.12);
+  border: 1px solid rgba(217, 155, 40, 0.35);
+  color: #f0c675;
+}
+
+.p86-live-roster {
+  flex-basis: 100%;
+  max-height: 42vh;
+  overflow-y: auto;
+  border-top: 1px solid var(--border-color, #33363c);
+  margin-top: 4px;
+  padding-top: 6px;
+}
+/* Dimmed means "this may be out of date" — a caveat, not a claim. The roster
+   is EMPTIED (not dimmed) once we genuinely cannot verify it; that emptying
+   happens in JS, and this class only ever covers the in-between state. */
+.p86-live-roster.is-dim { opacity: 0.55; }
+
+.p86-live-roster-note {
+  padding: 5px 2px;
+  opacity: 0.85;
+  font-style: italic;
+}
+
+.p86-live-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 2px;
+  border-bottom: 1px solid var(--border-color, #2b2e33);
+}
+.p86-live-row:last-child { border-bottom: 0; }
+.p86-live-row.is-stale { opacity: 0.5; }
+.p86-live-who { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.p86-live-who em { opacity: 0.6; font-size: 11px; font-style: normal; }
+
+.p86-live-flag {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.7;
+  border: 1px solid var(--border-color, #3a3d44);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.p86-live-acts { display: flex; gap: 4px; flex-wrap: wrap; }
+.p86-live-acts button { font-size: 11px; padding: 5px 7px; min-height: 30px; }
+
+/* ── Cursor layer ─────────────────────────────────────────────────────────
+   Positioned over the DOCUMENT, not the viewport, so a cursor stays on the
+   thing it is pointing at while the page scrolls. Never interactive. */
+.p86-live-cursors {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%;
+  pointer-events: none;
+  z-index: 9400;
+}
+.p86-live-cursor {
+  position: absolute;
+  top: 0; left: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 3px;
+  will-change: transform;
+  pointer-events: none;
+}
+.p86-live-cursor svg { fill: #4c8dff; stroke: #0b1220; stroke-width: 0.8; flex: none; }
+.p86-live-cursor-name {
+  background: #4c8dff;
+  color: #06101f;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  transform: translateY(6px);
+}
+
+/* Light mode. Hardcoded hex needs a light twin — a var-only rule would inherit
+   the dark surface here because these colors are literal by necessity. */
+body.light-mode .p86-live-strip {
+  background: #ffffff;
+  border-color: #d9dce2;
+  color: #1b1d21;
+  box-shadow: 0 6px 20px rgba(16, 24, 40, 0.12);
+}
+body.light-mode .p86-live-strip button {
+  background: #f5f6f8;
+  border-color: #d9dce2;
+  color: #1b1d21;
+}
+body.light-mode .p86-live-btn.is-end {
+  background: #fdeaea; border-color: #e6b4b4; color: #8c2222;
+}
+body.light-mode .p86-live-warn { color: #8a5a00; }
+body.light-mode .p86-live-cursor-name { color: #ffffff; }

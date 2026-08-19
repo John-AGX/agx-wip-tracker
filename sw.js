@@ -134,7 +134,22 @@ self.addEventListener('fetch', function (event) {
   var url = new URL(req.url);
 
   // API + SSE streams + auth → always network. No interception.
+  //
+  // This early return is LOAD-BEARING for the live-room stream, not just an
+  // optimisation: /api/live/:roomId/stream/:key is a GET, so without it the
+  // request would fall through to the stale-while-revalidate branch at the
+  // bottom of this handler and cache.put() an INFINITE stream.
   if (url.pathname.startsWith('/api/')) return;
+
+  // Live-room viewer pages carry a credential IN THE PATH. The navigation
+  // branch below does cache.put(req, clone), and a cache key is the URL — so
+  // caching this would persist a live session token in Cache Storage until
+  // CACHE_VERSION rolls. `cache: 'no-store'` on the server response does NOT
+  // prevent that: it is a fetch() option with no effect on a top-level
+  // navigation, and cache.put() ignores Cache-Control entirely. The only thing
+  // that actually stops it is not entering the branch. Same reasoning applies
+  // to /t/ (task shares), whose token is in the path for the same reason.
+  if (url.pathname.startsWith('/live/') || url.pathname.startsWith('/t/')) return;
 
   // Cross-origin (R2 attachments, Anthropic, etc.) → bypass.
   if (url.origin !== self.location.origin) return;

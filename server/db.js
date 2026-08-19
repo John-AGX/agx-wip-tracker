@@ -4770,6 +4770,116 @@ async function initSchema() {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_subs_org_name_lower
       ON subs (COALESCE(organization_id, 0), lower(name));
     DROP INDEX IF EXISTS idx_subs_name_lower;
+
+    -- ───────────────────────────────────────────────────────────────
+    -- Live Rooms (phase 01) — "a link that lets someone watch the screen
+    -- you're driving". A room is a per-SESSION row, not a per-entity one:
+    -- "the live pill replaces the button while a session runs" is
+    -- per-session language, and per-session gives a free audit trail of
+    -- who watched what, when.
+    --
+    -- organization_id is copied verbatim from task_shares — NOT NULL,
+    -- REFERENCES organizations(id) ON DELETE CASCADE. It is stamped at
+    -- mint from the PARENT ENTITY on strict equality (see
+    -- services/live-rooms.js mintVerdict) and never from the request body
+    -- or the requester's own JWT. The room row is then the SOLE tenancy
+    -- authority for everything downstream: a signed-in org-B user who
+    -- opens an org-A link is a GUEST of org A, and the tenant is never
+    -- re-derived at request time.
+    --
+    -- entity_type/entity_id are polymorphic and resolved through a frozen
+    -- whitelist in JS (the attachment-org-scope.js idiom). entity_type is
+    -- never interpolated into SQL. Phase 01 registers 'job' only; the
+    -- column SHAPE is the point.
+    CREATE TABLE IF NOT EXISTS live_rooms (
+      id                TEXT PRIMARY KEY,
+      organization_id   INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      token             TEXT NOT NULL UNIQUE,
+      entity_type       TEXT NOT NULL,
+      entity_id         TEXT NOT NULL,
+      host_user_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      -- Fail-closed read: services/live-rooms.js normalizeScope() maps any
+      -- unrecognised value to 'view'. Phase 04 ("guests who can draw") is a
+      -- VALUE change here, not a migration — and an old build reading a row
+      -- written by a newer one must narrow, never widen.
+      scope             TEXT NOT NULL DEFAULT 'view',
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at        TIMESTAMPTZ NOT NULL,
+      ended_at          TIMESTAMPTZ,
+      ended_reason      TEXT,
+      revoked_at        TIMESTAMPTZ,
+      -- The host's own beacon. Silence for 90s marks the room 'ending';
+      -- 120s ends it. This is the backstop that makes the pagehide beacon
+      -- an optimisation rather than the thing correctness depends on, and
+      -- it covers tab close, laptop lid, tunnel and crash identically.
+      last_host_beat_at TIMESTAMPTZ,
+      -- Which process is fanning this room out. In-memory fan-out means a
+      -- room is served by exactly one instance. On reconnect a DIFFERENT
+      -- instance TAKES OVER rather than refusing: refusing would deadlock
+      -- every ordinary deploy (the old instance's stale served_by blocks
+      -- the reconnect while the host's still-recent beat blocks the sweep),
+      -- locking the rightful host out of their own live session.
+      served_by         TEXT,
+      served_beat_at    TIMESTAMPTZ,
+      -- Takeovers are counted, not hidden. Repeated takeovers are the only
+      -- honest signal available that more than one replica is running, and
+      -- the host surface says so rather than quietly showing half a room.
+      takeover_count    INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_live_rooms_entity
+      ON live_rooms(entity_type, entity_id, created_at DESC);
+    -- One live room per entity. Without this a double-tapped button, or a
+    -- keepalive retry on a flaky mint, produces N rooms per job — each with
+    -- its own valid 64-hex token, each forwardable, each dying only at the
+    -- 120s backstop. Room rows are CREDENTIALS; unbounded credential
+    -- minting on a button is not a foundation.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_live_rooms_one_live_per_entity
+      ON live_rooms(entity_type, entity_id)
+      WHERE ended_at IS NULL AND revoked_at IS NULL;
+    -- Powers "which rooms am I hosting right now" — the lookup that lets a
+    -- host who pressed F5 find their own broadcast again. Without it the
+    -- host is live with no indicator until the 120s backstop fires.
+    CREATE INDEX IF NOT EXISTS idx_live_rooms_host_live
+      ON live_rooms(organization_id, host_user_id)
+      WHERE ended_at IS NULL AND revoked_at IS NULL;
+
+    -- Membership. organization_id is RESTATED on the child rather than
+    -- reached through room_id: the doors below key on the participant's own
+    -- stream_key, and the rule is stated on the KEY, not on the table.
+    CREATE TABLE IF NOT EXISTS live_participants (
+      id               TEXT PRIMARY KEY,
+      room_id          TEXT NOT NULL REFERENCES live_rooms(id) ON DELETE CASCADE,
+      organization_id  INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      -- Populated ONLY when the session's org equals the room's org. An
+      -- org-B user on an org-A link is a guest: user_id NULL, self-declared
+      -- name. That keeps a foreign user id off an org-A row while still
+      -- letting the host see who is watching.
+      user_id          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      display_name     TEXT NOT NULL,
+      role             TEXT NOT NULL DEFAULT 'viewer',
+      -- The bearer credential for this ONE session. Opaque random, not a
+      -- signed token: revocable by a row write, with no key-rotation story
+      -- and no second cookie that could recreate the sub-portal logout trap.
+      -- NULLed on kick/leave, which is what makes the kill immediate.
+      stream_key       TEXT,
+      joined_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      -- Written on TRANSITIONS (join / stale / leave / kick), not on every
+      -- beat. Presence is authoritative in memory; a 1Hz UPDATE per
+      -- participant would buy HOT-update churn on the hot path for
+      -- durability the design explicitly discards (every restart ends every
+      -- room anyway). What lands here is the audit trail.
+      last_seen_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      left_at          TIMESTAMPTZ,
+      left_reason      TEXT,
+      kicked_at        TIMESTAMPTZ,
+      kicked_by        INTEGER REFERENCES users(id) ON DELETE SET NULL
+    );
+    -- Partial UNIQUE: a stream key identifies exactly one live session, and
+    -- NULLs (revoked keys) are free to repeat.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_live_participants_stream_key
+      ON live_participants(stream_key) WHERE stream_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_live_participants_room
+      ON live_participants(room_id, joined_at);
   `);
 
   // ── Performance indexes: 86's read-tool surface (2026-05-23) ──────

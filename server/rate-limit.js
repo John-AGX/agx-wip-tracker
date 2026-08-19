@@ -156,10 +156,69 @@ const ingestLimiter = rateLimit({
   },
 });
 
+// 6 + 7. Live Rooms. These are NOT a "carve-out" of the global guard in the
+// sense of replacing it — Express middleware is additive, so a limiter mounted
+// ahead of `app.use('/api', ipGenericLimiter)` merely runs first and the
+// request still lands in the 200/min-per-IP bucket. The /api/live router is
+// therefore mounted ABOVE that line in server/index.js, which means it has NO
+// per-IP guard from the global middleware and these two are the whole story.
+//
+// WHY IT HAD TO MOVE OUT. With trust proxy=2 the global bucket is per real
+// client IP, so one NAT'd office shares 200/min across all of its ordinary app
+// traffic. At the beacon's 60 req/min/participant, three people in one room
+// consume 180 of those 200 and the office 429s on the whole app. Then it
+// compounds: a 429 on the host's beacon starves last_host_beat_at and the room
+// is ENDED at the 120s backstop. A transient limiter spike must not be able to
+// terminate a live session.
+
+// 6. The join door. This is the ONE live request that happens before a
+// stream_key exists, so there is no credential to key on and it falls back to
+// the IP — the ingestLimiter shape (keyGenerator with an `ip:` fallback), for
+// the same reason. Tight, because it is an unauthenticated INSERT that also
+// fans a `join` event out to every viewer. The hard per-room participant cap in
+// live-routes is the other half: a rate limit slows this door down, a row count
+// bounds it.
+const liveJoinLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 12,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: function (req) { return 'ip:' + (req.ip || 'unknown'); },
+  handler: function (req, res) {
+    const retryAfter = Math.ceil(res.getHeader('Retry-After') || 60);
+    console.warn('[rate-limit] live join throttle for IP', req.ip, '(retry in', retryAfter, 's)');
+    jsonHandler(res, retryAfter);
+  },
+});
+
+// 7. The in-session channels: stream, beat, leave, status. Keyed on the
+// participant's own stream_key so a shared office IP is irrelevant and one
+// participant cannot starve another. Budget is double the 60/min the client
+// aims for, leaving room for a reconnect storm without ever reaching the
+// ceiling in normal use. The status probe rides the same bucket: it only fires
+// on a close, and a client looping on it is exactly what should be slowed.
+const liveStreamLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 180,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: function (req) {
+    const k = (req.params && req.params.streamKey) || '';
+    return k ? ('lsk:' + k) : ('ip:' + (req.ip || 'unknown'));
+  },
+  handler: function (req, res) {
+    const retryAfter = Math.ceil(res.getHeader('Retry-After') || 60);
+    console.warn('[rate-limit] live stream throttle on', req.originalUrl, '(retry in', retryAfter, 's)');
+    jsonHandler(res, retryAfter);
+  },
+});
+
 module.exports = {
   ipLoginLimiter,
   ipGenericLimiter,
   aiChatLimiter,
   aiChatHourlyLimiter,
   ingestLimiter,
+  liveJoinLimiter,
+  liveStreamLimiter,
 };

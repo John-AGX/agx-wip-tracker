@@ -261,6 +261,11 @@
          records. JS wiring lives in js/edit-gate.js. -->
     <link rel="stylesheet" href="css/edit-gate.css?v=2">
 
+    <!-- Live Rooms (phase 01) — the host's broadcast indicator + the cursor
+         layer. The strip is body-fixed, not header-mounted, because
+         workspace-layout.js hides .job-detail-header unconditionally. -->
+    <link rel="stylesheet" href="css/live-rooms.css?v=1">
+
 </head>
 <body>
     <!-- Login Screen — always rendered in dark mode regardless of the
@@ -3585,6 +3590,12 @@
          calls p86Icon('edit') for the pencil glyph. CSS lives in
          css/edit-gate.css (already loaded in <head>). -->
     <script src="js/edit-gate.js?v=2"></script>
+
+    <!-- Live Rooms (phase 01) — room primitive, presence and live cursors.
+         Ships the host's own broadcast indicator; the viewer page (/live/:token)
+         is a separate bespoke page and loads this same file for its pure core.
+         No Present popover, no redaction, no follow-me: those are phase 02. -->
+    <script src="js/live-rooms.js?v=1"></script>
 
     <!-- Node Graph (Beta) -->
     <link rel="stylesheet" href="nodegraph/nodegraph.css?v=177" />

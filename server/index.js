@@ -120,6 +120,31 @@ app.post('/api/email-inbox/inbound',
 app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser());
 
+// Live Rooms — mounted ABOVE the global per-IP guard, DELIBERATELY, and this
+// is the one place in the app where that is true for a JSON router.
+//
+// Express middleware is ADDITIVE, not exclusive: mounting a second limiter
+// "ahead of" the global one does not replace it — the request still falls into
+// the 200/min-per-IP bucket underneath. The only shape that actually escapes
+// that guard is mounting the whole terminating router above line 128, which is
+// what /api/email-inbox/inbound does. So Live Rooms does the same, and the
+// consequence is stated rather than left implicit: /api/live has NO per-IP
+// guard from this middleware and carries its own two limiters instead
+// (liveJoinLimiter per IP on the unauthenticated join door, liveStreamLimiter
+// per stream_key on the in-session channels).
+//
+// WHY IT CANNOT LIVE BELOW. A room's beacon runs at ~60 req/min per
+// participant. With trust proxy=2 the global bucket is per real client IP, so
+// one NAT'd office shares 200/min across ALL of its ordinary app traffic —
+// three people in one room consume 180 of them and the office 429s on the whole
+// app. And a 429 on the host's beacon starves last_host_beat_at, which ENDS the
+// room at the 120s backstop. A transient limiter spike must never be able to
+// terminate a live session, so the live channels get their own budget.
+//
+// Mounted after express.json + cookieParser (the beat carries a JSON body, and
+// join reads an optional auth cookie) and before the guard below.
+app.use('/api/live', require('./routes/live-routes'));
+
 // P1-2 — global per-IP rate guard for /api (200 req/min/IP). It was
 // defined + exported in rate-limit.js but never mounted. Sits in front
 // of the /api routers; the per-route limiters (login, AI chat) still
@@ -377,6 +402,27 @@ app.get('/accept-org-invite', (req, res) => {
 // talks to the token-gated /api/task-share/* endpoints. No login, no app shell.
 app.get('/t/:token', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'task-share.html'));
+});
+
+// Public live-room viewer page — someone lands here from a forwarded link
+// (/live/<token>). Registered alongside /t/:token, i.e. BEFORE express.static
+// and the SPA fallback below, so the token page wins over the app shell.
+//
+// This is a BESPOKE MINIMAL PAGE, not the app in a read-only shell. Phase 01
+// ships a room title, a roster and a cursor surface — mirroring the app's
+// navigation is phase 02, and building it now would let one feature shape the
+// foundation. Phase 02 changes what this page renders, not this routing.
+//
+// Referrer-Policy is set EXPLICITLY rather than inherited. The URL carries a
+// credential in its path; modern browser defaults happen to keep it out of
+// cross-origin Referer headers today, but "the default is currently fine" is
+// not a decision. no-store for the same reason: this response is a credential's
+// landing page.
+app.get('/live/:token', (req, res) => {
+  res.set('Referrer-Policy', 'no-referrer');
+  res.set('X-Robots-Tag', 'noindex, nofollow');
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.sendFile(path.join(__dirname, '..', 'live.html'));
 });
 
 // Dynamic /sw.js — stamp the cache version with the current Railway

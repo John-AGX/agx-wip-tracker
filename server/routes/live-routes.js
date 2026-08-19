@@ -1,0 +1,985 @@
+// Live Rooms — phase 01. The room primitive: a room exists, it knows who is in
+// it, and it moves cursors between them. Nothing else.
+//
+// NOT IN THIS FILE, ON PURPOSE: no Present popover, no hide-financials, no
+// follow-me navigation, no mirrored routing, no whiteboard, and no guest write
+// capability of any kind. A phase-01 guest observes; the only bytes they send
+// are their own cursor and their own name.
+//
+// ── TRANSPORT ──────────────────────────────────────────────────────────────
+// EventSource (GET) down, batched POST up. Chosen for one reason that survives
+// scrutiny: SSE response bytes are the only streaming shape with production
+// evidence on this exact chain (client -> Cloudflare -> Railway -> Express),
+// via the AI chat stream. WebSocket is deferred, not rejected — a probe cannot
+// distinguish "no WS server exists" from "a hop stripped Upgrade", and an
+// unresolved question is not a foundation.
+//
+// Honest caveat, recorded rather than buried: the RESPONSE SHAPE is proven on
+// this chain; the EventSource CLIENT is not. `EventSource` appears nowhere else
+// in this repo. Which is precisely why this implementation does NOT depend on
+// any of the browser's built-in EventSource behaviour — see below.
+//
+// ── WE DO OUR OWN RECONNECT ────────────────────────────────────────────────
+// The browser's automatic EventSource retry is deliberately neutralised by the
+// client (it calls es.close() inside onerror, always). The reason is that
+// EventSource surfaces NO status code, NO body and NO headers on failure — a
+// closed stream looks identical whether the room ended, the participant row
+// aged out, the instance changed, or a rate limiter fired. A surface driven off
+// EventSource.readyState alone would tell a phone that slept for an hour "this
+// session ended" about a room that is still running, which is the same
+// claim-more-than-you-know defect this project has been removing, pointed the
+// other way.
+//
+// So every close is followed by a cheap GET /:token/status probe, and every
+// client-visible terminal state names its reason from THAT answer, never from
+// the readyState. Resume position rides in ?after=<seq> rather than
+// Last-Event-ID, because we control the reconnect.
+//
+// ── MOUNTING (see server/index.js) ─────────────────────────────────────────
+// This router is mounted ABOVE `app.use('/api', ipGenericLimiter)`. Express
+// middleware is ADDITIVE, not exclusive: a second limiter mounted "ahead of"
+// the global one does not replace it, it merely runs first and the request
+// still falls into the 200/min-per-IP bucket. That matters here because with
+// trust proxy=2 one NAT'd office shares one bucket with all of its ordinary app
+// traffic, and at 60 req/min/participant three people in a room would consume
+// 180 of 200 — 429ing the whole app. Worse, a 429 on the stream GET or on the
+// host's beacon would end a live room.
+//
+// The consequence is stated rather than hidden: /api/live has NO per-IP guard
+// from the global middleware. It carries its own, and the unauthenticated join
+// door — the one request that happens before a stream_key exists to key on — is
+// keyed per IP and additionally bounded by a hard per-room participant CAP, so
+// the ceiling is a row count and not merely a rate.
+//
+// ── PATH PREFIX IS LOAD-BEARING ────────────────────────────────────────────
+// The stream MUST live under /api/. sw.js returns early on non-GET (:132) and
+// on /api/ (:137). A room stream is a GET, so the /api/ guard is the only thing
+// standing between it and the stale-while-revalidate branch at sw.js:225, which
+// would cache.put() an infinite stream.
+
+'use strict';
+
+const express = require('express');
+const crypto = require('crypto');
+const { pool } = require('../db');
+const { requireAuth, resolveOrgId, ORG_LOOKUP_FAILED } = require('../auth');
+const { resolveEntityLabels } = require('../services/entity-labels');
+const { liveJoinLimiter, liveStreamLimiter } = require('../rate-limit');
+const L = require('../services/live-rooms');
+
+const router = express.Router();
+
+console.log('[live-routes] mounted at /api/live (phase 01: rooms, presence, cursors)');
+
+// Which process is fanning rooms out. Fan-out is in-memory, so a room is served
+// by exactly one instance at a time; this id is how a reconnect notices it
+// landed somewhere else and takes the room over.
+const INSTANCE_ID = crypto.randomBytes(8).toString('hex');
+
+function genId(p) { return p + '_' + Date.now().toString(36) + '_' + crypto.randomBytes(4).toString('hex'); }
+function genSecret() { return crypto.randomBytes(32).toString('hex'); }
+
+// ── The hub: everything ephemeral ───────────────────────────────────────────
+// Durable in Postgres: the room row, participant rows, the audit timestamps.
+// Ephemeral here: open response handles, current cursor positions, the beacon
+// clock, and a small ring of control events for resume.
+//
+// No LISTEN/NOTIFY: there is none in this repo, and the pg pool sets no `max`
+// (server/db.js:9 -> default 10), so a dedicated listener client would
+// permanently consume a tenth of DB capacity.
+const _rooms = new Map(); // roomId -> hub
+
+function hub(roomId) {
+  let h = _rooms.get(roomId);
+  if (!h) {
+    h = {
+      id: roomId,
+      seq: 0,
+      ring: [],                 // last RING_MAX CONTROL events, for resume
+      subs: new Map(),          // participantId -> { res, streamKey, connectedAt, fails }
+      beats: new Map(),         // participantId -> epoch ms of last beacon
+      cursors: new Map(),       // participantId -> [t, x, y]
+      presence: new Map()       // participantId -> last emitted presence state
+    };
+    _rooms.set(roomId, h);
+  }
+  return h;
+}
+
+const RING_MAX = 200;
+const SWEEP_MS = 15000;
+const HEARTBEAT_MS = 15000;
+const MAX_CONSEC_WRITE_FAILS = 2;   // mirrors ai-routes.js:3841
+
+// Teardown is as explicit as the ways a room ends. The design listed six ways
+// the ROW ends and none for the object; an in-memory room that is never deleted
+// is a leak whose only collector is the next deploy.
+function destroyHub(roomId, reason) {
+  const h = _rooms.get(roomId);
+  if (!h) return;
+  for (const [, sub] of h.subs) {
+    try { sub.res.end(); } catch (_) {}
+  }
+  h.subs.clear(); h.beats.clear(); h.cursors.clear(); h.presence.clear(); h.ring.length = 0;
+  _rooms.delete(roomId);
+  console.log('[live] hub destroyed', roomId, reason || '');
+}
+
+// ── The projection seam ─────────────────────────────────────────────────────
+// EVERY event passes through here before serialization, for every subscriber
+// individually. Phase 01 ships the identity projection. This exists now because
+// phase 02's redaction is a change to this ONE function, whereas retrofitting a
+// per-subscriber seam means rewriting the fan-out. It is not a redaction toggle
+// and it does not read any capability — it is the shape, not the feature.
+function project(event /*, participant */) { return event; }
+
+function writeFrame(sub, payload) {
+  try {
+    sub.res.write('data: ' + JSON.stringify(payload) + '\n\n');
+    sub.fails = 0;
+    return true;
+  } catch (e) {
+    sub.fails = (sub.fails || 0) + 1;
+    return false;
+  }
+}
+
+// Fan out to every open stream on this room. Control events are SEQUENCED and
+// ringed; cursor frames are neither. Cursor history is never replayed — a stale
+// motion trail is worse than no trail — so an id on a cursor frame would be
+// pure cost, and worse: with one shared id space a resuming client's last-seen
+// id is nearly always a cursor id far past any control id, which makes "the
+// ring cannot cover you" resolve to a full reset almost every time.
+function emit(roomId, type, data, opts) {
+  const h = _rooms.get(roomId);
+  if (!h) return null;
+  const control = !(opts && opts.cursor);
+  let ev;
+  if (control) {
+    h.seq += 1;
+    ev = Object.assign({ type: type, seq: h.seq }, data);
+    h.ring.push(ev);
+    if (h.ring.length > RING_MAX) h.ring.splice(0, h.ring.length - RING_MAX);
+  } else {
+    ev = Object.assign({ type: type }, data);
+  }
+  const except = (opts && opts.except) || null;
+  for (const [pid, sub] of h.subs) {
+    if (except && pid === except) continue;
+    const ok = writeFrame(sub, project(ev, pid));
+    if (!ok && sub.fails >= MAX_CONSEC_WRITE_FAILS) {
+      // The TCP stream is clearly broken. Close it rather than waiting for the
+      // OS to notice — ai-routes.js:3841 learned this the hard way, where empty
+      // catch blocks swallowed every write failure and subsequent writes
+      // silently no-op'd into a frozen client.
+      try { sub.res.end(); } catch (_) {}
+      h.subs.delete(pid);
+    }
+  }
+  return ev;
+}
+
+// ── Roster ──────────────────────────────────────────────────────────────────
+// Built from the DB rows for durability of identity, but the PRESENCE of each
+// row comes from the in-memory beacon clock. A socket being open is not
+// evidence that anyone is there.
+async function loadParticipants(roomId) {
+  const r = await pool.query(
+    `SELECT id, user_id, display_name, role, joined_at
+       FROM live_participants
+      WHERE room_id = $1 AND left_at IS NULL AND kicked_at IS NULL
+      ORDER BY joined_at ASC`,
+    [roomId]
+  );
+  return r.rows;
+}
+
+async function rosterFor(roomId, now) {
+  const h = _rooms.get(roomId);
+  const rows = await loadParticipants(roomId);
+  const out = [];
+  for (const p of rows) {
+    const beat = h ? h.beats.get(p.id) : null;
+    // A row with no beacon on this instance yet (fresh join, or a room this
+    // instance just took over) is reported by its DB last_seen_at, which the
+    // join wrote. It ages out on the same clock as everyone else.
+    const seen = beat != null ? beat : (p.joined_at instanceof Date ? p.joined_at.getTime() : Date.parse(p.joined_at));
+    out.push(L.publicParticipant(Object.assign({}, p, { last_seen_at: seen }), now));
+  }
+  return out;
+}
+
+async function entityTitle(room) {
+  try {
+    const labels = await resolveEntityLabels(room.organization_id, [
+      { entity_type: room.entity_type, entity_id: room.entity_id }
+    ]);
+    return labels.get(room.entity_type + ':' + String(room.entity_id)) || null;
+  } catch (e) { return null; }
+}
+
+// ── Room row helpers ────────────────────────────────────────────────────────
+async function endRoom(roomId, reason) {
+  await pool.query(
+    `UPDATE live_rooms SET ended_at = NOW(), ended_reason = $2
+      WHERE id = $1 AND ended_at IS NULL`,
+    [roomId, String(reason || 'ended').slice(0, 60)]
+  );
+  await pool.query(
+    `UPDATE live_participants
+        SET left_at = NOW(), left_reason = COALESCE(left_reason, $2), stream_key = NULL
+      WHERE room_id = $1 AND left_at IS NULL`,
+    [roomId, 'room_' + String(reason || 'ended').slice(0, 40)]
+  );
+  emit(roomId, 'end', { reason: String(reason || 'ended'), at: new Date().toISOString() });
+  // Give the terminal frame a tick to flush before the sockets go.
+  setTimeout(function () { destroyHub(roomId, 'ended:' + reason); }, 250).unref?.();
+}
+
+// ── The sweeper ─────────────────────────────────────────────────────────────
+// The server BOUNDS; the client INFORMS. Every body here is inside try/catch:
+// an uncaught throw in a setInterval callback takes the whole process down, and
+// that has already happened once in this repo (ai-routes.js:3946 records it).
+let _sweepTimer = null;
+async function sweepOnce() {
+  const now = Date.now();
+
+  // 1. Participants whose beacon has gone silent past GONE_MS. They are removed
+  //    from the roster and a leave(timeout) is emitted, so a wedged tab ages
+  //    out instead of sitting there as a phantom face.
+  for (const [roomId, h] of _rooms) {
+    for (const [pid, beat] of Array.from(h.beats)) {
+      if (now - beat < L.GONE_MS) continue;
+      h.beats.delete(pid);
+      h.cursors.delete(pid);
+      const sub = h.subs.get(pid);
+      if (sub) { try { sub.res.end(); } catch (_) {} h.subs.delete(pid); }
+      try {
+        await pool.query(
+          `UPDATE live_participants SET left_at = NOW(), left_reason = 'timeout',
+                  last_seen_at = to_timestamp($2 / 1000.0), stream_key = NULL
+            WHERE id = $1 AND left_at IS NULL`,
+          [pid, beat]
+        );
+      } catch (e) { console.warn('[live] sweep leave write failed', e && e.message); }
+      emit(roomId, 'leave', { participant_id: pid, reason: 'timeout', at: new Date().toISOString() });
+    }
+
+    // 2. Absolute stream TTL. No socket lives forever; the client reconnects
+    //    (which it does on any close) and is handed a fresh snapshot.
+    for (const [pid, sub] of Array.from(h.subs)) {
+      if (now - sub.connectedAt > L.STREAM_TTL_MS) {
+        try { sub.res.end(); } catch (_) {}
+        h.subs.delete(pid);
+      }
+    }
+
+    // 3. Presence TRANSITIONS are what get PERSISTED, not every beat: a 1Hz
+    //    UPDATE per participant would be HOT-update churn on the hot path,
+    //    buying durability the design discards anyway (every restart ends every
+    //    room). What lands in the DB is the audit trail.
+    for (const [pid, beat] of h.beats) {
+      const state = L.presenceOf(beat, now);
+      if (h.presence.get(pid) === state) continue;
+      h.presence.set(pid, state);
+      try {
+        await pool.query(
+          'UPDATE live_participants SET last_seen_at = to_timestamp($2 / 1000.0) WHERE id = $1 AND left_at IS NULL',
+          [pid, beat]
+        );
+      } catch (e) { /* audit only */ }
+    }
+
+    //    The SNAPSHOT, by contrast, goes out on a FIXED CADENCE and not only on
+    //    change. That is what makes the client's freshness test mean anything:
+    //    the roster's honesty rule is "if I have not been told recently, I stop
+    //    claiming to know", and a quiet room that emitted nothing for minutes
+    //    would drive a perfectly healthy client into "disconnected". A roster
+    //    is never maintained by diffs alone.
+    if (h.subs.size) {
+      try { emit(roomId, 'presence', { participants: await rosterFor(roomId, now), at: new Date().toISOString() }); }
+      catch (e) { console.warn('[live] presence emit failed', e && e.message); }
+    }
+  }
+
+  // 4. Rooms that must stop. Deliberately queried across ALL live rooms rather
+  //    than only the ones this instance serves: a room whose host never comes
+  //    back would otherwise hold the one-live-room-per-entity index forever.
+  let rows = [];
+  try {
+    const r = await pool.query(
+      `SELECT id, expires_at, ended_at, revoked_at, last_host_beat_at, created_at, scope
+         FROM live_rooms WHERE ended_at IS NULL AND revoked_at IS NULL`
+    );
+    rows = r.rows;
+  } catch (e) { console.warn('[live] sweep room query failed', e && e.message); return; }
+
+  for (const room of rows) {
+    const state = L.roomLifecycle(room, now);
+    if (state === 'live' || state === 'ending') continue;
+    try { await endRoom(room.id, state === 'expired' ? 'expired' : 'host_timeout'); }
+    catch (e) { console.warn('[live] sweep end failed', room.id, e && e.message); }
+  }
+
+  // 5. Keep this instance's claim warm, and drop hubs whose row is gone.
+  const liveIds = new Set(rows.map(function (r) { return r.id; }));
+  for (const roomId of Array.from(_rooms.keys())) {
+    if (!liveIds.has(roomId)) destroyHub(roomId, 'row_gone');
+  }
+  if (liveIds.size) {
+    try {
+      await pool.query(
+        `UPDATE live_rooms SET served_beat_at = NOW()
+          WHERE served_by = $1 AND ended_at IS NULL AND revoked_at IS NULL`,
+        [INSTANCE_ID]
+      );
+    } catch (e) { /* best effort */ }
+  }
+}
+
+function startSweeper() {
+  if (_sweepTimer) return;
+  _sweepTimer = setInterval(function () {
+    // The whole body wrapped: a throw here takes the process down.
+    try { sweepOnce().catch(function (e) { console.warn('[live] sweep failed:', e && e.message); }); }
+    catch (e) { console.warn('[live] sweep threw:', e && e.message); }
+  }, SWEEP_MS);
+  if (_sweepTimer.unref) _sweepTimer.unref();
+}
+startSweeper();
+
+// ── Host-side doors (requireAuth) ───────────────────────────────────────────
+
+// POST /api/live/rooms  { entity_type, entity_id }
+// Mints a room, or returns the one already live on that entity when the caller
+// already hosts it. Idempotent by construction: a double-tapped button, or a
+// keepalive retry, must not mint a second forwardable credential.
+router.post('/rooms', requireAuth, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const spec = L.roomEntity(body.entity_type);
+    if (!spec) return res.status(400).json({ error: 'Unsupported entity type' });
+    const entityId = String(body.entity_id == null ? '' : body.entity_id).trim();
+    if (!entityId) return res.status(400).json({ error: 'entity_id is required' });
+
+    let callerOrg;
+    try { callerOrg = await resolveOrgId(req); }
+    catch (e) {
+      return res.status(503).json({
+        error: 'Could not determine your organization right now. Nothing was started — retry shortly.',
+        code: ORG_LOOKUP_FAILED
+      });
+    }
+
+    // Strict equality against the PARENT, and a NAMED refusal for an unstamped
+    // one. Not jobInOrg(): that carries `OR organization_id IS NULL`, which
+    // would let any tenant mint against any unstamped job and then leave the
+    // NOT NULL tenant stamp with nothing to read. See services/live-rooms.js.
+    const eR = await pool.query(
+      'SELECT ' + spec.idColumn + ' AS id, ' + spec.orgColumn + ' AS organization_id' +
+      '  FROM ' + spec.table + ' WHERE ' + spec.idColumn + ' = $1',
+      [entityId]
+    );
+    const verdict = L.mintVerdict(callerOrg, eR.rows[0] || null);
+    if (!verdict.ok) return res.status(verdict.status).json({ error: verdict.error, code: verdict.code });
+
+    // Already live on this entity?
+    const exR = await pool.query(
+      `SELECT * FROM live_rooms
+        WHERE entity_type = $1 AND entity_id = $2 AND ended_at IS NULL AND revoked_at IS NULL`,
+      [body.entity_type, entityId]
+    );
+    if (exR.rows.length) {
+      const ex = exR.rows[0];
+      const state = L.roomLifecycle(ex, Date.now());
+      if (L.roomIsUsable(state)) {
+        if (String(ex.host_user_id) === String(req.user.id)) {
+          const title = await entityTitle(ex);
+          return res.json({ room: L.publicRoom(ex, title, Date.now()), token: ex.token, reused: true });
+        }
+        // Someone else is already presenting this entity. Refusing is honest —
+        // they can join the existing session — and it is not a lockout.
+        let hostName = null;
+        try {
+          const hR = await pool.query('SELECT name FROM users WHERE id = $1', [ex.host_user_id]);
+          hostName = hR.rows.length ? hR.rows[0].name : null;
+        } catch (e) {}
+        return res.status(409).json({
+          error: (hostName ? hostName : 'Someone else') + ' already has a live session on this record.',
+          code: 'ROOM_ALREADY_LIVE'
+        });
+      }
+      // Stale row holding the index — retire it before minting.
+      await endRoom(ex.id, state === 'expired' ? 'expired' : 'superseded');
+    }
+
+    const id = genId('lrm');
+    const token = genSecret();
+    const expires = new Date(Date.now() + L.ROOM_TTL_MS);
+    const insR = await pool.query(
+      `INSERT INTO live_rooms
+         (id, organization_id, token, entity_type, entity_id, host_user_id, scope,
+          expires_at, last_host_beat_at, served_by, served_beat_at)
+       VALUES ($1,$2,$3,$4,$5,$6,'view',$7,NOW(),$8,NOW())
+       RETURNING *`,
+      [id, verdict.orgId, token, body.entity_type, entityId, req.user.id, expires, INSTANCE_ID]
+    );
+    const room = insR.rows[0];
+    hub(room.id);
+    const title = await entityTitle(room);
+    console.log('[live] room minted', room.id, 'org', verdict.orgId, body.entity_type + ':' + entityId);
+    res.json({ room: L.publicRoom(room, title, Date.now()), token: token, reused: false });
+  } catch (e) {
+    // A UNIQUE violation on the one-live-room-per-entity index means someone
+    // won the race. That is the constraint doing its job, not a server fault.
+    if (e && e.code === '23505') {
+      return res.status(409).json({ error: 'A live session is already running on this record.', code: 'ROOM_ALREADY_LIVE' });
+    }
+    console.error('[live] mint failed:', e && e.stack || e);
+    res.status(500).json({ error: 'Could not start the live session.' });
+  }
+});
+
+// GET /api/live/mine — the rooms I am hosting right now.
+//
+// This exists because of a defect that is otherwise reachable by pressing F5:
+// the host's indicator reads its state from its own stream, and after a reload
+// there is no stream and no room id, so the host would broadcast with NO
+// indicator at all until the 120s backstop — precisely the situation the
+// indicator exists to prevent. Solved server-side; localStorage here would be
+// the cache-resurrection scar waiting to happen.
+router.get('/mine', requireAuth, async (req, res) => {
+  try {
+    let callerOrg;
+    try { callerOrg = await resolveOrgId(req); }
+    catch (e) { return res.status(503).json({ error: 'Could not determine your organization right now.', code: ORG_LOOKUP_FAILED }); }
+    if (callerOrg == null) return res.json({ rooms: [] });
+    const r = await pool.query(
+      `SELECT * FROM live_rooms
+        WHERE organization_id = $1 AND host_user_id = $2
+          AND ended_at IS NULL AND revoked_at IS NULL
+        ORDER BY created_at DESC`,
+      [callerOrg, req.user.id]
+    );
+    const now = Date.now();
+    const out = [];
+    for (const room of r.rows) {
+      if (!L.roomIsUsable(L.roomLifecycle(room, now))) continue;
+      const title = await entityTitle(room);
+      out.push({
+        room: L.publicRoom(room, title, now),
+        token: room.token,
+        entity_type: room.entity_type,
+        entity_id: room.entity_id
+      });
+    }
+    res.json({ rooms: out });
+  } catch (e) {
+    console.error('[live] mine failed:', e && e.message);
+    res.status(500).json({ error: 'Could not load your live sessions.' });
+  }
+});
+
+// Load a room the CALLER HOSTS (or an org admin in the room's own org may act
+// on). The tenant comes from the ROOM ROW, never from the requester's JWT.
+async function loadOwnedRoom(req, res) {
+  let callerOrg;
+  try { callerOrg = await resolveOrgId(req); }
+  catch (e) { res.status(503).json({ error: 'Could not determine your organization right now.', code: ORG_LOOKUP_FAILED }); return null; }
+  const r = await pool.query('SELECT * FROM live_rooms WHERE id = $1', [req.params.id]);
+  const room = r.rows[0];
+  // Absent and foreign get the same answer.
+  if (!room || callerOrg == null || String(room.organization_id) !== String(callerOrg)) {
+    res.status(404).json({ error: 'Not found' });
+    return null;
+  }
+  const isHost = String(room.host_user_id) === String(req.user.id);
+  const isAdmin = req.user.role === 'admin' || req.user.role === 'system_admin';
+  if (!isHost && !isAdmin) { res.status(404).json({ error: 'Not found' }); return null; }
+  return room;
+}
+
+// POST /api/live/rooms/:id/end — the fast path. The 90s/120s host-beacon
+// expiry is the backstop; this is the button. It does NOT report success from
+// the client's optimism — the client waits for the `end` event / the status
+// probe before it stops saying "you may still be broadcasting".
+router.post('/rooms/:id/end', requireAuth, async (req, res) => {
+  try {
+    const room = await loadOwnedRoom(req, res);
+    if (!room) return;
+    await endRoom(room.id, 'host_ended');
+    res.json({ ok: true, state: 'ended', reason: 'host_ended' });
+  } catch (e) {
+    console.error('[live] end failed:', e && e.message);
+    res.status(500).json({ error: 'Could not end the session.' });
+  }
+});
+
+// POST /api/live/rooms/:id/beat — the host's own liveness.
+router.post('/rooms/:id/beat', requireAuth, async (req, res) => {
+  try {
+    const room = await loadOwnedRoom(req, res);
+    if (!room) return;
+    const state = L.roomLifecycle(room, Date.now());
+    if (!L.roomIsUsable(state)) return res.status(410).json({ state: state, reason: room.ended_reason || state });
+    await pool.query('UPDATE live_rooms SET last_host_beat_at = NOW() WHERE id = $1 AND ended_at IS NULL', [room.id]);
+    const h = _rooms.get(room.id);
+    res.json({ ok: true, state: 'live', watching: h ? h.subs.size : 0 });
+  } catch (e) {
+    res.status(500).json({ error: 'beat failed' });
+  }
+});
+
+// POST /api/live/rooms/:id/kick  { participant_id, revoke? }
+//
+// THE HONEST LIMITATION, stated at the door rather than discovered later: a
+// guest's only identity IS the shared link. Removing them kills THIS SESSION;
+// it cannot stop the same person following the same link again. So the caller
+// chooses, and the response says which happened. `revoke: true` kills the link
+// for everyone, which is the only removal that actually holds.
+//
+// A best-effort soft ban rides along on the plain remove — in memory, 30
+// minutes, keyed on a coarse fingerprint. It is never reported as a guarantee
+// because it is not one: it dies with the process and a different network drops
+// straight through it.
+const _softBans = new Map(); // roomId -> Map(fingerprint -> expiresAt)
+const SOFT_BAN_MS = 30 * 60 * 1000;
+
+function fingerprint(req) {
+  const ua = String((req.headers && req.headers['user-agent']) || '');
+  return crypto.createHash('sha256').update(String(req.ip || '') + '|' + ua).digest('hex').slice(0, 32);
+}
+function isSoftBanned(roomId, req) {
+  const m = _softBans.get(roomId);
+  if (!m) return false;
+  const exp = m.get(fingerprint(req));
+  if (!exp) return false;
+  if (exp < Date.now()) { m.delete(fingerprint(req)); return false; }
+  return true;
+}
+
+router.post('/rooms/:id/kick', requireAuth, async (req, res) => {
+  try {
+    const room = await loadOwnedRoom(req, res);
+    if (!room) return;
+    const pid = String((req.body && req.body.participant_id) || '').trim();
+    if (!pid) return res.status(400).json({ error: 'participant_id is required' });
+    const revoke = !!(req.body && req.body.revoke);
+
+    const pR = await pool.query(
+      'SELECT id, room_id, organization_id, role FROM live_participants WHERE id = $1 AND room_id = $2',
+      [pid, room.id]
+    );
+    if (!pR.rows.length) return res.status(404).json({ error: 'Not found' });
+    if (pR.rows[0].role === 'host') return res.status(400).json({ error: 'The host cannot be removed. End the session instead.' });
+
+    await pool.query(
+      `UPDATE live_participants
+          SET kicked_at = NOW(), kicked_by = $2, left_at = COALESCE(left_at, NOW()),
+              left_reason = COALESCE(left_reason, 'kicked'), stream_key = NULL
+        WHERE id = $1`,
+      [pid, req.user.id]
+    );
+
+    const h = _rooms.get(room.id);
+    if (h) {
+      const sub = h.subs.get(pid);
+      if (sub) {
+        // Terminal frame first, then close. The client's own status probe is
+        // what turns this into a permanent stop; the frame is the fast path.
+        writeFrame(sub, { type: 'kicked', participant_id: pid, at: new Date().toISOString() });
+        try { sub.res.end(); } catch (_) {}
+        h.subs.delete(pid);
+      }
+      h.beats.delete(pid); h.cursors.delete(pid); h.presence.delete(pid);
+      const fp = sub && sub.fingerprint;
+      if (fp && !revoke) {
+        let m = _softBans.get(room.id);
+        if (!m) { m = new Map(); _softBans.set(room.id, m); }
+        m.set(fp, Date.now() + SOFT_BAN_MS);
+      }
+    }
+
+    if (revoke) {
+      await pool.query('UPDATE live_rooms SET revoked_at = NOW() WHERE id = $1 AND revoked_at IS NULL', [room.id]);
+      await endRoom(room.id, 'link_revoked');
+    } else {
+      emit(room.id, 'leave', { participant_id: pid, reason: 'kicked', at: new Date().toISOString() });
+      emit(room.id, 'presence', { participants: await rosterFor(room.id, Date.now()), at: new Date().toISOString() });
+    }
+
+    res.json({
+      ok: true,
+      revoked: revoke,
+      // Said plainly, because the surface must not claim more than it knows.
+      note: revoke
+        ? 'The link is dead. Nobody can rejoin this session.'
+        : 'Removed from this session. They still hold the link and can rejoin — revoke the link to stop that.'
+    });
+  } catch (e) {
+    console.error('[live] kick failed:', e && e.message);
+    res.status(500).json({ error: 'Could not remove that participant.' });
+  }
+});
+
+// ── Token / stream-key doors ────────────────────────────────────────────────
+// The complete list of what a room token can reach is these four routes. It
+// cannot reach the job, any attachment, any list, any other room, or anything
+// else under /api. It provisions no users row and sets no cookie — reusing the
+// app's own cookie name is what made the sub-portal logout trap inescapable.
+
+// GET /api/live/:token/status — the sixth endpoint, and the one that makes the
+// honesty rule implementable. EventSource cannot tell a client WHY it closed,
+// so the client probes here on every close and names the state from this
+// answer. Cheap, token-scoped, and it is what stops a slept phone being told
+// "this session ended" about a room that is still running.
+router.get('/:token/status', liveStreamLimiter, async (req, res) => {
+  if (!L.isRoomToken(req.params.token)) return res.status(404).json({ error: 'Not found' });
+  try {
+    const r = await pool.query('SELECT * FROM live_rooms WHERE token = $1', [req.params.token]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
+    const room = r.rows[0];
+    const now = Date.now();
+    const state = L.roomLifecycle(room, now);
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      state: state,
+      usable: L.roomIsUsable(state),
+      reason: room.ended_reason || (state === 'live' || state === 'ending' ? null : state),
+      room_id: room.id
+    });
+  } catch (e) {
+    // "I could not tell" is not "it ended". A 503 keeps the client retrying
+    // instead of announcing a terminal state it has no evidence for.
+    res.status(503).json({ error: 'Could not check the session right now.' });
+  }
+});
+
+// POST /api/live/:token/join  { display_name }
+router.post('/:token/join', liveJoinLimiter, async (req, res) => {
+  if (!L.isRoomToken(req.params.token)) return res.status(404).json({ error: 'Not found' });
+  try {
+    const r = await pool.query('SELECT * FROM live_rooms WHERE token = $1', [req.params.token]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
+    const room = r.rows[0];
+    const now = Date.now();
+    const state = L.roomLifecycle(room, now);
+    // Dead-but-real gets 410, not 404: the holder legitimately had the link and
+    // deserves "this ended", not "this never was".
+    if (!L.roomIsUsable(state)) return res.status(410).json({ error: 'This session has ended.', state: state, reason: room.ended_reason || state });
+
+    if (isSoftBanned(room.id, req)) {
+      return res.status(403).json({ error: 'You were removed from this session.', code: 'REMOVED' });
+    }
+
+    // A ceiling expressed as a ROW COUNT. A rate limit only slows an
+    // unauthenticated join door down; this bounds it.
+    const cR = await pool.query(
+      'SELECT COUNT(*)::int AS n FROM live_participants WHERE room_id = $1 AND left_at IS NULL AND kicked_at IS NULL',
+      [room.id]
+    );
+    if (cR.rows[0].n >= L.MAX_PARTICIPANTS) {
+      return res.status(429).json({ error: 'This session is full.', code: 'ROOM_FULL' });
+    }
+
+    // Identity. The tenant is the ROOM's, never the requester's: a signed-in
+    // org-B user opening an org-A link is a GUEST of org A. user_id is stamped
+    // only when the session's org matches the room's, which keeps a foreign
+    // user id off an org-A row while still letting the host see a real name.
+    let userId = null, userName = null, isHost = false;
+    try {
+      const jwt = require('jsonwebtoken');
+      const { JWT_SECRET } = require('../auth');
+      const tok = (req.cookies && req.cookies.token) || (req.headers.authorization || '').replace('Bearer ', '');
+      if (tok) {
+        const claims = jwt.verify(tok, JWT_SECRET);
+        if (claims && claims.organization_id != null &&
+            String(claims.organization_id) === String(room.organization_id)) {
+          userId = claims.id;
+          userName = claims.name || claims.email || null;
+          isHost = String(claims.id) === String(room.host_user_id);
+        }
+      }
+    } catch (e) { /* not signed in, or another tenant: they are a guest */ }
+
+    const name = L.normalizeDisplayName(
+      (req.body && req.body.display_name) || userName,
+      userId ? 'Teammate' : 'Guest'
+    );
+
+    // ONE host row per room. Without this, a second tab opened by the host
+    // creates a second host row whose beacon keeps last_host_beat_at alive —
+    // so closing the tab you THINK you are presenting from leaves the room
+    // broadcasting on the strength of a forgotten background tab. That is the
+    // named worst defect in this feature, reachable by ordinary behaviour.
+    if (isHost) {
+      const oldR = await pool.query(
+        `UPDATE live_participants
+            SET left_at = NOW(), left_reason = 'superseded', stream_key = NULL
+          WHERE room_id = $1 AND role = 'host' AND left_at IS NULL
+          RETURNING id`,
+        [room.id]
+      );
+      const h0 = _rooms.get(room.id);
+      for (const row of oldR.rows) {
+        if (h0) {
+          const s = h0.subs.get(row.id);
+          if (s) { writeFrame(s, { type: 'superseded', at: new Date().toISOString() }); try { s.res.end(); } catch (_) {} h0.subs.delete(row.id); }
+          h0.beats.delete(row.id); h0.cursors.delete(row.id); h0.presence.delete(row.id);
+        }
+        emit(room.id, 'leave', { participant_id: row.id, reason: 'superseded', at: new Date().toISOString() });
+      }
+    }
+
+    const pid = genId('lpt');
+    const streamKey = genSecret();
+    await pool.query(
+      `INSERT INTO live_participants
+         (id, room_id, organization_id, user_id, display_name, role, stream_key)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [pid, room.id, room.organization_id, userId, name, isHost ? 'host' : 'viewer', streamKey]
+    );
+
+    const h = hub(room.id);
+    h.beats.set(pid, Date.now());
+    h.presence.set(pid, 'live');
+    emit(room.id, 'join', { participant_id: pid, display_name: name, role: isHost ? 'host' : 'viewer', at: new Date().toISOString() });
+    emit(room.id, 'presence', { participants: await rosterFor(room.id, Date.now()), at: new Date().toISOString() });
+
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      room_id: room.id,
+      participant_id: pid,
+      stream_key: streamKey,
+      display_name: name,
+      role: isHost ? 'host' : 'viewer',
+      beat_ms: L.BEAT_MS
+    });
+  } catch (e) {
+    console.error('[live] join failed:', e && e.message);
+    res.status(500).json({ error: 'Could not join the session.' });
+  }
+});
+
+// Match a participant by (room_id, stream_key) and answer 404 UNIFORMLY until
+// that pair resolves. The design's ordering — load the room and differentiate
+// 404 / 410 / 409 BEFORE any credential is checked — rebuilds the very
+// existence oracle it cites user-org-scope.js:64 against. Here the credential
+// is checked FIRST; only a caller who has proven they hold one learns anything
+// about the room's state.
+async function loadStreamContext(req, res) {
+  const roomId = String(req.params.roomId || '');
+  const key = req.params.streamKey;
+  if (!L.isStreamKey(key)) { res.status(404).json({ error: 'Not found' }); return null; }
+  const r = await pool.query(
+    `SELECT p.id AS participant_id, p.role, p.display_name, p.user_id, p.joined_at,
+            r.*
+       FROM live_participants p
+       JOIN live_rooms r ON r.id = p.room_id
+      WHERE p.room_id = $1 AND p.stream_key = $2
+        AND p.left_at IS NULL AND p.kicked_at IS NULL`,
+    [roomId, key]
+  );
+  if (!r.rows.length) { res.status(404).json({ error: 'Not found' }); return null; }
+  const row = r.rows[0];
+  const state = L.roomLifecycle(row, Date.now());
+  if (!L.roomIsUsable(state)) {
+    res.status(410).json({ error: 'This session has ended.', state: state, reason: row.ended_reason || state });
+    return null;
+  }
+  return { participantId: row.participant_id, role: row.role, room: row, state: state };
+}
+
+// GET /api/live/:roomId/stream/:streamKey?after=<seq>
+router.get('/:roomId/stream/:streamKey', liveStreamLimiter, async (req, res) => {
+  let ctx;
+  try { ctx = await loadStreamContext(req, res); }
+  catch (e) { return res.status(503).json({ error: 'Could not open the stream right now.' }); }
+  if (!ctx) return;
+
+  const room = ctx.room;
+  const pid = ctx.participantId;
+
+  // TAKEOVER, not refusal. If this instance is not the one serving the room, it
+  // claims it. Refusing (a 409) deadlocks every ordinary deploy: the old
+  // instance's stale served_by blocks the reconnect while the host's still
+  // recent beacon blocks the sweep, so the host is locked out of their own live
+  // session for the full 120s window and told something false about why.
+  // Takeovers are COUNTED, and a room that keeps changing hands is the only
+  // honest signal available that more than one replica is running.
+  let multiInstance = false;
+  try {
+    if (room.served_by !== INSTANCE_ID) {
+      const tR = await pool.query(
+        `UPDATE live_rooms
+            SET served_by = $2, served_beat_at = NOW(), takeover_count = takeover_count + 1
+          WHERE id = $1 RETURNING takeover_count`,
+        [room.id, INSTANCE_ID]
+      );
+      const n = tR.rows.length ? tR.rows[0].takeover_count : 0;
+      multiInstance = n >= 4;
+      console.log('[live] took over room', room.id, 'takeovers', n);
+    }
+  } catch (e) { /* the stream still works; only the bookkeeping is best-effort */ }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-store, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+
+  const h = hub(room.id);
+  // One stream per participant. A reconnect replaces the old handle.
+  const prev = h.subs.get(pid);
+  if (prev) { try { prev.res.end(); } catch (_) {} }
+  const sub = { res: res, streamKey: req.params.streamKey, connectedAt: Date.now(), fails: 0, fingerprint: fingerprint(req) };
+  h.subs.set(pid, sub);
+  h.beats.set(pid, Date.now());
+
+  // Resume. Only CONTROL events are replayed, and only when the ring can still
+  // cover the caller's position. Cursor history is never replayed: a stale
+  // motion trail is worse than no trail.
+  const after = Number(req.query.after);
+  let resumed = false;
+  let backlog = [];
+  if (Number.isFinite(after) && after > 0 && h.ring.length) {
+    const lowest = h.ring[0].seq;
+    if (after >= lowest - 1) { resumed = true; backlog = h.ring.filter(function (e) { return e.seq > after; }); }
+  }
+
+  try {
+    const now = Date.now();
+    const title = await entityTitle(room);
+    writeFrame(sub, {
+      type: 'hello',
+      room: L.publicRoom(room, title, now),
+      you: { participant_id: pid, role: ctx.role },
+      participants: await rosterFor(room.id, now),
+      seq: h.seq,
+      resumed: resumed,
+      // Surfaced rather than swallowed. The host's strip says so.
+      multi_instance_suspected: multiInstance,
+      timings: { beat_ms: L.BEAT_MS, stale_ms: L.STALE_MS, gone_ms: L.GONE_MS }
+    });
+    for (const ev of backlog) writeFrame(sub, project(ev, pid));
+    // Current cursor positions, so a joiner does not stare at an empty screen
+    // until someone moves.
+    for (const [otherPid, s] of h.cursors) {
+      if (otherPid === pid) continue;
+      writeFrame(sub, { type: 'cursor', p: otherPid, s: [s] });
+    }
+  } catch (e) {
+    console.warn('[live] hello failed', e && e.message);
+  }
+
+  // Proxy-idle keepalive ONLY. This comment frame carries no meaning and is
+  // never treated as evidence that a participant is there — that is the entire
+  // lesson of the wedged-turn incident, and the reason presence is computed
+  // from the beacon instead.
+  const hb = setInterval(function () {
+    try {
+      if (res.writableEnded) { clearInterval(hb); return; }
+      res.write(': hb\n\n');
+    } catch (e) { try { clearInterval(hb); } catch (_) {} }
+  }, HEARTBEAT_MS);
+  if (hb.unref) hb.unref();
+
+  // Socket close is the correct signal for HANDLE cleanup — it is just not
+  // evidence about presence. The beacon decides whether they are still here.
+  res.on('close', function () {
+    try { clearInterval(hb); } catch (_) {}
+    const cur = h.subs.get(pid);
+    if (cur === sub) h.subs.delete(pid);
+  });
+});
+
+// POST /api/live/:roomId/beat/:streamKey  { cursor: [[t,x,y], ...], away? }
+// The up-channel, which doubles as the liveness beacon. One request per second
+// carrying up to ten samples; receivers interpolate, so 1Hz on the wire looks
+// like continuous motion at roughly 13 KB/min per moving participant.
+router.post('/:roomId/beat/:streamKey', liveStreamLimiter, async (req, res) => {
+  let ctx;
+  try { ctx = await loadStreamContext(req, res); }
+  catch (e) { return res.status(503).json({ error: 'beat failed' }); }
+  if (!ctx) return;
+
+  const h = hub(ctx.room.id);
+  const pid = ctx.participantId;
+  const now = Date.now();
+  const wasPresence = h.presence.get(pid);
+  h.beats.set(pid, now);
+  h.presence.set(pid, 'live');
+
+  const samples = L.normalizeCursorSamples(req.body && req.body.cursor);
+  if (samples.length) {
+    h.cursors.set(pid, samples[samples.length - 1]);
+    emit(ctx.room.id, 'cursor', { p: pid, s: samples }, { cursor: true, except: pid });
+  }
+
+  // Coming back from stale is a roster change, so say so rather than letting
+  // the next sweep tick decide.
+  if (wasPresence && wasPresence !== 'live') {
+    try { emit(ctx.room.id, 'presence', { participants: await rosterFor(ctx.room.id, now), at: new Date().toISOString() }); } catch (e) {}
+  }
+
+  // The host's beat also keeps the ROOM alive. Throttled to once per ~15s so
+  // this is not a 1Hz write.
+  if (ctx.role === 'host') {
+    const beatRow = ctx.room.last_host_beat_at;
+    const last = beatRow instanceof Date ? beatRow.getTime() : Date.parse(beatRow);
+    if (!Number.isFinite(last) || now - last > 15000) {
+      try { await pool.query('UPDATE live_rooms SET last_host_beat_at = NOW() WHERE id = $1 AND ended_at IS NULL', [ctx.room.id]); } catch (e) {}
+    }
+  }
+
+  res.set('Cache-Control', 'no-store');
+  res.json({ ok: true, watching: h.subs.size, state: ctx.state });
+});
+
+// POST /api/live/:roomId/leave/:streamKey — sent with keepalive:true on
+// pagehide, and the client clears its own room credentials BEFORE navigating.
+// The sub-portal logout trap is the precedent: a leave that races a navigation
+// leaves a credential behind that silently resurrects a session the host
+// thought was over.
+router.post('/:roomId/leave/:streamKey', liveStreamLimiter, async (req, res) => {
+  let ctx;
+  try { ctx = await loadStreamContext(req, res); }
+  catch (e) { return res.status(503).json({ error: 'leave failed' }); }
+  if (!ctx) return;
+  try {
+    await pool.query(
+      `UPDATE live_participants
+          SET left_at = NOW(), left_reason = 'left', last_seen_at = NOW(), stream_key = NULL
+        WHERE id = $1 AND left_at IS NULL`,
+      [ctx.participantId]
+    );
+    const h = _rooms.get(ctx.room.id);
+    if (h) {
+      const sub = h.subs.get(ctx.participantId);
+      if (sub) { try { sub.res.end(); } catch (_) {} h.subs.delete(ctx.participantId); }
+      h.beats.delete(ctx.participantId); h.cursors.delete(ctx.participantId); h.presence.delete(ctx.participantId);
+    }
+    emit(ctx.room.id, 'leave', { participant_id: ctx.participantId, reason: 'left', at: new Date().toISOString() });
+    // The host leaving ends the room. Ending must be as reliable as starting,
+    // and this is the fast path for "closed the tab" — the 120s beacon backstop
+    // still covers the case where this request never lands.
+    if (ctx.role === 'host') {
+      await endRoom(ctx.room.id, 'host_left');
+    } else {
+      emit(ctx.room.id, 'presence', { participants: await rosterFor(ctx.room.id, Date.now()), at: new Date().toISOString() });
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'leave failed' });
+  }
+});
+
+function stopSweeper() {
+  if (_sweepTimer) { clearInterval(_sweepTimer); _sweepTimer = null; }
+}
+
+module.exports = router;
+module.exports.__internals = {
+  INSTANCE_ID, _rooms, sweepOnce, destroyHub, emit, hub, project,
+  startSweeper, stopSweeper, _softBans
+};

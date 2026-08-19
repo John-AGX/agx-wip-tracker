@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="robots" content="noindex, nofollow" />
+<meta name="referrer" content="no-referrer" />
+<title>Live session</title>
+<!--
+  Live Rooms phase 01 — the guest page.
+
+  THIS IS NOT THE APP. It is a bespoke minimal page in the task-share.html
+  shape: a room title, a roster, and a cursor surface. Mirroring the host's
+  navigation into a stripped read-only shell is PHASE 02, and building it here
+  would let one feature shape the foundation before the foundation exists.
+  Phase 02 changes what this page renders; it does not change how it is routed
+  or how it authenticates.
+
+  The token in the path IS the credential. This page therefore loads no app
+  bundle, sets no cookie, provisions no user, and talks to exactly four
+  endpoints: join, stream, beat, leave (plus the status probe). It cannot
+  reach the job, any attachment, any list, or any other room.
+-->
+<style>
+  :root { --bg:#0e1014; --card:#171a1f; --line:#2a2e35; --ink:#e8eaed; --dim:#9aa1ac; --accent:#4c8dff; --warn:#d99b28; --bad:#e5484d; --radius:14px; }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f5f6f8; --card:#ffffff; --line:#e2e5ea; --ink:#131519; --dim:#69707c; }
+  }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; padding:0; min-height:100%; background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  .wrap { max-width:640px; margin:0 auto; padding:18px 14px calc(40px + env(safe-area-inset-bottom,0px)); }
+  .brand { font-size:11px; letter-spacing:.07em; text-transform:uppercase; color:var(--dim); margin-bottom:10px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:15px 16px; margin-bottom:12px; }
+  h1 { font-size:19px; line-height:1.3; margin:0 0 6px; font-weight:650; overflow-wrap:anywhere; }
+  .sub { font-size:13px; color:var(--dim); }
+  .sec-h { font-size:11px; letter-spacing:.05em; text-transform:uppercase; color:var(--dim); margin:0 0 9px; }
+
+  .status { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--dim); flex:none; }
+  .status[data-kind="asserted"] .dot { background:#3fb950; }
+  .status[data-kind="caveated"] .dot { background:var(--warn); }
+  .status[data-kind="unknown"]  .dot { background:var(--bad); }
+  .status[data-kind="ended"]    .dot { background:var(--dim); }
+
+  /* A caveat is dimmed. "We can't tell" is NOT dimmed — it is a plain
+     statement, and dimming it would read as decoration rather than as the
+     surface admitting it does not know. */
+  .roster.is-dim { opacity:.55; }
+  .note { font-size:13px; color:var(--dim); font-style:italic; margin:8px 0 0; }
+  .row { display:flex; align-items:center; gap:8px; padding:8px 0; border-top:1px solid var(--line); font-size:14px; }
+  .row:first-child { border-top:0; }
+  .row.is-stale { opacity:.5; }
+  .who { flex:1 1 auto; min-width:0; overflow-wrap:anywhere; }
+  .flag { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--dim);
+          border:1px solid var(--line); border-radius:4px; padding:1px 5px; }
+
+  .stage { position:relative; height:52vh; min-height:260px; border:1px solid var(--line);
+           border-radius:var(--radius); background:var(--card); overflow:hidden; }
+  .stage-hint { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+                text-align:center; padding:20px; color:var(--dim); font-size:13px; line-height:1.5; }
+  .cur { position:absolute; top:0; left:0; display:flex; align-items:flex-start; gap:3px;
+         will-change:transform; pointer-events:none; }
+  .cur svg { fill:var(--accent); stroke:#06101f; stroke-width:.8; flex:none; }
+  .cur span { background:var(--accent); color:#06101f; font-size:11px; font-weight:600; line-height:1;
+              padding:3px 6px; border-radius:4px; white-space:nowrap; transform:translateY(6px); }
+
+  label { display:block; font-size:13px; color:var(--dim); margin-bottom:6px; }
+  input[type=text] { width:100%; font:inherit; font-size:16px; padding:12px; border:1px solid var(--line);
+                     border-radius:10px; background:var(--bg); color:var(--ink); }
+  .btn { display:inline-flex; align-items:center; justify-content:center; font:inherit; font-size:16px;
+         font-weight:600; padding:13px 16px; border-radius:11px; border:1px solid var(--accent);
+         background:var(--accent); color:#06101f; cursor:pointer; width:100%; margin-top:10px; }
+  .btn[disabled] { opacity:.55; }
+  .ended { text-align:center; padding:26px 16px; }
+  .ended h2 { font-size:17px; margin:0 0 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">Project 86 &middot; live session</div>
+
+  <div id="gate" class="card">
+    <h1>Join this live session</h1>
+    <p class="sub" id="gate-sub">Checking the link&hellip;</p>
+    <div id="gate-form" style="display:none">
+      <label for="nm">Your name (everyone in the session sees this)</label>
+      <input type="text" id="nm" maxlength="40" autocomplete="name" placeholder="e.g. Dave &ndash; framing" />
+      <button type="button" class="btn" id="go">Join</button>
+    </div>
+  </div>
+
+  <div id="live" style="display:none">
+    <div class="card">
+      <h1 id="title">Live session</h1>
+      <div class="status" id="status" data-kind="unknown">
+        <span class="dot"></span><span id="status-text">Connecting&hellip;</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="sec-h">In this session</div>
+      <div class="roster" id="roster"></div>
+      <div class="note" id="roster-note"></div>
+    </div>
+
+    <div class="stage" id="stage">
+      <div class="stage-hint" id="stage-hint">
+        Cursors from everyone in this session appear here.<br />Move your pointer to show yours.
+      </div>
+    </div>
+  </div>
+
+  <div id="dead" class="card ended" style="display:none">
+    <h2 id="dead-h">This session has ended.</h2>
+    <p class="sub" id="dead-sub"></p>
+  </div>
+</div>
+
+<script src="/js/live-rooms.js?v=1"></script>
+<script>
+(function () {
+  'use strict';
+  var Core = window.p86LiveCore;
+  var token = (location.pathname.split('/')[2] || '').trim();
+  var session = null;
+
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
+    });
+  }
+
+  function showDead(reason) {
+    $('gate').style.display = 'none';
+    $('live').style.display = 'none';
+    $('dead').style.display = '';
+    $('dead-h').textContent = Core.endReasonText(reason);
+    $('dead-sub').textContent = 'You can close this page.';
+  }
+
+  // Probe before showing a join form, so a dead link says so instead of
+  // offering an action that cannot work.
+  fetch('/api/live/' + encodeURIComponent(token) + '/status', { cache: 'no-store' })
+    .then(function (r) {
+      if (r.status === 404) { showDead('not_found'); return null; }
+      if (!r.ok) { $('gate-sub').textContent = "Couldn't reach the server. Retrying is safe — reload this page."; return null; }
+      return r.json();
+    })
+    .then(function (j) {
+      if (!j) return;
+      if (!j.usable) { showDead(j.reason || j.state); return; }
+      $('gate-sub').textContent = 'Enter a name so the host knows who is watching.';
+      $('gate-form').style.display = '';
+      $('nm').focus();
+    })
+    .catch(function () { $('gate-sub').textContent = "Couldn't reach the server. Reload to try again."; });
+
+  $('go').addEventListener('click', function () {
+    var name = $('nm').value.trim();
+    if (!name) { $('nm').focus(); return; }
+    $('go').disabled = true;
+    session = new window.p86Live.Session({ token: token, displayName: name, onChange: paint });
+    $('gate').style.display = 'none';
+    $('live').style.display = '';
+    session.start();
+  });
+
+  var nodes = {};
+  function paint() {
+    if (!session) return;
+    var st = session.state();
+
+    if (st.kind === 'ended') { showDead(session.terminalReason); return; }
+
+    if (session.room && session.room.title) $('title').textContent = session.room.title;
+
+    $('status').setAttribute('data-kind', st.kind);
+    $('status-text').textContent =
+      st.kind === 'asserted' ? 'Live' :
+      st.kind === 'caveated' ? 'Reconnecting' : "Disconnected";
+
+    // The roster obeys ONE rule: never show a face we cannot currently verify.
+    var list = Core.visibleParticipants(session.participants, st);
+    var r = $('roster');
+    r.className = 'roster' + (st.dim ? ' is-dim' : '');
+    if (!st.showRoster) {
+      r.innerHTML = '';
+    } else if (!list.length) {
+      r.innerHTML = '<div class="row"><span class="who">Just you so far.</span></div>';
+    } else {
+      var out = '';
+      for (var i = 0; i < list.length; i++) {
+        var p = list[i];
+        out += '<div class="row' + (p.presence === 'stale' ? ' is-stale' : '') + '">' +
+               '<span class="who">' + esc(p.name) + (p.id === session.participantId ? ' (you)' : '') + '</span>' +
+               (p.presence === 'stale' ? '<span class="flag">not responding</span>' : '') +
+               (p.role === 'host' ? '<span class="flag">host</span>' : '') +
+               '</div>';
+      }
+      r.innerHTML = out;
+    }
+    $('roster-note').textContent = st.message || '';
+
+    paintCursors(st);
+  }
+
+  function paintCursors(st) {
+    var stage = $('stage');
+    var w = stage.clientWidth, h = stage.clientHeight;
+    var byId = {};
+    for (var i = 0; i < session.participants.length; i++) byId[session.participants[i].id] = session.participants[i];
+
+    var seen = {}, any = false;
+    for (var pid in session.cursors) {
+      if (!Object.prototype.hasOwnProperty.call(session.cursors, pid)) continue;
+      if (pid === session.participantId) continue;
+      // Same honesty rule as the roster, one layer down. A frozen named cursor
+      // sitting beside "we can't tell who's watching" is the same defect.
+      if (!Core.cursorVisible(byId[pid], st)) continue;
+      any = true; seen[pid] = true;
+      var c = session.cursors[pid];
+      var n = nodes[pid];
+      if (!n) {
+        n = document.createElement('div');
+        n.className = 'cur';
+        n.innerHTML = '<svg viewBox="0 0 16 16" width="16" height="16"><path d="M2 1 L2 13 L5.5 9.8 L7.7 14.5 L9.8 13.5 L7.6 9 L12 9 Z"/></svg><span></span>';
+        stage.appendChild(n);
+        nodes[pid] = n;
+      }
+      n.querySelector('span').textContent = c.name || 'Someone';
+      var shown = c.shown || c.target;
+      shown = [shown[0] + (c.target[0] - shown[0]) * 0.35, shown[1] + (c.target[1] - shown[1]) * 0.35];
+      c.shown = shown;
+      var pos = Core.fromDocCoords(shown[0], shown[1], w, h);
+      n.style.transform = 'translate(' + Math.round(pos.left) + 'px,' + Math.round(pos.top) + 'px)';
+    }
+    for (var old in nodes) {
+      if (!Object.prototype.hasOwnProperty.call(nodes, old)) continue;
+      if (!seen[old]) { if (nodes[old].parentNode) nodes[old].parentNode.removeChild(nodes[old]); delete nodes[old]; }
+    }
+    $('stage-hint').style.display = any ? 'none' : '';
+  }
+
+  // A guest's own cursor is the ONLY thing they send besides their name.
+  // Sampled relative to the stage, in the same 0..10000 document space.
+  $('stage').addEventListener('pointermove', function (ev) {
+    if (!session || session.terminal) return;
+    var b = $('stage').getBoundingClientRect();
+    // Normalised against the STAGE, because that is what was measured.
+    session.sampleCursor(ev.clientX - b.left, ev.clientY - b.top, b.width, b.height);
+  }, { passive: true });
+
+  // Interpolation tick, and the repaint that lets "we can't tell" arrive on
+  // its own — it is a state reached by the ABSENCE of news, so no event fires.
+  setInterval(function () { try { paint(); } catch (e) {} }, 1000);
+
+  window.addEventListener('pagehide', function () { if (session) session.stop('pagehide'); });
+})();
+</script>
+</body>
+</html>
