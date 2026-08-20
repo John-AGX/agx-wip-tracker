@@ -250,6 +250,12 @@ const HOST_REFUSAL_TEXT = Object.freeze({
   no_root: 'This screen is not mirrored. Viewers get the structured version instead.',
   canvas: 'The Site Plan is a drawing, not a page — it cannot be mirrored. Viewers see nothing from it.',
   not_mirrorable: 'This screen is not mirrored. Viewers get the structured version instead.',
+  // A frame past MIRROR_MAX_SNAP_BYTES is REFUSED, never truncated: a truncated
+  // DOM is a wrong screen that looks like a right one. Every refusal this gate
+  // can produce needs words, or the honesty rule is a promise the host cannot
+  // read — so this one is named beside the rest rather than falling through to
+  // an empty string.
+  too_big: 'This screen is too large to mirror. Viewers get the structured version instead.',
   projected_mode: ''
 });
 
@@ -270,7 +276,8 @@ function hostRefusalText(reason) {
  * document behind it and never did; that stays a pause with a named reason.
  */
 function fallsBackToProjected(reason) {
-  return reason === 'ledger' || reason === 'no_root' || reason === 'not_mirrorable';
+  return reason === 'ledger' || reason === 'no_root' ||
+         reason === 'not_mirrorable' || reason === 'too_big';
 }
 
 module.exports = {

@@ -214,9 +214,29 @@ describe('the mirror allow-list is narrower than the room\'s, on purpose', () =>
     for (const r of ['off_room', 'away', 'not_shared', 'canvas']) expect(LM.fallsBackToProjected(r)).toBe(false);
   });
 
-  test('every refusal the gate can produce has a sentence', () => {
-    const reasons = ['off_room', 'not_shared', 'away', 'ledger', 'no_root', 'canvas', 'not_mirrorable'];
-    for (const r of reasons) expect(LM.hostRefusalText(r).length).toBeGreaterThan(10);
+  test('EVERY refusal has words on BOTH surfaces — no silent named state', () => {
+    // A refusal with a name and no sentence is the honesty rule reduced to a
+    // log line. `too_big` was exactly that until this assertion: the server
+    // REFUSES an oversized frame rather than truncating it (a truncated DOM is
+    // a wrong screen that looks like a right one), and the host and the guest
+    // both have to be able to read why.
+    const reasons = ['off_room', 'not_shared', 'away', 'ledger', 'no_root', 'canvas', 'not_mirrorable', 'too_big'];
+    const GUEST = read('live.html');
+    for (const r of reasons) {
+      expect(LM.hostRefusalText(r).length).toBeGreaterThan(10);
+      // And the guest's third-person twin, for every refusal that leaves them
+      // looking at something rather than at a pause.
+      if (LM.fallsBackToProjected(r) || r === 'canvas') expect(GUEST).toContain(r + ':');
+    }
+  });
+
+  test('a refusal the room does not know about still stops the "waiting" claim', () => {
+    // mirrorableHere() is computed from the room's list, so a screen the ROOM
+    // shares and the MIRROR declines — too_big is the live case — would leave
+    // the bar saying "waiting for John's screen" forever.
+    const GUEST = read('live.html');
+    expect(GUEST).toMatch(/mirrorRefusal = \(data && data\.reason\) \|\| null;/);
+    expect(GUEST).toMatch(/mirroring && mirrorRefusal\) arrangement/);
   });
 });
 

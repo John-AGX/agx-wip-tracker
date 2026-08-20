@@ -263,6 +263,7 @@
     no_root: 'This screen is not mirrored. Viewers get the structured version instead.',
     canvas: 'The Site Plan is a drawing, not a page — it cannot be mirrored. Viewers see nothing from it.',
     not_mirrorable: 'This screen is not mirrored. Viewers get the structured version instead.',
+    too_big: 'This screen is too large to mirror. Viewers get the structured version instead.',
     projected_mode: ''
   };
 

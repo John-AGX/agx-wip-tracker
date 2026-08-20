@@ -182,6 +182,21 @@
   // The reader flips to the structured document for the same surface, which is
   // what pays for the stage being pointer-events:none.
   var preferText = false;
+  // The server's own refusal for the screen the host is on, held until a frame
+  // arrives. Without it a screen the mirror declines for a reason the room does
+  // not know about — a frame too large to send, say — would leave the bar
+  // saying "waiting for John's screen" forever, which is the surface claiming
+  // something is coming that never is.
+  var mirrorRefusal = null;
+  // What the guest is told for each. The host is told the same fact in his own
+  // terms by the strip; these are the third-person twins.
+  var REFUSAL_NOTE = {
+    ledger: "This screen isn't mirrored — it carries other people's contracts and internal notes. You're seeing the structured version.",
+    no_root: "This screen isn't mirrored — you're seeing the structured version.",
+    not_mirrorable: "This screen isn't mirrored — you're seeing the structured version.",
+    too_big: "This screen is too big to mirror — you're seeing the structured version.",
+    canvas: "That screen is a drawing, and drawings aren't shared."
+  };
 
   // Guest state. NONE of it is persisted: a credential in localStorage on a
   // guest's phone outlives the meeting, and "must not persist beyond the
@@ -397,12 +412,14 @@
       // rather than leave a stale screen presented as live; the structured
       // document for wherever he actually is takes over if there is one.
       dropStage();
+      mirrorRefusal = (data && data.reason) || null;
       var hv = (session && session.hostView) || {};
       if (following && hv.surface) loadSurface(hv.surface, true);
       paint();
       return;
     }
     if (kind === 'snap') {
+      mirrorRefusal = null;
       if (preferText) { paint(); return; }
       if (!data || !data.snapSeq) return;
       if (Stage.have() && Stage.snapSeq() === data.snapSeq && Stage.surface() === data.surface) return;
@@ -569,6 +586,7 @@
     var mirroring = session.mode === 'mirror';
     var arrangement;
     if (stageOn) arrangement = who + "'s actual screen, live";
+    else if (mirroring && mirrorRefusal) arrangement = "this screen isn't mirrored — structured version";
     else if (mirroring && mirrorableHere()) arrangement = 'waiting for ' + who + "'s screen";
     else if (mirroring) arrangement = "this screen isn't mirrored — structured version";
     else arrangement = 'structured view, built by the server';
@@ -597,9 +615,14 @@
     // declines to send pixels for it, and in that case the viewer is getting
     // the structured document and must be told so rather than left to assume.
     if (!note && mirroring && !stageOn) {
-      note = mirrorableHere()
-        ? 'Waiting for the first frame of ' + who + "'s screen."
-        : "This screen isn't mirrored — you're seeing the structured version, built by the server.";
+      if (mirrorRefusal) {
+        note = REFUSAL_NOTE[mirrorRefusal] ||
+               "This screen isn't mirrored — you're seeing the structured version, built by the server.";
+      } else if (mirrorableHere()) {
+        note = 'Waiting for the first frame of ' + who + "'s screen.";
+      } else {
+        note = "This screen isn't mirrored — you're seeing the structured version, built by the server.";
+      }
     }
     if (!note && stageOn && preferText) note = '';
     $('bar-note').textContent = note;
