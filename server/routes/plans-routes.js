@@ -41,65 +41,10 @@ const VALID_ENTITY_TYPES = new Set([
 
 const BASE_KINDS = new Set(['blank', 'sheet', 'photo', 'pdf']);
 
-// Coerce the `pages` payload to a safe JSONB-able array. Each page is
-// { page:int, calibration:obj|null, strokes:[...] }. We don't deeply
-// validate stroke shapes (the client owns that + the renderer is
-// defensive), but we cap sizes so a runaway payload can't bloat a row.
-function sanitizePages(raw) {
-  if (!Array.isArray(raw)) return [];
-  return raw.slice(0, 200).map(function (pg, i) {
-    pg = pg || {};
-    // Sheet-doc (CAD shop-drawing) entries are a different shape than the
-    // markup {page,calibration,strokes} pages — pass them through (with
-    // light size caps) instead of coercing, which would strip the doc.
-    if (pg.kind === 'sheet-doc') {
-      const out = {
-        kind: 'sheet-doc',
-        version: Number.isFinite(pg.version) ? (pg.version | 0) : 1,
-        sheet: (pg.sheet && typeof pg.sheet === 'object') ? pg.sheet : {},
-        titleblock: (pg.titleblock && typeof pg.titleblock === 'object') ? pg.titleblock : {},
-        layers: Array.isArray(pg.layers) ? pg.layers.slice(0, 200) : [],
-        viewports: Array.isArray(pg.viewports) ? pg.viewports.slice(0, 50) : [],
-        entities: Array.isArray(pg.entities) ? pg.entities.slice(0, 20000) : []
-      };
-      // CRITICAL: v2/v3 docs store the drawing under model/sheets (serializeDoc
-      // DELETES the flat entities/layers/viewports above before sending) —
-      // dropping these fields silently gutted every saved CAD sheet: the plan
-      // reloaded EMPTY. Pass them through with the same size caps.
-      // Pass model through WHOLE (caps only, no field whitelist) — a
-      // whitelist here is exactly what caused the data loss.
-      if (pg.model && typeof pg.model === 'object') {
-        out.model = Object.assign({}, pg.model, {
-          entities: Array.isArray(pg.model.entities) ? pg.model.entities.slice(0, 20000) : []
-        });
-      }
-      if (Array.isArray(pg.sheets)) out.sheets = pg.sheets.slice(0, 50);
-      if (Array.isArray(pg.blocks)) {
-        // Named block definitions (W3) — cap count AND each def's entity list
-        // so defs can't smuggle geometry past the per-sheet entity budget.
-        out.blocks = pg.blocks.slice(0, 200).map(function (bk) {
-          bk = bk || {};
-          return Object.assign({}, bk, { entities: Array.isArray(bk.entities) ? bk.entities.slice(0, 20000) : [] });
-        });
-      }
-      if (pg.activeSheetId != null) out.activeSheetId = String(pg.activeSheetId);
-      if (pg.space === 'sheet' || pg.space === 'model') out.space = pg.space;
-      if (pg.underlay && typeof pg.underlay === 'object') out.underlay = pg.underlay;
-      return out;
-    }
-    return {
-      page: Number.isFinite(pg.page) ? (pg.page | 0) : i,
-      calibration: (pg.calibration && typeof pg.calibration === 'object') ? pg.calibration : null,
-      strokes: Array.isArray(pg.strokes) ? pg.strokes.slice(0, 5000) : []
-    };
-  });
-}
-
-function sanitizeTotals(raw) {
-  raw = raw || {};
-  const num = function (v) { return Number.isFinite(v) ? v : 0; };
-  return { lf: num(raw.lf), sf: num(raw.sf), count: num(raw.count) };
-}
+// `pages`/`totals` sanitizing lives in services/plan-doc.js — pure logic,
+// unit-tested there without booting the auth stack. See that file's header
+// for the flat-alias trap that made this the most dangerous code in Plans.
+const { sanitizePages, sanitizeTotals } = require('../services/plan-doc');
 
 // Fields the PATCH route accepts. JSONB columns (pages, totals) are
 // handled specially below; the rest are plain scalar assignments.

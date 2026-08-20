@@ -393,8 +393,20 @@
       if (!sh.viewports) sh.viewports = [];
       // Rescue blobs saved with a broken alias (both flat + model present):
       // the flat arrays were the live data, so prefer them over model.*.
-      if (Array.isArray(doc.entities) && doc.entities !== doc.model.entities) doc.model.entities = doc.entities;
-      if (Array.isArray(doc.layers) && doc.layers !== doc.model.layers) doc.model.layers = doc.layers;
+      //
+      // ...but NEVER let an EMPTY flat array clobber a populated model array.
+      // The server's page sanitizer used to synthesize `entities: []` and
+      // `layers: []` onto every stored v2/v3 doc (serializeDoc strips the flat
+      // aliases before sending), and this rescue adopted those empties as
+      // truth — so every sheet drawing reloaded blank while its geometry sat
+      // intact in model.*, and the first stroke drawn afterwards overwrote the
+      // row for real. The sanitizer no longer synthesizes them; this guard is
+      // what RECOVERS the rows already written that way. Populated-flat still
+      // wins (the case the rescue was written for); empty never does.
+      if (Array.isArray(doc.entities) && doc.entities !== doc.model.entities &&
+          (doc.entities.length || !doc.model.entities.length)) doc.model.entities = doc.entities;
+      if (Array.isArray(doc.layers) && doc.layers !== doc.model.layers &&
+          (doc.layers.length || !doc.model.layers.length)) doc.model.layers = doc.layers;
       doc.entities = doc.model.entities;
       doc.layers = doc.model.layers;
       doc.viewports = sh.viewports;
