@@ -1389,8 +1389,14 @@
     S.onResize = onResize;
     // Unsaved-changes guard — autosave flushes on idle, but if the user closes
     // the tab mid-edit we flush once more + warn (Tier 2).
+    // Warn while ANYTHING is outstanding, not only while dirty: a save in
+    // flight has not been acknowledged, and an orphaned flush from a closed
+    // session is unsaved work with no editor left to show it.
     S._beforeUnload = function (ev) {
-      if (S && S._dirty) { saveSilent(); ev.preventDefault(); ev.returnValue = ''; return ''; }
+      if (S && S._dirty) saveSilent();
+      if ((S && (S._dirty || S._saveP)) || orphanPending()) {
+        ev.preventDefault(); ev.returnValue = ''; return '';
+      }
     };
     window.addEventListener('beforeunload', S._beforeUnload);
     validateScale();                        // warn on orphan viewport links / unset scale
@@ -1461,7 +1467,17 @@
   function close() {
     if (!S) return;
     hideContextMenu();
-    if (S._dirty) saveSilent();                       // flush any pending edits
+    // Flush any pending edits through a retry that survives S = null below.
+    // A save already in flight is left alone — it carries the same document,
+    // and its own settle() handler no-ops once the session is gone, so the
+    // orphan retry is what keeps that work accounted for.
+    if ((S._dirty || S._saveP) && typeof S.onSave === 'function') {
+      if (S._autosaveT) { clearTimeout(S._autosaveT); S._autosaveT = null; }
+      try {
+        orphanFlush(S.onSave, serializeDoc(S.doc),
+          (S.plan && S.plan.name) || 'this drawing', 0);
+      } catch (e) { /* serialization failed — nothing safe to send */ }
+    }
     if (S._beforeUnload) window.removeEventListener('beforeunload', S._beforeUnload);
     if (S._autosaveT) clearTimeout(S._autosaveT);
     if (S.onResize) window.removeEventListener('resize', S.onResize);
@@ -5913,28 +5929,101 @@
   // paths), which debounces an idle autosave. close() + beforeunload flush a
   // final save so edits survive an accidental tab close.
   var AUTOSAVE_MS = 2500;
+
+  // ── What a settled save MEANS (pure — no S, no DOM) ──────────────
+  // Exported as _save so it can be tested headlessly; saveSilent() below is
+  // the only caller and does nothing this does not decide.
+  //
+  // Two things this fixes, both of which lost work silently:
+  //
+  //   1. `_dirty` was cleared and the hint set to "Saved." SYNCHRONOUSLY,
+  //      before the PATCH had even left. The user was told the drawing was
+  //      safe at the moment the request was being refused.
+  //   2. On rejection the old path re-marked dirty and stopped. Nothing
+  //      re-armed the autosave timer, so nothing retried until the next
+  //      mutation — and close() then fired one more doomed save and tore the
+  //      editor down. A dropped connection quietly ate the session.
+  //
+  // st = { gen, flightGen, fails } — `gen` is bumped by every mutation, so
+  // gen !== flightGen means the user drew while the save was in flight and
+  // the document on the server is already behind.
+  function saveOutcome(ok, st) {
+    st = st || {};
+    var fails = st.fails || 0;
+    if (ok) {
+      if (st.gen === st.flightGen) {
+        return { dirty: false, fails: 0, hint: 'Saved.', rearmMs: null };
+      }
+      return { dirty: true, fails: 0, hint: 'Saved — newer edits still pending…', rearmMs: 400 };
+    }
+    fails += 1;
+    return {
+      dirty: true, fails: fails,
+      hint: fails < 4
+        ? 'Not saved — retrying' + (fails > 1 ? ' (attempt ' + fails + ')' : '') + '…'
+        : 'NOT SAVED after ' + fails + ' attempts. Your drawing is still here — keep this tab open.',
+      rearmMs: Math.min(30000, 1200 * Math.pow(2, fails - 1))
+    };
+  }
+
+  function armAutosave(ms) {
+    if (!S) return;
+    if (S._autosaveT) clearTimeout(S._autosaveT);
+    S._autosaveT = setTimeout(function () { saveSilent(); }, ms);
+  }
   function markDirty() {
     if (!S) return;
     S._dirty = true;
-    if (S._autosaveT) clearTimeout(S._autosaveT);
-    S._autosaveT = setTimeout(function () { saveSilent(); }, AUTOSAVE_MS);
+    S._gen = (S._gen || 0) + 1;
+    armAutosave(AUTOSAVE_MS);
   }
   function saveSilent() {
     if (!S || !S._dirty) return;
     if (S._autosaveT) { clearTimeout(S._autosaveT); S._autosaveT = null; }
-    if (typeof S.onSave === 'function') {
-      try {
-        // Track the in-flight save so version operations can drain it
-        // instead of racing it (a late-landing PATCH would silently
-        // overwrite a restore). Rejection re-marks dirty for retry.
-        var sSnap = S;
-        S._saveP = Promise.resolve(S.onSave(serializeDoc(S.doc), {}))
-          .catch(function () { if (S === sSnap) S._dirty = true; })
-          .then(function () { if (S === sSnap) S._saveP = null; });
-        S._dirty = false; setHint('Saved.');
+    if (S._saveP) return;                       // already in flight; its handler re-arms
+    if (typeof S.onSave !== 'function') return;
+    var sSnap = S, flightGen = S._gen || 0, payload;
+    try { payload = serializeDoc(S.doc); }
+    catch (e) { return; }                       // keep dirty; a later edit / close retries
+    setHint('Saving…');
+    var settle = function (ok) {
+      if (S !== sSnap) return;
+      var r = saveOutcome(ok, { gen: S._gen || 0, flightGen: flightGen, fails: S._saveFails || 0 });
+      S._saveP = null; S._dirty = r.dirty; S._saveFails = r.fails;
+      setHint(r.hint);
+      if (r.rearmMs != null) armAutosave(r.rearmMs);
+    };
+    // Track the in-flight save so version operations can drain it instead of
+    // racing it (a late-landing PATCH would silently overwrite a restore).
+    S._saveP = Promise.resolve(S.onSave(payload, {}))
+      .then(function () { settle(true); }, function () { settle(false); });
+  }
+
+  // ── Work that outlives the session ──────────────────────────────
+  // close() called saveSilent() fire-and-forget and set S = null on the very
+  // next line, so the promise's handlers found a dead session and did
+  // nothing: a failed final save was silent AND unretryable, and the payload
+  // went with it. Hand the serialized document to a retry that does not
+  // depend on S existing, and say so out loud if it ultimately cannot land.
+  var ORPHAN = null;
+  function orphanPending() { return !!ORPHAN; }
+  function orphanFlush(onSave, payload, label, tries) {
+    ORPHAN = { label: label, tries: tries };
+    return Promise.resolve(onSave(payload, {})).then(function () {
+      ORPHAN = null;
+    }, function () {
+      if (tries < 3) {
+        return new Promise(function (r) { setTimeout(r, 1200 * (tries + 1)); })
+          .then(function () { return orphanFlush(onSave, payload, label, tries + 1); });
       }
-      catch (e) { /* keep dirty; a later edit / close will retry */ }
-    }
+      ORPHAN = { label: label, tries: tries, failed: true };
+      var msg = 'Could not save “' + label + '” — ' + (tries + 1) + ' attempts failed. ' +
+                'Reopen the drawing and check it before closing this tab.';
+      // Native alert() no-ops in the installed PWA; use the app toast.
+      if (typeof window.p86Toast === 'function') window.p86Toast(msg, 'error');
+      else if (window.p86Toast && window.p86Toast.show) window.p86Toast.show(msg, 'error');
+      else console.warn(msg);
+    });
   }
   function save() {
     if (S && S._autosaveT) { clearTimeout(S._autosaveT); S._autosaveT = null; }
@@ -6570,6 +6659,9 @@
     // v3 migration internals — exposed for round-trip verification (the
     // migration must render pixel-identical: mToP(migrated, vp) === original
     // paper coords) and for external tooling.
-    _v3: { toV2: toV2, toV3: toV3, healDoc: healDoc, serializeDoc: serializeDoc, mToP: mToP, pToM: pToM }
+    _v3: { toV2: toV2, toV3: toV3, healDoc: healDoc, serializeDoc: serializeDoc, mToP: mToP, pToM: pToM },
+    // Autosave decision table — pure, so what a settled save means can be
+    // tested without a browser. See saveOutcome().
+    _save: { saveOutcome: saveOutcome, AUTOSAVE_MS: AUTOSAVE_MS }
   };
 })();
