@@ -596,6 +596,61 @@ describe('every way a session stops', () => {
     expect(stale.status).toBe(404);
   });
 
+  // THE SAME DEFECT, ONE DOOR LOWER. 2dd1239 stopped the guest PAGE from
+  // booting the host surface, but the host role is decided from the COOKIE and
+  // the cookie rides the join the read-only page still makes. So the host
+  // opening the link he had just copied — the first thing anyone does after
+  // pressing Present — took the room's one host row from a page that never
+  // reports a route, and killed the tab he was presenting from. Reported live,
+  // 2026-08-19, mid-presentation.
+  test("a join that asks for 'viewer' is NOT promoted to host, even holding the host's own cookie", async () => {
+    const m = await mint();
+    const h1 = await call('POST', '/api/live/' + m.body.token + '/join', { body: {} });
+    expect(h1.body.role).toBe('host');
+
+    // The same signed-in host, from the guest page.
+    const g = await call('POST', '/api/live/' + m.body.token + '/join', { body: { as: 'viewer' } });
+    expect(g.body.role).toBe('viewer');
+
+    // The presenting tab is untouched: still host, still live, still holding a
+    // working credential.
+    const first = db.participants.find((p) => p.id === h1.body.participant_id);
+    expect(first.left_at).toBeFalsy();
+    expect(first.left_reason).toBeNull();
+    expect(first.stream_key).toBe(h1.body.stream_key);
+    const beat = await call('POST', '/api/live/' + m.body.room.id + '/beat/' + h1.body.stream_key, { body: {} });
+    expect(beat.status).toBe(200);
+  });
+
+  test("'as' can only ever take a role away — it never grants one", async () => {
+    const m = await mint();
+    // A viewer asking to be the host is still a viewer. The downgrade is
+    // believable precisely because it cannot be an upgrade.
+    const g = await call('POST', '/api/live/' + m.body.token + '/join', { user: null, body: { display_name: 'Dave', as: 'host' } });
+    expect(g.body.role).toBe('viewer');
+    const g2 = await call('POST', '/api/live/' + m.body.token + '/join', { user: { id: 11, name: 'Viewer A' }, body: { as: 'host' } });
+    expect(g2.body.role).toBe('viewer');
+    // And the room still has no host row that a guest created.
+    expect(db.participants.filter((p) => p.role === 'host').length).toBe(0);
+  });
+
+  test("a downgraded host holds no host powers: their beat cannot steer the room", async () => {
+    const m = await mint();
+    const h = await call('POST', '/api/live/' + m.body.token + '/join', { body: {} });
+    const g = await call('POST', '/api/live/' + m.body.token + '/join', { body: { as: 'viewer' } });
+    // The host puts the room on a real surface.
+    await call('POST', '/api/live/' + m.body.room.id + '/beat/' + h.body.stream_key,
+      { body: { view: { entity_type: 'job', entity_id: 'jobA', surface: 'job-overview' } } });
+    const hub = liveRoutes.__internals._rooms.get(m.body.room.id);
+    expect(hub.view.surface).toBe('job-overview');
+    // The downgraded tab claims a foreign record. It is a viewer, so it is
+    // ignored — this is the leg that made the mirror go dark.
+    await call('POST', '/api/live/' + m.body.room.id + '/beat/' + g.body.stream_key,
+      { body: { view: { entity_type: 'job', entity_id: 'jobB', surface: 'job-overview' } } });
+    expect(hub.view.surface).toBe('job-overview');
+    expect(hub.view.reason).toBeNull();
+  });
+
   test('an expired room is swept, and it says it expired', async () => {
     const m = await mint();
     db.rooms[0].expires_at = new Date(Date.now() - 1000);

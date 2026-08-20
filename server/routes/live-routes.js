@@ -878,6 +878,21 @@ router.post('/:token/join', liveJoinLimiter, async (req, res) => {
       }
     } catch (e) { /* not signed in, or another tenant: they are a guest */ }
 
+    // A request may always ask for LESS, and that is the only kind of claim a
+    // client gets to make about its own role. `as: 'viewer'` is honoured as a
+    // HARD DOWNGRADE — it can never grant anything, so believing it authorizes
+    // nothing.
+    //
+    // It exists because the host role is derived from the COOKIE, and the
+    // cookie rides every same-origin join including the one the read-only guest
+    // page makes. So the host opening the viewer link he had just copied joined
+    // his OWN room as host from that page, tripped the one-host-row supersede
+    // below, and terminated the tab he was actually presenting from — while the
+    // guest page, which never calls setRoute, then held a host row that reported
+    // no route at all. 2dd1239 gated the guest page's boot(); this gates the
+    // join, which is the door that actually hands out the role.
+    if (req.body && req.body.as === 'viewer') isHost = false;
+
     const name = L.normalizeDisplayName(
       (req.body && req.body.display_name) || userName,
       userId ? 'Teammate' : 'Guest'

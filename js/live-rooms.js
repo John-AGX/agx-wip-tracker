@@ -124,6 +124,9 @@
       case 'not_found':    return 'This link is not valid.';
       case 'removed':      return 'You were removed from this session.';
       case 'server_restart': return 'Session ended — the server restarted.';
+      // A guest page was handed the HOST role. It refuses rather than steering
+      // the room from a read-only shell, and says so instead of looking broken.
+      case 'role_refused': return 'This page opened as the presenter by mistake and stopped. Reload to watch.';
       default:             return 'This session has ended.';
     }
   }
@@ -171,8 +174,121 @@
     return resumed ? 'resumed' : 'reset';
   }
 
+  // ── Which room this tab may adopt ───────────────────────────────────────
+  // A reload has to restore the indicator, but adopting the WRONG room is the
+  // defect that produced "he is on a different record". GET /api/live/mine
+  // returns EVERY live room this user hosts — one per ENTITY, each usable for
+  // hours — and taking rooms[0] blindly attaches this tab, AS HOST, to a room
+  // whose record is not the one on screen. The one-host-row rule then supersedes
+  // whichever tab was really presenting, and every beat from the adopting tab
+  // reports a foreign record, so hostViewEvent refuses the mirror and every
+  // guest is told "not shared" and can never load a first document.
+  //
+  // So adoption is now a MATCH, not a pick. A live room for some other record
+  // is still counted, because a host who is broadcasting must be told he is
+  // broadcasting — but it is reported as `elsewhere`, which the strip STATES
+  // and never joins.
+  function adoptionVerdict(rooms, route) {
+    var list = Array.isArray(rooms) ? rooms : [];
+    var et = (route && route.entity_type) ? String(route.entity_type) : null;
+    var eid = (route && route.entity_id != null && route.entity_id !== '') ? String(route.entity_id) : null;
+    var adopt = null, elsewhere = 0;
+    for (var i = 0; i < list.length; i++) {
+      var r = list[i] || {};
+      var same = !!(et && eid && String(r.entity_type) === et && String(r.entity_id) === eid);
+      if (same && !adopt) adopt = r;
+      else elsewhere += 1;
+    }
+    return { adopt: adopt, elsewhere: elsewhere };
+  }
+
+  // ── What the viewers can actually see, said to the HOST ─────────────────
+  // The server already tells the host this and the host already receives it:
+  // his own `view` frame comes back on his own stream carrying the verdict the
+  // guests were given. Phase 02 stored it in hostView and read it NOWHERE, so
+  // the one state that matters most — MY VIEWERS ARE LOOKING AT NOTHING — was
+  // spelled out on every guest's bar and invisible to the presenter. That is
+  // the roster's honesty rule pointed the other way, and it is the reason this
+  // defect was reported by the room rather than by the app.
+  //
+  // It NAMES the verdict rather than softening it. And it is a REPORT, never a
+  // command: the host's own echo must not move the host. Applying it would
+  // replace the presenter's document with the guest projection, which is the
+  // one thing this feature must never do to the presenter's own app.
+  function mirrorNotice(hostView, watching) {
+    var v = hostView || {};
+    if (v.surface) return '';
+    var n = watching || 0;
+    var who = n === 1 ? 'Your viewer' : (n > 1 ? ('Your ' + n + ' viewers') : 'Viewers');
+    switch (v.reason) {
+      case 'off_room':
+        return who + " can't see this — you're on a different record than the one you're presenting.";
+      case 'not_shared':
+        return who + " can't see this screen — it isn't one of the shared screens.";
+      case 'away':
+        return who + " can't see anything — you've left the job you're presenting.";
+      default:
+        // No verdict yet. Saying nothing is correct; a warning before the first
+        // beat would be the surface claiming more than it knows.
+        return '';
+    }
+  }
+
+  // ── What one viewer is reading, from the host's side ────────────────────
+  // "not loaded yet" was printed for EVERY viewer with no observed surface,
+  // which collapses three different situations into one sentence that blames
+  // the viewer. Worst of them: when the host's own screen is not being mirrored
+  // there is nothing to load, so a perfectly healthy guest reads as a broken
+  // one and the host goes looking for the fault at the wrong end.
+  var VIEWER_LOAD_GRACE_MS = 20000;
+  function viewerWhere(participant, hostSurface, label, now) {
+    var p = participant || {};
+    if (p.surface) {
+      var where = label || p.surface;
+      return p.following ? where : ('broke off — ' + where);
+    }
+    if (!hostSurface) return 'nothing to show — your screen is not being shared';
+    var t = Date.parse(p.joined_at);
+    if (isFinite(t) && (now || Date.now()) - t > VIEWER_LOAD_GRACE_MS) {
+      return "hasn't loaded — they may not be getting through";
+    }
+    return 'loading…';
+  }
+
+  // ── The Ended notice ────────────────────────────────────────────────────
+  // How long it stays up before the strip returns to idle. It is a NOTICE, not
+  // a state: the terminated session is RELEASED when it expires.
+  var ENDED_STICKY_MS = 10000;
+
+  // Pure, because both halves of this were unreachable in the version that
+  // shipped and neither could be caught by a test that could not run them:
+  // hostStripState was handed `hosting: !!(s && !s.terminal)`, so its own
+  // `terminal` branch was dead; and the sticky branch was gated on the session
+  // being ABSENT while the session object is only ever assigned, never nulled.
+  // Between them, every way a session dies — supersede, expiry, revoke, server
+  // restart — flipped the strip silently back to a "Present" button while the
+  // host went on talking to a room that had stopped listening.
+  //
+  // `release` is the half that also re-arms it: without nulling the terminated
+  // session, `endedUntil` stays set forever and the NEXT end shows nothing.
+  function endedNoticeVerdict(s) {
+    s = s || {};
+    var now = s.now || 0;
+    var until = s.endedUntil || 0;
+    if (s.terminal && !until) return { show: true, until: now + ENDED_STICKY_MS, release: false };
+    if (until && now < until) return { show: true, until: until, release: false };
+    if (until) return { show: false, until: 0, release: !!s.terminal };
+    return { show: false, until: 0, release: false };
+  }
+
   var Core = {
     resumeVerdict: resumeVerdict,
+    adoptionVerdict: adoptionVerdict,
+    endedNoticeVerdict: endedNoticeVerdict,
+    ENDED_STICKY_MS: ENDED_STICKY_MS,
+    mirrorNotice: mirrorNotice,
+    viewerWhere: viewerWhere,
+    VIEWER_LOAD_GRACE_MS: VIEWER_LOAD_GRACE_MS,
     ROSTER_FRESH_MS: ROSTER_FRESH_MS,
     ROSTER_UNKNOWN_MS: ROSTER_UNKNOWN_MS,
     ATTEMPTS_BEFORE_UNKNOWN: ATTEMPTS_BEFORE_UNKNOWN,
@@ -228,6 +344,14 @@
     this.displayName = opts.displayName || null;
     this.onChange = opts.onChange || function () {};
     this.isHostSurface = !!opts.host;
+    // A join may always ask for LESS. The guest page asks for `viewer`
+    // explicitly, because the host role is decided from the COOKIE and the
+    // cookie rides every same-origin request — including the one live.html
+    // makes. Without this, the host opening the link he just copied joined his
+    // own room AS HOST from the guest tab, tripped the one-host-row supersede
+    // rule, and terminated the tab he was actually presenting from. 2dd1239
+    // closed the boot() half of that; this closes the join.
+    this.asViewer = !!opts.asViewer;
 
     this.roomId = null;
     this.participantId = null;
@@ -321,7 +445,9 @@
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
       cache: 'no-store',
-      body: JSON.stringify({ display_name: this.displayName })
+      // `as` is DOWNGRADE-ONLY on the server, so it can be believed without
+      // authorizing anything: a request asking for less is always safe to grant.
+      body: JSON.stringify({ display_name: this.displayName, as: this.asViewer ? 'viewer' : undefined })
     }).then(function (r) {
       if (r.status === 410) return r.json().then(function (j) { self._terminate(j && j.reason); throw new Error('ended'); });
       if (r.status === 403) return r.json().then(function (j) { self._terminate((j && j.code === 'REMOVED') ? 'removed' : 'ended'); throw new Error('removed'); });
@@ -329,6 +455,14 @@
       if (!r.ok) throw new Error('join_failed_' + r.status);
       return r.json();
     }).then(function (j) {
+      // Verified on the way back, not merely requested. A page that asked to be
+      // a viewer and was handed `host` would be steering the room from a
+      // read-only shell — and every symptom of that is silent. Refusing is
+      // loud, which is the trade this feature keeps making.
+      if (self.asViewer && j && j.role === 'host') {
+        self._terminate('role_refused');
+        throw new Error('role_refused');
+      }
       self.roomId = j.room_id;
       self.participantId = j.participant_id;
       self.streamKey = j.stream_key;
@@ -701,6 +835,15 @@
     endedUntil: 0,
     lastEndReason: null,
     jobId: null,
+    // Rooms this user is hosting for OTHER records, from /api/live/mine. Named
+    // by the strip, never joined by it.
+    elsewhere: 0,
+    // The unadopted answer from /api/live/mine, retried against the route on
+    // the 1Hz tick: at DOMContentLoaded the job detail has not rendered yet, so
+    // a single match attempt at boot would miss the reload case this whole
+    // mechanism exists for.
+    mine: null,
+    mineUntil: 0,
     // Default ON. The link is a bearer credential this feature explicitly
     // designs for being pasted into a group chat, and the safe default for a
     // forwardable credential is the narrow one. The server's column carries the
@@ -786,6 +929,21 @@
     var s = host.session;
     var now = Date.now();
 
+    // Sticky "Ended" so an expiry, a supersede or a restart is SEEN rather than
+    // silently absorbed — the host must be able to tell that it stopped, and
+    // why. BOTH halves of this were unreachable: hostStripState was handed
+    // `hosting: !!(s && !s.terminal)`, which is false the moment a session goes
+    // terminal, so its own `terminal` branch could never run; and the sticky
+    // branch below was gated on `!s` while host.session is only ever assigned,
+    // never nulled. Between them, every way a session dies flipped the strip
+    // straight back to a "Present" button and the host went on talking to a
+    // room that had stopped listening. The session is released HERE, when the
+    // notice has been shown, which is also what re-arms it for the next end.
+    if (s && s.terminal && !host.endedUntil) host.lastEndReason = s.terminalReason;
+    var ended = endedNoticeVerdict({ terminal: !!(s && s.terminal), endedUntil: host.endedUntil, now: now });
+    host.endedUntil = ended.until;
+    if (ended.release) { host.session = null; host.token = null; s = null; host.lastEndReason = null; }
+
     var view = hostStripState({
       hosting: !!(s && !s.terminal),
       terminal: !!(s && s.terminal),
@@ -793,17 +951,15 @@
       watching: s ? Math.max(0, (s.participants || []).filter(function (p) { return p.role !== 'host'; }).length) : 0,
       msSinceConfirm: s ? (now - s.lastConfirmAt) : null
     });
-
-    // Sticky "Ended" so an expiry or a restart is SEEN rather than silently
-    // absorbed — the host must be able to tell that it stopped, and why.
-    if (s && s.terminal && !host.endedUntil) { host.endedUntil = now + 10000; host.lastEndReason = s.terminalReason; }
-    if (!s && host.endedUntil && now < host.endedUntil) {
+    if (ended.show) {
       view = { kind: 'ended', label: 'Ended', detail: endReasonText(host.lastEndReason), watching: 0 };
-    } else if (!s && host.endedUntil && now >= host.endedUntil) {
-      host.endedUntil = 0; host.lastEndReason = null;
     }
 
-    if (view.kind === 'idle' && !jobId) { el.style.display = 'none'; return; }
+    // A room running on ANOTHER record still has to be visible, and the old
+    // guard hid the strip entirely whenever this tab was not on a job — so a
+    // host who navigated away was broadcasting with no indicator at all, which
+    // is the exact defect the strip exists to prevent.
+    if (view.kind === 'idle' && !jobId && !host.elsewhere) { el.style.display = 'none'; return; }
     el.style.display = '';
     el.setAttribute('data-state', view.kind);
 
@@ -812,8 +968,18 @@
       // "One click mints the link and you're live — no room to create first."
       // That is already what this does: startHosting() mints and copies in one
       // action. The button says so.
-      html = '<button type="button" class="p86-live-btn" data-live-act="start">' +
-             '<span class="p86-live-dot"></span>Present</button>';
+      if (jobId) {
+        html = '<button type="button" class="p86-live-btn" data-live-act="start">' +
+               '<span class="p86-live-dot"></span>Present</button>';
+      }
+      // Named, not joined. This tab must not take the host row of a room for a
+      // record it is not looking at — that is the supersede that killed the
+      // presenting tab and pointed every guest at "not shared".
+      if (host.elsewhere) {
+        html += '<div class="p86-live-warn">' + esc(host.elsewhere === 1
+          ? "You're presenting a different record. Open it to see that session."
+          : "You're presenting " + host.elsewhere + " other records. Open one to see that session.") + '</div>';
+      }
     } else if (view.kind === 'ended') {
       html = '<span class="p86-live-label">Ended</span>' +
              '<span class="p86-live-detail">' + esc(view.detail) + '</span>';
@@ -828,6 +994,12 @@
       if (view.kind === 'unconfirmed') {
         html += '<div class="p86-live-warn">' + esc(view.detail) + '</div>';
       }
+      // THE STATE THE PRESENTER COULD NOT SEE. Every guest was being told, in
+      // words, that the host was on a different record; the host's own strip
+      // said "LIVE · 1 watching" and nothing else. Read from the host's own
+      // `view` echo — a report, never a command: nothing here navigates.
+      var mirror = mirrorNotice(s ? s.hostView : null, view.watching);
+      if (mirror) html += '<div class="p86-live-warn">' + esc(mirror) + '</div>';
       if (s && s.multiInstance) {
         html += '<div class="p86-live-warn">This session keeps moving between servers — some viewers may be seeing a different room.</div>';
       }
@@ -914,9 +1086,12 @@
           // What each viewer is looking at. A SAFETY property, not decoration:
           // it tells the host someone stopped following BEFORE he says "as you
           // can see here". Observed from their own fetch, never self-reported.
-          where = p.surface
-            ? (p.following ? esc(surfaceLabel(p.surface)) : 'broke off — ' + esc(surfaceLabel(p.surface)))
-            : 'not loaded yet';
+          // Three situations, not one sentence. "not loaded yet" was printed
+          // for all of them, including the case where there is NOTHING to load
+          // because the host's own screen is not being mirrored — which reads
+          // as a broken viewer and sends the host looking for the fault at the
+          // wrong end of the room.
+          where = esc(viewerWhere(p, s.hostView && s.hostView.surface, surfaceLabel(p.surface), Date.now()));
         }
         out += '<div class="p86-live-row' + (p.presence === 'stale' ? ' is-stale' : '') + '">' +
                '<span class="p86-live-who">' + esc(p.name) + (p.guest ? ' <em>guest</em>' : '') +
@@ -970,6 +1145,13 @@
   }
 
   function attachSession(token, isHostSurface) {
+    // THE HOST SURFACE MUST NEVER ATTACH FROM A GUEST PAGE. isGuestPage() gates
+    // boot(), but attachSession is also reachable through
+    // window.p86Live.startForJob and through adoptExistingRooms, and this
+    // feature has now had two host/guest bleeds. One gate at one entry point is
+    // how the second one happened, so the refusal lives at the door that
+    // actually takes the host row.
+    if (isGuestPage()) { try { console.warn('[live] refusing to host from a guest page'); } catch (e) {} return; }
     if (host.session) host.session.stop('restart');
     host.token = token;
     var s = new LiveSession({
@@ -1074,11 +1256,40 @@
     fetch('/api/live/mine', { credentials: 'same-origin', cache: 'no-store' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (j) {
-        if (!j || !j.rooms || !j.rooms.length) return;
-        if (host.session && !host.session.terminal) return;
-        host.hideFinancials = j.rooms[0].hide_financials !== false;
-        attachSession(j.rooms[0].token, true);
+        if (!j || !Array.isArray(j.rooms)) return;
+        host.mine = j.rooms;
+        host.mineUntil = Date.now() + MINE_REFRESH_MS;
+        tryAdopt();
       }).catch(function () {});
+  }
+
+  // An unadopted claim is re-checked against the server rather than trusted
+  // from boot: "you're presenting a different record" must stop being said when
+  // that room ends, and this tab has no stream on it to hear that from.
+  var MINE_REFRESH_MS = 60000;
+  function refreshMineIfStale() {
+    if (host.session && !host.session.terminal) return;
+    if (!host.mine && !host.elsewhere) return;
+    if (Date.now() < host.mineUntil) return;
+    host.mineUntil = Date.now() + MINE_REFRESH_MS;
+    adoptExistingRooms();
+  }
+
+  // Adopt only a room for the record THIS tab is looking at. Anything else is
+  // COUNTED and named, never joined: joining it takes the room's one host row,
+  // supersedes the tab that is really presenting, and then reports a foreign
+  // record on every beat — which is how a working session starts telling every
+  // guest "he is on a different record" and hands them nothing to load.
+  function tryAdopt() {
+    if (!host.mine) return;
+    if (host.session && !host.session.terminal) { host.elsewhere = 0; return; }
+    var v = adoptionVerdict(host.mine, captureHostRoute());
+    host.elsewhere = v.elsewhere;
+    if (!v.adopt) return;
+    host.mine = null;
+    host.elsewhere = 0;
+    host.hideFinancials = v.adopt.hide_financials !== false;
+    attachSession(v.adopt.token, true);
   }
 
   function wireCursorSampling() {
@@ -1133,7 +1344,11 @@
     // reached by the ABSENCE of news, so nothing will fire an event to
     // announce it.
     host._tick = setInterval(function () {
-      try { paintStrip(); pushRoute(); if (host.session) host.layer.render(host.session); } catch (e) {}
+      try {
+        tryAdopt(); refreshMineIfStale();
+        paintStrip(); pushRoute();
+        if (host.session) host.layer.render(host.session);
+      } catch (e) {}
     }, 1000);
     // The route is read on the 1Hz tick AND right after any click. The tick is
     // the backstop that matters: history.pushState fires no event, and the

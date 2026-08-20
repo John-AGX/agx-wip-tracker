@@ -122,7 +122,7 @@
   <div class="lv-bar-note" id="bar-note" style="display:none"></div>
 </div>
 
-<script src="/js/live-rooms.js?v=3"></script>
+<script src="/js/live-rooms.js?v=4"></script>
 <script src="/js/live-view.js?v=1"></script>
 <script>
 (function () {
@@ -204,7 +204,13 @@
     var name = $('nm').value.trim();
     if (!name) { $('nm').focus(); return; }
     $('go').disabled = true;
-    session = new window.p86Live.Session({ token: token, displayName: name, onChange: onChange });
+    // Asks for VIEWER explicitly. The host role is decided from the cookie, and
+    // the cookie rides this same-origin request — so without this, the host
+    // opening the link he just copied (the first thing anyone does after
+    // pressing Present) joined his own room AS HOST from this read-only page,
+    // took the room's one host row, and terminated the tab he was presenting
+    // from. The server treats `as` as a downgrade only.
+    session = new window.p86Live.Session({ token: token, displayName: name, asViewer: true, onChange: onChange });
     $('gate').style.display = 'none';
     $('live').style.display = '';
     $('bar').style.display = '';
