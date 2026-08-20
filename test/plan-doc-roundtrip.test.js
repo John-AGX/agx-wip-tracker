@@ -329,19 +329,24 @@ describe('Gate 0 — recovery of rows already written by the bug', () => {
   });
 
   test('inspectPages names a gutted row, and says whether it is recoverable', () => {
+    // `gutted` and `emptied` were two booleans that could both be true at
+    // once, and the census branched on the wrong one — see
+    // test/plan-recovery-census.test.js for the misreport reproduced against
+    // real wreckage. There is now ONE `state`, and the loss case is settled
+    // before anything else can claim the row.
     const g = inspectPages([guttedRow()]);
-    expect(g.gutted).toBe(true);
-    expect(g.emptied).toBe(false);
+    expect(g.state).toBe('recoverable-by-open');
     expect(g.modelEntities).toBe(14);
     expect(g.flatEntities).toBe(0);
 
     const healthy = inspectPages(sanitizePages([serialize(populate(freshDoc()))]));
-    expect(healthy.gutted).toBe(false);
+    expect(healthy.state).toBe('healthy');
     expect(healthy.modelEntities).toBe(14);
 
-    // a row that was already overwritten after a gutted load: nothing to recover
-    const dead = inspectPages([Object.assign(guttedRow(), { model: { entities: [], layers: [] } })]);
-    expect(dead.emptied).toBe(true);
+    // a row that was already overwritten after a gutted load: nothing to
+    // recover from the row itself, whatever its layer list still says.
+    const dead = inspectPages([Object.assign(guttedRow(), { model: { entities: [], layers: [{ id: 'L0' }] } })]);
+    expect(dead.state).toBe('empty');
   });
 
   test('inspectPages reports duplicate and missing entity ids', () => {

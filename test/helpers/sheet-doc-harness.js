@@ -18,8 +18,13 @@ const vm = require('vm');
 
 const EDITOR_PATH = path.join(__dirname, '..', '..', 'js', 'sheet-editor.js');
 
-function loadSheetEditor() {
-  const src = fs.readFileSync(EDITOR_PATH, 'utf8');
+// `src` defaults to the shipped file. It is a parameter so the wreckage
+// harness (helpers/plan-wreckage.js) can load the SAME file with the post-fix
+// guard textually removed, and produce destroyed rows with the real code that
+// destroyed them — rather than hand-writing a fixture that is "destroyed" only
+// because it was typed that way.
+function loadSheetEditor(src) {
+  if (src == null) src = fs.readFileSync(EDITOR_PATH, 'utf8');
   const win = {};
   const stubEl = function () {
     return {
@@ -83,4 +88,4 @@ const PLAN = { id: 'plan_test', name: 'Test Sheet', width: 2000, height: 1400, g
 
 function freshDoc(plan) { return loadDoc(Object.assign({}, PLAN, plan || {}, { pages: null })); }
 
-module.exports = { SE, V, loadDoc, serialize, clone, freshDoc, PLAN, EDITOR_PATH };
+module.exports = { SE, V, loadDoc, serialize, clone, freshDoc, PLAN, EDITOR_PATH, loadSheetEditor };

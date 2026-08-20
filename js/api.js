@@ -1008,7 +1008,14 @@
     update: function(id, payload) { return patch('/api/plans/' + encodeURIComponent(id), payload); },
     remove: function(id) { return del('/api/plans/' + encodeURIComponent(id)); },
     versions: function(id) { return get('/api/plans/' + encodeURIComponent(id) + '/versions'); },
-    restoreVersion: function(id, vid) { return post('/api/plans/' + encodeURIComponent(id) + '/versions/' + encodeURIComponent(vid) + '/restore', {}); }
+    // expectEntities is REQUIRED by the server: the entity_count that was on
+    // screen when the operator chose this restore point. A restore overwrites
+    // live drawing data, and the server re-measures the snapshot and refuses
+    // (409) on a mismatch, so a restore can never run from a stale preview.
+    restoreVersion: function(id, vid, expectEntities) {
+      return post('/api/plans/' + encodeURIComponent(id) + '/versions/' + encodeURIComponent(vid) + '/restore',
+        { expect_entities: expectEntities });
+    }
   };
 
   // Per-job weather lookup for the schedule. Server geocodes the job's

@@ -6604,26 +6604,57 @@
     p86Api.plans.versions(planId).then(function (res) {
       var list = (res && res.versions) || [];
       var host = box.querySelector('[data-vh-list]');
+      // What a restore would REPLACE. Shown next to every candidate, because
+      // "restore" is an overwrite and the operator has to be able to see both
+      // sides of it before clicking. `page_count` was always 1 for a sheet
+      // drawing and told them nothing.
+      var liveCount = (res && typeof res.current_entity_count === 'number') ? res.current_entity_count : null;
       if (!list.length) { host.innerHTML = '<div style="color:#9aa;font-size:12px;">No restore points yet — they accumulate as you save (at most one every 10 minutes).</div>'; return; }
+      if (liveCount !== null) {
+        host.insertAdjacentHTML('beforebegin',
+          '<div style="font-size:11px;color:' + (liveCount ? '#94a3b8' : '#fca5a5') + ';margin-bottom:8px;">' +
+          'This drawing currently holds <b>' + liveCount + '</b> object' + (liveCount === 1 ? '' : 's') + '. ' +
+          (liveCount ? 'Restoring REPLACES them.' : 'It is empty — a restore point with objects in it will bring a drawing back.') +
+          '</div>');
+      }
       host.innerHTML = list.map(function (v) {
         var when = v.created_at ? new Date(v.created_at).toLocaleString() : '?';
+        var n = Number(v.entity_count) || 0;
         return '<div style="display:flex;align-items:center;gap:8px;border:1px solid #333;border-radius:7px;padding:7px 9px;">' +
           '<div style="flex:1;min-width:0;">' +
             '<div style="font-size:12px;color:#e6e6e6;">' + esc(when) + '</div>' +
-            '<div style="font-size:10.5px;color:#64748b;">' + (v.created_by_name ? esc(v.created_by_name) + ' · ' : '') + (v.page_count || 0) + ' page' + ((v.page_count || 0) === 1 ? '' : 's') + '</div>' +
+            '<div style="font-size:10.5px;color:' + (n ? '#64748b' : '#b45309') + ';">' +
+              (v.created_by_name ? esc(v.created_by_name) + ' · ' : '') +
+              n + ' object' + (n === 1 ? '' : 's') + (n ? '' : ' — this restore point is empty') +
+            '</div>' +
           '</div>' +
-          '<button data-vh-restore="' + v.id + '" style="background:rgba(79,140,255,0.14);color:#93c5fd;border:1px solid #4f8cff;border-radius:6px;padding:5px 12px;font-size:11.5px;cursor:pointer;font-weight:600;">Restore</button>' +
+          '<button data-vh-restore="' + v.id + '" data-vh-n="' + n + '" style="background:rgba(79,140,255,0.14);color:#93c5fd;border:1px solid #4f8cff;border-radius:6px;padding:5px 12px;font-size:11.5px;cursor:pointer;font-weight:600;">Restore</button>' +
         '</div>';
       }).join('');
       host.querySelectorAll('[data-vh-restore]').forEach(function (b) {
         b.onclick = function () {
+          var take = Number(b.getAttribute('data-vh-n')) || 0;
+          // Two clicks, and the second one states the trade in full. Not a
+          // native confirm(): those silently no-op in the installed PWA, and a
+          // dialog that never appears would turn the first click into the
+          // whole authorisation.
+          if (b.getAttribute('data-vh-armed') !== '1') {
+            host.querySelectorAll('[data-vh-armed="1"]').forEach(function (o) {
+              o.removeAttribute('data-vh-armed'); o.textContent = 'Restore';
+              o.style.background = 'rgba(79,140,255,0.14)'; o.style.color = '#93c5fd'; o.style.borderColor = '#4f8cff';
+            });
+            b.setAttribute('data-vh-armed', '1');
+            b.textContent = 'Take ' + take + ', replace ' + (liveCount === null ? '?' : liveCount) + ' — confirm';
+            b.style.background = 'rgba(239,68,68,0.16)'; b.style.color = '#fca5a5'; b.style.borderColor = '#ef4444';
+            return;
+          }
           b.disabled = true; b.textContent = 'Restoring…';
           // Serialize against the autosave: cancel any pending timer and
           // DRAIN the in-flight save promise first — a late-landing PATCH
           // would silently overwrite the restore with pre-restore content.
           if (S && S._autosaveT) { clearTimeout(S._autosaveT); S._autosaveT = null; }
           Promise.resolve(S && S._saveP)
-            .then(function () { return p86Api.plans.restoreVersion(planId, b.getAttribute('data-vh-restore')); })
+            .then(function () { return p86Api.plans.restoreVersion(planId, b.getAttribute('data-vh-restore'), take); })
             .then(function () { return p86Api.plans.get(planId); })
             .then(function (r2) {
               var fresh = (r2 && (r2.plan || r2)) || null;
@@ -6635,7 +6666,13 @@
               window.p86SheetEditor.open(o);
               setTimeout(function () { if (S) setHint('Version restored — the previous state was snapshotted too.'); }, 100);
             })
-            .catch(function (e2) { alert('Restore failed: ' + (e2 && e2.message ? e2.message : e2)); b.disabled = false; b.textContent = 'Restore'; });
+            .catch(function (e2) {
+              alert('Restore failed: ' + (e2 && e2.message ? e2.message : e2));
+              // Back to unarmed — a failed restore must not leave a button one
+              // click from firing again on numbers that may now be stale.
+              b.disabled = false; b.removeAttribute('data-vh-armed'); b.textContent = 'Restore';
+              b.style.background = 'rgba(79,140,255,0.14)'; b.style.color = '#93c5fd'; b.style.borderColor = '#4f8cff';
+            });
         };
       });
     }).catch(function () {

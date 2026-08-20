@@ -20,6 +20,7 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireCapability } = require('../auth');
+const { auditedTransaction } = require('../audit');
 
 const router = express.Router();
 
@@ -44,7 +45,14 @@ const BASE_KINDS = new Set(['blank', 'sheet', 'photo', 'pdf']);
 // `pages`/`totals` sanitizing lives in services/plan-doc.js — pure logic,
 // unit-tested there without booting the auth stack. See that file's header
 // for the flat-alias trap that made this the most dangerous code in Plans.
-const { sanitizePages, sanitizeTotals } = require('../services/plan-doc');
+const { sanitizePages, sanitizeTotals, sqlSheetEntityCount } = require('../services/plan-doc');
+
+// "How many entities does this stored pages value hold" — ONE definition,
+// shared with scripts/plan-doc-census.js and scripts/plan-recover.js so the
+// prune guard, the restore preview and the census cannot disagree about which
+// rows still have a drawing in them.
+const V_ENTITIES = sqlSheetEntityCount('v.pages');
+const P_ENTITIES = sqlSheetEntityCount('p.pages');
 
 // Fields the PATCH route accepts. JSONB columns (pages, totals) are
 // handled specially below; the rest are plain scalar assignments.
@@ -157,7 +165,9 @@ router.post('/', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, r
     const width = Number.isFinite(body.width) ? (body.width | 0) : null;
     const height = Number.isFinite(body.height) ? (body.height | 0) : null;
     const grid = Number.isFinite(body.grid_spacing) ? (body.grid_spacing | 0) : 40;
-    const pages = sanitizePages(body.pages);
+    const cuts = [];
+    const pages = sanitizePages(body.pages, cuts);
+    if (cuts.length) console.warn('[plans] size cap TRUNCATED content on create: %s', JSON.stringify(cuts));
     const totals = sanitizeTotals(body.totals);
     const thumbUrl = (typeof body.thumb_url === 'string') ? body.thumb_url.slice(0, 2000) : null;
 
@@ -207,10 +217,28 @@ router.patch('/:id', requireAuth, requireCapability('ESTIMATES_EDIT'), async (re
         );
         // Prune only when a snapshot was actually taken (skips the two extra
         // statements on every throttled autosave) and stay org-scoped.
+        //
+        // ── THE PRUNE IS ALSO THE EVIDENCE DESTROYER ────────────────────
+        // 30 snapshots at one per 10 minutes span >= 5 hours of saving. Any
+        // plan gutted by the 2026-07-12 alias bug and edited across more than
+        // that since has been steadily pushing its last pre-bug restore point
+        // out of the window — and for a row that is ALREADY empty, every one
+        // of those saves prunes a good snapshot to make room for another empty
+        // one. The cap was quietly deleting the only copy of the drawing.
+        //
+        // So the cap no longer applies to a snapshot that still HOLDS geometry
+        // while the live row holds none. A plan with a real drawing in it
+        // prunes exactly as before (the exemption's second clause is false);
+        // a plan that has been emptied keeps every restore point that still
+        // has a drawing, indefinitely, until someone restores it or deletes
+        // the plan. Unbounded growth is bounded by the same 10-minute throttle
+        // and is the correct trade against permanent loss.
         if (ins.rowCount > 0) {
           await pool.query(
-            'DELETE FROM plan_versions WHERE plan_id = $1 AND organization_id = $2 AND id NOT IN ' +
-            ' (SELECT id FROM plan_versions WHERE plan_id = $1 ORDER BY created_at DESC LIMIT 30)',
+            'DELETE FROM plan_versions v WHERE v.plan_id = $1 AND v.organization_id = $2 ' +
+            '   AND v.id NOT IN (SELECT id FROM plan_versions WHERE plan_id = $1 ORDER BY created_at DESC LIMIT 30) ' +
+            '   AND NOT (' + V_ENTITIES + ' > 0 AND EXISTS (' +
+            '         SELECT 1 FROM plans p WHERE p.id = v.plan_id AND ' + P_ENTITIES + ' = 0))',
             [req.params.id, orgId]
           );
         }
@@ -230,8 +258,18 @@ router.patch('/:id', requireAuth, requireCapability('ESTIMATES_EDIT'), async (re
       params.push(body[k]);
     });
     if (Object.prototype.hasOwnProperty.call(body, 'pages')) {
+      // Truncation at the size caps is data loss. It used to be silent — a
+      // 20001-entity drawing stored 20000 and returned 200 OK. It still does
+      // not reject the save (refusing a drawing at the cap would be a new way
+      // to lose work) but it can no longer happen unobserved.
+      const cuts = [];
+      const clean = sanitizePages(body.pages, cuts);
+      if (cuts.length) {
+        console.warn('[plans] size cap TRUNCATED content on plan %s: %s',
+          req.params.id, JSON.stringify(cuts));
+      }
       sets.push('pages = $' + (pn++) + '::jsonb');
-      params.push(JSON.stringify(sanitizePages(body.pages)));
+      params.push(JSON.stringify(clean));
     }
     if (Object.prototype.hasOwnProperty.call(body, 'totals')) {
       sets.push('totals = $' + (pn++) + '::jsonb');
@@ -283,20 +321,34 @@ router.delete('/:id', requireAuth, requireCapability('ESTIMATES_EDIT'), async (r
 // ──────────────────────────────────────────────────────────────────
 // GET /api/plans/:id/versions — restore points, newest first (meta only;
 // the pages payload stays server-side until a restore).
+//
+// `entity_count` is what makes this a SHOW-BEFORE-ACT surface rather than a
+// list of timestamps. `page_count` was always 1 for a sheet drawing, so the
+// operator picking a restore point could not see whether the one they were
+// about to take held a drawing at all — which is the only question that
+// matters when recovering from the alias bug. `current_entity_count` is the
+// live row, so the answer to "what am I replacing" ships with the answer to
+// "what am I taking".
 router.get('/:id/versions', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, res) => {
   try {
     const orgId = callerOrgId(req);
     if (!orgId) return res.json({ versions: [] });
+    const cur = await pool.query(
+      'SELECT ' + P_ENTITIES + ' AS entity_count FROM plans p WHERE p.id = $1 AND p.organization_id = $2',
+      [req.params.id, orgId]
+    );
+    if (!cur.rows.length) return res.status(404).json({ error: 'Plan not found' });
     const { rows } = await pool.query(
       'SELECT v.id, v.name, v.created_at, u.name AS created_by_name, ' +
-      '       jsonb_array_length(v.pages) AS page_count ' +
+      '       jsonb_array_length(v.pages) AS page_count, ' +
+      '       ' + V_ENTITIES + ' AS entity_count ' +
       '  FROM plan_versions v ' +
       '  LEFT JOIN users u ON u.id = v.created_by ' +
       ' WHERE v.plan_id = $1 AND v.organization_id = $2 ' +
       ' ORDER BY v.created_at DESC LIMIT 50',
       [req.params.id, orgId]
     );
-    res.json({ versions: rows });
+    res.json({ versions: rows, current_entity_count: Number(cur.rows[0].entity_count) || 0 });
   } catch (e) {
     console.error('GET /api/plans/:id/versions error:', e);
     res.status(500).json({ error: 'Server error' });
@@ -304,36 +356,96 @@ router.get('/:id/versions', requireAuth, requireCapability('ESTIMATES_VIEW'), as
 });
 
 // POST /api/plans/:id/versions/:vid/restore — write a restore point back
-// onto the plan. The CURRENT content is snapshotted first (unthrottled),
-// so a restore is itself always undoable via another restore.
+// onto the plan. The CURRENT content is snapshotted first (unthrottled), so a
+// restore is itself always undoable via another restore.
+//
+// Body: { expect_entities: <int> } — REQUIRED. The number of entities the
+// caller was shown for this version. A restore overwrites live drawing data;
+// if it can run from a stale preview then "the operator saw what they took"
+// is a claim about a screen, not about the write. The server re-measures the
+// snapshot and refuses (409) on any mismatch, so the read that authorised the
+// restore has to be current. There is no bulk form and nothing calls this
+// except an explicit human action — recovery never happens by itself, because
+// a stale snapshot silently replacing a drawing someone has since redrawn
+// would be this incident happening a second time.
+//
+// The whole thing runs in one audited transaction: safety snapshot, audit row
+// and overwrite commit together or not at all.
 router.post('/:id/versions/:vid/restore', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
   try {
     const orgId = callerOrgId(req);
     if (!orgId) return res.status(404).json({ error: 'Plan not found' });
     const vid = parseInt(req.params.vid, 10);
     if (!Number.isFinite(vid)) return res.status(400).json({ error: 'Bad version id' });
+    const body = req.body || {};
+    const expect = Number.isFinite(body.expect_entities) ? (body.expect_entities | 0)
+      : (typeof body.expect_entities === 'string' && /^\d+$/.test(body.expect_entities) ? parseInt(body.expect_entities, 10) : null);
+    if (expect === null) {
+      return res.status(400).json({
+        error: 'expect_entities is required — read GET /api/plans/:id/versions first and pass the entity_count you were shown'
+      });
+    }
 
-    // Safety snapshot of what's about to be replaced — gated on the target
-    // version actually existing, so a bad vid can't litter orphan snapshots.
-    await pool.query(
-      'INSERT INTO plan_versions (plan_id, organization_id, name, pages, totals, created_by) ' +
-      'SELECT p.id, p.organization_id, p.name, p.pages, p.totals, $3 FROM plans p ' +
-      ' WHERE p.id = $1 AND p.organization_id = $2 ' +
-      '   AND EXISTS (SELECT 1 FROM plan_versions v WHERE v.id = $4 AND v.plan_id = p.id AND v.organization_id = p.organization_id)',
-      [req.params.id, orgId, (req.user && req.user.id) || null, vid]
-    );
-
-    const { rows } = await pool.query(
-      'UPDATE plans p SET pages = v.pages, totals = COALESCE(v.totals, p.totals), updated_at = NOW() ' +
-      '  FROM plan_versions v ' +
-      ' WHERE p.id = $1 AND p.organization_id = $2 ' +
-      '   AND v.id = $3 AND v.plan_id = p.id AND v.organization_id = p.organization_id ' +
-      ' RETURNING p.id',
+    // Measure both sides BEFORE touching anything, and hand the operator's
+    // claim to the server for checking rather than trusting it.
+    const pre = await pool.query(
+      'SELECT ' + P_ENTITIES + ' AS live, ' +
+      '       (SELECT ' + V_ENTITIES + ' FROM plan_versions v ' +
+      '         WHERE v.id = $3 AND v.plan_id = p.id AND v.organization_id = p.organization_id) AS snap ' +
+      '  FROM plans p WHERE p.id = $1 AND p.organization_id = $2',
       [req.params.id, orgId, vid]
     );
-    if (!rows.length) return res.status(404).json({ error: 'Version not found' });
-    res.json({ ok: true, restored: vid });
+    if (!pre.rows.length) return res.status(404).json({ error: 'Plan not found' });
+    if (pre.rows[0].snap == null) return res.status(404).json({ error: 'Version not found' });
+    const live = Number(pre.rows[0].live) || 0;
+    const snap = Number(pre.rows[0].snap) || 0;
+    if (snap !== expect) {
+      return res.status(409).json({
+        error: 'Stale preview: this restore point holds ' + snap + ' entities, not ' + expect +
+               '. Re-read the version list and confirm against the current numbers.',
+        expect_entities: expect, actual_entities: snap
+      });
+    }
+
+    await auditedTransaction(req, {
+      action: 'plan.version_restore', tier: 'A', outcome: 'ok',
+      targetType: 'plan', targetId: String(req.params.id), organizationId: orgId,
+      detail: {
+        version_id: vid,
+        entities_taken: snap,
+        entities_replaced: live,
+        replaced_a_populated_drawing: live > 0,
+        safety_snapshot: true
+      }
+    }, async (client) => {
+      // Safety snapshot of what's about to be replaced — gated on the target
+      // version actually existing, so a bad vid can't litter orphan snapshots.
+      await client.query(
+        'INSERT INTO plan_versions (plan_id, organization_id, name, pages, totals, created_by) ' +
+        'SELECT p.id, p.organization_id, p.name, p.pages, p.totals, $3 FROM plans p ' +
+        ' WHERE p.id = $1 AND p.organization_id = $2 ' +
+        '   AND EXISTS (SELECT 1 FROM plan_versions v WHERE v.id = $4 AND v.plan_id = p.id AND v.organization_id = p.organization_id)',
+        [req.params.id, orgId, (req.user && req.user.id) || null, vid]
+      );
+      const { rows } = await client.query(
+        'UPDATE plans p SET pages = v.pages, totals = COALESCE(v.totals, p.totals), updated_at = NOW() ' +
+        '  FROM plan_versions v ' +
+        ' WHERE p.id = $1 AND p.organization_id = $2 ' +
+        '   AND v.id = $3 AND v.plan_id = p.id AND v.organization_id = p.organization_id ' +
+        ' RETURNING p.id',
+        [req.params.id, orgId, vid]
+      );
+      if (!rows.length) { const e = new Error('VERSION_NOT_FOUND'); e.notFound = true; throw e; }
+      return rows;
+    });
+
+    res.json({ ok: true, restored: vid, entities_taken: snap, entities_replaced: live });
   } catch (e) {
+    if (e && e.notFound) return res.status(404).json({ error: 'Version not found' });
+    if (e && e.auditFailure) {
+      // Tier A: the restore is refused rather than performed unrecorded.
+      return res.status(503).json({ error: 'Restore refused — the audit trail could not be written. Nothing was changed.' });
+    }
     console.error('POST /api/plans/:id/versions/:vid/restore error:', e);
     res.status(500).json({ error: 'Server error' });
   }
