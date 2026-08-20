@@ -242,7 +242,31 @@
     return String(s == null ? '' : s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
-  function uid(p) { return (p || 'e') + '_' + Math.random().toString(36).slice(2, 9); }
+  // ── Entity / layer / viewport ids ────────────────────────────────
+  // These were 7 random base-36 characters — a ~7.8e10 space, minted by the
+  // client with nothing to separate one session from another. Inside one
+  // document that is a birthday problem: at the 20,000-entity cap the chance
+  // that some pair already shares an id is roughly 0.26%, about one large
+  // takeoff in four hundred.
+  //
+  // Harmless as long as ids are only labels: entities live in an array, the
+  // renderer iterates, selectedEntity() takes the first .filter() hit, and
+  // both objects draw. It stops being harmless the moment an id becomes a
+  // MERGE KEY — a splice or an upsert keyed on a duplicated id collapses two
+  // objects into one permanently, and does it to an existing drawing.
+  //
+  // A per-session salt plus a monotonic counter makes collisions impossible
+  // within a session by construction, and leaves only a salt collision
+  // (8 base-36 chars, ~2.8e12) between sessions. Ids stay opaque strings;
+  // nothing in the file parses one. scripts/plan-doc-census.js reports the
+  // historical duplicates already sitting in stored documents.
+  function rnd36(n) {
+    var s = '';
+    while (s.length < n) s += Math.random().toString(36).slice(2);
+    return s.slice(0, n);
+  }
+  var UID_SALT = rnd36(8), UID_SEQ = 0;
+  function uid(p) { return (p || 'e') + '_' + UID_SALT + (UID_SEQ++).toString(36); }
   // Normalize any stored color to #rrggbb for <input type="color">.
   function toHex6(c) {
     var h = String(c || '#000000').replace('#', '');
@@ -6662,6 +6686,7 @@
     _v3: { toV2: toV2, toV3: toV3, healDoc: healDoc, serializeDoc: serializeDoc, mToP: mToP, pToM: pToM },
     // Autosave decision table — pure, so what a settled save means can be
     // tested without a browser. See saveOutcome().
-    _save: { saveOutcome: saveOutcome, AUTOSAVE_MS: AUTOSAVE_MS }
+    _save: { saveOutcome: saveOutcome, AUTOSAVE_MS: AUTOSAVE_MS },
+    _ids: { uid: uid, rnd36: rnd36 }
   };
 })();
