@@ -625,6 +625,40 @@ function projectEvent(event, recipient) {
   // Returning null means DO NOT SEND. emit() skips a null projection.
   if (event.type === 'cursor' && !isHost) return null;
 
+  // ── Mirror frames, and why this arm exists ──────────────────────────────
+  // A mirror frame IS the host's raw pane. Every one of them is money-bearing
+  // by construction, and no builder in this file ever walks it — projectEvent's
+  // last line is `return event`, so an unknown type passes the seam untouched,
+  // for every recipient, regardless of policy.
+  //
+  // Phase 03 enforces mode='mirror' => hide_financials=false at the WRITE
+  // (services/live-mirror.js modeWrite), which is where the invariant belongs.
+  // But this file is the repo's SINGLE classification point — "one walk, one
+  // place, one field list, so there is exactly one classification rather than
+  // two that drift" — and a DB invariant is not a classification. If that
+  // invariant is ever violated (a migration default, a direct UPDATE, a row
+  // written by a newer build and read by an older one — the exact failure
+  // normalizeScope fails closed against) the seam would not catch it.
+  //
+  // So the seam AGREES with the row rather than trusting it: a mirror frame is
+  // dropped for any recipient whose policy does not say money. Two independent
+  // guards, one policy and one mechanism, the same pairing the Static Maps key
+  // gets on the client.
+  if (typeof event.type === 'string' && event.type.indexOf('mirror-') === 0 && !showMoney) return null;
+
+  // The same rule for the mirror POINTER that rides `hello`. It is not a
+  // mirror- typed frame, so the arm above does not reach it, and a recipient
+  // who may not be shown the pixels must not be told where to fetch them
+  // either. In practice mode='mirror' forces money on, so this only ever fires
+  // if the row invariant has been violated — which is exactly the case this
+  // seam exists to survive.
+  if (event.type === 'hello' && event.mirror && !showMoney) {
+    const noMirror = {};
+    for (const k of Object.keys(event)) noMirror[k] = event[k];
+    noMirror.mirror = null;
+    event = noMirror;
+  }
+
   // The ROOM TITLE is author-written text and it rides the control channel, not
   // the read proxy — so it never passed through a builder and the first version
   // of this seam let it straight out. It is a forward-facing name resolved by

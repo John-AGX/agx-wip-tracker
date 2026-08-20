@@ -264,7 +264,7 @@
     <!-- Live Rooms (phase 01) — the host's broadcast indicator + the cursor
          layer. The strip is body-fixed, not header-mounted, because
          workspace-layout.js hides .job-detail-header unconditionally. -->
-    <link rel="stylesheet" href="css/live-rooms.css?v=2">
+    <link rel="stylesheet" href="css/live-rooms.css?v=3">
 
 </head>
 <body>
@@ -3610,7 +3610,14 @@
          Ships the host's own broadcast indicator; the viewer page (/live/:token)
          is a separate bespoke page and loads this same file for its pure core.
          No Present popover, no redaction, no follow-me: those are phase 02. -->
-    <script src="js/live-rooms.js?v=4"></script>
+    <script src="js/live-rooms.js?v=5"></script>
+    <!-- Phase 03 — the MIRROR serializer, host side. It observes one authorized
+         pane and sends it; it mounts nothing on this body, patches no
+         prototype, sets no attribute on any app node, binds no listener to any
+         app element, and serializes off the observer callback so a paint never
+         waits on it. test/live-host-guest-bleed.test.js asserts every one of
+         those, and this file is on that suite's list. -->
+    <script src="js/live-mirror-host.js?v=1"></script>
     <!-- The guest renderer's PURE CORE. index.html loads it for one thing:
          the presenter panel's expiry text, so "exactly when the link stops
          working" is computed by the same function the guest bar uses rather

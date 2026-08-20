@@ -4955,6 +4955,28 @@ async function initSchema() {
     -- strict-equals-false, so NULL or anything a future build writes means
     -- HIDDEN.
     ALTER TABLE live_rooms ADD COLUMN IF NOT EXISTS hide_financials BOOLEAN NOT NULL DEFAULT TRUE;
+    -- Phase 03 — PROJECTED vs MIRROR. A ROOM-level property, not a per-surface
+    -- one: a mode that changes as the host wanders is a mode nobody can
+    -- describe.
+    --
+    -- DEFAULT 'projected', for exactly the reason hide_financials defaults TRUE
+    -- — the link is a bearer credential this feature explicitly designs for
+    -- being pasted into a group chat, and the safe default for a forwardable
+    -- credential is the narrow one. Read fail-closed: services/live-mirror.js
+    -- normalizeMode() maps anything that is not literally 'mirror' back to
+    -- 'projected', so a row written by a newer build and read by an older one
+    -- NARROWS rather than widens.
+    --
+    -- THE INVARIANT: mode='mirror' implies hide_financials=false, enforced at
+    -- the write by services/live-mirror.js modeWrite(). A mirrored room streams
+    -- the host's raw pane, so a row claiming to hide financials while doing that
+    -- would be describing a redaction the transport is not performing — "a
+    -- viewer who believes they are seeing a filtered view while receiving a raw
+    -- one" is the stated bad outcome of this feature. It is not the only gate:
+    -- services/live-view.js projectEvent DROPS every mirror frame for a
+    -- recipient whose policy does not say money, so the seam agrees with the row
+    -- instead of trusting it.
+    ALTER TABLE live_rooms ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'projected';
     CREATE INDEX IF NOT EXISTS idx_live_rooms_entity
       ON live_rooms(entity_type, entity_id, created_at DESC);
     -- One live room per entity. Without this a double-tapped button, or a

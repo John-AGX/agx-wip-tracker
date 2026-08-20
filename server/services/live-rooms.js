@@ -159,6 +159,13 @@ function publicRoom(room, title, now) {
     id: room.id,
     title: title || 'Live session',
     scope: normalizeScope(room.scope),
+    // WHICH ARRANGEMENT THIS IS, said on every frame the guest receives.
+    // Phase 03's rule: "a viewer who believes they are seeing a filtered view
+    // while receiving a raw one is the bad outcome", so the mode is not an
+    // inference from what arrives — it is stated, and the guest bar paints from
+    // it. Normalised the same fail-closed way scope is: anything that is not
+    // literally 'mirror' reads as 'projected'.
+    mode: normalizeMode(room.mode),
     started_at: room.created_at instanceof Date ? room.created_at.toISOString() : room.created_at,
     expires_at: room.expires_at instanceof Date ? room.expires_at.toISOString() : room.expires_at,
     state: roomLifecycle(room, now)
@@ -170,6 +177,12 @@ function publicRoom(room, title, now) {
 // the newest thing -- a row written by a future build and read by an older one
 // must never widen what a guest may do.
 function normalizeScope(s) { return s === 'view' ? 'view' : 'view'; }
+
+// Phase 03's mode, restated here so publicRoom stays a pure function of its
+// argument and this module keeps its no-require rule. services/live-mirror.js
+// owns the same predicate for the write side; the drift between them is a
+// failing test, not a silent divergence.
+function normalizeMode(m) { return m === 'mirror' ? 'mirror' : 'projected'; }
 
 // -- Cursors ----------------------------------------------------------------
 // One coordinate space, stated once. x and y are BOTH integers 0..10000,
@@ -316,7 +329,7 @@ module.exports = {
   ROOM_TTL_MS, STREAM_TTL_MS, MAX_PARTICIPANTS,
   CURSOR_MAX, MAX_SAMPLES,
   presenceOf, roomLifecycle, roomIsUsable,
-  publicParticipant, publicRoom, normalizeScope,
+  publicParticipant, publicRoom, normalizeScope, normalizeMode,
   normalizeCursorSamples, normalizeDisplayName,
   mintVerdict
 };

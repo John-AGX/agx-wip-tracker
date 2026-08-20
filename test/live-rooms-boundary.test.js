@@ -32,7 +32,10 @@ jest.mock('../server/rate-limit', () => ({
   liveJoinLimiter: (req, res, next) => next(),
   liveStreamLimiter: (req, res, next) => next(),
   liveViewLimiter: (req, res, next) => next(),
-  liveRoomViewLimiter: (req, res, next) => next()
+  liveRoomViewLimiter: (req, res, next) => next(),
+  liveMirrorLimiter: (req, res, next) => next(),
+  liveSnapLimiter: (req, res, next) => next(),
+  liveRoomSnapLimiter: (req, res, next) => next()
 }));
 
 // Forward-facing names come from here. Stubbed to a fixed string so that if a

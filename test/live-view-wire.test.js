@@ -43,7 +43,10 @@ jest.mock('../server/rate-limit', () => ({
   liveJoinLimiter: (req, res, next) => next(),
   liveStreamLimiter: (req, res, next) => next(),
   liveViewLimiter: (req, res, next) => next(),
-  liveRoomViewLimiter: (req, res, next) => next()
+  liveRoomViewLimiter: (req, res, next) => next(),
+  liveMirrorLimiter: (req, res, next) => next(),
+  liveSnapLimiter: (req, res, next) => next(),
+  liveRoomSnapLimiter: (req, res, next) => next()
 }));
 
 // The forward-facing title is stubbed to a string that CONTAINS a money canary,

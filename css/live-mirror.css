@@ -1,0 +1,41 @@
+/* Live Rooms phase 03 — the guest's STAGE.
+ *
+ * This file styles the frame AROUND the mirrored document, never the document
+ * itself. The mirrored pane lives inside a sandboxed same-origin iframe and
+ * wears the app's own stylesheets, linked by URL at the host's own ?v; nothing
+ * here can reach inside it and nothing inside it can reach out. That isolation
+ * is the whole reason for the iframe — css/styles.css carries bare `body`,
+ * `button`, `input`, `table`, `th`, `td` selectors, and linking it into the
+ * guest shell would eat the guest shell.
+ */
+
+.lm-wrap {
+  position: relative;
+  margin: 0 0 12px;
+  border: 1px solid var(--lv-line);
+  border-radius: 12px;
+  overflow: auto;
+  background: var(--lv-bg);
+  /* Momentum scrolling, because the default is 1:1 with pan: fitting a 1250px
+     pane onto a 375px phone would put 11px body text at 3px, which is a picture
+     of a screen rather than a screen. */
+  -webkit-overflow-scrolling: touch;
+}
+
+.lm-wrap .lm-stage {
+  display: block;
+  border: 0;
+  background: transparent;
+}
+
+/* A GUEST OBSERVES. The stage takes no pointer at all — no clicks, no hover, no
+   focus. The stage's own internal sheet repeats this inside the iframe, because
+   the two documents have separate cascades and only one of them is ours. */
+.lm-wrap .lm-stage {
+  pointer-events: none;
+}
+
+/* While the room is mirroring but no frame has landed yet, the wrapper stays
+   HIDDEN and the guest bar says "waiting for John's screen" in words. An empty
+   bordered box would read as a screen with nothing on it, which is the blank-
+   rectangle failure this feature refuses everywhere else. */

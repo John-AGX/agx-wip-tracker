@@ -381,6 +381,24 @@
     // claiming numbers are hidden while they sit in the response.
     this.policy = { money: false };
     this.surfaces = [];
+    // ── Phase 03 ──────────────────────────────────────────────────────────
+    // WHICH ARRANGEMENT this is, said by the server on `hello` and on every
+    // `mode` event, never inferred from what happens to arrive. A viewer who
+    // believes they are seeing a filtered view while receiving a raw one is the
+    // bad outcome of this whole feature, and the inverse is only marginally
+    // better, so the mode is stated on both bars from this one field.
+    this.mode = 'projected';
+    // Which surfaces this room can mirror at all. The rest still serve their
+    // structured document, so a screen the mirror refuses degrades to phase
+    // 02's projection rather than to a pause.
+    this.mirrorSurfaces = [];
+    // The mirror POINTER — never the frame. The frame is pulled.
+    this.mirror = { snapSeq: 0, surface: null, at: null, reason: null, w: 0, h: 0 };
+    // Ops are handed straight through rather than buffered on the session: a
+    // delta is only meaningful against the base the applier is holding, and a
+    // session that queued them would be holding a second, divergent idea of the
+    // document.
+    this.onMirror = opts.onMirror || null;
     // Freshness of the MIRROR specifically. Any frame — including the SSE
     // keepalive's sibling events — refreshes it; "we can't tell what he is
     // looking at" is a state reached by the ABSENCE of news.
@@ -514,6 +532,18 @@
         if (msg.policy) this.policy = { money: !!msg.policy.money };
         if (msg.view) this.hostView = { surface: msg.view.surface || null, reason: msg.view.reason || null };
         if (Array.isArray(msg.surfaces)) this.surfaces = msg.surfaces;
+        if (Array.isArray(msg.mirror_surfaces)) this.mirrorSurfaces = msg.mirror_surfaces;
+        this.mode = (msg.room && msg.room.mode === 'mirror') ? 'mirror' : 'projected';
+        // The current mirror pointer, for the same reason `view` is here:
+        // without it a mid-session joiner stares at nothing until the host's
+        // next wholesale repaint, which on the WIP pane can be minutes.
+        if (msg.mirror && msg.mirror.snapSeq) {
+          this.mirror = {
+            snapSeq: msg.mirror.snapSeq, surface: msg.mirror.surface || null,
+            at: msg.mirror.at || null, reason: null, w: 0, h: 0
+          };
+          if (this.onMirror) { try { this.onMirror('snap', this.mirror); } catch (e) {} }
+        }
         if (msg.timings && msg.timings.beat_ms) this.beatMs = msg.timings.beat_ms;
         this.lastSnapshotAt = now; this.lastConfirmAt = now; this.attempts = 0;
         // A reset is a reset — including the case the resumed flag cannot see,
@@ -552,6 +582,42 @@
         // client-side unhide of data the client already lacks; flipping on must
         // not leave a document with live numbers sitting in memory.
         this.policy = { money: !msg.hide_financials };
+        this._changed();
+        break;
+      case 'mode':
+        // Same discipline as `policy`: the listener DISCARDS and rebuilds. A
+        // mirrored frame surviving a switch to the structured view is the same
+        // class of defect as a revoked link leaving the WIP table on screen.
+        this.mode = (msg.mode === 'mirror') ? 'mirror' : 'projected';
+        this.mirror = { snapSeq: 0, surface: null, at: null, reason: null, w: 0, h: 0 };
+        if (this.onMirror) { try { this.onMirror('mode', { mode: this.mode }); } catch (e) {} }
+        this._changed();
+        break;
+      case 'mirror-snap':
+        // A POINTER, ~60 bytes. The frame is pulled over an ordinary GET, which
+        // compresses (the SSE stream sets no-transform and cannot) and which
+        // each guest fetches at its own pace instead of one slow phone stalling
+        // a synchronous fan-out to twenty-five of them.
+        this.mirror = {
+          snapSeq: msg.snapSeq || 0, surface: msg.surface || null, at: msg.at || null,
+          reason: null, w: msg.w || 0, h: msg.h || 0
+        };
+        if (this.onMirror) { try { this.onMirror('snap', this.mirror); } catch (e) {} }
+        this._changed();
+        break;
+      case 'mirror-op':
+        // Handed straight through, WITH the snapSeq it was cut against. An
+        // applier holding a different base drops the batch and pulls: a patch
+        // applied to the wrong document is worse than a missing patch, because
+        // it looks like data.
+        if (this.onMirror) { try { this.onMirror('ops', msg); } catch (e) {} }
+        break;
+      case 'mirror-off':
+        // The host moved somewhere the mirror does not follow. The guest is
+        // TOLD, and the last frame keeps its capture time — a stale screen is
+        // never presented as current.
+        this.mirror = { snapSeq: 0, surface: null, at: this.mirror ? this.mirror.at : null, reason: msg.reason || 'away', w: 0, h: 0 };
+        if (this.onMirror) { try { this.onMirror('off', this.mirror); } catch (e) {} }
         this._changed();
         break;
       case 'kicked':
@@ -849,6 +915,12 @@
     // forwardable credential is the narrow one. The server's column carries the
     // same default, so this is a mirror of the row and never the authority.
     hideFinancials: true,
+    // Phase 03. Default 'projected', mirroring the column's own default, for
+    // the same reason hideFinancials defaults on: the link is a bearer
+    // credential this feature designs for being pasted into a group chat, and
+    // the safe default for a forwardable credential is the narrow one. This is
+    // a mirror of the row and never the authority.
+    mode: 'projected',
     _tick: null
   };
 
@@ -917,6 +989,7 @@
       else if (a === 'kick') kickParticipant(act.getAttribute('data-pid'), act.getAttribute('data-revoke') === '1');
       else if (a === 'copy') copyLink();
       else if (a === 'policy') setHideFinancials(act.getAttribute('data-hide') === '1');
+      else if (a === 'mode') setMode(act.getAttribute('data-mode'));
       else if (a === 'roster') { el.classList.toggle('is-open'); paintStrip(); }
     });
     host.el = el;
@@ -998,8 +1071,33 @@
       // words, that the host was on a different record; the host's own strip
       // said "LIVE · 1 watching" and nothing else. Read from the host's own
       // `view` echo — a report, never a command: nothing here navigates.
+      // WHICH ARRANGEMENT IS RUNNING, always visible, never behind a click.
+      // The host chooses mirror-vs-structured, sees which one is live, and the
+      // guest bar says which they are getting; a presenter who thinks he is
+      // sending a filtered view while sending pixels is the outcome this is
+      // here to make impossible.
+      html += '<span class="p86-live-mode" data-mode="' + esc(host.mode) + '">' +
+              esc(host.mode === 'mirror' ? 'MIRRORING' : 'SHARED VIEW') +
+              (view.kind === 'live' && s && s.hostView && s.hostView.surface
+                ? ' &middot; ' + esc(surfaceLabel(s.hostView.surface)) : '') +
+              '</span>';
       var mirror = mirrorNotice(s ? s.hostView : null, view.watching);
       if (mirror) html += '<div class="p86-live-warn">' + esc(mirror) + '</div>';
+      // The mirror's own refusal, which is a DIFFERENT fact from the room's:
+      // the room may be perfectly happy with this surface while the mirror
+      // declines to send pixels for it, and in that case the viewers are still
+      // getting the structured document rather than nothing.
+      if (host.mode === 'mirror') {
+        var ms = mirrorStatus();
+        if (ms.reason) {
+          var C2 = window.p86LiveMirrorCore;
+          var t = (C2 && C2.REFUSAL_TEXT && C2.REFUSAL_TEXT[ms.reason]) || '';
+          if (t) html += '<div class="p86-live-warn">' + esc(t) + '</div>';
+        }
+        if (ms.degraded) {
+          html += '<div class="p86-live-warn">Your screen is busy — viewers are getting an update every few seconds instead of live.</div>';
+        }
+      }
       if (s && s.multiInstance) {
         html += '<div class="p86-live-warn">This session keeps moving between servers — some viewers may be seeing a different room.</div>';
       }
@@ -1053,11 +1151,48 @@
       out += '<div class="p86-live-meta">' + esc(window.p86LiveView.expiryText(s.room.expires_at)) + '</div>';
     }
 
+    // ── The arrangement, chosen and stated ────────────────────────────────
+    // Two modes, one switch, and the switch says what each one DOES rather than
+    // naming it. Mirroring is the one change in this feature that widens what a
+    // link-holder can see, so it is confirmed in those words and never flipped
+    // on a stray tap.
+    var mirroring = host.mode === 'mirror';
+    out += '<div class="p86-live-toggle">' +
+           '<button type="button" class="p86-live-switch' + (mirroring ? ' is-on' : '') + '" ' +
+             'role="switch" aria-checked="' + (mirroring ? 'true' : 'false') + '" ' +
+             'data-live-act="mode" data-mode="' + (mirroring ? 'projected' : 'mirror') + '">' +
+             '<span class="p86-live-switch-knob"></span>' +
+             '<span class="p86-live-switch-label">Show my actual screen</span>' +
+           '</button>' +
+           '<div class="p86-live-meta">' + (mirroring
+             ? 'Viewers see this screen exactly as you see it, including every figure on it.'
+             : 'Viewers see a structured version the server builds from the record.') +
+           '</div>';
+    if (mirroring) {
+      // WHAT THEY CAN SEE, generated from the list the serializer actually
+      // enforces. Typing this out beside the denylist is how a promise on
+      // screen outlives the code that kept it.
+      var CM = window.p86LiveMirrorCore;
+      var mine = (s.mirrorSurfaces || []).map(surfaceLabel).filter(Boolean).join(', ');
+      out += '<div class="p86-live-meta">Mirrored screens: ' + esc(mine || 'none') + '. ' +
+             'Every other screen falls back to the structured version.</div>';
+      if (CM && CM.notSharedText) {
+        out += '<div class="p86-live-meta">They never see: ' + esc(CM.notSharedText()) + '.</div>';
+      }
+      out += '<div class="p86-live-meta">Photos already load from a public link, so a viewer who saves one keeps it after this session ends.</div>';
+    }
+    out += '</div>';
+
     // The toggle. The label states the MECHANISM, because the mechanism IS the
     // feature — it is what separates this from a CSS blur someone can peel off
     // in dev tools. No blur language anywhere.
+    //
+    // Absent in mirror mode, and absent rather than disabled: the server refuses
+    // it there (a mirrored room streaming pixels cannot also claim to hide
+    // financials), and a control that is present but always refused teaches
+    // people the surface lies.
     var hidden = host.hideFinancials !== false;
-    out += '<div class="p86-live-toggle">' +
+    if (!mirroring) out += '<div class="p86-live-toggle">' +
            '<button type="button" class="p86-live-switch' + (hidden ? ' is-on' : '') + '" ' +
              'role="switch" aria-checked="' + (hidden ? 'true' : 'false') + '" ' +
              'data-live-act="policy" data-hide="' + (hidden ? '0' : '1') + '">' +
@@ -1135,6 +1270,7 @@
     }).then(function (res) {
       if (!res.ok) { toast(res.body && res.body.error ? res.body.error : 'Could not start the live session.'); return; }
       host.endedUntil = 0;
+      host.mode = res.body.mode === 'mirror' ? 'mirror' : 'projected';
       host.hideFinancials = res.body.hide_financials !== false;
       attachSession(res.body.token, true);
       copyLink();
@@ -1160,6 +1296,11 @@
     });
     host.session = s;
     s.start();
+    // The mirror follows the SESSION, and it stops the instant the session
+    // does. A serializer left running against a terminated room is the same
+    // class of defect as a strip that flips back to "Present" while the host
+    // goes on talking.
+    syncMirror();
     paintStrip();
   }
 
@@ -1237,6 +1378,51 @@
       .catch(function () { toast('Could not change what viewers can see.'); });
   }
 
+  // ── Mode ────────────────────────────────────────────────────────────────
+  // The mirror engine is STARTED AND STOPPED FROM THE SERVER'S ANSWER, never
+  // from the click. Nothing is mirrored until the row says mirror, for the same
+  // reason nothing is hidden until the row says hidden: the row is where the
+  // arrangement lives, and a client that flipped optimistically would be
+  // claiming an arrangement that had not happened.
+  function syncMirror() {
+    var M = window.p86LiveMirror;
+    if (!M) return;
+    var s = host.session;
+    if (host.mode === 'mirror' && s && !s.terminal && s.roomId) M.start(s);
+    else M.stop();
+  }
+
+  function mirrorStatus() {
+    try { return (window.p86LiveMirror && window.p86LiveMirror.status()) || {}; }
+    catch (e) { return {}; }
+  }
+
+  function setMode(mode) {
+    var s = host.session;
+    if (!s || !s.roomId) return;
+    var next = mode === 'mirror' ? 'mirror' : 'projected';
+    var ask2 = next === 'mirror'
+      ? 'Show viewers your actual screen?\n\nThey will see this screen exactly as you see it, including every figure on it. Screens that cannot be mirrored fall back to the structured view.'
+      : 'Go back to the structured view?\n\nViewers stop seeing your screen immediately.';
+    ask(ask2, next === 'mirror' ? 'Show my screen' : 'Use structured view').then(function (ok) {
+      if (!ok) return;
+      fetch('/api/live/rooms/' + encodeURIComponent(s.roomId) + '/mode', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin', cache: 'no-store',
+        body: JSON.stringify({ mode: next })
+      }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
+        .then(function (res) {
+          if (!res.ok) { toast((res.body && res.body.error) || 'Could not change how viewers see this.'); return; }
+          host.mode = res.body.mode === 'mirror' ? 'mirror' : 'projected';
+          host.hideFinancials = !!res.body.hide_financials;
+          if (res.body.note) toast(res.body.note);
+          syncMirror();
+          paintStrip();
+        })
+        .catch(function () { toast('Could not change how viewers see this.'); });
+    });
+  }
+
   function copyLink() {
     if (!host.token) return;
     var url = location.origin + '/live/' + host.token;
@@ -1288,6 +1474,7 @@
     if (!v.adopt) return;
     host.mine = null;
     host.elsewhere = 0;
+    host.mode = v.adopt.mode === 'mirror' ? 'mirror' : 'projected';
     host.hideFinancials = v.adopt.hide_financials !== false;
     attachSession(v.adopt.token, true);
   }
@@ -1347,6 +1534,15 @@
       try {
         tryAdopt(); refreshMineIfStale();
         paintStrip(); pushRoute();
+        // The mirror's frame outline rides THIS tick rather than a rAF loop or
+        // a scroll listener: the pane sits inside an inner scroller and
+        // tracking it live would mean a forced synchronous layout per frame on
+        // the presenter's own page. One measurement a second is enough for a
+        // box that only moves when the window does, and it costs the host
+        // nothing that the strip repaint was not already costing.
+        if (window.p86LiveMirror) window.p86LiveMirror.tick();
+        // A session that died must not leave a serializer running.
+        if (host.mode === 'mirror' && (!host.session || host.session.terminal)) syncMirror();
         if (host.session) host.layer.render(host.session);
       } catch (e) {}
     }, 1000);
@@ -1377,6 +1573,13 @@
     CursorLayer: CursorLayer,
     startForJob: startHosting,
     end: endHosting,
-    current: function () { return host.session; }
+    current: function () { return host.session; },
+    // The host's claimed route, unfiltered, for the mirror to attach to EVERY
+    // flush. Exposed rather than reimplemented so there is one reader of the
+    // DOM's nav state and not two that disagree — and it is still reported AS
+    // FOUND: the server decides what is inside the room, because a client that
+    // filtered its own route would be the authorization.
+    route: captureHostRoute,
+    mode: function () { return host.mode; }
   };
 })();

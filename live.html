@@ -50,6 +50,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" />
 <link rel="stylesheet" href="/css/live-surface.css?v=1" />
 <link rel="stylesheet" href="/css/live-view.css?v=2" />
+<link rel="stylesheet" href="/css/live-mirror.css?v=1" />
 <style>
   /* LAYOUT ONLY. Tokens and component appearance belong to live-surface.css
      (the app's own, extracted) and layout to live-view.css. Nothing here may
@@ -107,6 +108,14 @@
   <div id="live" style="display:none">
     <div class="lv-tabs" id="tabs"></div>
     <p class="lv-stamp" id="stamp" style="display:none"></p>
+    <!-- The mirror stage. A same-origin iframe with sandbox="allow-same-origin"
+         and nothing else — no allow-scripts, no allow-forms, no
+         allow-top-navigation — so the app's real stylesheets can apply to the
+         mirrored pane at full fidelity without reaching this shell, and a
+         <script> the serializer somehow missed still cannot run. Empty and
+         display:none until a frame arrives; cleared on every terminal state. -->
+    <div id="stage-wrap" class="lm-wrap" style="display:none"></div>
+    <p class="note" id="stage-note" style="display:none"></p>
     <!-- p86-surface is the scope the extracted `table`/`th`/`td` rules are
          written under. Bare element selectors from the app would otherwise
          reach the shell's own chrome; scoping them is what lets the guest use
@@ -135,19 +144,44 @@
     <div class="lv-bar-sub" id="bar-sub">Read-only</div>
   </div>
   <button type="button" class="lv-follow" id="follow" aria-pressed="true">Following</button>
+  <!-- Fit-to-width. The mirrored pane is the HOST's layout at the HOST's width;
+       reflowing it at the guest's width would produce a layout the host has
+       never seen and cannot describe, which breaks the one thing the mirror is
+       for. So the default is 1:1 with pan, and this is the orientation view. -->
+  <button type="button" class="lv-follow" id="fitbtn" aria-pressed="false" style="display:none">Fit</button>
+  <!-- The mirror's accessibility and copy fallback. The stage is
+       pointer-events:none because a guest observes — which also costs text
+       selection, and reading a number off a screen and copying it is
+       legitimate. This switches the same surface to the structured document:
+       selectable, typed, semantic, already built. -->
+  <button type="button" class="lv-follow" id="readable" style="display:none">Text</button>
   <button type="button" class="is-primary" id="back" style="display:none">Back</button>
   <div class="lv-bar-note" id="bar-note" style="display:none"></div>
 </div>
 
-<script src="/js/live-rooms.js?v=4"></script>
+<script src="/js/live-rooms.js?v=5"></script>
 <script src="/js/live-view.js?v=2"></script>
+<script src="/js/live-mirror-guest.js?v=1"></script>
 <script>
 (function () {
   'use strict';
   var Core = window.p86LiveCore;
   var View = window.p86LiveView;
+  var Stage = window.p86LiveMirrorGuest;
   var token = (location.pathname.split('/')[2] || '').trim();
   var session = null;
+
+  // ── Phase 03 ────────────────────────────────────────────────────────────
+  // Which arrangement this guest is on, and whether the CURRENT screen is
+  // actually being mirrored — two different facts, and conflating them is how a
+  // bar ends up claiming pixels while the structured document is on screen.
+  // `stageOn` is only true while a real frame is mounted.
+  var stageOn = false;
+  var stagePulling = false;
+  // Deliberately preferred OFF for a mirrored surface: the stage is the point.
+  // The reader flips to the structured document for the same surface, which is
+  // what pays for the stage being pointer-events:none.
+  var preferText = false;
 
   // Guest state. NONE of it is persisted: a credential in localStorage on a
   // guest's phone outlives the meeting, and "must not persist beyond the
@@ -196,6 +230,11 @@
     $('bar').style.display = 'none';
     $('dead').style.display = '';
     $('surface').innerHTML = '';
+    // THE MIRRORED DOM GOES WITH IT. It is the most sensitive thing this
+    // feature has ever put in a guest browser, and "a revoked link that left
+    // the WIP table on screen would be persisting past a kick" applies to the
+    // host's raw pane far more than it applied to the projection.
+    dropStage();
     lastDoc = null;
     docSig = null;
     $('dead-h').textContent = Core.endReasonText(reason);
@@ -227,7 +266,10 @@
     // pressing Present) joined his own room AS HOST from this read-only page,
     // took the room's one host row, and terminated the tab he was presenting
     // from. The server treats `as` as a downgrade only.
-    session = new window.p86Live.Session({ token: token, displayName: name, asViewer: true, onChange: onChange });
+    session = new window.p86Live.Session({
+      token: token, displayName: name, asViewer: true,
+      onChange: onChange, onMirror: onMirror
+    });
     $('gate').style.display = 'none';
     $('live').style.display = '';
     $('bar').style.display = '';
@@ -271,6 +313,127 @@
     loadSurface(hv.surface, force);
   }
 
+  // ── The stage ──────────────────────────────────────────────────────────
+  // A mirror frame is PULLED, never pushed: the pointer arrives on the stream
+  // and the bytes come over an ordinary GET, which compresses (the SSE stream
+  // sets no-transform and cannot) and which this phone fetches at its own pace
+  // rather than being one of twenty-five copies queued in a synchronous loop.
+  function dropStage() {
+    stageOn = false;
+    if (Stage) { try { Stage.teardown(); } catch (e) {} }
+    var w = $('stage-wrap');
+    if (w) { w.style.display = 'none'; w.innerHTML = ''; }
+    // The structured document has to be allowed to repaint underneath. Without
+    // this, docSig still matches the document that was suppressed while the
+    // stage was up and the guest is left with an empty surface.
+    docSig = null;
+  }
+
+  // Is the screen the host is on one this room can mirror? Answered from the
+  // server's own list (shipped on `hello`), not from whether pixels happen to
+  // have arrived — the difference is what lets the bar say "this screen isn't
+  // mirrored, here's the structured version" instead of "loading…" forever.
+  function mirrorableHere() {
+    if (!session || session.mode !== 'mirror') return false;
+    var hv = session.hostView || {};
+    var list = session.mirrorSurfaces || [];
+    return !!hv.surface && list.indexOf(hv.surface) >= 0;
+  }
+
+  function pullFrame() {
+    if (!Stage || !session || !session.roomId || !session.streamKey) return;
+    if (stagePulling) return;
+    stagePulling = true;
+    var url = '/api/live/' + encodeURIComponent(session.roomId) + '/mirror/' +
+              encodeURIComponent(session.streamKey) + '/snapshot';
+    fetch(url, { cache: 'no-store', credentials: 'omit' })
+      .then(function (r) {
+        stagePulling = false;
+        // 404 NO_SNAPSHOT is "I have nothing yet", not "there is nothing".
+        // 409 is a mode change or a surface that moved. Neither is a terminal
+        // state and neither is guessed at: the session's own recovery decides.
+        if (!r.ok) return null;
+        return r.json();
+      })
+      .then(function (j) {
+        if (!j || !j.frame) { paint(); return; }
+        var wrap = $('stage-wrap');
+        wrap.style.display = '';
+        var ok = Stage.applySnapshot(wrap, {
+          root: j.frame.root, meta: j.frame.meta,
+          snapSeq: j.snapSeq, surface: j.surface
+        });
+        stageOn = !!ok;
+        if (ok) {
+          // The stage is showing, so the structured document must not be
+          // underneath it claiming to be the same thing.
+          $('surface').innerHTML = '';
+          docSig = null;
+          lastFetchAt = j.at;
+          mySurface = j.surface;
+        } else {
+          wrap.style.display = 'none';
+        }
+        paint();
+      })
+      .catch(function () { stagePulling = false; });
+  }
+
+  // Every mirror event, from the session. The session holds the POINTER; this
+  // holds the document.
+  function onMirror(kind, data) {
+    if (!Stage) return;
+    if (kind === 'mode') {
+      // Mode changed under us. DISCARD and rebuild — never patch across an
+      // arrangement change, the same rule `policy` has always followed.
+      dropStage();
+      preferText = false;
+      if (mySurface) loadSurface(mySurface, true);
+      paint();
+      return;
+    }
+    if (kind === 'off') {
+      // The host stepped somewhere the mirror does not follow. Drop the pixels
+      // rather than leave a stale screen presented as live; the structured
+      // document for wherever he actually is takes over if there is one.
+      dropStage();
+      var hv = (session && session.hostView) || {};
+      if (following && hv.surface) loadSurface(hv.surface, true);
+      paint();
+      return;
+    }
+    if (kind === 'snap') {
+      if (preferText) { paint(); return; }
+      if (!data || !data.snapSeq) return;
+      if (Stage.have() && Stage.snapSeq() === data.snapSeq && Stage.surface() === data.surface) return;
+      pullFrame();
+      return;
+    }
+    if (kind === 'ops') {
+      if (preferText || !Stage.have()) return;
+      if (Stage.surface() !== data.surface) { pullFrame(); return; }
+      // A batch cut against a base we are not holding is DROPPED and a fresh
+      // frame pulled. A patch applied to the wrong document is worse than a
+      // missing patch, because it looks like data.
+      if (!Stage.applyOps(data.ops, data.snapSeq)) pullFrame();
+      lastFetchAt = new Date().toISOString();
+    }
+  }
+
+  $('fitbtn').addEventListener('click', function () {
+    if (!Stage) return;
+    Stage.setFit(!Stage.fit());
+    $('fitbtn').setAttribute('aria-pressed', Stage.fit() ? 'true' : 'false');
+    $('fitbtn').textContent = Stage.fit() ? 'Actual size' : 'Fit';
+  });
+
+  $('readable').addEventListener('click', function () {
+    preferText = !preferText;
+    if (preferText) { dropStage(); if (mySurface) loadSurface(mySurface, true); }
+    else if (session && session.mirror && session.mirror.snapSeq) pullFrame();
+    paint();
+  });
+
   // ── Reacting to the session ────────────────────────────────────────────
   var lastPolicyMoney = null;
   var lastHostSurface = null;
@@ -297,6 +460,17 @@
     }
     // First document, once the stream has told us where he is.
     if (!lastDoc && following && hv.surface) followHost(false);
+
+    // First FRAME, once the stream has told us there is one. `hello` carries
+    // the current pointer for exactly this: without it a mid-session joiner
+    // would stare at the structured document until the host's next wholesale
+    // repaint, which on the WIP pane can be minutes.
+    if (!preferText && mirrorableHere() && session.mirror && session.mirror.snapSeq &&
+        (!Stage.have() || Stage.snapSeq() !== session.mirror.snapSeq)) {
+      pullFrame();
+    }
+    // Mode went back to structured while a frame was up.
+    if (session.mode !== 'mirror' && stageOn) dropStage();
     paint();
   }
 
@@ -312,7 +486,11 @@
     // Only when the DOCUMENT changed. A 1Hz innerHTML rewrite would fight text
     // selection and reset the horizontal scroll inside a wide table on every
     // tick — on the one device this feature is for.
-    if (lastDoc) {
+    //
+    // And never while the stage is up: the structured document underneath a
+    // mirrored pane would be a second, differently-shaped copy of the same
+    // screen, and a viewer who scrolled past the stage would find it.
+    if (lastDoc && !stageOn) {
       var sig = lastFetchAt + '|' + lastDoc.surface;
       if (sig !== docSig) { docSig = sig; View.render($('surface'), lastDoc); }
     }
@@ -339,6 +517,11 @@
     var s = b.getAttribute('data-surface');
     var hv = (session && session.hostView) || {};
     if (s !== hv.surface) setFollowing(false);
+    // Breaking off in mirror mode means leaving the pixels behind: the stage
+    // shows the host's pane and only the host's pane, so a guest reading a
+    // different surface must get that surface's structured document rather than
+    // tapping a tab and watching nothing happen underneath a mirrored screen.
+    if (stageOn && s !== Stage.surface()) dropStage();
     loadSurface(s, true);
   });
 
@@ -346,8 +529,14 @@
     following = !!on;
     $('follow').setAttribute('aria-pressed', following ? 'true' : 'false');
     $('follow').textContent = following ? 'Following' : 'Follow';
-    if (following) followHost(true);
-    else paint();
+    if (following) {
+      // Coming back to the host means coming back to his PIXELS where there are
+      // any. Without this, "Back to John's view" would land the guest on the
+      // structured document of a screen that is being mirrored — a quieter
+      // version of the same confusion the mode chip exists to prevent.
+      if (!preferText && mirrorableHere()) pullFrame();
+      followHost(true);
+    } else paint();
   }
   $('follow').addEventListener('click', function () { setFollowing(!following); });
   $('back').addEventListener('click', function () { setFollowing(true); });
@@ -372,9 +561,20 @@
     bar.setAttribute('data-kind', m.kind);
     $('bar-claim').textContent = m.claim || (who + "'s screen");
 
-    // Whose screen · read-only · when the link dies. Three facts, one line. If
-    // it needs another line, cut a word, not a fact.
-    var bits = [who + "'s screen", 'read-only', 'the same screen, laid out for your phone'];
+    // ── WHICH ARRANGEMENT, said out loud, on every paint ──────────────────
+    // "A viewer who believes they are seeing a filtered view while receiving a
+    // raw one is the bad outcome." So the mode is never inferred from what
+    // arrived: it is stated, per surface, and the two cases are worded
+    // differently enough that nobody can mistake one for the other.
+    var mirroring = session.mode === 'mirror';
+    var arrangement;
+    if (stageOn) arrangement = who + "'s actual screen, live";
+    else if (mirroring && mirrorableHere()) arrangement = 'waiting for ' + who + "'s screen";
+    else if (mirroring) arrangement = "this screen isn't mirrored — structured version";
+    else arrangement = 'structured view, built by the server';
+
+    // Whose screen · read-only · which arrangement · when the link dies.
+    var bits = [who + "'s screen", 'read-only', arrangement];
     if (session.room && session.room.expires_at) {
       var exp = View.expiryText(session.room.expires_at);
       if (exp) bits.push(exp);
@@ -392,8 +592,26 @@
     // are the honest core of this feature and the one thing the bar must never
     // do is stop admitting it cannot verify.
     var note = m.note || '';
+    // The mirror's own honesty notes, which are about a DIFFERENT fact than the
+    // room's: the host can be on a perfectly shared screen while the mirror
+    // declines to send pixels for it, and in that case the viewer is getting
+    // the structured document and must be told so rather than left to assume.
+    if (!note && mirroring && !stageOn) {
+      note = mirrorableHere()
+        ? 'Waiting for the first frame of ' + who + "'s screen."
+        : "This screen isn't mirrored — you're seeing the structured version, built by the server.";
+    }
+    if (!note && stageOn && preferText) note = '';
     $('bar-note').textContent = note;
     $('bar-note').style.display = note ? '' : 'none';
+
+    // The stage's own two controls appear only while there are pixels to
+    // control, and the reader stays reachable while it is ON so it is a toggle
+    // rather than a trapdoor.
+    $('fitbtn').style.display = stageOn ? '' : 'none';
+    $('readable').style.display = (stageOn || (mirroring && preferText && mirrorableHere())) ? '' : 'none';
+    $('readable').textContent = preferText ? 'Screen' : 'Text';
+    $('readable').setAttribute('aria-pressed', preferText ? 'true' : 'false');
 
     $('back').style.display = m.showBack ? '' : 'none';
     if (m.showBack) $('back').textContent = m.backLabel;
@@ -446,9 +664,18 @@
   document.addEventListener('visibilitychange', function () {
     if (document.visibilityState !== 'visible') return;
     if (!session || session.terminal) return;
+    // A mirrored frame is far more likely to be stale after a trip to another
+    // app than a structured document is — the host has been moving the whole
+    // time and mutations are not replayed. Pull a whole frame rather than trust
+    // a patch chain we were not awake for.
+    if (!preferText && mirrorableHere()) pullFrame();
     if (following) followHost(true);
     else if (mySurface) loadSurface(mySurface, true);
   });
+
+  // The stage is sized to the HOST's pane width and scaled to fit this screen,
+  // so a rotation changes what "fit" means. Re-laid out rather than re-pulled.
+  window.addEventListener('resize', function () { if (Stage && stageOn) Stage.relayout(); });
 
   // The repaint that lets "we can't tell" arrive on its own — it is a state
   // reached by the ABSENCE of news, so no event fires to announce it.

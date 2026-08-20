@@ -385,13 +385,197 @@ describe('the host document is never read-only while presenting', () => {
     expect(GUEST).not.toMatch(/startForJob|p86Live\.startForJob/);
   });
 
+  // ══ PHASE 03 — THE MIRROR RUNS INSIDE THE PRESENTER'S DOCUMENT ═══════════
+  //
+  // Every assertion above ran on js/live-rooms.js, js/live-view.js, live.html,
+  // sw.js and css/live-rooms.css. A new file evades all of them, and that is by
+  // some distance the most likely route to a fourth bleed — so the mirror's two
+  // files are added to this suite in the SAME COMMIT that creates them, and
+  // each assertion below pins one specific way a mirror could damage the app it
+  // is observing.
+  const MIRROR_HOST = code('js', 'live-mirror-host.js');
+  const MIRROR_GUEST = code('js', 'live-mirror-guest.js');
+
+  test('the mirror host mounts NOTHING on the presenter\'s body', () => {
+    // The "exactly two mounts" count above stays at two, and it stays true for
+    // a feature whose job is to draw a box around a live pane: the frame is
+    // drawn inside .p86-live-cursors, which is already body-mounted and already
+    // pointer-events:none.
+    expect((MIRROR_HOST.match(/document\.body\.appendChild/g) || []).length).toBe(0);
+    expect(MIRROR_HOST).toMatch(/querySelector\('\.p86-live-cursors'\)/);
+    expect(MIRROR_HOST).toMatch(/className = 'p86-mirror-frame'/);
+    const frame = LIVE_CSS.slice(LIVE_CSS.indexOf('.p86-mirror-frame'));
+    expect(frame.slice(0, frame.indexOf('}'))).toMatch(/pointer-events:\s*none/);
+  });
+
+  test('IT PATCHES NO PROTOTYPE IN THE PRESENTER\'S DOCUMENT', () => {
+    // The single largest reason rrweb was not vendored. It Proxies
+    // CSSStyleSheet.prototype.insertRule/deleteRule and
+    // CSSStyleDeclaration.prototype.setProperty/removeProperty UNCONDITIONALLY,
+    // plus every method on CanvasRenderingContext2D.prototype when canvas
+    // recording is on. Three host/guest bleeds have happened on this feature;
+    // rewriting two CSSOM prototypes in the host document is a change to the
+    // host's app whatever the intent.
+    for (const forbidden of [
+      'CanvasRenderingContext2D', 'CSSStyleSheet.prototype', 'CSSStyleDeclaration',
+      'Node.prototype', 'Element.prototype', 'HTMLElement.prototype',
+      'Object.defineProperty', 'new Proxy'
+    ]) {
+      expect(MIRROR_HOST).not.toContain(forbidden);
+    }
+  });
+
+  test('it mutates nothing on the host page', () => {
+    // The same list the strip is held to, applied to the file that has an
+    // actual reason to touch app nodes and must not.
+    expect(MIRROR_HOST).not.toMatch(/\.disabled\s*=/);
+    expect(MIRROR_HOST).not.toMatch(/setAttribute\(\s*['"](inert|disabled)['"]/);
+    // READING document.body.className is legitimate and necessary — the theme
+    // is body.light-mode re-declaring the :root tokens, and a stage that did
+    // not carry it would render the host's screen in the wrong theme with no
+    // clue why. WRITING it is the thing that must never happen, so the
+    // assertion is on assignment and on the mutating classList methods rather
+    // than on the identifier.
+    expect(MIRROR_HOST).not.toMatch(/document\.body\.(className|style)\s*=/);
+    expect(MIRROR_HOST).not.toMatch(/document\.body\.classList\.(add|remove|toggle|replace)/);
+    expect(MIRROR_HOST).not.toMatch(/documentElement\.(classList|className)\s*=/);
+    expect(MIRROR_HOST).not.toMatch(/documentElement\.classList\.(add|remove|toggle)/);
+    expect(MIRROR_HOST).not.toMatch(/documentElement\.style\.setProperty/);
+    for (const forbidden of ['read-only-mode', '_canEdit', 'readOnly']) {
+      expect(MIRROR_HOST).not.toContain(forbidden);
+    }
+    // Node identity lives in a WeakMap, NOT in a data- attribute stamped on the
+    // presenter's DOM. That is what makes the teardown-equality test in
+    // test/live-mirror-roundtrip.test.js possible at all.
+    expect(MIRROR_HOST).toMatch(/new WeakMap\(\)/);
+  });
+
+  test('the observer is the only hook, and it binds to no app element', () => {
+    expect(MIRROR_HOST).toMatch(/new MutationObserver/);
+    // No scroll handler, no rAF loop, no click hook: the frame repaint rides
+    // the 1 Hz tick live-rooms.js already runs.
+    expect(MIRROR_HOST).not.toMatch(/addEventListener/);
+    expect(MIRROR_HOST).not.toMatch(/requestAnimationFrame/);
+    expect(MIRROR_HOST).not.toMatch(/setInterval/);
+    expect(code('js', 'live-rooms.js')).toMatch(/window\.p86LiveMirror\.tick\(\)/);
+  });
+
+  test('serialization never runs inside the observer callback', () => {
+    // The presenter's paint must not wait on us. Records are queued and the
+    // walk runs on a timer.
+    const cb = MIRROR_HOST.slice(MIRROR_HOST.indexOf('new MutationObserver'));
+    const body = cb.slice(0, cb.indexOf('M.obs.observe'));
+    expect(body).toMatch(/M\.queue\.push/);
+    expect(body).not.toMatch(/serialize\(|snapshot\(/);
+  });
+
+  test('THE DENYLIST IS FROZEN, AND THE HOST-VISIBLE COPY IS GENERATED FROM IT', () => {
+    // A promise on screen that the code stopped keeping is worse than no
+    // promise, so the strip's "what they never see" sentence is BUILT from the
+    // list the serializer enforces rather than typed out beside it.
+    const MC = require('../js/live-mirror-host.js');
+    expect(MC.DENY.length).toBeGreaterThan(6);
+    for (const sel of MC.DENY) {
+      expect(typeof MC.DENY_LABELS[sel]).toBe('string');
+      expect(MC.DENY_LABELS[sel].length).toBeGreaterThan(3);
+    }
+    const sentence = MC.notSharedText();
+    for (const sel of MC.DENY) expect(sentence).toContain(MC.DENY_LABELS[sel]);
+    // And the strip actually paints that generated sentence.
+    expect(code('js', 'live-rooms.js')).toMatch(/CM\.notSharedText\(\)/);
+  });
+
+  test('BLEED #4: the room URL and the presenter strip are denied BY NAME', () => {
+    // js/live-rooms.js renders location.origin + '/live/' + host.token — the
+    // room's own bearer credential — into a <code> in the presenter's body,
+    // beside the roster and the kick buttons. A mirror that captured it would
+    // ship the credential and every guest's name to everyone the link had been
+    // forwarded to.
+    const MC = require('../js/live-mirror-host.js');
+    expect(MC.DENY).toContain('.p86-live-strip');
+    expect(MC.DENY).toContain('.p86-live-cursors');
+    expect(MC.DENY).toContain('#p86-ai-panel');
+    expect(MC.DENY).toContain('.modal');
+    // And a generic opt-out, so a future feature excludes itself without
+    // editing the serializer.
+    expect(MC.DENY).toContain('[data-live-private]');
+  });
+
+  test('attribute copying is an ALLOW-LIST of names AND a filter on values', () => {
+    const MC = require('../js/live-mirror-host.js');
+    // The mechanism, not a sample: nothing beginning with "on" is on the list,
+    // and data-* is denied except a frozen presentational set.
+    expect(MC.ATTR_ALLOW.filter((a) => a.indexOf('on') === 0)).toEqual([]);
+    expect(MC.isAllowedAttr('onclick')).toBe(false);
+    expect(MC.isAllowedAttr('data-co-open')).toBe(false);
+    // And the VALUE filter, which an allow-list of names cannot do: this app
+    // puts primary keys — including the room's own withheld entity_id — inside
+    // id and data-* (js/schedule.js:3686, js/jobs.js:826,851).
+    expect(MC.scrubIdValue('schJobWxBody-a3f1c2d4-55aa-4b7c-9e11-0123456789ab'))
+      .not.toContain('a3f1c2d4-55aa-4b7c-9e11-0123456789ab');
+    expect(MC.scrubIdValue('wip-contract-income')).toBe('wip-contract-income');
+  });
+
+  test('the mirror host never renders the guest bar, and never fetches the read proxy', () => {
+    // The same rule the strip is held to. If the presenter's page ever starts
+    // painting the guest's projection, that is the failure both of the reported
+    // symptoms looked like.
+    expect(MIRROR_HOST).not.toMatch(/\/view\//);
+    expect(MIRROR_HOST).not.toMatch(/\bread-only\b/i);
+    expect(MIRROR_HOST).not.toMatch(/loadSurface|View\.render/);
+    // It talks to exactly one door, and that door is the mirror up-channel.
+    expect((MIRROR_HOST.match(/fetch\(/g) || []).length).toBe(1);
+    expect((MIRROR_HOST.match(/'\/api\/live\/'/g) || []).length).toBe(1);
+    expect(MIRROR_HOST).toMatch(/'\/api\/live\/' \+ encodeURIComponent\(s\.roomId\) \+ '\/mirror\/'/);
+  });
+
+  test('the guest stage is scriptless, pointer-inert, and persists nothing', () => {
+    expect(MIRROR_GUEST).toMatch(/setAttribute\('sandbox', 'allow-same-origin'\)/);
+    expect(MIRROR_GUEST).not.toMatch(/allow-scripts|allow-forms|allow-popups|allow-top-navigation|allow-modals/);
+    expect(MIRROR_GUEST).toMatch(/pointer-events:\s*none/);
+    // Same-origin contentDocument, so no postMessage is involved and the
+    // no-shared-surface assertion below stays intact.
+    expect(MIRROR_GUEST).not.toMatch(/localStorage|sessionStorage|indexedDB|BroadcastChannel|postMessage/);
+    // And a terminal state drops it. The mirrored DOM is the most sensitive
+    // thing this feature has ever put in a guest browser.
+    expect(MIRROR_GUEST).toMatch(/teardown: clear/);
+    expect(stripHtml(read('live.html'))).toMatch(/dropStage\(\);/);
+  });
+
+  test('MODE IS VISIBLE ON BOTH SIDES, always, without opening anything', () => {
+    // "A viewer who believes they are seeing a filtered view while receiving a
+    // raw one is the bad outcome." Both surfaces state the arrangement rather
+    // than letting it be inferred from what arrives.
+    const HOSTJS = code('js', 'live-rooms.js');
+    expect(HOSTJS).toMatch(/p86-live-mode/);
+    expect(HOSTJS).toMatch(/MIRRORING/);
+    expect(HOSTJS).toMatch(/SHARED VIEW/);
+    const GUEST = stripHtml(read('live.html'));
+    expect(GUEST).toMatch(/actual screen, live/);
+    expect(GUEST).toMatch(/structured view, built by the server/);
+    expect(GUEST).toMatch(/isn't mirrored/);
+  });
+
+  test('the mirror files are LOADED by the pages that are allowed to have them', () => {
+    // The host serializer must never reach the guest page, and the stage must
+    // never reach the app. This is the same class of separation the isGuestPage
+    // gate enforces at runtime, asserted at load time.
+    const APP = read('index.html');
+    expect(APP).toMatch(/js\/live-mirror-host\.js\?v=\d+/);
+    expect(APP).not.toMatch(/live-mirror-guest\.js/);
+    const GUEST_HTML = read('live.html');
+    expect(GUEST_HTML).toMatch(/js\/live-mirror-guest\.js\?v=\d+/);
+    expect(GUEST_HTML).not.toMatch(/live-mirror-host\.js/);
+  });
+
   test('no shared same-origin surface carries viewer state to the host tab', () => {
     // Same browser means localStorage, sessionStorage, BroadcastChannel, a
     // service worker and postMessage are all shared between the presenting tab
     // and a viewer tab. If the guest shell ever writes "I am read-only"
     // anywhere shared, the host tab can read it. Today none of them are used —
     // and this is what keeps it that way.
-    for (const f of [['js', 'live-rooms.js'], ['js', 'live-view.js']]) {
+    for (const f of [['js', 'live-rooms.js'], ['js', 'live-view.js'],
+                     ['js', 'live-mirror-host.js'], ['js', 'live-mirror-guest.js']]) {
       const SRC = code(...f);
       expect(SRC).not.toMatch(/localStorage|sessionStorage|indexedDB|BroadcastChannel|postMessage/);
     }

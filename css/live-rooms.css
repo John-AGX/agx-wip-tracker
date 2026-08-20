@@ -273,3 +273,54 @@ body.light-mode .p86-live-link {
 }
 body.light-mode .p86-live-switch-knob { background: #cdd2da; }
 body.light-mode .p86-live-switch-knob::after { background: #ffffff; }
+
+/* ══ Phase 03 — the mirror ══════════════════════════════════════════════════
+ * Two additions, and both are about the presenter KNOWING what is being shared.
+ *
+ * The frame outline is drawn INSIDE .p86-live-cursors, which is already
+ * body-mounted and already pointer-events:none. js/live-mirror-host.js mounts
+ * nothing of its own on the host body — the "exactly two mounts" assertion in
+ * test/live-host-guest-bleed.test.js stays at two, and it stays true for a
+ * feature that draws a box around a live pane. */
+.p86-mirror-frame {
+  pointer-events: none;
+  border: 2px solid var(--accent, #4f8cff);
+  border-radius: 10px;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0);
+  outline-offset: 2px;
+  z-index: 1;
+}
+/* Self-degraded: the serializer is eating too much of the main thread and has
+   dropped to snapshot-only. Said on the frame as well as in the strip, because
+   the frame is the thing the host is actually looking at. */
+.p86-mirror-frame[data-lm-degraded="1"] {
+  border-style: dashed;
+  border-color: var(--yellow, #f0b429);
+}
+
+/* WHICH ARRANGEMENT IS RUNNING. Always visible, never behind a click: a
+   presenter who believes he is sending a filtered view while sending pixels is
+   the outcome this whole mode is built to make impossible. */
+.p86-live-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border, #2a2a32);
+  color: var(--text-dim, #8b90a5);
+  white-space: nowrap;
+}
+.p86-live-mode[data-mode="mirror"] {
+  border-color: var(--accent, #4f8cff);
+  color: var(--accent, #4f8cff);
+  background: rgba(79, 140, 255, 0.12);
+}
+body.light-mode .p86-live-mode { color: #5b6070; border-color: #d9dce2; }
+body.light-mode .p86-live-mode[data-mode="mirror"] {
+  color: #1d4ed8; border-color: #93b4ff; background: rgba(29, 78, 216, 0.08);
+}

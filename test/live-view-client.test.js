@@ -261,9 +261,14 @@ describe('the guest shell is not the app', () => {
   const HTML = read('live.html');
   const BODY = stripHtml(HTML);
 
-  test('it loads exactly two of the app JS files, and none of the SPA', () => {
+  test('it loads exactly three of the app JS files, and none of the SPA', () => {
+    // Phase 03 adds the mirror APPLIER. The host SERIALIZER is not here and
+    // must never be — it reads the app's nav state and POSTs the presenter's
+    // pane, neither of which this page has.
     const srcs = Array.from(HTML.matchAll(/<script src="([^"]+)"/g)).map((m) => m[1]);
-    expect(srcs.map((s) => s.split('?')[0]).sort()).toEqual(['/js/live-rooms.js', '/js/live-view.js']);
+    expect(srcs.map((s) => s.split('?')[0]).sort())
+      .toEqual(['/js/live-mirror-guest.js', '/js/live-rooms.js', '/js/live-view.js']);
+    expect(BODY).not.toContain('live-mirror-host');
     // js/app.js loadData() opens with eight ORG-WIDE GETs in one Promise.all —
     // every job, estimate, QB cost line, sub, PO, CO, bill and AR invoice. A
     // guest shell that booted the SPA would download the company.
@@ -307,8 +312,15 @@ describe('the guest shell is not the app', () => {
     // And a terminal state CLEARS the document rather than leaving a rendered
     // job on screen after a revoke.
     const dead = HTML.slice(HTML.indexOf('function showDead'));
-    expect(dead.slice(0, 400)).toMatch(/surface'\)\.innerHTML = ''/);
-    expect(dead.slice(0, 400)).toMatch(/lastDoc = null/);
+    const body = dead.slice(0, dead.indexOf('}'));
+    expect(body).toMatch(/surface'\)\.innerHTML = ''/);
+    expect(body).toMatch(/lastDoc = null/);
+    // Phase 03: AND the mirrored DOM. It is the most sensitive thing this
+    // feature has ever put in a guest browser, and the rule that wrote this
+    // assertion — a revoked link must not leave the WIP table on screen —
+    // applies to the host's raw pane far harder than it applied to the
+    // projection.
+    expect(body).toMatch(/dropStage\(\);/);
   });
 
   test('a policy flip DISCARDS the document rather than patching it', () => {
@@ -346,7 +358,20 @@ describe('the guest shell is not the app', () => {
     // sentence was removed, and a raw grep would fail on the explanation —
     // which teaches the next person to delete the comment instead of the bug.
     expect(BODY).not.toMatch(/not their pointer/);
-    expect(HTML).toMatch(/the same screen, laid out for your phone/);
+
+    // Phase 03 makes that sentence CONDITIONAL rather than deleting it, because
+    // it is only true on one of the two paths. "The same screen, laid out for
+    // your phone" describes the structured document exactly; a mirrored pane is
+    // the HOST's layout at the HOST's width, scaled — reflowing it would produce
+    // a layout the host has never seen and cannot describe. So the bar states
+    // which arrangement is running, per surface, and the two sentences are
+    // worded differently enough that nobody can mistake one for the other.
+    expect(HTML).toMatch(/structured view, built by the server/);
+    expect(HTML).toMatch(/actual screen, live/);
+    expect(HTML).toMatch(/isn't mirrored/);
+    // And it is a STATEMENT, not an inference from what happens to arrive: the
+    // mode comes off the room row, through publicRoom, onto the session.
+    expect(HTML).toMatch(/session\.mode === 'mirror'/);
 
     // And every non-following note is untouched: the bar must never stop
     // admitting it cannot verify.

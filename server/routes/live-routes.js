@@ -86,9 +86,13 @@ const crypto = require('crypto');
 const { pool } = require('../db');
 const { requireAuth, resolveOrgId, ORG_LOOKUP_FAILED } = require('../auth');
 const { resolveEntityLabels } = require('../services/entity-labels');
-const { liveJoinLimiter, liveStreamLimiter, liveViewLimiter, liveRoomViewLimiter } = require('../rate-limit');
+const {
+  liveJoinLimiter, liveStreamLimiter, liveViewLimiter, liveRoomViewLimiter,
+  liveMirrorLimiter, liveSnapLimiter, liveRoomSnapLimiter
+} = require('../rate-limit');
 const L = require('../services/live-rooms');
 const LV = require('../services/live-view');
+const LM = require('../services/live-mirror');
 const jobMoney = require('../services/money/change-order-totals');
 const jobWip = require('../services/money/job-wip');
 const jobCostBuckets = require('../services/money/job-cost-buckets');
@@ -135,7 +139,29 @@ function hub(roomId) {
       // view fetch rather than self-reported. Presenter-only: it is what tells
       // the host someone stopped following BEFORE they say "as you can see
       // here", and project() strips it from every guest's copy.
-      at: new Map()             // participantId -> surface key
+      at: new Map(),            // participantId -> surface key
+      // ── Phase 03: the mirror ────────────────────────────────────────────
+      // The current frame of the host's pane, PULLED by guests rather than
+      // pushed to them. Three things fall out of that choice and all three
+      // matter:
+      //   1. an ordinary JSON GET compresses for free — the SSE stream sets
+      //      no-transform (see the stream route below) and there is no
+      //      compression middleware anywhere in server/, so a pushed snapshot
+      //      would cross the wire raw.
+      //   2. the MAX_PARTICIPANTS-way fan-out never happens. emit() loops
+      //      synchronously over every sub; one pushed snapshot is N x 25 bytes
+      //      queued in a single pass, and a slow phone on LTE would stall the
+      //      whole room. Pulling means each guest fetches at its own pace and
+      //      stalls only itself.
+      //   3. resume becomes a pointer comparison (services/live-mirror.js
+      //      mirrorResume).
+      //
+      // MUTATIONS NEVER ENTER h.ring. The ring is RING_MAX CONTROL events;
+      // feeding mutations in would evict `view`, `presence` and `policy` and
+      // break the resume that already works — the same argument that kept
+      // cursor frames out. The tail here is bounded by BYTES and by AGE, never
+      // by a count, because one entry can be a megabyte.
+      mirror: null              // { snapSeq, at, surface, body, meta, ops, opsBytes, stale }
     };
     _rooms.set(roomId, h);
   }
@@ -146,6 +172,13 @@ const RING_MAX = 200;
 const SWEEP_MS = 15000;
 const HEARTBEAT_MS = 15000;
 const MAX_CONSEC_WRITE_FAILS = 2;   // mirrors ai-routes.js:3841
+// Sustained BACKPRESSURE, which is a different fault from a broken socket and
+// deserves a different threshold. res.write returning false once is ordinary on
+// a phone; twenty consecutive times means this subscriber cannot keep up, and
+// the honest answer is to close it so it reconnects into a fresh snapshot
+// rather than accumulating a DOM that drifts further from the host every second
+// while the server reports a healthy stream.
+const MAX_CONSEC_SOFT_FAILS = 20;
 
 // Teardown is as explicit as the ways a room ends. The design listed six ways
 // the ROW ends and none for the object; an in-memory room that is never deleted
@@ -157,6 +190,12 @@ function destroyHub(roomId, reason) {
     try { sub.res.end(); } catch (_) {}
   }
   h.subs.clear(); h.beats.clear(); h.cursors.clear(); h.presence.clear(); h.at.clear(); h.ring.length = 0;
+  // The mirror frame is the raw DOM of someone's private job screen. It goes on
+  // the EXPLICIT clear list beside the ring and the cursors rather than being
+  // left to _rooms.delete: this list is the answer to "what does the end of a
+  // room actually erase", and a cached copy of the host's screen belongs in it
+  // by name.
+  clearMirror(h);
   _rooms.delete(roomId);
   console.log('[live] hub destroyed', roomId, reason || '');
 }
@@ -182,11 +221,40 @@ function destroyHub(roomId, reason) {
 // flips the policy.
 function project(event, sub) { return LV.projectEvent(event, sub); }
 
+// Drop the mirror. Called on teardown, on a mode change, and whenever the
+// host's claimed route stops being authorized — every one of which must leave
+// the hub with no copy of the host's screen in it.
+//
+// Not merely "stop sending". loadStreamContext re-queries per request and
+// enforces left_at/kicked_at/roomIsUsable, so kick, revoke and expiry already
+// close the snapshot door — but MODE is not in that query, and a cached
+// snapshot is frozen under the policy that captured it while the projected read
+// proxy re-derives from the DB under viewPolicy on every hit. So a mode flip
+// has to erase the bytes, not just change what future ones look like.
+function clearMirror(h) {
+  if (!h) return;
+  if (h.mirror) { h.mirror.body = null; h.mirror.ops = null; }
+  h.mirror = null;
+}
+
 function writeFrame(sub, payload) {
   try {
-    sub.res.write('data: ' + JSON.stringify(payload) + '\n\n');
-    sub.fails = 0;
-    return true;
+    // res.write's RETURN VALUE is the whole point of this line. The shipped
+    // version discarded it, so MAX_CONSEC_WRITE_FAILS could only ever fire on a
+    // THROW — a full socket buffer returns false and was invisible. A guest on
+    // a truck's LTE therefore accumulated an ever-growing kernel queue and,
+    // once the mirror is on the wire, an ever-more-desynced DOM, with the
+    // server reporting a healthy stream throughout.
+    const ok = sub.res.write('data: ' + JSON.stringify(payload) + '\n\n');
+    if (ok) { sub.fails = 0; sub.soft = 0; return true; }
+    // A SOFT fail: the socket is alive, its buffer is simply full. Counted
+    // separately and tolerated far longer than a throw, because one buffered
+    // write on a phone that just went through a tunnel is normal and closing
+    // that stream would be the surface claiming a fault it has no evidence for.
+    // Sustained backpressure is a different thing, and MAX_CONSEC_SOFT_FAILS is
+    // where it stops being ignored.
+    sub.soft = (sub.soft || 0) + 1;
+    return false;
   } catch (e) {
     sub.fails = (sub.fails || 0) + 1;
     return false;
@@ -222,7 +290,7 @@ function emit(roomId, type, data, opts) {
     const payload = project(ev, sub);
     if (payload == null) continue;
     const ok = writeFrame(sub, payload);
-    if (!ok && sub.fails >= MAX_CONSEC_WRITE_FAILS) {
+    if (!ok && (sub.fails >= MAX_CONSEC_WRITE_FAILS || sub.soft >= MAX_CONSEC_SOFT_FAILS)) {
       // The TCP stream is clearly broken. Close it rather than waiting for the
       // OS to notice — ai-routes.js:3841 learned this the hard way, where empty
       // catch blocks swallowed every write failure and subsequent writes
@@ -529,7 +597,8 @@ router.post('/rooms', requireAuth, async (req, res) => {
             // The host's own copy of the policy. Not on publicRoom: that
             // projection is what a GUEST is allowed to see, and phase 01 keeps
             // it to the smallest set that works.
-            hide_financials: ex.hide_financials !== false
+            hide_financials: ex.hide_financials !== false,
+            mode: L.normalizeMode(ex.mode)
           });
         }
         // Someone else is already presenting this entity. Refusing is honest —
@@ -565,7 +634,8 @@ router.post('/rooms', requireAuth, async (req, res) => {
     console.log('[live] room minted', room.id, 'org', verdict.orgId, body.entity_type + ':' + entityId);
     res.json({
       room: L.publicRoom(room, title, Date.now()), token: token, reused: false,
-      hide_financials: room.hide_financials !== false
+      hide_financials: room.hide_financials !== false,
+      mode: L.normalizeMode(room.mode)
     });
   } catch (e) {
     // A UNIQUE violation on the one-live-room-per-entity index means someone
@@ -609,7 +679,8 @@ router.get('/mine', requireAuth, async (req, res) => {
         token: room.token,
         entity_type: room.entity_type,
         entity_id: room.entity_id,
-        hide_financials: room.hide_financials !== false
+        hide_financials: room.hide_financials !== false,
+        mode: L.normalizeMode(room.mode)
       });
     }
     res.json({ rooms: out });
@@ -695,6 +766,18 @@ router.post('/rooms/:id/policy', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'hide_financials must be true or false.' });
     }
     const hide = body.hide_financials;
+    // THE INVARIANT, defended from the other side. A mirrored room is streaming
+    // the host's raw pane; turning "hide financials" on would leave the row
+    // claiming a redaction the transport is not performing, which is the exact
+    // failure mode this feature names as the worst one. Refused BY NAME, with
+    // the action that actually achieves it — never silently accepted and never
+    // silently ignored.
+    if (hide && LM.normalizeMode(room.mode) === 'mirror') {
+      return res.status(409).json({
+        error: 'This session is mirroring your screen, so financials cannot be hidden — viewers are seeing the pixels. Switch back to the structured view first.',
+        code: 'MIRROR_MODE'
+      });
+    }
     await pool.query('UPDATE live_rooms SET hide_financials = $2 WHERE id = $1', [room.id, hide]);
     const next = Object.assign({}, room, { hide_financials: hide });
 
@@ -718,6 +801,77 @@ router.post('/rooms/:id/policy', requireAuth, async (req, res) => {
   } catch (e) {
     console.error('[live] policy failed:', e && e.message);
     res.status(500).json({ error: 'Could not change what viewers can see.' });
+  }
+});
+
+// POST /api/live/rooms/:id/mode  { mode: 'projected' | 'mirror' }
+//
+// MODE IS A ROOM PROPERTY, NOT A PER-SURFACE ONE. A mode that changes as the
+// host wanders is a mode nobody can describe, and the guest bar's whole job is
+// to describe the arrangement.
+//
+// Four things happen and each one closes a specific way this could go wrong:
+//
+//   1. modeWrite() computes BOTH columns. mode='mirror' forces
+//      hide_financials=false at the WRITE, so the row can never claim a
+//      redaction the transport is not performing. That is "a viewer who
+//      believes they are seeing a filtered view while receiving a raw one"
+//      turned into a data invariant instead of a UI promise.
+//   2. every open sub is re-stamped, exactly as the policy door does it, so
+//      the projection seam never needs a query it does not have.
+//   3. THE CACHED FRAME IS ERASED. Switching back to projected must not leave
+//      the host's raw pane sitting in hub memory behind a still-valid stream
+//      key — "a mirrored frame surviving a switch-to-projected is the same
+//      class as a revoked link leaving the WIP table on screen", and that rule
+//      has to apply to the SERVER's copy and not only to the guest's DOM.
+//   4. a CONTROL event goes out — seq, ring slot — so a guest reconnecting with
+//      ?after= lands in the right mode. Same argument as `view`.
+//
+// Host only, checked at execution (loadOwnedRoom), never gated in the UI.
+router.post('/rooms/:id/mode', requireAuth, async (req, res) => {
+  try {
+    const room = await loadOwnedRoom(req, res);
+    if (!room) return;
+    const body = req.body || {};
+    if (body.mode !== 'projected' && body.mode !== 'mirror') {
+      return res.status(400).json({ error: "mode must be 'projected' or 'mirror'." });
+    }
+    const write = LM.modeWrite(body.mode, room.hide_financials);
+    await pool.query(
+      'UPDATE live_rooms SET mode = $2, hide_financials = $3 WHERE id = $1',
+      [room.id, write.mode, write.hide_financials]
+    );
+    const next = Object.assign({}, room, write);
+
+    const h = _rooms.get(room.id);
+    if (h) {
+      clearMirror(h);
+      for (const [, sub] of h.subs) sub.policy = LV.viewPolicy(next, { role: sub.role });
+    }
+    emit(room.id, 'mode', {
+      mode: write.mode,
+      hide_financials: write.hide_financials,
+      at: new Date().toISOString()
+    });
+    // The policy moved as a side effect of the mode, so say so on that channel
+    // too rather than letting a guest bar painted from `policy` drift out of
+    // step with one painted from `mode`.
+    emit(room.id, 'policy', { hide_financials: write.hide_financials, at: new Date().toISOString() });
+
+    res.json({
+      ok: true,
+      mode: write.mode,
+      hide_financials: write.hide_financials,
+      // The MECHANISM, in the host's own terms. Switching to mirror is the one
+      // change in this feature that widens what a link-holder can see, so it
+      // says what it does plainly rather than in a reassurance.
+      note: write.mode === 'mirror'
+        ? 'Viewers now see this screen exactly as you see it, including every figure on it. Screens that are not mirrored fall back to the structured view.'
+        : 'Viewers are back on the structured view, built by the server from the record.'
+    });
+  } catch (e) {
+    console.error('[live] mode failed:', e && e.message);
+    res.status(500).json({ error: 'Could not change how viewers see this session.' });
   }
 });
 
@@ -1042,7 +1196,7 @@ router.get('/:roomId/stream/:streamKey', liveStreamLimiter, async (req, res) => 
   // where ctx.role is already in scope, so the fan-out never needs a query to
   // decide what a given recipient may be shown.
   const sub = {
-    res: res, streamKey: req.params.streamKey, connectedAt: Date.now(), fails: 0,
+    res: res, streamKey: req.params.streamKey, connectedAt: Date.now(), fails: 0, soft: 0,
     fingerprint: fingerprint(req),
     role: ctx.role,
     policy: LV.viewPolicy(room, { role: ctx.role })
@@ -1085,7 +1239,18 @@ router.get('/:roomId/stream/:streamKey', liveStreamLimiter, async (req, res) => 
       // joiner stares at the default until the host next navigates — the same
       // gap current cursor positions were already fixed for below.
       view: { surface: h.view.surface || null, reason: h.view.reason || null },
+      // The mirror pointer, for the same reason `view` and the current cursor
+      // positions are here: without it a mid-session joiner in a mirroring room
+      // stares at nothing until the host's next wholesale repaint, which on the
+      // WIP pane can be minutes. The FRAME is not here — it is pulled.
+      mirror: (h.mirror && h.mirror.surface)
+        ? { snapSeq: h.mirror.snapSeq, surface: h.mirror.surface, at: h.mirror.at }
+        : null,
       surfaces: LV.surfacesFor(room.entity_type),
+      // Which surfaces this room can mirror, so the guest can tell a screen it
+      // is NOT getting pixels for from one it is, and say which — rather than
+      // inferring the arrangement from what happens to arrive.
+      mirror_surfaces: LM.MIRROR_SURFACE_KEYS,
       // Surfaced rather than swallowed. The host's strip says so.
       multi_instance_suspected: multiInstance,
       timings: { beat_ms: L.BEAT_MS, stale_ms: L.STALE_MS, gone_ms: L.GONE_MS }
@@ -1289,6 +1454,217 @@ router.get('/:roomId/view/:streamKey/:surface', liveRoomViewLimiter, liveViewLim
     console.error('[live] view failed:', e && e.message);
     res.status(500).json({ error: 'Could not load that view.' });
   }
+});
+
+// ── PHASE 03: THE MIRROR CHANNELS ───────────────────────────────────────────
+//
+// POST /api/live/:roomId/mirror/:streamKey
+//   { claim: { entity_type, entity_id, surface }, kind: 'snap'|'ops'|'off',
+//     snapSeq, root?, meta?, ops? }
+//
+// ══ WHY THE CLAIM RIDES EVERY FLUSH ════════════════════════════════════════
+// This is the correction that the whole mode rests on, so it is written out
+// rather than delegated.
+//
+// In PROJECTED mode a guest's document is built by this process FROM THE
+// DATABASE, and the read proxy has no parameter that could carry an entity id —
+// "a guest cannot reach any record but the presented one" is a property of the
+// route SHAPE. In MIRROR mode the bytes come from the host's DOM, which is
+// repainted before this process hears about anything.
+//
+// The route travels on the BEAT, at BEAT_MS = 5000. Mutation flushes are ~50x
+// faster. And switching jobs does not create new panes: renderWipTab and
+// renderChangeOrders repaint the SAME element in place with the new job's
+// numbers, and the observer is attached to that element. So a mirror that
+// trusted the last beat's verdict would stream job B's pixels under job A's
+// authorization for up to a beat — and "they have access to the job anyway"
+// stops covering it the moment the leaked job is a DIFFERENT job.
+//
+// A role check is not the same check. `ctx.role === 'host'` on the beat is
+// authorization to STEER; hostViewEvent is the TENANCY test, and it runs
+// against ctx.room — the sole tenancy authority. Both run here, on every flush,
+// and a refusal DISCARDS the payload rather than merely declining to fan it
+// out: emit() rings control events before any projection, so a filter applied
+// downstream would already have written the wrong job's bytes into shared room
+// memory.
+//
+// The window is therefore zero, because there is no window.
+//
+// ══ AND THE CONTENT ALLOW-LIST IS ITS OWN ══════════════════════════════════
+// hostViewEvent authorizes a surface KEY. In projected mode that key resolves
+// to a hand-built fifteen-field document; in mirror mode it would resolve to a
+// DOM subtree this process cannot classify, and for job-overview those differ by
+// the job's entire sub-contract, AP, AR and PO ledger, the task list with
+// assignee names, and the file tree. services/live-mirror.js states which
+// surfaces may be mirrored and names the refusal for every one that may not.
+router.post('/:roomId/mirror/:streamKey', liveMirrorLimiter, async (req, res) => {
+  let ctx;
+  try { ctx = await loadStreamContext(req, res); }
+  catch (e) { return res.status(503).json({ error: 'mirror failed' }); }
+  if (!ctx) return;
+
+  // AUTHORIZE AT EXECUTION. /86/chat/continue ran writes with no capability
+  // check for exactly this shape of reason; a guest POSTing here must be
+  // refused at the door, not filtered downstream.
+  if (ctx.role !== 'host') return res.status(403).json({ error: 'Not found' });
+
+  const h = hub(ctx.room.id);
+  const body = req.body || {};
+
+  // The tenancy test, then the content test. Both on THIS flush, both against
+  // the room row.
+  const verdict = LV.hostViewEvent(body.claim, ctx.room);
+  const gate = LM.mirrorAuthorize(verdict, ctx.room.mode);
+
+  if (!gate.ok || body.kind === 'off') {
+    // DISCARD. Nothing this request carried is stored, replayed or fanned out.
+    const had = !!h.mirror;
+    clearMirror(h);
+    if (had) {
+      // Guests are moved off a frame that is no longer current rather than left
+      // staring at it presented as live. Phase 01's honesty rule.
+      emit(ctx.room.id, 'mirror-off', { reason: gate.reason || 'away', at: new Date().toISOString() });
+    }
+    res.set('Cache-Control', 'no-store');
+    return res.json({
+      ok: false,
+      surface: null,
+      reason: gate.reason || 'away',
+      fallback: LM.fallsBackToProjected(gate.reason),
+      watching: h.subs.size
+    });
+  }
+
+  const surface = gate.surface;
+  const now = Date.now();
+
+  try {
+    if (body.kind === 'snap') {
+      const serialized = JSON.stringify({ root: body.root, meta: body.meta || {} });
+      if (serialized.length > LM.MIRROR_MAX_SNAP_BYTES) {
+        // Refused with a NAMED reason rather than truncated. A truncated DOM is
+        // a wrong screen that looks like a right one.
+        clearMirror(h);
+        emit(ctx.room.id, 'mirror-off', { reason: 'too_big', at: new Date().toISOString() });
+        return res.json({ ok: false, surface: null, reason: 'too_big', fallback: true, watching: h.subs.size });
+      }
+      h.mirror = {
+        snapSeq: Number(body.snapSeq) || 1,
+        at: new Date(now).toISOString(),
+        surface: surface,
+        body: serialized,
+        meta: body.meta || {},
+        ops: [],
+        opsBytes: 0,
+        stale: false
+      };
+      // A ~60-byte POINTER. The frame itself is pulled.
+      //
+      // NOT a control event, for the same reason mutations are not: the ring is
+      // RING_MAX slots of `view`, `presence`, `policy` and `mode`, and a
+      // pointer that re-fires on every wholesale repaint would evict all of
+      // them within a busy minute. A guest that misses a pointer self-heals on
+      // the next mirror-op, which carries snapSeq and no longer matches its own;
+      // and a JOINING guest gets the current pointer in `hello`, which is where
+      // per-connection state belongs.
+      emit(ctx.room.id, 'mirror-snap', {
+        snapSeq: h.mirror.snapSeq, surface: surface,
+        w: (body.meta && body.meta.w) || null, h: (body.meta && body.meta.h) || null,
+        at: h.mirror.at
+      }, { cursor: true });
+      res.set('Cache-Control', 'no-store');
+      return res.json({ ok: true, surface: surface, reason: null, watching: h.subs.size });
+    }
+
+    if (body.kind === 'ops') {
+      // A takeover moved this room to a process that has no snapshot, so every
+      // guest's DOM is orphaned. live-routes' takeover path only bumps
+      // takeover_count; without this, every deploy would leave a room mirroring
+      // into nothing. The host is told to re-send rather than the guests being
+      // shown a stale frame.
+      if (!h.mirror || h.mirror.surface !== surface || Number(body.snapSeq) !== h.mirror.snapSeq) {
+        res.set('Cache-Control', 'no-store');
+        return res.json({ ok: true, surface: surface, reason: null, resnapshot: true, watching: h.subs.size });
+      }
+      const ops = Array.isArray(body.ops) ? body.ops : [];
+      // A batch this big means the sender's own big-batch rule did not fire —
+      // a bug, or a client that is not ours. Answer with "send me a whole
+      // frame" rather than folding a delta nobody can bound into the tail.
+      let batchBytes = 0;
+      try { batchBytes = JSON.stringify(ops).length; } catch (e) { batchBytes = LM.MIRROR_MAX_FLUSH_BYTES + 1; }
+      if (batchBytes > LM.MIRROR_MAX_FLUSH_BYTES) {
+        res.set('Cache-Control', 'no-store');
+        return res.json({ ok: true, surface: surface, reason: null, resnapshot: true, watching: h.subs.size });
+      }
+      const folded = LM.foldOps(h.mirror.ops, ops, h.mirror.opsBytes, now);
+      h.mirror.ops = folded.ops;
+      h.mirror.opsBytes = folded.bytes;
+      h.mirror.stale = h.mirror.stale || folded.stale;
+      h.mirror.at = new Date(now).toISOString();
+      // NOT a control event: mutations must never take a ring slot. `cursor:
+      // true` is this file's existing name for "sequence-less, never replayed".
+      emit(ctx.room.id, 'mirror-op', { snapSeq: h.mirror.snapSeq, surface: surface, ops: ops }, { cursor: true, except: ctx.participantId });
+      res.set('Cache-Control', 'no-store');
+      return res.json({ ok: true, surface: surface, reason: null, watching: h.subs.size });
+    }
+
+    return res.status(400).json({ error: 'Unknown mirror frame.' });
+  } catch (e) {
+    console.error('[live] mirror failed:', e && e.message);
+    return res.status(500).json({ error: 'mirror failed' });
+  }
+});
+
+// GET /api/live/:roomId/mirror/:streamKey/snapshot — THE PULL.
+//
+// Same credential shape and the same ordering as the read proxy: the credential
+// is checked FIRST, so a caller who does not hold one learns nothing about the
+// room. Two limiters, sized against the RESNAPSHOT rate rather than inherited
+// from the read proxy's 30/min — that number was sized for a human tapping a
+// surface picker, and inheriting it here would produce a livelock, because the
+// answer to "you fell behind" is itself a pull.
+//
+// MODE IS CHECKED HERE, and that check is not redundant with the mode door's
+// clearMirror(): loadStreamContext re-queries the room row per request and
+// covers kick, revoke and expiry, but it does not know about mode, and a cached
+// snapshot is frozen under the policy that captured it while the projected read
+// proxy re-derives under viewPolicy on every hit.
+router.get('/:roomId/mirror/:streamKey/snapshot', liveRoomSnapLimiter, liveSnapLimiter, async (req, res) => {
+  let ctx;
+  try { ctx = await loadStreamContext(req, res); }
+  catch (e) { return res.status(503).json({ error: 'Could not load that screen right now.' }); }
+  if (!ctx) return;
+
+  if (LM.normalizeMode(ctx.room.mode) !== 'mirror') {
+    return res.status(409).json({ error: 'This session is not mirroring.', code: 'NOT_MIRRORING' });
+  }
+  const h = _rooms.get(ctx.room.id);
+  const m = h && h.mirror;
+  if (!m || !m.body) {
+    // "I have nothing yet" is not "there is nothing". The guest waits and is
+    // told it is waiting; it is never handed a stale frame as current.
+    return res.status(404).json({ error: 'No frame yet.', code: 'NO_SNAPSHOT' });
+  }
+  // The surface the ROOM currently says the host is on. A frame captured for a
+  // surface the room has since moved off is not served: every frame carries the
+  // server-issued surface key so a guest can drop anything labelled for a
+  // surface it is not showing.
+  if (h.view && h.view.surface && m.surface !== h.view.surface) {
+    return res.status(409).json({ error: 'That screen moved.', code: 'SURFACE_MOVED' });
+  }
+
+  if (h) h.at.set(ctx.participantId, m.surface);
+  res.set('Cache-Control', 'no-store');
+  res.set('Referrer-Policy', 'no-referrer');
+  res.set('Content-Type', 'application/json; charset=utf-8');
+  // Assembled as text rather than through res.json so the stored frame is never
+  // re-parsed and re-serialized on every pull. Unlike the SSE stream this
+  // response sets NO no-transform, so it compresses on the way out for free.
+  res.send('{"snapSeq":' + JSON.stringify(m.snapSeq) +
+           ',"surface":' + JSON.stringify(m.surface) +
+           ',"at":' + JSON.stringify(m.at) +
+           ',"stale":' + JSON.stringify(!!m.stale) +
+           ',"frame":' + m.body + '}');
 });
 
 // POST /api/live/:roomId/leave/:streamKey — sent with keepalive:true on

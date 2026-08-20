@@ -273,6 +273,87 @@ const liveRoomViewLimiter = rateLimit({
   },
 });
 
+// 9. Phase 03 — the MIRROR channels. Two doors, two buckets, and neither of
+// them shares one with the beat.
+//
+// THE BEAT'S BUDGET IS LOAD-BEARING FOR ROOM LIFETIME, which the comment above
+// states as a consequence rather than a preference: a 429 on the host's beat
+// starves last_host_beat_at and the room is ENDED at the 120s backstop. So the
+// mutation channel gets its own bucket and is structurally unable to 429 the
+// thing that keeps the room alive.
+//
+// A correction to the record while sizing these, because anyone reading the
+// prose above will size a new budget wrong: the client aims at BEAT_MS = 5000
+// (services/live-rooms.js:61, js/live-rooms.js beatMs), i.e. TWELVE requests a
+// minute per participant, not the sixty the paragraph above describes. The
+// stream bucket's 180 is therefore ~15x the shipped cadence, not 3x.
+//
+// The mutation up-channel coalesces at ~100ms with an early flush on a 32KB
+// burst, so 1-3 POST/s is typical and ~10/s is the worst case. 900/min is that
+// worst case with headroom, and it is HOST-ONLY — a viewer's POST is refused at
+// the door by role, not merely rate-limited.
+const liveMirrorLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 900,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: function (req) {
+    // MUST read req.params.streamKey — same trap as liveViewLimiter: name the
+    // route param anything else and this silently falls back to the IP.
+    const k = (req.params && req.params.streamKey) || '';
+    return k ? ('lmk:' + k) : ('ip:' + (req.ip || 'unknown'));
+  },
+  handler: function (req, res) {
+    const retryAfter = Math.ceil(res.getHeader('Retry-After') || 60);
+    console.warn('[rate-limit] live mirror throttle on', req.originalUrl, '(retry in', retryAfter, 's)');
+    jsonHandler(res, retryAfter);
+  },
+});
+
+// 10. The snapshot PULL. Deliberately NOT liveViewLimiter's 30/min: that number
+// was sized for a human tapping a surface picker, and this door is pulled by
+// machinery. The big-batch rule turns this app's dominant render pattern
+// (1,346 `innerHTML =` sites — remove-all plus insert-all to any observer) into
+// a snapSeq bump, and a guest that falls behind is dropped to "resyncing",
+// which ALSO pulls. Inheriting a 30/min bucket would produce a livelock built
+// out of two correct-in-isolation rules: 429 -> resync -> pull -> 429.
+//
+// Sized against the resnapshot rate instead, and paired with a per-ROOM bucket
+// for the same reason the read proxy has one: a stream key is not scarce (join
+// mints a fresh one), so the bound that actually holds is keyed on the room id,
+// which cannot be manufactured without requireAuth.
+const liveSnapLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: function (req) {
+    const k = (req.params && req.params.streamKey) || '';
+    return k ? ('lsn:' + k) : ('ip:' + (req.ip || 'unknown'));
+  },
+  handler: function (req, res) {
+    const retryAfter = Math.ceil(res.getHeader('Retry-After') || 60);
+    console.warn('[rate-limit] live snapshot throttle on', req.originalUrl, '(retry in', retryAfter, 's)');
+    jsonHandler(res, retryAfter);
+  },
+});
+
+const liveRoomSnapLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 900,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: function (req) {
+    const r = (req.params && req.params.roomId) || '';
+    return r ? ('lsr:' + r) : ('ip:' + (req.ip || 'unknown'));
+  },
+  handler: function (req, res) {
+    const retryAfter = Math.ceil(res.getHeader('Retry-After') || 60);
+    console.warn('[rate-limit] live room snapshot throttle on', req.originalUrl, '(retry in', retryAfter, 's)');
+    jsonHandler(res, retryAfter);
+  },
+});
+
 module.exports = {
   ipLoginLimiter,
   ipGenericLimiter,
@@ -283,4 +364,7 @@ module.exports = {
   liveStreamLimiter,
   liveViewLimiter,
   liveRoomViewLimiter,
+  liveMirrorLimiter,
+  liveSnapLimiter,
+  liveRoomSnapLimiter,
 };

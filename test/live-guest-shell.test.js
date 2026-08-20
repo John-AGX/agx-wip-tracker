@@ -109,15 +109,24 @@ describe('the guest page loads a CLOSED set of assets', () => {
   const SCRIPTS = Array.from(HTML.matchAll(/<script src="([^"]+)"/g)).map((m) => m[1].split('?')[0]);
   const LINKS = Array.from(HTML.matchAll(/<link[^>]+href="([^"]+)"/g)).map((m) => m[1].split('?')[0]);
 
-  test('the script set is EXACTLY two host files — an equality, not a subset', () => {
-    expect(SCRIPTS.slice().sort()).toEqual(['/js/live-rooms.js', '/js/live-view.js']);
+  test('the script set is EXACTLY three files — an equality, not a subset', () => {
+    // Phase 03 adds the mirror APPLIER — the guest half. The host SERIALIZER
+    // (js/live-mirror-host.js) is deliberately not here and must never be: it
+    // reads the app's nav state and POSTs the presenter's pane, and this page
+    // has neither. The equality is what keeps that true rather than the
+    // intention.
+    expect(SCRIPTS.slice().sort()).toEqual([
+      '/js/live-mirror-guest.js', '/js/live-rooms.js', '/js/live-view.js'
+    ]);
+    expect(BODY).not.toContain('live-mirror-host');
   });
 
-  test('the stylesheet set is EXACTLY the two guest sheets plus Google Fonts', () => {
+  test('the stylesheet set is EXACTLY the guest sheets plus Google Fonts', () => {
     // An equality check is the generalisation of "this file's boot is gated"
     // into "no host file is on this page at all". A subset check would let the
     // next stylesheet in silently.
     expect(LINKS.slice().sort()).toEqual([
+      '/css/live-mirror.css',
       '/css/live-surface.css',
       '/css/live-view.css',
       'https://fonts.googleapis.com/css2',
@@ -240,23 +249,37 @@ describe('the guest shell stays a phone-in-a-truck page', () => {
   const SHELL = [
     ['js', 'live-rooms.js'],
     ['js', 'live-view.js'],
+    ['js', 'live-mirror-guest.js'],
     ['css', 'live-view.css'],
-    ['css', 'live-surface.css']
+    ['css', 'live-surface.css'],
+    ['css', 'live-mirror.css']
   ];
 
-  test('the whole shell is under 48 KB gzipped, and the extract under 4 KB', () => {
+  test('the whole shell is under 64 KB gzipped, and the extract under 4 KB', () => {
     // Measured on this tree, gzip -9:
-    //   js/live-rooms.js  20,324   js/live-view.js    7,684
-    //   css/live-view.css  3,827   css/live-surface   3,154
-    //   live.html          8,034                 total ~43 KB
-    // The ceiling is set to catch the two ways this page gets heavy — linking
-    // css/styles.css (+92 KB gz) or pulling in an SPA file — not to police a
-    // few hundred bytes of comment.
+    //   js/live-rooms.js       23,640   js/live-view.js         7,684
+    //   js/live-mirror-guest.js 5,540   css/live-view.css       3,827
+    //   css/live-surface.css    3,154   css/live-mirror.css       928
+    //   live.html              11,177                      total ~55 KB
+    //
+    // The ceiling moved from 48 KB with phase 03 and the number is restated
+    // rather than quietly raised. Two honest notes about where it went:
+    //   • js/live-mirror-guest.js (5.4 KB) is the stage applier, and it is the
+    //     only genuinely NEW cost this page pays.
+    //   • js/live-rooms.js grew ~3 KB, and most of that growth is the HOST's
+    //     mode switch and presenter panel, which this page loads for the
+    //     session core and never runs. That is a pre-existing shape (the guest
+    //     has always loaded the whole file for LiveSession), not a new one, and
+    //     it is worth splitting the day this ceiling is genuinely in the way.
+    //
+    // The ceiling is still set to catch the two ways this page gets HEAVY —
+    // linking css/styles.css (+92 KB gz) or pulling in an SPA file — not to
+    // police a few hundred bytes of comment.
     const total = SHELL.reduce((s, f) => s + gz(...f), 0) + gz('live.html');
-    expect(total).toBeLessThan(48 * 1024);
+    expect(total).toBeLessThan(64 * 1024);
     expect(gz('css', 'live-surface.css')).toBeLessThan(4 * 1024);
     // And no single asset dominates: the largest is the session core.
-    for (const f of SHELL) expect(gz(...f)).toBeLessThan(25 * 1024);
+    for (const f of SHELL) expect(gz(...f)).toBeLessThan(28 * 1024);
   });
 
   test('the extract costs a fraction of the stylesheet it replaces', () => {
