@@ -62,6 +62,11 @@ function shapeChangeOrderRow(r) {
     id: r.id,
     status: r.status,
     coNumber: r.co_number,
+    // The SELECT did not ask for approved_at and this shape did not return it,
+    // so every consumer reading `approved_at` off a shaped row read undefined —
+    // forever, silently. The Live Rooms CO surface showed a blank approval date
+    // on every approved CO because of it.
+    approved: r.approved_at || d.approvedAt || null,
     linked_node_id: r.linked_node_id,
     description: d.title || d.description || '',
     lineCount: Array.isArray(d.lines) ? d.lines.length : 0,
@@ -83,9 +88,51 @@ function shapeChangeOrderRow(r) {
 // dedupe on. When a job holds both, the hidden count is reported on the
 // returned array so callers can say so out loud instead of silently
 // dropping records.
+
+// A legacy blob CO, given the SAME SHAPE a table row gets. It was returned raw
+// before, which meant a caller reading the canonical fields — `counted`,
+// `proposedIncome`, `coNumber` — got undefined on every pre-migration job. The
+// Live Rooms CO surface rendered a row of dashes for jobs whose WIP tab was, at
+// the same moment, counting those same COs into coIncome: two tabs, one job,
+// contradicting each other.
+//
+// THE MONEY IS DELIBERATELY UNCHANGED. computeJobWIP sums `c.income` and has
+// always summed the legacy blob's raw `income` regardless of status, so
+// `counted` is true here and income/costs pass through untouched. Re-deciding
+// which legacy COs count is a change to org-wide job cost, it is not what this
+// pass is, and doing it as a side effect of a display fix is how a money bug
+// ships inside a rendering commit.
+function shapeLegacyChangeOrder(r) {
+  const d = r || {};
+  const income = num(d.income);
+  // `costs` is read EXACTLY as coTotals reads it — off `costs`, not off
+  // `estimatedCosts`. A legacy blob CO carries its cost under the second name,
+  // so computeJobWIP has never counted it. That is a PRE-EXISTING gap in the
+  // money layer, it is named here rather than repaired, and repairing it would
+  // move org-wide job cost from inside a rendering commit. `proposedCosts`
+  // carries the value the record actually holds, so the number is visible
+  // without being counted.
+  const costs = num(d.costs);
+  const proposedCosts = num(d.costs != null ? d.costs : d.estimatedCosts);
+  return {
+    id: d.id,
+    status: d.status || '',
+    coNumber: d.coNumber || d.co_number || d.number || '',
+    approved: d.approvedAt || d.approved_at || null,
+    linked_node_id: d.linked_node_id || d.linkedNodeId || null,
+    description: d.title || d.description || '',
+    lineCount: Array.isArray(d.lines) ? d.lines.length : 0,
+    income: income,
+    costs: costs,
+    proposedIncome: income,
+    proposedCosts: proposedCosts,
+    counted: true,
+  };
+}
+
 function withLegacyFallback(rows, legacyBlobArray) {
   const legacy = Array.isArray(legacyBlobArray) ? legacyBlobArray : [];
-  if (!rows.length) return legacy;
+  if (!rows.length) return legacy.map(shapeLegacyChangeOrder);
   const out = rows.map(shapeChangeOrderRow);
   if (legacy.length) {
     Object.defineProperty(out, 'legacyHiddenCount', {
@@ -97,7 +144,7 @@ function withLegacyFallback(rows, legacyBlobArray) {
 
 async function changeOrdersForJob(db, jobId, legacyBlobArray) {
   const { rows } = await db.query(
-    `SELECT id, job_id, status, co_number, linked_node_id, data
+    `SELECT id, job_id, status, co_number, linked_node_id, approved_at, data
        FROM job_change_orders WHERE job_id = $1 ORDER BY created_at ASC`,
     [jobId]
   );
@@ -117,7 +164,7 @@ async function changeOrdersForJobs(db, jobIds) {
   const ids = (jobIds || []).filter(Boolean);
   if (!ids.length) return out;
   const { rows } = await db.query(
-    `SELECT id, job_id, status, co_number, linked_node_id, data
+    `SELECT id, job_id, status, co_number, linked_node_id, approved_at, data
        FROM job_change_orders WHERE job_id = ANY($1) ORDER BY created_at ASC`,
     [ids]
   );
@@ -257,6 +304,8 @@ function invoicedToDate(invoiceRows, job) {
 
 module.exports = {
   changeOrderMoney,
+  shapeChangeOrderRow,
+  shapeLegacyChangeOrder,
   purchaseOrderMoney,
   changeOrdersForJob,
   changeOrdersForJobs,

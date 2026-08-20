@@ -27,6 +27,8 @@
 
 const express = require('express');
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const C = require('./fixtures/live-money-canaries');
 
 let queries;
@@ -226,6 +228,7 @@ const liveRoutes = require('../server/routes/live-routes');
 const LV = require('../server/services/live-view');
 const jobWip = require('../server/services/money/job-wip');
 const jobMoney = require('../server/services/money/change-order-totals');
+const jobCostBuckets = require('../server/services/money/job-cost-buckets');
 setRolePool(require('../server/db').pool);
 
 let server, baseUrl;
@@ -355,19 +358,45 @@ function waitFor(pred, ms) {
 // every margin and every profit figure this feature exists to hide.
 const NON_MONEY_WIP_KEYS = new Set(['pctComplete', 'qbCostLineCount', 'qbCostsAsOf']);
 
-async function expectedWipFigures() {
+async function wipInputs() {
   const job = C.jobBlob();
   const changeOrders = await jobMoney.changeOrdersForJob(
     { query: async (s, p) => mockRun(s, p) }, C.IDENTITY.jobId, job.changeOrders);
   const invoices = await jobMoney.invoicesForJob(
     { query: async (s, p) => mockRun(s, p) }, C.IDENTITY.jobId, job.invoices);
   const wi = (await jobWip.loadWipInputs({ query: async (s, p) => mockRun(s, p) }, [C.IDENTITY.jobId])).get(C.IDENTITY.jobId) || {};
-  return jobWip.computeJobWIP(job, {
-    phases: job.phases, buildings: job.buildings, subs: job.subs,
-    changeOrders, invoices,
-    qbCostLines: wi.qbCostLines || [], vendorBills: wi.vendorBills || [],
-    purchaseOrders: wi.purchaseOrders || []
-  });
+  return {
+    job,
+    deps: {
+      phases: job.phases, buildings: job.buildings, subs: job.subs,
+      changeOrders, invoices,
+      qbCostLines: wi.qbCostLines || [], vendorBills: wi.vendorBills || [],
+      purchaseOrders: wi.purchaseOrders || []
+    }
+  };
+}
+
+async function expectedWipFigures() {
+  const { job, deps } = await wipInputs();
+  return jobWip.computeJobWIP(job, deps);
+}
+
+// The per-cost-code rollup, whose figures are SUB-SUMS: a bucket's budget is a
+// slice of the phase matrix and a bucket's actual is a slice of the QB import.
+// Not one of them is byte-identical to a seed, and not one is a computeJobWIP
+// output either — so the two existing corpora are BOTH blind to them, and a new
+// surface built on them would have been swept against a corpus that could not
+// see its numbers. Widening the NEGATIVE corpus is what a new money dimension
+// needs; MUST_SURVIVE is a different guarantee and does not substitute.
+async function expectedBucketFigures() {
+  const { job, deps } = await wipInputs();
+  const wip = jobWip.computeJobWIP(job, deps);
+  const roll = jobCostBuckets.jobCostBuckets(job, Object.assign({ wip }, deps));
+  const out = [];
+  for (const r of roll.rows.concat([roll.total])) {
+    out.push(r.budget, r.committed, r.actual, r.variance);
+  }
+  return { roll, figures: out.filter((n) => typeof n === 'number' && isFinite(n) && n !== 0) };
 }
 
 // Every way a number can appear in a byte stream. The 4-digit floor keeps a
@@ -451,7 +480,12 @@ async function sweepGuest(opts) {
   // Every `view` the host can emit: an allow-listed surface, a surface this
   // room does not serve, a DIFFERENT record in the same org, and off the job
   // entirely.
-  const hostBeat = (view) => call('POST', '/api/live/' + roomId + '/beat/' + hostJoin.body.stream_key, { user: null, body: { cursor: [], view: view } });
+  // A REAL POINTER SAMPLE rides every beat, because that is what the host's
+  // client actually sends — 10 Hz sampled, up to 12 triples per beat. It is
+  // here so "a guest is sent no cursor frame" is asserted against traffic that
+  // exists rather than against a quiet room.
+  const hostBeat = (view) => call('POST', '/api/live/' + roomId + '/beat/' + hostJoin.body.stream_key,
+    { user: null, body: { cursor: [[1, 4242, 8181], [2, 4243, 8182]], view: view } });
   await hostBeat({ entity_type: 'job', entity_id: C.IDENTITY.jobId, surface: 'job-wip-report' });
   await hostBeat({ entity_type: 'job', entity_id: C.IDENTITY.jobId, surface: 'job-qb-costs' });
   await hostBeat({ entity_type: 'job', entity_id: 'job_other_9911', surface: 'job-overview' });
@@ -500,6 +534,45 @@ describe('the corpus is sound before it is trusted', () => {
     }
   });
 
+  test('the per-cost-code figures are a THIRD corpus — seeds and WIP outputs are both blind to them', async () => {
+    // A bucket budget is a slice of the phase matrix; a bucket actual is a
+    // slice of the QB import. Neither is a stored scalar and neither is a
+    // computeJobWIP output, so adding the cost surface without widening the
+    // corpus would have swept it for numbers that cannot be on its wire —
+    // exactly the failure the WIP half of this corpus was written to fix.
+    const { figures, roll } = await expectedBucketFigures();
+    expect(figures.length).toBeGreaterThanOrEqual(8);
+
+    const seeds = new Set(Object.values(C.MONEY));
+    const wip = await expectedWipFigures();
+    const wipVals = new Set(Object.keys(wip).filter((k) => !NON_MONEY_WIP_KEYS.has(k)).map((k) => wip[k]));
+    const uncovered = figures.filter((n) => !seeds.has(n) && !wipVals.has(n));
+    // Not "most of them are new" — a NAMED count, so the argument for widening
+    // the corpus is arithmetic rather than assertion. Every one of these is a
+    // figure the old sweep would have searched for and never found, because it
+    // was searching a corpus that could not contain it.
+    expect(uncovered.length).toBeGreaterThanOrEqual(10);
+
+    // And the decomposition RECONCILES: the cost tab and the WIP tab cannot
+    // disagree about the same job, which is the whole B6 failure class.
+    const summed = roll.rows.reduce((s, r) => s + r.actual, 0);
+    expect(Math.abs(summed - wip.actualCosts)).toBeLessThan(0.01);
+    expect(Math.abs(roll.total.actual - wip.actualCosts)).toBeLessThan(0.01);
+  });
+
+  test('a sub-$1,000 figure is VISIBLE to the sweep — the 4-digit floor is a real blind spot', () => {
+    // renderings() drops any needle with fewer than four digit characters, so
+    // "847" would be invisible. Per-cost-code money is where small figures
+    // live, so the fixture seeds them with cents and this asserts that choice
+    // actually buys coverage rather than being a comment about one.
+    expect(Array.from(renderings(847.23))).toContain('847.23');
+    // The blind spot itself, stated: the BARE integer form of a sub-$1,000
+    // figure is discarded, so a whole-dollar small budget is only findable
+    // through its "847.00" rendering — which a JSON wire does not produce.
+    expect(Array.from(renderings(847))).not.toContain('847');
+    expect(Array.from(renderings(847.23))).not.toContain('847');
+  });
+
   test('the money outputs are DERIVED, not copied — which is why seeds alone are blind', async () => {
     const wip = await expectedWipFigures();
     const seeds = new Set(Object.values(C.MONEY));
@@ -544,6 +617,33 @@ describe('a guest never receives a hidden number in any response byte', () => {
       ['displayMargin', 'jtdMargin', 'asSoldMargin', 'revisedMargin', 'displayProfit', 'projectedProfit']));
     const hits = hitsIn(run.buffer, needles);
     expect(hits).toEqual([]);
+  });
+
+  test('no PER-COST-CODE figure reaches the wire — the surface the study asked for', async () => {
+    const run = await sweepGuest();
+    const { figures } = await expectedBucketFigures();
+    const needles = new Map();
+    figures.forEach((n, i) => { for (const s of renderings(n)) if (!needles.has(s)) needles.set(s, 'bucket#' + i); });
+    expect(needles.size).toBeGreaterThan(0);
+    const hits = hitsIn(run.buffer, needles);
+    expect(hits).toEqual([]);
+    // And the surface really is on the wire, so this is not vacuous.
+    const cost = run.driven.find((d) => d.surface === 'job-cost-summary');
+    expect(cost.status).toBe(200);
+    expect(cost.body.view.rows.length).toBeGreaterThanOrEqual(6);
+  });
+
+  test('the host pointer is not on a guest wire at all', async () => {
+    // Every beat in the sweep carries real cursor samples. The guest used to
+    // receive all of them — highest-frequency channel on the wire — and had no
+    // way to draw one, because the host measures against a document the guest
+    // is not looking at.
+    const run = await sweepGuest();
+    expect(run.frames.some((f) => f.type === 'cursor')).toBe(false);
+    expect(run.buffer).not.toContain('"cursor"');
+    expect(run.buffer).not.toContain('4242');
+    // A null projection means DO NOT SEND, never "send null".
+    expect(run.buffer).not.toContain('data: null');
   });
 
   test('prose carrying a figure is scrubbed, not shipped', async () => {
@@ -601,6 +701,142 @@ describe('a guest never receives a hidden number in any response byte', () => {
         expect(p).not.toHaveProperty('following');
       }
     }
+  });
+});
+
+// ══ 2b. THE OTHER DIRECTION ════════════════════════════════════════════════
+//
+// Everything above proves a value is ABSENT. Nothing proved a permitted field
+// arrives INTACT, and that is not a theoretical gap: the address in the fixture
+// shipped as "— Marina Way, Tampa FL" from the day the file was written, in a
+// suite that stayed green through every run. The redactor was eating a street
+// number and a ZIP because nothing had ever CLASSIFIED an address, and a
+// one-directional proof cannot see that.
+//
+// So this block is the mirror image, with the same coverage discipline the
+// registry lock already applies: the field list is a file, and every entry in
+// it is asserted.
+
+describe('a field a guest is ALLOWED to read arrives whole', () => {
+  jest.setTimeout(30000);
+
+  test('every MUST_SURVIVE string reaches the guest unmangled, with money hidden', async () => {
+    const run = await sweepGuest();
+    const missing = [];
+    for (const k of Object.keys(C.MUST_SURVIVE)) {
+      if (run.buffer.indexOf(C.MUST_SURVIVE[k]) === -1) missing.push(k + ' = ' + JSON.stringify(C.MUST_SURVIVE[k]));
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test('the address is on the card, in one piece, on the surface John opened', async () => {
+    const run = await sweepGuest();
+    const ov = run.driven.find((d) => d.surface === 'job-overview');
+    expect(ov.status).toBe(200);
+    expect(ov.body.view.address).toBe(C.MUST_SURVIVE['job.propertyAddr']);
+    // The sentinel is a MONEY glyph. It has no business in an address.
+    expect(ov.body.view.address).not.toContain('—');
+    expect(ov.body.view.address).not.toContain('[…]');
+    expect(ov.body.view.status).toBe('In progress');
+  });
+
+  test('a CO number is an identifier, not a figure', async () => {
+    const run = await sweepGuest();
+    const co = run.driven.find((d) => d.surface === 'job-changeorders');
+    expect(co.body.view.rows.map((r) => r.number)).toEqual(['CO-001', 'CO-002']);
+    // And the approval date is now REAL. It read a column the shaper's SELECT
+    // never asked for, so it was null on every CO, always.
+    expect(co.body.view.rows[0].approved).toBe('2026-04-09');
+  });
+
+  test('the CO shaper asks the database for the column it claims to return', () => {
+    // The mock DB hands back whole rows regardless of the SELECT list, so this
+    // one is asserted on the SOURCE — a column the shaper reads and the query
+    // never requests is invisible to any fixture-backed test, which is exactly
+    // how `approved` stayed null on every CO in production while the suite
+    // stayed green.
+    const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'services', 'money', 'change-order-totals.js'), 'utf8');
+    expect((src.match(/SELECT id, job_id, status, co_number, linked_node_id, approved_at, data/g) || []).length).toBe(2);
+    expect(jobMoney.shapeChangeOrderRow({
+      id: 'x', status: 'approved', co_number: 'CO-001',
+      approved_at: '2026-04-09T00:00:00.000Z', data: {}
+    }).approved).toBe('2026-04-09T00:00:00.000Z');
+  });
+
+  test('a LEGACY change order gets the same shape — and exactly the same money', () => {
+    // A job with no rows in job_change_orders returned the raw blob array,
+    // unshaped: no `counted`, no `proposedIncome`, no `coNumber`. The guest
+    // surface printed a row of dashes while the WIP tab, at the same moment,
+    // counted those same COs into coIncome. Two tabs, one job, contradicting.
+    const legacyBlob = [{ status: 'draft', coNumber: 'CO-7', income: 4210, estimatedCosts: 1900, title: 'Old CO' }];
+    const shaped = jobMoney.shapeLegacyChangeOrder(legacyBlob[0]);
+    expect(shaped.coNumber).toBe('CO-7');
+    expect(shaped.proposedIncome).toBe(4210);
+    // The record's cost is VISIBLE...
+    expect(shaped.proposedCosts).toBe(1900);
+    // ...and still NOT COUNTED, because coTotals reads `costs` and a legacy
+    // blob spells it `estimatedCosts`. That gap predates this pass; naming it
+    // is the fix that belongs in a rendering commit, closing it is not.
+    expect(shaped.costs).toBe(0);
+    // AND THE MONEY IS UNCHANGED. computeJobWIP has always summed the legacy
+    // blob's raw `income` regardless of status; re-deciding which legacy COs
+    // count is a change to org-wide job cost and has no business riding along
+    // inside a rendering fix.
+    expect(jobWip.coTotals([shaped])).toEqual(jobWip.coTotals(legacyBlob));
+  });
+
+  test('a percentage with no denominator is NULL, never 0% — the same lie one column over', async () => {
+    // Number(null) is 0 and it is finite, so the obvious num() turns "this
+    // bucket was never budgeted" into a confident "0% used". Found by looking
+    // at the rendered page rather than by reading the code.
+    const doc = LV.buildView('job-cost-summary', {
+      costBuckets: { rows: [{ label: 'Other', budget: 0, committed: 0, actual: 0, variance: 0, pctUsed: null }], total: null }
+    }, { money: false });
+    expect(doc.rows[0].pctUsed).toBeNull();
+    // A REAL zero still prints as zero: the two are different facts.
+    const zero = LV.buildView('job-cost-summary', {
+      costBuckets: { rows: [{ label: 'Labor', budget: 10, committed: 0, actual: 0, variance: 10, pctUsed: 0 }], total: null }
+    }, { money: false });
+    expect(zero.rows[0].pctUsed).toBe(0);
+    // And the rollup itself produces the null rather than a zero.
+    const { roll } = await expectedBucketFigures();
+    expect(roll.rows.find((r) => r.code === 'other').pctUsed).toBeNull();
+  });
+
+  test('the two sentinels mean two different things', () => {
+    // A money cell renders "—" and the client styles it. Text removed from
+    // inside a sentence reads as removed TEXT. Printing both as "—" on one card
+    // is most of why the shipped surface read as broken rather than careful.
+    expect(LV.scrubProse('Add 3 doors — $4,200')).toContain('[…]');
+    expect(LV.scrubProse('Add 3 doors — $4,200')).toContain('Add 3 doors');
+    expect(LV.buildView('job-wip-report', { wip: {} }, { money: false })
+      .sections[0].rows[0].cell).toEqual({ r: true });
+  });
+
+  test('the structured tier still catches EXPLICIT money, and the prose tier still catches the guess', () => {
+    // The split is an axis, not a weakening. A PM who types a dollar figure
+    // into any field means dollars.
+    expect(LV.scrubIdent('$120,000 job')).not.toContain('120');
+    expect(LV.scrubIdent('budget of 4,200 total')).not.toContain('4,200');
+    // Prose keeps the guess, and it is now WIDER than it was: a digit glued to
+    // a unit letter, and a percentage, both used to survive it intact.
+    expect(LV.scrubProse('9500sf of deck')).not.toContain('9500');
+    expect(LV.scrubProse('1.2M contract')).not.toContain('1.2');
+    expect(LV.scrubProse('Repriced at 18% markup')).not.toContain('18%');
+    // And what the design protects on purpose still survives.
+    expect(LV.scrubProse('Add 3 doors')).toBe('Add 3 doors');
+    expect(LV.scrubProse('Phase 2')).toBe('Phase 2');
+  });
+
+  test('a bare figure in a job TITLE is still caught — the tier split did not move it', async () => {
+    // The realistic leak, and it rides the hello frame: the FIRST bytes every
+    // guest receives. Moving titles onto the structured tier to win back the
+    // legibility of "MDW-2008" would have re-emitted this canary.
+    const run = await sweepGuest();
+    expect(run.buffer).not.toContain('776522');
+    const hello = run.frames.find((f) => f.type === 'hello');
+    expect(hello.room.title).toContain('RV2006 Waterside');
+    expect(hello.room.title).not.toContain('776522');
   });
 });
 
@@ -691,6 +927,18 @@ describe('THE POSITIVE CONTROL — the sweep can fail', () => {
     // other test in this file is vacuously green.
     expect(hits.length).toBeGreaterThan(0);
     expect(run.driven.every((d) => d.body && d.body.money_visible === true)).toBe(true);
+  });
+
+  test('with hide_financials OFF the PER-COST-CODE figures are found too', async () => {
+    // The positive control, extended to the new dimension. Without it the
+    // widened corpus could be searching for numbers that never reach any wire
+    // under any policy, and the cost surface would be swept by a test that
+    // cannot fail.
+    const run = await sweepGuest({ hideFinancials: false });
+    const { figures } = await expectedBucketFigures();
+    const needles = new Map();
+    figures.forEach((n, i) => { for (const s of renderings(n)) if (!needles.has(s)) needles.set(s, 'bucket#' + i); });
+    expect(hitsIn(run.buffer, needles).length).toBeGreaterThan(0);
   });
 
   test('with the policy ON the same guest is told money_visible:false', async () => {

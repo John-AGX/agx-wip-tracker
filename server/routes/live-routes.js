@@ -91,6 +91,7 @@ const L = require('../services/live-rooms');
 const LV = require('../services/live-view');
 const jobMoney = require('../services/money/change-order-totals');
 const jobWip = require('../services/money/job-wip');
+const jobCostBuckets = require('../services/money/job-cost-buckets');
 
 const router = express.Router();
 
@@ -214,7 +215,13 @@ function emit(roomId, type, data, opts) {
   const except = (opts && opts.except) || null;
   for (const [pid, sub] of h.subs) {
     if (except && pid === except) continue;
-    const ok = writeFrame(sub, project(ev, sub));
+    // A null projection means DO NOT SEND — not "send null". Today the only
+    // one is a cursor frame bound for a recipient that has no way to draw it
+    // (services/live-view.js projectEvent), which was the highest-frequency
+    // channel on the wire and rendered nowhere.
+    const payload = project(ev, sub);
+    if (payload == null) continue;
+    const ok = writeFrame(sub, payload);
     if (!ok && sub.fails >= MAX_CONSEC_WRITE_FAILS) {
       // The TCP stream is clearly broken. Close it rather than waiting for the
       // OS to notice — ai-routes.js:3841 learned this the hard way, where empty
@@ -319,14 +326,22 @@ async function loadJobViewInputs(room) {
   // legitimately sees progress, but it can only be computed from figures they
   // must not have. Recomputing it from redacted inputs would produce a wrong
   // number rather than a hidden one.
-  const wip = jobWip.computeJobWIP(job, {
+  const wipDeps = {
     phases, buildings, subs, changeOrders, invoices,
     qbCostLines: wi.qbCostLines || [],
     vendorBills: wi.vendorBills || [],
     purchaseOrders: wi.purchaseOrders || []
-  });
+  };
+  const wip = jobWip.computeJobWIP(job, wipDeps);
 
-  return { job, wip, changeOrders, title: await entityTitle(room) };
+  // The per-cost-code decomposition, from the SAME inputs and reconciled
+  // against the same actualCosts. Built here rather than inside the projection
+  // so the rollup stays a pure money function with a test of its own, and so
+  // "the guest's cost table agrees with the guest's WIP tab" is arithmetic
+  // rather than hope.
+  const costBuckets = jobCostBuckets.jobCostBuckets(job, Object.assign({ wip }, wipDeps));
+
+  return { job, wip, costBuckets, changeOrders, title: await entityTitle(room) };
 }
 
 const VIEW_INPUT_LOADERS = Object.freeze({ job: loadJobViewInputs });
@@ -1075,12 +1090,20 @@ router.get('/:roomId/stream/:streamKey', liveStreamLimiter, async (req, res) => 
       multi_instance_suspected: multiInstance,
       timings: { beat_ms: L.BEAT_MS, stale_ms: L.STALE_MS, gone_ms: L.GONE_MS }
     }, sub));
-    for (const ev of backlog) writeFrame(sub, project(ev, sub));
+    for (const ev of backlog) {
+      const payload = project(ev, sub);
+      if (payload != null) writeFrame(sub, payload);
+    }
     // Current cursor positions, so a joiner does not stare at an empty screen
-    // until someone moves.
-    for (const [otherPid, s] of h.cursors) {
-      if (otherPid === pid) continue;
-      writeFrame(sub, { type: 'cursor', p: otherPid, s: [s] });
+    // until someone moves. This write BYPASSES project(), so the same rule has
+    // to be stated here too — a guest cannot draw a pointer measured against a
+    // document they are not looking at, and shipping it costs bytes on a phone
+    // for nothing.
+    if (ctx.role === 'host') {
+      for (const [otherPid, s] of h.cursors) {
+        if (otherPid === pid) continue;
+        writeFrame(sub, { type: 'cursor', p: otherPid, s: [s] });
+      }
     }
   } catch (e) {
     console.warn('[live] hello failed', e && e.message);

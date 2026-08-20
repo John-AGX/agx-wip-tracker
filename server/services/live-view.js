@@ -31,13 +31,18 @@
 //      rather than "0.0%" because those mean materially different things. This
 //      generalises that.
 //
-//   3. FREE TEXT IS SCRUBBED. A CO titled "Add 3 doors — $4,200" puts a dollar
-//      figure on the wire through a field no money-typed redactor would ever
-//      look at. Author-written prose therefore goes through text() and has
-//      currency-shaped tokens removed when money is hidden. Stated honestly:
-//      an amount SPELLED OUT ("four thousand two hundred") is not catchable by
-//      any scrubber, and that residue is named in the field list rather than
-//      papered over.
+//   3. STRINGS HAVE TWO CLASSES, NOT ONE. A CO titled "Add 3 doors — $4,200"
+//      puts a dollar figure on the wire through a field no money-typed redactor
+//      would ever look at, so author PROSE goes through text() and is guessed
+//      at aggressively. But the first build had only that one class, so text()
+//      became the generic string wrapper and the heuristic ate a street number
+//      and a ZIP out of the address on the guest's job card. Structured strings
+//      — address, enum, document number — go through ident() and get explicit
+//      currency removed and nothing else. See ident() for the full argument,
+//      including why titles deliberately stay on the prose tier.
+//      Stated honestly: an amount SPELLED OUT ("four thousand two hundred") is
+//      not catchable by any scrubber, and that residue is named in the field
+//      list rather than papered over.
 //
 //   4. A DERIVED FIGURE WHOSE INPUTS ARE HIDDEN IS ITSELF HIDDEN, and so is
 //      anything that reconstructs a hidden term. See DERIVATION CLOSURE below.
@@ -66,8 +71,17 @@
 // Nothing else numeric ships.
 //
 // ══ WHAT IS NOT HERE, ON PURPOSE ═══════════════════════════════════════════
-// No QB costs (blanking `amount` still ships vendor, memo and cadence — that is
-// AGX's supplier list). No POs or invoices (sub names, contract structure). No
+// No raw QB COST LINES — blanking `amount` still ships vendor, memo and cadence,
+// and that is AGX's supplier list. The Job Costs surface below is the ROLLUP of
+// those lines into six frozen cost-code buckets and nothing else: no vendor, no
+// memo, no date, no line count. No QB WEEKLY FLOW either, and the reason is
+// worth writing down because it is the line this feature keeps having to draw:
+// its 12-week bar is a SPEND PROFILE, and a profile survives redaction (the
+// bars are ratios) while every figure is hidden. That is a new disclosure and
+// it has to be weighed on purpose, not inherited by reusing a component that
+// happens to be well-shaped. Per-bucket "% used" is deliberately NOT that: it
+// is self-normalised per row, so it says nothing about how one bucket compares
+// to another. No POs or invoices (sub names, contract structure). No
 // pay apps (there is no half-redacted G703: whole, or not at all). No photos
 // (attachment URLs resolve to storage.publicBase, an UNAUTHENTICATED host, so
 // any URL a projection emits is a permanently fetchable credential that
@@ -75,7 +89,7 @@
 // display one, and it needs an answer before it needs a tab). No Site Plan
 // (Maps SDK + a key handed to an anonymous holder + geo footprints + a graph
 // projection; the most expensive of the candidates by a wide margin, and
-// shipping three surfaces honestly beats shipping four badly).
+// shipping four surfaces honestly beats shipping six badly).
 
 'use strict';
 
@@ -87,6 +101,7 @@ const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 // builder bug, and it is caught loudly rather than shipped quietly.
 const MONEY_TAG = '__p86_money';
 const TEXT_TAG = '__p86_text';
+const IDENT_TAG = '__p86_ident';
 
 /** Wrap a money-bearing value. Every dollar, every margin, every rate. */
 function money(v) {
@@ -99,18 +114,78 @@ function text(v) {
   return { [TEXT_TAG]: v == null ? '' : String(v) };
 }
 
-// Currency-shaped tokens in prose. Deliberately aggressive: a grouped number
-// ($4,200 / 4,200 / 4200.00), any bare run of three or more digits, and any
-// decimal fraction. "Add 3 doors" and "Phase 2" survive; "$4,200" does not.
+/**
+ * Wrap a STRUCTURED STRING — an address, an enum, a document number. Capped and
+ * escaped like prose, but NOT run through the heuristic scrubber.
+ *
+ * ── WHY THIS EXISTS, AND WHAT NOT HAVING IT COST ──────────────────────────
+ * The first build had exactly two string meanings: money-typed, or "author
+ * prose, scrub it". text() therefore became the generic string wrapper for six
+ * structurally different fields, and a guest's job card read
+ *
+ *     "— Fairway Circle, Tampa, FL —"
+ *
+ * because the prose scrubber's bare-3+-digit rule ate the street number and the
+ * ZIP. That is redaction as a function of HOUSE-NUMBER DIGIT COUNT: "12 Oak St"
+ * kept its number and "1420 Fairway Circle" did not. The address was never
+ * classified as money — NOTHING classified it at all, and the missing CATEGORY
+ * is the defect. The address is one instance; "CO-001" -> "CO-—" is another,
+ * on the one document a client is actually meant to read.
+ *
+ * NOT on this tier, deliberately, and this is the correction that matters most:
+ * job/room TITLE and CLIENT stay on prose. test/fixtures/live-money-canaries.js
+ * seeds `job.title = 'Waterside Phase 2 — 776522 contract'` precisely because a
+ * bare un-grouped figure typed into a title is the realistic leak, and the room
+ * title rides the hello frame — the FIRST bytes every guest receives. Moving
+ * titles here to win back the legibility of "MDW-2008" would have re-emitted
+ * that canary. An identifier reading cleanly inside a title is worth less than
+ * the tier that catches the money.
+ */
+function ident(v) {
+  return { [IDENT_TAG]: v == null ? '' : String(v) };
+}
+
+// ── The two string tiers ───────────────────────────────────────────────────
+// EXPLICIT: unambiguous currency — a dollar sign, or grouped thousands. Runs on
+// EVERY string that reaches a guest, structured or prose. A PM who types
+// "$120,000" into a job title means dollars no matter which field it was.
+const EXPLICIT_MONEY = /\$\s*\d[\d,]*(?:\.\d+)?|\b\d{1,3}(?:[,  ]\d{3})+(?:\.\d+)?/g;
+
+// HEURISTIC: the GUESS. A bare run of three or more digits, a bare decimal, or
+// a percentage — every one of which is also a street number, a ZIP, a document
+// number or a model number, which is why this tier is PROSE ONLY.
 //
-// The residue, stated: a figure spelled out in words is not catchable. So is a
-// figure split across a sentence. Prose is the ONE place this file's promise is
-// best-effort rather than structural, and it is named here rather than implied.
-const CURRENCY_SHAPES = /\$\s*\d[\d,]*(?:\.\d+)?|\b\d{1,3}(?:[,  ]\d{3})+(?:\.\d+)?\b|\b\d{3,}(?:\.\d+)?\b|\b\d+\.\d+\b/g;
+// Note the missing trailing \b on the digit runs. The old rule required one, so
+// "9500sf", "250k" and "1.2M contract" — a digit glued to a unit letter, which
+// is how people actually write a figure in a note — all survived it intact.
+//
+// The percentage clause is new and it is the one that earns its keep: the
+// toggle's own words are "margins, cost and contract values", and a CO
+// described as "repriced at 18% markup" shipped a margin in plain text.
+//
+// THE RESIDUE, NAMED RATHER THAN IMPLIED. A bare one- or two-digit figure
+// ("bill 85 per door") survives, and so does an amount spelled out in words.
+// Widening to catch those destroys "Add 3 doors" and "Phase 2", which this
+// design protects on purpose. Prose is the ONE best-effort tier in this file.
+const HEURISTIC_MONEY = new RegExp(
+  EXPLICIT_MONEY.source + '|\\b\\d+(?:\\.\\d+)?\\s*%|\\b\\d{3,}(?:\\.\\d+)?|\\b\\d+\\.\\d+',
+  'g'
+);
+
 const PROSE_MAX = 240;
 
+// TWO SENTINELS, because they mean two different things and printing both as
+// "—" is most of why the shipped card read as broken rather than careful. A
+// money cell renders "—": the figure is withheld and the client styles it as
+// such. Text removed from inside a sentence reads as REMOVED TEXT.
+const PROSE_CUT = '[…]';
+
 function scrubProse(s) {
-  return String(s == null ? '' : s).replace(CURRENCY_SHAPES, '—').slice(0, PROSE_MAX);
+  return String(s == null ? '' : s).replace(HEURISTIC_MONEY, PROSE_CUT).slice(0, PROSE_MAX);
+}
+// The structured-string tier: explicit currency only, no guessing.
+function scrubIdent(s) {
+  return String(s == null ? '' : s).replace(EXPLICIT_MONEY, PROSE_CUT).slice(0, PROSE_MAX);
 }
 function plainProse(s) {
   return String(s == null ? '' : s).slice(0, PROSE_MAX);
@@ -146,6 +221,7 @@ function viewPolicy(room, participant) {
 function redact(node, policy) {
   const showMoney = !!(policy && policy.money === true);
   const prose = showMoney ? plainProse : scrubProse;
+  const structured = showMoney ? plainProse : scrubIdent;
 
   function walk(v, depth) {
     if (depth > 24) return null;                       // no cyclic doc ships
@@ -157,6 +233,7 @@ function redact(node, policy) {
       return { m: (typeof n === 'number' && isFinite(n)) ? n : null };
     }
     if (hasOwn(v, TEXT_TAG)) return prose(v[TEXT_TAG]);
+    if (hasOwn(v, IDENT_TAG)) return structured(v[IDENT_TAG]);
     const out = {};
     for (const k of Object.keys(v)) out[k] = walk(v[k], depth + 1);
     return out;
@@ -171,7 +248,8 @@ function redact(node, policy) {
 function containsRawTag(doc) {
   let s;
   try { s = JSON.stringify(doc); } catch (e) { return true; }
-  return s == null || s.indexOf(MONEY_TAG) !== -1 || s.indexOf(TEXT_TAG) !== -1;
+  return s == null || s.indexOf(MONEY_TAG) !== -1 || s.indexOf(TEXT_TAG) !== -1
+    || s.indexOf(IDENT_TAG) !== -1;
 }
 
 // ── Surfaces ───────────────────────────────────────────────────────────────
@@ -182,7 +260,15 @@ function containsRawTag(doc) {
 // Names match js/router.js KNOWN_JOB_SUBS, so a mirrored route maps to a
 // surface with no translation table to drift.
 
-function num(v) { const n = Number(v); return Number.isFinite(n) ? n : null; }
+// NULL-PRESERVING, and it has to be. Number(null) is 0 and Number('') is 0,
+// both finite — so the obvious version turns "there is no denominator" into a
+// confident 0%, which is the same lie as $0.00 for a missing figure, one column
+// over. Caught on the cost surface: a bucket with no budget printed "0% used".
+function num(v) {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
 
 function isoDay(v) {
   if (v == null || v === '') return null;
@@ -204,37 +290,81 @@ function isoDay(v) {
 // shape would break that invariant on day one — job_id rides along on
 // change-order-routes.js shapeRow, on buildings, on phases, on every canonical
 // shape in this codebase.
+//
+// ── FIDELITY: THIS DOCUMENT IS SHAPED BY THE APP'S OWN CARD ────────────────
+// index.html:1005 #job-info-card is the "money first" job card: a header
+// (label / title / address / status pill), a THREE-TILE as-sold row
+// (Contract (As Sold) · Est. Costs (As Sold) · Margin (As Sold)), and a meta
+// grid. index.html:1061 then carries the 7-chip .p86-totals-strip. The guest
+// document names those slots with the app's own labels so the two screens read
+// as the same screen, and the guest renderer draws them in the app's own
+// markup. Nothing here is a new KIND of field: every tile and chip is a money
+// cell, every string is classified, and the sweep already drives every
+// computeJobWIP output.
 function buildJobOverview(inp) {
   const job = (inp && inp.job) || {};
   const w = (inp && inp.wip) || {};
   return {
     surface: 'job-overview',
     title: text(inp && inp.title),
+    // Structured strings, not prose. This is the fix John saw: an address is
+    // not money and nothing had ever said so.
+    address: ident(job.propertyAddr || job.address || ''),
+    status: ident(job.status || job.jobStatus || ''),
+    // The app's three as-sold tiles, in the app's order, under the app's labels.
+    tiles: [
+      { label: 'Contract (As Sold)', cell: money(w.contractIncome), tone: 'accent' },
+      { label: 'Est. Costs (As Sold)', cell: money(w.estimatedCosts) },
+      { label: 'Margin (As Sold)', cell: money(w.asSoldMargin), unit: '%' }
+    ],
+    // The app's WIP chip strip, same seven chips in the same order.
+    chips: wipChips(w),
     facts: [
-      { label: 'Status', value: text(job.status || job.jobStatus || '') },
-      { label: 'Type', value: text(job.jobType || '') },
       { label: 'Client', value: text(job.client || '') },
-      { label: 'Address', value: text(job.propertyAddr || job.address || '') },
-      { label: 'Start', value: isoDay(job.startDate) },
-      { label: 'Target completion', value: isoDay(job.endDate || job.targetCompletion) }
+      { label: 'Type', value: ident(job.jobType || '') },
+      { label: 'Start Date', value: isoDay(job.startDate) },
+      { label: 'End Date', value: isoDay(job.endDate || job.targetCompletion) }
     ],
     // Progress survives. It reconstructs revenueEarned only against
     // totalIncome, and both of those are money cells. R1 holds.
-    progress: { pct: num(w.pctComplete) },
-    // The three tiles the job page leads with. All money.
-    tiles: [
-      { label: 'Contract', cell: money(w.totalIncome) },
-      { label: 'Cost to date', cell: money(w.actualCosts) },
-      { label: 'Profit', cell: money(w.displayProfit) },
-      { label: 'Margin', cell: money(w.displayMargin), unit: '%' }
-    ]
+    progress: { pct: num(w.pctComplete) }
   };
+}
+
+// The seven chips index.html:1061-1093 paints above every job. `tone` is the
+// app's own chip modifier (accent / warn / info), carried as DATA so the guest
+// renderer never has to pick a colour from a value — a colour driven by the
+// sign of a hidden number would be a channel.
+function wipChips(w) {
+  w = w || {};
+  return [
+    { label: 'Total Income', cell: money(w.totalIncome), tone: 'accent' },
+    { label: 'Actual Costs', cell: money(w.actualCosts), tone: 'warn' },
+    { label: 'Accrued Costs', cell: money(w.accruedCosts), tone: 'warn' },
+    { label: '% Complete', pct: num(w.pctComplete) },
+    { label: 'Revenue Earned', cell: money(w.revenueEarned), tone: 'info' },
+    { label: 'Gross Profit', cell: money(w.displayProfit) },
+    { label: 'Margin %', cell: money(w.displayMargin), unit: '%' }
+  ];
 }
 
 // Surface 2 — WIP Report. Zero fetches on the app side and a flat read of the
 // same 20 figures computeJobWIP already produces server-side, which is the
 // cheapest surface in the repo to render honestly and the entire point of the
 // toggle existing.
+//
+// EVERY figure below is a money cell, including the margins: a margin is not
+// dollars but it is profitability, and the toggle's own words are "margins,
+// cost and contract values". pctComplete is the single survivor.
+//
+// ── FIDELITY: THE LABELS ARE THE APP'S, CHARACTER FOR CHARACTER ───────────
+// index.html:1121-1226 is the host's WIP grid, and every string below is copied
+// from it — five headings, in the host's order, with the host's row labels
+// ("As Sold Gross Profit", not "As-sold profit"). That is not decoration: it is
+// most of the pointer answer. The reason a remote arrow was dropped is that the
+// two ends were different documents; once the row a presenter is reading has
+// the SAME NAME on both screens, "look at As Sold Gross Profit" lands with no
+// coordinate, no new channel, and it works over the phone too.
 //
 // EVERY figure below is a money cell, including the margins: a margin is not
 // dollars but it is profitability, and the toggle's own words are "margins,
@@ -246,52 +376,58 @@ function buildJobWip(inp) {
     surface: 'job-wip-report',
     title: text(inp && inp.title),
     pctComplete: num(w.pctComplete),
+    // The same chip strip the host has sitting above this tab.
+    chips: wipChips(w),
     sections: [
       {
-        heading: 'Contract',
+        heading: 'Income',
+        tone: 'accent',
         rows: [
-          row('Contract income', 'contractIncome'),
-          row('Change order income', 'coIncome'),
-          row('Total income', 'totalIncome')
+          row('Contract (As Sold)', 'contractIncome'),
+          row('+ Change Orders', 'coIncome'),
+          Object.assign(row('Total Income', 'totalIncome'), { strong: true })
         ]
       },
       {
-        heading: 'Estimated cost',
+        heading: 'Estimated Costs',
+        tone: 'accent',
         rows: [
-          row('Estimated costs', 'estimatedCosts'),
-          row('Change order costs', 'coCosts'),
-          row('Revised cost changes', 'revisedCostChanges'),
-          row('Revised estimated costs', 'revisedEstCosts')
+          row('Est. Costs (As Sold)', 'estimatedCosts'),
+          row('+ CO Est. Costs', 'coCosts'),
+          row('+ Revised Changes', 'revisedCostChanges'),
+          Object.assign(row('Total Est. Costs (Revised)', 'revisedEstCosts'), { strong: true })
         ]
       },
       {
-        heading: 'As sold',
+        heading: 'Profit & Margin',
+        tone: 'good',
         rows: [
-          row('As-sold profit', 'asSoldProfit'),
-          row('As-sold margin', 'asSoldMargin', '%'),
-          row('Revised profit', 'revisedProfit'),
-          row('Revised margin', 'revisedMargin', '%')
+          row('As Sold Gross Profit', 'asSoldProfit'),
+          row('As Sold Margin %', 'asSoldMargin', '%'),
+          row('Revised Gross Profit', 'revisedProfit'),
+          Object.assign(row('Revised Margin %', 'revisedMargin', '%'), { strong: true })
         ]
       },
       {
-        heading: 'Job to date',
+        heading: 'Revenue & Billing',
+        tone: 'warn',
         rows: [
-          row('Revenue earned', 'revenueEarned'),
-          row('Actual costs', 'actualCosts'),
-          row('JTD profit', 'jtdProfit'),
-          row('JTD margin', 'jtdMargin', '%'),
-          row('Accrued costs', 'accruedCosts'),
-          row('Projected cost', 'projectedCost'),
-          row('Projected profit', 'projectedProfit')
+          { label: '% Complete', pct: num(w.pctComplete) },
+          row('Revenue Earned (Income × %)', 'revenueEarned'),
+          row('JTD Gross Profit', 'jtdProfit'),
+          row('JTD Margin %', 'jtdMargin', '%'),
+          row('Invoiced to Date', 'invoiced'),
+          row('Unbilled (Revenue - Invoiced)', 'unbilled'),
+          Object.assign(row('Backlog (Income - Revenue)', 'backlog'), { strong: true })
         ]
       },
       {
-        heading: 'Billing',
+        heading: 'Actual Costs vs Estimated',
+        tone: 'orange',
         rows: [
-          row('Invoiced to date', 'invoiced'),
-          row('Unbilled', 'unbilled'),
-          row('Backlog', 'backlog'),
-          row('Remaining costs', 'remainingCosts')
+          row('Actual Costs (from tracker)', 'actualCosts'),
+          row('Revised Est. Costs', 'revisedEstCosts'),
+          Object.assign(row('Remaining Est. Costs', 'remainingCosts'), { strong: true })
         ]
       }
     ]
@@ -314,19 +450,71 @@ function buildJobChangeOrders(inp) {
     title: text(inp && inp.title),
     count: rows.length,
     rows: rows.map((c) => ({
-      number: text(c && (c.coNumber || c.co_number) || ''),
-      status: text(c && c.status || ''),
+      // A CO NUMBER IS AN IDENTIFIER. On the prose tier "CO-001" rendered as
+      // "CO-—" — the primary name of the one document a client is meant to
+      // read, sentinelled by a rule written to catch dollar figures.
+      number: ident(c && (c.coNumber || c.co_number) || ''),
+      status: ident(c && c.status || ''),
       description: text(c && (c.description || c.title) || ''),
-      approved: isoDay(c && (c.approved_at || c.approvedAt)),
+      // Was ALWAYS null: shapeChangeOrderRow's SELECT never asked for
+      // approved_at, so this read a column that did not exist on the shape.
+      approved: isoDay(c && (c.approved || c.approved_at || c.approvedAt)),
       income: money(c && (c.counted ? c.income : c.proposedIncome)),
       costs: money(c && (c.counted ? c.costs : c.proposedCosts))
     }))
   };
 }
 
+// Surface 4 — JOB COST SUMMARY. The table in the study's own mock: cost code,
+// budget, committed, actual, variance, % used with a meter. It is the picture
+// the whole feature was described around and it was the one surface that did
+// not exist, because there was no server-side bucket rollup to build it from
+// (js/cost-buckets.js is a browser IIFE over appData; there was no twin).
+// money/job-cost-buckets.js is that twin, and it is PURE — the caller hands it
+// inputs it has already loaded and org-verified.
+//
+// WHAT SHIPS AND WHY:
+//   budget / committed / actual / variance — money cells, every one.
+//   pctUsed — a ratio of two money terms that are BOTH redacted under the
+//     policy, so R1 holds exactly as it does for pctComplete. It is also
+//     per-row and self-normalised, so it discloses no cross-bucket spend
+//     PROFILE: the relative height of one bucket against another never leaves.
+//     That distinction is the reason the QB weekly-flow surface is still not
+//     here — its bar IS the profile, and a profile is a disclosure that has to
+//     be weighed on purpose rather than inherited from a component.
+//   the cost-code LABEL — an enum from a frozen list in this repo.
+// Nothing else. No line counts (a count times a public constant is money), no
+// vendor names, no memos, no dates.
+function buildJobCostSummary(inp) {
+  const roll = (inp && inp.costBuckets) || { rows: [], total: null };
+  const rows = Array.isArray(roll.rows) ? roll.rows : [];
+  const shape = (r) => ({
+    label: ident(r && r.label),
+    budget: money(r && r.budget),
+    committed: money(r && r.committed),
+    actual: money(r && r.actual),
+    variance: money(r && r.variance),
+    // num(), not money(): a null budget must arrive as null, never as 0.
+    pctUsed: num(r && r.pctUsed)
+  });
+  return {
+    surface: 'job-cost-summary',
+    title: text(inp && inp.title),
+    columns: ['Cost Code', 'Budget', 'Committed', 'Actual', 'Variance', '% Used'],
+    rows: rows.map(shape),
+    // Summed SERVER-SIDE from the real figures, before redaction. Never summed
+    // on the client from cells: js/insights.js's report.total does exactly that
+    // through a num() that returns 0 for anything non-numeric, so reusing it
+    // would have printed a confident "$0" company total in the one slot a
+    // total belongs — the forbidden failure mode, reached by reuse alone.
+    total: roll.total ? shape(roll.total) : null
+  };
+}
+
 const SURFACES = Object.freeze({
   'job-overview': Object.freeze({ entity: 'job', label: 'Overview', build: buildJobOverview }),
   'job-wip-report': Object.freeze({ entity: 'job', label: 'WIP Report', build: buildJobWip }),
+  'job-cost-summary': Object.freeze({ entity: 'job', label: 'Job Costs', build: buildJobCostSummary }),
   'job-changeorders': Object.freeze({ entity: 'job', label: 'Change Orders', build: buildJobChangeOrders })
 });
 
@@ -423,6 +611,20 @@ function projectEvent(event, recipient) {
   const isHost = !!(recipient && recipient.role === 'host');
   const showMoney = !!(recipient && recipient.policy && recipient.policy.money === true);
 
+  // ── The frames nobody draws ─────────────────────────────────────────────
+  // A guest is sent the host's pointer at 10 Hz, buffered 12 samples to a 5s
+  // beat, fanned out to everyone-but-the-sender — and live.html has never
+  // drawn one. It cannot: the host's coordinate is measured against
+  // index.html's workspace and the guest page is a different document, which
+  // is exactly why the remote arrow was dropped on purpose rather than
+  // shipped wrong. So the guest was paying roughly 3.6 KB a minute for frames
+  // that end in a Map nothing reads, against a promise of "a few kilobytes a
+  // minute". Dropped HERE rather than at the sampler so a second presenter —
+  // the only recipient that could ever draw one — keeps receiving them.
+  //
+  // Returning null means DO NOT SEND. emit() skips a null projection.
+  if (event.type === 'cursor' && !isHost) return null;
+
   // The ROOM TITLE is author-written text and it rides the control channel, not
   // the read proxy — so it never passed through a builder and the first version
   // of this seam let it straight out. It is a forward-facing name resolved by
@@ -457,10 +659,11 @@ function projectEvent(event, recipient) {
 }
 
 module.exports = {
-  MONEY_TAG, TEXT_TAG,
-  money, text, scrubProse, redact, containsRawTag,
+  MONEY_TAG, TEXT_TAG, IDENT_TAG,
+  money, text, ident, scrubProse, scrubIdent, redact, containsRawTag,
+  EXPLICIT_MONEY, HEURISTIC_MONEY, PROSE_CUT,
   viewPolicy,
   SURFACES, SURFACE_KEYS, DEFAULT_SURFACE, surfaceSpec, surfacesFor,
-  buildView, buildJobOverview, buildJobWip, buildJobChangeOrders,
+  buildView, buildJobOverview, buildJobWip, buildJobChangeOrders, buildJobCostSummary,
   hostViewEvent, viewEq, projectEvent, stripPresenterOnly
 };

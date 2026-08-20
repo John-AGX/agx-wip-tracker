@@ -735,10 +735,19 @@ describe('presence reflects a dropped stream honestly', () => {
 });
 
 describe('cursors round-trip over the real stream', () => {
-  // The one visible deliverable of phase 01, proven end to end: a cursor posted
-  // by one participant arrives on another participant's open SSE stream, with
-  // the sender's identity attached and the coordinates intact.
-  test("one participant's cursor arrives on another's stream", async () => {
+  // PHASE 02 FIDELITY PASS — this test used to assert the opposite, and the
+  // opposite was waste. A guest was sent every one of the host's pointer
+  // samples — 10 Hz sampled, up to 12 triples per 5s beat, roughly 3.6 KB a
+  // minute — and live.html has never drawn one and cannot: the host's
+  // coordinate is measured against index.html's workspace, and the guest is
+  // looking at a different document. Against a stated budget of "a few
+  // kilobytes a minute" that was plausibly the majority of steady-state guest
+  // traffic, spent on frames that end in a Map nothing reads.
+  //
+  // The drop is at the projection seam, not at the sampler, so a second
+  // PRESENTER — the only recipient that could ever draw one — keeps receiving
+  // them, and the phase-01 mechanism is intact underneath.
+  test("a guest receives no cursor frame, because a guest cannot draw one", async () => {
     const m = await mint();
     const host = await call('POST', '/api/live/' + m.body.token + '/join', { body: {} });
     const guest = await call('POST', '/api/live/' + m.body.token + '/join', { user: null, body: { display_name: 'Dave' } });
@@ -786,16 +795,19 @@ describe('cursors round-trip over the real stream', () => {
     const cursor = await readFor((b) => {
       const line = b.split('\n').find((l) => l.startsWith('data: ') && l.includes('"cursor"'));
       return line ? JSON.parse(line.slice(6)) : null;
-    }, 4000);
-    expect(cursor).toBeTruthy();
-    expect(cursor.p).toBe(host.body.participant_id);
-    expect(cursor.s).toEqual([[1, 1234, 5678], [2, 4321, 8765]]);
+    }, 1500);
+    expect(cursor).toBeNull();
+    // Not sent, and NOT sent as an empty frame either: a null projection means
+    // do-not-send, and `data: null` on the wire would be the same bytes with a
+    // worse client contract.
+    expect(buf).not.toContain('data: null');
+    expect(buf).not.toContain('1234');
 
-    // Cursor frames carry NO sequence number: they are never replayed, so an
-    // id on them would be pure cost — and worse, a shared id space makes a
-    // resuming client's last-seen id almost always a cursor id far past any
-    // control id, forcing a full reset on nearly every reconnect.
-    expect(cursor.seq).toBeUndefined();
+    // The mechanism underneath is untouched: the server still normalises and
+    // still stores the position, so a second presenter joining would be handed
+    // it. What changed is only who it is written to.
+    const hub = liveRoutes.__internals._rooms.get(m.body.room.id);
+    expect(hub.cursors.get(host.body.participant_id)).toEqual([2, 4321, 8765]);
 
     ac.abort();
     try { await reader.cancel(); } catch (e) {}
@@ -977,10 +989,17 @@ describe('phase 02 is built; phase 03 and 04 are still not', () => {
     // Every fan-out write still goes through it, and now carries the recipient
     // itself: redaction cannot be decided from an id without a query, and a
     // query inside emit() is a query storm across every open stream.
-    expect(ROUTES).toMatch(/writeFrame\(sub, project\(ev, sub\)\)/);
+    // The fan-out and the backlog replay both project, and both now honour a
+    // NULL projection as do-not-send rather than writing `data: null`.
+    expect(ROUTES).toMatch(/const payload = project\(ev, sub\);\s*\n\s*if \(payload == null\) continue;/);
+    expect(ROUTES).toMatch(/writeFrame\(sub, payload\)/);
     // hello goes through it TOO, so there is one seam and not two.
     expect(ROUTES).toMatch(/writeFrame\(sub, project\(\{[\s\S]*?\}, sub\)\)/);
-    expect(ROUTES).toMatch(/for \(const ev of backlog\) writeFrame\(sub, project\(ev, sub\)\)/);
+    expect(ROUTES).toMatch(/for \(const ev of backlog\) \{[\s\S]{0,160}project\(ev, sub\)/);
+    // And the ONE write that bypasses project() — the current-position replay
+    // on join — carries the same rule inline, because a bypass is exactly where
+    // a seam rule stops applying.
+    expect(ROUTES).toMatch(/if \(ctx\.role === 'host'\) \{\s*\n\s*for \(const \[otherPid, s\] of h\.cursors\)/);
   });
 
   test('the off-room filter runs on the HOST BEAT, before the replay ring', () => {

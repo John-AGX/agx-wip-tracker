@@ -96,6 +96,17 @@ const MONEY = Object.freeze({
   'phases[0].equipment': 6455.19,
   'phases[0].asSoldPhaseBudget': 199877.53,
 
+  // A SECOND PHASE, DELIBERATELY SUB-$1,000. renderings() drops any needle with
+  // fewer than four digit characters, so a figure under a thousand is invisible
+  // to the sweep unless it carries cents — and per-cost-code budgets are
+  // exactly where small figures live. These four keep two decimals so the
+  // "847.23" rendering has five digit characters and IS swept, while the
+  // "847" rendering is correctly discarded as a coincidence risk.
+  'phases[1].materials': 847.23,
+  'phases[1].labor': 604.91,
+  'phases[1].sub': 388.47,
+  'phases[1].equipment': 917.61,
+
   // subs[] — contract + billed
   'subs[0].contractAmt': 155433.29,
   'subs[0].billedToDate': 61277.83,
@@ -130,6 +141,27 @@ const PROSE = Object.freeze({
 });
 const PROSE_NUMBERS = Object.freeze([412900, 58433.19, 776522]);
 
+// ── The OTHER half of the proof ────────────────────────────────────────────
+// Every canary above asserts a value is ABSENT. Nothing asserted a permitted
+// field arrives INTACT — and that gap is not hypothetical: the address in this
+// very fixture shipped as "— Marina Way, Tampa FL" for as long as the file has
+// existed, in a suite that was green the whole time. A one-directional proof
+// cannot see a redactor eating the wrong thing, and "you cannot responsibly add
+// a field to a document whose test suite only proves absence" is why this list
+// exists before the cost surface does.
+//
+// Each entry is a string that MUST reach the guest whole, with money hidden.
+const MUST_SURVIVE = Object.freeze({
+  'job.propertyAddr': '1400 Marina Way, Tampa, FL 33607',
+  'job.propertyAddr#street': '1400',
+  'job.propertyAddr#zip': '33607',
+  'changeOrders[0].co_number': 'CO-001',
+  'changeOrders[1].co_number': 'CO-002',
+  'job.client': 'Waterside HOA',
+  'job.status': 'In progress',
+  'job.jobType': 'Renovation'
+});
+
 // ── The fixture ────────────────────────────────────────────────────────────
 // Realistic shapes, seeded values. Note that BOTH halves of every three-field
 // money mirror are seeded (asSoldRevenue / asSoldPhaseBudget / phaseBudget):
@@ -142,7 +174,13 @@ function jobBlob() {
     jobNumber: 'RV2006',
     client: 'Waterside HOA',
     client_id: IDENTITY.clientId,
-    propertyAddr: '1400 Marina Way, Tampa FL',
+    // A REAL address: a 4-digit street number and a 5-digit ZIP, because both
+    // are what the prose scrubber's bare-digit rule ate. The old fixture value
+    // had no ZIP and the suite asserted nothing about it, so it sat mangled in
+    // a green build from the day it was written. See MUST_SURVIVE in
+    // test/live-view-wire.test.js — the list that proves a PERMITTED field
+    // arrives whole, which is the half this corpus never had.
+    propertyAddr: '1400 Marina Way, Tampa, FL 33607',
     jobType: 'Renovation',
     status: 'In progress',
     startDate: '2026-03-02',
@@ -191,6 +229,13 @@ function jobBlob() {
       sub: MONEY['phases[0].sub'],
       equipment: MONEY['phases[0].equipment'],
       asSoldPhaseBudget: MONEY['phases[0].asSoldPhaseBudget']
+    }, {
+      id: 'phase_canary_2',
+      name: 'Punch',
+      materials: MONEY['phases[1].materials'],
+      labor: MONEY['phases[1].labor'],
+      sub: MONEY['phases[1].sub'],
+      equipment: MONEY['phases[1].equipment']
     }],
 
     subs: [{
@@ -210,7 +255,10 @@ function changeOrderRows() {
       id: IDENTITY.coId,
       job_id: IDENTITY.jobId,
       status: 'approved',
-      co_number: 'CO-1',
+      // PADDED, which is house style and is the shape the bug destroyed:
+      // "CO-001" went out as "CO-—". An unpadded "CO-1" cannot fail the test,
+      // which is why the old fixture could not see the defect.
+      co_number: 'CO-001',
       linked_node_id: IDENTITY.nodeId,
       created_at: '2026-04-02T00:00:00.000Z',
       approved_at: '2026-04-09T00:00:00.000Z',
@@ -223,7 +271,7 @@ function changeOrderRows() {
       id: 'co_canary_second',
       job_id: IDENTITY.jobId,
       status: 'draft',
-      co_number: 'CO-2',
+      co_number: 'CO-002',
       linked_node_id: null,
       created_at: '2026-05-11T00:00:00.000Z',
       approved_at: null,
@@ -278,7 +326,7 @@ function purchaseOrderRows() {
 }
 
 module.exports = {
-  IDENTITY, MONEY, PROSE, PROSE_NUMBERS,
+  IDENTITY, MONEY, PROSE, PROSE_NUMBERS, MUST_SURVIVE,
   jobBlob, changeOrderRows, invoiceRows,
   qbCostLineRows, vendorBillRows, purchaseOrderRows
 };
