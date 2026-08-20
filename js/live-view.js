@@ -34,10 +34,33 @@
 //   • hasCapability does not exist on the page, so js/auth.js's offline-admin
 //     grant is unreachable.
 //
-// Recorded rather than discovered: the page DOES link css/styles.css for
-// content styling, which ships class names for surfaces a guest cannot reach.
-// That is a leak of feature names, not of data, and it is the same exposure
-// index.html already has to any unauthenticated visitor.
+// ══ AND WHAT IT DOES COPY ═════════════════════════════════════════════════
+// The first build drew bespoke markup, and the result was correct and looked
+// like a different, thinner product. The rule now is:
+//
+//     THE GUEST PAGE COPIES THE APP'S MARKUP, CLASSES AND TOKENS.
+//     IT NEVER LINKS THE APP'S CODE.
+//
+// So the renderers below emit the app's own class names — .card, .p86-totals-
+// strip / .p86-totals-chip, the app's table chrome — against css/live-surface.
+// css, which scripts/build-live-surface-css.js extracts from css/styles.css.
+// Same chips, same tokens, same type; none of the 253 top-level functions in
+// js/jobs.js, none of its write paths, and no appData.
+//
+// Copying is what makes fidelity possible here: the reusable unit in this
+// codebase is markup + class, not function. Every real renderer takes a jobId
+// and reaches for appData itself, so there is no component to call with a
+// projected document — and two of them would actively misbehave if there were:
+// js/jobs.js coTotal recomputes CO money from c.lines (which the projection
+// deliberately never ships) and would print $0.00 on every row, and
+// js/insights.js num() returns 0 for anything non-numeric, so its <tfoot>
+// would print a confident "$0" company total. Reuse would have reached the
+// exact failure this file exists to prevent.
+//
+// Corrected, because the note that used to sit here read as licence: the page
+// does NOT link css/styles.css, and must not. See css/live-view.css for why —
+// 92 KB gzipped of desktop-workspace rules, including bare `button`, `input`,
+// `table`, `th` and `td` selectors, against a 28 KB guest shell.
 
 (function () {
   'use strict';
@@ -69,6 +92,16 @@
   }
 
   function isRedacted(cell) { return !!(cell && cell.r === true); }
+
+  // A PERCENTAGE THAT IS NOT A MONEY CELL — % complete, % used. Same discipline
+  // and for the same reason: null means "there is no denominator", which is a
+  // different fact from 0%, and js/insights.js fmtPct(null) returning '0%' is
+  // precisely the confident-zero this whole design is built against. There is
+  // no fallback branch here either.
+  function pctText(n) {
+    if (typeof n !== 'number' || !isFinite(n)) return '—';
+    return (Math.round(n * 10) / 10) + '%';
+  }
 
   function reasonText(reason, hostName) {
     var who = hostName || 'The host';
@@ -176,6 +209,7 @@
     FRESH_MS: FRESH_MS,
     UNKNOWN_MS: UNKNOWN_MS,
     cellText: cellText,
+    pctText: pctText,
     isRedacted: isRedacted,
     reasonText: reasonText,
     mirrorState: mirrorState,
@@ -202,62 +236,165 @@
     return '<span class="lv-money' + (isRedacted(cell) ? ' is-redacted' : '') + '">' + esc(txt) + '</span>';
   }
 
-  function factsHtml(facts) {
-    var out = '';
-    for (var i = 0; i < (facts || []).length; i++) {
-      var f = facts[i];
-      if (f.value == null || f.value === '') continue;
-      out += '<div class="lv-fact"><dt>' + esc(f.label) + '</dt><dd>' + esc(f.value) + '</dd></div>';
-    }
-    return out ? '<dl class="lv-facts">' + out + '</dl>' : '';
+  // A percentage slot, rendered. Distinct class from .lv-money so a dash here
+  // and a dash there are styled by what they MEAN.
+  function pctHtml(n) {
+    var known = (typeof n === 'number' && isFinite(n));
+    return '<span class="lv-pct' + (known ? '' : ' is-unknown') + '">' + esc(pctText(n)) + '</span>';
   }
 
+  // A meter. Width comes from the RATIO, never from a figure — there is no
+  // figure here to come from, which is the point. Over-budget is its own state
+  // because "97% used" and "162% used" are the two things a superintendent is
+  // actually looking for.
+  function meterHtml(pct) {
+    if (typeof pct !== 'number' || !isFinite(pct)) return '';
+    var w = Math.max(0, Math.min(100, pct));
+    var tone = pct > 100 ? ' is-over' : (pct > 85 ? ' is-near' : '');
+    return '<span class="lv-meter' + tone + '"><span style="width:' + w + '%"></span></span>';
+  }
+
+  // ── The app's chip ribbon ────────────────────────────────────────────────
+  // index.html:1061-1093, class for class. `tone` arrives as DATA on the
+  // document — accent / warn / info — and is validated against a fixed list
+  // here, so a colour is never picked from the sign of a value the guest does
+  // not have. renderJobDetail sets .style.color from the sign of the figure in
+  // five places; transcribing that would have made colour a channel.
+  var CHIP_TONES = { accent: 1, warn: 1, info: 1, dim: 1 };
+  function chipsHtml(chips) {
+    if (!chips || !chips.length) return '';
+    var html = '<div class="p86-totals-strip job-totals-strip">';
+    for (var i = 0; i < chips.length; i++) {
+      var c = chips[i];
+      var tone = (c.tone && CHIP_TONES[c.tone] === 1) ? (' ' + c.tone) : '';
+      var value = (typeof c.pct === 'number' || c.cell == null)
+        ? pctHtml(c.pct) : cellHtml(c.cell, c.unit);
+      html += '<div class="p86-totals-chip' + tone + '">' +
+              '<div class="p86-totals-chip-label">' + esc(c.label) + '</div>' +
+              '<div class="p86-totals-chip-value">' + value + '</div>' +
+              (typeof c.pct === 'number'
+                ? '<div class="job-totals-chip-sub">' + meterHtml(c.pct) + '</div>' : '') +
+              '</div>';
+    }
+    return html + '</div>';
+  }
+
+  // ── Surface 1: the job information card ─────────────────────────────────
+  // index.html:1005 #job-info-card, minus its two write affordances (the Edit
+  // button in the markup, and the second one renderJobDetail injects into
+  // job-info-address at runtime along with a Google Maps deep link — an
+  // outbound URL carrying the address, on a page whose premise is "talks to
+  // exactly six endpoints").
+  //
+  // EVERY SLOT IS WRITTEN ON EVERY PAINT. The app's markup hard-codes "$0.00"
+  // as the default text of its value cells; a filler that SKIPS a missing field
+  // leaves a confident $0.00 in the DOM — the exact failure the money-cell
+  // design exists to prevent, walking back in through markup reuse. Nothing
+  // below is conditional on a value being present.
   function overviewHtml(v) {
-    var pct = (typeof v.progress === 'object' && v.progress && typeof v.progress.pct === 'number')
-      ? v.progress.pct : null;
-    var html = '';
+    var html = '<div class="card lv-jobcard p86-surface">';
+    html += '<div class="lv-jobcard-head">' +
+            '<div class="lv-jobcard-id">' +
+              '<div class="lv-eyebrow">Job Information</div>' +
+              '<div class="lv-jobname">' + esc(v.title || '—') + '</div>' +
+              '<div class="lv-jobaddr">' + esc(v.address || '—') + '</div>' +
+            '</div>' +
+            '<span class="lv-statuspill">' + esc(v.status || '—') + '</span>' +
+            '</div>';
+
     html += '<div class="lv-tiles">';
     for (var i = 0; i < (v.tiles || []).length; i++) {
       var t = v.tiles[i];
-      html += '<div class="lv-tile"><div class="lv-tile-k">' + esc(t.label) + '</div>' +
+      html += '<div class="lv-tile' + (t.tone === 'accent' ? ' is-accent' : '') + '">' +
+              '<div class="lv-tile-k">' + esc(t.label) + '</div>' +
               '<div class="lv-tile-v">' + cellHtml(t.cell, t.unit) + '</div></div>';
     }
     html += '</div>';
-    if (pct != null) {
-      html += '<div class="lv-progress"><div class="lv-progress-k">Complete</div>' +
-              '<div class="lv-progress-bar"><span style="width:' + Math.max(0, Math.min(100, pct)) + '%"></span></div>' +
-              '<div class="lv-progress-v">' + esc(pct.toFixed(1)) + '%</div></div>';
+
+    html += '<div class="lv-meta">';
+    for (var j = 0; j < (v.facts || []).length; j++) {
+      var f = v.facts[j];
+      html += '<div class="lv-meta-cell"><div class="lv-meta-k">' + esc(f.label) + '</div>' +
+              '<div class="lv-meta-v">' + esc(f.value == null || f.value === '' ? '—' : f.value) + '</div></div>';
     }
-    html += factsHtml(v.facts);
+    html += '</div></div>';
+
+    html += chipsHtml(v.chips);
     return html;
   }
 
+  // ── Surface 2: the WIP report ───────────────────────────────────────────
+  // index.html:1121-1226, same five groups in the same order with the same row
+  // labels, which is what makes "look at As Sold Gross Profit" land on both
+  // screens without a coordinate. Two columns on a wide screen, one on a phone
+  // — fidelity of LOOK is not fidelity of LAYOUT, and the app's grid here is a
+  // desktop `1fr 1fr` at 12px. The breakpoint lives in css/live-view.css.
+  var SEC_TONES = { accent: 1, good: 1, warn: 1, orange: 1 };
   function wipHtml(v) {
-    var html = '';
-    if (typeof v.pctComplete === 'number') {
-      html += '<div class="lv-progress"><div class="lv-progress-k">Complete</div>' +
-              '<div class="lv-progress-bar"><span style="width:' + Math.max(0, Math.min(100, v.pctComplete)) + '%"></span></div>' +
-              '<div class="lv-progress-v">' + esc(v.pctComplete.toFixed(1)) + '%</div></div>';
-    }
+    var html = chipsHtml(v.chips);
+    html += '<div class="card p86-surface"><h3 class="lv-cardtitle">WIP Report Calculations</h3>';
+    html += '<div class="lv-wipgrid">';
     for (var i = 0; i < (v.sections || []).length; i++) {
       var s = v.sections[i];
-      // Wide content scrolls INSIDE ITSELF. A guest shell whose body scrolls
-      // sideways on a phone is unusable in a truck, which is the stated case.
-      html += '<div class="lv-sec"><h3>' + esc(s.heading) + '</h3><div class="lv-scroll"><table class="lv-table"><tbody>';
+      var tone = (s.tone && SEC_TONES[s.tone] === 1) ? (' is-' + s.tone) : '';
+      html += '<section class="lv-wipsec"><h4 class="lv-wiph' + tone + '">' + esc(s.heading) + '</h4>';
       for (var j = 0; j < (s.rows || []).length; j++) {
         var r = s.rows[j];
-        html += '<tr><th scope="row">' + esc(r.label) + '</th><td>' + cellHtml(r.cell, r.unit) + '</td></tr>';
+        var value = (typeof r.pct === 'number' || r.cell == null) ? pctHtml(r.pct) : cellHtml(r.cell, r.unit);
+        html += '<div class="lv-wiprow' + (r.strong ? ' is-strong' : '') + '">' +
+                '<span class="lv-wipk">' + esc(r.label) + '</span>' +
+                '<span class="lv-wipv">' + value + '</span></div>';
       }
-      html += '</tbody></table></div></div>';
+      html += '</section>';
     }
-    return html;
+    return html + '</div></div>';
   }
 
+  // ── Surface 3: the job cost summary ─────────────────────────────────────
+  // The table the study drew: cost code, budget, committed, actual, variance,
+  // % used with a meter. Hand-built on purpose. js/insights.js renderReport is
+  // the nearest real component and it is disqualified three ways: its rows are
+  // one-per-JOB company-wide (first two columns are other jobs' numbers and
+  // titles), its <tfoot> sums cells through a num() that returns 0 for
+  // anything non-numeric — a confident "$0" company total in the slot a total
+  // belongs — and its cell colour is picked from num(v) < 0. What is worth
+  // borrowing from it is the idea it already ships: money is a TYPE on the
+  // column, not a guess about the value. That idea is the server's.
+  function costHtml(v) {
+    var cols = v.columns || [];
+    if (!v.rows || !v.rows.length) return '<p class="lv-empty">No cost codes on this job yet.</p>';
+    var html = '<div class="card p86-surface"><h3 class="lv-cardtitle">Job Cost Summary</h3>';
+    html += '<div class="table-container"><table class="lv-cost"><thead><tr>';
+    for (var c = 0; c < cols.length; c++) {
+      html += '<th' + (c === 0 ? '' : ' class="lv-num"') + '>' + esc(cols[c]) + '</th>';
+    }
+    html += '</tr></thead><tbody>';
+    for (var i = 0; i < v.rows.length; i++) html += costRow(v.rows[i], false);
+    html += '</tbody>';
+    // The total is the SERVER's, summed from real figures before redaction.
+    // Nothing on this page adds a column of cells up.
+    if (v.total) html += '<tfoot>' + costRow(v.total, true) + '</tfoot>';
+    return html + '</table></div></div>';
+  }
+
+  function costRow(r, isTotal) {
+    return '<tr' + (isTotal ? ' class="is-total"' : '') + '>' +
+      '<th scope="row">' + esc(r.label || '—') + '</th>' +
+      '<td class="lv-num">' + cellHtml(r.budget) + '</td>' +
+      '<td class="lv-num">' + cellHtml(r.committed) + '</td>' +
+      '<td class="lv-num">' + cellHtml(r.actual) + '</td>' +
+      '<td class="lv-num">' + cellHtml(r.variance) + '</td>' +
+      '<td class="lv-num lv-usedcell">' + meterHtml(r.pctUsed) + pctHtml(r.pctUsed) + '</td>' +
+      '</tr>';
+  }
+
+  // ── Surface 4: change orders ────────────────────────────────────────────
   function coHtml(v) {
-    if (!v.count) return '<p class="lv-empty">No change orders on this job.</p>';
-    var html = '<div class="lv-scroll"><table class="lv-table lv-co"><thead><tr>' +
-               '<th>CO</th><th>Status</th><th>Scope</th><th class="lv-num">Income</th><th class="lv-num">Cost</th>' +
-               '</tr></thead><tbody>';
+    if (!v.count) return '<div class="card p86-surface"><p class="lv-empty">No change orders on this job.</p></div>';
+    var html = '<div class="card p86-surface"><h3 class="lv-cardtitle">Change Orders</h3>';
+    html += '<div class="table-container"><table class="lv-co"><thead><tr>' +
+            '<th>CO</th><th>Status</th><th>Scope</th><th class="lv-num">Income</th><th class="lv-num">Cost</th>' +
+            '</tr></thead><tbody>';
     for (var i = 0; i < v.rows.length; i++) {
       var r = v.rows[i];
       html += '<tr>' +
@@ -269,12 +406,13 @@
         '<td class="lv-num">' + cellHtml(r.costs) + '</td>' +
         '</tr>';
     }
-    return html + '</tbody></table></div>';
+    return html + '</tbody></table></div></div>';
   }
 
   var RENDERERS = {
     'job-overview': overviewHtml,
     'job-wip-report': wipHtml,
+    'job-cost-summary': costHtml,
     'job-changeorders': coHtml
   };
 
@@ -284,19 +422,20 @@
   function render(el, doc) {
     if (!el) return;
     if (!doc || !doc.surface || !Object.prototype.hasOwnProperty.call(RENDERERS, doc.surface)) {
-      el.innerHTML = '<p class="lv-empty">This screen is not available in the viewer.</p>';
+      el.innerHTML = '<div class="card"><p class="lv-empty">This screen is not available in the viewer.</p></div>';
       return;
     }
-    var html = '';
-    if (doc.title) html += '<h2 class="lv-title">' + esc(doc.title) + '</h2>';
-    html += RENDERERS[doc.surface](doc);
-    el.innerHTML = html;
+    // The compact job header the app puts above its sub-tabs, so every surface
+    // says which job it is rather than only the first one.
+    var html = doc.title ? '<div class="lv-jobhead">' + esc(doc.title) + '</div>' : '';
+    el.innerHTML = html + RENDERERS[doc.surface](doc);
   }
 
   window.p86LiveView = {
     core: Core,
     render: render,
     cellText: cellText,
+    pctText: pctText,
     mirrorState: mirrorState,
     expiryText: expiryText,
     stampText: stampText,

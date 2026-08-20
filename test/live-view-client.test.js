@@ -84,27 +84,79 @@ describe('the rendered surfaces', () => {
   test('every redacted WIP row paints a dash, and no dollar sign appears', () => {
     const doc = {
       surface: 'job-wip-report', title: 'RV2006 Waterside', pctComplete: 51.3,
-      sections: [{ heading: 'Contract', rows: [
-        { label: 'Contract income', cell: { r: true }, unit: null },
-        { label: 'As-sold margin', cell: { r: true }, unit: '%' }
+      chips: [{ label: '% Complete', pct: 51.3 }],
+      sections: [{ heading: 'Income', tone: 'accent', rows: [
+        { label: 'Contract (As Sold)', cell: { r: true }, unit: null },
+        { label: 'As Sold Margin %', cell: { r: true }, unit: '%' }
       ] }]
     };
     const el = render(doc);
     expect(el.querySelectorAll('.lv-money.is-redacted').length).toBe(2);
     expect(el.textContent).not.toContain('$');
     expect(el.textContent).toContain('51.3%');   // progress survives
+    // And it is the APP'S markup: the same chip ribbon class the job page uses.
+    expect(el.querySelector('.p86-totals-strip.job-totals-strip')).toBeTruthy();
+    expect(el.querySelector('.lv-wiph.is-accent').textContent).toBe('Income');
+  });
+
+  test('the WIP rows carry the APP\'S OWN LABELS — which is the pointer answer', () => {
+    // The remote arrow was dropped because the two ends were different
+    // documents. They are not any more: these strings are index.html's, so
+    // "look at As Sold Gross Profit" lands on both screens with no coordinate,
+    // and it works over the phone and at 375px where an arrow would not.
+    const LV = require('../server/services/live-view.js');
+    const doc = LV.buildJobWip({ wip: {} });
+    const labels = doc.sections.reduce((a, s) => a.concat(s.rows.map((r) => r.label)), []);
+    const INDEX = read('index.html');
+    for (const l of labels) {
+      const inApp = INDEX.indexOf('>' + l.replace(/&/g, '&amp;').replace(/×/g, '&times;')) !== -1
+        || INDEX.indexOf('>' + l) !== -1;
+      expect([l, inApp]).toEqual([l, true]);
+    }
+    expect(doc.sections.map((s) => s.heading)).toEqual(
+      ['Income', 'Estimated Costs', 'Profit & Margin', 'Revenue & Billing', 'Actual Costs vs Estimated']);
+  });
+
+  test('the job cost table draws a meter from the RATIO and a dash from a null', () => {
+    // The table the study drew. % used is a ratio of two terms that are both
+    // money and both redacted, so it survives on the same R1 argument as
+    // % complete — and a bucket with no budget has no percentage to BE, which
+    // is a different fact from 0%.
+    const el = render({
+      surface: 'job-cost-summary', title: 'x',
+      columns: ['Cost Code', 'Budget', 'Committed', 'Actual', 'Variance', '% Used'],
+      rows: [
+        { label: 'Labor', budget: { r: true }, committed: { r: true }, actual: { r: true }, variance: { r: true }, pctUsed: 62.4 },
+        { label: 'Other', budget: { r: true }, committed: { r: true }, actual: { r: true }, variance: { r: true }, pctUsed: null }
+      ],
+      total: { label: 'Total', budget: { r: true }, committed: { r: true }, actual: { r: true }, variance: { r: true }, pctUsed: 118.2 }
+    });
+    expect(el.textContent).not.toContain('$');
+    expect(el.textContent).toContain('62.4%');
+    expect(el.querySelectorAll('.lv-meter').length).toBe(2);          // not three: null draws none
+    expect(el.querySelector('.lv-meter > span').style.width).toBe('62.4%');
+    expect(el.querySelector('.lv-meter.is-over')).toBeTruthy();       // the total is over budget
+    expect(el.querySelectorAll('.lv-pct.is-unknown').length).toBe(1); // the null bucket
+    // The total is the SERVER'S. Nothing on this page sums a column of cells —
+    // js/insights.js report.total does exactly that through a num() that
+    // returns 0, which would print a confident "$0" company total.
+    expect(read('js', 'live-view.js')).not.toMatch(/reduce\([^)]*\.m\b/);
   });
 
   test('wide content scrolls inside itself, never the page', () => {
     // A guest shell whose BODY scrolls sideways on a phone is unusable in a
-    // truck, which is the stated case for this whole feature.
+    // truck, which is the stated case for this whole feature. It is now the
+    // app's own .table-container that does it.
     const el = render({
       surface: 'job-changeorders', title: 'x', count: 1,
-      rows: [{ number: 'CO-1', status: 'approved', description: 'Add 3 doors', approved: '2026-04-09', income: { r: true }, costs: { r: true } }]
+      rows: [{ number: 'CO-001', status: 'approved', description: 'Add 3 doors', approved: '2026-04-09', income: { r: true }, costs: { r: true } }]
     });
     const table = el.querySelector('table');
-    expect(table.closest('.lv-scroll')).toBeTruthy();
-    expect(read('css', 'live-view.css')).toMatch(/\.lv-scroll\s*\{[^}]*overflow-x:\s*auto/);
+    expect(table.closest('.table-container')).toBeTruthy();
+    expect(read('css', 'live-surface.css')).toMatch(/\.p86-surface \.table-container \{[^}]*overflow-x: auto/);
+    // And the two-column WIP grid stacks on a phone — fidelity of LOOK is not
+    // fidelity of LAYOUT, and a 12px 1fr-1fr grid at 375px is how this fails.
+    expect(read('css', 'live-view.css')).toMatch(/@media \(max-width: 560px\)[\s\S]*\.lv-wipgrid \{ grid-template-columns: 1fr;/);
   });
 
   test('a surface this build cannot draw says so, rather than painting an empty job', () => {
@@ -278,14 +330,32 @@ describe('the guest shell is not the app', () => {
     expect(BODY).not.toMatch(/entity_id/);
   });
 
-  test('the host pointer is not drawn on a document it was never measured against', () => {
-    // Phase 01 normalises a cursor to the DOCUMENT it was measured on. The host
-    // measures index.html's workspace; this page is a bespoke single column.
-    // Drawing a confident arrow at the wrong row is the claim this feature has
-    // been corrected against all week, and anchoring to an element is phase
-    // 03's mechanism, not a mobile-polish shortcut.
+  test('the host pointer is not drawn, and the bar no longer apologises for it', () => {
+    // The arrow stays dropped, permanently, and on stronger evidence than
+    // before: the only sampler passes raw pageX/pageY and the host's own
+    // container is height:100vh;overflow:hidden with an inner <main> doing the
+    // scrolling, so the coordinate is blind to the pane that actually moves.
     expect(BODY).not.toMatch(/paintCursors|sampleCursor/);
-    expect(HTML).toMatch(/not their pointer/);
+    expect(read('css', 'styles.css')).toMatch(/\.container \{[^}]*height: 100vh;[^}]*overflow: hidden/);
+
+    // What replaced the apology. "You see his screens, not their pointer" was
+    // true, and was a deficiency notice about an absent feature printed on the
+    // one branch where everything is working. The sub-line now states the thing
+    // that IS true, and it is literally true after this pass.
+    // Asserted on CODE, not on prose: the page explains at length why the
+    // sentence was removed, and a raw grep would fail on the explanation —
+    // which teaches the next person to delete the comment instead of the bug.
+    expect(BODY).not.toMatch(/not their pointer/);
+    expect(HTML).toMatch(/the same screen, laid out for your phone/);
+
+    // And every non-following note is untouched: the bar must never stop
+    // admitting it cannot verify.
+    const V = require('../js/live-view.js');
+    expect(V.mirrorState({ multiInstance: true, hostName: 'John' }).note).toMatch(/can't tell what John/);
+    expect(V.mirrorState({ attempts: 5, hostName: 'John' }).note).toMatch(/Disconnected/);
+    expect(V.mirrorState({ msSinceFrame: 40000, hostName: 'John' }).note).toMatch(/Reconnecting/);
+    expect(V.mirrorState({ msSinceFrame: 0, hostReason: 'off_room', hostName: 'John' }).note)
+      .toMatch(/different record — not shared/);
   });
 });
 

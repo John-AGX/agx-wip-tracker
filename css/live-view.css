@@ -7,81 +7,141 @@
    Two reasons that did not survive contact:
 
      1. The app's job page is a desktop three-column workspace. Its global
-        `input`, `table` and `.card` rules are written for that shell, and this
-        repo has already been bitten by exactly that — a new single-class rule
-        losing to `.p86-enhanced td`, and hardcoded hex needing a light twin.
-        Importing a 450 KB desktop stylesheet into a bespoke single column to
-        borrow four type rules is how a guest page ends up debugging someone
-        else's specificity.
+        `input`, `button`, `table`, `th` and `td` rules are written for that
+        shell, and this repo has already been bitten by exactly that — a new
+        single-class rule losing to `.p86-enhanced td`, and hardcoded hex
+        needing a light twin. Importing 92 KB gzipped of desktop stylesheet
+        into a 28 KB guest shell to borrow four type rules is how a guest page
+        ends up debugging someone else's specificity.
      2. It ships class names for every surface a guest cannot reach. That is a
         leak of feature NAMES rather than of data — the same exposure
         index.html already has — but it is free to not do.
 
-   So this file reproduces the app's type scale and table treatment in the
-   ~140 lines the three shared surfaces actually need. */
+   ── WHAT CHANGED, AND WHY THE VIEWER NOW LOOKS LIKE THE APP ────────────────
+   The verdict on the first build was that it was correct and looked like a
+   thinner, different product. It did, and the reason was here: this file
+   invented its own palette. It no longer does. Every --lv-* token below now
+   ALIASES the app's own token from css/live-surface.css — which
+   scripts/build-live-surface-css.js extracts from css/styles.css, light twin
+   and all. One indirection, and the whole shell is painted in Project 86's
+   colours in both themes, with the literals kept only as fallbacks so a
+   missing extract degrades rather than disappears.
+
+   The light-mode media query that used to live here is gone with it: the
+   extract carries the app's own light values, re-keyed from body.light-mode to
+   the system preference (a guest has no account and no theme setting).
+
+   THIS FILE OWNS LAYOUT. live-surface.css owns tokens and component
+   appearance; live.html's inline block owns nothing that either of them
+   defines. Fidelity of LOOK is not fidelity of LAYOUT: the app's WIP grid is a
+   desktop `1fr 1fr` at 12px and its CO table is five columns, and both of those
+   have to stack on a 375px screen. That split is stated here so nobody has to
+   rediscover which of three files a breakpoint belongs in. */
 
 :root {
-  --lv-bg: #0e1014;
-  --lv-card: #171a1f;
-  --lv-line: #2a2e35;
-  --lv-ink: #e8eaed;
-  --lv-dim: #9aa1ac;
-  --lv-accent: #4c8dff;
-  --lv-warn: #d99b28;
-  --lv-bad: #e5484d;
-  --lv-good: #3fb950;
-  --lv-radius: 14px;
+  --lv-bg: var(--bg, #101014);
+  --lv-card: var(--surface, #17171c);
+  --lv-line: var(--border, #2a2a32);
+  --lv-ink: var(--text, #f5f5f7);
+  --lv-dim: var(--text-dim, #b4b4bf);
+  --lv-accent: var(--accent, #4f8cff);
+  --lv-warn: var(--yellow, #fbbf24);
+  --lv-bad: var(--red, #f87171);
+  --lv-good: var(--green, #34d399);
+  --lv-tile: var(--surface2, #202027);
+  --lv-radius: 10px;
   --lv-bar: 74px;
 }
-@media (prefers-color-scheme: light) {
-  :root {
-    --lv-bg: #f5f6f8; --lv-card: #ffffff; --lv-line: #e2e5ea;
-    --lv-ink: #131519; --lv-dim: #69707c;
-  }
+
+/* ── The job header the app puts above its sub-tabs ────────────────────── */
+.lv-jobhead {
+  font-size: 15px; font-weight: 650; margin: 0 0 10px;
+  overflow-wrap: anywhere; line-height: 1.35; color: var(--lv-ink);
 }
 
-/* ── Surfaces ─────────────────────────────────────────────────────────── */
-.lv-title {
-  font-size: 15px; font-weight: 650; margin: 0 0 12px;
-  overflow-wrap: anywhere; line-height: 1.35;
+/* ── Job Information card (index.html #job-info-card) ──────────────────── */
+.lv-jobcard-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
+.lv-jobcard-id { flex: 1; min-width: 0; }
+.lv-eyebrow {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .5px; color: var(--lv-dim); margin-bottom: 4px;
+}
+.lv-jobname { font-size: 16px; font-weight: 600; color: var(--lv-ink); line-height: 1.3; word-break: break-word; }
+.lv-jobaddr { font-size: 13px; color: var(--lv-dim); margin-top: 5px; overflow-wrap: anywhere; }
+.lv-statuspill {
+  flex-shrink: 0; font-size: 12px; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--lv-line); color: var(--lv-dim); white-space: nowrap;
 }
 
-.lv-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
-.lv-tile { border: 1px solid var(--lv-line); border-radius: 10px; padding: 10px 11px; min-width: 0; }
-.lv-tile-k { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--lv-dim); }
-.lv-tile-v { font-size: 17px; font-weight: 650; margin-top: 3px; overflow-wrap: anywhere; }
+/* The three as-sold tiles. Three across on a wide screen, two on a phone —
+   three 19px figures in a 375px row is unreadable, and the app itself drops to
+   two columns for the chips at the same width. */
+.lv-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
+.lv-tile { background: var(--lv-tile); border-radius: 9px; padding: 10px 12px; min-width: 0; }
+.lv-tile-k { font-size: 11px; color: var(--lv-dim); margin-bottom: 3px; }
+.lv-tile-v { font-size: 19px; font-weight: 700; overflow-wrap: anywhere; }
+.lv-tile.is-accent .lv-tile-v { color: var(--lv-accent); }
 
+.lv-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px 16px; }
+.lv-meta-k { font-size: 11px; color: var(--lv-dim); margin-bottom: 2px; }
+.lv-meta-v { font-size: 13px; overflow-wrap: anywhere; }
+
+/* ── The typed slots ───────────────────────────────────────────────────── */
 /* A redacted cell is a DASH, not a blur. There is nothing underneath it to
    reveal: the number never left the server. Styling it as "hidden content"
    would be a lie about the mechanism. */
-.lv-money.is-redacted { color: var(--lv-dim); font-weight: 500; letter-spacing: .08em; }
+.lv-money.is-redacted, .lv-pct.is-unknown { color: var(--lv-dim); font-weight: 500; letter-spacing: .08em; }
+.lv-money, .lv-pct { font-variant-numeric: tabular-nums; }
 
-.lv-progress { display: flex; align-items: center; gap: 9px; margin: 0 0 14px; font-size: 13px; }
-.lv-progress-k { color: var(--lv-dim); flex: none; }
-.lv-progress-bar { flex: 1 1 auto; height: 7px; border-radius: 99px; background: var(--lv-line); overflow: hidden; }
-.lv-progress-bar span { display: block; height: 100%; background: var(--lv-accent); }
-.lv-progress-v { flex: none; font-weight: 650; font-variant-numeric: tabular-nums; }
+/* ── The % used meter ──────────────────────────────────────────────────── */
+.lv-meter {
+  display: inline-block; vertical-align: middle; width: 54px; height: 6px;
+  border-radius: 99px; background: var(--lv-line); overflow: hidden; margin-right: 7px;
+}
+.lv-meter > span { display: block; height: 100%; background: var(--lv-accent); }
+.lv-meter.is-near > span { background: var(--lv-warn); }
+.lv-meter.is-over > span { background: var(--lv-bad); }
+.job-totals-chip-sub .lv-meter { width: 100%; margin: 3px 0 0; }
 
-.lv-facts { margin: 0; display: grid; grid-template-columns: minmax(90px, auto) 1fr; gap: 6px 12px; font-size: 13px; }
-.lv-fact { display: contents; }
-.lv-facts dt { color: var(--lv-dim); }
-.lv-facts dd { margin: 0; overflow-wrap: anywhere; }
+/* ── WIP grid (index.html #job-wip-report) ─────────────────────────────── */
+.lv-cardtitle { font-size: 14px; margin: 0 0 10px; font-weight: 650; }
+.lv-wipgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 18px; }
+.lv-wipsec { min-width: 0; }
+.lv-wiph {
+  margin: 0 0 6px; font-size: 11px; text-transform: uppercase;
+  letter-spacing: .04em; font-weight: 700; color: var(--lv-dim);
+}
+.lv-wiph.is-accent { color: var(--lv-accent); }
+.lv-wiph.is-good { color: var(--lv-good); }
+.lv-wiph.is-warn { color: var(--lv-warn); }
+.lv-wiph.is-orange { color: var(--orange, #fb923c); }
+.lv-wiprow {
+  display: flex; justify-content: space-between; gap: 10px;
+  padding: 3px 0; border-bottom: 1px solid var(--lv-line); font-size: 12px;
+}
+.lv-wipk { color: var(--lv-dim); min-width: 0; overflow-wrap: anywhere; }
+.lv-wipv { white-space: nowrap; }
+.lv-wiprow.is-strong { font-weight: 700; padding: 6px 0; border-bottom: 0; }
+.lv-wiprow.is-strong .lv-wipk { color: var(--lv-ink); }
 
-.lv-sec { margin-bottom: 16px; }
-.lv-sec h3 { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--lv-dim); margin: 0 0 7px; }
-
-/* Wide content scrolls INSIDE ITSELF. A page body that scrolls sideways on a
-   phone is unusable in a truck, which is the whole stated case. */
-.lv-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-.lv-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
-.lv-table th, .lv-table td { padding: 8px 6px; border-top: 1px solid var(--lv-line); text-align: left; vertical-align: top; }
-.lv-table tr:first-child th, .lv-table tr:first-child td { border-top: 0; }
-.lv-table th[scope="row"] { font-weight: 400; color: var(--lv-dim); }
-.lv-table td { font-variant-numeric: tabular-nums; }
-.lv-table .lv-num { text-align: right; white-space: nowrap; }
-.lv-co thead th { font-size: 10px; letter-spacing: .05em; text-transform: uppercase; color: var(--lv-dim); border-top: 0; }
-.lv-co { min-width: 460px; }
-.lv-prose { color: var(--lv-ink); overflow-wrap: anywhere; min-width: 150px; }
+/* ── Tables ────────────────────────────────────────────────────────────── */
+/* Wide content scrolls INSIDE ITSELF (.table-container, from the app). A page
+   body that scrolls sideways on a phone is unusable in a truck. */
+.lv-cost, .lv-co { min-width: 520px; }
+.lv-cost th[scope="row"], .lv-co td:first-child { white-space: nowrap; }
+.p86-surface .lv-num { text-align: right; white-space: nowrap; }
+.p86-surface th.lv-num { text-align: right; }
+.lv-cost th[scope="row"] {
+  background: none; text-transform: none; letter-spacing: 0;
+  font-size: 12px; font-weight: 500; color: var(--lv-ink);
+  border-bottom: 1px solid var(--lv-line); padding: 6px 8px; text-align: left;
+}
+.lv-cost tfoot tr.is-total th, .lv-cost tfoot tr.is-total td {
+  font-weight: 700; border-top: 2px solid var(--lv-line); border-bottom: 0;
+  background: var(--lv-tile);
+}
+.lv-usedcell { white-space: nowrap; }
+.lv-prose { overflow-wrap: anywhere; min-width: 150px; }
 .lv-chip {
   display: inline-block; font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
   border: 1px solid var(--lv-line); border-radius: 4px; padding: 1px 5px; color: var(--lv-dim);
@@ -129,3 +189,15 @@
 .lv-follow[aria-pressed="true"] { border-color: var(--lv-accent); color: var(--lv-ink); }
 
 .lv-stamp { font-size: 11px; color: var(--lv-dim); margin: 0 0 8px; }
+
+/* ── THE PHONE ─────────────────────────────────────────────────────────── */
+/* The real mobile risk in this feature is not bytes, it is layout, and it
+   fails visually rather than in a transfer log. A 2-column 12px WIP grid and a
+   3-across tile row on a 375px screen is how. */
+@media (max-width: 560px) {
+  .lv-wipgrid { grid-template-columns: 1fr; gap: 14px; }
+  .lv-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .lv-tile-v { font-size: 17px; }
+  .lv-jobcard-head { gap: 8px; }
+  .lv-meter { width: 40px; }
+}

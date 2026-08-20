@@ -1,0 +1,266 @@
+/* css/live-surface.css — GENERATED. Do not edit by hand.
+
+   Regenerate:  node scripts/build-live-surface-css.js
+   Source:      css/styles.css
+   Guard:       test/live-guest-shell.test.js re-runs the generator and
+                fails when this file and the source have drifted apart.
+
+   This is the app's own skin, copied into the guest page so the viewer reads as
+   Project 86 rather than as a thinner, different app. It is a COPY on purpose —
+   live.html links no host stylesheet and no host script, because every
+   host/guest bleed this feature has had came from loading a host file there and
+   trusting a runtime gate. Drift is the accepted cost; the parity test is the
+   alarm, and regeneration is a human act with a reviewable diff.            */
+
+/* ── Design tokens (css/styles.css :root) ─────────────────────────────── */
+:root {
+  --bg: #101014;
+  --surface: #17171c;
+  --surface2: #202027;
+  --border: #2a2a32;
+  /* Brightened twice for mobile readability — the muted
+  #a3a8bd dim color was rendering as mid-gray on phones
+  in field conditions (bright daylight, low brightness)
+  and was painful to read. Pumped both up another step
+  so body copy + secondary labels stay legible without
+  going pure-white (which would look harsh against the
+  dark backdrop on desktop). */
+  --text: #f5f5f7;
+  --text-dim: #b4b4bf;
+  --accent: #4f8cff;
+  --accent-dim: #2a4a8a;
+  --green: #34d399;
+  --yellow: #fbbf24;
+  --red: #f87171;
+  --orange: #fb923c;
+  --purple: #a78bfa;
+  --cell-bg: #1a1a20;
+  --cell-border: #34343e;
+  --row-alt: #16161b;
+  --row-hover: #232329;
+  --grid-header-bg: #26262e;
+  --grid-header-text: #e2e2e8;
+  --grid-border: #3d3d48;
+  --scrollbar-thumb: #3a3a44;
+  --context-bg: #202027;
+  --input-bg: #101014;
+  /* --card-bg sits one step deeper than --surface so nested
+  panels and tables read as elevated cards. Hard-coded in
+  27+ inline styles as the var(--card-bg, #141419) fallback;
+  defining it here lets light mode override that fallback. */
+  --card-bg: #141419;
+  /* Elevated panel surface (filter drawer, columns popover). Was
+  only ever the #12141f literal fallback -> stayed dark in light
+  mode. Define it per-theme so those surfaces follow the theme. */
+  --panel-bg: #12141f;
+  --bg-dark: #0b0b0e;
+  --shadow: rgba(0,0,0,0.3);
+  --overlay-light: rgba(255,255,255,0.06);
+  /* Messaging accent tints (inbox hover/selected rows, avatar chip)
+  — cyan on dark, remapped for readability on white in light. */
+  --msg-chip: rgba(34,211,238,0.18);
+  --msg-hover: rgba(34,211,238,0.06);
+  --msg-selected: rgba(34,211,238,0.10);
+}
+
+/* Light mode, RE-KEYED. The app switches on body.light-mode, from a signed-in
+   user's setting. A guest has no account and no setting, so the same tokens are
+   keyed to the system preference instead — which is what a phone actually
+   reports, and a phone in a truck is the stated case.                        */
+@media (prefers-color-scheme: light) {
+  :root {
+    /* White main panel (not gray) — the reference look is white-on-
+    white with hairline borders doing the separation. */
+    --bg: #ffffff;
+    --surface: #ffffff;
+    --surface2: #e8eaef;
+    --border: #e5e7eb;
+    /* Darkened a step for better contrast against the light bg.
+    --text: #111827 → #0a0e15 (almost-black) so body copy
+    carries more weight; --text-dim: #4b5563 → #374151 so
+    muted labels stay readable instead of fading out. */
+    --text: #0a0e15;
+    --text-dim: #374151;
+    --accent: #2563eb;
+    --accent-dim: #93b4f5;
+    --green: #059669;
+    --yellow: #d97706;
+    --red: #dc2626;
+    --orange: #ea580c;
+    --purple: #7c3aed;
+    --cell-bg: #ffffff;
+    --cell-border: #d1d5db;
+    --row-alt: #f9fafb;
+    --row-hover: #f3f4f6;
+    --grid-header-bg: #f3f4f6;
+    --grid-header-text: #1f2937;
+    --grid-border: #eceff2;
+    --scrollbar-thumb: #9ca3af;
+    --context-bg: #ffffff;
+    --input-bg: #ffffff;
+    /* Light-mode --card-bg is white so nested cards / tables /
+    inputs that hardcoded var(--card-bg, #141419) become
+    readable instead of falling back to the dark literal. */
+    --card-bg: #ffffff;
+    /* Light drawer/popover — white to match the white-on-white
+    reference (hairline borders separate the inputs). */
+    --panel-bg: #ffffff;
+    --bg-dark: #e5e7eb;
+    --shadow: rgba(0,0,0,0.1);
+    --overlay-light: rgba(0,0,0,0.04);
+    --msg-chip: rgba(8,145,178,0.14);
+    --msg-hover: #f3f4f6;
+    --msg-selected: rgba(37,99,235,0.10);
+  }
+}
+
+/* ── Components (copied, with provenance) ─────────────────────────────── */
+/* the app card — chrome for every panel on the guest page */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+
+.p86-surface .table-container {
+  overflow-x: auto;
+  margin-bottom: 10px;
+}
+
+.p86-surface table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.p86-surface th {
+  background: var(--surface2);
+  color: var(--text-dim);
+  padding: 6px 8px;
+  text-align: left;
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.p86-surface td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+
+.p86-surface tr:last-child td {
+  border-bottom: none;
+}
+
+/* the chip ribbon chassis */
+.p86-co-totals,
+.p86-totals-strip {
+  display: flex;
+  gap: 8px;
+  padding: 12px 18px;
+  background: rgba(255,255,255,0.02);
+  border-bottom: 1px solid var(--border, #2a2a32);
+  overflow-x: auto;
+}
+
+.p86-co-chip,
+.p86-totals-chip {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border, #2a2a32);
+  border-radius: 8px;
+  padding: 8px 14px;
+  min-width: 110px;
+  flex: 0 0 auto;
+}
+
+.p86-co-chip.accent,
+.p86-totals-chip.accent {
+  background: rgba(52, 211, 153, 0.08);
+  border-color: rgba(52, 211, 153, 0.35);
+}
+
+.p86-co-chip-label,
+.p86-totals-chip-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-dim, #b4b4bf);
+  margin-bottom: 4px;
+}
+
+.p86-co-chip-value,
+.p86-totals-chip-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text, #fff);
+}
+
+.p86-co-chip.accent .p86-co-chip-value,
+.p86-totals-chip.accent .p86-totals-chip-value {
+  color: #34d399;
+}
+
+.p86-totals-chip.warn .p86-totals-chip-value {
+  color: var(--yellow, #fbbf24);
+}
+
+.p86-totals-chip.info .p86-totals-chip-value {
+  color: var(--accent, #60a5fa);
+}
+
+.p86-totals-chip.dim .p86-totals-chip-value {
+  color: var(--text-dim, #b4b4bf);
+}
+
+/* the job page relaxes the ribbon for inline content */
+.job-totals-strip {
+  background: transparent;
+  border-bottom: 0;
+  padding: 0;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+.job-totals-chip-sub {
+  font-size: 10.5px;
+  color: var(--text-dim, #b4b4bf);
+  margin-top: 3px;
+  line-height: 1.3;
+}
+
+@media (max-width: 640px) {
+  .job-totals-strip {
+    gap: 6px; margin-bottom: 12px;
+  }
+  .job-totals-strip .p86-totals-chip {
+    min-width: calc(50% - 4px); padding: 6px 10px;
+  }
+  .job-totals-strip .p86-totals-chip-value {
+    font-size: 13px;
+  }
+}
+
+/* ── LIGHT-MODE REPAIRS (authored, not extracted) ────────────────────────────
+   .p86-totals-chip is background: rgba(255,255,255,0.03) in styles.css and has
+   NO body.light-mode twin — grep the whole file. On a white background that is
+   an invisible chip, on the one device this feature exists for. There is
+   nothing to extract, so it is repaired here in terms of the app's own
+   --overlay-light token, which DOES carry a light twin (rgba(255,255,255,.06)
+   dark / rgba(0,0,0,.04) light).                                             */
+.p86-totals-chip { background: var(--overlay-light, rgba(255,255,255,0.03)); }
+.p86-co-totals, .p86-totals-strip { background: var(--overlay-light, rgba(255,255,255,0.02)); }
+.job-totals-strip { background: transparent; }
+
+/* th is position: sticky in the app because its tables sit in a fixed-height
+   workspace pane. The guest's tables scroll inside their own container with no
+   height, where sticky buys nothing and costs a paint. */
+.p86-surface th { position: static; }

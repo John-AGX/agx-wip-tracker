@@ -27,25 +27,40 @@
   the meeting. This page sets no cookie, provisions no user, and talks to
   exactly six endpoints: status, join, stream, view, beat, leave.
 
-  ── THE HOST'S POINTER IS NOT DRAWN HERE, AND THAT IS DELIBERATE ───────────
+  ── THE HOST'S POINTER IS NOT DRAWN HERE, AND THAT IS PERMANENT ────────────
   Phase 01 normalises a cursor to 0..10000 of the DOCUMENT it was measured
-  against. The host measures against index.html's workspace; this page is a
-  bespoke single column with different content in a different order. Proportional
-  tracking across two unrelated documents lands nowhere in particular, and a
-  confident arrow pointing at the wrong row is exactly the kind of claim this
-  whole feature has been corrected against. Anchoring a cursor to a DOM element
-  is phase 03's mechanism and it is not being smuggled in early. So: no remote
-  pointer on the guest shell, said out loud in the bar rather than quietly wrong.
+  against — except it does not: the only sampler passes raw pageX/pageY, and the
+  host's own container is height:100vh;overflow:hidden with the scrolling done
+  by an inner <main>, so the coordinate is blind to the pane that actually
+  scrolls. It is a viewport overlay wearing document-overlay code, and it is
+  only accurate host-to-host at matching scroll offset and window size.
+
+  The answer is not a better arrow. It is that the two ends are now THE SAME
+  DOCUMENT: the guest's WIP rows carry the app's own labels in the app's own
+  order, so "look at As Sold Gross Profit" lands on both screens with no
+  coordinate, over the phone, on a 375px display. That is what the cursor was
+  for. The guest no longer receives cursor frames at all — it was being sent
+  roughly 3.6 KB a minute of pointer samples it had no way to draw.
 -->
-<link rel="stylesheet" href="/css/live-view.css?v=1" />
+<!-- Inter, Project 86's UI typeface. "The app's own type" was half the fidelity
+     complaint. index.html loads six weights; a guest needs two, and display=swap
+     keeps the page readable if the CDN is slow on a truck's connection. The
+     fallback stack is css/styles.css:104's, character for character. -->
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" />
+<link rel="stylesheet" href="/css/live-surface.css?v=1" />
+<link rel="stylesheet" href="/css/live-view.css?v=2" />
 <style>
+  /* LAYOUT ONLY. Tokens and component appearance belong to live-surface.css
+     (the app's own, extracted) and layout to live-view.css. Nothing here may
+     redefine a selector either of them owns — `.card` used to live in this
+     block and, being later in source order at equal specificity, it silently
+     beat the app's card the moment the extract landed. */
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin: 0; padding: 0; min-height: 100%; background: var(--lv-bg); color: var(--lv-ink);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-  .wrap { max-width: 640px; margin: 0 auto; padding: 16px 14px calc(var(--lv-bar) + 24px); }
+    font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 16px 14px calc(var(--lv-bar) + 24px); }
   .brand { font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--lv-dim); margin-bottom: 10px; }
-  .card { background: var(--lv-card); border: 1px solid var(--lv-line); border-radius: var(--lv-radius);
-          padding: 15px 16px; margin-bottom: 12px; }
   h1 { font-size: 19px; line-height: 1.3; margin: 0 0 6px; font-weight: 650; overflow-wrap: anywhere; }
   .sub { font-size: 13px; color: var(--lv-dim); }
   .sec-h { font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--lv-dim); margin: 0 0 9px; }
@@ -91,10 +106,12 @@
 
   <div id="live" style="display:none">
     <div class="lv-tabs" id="tabs"></div>
-    <div class="card">
-      <p class="lv-stamp" id="stamp" style="display:none"></p>
-      <div id="surface"></div>
-    </div>
+    <p class="lv-stamp" id="stamp" style="display:none"></p>
+    <!-- p86-surface is the scope the extracted `table`/`th`/`td` rules are
+         written under. Bare element selectors from the app would otherwise
+         reach the shell's own chrome; scoping them is what lets the guest use
+         the app's real table treatment without inheriting a workspace. -->
+    <div id="surface" class="p86-surface"></div>
 
     <details class="card roster-fold" id="roster-card">
       <summary class="sec-h" id="roster-summary">In this session</summary>
@@ -123,7 +140,7 @@
 </div>
 
 <script src="/js/live-rooms.js?v=4"></script>
-<script src="/js/live-view.js?v=1"></script>
+<script src="/js/live-view.js?v=2"></script>
 <script>
 (function () {
   'use strict';
@@ -357,16 +374,24 @@
 
     // Whose screen · read-only · when the link dies. Three facts, one line. If
     // it needs another line, cut a word, not a fact.
-    var bits = [who + "'s screen", 'read-only'];
+    var bits = [who + "'s screen", 'read-only', 'the same screen, laid out for your phone'];
     if (session.room && session.room.expires_at) {
       var exp = View.expiryText(session.room.expires_at);
       if (exp) bits.push(exp);
     }
     $('bar-sub').textContent = bits.join(' · ');
 
+    // On the everything-is-working branch the bar now says NOTHING extra. It
+    // used to apologise here — "you see his screens, not their pointer" — which
+    // was true, and was an apology for an absent feature phrased as a
+    // deficiency, on the one branch where nothing is wrong. What replaced it is
+    // a positive statement in the sub-line, and it is now literally accurate:
+    // same document, same rows, same labels, reflowed.
+    //
+    // Every NON-following note is untouched. broken / unconfirmed / not_shared
+    // are the honest core of this feature and the one thing the bar must never
+    // do is stop admitting it cannot verify.
     var note = m.note || '';
-    // The pointer limitation, stated once rather than drawn wrongly.
-    if (!note && m.kind === 'following') note = "You see " + who + "'s screens, not their pointer.";
     $('bar-note').textContent = note;
     $('bar-note').style.display = note ? '' : 'none';
 
