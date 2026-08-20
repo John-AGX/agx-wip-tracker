@@ -153,7 +153,26 @@
     return Math.round(base * (0.75 + r * 0.5));
   }
 
+  // What a `hello` actually means for state we are already holding.
+  //
+  // lastSeq only ever RISES (a frame with a lower seq is ignored) and is reset
+  // in exactly one place, _join(). A reconnect that does not re-join therefore
+  // carries its old lastSeq into a hub that may have restarted at zero — which
+  // is the normal deploy path, not an edge case. The server now refuses to
+  // claim a resume it cannot prove, but the client must not depend on the
+  // server's answer alone: a hello whose seq is BELOW our lastSeq is proof on
+  // its own that this is a different hub, whatever the resumed flag says.
+  //
+  // 'reset' means: drop what we are holding and take what arrives. That is the
+  // honest answer — showing a cursor trail from a hub that no longer exists is
+  // the stale-state failure this whole feature is supposed to refuse.
+  function resumeVerdict(helloSeq, lastSeq, resumed) {
+    if (typeof helloSeq === 'number' && helloSeq < (lastSeq || 0)) return 'reset';
+    return resumed ? 'resumed' : 'reset';
+  }
+
   var Core = {
+    resumeVerdict: resumeVerdict,
     ROSTER_FRESH_MS: ROSTER_FRESH_MS,
     ROSTER_UNKNOWN_MS: ROSTER_UNKNOWN_MS,
     ATTEMPTS_BEFORE_UNKNOWN: ATTEMPTS_BEFORE_UNKNOWN,
@@ -363,7 +382,12 @@
         if (Array.isArray(msg.surfaces)) this.surfaces = msg.surfaces;
         if (msg.timings && msg.timings.beat_ms) this.beatMs = msg.timings.beat_ms;
         this.lastSnapshotAt = now; this.lastConfirmAt = now; this.attempts = 0;
-        if (!msg.resumed) this.cursors = {};   // a reset is a reset
+        // A reset is a reset — including the case the resumed flag cannot see,
+        // where this hello comes from a hub that restarted below our position.
+        if (resumeVerdict(msg.seq, this.lastSeq, msg.resumed) === 'reset') {
+          this.cursors = {};
+          this.lastSeq = (typeof msg.seq === 'number') ? msg.seq : 0;
+        }
         this._changed();
         break;
       case 'presence':

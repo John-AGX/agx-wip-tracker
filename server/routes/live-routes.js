@@ -1023,13 +1023,16 @@ router.get('/:roomId/stream/:streamKey', liveStreamLimiter, async (req, res) => 
   // Resume. Only CONTROL events are replayed, and only when the ring can still
   // cover the caller's position. Cursor history is never replayed: a stale
   // motion trail is worse than no trail.
-  const after = Number(req.query.after);
-  let resumed = false;
-  let backlog = [];
-  if (Number.isFinite(after) && after > 0 && h.ring.length) {
-    const lowest = h.ring[0].seq;
-    if (after >= lowest - 1) { resumed = true; backlog = h.ring.filter(function (e) { return e.seq > after; }); }
-  }
+  //
+  // The decision is in services/live-rooms.js so it can be tested where it
+  // lives. It now also refuses to claim a resume it cannot prove: `after`
+  // above this hub's own seq means the hub restarted (a takeover, or any
+  // deploy) and the caller's position is meaningless here. That case used to
+  // return resumed:true with an empty backlog — the client kept its stale
+  // state because it was told it had resumed, and got nothing to replace it.
+  const decision = L.resumeDecision(Number(req.query.after), h.ring, h.seq);
+  const resumed = decision.resumed;
+  const backlog = decision.backlog;
 
   try {
     const now = Date.now();

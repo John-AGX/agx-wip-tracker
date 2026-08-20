@@ -264,7 +264,51 @@ function mintVerdict(callerOrgId, entityRow) {
   return { ok: true, orgId: rowOrg };
 }
 
+// ── Resume: coverage has to be PROVED, not assumed ──────────────────────
+// A reconnecting stream sends ?after=<last seq it saw> and the hub decides
+// whether its ring can still cover the gap. The shipped rule was
+//
+//     if (after >= lowest - 1) { resumed = true; backlog = ring after `after` }
+//
+// which only ever looks DOWNWARD. It never asked whether this hub had emitted
+// that many events at all — and hubs restart at seq 0 constantly. A takeover
+// is the normal deploy path, destroyHub() deletes the object, and a fresh
+// process starts at zero, while the client's lastSeq only ever RISES (it is
+// reset solely inside _join). So after a takeover a plain reconnect sends a
+// stale-high `after`, sails past `lowest - 1`, and gets resumed:true with a
+// backlog that filters to EMPTY. The client is told it resumed, so it does not
+// clear its state, and it receives nothing to replace it.
+//
+// Today the 15s full presence snapshot papers over it, which is why it has
+// never been visible. Cursors have no such snapshot.
+//
+// The honest rule is that a client claiming to have seen more than this hub
+// ever emitted has NOT been proved coverable, so it is a reset — and the
+// reason is named rather than inferred from an empty array. Every branch
+// returns a reason for exactly that: "resumed with nothing to send" and
+// "cannot cover you" are different answers and must not look alike.
+//
+//   ring   — [{ seq }, …], oldest first.  hubSeq — this hub's current seq.
+//   returns { resumed, backlog, reason }
+function resumeDecision(after, ring, hubSeq) {
+  const list = Array.isArray(ring) ? ring : [];
+  const seq = Number.isFinite(hubSeq) ? hubSeq : 0;
+  const none = (reason) => ({ resumed: false, backlog: [], reason: reason });
+  if (!Number.isFinite(after) || after <= 0) return none('fresh');
+  // The fix. A hub cannot have delivered events it never emitted, so this
+  // client is talking to a different hub than the one it was reading.
+  if (after > seq) return none('hub_restarted');
+  if (!list.length) return none('no_ring');
+  if (after < list[0].seq - 1) return none('gap');
+  return {
+    resumed: true,
+    backlog: list.filter(function (e) { return e.seq > after; }),
+    reason: null
+  };
+}
+
 module.exports = {
+  resumeDecision,
   ROOM_ENTITIES, roomEntity,
   isRoomToken, isStreamKey,
   BEAT_MS, STALE_MS, GONE_MS,
