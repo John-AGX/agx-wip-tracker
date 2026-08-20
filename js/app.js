@@ -2342,6 +2342,7 @@
             'job-estimates':    'renderJobEstimates',
             'job-photos':       'renderJobPhotos',
             'job-files':        'renderJobFiles',
+            'job-daily-logs':   'renderJobDailyLogs',
             'job-reports':      'renderJobReports'
         };
         function switchJobSubTab(subtabName) {

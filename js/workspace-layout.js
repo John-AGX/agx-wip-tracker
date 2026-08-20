@@ -40,7 +40,7 @@
     { id: 'job-wip-report',    label: 'WIP Report', icon: 'wip' },
     { id: 'job-details',       label: 'Details',   icon: 'edit' },
     { id: 'job-estimates',     label: 'Estimates', icon: 'estimates' },
-    { id: 'job-qb-costs',      label: 'Detailed',  icon: 'daily-logs' },
+    { id: 'job-qb-costs',      label: 'Detailed',  icon: 'banknotes' },
     { id: 'job-changeorders',  label: 'CO\'s',     icon: 'links' },
     { id: 'job-purchaseorders',label: 'PO\'s',     icon: 'materials' },
     { id: 'job-invoices',      label: 'Invoices',  icon: 'exports' },
@@ -50,9 +50,10 @@
     // logs, grouped next to Reports. Photos reuses the attachments manager
     // (window.p86Attachments); Files reuses the folder-tree explorer
     // (window.p86Explorer). Renderers live in js/job-media.js.
-    { id: 'job-photos',        label: 'Photos',    icon: 'photos' },
-    { id: 'job-files',         label: 'Files',     icon: 'folder' },
-    { id: 'job-reports',       label: 'Reports',   icon: 'document-text' }
+    { id: 'job-photos',        label: 'Photos',     icon: 'photos' },
+    { id: 'job-files',         label: 'Files',      icon: 'folder' },
+    { id: 'job-daily-logs',    label: 'Daily Logs', icon: 'daily-logs' },
+    { id: 'job-reports',       label: 'Reports',    icon: 'document-text' }
   ];
 
   // Workspace toggle state. Tracked at module scope so the toggle can
@@ -1369,6 +1370,7 @@
       'job-wip-report': 'renderWipTab',
       'job-photos': 'renderJobPhotos',
       'job-files': 'renderJobFiles',
+      'job-daily-logs': 'renderJobDailyLogs',
       'job-reports': 'renderJobReports'
     };
     safeRenderTabContent(targetId, target, jobId, renderers[targetId]);
@@ -1743,6 +1745,7 @@
       'job-wip-report': 'renderWipTab',
       'job-photos': 'renderJobPhotos',
       'job-files': 'renderJobFiles',
+      'job-daily-logs': 'renderJobDailyLogs',
       'job-reports': 'renderJobReports'
     };
 

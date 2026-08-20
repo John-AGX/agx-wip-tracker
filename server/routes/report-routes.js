@@ -67,6 +67,39 @@ function normalizeSections(raw) {
   }).filter(Boolean).slice(0, 50);
 }
 
+// Template + cover-page support (Wave B parity). This legacy job route
+// predated per-template cover pages; the columns already exist on
+// job_reports (the polymorphic /api/reports sibling writes them), so the
+// Daily Log tab can store date / crew / weather / hours here too. The
+// whitelist mirrors reports-routes.js's normalizeCoverPage so both write
+// paths accept an identical key set; unknown keys are dropped, values capped.
+const COVER_PAGE_KEYS = [
+  'company_name', 'pm_name', 'date', 'address', 'subtitle',
+  'crew', 'weather', 'hours_on_site',
+  'week_ending', 'project_phase', 'schedule_status',
+  'stamped_by', 'license_number', 'signed_date',
+  'submittal_number', 'spec_section', 'supplier', 'approval_block',
+  'walkthrough_date', 'walkthrough_with',
+  'survey_date', 'surveyed_by', 'building',
+  'co_number', 'co_amount', 'requested_by'
+];
+function normalizeCoverPage(raw) {
+  if (!raw || typeof raw !== 'object') return { enabled: false };
+  const out = { enabled: !!raw.enabled };
+  COVER_PAGE_KEYS.forEach(function(k) {
+    if (typeof raw[k] === 'string') out[k] = raw[k].slice(0, 500);
+  });
+  return out;
+}
+// Must stay in lockstep with js/report-templates.js + reports-routes.js.
+const TEMPLATE_TYPES = [
+  'walkthrough', 'daily-log', 'weekly-progress', 'engineers-report',
+  'submittal-package', 'punch-list', 'pre-con-survey', 'change-order'
+];
+function normalizeTemplateType(raw) {
+  return (typeof raw === 'string' && TEMPLATE_TYPES.indexOf(raw) !== -1) ? raw : 'walkthrough';
+}
+
 // The job this request names, and whether it is the CALLER'S job.
 //
 // This used to be ensureJobExists: `SELECT id FROM jobs WHERE id = $1`, which
@@ -142,6 +175,7 @@ router.get('/', requireAuth, requireCapability(READ_CAP), requireOrgId,
       if (!(await jobIsReachable(jobId, req.orgId))) return res.status(404).json({ error: 'Job not found' });
       const { rows } = await pool.query(
         'SELECT r.id, r.job_id, r.title, r.summary, r.sections, ' +
+        '       r.template_type, r.cover_page, ' +
         '       r.created_at, r.updated_at, u.name AS created_by_name ' +
         '  FROM job_reports r ' +
         '  LEFT JOIN users u ON u.id = r.created_by ' +
@@ -159,6 +193,10 @@ router.get('/', requireAuth, requireCapability(READ_CAP), requireOrgId,
           job_id: r.job_id,
           title: r.title,
           summary: r.summary,
+          // Template + cover surfaced so the client can split Reports vs
+          // Daily Logs and show cover fields (crew/weather/hours) in the list.
+          template_type: r.template_type || 'walkthrough',
+          cover_page: r.cover_page || {},
           section_count: sections.length,
           photo_count: photoCount,
           created_at: r.created_at,
@@ -200,6 +238,8 @@ router.get('/:reportId', requireAuth, requireCapability(READ_CAP), requireOrgId,
           job_id: r.job_id,
           title: r.title,
           summary: r.summary,
+          template_type: r.template_type || 'walkthrough',
+          cover_page: r.cover_page || {},
           sections: hydrated,
           // Raw sections too so the editor can round-trip the
           // captions object without re-walking the hydrated array.
@@ -230,20 +270,28 @@ router.post('/', requireAuth, requireCapability(WRITE_CAP), requireOrgId,
       const summary = (req.body && typeof req.body.summary === 'string')
         ? req.body.summary.slice(0, 5000) : '';
       const sections = normalizeSections(req.body && req.body.sections);
-      // Seed default Before / During / After if no sections passed.
-      const seedSections = sections.length ? sections : [
-        { id: newId('sec'), label: 'Before',  photo_ids: [], captions: {} },
-        { id: newId('sec'), label: 'During',  photo_ids: [], captions: {} },
-        { id: newId('sec'), label: 'After',   photo_ids: [], captions: {} }
-      ];
+      const templateType = normalizeTemplateType(req.body && req.body.template_type);
+      const coverPage = normalizeCoverPage(req.body && req.body.cover_page);
+      // Seed default Before / During / After only when no sections passed
+      // AND no template drove its own seed sections (the client seeds Daily
+      // Logs from js/report-templates.js, so respect an explicit empty set
+      // for a templated create by seeding a single photo section instead).
+      const seedSections = sections.length ? sections
+        : (templateType && templateType !== 'walkthrough'
+            ? [{ id: newId('sec'), label: 'Photos from the field', photo_ids: [], captions: {} }]
+            : [
+                { id: newId('sec'), label: 'Before',  photo_ids: [], captions: {} },
+                { id: newId('sec'), label: 'During',  photo_ids: [], captions: {} },
+                { id: newId('sec'), label: 'After',   photo_ids: [], captions: {} }
+              ]);
       await pool.query(
-        'INSERT INTO job_reports (id, job_id, title, summary, sections, created_by) ' +
-        'VALUES ($1, $2, $3, $4, $5::jsonb, $6)',
+        'INSERT INTO job_reports (id, job_id, title, summary, sections, template_type, cover_page, created_by) ' +
+        'VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7::jsonb, $8)',
         // created_by = attributed user (acted-as target when disguised);
         // display-only column, never a read filter or access guard.
-        [id, jobId, title, summary, JSON.stringify(seedSections), getAttributedUserId(req)]
+        [id, jobId, title, summary, JSON.stringify(seedSections), templateType, JSON.stringify(coverPage), getAttributedUserId(req)]
       );
-      res.json({ report: { id, job_id: jobId, title, summary, sections: seedSections } });
+      res.json({ report: { id, job_id: jobId, title, summary, template_type: templateType, cover_page: coverPage, sections: seedSections } });
     } catch (e) {
       console.error('POST /api/jobs/:jobId/reports error:', e);
       res.status(500).json({ error: 'Server error' });
@@ -271,6 +319,17 @@ router.patch('/:reportId', requireAuth, requireCapability(WRITE_CAP), requireOrg
       if (Array.isArray(req.body.sections)) {
         sets.push('sections = $' + (p++) + '::jsonb');
         params.push(JSON.stringify(normalizeSections(req.body.sections)));
+      }
+      // Cover page (Daily Log date/crew/weather/hours) + template type —
+      // only written when the client sends them, so untouched reports keep
+      // whatever they had.
+      if (req.body.cover_page && typeof req.body.cover_page === 'object') {
+        sets.push('cover_page = $' + (p++) + '::jsonb');
+        params.push(JSON.stringify(normalizeCoverPage(req.body.cover_page)));
+      }
+      if (typeof req.body.template_type === 'string') {
+        sets.push('template_type = $' + (p++));
+        params.push(normalizeTemplateType(req.body.template_type));
       }
       if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
       sets.push('updated_at = NOW()');

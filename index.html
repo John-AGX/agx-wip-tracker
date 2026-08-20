@@ -1347,6 +1347,15 @@
                              driver: window.renderJobFiles (js/job-media.js). -->
                         <div id="job-files" class="sub-tab-content-job"></div>
 
+                        <!-- Job Daily Logs — the reports engine (js/job-reports.js)
+                             filtered to the 'daily-log' template, with the
+                             structured cover fields (date / crew / weather /
+                             hours) surfaced. Render driver:
+                             window.renderJobDailyLogs. -->
+                        <div id="job-daily-logs" class="sub-tab-content-job">
+                            <div id="job-daily-logs-content"></div>
+                        </div>
+
                         <!-- Job Reports — Project 86 "report" feature.
                              Photo collection grouped into named
                              sections, designed to print as PDF.
@@ -3403,7 +3412,7 @@
     <script src="js/subs.js?v=16"></script>
     <script src="js/assemblies.js?v=11"></script>
     <script src="js/job-audit.js?v=4d"></script>
-    <script src="js/job-reports.js?v=3"></script>
+    <script src="js/job-reports.js?v=4"></script>
     <!-- Shared table enhancements (reorder / resize / freeze first column /
          internal scroll / persisted layout) for the Jobs, Estimates and
          Leads lists. Loads BEFORE those renderers so window.p86Tables is
@@ -3426,7 +3435,7 @@
          app.js: loadData consults p86SaveMerge.shouldVetoHydrate() on the very
          first hydrate. -->
     <script src="js/save-merge.js?v=5"></script>
-    <script src="js/app.js?v=147"></script>
+    <script src="js/app.js?v=148"></script>
     <!-- The visible signal for a write that has not reached the server.
          Loads AFTER app.js so window.p86PushStatus exists to subscribe to. -->
     <script src="js/save-banner.js?v=3"></script>
@@ -3563,7 +3572,7 @@
 
     <script src="js/workspace.js?v=54"></script>
     <script src="js/workspace-gc.js?v=1"></script>
-    <script src="js/workspace-layout.js?v=103"></script>
+    <script src="js/workspace-layout.js?v=104"></script>
 
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist

@@ -45,7 +45,20 @@ function p86Ask(message, opts) {
     attachments: null,       // null = not fetched yet
     attachmentsLoading: false,
     pickerSectionId: null,   // which section is choosing photos
-    pickerSelected: {}       // map of attachment_id -> true while picker open
+    pickerSelected: {},      // map of attachment_id -> true while picker open
+    // ── Tab config (set by renderJobReports / renderJobDailyLogs) ──
+    // The module drives TWO job sub-tabs: Reports and Daily Logs. They
+    // share this state + all the section/photo/save/print machinery and
+    // differ only in host pane, list filter, labels, and the template a
+    // freshly-created record is seeded from. host defaults keep the
+    // Reports tab byte-identical to before this became multi-tab.
+    host: 'job-reports-content',   // content div id this tab paints into
+    filter: null,                  // fn(report)->bool, or null = all
+    kind: 'Report',                // singular label
+    kindPlural: 'Reports',         // plural label
+    newTemplate: null,             // template_type to seed a new record from
+    showCover: false,              // render the template's cover-field fieldset
+    summaryLabel: 'Summary'        // label for the summary textarea
   };
 
   function _api() {
@@ -94,10 +107,22 @@ function p86Ask(message, opts) {
   // ── Top-level entry ──
   // Called by workspace-layout.js TAB_RENDERERS when the user clicks
   // the Reports sub-tab. Re-renders from current state every time.
-  function renderJobReports(jobId) {
+  // Shared enter path for both tabs. `cfg` overlays the tab-specific
+  // host / filter / labels / template onto _state, then fetches + paints.
+  function _enter(jobId, cfg) {
     _state.jobId = jobId;
     _state.mode = 'list';
     _state.editingReport = null;
+    // Attachments are per-job; drop the cache if the job changed so the
+    // photo picker doesn't show a stale job's photos.
+    if (_state._attJobId !== jobId) { _state.attachments = null; _state._attJobId = jobId; }
+    _state.host        = cfg.host;
+    _state.filter      = cfg.filter || null;
+    _state.kind        = cfg.kind || 'Report';
+    _state.kindPlural  = cfg.kindPlural || (_state.kind + 's');
+    _state.newTemplate = cfg.newTemplate || null;
+    _state.showCover   = !!cfg.showCover;
+    _state.summaryLabel = cfg.summaryLabel || 'Summary';
     _paint();
     _fetchReports(jobId).then(function(reports) {
       _state.reports = reports;
@@ -107,7 +132,31 @@ function p86Ask(message, opts) {
       _paint();
     });
   }
+
+  function renderJobReports(jobId) {
+    // Reports tab excludes daily logs — those live in their own tab.
+    _enter(jobId, {
+      host: 'job-reports-content',
+      filter: function(r) { return (r.template_type || '') !== 'daily-log'; },
+      kind: 'Report', kindPlural: 'Reports',
+      newTemplate: null, showCover: false, summaryLabel: 'Summary'
+    });
+  }
   window.renderJobReports = renderJobReports;
+
+  // Daily Logs tab — the same engine, filtered to the 'daily-log'
+  // template, with the template's structured cover fields (date, crew,
+  // weather, hours) surfaced in the editor and new records seeded from
+  // js/report-templates.js's daily-log defaults + sections.
+  function renderJobDailyLogs(jobId) {
+    _enter(jobId, {
+      host: 'job-daily-logs-content',
+      filter: function(r) { return (r.template_type || '') === 'daily-log'; },
+      kind: 'Daily Log', kindPlural: 'Daily Logs',
+      newTemplate: 'daily-log', showCover: true, summaryLabel: 'Work performed'
+    });
+  }
+  window.renderJobDailyLogs = renderJobDailyLogs;
 
   // Refresh seam for js/refresh.js (`report` entry). renderJobReports() resets
   // mode to 'list' and drops _state.editingReport, so calling it while the
@@ -117,16 +166,19 @@ function p86Ask(message, opts) {
   // pretending it refreshed.
   window.p86JobReportsRefresh = function (jobId) {
     if (_state.mode !== 'list') return false;
-    if (!document.getElementById('job-reports-content')) return false;
+    if (!document.getElementById(_state.host)) return false;
     var id = jobId || _state.jobId;
     if (!id) return false;
-    renderJobReports(id);
+    // Honor whichever tab is currently active so a data-change refresh
+    // repaints the right pane (Reports vs Daily Logs).
+    if (_state.host === 'job-daily-logs-content') renderJobDailyLogs(id);
+    else renderJobReports(id);
     return true;
   };
 
   // ── Render dispatch ──
   function _paint() {
-    var host = document.getElementById('job-reports-content');
+    var host = document.getElementById(_state.host);
     if (!host) return;
     if (_state.mode === 'edit') {
       host.innerHTML = _renderEditor();
@@ -137,13 +189,36 @@ function p86Ask(message, opts) {
     }
   }
 
+  // The list this tab shows — all reports narrowed by the tab's filter
+  // (Reports = everything except daily logs; Daily Logs = only those).
+  function _visibleReports() {
+    var f = _state.filter;
+    return f ? _state.reports.filter(f) : _state.reports.slice();
+  }
+  // Cover-derived subtitle for daily logs (Crew · Weather · Hours), when
+  // the list payload carries cover_page; falls back to the summary line.
+  function _listSubtitle(r) {
+    if (_state.showCover && r.cover_page && typeof r.cover_page === 'object') {
+      var cp = r.cover_page;
+      var bits = [];
+      if (cp.crew) bits.push('Crew: ' + cp.crew);
+      if (cp.weather) bits.push(cp.weather);
+      if (cp.hours_on_site) bits.push(cp.hours_on_site);
+      if (bits.length) return bits.join(' · ');
+    }
+    return r.summary || '';
+  }
+
   // ── List view ──
   function _renderList() {
-    var rows = _state.reports.map(function(r) {
+    var visible = _visibleReports();
+    var kind = _state.kind, kindPlural = _state.kindPlural;
+    var rows = visible.map(function(r) {
+      var sub = _listSubtitle(r);
       return '<tr data-report-id="' + _esc(r.id) + '">' +
         '<td><strong>' + _esc(r.title || '(untitled)') + '</strong>' +
-          (r.summary ? '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:2px;">' +
-            _esc(r.summary.slice(0, 120)) + (r.summary.length > 120 ? '…' : '') + '</div>' : '') +
+          (sub ? '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:2px;">' +
+            _esc(sub.slice(0, 120)) + (sub.length > 120 ? '…' : '') + '</div>' : '') +
         '</td>' +
         '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + r.section_count + '</td>' +
         '<td style="text-align:right;font-variant-numeric:tabular-nums;">' + r.photo_count + '</td>' +
@@ -151,27 +226,28 @@ function p86Ask(message, opts) {
         '<td style="text-align:right;white-space:nowrap;">' +
           '<button class="ee-btn small" data-action="open">Edit</button> ' +
           '<button class="ee-btn small" data-action="print">Print</button> ' +
-          '<button class="ee-btn small danger" data-action="delete" title="Delete report">&#x1F5D1;</button>' +
+          '<button class="ee-btn small danger" data-action="delete" title="Delete ' + _esc(kind.toLowerCase()) + '">&#x1F5D1;</button>' +
         '</td>' +
       '</tr>';
     }).join('');
-    var empty = !_state.reports.length
+    var empty = !visible.length
       ? '<div style="padding:20px;text-align:center;color:var(--text-dim,#888);font-size:13px;">' +
-          'No reports yet. Click + New Report to create the first one — a photo-driven walkthrough for this job.' +
+          'No ' + _esc(kindPlural.toLowerCase()) + ' yet. Click + New ' + _esc(kind) + ' to create the first one' +
+          (_state.showCover ? ' — date, crew, weather, hours and photos from the field.' : ' — a photo-driven walkthrough for this job.') +
         '</div>'
       : '';
     return '<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">' +
-        '<h3 style="margin:0;font-size:16px;">Reports</h3>' +
+        '<h3 style="margin:0;font-size:16px;">' + _esc(kindPlural) + '</h3>' +
         '<span style="color:var(--text-dim,#888);font-size:12px;">' +
-          _state.reports.length + ' report' + (_state.reports.length === 1 ? '' : 's') +
+          visible.length + ' ' + _esc(visible.length === 1 ? kind.toLowerCase() : kindPlural.toLowerCase()) +
         '</span>' +
         '<div style="flex:1;"></div>' +
-        '<button class="ee-btn primary" id="rpt-new-btn">&#x2795; New Report</button>' +
+        '<button class="ee-btn primary" id="rpt-new-btn">&#x2795; New ' + _esc(kind) + '</button>' +
       '</div>' +
       '<div class="table-container">' +
         '<table class="dense-table">' +
           '<thead><tr>' +
-            '<th>Title</th>' +
+            '<th>' + (_state.showCover ? 'Daily Log' : 'Title') + '</th>' +
             '<th style="text-align:right;width:70px;">Sections</th>' +
             '<th style="text-align:right;width:70px;">Photos</th>' +
             '<th style="width:170px;">Updated</th>' +
@@ -185,7 +261,7 @@ function p86Ask(message, opts) {
   function _wireList() {
     var newBtn = document.getElementById('rpt-new-btn');
     if (newBtn) newBtn.onclick = _onNewReport;
-    document.querySelectorAll('#job-reports-content tbody tr').forEach(function(tr) {
+    document.querySelectorAll('#' + _state.host + ' tbody tr').forEach(function(tr) {
       var rid = tr.getAttribute('data-report-id');
       var openBtn   = tr.querySelector('[data-action="open"]');
       var printBtn  = tr.querySelector('[data-action="print"]');
@@ -193,7 +269,7 @@ function p86Ask(message, opts) {
       if (openBtn)   openBtn.onclick   = function() { _openReport(rid); };
       if (printBtn)  printBtn.onclick  = function() { _printReport(rid); };
       if (deleteBtn) deleteBtn.onclick = async function() {
-        if (!(await p86Ask('Delete this report? This cannot be undone.'))) return;
+        if (!(await p86Ask('Delete this ' + _state.kind.toLowerCase() + '? This cannot be undone.'))) return;
         _deleteReport(_state.jobId, rid).then(function() {
           _state.reports = _state.reports.filter(function(r) { return r.id !== rid; });
           _paint();
@@ -202,10 +278,41 @@ function p86Ask(message, opts) {
     });
   }
 
+  // Seed the create body from the tab's template (js/report-templates.js):
+  // template_type + cover_page defaults + starter sections. Reports tab
+  // (newTemplate=null) creates a bare report exactly as before.
+  function _newRecordBody(title) {
+    var body = { title: title };
+    var tplId = _state.newTemplate;
+    if (!tplId) return body;
+    body.template_type = tplId;
+    var tpl = (window.p86ReportTemplates && window.p86ReportTemplates.get)
+      ? window.p86ReportTemplates.get(tplId) : null;
+    if (tpl) {
+      var user = (window.appState && window.appState.user) || (window.currentUser) || null;
+      var cover = (typeof tpl.cover_defaults === 'function') ? (tpl.cover_defaults(null, user) || {}) : {};
+      cover.enabled = true;
+      body.cover_page = cover;
+      // Only seed photo-grid sections here — this editor renders photo
+      // sections, not text-block layouts (those live in the My Files
+      // report editor). The narrative goes in the summary ("Work
+      // performed") instead, so a daily log still captures everything.
+      var seeds = Array.isArray(tpl.seed_sections) ? tpl.seed_sections : [];
+      body.sections = seeds
+        .filter(function(s) { return s.layout === 'photo-grid'; })
+        .map(function(s) { return { id: _newId('sec'), label: s.label, photo_ids: [], captions: {} }; });
+      if (!body.sections.length) body.sections = [{ id: _newId('sec'), label: 'Photos from the field', photo_ids: [], captions: {} }];
+    }
+    return body;
+  }
+
   function _onNewReport() {
-    var title = prompt('Report title:', 'Job walkthrough — ' + new Date().toLocaleDateString());
+    var defaultTitle = _state.showCover
+      ? _state.kind + ' — ' + new Date().toLocaleDateString()
+      : 'Job walkthrough — ' + new Date().toLocaleDateString();
+    var title = prompt(_state.kind + ' title:', defaultTitle);
     if (title == null) return;
-    _createReport(_state.jobId, { title: title }).then(function(r) {
+    _createReport(_state.jobId, _newRecordBody(title)).then(function(r) {
       // Reload the freshly-created (so we get hydrated sections) and
       // jump straight into the editor.
       return _fetchReport(_state.jobId, r.id);
@@ -215,7 +322,7 @@ function p86Ask(message, opts) {
       _paint();
       // Prime the attachments cache for the photo picker.
       _ensureAttachments();
-    }).catch(function(e) { alert('Could not create report: ' + (e.message || 'unknown')); });
+    }).catch(function(e) { alert('Could not create ' + _state.kind.toLowerCase() + ': ' + (e.message || 'unknown')); });
   }
 
   function _openReport(reportId) {
@@ -255,23 +362,60 @@ function p86Ask(message, opts) {
     });
   }
 
+  // Cover-field fieldset — reuses the SAME template registry + field
+  // metadata as the My Files report editor (js/report-templates.js), so
+  // a job Daily Log surfaces Date / Crew on site / Weather / Hours on
+  // site with identical labels. Rendered only when the tab opts in
+  // (showCover), keeping the Reports tab's editor unchanged. Values live
+  // on rpt.cover_page; inputs are keyed cv_<field> and bound in _wireEditor.
+  function _renderCoverFields() {
+    if (!_state.showCover) return '';
+    var reg = window.p86ReportTemplates;
+    var rpt = _state.editingReport || {};
+    var tplId = rpt.template_type || _state.newTemplate || 'daily-log';
+    var tpl = (reg && reg.get) ? reg.get(tplId) : null;
+    var schema = (tpl && Array.isArray(tpl.cover_schema)) ? tpl.cover_schema : [];
+    if (!schema.length) return '';
+    var cover = (rpt.cover_page && typeof rpt.cover_page === 'object') ? rpt.cover_page : {};
+    var fields = schema.map(function(key) {
+      var meta = (reg && reg.coverFieldMeta) ? reg.coverFieldMeta(key) : { label: key, type: 'text', placeholder: '' };
+      var val = cover[key] != null ? String(cover[key]) : '';
+      var input = (meta.type === 'textarea')
+        ? '<textarea id="cv_' + _esc(key) + '" rows="2" placeholder="' + _esc(meta.placeholder || '') + '" ' +
+            'style="display:block;width:100%;margin-top:4px;padding:6px 9px;background:transparent;border:1px solid var(--border,#333);border-radius:6px;color:var(--text,#fff);font-family:inherit;font-size:13px;resize:vertical;">' + _esc(val) + '</textarea>'
+        : '<input id="cv_' + _esc(key) + '" type="text" value="' + _esc(val) + '" placeholder="' + _esc(meta.placeholder || '') + '" ' +
+            'style="display:block;width:100%;margin-top:4px;padding:6px 9px;background:transparent;border:1px solid var(--border,#333);border-radius:6px;color:var(--text,#fff);font-family:inherit;font-size:13px;" />';
+      return '<label style="display:block;"><span style="font-size:10px;font-weight:600;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">' +
+        _esc(meta.label || key) + '</span>' + input + '</label>';
+    }).join('');
+    return '<div class="card" style="margin-bottom:14px;padding:12px 14px;">' +
+        '<div style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">' + _esc(_state.kind) + ' details</div>' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;">' + fields + '</div>' +
+      '</div>';
+  }
+
   // ── Editor view ──
   function _renderEditor() {
     var rpt = _state.editingReport;
     if (!rpt) return '<div style="padding:20px;">Loading…</div>';
     var sections = Array.isArray(rpt.sections) ? rpt.sections : [];
     var sectionsHtml = sections.map(function(s) { return _renderSectionEditor(s); }).join('');
+    var summaryLabel = _state.summaryLabel || 'Summary';
+    var summaryPlaceholder = _state.showCover
+      ? 'What the crew did today — areas worked, quantities, progress…'
+      : 'One paragraph overview shown at the top of the printed report…';
     return '<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">' +
         '<button class="ee-btn secondary" id="rpt-back-btn">&larr; Back to list</button>' +
-        '<input id="rpt-title" type="text" value="' + _esc(rpt.title || '') + '" placeholder="Report title" ' +
+        '<input id="rpt-title" type="text" value="' + _esc(rpt.title || '') + '" placeholder="' + _esc(_state.kind) + ' title" ' +
           'style="flex:1;min-width:240px;font-size:17px;font-weight:600;padding:6px 10px;background:transparent;border:1px solid var(--border,#333);border-radius:6px;color:var(--text,#fff);" />' +
         '<span id="rpt-save-state" style="font-size:11px;color:var(--text-dim,#888);min-width:80px;text-align:right;"></span>' +
         '<button class="ee-btn" id="rpt-save-btn">&#x1F4BE; Save</button>' +
         '<button class="ee-btn primary" id="rpt-print-btn">&#x1F5A8; Print</button>' +
       '</div>' +
+      _renderCoverFields() +
       '<div class="card" style="margin-bottom:14px;padding:12px 14px;">' +
-        '<label style="font-size:11px;font-weight:600;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">Summary</label>' +
-        '<textarea id="rpt-summary" rows="3" placeholder="One paragraph overview shown at the top of the printed report…" ' +
+        '<label style="font-size:11px;font-weight:600;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">' + _esc(summaryLabel) + '</label>' +
+        '<textarea id="rpt-summary" rows="3" placeholder="' + _esc(summaryPlaceholder) + '" ' +
           'style="display:block;width:100%;margin-top:6px;padding:8px 10px;background:transparent;border:1px solid var(--border,#333);border-radius:6px;color:var(--text,#fff);font-family:inherit;font-size:13px;line-height:1.45;resize:vertical;">' +
           _esc(rpt.summary || '') +
         '</textarea>' +
@@ -338,8 +482,27 @@ function p86Ask(message, opts) {
       _paint();
     };
 
+    // Cover fields (Daily Log details) → live state on cover_page.
+    if (_state.showCover) {
+      var rptc = _state.editingReport;
+      if (rptc && (!rptc.cover_page || typeof rptc.cover_page !== 'object')) rptc.cover_page = {};
+      var reg = window.p86ReportTemplates;
+      var tplId = (rptc && rptc.template_type) || _state.newTemplate || 'daily-log';
+      var tpl = (reg && reg.get) ? reg.get(tplId) : null;
+      var schema = (tpl && Array.isArray(tpl.cover_schema)) ? tpl.cover_schema : [];
+      schema.forEach(function(key) {
+        var el = document.getElementById('cv_' + key);
+        if (!el) return;
+        el.oninput = function() {
+          if (!_state.editingReport.cover_page || typeof _state.editingReport.cover_page !== 'object') _state.editingReport.cover_page = {};
+          _state.editingReport.cover_page[key] = el.value;
+          _state.editingReport.cover_page.enabled = true;
+        };
+      });
+    }
+
     // Section + photo controls.
-    document.querySelectorAll('#job-reports-content .rpt-section').forEach(function(secEl) {
+    document.querySelectorAll('#' + _state.host + ' .rpt-section').forEach(function(secEl) {
       var sid = secEl.getAttribute('data-section-id');
       var addPhotos    = secEl.querySelector('[data-action="add-photos"]');
       var deleteSec    = secEl.querySelector('[data-action="delete-section"]');
@@ -417,11 +580,16 @@ function p86Ask(message, opts) {
       });
       return { id: s.id, label: s.label, photo_ids: photoIds, captions: captions };
     });
-    return _saveReport(_state.jobId, rpt.id, {
+    var body = {
       title: rpt.title,
       summary: rpt.summary,
       sections: wire
-    }).then(function() {
+    };
+    // Persist the structured cover fields (Daily Log date/crew/weather/
+    // hours) only on the tab that actually edits them, so a plain Report
+    // save never rewrites its cover_page. Server whitelists the keys.
+    if (_state.showCover && rpt.cover_page && typeof rpt.cover_page === 'object') body.cover_page = rpt.cover_page;
+    return _saveReport(_state.jobId, rpt.id, body).then(function() {
       if (statusEl) {
         statusEl.textContent = 'Saved';
         clearTimeout(statusEl._timer);
