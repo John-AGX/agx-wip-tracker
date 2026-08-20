@@ -41,7 +41,7 @@
 'use strict';
 
 const { pool } = require('../server/db');
-const { auditActorCritical } = require('../audit');
+const { auditActorCritical } = require('../server/audit');
 const { inspectPages, classifyPlan } = require('../server/services/plan-doc');
 
 function arg(name) {
