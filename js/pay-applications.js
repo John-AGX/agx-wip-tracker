@@ -112,11 +112,13 @@
     return s.split(' › ')[0].split(' > ')[0].trim() || fallback || '';
   }
   // Natural order so B2 sorts before B10 (plain string sort puts B10 first).
+  //
+  // This local comparator became window.p86BuildingSort (js/building-sort.js)
+  // and every other building list in the app now uses it. Its ALGORITHM was
+  // adopted unchanged precisely so this line stays a no-op: a pay application's
+  // schedule-of-values order must not shift because a comparator was unified.
   function bldgSort(a, b) {
-    var na = String(a.name || ''), nb = String(b.name || '');
-    var ma = na.match(/\d+/), mb = nb.match(/\d+/);
-    if (ma && mb && na.replace(/\d+/, '') === nb.replace(/\d+/, '')) return (+ma[0]) - (+mb[0]);
-    return na.localeCompare(nb);
+    return window.p86BuildingSort(a, b);
   }
   // Schedule of values, derived from the ALLOCATION MATRIX (appData.phases) —
   // one record per (scope, building), which is precisely the G703's shape.

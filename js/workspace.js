@@ -4283,7 +4283,7 @@ function p86Ask(message, opts) {
 
     if (typeof appData !== 'undefined') {
       // Buildings
-      var buildings = appData.buildings.filter(function (b) { return b.jobId === grid.jobId; });
+      var buildings = window.p86SortBuildings(appData.buildings.filter(function (b) { return b.jobId === grid.jobId; }));
       if (buildings.length > 0) {
         html += '<details class="ws-link-level"><summary class="ws-link-level-header">Buildings</summary>';
         buildings.forEach(function (b) {

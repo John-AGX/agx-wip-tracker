@@ -683,8 +683,11 @@ function p86Ask(message, opts) {
   }
 
   function canonBuckets() { return (window.p86CostBuckets && p86CostBuckets.CANON) || []; }
+  // Feeds the per-line "attribute this cost to a building" dropdown only, so
+  // the shared display order applies. Nothing here distributes money.
   function jobBuildingsList(jobId) {
-    return ((window.appData && appData.buildings) || []).filter(function (b) { return b && b.jobId === jobId; });
+    var list = ((window.appData && appData.buildings) || []).filter(function (b) { return b && b.jobId === jobId; });
+    return window.p86SortBuildings ? window.p86SortBuildings(list) : list;
   }
   function effBucket(l) {
     if (window.p86CostBuckets) {

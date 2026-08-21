@@ -29,7 +29,11 @@
   // one pass so individual rules stay simple.
   function buildContext(jobId) {
     var job = (window.appData && (appData.jobs || []).find(function(j) { return j.id === jobId; })) || null;
+    // Sorted so findings that name a building (R3) list them in the same order
+    // every other surface does. Audit rules only read this array; none of them
+    // distributes money by index.
     var buildings = (appData.buildings || []).filter(function(b) { return b.jobId === jobId; });
+    if (window.p86SortBuildings) buildings = window.p86SortBuildings(buildings);
     var phases = (appData.phases || []).filter(function(p) { return p.jobId === jobId; });
     var subs = (appData.subs || []).filter(function(s) { return s.jobId === jobId; });
     var changeOrders = (appData.changeOrders || []).filter(function(c) { return c.jobId === jobId; });

@@ -3904,7 +3904,10 @@ function renderJobsMain() {
             ensureNGComputed(jobId);
             const w = getJobWIP(jobId);
             const accrued = getJobAccruedCosts(jobId);
-            const buildings = appData.buildings.filter(b => b.jobId === jobId);
+            // Sorted so a WIP snapshot's building detail reads in the same order
+            // as the screen it snapshots. Snapshot totals are computed elsewhere
+            // (getJobWIP above) and are unaffected by this array's order.
+            const buildings = window.p86SortBuildings(appData.buildings.filter(b => b.jobId === jobId));
             const phases = appData.phases.filter(p => p.jobId === jobId);
             // Change orders are server-backed in appData.jobChangeOrders (keyed
             // job_id). appData.changeOrders is a dead localStorage relic that is
@@ -4177,11 +4180,22 @@ function renderJobsMain() {
 
         // Natural sort by the building name's number (B1, B2, … B10) so a
         // re-added/healed building lands in order, not appended at the end.
+        //
+        // Now a thin alias over window.p86BuildingSort (js/building-sort.js) —
+        // the ONE comparator every surface shares. The local version stripped
+        // EVERY non-digit before parsing, so "Phase 2 Bldg 3" read as the number
+        // 23; the shared one takes the first digit run and only compares
+        // numerically when the surrounding text matches. Kept as a name because
+        // three call sites below read better with it.
+        //
+        // DISPLAY ONLY. Do not hand a sorted array to phasePctShares,
+        // spreadPhaseCore, distributeContractToPhases or
+        // _p86DoSplitJobLevelScopes — those distribute a rounding remainder by
+        // ARRAY INDEX and write the money mirror (asSoldRevenue /
+        // asSoldPhaseBudget / phaseBudget). Re-ordering them moves real dollars
+        // between buildings.
         function _bldgNumSort(a, b) {
-            var na = parseInt(String(a.name || '').replace(/\D/g, ''), 10);
-            var nb = parseInt(String(b.name || '').replace(/\D/g, ''), 10);
-            if (!isNaN(na) && !isNaN(nb) && na !== nb) return na - nb;
-            return String(a.name || '').localeCompare(String(b.name || ''));
+            return window.p86BuildingSort(a, b);
         }
         // ── Buildings "Money line" crew derivation ─────────────────────────
         // The crew a building shows is DERIVED from the POs allocated to it
@@ -6697,7 +6711,7 @@ function renderJobsMain() {
             document.getElementById('savePhaseBtn').innerHTML = '&#x1F4CB; Add Scope';
             document.getElementById('deletePhaseBtn').style.display = 'none';
 
-            const buildings = appData.buildings.filter(b => b.jobId === appState.currentJobId);
+            const buildings = window.p86SortBuildings(appData.buildings.filter(b => b.jobId === appState.currentJobId));
             const select = document.getElementById('phaseBuilding');
             select.innerHTML = '<option value="">-- Select Building --</option>';
             buildings.forEach(b => {

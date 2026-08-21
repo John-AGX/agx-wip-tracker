@@ -5024,7 +5024,12 @@ window.refreshInspContractAlloc = refreshInspContractAlloc;
 function contractAllocHtml(){
   var jid=E.job();
   if(typeof appData==='undefined' || !appData) return '';
-  var blds=(appData.buildings||[]).filter(function(b){ return b.jobId===jid; });
+  // Display order via the shared comparator, so this board's columns read in
+  // the same order as the full-width matrix on the Jobs page and the G703 —
+  // the comment above claims they show "the SAME dollars", and until now they
+  // disagreed on the ORDER of them. Cells are keyed by building id, so no
+  // rollup moves.
+  var blds=window.p86SortBuildings((appData.buildings||[]).filter(function(b){ return b.jobId===jid; }));
   var rows=(appData.phases||[]).filter(function(p){ return p.jobId===jid; });
   var pRev=function(p){ return Number((p&&(p.asSoldRevenue||p.asSoldPhaseBudget||p.phaseBudget))||0); };
   var names=[]; rows.forEach(function(p){ var n=p.phase||'Unnamed'; if(names.indexOf(n)<0) names.push(n); });
@@ -5190,7 +5195,20 @@ function openCoAllocEditor(coId){
   // never be allocated. Only an APPLIED (already-billed) CO is frozen here.
   var frozen = (c.status==='applied');
   var jid=c.job_id;
+  // TWO arrays on purpose, and the difference is money.
+  //
+  // `buildings` is INSERTION ORDER and must stay that way: save() below runs a
+  // largest-remainder split over `picked = buildings.filter(...)` and hands the
+  // spare hundredths of a percent to the first elements of that array. One
+  // hundredth of a percent is sell/10,000 — $2.75 on a $27,500 CO, $100 on a
+  // $1M one. Sorting this array would silently move that between buildings.
+  //
+  // `buildingsView` is what the user READS. Without it this modal rendered raw
+  // insertion order, which is how Fairways RV2008 CO-0001 listed its ten
+  // buildings as B2, B3 … B10, B1 — B1 last because it was traced on the map
+  // last. Every render below uses the view; nothing that computes uses it.
   var buildings=(appData.buildings||[]).filter(function(b){ return b.jobId===jid; });
+  var buildingsView=window.p86SortBuildings(buildings);
   var sell=(typeof window.coSellAmount==='function') ? Number(window.coSellAmount(c)||0) : 0;
   var uW=function(b){ return (b.units&&b.units.length)?b.units.length:0; };
   var lW=function(b){ return (b.levels&&b.levels.length)?b.levels.length:0; };
@@ -5267,7 +5285,7 @@ function openCoAllocEditor(coId){
         : '<div class="cae-frozen" style="color:#f4c152;border-color:#b45309;background:rgba(180,83,9,.12);">This job has no scopes yet — add a scope to ride.</div>';
       var preview='';
       if(comp){
-        preview=buildings.filter(function(b){ return comp.byBuilding[b.id]; }).map(function(b){
+        preview=buildingsView.filter(function(b){ return comp.byBuilding[b.id]; }).map(function(b){
           var d=comp.byBuilding[b.id];
           return '<div class="cae-line"><span class="cae-nm">'+luEsc(b.name||'Building')+'</span>'
             +'<span style="width:118px;text-align:right;color:#8b90a5;font-size:11px;">'+E.fmtC(d.share)+' @ '+Math.round(d.pct)+'%</span>'
@@ -5279,10 +5297,10 @@ function openCoAllocEditor(coId){
         +'<div class="cae-tbl">'+preview+'</div>';
     } else {
       recompute();
-      var chips=buildings.map(function(b){
+      var chips=buildingsView.map(function(b){
         return '<div class="cae-chip'+(st[b.id].on?' on':'')+'" data-cae-chip="'+b.id+'"><span class="cae-tick">'+(st[b.id].on?'✓':'')+'</span>'+luEsc(b.name||'Building')+' <span class="cae-u">'+uW(b)+'u</span></div>';
       }).join('') || '<div style="color:#8b90a5;font-size:12px;padding:4px 0;">This job has no buildings yet — add buildings first.</div>';
-      var rows=buildings.map(function(b){
+      var rows=buildingsView.map(function(b){
         var on=st[b.id].on, pct=Math.round(st[b.id].pct*10)/10, amt=sell*(on?st[b.id].pct:0)/100, done=Math.round(st[b.id].done);
         return '<div class="cae-line'+(on?'':' off')+'"><span class="cae-nm">'+luEsc(b.name||'Building')+'</span>'
           +(on?'<span class="cae-pin"><input data-cae-in="'+b.id+'" value="'+pct+'" title="money share of the CO">%</span>':'<span style="color:#4a4f63;width:66px;text-align:right;">—</span>')
