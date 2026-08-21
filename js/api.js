@@ -336,6 +336,20 @@
         riderScopeName: opts.riderScopeName || ''
       });
     },
+    // Where this CO's COST comes from. `costSource` is 'po' | 'self' |
+    // 'unfunded' | '' (unclassified — the default every existing CO carries).
+    // `subId` is IDENTITY (who performs the work); `costDraws` is MONEY (which
+    // purchase orders carry the cost). Separate fields on purpose; the server
+    // refuses a payload where they contradict each other. Recording a draw
+    // moves no money — see server/services/money/co-draw.js.
+    setCostSource: function(id, opts) {
+      opts = opts || {};
+      return post('/api/change-orders/' + encodeURIComponent(id) + '/cost-source', {
+        costSource: opts.costSource || '',
+        subId: opts.subId || null,
+        costDraws: opts.costDraws || []
+      });
+    },
     remove: function(id) {
       return del('/api/change-orders/' + encodeURIComponent(id));
     },

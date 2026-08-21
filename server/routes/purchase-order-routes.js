@@ -358,6 +358,15 @@ router.put('/purchase-orders/:id', requireAuth, requireCapability('ESTIMATES_EDI
     if (locked) {
       data = { ...existingData };
       if (Object.prototype.hasOwnProperty.call(clean, 'internalNotes')) data.internalNotes = clean.internalNotes;
+      // phaseName — WHICH SCOPE this PO is for — is an attribution key, not a
+      // contract term. The sub signed data.scope (the prose) and the line
+      // items; nothing they agreed to changes when we record that this PO
+      // belongs to "Gutters". Same reasoning the CO /allocations endpoint
+      // gives for writing a billing-distribution key onto a locked record, and
+      // the same necessity: the field is new, so EVERY existing PO is unset
+      // and most of them are locked. Without this the link can never be made
+      // on an issued PO, and a scope rename could never follow it.
+      if (Object.prototype.hasOwnProperty.call(clean, 'phaseName')) data.phaseName = clean.phaseName;
     } else {
       data = { ...existingData, ...clean };
     }

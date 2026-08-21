@@ -239,6 +239,20 @@
           '<input id="po-f-title" type="text" class="po-ed-input" value="' + escAttr(_po.title || '') + '" placeholder="e.g. Framing and Decking"' + dis + '></label>' +
         '<label class="po-ed-field"><span>Subcontractor</span>' +
           '<select id="po-f-sub" class="po-ed-input"' + dis + '><option value="">— Select sub —</option></select></label>' +
+        // WHICH SCOPE THIS PO IS FOR. Writes data.phaseName — the field
+        // js/jobs.js getJobPOAccrued has READ since it was written and that
+        // nothing in the repo ever WROTE, so its explicit branch was dead and
+        // every PO fell through to fuzzy-matching its title against scope
+        // names. This is also what makes John's "whichever PO is attached to
+        // that scope" resolvable at all: a rider change order finds its PO by
+        // this name. The textarea below labelled "Scope of Work & Terms" is
+        // contract prose, not this.
+        // Deliberately NOT disabled by `dis`: scope attribution is not a
+        // contract term (the sub signed the prose and the line items), and
+        // every PO that exists today is unset and locked. The server allows
+        // this one key through on a locked PO for the same reason.
+        '<label class="po-ed-field"><span>Scope</span>' +
+          '<select id="po-f-phase" class="po-ed-input"><option value="">— Job level —</option></select></label>' +
         '<label class="po-ed-field"><span>Scheduled completion</span>' +
           '<input id="po-f-sched" type="date" class="po-ed-input" value="' + escAttr(_po.scheduledCompletion || '') + '"' + dis + '></label>' +
         '<label class="po-ed-field po-ed-check"><input id="po-f-materials" type="checkbox"' + (_po.materialsOnly ? ' checked' : '') + dis + '> <span>Materials only</span></label>' +
@@ -521,6 +535,36 @@
             jobId: _po.job_id, jobName: _po.job_title || _po.job_name || ''
           });
         }
+      });
+    }
+
+    // Scope picker — the job's scope names, straight off the allocation matrix
+    // (appData.phases) so it can only offer a scope that actually exists. Bound
+    // BY NAME, which is what a rider change order matches on; renaming a scope
+    // carries this along (window.p86PropagateScopeRename in js/jobs.js), so a
+    // rename cannot silently orphan the link.
+    var phaseSel = byId('po-f-phase');
+    if (phaseSel) {
+      var scopeNames = [];
+      try {
+        (((window.appData || {}).phases) || []).forEach(function (p) {
+          if (!p || p.jobId !== _po.job_id) return;
+          var n = String(p.phase || 'Unnamed').trim();
+          if (n && scopeNames.indexOf(n) === -1) scopeNames.push(n);
+        });
+      } catch (e) {}
+      scopeNames.sort();
+      // A stored name whose scope has since been renamed away still shows, so
+      // the PO says what it points at instead of silently reading "Job level".
+      var curPhase = String(_po.phaseName || '');
+      if (curPhase && scopeNames.indexOf(curPhase) === -1) scopeNames.push(curPhase + ' (missing)');
+      phaseSel.innerHTML = '<option value="">— Job level —</option>' + scopeNames.map(function (n) {
+        var val = n.replace(/ \(missing\)$/, '');
+        return '<option value="' + escAttr(val) + '"' + (val === curPhase ? ' selected' : '') + '>' + esc(n) + '</option>';
+      }).join('');
+      phaseSel.addEventListener('change', function () {
+        _po.phaseName = phaseSel.value || '';
+        queueSave();
       });
     }
 
@@ -830,7 +874,12 @@
       title: _po.title || '', scope: _po.scope || '', internalNotes: _po.internalNotes || '',
       scheduledCompletion: _po.scheduledCompletion || '', materialsOnly: !!_po.materialsOnly,
       lines: _po.lines || [], linkedRfiIds: _po.linkedRfiIds || [],
-      sub_id: _po.sub_id || null
+      sub_id: _po.sub_id || null,
+      // Which SCOPE this PO is for. Sent on every save, including a locked
+      // one — the server lets this one key through the lock because scope
+      // attribution is not a contract term. It is what a rider change order
+      // matches on to find "whichever PO is attached to that scope".
+      phaseName: _po.phaseName || ''
     };
     // Carry the PDF extraction once (close-flush) so the server logs
     // extraction-vs-final as a training example, then drop it.

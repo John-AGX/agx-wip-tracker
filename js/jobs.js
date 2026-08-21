@@ -399,8 +399,22 @@ function renderJobsMain() {
                     var cpct0 = window.p86Progress ? window.p86Progress.scopeCellPct(cells[0]) : (cells[0].pctComplete || 0);
                     earned = sell * cpct0 / 100;
                 }
+                // THE SILENT DROP, NAMED. If the ridden scope has been renamed
+                // or deleted, `cells` is empty: earned falls to $0 and stays
+                // there, with nothing on screen to say why. That is revenue
+                // vanishing, not revenue not yet earned.
+                //
+                // This flag REPORTS it; it deliberately does NOT fall back to
+                // the job's percent. A fallback would restore the revenue —
+                // moving displayProfit and displayMargin on every job whose
+                // rider scope was ever renamed — as an invisible side effect of
+                // a feature commit. So the drop becomes visible (the CO editor
+                // and js/job-audit.js R11 both shout), John sees the number,
+                // and re-pointing the CO at a real scope is the fix. Renaming a
+                // scope now carries its riders along, so it cannot recur.
                 return { mode: 'rider', scopeName: scopeName, sell: sell, cost: cost, profit: sell - cost,
                     byBuilding: byB, earned: earned, placed: placed, unallocated: sell - placed,
+                    riderScopeMissing: !cells.length,
                     weightedPct: sell > 0 ? earned / sell * 100 : 0 };
             }
 
@@ -6909,7 +6923,10 @@ function renderJobsMain() {
             // Keep the first record, absorb the rest
             const keeper = phases[0];
             const absorbed = phases.slice(1);
+            const _priorScope = String(keeper.phase || 'Unnamed').trim();
             keeper.phase = newName;
+            // Carry rider COs and scope-linked POs onto the merged name.
+            p86PropagateScopeRename(jobId, _priorScope, newName);
             keeper.asSoldRevenue = newRev;
             keeper.materials = phases.reduce((s, r) => s + (r.materials || 0), 0);
             keeper.labor = phases.reduce((s, r) => s + (r.labor || 0), 0);
@@ -6933,13 +6950,66 @@ function renderJobsMain() {
             renderJobDetail(jobId);
         }
 
+        // A scope name is a FOREIGN KEY, and two records point at it by name:
+        //   • a rider change order  — co.data.riderScopeName
+        //   • a purchase order      — po.data.phaseName
+        // Rename the scope without carrying those along and the CO's cells go
+        // empty, its earned revenue silently reads $0, and the PO stops being
+        // "the PO attached to that scope". This is the propagation.
+        //
+        // Deliberately best-effort and mirror-first: the local records are
+        // updated so the screen is right immediately, and each server write is
+        // fire-and-forget. A failed write leaves the OLD name on the server,
+        // which the rider-scope-missing audit rule (js/job-audit.js R11) then
+        // reports — it does not fail silently, it fails loudly next paint.
+        function p86PropagateScopeRename(jobId, oldName, newName) {
+            oldName = String(oldName || '').trim();
+            newName = String(newName || '').trim();
+            if (!oldName || !newName || oldName === newName) return;
+
+            (appData.jobChangeOrders || []).forEach(function (c) {
+                if (!c || c.job_id !== jobId) return;
+                var mode = (c.completionMode || (c.data && c.data.completionMode)) || '';
+                var scope = (c.riderScopeName || (c.data && c.data.riderScopeName)) || '';
+                if (mode !== 'rider' || String(scope).trim() !== oldName) return;
+                c.riderScopeName = newName;
+                if (!c.data || typeof c.data !== 'object') c.data = {};
+                c.data.riderScopeName = newName;
+                try {
+                    if (window.p86Api && p86Api.changeOrders) {
+                        var allocs = Array.isArray(c.buildingAllocations) ? c.buildingAllocations
+                            : ((c.data && Array.isArray(c.data.buildingAllocations)) ? c.data.buildingAllocations : []);
+                        p86Api.changeOrders.setAllocations(c.id, allocs,
+                            { completionMode: 'rider', riderScopeName: newName }).catch(function () {});
+                    }
+                } catch (e) {}
+            });
+
+            (appData.jobPurchaseOrders || []).forEach(function (po) {
+                if (!po || po.job_id !== jobId) return;
+                if (String(po.phaseName || '').trim() !== oldName) return;
+                po.phaseName = newName;
+                if (po.data && typeof po.data === 'object') po.data.phaseName = newName;
+                try {
+                    if (window.p86Api && p86Api.purchaseOrders) {
+                        p86Api.purchaseOrders.update(po.id, { phaseName: newName }).catch(function () {});
+                    }
+                } catch (e) {}
+            });
+        }
+        window.p86PropagateScopeRename = p86PropagateScopeRename;
+
         function saveManagedPhase(key) {
             const jobId = appState.currentJobId;
             const phase = (appData.phases || []).find(p => p.jobId === jobId && (p.phase || 'Unnamed').trim().toLowerCase() === key);
             if (!phase) return;
             const nameInput = document.querySelector('[data-mp-name="' + key + '"]');
             const revInput = document.querySelector('[data-mp-rev="' + key + '"]');
-            if (nameInput) phase.phase = nameInput.value.trim();
+            if (nameInput) {
+                const _priorScope = String(phase.phase || 'Unnamed').trim();
+                phase.phase = nameInput.value.trim();
+                p86PropagateScopeRename(jobId, _priorScope, phase.phase);
+            }
             // Write ALL THREE money fields, not just asSoldRevenue.
             // asSoldRevenue / asSoldPhaseBudget / phaseBudget are mirrors of
             // one number (see onPhaseBreakdownInput). Writing one alone splits

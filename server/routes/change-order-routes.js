@@ -24,6 +24,12 @@ const { requireAuth, requireCapability, hasCapability } = require('../auth');
 const { assertEntityInOrg } = require('../org-access');
 const { sanitizeRichText } = require('../util/rich-text');
 const jobFin = require('../services/job-financials');
+const { subInOrg } = require('../services/sub-org-scope');
+// Where a change order's COST comes from — the PO it draws against, the sub
+// that performs it, and the loud "no commitment behind this" state. Pure math;
+// nothing it exports is summed into a cost total. Read its header first.
+const coDraw = require('../../js/co-draw');
+const jobMoney = require('../services/money/change-order-totals');
 
 const router = express.Router();
 
@@ -537,6 +543,92 @@ router.post('/change-orders/:id/allocations', requireAuth, requireCapability('ES
     res.json({ change_order: shapeRow(rows[0]) });
   } catch (e) {
     console.error('POST /api/change-orders/:id/allocations error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/change-orders/:id/cost-source — where this change order's COST
+// comes from. Body: { costSource, subId?, costDraws? }.
+//
+// John's rule: "the change order should have cost associated with it, it would
+// either draw from its own scope and PO or which ever PO is attached to the
+// scope or sub." This endpoint records the answer. It does NOT move money —
+// see services/money/co-draw.js for why a draw is attribution rather than
+// accrual, and for the arithmetic showing the addendum mechanism already IS
+// the money model for an "extend the PO" draw.
+//
+// A DEDICATED endpoint, like /allocations above and for the same reason: it
+// read-modify-writes only these three keys, so it can never clobber the CO's
+// line items from a stale client cache. The CO's dollar total stays priced
+// from its lines, untouched.
+//
+// Guards mirror /allocations: ESTIMATES_EDIT, org-scoped through the job join,
+// and an APPLIED (already-billed) CO is frozen. is_locked deliberately does
+// NOT block — COs auto-lock on approval and classifying cost is normally done
+// after approval, exactly as allocation is.
+router.post('/change-orders/:id/cost-source', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+  try {
+    const id = req.params.id;
+    const existing = await pool.query(
+      `SELECT co.job_id, co.status, co.data FROM job_change_orders co
+         JOIN jobs j ON j.id = co.job_id
+        WHERE co.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
+      [id, req.user.organization_id]
+    );
+    if (!existing.rowCount) return res.status(404).json({ error: 'Not found' });
+    const cur = existing.rows[0];
+    if (cur.status === 'applied') {
+      return res.status(409).json({ error: 'Cannot change the cost source of an applied change order' });
+    }
+
+    // A sub on a CO is proved to be OURS here, not only where a grant is
+    // written — the same rule the PO routes apply to po.sub_id. A CO naming
+    // another tenant's sub should never exist.
+    const subId = (req.body && req.body.subId) ? String(req.body.subId) : null;
+    if (subId && !(await subInOrg(pool, subId, req.user.organization_id))) {
+      return res.status(404).json({ error: 'Subcontractor not found' });
+    }
+
+    // Candidate POs are read from the JOB, so a draw can never name a purchase
+    // order belonging to another job — let alone another tenant.
+    const posQ = await pool.query(
+      `SELECT id, status, sub_id, po_number, data FROM job_purchase_orders WHERE job_id = $1`,
+      [cur.job_id]
+    );
+
+    const data = (cur.data && typeof cur.data === 'object') ? cur.data : {};
+    const coCost = jobMoney.changeOrderMoney(data).costs;   // raw line subtotal
+    const errs = coDraw.validateCostSource(req.body || {}, { pos: posQ.rows, coCost });
+    if (errs.length) return res.status(422).json({ error: errs[0], errors: errs });
+
+    const costSource = (req.body && req.body.costSource) || '';
+    // Re-normalize rather than trusting the payload's shape: amounts rounded,
+    // unknown modes defaulted, junk rows dropped.
+    const costDraws = costSource === 'po'
+      ? coDraw.normalizeDraws({ data: { costDraws: (req.body && req.body.costDraws) || [] } })
+      : [];
+
+    data.costSource = costSource;
+    data.subId = subId;
+    data.costDraws = costDraws;
+
+    const { rows } = await pool.query(
+      `UPDATE job_change_orders
+          SET data = $1::jsonb,
+              updated_at = CASE WHEN data IS DISTINCT FROM $1::jsonb THEN NOW() ELSE updated_at END
+        WHERE id = $2
+        RETURNING id, job_id, owner_id, status, co_number, data, approved_at,
+                  approved_by, linked_node_id, is_locked, created_at, updated_at`,
+      [JSON.stringify(data), id]
+    );
+    const row = rows[0];
+    res.json({
+      change_order: shapeRow(row),
+      coverage: coDraw.coCostCoverage(
+        { status: row.status, data: row.data || {} }, posQ.rows, coCost),
+    });
+  } catch (e) {
+    console.error('POST /api/change-orders/:id/cost-source error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });

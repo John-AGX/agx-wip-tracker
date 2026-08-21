@@ -5231,6 +5231,49 @@ function openCoAllocEditor(coId){
   var scopeNames=(function(){ var m={}; (appData.phases||[]).forEach(function(p){ if(p.jobId===jid){ m[p.phase||'Unnamed']=1; } }); return Object.keys(m).sort(); })();
   if(coMode==='rider'&&!riderScope&&scopeNames.length) riderScope=scopeNames[0];
 
+  // ── COSTS ────────────────────────────────────────────────────────────────
+  // This modal already said "A change order as a mini-P&L — choose how it EARNS
+  // below." It only ever offered the EARNS half. John's second sentence is the
+  // other half: "the change order should have cost associated with it, it would
+  // either draw from its own scope and PO or which ever PO is attached to the
+  // scope or sub."
+  //
+  // A SUB and a PO are separate fields on purpose. The sub is IDENTITY — who
+  // performs the work — and it can be set in BOTH modes. The PO is MONEY. They
+  // may not contradict each other, and the server refuses a payload where they
+  // do; but a CO can name a sub before a PO exists, which is exactly the
+  // "unfunded" state this makes loud.
+  //
+  // NOTHING HERE MOVES A DOLLAR. Recording that CO-0001's cost draws against
+  // PO-0007 changes no total: for an "extend the PO" draw the addendum already
+  // raised the PO's committed value and poAccruedOf already accrues it. See
+  // js/co-draw.js for the arithmetic. What this buys is that the cost is
+  // ATTRIBUTED, and that a CO with no commitment behind it cannot hide.
+  var coCost=(function(){
+    var lines=Array.isArray(c.lines)?c.lines:[];
+    if(!window.p86Pricing||!lines.length) return 0;
+    return Number((window.p86Pricing.computeForLines(c,lines)||{}).subtotal||0);
+  })();
+  var CD=window.p86CoDraw;
+  var costSource=(CD?CD.coCostSource(c):'');
+  var coSubId=(CD?CD.coSubId(c):null);
+  var draws=(CD?CD.normalizeDraws(c):[]);
+  var jobPOs=(appData.jobPurchaseOrders||[]).filter(function(p){ return p && p.job_id===jid; });
+  var subsDir=(appData.subsDirectory||[]);
+  function subName(id){ var s=subsDir.find(function(x){ return String(x.id)===String(id); }); return s?(s.name||s.id):''; }
+  function poById(id){ return jobPOs.find(function(p){ return String(p.id)===String(id); })||null; }
+  // POs load on demand; without them every draw would read "missing-po". Fetch
+  // once and repaint rather than render a wrong state confidently.
+  var _posLoaded=jobPOs.length>0;
+  function ensurePOs(){
+    if(_posLoaded||typeof window.loadPurchaseOrdersForJob!=='function') return;
+    _posLoaded=true;
+    try{ window.loadPurchaseOrdersForJob(jid).then(function(){
+      jobPOs=(appData.jobPurchaseOrders||[]).filter(function(p){ return p && p.job_id===jid; });
+      paint();
+    }); }catch(e){}
+  }
+
   // The CO's completion/earned per the CURRENT editor state (live), for the P&L
   // strip. Rider derives from the scope; standalone from the live st shares.
   function liveComp(){
@@ -5260,6 +5303,112 @@ function openCoAllocEditor(coId){
     autoIds.forEach(function(id){ st[id].pct=wsum>0?remain*(w[id]/wsum):0; });
   }
   function totalPct(){ return buildings.reduce(function(s,b){ return s+(st[b.id].on?st[b.id].pct:0); },0); }
+
+  // The COSTS block. Rendered identically in BOTH modes — "its own scope" needs
+  // a sub and a PO exactly as much as "rides a scope" does; the only difference
+  // is that riding proposes a PO from the scope link and its-own-scope never
+  // guesses one.
+  function costsBlock(){
+    if(!CD) return '';
+    var cov=CD.coCostCoverage(c,jobPOs,coCost);
+    var res=CD.resolvePoForCo(
+      {status:c.status,data:{costSource:costSource,costDraws:draws,subId:coSubId,
+        completionMode:coMode,riderScopeName:riderScope}}, jobPOs);
+    if(coCost<=0.005) return '';
+
+    var subOpts='<option value="">— No sub named —</option>'+subsDir.map(function(s){
+      return '<option value="'+luEsc(s.id)+'"'+(String(s.id)===String(coSubId)?' selected':'')+'>'+luEsc(s.name||s.id)+'</option>';
+    }).join('');
+
+    var live=jobPOs.filter(function(p){ return p.status!=='draft'&&p.status!=='cancelled'&&p.status!=='void'; });
+    var bound=draws.length?draws[0].poId:'';
+    var poOpts='<option value="">— No purchase order —</option>'+live.map(function(p){
+      var lbl=(p.po_number||p.id)+(p.phaseName?' · '+p.phaseName:'')+(p.sub_name?' · '+p.sub_name:'');
+      var sel=(String(p.id)===String(bound))||(!bound&&res.state==='proposed'&&String(p.id)===String(res.poId));
+      return '<option value="'+luEsc(p.id)+'"'+(sel?' selected':'')+'>'+luEsc(lbl)+'</option>';
+    }).join('');
+
+    // The three answers a CO's cost can have. `unfunded` is a legitimate CHOICE
+    // — someone will be paid and there is no PO — it just may never be an
+    // accident, which is why '' (unclassified) is its own visible state and the
+    // default for every CO that already exists.
+    var srcSeg='<span class="cae-seg" id="caeSrc">'
+      +['po','self','unfunded'].map(function(k){
+        var lbl=k==='po'?'Draws on a PO':(k==='self'?'Self-performed':'No PO (unfunded)');
+        return '<button data-src="'+k+'" class="'+(costSource===k?'on':'')+'"'+(frozen?' disabled':'')+'>'+lbl+'</button>';
+      }).join('')+'</span>';
+
+    var mid='';
+    if(costSource==='po'){
+      var d0=draws[0]||null;
+      var mode0=d0?d0.mode:'addendum';
+      mid='<div class="cae-field"><span class="cae-lbl">Draws against</span>'
+        +'<select id="caePo"'+(frozen?' disabled':'')+' style="flex:1;background:var(--ng-panel,#1a1a22);color:var(--ng-text,#c8cbe0);border:1px solid var(--ng-border2,#333);border-radius:6px;padding:5px 8px;">'+poOpts+'</select></div>'
+        +'<div class="cae-field"><span class="cae-lbl">How</span><span class="cae-seg" id="caeDrawMode">'
+          +'<button data-dmode="addendum" class="'+(mode0==='addendum'?'on':'')+'"'+(frozen?' disabled':'')+'>Extend the PO</button>'
+          +'<button data-dmode="within" class="'+(mode0==='within'?'on':'')+'"'+(frozen?' disabled':'')+'>Within the PO</button>'
+        +'</span></div>';
+      if(mode0==='addendum'){
+        // The hard binding. Without an APPROVED addendum of exactly this delta
+        // the draw is proposed, not committed — and saying otherwise would
+        // claim a commitment the sub has not signed.
+        var po=poById(bound||res.poId);
+        var adds=(po&&Array.isArray(po.addendums))?po.addendums:[];
+        var match=adds.filter(function(a){ return a&&Math.abs(Number(a.delta||0)-coCost)<0.005; });
+        mid+='<div class="cae-sub" style="margin:2px 0 4px;">A change order that ADDS work means the sub is owed more, so the purchase order grows by '
+          +E.fmtC(coCost)+' through an addendum they e-sign. Raise it on the purchase order screen — this screen never drives it for you.</div>';
+        if(!adds.length) mid+='<div class="cae-frozen" style="color:#f4c152;border-color:#b45309;background:rgba(180,83,9,.12);">That PO has no addendum yet. Unlock it, add this change order\'s lines, then record the addendum.</div>';
+        else if(!match.length) mid+='<div class="cae-frozen" style="color:#f4c152;border-color:#b45309;background:rgba(180,83,9,.12);">No addendum on that PO is '+E.fmtC(coCost)+'. The addendum and the draw must be the same number.</div>';
+        else {
+          mid+='<div class="cae-field"><span class="cae-lbl">Addendum</span><select id="caeAdd"'+(frozen?' disabled':'')+' style="flex:1;background:var(--ng-panel,#1a1a22);color:var(--ng-text,#c8cbe0);border:1px solid var(--ng-border2,#333);border-radius:6px;padding:5px 8px;">'
+            +match.map(function(a){
+              return '<option value="'+luEsc(a.id)+'"'+((d0&&d0.addendumId===a.id)?' selected':'')+'>#'+(a.seq||'?')+' · '+E.fmtC(a.delta)+' · '+luEsc(a.status||'pending')+'</option>';
+            }).join('')+'</select></div>';
+        }
+      } else {
+        // `within` asserts the cost was ALREADY inside the PO. That is true for
+        // an allowance or a re-allocation and false for work that was added —
+        // and when it is false, revisedEstCosts has already added co.costs to
+        // the budget, so the revised margin drops for cost that does not exist.
+        // Said out loud rather than discovered later.
+        mid+='<div class="cae-frozen" style="color:#f4c152;border-color:#b45309;background:rgba(180,83,9,.12);">'
+          +'Within the PO means this cost was ALREADY committed — an allowance, or work moved between scopes. The PO total does not grow. '
+          +'If the change order ADDS work, this understates what the sub is owed, and the revised margin drops for cost the PO does not carry.</div>';
+      }
+    } else if(costSource==='self'){
+      mid='<div class="cae-sub" style="margin:2px 0;">Self-performed — no commitment to record. The cost arrives as labor and materials through QuickBooks as the work happens.</div>';
+    } else if(costSource==='unfunded'){
+      mid='<div class="cae-frozen" style="color:#f87171;border-color:#7f1d1d;background:rgba(127,29,29,.18);">'
+        +E.fmtC(coCost)+' of change-order cost with NO purchase order behind it. It accrues nothing, so projected cost understates this job by that amount until a PO is raised.</div>';
+    } else {
+      mid='<div class="cae-frozen" style="color:#f4c152;border-color:#b45309;background:rgba(180,83,9,.12);">'
+        +'This change order\'s '+E.fmtC(coCost)+' of cost is not classified yet. Pick one — there is no default, on purpose.</div>';
+    }
+
+    // What the draw is RIGHT NOW, from the same code the API validates with.
+    var badge='';
+    if(costSource==='po'&&cov.draws.length){
+      var d=cov.draws[0];
+      var tone={active:['#34d399','committed'],pending:['#f4c152','awaiting the sub\'s signature'],
+        orphan:['#f87171','the addendum it named no longer matches'],
+        'dead-po':['#f87171','that purchase order is not live'],
+        'missing-po':['#f87171','that purchase order is not on this job']}[d.state]||['#8b90a5',d.state];
+      badge='<div class="cae-sub" style="margin:2px 0;color:'+tone[0]+';">'+E.fmtC(d.amount)+' against '+luEsc(d.poNumber||d.poId)+' — '+tone[1]+'.'
+        +(d.subId?' Sub: '+luEsc(subName(d.subId)||d.subId)+'.':'')+'</div>';
+      // The server accrues Σ raw lines; the PO list commits baseline + approved.
+      // When they differ the two screens are already quoting different money for
+      // this PO, before any change order touched it.
+      if(d.totals&&Math.abs(d.totals.delta)>0.005){
+        badge+='<div class="cae-sub" style="margin:2px 0;color:#f4c152;">That PO\'s line items total '+E.fmtC(d.totals.ordered)
+          +' but its committed value is '+E.fmtC(d.totals.committed)+'. Accrued cost is computed from the first and the PO list shows the second — they will not agree until the addendum is approved.</div>';
+      }
+    }
+
+    return '<div class="cae-field" style="margin-top:8px;"><span class="cae-lbl">Costs</span>'+srcSeg+'</div>'
+      +'<div class="cae-field"><span class="cae-lbl">Sub</span>'
+        +'<select id="caeSub"'+(frozen?' disabled':'')+' style="flex:1;background:var(--ng-panel,#1a1a22);color:var(--ng-text,#c8cbe0);border:1px solid var(--ng-border2,#333);border-radius:6px;padding:5px 8px;">'+subOpts+'</select></div>'
+      +mid+badge;
+  }
 
   var ov=document.createElement('div');
   ov.className='co-alloc-ov';
@@ -5330,11 +5479,20 @@ function openCoAllocEditor(coId){
       +'<div class="cae-hd"><span class="cae-badge">'+luEsc(c.co_number||'CO')+'</span>'
         +'<span class="cae-title">'+luEsc((c.title||c.description||'Change order')).slice(0,60)+'</span>'
         +'<span class="cae-total">'+E.fmtC(sell)+'</span></div>'
-      +'<div class="cae-sub">A change order as a mini-P&L — choose how it EARNS below.</div>'
+      +'<div class="cae-sub">A change order as a mini-P&L — choose how it EARNS and what its cost DRAWS AGAINST.</div>'
       +(frozen?'<div class="cae-frozen">This change order has been applied (billed) — it can\'t be changed.</div>':'')
+      // The ridden scope is gone (renamed or deleted): this CO earns $0 and
+      // there was nothing on screen to say so. Named, not silently patched —
+      // falling back to the job's percent would restore the revenue and move
+      // this job's profit as a side effect of a feature commit.
+      +((comp&&comp.riderScopeMissing)
+        ? '<div class="cae-frozen" style="color:#f87171;border-color:#7f1d1d;background:rgba(127,29,29,.18);">Scope <b>'+luEsc(riderScope||'(none)')
+          +'</b> no longer exists on this job, so this change order earns <b>$0</b> no matter how far the work has gone. Point it at a live scope.</div>'
+        : '')
       +modeSeg
       +pnlStrip(comp)
       +mid
+      +costsBlock()
       +'<div class="cae-foot"><button class="cae-btn ghost" id="caeCancel">Cancel</button>'
         +'<button class="cae-btn primary" id="caeSave"'+(saveDisabled?' disabled':'')+'>Save</button></div>';
   }
@@ -5351,6 +5509,41 @@ function openCoAllocEditor(coId){
     var cl=m.querySelector('#caeClear'); if(cl&&!frozen) cl.onclick=function(){ buildings.forEach(function(b){ st[b.id].on=false; st[b.id].manual=false; st[b.id].pct=0; }); paint(); };
     var cc=m.querySelector('#caeCancel'); if(cc) cc.onclick=close;
     var sv=m.querySelector('#caeSave'); if(sv) sv.onclick=save;
+
+    // ── COSTS wiring ──────────────────────────────────────────────────────
+    // Every control here edits LOCAL state and repaints. Nothing writes until
+    // Save, and Save writes the classification through its own endpoint — it
+    // never unlocks a PO, never creates an addendum, and never e-signs
+    // anything. Extending a purchase order is a human act on the PO screen
+    // with the sub's signature, which is also the construction reality.
+    ensurePOs();
+    var sr=m.querySelector('#caeSrc'); if(sr&&!frozen) sr.onclick=function(e){
+      var b=e.target.closest('button'); if(!b) return;
+      costSource=b.dataset.src;
+      if(costSource!=='po') draws=[];
+      paint();
+    };
+    var sb=m.querySelector('#caeSub'); if(sb&&!frozen) sb.onchange=function(){ coSubId=sb.value||null; paint(); };
+    var pp=m.querySelector('#caePo'); if(pp&&!frozen) pp.onchange=function(){
+      var id=pp.value||'';
+      if(!id){ draws=[]; paint(); return; }
+      var po=poById(id);
+      var keepMode=(draws[0]&&draws[0].mode)||'addendum';
+      draws=[{poId:id, poNumber:(po&&po.po_number)||'', amount:Math.round(coCost*100)/100,
+        mode:keepMode, addendumId:null}];
+      // A PO carrying a sub names the sub for us; a materials-only PO has none
+      // to inherit, and that is fine — the PO is the money either way.
+      if(po&&po.sub_id&&!coSubId) coSubId=po.sub_id;
+      paint();
+    };
+    var dm=m.querySelector('#caeDrawMode'); if(dm&&!frozen) dm.onclick=function(e){
+      var b=e.target.closest('button'); if(!b) return;
+      if(draws[0]){ draws[0].mode=b.dataset.dmode; if(draws[0].mode!=='addendum') draws[0].addendumId=null; }
+      paint();
+    };
+    var ad=m.querySelector('#caeAdd'); if(ad&&!frozen) ad.onchange=function(){
+      if(draws[0]) draws[0].addendumId=ad.value||null; paint();
+    };
   }
   function save(){
     var opts={ completionMode: coMode, riderScopeName: (coMode==='rider' ? riderScope : '') };
@@ -5371,7 +5564,23 @@ function openCoAllocEditor(coId){
     }
     // Rider: money + %s derive from the scope, so no manual allocations are stored.
     var sv=ov.querySelector('#caeSave'); if(sv){ sv.disabled=true; sv.textContent='Saving…'; }
-    p86Api.changeOrders.setAllocations(c.id, allocations, opts).then(function(){
+    // The COST classification goes through its OWN endpoint, for the same
+    // reason /allocations is its own: each read-modify-writes a small, named
+    // set of keys, so neither can clobber the CO's line items from a stale
+    // cache. Chained rather than parallel so a 422 on the cost side (a draw
+    // above the CO's cost, an addendum whose delta no longer matches) surfaces
+    // as the save error instead of racing the allocation write.
+    var costPayload={ costSource:costSource, subId:coSubId,
+      costDraws:(costSource==='po'?draws:[]) };
+    var costWrite=(window.p86Api&&p86Api.changeOrders&&p86Api.changeOrders.setCostSource)
+      ? p86Api.changeOrders.setCostSource(c.id, costPayload) : Promise.resolve(null);
+    costWrite.then(function(){
+      c.costSource=costPayload.costSource; c.subId=costPayload.subId; c.costDraws=costPayload.costDraws;
+      if(!c.data||typeof c.data!=='object') c.data={};
+      c.data.costSource=costPayload.costSource; c.data.subId=costPayload.subId;
+      c.data.costDraws=costPayload.costDraws;
+    }).then(function(){
+    return p86Api.changeOrders.setAllocations(c.id, allocations, opts); }).then(function(){
       // Reflect on the in-memory record (both top-level and in data — shapeRow
       // spreads data, so future reloads see them top-level too). Kept as the
       // OFFLINE belt: if the forced refetch below fails, the mirror is already

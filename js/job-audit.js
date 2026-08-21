@@ -247,6 +247,121 @@
         title: 'Underbilled: ' + Math.round(pct * 100) + '% of earned revenue not yet invoiced',
         detail: fmtMoney(unbilled) + ' of revenue earned hasn\'t been invoiced yet. Send the next billing.'
       }];
+    },
+
+    // R11: a change order riding a scope that no longer exists.
+    //
+    // coCompletion filters appData.phases on p.phase === riderScopeName. Rename
+    // or delete that scope and the filter returns nothing: the CO's earned
+    // revenue falls to $0 and STAYS there, with nothing anywhere saying why.
+    // Revenue vanishing is not revenue not yet earned. Renaming a scope now
+    // carries its riders along (p86PropagateScopeRename), so this catches the
+    // ones that were already orphaned and any write that fails to land.
+    function(ctx) {
+      var live = {};
+      ctx.phases.forEach(function(p) { live[String(p.phase || 'Unnamed').trim()] = true; });
+      var cos = ((window.appData && appData.jobChangeOrders) || [])
+        .filter(function(c) { return c && c.job_id === ctx.jobId && (c.status === 'approved' || c.status === 'applied'); });
+      return cos.filter(function(c) {
+        var mode = (c.completionMode || (c.data && c.data.completionMode)) || '';
+        if (mode !== 'rider') return false;
+        var nm = String((c.riderScopeName || (c.data && c.data.riderScopeName)) || '').trim();
+        return !nm || !live[nm];
+      }).map(function(c) {
+        var nm = String((c.riderScopeName || (c.data && c.data.riderScopeName)) || '').trim();
+        var sell = (typeof window.coSellAmount === 'function') ? Number(window.coSellAmount(c) || 0) : 0;
+        return {
+          severity: 'high',
+          title: 'Change order rides a scope that is gone',
+          detail: (c.co_number || 'CO') + ' rides "' + (nm || '(no scope named)') + '", which is not a scope on this job. ' +
+            'It earns $0 of its ' + fmtMoney(sell) + ' no matter how far the work has gone. Point it at a live scope.'
+        };
+      });
+    },
+
+    // R12: change-order cost with no purchase order behind it.
+    //
+    // A NEW figure that sits beside committed cost — it changes no existing
+    // total. It is here because the alternative to saying it out loud is the
+    // silent drop: route a CO's cost at a sub contract instead of a PO and
+    // subAccruedOf skips that sub outright whenever they hold a live PO on the
+    // job, so the cost lands in neither accrual nor actual.
+    //
+    // 'unclassified' is reported SEPARATELY and at low severity: every change
+    // order that existed before this feature is unclassified, and that is
+    // exactly why shipping it moved no money.
+    function(ctx) {
+      var CD = window.p86CoDraw;
+      if (!CD || typeof window.p86Pricing !== 'object') return [];
+      var pos = ((window.appData && appData.jobPurchaseOrders) || [])
+        .filter(function(p) { return p && p.job_id === ctx.jobId; });
+      var cos = ((window.appData && appData.jobChangeOrders) || [])
+        .filter(function(c) { return c && c.job_id === ctx.jobId; });
+      var costOf = function(c) {
+        var lines = Array.isArray(c.lines) ? c.lines : [];
+        if (!lines.length) return 0;
+        return Number((window.p86Pricing.computeForLines(c, lines) || {}).subtotal || 0);
+      };
+      var roll;
+      try { roll = CD.jobCoCostCoverage(cos, pos, costOf); } catch (e) { return []; }
+      var out = [];
+      if (roll.uncovered > 0.5) out.push({
+        severity: 'high',
+        title: 'Uncommitted change-order cost: ' + fmtMoney(roll.uncovered),
+        detail: fmtMoney(roll.uncovered) + ' of approved change-order cost has no purchase order behind it. ' +
+          'It accrues nothing, so this job\'s projected cost understates by that amount and its margin reads high.'
+      });
+      if (roll.pending > 0.5) out.push({
+        severity: 'med',
+        title: fmtMoney(roll.pending) + ' of change-order cost awaits a signature',
+        detail: 'Its purchase-order addendum is recorded but not approved. The sub has not signed, so the commitment is proposed, not committed.'
+      });
+      if (roll.broken > 0.5) out.push({
+        severity: 'high',
+        title: fmtMoney(roll.broken) + ' of change-order cost points at a commitment that moved',
+        detail: 'A draw names a purchase order or addendum that no longer matches it — the PO was revised, cancelled, or the addendum\'s amount changed. Re-bind it.'
+      });
+      if (roll.unclassified > 0.5) out.push({
+        severity: 'low',
+        title: fmtMoney(roll.unclassified) + ' of change-order cost is not classified',
+        detail: 'Nobody has said whether this cost draws on a purchase order, is self-performed, or has no PO at all. ' +
+          'Open each change order and pick one — there is no default, on purpose.'
+      });
+      return out;
+    },
+
+    // R13: bills that are netted out of accrual but counted as nothing.
+    //
+    // The two bill filters in this repo disagree, on BOTH engines. poBilled
+    // excludes only 'void'; billedCostOf excludes draft, void, cancelled,
+    // canceled and rejected. So a DRAFT bill against a live PO reduces accrued
+    // cost by its amount and adds nothing to actual cost — projected cost drops
+    // by the full amount and the job's margin reads high by it.
+    //
+    // Pre-existing and org-wide. Reconciling the two filters moves money on
+    // every job that holds such a bill, so it is REPORTED here rather than
+    // repaired inside a change-order commit.
+    function(ctx) {
+      var DEAD_FOR_ACTUAL = { draft: 1, cancelled: 1, canceled: 1, rejected: 1 };
+      var livePo = {};
+      ((window.appData && appData.jobPurchaseOrders) || []).forEach(function(p) {
+        if (p && p.job_id === ctx.jobId && p.status !== 'draft' && p.status !== 'cancelled' && p.status !== 'void') livePo[p.id] = true;
+      });
+      var amt = 0, n = 0;
+      ((window.appData && appData.jobVendorBills) || []).forEach(function(b) {
+        if (!b || (b.job_id !== ctx.jobId && b.jobId !== ctx.jobId)) return;
+        if (!b.po_id || !livePo[b.po_id]) return;
+        if (!DEAD_FOR_ACTUAL[b.status]) return;
+        amt += Number(b.amount) || 0; n++;
+      });
+      if (amt <= 0.5) return [];
+      return [{
+        severity: 'med',
+        title: n + ' bill' + (n === 1 ? '' : 's') + ' netted out of accrual but counted nowhere',
+        detail: fmtMoney(amt) + ' of ' + (n === 1 ? 'a bill' : 'bills') + ' in a draft/cancelled/rejected state sits against a live PO. ' +
+          'Accrual subtracts it (only "void" is excluded there) but actual cost does not add it (five statuses are excluded there), ' +
+          'so projected cost is low by that amount. Post or void ' + (n === 1 ? 'it' : 'them') + '.'
+      }];
     }
   ];
 
