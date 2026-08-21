@@ -793,7 +793,13 @@ function renderJobsMain() {
             // Kick off a fresh fetch so the list updates after first
             // load. If the cache already has rows for this job, the
             // first paint above already shows them.
-            loadChangeOrdersForJob(jobId).then(function() {
+            // Purchase orders alongside the change orders: the "Cost draws on"
+            // column reads them, and without them a bound draw would render as
+            // "re-bind" — a wrong state shown confidently, which is the one
+            // thing that column must never do. Until they land, the column
+            // renders a dash (see costCell's _posKnown guard) rather than a
+            // guess.
+            Promise.all([loadChangeOrdersForJob(jobId), loadPurchaseOrdersForJob(jobId)]).then(function() {
                 paintJobChangeOrdersInto(mount, jobId);
             });
         }
@@ -828,6 +834,67 @@ function renderJobsMain() {
                 }
                 return window.p86Pricing.applyFeesAndTax(markedUp, c).total;
             }
+            // A CO's raw line subtotal — its COST, pre-markup. Same figure
+            // job-wip.js folds into revisedEstCosts, and the amount a draw
+            // against a purchase order has to cover.
+            function coRawCost(c) {
+                if (!window.p86Pricing) return 0;
+                var lines = Array.isArray(c.lines) ? c.lines : [];
+                if (!lines.length) return 0;
+                return Number((window.p86Pricing.computeForLines(c, lines) || {}).subtotal || 0);
+            }
+            // WHERE THE COST DRAWS. A new column and a new figure — neither
+            // changes an existing total. Its whole job is that a change order
+            // whose cost has no purchase order behind it cannot sit in this
+            // list looking like every other row.
+            var _jobPOs = (appData.jobPurchaseOrders || []).filter(function(p) { return p && p.job_id === jobId; });
+            // POs load per job on demand. Until they are here a bound draw
+            // would resolve to "missing-po" and the column would accuse a
+            // perfectly good purchase order of not existing. So a CO that
+            // NAMES a PO stays a dash until the POs land; a CO that names none
+            // needs no PO to be judged and renders immediately.
+            var _posKnown = _jobPOs.length > 0;
+            function costCell(c) {
+                var CD = window.p86CoDraw;
+                var dim = 'color:var(--text-dim,#888);';
+                if (!CD) return '<span style="' + dim + '">—</span>';
+                if (!_posKnown && CD.normalizeDraws(c).length) return '<span style="' + dim + '">…</span>';
+                var cov;
+                try { cov = CD.coCostCoverage(c, _jobPOs, coRawCost(c)); } catch (e) { return '<span style="' + dim + '">—</span>'; }
+                if (cov.state === 'no-cost') return '<span style="' + dim + '">no cost</span>';
+                if (cov.state === 'self') return '<span style="' + dim + '">self-performed</span>';
+                if (cov.state === 'unclassified') return '<span style="color:var(--yellow,#f4c152);" title="Nobody has said whether this cost draws on a purchase order, is self-performed, or has no PO at all.">not classified</span>';
+                if (cov.state === 'unfunded') return '<span style="color:#f87171;" title="Someone will be paid and there is no purchase order behind it.">no PO — ' + formatCurrency(cov.cost) + '</span>';
+                var d = cov.draws[0] || {};
+                if (cov.state === 'covered') return '<span style="color:var(--green,#34d399);">' + escapeHTML(d.poNumber || 'PO') + '</span>';
+                if (cov.state === 'partly-pending') return '<span style="color:var(--yellow,#f4c152);" title="The addendum is recorded but the sub has not signed it.">' + escapeHTML(d.poNumber || 'PO') + ' · unsigned</span>';
+                if (cov.state === 'broken') return '<span style="color:#f87171;" title="A draw names a purchase order or addendum that no longer matches it.">' + escapeHTML(d.poNumber || 'PO') + ' · re-bind</span>';
+                return '<span style="color:var(--yellow,#f4c152);">' + formatCurrency(cov.uncovered) + ' uncovered</span>';
+            }
+            // Job-level roll-up of the same thing, shown only when there is
+            // something to say. Counted COs only — a voided CO's cost left the
+            // contract, so its shortfall is not a shortfall.
+            function costStrip() {
+                var CD = window.p86CoDraw;
+                if (!CD || !rows.length) return '';
+                // Same guard as the column: with POs unloaded every bound draw
+                // would roll up as "to re-bind" and the strip would shout at a
+                // job that is perfectly fine.
+                if (!_posKnown && rows.some(function(c) { return CD.normalizeDraws(c).length; })) return '';
+                var roll;
+                try { roll = CD.jobCoCostCoverage(rows, _jobPOs, coRawCost); } catch (e) { return ''; }
+                var bits = [];
+                if (roll.covered > 0.5) bits.push('<span style="color:var(--green,#34d399);">' + formatCurrency(roll.covered) + ' committed</span>');
+                if (roll.pending > 0.5) bits.push('<span style="color:var(--yellow,#f4c152);">' + formatCurrency(roll.pending) + ' unsigned</span>');
+                if (roll.broken > 0.5) bits.push('<span style="color:#f87171;">' + formatCurrency(roll.broken) + ' to re-bind</span>');
+                if (roll.selfPerformed > 0.5) bits.push('<span style="color:var(--text-dim,#888);">' + formatCurrency(roll.selfPerformed) + ' self-performed</span>');
+                if (roll.uncovered > 0.5) bits.push('<span style="color:#f87171;font-weight:700;">' + formatCurrency(roll.uncovered) + ' uncommitted</span>');
+                if (roll.unclassified > 0.5) bits.push('<span style="color:var(--yellow,#f4c152);">' + formatCurrency(roll.unclassified) + ' not classified</span>');
+                if (!bits.length) return '';
+                return '<div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:8px;padding:7px 10px;border:1px solid var(--border,#333);border-radius:8px;font-size:11px;" ' +
+                    'title="Change-order COST, and what carries it. Uncommitted cost accrues nothing — projected cost understates this job by that amount.">' +
+                    '<span style="color:var(--text-dim,#888);">CO cost</span>' + bits.join('') + '</div>';
+            }
             var bodyHTML;
             if (!rows.length) {
                 bodyHTML =
@@ -842,6 +909,7 @@ function renderJobsMain() {
                         '<td style="padding:8px 10px;font-size:12.5px;color:var(--text,#fff);">' + escapeHTML(c.title || '(untitled)') + '</td>' +
                         '<td style="white-space:nowrap;padding:8px 10px;">' + statusBadge(c.status || 'draft') + '</td>' +
                         '<td class="num" style="text-align:right;white-space:nowrap;padding:8px 10px;font-family:inherit;font-size:13px;color:var(--green,#34d399);font-weight:600;">' + formatCurrency(total) + '</td>' +
+                        '<td style="white-space:nowrap;padding:8px 10px;font-size:11px;">' + costCell(c) + '</td>' +
                         '<td style="white-space:nowrap;padding:8px 10px;font-size:11px;color:var(--text-dim,#888);">' + (c.linked_node_id ? '⛓ Linked' : '—') + '</td>' +
                     '</tr>';
                 }).join('');
@@ -853,6 +921,7 @@ function renderJobsMain() {
                                 thCell('Title', 'left') +
                                 thCell('Status', 'left') +
                                 thCell('Total', 'right') +
+                                thCell('Cost draws on', 'left') +
                                 thCell('Graph', 'left') +
                             '</tr></thead>' +
                             '<tbody>' + rowsHTML + '</tbody>' +
@@ -864,6 +933,7 @@ function renderJobsMain() {
                     '<h3 style="font-size:13px;margin:0;">&#x1F4DD; Change Orders (' + rows.length + ')</h3>' +
                     '<button class="ee-btn primary" data-co-new="' + escapeHTML(jobId) + '" style="font-size:12px;">+ New Change Order</button>' +
                 '</div>' +
+                costStrip() +
                 bodyHTML;
             // Wire row clicks → open editor
             mount.querySelectorAll('[data-co-open]').forEach(function(tr) {

@@ -258,6 +258,50 @@ describe('the change-order editor gained the COSTS half', () => {
   });
 });
 
+// ══ THE CHANGE-ORDER LIST SHOWS WHERE THE COST DRAWS ═══════════════════════
+
+describe('a change order with no commitment behind it cannot hide in the list', () => {
+  const LIST = section(JOBS, /function paintJobChangeOrdersInto\(mount, jobId\) \{/, /^ {8}function [a-zA-Z]/m);
+
+  test('a "Cost draws on" column, and a job-level strip above the table', () => {
+    expect(LIST).toMatch(/thCell\('Cost draws on', 'left'\)/);
+    expect(LIST).toMatch(/\+ costCell\(c\) \+/);
+    expect(LIST).toMatch(/costStrip\(\) \+\s*\n\s*bodyHTML/);
+  });
+
+  test('uncommitted cost is the loud one', () => {
+    expect(LIST).toMatch(/uncommitted/);
+    expect(LIST).toMatch(/no PO — /);
+  });
+
+  test('unclassified reads as unclassified — not as self-performed, not as unfunded', () => {
+    expect(LIST).toMatch(/not classified/);
+    expect(LIST).toMatch(/self-performed/);
+  });
+
+  test('the cost figure is the RAW LINE SUBTOTAL, the same one revisedEstCosts uses', () => {
+    expect(LIST).toMatch(/function coRawCost\(c\)/);
+    expect(LIST).toMatch(/computeForLines\(c, lines\) \|\| \{\}\)\.subtotal/);
+  });
+
+  test('it never renders a draw state before the purchase orders have landed', () => {
+    // Otherwise a perfectly good PO gets accused of not existing, in green
+    // text, on first paint.
+    expect(LIST).toMatch(/var _posKnown = _jobPOs\.length > 0;/);
+    expect(LIST).toMatch(/if \(!_posKnown && CD\.normalizeDraws\(c\)\.length\) return/);
+    expect(JOBS).toMatch(/Promise\.all\(\[loadChangeOrdersForJob\(jobId\), loadPurchaseOrdersForJob\(jobId\)\]\)/);
+  });
+
+  test('and the strip stays silent for the same reason', () => {
+    expect(LIST).toMatch(/if \(!_posKnown && rows\.some\(function\(c\) \{ return CD\.normalizeDraws\(c\)\.length; \}\)\) return '';/);
+  });
+
+  test('the roll-up counts only APPROVED/APPLIED change orders', () => {
+    // A voided CO's cost left the contract, so its shortfall is not one.
+    expect(code('js', 'co-draw.js')).toMatch(/if \(!coIsCounted\(co\)\) continue;/);
+  });
+});
+
 // ══ THE AUDIT RULES THAT REPORT WHAT THIS DOES NOT REPAIR ══════════════════
 
 describe('what is reported rather than silently fixed', () => {
