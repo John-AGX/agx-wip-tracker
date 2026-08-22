@@ -6093,7 +6093,6 @@ function renderJobsMain() {
                 totalContract += contract;
                 totalBilled += billed;
 
-                const conns = getNodeGraphConnections('sub', sub.id);
                 const uid = 'sub-grp-' + sub.id.replace(/\W/g, '_');
                 const arrowId = uid + '-arrow';
 
@@ -6103,7 +6102,6 @@ function renderJobsMain() {
                         '<td style="white-space:nowrap;padding:6px 10px;">' +
                             '<span id="' + arrowId + '" style="font-size:10px;color:var(--text-dim);display:inline-block;width:10px;">' + ARROW_RIGHT + '</span> ' +
                             '<strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(sub.name) + '</strong>' +
-                            (conns.length > 0 ? '<span style="margin-left:6px;font-size:10px;padding:1px 6px;border-radius:10px;background:rgba(79,140,255,0.15);color:var(--accent);">' + conns.length + ' node' + (conns.length > 1 ? 's' : '') + '</span>' : '') +
                         '</td>' +
                         '<td style="white-space:nowrap;padding:6px 10px;font-size:12px;color:var(--text-dim,#aaa);">' +
                             escapeHTML(sub.trade || '') +
@@ -6129,19 +6127,23 @@ function renderJobsMain() {
                 if (sub.notes) {
                     body += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;">' + escapeHTML(sub.notes) + '</div>';
                 }
-                body += '<div style="font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:6px;">Site Plan Connections</div>';
-                if (conns.length === 0) {
-                    body += '<div style="font-size:11px;color:var(--text-dim);font-style:italic;">Not placed on graph yet</div>';
-                } else {
-                    conns.forEach(function(c, i) {
-                        var wireDesc = [];
-                        c.targets.forEach(function(t) { wireDesc.push('<span style="color:var(--green);">&rarr; ' + escapeHTML(t.label) + '</span>'); });
-                        c.sources.forEach(function(s) { wireDesc.push('<span style="color:var(--accent);">' + escapeHTML(s.label) + ' &rarr;</span>'); });
-                        body += '<div style="padding:4px 8px;margin:3px 0;background:var(--surface);border-radius:4px;font-size:11px;display:flex;align-items:center;gap:8px;">' +
-                            '<span style="color:var(--purple);font-weight:600;">Instance #' + (i + 1) + '</span>' +
-                            (wireDesc.length ? wireDesc.join(' ') : '<span style="color:var(--text-dim);">Unconnected</span>') +
+                // A sub's contract is the sum of its purchase orders — show that
+                // breakdown here. Replaces the retired node-graph "Site Plan
+                // Connections" instance list (nodes/wiring are gone; subs are
+                // PO-derived now).
+                var subPos = Array.isArray(sub.pos) ? sub.pos : [];
+                if (subPos.length) {
+                    body += '<div style="font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:6px;">Purchase Orders (' + subPos.length + ')</div>';
+                    subPos.forEach(function(po) {
+                        body += '<div style="padding:4px 8px;margin:3px 0;background:var(--surface);border-radius:4px;font-size:11px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+                            '<span style="color:var(--accent);font-weight:600;">PO ' + escapeHTML(po.poNumber || '—') + '</span>' +
+                            (po.title ? '<span style="color:var(--text-dim);">' + escapeHTML(po.title) + '</span>' : '') +
+                            '<span style="margin-left:auto;color:var(--accent);font-weight:600;">' + formatCurrency(po.total || 0) + '</span>' +
+                            '<span style="color:var(--green);">' + formatCurrency(po.billed || 0) + ' billed</span>' +
                             '</div>';
                     });
+                } else if (!sub.notes) {
+                    body += '<div style="font-size:11px;color:var(--text-dim);font-style:italic;">No additional details.</div>';
                 }
                 body += '</td></tr>';
                 return summaryRow + body;
@@ -6183,9 +6185,11 @@ function renderJobsMain() {
             var bySub = {};
             pos.filter(function (po) { return !_JB_PO_DEAD[String(po.status || '').toLowerCase()]; }).forEach(function (po) {
                 var sid = po.sub_id || (po.data && po.data.sub_id); if (!sid) return;
-                if (!bySub[sid]) bySub[sid] = { id: sid, name: po.sub_name || _jbSubName(sid) || 'Sub', contractAmt: 0, billedToDate: 0 };
-                bySub[sid].contractAmt += (Number(poRowTotal(po)) || 0);
-                bySub[sid].billedToDate += (Number(poRowBilled(po)) || 0);
+                if (!bySub[sid]) bySub[sid] = { id: sid, name: po.sub_name || _jbSubName(sid) || 'Sub', contractAmt: 0, billedToDate: 0, pos: [] };
+                var _t = Number(poRowTotal(po)) || 0, _b = Number(poRowBilled(po)) || 0;
+                bySub[sid].contractAmt += _t;
+                bySub[sid].billedToDate += _b;
+                bySub[sid].pos.push({ poNumber: po.poNumber || po.po_number || (po.data && po.data.poNumber) || '', title: (po.data && po.data.title) || po.title || '', total: _t, billed: _b });
             });
             return Object.keys(bySub).map(function (k) { return bySub[k]; });
         }
