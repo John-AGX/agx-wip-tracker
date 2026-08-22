@@ -224,6 +224,11 @@ const PAYLOAD_OPS_SCHEMAS = Object.freeze({
     // field_updates: top-level job blob keys (NOT structural sub-arrays)
     // phase_updates: [{phase_id, pct_complete?, materials?, labor?, sub?, equipment?, buildingId?}]
     // change_orders / purchase_orders / invoices: array ops with {op, *_id?, fields}
+    //   a change_orders op may also carry assembly_adds:
+    //   [{assembly_id, params:{Q,...}, mode?}] — put a COSTED RECIPE on the
+    //   CO INTACT, same gate and same refusals as estimate.ops.assembly_adds.
+    //   It is the alternative to hand-writing unitCost, which is how a price
+    //   quoted to the owner ends up booked as job cost.
     // notes: [string, ...]  (append to job.data.agent_notes JSONB array if present)
     //
     // node_values / wire_updates / qb_assignments / graph are RETIRED —
@@ -538,6 +543,15 @@ function validateOps(entityType, ops) {
       if (ops[k] != null && !Array.isArray(ops[k])) {
         throw new Error(`job.ops.${k} must be an array`);
       }
+    }
+    // A change_orders op may carry assembly_adds beside (or instead of)
+    // fields. Catch the wrong shape here rather than inside the txn.
+    if (Array.isArray(ops.change_orders)) {
+      ops.change_orders.forEach((op, i) => {
+        if (op && op.assembly_adds != null && !Array.isArray(op.assembly_adds)) {
+          throw new Error(`job.ops.change_orders[${i}].assembly_adds must be an array`);
+        }
+      });
     }
   }
   if (entityType === 'lead') {
@@ -1158,6 +1172,69 @@ async function applyAssemblyAdds(dbClient, data, estId, entries, ctx) {
     const plan = estLines.applyAssemblyToEstimateData(data, {
       estId: estId, assembly: ex.assembly, rows: ex.rows, scope: ex.scope,
       mode: mode, alternatePref: altPref, nowStamp: stampBase + 'a' + i,
+    });
+    if (!plan.added) {
+      throw new PayloadValidationError(
+        `Assembly "${ex.assembly.name || e.assembly_id}" produced no lines (all items priced at zero or empty).`,
+        { code: 'assembly_empty', field_path: path, op_index: i, retryable: false }
+      );
+    }
+    added += plan.added;
+    names.push(ex.assembly.name || ('#' + ex.assembly.id));
+  }
+  return { added, names };
+}
+
+// change_order.ops.assembly_adds — the SAME thing, onto a change order.
+//
+// Until now the agent's only change-order tool was a flat `fields.lines`,
+// which is the door that produces hand-written unit costs — a price
+// quoted to the owner typed into `unitCost`, booked as job cost, reported
+// as zero profit. A recipe is the honest mechanism: it supplies COST, and
+// the markup cascade supplies the sell price, exactly as on an estimate.
+//
+// Every refusal is explodeForEstimate's, unchanged, including the
+// retryable:false and the "do NOT hand-write line_adds with guessed unit
+// costs" instruction — which is precisely the guidance the change-order
+// path never had.
+//
+// A change order is ONE FLAT GROUP, so there is no alternate to resolve:
+// no alternate_id, no alternate_name, no ambiguity to report.
+async function applyCoAssemblyAdds(dbClient, data, coId, entries, ctx) {
+  const asmSvc = require('./assemblies');
+  const estLines = require('./estimate-lines');
+  if (!ctx || !ctx.organizationId) {
+    throw new PayloadValidationError(
+      'change_orders assembly_adds requires an authenticated org context',
+      { code: 'missing_org', field_path: 'change_orders.assembly_adds', retryable: false }
+    );
+  }
+  const graph = await asmSvc.loadGraph(dbClient, ctx.organizationId);
+  let added = 0;
+  const names = [];
+  const stampBase = Date.now().toString(36);
+
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i] || {};
+    const path = `change_orders.assembly_adds[${i}]`;
+    const mode = e.mode === 'exploded' ? 'exploded' : 'rollup';
+
+    const ex = estLines.explodeForEstimate({
+      assembly_id: e.assembly_id, graph: graph, params: e.params || {},
+    });
+    if (!ex.ok) {
+      throw new PayloadValidationError(ex.error, {
+        code: ex.code, field_path: path, op_index: i, retryable: false,
+        received: e.assembly_id,
+        suggestion: ex.code === 'assembly_unpriced'
+          ? 'Do NOT work around this by hand-writing lines with guessed unit costs. The recipe has to be priced first.'
+          : 'Fix the recipe (or the takeoff quantity) before putting it on a change order.',
+      });
+    }
+
+    const plan = estLines.applyAssemblyToChangeOrderData(data, {
+      coId: coId, assembly: ex.assembly, rows: ex.rows, scope: ex.scope,
+      mode: mode, nowStamp: stampBase + 'c' + i,
     });
     if (!plan.added) {
       throw new PayloadValidationError(
@@ -2251,10 +2328,20 @@ async function dispatchJob(dbClient, target, refTable, ctx) {
         const row = await svc.create(op.fields || {});
         // Let later ops in the same payload point at what we just made.
         if (isRef(op[idKey])) refTable[op[idKey]] = row.id;
+        // A recipe can ride along with the record that carries it, so the
+        // agent never has to create-then-update to get an assembly on.
+        if (svc.assemblyAdds && Array.isArray(op.assembly_adds) && op.assembly_adds.length) {
+          await svc.assemblyAdds(row.id, op.assembly_adds);
+        }
       } else if (op.op === 'update') {
         const idVal = resolveRef(op[idKey], refTable);
         if (!idVal) throw new Error(`${displayName}[].update requires ${idKey}`);
-        await svc.update(idVal, op.fields || {});
+        // `fields` is optional when the op is purely an assembly append.
+        if (op.fields && Object.keys(op.fields).length) await svc.update(idVal, op.fields);
+        else if (!Array.isArray(op.assembly_adds) || !op.assembly_adds.length) await svc.update(idVal, {});
+        if (svc.assemblyAdds && Array.isArray(op.assembly_adds) && op.assembly_adds.length) {
+          await svc.assemblyAdds(idVal, op.assembly_adds);
+        }
       } else if (op.op === 'delete') {
         const idVal = resolveRef(op[idKey], refTable);
         if (!idVal) throw new Error(`${displayName}[].delete requires ${idKey}`);
@@ -2272,6 +2359,29 @@ async function dispatchJob(dbClient, target, refTable, ctx) {
       create: (fields) => jobFin.createChangeOrder(dbClient, { jobId: id, orgId, ownerId, fields }),
       update: (rid, fields) => jobFin.updateChangeOrder(dbClient, { id: rid, orgId, jobId: id, fields }),
       remove: (rid) => jobFin.deleteChangeOrder(dbClient, { id: rid, orgId, jobId: id }),
+      // A COSTED RECIPE on a change order, intact — one line per cost
+      // bucket, `markup: ''` so the cascade prices it, and the SAME
+      // refusals the estimate door enforces. This is the alternative to
+      // the flat fields.lines that produced hand-written unit costs.
+      assemblyAdds: async (rid, entries) => {
+        const cur = await dbClient.query(
+          `SELECT co.data, co.status, co.is_locked FROM job_change_orders co
+             JOIN jobs j ON j.id = co.job_id
+            WHERE co.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)
+              AND co.job_id = $3`,
+          [rid, orgId == null ? null : orgId, id]);
+        if (!cur.rowCount) throw new Error(`Change order not found on this job: ${rid}`);
+        if (cur.rows[0].status === 'applied') throw new Error(`Cannot edit an applied change order: ${rid}`);
+        if (cur.rows[0].is_locked) throw new Error(`Cannot edit an approved (locked) change order: ${rid}`);
+        const data = cur.rows[0].data || {};
+        const plan = await applyCoAssemblyAdds(dbClient, data, rid, entries, ctx);
+        await dbClient.query(
+          `UPDATE job_change_orders SET data = $1::jsonb,
+              updated_at = CASE WHEN data IS DISTINCT FROM $1::jsonb THEN NOW() ELSE updated_at END
+            WHERE id = $2`,
+          [JSON.stringify(data), rid]);
+        return plan;
+      },
     }, 'change_orders');
     changes.push(`${ops.change_orders.length} CO op(s)`);
   }

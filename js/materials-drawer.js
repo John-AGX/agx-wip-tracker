@@ -844,6 +844,42 @@
         .then(function(r) { if (!r.ok) throw new Error(s.a.name + ': load failed'); return r.json(); })
         .then(function(d) { return { s: s, d: d }; });
     })).then(function(loaded) {
+      // ── assembly_unpriced — the same hard stop the server enforces ──
+      //
+      // The server has refused an unpriced recipe since estimate-lines
+      // landed: explodeForEstimate returns code 'assembly_unpriced' and
+      // NAMES the offenders, and both the HTTP append-assembly routes and
+      // the payload dispatcher's assembly_adds honour it as terminal.
+      //
+      // THE DRAWER NEVER DID. It showed a ⚠ badge on the row and then
+      // coerced a null unit_cost to 0 on the way into the spec — so the
+      // one door a human actually uses appended an understated cost, in
+      // silence, on an estimate AND on a change order. A badge is not a
+      // guard. Same rule, same wording, every door.
+      var unpriced = [];
+      loaded.forEach(function(x) {
+        var rows = x.p ? (Array.isArray(x.p.rows) ? x.p.rows : [])
+                       : (Array.isArray(x.d && x.d.flat) ? x.d.flat : []);
+        var bad = rows.filter(function(f) { return f && f.unit_cost == null; });
+        if (bad.length) {
+          unpriced.push({
+            name: x.s.a.name,
+            items: bad.map(function(f) { return f.description || f.kind || 'item'; })
+          });
+        }
+      });
+      if (unpriced.length) {
+        var msg = unpriced.map(function(u) {
+          var shown = u.items.slice(0, 5);
+          return '"' + u.name + '" has unpriced items (' + shown.join(', ') +
+            (u.items.length > shown.length ? ', +' + (u.items.length - shown.length) + ' more' : ') ');
+        }).join('\n');
+        alert('Priced this recipe before adding it.\n\n' + msg +
+          '\n\nAdding it now would append a cost that is too low, and nothing downstream would ' +
+          'say so. Open the assembly and give every item a price, then insert it.');
+        return;
+      }
+
       var specs = [];
       loaded.forEach(function(x) {
         var q = parseFloat(x.s.qty);

@@ -158,7 +158,15 @@ describe('unitSell is change-order-only, and that is ENFORCED not assumed', () =
     for (const rel of [['server', 'services', 'money', 'estimate-totals.js'],
       ['js', 'estimates.js'], ['js', 'estimate-preview.js'], ['js', 'bt-export.js'],
       ['server', 'services', 'estimate-lines.js']]) {
-      expect(raw(...rel)).not.toMatch(/unitSell/);
+      // Comments stripped — estimate-lines.js explains at length that an
+      // assembly must never write the field, and a guard has to read code
+      // rather than the prose forbidding the thing. (The stripper mangles
+      // js/estimate-editor.js specifically, which is why that file is
+      // checked raw in its own test above rather than listed here.)
+      const CODE = raw(...rel)
+        .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+      expect({ file: rel.join('/'), hit: /unitSell/.test(CODE) })
+        .toEqual({ file: rel.join('/'), hit: false });
     }
   });
 });

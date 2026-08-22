@@ -30,6 +30,11 @@ const { subInOrg } = require('../services/sub-org-scope');
 // nothing it exports is summed into a cost total. Read its header first.
 const coDraw = require('../../js/co-draw');
 const jobMoney = require('../services/money/change-order-totals');
+// The ONE gate every "put this assembly on a document" path runs through —
+// shared with the estimate route and the payload dispatcher so all three
+// doors refuse the same recipes.
+const estLines = require('../services/estimate-lines');
+const asm = require('../services/assemblies');
 
 const router = express.Router();
 
@@ -629,6 +634,99 @@ router.post('/change-orders/:id/cost-source', requireAuth, requireCapability('ES
     });
   } catch (e) {
     console.error('POST /api/change-orders/:id/cost-source error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/change-orders/:id/append-assembly — put a COSTED RECIPE on a
+// change order, intact. Body: { assembly_id, params:{Q,...}, mode?:'rollup'
+// |'exploded' }.
+//
+// The change order's missing door. The CO editor could already pull an
+// assembly in through the shared Materials Drawer, but there was no server
+// route — so the CAD/Quantify takeoff bridge could push a drawn quantity to
+// an estimate and not to a change order, and 86/Scribe's only CO tool was a
+// flat fields.lines. That flat door is precisely where hand-written unit
+// costs come from, which is the bug this whole pass exists to end.
+//
+// Every refusal is estLines.explodeForEstimate's — the SAME gate the
+// estimate route and the payload dispatcher run. Duplicating that math is
+// how two doors silently drift and one of them starts appending an
+// understated cost.
+router.post('/change-orders/:id/append-assembly', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+  try {
+    const id = req.params.id;
+    const b = req.body || {};
+    const assemblyId = parseInt(b.assembly_id, 10);
+    if (!isFinite(assemblyId)) return res.status(400).json({ error: 'assembly_id required' });
+    const mode = b.mode === 'exploded' ? 'exploded' : 'rollup';
+    const orgId = req.user.organization_id;
+
+    // Explode BEFORE opening the row-locked txn — the catalog read is
+    // org-scoped and read-only, and a refusal must not hold a lock.
+    const graph = await asm.loadGraph(pool, orgId);
+    const ex = estLines.explodeForEstimate({ assembly_id: assemblyId, graph, params: b.params });
+    if (!ex.ok) {
+      const body = { error: ex.error, code: ex.code };
+      if (ex.errors) body.errors = ex.errors;
+      return res.status(ex.code === 'assembly_not_found' ? 404 : 400).json(body);
+    }
+
+    const client = await pool.connect();
+    let plan, fresh;
+    try {
+      await client.query('BEGIN');
+      const cr = await client.query(
+        `SELECT co.id, co.status, co.is_locked, co.data FROM job_change_orders co
+           JOIN jobs j ON j.id = co.job_id
+          WHERE co.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)
+          FOR UPDATE OF co`,
+        [id, orgId]);
+      if (!cr.rowCount) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Not found' }); }
+      // The same two locks the PUT enforces. An applied CO has already fed
+      // the WIP; an approved one is committed scope.
+      if (cr.rows[0].status === 'applied') {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: 'Cannot edit an applied change order' });
+      }
+      if (cr.rows[0].is_locked) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: 'Cannot edit an approved (locked) change order. Unlock it to edit.' });
+      }
+
+      const data = cr.rows[0].data || {};
+      plan = estLines.applyAssemblyToChangeOrderData(data, {
+        coId: id, assembly: ex.assembly, rows: ex.rows, scope: ex.scope, mode,
+      });
+      if (!plan.added) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Nothing to add (all items priced at zero or empty)' });
+      }
+      const up = await client.query(
+        `UPDATE job_change_orders SET data = $1::jsonb, updated_at = NOW()
+          WHERE id = $2 RETURNING id, job_id, status, co_number, data, approved_at,
+                                  approved_by, linked_node_id, is_locked, created_at, updated_at`,
+        [JSON.stringify(data), id]);
+      await client.query('COMMIT');
+      fresh = up.rows[0];
+    } catch (e) {
+      try { await client.query('ROLLBACK'); } catch (_) {}
+      throw e;
+    } finally {
+      client.release();
+    }
+
+    const money = jobMoney.changeOrderMoney(fresh.data || {});
+    res.json({
+      ok: true, added: plan.added, mode,
+      change_order: { ...fresh, ...(fresh.data || {}) },
+      // The recipe's own cost at this takeoff quantity, so the caller can
+      // show what it just added without re-deriving it.
+      total: Math.round(ex.rows.reduce((s, r) => s + (r.unit_cost != null ? r.qty * r.unit_cost : 0), 0) * 100) / 100,
+      income: money.income, costs: money.costs,
+    });
+  } catch (e) {
+    console.error('POST /api/change-orders/:id/append-assembly error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
