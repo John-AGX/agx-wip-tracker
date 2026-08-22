@@ -444,9 +444,36 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.17';
+const APP_VERSION = '1.18';
 
 const releases = [
+  {
+    version: '1.18',
+    date: '2026-08-18',
+    name: 'Live Rooms',
+    summary: 'Show a job to someone over a link without giving them an account — and a fix for sheet drawings that were reloading empty.',
+    changes: [
+      { type: 'fixed', text: 'Sheet drawings were reloading empty. From 12 July until this week, opening a drawing could show a blank canvas — the geometry was still in the record, but the app threw it away when loading, and the next save then wrote the blank version back. If a drawing of yours went missing in that window, it was this, not you. Most affected drawings come back on their own the first time you open them now. For any that stay blank, ask John — there is a recovery tool that can pull the drawing back from a restore point, and it shows exactly what it would restore before restoring anything.' },
+      { type: 'fixed', text: 'The drawing editor said "Saved." before the save had actually left the browser, and if it failed nothing tried again. It now says saved when it is saved, retries on its own, and tells you plainly when it cannot reach the server.' },
+      { type: 'new', text: 'Live Rooms — a Present button in the job header. One click mints a link; anyone you send it to can watch the job you are showing, with no account and nothing to install. The people watching are listed by name with how long they have been there, and you can remove any of them.' },
+      { type: 'new', text: 'What they open is the job itself, read-only — not a video of your screen — so it stays sharp on a phone in the field and costs very little data. When you move between the Overview, WIP Report, Job Costs and Change Orders, their screen follows you. They can break off to read something and come back.' },
+      { type: 'new', text: 'On the WIP Report and Change Orders, the person watching now sees your actual screen rather than a rebuilt copy of it — the same tables, the same wording, updating as you scroll and edit. The strip along the top tells you which of the two you are sending and draws a frame around exactly what they can see. Your 86 panel, pop-up windows and the sharing bar itself are never part of it.' },
+      { type: 'new', text: 'Hide financials, on by default. With it on, contract, cost, profit and margin are never sent to whoever is watching — not hidden in the page where they could be dug out, but genuinely not sent. Progress, status, client and schedule still show.' },
+      { type: 'fixed', text: 'Job Reports had been returning an error to everyone, including admins, since it was built. It works now.' },
+      { type: 'fixed', text: 'Company knowledge-base PDFs could not be opened by anyone. Fixed — the file viewer opens them again.' },
+      { type: 'fixed', text: 'Deleting an attachment, editing its caption, and Move / Copy in My Files were all unreachable — the buttons were there and did nothing. All working again.' },
+      { type: 'new', text: 'Daily Logs, Photos and Files now have their own tabs in the job sidebar, so they are one click from the job instead of somewhere else.' },
+      { type: 'improved', text: 'Site Plan unit check-offs read as flat blue tiles when done, which is easier to scan across a building than the old raised green cubes.' },
+      { type: 'improved', text: 'Push notifications repair themselves. If the notification keys are ever changed, your device notices on the next page load and re-subscribes on its own instead of going quiet.' },
+      { type: 'fixed', text: 'The Email settings panel could get stuck after a refused change and needed a reload to recover.' },
+      { type: 'fixed', text: 'Buildings are listed in order everywhere. The change order allocation list showed them in the order they were traced on the map, so B1 could sit below B10 — and different screens on the same job could disagree. One order now, everywhere. The money each building carries is unchanged; only the order you read them in moved.' },
+      { type: 'new', text: 'A change order can name the subcontractor doing the work, and record which purchase order its cost draws against — either its own, or the PO already on the scope it rides. The job page shows what each change order draws on. This is a record of where the cost belongs, not a new charge: no job total moves when you set it.' },
+      { type: 'improved', text: 'Purchase orders can name the scope they cover. That is what lets a change order riding a scope find the right PO — and renaming a scope now carries its purchase orders and change orders with it instead of quietly orphaning them.' },
+      { type: 'fixed', text: 'The QuickBooks cost import used to give one explanation for two different problems. A project that will not import now says which it is: the QuickBooks name does not start with a job number, or the job number is fine but no such job exists here yet — and it names the number it looked for. The first is fixed in QuickBooks; the second by creating the job.' },
+      { type: 'new', text: 'Admin — a record of who did what. Privileged actions now write an audit row naming the person, the record, the time and where from, including attempts that were refused. Searchable under the Command Center.' },
+      { type: 'new', text: 'Admin — two new tools: rotate the push notification keys (with a plain description of what it costs before you confirm), and a Tenant boundary report showing which records are fully stamped to an organization.' },
+    ],
+  },
   {
     version: '1.17',
     date: '2026-08-17',
