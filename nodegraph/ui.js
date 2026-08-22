@@ -5276,6 +5276,25 @@ function openCoAllocEditor(coId){
 
   // The CO's completion/earned per the CURRENT editor state (live), for the P&L
   // strip. Rider derives from the scope; standalone from the live st shares.
+  //
+  // ⚠ KNOWN, REPORTED, NOT FIXED HERE — THE STRIP PRICES A STRIPPED RECORD.
+  // Both calls below hand coCompletion a SYNTHETIC record: {id, lines, data:{…}}.
+  // The CO's own money fields — defaultMarkup, targetMargin, feeFlat, feePct,
+  // taxPct, roundTo — do not travel. coSellAmount therefore returns the RAW
+  // line subtotal, so the strip's Revenue is the un-marked-up number while
+  // coIncome, G702 line 2, the WIP and 86 all carry the real contract value:
+  //
+  //   defaultMarkup 20  → strip says Revenue $27,500, Profit $0
+  //                       everywhere else says $33,000, profit $5,500
+  //   targetMargin 35   → strip $27,500 · contract $42,308
+  //
+  // Fairways CO-0001 is immune only because its defaultMarkup is 0, which is
+  // why its strip reconciles. Now that server-side coEarned runs the SAME clock
+  // (js/co-completion.js), the clock is no longer the thing that disagrees —
+  // this is, and on any marked-up rider CO the strip's Earned will read low
+  // against 86's. Fixing it means passing the record's pricing fields through,
+  // which MOVES a displayed number, so it is named here for John rather than
+  // slipped inside a port whose whole claim is that it changes no amount.
   function liveComp(){
     if(typeof window.coCompletion!=='function') return null;
     if(coMode==='rider') return window.coCompletion({id:c.id,lines:c.lines,data:{completionMode:'rider',riderScopeName:riderScope}}, jid);

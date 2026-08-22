@@ -721,6 +721,27 @@ describe('D · the blast radius — what this port may NOT touch', () => {
     expect(noGraph.revenueEarned).toBe(500000 * 0.42);
   });
 
+  test('D9b · REPORTED, NOT FIXED: the CO editor strip prices a STRIPPED record', () => {
+    // nodegraph/ui.js liveComp hands coCompletion {id, lines, data:{…}} — the
+    // CO's defaultMarkup / targetMargin / fee / tax fields do not travel, so
+    // the strip's Revenue is the raw line subtotal while coIncome, G702 line 2,
+    // the WIP and 86 all carry the marked-up contract value. Fairways CO-0001
+    // is immune only because defaultMarkup is 0. Now that the clock agrees
+    // across the client/server line, THIS is what will disagree on a marked-up
+    // rider CO — so it is pinned rather than left to be rediscovered.
+    const rec = { lines: [{ id: 'x', qty: 1, unitCost: 27500 }], defaultMarkup: 20 };
+    const full = pricing.applyFeesAndTax(pricing.resolveMarkedUp(pricing.computeForLines(rec, rec.lines), rec), rec).total;
+    const synthetic = { id: 'c', lines: rec.lines };  // what liveComp actually passes
+    const stripped = pricing.applyFeesAndTax(pricing.resolveMarkedUp(pricing.computeForLines(synthetic, synthetic.lines), synthetic), synthetic).total;
+    expect(full).toBe(33000);
+    expect(stripped).toBe(27500);
+    // The synthetic record is still built this way — when someone fixes it,
+    // this assertion is the reminder that a displayed number moves.
+    const UI = raw('nodegraph', 'ui.js');
+    expect(UI).toMatch(/window\.coCompletion\(\{id:c\.id,lines:c\.lines,data:\{completionMode:'rider'/);
+    expect(UI).toMatch(/THE STRIP PRICES A STRIPPED RECORD/);
+  });
+
   test('D9 · the reported pctComplete is STILL the stored scalar (guest-visible; not in this pass)', () => {
     const wip = jobWip.computeJobWIP({ contractAmount: 100, pctComplete: 51 },
       { phases: FAIRWAYS_CELLS, buildings: FAIRWAYS_BUILDINGS, changeOrders: [] });
