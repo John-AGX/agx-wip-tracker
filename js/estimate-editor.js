@@ -1513,6 +1513,14 @@
       // While target-margin is locked, every included group's markedUp
       // gets rebuilt off subtotal so the per-group breakdown sums to
       // the override total. Excluded groups keep their natural markup.
+      // ⚠ THIS REBUILDS `per` AS A FRESH LITERAL, dropping p86Pricing's
+      // lockedSubtotal/lockedSell keys. Harmless today because the
+      // promised-price field (`unitSell`) is change-order-only, so no
+      // estimate line is ever locked and the carve-out is always zero.
+      // The day `unitSell` reaches estimates, this line and its twin
+      // below silently discard every promised price under a target
+      // margin — call p86Pricing.resolveMarkedUp(per, est) instead of
+      // re-deriving here, and keep the whole `per` object.
       if (targetMode && !alt.excludeFromTotal) {
         per = { subtotal: per.subtotal, markedUp: applyTargetMargin(per.subtotal, est) };
       }
@@ -1531,6 +1539,9 @@
     }).length;
     var activeAlt = getActiveAlternate();
     var activePer = activeAlt ? markedUpForGroup(est, activeAlt) : { subtotal: 0, markedUp: 0 };
+    // ⚠ Same fresh-literal rebuild as above — see the note there. It
+    // drops lockedSubtotal/lockedSell and is only safe while `unitSell`
+    // is change-order-only.
     if (targetMode && activeAlt && !activeAlt.excludeFromTotal) {
       activePer = { subtotal: activePer.subtotal, markedUp: applyTargetMargin(activePer.subtotal, est) };
     }

@@ -348,10 +348,7 @@ function renderJobsMain() {
             const lines = Array.isArray(c && c.lines) ? c.lines : [];
             if (!window.p86Pricing || !lines.length) return 0;
             const per = window.p86Pricing.computeForLines(c, lines);
-            let markedUp = per.markedUp;
-            if (window.p86Pricing.targetMarginActive(c)) {
-                markedUp = window.p86Pricing.applyTargetMargin(per.subtotal, c);
-            }
+            const markedUp = window.p86Pricing.resolveMarkedUp(per, c);
             return window.p86Pricing.applyFeesAndTax(markedUp, c).total;
         }
         window.coSellAmount = coSellAmount;
@@ -828,10 +825,7 @@ function renderJobsMain() {
                 if (!window.p86Pricing) return 0;
                 var lines = Array.isArray(c.lines) ? c.lines : [];
                 var per = window.p86Pricing.computeForLines(c, lines);
-                var markedUp = per.markedUp;
-                if (window.p86Pricing.targetMarginActive(c)) {
-                    markedUp = window.p86Pricing.applyTargetMargin(per.subtotal, c);
-                }
+                var markedUp = window.p86Pricing.resolveMarkedUp(per, c);
                 return window.p86Pricing.applyFeesAndTax(markedUp, c).total;
             }
             // A CO's raw line subtotal — its COST, pre-markup. Same figure
@@ -4740,8 +4734,7 @@ function renderJobsMain() {
                     var income = 0, cost = 0;
                     if (window.p86Pricing) {
                         var per = window.p86Pricing.computeForLines(srv, lines);
-                        var markedUp = window.p86Pricing.targetMarginActive(srv)
-                            ? window.p86Pricing.applyTargetMargin(per.subtotal, srv) : per.markedUp;
+                        var markedUp = window.p86Pricing.resolveMarkedUp(per, srv);
                         income = window.p86Pricing.applyFeesAndTax(markedUp, srv).total;
                         cost = per.subtotal;
                     }

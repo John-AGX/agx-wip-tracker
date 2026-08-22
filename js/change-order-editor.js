@@ -217,13 +217,19 @@ function p86Ask(message, opts) {
     var lines = Array.isArray(co.lines) ? co.lines : [];
     var per = window.p86Pricing.computeForLines(co, lines);
     var subtotal = per.subtotal;
-    var markedUp = per.markedUp;
-    if (window.p86Pricing.targetMarginActive(co)) {
-      markedUp = window.p86Pricing.applyTargetMargin(subtotal, co);
-    }
+    // Shared resolver — carries the sell-lock carve-out under an active
+    // target margin. Hand-rolling the ternary here is how the editor's
+    // total and the server's WIP number drift apart.
+    var markedUp = window.p86Pricing.resolveMarkedUp(per, co);
     var fees = window.p86Pricing.applyFeesAndTax(markedUp, co);
     var marginPct = fees.total > 0 ? ((fees.total - subtotal) / fees.total) * 100 : 0;
     var lineCount = lines.filter(function(l) { return l.section !== '__section_header__'; }).length;
+    var lockedCount = lines.filter(function(l) {
+      return l.section !== '__section_header__' && window.p86Pricing.sellLocked(l);
+    }).length;
+    var pendingCount = lines.filter(function(l) {
+      return l.section !== '__section_header__' && l.costPending;
+    }).length;
     return {
       subtotal: subtotal,
       markupAmount: markedUp - subtotal,
@@ -232,8 +238,11 @@ function p86Ask(message, opts) {
       feePctAmount: fees.feePctAmount,
       taxAmount: fees.taxAmount,
       total: fees.total,
+      profit: fees.total - subtotal,
       marginPct: marginPct,
-      lineCount: lineCount
+      lineCount: lineCount,
+      lockedCount: lockedCount,
+      pendingCount: pendingCount
     };
   }
 
@@ -820,10 +829,15 @@ function p86Ask(message, opts) {
             '<td class="del"><button type="button" class="p86-co-line-del" data-line-del title="Delete section">&times;</button></td>' +
           '</tr>';
       } else {
-        var lineList = lines;
-        var m = window.p86Pricing.effectiveMarkupForLine(l, lineList, _state.co);
-        var ext = (parseFloat(l.qty) || 0) * (parseFloat(l.unitCost) || 0);
-        var marked = ext * (1 + m / 100);
+        // ONE rule for what a line is worth — the same function the totals
+        // bar sums. This row used to hand-roll `ext * (1 + m/100)`, which
+        // is fine until there are two ways a line can be priced.
+        var mm = window.p86Pricing.lineMoney(l, lines, _state.co);
+        var m = mm.locked
+          ? window.p86Pricing.effectiveMarkupForLine(l, lines, _state.co)
+          : mm.markup;
+        var ext = mm.ext;
+        var marked = mm.sell;
         var asm = isCoAsmLine(l);
         html +=
           '<tr class="p86-co-line-row' + (asm ? ' p86-co-asm-line' : '') + '" data-line-id="' + escapeAttr(l.id) + '">' +
@@ -928,9 +942,8 @@ function p86Ask(message, opts) {
     if (!line || line.section === '__section_header__') return;
     var cell = tr.querySelector('td.ext');
     if (!cell) return;
-    var m = window.p86Pricing.effectiveMarkupForLine(line, lines, _state.co);
-    var ext = (parseFloat(line.qty) || 0) * (parseFloat(line.unitCost) || 0);
-    cell.textContent = fmtCurrency(ext * (1 + m / 100));
+    // Same shared rule as the full paint and the totals bar.
+    cell.textContent = fmtCurrency(window.p86Pricing.lineMoney(line, lines, _state.co).sell);
   }
 
   // ── Totals chip bar ────────────────────────────────────────────

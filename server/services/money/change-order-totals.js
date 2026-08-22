@@ -40,10 +40,17 @@ function changeOrderMoney(rec) {
   const r = rec || {};
   const lines = Array.isArray(r.lines) ? r.lines : [];
   const per = pricing.computeForLines(r, lines);
-  let markedUp = per.markedUp;
-  if (pricing.targetMarginActive(r)) markedUp = pricing.applyTargetMargin(per.subtotal, r);
+  // resolveMarkedUp, not a local ternary: a line carrying a promised
+  // `unitSell` is carved out of a target-margin back-solve, and a call
+  // site left un-ported would silently throw that promise away instead
+  // of failing. Records with no promised line — every change order that
+  // exists today — take the identical arithmetic they always have.
+  const markedUp = pricing.resolveMarkedUp(per, r);
   const income = pricing.applyFeesAndTax(markedUp, r).total;
-  return { income, costs: per.subtotal }; // costs = raw line cost, pre-markup
+  // costs = raw line cost, pre-markup: Σ qty × unitCost and nothing else.
+  // `unitSell` does not touch this number. The ONLY way a change order's
+  // cost moves is a human typing in a Unit Cost cell.
+  return { income, costs: per.subtotal };
 }
 
 /**

@@ -2057,6 +2057,17 @@ function applyLineEdits(data, lineEdits) {
       // Skip blocked keys; let typed fields coerce gently.
       if (k === 'id' || k === 'estimateId') continue;
       const targetKey = normalizeLineFieldKey(k);
+      // `unitSell` — a line's PROMISED per-unit price — is a change-order
+      // concept and is enforced as one HERE, because this loop assigns
+      // arbitrary keys onto an estimate line and would otherwise store it
+      // verbatim. The pipeline honours the key on any line it sees, but
+      // every estimate READER is blind to it: the estimate row paint,
+      // js/bt-export.js's forked markup cascade, and the hand-rolled
+      // cascades in server/routes/ai-routes.js. An estimate that silently
+      // repriced for one reader and not the others is the drift the shared
+      // pipeline exists to prevent. Extending the field to estimates means
+      // porting those readers first — not letting an agent smuggle it in.
+      if (targetKey === 'unitSell' || targetKey === 'unit_sell') continue;
       const numericKeys = new Set(['qty', 'unitCost']);
       if (numericKeys.has(targetKey)) {
         lines[idx][targetKey] = f[k] != null && f[k] !== '' ? Number(f[k]) : null;
