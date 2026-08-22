@@ -13,50 +13,27 @@
  *
  * Earned revenue = Σ over (scope, building) cells of (cell revenue × cell %).
  * This replaces the node graph's getOutput(wip,2) — no wires, no divergence.
+ *
+ * THIS FILE IS NOW AN ADAPTER, AND THAT IS THE POINT.
+ * ---------------------------------------------------
+ * The arithmetic moved to js/progress-core.js, appData-free, so the SERVER can
+ * require the same lines the browser runs. It was welded to appData here, which
+ * is precisely why server/services/money/job-wip.js grew a second, smaller idea
+ * of "how far along" (`job.pctComplete`, a stored 0.1-precision scalar written
+ * as a side effect of a browser render). One clock, one implementation.
+ *
+ * Everything below is jobId → filter appData → delegate. No math lives here.
+ * Every existing call site keeps its jobId signature and its exact value.
  * ========================================================================== */
 (function () {
   'use strict';
 
-  function num(v) { var n = Number(v); return isFinite(n) ? n : 0; }
-  function clampPct(v) { var n = num(v); return n < 0 ? 0 : (n > 100 ? 100 : n); }
-
-  function phaseRevenue(p) {
-    return num(p && (p.asSoldRevenue != null ? p.asSoldRevenue
-      : (p.asSoldPhaseBudget != null ? p.asSoldPhaseBudget : p.phaseBudget)));
-  }
-
-  // A unit/level's own % — an explicit `pct` (0-100) wins, else a bare
-  // `done:true` reads as 100. Matches the engine's _uPct.
-  function itemPct(u) {
-    if (!u) return 0;
-    if (u.pct != null) return clampPct(u.pct);
-    return u.done ? 100 : 0;
-  }
-  // Average % across a units/levels collection, or null when there is none.
-  function collectionPct(coll) {
-    if (!coll || !coll.length) return null;
-    var s = 0; for (var i = 0; i < coll.length; i++) s += itemPct(coll[i]);
-    return s / coll.length;
-  }
-  // A building's units/levels-driven %, or null when it has neither.
-  function buildingUnitPct(b) {
-    if (!b) return null;
-    var u = collectionPct(b.units);
-    if (u != null) return u;
-    return collectionPct(b.levels);
-  }
-
-  // THE per-cell completion %. The scope's OWN % — a manually-typed value or the
-  // stored value — is the SOURCE OF TRUTH: an existing scope drives its building's
-  // completion, it is NOT overridden by the building's units. (John / Saddlebrook
-  // Cluster 9: 12 per-building scope cells roll straight up to B1 92 / B2 8 / B3 8
-  // / B4 75, job 46, with no units in play — and across the live data no building
-  // ever has both a scope cell and units, so the scope % always stands.) `buildings`
-  // kept for call-site compatibility.
-  function scopeCellPct(phase, buildings) {
-    if (!phase) return 0;
-    return clampPct(phase.pctComplete);
-  }
+  // Loud, not lenient. If progress-core.js has not loaded, a silent degrade
+  // here would leave coCompletion earning from an absent core and would let a
+  // rider change order bill as one General G703 line instead of ten
+  // per-building lines — the exact corruption the port exists to prevent.
+  var CORE = (typeof window !== 'undefined') ? window.p86ProgressCore : null;
+  if (!CORE) throw new Error('js/progress.js requires js/progress-core.js to load first');
 
   function jobPhases(jobId) {
     return ((window.appData && appData.phases) || []).filter(function (p) { return p && p.jobId === jobId; });
@@ -65,41 +42,11 @@
     return ((window.appData && appData.buildings) || []).filter(function (b) { return b && b.jobId === jobId; });
   }
 
-  // Earned revenue = Σ cell revenue × cell %. The node-graph-free replacement
-  // for job.ngRevenueEarned.
-  function jobEarnedRevenue(jobId) {
-    var blds = jobBuildings(jobId);
-    return jobPhases(jobId).reduce(function (s, p) {
-      return s + phaseRevenue(p) * scopeCellPct(p, blds) / 100;
-    }, 0);
-  }
-
-  // Revenue-weighted % complete for a building = the roll-up of its scope cells'
-  // own %s (the source of truth). A building with no scope cell has no scope-driven
-  // completion basis → 0; give it scope cells to drive it (per Saddlebrook Cluster 9).
-  function buildingPct(buildingId, jobId) {
-    var blds = jobBuildings(jobId);
-    var cells = jobPhases(jobId).filter(function (p) { return p.buildingId === buildingId; });
-    var rev = cells.reduce(function (s, p) { return s + phaseRevenue(p); }, 0);
-    if (rev > 0) return cells.reduce(function (s, p) { return s + scopeCellPct(p, blds) * phaseRevenue(p); }, 0) / rev;
-    return cells.length ? cells.reduce(function (s, p) { return s + scopeCellPct(p, blds); }, 0) / cells.length : 0;
-  }
-
-  // Revenue-weighted job % = earned ÷ total scope revenue.
-  function jobPct(jobId) {
-    var blds = jobBuildings(jobId);
-    var cells = jobPhases(jobId);
-    var rev = cells.reduce(function (s, p) { return s + phaseRevenue(p); }, 0);
-    if (rev <= 0) return 0;
-    var earned = cells.reduce(function (s, p) { return s + phaseRevenue(p) * scopeCellPct(p, blds); }, 0);
-    return earned / rev;
-  }
-
   window.p86Progress = {
-    scopeCellPct: scopeCellPct,
-    buildingUnitPct: buildingUnitPct,
-    jobEarnedRevenue: jobEarnedRevenue,
-    buildingPct: buildingPct,
-    jobPct: jobPct
+    scopeCellPct: CORE.scopeCellPct,
+    buildingUnitPct: CORE.buildingUnitPct,
+    jobEarnedRevenue: function (jobId) { return CORE.jobEarnedRevenue(jobPhases(jobId), jobBuildings(jobId)); },
+    buildingPct: function (buildingId, jobId) { return CORE.buildingPct(buildingId, jobPhases(jobId), jobBuildings(jobId)); },
+    jobPct: function (jobId) { return CORE.jobPct(jobPhases(jobId), jobBuildings(jobId)); }
   };
 })();

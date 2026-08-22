@@ -21,6 +21,26 @@
  * browser reads an appData array, this reads the table that array is loaded
  * from — a data-source swap, deliberately not a redesign.
  *
+ * ONE CLOCK FOR CHANGE-ORDER REVENUE
+ * ----------------------------------
+ * The same drift recurred one level down. This file used to carry its own
+ * answer to "how much of a change order have we earned?":
+ *
+ *     coEarned = unlinkedIncome × job.pctComplete / 100
+ *
+ * while the browser earned a RIDER change order at its ridden scope's own
+ * percent. On RV2008 Fairway Paint & Gutters that is 74% / $20,302 on screen
+ * against the job's stored percent here — the same CO, two numbers, one of them
+ * quoted by 86 next to a ribbon showing the other. So the formula above is
+ * DELETED, along with the `unlinkedIncome` field whose only reader it was, and
+ * the clock now lives in ONE place, js/co-completion.js, which the browser
+ * loads by script tag and this file require()s. Not two that agree today.
+ *
+ * What did NOT converge, and why, is written at the coEarned block below: the
+ * base-contract term and the reported `pctComplete` still run on the stored
+ * scalar, and cost accrual deliberately stays there because the browser accrues
+ * there too.
+ *
  * The node-graph values (ngActualCosts, ngRevenueEarned, ngBacklog,
  * ngAccruedCosts) are read off the jobs blob exactly as the browser reads
  * them. They are computed by a stateful graph walk in nodegraph/ui.js that
@@ -31,23 +51,28 @@
 
 const jobMoney = require('./change-order-totals');
 const { classifyCostLine } = require('./cost-line-filters');
+// THE completion clock — the same file js/jobs.js coCompletion wraps and the
+// browser loads by script tag. See the "one clock" note above coEarned below.
+const { coCompletion } = require('../../../js/co-completion.js');
 
 function num(v) { const n = Number(v); return isFinite(n) ? n : 0; }
 
 // A CO's money only joins the contract once approved/applied. changeOrdersForJob
 // already zeroes income/costs for un-approved rows, so summing is enough.
-// unlinkedIncome tracks COs NOT wired to a graph node: the graph's
-// ngRevenueEarned only knows about graph revenue, so an unlinked CO's earned
-// share has to be added on top or it never reaches Revenue Earned.
+//
+// `unlinkedIncome` USED TO LIVE HERE and is deliberately gone. Its only reader
+// was the old `coEarned = unlinkedIncome × job.pctComplete / 100` — a second,
+// live-but-unread definition of "CO money that needs a percentage applied",
+// which is exactly the seed that grew into the two-clock defect. Earned is now
+// computed per CO, by that CO's own completion mode, in computeJobWIP.
 function coTotals(changeOrders) {
   const rows = Array.isArray(changeOrders) ? changeOrders : [];
-  let income = 0, costs = 0, unlinkedIncome = 0;
+  let income = 0, costs = 0;
   for (const c of rows) {
     income += num(c.income);
     costs += num(c.costs);
-    if (!c.linked_node_id) unlinkedIncome += num(c.income);
   }
-  return { income, costs, unlinkedIncome, count: rows.length };
+  return { income, costs, count: rows.length };
 }
 
 // Manual/wired cost from the jobs blob. Job-level `sub` is excluded when
@@ -183,14 +208,66 @@ function computeJobWIP(job, deps) {
   const revisedProfit = totalIncome - revisedEstCosts;
   const revisedMargin = totalIncome > 0 ? (revisedProfit / totalIncome * 100) : 0;
 
-  const pctComplete = num(job.pctComplete);
-  // Unlinked-CO income never reaches the graph's ngRevenueEarned, so its
-  // earned share is added on top. The no-graph fallback already folds ALL CO
-  // income in via totalIncome and needs nothing.
-  const coEarned = co.unlinkedIncome * (pctComplete / 100);
+  // ── TWO CLOCKS, NAMED AND KEPT APART ──────────────────────────────────────
+  // `storedPct` is the jobs-blob scalar: round(calcJobPctComplete × 10)/10,
+  // written ONLY when a browser renders the job detail and only when the job is
+  // not pctCompleteManual. It is a 0.1-precision, possibly stale, possibly
+  // hand-frozen cache — and it is what COST accrual runs on, on BOTH sides
+  // (js/jobs.js poAccrued/subAccrued read the same scalar). It stays the cost
+  // clock here for exactly that reason: moving cost to the scope clock
+  // server-side alone would CREATE a browser/server split where none exists.
+  // See the bottom of this block — it must never reach revenue, and the live
+  // scope clock must never reach poAccruedOf/subAccruedOf.
+  const storedPct = num(job.pctComplete);
+
+  // ── REVENUE: the CO term now runs on the SCOPE clock, per CO ──────────────
+  // Was: `coEarned = co.unlinkedIncome × storedPct/100` — one blunt formula for
+  // every change order, with no idea the rider concept existed. A rider CO
+  // exists BECAUSE its work is the ridden scope's work; measuring it against a
+  // job-wide average that includes unrelated scopes made a CO's earned revenue
+  // move when a DIFFERENT scope progressed. That is a category error, not a
+  // rounding difference. js/co-completion.js is now the single implementation
+  // and the browser wraps the same file, so this figure and the one on the CO
+  // editor's P&L strip are produced by the same lines.
+  //
+  // The exclusion predicate is UNCHANGED from the deleted unlinkedIncome:
+  // `!c.linked_node_id` — a graph-linked CO's earned already lives in
+  // ngRevenueEarned. NOTE the pre-existing gap this preserves rather than
+  // repairs: a raw legacy blob CO (ai-routes read_wip_summary falls back to
+  // `d.changeOrders` unshaped) carries `linkedNodeId`, not `linked_node_id`, so
+  // it reads as unlinked here — as it always has. Normalizing the key would
+  // move org-wide revenue inside a port, so it is reported, not fixed.
+  //
+  // sell/cost come off the shaped row (income/costs), never from the pricing
+  // pipeline: this file has never heard of the pricing model and must not start.
+  // A draft/void CO already carries income 0 from shapeChangeOrderRow, so it
+  // earns 0 with no status check needed here.
+  let coEarned = 0;
+  for (const c of (Array.isArray(d.changeOrders) ? d.changeOrders : [])) {
+    if (!c || c.linked_node_id) continue;
+    coEarned += num(coCompletion(c, {
+      sell: num(c.income),
+      cost: num(c.costs),
+      phases,
+      buildings,
+      storedPct,
+    }).earned);
+  }
+  // The base-contract term is UNCHANGED in this pass. It disagrees with the
+  // browser too (browser: Σ cell revenue × cell %; here: ngRevenueEarned, else
+  // totalIncome × storedPct), and converging it would promote the progress
+  // core's NULL phaseRevenue chain to the authority over the company WIP, 86's
+  // per-turn context and the guest-visible Live Rooms chip — on legacy
+  // {asSoldRevenue: 0, asSoldPhaseBudget: N} rows that reads $0. That move
+  // needs a census of affected rows first (scripts/co-clock-census.js), so it
+  // is deliberately NOT in this commit.
+  //
+  // On the ngRevenueEarned == null branch coEarned is computed and DISCARDED —
+  // the fallback already folds all CO income into totalIncome × pct. True on
+  // both sides today (js/jobs.js does the same), preserved here.
   const revenueEarned = job.ngRevenueEarned != null
     ? num(job.ngRevenueEarned) + coEarned
-    : totalIncome * (pctComplete / 100);
+    : totalIncome * (storedPct / 100);
 
   // JTD stays PURE (revenue − actual) for the WIP report and the margin-drift
   // audit rule. Do NOT prefer the engine's ngJtdProfit — that is graph-manual
@@ -203,8 +280,12 @@ function computeJobWIP(job, deps) {
   const backlog = job.ngBacklog != null ? num(job.ngBacklog) : totalIncome - revenueEarned;
   const remainingCosts = revisedEstCosts - actualCosts;
 
-  const poAccrued = poAccruedOf(purchaseOrders, vendorBills, pctComplete);
-  const accruedCosts = subAccruedOf(job, subs, purchaseOrders, pctComplete) + poAccrued;
+  // THE COST CLOCK STAYS STORED. `storedPct` and nothing else reaches these two
+  // — the browser accrues on the same scalar, so switching them to the scope
+  // clock here would manufacture a split. Letting one variable feed both
+  // revenue and cost is how the two-clock defect happened the first time.
+  const poAccrued = poAccruedOf(purchaseOrders, vendorBills, storedPct);
+  const accruedCosts = subAccruedOf(job, subs, purchaseOrders, storedPct) + poAccrued;
   const projectedCost = actualCosts + accruedCosts;
   const projectedProfit = totalIncome - projectedCost;
 
@@ -224,7 +305,13 @@ function computeJobWIP(job, deps) {
     contractIncome, estimatedCosts, coIncome: co.income, coCosts: co.costs,
     totalIncome, totalEstCosts, revisedCostChanges, revisedEstCosts,
     asSoldProfit, asSoldMargin, revisedProfit, revisedMargin,
-    pctComplete, revenueEarned, actualCosts, jtdProfit, jtdMargin,
+    // The REPORTED percent is still the stored scalar. The browser reports the
+    // live weighted percent here instead, so this field still disagrees — and
+    // it is the "single survivor" of Live Rooms money redaction, the one figure
+    // an outside owner sees in a redacted room. Converging it is a
+    // guest-visible change and belongs with the base-contract term above and
+    // its census, not inside this commit.
+    pctComplete: storedPct, revenueEarned, actualCosts, jtdProfit, jtdMargin,
     displayProfit, displayMargin,
     qbActualCosts, qbCostLineCount, qbCostsAsOf, qbSubMatch, qbAccrual,
     invoiced, unbilled, backlog, remainingCosts,

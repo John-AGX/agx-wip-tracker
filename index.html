@@ -3545,8 +3545,29 @@
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->
     <script src="js/pricing-pipeline.js?v=3"></script>
-    <script src="js/progress.js?v=3"></script>
-    <script src="js/jobs.js?v=229"></script>
+    <!-- ONE COMPLETION CLOCK. progress-core.js is the pure math that used to be
+         welded to appData inside progress.js; co-completion.js is HOW A CHANGE
+         ORDER EARNS, the body that used to live inside js/jobs.js. Both are
+         require()'d by server/services/money/job-wip.js, so the percent 86
+         quotes and the percent the CO editor's P&L strip paints are now the
+         same lines of code. They were two formulas: a rider CO read 74% here
+         and the job's stored percent on the server.
+
+         ORDER IS LOAD-BEARING, NOT COSMETIC. progress-core.js must precede
+         progress.js AND co-completion.js — both THROW on a missing core rather
+         than degrade — and co-completion.js must precede jobs.js. A silent
+         degrade is not a display bug: js/pay-applications.js deriveSOV guards
+         only on `typeof window.coCompletion === 'function'`, so the wrapper
+         would still pass the guard and then fall to its else-branch,
+         `allocs = c.buildingAllocations`, which for a rider CO is []. Ten
+         per-building G703 lines collapse into one General line under a new id,
+         every carried-forward `previous` resets to 0, and the whole change
+         order re-bills in a single draw. Hence the throw; hence
+         test/co-completion-port.test.js pins this order and these tags. -->
+    <script src="js/progress-core.js?v=1"></script>
+    <script src="js/co-completion.js?v=1"></script>
+    <script src="js/progress.js?v=4"></script>
+    <script src="js/jobs.js?v=230"></script>
     <script src="js/doc-import.js?v=6"></script>
     <script src="js/job-workflow-ui.js?v=6"></script>
     <!-- Job sidebar Files + Photos tabs (renderJobFiles / renderJobPhotos).

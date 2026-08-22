@@ -368,76 +368,40 @@ function renderJobsMain() {
         //    nothing changes until a mode is chosen.
         // Returns { mode, scopeName?, sell, cost, profit, byBuilding:{bid:{share,pct,earned}},
         //           earned, placed, unallocated, weightedPct }.
+        //
+        // THE MATH IS NOT HERE ANY MORE — it is js/co-completion.js, which the
+        // SERVER require()s. It lived here, welded to appData, which is why
+        // server/services/money/job-wip.js had its own smaller idea of how a
+        // change order earns (`unlinkedIncome × job.pctComplete/100`, with no
+        // rider concept at all): the same CO read 74% on this screen and the
+        // job's stored percent in 86's context. Two clocks. This function is now
+        // a wrapper — it computes sell/cost from the pricing pipeline, filters
+        // appData to THIS job, and delegates. There is exactly one body.
+        //
+        // The signature is unchanged on purpose: nodegraph/ui.js liveComp +
+        // coBuildingShares, js/pay-applications.js deriveSOV and
+        // getCOsConnectedTo below all keep calling coCompletion(co, jobId) and
+        // all keep their exact values.
         function coCompletion(co, jobId) {
-            function clampPct(v) { v = Number(v) || 0; return v < 0 ? 0 : (v > 100 ? 100 : v); }
+            // sell and cost stay OPAQUE SCALARS to the clock: it is handed two
+            // numbers and never learns how either was derived. That is what lets
+            // the ported module carry the standing guarantee that the money layer
+            // has never heard of the pricing model.
             var sell = coSellAmount(co);
             var lines = Array.isArray(co && co.lines) ? co.lines : [];
             var cost = (window.p86Pricing && lines.length) ? ((window.p86Pricing.computeForLines(co, lines) || {}).subtotal || 0) : 0;
-            var mode = (co && (co.completionMode || (co.data && co.data.completionMode))) || '';
-            var byB = {}, earned = 0, placed = 0;
-
-            if (mode === 'rider') {
-                var scopeName = (co && (co.riderScopeName || (co.data && co.data.riderScopeName))) || '';
-                var cells = (appData.phases || []).filter(function (p) { return p.jobId === jobId && (p.phase || 'Unnamed') === scopeName; });
-                var perB = cells.filter(function (p) { return p.buildingId; });
-                if (perB.length) {
-                    // Per-building scope: inherit its revenue split + %s EXACTLY.
-                    var scopeRev = perB.reduce(function (s, p) { return s + phaseRevenue(p); }, 0);
-                    perB.forEach(function (p) {
-                        var cpct = window.p86Progress ? window.p86Progress.scopeCellPct(p) : (p.pctComplete || 0);
-                        var share = scopeRev > 0 ? sell * (phaseRevenue(p) / scopeRev) : (sell / perB.length);
-                        var e = share * cpct / 100;
-                        byB[p.buildingId] = { share: share, pct: cpct, earned: e };
-                        earned += e; placed += share;
-                    });
-                } else if (cells.length) {
-                    // Job-level scope (no per-building split to inherit yet) — earn at
-                    // its overall %; no per-building breakdown until it's split.
-                    var cpct0 = window.p86Progress ? window.p86Progress.scopeCellPct(cells[0]) : (cells[0].pctComplete || 0);
-                    earned = sell * cpct0 / 100;
-                }
-                // THE SILENT DROP, NAMED. If the ridden scope has been renamed
-                // or deleted, `cells` is empty: earned falls to $0 and stays
-                // there, with nothing on screen to say why. That is revenue
-                // vanishing, not revenue not yet earned.
-                //
-                // This flag REPORTS it; it deliberately does NOT fall back to
-                // the job's percent. A fallback would restore the revenue —
-                // moving displayProfit and displayMargin on every job whose
-                // rider scope was ever renamed — as an invisible side effect of
-                // a feature commit. So the drop becomes visible (the CO editor
-                // and js/job-audit.js R11 both shout), John sees the number,
-                // and re-pointing the CO at a real scope is the fix. Renaming a
-                // scope now carries its riders along, so it cannot recur.
-                return { mode: 'rider', scopeName: scopeName, sell: sell, cost: cost, profit: sell - cost,
-                    byBuilding: byB, earned: earned, placed: placed, unallocated: sell - placed,
-                    riderScopeMissing: !cells.length,
-                    weightedPct: sell > 0 ? earned / sell * 100 : 0 };
-            }
-
-            if (mode === 'standalone') {
-                var allocs = Array.isArray(co && co.buildingAllocations) ? co.buildingAllocations
-                    : ((co && co.data && Array.isArray(co.data.buildingAllocations)) ? co.data.buildingAllocations : []);
-                var live = {}; (appData.buildings || []).forEach(function (b) { if (b && b.jobId === jobId) live[b.id] = 1; });
-                allocs.forEach(function (a) {
-                    if (!a || !a.buildingId || !live[a.buildingId]) return;
-                    var share = sell * clampPct(a.pct) / 100;
-                    var cpct = clampPct(a.pctComplete);
-                    var e = share * cpct / 100;
-                    byB[a.buildingId] = { share: share, pct: cpct, earned: e };
-                    earned += e; placed += share;
-                });
-                return { mode: 'standalone', sell: sell, cost: cost, profit: sell - cost,
-                    byBuilding: byB, earned: earned, placed: placed, unallocated: sell - placed,
-                    weightedPct: sell > 0 ? earned / sell * 100 : 0 };
-            }
-
-            // Legacy: earn at the job's overall % — matches the pctComplete getJobWIP uses.
-            var _hasScopes = (appData.phases || []).some(function (p) { return p.jobId === jobId; });
             var _job = (appData.jobs || []).find(function (j) { return j.id === jobId; });
-            var jp = (window.p86Progress && _hasScopes) ? window.p86Progress.jobPct(jobId) : ((_job && _job.pctComplete) || 0);
-            return { mode: 'legacy', sell: sell, cost: cost, profit: sell - cost,
-                byBuilding: {}, earned: sell * jp / 100, placed: 0, unallocated: sell, weightedPct: jp };
+            return window.p86CoCompletion.coCompletion(co, {
+                sell: sell,
+                cost: cost,
+                phases: (appData.phases || []).filter(function (p) { return p && p.jobId === jobId; }),
+                buildings: (appData.buildings || []).filter(function (b) { return b && b.jobId === jobId; }),
+                // REQUIRED, not optional. The legacy branch falls back to this
+                // on a job with no scope rows; omitting it would earn $0 on
+                // every legacy CO on a scope-less job — a revenue regression
+                // hidden inside a port.
+                storedPct: (_job && _job.pctComplete) || 0
+            });
         }
         window.coCompletion = coCompletion;
 

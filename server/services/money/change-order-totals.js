@@ -84,6 +84,14 @@ function shapeChangeOrderRow(r) {
     costs: counted ? m.costs : 0,
     proposedIncome: m.income,
     proposedCosts: m.costs,
+    // HOW this CO earns, carried through so the completion clock is reachable
+    // from a shaped row. These three were dropped here, which is why
+    // money/job-wip.js had no rider concept at all and fell back to one blunt
+    // `income × job.pctComplete` for every change order. js/co-completion.js
+    // reads them; it never sees the raw table row.
+    completionMode: d.completionMode || '',
+    riderScopeName: d.riderScopeName || '',
+    buildingAllocations: Array.isArray(d.buildingAllocations) ? d.buildingAllocations : [],
     counted,
   };
 }
@@ -133,6 +141,14 @@ function shapeLegacyChangeOrder(r) {
     costs: costs,
     proposedIncome: income,
     proposedCosts: proposedCosts,
+    // Empty BY CONSTRUCTION, and that is the point. A pre-migration blob CO has
+    // no completion mode, so it takes js/co-completion.js's legacy branch and
+    // earns at the job's overall percent — which is what it has always done.
+    // Carrying the keys explicitly (rather than leaving them undefined) makes
+    // that a stated fact instead of an accident of the shape.
+    completionMode: '',
+    riderScopeName: '',
+    buildingAllocations: [],
     counted: true,
   };
 }

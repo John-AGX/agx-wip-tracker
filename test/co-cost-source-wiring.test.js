@@ -179,12 +179,20 @@ describe('renaming a scope no longer orphans its riders', () => {
 
 describe('a rider change order whose scope is gone', () => {
   test('coCompletion REPORTS it and deliberately does not paper over it', () => {
-    expect(JOBS).toMatch(/riderScopeMissing: !cells\.length,/);
+    // The clock moved out of js/jobs.js into js/co-completion.js — the
+    // one-clock port, so the server runs the same rider rule instead of
+    // `unlinkedIncome × job.pctComplete`. The guard follows the code; the
+    // rule it guards is unchanged.
+    const CLOCK = code('js', 'co-completion.js');
+    expect(CLOCK).toMatch(/riderScopeMissing: !cells\.length,/);
     // No fallback to the job's percent: restoring the revenue would move
     // displayProfit and displayMargin on every job whose rider scope was ever
     // renamed, invisibly, inside a feature commit.
-    const rider = section(JOBS, /if \(mode === 'rider'\) \{/, /if \(mode === 'standalone'\)/);
-    expect(rider).not.toMatch(/jobPct|p86Progress\.jobPct/);
+    const rider = section(CLOCK, /if \(mode === 'rider'\) \{/, /if \(mode === 'standalone'\)/);
+    expect(rider).not.toMatch(/jobPct|storedPct/);
+    // And js/jobs.js keeps a wrapper, not a second body.
+    expect(JOBS).not.toMatch(/riderScopeMissing: !cells\.length,/);
+    expect(JOBS).toMatch(/window\.p86CoCompletion\.coCompletion\(co, \{/);
   });
 
   test('the CO editor says so on screen', () => {
