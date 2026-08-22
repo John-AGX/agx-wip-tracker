@@ -249,6 +249,71 @@
             height: 100%;
         }
 
+        /* Global search relocated PERMANENTLY into the sticky header — centered
+           between the brand and the user cluster, present on every page. It
+           replaced the old "← Back to Jobs / job title" job lockup that used to
+           inject into this slot. IDs are unchanged (js/search.js is id-bound);
+           .in-header just re-skins the box for the header row. */
+        #app-sidebar-search.in-header {
+            flex: 1 1 auto;
+            min-width: 0;                 /* shrink instead of overflowing */
+            display: flex;
+            justify-content: center;
+            position: relative;           /* anchor the results dropdown */
+        }
+        #app-sidebar-search.in-header .sidebar-search-box {
+            width: 100%;
+            max-width: 460px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            height: 36px;
+            padding: 0 12px;
+            border-radius: 9px;
+            background: var(--surface2, rgba(255, 255, 255, 0.06));
+            border: 1px solid var(--border, rgba(255, 255, 255, 0.10));
+            transition: border-color 0.12s, background 0.12s;
+            cursor: text;
+        }
+        #app-sidebar-search.in-header .sidebar-search-box:focus-within {
+            border-color: var(--accent, #4f8cff);
+            background: var(--surface, rgba(255, 255, 255, 0.08));
+        }
+        #app-sidebar-search.in-header .sidebar-search-icon {
+            flex: 0 0 auto;
+            color: var(--text-dim, #8b90a5);
+        }
+        #app-sidebar-search.in-header .sidebar-search-input {
+            flex: 1 1 auto;
+            min-width: 0;
+            border: none;
+            background: transparent;
+            outline: none;
+            color: var(--text, #e4e6f0);
+            font-size: 13px;
+            font-family: inherit;
+        }
+        #app-sidebar-search.in-header .sidebar-search-input::placeholder {
+            color: var(--text-dim, #8b90a5);
+        }
+        #app-sidebar-search.in-header .sidebar-search-results {
+            position: absolute;
+            top: calc(100% + 6px);
+            left: 50%;
+            transform: translateX(-50%);
+            width: 100%;
+            max-width: 460px;
+            max-height: 60vh;
+            overflow-y: auto;
+            z-index: 1200;
+        }
+        /* Mobile: the bottom-nav owns navigation; keep search but let it fill. */
+        @media (max-width: 768px) {
+            #app-sidebar-search.in-header { max-width: none; }
+            #app-sidebar-search.in-header .sidebar-search-box { max-width: none; height: 34px; }
+            #app-sidebar-search.in-header .sidebar-search-results { max-width: none; }
+        }
+
         /* Logo lockup. 26px is small enough to share the row with
            tabs without dominating, large enough to read clearly. */
         .header-brand {

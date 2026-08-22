@@ -210,9 +210,11 @@
 
     // On the collapsed rail the input is hidden — clicking the box
     // should expand the sidebar so the user can type. The toggle lives
-    // in app.js; we just click it when collapsed.
+    // in app.js; we just click it when collapsed. Only applies when the
+    // box is actually INSIDE the sidebar — the search now lives in the
+    // sticky header, where a click must never toggle the sidebar.
     var box = inputEl.closest('.sidebar-search-box');
-    if (box) {
+    if (box && box.closest('#app-sidebar')) {
       box.addEventListener('click', function () {
         var sidebar = document.getElementById('app-sidebar');
         if (sidebar && sidebar.classList.contains('collapsed')) {

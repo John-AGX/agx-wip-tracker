@@ -263,36 +263,13 @@
     // the header rendered "RV2006 \u2014 " with an empty right side. fromJob
     // reads title first and drops the separator when there's one part.
     var name = job ? window.p86JobLabel.fromJob(job, { fallback: "Job Detail" }) : "Job Detail";
-    var userMenu = siteHeader.querySelector("#user-menu");
-    if (headerContent && userMenu) {
-      var jobInfo = document.createElement("div");
-      jobInfo.className = "jh-job-info";
-
-      var backBtn = document.createElement("button");
-      backBtn.className = "jh-back-btn";
-      backBtn.textContent = "\u2190 Back to Jobs";
-      backBtn.addEventListener("click", function() {
-        // Site Plan is the job page now \u2014 Back goes to the jobs LIST,
-        // never the retired classic overview. Fall back to the old
-        // in-detail back link only if the global isn't loaded yet.
-        if (typeof window.backToJobsMain === "function") { window.backToJobsMain(); return; }
-        var backLink = detail.querySelector("a[href], button");
-        if (backLink) backLink.click();
-      });
-      jobInfo.appendChild(backBtn);
-
-      var jobTitle = document.createElement("span");
-      jobTitle.className = "jh-job-title";
-      jobTitle.textContent = name;
-      jobInfo.appendChild(jobTitle);
-
-      var statusBadge = document.createElement("span");
-      statusBadge.className = "jh-status-badge";
-      statusBadge.textContent = job && job.status ? job.status : "In Progress";
-      jobInfo.appendChild(statusBadge);
-
-      headerContent.insertBefore(jobInfo, userMenu);
-    }
+    // Job lockup RETIRED (John): the "\u2190 Back to Jobs / job title / status"
+    // block used to inject here, before #user-menu. It duplicated the left
+    // sidebar (job card + "\u2190 All Jobs" + the section nav), and the global
+    // search now lives permanently in this exact header slot. Back-to-jobs is
+    // still one click away in the sidebar; window.backToJobsMain is unchanged.
+    // `name`/`userMenu` are intentionally no longer read here.
+    void name;
 
     // Map each metric label to a tone hint so the card can color-code itself.
     // Income-side = blue, cost-side = red, gain-side (revenue/profit/margin)
