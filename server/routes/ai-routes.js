@@ -7514,7 +7514,7 @@ const PROJECT_INLINE_TOOLS = [
     name: 'read_purchase_orders',
     tier: 'auto',
     description:
-      'List/read PURCHASE ORDERS (job POs — sub scope-of-work contracts). READ-ONLY. Org-scoped. Pass `job_id` to restrict to one job, `status` to scope (draft|approved|...), or `filter` to match the PO number. Returns id, po_number, status, the job, the sub/vendor, amount (if set), and approval state. Use for "what POs are on job X", "show open purchase orders".',
+      'List/read PURCHASE ORDERS (job POs — sub scope-of-work contracts). READ-ONLY. Org-scoped. Pass `job_id` to restrict to one job, `status` to scope (draft|approved|...), or `filter` to match the PO number. Returns id, po_number, status, the job, the sub/vendor NAME, title, the amount (the extended line-item total = the committed PO value; this is authoritative, not a "blank"), and approval state. Use for "what POs are on job X", "show open purchase orders", "what is the total for PO-000X".',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -13918,25 +13918,35 @@ async function execProjectInlineTool(name, input, ctx) {
     if (q) { where.push('po.po_number ILIKE $' + (pn++)); params.push('%' + q + '%'); }
     const limit = Math.max(1, Math.min(100, Number(input && input.limit) || 20));
     const por = await pool.query(
-      `SELECT po.id, po.po_number, po.status, po.job_id, po.sub_id, po.data, po.approved_at
+      `SELECT po.id, po.po_number, po.status, po.job_id, po.sub_id, po.data, po.approved_at,
+              s.name AS sub_name
          FROM job_purchase_orders po
+         LEFT JOIN subs s ON s.id = po.sub_id
         WHERE ${where.join(' AND ')}
         ORDER BY po.created_at DESC
         LIMIT ${limit}`,
       params
     );
     if (!por.rows.length) return 'No purchase orders found.';
+    // A PO's total is the extension of its LINE ITEMS (qty × unitCost) plus any
+    // APPROVED addendum deltas — never a stored d.total/d.amount field. The old
+    // amtOf read those stored keys, which are only ever computed, so it returned
+    // null for every real PO: 86 answered "no amount set" while the job page
+    // showed the right number off the same lines. Use the ONE canonical helper
+    // the UI (poRowTotal), job context, and poEffectiveTotal all share.
     const amtOf = (d) => {
-      if (!d || typeof d !== 'object') return null;
-      const v = d.total != null ? d.total : (d.amount != null ? d.amount : (d.grand_total != null ? d.grand_total : d.totalAmount));
-      const n = Number(v);
+      const n = Number(jobMoney.purchaseOrderMoney(d || {}));
       return Number.isFinite(n) && n ? '$' + Math.round(n).toLocaleString() : null;
     };
     const lines = [`${por.rows.length} purchase order${por.rows.length === 1 ? '' : 's'}:`];
     for (const x of por.rows) {
       const amt = amtOf(x.data);
+      const title = (x.data && typeof x.data.title === 'string') ? x.data.title.slice(0, 80) : '';
+      // Surface the sub's NAME (not just sub_id) so 86 attributes each PO to the
+      // right vendor — reading only sub_id before, it guessed and swapped them.
       lines.push('- PO ' + (x.po_number || x.id) + ' [id=' + x.id + '] · ' + (x.status || 'draft') +
-        (x.sub_id ? ' · sub ' + x.sub_id : '') +
+        (x.sub_name ? ' · ' + wrapUserData('subs.name', String(x.sub_name).slice(0, 80)) : (x.sub_id ? ' · sub ' + x.sub_id : '')) +
+        (title ? ' · ' + wrapUserData('po.title', title) : '') +
         (amt ? ' · ' + amt : '') +
         (x.job_id ? ' · job ' + x.job_id : '') +
         (x.approved_at ? ' · approved' : ''));
