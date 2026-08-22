@@ -175,17 +175,26 @@ describe('every row that did not land says why', () => {
     expect(dom.body.textContent).toMatch(/stale copy of the jobs list/i);
   });
 
+  // The count here is the contract; the sentence is pinned in detail in
+  // test/qb-costs-unmatched-cause.test.js. It used to read "the
+  // QuickBooks project code doesn't match any Project 86 job number —
+  // fix the project name in QB", which is one of TWO causes and sent
+  // readers to the wrong application for the other one.
   test('unmatched QB projects are counted as rejected, with the fix spelled out', () => {
     const dom = mountModal();
     renderCommitReceipt(receipt({
       unmatched: [{ code: '437775', name: 'Solace Exterior Paint', lines: new Array(40).fill({}), computedTotal: 12500 }],
+      jobNumbers: ['RV2004', 'S2205', 'S2222'],
       srv: { ok: true, received: 222, inserted: 222, updated: 0, skipped: 0, cleaned: 0, rejected: [], byJob: {} }
     }));
 
     // 0 server-side + 40 never-sent.
     expect(tiles(dom.body).Rejected).toBe('40');
     expect(dom.body.textContent).toContain('437775');
-    expect(dom.body.textContent).toMatch(/doesn’t match any Project.86 job number/i);
+    // An all-numeric code against an org that letters its job numbers is
+    // a QB auto-number — named specifically, with the fix in QuickBooks.
+    expect(dom.body.textContent).toMatch(/QuickBooks auto-number/);
+    expect(dom.body.textContent).toMatch(/Rename the project in QuickBooks/);
   });
 
   test('a failed local sheet cache is reported without being mistaken for a money failure', () => {

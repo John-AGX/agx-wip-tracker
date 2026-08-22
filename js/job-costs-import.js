@@ -347,7 +347,10 @@ function p86Ask(message, opts) {
 
   // ─── Match parsed jobs against appData.jobs by jobNumber ─────────
   function matchJobs(parsed) {
-    var jobs = (window.appData && window.appData.jobs) || [];
+    // `typeof window` guard only so the matcher can be exercised under
+    // plain-node jest alongside the classifier that explains it. In the
+    // browser this is the same expression it always was.
+    var jobs = (typeof window !== 'undefined' && window.appData && window.appData.jobs) || [];
     var byNumber = {};
     jobs.forEach(function(j) {
       var num = (j.jobNumber || '').toUpperCase().trim();
@@ -360,7 +363,189 @@ function p86Ask(message, opts) {
       if (hit) matched.push({ parsed: p, job: hit });
       else unmatched.push(p);
     });
-    return { matched: matched, unmatched: unmatched };
+    // jobNumbers is what the unmatched classifier learns the org's
+    // numbering shape from — same source, same normalisation, so the
+    // explanation can never disagree with the match it is explaining.
+    return { matched: matched, unmatched: unmatched, jobNumbers: Object.keys(byNumber) };
+  }
+
+  // The org's job numbers, normalised exactly as matchJobs normalises
+  // them. Used by the receipt, which is rendered after _lastParse has
+  // been cleared and so has no match result to borrow from.
+  function orgJobNumbers() {
+    var jobs = (typeof window !== 'undefined' && window.appData && window.appData.jobs) || [];
+    var out = [];
+    jobs.forEach(function(j) {
+      var num = ((j && j.jobNumber) || '').toUpperCase().trim();
+      if (num) out.push(num);
+    });
+    return out;
+  }
+
+  // ─── Why an unmatched project did not import ─────────────────────
+  //
+  // Two completely different failures used to share one sentence, and it
+  // led with the wrong one: "fix the project name in QuickBooks". John
+  // lost twenty minutes hunting a formatting problem (did the matcher
+  // want a dash?) on two projects — S2240 ($620.57) and S2157
+  // ($13,065.74) — whose names were perfectly fine. Neither job existed
+  // in Project 86. The fix to make was in Project 86, not QuickBooks.
+  //
+  // So classify first, then speak. Four outcomes, each one cause:
+  //   'no-code'      the leading token isn't a job number at all (a
+  //                  customer name, or a header with no name after it)
+  //   'qb-autonumber' the leading token is all digits and this org does
+  //                  not number jobs numerically → a QB auto-number
+  //   'missing-job'  a well-formed job number for THIS org's numbering,
+  //                  but no such job exists → create the job
+  //   'unclear'      shaped like a job number, but not one we can place
+  //                  → say we can't tell rather than guess
+  //
+  // DERIVING THE SHAPE. Job numbering here is configurable — a type maps
+  // to a prefix and a counter, claimed atomically via
+  // POST /api/org/next-job-number — so `S####` / `RV####` is AGX's
+  // convention, not the product's. Hardcoding it would make this message
+  // nonsense for any org numbering differently. Instead the shape is
+  // learned from the org's own job numbers.
+  //
+  // The formulation is a PREFIX SET (the leading letter-run of each real
+  // job number) plus a letters-then-digits form, rather than a general
+  // "letters+digits" regex. Two reasons:
+  //   * a general regex would call any letters+digits token a missing
+  //     job and tell the user to create it — over-claiming, which is the
+  //     exact failure being fixed here;
+  //   * the prefix set is evidence: `S2240` against an org holding
+  //     S2205/S2222 is a real, near-miss job number, not a guess.
+  // But a prefix set alone would be too strict in the other direction: a
+  // job TYPE can exist with no job yet claimed under it, so its prefix is
+  // invisible here. A well-formed code under an unseen prefix is
+  // therefore genuinely undecidable — that is what 'unclear' is for.
+  //
+  // allowsNumeric carries the same honesty for the numeric case: calling
+  // `437775` a QB auto-number is only safe when the org does NOT number
+  // jobs with bare digits. If it does, the code is ambiguous, not (A).
+  function orgJobNumberShape(jobNumbers) {
+    var prefixes = {};
+    var prefixCount = 0;
+    var allowsNumeric = false;
+    (jobNumbers || []).forEach(function(n) {
+      var s = String(n == null ? '' : n).toUpperCase().trim();
+      if (!s) return;
+      if (/^\d+$/.test(s)) { allowsNumeric = true; return; }
+      var m = s.match(/^([A-Z]+)\d/);
+      if (!m) return;
+      if (!Object.prototype.hasOwnProperty.call(prefixes, m[1])) {
+        prefixes[m[1]] = true;
+        prefixCount++;
+      }
+    });
+    return {
+      prefixes: prefixes,
+      allowsNumeric: allowsNumeric,
+      // A brand-new org has nothing to learn from. Rather than throwing
+      // or inventing a shape, every unmatched project degrades to the
+      // generic "we couldn't read a job number" branch.
+      known: prefixCount > 0 || allowsNumeric
+    };
+  }
+
+  function classifyUnmatchedCode(code, shape) {
+    var c = String(code == null ? '' : code).toUpperCase().trim();
+    shape = shape || { prefixes: {}, allowsNumeric: false, known: false };
+    if (!c) return 'no-code';
+    if (!shape.known) return 'no-code';
+    if (/^\d+$/.test(c)) return shape.allowsNumeric ? 'unclear' : 'qb-autonumber';
+    // Letters, then at least one digit. Trailing digits/hyphens are kept
+    // so a real number like RV2000-2013 reads as well-formed.
+    var m = c.match(/^([A-Z]+)\d[\dA-Z-]*$/);
+    if (!m) return 'no-code';
+    return Object.prototype.hasOwnProperty.call(shape.prefixes, m[1]) ? 'missing-job' : 'unclear';
+  }
+
+  // One cause, one action, in plain text — the caller escapes it. The
+  // reader should finish the sentence knowing whether to open
+  // QuickBooks or to open Project 86.
+  function unmatchedReason(code, shape) {
+    var c = String(code == null ? '' : code).toUpperCase().trim();
+    // Brand-new org: no jobs, so no numbering to learn and no shape to
+    // judge against. This lands in the same (A) bucket — we could not
+    // recognise a job number — but saying «"S2240" isn't a job number»
+    // would be a flat lie. Name the real cause instead.
+    if (c && shape && shape.known === false) {
+      return 'Not sent — Project 86 has no jobs yet, so there is nothing for “' + c + '” to match. ' +
+        'Set the job up in Project 86 under the number you want it to carry, then re-import.';
+    }
+    switch (classifyUnmatchedCode(c, shape)) {
+      case 'missing-job':
+        return 'Not sent — no job numbered ' + c + ' exists in Project 86. ' +
+          'Create job ' + c + ', then re-import. The QuickBooks project name is fine.';
+      case 'qb-autonumber':
+        return 'Not sent — “' + c + '” is a QuickBooks auto-number, not a Project 86 job number. ' +
+          'Rename the project in QuickBooks to start with its job number, then re-import.';
+      case 'unclear':
+        return 'Not sent — “' + c + '” doesn’t match any Project 86 job number, and we can’t tell ' +
+          'whether the job is missing or the code is wrong. Check this project against your job list, ' +
+          'then re-import.';
+      default:
+        return 'Not sent — ' + (c ? '“' + c + '” isn’t a job number' : 'the project name carries no job number') +
+          ', so there was nothing to match on. ' +
+          'Rename the project in QuickBooks to start with its Project 86 job number, then re-import.';
+    }
+  }
+
+  // Group unmatched projects by cause for the preview summary, keeping
+  // count + dollars per cause so the loud unmatched-money warning stays
+  // loud while naming the right fix for each group.
+  function groupUnmatched(unmatched, shape) {
+    var order = ['missing-job', 'qb-autonumber', 'no-code', 'unclear'];
+    var buckets = {};
+    (unmatched || []).forEach(function(p) {
+      var cause = classifyUnmatchedCode(p && p.code, shape);
+      if (!buckets[cause]) {
+        buckets[cause] = {
+          cause: cause, count: 0, total: 0, codes: [],
+          // Carried so the sentence can distinguish "we read no job
+          // number" from "this org has no jobs at all yet".
+          shapeKnown: !(shape && shape.known === false)
+        };
+      }
+      buckets[cause].count++;
+      buckets[cause].total += Number(p && p.computedTotal) || 0;
+      var c = String((p && p.code) || '').toUpperCase().trim();
+      if (c) buckets[cause].codes.push(c);
+    });
+    return order.filter(function(k) { return buckets[k]; }).map(function(k) { return buckets[k]; });
+  }
+
+  // The per-cause sentence in the preview summary. Same rule as the row
+  // message: one cause, one action.
+  function unmatchedGroupSentence(group) {
+    var one = group.count === 1;
+    var codes = group.codes.slice(0, 6).join(', ');
+    var more = group.codes.length > 6 ? ' and ' + (group.codes.length - 6) + ' more' : '';
+    var lead = group.count + ' project' + (one ? '' : 's') + ' (' + fmtMoney(group.total) + ')';
+    var named = codes ? ' — ' + codes + more : '';
+    if (group.shapeKnown === false) {
+      return lead + ' cannot be placed because Project 86 has no jobs yet' + named +
+        '. Set ' + (one ? 'that job' : 'those jobs') + ' up in Project 86 under the number' + (one ? '' : 's') +
+        ' you want ' + (one ? 'it' : 'them') + ' to carry, then re-import.';
+    }
+    switch (group.cause) {
+      case 'missing-job':
+        return lead + ' name' + (one ? 's' : '') + ' a job number that does not exist in Project 86 yet' + named +
+          '. Create ' + (one ? 'that job' : 'those jobs') + ' (the “+ Create stub job” button' + (one ? '' : 's') +
+          ' below ' + (one ? 'does' : 'do') + ' it), then re-import. The QuickBooks name' + (one ? ' is' : 's are') + ' fine.';
+      case 'qb-autonumber':
+        return lead + ' lead' + (one ? 's' : '') + ' with a QuickBooks auto-number instead of a job number' + named +
+          '. Rename ' + (one ? 'it' : 'them') + ' in QuickBooks to start with the Project 86 job number, then re-import.';
+      case 'unclear':
+        return lead + ' lead' + (one ? 's' : '') + ' with a code we cannot place' + named +
+          '. We cannot tell whether the job is missing or the code is wrong — check ' +
+          (one ? 'it' : 'them') + ' against your job list.';
+      default:
+        return lead + (one ? ' does not' : ' do not') + ' lead with a job number at all' + named +
+          '. Rename ' + (one ? 'it' : 'them') + ' in QuickBooks to start with the Project 86 job number, then re-import.';
+    }
   }
 
   // ─── Preview dialog ──────────────────────────────────────────────
@@ -431,16 +616,29 @@ function p86Ask(message, opts) {
 
     // Flag mismatches LOUDLY. A QB project whose code doesn't match a P86 job
     // number silently imports nothing — that's how 20% of a real export can
-    // vanish unnoticed. Surface the count + $ + the usual cause so the user can
-    // fix the code in QuickBooks (or stub it) instead of losing the costs.
+    // vanish unnoticed. Keep the count + $ shouting, but split the causes: a
+    // missing job is fixed in Project 86 and a bad project name is fixed in
+    // QuickBooks, and the old single sentence sent the reader to the wrong
+    // one of the two.
     if (m.unmatched.length) {
+      var shape = orgJobNumberShape(m.jobNumbers);
+      var groups = groupUnmatched(m.unmatched, shape);
       html += '<div style="display:flex;gap:10px;align-items:flex-start;background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.4);border-radius:8px;padding:12px 14px;margin-bottom:16px;">' +
         '<span style="font-size:18px;line-height:1;">&#9888;&#xFE0F;</span>' +
         '<div style="font-size:12px;color:var(--text,#fff);line-height:1.5;">' +
           '<strong>' + m.unmatched.length + ' project' + (m.unmatched.length === 1 ? '' : 's') + ' (' + fmtMoney(totalUnmatched) + ') won’t import.</strong> ' +
-          'Their QuickBooks code doesn’t match a Project&nbsp;86 job number — usually a QB auto-number (e.g. <code>437775</code>) or a customer name instead of your <code>S####</code> / <code>RV####</code> code. ' +
-          'Fix the project name in QuickBooks to lead with the job number, or create a stub below. They’re listed under <em>Unmatched</em>.' +
-        '</div>' +
+          'They’re listed under <em>Unmatched</em>.' +
+          (groups.length > 1 ? ' Not all for the same reason:' : '');
+      if (groups.length > 1) {
+        html += '<ul style="margin:6px 0 0;padding-left:18px;">';
+        groups.forEach(function(g) {
+          html += '<li style="margin-bottom:3px;">' + escapeHTML(unmatchedGroupSentence(g)) + '</li>';
+        });
+        html += '</ul>';
+      } else if (groups.length === 1) {
+        html += '<br>' + escapeHTML(unmatchedGroupSentence(groups[0]));
+      }
+      html += '</div>' +
       '</div>';
     }
 
@@ -874,6 +1072,9 @@ function p86Ask(message, opts) {
       parsedLines: parsedLines,
       matched: m.matched,
       unmatched: m.unmatched,
+      // The org's numbering, carried through so the receipt can tell a
+      // missing job apart from a bad QB project name.
+      jobNumbers: m.jobNumbers,
       sentLines: sentLines,
       srv: srv,
       srvErr: srvErr,
@@ -1021,13 +1222,17 @@ function p86Ask(message, opts) {
           '<td style="padding:8px 10px;color:#fbbf24;">' + escapeHTML((rj && rj.reason) || 'no reason given') + '</td>' +
         '</tr>';
       });
+      // One cause and one action per row. This used to be a single
+      // sentence for every unmatched project, and it led with "fix the
+      // project name in QB" — which sent the reader to QuickBooks even
+      // when the name was perfect and the job simply did not exist here.
+      var rShape = orgJobNumberShape(r.jobNumbers || orgJobNumbers());
       r.unmatched.forEach(function(p) {
         html += '<tr style="border-top:1px solid var(--border,#2a2a32);">' +
           '<td style="padding:8px 10px;color:var(--text,#fff);">' + escapeHTML((p.code || '(no code)') + ' ' + (p.name || '')) +
             ' <span style="color:var(--text-dim,#888);">' + fmtMoney(p.computedTotal) + '</span></td>' +
           '<td style="text-align:right;padding:8px 10px;font-family:\'SF Mono\',monospace;color:#fbbf24;">' + p.lines.length + '</td>' +
-          '<td style="padding:8px 10px;color:#fbbf24;">Not sent &mdash; the QuickBooks project code doesn’t match any Project&nbsp;86 job number. ' +
-            'Fix the project name in QB to lead with the job number, or create a stub job, then re-import.</td>' +
+          '<td style="padding:8px 10px;color:#fbbf24;">' + escapeHTML(unmatchedReason(p.code, rShape)) + '</td>' +
         '</tr>';
       });
       html += '</tbody></table></div>';
@@ -1159,6 +1364,16 @@ function p86Ask(message, opts) {
       parseAoa: parseAoa,
       reconcile: reconcile,
       RECONCILE_TOLERANCE: RECONCILE_TOLERANCE,
+      // Why a project didn't import. Two different failures used to wear
+      // one message; these are the pieces that tell them apart, and the
+      // shape they judge against is learned from the org's own numbering
+      // rather than hardcoded to AGX's S#### / RV####.
+      orgJobNumberShape: orgJobNumberShape,
+      classifyUnmatchedCode: classifyUnmatchedCode,
+      unmatchedReason: unmatchedReason,
+      groupUnmatched: groupUnmatched,
+      unmatchedGroupSentence: unmatchedGroupSentence,
+      matchJobs: matchJobs,
       // The result screen is part of the fix, not decoration: an import
       // that wrote nothing used to look exactly like one that worked.
       // Exported so the numbers it prints can be pinned under jsdom.
