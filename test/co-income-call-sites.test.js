@@ -219,8 +219,20 @@ describe('the pending one-clock port is not collided with', () => {
     }
   });
 
-  test('coCompletion still reads coSellAmount and subtotal as opaque scalars', () => {
-    expect(JOBS).toMatch(/var sell = coSellAmount\(co\);/);
-    expect(JOBS).toMatch(/computeForLines\(co, lines\) \|\| \{\}\)\.subtotal/);
+  test('coCompletion still reads coSellAmount and subtotal as OPAQUE SCALARS', () => {
+    // The invariant, not the spelling: the completion clock is handed a
+    // sell number and a cost number and never learns how either was
+    // derived. Porting coSellAmount to resolveMarkedUp therefore changes
+    // no field it reads. Deliberately NOT pinned to a particular line of
+    // js/jobs.js — the one-clock port is actively reshaping this function,
+    // and a guard that breaks on someone else's refactor is a guard that
+    // gets deleted rather than heeded.
+    const i = JOBS.indexOf('function coCompletion(');
+    expect(i).toBeGreaterThan(-1);
+    const body = JOBS.slice(i, i + 2000);
+    expect(body).toMatch(/coSellAmount\(co\)/);
+    expect(body).toMatch(/computeForLines\(co, lines\) \|\| \{\}\)\.subtotal/);
+    // And it must not reach into the pricing model itself.
+    expect(body).not.toMatch(/unitSell|resolveMarkedUp|applyTargetMargin|lineMoney/);
   });
 });
