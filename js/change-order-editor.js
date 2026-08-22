@@ -601,7 +601,13 @@ function p86Ask(message, opts) {
       if (!Array.isArray(_state.co.lines)) _state.co.lines = [];
       _state.co.lines.push({
         id: newLineId(),
-        qty: 1, unitCost: 0, description: '', markup: '', markupMode: 'percent'
+        // unitSell seeds BLANK, never 0 — blank is "derive my price from
+        // cost", 0 is "promised at $0". Same distinction markup: '' has
+        // always carried, and the whole reason no existing record needed
+        // rewriting. `unit` is finally seeded because it finally has a
+        // column; it is never priced.
+        qty: 1, unitCost: 0, unit: 'ea', unitSell: '',
+        description: '', markup: '', markupMode: 'percent'
       });
       markDirty();
       paintLines();
@@ -782,9 +788,82 @@ function p86Ask(message, opts) {
       delete _coAsmOpen[lineId];
       coApplyBulkAddLineItems(specs);
     };
+    // EXPLODING A PROMISED LINE MOVES THE CHANGE ORDER TOTAL, and the
+    // human has to see the number before the click, not after it.
+    //
+    // The components are correctly born without a Unit Sell — spreading
+    // one promise across every component would multiply it, which would
+    // be far worse. But that means the promise is DROPPED: the line stops
+    // being "we said $2,750" and goes back to cost x markup. On contract
+    // money, a confirm dialog that lets a total move silently is not a
+    // confirm dialog.
+    var msg = 'Explode "' + (line.description || 'assembly') + '" into ' +
+      line.assemblyBreakdown.length + ' editable lines? The single rollup line is replaced.';
+    if (window.p86Pricing.sellLocked(line)) {
+      var before = (computeTotals() || {}).total || 0;
+      // Price the record as it would be AFTER, without touching it.
+      var after = 0;
+      try {
+        var sim = (_state.co.lines || []).filter(function (x) { return x !== line; })
+          .concat(line.assemblyBreakdown.map(function (b) {
+            var q = coNum(line.qty) * coNum(b.qty_per_unit);
+            return { id: 'sim', qty: Math.round(q * 100) / 100,
+              unitCost: b.unit_cost != null ? coNum(b.unit_cost) : 0, markup: '' };
+          }));
+        var perSim = window.p86Pricing.computeForLines(_state.co, sim);
+        after = window.p86Pricing.applyFeesAndTax(
+          window.p86Pricing.resolveMarkedUp(perSim, _state.co), _state.co).total;
+      } catch (e) { after = null; }
+      msg = 'This line has a promised sell price of ' + fmtCurrency(coNum(line.qty) * coNum(line.unitSell)) + '.\n\n' +
+        'Exploding returns it to markup pricing and drops that promise' +
+        (after == null ? '.' : ', moving the change order total from ' + fmtCurrency(before) + ' to ' + fmtCurrency(after) + '.') +
+        '\n\n' + msg;
+    }
     if (window.p86Confirm) {
-      window.p86Confirm({ title: 'Explode assembly', message: 'Explode "' + (line.description || 'assembly') + '" into ' + line.assemblyBreakdown.length + ' editable lines? The single rollup line is replaced.', confirmText: 'Explode', destructive: true }).then(function (ok) { if (ok) doIt(); });
-    } else if (confirm('Explode into editable lines?')) doIt();
+      window.p86Confirm({ title: 'Explode assembly', message: msg, confirmText: 'Explode', destructive: true }).then(function (ok) { if (ok) doIt(); });
+    } else if (confirm(msg)) doIt();
+  }
+
+  // ── Section money, for the header row's cost / amount / GM chip ────
+  // Walks the array once and attributes every content line to the header
+  // that encloses it. Positional, exactly as the pricing cascade is —
+  // array order IS the section on a change order, which is also why the
+  // catalog drawer splices a line INSIDE its section rather than at the
+  // end. Lines before any header land under the null key and are not
+  // shown anywhere; they simply have no section row to report on.
+  function coSectionTotals(lines, rec) {
+    var map = {};
+    var currentId = null;
+    lines.forEach(function (l) {
+      if (l.section === '__section_header__') {
+        currentId = l.id;
+        if (!map[currentId]) map[currentId] = { cost: 0, sell: 0, locked: 0, lines: 0 };
+        // A $-mode section's flat adder is part of what the section sells
+        // for, so it belongs in the section's own amount and margin.
+        if (l.markupMode === 'dollar' && l.markup !== '' && l.markup != null) {
+          map[currentId].sell += coNum(l.markup);
+        }
+        return;
+      }
+      if (currentId == null) return;
+      var mm = window.p86Pricing.lineMoney(l, lines, rec);
+      map[currentId].cost += mm.ext;
+      map[currentId].sell += mm.sell;
+      map[currentId].lines += 1;
+      if (mm.locked) map[currentId].locked += 1;
+    });
+    return map;
+  }
+
+  // The markup a locked line IMPLIES — what its promised price works out
+  // to as a percentage over its cost. Display only; nothing prices from
+  // it. Null when there is no cost to compare against, because "infinite
+  // margin on $0 of cost" is a number that would only mislead.
+  function coImpliedMarkup(line) {
+    var cost = coNum(line.qty) * coNum(line.unitCost);
+    if (!cost) return null;
+    var sell = coNum(line.qty) * coNum(line.unitSell);
+    return ((sell / cost) - 1) * 100;
   }
 
   function paintLines() {
@@ -797,13 +876,28 @@ function p86Ask(message, opts) {
       '</div>';
       return;
     }
+    // Column ORDER is the estimate editor's, deliberately: the two
+    // surfaces price the same way now, so they should read the same way.
+    //
+    // Two of these have never been on a change order at all. UNIT is a
+    // field the catalog drawer has always written and nothing displayed.
+    // EXT. COST is qty x unitCost — the number that becomes the change
+    // order's `costs` and lands in the job's Total Est. Costs. It being
+    // invisible is precisely how a sell price pasted into Unit Cost stayed
+    // invisible: cost and price were never on screen at the same time.
+    var rec = _state.co;
+    var targetOn = window.p86Pricing.targetMarginActive(rec);
+    var secTotals = coSectionTotals(lines, rec);
     var html = '<table class="p86-co-line-tbl"><thead>' +
       '<tr>' +
-        '<th class="qty">Qty</th>' +
-        '<th class="unit">Unit Cost</th>' +
         '<th class="desc">Description</th>' +
+        '<th class="qty">Qty</th>' +
+        '<th class="uom">Unit</th>' +
+        '<th class="unit">Unit Cost</th>' +
         '<th class="markup">Markup %</th>' +
-        '<th class="ext">Marked-Up</th>' +
+        '<th class="sell">Unit Sell</th>' +
+        '<th class="cost">Ext. Cost</th>' +
+        '<th class="ext">Amount</th>' +
         '<th class="del"></th>' +
       '</tr></thead><tbody>';
     lines.forEach(function(l) {
@@ -812,12 +906,24 @@ function p86Ask(message, opts) {
         // "override lines" checkbox (both drive the shared p86Pricing
         // engine, which already understands markupMode/overrideLineMarkups).
         var dollar = l.markupMode === 'dollar';
+        // The section's own money. Its Ext. Cost column carried nothing at
+        // all before — which meant a whole trade priced at zero margin
+        // looked exactly like one priced at forty.
+        var st = secTotals[l.id] || { cost: 0, sell: 0, locked: 0, lines: 0 };
+        var stGm = st.sell ? ((st.sell - st.cost) / st.sell) * 100 : 0;
+        var gmChip = st.lines
+          ? '<span class="p86-co-gm" style="display:inline-block;margin-left:8px;padding:1px 6px;border-radius:8px;font-size:9.5px;font-weight:700;' +
+              (stGm <= 0 ? 'background:rgba(248,113,113,.15);color:#f87171;'
+                         : stGm < 15 ? 'background:rgba(251,191,36,.15);color:#fbbf24;'
+                                     : 'background:rgba(52,211,153,.13);color:#34d399;') +
+              '" title="Gross margin on this section">GM ' + escapeHTML(fmtPct(stGm)) + '</span>'
+          : '';
         html +=
           '<tr class="p86-co-section-row" data-line-id="' + escapeAttr(l.id) + '">' +
-            '<td colspan="3">' +
+            '<td colspan="4">' +
               '<div style="display:flex;align-items:center;gap:12px;">' +
                 '<input class="p86-co-section-label" type="text" data-line-field="label" value="' + escapeAttr(l.label || '') + '" placeholder="Section name" style="flex:1;min-width:0;" />' +
-                '<label class="p86-co-sec-override" title="Ignore per-line markups — the section markup drives every line in it" style="display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:400;text-transform:none;letter-spacing:normal;color:var(--text-dim,#8a93a6);white-space:nowrap;cursor:pointer;">' +
+                '<label class="p86-co-sec-override" title="Ignore per-line markups — the section markup drives every line in it (a line with its own Unit Sell keeps its promised price)" style="display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:400;text-transform:none;letter-spacing:normal;color:var(--text-dim,#8a93a6);white-space:nowrap;cursor:pointer;">' +
                   '<input type="checkbox" data-line-field="overrideLineMarkups"' + (l.overrideLineMarkups ? ' checked' : '') + ' style="margin:0;" />override lines</label>' +
               '</div>' +
             '</td>' +
@@ -825,7 +931,9 @@ function p86Ask(message, opts) {
               '<button type="button" class="p86-co-sec-mode" data-sec-mode="' + escapeAttr(l.id) + '" title="Toggle percent markup / flat dollar add" style="min-width:24px;padding:2px 6px;font-size:11px;font-weight:700;border-radius:5px;border:1px solid rgba(255,255,255,0.18);background:rgba(255,255,255,0.06);color:inherit;cursor:pointer;vertical-align:middle;">' + (dollar ? '$' : '%') + '</button> ' +
               '<input class="p86-co-section-markup" type="text" inputmode="decimal" data-line-field="markup" value="' + escapeAttr(l.markup == null ? '' : l.markup) + '" placeholder="' + (dollar ? 'Section $' : 'Section %') + '" />' +
             '</td>' +
-            '<td class="ext"></td>' +
+            '<td class="sell"></td>' +
+            '<td class="cost">' + (st.lines ? escapeHTML(fmtCurrency(st.cost)) : '') + '</td>' +
+            '<td class="ext">' + (st.lines ? escapeHTML(fmtCurrency(st.sell)) + gmChip : '') + '</td>' +
             '<td class="del"><button type="button" class="p86-co-line-del" data-line-del title="Delete section">&times;</button></td>' +
           '</tr>';
       } else {
@@ -833,25 +941,61 @@ function p86Ask(message, opts) {
         // bar sums. This row used to hand-roll `ext * (1 + m/100)`, which
         // is fine until there are two ways a line can be priced.
         var mm = window.p86Pricing.lineMoney(l, lines, _state.co);
-        var m = mm.locked
+        var locked = mm.locked;
+        // The markup a line would derive from if it were not locked — the
+        // placeholder on an unlocked cell, and the "what this promise
+        // works out to" readout on a locked one.
+        var m = locked
           ? window.p86Pricing.effectiveMarkupForLine(l, lines, _state.co)
           : mm.markup;
         var ext = mm.ext;
         var marked = mm.sell;
         var asm = isCoAsmLine(l);
+
+        // MARKUP % AND UNIT SELL ARE MUTUALLY EXCLUSIVE. Exactly one is
+        // authoritative; the other shows its derivation as a PLACEHOLDER,
+        // never as a value — so a cell is never both greyed and lying.
+        //
+        // A target margin already overrode every per-line markup, but the
+        // markup cell stayed editable-looking and took keystrokes that
+        // changed nothing. The estimate editor greys it. Now so does this.
+        var implied = locked ? coImpliedMarkup(l) : null;
+        var markupDead = locked || targetOn;
+        var markupPh = locked
+          ? (implied == null ? 'promised' : implied.toFixed(1) + '% implied')
+          : (targetOn ? 'target margin' : m.toFixed(1));
+        // The per-unit price this line WOULD carry, shown greyed in the
+        // Unit Sell cell so the derived answer is always visible next to
+        // the field that would override it. Taken from the shared rule and
+        // divided back out — the priced amount is never re-derived here.
+        // (A zero-qty line has nothing to divide by, so its placeholder is
+        // the one place a percentage is applied for display.)
+        var derivedSell = coNum(l.qty)
+          ? mm.sell / coNum(l.qty)
+          : coNum(l.unitCost) * (1 + m / 100);
+        var pending = !!l.costPending;
+
         html +=
-          '<tr class="p86-co-line-row' + (asm ? ' p86-co-asm-line' : '') + '" data-line-id="' + escapeAttr(l.id) + '">' +
-            '<td><input type="text" inputmode="decimal" data-line-field="qty" value="' + escapeAttr(l.qty == null ? '' : l.qty) + '" /></td>' +
-            '<td><input type="text" inputmode="decimal" data-line-field="unitCost" value="' + escapeAttr(l.unitCost == null ? '' : l.unitCost) + '" /></td>' +
+          '<tr class="p86-co-line-row' + (asm ? ' p86-co-asm-line' : '') + (locked ? ' p86-co-line-locked' : '') + '" data-line-id="' + escapeAttr(l.id) + '">' +
             '<td>' + (asm ? '<span title="From assembly" style="color:#7eb0ff;margin-right:3px;">&#129513;</span>' : '') +
-              '<input type="text" data-line-field="description" value="' + escapeAttr(l.description || '') + '" placeholder="Line description"' + (asm ? ' style="width:calc(100% - 22px);"' : '') + ' /></td>' +
-            '<td><input type="text" inputmode="decimal" data-line-field="markup" value="' + escapeAttr(l.markup == null ? '' : l.markup) + '" placeholder="' + m.toFixed(1) + '" /></td>' +
-            '<td class="ext">' + escapeHTML(fmtCurrency(marked)) + '</td>' +
+              '<input type="text" data-line-field="description" value="' + escapeAttr(l.description || '') + '" placeholder="Line description"' + (asm ? ' style="width:calc(100% - 22px);"' : '') + ' />' +
+              (pending ? '<span class="p86-co-pending" title="This line&#39;s cost is a placeholder equal to its price — type the real cost into Unit Cost." style="display:inline-block;margin-left:6px;padding:1px 6px;border-radius:8px;font-size:9px;font-weight:700;background:rgba(251,191,36,.15);color:#fbbf24;white-space:nowrap;">COST?</span>' : '') +
+            '</td>' +
+            '<td><input type="text" inputmode="decimal" data-line-field="qty" value="' + escapeAttr(l.qty == null ? '' : l.qty) + '" /></td>' +
+            '<td class="uom"><input type="text" data-line-field="unit" value="' + escapeAttr(l.unit == null ? '' : l.unit) + '" placeholder="ea" /></td>' +
+            '<td><input type="text" inputmode="decimal" data-line-field="unitCost" value="' + escapeAttr(l.unitCost == null ? '' : l.unitCost) + '"' + (pending ? ' style="color:#fbbf24;"' : '') + ' /></td>' +
+            '<td><input type="text" inputmode="decimal" data-line-field="markup" value="' + escapeAttr(l.markup == null ? '' : l.markup) + '" placeholder="' + escapeAttr(markupPh) + '"' +
+              (markupDead ? ' readonly tabindex="-1" style="opacity:.45;cursor:not-allowed;" title="' +
+                (locked ? 'This line has a promised Unit Sell, so its markup is implied rather than applied. Clear Unit Sell to price it by markup.'
+                        : 'A target margin is set on this change order, so per-line markups are ignored.') + '"' : '') + ' /></td>' +
+            '<td class="sell"><input type="text" inputmode="decimal" data-line-field="unitSell" value="' + escapeAttr(l.unitSell == null ? '' : l.unitSell) + '" placeholder="' + escapeAttr(fmtCurrency(derivedSell).replace('$', '')) + '" title="The price promised to the owner. Leave blank to derive it from cost x markup." /></td>' +
+            '<td class="cost">' + escapeHTML(fmtCurrency(ext)) + '</td>' +
+            '<td class="ext">' + escapeHTML(fmtCurrency(marked)) + (locked ? '<span class="p86-co-lockdot" title="Promised price — not derived from cost" style="margin-left:5px;color:#7eb0ff;font-size:9px;">&#9679;</span>' : '') + '</td>' +
             '<td class="del"><button type="button" class="p86-co-line-del" data-line-del title="Delete line">&times;</button></td>' +
           '</tr>';
         if (asm) {
           html += '<tr class="p86-co-asm-strip-row" data-asm-strip-for="' + escapeAttr(l.id) + '">' +
-            '<td colspan="6" style="padding:0;border-top:1px dashed rgba(79,140,255,.25);background:rgba(79,140,255,.05);">' + coAsmStripHTML(l) + '</td></tr>';
+            '<td colspan="9" style="padding:0;border-top:1px dashed rgba(79,140,255,.25);background:rgba(79,140,255,.05);">' + coAsmStripHTML(l) + '</td></tr>';
         }
       }
     });
@@ -875,23 +1019,38 @@ function p86Ask(message, opts) {
             return;
           }
           var v = input.value;
-          if (['qty', 'unitCost', 'markup'].indexOf(f) !== -1) {
+          if (['qty', 'unitCost', 'markup', 'unitSell'].indexOf(f) !== -1) {
             // inputmode=decimal text field: keep the prior value while a
-            // partial entry ("1.", "-") is unparseable, blank stays blank.
+            // partial entry ("1.", "-") is unparseable, BLANK STAYS BLANK.
+            // That last part is load-bearing for unitSell: blank means "no
+            // promise, price me from cost" and 0 means "promised at $0".
+            // Writing 0 on the user's behalf would lock a line at free.
             var nv = Number(v);
             line[f] = v === '' ? '' : (isNaN(nv) ? line[f] : nv);
           } else {
             line[f] = v;
           }
+          // A real cost typed over a placeholder is no longer pending. The
+          // flag is display-only and no pricing code reads it, but leaving
+          // it on a repaired line would keep asking for work already done.
+          if (f === 'unitCost' && line.costPending && v !== '' && Number(v) !== Number(line.unitSell)) {
+            delete line.costPending;
+            paintLines(); paintTotals();
+            return;
+          }
           markDirty();
-          if (isHeaderRow) { paintTotals(); }   // child ext cells refresh on next paint
-          else { paintLineExt(tr); paintTotals(); }
+          // Section rows: refresh the section's own cost/amount/GM now.
+          // Child rows still wait for the next full paint, as they always
+          // have — rebuilding the table under a caret mid-keystroke is a
+          // UX regression, and it is not this commit's to make.
+          if (isHeaderRow) { paintSectionRows(); paintTotals(); }
+          else { paintLineRow(tr); paintTotals(); }
         });
         // Decimal fields commit on 'input' but keep the prior value when the
         // text is unparseable. On blur, reconcile the field's display back to
         // the stored value so a malformed entry (e.g. "15.0.0") can't sit
         // there looking edited while the priced value silently stayed old.
-        if (['qty', 'unitCost', 'markup'].indexOf(input.getAttribute('data-line-field')) !== -1) {
+        if (['qty', 'unitCost', 'markup', 'unitSell'].indexOf(input.getAttribute('data-line-field')) !== -1) {
           input.addEventListener('blur', function() {
             var line = (_state.co.lines || []).find(function(x) { return String(x.id) === String(lineId); });
             if (!line) return;
@@ -934,16 +1093,67 @@ function p86Ask(message, opts) {
     });
   }
 
-  // Update the marked-up cell of a single line row without re-paint.
-  function paintLineExt(tr) {
+  // Update ONE row's derived cells without rebuilding the table, so focus
+  // and caret survive a keystroke. Three things move: Ext. Cost, Amount,
+  // and whether the Markup cell is live — because typing into Unit Sell
+  // takes the line out of the markup cascade the instant it has a value,
+  // and a cell that has stopped mattering must stop looking editable.
+  function paintLineRow(tr) {
     var lineId = tr.getAttribute('data-line-id');
     var lines = _state.co.lines || [];
     var line = lines.find(function(x) { return String(x.id) === String(lineId); });
     if (!line || line.section === '__section_header__') return;
+    var mm = window.p86Pricing.lineMoney(line, lines, _state.co);
+    var costCell = tr.querySelector('td.cost');
+    if (costCell) costCell.textContent = fmtCurrency(mm.ext);
     var cell = tr.querySelector('td.ext');
-    if (!cell) return;
-    // Same shared rule as the full paint and the totals bar.
-    cell.textContent = fmtCurrency(window.p86Pricing.lineMoney(line, lines, _state.co).sell);
+    if (cell) {
+      cell.innerHTML = escapeHTML(fmtCurrency(mm.sell)) +
+        (mm.locked ? '<span class="p86-co-lockdot" title="Promised price — not derived from cost" style="margin-left:5px;color:#7eb0ff;font-size:9px;">&#9679;</span>' : '');
+    }
+    tr.classList.toggle('p86-co-line-locked', mm.locked);
+    var mk = tr.querySelector('[data-line-field="markup"]');
+    if (mk && document.activeElement !== mk) {
+      var targetOn = window.p86Pricing.targetMarginActive(_state.co);
+      var dead = mm.locked || targetOn;
+      mk.readOnly = dead;
+      mk.style.opacity = dead ? '.45' : '';
+      mk.style.cursor = dead ? 'not-allowed' : '';
+      if (mm.locked) {
+        var imp = coImpliedMarkup(line);
+        mk.placeholder = (imp == null ? 'promised' : imp.toFixed(1) + '% implied');
+      } else if (targetOn) {
+        mk.placeholder = 'target margin';
+      } else {
+        mk.placeholder = window.p86Pricing.effectiveMarkupForLine(line, lines, _state.co).toFixed(1);
+      }
+    }
+    paintSectionRows();
+  }
+
+  // Section header rows carry their own cost / amount / GM chip now, so a
+  // keystroke in any line has to move the section it sits in.
+  function paintSectionRows() {
+    var host = document.getElementById('p86CoLineTable');
+    if (!host) return;
+    var lines = _state.co.lines || [];
+    var totals = coSectionTotals(lines, _state.co);
+    host.querySelectorAll('tr.p86-co-section-row').forEach(function (tr) {
+      var st = totals[tr.getAttribute('data-line-id')];
+      if (!st) return;
+      var costCell = tr.querySelector('td.cost');
+      var extCell = tr.querySelector('td.ext');
+      if (costCell) costCell.textContent = st.lines ? fmtCurrency(st.cost) : '';
+      if (!extCell) return;
+      if (!st.lines) { extCell.innerHTML = ''; return; }
+      var gm = st.sell ? ((st.sell - st.cost) / st.sell) * 100 : 0;
+      extCell.innerHTML = escapeHTML(fmtCurrency(st.sell)) +
+        '<span class="p86-co-gm" style="display:inline-block;margin-left:8px;padding:1px 6px;border-radius:8px;font-size:9.5px;font-weight:700;' +
+          (gm <= 0 ? 'background:rgba(248,113,113,.15);color:#f87171;'
+                   : gm < 15 ? 'background:rgba(251,191,36,.15);color:#fbbf24;'
+                             : 'background:rgba(52,211,153,.13);color:#34d399;') +
+          '" title="Gross margin on this section">GM ' + escapeHTML(fmtPct(gm)) + '</span>';
+    });
   }
 
   // ── Totals chip bar ────────────────────────────────────────────
@@ -958,13 +1168,57 @@ function p86Ask(message, opts) {
         '<div class="p86-co-chip-value">' + escapeHTML(value) + '</div>' +
       '</div>';
     }
+    // "Subtotal" was the single most misleading word in this editor. That
+    // chip IS the change order's cost — the number that flows into the
+    // job's Total Est. Costs (Revised). Labelling contract cost "Subtotal"
+    // is what let a $27,500 sell price sit there looking harmless.
     host.innerHTML =
-      chip('Subtotal', fmtCurrency(t.subtotal)) +
+      chip('Est. Cost', fmtCurrency(t.subtotal)) +
       chip('Markup', fmtCurrency(t.markupAmount)) +
       chip('Tax + Fees', fmtCurrency(t.feeFlat + t.feePctAmount + t.taxAmount)) +
+      chip('Profit', fmtCurrency(t.profit)) +
       chip('Change Order Total', fmtCurrency(t.total), true) +
       chip('Margin', fmtPct(t.marginPct)) +
       chip('Lines', String(t.lineCount));
+    paintCoNotices(t);
+  }
+
+  // Two things the totals bar cannot say in a chip.
+  //
+  // 1. A target margin is set — so every per-line markup on screen is
+  //    ignored, and any line carrying a promised Unit Sell is carved OUT
+  //    of the back-solve rather than restated by it. The estimate editor
+  //    has said this for a long time; the CO editor said nothing and left
+  //    markup cells looking live.
+  // 2. Some line's cost is still a placeholder equal to its price. That
+  //    change order reads as zero profit and overstates the job's cost by
+  //    the difference, and the repair is one cell.
+  function paintCoNotices(t) {
+    var bar = document.getElementById('p86CoTotals');
+    if (!bar) return;
+    var host = document.getElementById('p86CoNotices');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'p86CoNotices';
+      bar.parentNode.insertBefore(host, bar.nextSibling);
+    }
+    var out = '';
+    if (window.p86Pricing.targetMarginActive(_state.co)) {
+      out += '<div class="p86-co-notice" style="padding:7px 14px;font-size:11.5px;background:rgba(79,140,255,.08);border-bottom:1px solid rgba(79,140,255,.18);color:#9ec1ff;">' +
+        '<strong>Target margin ' + escapeHTML(fmtPct(coNum(_state.co.targetMargin))) + '</strong> — per-line markups are ignored and the total is back-solved from cost.' +
+        (t.lockedCount
+          ? ' ' + t.lockedCount + ' line' + (t.lockedCount === 1 ? '' : 's') + ' with a promised Unit Sell ' +
+            (t.lockedCount === 1 ? 'is' : 'are') + ' excluded from the back-solve — a promise is not derived from cost, so a margin target may not restate it.'
+          : '') +
+        '</div>';
+    }
+    if (t.pendingCount) {
+      out += '<div class="p86-co-notice" style="padding:7px 14px;font-size:11.5px;background:rgba(251,191,36,.08);border-bottom:1px solid rgba(251,191,36,.20);color:#fbbf24;">' +
+        '<strong>' + t.pendingCount + ' line' + (t.pendingCount === 1 ? '' : 's') + ' need' + (t.pendingCount === 1 ? 's' : '') + ' a real cost.</strong> ' +
+        'Their Unit Cost is a placeholder equal to the price quoted, so this change order reads as zero profit and the job\'s estimated cost carries the whole quote. Type the real cost into Unit Cost.' +
+        '</div>';
+    }
+    host.innerHTML = out;
   }
 
   // ── Status pill ────────────────────────────────────────────────
@@ -1167,4 +1421,26 @@ function p86Ask(message, opts) {
     open: openExisting,
     close: close
   };
+
+  // Node-only test seam. Same dual-target shape js/co-draw.js,
+  // js/building-sort.js and js/job-costs-import.js already use, and for
+  // the same reason: the line table is where cost and price finally sit
+  // side by side, so what it renders is worth asserting against a real
+  // DOM rather than a regex over this file. Never reached in the browser
+  // — there is no `module` there — and it exposes nothing the editor does
+  // not already do to itself.
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      __test: {
+        setCo: function (co) { _state.co = co; },
+        getCo: function () { return _state.co; },
+        paintLines: paintLines,
+        paintTotals: paintTotals,
+        computeTotals: computeTotals,
+        coSectionTotals: coSectionTotals,
+        coImpliedMarkup: coImpliedMarkup,
+        newLineId: newLineId,
+      },
+    };
+  }
 })();

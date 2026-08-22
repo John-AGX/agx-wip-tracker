@@ -9571,11 +9571,31 @@ body.light-mode .p86-pv-tag-modal-chip {
   border-bottom: 1px solid var(--border, #2a2a32);
 }
 .p86-co-line-tbl th.ext,
-.p86-co-line-tbl td.ext { text-align: right; }
+.p86-co-line-tbl td.ext,
+.p86-co-line-tbl th.cost,
+.p86-co-line-tbl td.cost { text-align: right; }
 .p86-co-line-tbl th.qty,
 .p86-co-line-tbl th.unit,
-.p86-co-line-tbl th.markup { width: 110px; }
-.p86-co-line-tbl th.ext { width: 130px; }
+.p86-co-line-tbl th.sell,
+.p86-co-line-tbl th.markup { width: 104px; }
+.p86-co-line-tbl th.uom { width: 62px; }
+.p86-co-line-tbl th.cost { width: 116px; }
+.p86-co-line-tbl th.ext { width: 150px; }
+/* EXT. COST is the change order's actual cost — the figure that lands in
+   the job's Total Est. Costs. It reads as cost (dim, not the green the
+   Amount column uses for the customer price) so the two are never
+   confused at a glance, which is the confusion this whole column set
+   exists to end. */
+.p86-co-line-tbl td.cost {
+  color: var(--text-dim, #8a93a6);
+  font-variant-numeric: tabular-nums;
+}
+.p86-co-line-tbl td.uom input { text-align: center; }
+/* A line priced by a promise rather than derived from cost. */
+.p86-co-line-row.p86-co-line-locked td.ext { color: #7eb0ff; }
+.p86-co-line-tbl input[readonly] { color: var(--text-dim, #8a93a6); }
+.p86-co-section-row td.cost,
+.p86-co-section-row td.ext { font-weight: 700; font-variant-numeric: tabular-nums; }
 .p86-co-line-tbl th.del,
 .p86-co-line-tbl td.del { width: 36px; text-align: center; }
 .p86-co-line-tbl tbody td {
@@ -9636,7 +9656,15 @@ body.light-mode .p86-pv-tag-modal-chip {
   .p86-co-line-tbl { font-size: 12px; }
   .p86-co-line-tbl th.qty,
   .p86-co-line-tbl th.unit,
-  .p86-co-line-tbl th.markup { width: 80px; }
+  .p86-co-line-tbl th.sell,
+  .p86-co-line-tbl th.markup { width: 76px; }
+  .p86-co-line-tbl th.uom { width: 48px; }
+  .p86-co-line-tbl th.cost,
+  .p86-co-line-tbl th.ext { width: 96px; }
+  /* Nine columns do not fit a phone. Scroll the TABLE, never the page —
+     the body must not gain a horizontal scrollbar. */
+  .p86-co-lines .p86-co-line-table { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .p86-co-line-tbl { min-width: 720px; }
 }
 
 /* ──────────────────────────────────────────────────────────────────

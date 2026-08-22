@@ -97,9 +97,12 @@ describe('all six income sites call resolveMarkedUp', () => {
 
   test('6 — the CO editor row paints, via the shared per-line rule', () => {
     // Two row sites that each hand-rolled `ext * (1 + m/100)`. A rule
-    // written four times is a rule that will disagree with itself.
+    // written four times is a rule that will disagree with itself. Both
+    // now take their cost AND their amount from lineMoney.
     expect(CO_ED).toMatch(/window\.p86Pricing\.lineMoney\(l, lines, _state\.co\)/);
-    expect(CO_ED).toMatch(/window\.p86Pricing\.lineMoney\(line, lines, _state\.co\)\.sell/);
+    expect(CO_ED).toMatch(/window\.p86Pricing\.lineMoney\(line, lines, _state\.co\)/);
+    // ...and the section header row's money comes from the same call.
+    expect(CO_ED).toMatch(/window\.p86Pricing\.lineMoney\(l, lines, rec\)/);
   });
 
   test('NO CO income path still hand-rolls the old ternary', () => {
@@ -111,8 +114,14 @@ describe('all six income sites call resolveMarkedUp', () => {
     }
   });
 
-  test('and no CO row paint still hand-rolls the markup arithmetic', () => {
-    expect(raw('js', 'change-order-editor.js')).not.toMatch(/\(1 \+ m \/ 100\)/);
+  test('and no PRICED amount in the CO editor is hand-rolled', () => {
+    // The exact old shape: the row's Amount computed from cost x markup
+    // instead of from the shared rule. (A greyed per-unit PLACEHOLDER on a
+    // zero-qty line still applies a percentage for display — that number
+    // is never summed, never saved, and never reaches a total.)
+    const SRC = raw('js', 'change-order-editor.js');
+    expect(SRC).not.toMatch(/ext \* \(1 \+ m \/ 100\)/);
+    expect(SRC).not.toMatch(/marked = ext/);
   });
 
   test('the un-ported number is a DIFFERENT number — so a miss is a red test', () => {
