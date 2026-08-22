@@ -184,13 +184,21 @@ function rejectFlatMoney(body, kind) {
                 'subtotal', 'contractAmount', 'proposedIncome', 'proposedCosts']
     .filter((k) => b[k] != null && b[k] !== '');
   if (!flat.length) return;
+  // NOTE the list above is DOCUMENT-level flat money and `unitSell` is
+  // deliberately not in it. unitSell is a LINE field — the very shape this
+  // message tells the model to use — so forbidding it would forbid the fix.
   throw new Error(
     `${kind}: ${flat.join('/')} cannot be set directly — money is derived from lines[]. ` +
     'Send fields.lines = [{description, qty, ' +
     (kind === 'invoice' ? 'unitPrice' : 'unitCost') +
-    (kind === 'change_order' ? ', markup' : '') + '}] instead' +
+    (kind === 'change_order' ? ', markup, unitSell' : '') + '}] instead' +
     (kind === 'change_order'
-      ? ' (income = lines through markup → target-margin → fees → tax; cost = the raw line subtotal).'
+      ? ' (income = lines through markup → target-margin → fees → tax; cost = the raw line subtotal). ' +
+        'unitCost is what the work COSTS — never a price quoted to the owner. ' +
+        'When the number you have is a quoted PRICE (a flat rate off a proposal), put it in ' +
+        'unitSell and put the real cost in unitCost; if the cost is unknown, set unitCost to the ' +
+        'same number and costPending: true rather than guessing, so the change order does not ' +
+        'silently book the whole quote as job cost.'
       : '.')
   );
 }
@@ -208,6 +216,49 @@ function rejectPoStatus(body) {
       'via the PO status endpoint, which enforces the allowed transitions.'
     );
   }
+}
+
+// Change-order line keys, as the editor and the pricing pipeline spell
+// them.
+//
+// Estimates have had a normalizer since the day an agent's `unit_cost`
+// was found sitting on an estimate line the editor never reads
+// (payload-dispatcher.normalizeLineFieldKey). CHANGE ORDERS HAD NONE. An
+// agent line carrying `unit_cost` was stored verbatim, `unitCost` was
+// undefined, num(undefined) is 0, and the line priced at ZERO — silently,
+// with the payload reporting success. That is the same class of failure
+// this whole pass exists to end, on the same records.
+//
+// `unit_sell` is mapped here and ONLY here: a promised sell price is a
+// change-order concept, and the estimate line-edit door explicitly
+// refuses the key (see payload-dispatcher.applyLineEdits).
+//
+// Applied to INCOMING lines only — never to lines merged out of an
+// existing record — so this cannot rewrite a stored row as a side effect
+// of an unrelated update.
+const CO_LINE_KEY_MAP = {
+  unit_cost: 'unitCost', unit_price: 'unitCost', unitPrice: 'unitCost',
+  unit_sell: 'unitSell', sell_price: 'unitSell', unitSellPrice: 'unitSell',
+  markup_pct: 'markup', markupPct: 'markup',
+  quantity: 'qty',
+  cost_pending: 'costPending',
+};
+
+function normalizeCoLines(lines) {
+  if (!Array.isArray(lines)) return lines;
+  return lines.map((l) => {
+    if (!l || typeof l !== 'object' || Array.isArray(l)) return l;
+    const out = {};
+    for (const k of Object.keys(l)) {
+      const target = CO_LINE_KEY_MAP[k] || k;
+      // An explicit camelCase value already present wins over a
+      // snake_case alias, so a line sending both cannot be reordered
+      // into a different answer by key iteration order.
+      if (target !== k && Object.prototype.hasOwnProperty.call(l, target)) continue;
+      out[target] = l[k];
+    }
+    return out;
+  });
 }
 
 function cleanCoData(body) {
@@ -306,7 +357,11 @@ async function createChangeOrder(db, { jobId, orgId, ownerId, fields }) {
   rejectFlatMoney(body, 'change_order');
   const id = genId('co');
   const coNumber = (body.co_number && String(body.co_number).trim()) || await nextCoNumber(db, jobId);
-  const data = cleanCoData(body);
+  // Normalize the INCOMING lines only. An agent's `unit_cost` used to be
+  // stored verbatim and price at $0.
+  const data = cleanCoData(Array.isArray(body.lines)
+    ? Object.assign({}, body, { lines: normalizeCoLines(body.lines) })
+    : body);
   const { rows } = await db.query(
     // organization_id off the PARENT JOB, never off the caller — and this is
     // the shared financials service the AGENT write path lands in, so it is the
@@ -346,7 +401,13 @@ async function updateChangeOrder(db, { id, orgId, jobId, fields, merge = true })
   if (cur.is_locked) throw new Error(`Cannot edit an approved (locked) change order: ${id}`);
 
   const base = merge ? (cur.data || {}) : {};
-  const data = cleanCoData(Object.assign({}, base, fields || {}));
+  // Only the lines ARRIVING in this op are normalized. Lines merged out
+  // of `base` are left exactly as stored — repairing a stored row as a
+  // side effect of an unrelated field update would move money on a record
+  // nobody asked to touch.
+  const incoming = fields || {};
+  const data = cleanCoData(Object.assign({}, base, incoming,
+    Array.isArray(incoming.lines) ? { lines: normalizeCoLines(incoming.lines) } : {}));
   const { rows } = await db.query(
     `UPDATE job_change_orders
         SET data = $1::jsonb,
@@ -582,7 +643,7 @@ async function deleteInvoice(db, { id, orgId, jobId }) {
 module.exports = {
   DEFAULT_SCOPE_TEMPLATE,
   nextCoNumber, nextPoNumber, nextInvoiceNumber, orgScopeTemplate,
-  cleanCoData, cleanPoData, poEffectiveTotal, lineAmount, computeInvoiceTotals,
+  cleanCoData, cleanPoData, normalizeCoLines, poEffectiveTotal, lineAmount, computeInvoiceTotals,
   createChangeOrder, updateChangeOrder, deleteChangeOrder,
   createPurchaseOrder, updatePurchaseOrder, deletePurchaseOrder,
   createInvoice, updateInvoice, deleteInvoice,

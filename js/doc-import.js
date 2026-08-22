@@ -501,7 +501,28 @@
     var unit = (l.unit_cost != null) ? num(l.unit_cost) : (amt != null ? amt / q : 0);
     var desc = l.description || '(item)';
     if (entityType === 'invoice') return { description: desc, qty: q, unitPrice: unit, amount: (amt != null ? amt : q * unit) };
-    return { description: desc, qty: q, unitCost: unit }; // po + co
+    // A PURCHASE ORDER is a cost document — the number on it is what AGX
+    // pays, so `unitCost` is literally right and nothing else is needed.
+    //
+    // A CHANGE ORDER is not. The number on a change-order PDF is a PRICE
+    // quoted to the owner, and this importer is where the ten
+    // "Buildertrend Flat Rate" lines on CO-0001 came from: a sell price
+    // written into `unitCost`, which the pricing pipeline reads as AGX's
+    // cost. So the change-order line now records the price AS a price.
+    //
+    // unitCost is deliberately seeded to the SAME number rather than left
+    // blank. That is the conservative reading and it is chosen so a newly
+    // imported change order produces BYTE-IDENTICAL income and costs to
+    // what this importer produced before — cost = sell, zero margin,
+    // nothing in any aggregate moves. Blanking the cost would book $0 and
+    // OVERSTATE margin, which is worse than the bug being fixed. What
+    // changes is that the record now says what it means: the price is
+    // recorded as a price, the cost is flagged as unknown, and the repair
+    // is a single cell rather than a reinterpretation.
+    if (entityType === 'co') {
+      return { description: desc, qty: q, unitCost: unit, unitSell: unit, costPending: true };
+    }
+    return { description: desc, qty: q, unitCost: unit }; // po
   }
 
   function buildPayload(it) {
