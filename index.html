@@ -250,7 +250,7 @@
          system fallback if the font is slow/unreachable (offline / PWA cold). -->
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&display=swap">
-    <link rel="stylesheet" href="css/styles.css?v=270">
+    <link rel="stylesheet" href="css/styles.css?v=271">
     <link rel="stylesheet" href="css/report-style-packs.css?v=4">
     <link rel="stylesheet" href="css/workspace-layout.css?v=68">
     <link rel="stylesheet" href="css/workspace.css?v=41">
@@ -355,32 +355,32 @@
                     <img src="images/project-86-icon.svg" alt="" class="header-logo" />
                     <span class="header-wordmark">PROJECT 86</span>
                 </a>
-                <!-- Global site search — lives PERMANENTLY in the sticky header,
-                     centered between the brand and the user cluster. Moved here
-                     from the left sidebar (and it replaced the redundant
-                     "← Back to Jobs / job title" job lockup that used to be
-                     injected into this same slot). IDs unchanged so js/search.js
-                     (id-based wiring) keeps working from the new location. -->
-                <div class="app-sidebar-search in-header" id="app-sidebar-search">
-                    <div class="sidebar-search-box">
-                        <svg class="sidebar-search-icon" viewBox="0 0 24 24" fill="none"
-                             stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                             stroke-linejoin="round" width="16" height="16" aria-hidden="true">
-                            <circle cx="11" cy="11" r="7"></circle>
-                            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                        </svg>
-                        <input id="sidebar-search-input" class="sidebar-search-input" type="text"
-                               placeholder="Search jobs, estimates, leads, clients…" autocomplete="off" spellcheck="false"
-                               aria-label="Search jobs, estimates, leads and clients" />
-                    </div>
-                    <div id="sidebar-search-results" class="sidebar-search-results" role="listbox" hidden></div>
-                </div>
                 <!-- Primary navigation moved out of the header into the
                      collapsible left sidebar (#app-sidebar, below). The
-                     header now carries brand + search + the right-side user
-                     cluster; the sidebar owns destination switching on
-                     desktop, and the bottom-nav owns it on mobile. -->
+                     header carries brand + the right-side user cluster; the
+                     sidebar owns destination switching on desktop, and the
+                     bottom-nav owns it on mobile. -->
                 <div id="user-menu" class="header-user-menu">
+                    <!-- Global site search — lives PERMANENTLY in the header,
+                         slimmed + vertically centered, at the LEFT edge of the
+                         right cluster (just before the weather/temp chip). Moved
+                         from the left sidebar; it replaced the redundant "← Back
+                         to Jobs / job title" lockup. IDs unchanged so
+                         js/search.js (id-based) keeps working from here. -->
+                    <div class="app-sidebar-search in-header" id="app-sidebar-search">
+                        <div class="sidebar-search-box">
+                            <svg class="sidebar-search-icon" viewBox="0 0 24 24" fill="none"
+                                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                 stroke-linejoin="round" width="15" height="15" aria-hidden="true">
+                                <circle cx="11" cy="11" r="7"></circle>
+                                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                            </svg>
+                            <input id="sidebar-search-input" class="sidebar-search-input" type="text"
+                                   placeholder="Search…" autocomplete="off" spellcheck="false"
+                                   aria-label="Search jobs, estimates, leads and clients" />
+                        </div>
+                        <div id="sidebar-search-results" class="sidebar-search-results" role="listbox" hidden></div>
+                    </div>
                     <!-- Notifications bell. Renders the agx 'bell' SVG
                          (Heroicons outline) instead of the previous 🔔
                          emoji. Red dot toggles via the data-count

@@ -249,39 +249,39 @@
             height: 100%;
         }
 
-        /* Global search relocated PERMANENTLY into the sticky header — centered
-           between the brand and the user cluster, present on every page. It
-           replaced the old "← Back to Jobs / job title" job lockup that used to
-           inject into this slot. IDs are unchanged (js/search.js is id-bound);
-           .in-header just re-skins the box for the header row. */
+        /* Global search relocated PERMANENTLY into the sticky header — a SLIM
+           box, vertically centered, at the LEFT edge of the right-hand user
+           cluster (just before the weather/temp chip). It replaced the old
+           "← Back to Jobs / job title" job lockup. IDs unchanged (js/search.js
+           is id-bound); .in-header just re-skins the box for the header row.
+           The header is always the dark navy gradient, so text/icon are light
+           regardless of light-mode. */
         #app-sidebar-search.in-header {
-            flex: 1 1 auto;
-            min-width: 0;                 /* shrink instead of overflowing */
+            flex: 0 0 auto;
             display: flex;
-            justify-content: center;
+            align-items: center;          /* vertical-center in the 46px header */
             position: relative;           /* anchor the results dropdown */
         }
         #app-sidebar-search.in-header .sidebar-search-box {
-            width: 100%;
-            max-width: 460px;
+            width: 220px;
+            height: 30px;
             display: flex;
             align-items: center;
-            gap: 8px;
-            height: 36px;
-            padding: 0 12px;
-            border-radius: 9px;
-            background: var(--surface2, rgba(255, 255, 255, 0.06));
-            border: 1px solid var(--border, rgba(255, 255, 255, 0.10));
+            gap: 7px;
+            padding: 0 10px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.14);
             transition: border-color 0.12s, background 0.12s;
             cursor: text;
         }
         #app-sidebar-search.in-header .sidebar-search-box:focus-within {
             border-color: var(--accent, #4f8cff);
-            background: var(--surface, rgba(255, 255, 255, 0.08));
+            background: rgba(255, 255, 255, 0.12);
         }
         #app-sidebar-search.in-header .sidebar-search-icon {
             flex: 0 0 auto;
-            color: var(--text-dim, #8b90a5);
+            color: rgba(255, 255, 255, 0.7);
         }
         #app-sidebar-search.in-header .sidebar-search-input {
             flex: 1 1 auto;
@@ -289,29 +289,29 @@
             border: none;
             background: transparent;
             outline: none;
-            color: var(--text, #e4e6f0);
-            font-size: 13px;
+            color: #fff;
+            font-size: 12.5px;
             font-family: inherit;
         }
         #app-sidebar-search.in-header .sidebar-search-input::placeholder {
-            color: var(--text-dim, #8b90a5);
+            color: rgba(255, 255, 255, 0.55);
         }
+        /* Results dropdown — anchored to the box's RIGHT edge (the box sits on
+           the right now), wider than the slim box so rows stay readable. */
         #app-sidebar-search.in-header .sidebar-search-results {
             position: absolute;
             top: calc(100% + 6px);
-            left: 50%;
-            transform: translateX(-50%);
-            width: 100%;
-            max-width: 460px;
+            right: 0;
+            left: auto;
+            width: 340px;
             max-height: 60vh;
             overflow-y: auto;
             z-index: 1200;
         }
-        /* Mobile: the bottom-nav owns navigation; keep search but let it fill. */
+        /* Mobile: the sidebar (and this search) were already hidden <=768px —
+           the bottom-nav owns navigation there — so keep the header search off. */
         @media (max-width: 768px) {
-            #app-sidebar-search.in-header { max-width: none; }
-            #app-sidebar-search.in-header .sidebar-search-box { max-width: none; height: 34px; }
-            #app-sidebar-search.in-header .sidebar-search-results { max-width: none; }
+            #app-sidebar-search.in-header { display: none; }
         }
 
         /* Logo lockup. 26px is small enough to share the row with
