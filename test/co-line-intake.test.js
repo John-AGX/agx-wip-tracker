@@ -1,3 +1,11 @@
+/**
+ * @jest-environment jsdom
+ */
+// jsdom because this file now CALLS js/doc-import.js rather than regexing it,
+// and that module registers window.p86DocImport at load. The modules it tests
+// alongside (pricing-pipeline, change-order-totals, job-financials) are pure
+// and behave identically either way.
+//
 // test/co-line-intake.test.js — the two doors that actually PRODUCE the
 // change-order lines this whole pass is about.
 //
@@ -30,13 +38,26 @@ const jobFin = require('../server/services/job-financials');
 const IMPORT = raw('js', 'doc-import.js');
 
 describe('a change order built from a PDF records the price AS a price', () => {
+  // These two were regexes over the source of toLine, because the file had no
+  // node export. It has one now (js/doc-import.js __test.toLine), so CALL it:
+  // the shape the importer emits is the thing under test, and a regex over a
+  // return statement stops matching the moment a key is added to it — which is
+  // exactly what happened when the change-order line learned to carry an `id`.
+  const { toLine } = require('../js/doc-import.js').__test;
+  // server/routes/doc-import-routes.js:148 emits this per line; :88 says
+  // qty/unit_cost are null when only an extended amount is printed, which is
+  // what a "Buildertrend Flat Rate" row is.
+  const ocr = (description, amount) => ({ description, qty: null, unit_cost: null, amount });
+
   test('the CO branch writes unitSell, and flags the cost as a placeholder', () => {
-    expect(IMPORT).toMatch(
-      /return \{ description: desc, qty: q, unitCost: unit, unitSell: unit, costPending: true \};/);
+    expect(toLine(ocr('Gutters — Buildertrend Flat Rate', 2750), 'co'))
+      .toMatchObject({ description: 'Gutters — Buildertrend Flat Rate', qty: 1,
+        unitCost: 2750, unitSell: 2750, costPending: true });
   });
 
   test('a PURCHASE ORDER is untouched — its number really is a cost', () => {
-    expect(IMPORT).toMatch(/return \{ description: desc, qty: q, unitCost: unit \}; \/\/ po/);
+    expect(toLine({ description: '2x4 studs', qty: 40, unit_cost: 4.25, amount: 170 }, 'po'))
+      .toEqual({ description: '2x4 studs', qty: 40, unitCost: 4.25 });
   });
 
   test('the imported shape produces BYTE-IDENTICAL money to the old one', () => {

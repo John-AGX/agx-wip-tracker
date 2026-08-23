@@ -53,14 +53,42 @@ function p86Ask(message, opts) {
 
   // Per-editor state — single CO open at a time. Reset on open() so
   // we never leak data between sessions.
+  var _stateCo = null;   // backing store for the _state.co accessor below
   var _state = {
-    co: null,         // server record (canonical columns + data blob spread on top)
     dirty: false,
     saveTimer: null,
     saving: false,
     lastSavedAt: null,
     saveError: null
   };
+
+  // `co` IS AN ACCESSOR, NOT A FIELD, AND THAT IS THE WHOLE POINT.
+  //
+  // A line's id is its ADDRESS in this editor (see adoptCo). The editor
+  // must be unable to HOLD a line that has no address — whatever handed it
+  // one. That invariant used to be enforced at the top of paintLines, which
+  // made it a property of what had been RENDERED rather than of what is
+  // STORED: true only after a paint, skipped entirely by the
+  // `if (!host) return` above it, and invisible to every reader that does
+  // not paint first — coApplyAddLineItem's section findIndex, coSectionTotals,
+  // flushSave's payload, and any harness that assembles state directly.
+  //
+  // Enforcing it on the PROPERTY instead means every assignment heals: the
+  // two open doors, the test seam, and any door added later that nobody
+  // remembers to audit. There is no call site left to leak from.
+  //
+  // The heal MUTATES the record in place and returns the same object, so
+  // `co` keeps its identity and each line keeps its own: an id, once
+  // minted, is byte-stable for the life of the session and across every
+  // repaint. Deriving one at render time instead would hand each row a new
+  // address on every paint, which detaches the caret's row from its line
+  // and collapses every open assembly strip.
+  Object.defineProperty(_state, 'co', {
+    enumerable: true,
+    configurable: true,
+    get: function () { return _stateCo; },
+    set: function (co) { _stateCo = adoptCo(co); }
+  });
 
   // Idempotent random-ish id generator for new lines. Same convention
   // as estimate-editor — short enough to be readable in DevTools, long
@@ -82,36 +110,71 @@ function p86Ask(message, opts) {
   // fires, no autosave is armed, and the save pill goes on reading "Saved".
   // Every chip stays frozen. That is not a pricing bug and not a repaint
   // bug: the row is inert, and it looks exactly like the app refusing to do
-  // arithmetic.
+  // arithmetic. Delete is worse than dead — its filter KEEPS every line,
+  // because "undefined" !== "" is true of all of them.
   //
-  // Two producers ship id-less lines — the bulk PDF importer and the
-  // agent/Scribe — which are the change orders 1.19 exists to repair. Both
-  // doors now stamp ids server-side, but records ALREADY STORED id-less do
-  // not heal until something writes them, and nothing can write them while
-  // the editor is dead. So heal here too, on the way to the screen.
+  // Producers that ship id-less lines: the bulk PDF importer and the
+  // agent/Scribe. Both doors stamp server-side now, but records ALREADY
+  // STORED id-less do not heal until something writes them, and nothing
+  // could write them while the editor was dead. So the editor heals what it
+  // is handed — at the STATE boundary, not on the way to the screen.
   //
   // A DUPLICATE id is the same defect wearing a different hat: two rows
   // resolve to the first line, so edits to the second land on the first.
   // Re-mint those as well.
   //
-  // Minting does NOT mark the record dirty — opening a change order must not
-  // save it. The ids ride along with the first real edit, which is now
-  // possible.
+  // Minting does NOT mark the record dirty — opening a change order must
+  // not save it. The ids ride along with the first real edit, which is now
+  // possible, and the PUT door stores them.
+
+  // Mint an id that is taken by NOTHING on this record. Termination is
+  // structural, not probabilistic: the retry suffix strictly increases and
+  // the taken set is finite. The previous shape was
+  // `do { id = newLineId(); } while (taken[id]);`, which relies on
+  // Math.random eventually disagreeing with itself — and spins forever, on
+  // the main thread, if it does not.
+  function mintLineId(taken) {
+    var base = newLineId(), id = base, n = 0;
+    while (taken[id]) { id = base + '_' + (++n); }
+    return id;
+  }
+
+  // Two passes, deliberately. Pass 1 claims every id ALREADY on the record,
+  // so a minted id cannot collide with one a LATER line is still holding;
+  // pass 2 fills the gaps. A single pass would let row 1's new id land on
+  // row 9's existing one.
   function ensureLineIds(lines) {
     if (!Array.isArray(lines)) return 0;
-    var seen = {}, minted = 0;
-    for (var i = 0; i < lines.length; i++) {
-      var l = lines[i];
+    var taken = Object.create(null), used = Object.create(null), minted = 0;
+    var i, l, id;
+    for (i = 0; i < lines.length; i++) {
+      l = lines[i];
       if (!l || typeof l !== 'object') continue;
-      var id = (l.id == null) ? '' : String(l.id);
-      if (id === '' || Object.prototype.hasOwnProperty.call(seen, id)) {
-        do { l.id = newLineId(); } while (Object.prototype.hasOwnProperty.call(seen, String(l.id)));
-        id = String(l.id);
-        minted++;
-      }
-      seen[id] = true;
+      id = (l.id == null) ? '' : String(l.id);
+      if (id !== '') taken[id] = true;
+    }
+    for (i = 0; i < lines.length; i++) {
+      l = lines[i];
+      if (!l || typeof l !== 'object') continue;
+      id = (l.id == null) ? '' : String(l.id);
+      if (id !== '' && !used[id]) { used[id] = true; continue; }
+      // Blank, or the SECOND row to claim this address.
+      id = mintLineId(taken);
+      l.id = id;
+      taken[id] = true;
+      used[id] = true;
+      minted++;
     }
     return minted;
+  }
+
+  // THE STATE BOUNDARY. Everything assigned to _state.co passes through
+  // here, so "every line this editor holds has its own address" is a fact
+  // about the STATE — true before the first paint, and true whether or not
+  // anything ever paints.
+  function adoptCo(co) {
+    if (co && typeof co === 'object') ensureLineIds(co.lines);
+    return co;
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -956,10 +1019,10 @@ function p86Ask(message, opts) {
   function paintLines() {
     var host = document.getElementById('p86CoLineTable');
     if (!host) return;
+    // No heal here, on purpose. Identity belongs to the _state.co accessor
+    // (adoptCo), so it holds for readers that never paint — and the
+    // `if (!host) return` two lines up can no longer skip it.
     var lines = Array.isArray(_state.co.lines) ? _state.co.lines : [];
-    // Identity BEFORE markup: the id this writes is the address every
-    // handler bound below resolves against. See ensureLineIds.
-    ensureLineIds(lines);
     if (!lines.length) {
       host.innerHTML = '<div class="p86-co-lines-empty">' +
         'No line items yet. Click <strong>+ Add Line</strong> to add the first one, or <strong>+ Section Header</strong> to group lines by trade.' +
@@ -1596,7 +1659,15 @@ function p86Ask(message, opts) {
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       __test: {
+        // setCo is the REAL door — the same assignment openNew() and
+        // openExisting() make, accessor and all. A harness therefore
+        // CANNOT build an _state the editor could not hold, which is
+        // precisely the drift that let an id-less fixture ship as "proven".
         setCo: function (co) { _state.co = co; },
+        // setRawCo is the deliberate BYPASS, and the only way left to
+        // observe the unhealed shape. Tests that assert what the heal DOES
+        // need it. Nothing else may use it.
+        setRawCo: function (co) { _stateCo = co; },
         getCo: function () { return _state.co; },
         paintLines: paintLines,
         paintTotals: paintTotals,
@@ -1605,6 +1676,7 @@ function p86Ask(message, opts) {
         coImpliedMarkup: coImpliedMarkup,
         newLineId: newLineId,
         ensureLineIds: ensureLineIds,
+        adoptCo: adoptCo,
       },
     };
   }

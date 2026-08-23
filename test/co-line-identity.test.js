@@ -182,15 +182,22 @@ describe('every rendered row is addressable, whatever produced the line', () => 
   });
 
   test('minting does not dirty the record — opening a CO must not save it', () => {
+    // The unhealed shape is now only reachable through setRawCo, the
+    // deliberate bypass. setCo is the door openNew()/openExisting() use, and
+    // it adopts the record: identity is a property of _state.co itself, so it
+    // is already true here, BEFORE the first paint. That is the difference
+    // between an invariant and a rendering side effect — see
+    // test/co-line-addressability.test.js.
+    T.setRawCo({ defaultMarkup: 20, lines: [{ qty: 1, unitCost: 1000 }] });
+    expect(T.getCo().lines[0].id).toBeUndefined();
+
     T.setCo({ defaultMarkup: 20, lines: [{ qty: 1, unitCost: 1000 }] });
-    const before = T.getCo().lines[0].id;
-    T.paintLines();
     const first = T.getCo().lines[0].id;
-    T.paintLines();
-    expect(before).toBeUndefined();
     expect(first).toBeTruthy();
-    // Idempotent: a second paint must not re-address the row, or every
-    // repaint would detach the caret's own row from its line.
+    T.paintLines();
+    T.paintLines();
+    // Idempotent: a repaint must not re-address the row, or every repaint
+    // would detach the caret's own row from its line.
     expect(T.getCo().lines[0].id).toBe(first);
   });
 });

@@ -510,6 +510,28 @@
   }
 
   // ---- bulk create -------------------------------------------------------
+  // A CHANGE-ORDER line's `id` is its ADDRESS in the CO editor: every row is
+  // rendered as data-line-id="<id>" and every handler on it resolves the line
+  // by matching that attribute back. A line imported without one used to
+  // render data-line-id="" and resolve to nothing, so the row was silently
+  // uneditable — which is what happened to the ten "Buildertrend Flat Rate"
+  // lines on RV2008 CO-0001, the very change orders this importer exists to
+  // get into the app so they can be repaired.
+  //
+  // The editor now guarantees identity at its own state boundary and both
+  // server doors stamp on the way in, so this is not the load-bearing fix.
+  // It is here because a line born with a key is easier to reason about than
+  // one healed later, and because it means the id in the stored record is the
+  // one this document's rows were created with.
+  //
+  // A MONOTONIC counter, not four random characters: a bulk import mints a
+  // whole document's worth of lines inside one millisecond, and uniqueness
+  // there should not be a probability.
+  var _docLineSeq = 0;
+  function docLineId() {
+    return 'line_' + Date.now().toString(36) + '_' + (_docLineSeq++).toString(36);
+  }
+
   // Map an extracted line to the entity's line shape.
   function toLine(l, entityType) {
     var amt = (l.amount != null) ? num(l.amount) : (l.qty != null && l.unit_cost != null ? num(l.qty) * num(l.unit_cost) : null);
@@ -536,8 +558,13 @@
     // recorded as a price, the cost is flagged as unknown, and the repair
     // is a single cell rather than a reinterpretation.
     if (entityType === 'co') {
-      return { description: desc, qty: q, unitCost: unit, unitSell: unit, costPending: true };
+      return { id: docLineId(), description: desc, qty: q, unitCost: unit, unitSell: unit, costPending: true };
     }
+    // PO and INVOICE lines carry NO id, deliberately. Their editors
+    // (js/purchase-order-editor.js, js/invoices.js) resolve a row by ARRAY
+    // INDEX — data-i / data-li — and never read a line id at all, so one
+    // would be dead weight stored in every record forever. The change-order
+    // editor is the only id-resolved line surface in the app.
     return { description: desc, qty: q, unitCost: unit }; // po
   }
 
@@ -679,4 +706,14 @@
   }
 
   window.p86DocImport = { open: open };
+
+  // Node-only test seam, same dual-target shape js/change-order-editor.js and
+  // js/co-draw.js already use. toLine is the shape contract between this
+  // importer and three editors, so a test asserting what a change order looks
+  // like on arrival should CALL it rather than restate it — a restated fixture
+  // is free to drift away from the thing it claims to describe, and that drift
+  // is exactly how an id-less line shipped past a passing suite.
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { __test: { toLine: toLine } };
+  }
 })();
