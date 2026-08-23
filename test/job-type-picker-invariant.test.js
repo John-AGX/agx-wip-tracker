@@ -204,6 +204,85 @@ describe('a job number reads back to its type through the registry', () => {
     expect(JF.labelForNumber(null)).toBe('');
     expect(JF.labelForNumber('no digits here')).toBe('');
   });
+
+  /* Reading a number is NOT the same question as "what does this org offer?".
+   * effectiveTypes() answers the offer — the registry, or the product defaults
+   * only while the registry is EMPTY — and answering the READING with it made
+   * an org whose registry is non-empty but omits a default type render
+   * nothing for a job that exists. Measured, before the fix: a registry of
+   * [S, M, RV] and labelForNumber('WO0007') === '' where the hardcoded chain
+   * this replaced always said 'Work Order'. */
+  describe('a job under a prefix the org registry no longer contains', () => {
+    const NO_WO = [
+      { key: 'service', label: 'Service', prefix: 'S', pad: 4, next: 1 },
+      { key: 'mid_tier_service', label: 'Mid-Tier Service', prefix: 'M', pad: 4, next: 1 },
+      { key: 'renovation', label: 'Renovation', prefix: 'RV', pad: 4, next: 1 },
+    ];
+
+    test('still reads back to the type the product ships', () => {
+      return serveRegistry(NO_WO, AGX_REGISTRY).then(() => {
+        expect(JF.prefixForNumber('WO0007')).toBe('WO');
+        expect(JF.labelForNumber('WO0007')).toBe('Work Order');
+      });
+    });
+
+    test('but the org is NOT offered a type it dropped', () => {
+      // The whole point of splitting the two questions: WO0007 keeps its
+      // label, and nobody can pick Work Order for something new.
+      return serveRegistry(NO_WO, AGX_REGISTRY).then(() => {
+        expect(JF.typeLabels('')).toEqual(['Service', 'Mid-Tier Service', 'Renovation']);
+        expect(JF.prefixes()).toEqual(['S', 'M', 'RV']);
+      });
+    });
+
+    test('and the org still WINS when it renames one', () => {
+      return serveRegistry([{ key: 'wo', label: 'Field Ticket', prefix: 'WO', pad: 4, next: 1 }], AGX_REGISTRY).then(() => {
+        expect(JF.labelForNumber('WO0007')).toBe('Field Ticket');
+      });
+    });
+
+    test('a prefix NEITHER knows is still unknown — the fallback is not a guess', () => {
+      return serveRegistry(NO_WO, AGX_REGISTRY).then(() => {
+        expect(JF.labelForNumber('ZZ0001')).toBe('');
+        expect(JF.typeForPrefix('ZZ')).toBeNull();
+      });
+    });
+  });
+});
+
+// ── 3b. Nothing displays a job with no type at all ────────────────────
+// The Job Information card read `job.jobType ? … : '—'`, with no fallback to
+// the number — so a job whose jobType is blank (the QB-import stub, a lead-only
+// job, a job an org's registry no longer covers) showed '—' in the card while
+// the Jobs list beside it called the same job Mid-Tier Service off M0001.
+describe('the job card shows a type for any job that has a number', () => {
+  const { extractFunction, compile } = require('./helpers/browser-fn.js');
+  const JOBS_JS = fs.readFileSync(path.join(__dirname, '..', 'js', 'jobs.js'), 'utf8');
+  const display = compile(
+    ['getJobType', 'getJobTypeLabel', 'jobTypeDisplay'].map((n) => extractFunction(JOBS_JS, n)),
+    ['window'], [window], 'jobTypeDisplay'
+  );
+
+  beforeEach(() => serveRegistry(AGX_REGISTRY, AGX_REGISTRY).then(() => { window.p86JobFinalize = JF; }));
+
+  test.each([
+    ['its own type wins', { jobType: 'Renovation', jobNumber: 'M0001' }, 'Renovation'],
+    ['no type — the NUMBER answers', { jobType: '', jobNumber: 'M0001' }, 'Mid-Tier Service'],
+    ['no type, WO number', { jobType: '', jobNumber: 'WO0007' }, 'Work Order'],
+    ['with a market', { jobType: '', jobNumber: 'S2287', market: 'Tampa' }, 'Service - Tampa'],
+    ['nothing knowable', { jobType: '', jobNumber: 'ZZ0001' }, '—'],
+    ['no number either', { jobType: '', jobNumber: '' }, '—'],
+  ])('%s', (_why, job, shown) => {
+    expect(display(job)).toBe(shown);
+  });
+
+  test('and the card actually renders through it', () => {
+    // The function above is only worth having if renderJobDetail calls it —
+    // pinned on the source, the way section 4 pins the other call sites,
+    // because this one lives inside a 400-line render function.
+    expect(JOBS_JS).toMatch(/getElementById\('job-info-type'\)\.textContent = jobTypeDisplay\(job\)/);
+    expect(JOBS_JS).not.toMatch(/job-info-type'\)\.textContent = job\.jobType \?/);
+  });
 });
 
 // ── 4. The call sites actually read the one source ────────────────────

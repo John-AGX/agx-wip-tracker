@@ -44,16 +44,7 @@ const APP_JS = SRC('app.js');
  * function TEXT is extracted and evaluated with its free variables injected.
  * Anything that changes inside toggleEditJobInfo changes what these tests
  * run. */
-function extractFunction(src, name) {
-  const start = src.indexOf('function ' + name + '(');
-  if (start === -1) throw new Error('extractFunction: no function ' + name);
-  let depth = 0;
-  for (let j = src.indexOf('{', start); j < src.length; j++) {
-    if (src[j] === '{') depth++;
-    else if (src[j] === '}' && --depth === 0) return src.slice(start, j + 1);
-  }
-  throw new Error('extractFunction: unbalanced braces in ' + name);
-}
+const { extractFunction } = require('./helpers/browser-fn.js');
 
 const TOGGLE_SRC = extractFunction(JOBS_JS, 'toggleEditJobInfo');
 const ESCAPE_SRC = extractFunction(APP_JS, 'escapeHTML'); // the real one, not a stand-in

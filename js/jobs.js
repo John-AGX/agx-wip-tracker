@@ -2020,6 +2020,19 @@ function renderJobsMain() {
             return '';
         }
 
+        // What the Job Information card shows in Type: the job's own jobType,
+        // else the label its NUMBER resolves to — the same fallback the Jobs
+        // list filter (above) and js/insights.js already use. The card was the
+        // odd one out: a job with a blank jobType read '—' here while the list
+        // beside it called the same job Mid-Tier Service off M0001. A job that
+        // exists should not display without a type label.
+        function jobTypeDisplay(job) {
+            if (!job) return '—';
+            var label = job.jobType || getJobTypeLabel(getJobType(job.jobNumber));
+            if (!label) return '—';
+            return label + (job.market ? ' - ' + job.market : '');
+        }
+
         // ── Multi-market M3: the Market column ────────────────────────
         // Both helpers go through p86Markets so the chip, the sort key
         // and the P&L rollup all answer "what market is this?" the same
@@ -3540,7 +3553,7 @@ function renderJobsMain() {
             document.getElementById('job-info-title').textContent = job.title;
             document.getElementById('job-info-client').textContent = job.client || '—';
             document.getElementById('job-info-pm').textContent = getJobOwnerName(job);
-            document.getElementById('job-info-type').textContent = job.jobType ? (job.jobType + (job.market ? ' - ' + job.market : '')) : '—';
+            document.getElementById('job-info-type').textContent = jobTypeDisplay(job);
             document.getElementById('job-info-worktype').textContent = job.workType || '—';
             document.getElementById('job-info-market').textContent = job.market || '—';
             document.getElementById('job-info-contract').textContent = formatCurrency(job.contractAmount);

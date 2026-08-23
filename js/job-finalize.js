@@ -128,19 +128,47 @@
    * never a partial match against 'Mid-Tier'. That also means a custom org
    * prefix that starts with another one (S and SV) resolves correctly, which
    * an ordered chain cannot promise.
+   *
+   * READING a number is NOT the same question as "what types does this org
+   * offer?", and they must not share an answer. The offer is the org's
+   * registry: an org that stopped doing work orders should not be handed Work
+   * Order in a picker. The reading is about a job that ALREADY EXISTS — its
+   * number was minted under some prefix, and that prefix means what it meant,
+   * whether or not the org still numbers under it today.
+   *
+   * Answering the reading question with effectiveTypes() (registry, or the
+   * product defaults only while the registry is EMPTY) made a non-empty
+   * registry that omits a default type render nothing: measured, with a
+   * registry of [S, M, RV], labelForNumber('WO0007') returned '' where the
+   * hardcoded chain this replaced always returned 'Work Order'. A job that
+   * exists then displayed with no type at all — and since js/leads.js and
+   * js/estimate-editor.js now DERIVE a converted job's jobType from its
+   * number, such a job would also be born with none.
+   *
+   * So the lookup is: the org registry first (a renamed type wins over the
+   * shipped one), then the product defaults (a prefix this product ships
+   * always means something), then unknown. Unknown stays '' — a prefix
+   * neither the org nor the product knows is not a type, and inventing a
+   * label from the letters would put it in type filters and reports as though
+   * somebody had chosen it.
    * ─────────────────────────────────────────────────────────────────────*/
+  function typeForPrefix(prefix) {
+    var p = String(prefix == null ? '' : prefix).toUpperCase();
+    if (!p) return null;
+    var hit = function (list) {
+      return (list || []).filter(function (x) { return String(x.prefix || '').toUpperCase() === p; })[0] || null;
+    };
+    return hit(getTypes()) || hit(_defaults);
+  }
   function prefixForNumber(jobNumber) {
     var m = String(jobNumber == null ? '' : jobNumber).trim().toUpperCase().match(/^([A-Z]{1,4})\s*\d/);
     if (!m) return '';
-    var p = m[1];
-    var t = effectiveTypes().find(function (x) { return String(x.prefix || '').toUpperCase() === p; });
+    var t = typeForPrefix(m[1]);
     return t ? String(t.prefix).toUpperCase() : '';
   }
   function labelForPrefix(prefix) {
-    if (!prefix) return '';
-    var p = String(prefix).toUpperCase();
-    var t = effectiveTypes().find(function (x) { return String(x.prefix || '').toUpperCase() === p; });
-    return t ? String(t.label || p) : '';
+    var t = typeForPrefix(prefix);
+    return t ? String(t.label || String(prefix).toUpperCase()) : '';
   }
   function labelForNumber(jobNumber) { return labelForPrefix(prefixForNumber(jobNumber)); }
 
@@ -315,6 +343,7 @@
     prefixes: prefixes, typeHint: typeHint,
     // One source for "what job types are there?" in the browser.
     defaults: defaults, effectiveTypes: effectiveTypes,
+    typeForPrefix: typeForPrefix,
     prefixForNumber: prefixForNumber, labelForPrefix: labelForPrefix,
     labelForNumber: labelForNumber,
     typeLabels: typeLabels, typeOptionsHTML: typeOptionsHTML,
