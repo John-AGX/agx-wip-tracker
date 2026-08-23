@@ -3010,6 +3010,15 @@ async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, 
     } catch (e) { /* non-fatal: identity is best-effort */ }
   }
 
+  try {
+    const _tc = String(turnContextText || '').length;
+    const _pb = Array.isArray(photoBlocks) ? photoBlocks.length : 0;
+    if (_tc >= 3000 || _pb) {
+      console.log('[ctx-size] turnContext ' + (entityType || '?') + '/' + (entityId || '?') +
+        ' → ' + _tc + ' chars (~' + Math.round(_tc / 4) + ' tok)' +
+        (_pb ? ' + ' + _pb + ' photo block(s)' : ''));
+    }
+  } catch (_) { /* instrumentation must never break a turn */ }
   return { turnContextText, photoBlocks, entityText };
 }
 
@@ -8274,7 +8283,26 @@ function haversineMiles(aLat, aLng, bLat, bLng) {
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
 }
 
+// ── Per-turn context-size instrumentation (temporary) ─────────────────────
+// Debugging the "112k cache" question: every agent (Assistant, 86, background)
+// routes read_entity / search_entities / find_entities_near through
+// execConsolidatedRead, and those results ride in the conversation + are
+// re-read from cache every turn. This thin wrapper logs the byte/token size of
+// each read result so a single live chat reveals exactly which read is fat
+// (the suspected ~90k). Log-only; no behavior change. Grep server logs for
+// [ctx-size]. Remove once the culprit is fixed.
 async function execConsolidatedRead(name, input, ctx) {
+  const out = await _execConsolidatedReadImpl(name, input, ctx);
+  try {
+    const chars = String(out == null ? '' : out).length;
+    if (chars >= 1500) {
+      console.log('[ctx-size] read ' + name + ' → ' + chars + ' chars (~' +
+        Math.round(chars / 4) + ' tok) · ' + JSON.stringify(input || {}).slice(0, 120));
+    }
+  } catch (_) { /* never let instrumentation break a turn */ }
+  return out;
+}
+async function _execConsolidatedReadImpl(name, input, ctx) {
   const inp = input || {};
 
   // Wave 1.B — log entity reads/searches into context_load_events so
@@ -13119,6 +13147,11 @@ async function driveEscalateTo86(intent, ctx) {
     console.warn('[escalate] context-pack build failed (non-fatal — 86 will read):', e && e.message);
     pack = '';
   }
+  try {
+    const _pk = String(pack || '').length;
+    if (_pk >= 2000) console.log('[ctx-size] escalate pack ' + (et || '?') + '/' + (eidResolved || '?') +
+      ' → ' + _pk + ' chars (~' + Math.round(_pk / 4) + ' tok)');
+  } catch (_) {}
 
   // Briefing: Haiku's if it provided one, else synthesize from the reads it
   // ran this turn so 86 still gets the gathered data even with no pack.
