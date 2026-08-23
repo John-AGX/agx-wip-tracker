@@ -361,10 +361,74 @@ describe('typing a price, then a cost, and watching only the cost move', () => {
     ] });
     T.paintLines(); T.paintTotals();
     expect(document.querySelectorAll('.p86-co-pending')).toHaveLength(1);
-    type(rows()[0], 'unitCost', '1650');
+    const el = type(rows()[0], 'unitCost', '1650');
     T.paintTotals();
     expect(T.getCo().lines[0].costPending).toBeUndefined();
     expect(document.querySelectorAll('.p86-co-pending')).toHaveLength(0);
+    // Repairing the cost is the whole point of this release, and it is
+    // done by PASTING a number — one input event. Clearing the flag used
+    // to repaint the entire table and then return, which detached the
+    // input the caret was in and skipped markDirty(), so the paste was
+    // never scheduled for save while the pill still read "Saved".
+    expect(document.contains(el)).toBe(true);
+    expect(el.style.color).toBe('');              // amber tint dropped in place
+    jest.advanceTimersByTime(800);
+    expect(saves).toHaveLength(1);
+    expect(saves[0].lines[0]).toMatchObject({ unitCost: 1650 });
+    expect(saves[0].lines[0].costPending).toBeUndefined();
+    // And the banner that counts pending lines empties with the badge.
+    expect(document.getElementById('p86CoNotices').textContent)
+      .not.toMatch(/need a real cost/);
+  });
+
+  test('a partial cost entry does NOT clear the flag — it recorded no cost', () => {
+    // The old predicate read the raw text: Number('-') is NaN and NaN is
+    // !== everything, so a minus sign cleared the COST? badge while the
+    // commit above deliberately kept the old placeholder. The badge went
+    // away and the placeholder stayed.
+    T.setCo({ defaultMarkup: 0, lines: [
+      { id: 'a', qty: 1, unitCost: 2750, unitSell: 2750, costPending: true },
+    ] });
+    T.paintLines(); T.paintTotals();
+    for (const junk of ['-', '1.2.3', '']) {
+      type(rows()[0], 'unitCost', junk);
+      expect(T.getCo().lines[0].costPending).toBe(true);
+      expect(document.querySelectorAll('.p86-co-pending')).toHaveLength(1);
+    }
+    expect(T.getCo().lines[0].unitCost).toBe('');   // blank still stays blank
+  });
+
+  test('a placeholder line whose price was cleared can still be costed at zero', () => {
+    // "Placeholder" means the cost merely mirrors the price. Number('') is
+    // 0, so comparing against a BLANK Unit Sell made a typed "0" look like
+    // the very placeholder it was replacing — such a line could never
+    // clear its flag.
+    T.setCo({ defaultMarkup: 0, lines: [
+      { id: 'a', qty: 1, unitCost: 2750, unitSell: 2750, costPending: true },
+    ] });
+    T.paintLines(); T.paintTotals();
+    type(rows()[0], 'unitSell', '');                       // no promise left
+    expect(T.getCo().lines[0].costPending).toBe(true);     // still a placeholder
+    type(rows()[0], 'unitCost', '0');
+    expect(T.getCo().lines[0].costPending).toBeUndefined();
+    expect(document.querySelectorAll('.p86-co-pending')).toHaveLength(0);
+  });
+
+  test('clearing the flag moves no money — only the cost the user typed', () => {
+    // costPending is display-only. Run the identical keystroke on lines
+    // that differ ONLY by the flag; every number the editor computes must
+    // come out the same. If clearing it ever moved money, this is where
+    // the two runs diverge.
+    const run = (pending) => {
+      mount();
+      T.setCo({ defaultMarkup: 0, lines: [Object.assign(
+        { id: 'a', qty: 1, unitCost: 2750, unitSell: 2750 },
+        pending ? { costPending: true } : {}) ] });
+      T.paintLines(); T.paintTotals();
+      type(rows()[0], 'unitCost', '1650');
+      return T.computeTotals();
+    };
+    expect(run(true)).toEqual(run(false));
   });
 
   test('the saved blob carries the promise, the unit and the flag', () => {
@@ -380,6 +444,108 @@ describe('typing a price, then a cost, and watching only the cost move', () => {
     expect(saves[0].lines[0]).toMatchObject({
       qty: 2, unitCost: 1650, unit: 'ea', unitSell: 2750, costPending: true,
     });
+  });
+});
+
+// ── The property, not the case ──────────────────────────────────────
+// Both halves of the caret bug were branch-shaped: one branch returned
+// before markDirty(), and the same branch rebuilt the table while a caret
+// was in it. A test written against THAT branch goes green again the
+// moment someone adds the next one. So state the rule over every field the
+// line table renders instead:
+//
+//   an 'input' event on a line field always schedules the save,
+//   and never destroys the element the caret is in.
+//
+// The list below is pinned against the real DOM by the first test, so a
+// new line field cannot be added without being covered here.
+describe('every line-field keystroke saves, and none of them eats the caret', () => {
+  let saves;
+  beforeEach(() => {
+    jest.useFakeTimers();
+    saves = [];
+    window.p86Api = { changeOrders: { update: (id, data) => { saves.push(data); return Promise.resolve({}); } } };
+  });
+  afterEach(() => { jest.clearAllTimers(); jest.useRealTimers(); });
+
+  // One change order carrying every shape a line can have: a section
+  // header, a plain line priced by markup, a doc-imported line whose cost
+  // is still a placeholder (the 1.19 repair workflow), and a line with a
+  // promised Unit Sell (whose markup cell is readonly).
+  const fixture = () => ({
+    defaultMarkup: 20,
+    lines: [
+      { id: 's1', section: '__section_header__', label: 'Sitework', markup: 15 },
+      { id: 'a', qty: 1, unitCost: 900, unit: 'ea', unitSell: '', description: 'Plain' },
+      { id: 'b', qty: 1, unitCost: 2750, unit: 'ea', unitSell: 2750, costPending: true, description: 'Imported' },
+      { id: 'c', qty: 2, unitCost: 400, unit: 'ea', unitSell: 1200, description: 'Promised' },
+    ],
+  });
+  const FIELDS = [
+    ['s1', 'label'], ['s1', 'overrideLineMarkups'], ['s1', 'markup'],
+    ['a', 'description'], ['a', 'qty'], ['a', 'unit'], ['a', 'unitCost'], ['a', 'markup'], ['a', 'unitSell'],
+    ['b', 'description'], ['b', 'qty'], ['b', 'unit'], ['b', 'unitCost'], ['b', 'markup'], ['b', 'unitSell'],
+    ['c', 'description'], ['c', 'qty'], ['c', 'unit'], ['c', 'unitCost'], ['c', 'markup'], ['c', 'unitSell'],
+  ];
+  const NEW_VALUE = {
+    label: 'Edited', description: 'edited', qty: '3', unit: 'lf',
+    unitCost: '1650', markup: '35', unitSell: '2400',
+  };
+  // Toggling "override lines" re-prices every child line in the section at
+  // once, so it legitimately rebuilds the table — and it calls markDirty()
+  // BEFORE it does, so the save still lands. It is a checkbox: there is no
+  // caret in it to lose. That is the ONLY carve-out, and the test below
+  // pins it so the exemption cannot quietly widen to a text field.
+  const CARET_FIELDS = FIELDS.filter(([, f]) => f !== 'overrideLineMarkups');
+
+  const stroke = (lineId, field) => {
+    mount();
+    T.setCo(fixture());
+    T.paintLines(); T.paintTotals();
+    saves.length = 0;
+    const tr = document.querySelector('tr[data-line-id="' + lineId + '"]');
+    const el = tr.querySelector('[data-line-field="' + field + '"]');
+    el.focus();
+    expect(document.activeElement).toBe(el);      // the caret really is here
+    if (el.type === 'checkbox') el.checked = !el.checked;
+    else el.value = NEW_VALUE[field];
+    el.dispatchEvent(new window.Event('input', { bubbles: true }));
+    return el;
+  };
+
+  test('the covered field list IS what the table renders', () => {
+    mount();
+    T.setCo(fixture());
+    T.paintLines(); T.paintTotals();
+    const seen = [];
+    document.querySelectorAll('tr[data-line-id]').forEach((tr) => {
+      tr.querySelectorAll('[data-line-field]').forEach((el) => {
+        seen.push([tr.getAttribute('data-line-id'), el.getAttribute('data-line-field')]);
+      });
+    });
+    expect(seen).toEqual(FIELDS);
+  });
+
+  test('the override checkbox is the only field without a caret in it', () => {
+    mount();
+    T.setCo(fixture());
+    T.paintLines();
+    const boxes = Array.from(document.querySelectorAll('[data-line-field]'))
+      .filter((el) => el.type === 'checkbox')
+      .map((el) => el.getAttribute('data-line-field'));
+    expect(boxes).toEqual(['overrideLineMarkups']);
+  });
+
+  test.each(FIELDS)('a keystroke in %s.%s schedules the autosave', (lineId, field) => {
+    stroke(lineId, field);
+    jest.advanceTimersByTime(800);
+    expect(saves).toHaveLength(1);
+  });
+
+  test.each(CARET_FIELDS)('a keystroke in %s.%s leaves the caret where it was', (lineId, field) => {
+    const el = stroke(lineId, field);
+    expect(document.contains(el)).toBe(true);
+    expect(document.activeElement).toBe(el);
   });
 });
 

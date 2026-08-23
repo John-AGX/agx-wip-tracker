@@ -866,6 +866,30 @@ function p86Ask(message, opts) {
     return ((sell / cost) - 1) * 100;
   }
 
+  // Has a placeholder cost been replaced by a real one? Asked of the value
+  // the handler COMMITTED, never of the raw text the user typed, because
+  // those two disagree exactly when it matters. A partial entry ("-",
+  // "1.2.3") is rejected on commit and leaves the placeholder in place —
+  // but Number('-') is NaN, and NaN !== anything, so testing the text
+  // dropped the COST? badge for a line that still carried no cost at all.
+  // Blank is not a cost either: blank stays blank, and a blank cell is
+  // still a cost nobody has supplied.
+  //
+  // The comparison against Unit Sell is what "placeholder" MEANS here —
+  // doc-import seeds unitCost = unitSell = the quoted price. A line whose
+  // Unit Sell has since been cleared has no price left to mirror, so any
+  // real number entered repairs it; reading that blank as Number('') === 0
+  // used to mean such a line could never clear its flag by being costed at
+  // zero.
+  function costNowReal(line) {
+    if (!line || !line.costPending) return false;
+    var cost = line.unitCost;
+    if (cost === '' || cost == null || isNaN(Number(cost))) return false;
+    var sell = line.unitSell;
+    if (sell === '' || sell == null) return true;
+    return Number(cost) !== Number(sell);
+  }
+
   function paintLines() {
     var host = document.getElementById('p86CoLineTable');
     if (!host) return;
@@ -1030,13 +1054,31 @@ function p86Ask(message, opts) {
           } else {
             line[f] = v;
           }
-          // A real cost typed over a placeholder is no longer pending. The
-          // flag is display-only and no pricing code reads it, but leaving
-          // it on a repaired line would keep asking for work already done.
-          if (f === 'unitCost' && line.costPending && v !== '' && Number(v) !== Number(line.unitSell)) {
+          // A real cost typed over a placeholder is no longer pending.
+          // costPending is DISPLAY ONLY — no pricing code reads it — so
+          // clearing it is a display change and must not take an exit of
+          // its own. This branch used to call paintLines() and return, and
+          // that cost two things at once. The rebuild assigned over the
+          // table's innerHTML, detaching the very input the caret sat in,
+          // on the FIRST character. And the return jumped the markDirty()
+          // below, so the keystroke never armed the autosave — a cost
+          // PASTED in one input event (the actual repair workflow) was
+          // never saved at all, while the save pill still read "Saved".
+          // Typing only appeared to work because the second character no
+          // longer matched this branch and fell through.
+          //
+          // Only two things on screen are pending-only, and paintLines is
+          // the only thing that paints either: the COST? badge node in the
+          // description cell, and the amber tint on this input. Drop both
+          // in place — removing a sibling span and setting a style
+          // property move no caret — then fall through to the surgical
+          // tail, which arms the save and repaints this row. The notices
+          // banner and its count come from paintTotals() there.
+          if (f === 'unitCost' && costNowReal(line)) {
             delete line.costPending;
-            paintLines(); paintTotals();
-            return;
+            var badge = tr.querySelector('.p86-co-pending');
+            if (badge) badge.remove();
+            input.style.color = '';
           }
           markDirty();
           // Section rows: refresh the section's own cost/amount/GM now.
