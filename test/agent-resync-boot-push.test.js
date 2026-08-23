@@ -176,6 +176,45 @@ describe('steady-state rules are unchanged', () => {
   });
 });
 
+// The second defect in the same throttle: TWO fingerprint definitions.
+//
+// The sweep hashed _sha1(system + '\0' + model); sync-all hashed
+// _sha1(system + ' ' + model). Different hash domains, so the fingerprint a
+// manual sync recorded could never equal what the sweep computed on the next
+// tick. The sweep saw drift after every manual sync, and the comment above
+// that line claimed it existed to prevent a double-push — describing
+// something the code did not do.
+//
+// The separator itself is pinned by test/no-nul-bytes.test.js. What is pinned
+// HERE is the thing that actually broke: that there is only ever ONE
+// definition to keep consistent.
+describe('there is exactly one system-fingerprint definition', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const src = fs.readFileSync(
+    path.join(__dirname, '..', 'server', 'routes', 'admin-agents-routes.js'), 'utf8');
+
+  test('only one call site hashes the composed system against the model', () => {
+    const sites = src.match(/_sha1\([^\n]*\+\s*\(model/g) || [];
+    expect(sites).toHaveLength(1);
+  });
+
+  test('the abandoned space-separated variant is gone', () => {
+    expect(src).not.toMatch(/_sha1\([^\n]*\+ ' ' \+ \(model/);
+  });
+
+  test('both sync paths go through the shared helper', () => {
+    // The sweep, sync-all, and the single-agent sync endpoint.
+    expect((src.match(/_syncFingerprints\(/g) || []).length).toBeGreaterThanOrEqual(4);
+  });
+
+  test('every push persists the fingerprint, or the next boot re-pushes', () => {
+    expect(src).toMatch(/_persistSyncFingerprint/);
+    expect((src.match(/_persistSyncFingerprint\(/g) || []).length).toBeGreaterThanOrEqual(3);
+    expect(src).toMatch(/last_sync_sys_hash/);
+  });
+});
+
 // ── Mutation guard ────────────────────────────────────────────────────────
 describe('the boot property detects its own bypass', () => {
   // The pre-fix decision, reproduced exactly: everything guarded on `prev`,
