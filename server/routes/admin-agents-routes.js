@@ -4215,7 +4215,15 @@ router.get('/reference-links/:id/preview', requireAuth, requireCapability('ROLES
 // concatenated text block of every enabled link's last_fetched_text,
 // or '' if there are none / all are stale failures. Trimmed to a
 // reasonable cap so a runaway sheet doesn't blow the model context.
-const REF_LINKS_PROMPT_CAP = 60000; // ~15k tokens of reference data
+const REF_LINKS_PROMPT_CAP = 60000; // ~15k tokens of reference data (whole block)
+// Per-ROW inline safeguard: an individual sheet bigger than this is NOT baked
+// into every turn — one huge sheet would dominate the block AND balloon the
+// cached prefix every fresh session pays on turn 1. Oversized sheets stay
+// fully reachable ON DEMAND via search_reference_sheet (which reads every
+// enabled row regardless of inject_mode), so nothing is lost — the big sheet
+// just isn't pinned to every turn. Guards against accidentally inlining a huge
+// SharePoint export.
+const REF_LINK_INLINE_ROW_CAP = 8000; // ~2k tokens per inlined sheet
 //
 // Phase D made reference links org-scoped. Callers (composedAgentSystem
 // in ai-routes.js, the resync sweep below) MUST pass organizationId so
@@ -4240,9 +4248,14 @@ async function buildReferenceLinksBlock(organizationId) {
     if (!r.rowCount) return '';
     let out = '\n\n# Live reference sheets\n\n' +
       'These are live company data sheets, refreshed from SharePoint by the server. Use them when the user asks about job numbers, WIP, or anything else listed below.\n';
+    const demotedBig = [];
     for (const row of r.rows) {
       const block = row.last_fetched_text || '';
       if (!block) continue;
+      // Per-row safeguard: an oversized sheet is NOT inlined (it would balloon
+      // every turn's cached prefix). It stays reachable on demand via
+      // search_reference_sheet, so we just note it below instead of baking it in.
+      if (block.length > REF_LINK_INLINE_ROW_CAP) { demotedBig.push(row.title); continue; }
       // No fetch timestamp in the prompt text: it changes on every 15-min
       // refresh even when the sheet data is identical, which re-registers
       // the whole stable system prefix and busts the agent prompt cache.
@@ -4250,6 +4263,10 @@ async function buildReferenceLinksBlock(organizationId) {
       const candidate = '\n\n[' + row.title + ']\n' + block;
       if (out.length + candidate.length > REF_LINKS_PROMPT_CAP) break;
       out += candidate;
+    }
+    if (demotedBig.length) {
+      out += '\n\n(These sheets are too large to pin every turn — fetch rows on demand with `search_reference_sheet`: ' +
+        demotedBig.join(', ') + '.)';
     }
     return out;
   } catch (e) {
