@@ -1994,19 +1994,29 @@ function renderJobsMain() {
             // if the tiles ever return to this page.
         }
 
+        // Prefix ↔ label, off the ORG REGISTRY (branding.job_types) rather than
+        // a hardcoded S/RV/WO chain. These used to be a hand-written list that
+        // adding M silently fell through: M0001 answered '' to both, so it
+        // rendered with no type in the list and never matched the type filter.
+        // window.p86JobFinalize is cache-first and falls back to the product
+        // defaults the SERVER ships (GET /api/org/branding → job_types_default),
+        // so an org that renamed or added a type gets ITS types here with no
+        // edit to this file. See js/job-finalize.js for why extracting the whole
+        // letter run beats an ordered startsWith() chain.
         function getJobType(jobNumber) {
             if (!jobNumber) return '';
-            const num = jobNumber.toUpperCase().trim();
-            if (num.startsWith('RV')) return 'RV';
-            if (num.startsWith('WO')) return 'WO';
-            if (num.startsWith('S')) return 'S';
-            return '';
+            if (window.p86JobFinalize && window.p86JobFinalize.prefixForNumber) {
+                return window.p86JobFinalize.prefixForNumber(jobNumber);
+            }
+            const m = String(jobNumber).trim().toUpperCase().match(/^([A-Z]{1,4})\s*\d/);
+            return m ? m[1] : '';
         }
 
         function getJobTypeLabel(type) {
-            if (type === 'S') return 'Service';
-            if (type === 'RV') return 'Renovation';
-            if (type === 'WO') return 'Work Order';
+            if (!type) return '';
+            if (window.p86JobFinalize && window.p86JobFinalize.labelForPrefix) {
+                return window.p86JobFinalize.labelForPrefix(type);
+            }
             return '';
         }
 
@@ -2605,7 +2615,14 @@ function renderJobsMain() {
                     ? window.p86JobFinalize.normalizeNumber(typed)
                     : (/^[A-Za-z]{1,4}\d{1,6}$/.test(typed) ? typed.toUpperCase() : null);
             }
-            if (!jobNum) { alert('Pick a Job Type to auto-assign a number, or type one manually (e.g. RV0000).'); numEl.focus(); return; }
+            if (!jobNum) {
+                // Shapes come from the registry — naming one prefix by hand here
+                // is how this message ended up advertising types the org may not
+                // have and omitting ones it does.
+                var _shapes = (window.p86JobFinalize && window.p86JobFinalize.typeHint) ? window.p86JobFinalize.typeHint().join(', ') : 'RV0000';
+                alert('Pick a Job Type to auto-assign a number, or type one manually (e.g. ' + _shapes + ').');
+                numEl.focus(); return;
+            }
             // Uniqueness guard — never issue a duplicate job number.
             if ((appData.jobs || []).some(function(j) { return String(j.jobNumber || '').toUpperCase() === String(jobNum).toUpperCase(); })) {
                 alert('Job number ' + jobNum + ' already exists — pick another.'); numEl.focus(); return;
@@ -2924,7 +2941,21 @@ function renderJobsMain() {
                     'job-info-number':    () => '<input id="edit-jobNumber" type="text" value="' + escapeHTML(job.jobNumber || '') + '" style="' + IST + '">',
                     'job-info-client':    () => '<input id="edit-jobClient" type="text" value="' + escapeHTML(job.client || '') + '" style="' + IST + '">',
                     'job-info-pm':        () => '<select id="edit-jobPM" style="' + IST + '">' + opts(['John', 'Noah', 'Henry'], job.pm) + '</select>',
-                    'job-info-type':      () => '<select id="edit-jobType" style="' + IST + '">' + opts(['Service', 'Renovation', 'Work Order'], job.jobType) + '</select>',
+                    // Job type comes from the org registry (branding.job_types),
+                    // not a hardcoded three. window.p86JobTypeOptions() is
+                    // cache-first and ALWAYS includes this job's current value —
+                    // an M job, or a job converted from a 'Service & Repair'
+                    // lead, keeps the type it already carries. Without that
+                    // union the browser falls back to the first option and the
+                    // save below writes it: opening this card to fix a TITLE
+                    // would silently reclassify the job. A job number is
+                    // identity here — POs, pay apps and QuickBooks all carry it.
+                    // If job-finalize.js somehow didn't load, degrade to a list
+                    // of exactly ONE option — the value this job already has.
+                    // A picker with nothing to offer must still not be able to
+                    // change anything.
+                    'job-info-type':      () => '<select id="edit-jobType" style="' + IST + '">' +
+                        (window.p86JobTypeOptions ? window.p86JobTypeOptions(job.jobType) : opts([job.jobType || ''], job.jobType || '')) + '</select>',
                     'job-info-worktype':  () => '<input id="edit-jobWorkType" type="text" value="' + escapeHTML(job.workType || '') + '" style="' + IST + '">',
                     // Markets come from the markets TABLE (multi-market M1), not a
                     // hardcoded pair. window.p86MarketNames() is cache-first and
@@ -7296,6 +7327,13 @@ function renderJobsMain() {
         document.addEventListener('DOMContentLoaded', function() {
             const el = document.getElementById('subName');
             if (el) el.addEventListener('input', updateSubDirectoryHint);
+            // The Jobs-list "Filter by Type" options are markup in index.html.
+            // Rebuild them from the org registry so a type this org added or
+            // renamed is filterable without an index.html edit. Keeps "All
+            // Types" and whatever is currently selected.
+            if (window.p86JobFinalize && window.p86JobFinalize.setupTypeFilter) {
+                window.p86JobFinalize.setupTypeFilter('typeFilter');
+            }
         });
 
         function saveSub() {

@@ -37,17 +37,38 @@
   // ACTUAL claim (atomic + collision-safe). All of this degrades gracefully to
   // derive-from-max when the registry / endpoint isn't available.
   var _registry = null, _regLoaded = false, _regPromise = null;
+
+  // The product defaults. GET /api/org/branding serves them as
+  // `job_types_default` (straight out of server/services/job-types.js), so
+  // this literal is a LAST RESORT only — first paint, offline, failed fetch.
+  // It is the ONE copy left in the browser: everything that used to keep its
+  // own (js/admin.js's first-time seed, the hint line, the suggestion chips)
+  // now reads defaults() instead. Keep it complete; the two copies this
+  // replaced had both silently dropped Work Order.
+  var _defaults = [
+    { key: 'service', label: 'Service', prefix: 'S', pad: 4 },
+    { key: 'mid_tier_service', label: 'Mid-Tier Service', prefix: 'M', pad: 4 },
+    { key: 'renovation', label: 'Renovation', prefix: 'RV', pad: 4 },
+    { key: 'work_order', label: 'Work Order', prefix: 'WO', pad: 4 }
+  ];
+  function defaults() { return _defaults.slice(); }
+
   function loadRegistry(force) {
     if (_regLoaded && !force) return Promise.resolve(_registry);
     if (_regPromise && !force) return _regPromise;
     if (!(window.p86Api && window.p86Api.org && window.p86Api.org.branding)) { _regLoaded = true; _registry = []; return Promise.resolve(_registry); }
     _regPromise = window.p86Api.org.branding().then(function (r) {
       _registry = (r && r.branding && Array.isArray(r.branding.job_types)) ? r.branding.job_types : [];
+      if (r && Array.isArray(r.job_types_default) && r.job_types_default.length) _defaults = r.job_types_default;
       _regLoaded = true; return _registry;
     }).catch(function () { _regLoaded = true; _registry = []; return _registry; });
     return _regPromise;
   }
   function getTypes() { return _registry || []; }
+  // What a picker or a label lookup should treat as "the types this org has".
+  // The org registry when we have it, the product defaults until we do — so a
+  // cold cache degrades to the shipped set instead of to nothing.
+  function effectiveTypes() { var t = getTypes(); return (t && t.length) ? t : _defaults; }
   function typeForLabel(label) { label = String(label || '').toLowerCase(); return getTypes().find(function (t) { return String(t.label || '').toLowerCase() === label; }) || null; }
   function pad(n, width) { var s = String(Math.max(1, parseInt(n, 10) || 1)); width = Math.max(1, Math.min(8, parseInt(width, 10) || 4)); while (s.length < width) s = '0' + s; return s; }
   function maxExistingFor(prefix) {
@@ -95,18 +116,89 @@
   function prefixes() {
     return getTypes().map(function (t) { return String(t.prefix || '').toUpperCase(); }).filter(Boolean);
   }
+  /* ── Reading a job number back to its type ─────────────────────────────
+   * A job number is IDENTITY: S2287, RV2044, M0001. These two answer "what
+   * type is this?" for every display surface, off the SAME registry the
+   * numbers are minted from — replacing the hand-written startsWith() chains
+   * that js/jobs.js and js/insights.js each kept their own copy of.
+   *
+   * No longest-prefix-first ordering hazard here, because the prefix isn't
+   * probed a letter at a time: the whole leading letter RUN is extracted and
+   * looked up exactly. 'RV2044' yields 'RV', never 'R'; 'M0001' yields 'M',
+   * never a partial match against 'Mid-Tier'. That also means a custom org
+   * prefix that starts with another one (S and SV) resolves correctly, which
+   * an ordered chain cannot promise.
+   * ─────────────────────────────────────────────────────────────────────*/
+  function prefixForNumber(jobNumber) {
+    var m = String(jobNumber == null ? '' : jobNumber).trim().toUpperCase().match(/^([A-Z]{1,4})\s*\d/);
+    if (!m) return '';
+    var p = m[1];
+    var t = effectiveTypes().find(function (x) { return String(x.prefix || '').toUpperCase() === p; });
+    return t ? String(t.prefix).toUpperCase() : '';
+  }
+  function labelForPrefix(prefix) {
+    if (!prefix) return '';
+    var p = String(prefix).toUpperCase();
+    var t = effectiveTypes().find(function (x) { return String(x.prefix || '').toUpperCase() === p; });
+    return t ? String(t.label || p) : '';
+  }
+  function labelForNumber(jobNumber) { return labelForPrefix(prefixForNumber(jobNumber)); }
+
+  /* ── The job-type picker ───────────────────────────────────────────────
+   * THE INVARIANT: a picker must never be able to change a value the user
+   * did not touch. A <select> that does not contain the record's current
+   * value silently resolves to its FIRST option, and the next save writes
+   * that — turning "I edited the title" into "I reclassified this job".
+   *
+   * So the option list is registry-first and then ALWAYS unions in whatever
+   * the record actually holds, whether or not this org still numbers under
+   * it. This is the same shape js/markets.js:names(current) uses, and for
+   * the same reason. It has to hold for ANY unrecognized value, not for a
+   * named list of them: jobs converted from a lead carry the LEAD vocabulary
+   * ('Service & Repair'), which is not a job type and never will be.
+   *
+   * A job with NO type gets a real empty option FIRST, so the pre-selected
+   * option is a no-op rather than the alphabetically luckiest type.
+   * ─────────────────────────────────────────────────────────────────────*/
+  function typeLabels(current) {
+    var out = effectiveTypes().map(function (t) { return String(t.label || t.prefix || ''); }).filter(Boolean);
+    var cur = (current == null) ? '' : String(current);
+    if (cur && out.indexOf(cur) === -1) out.unshift(cur);
+    return out;
+  }
+  // <option> markup for a job-type <select>, with `selected` on the current
+  // value. Use this rather than building options from typeLabels() by hand —
+  // the empty "not set" option carries value="" and cannot be expressed as a
+  // label string.
+  function typeOptionsHTML(current) {
+    var cur = (current == null) ? '' : String(current);
+    var html = cur ? '' : '<option value="" selected>&mdash; Not set &mdash;</option>';
+    return html + typeLabels(cur).map(function (label) {
+      return '<option value="' + esc(label) + '"' + (label === cur ? ' selected' : '') + '>' + esc(label) + '</option>';
+    }).join('');
+  }
+  // Rebuild a standing filter <select> from the registry, keeping its leading
+  // "all" option and the user's current selection. Same drift problem as the
+  // picker, without the data risk — this one only filters a list.
+  function setupTypeFilter(selectId) {
+    var sel = document.getElementById(selectId);
+    if (!sel) return;
+    loadRegistry().then(function (types) {
+      if (!types || !types.length) return;
+      var cur = sel.value;
+      var head = sel.options.length && !sel.options[0].value ? sel.options[0].outerHTML : '<option value="">All Types</option>';
+      sel.innerHTML = head + typeLabels(cur).map(function (label) {
+        return '<option value="' + esc(label) + '">' + esc(label) + '</option>';
+      }).join('');
+      sel.value = cur;
+    });
+  }
+
   // "S#### (Service), M#### (Mid-Tier Service), RV#### (Renovation)" — built
   // from the registry so a new type never needs this string edited. Falls back
   // to the product defaults before the registry has loaded.
   function typeHint() {
-    var types = getTypes();
-    if (!types.length) {
-      types = [
-        { label: 'Service', prefix: 'S', pad: 4 },
-        { label: 'Mid-Tier Service', prefix: 'M', pad: 4 },
-        { label: 'Renovation', prefix: 'RV', pad: 4 }
-      ];
-    }
+    var types = effectiveTypes();
     return types.slice(0, 6).map(function (t) {
       return String(t.prefix) + new Array(Math.max(1, Math.min(8, parseInt(t.pad, 10) || 4)) + 1).join('#') +
         ' (' + String(t.label || t.prefix) + ')';
@@ -147,7 +239,7 @@
       var btn = 'appearance:none;border:1px solid var(--border,#2a2a32);background:var(--surface,#17171c);color:var(--text,#eef0f6);border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;';
       var btnPri = 'appearance:none;border:1px solid var(--accent,#4f8cff);background:var(--accent,#4f8cff);color:#fff;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer;';
       var chip = 'appearance:none;border:1px solid var(--border,#2a2a32);background:transparent;color:var(--accent,#4f8cff);border-radius:999px;padding:2px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;';
-      var _prefixes = prefixes().length ? prefixes() : ['S', 'M', 'RV'];
+      var _prefixes = effectiveTypes().map(function (t) { return String(t.prefix || '').toUpperCase(); }).filter(Boolean);
       var sugg = _prefixes.map(nextNumber).filter(Boolean);
       var _hints = typeHint();
       var _hintHTML = _hints.map(function (h) {
@@ -216,12 +308,28 @@
     });
   }
 
-  window.p86JobFinalize = {
+  var API = {
     open: open, normalizeNumber: normalizeNumber, nextNumber: nextNumber,
     loadRegistry: loadRegistry, getTypes: getTypes, previewFor: previewFor,
     claimForLabel: claimForLabel, setupCreateModal: setupCreateModal,
-    prefixes: prefixes, typeHint: typeHint
+    prefixes: prefixes, typeHint: typeHint,
+    // One source for "what job types are there?" in the browser.
+    defaults: defaults, effectiveTypes: effectiveTypes,
+    prefixForNumber: prefixForNumber, labelForPrefix: labelForPrefix,
+    labelForNumber: labelForNumber,
+    typeLabels: typeLabels, typeOptionsHTML: typeOptionsHTML,
+    setupTypeFilter: setupTypeFilter
   };
-  // Warm the registry cache so create/convert modals have it ready.
-  try { loadRegistry(); } catch (e) {}
+  if (typeof window !== 'undefined') {
+    window.p86JobFinalize = API;
+    // Shorthand for the render functions that build pickers by string concat,
+    // mirroring window.p86MarketNames (js/markets.js:239).
+    window.p86JobTypeOptions = typeOptionsHTML;
+    // Warm the registry cache so create/convert modals have it ready.
+    try { loadRegistry(); } catch (e) {}
+  }
+  // Test seam. This is a browser script, not a module; re-exported under Node
+  // (jest) so the picker invariant — an unrecognized job type survives a
+  // round-trip through a real <select> — can be driven directly.
+  if (typeof module !== 'undefined' && module.exports) module.exports = API;
 })();

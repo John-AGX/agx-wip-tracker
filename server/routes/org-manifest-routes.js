@@ -513,6 +513,14 @@ router.get('/logo', requireAuth, async (req, res) => {
 // is surface metadata, not record data. Powers the shop-drawing titleblock
 // logo (and any future branded surface). The admin *write* path lives in
 // admin-organizations-routes.js and is intentionally not touched here.
+//
+// It also carries `job_types_default` — the PRODUCT defaults out of
+// server/services/job-types.js, alongside this org's own registry. That is
+// here because the browser had three hand-copies of DEFAULT_JOB_TYPES
+// (js/admin.js's first-time seed, and two fallbacks in js/job-finalize.js),
+// and two of them had already drifted — both were missing Work Order. Serving
+// the array means no browser file has to restate it, and an org that has
+// never opened Job Numbering still seeds from what the server actually ships.
 router.get('/branding', requireAuth, async (req, res) => {
   const orgId = callerOrgId(req);
   if (!orgId) return res.status(403).json({ error: 'Caller has no organization' });
@@ -535,6 +543,7 @@ router.get('/branding', requireAuth, async (req, res) => {
         map_pins: normMapPins(b.map_pins),
         job_types: normJobTypes(b.job_types),
       },
+      job_types_default: defaultJobTypes(),
     });
   } catch (e) {
     console.error('GET /api/org/branding error:', e);

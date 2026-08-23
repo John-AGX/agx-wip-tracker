@@ -62,14 +62,14 @@
 
   function jobTypeLabel(j) {
     if (j.jobType) return j.jobType;
-    // Legacy fallback from the job-number prefix (mirrors js/jobs.js).
-    // Longest prefix first: a two-letter prefix must be tested before any
-    // single letter it starts with, or RV2001 reads as a type it isn't.
-    var n = String(j.jobNumber || '').toUpperCase();
-    if (/^RV/.test(n)) return 'Renovation';
-    if (/^WO/.test(n)) return 'Work Order';
-    if (/^M/.test(n)) return 'Mid-Tier Service';
-    if (/^S/.test(n)) return 'Service';
+    // Legacy fallback from the job-number prefix. This used to be a second,
+    // independent copy of the chain in js/jobs.js — two lists that had to
+    // agree and no way to make them. Both now read the ORG REGISTRY through
+    // p86JobFinalize, which falls back to the product defaults the server
+    // ships, so adding or renaming a type touches neither file.
+    if (window.p86JobFinalize && window.p86JobFinalize.labelForNumber) {
+      return window.p86JobFinalize.labelForNumber(j.jobNumber);
+    }
     return '';
   }
   function marketName(j) { return (window.p86Markets ? window.p86Markets.nameFor(j) : (j.market || '')) || ''; }

@@ -769,8 +769,19 @@ describe('E · load order and cache-busting — the containment', () => {
   });
 
   test('E3 · both edited files got a ?v bump in the same commit', () => {
-    expect(HTML).toMatch(/src="js\/progress\.js\?v=4"/);
-    expect(HTML).toMatch(/src="js\/jobs\.js\?v=230"/);
+    // Pinned as a FLOOR, not an equality. The bump this port made is the
+    // historical fact worth keeping — but an exact `?v=230` also fails on the
+    // next unrelated edit to jobs.js, which teaches the next person that the
+    // right response to this test is to retype a number rather than to check
+    // that they bumped. A floor still catches the two things that matter:
+    // the ?v being dropped, and a bump being reverted.
+    const ver = (f) => {
+      const m = HTML.match(new RegExp('src="js/' + f.replace('.', '\\.') + '\\?v=(\\d+)"'));
+      expect(m).not.toBeNull();
+      return parseInt(m[1], 10);
+    };
+    expect(ver('progress.js')).toBeGreaterThanOrEqual(4);
+    expect(ver('jobs.js')).toBeGreaterThanOrEqual(230);
   });
 
   test('E4 · a missing core THROWS — it does not degrade', () => {

@@ -1859,15 +1859,17 @@ function p86Ask(message, opts) {
   // The product's default types, each seeded so "Next #" continues past the
   // highest EXISTING job number for that prefix — so a first-time setup keeps
   // the sequence going instead of restarting at 1.
-  // Kept in lockstep with DEFAULT_JOB_TYPES in server/services/job-types.js,
-  // which is the source of truth (this list only runs on a first-time seed).
-  function seedJobTypesFromJobs() {
-    var defs = [
-      { key: 'service', label: 'Service', prefix: 'S', pad: 4 },
-      { key: 'mid_tier_service', label: 'Mid-Tier Service', prefix: 'M', pad: 4 },
-      { key: 'renovation', label: 'Renovation', prefix: 'RV', pad: 4 },
-      { key: 'work_order', label: 'Work Order', prefix: 'WO', pad: 4 }
-    ];
+  //
+  // The defaults are NOT restated here any more. This ran when an org has no
+  // branding.job_types yet and wrote its output straight back via PUT
+  // /api/org/branding — so drift didn't misrender a label, it seeded the org's
+  // permanent numbering registry wrong. It now reads p86JobFinalize.defaults(),
+  // which is served by GET /api/org/branding as `job_types_default` straight
+  // out of DEFAULT_JOB_TYPES in server/services/job-types.js.
+  function seedJobTypesFromJobs(serverDefaults) {
+    var defs = (Array.isArray(serverDefaults) && serverDefaults.length)
+      ? serverDefaults
+      : ((window.p86JobFinalize && window.p86JobFinalize.defaults) ? window.p86JobFinalize.defaults() : []);
     var jobs = (window.appData && window.appData.jobs) || [];
     return defs.map(function (d) {
       var re = new RegExp('^' + d.prefix + '(\\d+)$', 'i');
@@ -1894,8 +1896,13 @@ function p86Ask(message, opts) {
       if (Array.isArray(b.job_types) && b.job_types.length) {
         _orgJobTypes = b.job_types.map(function (t) { return { key: t.key || '', label: t.label || '', prefix: t.prefix || '', pad: t.pad || 4, next: t.next || 1 }; });
       } else {
-        _orgJobTypes = seedJobTypesFromJobs();
-        _orgJobTypesFresh = true;
+        // First-time setup. The defaults ride along on THIS response
+        // (job_types_default), so the seed is whatever the server ships.
+        _orgJobTypes = seedJobTypesFromJobs(r && r.job_types_default);
+        // Only auto-save a seed that actually produced types. Writing an empty
+        // array back would blank the org's registry, which is the one thing
+        // this screen must never do.
+        _orgJobTypesFresh = _orgJobTypes.length > 0;
       }
       host.innerHTML =
         '<div style="font-size:12px;color:var(--text-dim,#888);margin-bottom:12px;line-height:1.55;">New jobs auto-assign the next number for their type &mdash; <strong>Prefix</strong> + a zero-padded <strong>Next&nbsp;#</strong>. Existing jobs keep their numbers; &ldquo;Next&nbsp;#&rdquo; is seeded from your highest and advances on each new job. <span id="org-jobnum-status" style="margin-left:6px;"></span></div>' +
