@@ -947,6 +947,7 @@
                                 <select id="typeFilter" onchange="filterJobs()" style="width: 200px; margin: 0;">
                                     <option value="">All Types</option>
                                     <option value="Service">Service</option>
+                                    <option value="Mid-Tier Service">Mid-Tier Service</option>
                                     <option value="Renovation">Renovation</option>
                                     <option value="Work Order">Work Order</option>
                                 </select>
@@ -2158,9 +2159,14 @@
             <div class="form-row">
                 <div class="form-group">
                     <label>Type</label>
+                    <!-- Repopulated from the org registry (branding.job_types)
+                         by p86JobFinalize.setupCreateModal. These options are
+                         the pre-registry fallback and must stay in step with
+                         DEFAULT_JOB_TYPES in server/services/job-types.js. -->
                     <select id="jobType">
                         <option value="">-- Select Type --</option>
                         <option value="Service">Service</option>
+                        <option value="Mid-Tier Service">Mid-Tier Service</option>
                         <option value="Renovation">Renovation</option>
                         <option value="Work Order">Work Order</option>
                     </select>
@@ -3414,7 +3420,7 @@
     <script src="js/dash-shell.js?v=2"></script>
     <script src="js/settings-registry.js?v=3"></script>
     <script src="js/admin-dashboard.js?v=3"></script>
-    <script src="js/admin.js?v=139"></script>
+    <script src="js/admin.js?v=140"></script>
     <!-- Act-as / disguise mode: persistent "Acting as NAME — Exit" banner +
          window.p86ActAs(userId). Self-contained; re-fetches /api/auth/me. -->
     <script src="js/actas.js?v=1"></script>
@@ -3442,12 +3448,12 @@
          ready the first time they build their tables. -->
     <script src="js/table-enhancements.js?v=15"></script>
     <script src="js/bulk-ribbon.js?v=1"></script>
-    <script src="js/job-finalize.js?v=5"></script>
+    <script src="js/job-finalize.js?v=6"></script>
     <script src="js/leads.js?v=95"></script>
-    <script src="js/job-costs-import.js?v=15"></script>
+    <script src="js/job-costs-import.js?v=16"></script>
     <script src="js/qb-costs-view.js?v=23"></script>
-    <script src="js/insights.js?v=11"></script>
-    <script src="js/schedule.js?v=51"></script>
+    <script src="js/insights.js?v=12"></script>
+    <script src="js/schedule.js?v=52"></script>
     <script src="js/my-day.js?v=9"></script>
     <!-- Shared entity card (job/lead/estimate Pulse card) — window.p86EntityCard.
          Loads before its callers (entities-map.js, workspace-layout.js). -->

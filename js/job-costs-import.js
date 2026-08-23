@@ -372,6 +372,19 @@ function p86Ask(message, opts) {
   // The org's job numbers, normalised exactly as matchJobs normalises
   // them. Used by the receipt, which is rendered after _lastParse has
   // been cleared and so has no match result to borrow from.
+  // The prefixes this org NUMBERS UNDER, from the job-numbering registry
+  // (branding.job_types). p86JobFinalize warms that cache at load, so this is
+  // a synchronous read; [] when the registry never arrived, which degrades to
+  // the old learn-from-jobs-only behaviour rather than misreporting.
+  function orgTypePrefixes() {
+    try {
+      if (typeof window !== 'undefined' && window.p86JobFinalize && typeof window.p86JobFinalize.prefixes === 'function') {
+        return window.p86JobFinalize.prefixes();
+      }
+    } catch (e) { /* defensive — diagnosis must never break the import */ }
+    return [];
+  }
+
   function orgJobNumbers() {
     var jobs = (typeof window !== 'undefined' && window.appData && window.appData.jobs) || [];
     var out = [];
@@ -424,18 +437,44 @@ function p86Ask(message, opts) {
   // allowsNumeric carries the same honesty for the numeric case: calling
   // `437775` a QB auto-number is only safe when the org does NOT number
   // jobs with bare digits. If it does, the code is ambiguous, not (A).
-  function orgJobNumberShape(jobNumbers) {
+  //
+  // THE REGISTRY CLOSES THE 'unclear' HOLE. The paragraph above admits it: a
+  // job TYPE can exist with no job claimed under it yet, so its prefix is
+  // invisible to a set learned from job numbers alone. That is not a
+  // hypothetical — it is the state of every newly added type on the day it is
+  // added, and Mid-Tier Service (M) is in it right now. The org's own
+  // numbering registry knows those prefixes, so it is passed in as a second
+  // source of evidence: a prefix the org NUMBERS UNDER is a real prefix even
+  // with zero jobs behind it, which turns "we can't tell what M0001 is" into
+  // "create job M0001". Registry prefixes do NOT make the shape `known` on
+  // their own — an org with a registry and no jobs still has nothing to match
+  // against, and that case has its own honest message.
+  function orgJobNumberShape(jobNumbers, registryPrefixes) {
     var prefixes = {};
     var prefixCount = 0;
     var allowsNumeric = false;
+    (registryPrefixes || []).forEach(function(p) {
+      var s = String(p == null ? '' : p).toUpperCase().trim().replace(/[^A-Z]/g, '');
+      if (!s) return;
+      if (!Object.prototype.hasOwnProperty.call(prefixes, s)) prefixes[s] = true;
+    });
+    // `learned` is counted SEPARATELY from `prefixes`, which now also holds
+    // registry entries. Counting the merged set would let a registry prefix
+    // stand in for evidence: an org whose every job prefix is already in the
+    // registry would never increment, `known` would read false, and every
+    // unmatched project would be told "Project 86 has no jobs yet" while
+    // holding hundreds. `known` must keep meaning "we have real jobs to judge
+    // against".
+    var learned = {};
     (jobNumbers || []).forEach(function(n) {
       var s = String(n == null ? '' : n).toUpperCase().trim();
       if (!s) return;
       if (/^\d+$/.test(s)) { allowsNumeric = true; return; }
       var m = s.match(/^([A-Z]+)\d/);
       if (!m) return;
-      if (!Object.prototype.hasOwnProperty.call(prefixes, m[1])) {
-        prefixes[m[1]] = true;
+      prefixes[m[1]] = true;
+      if (!Object.prototype.hasOwnProperty.call(learned, m[1])) {
+        learned[m[1]] = true;
         prefixCount++;
       }
     });
@@ -621,7 +660,7 @@ function p86Ask(message, opts) {
     // QuickBooks, and the old single sentence sent the reader to the wrong
     // one of the two.
     if (m.unmatched.length) {
-      var shape = orgJobNumberShape(m.jobNumbers);
+      var shape = orgJobNumberShape(m.jobNumbers, orgTypePrefixes());
       var groups = groupUnmatched(m.unmatched, shape);
       html += '<div style="display:flex;gap:10px;align-items:flex-start;background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.4);border-radius:8px;padding:12px 14px;margin-bottom:16px;">' +
         '<span style="font-size:18px;line-height:1;">&#9888;&#xFE0F;</span>' +
@@ -1226,7 +1265,7 @@ function p86Ask(message, opts) {
       // sentence for every unmatched project, and it led with "fix the
       // project name in QB" — which sent the reader to QuickBooks even
       // when the name was perfect and the job simply did not exist here.
-      var rShape = orgJobNumberShape(r.jobNumbers || orgJobNumbers());
+      var rShape = orgJobNumberShape(r.jobNumbers || orgJobNumbers(), orgTypePrefixes());
       r.unmatched.forEach(function(p) {
         html += '<tr style="border-top:1px solid var(--border,#2a2a32);">' +
           '<td style="padding:8px 10px;color:var(--text,#fff);">' + escapeHTML((p.code || '(no code)') + ' ' + (p.name || '')) +

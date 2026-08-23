@@ -63,9 +63,12 @@
   function jobTypeLabel(j) {
     if (j.jobType) return j.jobType;
     // Legacy fallback from the job-number prefix (mirrors js/jobs.js).
+    // Longest prefix first: a two-letter prefix must be tested before any
+    // single letter it starts with, or RV2001 reads as a type it isn't.
     var n = String(j.jobNumber || '').toUpperCase();
     if (/^RV/.test(n)) return 'Renovation';
     if (/^WO/.test(n)) return 'Work Order';
+    if (/^M/.test(n)) return 'Mid-Tier Service';
     if (/^S/.test(n)) return 'Service';
     return '';
   }

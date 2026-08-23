@@ -4,6 +4,9 @@ const { requireAuth, requireRole, requireOrgId, resolveOrgId, isAdminish } = req
 const { sendEmail } = require('../email');
 const { jobAssigned } = require('../email-templates');
 const markets = require('../services/markets');
+// Job numbering is a per-org REGISTRY (type → prefix → counter), not a fixed
+// pair of prefixes. See the convert guard below.
+const jobTypes = require('../services/job-types');
 
 const router = express.Router();
 
@@ -267,14 +270,42 @@ router.post('/convert', requireAuth, requireRole('admin', 'pm'), requireOrgId, a
     if (!leadId && !estimateId) {
       return res.status(400).json({ error: 'lead_id or estimate_id is required' });
     }
-    // Every job must carry a job number — S#### (Service) or RV#### (Renovation).
-    if (!/^(S|RV)\d{1,6}$/i.test(String((job && job.jobNumber) || '').trim())) {
-      return res.status(400).json({ error: 'A job number (S#### or RV####) is required to create a job.' });
-    }
     // req.orgId — server-derived and the same source the INSERT and the bulk
     // save use. This read req.user.organization_id, correct only because
     // resolveOrgId happens to repair that field.
     const orgId = req.orgId;
+
+    // Every job must carry a job number, and the number's PREFIX must be a type
+    // this org actually numbers under.
+    //
+    // This was `/^(S|RV)\d{1,6}$/` — hardcoded to two of AGX's prefixes while
+    // the admin registry seeded three. The consequence was not cosmetic: a
+    // registry type could claim a number atomically through
+    // POST /api/org/next-job-number and then be REFUSED here, so no job could
+    // ever be converted from a lead or an estimate under it. Work Order has
+    // been in that state since the registry shipped; Mid-Tier Service would
+    // have been born into it.
+    //
+    // Reading the org's own registry (defaults when it has none) makes the door
+    // agree with the counter. It stays a whitelist — an arbitrary letters+digits
+    // string is still refused, so a typo can't mint a new prefix by accident.
+    let orgJobTypes = null;
+    try {
+      const br = await pool.query('SELECT branding FROM organizations WHERE id = $1', [orgId]);
+      const brand = (br.rows[0] && br.rows[0].branding) || {};
+      orgJobTypes = brand.job_types;
+    } catch (e) {
+      orgJobTypes = null; // falls back to the product defaults
+    }
+    const normalizedNumber = jobTypes.normalizeJobNumber((job && job.jobNumber) || '', orgJobTypes);
+    if (!normalizedNumber) {
+      const allowed = jobTypes.allowedPrefixes(orgJobTypes);
+      return res.status(400).json({
+        error: 'A job number is required to create a job, and its prefix must be one this organization uses (' +
+          allowed.join(', ') + '). Example: ' + allowed[0] + '0000.',
+      });
+    }
+    job.jobNumber = normalizedNumber;
 
     // Resolve owner (mirror POST /): admins may assign, others own their own.
     // Org-scoped for the reason spelled out at POST / — and this path carries a

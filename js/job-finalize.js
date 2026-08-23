@@ -1,8 +1,14 @@
-// Shared "Finalize Job" modal — collects the REQUIRED job number (S#### Service
-// or RV#### Renovation) and the title before a job is created from a lead or an
-// estimate. The title is pre-filled "{client short name} {proposal name}" and is
-// editable; the job number is required + format-validated. Self-contained (inline
-// themed styles) so leads.js / estimate-editor.js can both call it.
+// Shared "Finalize Job" modal — collects the REQUIRED job number and the title
+// before a job is created from a lead or an estimate. The title is pre-filled
+// "{client short name} {proposal name}" and is editable; the job number is
+// required + format-validated. Self-contained (inline themed styles) so
+// leads.js / estimate-editor.js can both call it.
+//
+// The prefixes and their labels come from the ORG REGISTRY
+// (branding.job_types — Admin → Organization → Job Numbering), not from a
+// hardcoded S/RV pair. That is why adding a type (M, Mid-Tier Service) shows up
+// here with no edit: the hint line, the suggestion chips and the error text are
+// all generated from whatever types the org actually numbers under.
 //
 //   window.p86JobFinalize.open({ title, subtitle })
 //     -> Promise<{ jobNumber, title } | null>   (null = cancelled)
@@ -83,6 +89,29 @@
     return Promise.resolve(previewFor(t));
   }
   function claimForLabel(label) { var t = typeForLabel(label); return t ? claimFor(t) : Promise.resolve(null); }
+  // Every registry prefix, for callers that need to know which shapes this org
+  // numbers under (the QB import's unmatched-project diagnosis reads this so a
+  // type with NO jobs yet is still a known prefix).
+  function prefixes() {
+    return getTypes().map(function (t) { return String(t.prefix || '').toUpperCase(); }).filter(Boolean);
+  }
+  // "S#### (Service), M#### (Mid-Tier Service), RV#### (Renovation)" — built
+  // from the registry so a new type never needs this string edited. Falls back
+  // to the product defaults before the registry has loaded.
+  function typeHint() {
+    var types = getTypes();
+    if (!types.length) {
+      types = [
+        { label: 'Service', prefix: 'S', pad: 4 },
+        { label: 'Mid-Tier Service', prefix: 'M', pad: 4 },
+        { label: 'Renovation', prefix: 'RV', pad: 4 }
+      ];
+    }
+    return types.slice(0, 6).map(function (t) {
+      return String(t.prefix) + new Array(Math.max(1, Math.min(8, parseInt(t.pad, 10) || 4)) + 1).join('#') +
+        ' (' + String(t.label || t.prefix) + ')';
+    });
+  }
 
   // Wire a create form (a job-type <select> + a job-number <input>): populate
   // the type options from the registry and auto-fill the number preview when a
@@ -118,8 +147,13 @@
       var btn = 'appearance:none;border:1px solid var(--border,#2a2a32);background:var(--surface,#17171c);color:var(--text,#eef0f6);border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;';
       var btnPri = 'appearance:none;border:1px solid var(--accent,#4f8cff);background:var(--accent,#4f8cff);color:#fff;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer;';
       var chip = 'appearance:none;border:1px solid var(--border,#2a2a32);background:transparent;color:var(--accent,#4f8cff);border-radius:999px;padding:2px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;';
-      var _prefixes = getTypes().length ? getTypes().map(function (t) { return t.prefix; }) : ['S', 'RV'];
+      var _prefixes = prefixes().length ? prefixes() : ['S', 'M', 'RV'];
       var sugg = _prefixes.map(nextNumber).filter(Boolean);
+      var _hints = typeHint();
+      var _hintHTML = _hints.map(function (h) {
+        var i = h.indexOf(' (');
+        return '<strong>' + esc(h.slice(0, i)) + '</strong>' + esc(h.slice(i));
+      }).join(', ');
       modal.innerHTML =
         '<div style="' + card + '">' +
           '<div style="padding:16px;">' +
@@ -127,8 +161,8 @@
             (opts.subtitle ? '<div style="font-size:12px;color:var(--text-dim,#b4b4bf);margin-bottom:14px;line-height:1.5;">' + esc(opts.subtitle) + '</div>' : '') +
             '<div style="margin-bottom:14px;">' +
               '<label style="' + lbl + '">Job Number <span style="color:#f0a020;">*</span></label>' +
-              '<input id="p86jfNum" style="' + inp + '" placeholder="S0000 or RV0000" autocomplete="off" />' +
-              '<div style="font-size:11px;color:var(--text-dim,#b4b4bf);margin-top:5px;">Required — <strong>S####</strong> for Service or <strong>RV####</strong> for Renovation. Editable.</div>' +
+              '<input id="p86jfNum" style="' + inp + '" placeholder="' + esc((sugg[0] || _prefixes[0] + '0000')) + '" autocomplete="off" />' +
+              '<div style="font-size:11px;color:var(--text-dim,#b4b4bf);margin-top:5px;">Required &mdash; ' + _hintHTML + '. Editable.</div>' +
               (sugg.length
                 ? '<div style="display:flex;gap:6px;align-items:center;margin-top:7px;flex-wrap:wrap;">' +
                     '<span style="font-size:11px;color:var(--text-dim,#b4b4bf);">Next available:</span>' +
@@ -137,7 +171,7 @@
                     }).join('') +
                   '</div>'
                 : '') +
-              '<div id="p86jfErr" style="font-size:11px;color:#ff6b6b;margin-top:5px;display:none;">Enter a valid job number: S#### (Service) or RV#### (Renovation).</div>' +
+              '<div id="p86jfErr" style="font-size:11px;color:#ff6b6b;margin-top:5px;display:none;">Enter a valid job number: ' + esc(_hints.join(', ')) + '.</div>' +
             '</div>' +
             '<div style="margin-bottom:18px;">' +
               '<label style="' + lbl + '">Job Title</label>' +
@@ -185,7 +219,8 @@
   window.p86JobFinalize = {
     open: open, normalizeNumber: normalizeNumber, nextNumber: nextNumber,
     loadRegistry: loadRegistry, getTypes: getTypes, previewFor: previewFor,
-    claimForLabel: claimForLabel, setupCreateModal: setupCreateModal
+    claimForLabel: claimForLabel, setupCreateModal: setupCreateModal,
+    prefixes: prefixes, typeHint: typeHint
   };
   // Warm the registry cache so create/convert modals have it ready.
   try { loadRegistry(); } catch (e) {}

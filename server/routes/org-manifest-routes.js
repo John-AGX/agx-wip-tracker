@@ -52,6 +52,8 @@ const { features, releases, APP_VERSION } = require('../feature-catalog');
 const BUILD_SHA = String(process.env.RAILWAY_GIT_COMMIT_SHA || '').slice(0, 8) || null;
 const entitlements = require('../entitlements');
 const { safeFetch } = require('../util/ssrf-guard'); // P1-3 SSRF guard
+// Job type → prefix → counter. The registry shape + the product defaults.
+const { normJobTypes, defaultJobTypes } = require('../services/job-types');
 
 const router = express.Router();
 
@@ -91,21 +93,10 @@ function normMapPins(obj) {
 // numbers auto-assign from this (type → prefix → stored counter). Prefix is
 // forced to [A-Z] (safe to embed in the claim endpoint's regex), unique per
 // org; pad 1–8 (John: 4); next ≥ 1. Malformed/duplicate-prefix entries drop.
-function normJobTypes(arr) {
-  if (!Array.isArray(arr)) return [];
-  var seen = {};
-  return arr.slice(0, 24).map(function (t) {
-    if (!t || typeof t !== 'object') return null;
-    var prefix = String(t.prefix == null ? '' : t.prefix).trim().toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4);
-    if (!prefix || seen[prefix]) return null;
-    seen[prefix] = true;
-    var label = String(t.label == null ? '' : t.label).trim().slice(0, 40) || prefix;
-    var key = String(t.key == null ? '' : t.key).trim().toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 32) || prefix.toLowerCase();
-    var pad = Math.max(1, Math.min(8, parseInt(t.pad, 10) || 4));
-    var next = Math.max(1, parseInt(t.next, 10) || 1);
-    return { key: key, label: label, prefix: prefix, pad: pad, next: next };
-  }).filter(Boolean);
-}
+// normJobTypes moved to server/services/job-types.js (required at the top of
+// this file) — three files used to define the registry's shape independently
+// and had no way to agree. The name is unchanged; the call sites below read
+// exactly as they did.
 
 function callerOrgId(req) {
   const oid = req.user && req.user.organization_id;
@@ -610,7 +601,12 @@ router.post('/next-job-number', requireAuth, requireOrg, async (req, res) => {
     const cur = (await client.query('SELECT branding FROM organizations WHERE id = $1 FOR UPDATE', [orgId])).rows[0];
     if (!cur) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Organization not found' }); }
     const b = (cur.branding && typeof cur.branding === 'object') ? cur.branding : {};
-    const types = normJobTypes(b.job_types);
+    // An org that has never opened Admin → Job Numbering has no registry yet.
+    // Fall back to the product defaults and PERSIST them on this claim, rather
+    // than 400ing "Unknown job type" — otherwise the very first job of a new
+    // tenant cannot be numbered. The max-existing floor below still applies, so
+    // a seeded counter of 1 can never re-issue a number already in use.
+    const types = normJobTypes(b.job_types).length ? normJobTypes(b.job_types) : defaultJobTypes();
     let idx = wantKey ? types.findIndex(function (t) { return t.key === wantKey; }) : -1;
     if (idx < 0 && wantPrefix) idx = types.findIndex(function (t) { return t.prefix === wantPrefix; });
     if (idx < 0) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'Unknown job type' }); }

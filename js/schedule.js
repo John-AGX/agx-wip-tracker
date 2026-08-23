@@ -56,7 +56,7 @@
       // Default Job Type filter: all on. PMs typically narrow this
       // manually (e.g., a renovations PM toggles off Service tickets).
       jobTypeFilter: {
-        'Service': true, 'Renovation': true, 'Work Order': true
+        'Service': true, 'Mid-Tier Service': true, 'Renovation': true, 'Work Order': true
       },
       // Inline week-summary pin state. Pinned=false means the
       // summary tracks the current real-life week, no matter which
@@ -93,6 +93,29 @@
       }
       if (!merged.jobTypeFilter || typeof merged.jobTypeFilter !== 'object') {
         merged.jobTypeFilter = Object.assign({}, defaults.jobTypeFilter);
+      } else {
+        // PER-KEY backfill for a job type added AFTER this user last saved.
+        // The object-level guard above only fires when the whole filter is
+        // missing, so every existing user's saved settings would carry the old
+        // key set and the new type would read as `undefined` → falsy → its jobs
+        // silently absent from the board, with no pill to turn back on. An
+        // explicit `false` (the user toggled it off) is a real choice and is
+        // honored; only a MISSING key is seeded.
+        //
+        // ONLY when at least one type is already on. "All off" is WILDCARD on
+        // this bar (see filteredJobs) — a user in that state is currently
+        // seeing every job, and seeding one key to true would turn their
+        // wildcard into a single-type filter that hides everything else. A
+        // wildcard already shows the new type, so it needs no help.
+        var _anyOn = JOB_TYPE_FILTERS.some(function (k) { return merged.jobTypeFilter[k] === true; }) ||
+          Object.keys(merged.jobTypeFilter).some(function (k) { return merged.jobTypeFilter[k] === true; });
+        if (_anyOn) {
+          JOB_TYPE_FILTERS.forEach(function (k) {
+            if (typeof merged.jobTypeFilter[k] !== 'boolean') {
+              merged.jobTypeFilter[k] = DEFAULT_JOB_TYPE_SET[k] === true;
+            }
+          });
+        }
       }
       // Slice C — heal the layers object. A legacy save predates it
       // entirely (object missing → seed both-on); a partial save may
@@ -454,8 +477,8 @@
   var STATUS_FILTERS = ['New', 'In Progress', 'Backlog', 'On Hold', 'Completed', 'Archived'];
   var DEFAULT_STATUS_SET = { 'New': true, 'In Progress': true, 'Backlog': true };
 
-  var JOB_TYPE_FILTERS = ['Service', 'Renovation', 'Work Order'];
-  var DEFAULT_JOB_TYPE_SET = { 'Service': true, 'Renovation': true, 'Work Order': true };
+  var JOB_TYPE_FILTERS = ['Service', 'Mid-Tier Service', 'Renovation', 'Work Order'];
+  var DEFAULT_JOB_TYPE_SET = { 'Service': true, 'Mid-Tier Service': true, 'Renovation': true, 'Work Order': true };
 
   var _state = {
     cursor: null,        // first day of the month being viewed
@@ -3804,4 +3827,21 @@
   window.p86Weather = {
     renderJobWidget: renderJobWeatherWidget
   };
+
+  // Test seam. This file is a browser script, not a module, so the settings
+  // healer is re-exported when loaded under Node (jest). It exists because a
+  // job type added AFTER a user last saved reads as `undefined` out of their
+  // stored filter object — falsy, so its jobs vanish from the board with no
+  // pill to turn back on. That is a silent disappearance of work, which is
+  // worth a test rather than a comment.
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      loadSettings: loadSettings,
+      filteredJobs: filteredJobs,
+      JOB_TYPE_FILTERS: JOB_TYPE_FILTERS,
+      DEFAULT_JOB_TYPE_SET: DEFAULT_JOB_TYPE_SET,
+      SETTINGS_KEY: SETTINGS_KEY,
+      _state: _state
+    };
+  }
 })();

@@ -1856,12 +1856,15 @@ function p86Ask(message, opts) {
     while (s.length < pad) s = '0' + s;
     return s;
   }
-  // Default 3 types (S/RV/WO), each seeded so "Next #" continues past the
+  // The product's default types, each seeded so "Next #" continues past the
   // highest EXISTING job number for that prefix — so a first-time setup keeps
   // the sequence going instead of restarting at 1.
+  // Kept in lockstep with DEFAULT_JOB_TYPES in server/services/job-types.js,
+  // which is the source of truth (this list only runs on a first-time seed).
   function seedJobTypesFromJobs() {
     var defs = [
       { key: 'service', label: 'Service', prefix: 'S', pad: 4 },
+      { key: 'mid_tier_service', label: 'Mid-Tier Service', prefix: 'M', pad: 4 },
       { key: 'renovation', label: 'Renovation', prefix: 'RV', pad: 4 },
       { key: 'work_order', label: 'Work Order', prefix: 'WO', pad: 4 }
     ];

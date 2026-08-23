@@ -5958,6 +5958,18 @@ async function init() {
   } catch (e) {
     console.error('[init] markets backfill failed (non-fatal):', e && e.message);
   }
+  // Job numbering: introduce the job types a new registry version adds (v2 =
+  // M, Mid-Tier Service) into each org's branding.job_types. APPEND ONLY — it
+  // never touches an existing type's label/prefix/pad/counter and never reads
+  // or rewrites a jobs row, so no job is renumbered or reclassified. Guarded
+  // per-org by branding.job_types_v so it runs exactly once: an org that then
+  // deletes the type keeps it deleted instead of having it resurrected on the
+  // next boot.
+  try {
+    await require('./services/job-types').backfill(pool);
+  } catch (e) {
+    console.error('[init] job-types backfill failed (non-fatal):', e && e.message);
+  }
   // Assembly code protocol: seed the global taxonomy + normalize/de-dupe
   // existing codes, THEN build the per-org unique-code index. Order matters —
   // the index must come after the de-dup pass. Idempotent (no-op on reboot).
