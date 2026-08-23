@@ -2899,12 +2899,67 @@ function renderJobsMain() {
 
             const IST = 'width:100%;box-sizing:border-box;background:var(--input-bg,#0f111a);color:var(--text);border:1px solid var(--border,#2a2a32);border-radius:6px;padding:5px 7px;font-size:13px;';
             const SST = 'box-sizing:border-box;background:var(--input-bg,#0f111a);color:var(--text);border:1px solid var(--border,#2a2a32);border-radius:6px;padding:4px 6px;font-size:12px;';
-            const opts = (arr, cur) => arr.map(v => '<option' + (v === cur ? ' selected' : '') + '>' + escapeHTML(v) + '</option>').join('');
+            /* Build a <select>'s options. It ALWAYS unions in the value the
+             * record actually holds, whichever list the caller passes — the
+             * rule lives here so no caller can get it wrong, the way
+             * p86JobTypeOptions() and p86MarketNames() already do it for the
+             * two lists that have their own source. A <select> that does not
+             * contain the record's value resolves to its FIRST option, so a
+             * list that has drifted away from the data turns "I opened the
+             * card" into "I changed this field". The value goes on an explicit
+             * value= attribute: a blank current value is a real option that
+             * reads as "not set" rather than an empty row. */
+            const opts = (arr, cur) => {
+                const c = (cur == null) ? '' : String(cur);
+                const list = (arr || []).map(v => String(v == null ? '' : v));
+                if (list.indexOf(c) === -1) list.unshift(c);
+                return list.map(v => '<option value="' + escapeHTML(v) + '"' + (v === c ? ' selected' : '') +
+                    '>' + (v === '' ? '&mdash; Not set &mdash;' : escapeHTML(v)) + '</option>').join('');
+            };
+            /* Project managers come from the users TABLE — the same
+             * window.p86Admin cache the Add Job modal and the bulk "Assign PM"
+             * action read — not from three hardcoded first names. A cold cache
+             * yields an empty list, which opts() turns into exactly ONE option:
+             * the PM this job already has. A picker with nothing to offer must
+             * still not be able to change anything. */
+            const pmNames = () => {
+                const a = window.p86Admin;
+                return (a && a.getActivePMs)
+                    ? a.getActivePMs().map(u => (u && u.name) || '').filter(Boolean)
+                    : [];
+            };
 
             if (isEditing) {
-                // Save — read inputs defensively (a cell may be absent on older
-                // cached markup) and write back.
-                const gv = (id) => { const e = document.getElementById(id); return e ? e.value : null; };
+                /* Save. Two rules, both enforced HERE and not per field —
+                 * a per-field rule is one new FIELDS entry away from being
+                 * wrong again:
+                 *
+                 *  1. A control the user did not touch is not an edit. Every
+                 *     control is stamped with the value it was RENDERED with
+                 *     (data-p86-initial, below); gv() returns null — the same
+                 *     "no cell here" answer that already means "don't write" —
+                 *     when the control still holds that value. This is what
+                 *     makes a picker unable to change a value nobody chose:
+                 *     even a <select> that cannot offer the stored value and
+                 *     falls to its first option was stamped with that same
+                 *     first option, so the save writes nothing.
+                 *  2. If nothing was touched, NOTHING is written: no
+                 *     updatedAt, no saveData(). Entering and leaving edit mode
+                 *     is not an edit, and it should not bump a row's version.
+                 *
+                 * Reading is still defensive — a cell may be absent on older
+                 * cached markup, and an un-stamped control (rendered by
+                 * something other than the loop below) falls through to the
+                 * old read-it-back behaviour rather than being ignored. */
+                let touched = 0;
+                const gv = (id) => {
+                    const e = document.getElementById(id);
+                    if (!e) return null;
+                    const was = e.dataset ? e.dataset.p86Initial : undefined;
+                    if (was !== undefined && e.value === was) return null;
+                    touched++;
+                    return e.value;
+                };
                 let v;
                 if ((v = gv('edit-jobNumber')) !== null) job.jobNumber = v.trim();
                 if ((v = gv('edit-jobTitle')) !== null) job.title = v.trim();
@@ -2929,8 +2984,10 @@ function renderJobsMain() {
                 if ((v = gv('edit-jobEndDate')) !== null) job.endDate = (v || '').trim();
                 if ((v = gv('edit-jobStatus')) !== null) job.status = v;
                 if ((v = gv('edit-jobNotes')) !== null) job.notes = v.trim();
-                job.updatedAt = new Date().toISOString();
-                saveData();
+                if (touched) {
+                    job.updatedAt = new Date().toISOString();
+                    saveData();
+                }
                 btn.setAttribute('data-editing', '0');
                 btn.innerHTML = '&#9998; Edit';
                 renderJobDetail(jobId); // repopulates #job-info-* cells → restores display
@@ -2940,7 +2997,7 @@ function renderJobsMain() {
                     'job-info-title':     () => '<input id="edit-jobTitle" type="text" value="' + escapeHTML(job.title || '') + '" style="' + IST + '">',
                     'job-info-number':    () => '<input id="edit-jobNumber" type="text" value="' + escapeHTML(job.jobNumber || '') + '" style="' + IST + '">',
                     'job-info-client':    () => '<input id="edit-jobClient" type="text" value="' + escapeHTML(job.client || '') + '" style="' + IST + '">',
-                    'job-info-pm':        () => '<select id="edit-jobPM" style="' + IST + '">' + opts(['John', 'Noah', 'Henry'], job.pm) + '</select>',
+                    'job-info-pm':        () => '<select id="edit-jobPM" style="' + IST + '">' + opts(pmNames(), job.pm) + '</select>',
                     // Job type comes from the org registry (branding.job_types),
                     // not a hardcoded three. window.p86JobTypeOptions() is
                     // cache-first and ALWAYS includes this job's current value —
@@ -2953,7 +3010,9 @@ function renderJobsMain() {
                     // If job-finalize.js somehow didn't load, degrade to a list
                     // of exactly ONE option — the value this job already has.
                     // A picker with nothing to offer must still not be able to
-                    // change anything.
+                    // change anything. (opts() now enforces that union for
+                    // every list in this card, and the save enforces it a
+                    // second time by ignoring controls nobody touched.)
                     'job-info-type':      () => '<select id="edit-jobType" style="' + IST + '">' +
                         (window.p86JobTypeOptions ? window.p86JobTypeOptions(job.jobType) : opts([job.jobType || ''], job.jobType || '')) + '</select>',
                     'job-info-worktype':  () => '<input id="edit-jobWorkType" type="text" value="' + escapeHTML(job.workType || '') + '" style="' + IST + '">',
@@ -2974,12 +3033,28 @@ function renderJobsMain() {
                     'job-info-prod-days': () => '<input id="edit-jobProductionDays" type="number" value="' + (job.totalProductionDays || '') + '" style="' + IST + '">',
                     'job-info-start':     () => '<input id="edit-jobStartDate" type="date" value="' + escapeHTML(String(job.startDate || '').slice(0, 10)) + '" style="' + IST + '">',
                     'job-info-end':       () => '<input id="edit-jobEndDate" type="date" value="' + escapeHTML(String(job.endDate || '').slice(0, 10)) + '" style="' + IST + '">',
+                    // The lifecycle statuses. Still a literal list (there is no
+                    // status registry yet — the bulk bar keeps the same one),
+                    // but opts() unions whatever this job actually holds, so a
+                    // status that was renamed, imported, or set by an agent is
+                    // shown and survives instead of being rewritten to 'New'.
                     'job-info-status':    () => '<select id="edit-jobStatus" style="' + SST + '">' + opts(['New', 'Backlog', 'In Progress', 'On Hold', 'Completed', 'Archived'], job.status) + '</select>',
                     'job-info-notes':     () => '<textarea id="edit-jobNotes" rows="3" style="' + IST + 'resize:vertical;">' + escapeHTML(job.notes || '') + '</textarea>'
                 };
                 Object.keys(FIELDS).forEach((cellId) => {
                     const el = document.getElementById(cellId);
-                    if (el) el.innerHTML = FIELDS[cellId]();
+                    if (!el) return;
+                    el.innerHTML = FIELDS[cellId]();
+                    // Stamp every control with the value the BROWSER resolved
+                    // it to — which is not always the value we asked for: a
+                    // <select> whose list is missing the record's value lands
+                    // on its first option instead. The save compares against
+                    // this stamp to answer "did the user change this?", so the
+                    // rule covers every field in the card, including the ones
+                    // added after this loop was written.
+                    Array.prototype.forEach.call(el.querySelectorAll('input, select, textarea'), (c) => {
+                        c.dataset.p86Initial = c.value;
+                    });
                 });
                 btn.setAttribute('data-editing', '1');
                 btn.innerHTML = '&#x1F4BE; Save';
