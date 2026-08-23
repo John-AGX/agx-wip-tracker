@@ -247,3 +247,18 @@ describe('no browser file keeps its own job-type list', () => {
     expect(src).toMatch(/job_types_default: defaultJobTypes\(\)/);
   });
 });
+
+// ── 5. The two files this rule lives in ship with a truthful ?v ───────
+// Editing js/ requires bumping that file's ?v in index.html in the SAME
+// commit, or the browser and the service worker keep serving the old body
+// under the old tag — which for THIS rule means the picker fix is in the repo
+// and not in anybody's browser. Asserted as a relationship (git holds both
+// halves), never as a number: a pinned `?v=7` goes red on the next unrelated
+// edit and teaches people to retype it, and a floor of 7 is satisfied forever.
+// See test/helpers/cache-buster.js.
+describe('the files this rule lives in are cache-busted honestly', () => {
+  const CB = require('./helpers/cache-buster.js');
+  test.each(['js/job-finalize.js', 'js/jobs.js'])('%s', (f) => {
+    expect(CB.report(f)).toMatchObject(CB.healthy(f));
+  });
+});

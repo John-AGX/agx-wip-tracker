@@ -27,6 +27,7 @@ const core = require('../js/progress-core.js');
 const { coCompletion, phaseRevenueTruthy } = require('../js/co-completion.js');
 const jobWip = require('../server/services/money/job-wip.js');
 const jobMoney = require('../server/services/money/change-order-totals.js');
+const cacheBuster = require('./helpers/cache-buster.js');
 
 const raw = (...p) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
 
@@ -768,20 +769,33 @@ describe('E · load order and cache-busting — the containment', () => {
     expect(at('js/jobs.js')).toBeGreaterThan(at('js/co-completion.js'));
   });
 
-  test('E3 · both edited files got a ?v bump in the same commit', () => {
-    // Pinned as a FLOOR, not an equality. The bump this port made is the
-    // historical fact worth keeping — but an exact `?v=230` also fails on the
-    // next unrelated edit to jobs.js, which teaches the next person that the
-    // right response to this test is to retype a number rather than to check
-    // that they bumped. A floor still catches the two things that matter:
-    // the ?v being dropped, and a bump being reverted.
-    const ver = (f) => {
-      const m = HTML.match(new RegExp('src="js/' + f.replace('.', '\\.') + '\\?v=(\\d+)"'));
-      expect(m).not.toBeNull();
-      return parseInt(m[1], 10);
-    };
-    expect(ver('progress.js')).toBeGreaterThanOrEqual(4);
-    expect(ver('jobs.js')).toBeGreaterThanOrEqual(230);
+  test('E3 · both edited files move together with their ?v', () => {
+    // This used to pin `?v=230` exactly, and was then loosened to
+    // `toBeGreaterThanOrEqual(230)` while the file shipped at 231 — which made
+    // the assertion permanently satisfied. It could no longer fail, including
+    // for the revert it was loosened to keep catching. The exact pin was no
+    // better: it goes red on the next unrelated edit to jobs.js, which teaches
+    // the next person to retype the number instead of checking their work.
+    //
+    // Neither number was ever the invariant. The invariant is a relationship
+    // between the file and its tag, and git holds both halves — see
+    // test/helpers/cache-buster.js. No literal, and every clause can fail.
+    for (const f of ['js/progress.js', 'js/jobs.js']) {
+      expect(cacheBuster.report(f)).toMatchObject(cacheBuster.healthy(f));
+    }
+  });
+
+  test('E3b · the guard itself still has all four clauses', () => {
+    // A guard that quietly loses a clause is how E3 got here. If git cannot
+    // answer, `historyAvailable` goes false and the assertion above goes RED
+    // rather than silently passing.
+    const r = cacheBuster.report('js/jobs.js');
+    expect(Object.keys(r).filter((k) => typeof r[k] === 'boolean').sort())
+      .toEqual(['bumpedWithLastEdit', 'dirtyIsBumped', 'historyAvailable', 'notReverted', 'tagged']);
+    // …and a file index.html does not tag reports untagged rather than
+    // sailing through, which is the clause a `?v` deleted outright trips.
+    expect(cacheBuster.report('js/co-completion.js').tagged).toBe(true);
+    expect(cacheBuster.report('js/nothing-tags-this.js').tagged).toBe(false);
   });
 
   test('E4 · a missing core THROWS — it does not degrade', () => {
