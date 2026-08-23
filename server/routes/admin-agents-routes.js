@@ -23,6 +23,9 @@ const { requireAuth, requireCapability, requireSystemAdmin, hasCapability } = re
 // The resync push/skip decision — extracted so the boot case is testable
 // without a process restart. See agent-resync-decision.js for why.
 const { decideResync } = require('../services/agent-resync-decision');
+// The prompt-audit honesty contract: no grand total unless the ledger is
+// complete. See agent-prefix-ledger.js for what it used to under-report.
+const ledger = require('../services/agent-prefix-ledger');
 
 const router = express.Router();
 
@@ -1712,10 +1715,55 @@ router.get('/preview-prompt', requireAuth, requireCapability('ROLES_MANAGE'), as
       stable = systemBlocks;
     }
 
+    // WHICH CODE PATH THIS MODELS. Everything above comes from the LEGACY
+    // inline-Messages path (aiInternals.jobTools() / estimateTools() and
+    // buildJobContext's system blocks). The live job, estimate and client
+    // chats no longer take that path — they run on beta.sessions.create +
+    // events.stream against the registered managed agent, whose tools come
+    // from customToolsFor() and whose system prompt is the registered one.
+    //
+    // That is the whole of the "29 vs 46 tools" contradiction between this
+    // endpoint and prompt-audit: both are right about different code paths,
+    // and neither was saying which. Reading "46 tools" or "stable_prefix 330
+    // tokens" as a description of a live turn is wrong by a wide margin — the
+    // extra tools are not on the agent and cost nothing, and the 330-token
+    // job block belongs to a path that no longer runs.
+    let registeredCounts = null;
+    try {
+      // Every surface this endpoint serves (estimate / job / client / admin)
+      // was absorbed into the one 'job' agent — 86.
+      const regKey = 'job';
+      const reg = await pool.query(
+        `SELECT tool_count, skill_count, anthropic_agent_id
+           FROM managed_agent_registry
+          WHERE agent_key = $1 AND organization_id = $2`,
+        [regKey, req.organization ? req.organization.id : null]
+      );
+      if (reg.rows.length) {
+        registeredCounts = {
+          agent_key: regKey,
+          anthropic_agent_id: reg.rows[0].anthropic_agent_id,
+          tool_count: reg.rows[0].tool_count,
+          skill_count: reg.rows[0].skill_count
+        };
+      }
+    } catch (e) {
+      console.warn('[preview-prompt] registry lookup failed:', e.message);
+    }
+
     res.json({
       surface: surface,
       entity: { label: entityLabel },
       ai_phase: aiPhase,
+      models_code_path: 'legacy inline-Messages (ai-routes runStream)',
+      is_the_live_chat_path: false,
+      path_warning:
+        'These numbers describe the LEGACY inline-Messages path, NOT what a live chat ' +
+        'costs. The live surfaces run on the registered managed agent ' +
+        '(beta.sessions.create + events.stream), whose tool list comes from ' +
+        'customToolsFor() and whose prompt is the registered system prompt. For live ' +
+        'numbers use GET /managed/prompt-audit and GET /managed/:agentKey/anthropic-state.',
+      registered_agent: registeredCounts,
       stable_prefix: { text: stable, tokens: approxTokens(stable) },
       dynamic_context: { text: dynamic, tokens: approxTokens(dynamic) },
       tools: toolNames,
@@ -2653,6 +2701,13 @@ function builtinToolsetFor(agentKey) {
     // No per-tool overrides — every tool in the toolset is enabled.
   }];
 }
+
+// The tools agent_toolset_20260401 actually turns on. We register a ~90-char
+// REFERENCE; Anthropic expands it into full tool schemas that ride in the
+// cached prefix and are billed on every turn. prompt-audit counted that
+// reference as ZERO chars. Lives in the ledger service so it is testable
+// without booting this router — see agent-prefix-ledger.js.
+const _builtinToolsetToolNames = ledger.builtinToolsetToolNames;
 
 // Per-agent model. Every agent runs on the code default (Opus) EXCEPT the
 // Scribe — the cheap, write-only worker — which runs on Sonnet. Routed
@@ -3643,15 +3698,135 @@ router.get('/managed/prompt-audit', requireAuth, requireCapability('ROLES_MANAGE
       }))
     };
 
-    // 4. Grand-total floor — what every fresh session pays via
-    //    cache_read on the first turn.
-    const grandTotalChars = composedSystem.total_chars + tools.total_schema_chars;
-    const firstTurnFloor = {
-      note: 'This is what Anthropic caches on the registered agent. Every fresh session pays this read on its first turn via cache_read. Reduce by trimming the biggest contributors below.',
-      composed_system_tokens: composedSystem.total_tokens_estimate,
-      tool_schema_tokens: tools.total_tokens_estimate,
-      grand_total_tokens: Math.round(grandTotalChars / 4)
-    };
+    // 4. First-turn floor — what every fresh session pays via cache_read on
+    //    its first turn.
+    //
+    //    THIS USED TO LIE. It was composedSystem.total_chars +
+    //    customToolsFor(agentKey), full stop: no skills, and the
+    //    agent_toolset_20260401 entry counted as ZERO chars even though it
+    //    expands server-side into eight full tool schemas billed on every
+    //    turn. It reported 12,715 tokens against a measured 26,452, under a
+    //    note claiming to be "what Anthropic caches on the registered agent".
+    //    A number narrower than its own label sends its reader somewhere
+    //    else to look. See services/agent-prefix-ledger.js for the contract:
+    //    no grand total unless the ledger is complete.
+    const skillsForFloor = await collectSkillsFor(agentKey, { id: orgId });
+    const builtinForFloor = builtinToolsetFor(agentKey);
+    const builtinToolNames = _builtinToolsetToolNames(builtinForFloor);
+
+    const unmeasured = [];
+    if (builtinToolNames.length) {
+      unmeasured.push({
+        component: 'agent_toolset_20260401 — ' + builtinToolNames.length +
+          ' built-in tool schemas (' + builtinToolNames.join(', ') + ')',
+        registered: true,
+        why_not_measured:
+          'We register a ' + JSON.stringify(builtinForFloor).length + '-char toolset ' +
+          'REFERENCE, not the schemas. Anthropic expands it server-side into full tool ' +
+          'schemas that ride in the cached prefix and are billed every turn. Their text is ' +
+          'Anthropic-owned and versioned — a new toolset version can grow this with no ' +
+          'change on our side, and no P86 endpoint would show it. Only ' +
+          'observed_first_turn_tokens catches that.'
+      });
+    }
+    if (skillsForFloor.length) {
+      unmeasured.push({
+        component: skillsForFloor.length + ' Anthropic Skills attached by skill_id',
+        registered: true,
+        why_not_measured:
+          'Skills attach by id, so only each skill\'s name + description ride in the cached ' +
+          'prefix; the BODIES load on demand into the session container and are not part of ' +
+          'this floor. We hold the ids, not the registered descriptor text, so the ' +
+          'descriptor cost is Anthropic-side. (Skill bodies for this agent total ' +
+          'a few thousand tokens and are listed by /preview-prompt — they are NOT the ' +
+          'reason a turn is expensive.)'
+      });
+    }
+    unmeasured.push({
+      component: 'Anthropic managed-agent harness preamble',
+      registered: true,
+      why_not_measured:
+        'Anthropic wraps every managed-agent session in its own instructions ahead of our ' +
+        'system prompt. We never see that text, so it can only be observed as a residual.'
+    });
+
+    // Ground truth: one real cold-start turn on this agent. A first turn has
+    // no history behind it, so what it reads/writes to cache IS the prefix.
+    let observed = null;
+    try {
+      const obsRes = await pool.query(
+        `SELECT DISTINCT ON (m.session_id)
+                m.session_id,
+                COALESCE(m.cache_creation_input_tokens, 0) AS cc,
+                COALESCE(m.cache_read_input_tokens, 0)     AS cr,
+                m.created_at,
+                s.anthropic_session_id
+           FROM ai_messages m
+           JOIN ai_sessions s ON s.id = m.session_id
+          WHERE m.role = 'assistant'
+            AND s.agent_key = $1
+            AND m.organization_id = $2
+            AND (m.cache_creation_input_tokens IS NOT NULL
+                 OR m.cache_read_input_tokens IS NOT NULL)
+          ORDER BY m.session_id, m.created_at ASC`,
+        [agentKey, orgId]
+      );
+      const newest = obsRes.rows
+        .slice()
+        .sort((x, y) => new Date(y.created_at) - new Date(x.created_at));
+      observed = ledger.observedFromFirstTurns(newest);
+    } catch (e) {
+      console.warn('[prompt-audit] observed first-turn lookup failed:', e.message);
+    }
+
+    const firstTurnFloor = ledger.buildFirstTurnFloor({
+      composedSystemChars: composedSystem.total_chars,
+      customToolChars: tools.total_schema_chars,
+      unmeasured: unmeasured,
+      observed: observed
+    });
+
+    // 4b. The prefix is NOT the bill. Session history is added on top of it
+    //     and grows every turn with no cap — that is where a 112k turn
+    //     actually comes from, and an audit that shows only the prefix
+    //     invites the reader to conclude the opposite.
+    let sessionHistory = null;
+    try {
+      const histRes = await pool.query(
+        `SELECT s.id, s.session_kind, s.turn_count, s.created_at, s.last_compacted_at,
+                MAX(COALESCE(m.cache_read_input_tokens, 0)
+                    + COALESCE(m.cache_creation_input_tokens, 0)) AS peak_in
+           FROM ai_sessions s
+           JOIN ai_messages m ON m.session_id = s.id AND m.role = 'assistant'
+          WHERE s.agent_key = $1 AND m.organization_id = $2 AND s.archived_at IS NULL
+          GROUP BY s.id
+          ORDER BY peak_in DESC NULLS LAST
+          LIMIT 5`,
+        [agentKey, orgId]
+      );
+      const prefix = observed ? observed.tokens : null;
+      sessionHistory = {
+        note:
+          'Live sessions ranked by their most expensive turn. history_tokens is that turn ' +
+          'minus the registered prefix — it is conversation transcript, uncapped, and it ' +
+          'is rewritten in full every time the cache entry lapses. There is no turn cap, ' +
+          'no age cap and no reset on a deal-thread session.',
+        registered_prefix_tokens: prefix,
+        top_sessions: histRes.rows.map(r => ({
+          session_id: r.id,
+          session_kind: r.session_kind,
+          turn_count: r.turn_count,
+          created_at: r.created_at,
+          ever_compacted: !!r.last_compacted_at,
+          peak_turn_input_tokens: Number(r.peak_in || 0),
+          history_tokens: prefix != null
+            ? Math.max(0, Number(r.peak_in || 0) - prefix)
+            : null
+        }))
+      };
+    } catch (e) {
+      console.warn('[prompt-audit] session-history lookup failed:', e.message);
+    }
 
     // 5. Find the registered Anthropic agent id for context.
     const regRes = await pool.query(
@@ -3669,8 +3844,28 @@ router.get('/managed/prompt-audit', requireAuth, requireCapability('ROLES_MANAGE
       registered_at: registered ? registered.updated_at : null,
       composed_system: composedSystem,
       tools: tools,
+      skills: {
+        count: skillsForFloor.length,
+        skill_ids: skillsForFloor.map(s => s.skill_id),
+        note:
+          'Attached by skill_id, so only name + description ride in the cached prefix; ' +
+          'bodies load on demand into the session container. Sources are unioned by ' +
+          'collectSkillsFor: org_skill_packs, managed_agent_skills, then the legacy ' +
+          'app_settings.agent_skills JSONB — which is where these actually come from, and ' +
+          'why /organizations/:id/skill-packs and /agents/:key/native-skills both show none.'
+      },
+      builtin_toolset: {
+        entries: builtinForFloor,
+        expands_to_tools: builtinToolNames,
+        note:
+          'Registered as a short reference; Anthropic expands it into ' +
+          builtinToolNames.length + ' full tool schemas in the cached prefix. Their size is ' +
+          'NOT counted in composed_system or tools above — see ' +
+          'first_turn_floor.unmeasured_components.'
+      },
       reference_links: referenceLinks,
-      first_turn_floor: firstTurnFloor
+      first_turn_floor: firstTurnFloor,
+      session_history: sessionHistory
     });
   } catch (e) {
     console.error('GET /api/admin/agents/managed/prompt-audit error:', e);
