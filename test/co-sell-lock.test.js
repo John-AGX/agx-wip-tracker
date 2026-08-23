@@ -166,17 +166,60 @@ describe('target margin back-solves the UNLOCKED remainder only', () => {
   });
 });
 
-// ── The NaN trap the empty-array return exists to close ─────────────
+// ── Where the NaN containment actually is ───────────────────────────
+// It is resolveMarkedUp's num()/typeof coercion, NOT the empty-array
+// return's key list. This block used to claim otherwise — that omitting
+// lockedSubtotal/lockedSell from that early return turned income into NaN
+// and poisoned the whole job tile. Measured: it does not. Removing both
+// keys leaves every number on both corpora unchanged and fails exactly one
+// test, the shape assertion below. The claim is corrected rather than the
+// keys deleted; they are defensive, and a false rationale is how the next
+// reader stops looking for the real guard.
 describe('a stripped per-object degrades to today number, never to NaN', () => {
-  test('the empty-lines return carries all four keys', () => {
+  test('the empty-lines return carries all four keys — one shape from every path', () => {
     const per = pricing.computeForLines({ targetMargin: 30 }, []);
     expect(per).toEqual({ subtotal: 0, markedUp: 0, lockedSubtotal: 0, lockedSell: 0 });
   });
 
+  test('...and those two keys are NOT what keeps it out of NaN', () => {
+    // The measured fact, made executable so the corrected comment cannot
+    // rot back into the old claim. A `per` missing the locked pair takes
+    // the `!lockedSell && !lockedSubtotal` branch and lands on the same
+    // number, because resolveMarkedUp coerces.
+    const rec = { targetMargin: 30 };
+    const withKeys = { subtotal: 0, markedUp: 0, lockedSubtotal: 0, lockedSell: 0 };
+    const without = { subtotal: 0, markedUp: 0 };
+    expect(pricing.resolveMarkedUp(without, rec)).toBe(pricing.resolveMarkedUp(withKeys, rec));
+    expect(Number.isNaN(pricing.resolveMarkedUp(without, rec))).toBe(false);
+    // Same at a non-zero subtotal — this is not an artefact of everything
+    // being 0 on the empty-lines path.
+    const a = { subtotal: 4650, markedUp: 5000, lockedSubtotal: 0, lockedSell: 0 };
+    const b = { subtotal: 4650, markedUp: 5000 };
+    expect(pricing.resolveMarkedUp(b, rec)).toBe(pricing.resolveMarkedUp(a, rec));
+  });
+
+  test('the coercion earns its keep on a HALF-stripped per, which is the real trap', () => {
+    // Both keys absent is safe by the `!lockedSell && !lockedSubtotal`
+    // short-circuit, with or without num(). ONE key absent is not: that
+    // reaches `lockedSell + applyTargetMargin(subtotal - lockedSubtotal)`,
+    // and 4650 - undefined is NaN. This is the case the coercion actually
+    // covers, so it is the case worth pinning — the previous test in this
+    // block would pass even if num() were removed.
+    const rec = { targetMargin: 30 };
+    expect(4650 - undefined).toBeNaN();                       // the arithmetic being avoided
+    const half = { subtotal: 4650, markedUp: 5000, lockedSell: 500 };
+    expect(Number.isNaN(pricing.resolveMarkedUp(half, rec))).toBe(false);
+    expect(pricing.resolveMarkedUp(half, rec)).toBe(7142.857142857143);
+    const otherHalf = { subtotal: 4650, markedUp: 5000, lockedSubtotal: 1000 };
+    expect(Number.isNaN(pricing.resolveMarkedUp(otherHalf, rec))).toBe(false);
+    expect(pricing.resolveMarkedUp(otherHalf, rec)).toBe(5214.285714285715);
+  });
+
   test('an empty change order with a target margin and a fee is $500, not NaN', () => {
-    // Omit lockedSubtotal/lockedSell from that early return and this
-    // becomes NaN, which then propagates into totalIncome, revisedProfit,
-    // revisedMargin and backlog — the entire job tile.
+    // Worth keeping on its own terms: a record with an active target
+    // margin and no lines must price to just its fee. It does NOT
+    // demonstrate anything about the locked keys — it passes with them
+    // removed.
     const m = changeOrderMoney({ targetMargin: 30, feeFlat: 500, lines: [] });
     expect(m.income).toBe(500);
     expect(Number.isNaN(m.income)).toBe(false);

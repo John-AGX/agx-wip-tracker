@@ -168,11 +168,29 @@
   // `subtotal` and `markedUp` keep their exact prior meanings. The two
   // added keys report how much of each came from PROMISED lines, so
   // resolveMarkedUp below can carve them out of a target-margin
-  // back-solve. THE EMPTY-ARRAY RETURN CARRIES ALL FOUR KEYS ON
-  // PURPOSE: omit the locked pair and resolveMarkedUp turns income into
-  // NaN on any record with an active target margin and no lines, and
-  // NaN propagates into totalIncome, revisedProfit, revisedMargin and
-  // backlog — the whole job tile.
+  // back-solve.
+  //
+  // THE EMPTY-ARRAY RETURN CARRIES ALL FOUR KEYS FOR SHAPE, NOT FOR
+  // SAFETY. This comment used to say that omitting the locked pair
+  // turned income into NaN and poisoned the whole job tile. That was
+  // measured, and it is FALSE: with BOTH keys absent, resolveMarkedUp's
+  // `!lockedSell && !lockedSubtotal` short-circuits to the legacy branch
+  // and returns exactly today's number. Strip them and no figure moves
+  // on either corpus — the only test that fails is the one asserting the
+  // shape.
+  //
+  // The real NaN trap is a HALF-stripped `per`: one locked key present
+  // and the other missing reaches
+  // `lockedSell + applyTargetMargin(subtotal - lockedSubtotal)`, and
+  // `4650 - undefined` is NaN. That is covered by resolveMarkedUp's
+  // num() coercion, not by this line. js/estimate-editor.js rebuilds
+  // `per` as a bare {subtotal, markedUp} literal in two places, so a
+  // consumer reading the keys uncoerced is not hypothetical.
+  //
+  // The keys stay: every return path here should hand back one shape.
+  // Defensive, not load-bearing. The distinction is worth the words — a
+  // rationale that overstates is how the next reader concludes the guard
+  // is here and stops looking for it where it actually is.
   function computeForLines(rec, lines) {
     if (!Array.isArray(lines) || !lines.length) {
       return { subtotal: 0, markedUp: 0, lockedSubtotal: 0, lockedSell: 0 };
