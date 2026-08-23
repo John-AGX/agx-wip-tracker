@@ -3031,9 +3031,18 @@ async function composedAgentSystem(agentKey, baseline, org) {
   // All are optional; missing → just the baseline ships.
   if (agentKey !== 'job') return baseline;
   try {
+    // Both per-tenant blocks below are CAPPED (agent-prompt-caps.js). They
+    // ride in the registered = CACHED prefix, so every session in the org pays
+    // for them; before the cap they were unbounded free-text admin fields.
+    // Truncation is never silent: the returned text carries an in-prompt
+    // notice, and `warning` is logged here.
+    const promptCaps = require('../services/agent-prompt-caps');
     const parts = [baseline];
     if (org && org.identity_body && org.identity_body.trim()) {
-      parts.push(String(org.identity_body).trim());
+      const ident = promptCaps.capIdentityBody(
+        org.identity_body, promptCaps.IDENTITY_BODY_PROMPT_CAP);
+      if (ident.warning) console.warn(ident.warning);
+      if (ident.text) parts.push(ident.text);
     }
     // Org memory rows — concatenated under a single "Working posture"
     // heading so the model sees them as one coherent block rather than
@@ -3050,14 +3059,10 @@ async function composedAgentSystem(agentKey, baseline, org) {
             ORDER BY sort_order ASC, created_at ASC`,
           [org.id]
         );
-        if (memRes.rows && memRes.rows.length) {
-          const memBlock = ['## Working posture'].concat(
-            memRes.rows.map(function (r) {
-              return '### ' + String(r.name).trim() + '\n' + String(r.body).trim();
-            })
-          ).join('\n\n');
-          parts.push(memBlock);
-        }
+        const mem = promptCaps.buildOrgMemoryBlock(
+          memRes.rows, promptCaps.ORG_MEMORY_PROMPT_CAP);
+        if (mem.warning) console.warn(mem.warning);
+        if (mem.text) parts.push(mem.text);
       } catch (e) {
         console.warn('[composedAgentSystem] org_memory injection skipped:', e.message);
       }
@@ -3082,10 +3087,14 @@ async function composedAgentSystem(agentKey, baseline, org) {
 // breakdown so the admin prompt-audit endpoint can show what's in the
 // registered system prompt. Mirrors composedAgentSystem's parts list.
 async function composedAgentSystemBreakdown(agentKey, baseline, org) {
+  const promptCaps = require('../services/agent-prompt-caps');
   const parts = [];
-  function record(name, text) {
+  // `extra` carries cap/truncation facts to the audit. A part that was cut
+  // MUST say so here — an audit that renders a truncated block as a plain
+  // char count is reporting a number narrower than its label.
+  function record(name, text, extra) {
     if (!text) return;
-    parts.push({ name: name, chars: String(text).length });
+    parts.push(Object.assign({ name: name, chars: String(text).length }, extra || {}));
   }
   if (agentKey !== 'job') {
     record('baseline (staff passthrough)', baseline);
@@ -3094,7 +3103,14 @@ async function composedAgentSystemBreakdown(agentKey, baseline, org) {
   try {
     record('baseline', baseline);
     if (org && org.identity_body && org.identity_body.trim()) {
-      record('org.identity_body', String(org.identity_body).trim());
+      const ident = promptCaps.capIdentityBody(
+        org.identity_body, promptCaps.IDENTITY_BODY_PROMPT_CAP);
+      record('org.identity_body', ident.text, {
+        cap_chars: ident.cap,
+        truncated: ident.truncated,
+        original_chars: ident.originalChars,
+        dropped_chars: ident.droppedChars
+      });
     }
     if (org && org.id) {
       try {
@@ -3104,14 +3120,16 @@ async function composedAgentSystemBreakdown(agentKey, baseline, org) {
             ORDER BY sort_order ASC, created_at ASC`,
           [org.id]
         );
-        if (memRes.rows && memRes.rows.length) {
-          const memBlock = ['## Working posture'].concat(
-            memRes.rows.map(function (r) {
-              return '### ' + String(r.name).trim() + '\n' + String(r.body).trim();
-            })
-          ).join('\n\n');
-          record('org_memory (' + memRes.rows.length + ' rows)', memBlock);
-        }
+        const mem = promptCaps.buildOrgMemoryBlock(
+          memRes.rows, promptCaps.ORG_MEMORY_PROMPT_CAP);
+        record('org_memory (' + mem.rowsKept + ' of ' + mem.rowsGiven + ' rows)', mem.text, {
+          cap_chars: mem.cap,
+          truncated: mem.truncated,
+          original_chars: mem.originalChars,
+          rows_given: mem.rowsGiven,
+          rows_kept: mem.rowsKept,
+          dropped_row_names: mem.droppedNames
+        });
       } catch (e) { /* match composedAgentSystem's defensive skip */ }
     }
     try {
@@ -3136,9 +3154,14 @@ function _finalizeBreakdown(parts) {
   // separator chars so total_joined_chars matches the actual
   // registered prompt size to within a byte or two.
   const sepChars = parts.length > 1 ? (parts.length - 1) * 2 : 0;
+  const truncatedParts = parts.filter(p => p.truncated).map(p => p.name);
   return {
     total_chars: totalChars,
     total_joined_chars: totalChars + sepChars,
+    // Hoisted so a caller reading the summary cannot miss that a capped block
+    // was cut. Empty array = nothing was truncated.
+    truncated_parts: truncatedParts,
+    any_truncated: truncatedParts.length > 0,
     parts: parts
   };
 }
