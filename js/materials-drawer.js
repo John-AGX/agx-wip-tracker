@@ -627,9 +627,38 @@
     return !!(a && ((Array.isArray(a.params) && a.params.length) || a.has_formulas));
   }
 
-  // PWA-safe notice — native alert() silently no-ops in the installed app.
-  function mdNotify(msg) {
-    if (window.p86Confirm) { try { window.p86Confirm({ title: 'Assemblies', message: msg, confirmText: 'OK' }); return; } catch (e) {} }
+  // PWA-safe notice — native alert() silently no-ops in the installed app,
+  // so a refusal routed through it is a button that just looks broken.
+  //
+  // p86Alert is the right primitive and the house pattern (~8 files guard
+  // it exactly this way): ONE OK button, which is the shape a notice
+  // wants. This helper used to reach for p86Confirm, which draws a Cancel
+  // beside OK for a message there is nothing to cancel — and the two live
+  // p86Confirm implementations disagree on option names
+  // (confirmText/cancelText/destructive in js/app.js, confirmLabel/
+  // cancelLabel/danger in js/dialogs.js), so the button label silently
+  // depended on which loaded last. The `confirmText: 'OK'` here was read
+  // by one of them and ignored by the other. p86Alert is defined once, in
+  // js/dialogs.js, which loads before everything in this file.
+  //
+  // p86Confirm stays as a middle rung for the one case it covers: app.js
+  // defines p86Confirm independently, so if dialogs.js failed to load it
+  // is still there when p86Alert is not. alert() is the last resort for a
+  // plain browser that has neither — in the installed app it is never
+  // reached, which is the point. A fallback that is itself a no-op there
+  // is not a fallback.
+  function mdNotify(msg, title) {
+    var t = title || 'Assemblies';
+    if (typeof window.p86Alert === 'function') {
+      try {
+        var p = window.p86Alert({ title: t, message: msg });
+        if (p && typeof p.catch === 'function') p.catch(function () {});
+        return;
+      } catch (e) {}
+    }
+    if (typeof window.p86Confirm === 'function') {
+      try { window.p86Confirm({ title: t, message: msg }); return; } catch (e) {}
+    }
     alert(msg);
   }
 
@@ -814,11 +843,22 @@
   // (one line each + component breakdown); 'exploded' = raw lines.
   function insertStack() {
     if (!targetApi() || typeof targetApi().applyBulkAddLineItems !== 'function') {
+      // RAW alert() ON PURPOSE — a developer signal, not a user refusal,
+      // so it is deliberately NOT routed through mdNotify. targetApi()
+      // returns window.p86ActiveLineTarget || window.estimateEditorAPI.
+      // estimateEditorAPI is assigned unconditionally at js/estimate-
+      // editor.js load (which is before this file) carrying both apply*
+      // methods, and coLineTarget — the ONLY value p86ActiveLineTarget is
+      // ever assigned, in js/change-order-editor.js — carries both too.
+      // So this can fire only if estimate-editor.js failed to PARSE, in
+      // which case the app is already broken and a plain alert is the
+      // more honest signal. Same guard repeats in submitAdd and
+      // submitBulkAdd; same reasoning.
       alert('Estimate editor isn\'t available — open an estimate first.');
       return;
     }
     var ready = _stack.filter(function(s) { var q = parseFloat(s.qty); return isFinite(q) && q > 0; });
-    if (!ready.length) { alert('Give each stacked assembly a takeoff qty first.'); return; }
+    if (!ready.length) { mdNotify('Give each stacked assembly a takeoff qty first.'); return; }
     Promise.all(ready.map(function(s) {
       // Parametric assemblies insert from the server explode — FINAL
       // quantities computed from the typed dimensions, never q × per-unit.
@@ -874,9 +914,10 @@
           return '"' + u.name + '" has unpriced items (' + shown.join(', ') +
             (u.items.length > shown.length ? ', +' + (u.items.length - shown.length) + ' more' : ') ');
         }).join('\n');
-        alert('Priced this recipe before adding it.\n\n' + msg +
+        mdNotify('Priced this recipe before adding it.\n\n' + msg +
           '\n\nAdding it now would append a cost that is too low, and nothing downstream would ' +
-          'say so. Open the assembly and give every item a price, then insert it.');
+          'say so. Open the assembly and give every item a price, then insert it.',
+          'Unpriced assembly');
         return;
       }
 
@@ -973,7 +1014,7 @@
   function saveStackAsAssembly(tray) {
     var name = (tray.querySelector('[data-stacksave-name]') || {}).value || '';
     var unit = (tray.querySelector('[data-stacksave-unit]') || {}).value || 'EA';
-    if (!name.trim()) { alert('Name the new assembly first.'); return; }
+    if (!name.trim()) { mdNotify('Name the new assembly first.'); return; }
     var items = _stack.map(function(s) {
       var q = parseFloat(s.qty);
       return {
@@ -997,7 +1038,7 @@
           try { window.p86Assemblies.renderList(); } catch (e) {}
         }
       })
-      .catch(function(e) { alert('Save failed: ' + (e.message || 'unknown')); });
+      .catch(function(e) { mdNotify('Save failed: ' + (e.message || 'unknown'), 'Save failed'); });
   }
 
   // Which cost code carries the most $ in a flattened recipe — used to
@@ -1043,6 +1084,8 @@
 
   function submitAdd(material, form) {
     if (!targetApi() || typeof targetApi().applyAddLineItem !== 'function') {
+      // Raw alert() on purpose — developer signal, not a user refusal.
+      // See insertStack()'s copy of this guard for why it cannot fire.
       alert('Estimate editor isn\'t available — open an estimate first.');
       return;
     }
@@ -1177,6 +1220,8 @@
 
   function submitBulkAdd() {
     if (!targetApi() || typeof targetApi().applyBulkAddLineItems !== 'function') {
+      // Raw alert() on purpose — developer signal, not a user refusal.
+      // See insertStack()'s copy of this guard for why it cannot fire.
       alert('Estimate editor isn\'t available — open an estimate first.');
       return;
     }
@@ -1206,7 +1251,9 @@
       });
     });
     if (missingQty > 0) {
-      alert(missingQty + ' line(s) need a qty before adding.');
+      // The offending qty fields already went red (md-error, above), but
+      // the red says WHICH rows, not why the button did nothing.
+      mdNotify(missingQty + ' line(s) need a qty before adding.', 'Add lines');
       return;
     }
     try {
@@ -1222,7 +1269,7 @@
       renderResults();
       renderTray();
     } catch (e) {
-      alert('Bulk add failed: ' + (e.message || 'unknown'));
+      mdNotify('Bulk add failed: ' + (e.message || 'unknown'), 'Add failed');
     }
   }
 

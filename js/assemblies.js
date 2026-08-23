@@ -80,9 +80,31 @@
     if (s == null) return '';
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
-  // PWA-safe notice — native alert() silently no-ops in the installed app.
-  function notify(msg) {
-    if (window.p86Confirm) { try { window.p86Confirm({ title: 'Assemblies', message: msg, confirmText: 'OK' }); return; } catch (e) {} }
+  // PWA-safe notice — native alert() silently no-ops in the installed app,
+  // so a refusal routed through it is a button that just looks broken.
+  //
+  // p86Alert is the single-button primitive (js/dialogs.js, which loads
+  // before this file) and is the house pattern. p86Confirm draws a Cancel
+  // beside OK for a message there is nothing to cancel, and the two live
+  // p86Confirm implementations disagree on option names — js/app.js reads
+  // confirmText, js/dialogs.js reads confirmLabel — so the `confirmText:
+  // 'OK'` this used to pass was honoured by one and ignored by the other.
+  // p86Confirm stays only as a middle rung, since app.js defines it
+  // independently of dialogs.js. alert() is the last resort for a plain
+  // browser with neither; the installed app never reaches it, which is the
+  // point — a fallback that is itself a no-op there is not a fallback.
+  function notify(msg, title) {
+    var t = title || 'Assemblies';
+    if (typeof window.p86Alert === 'function') {
+      try {
+        var p = window.p86Alert({ title: t, message: msg });
+        if (p && typeof p.catch === 'function') p.catch(function () {});
+        return;
+      } catch (e) {}
+    }
+    if (typeof window.p86Confirm === 'function') {
+      try { window.p86Confirm({ title: t, message: msg }); return; } catch (e) {}
+    }
     alert(msg);
   }
   function money(n) { return (n == null || isNaN(n)) ? '—' : '$' + Number(n).toFixed(2); }
@@ -838,13 +860,45 @@
     var a = _list.find(function (x) { return x.id === id; });
     var doDelete = function () {
       window.p86Api.assemblies.remove(id).then(function (res) {
-        if (res && res.error) { alert(res.error); return; }
+        // The server refusing the delete — an assembly still in use, say.
+        // A refusal the user has to hear, and raw alert() is inaudible in
+        // the installed app. This file already had notify() and used it
+        // correctly one function up, in save().
+        if (res && res.error) { notify(res.error, 'Delete refused'); return; }
         renderList(null, { quiet: true });   // data-changed — see renderList
-      }).catch(function (err) { alert('Delete failed: ' + (err.message || (err.error || 'unknown'))); });
+      }).catch(function (err) {
+        notify('Delete failed: ' + (err.message || (err.error || 'unknown')), 'Delete failed');
+      });
     };
-    if (window.p86Confirm) {
-      window.p86Confirm('Delete assembly "' + ((a && a.name) || id) + '"? Estimates already built from it keep their lines.', doDelete);
-    } else if (confirm('Delete this assembly?')) {
+    var msg = 'Delete assembly "' + ((a && a.name) || id) +
+      '"? Estimates already built from it keep their lines.';
+    // p86Confirm takes an OPTIONS OBJECT and returns a Promise<boolean>.
+    // This was called POSITIONALLY — p86Confirm(msg, doDelete) — so `opts`
+    // was a string: opts.message came out undefined and the dialog
+    // rendered with an EMPTY body, while doDelete sat in a second argument
+    // that nothing reads and nothing calls. Wherever p86Confirm exists
+    // (always, in the app) deleting an assembly showed a blank box and
+    // then did nothing at all; only the confirm() fallback below ever
+    // deleted, and it runs only when p86Confirm is ABSENT.
+    //
+    // That is also why the two notices above had to be fixed together
+    // with this: inside doDelete they were unreachable in the app, so
+    // routing them through notify() on their own would have been theatre.
+    //
+    // Both option-name families are passed because the two live
+    // implementations disagree and load order picks the winner: js/app.js
+    // reads confirmText/destructive, js/dialogs.js reads
+    // confirmLabel/danger. Promise.resolve() wraps the return so an
+    // implementation that resolved nothing fails CLOSED — no delete —
+    // rather than deleting unconfirmed.
+    if (typeof window.p86Confirm === 'function') {
+      Promise.resolve(window.p86Confirm({
+        title: 'Delete assembly',
+        message: msg,
+        confirmText: 'Delete', confirmLabel: 'Delete',
+        destructive: true, danger: true
+      })).then(function (ok) { if (ok) doDelete(); });
+    } else if (confirm(msg)) {
       doDelete();
     }
   }
