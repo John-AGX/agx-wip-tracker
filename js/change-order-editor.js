@@ -245,6 +245,24 @@ function p86Ask(message, opts) {
         _state.saving = false;
         _state.lastSavedAt = new Date();
         paintSaveStatus();
+        // THE SAVE LANDED, SO EVERY OTHER SURFACE IS NOW WRONG.
+        //
+        // Only close() refreshed. The editor is an overlay over the job page,
+        // so with it open the CO tile, the Jobs Hub list and this job's money
+        // sections went on showing the pre-edit number for as long as the user
+        // kept typing — and "I changed the cost and the CO total didn't move"
+        // is indistinguishable from that, because a change order's total is
+        // read from more than one place.
+        //
+        // The shared primitive, with the entity's existing registry entry —
+        // not a bespoke repaint. It patches appData.jobChangeOrders from the
+        // server and repaints the four job-money surfaces.
+        //
+        // This also closes a race close() has always had: close() fires the
+        // pending flush and then refreshes IMMEDIATELY, so the refetch could
+        // beat the PUT and repaint the stale row. Refreshing from the save's
+        // own success is ordered by construction.
+        if (window.p86Refresh) window.p86Refresh('co', { jobId: co.job_id });
       })
       .catch(function(e) {
         _state.saving = false;
@@ -1252,23 +1270,46 @@ function p86Ask(message, opts) {
     if (!host) return;
     var t = computeTotals();
     if (!t) { host.innerHTML = ''; return; }
-    function chip(label, value, accent) {
+    function chip(label, value, accent, note) {
       return '<div class="p86-co-chip' + (accent ? ' accent' : '') + '">' +
         '<div class="p86-co-chip-label">' + escapeHTML(label) + '</div>' +
         '<div class="p86-co-chip-value">' + escapeHTML(value) + '</div>' +
+        (note
+          ? '<div class="p86-co-chip-note" style="margin-top:3px;font-size:9px;font-weight:700;' +
+            'letter-spacing:.3px;text-transform:uppercase;line-height:1.3;color:#7eb0ff;">' +
+            escapeHTML(note) + '</div>'
+          : '') +
       '</div>';
     }
+    // A sell-locked change order's total is CORRECT when it does not move,
+    // and there was nothing on screen that said so. A person typing a real
+    // cost into a promised line watched six numbers move and the seventh —
+    // the one they were looking at — hold, with no explanation anywhere but
+    // a title attribute on a 9px dot.
+    //
+    // These notes are only written when the claim is true of the WHOLE
+    // record. With every priced line locked, resolveMarkedUp reduces to the
+    // promised sell, so Change Order Total and Tax + Fees are provably held
+    // and Est. Cost, Profit and Margin provably track cost. In a MIXED change
+    // order none of that is true line-for-line, so the Total chip says how
+    // many lines are promised and the rest say nothing rather than something
+    // false.
+    var allLocked = t.lineCount > 0 && t.lockedCount === t.lineCount;
+    var HELD = 'Held by the promised price';
+    var TRACKS = 'Moves with cost';
+    var totalNote = allLocked ? HELD
+      : (t.lockedCount ? t.lockedCount + ' of ' + t.lineCount + ' lines priced by promise' : '');
     // "Subtotal" was the single most misleading word in this editor. That
     // chip IS the change order's cost — the number that flows into the
     // job's Total Est. Costs (Revised). Labelling contract cost "Subtotal"
     // is what let a $27,500 sell price sit there looking harmless.
     host.innerHTML =
-      chip('Est. Cost', fmtCurrency(t.subtotal)) +
+      chip('Est. Cost', fmtCurrency(t.subtotal), false, allLocked ? TRACKS : '') +
       chip('Markup', fmtCurrency(t.markupAmount)) +
-      chip('Tax + Fees', fmtCurrency(t.feeFlat + t.feePctAmount + t.taxAmount)) +
-      chip('Profit', fmtCurrency(t.profit)) +
-      chip('Change Order Total', fmtCurrency(t.total), true) +
-      chip('Margin', fmtPct(t.marginPct)) +
+      chip('Tax + Fees', fmtCurrency(t.feeFlat + t.feePctAmount + t.taxAmount), false, allLocked ? HELD : '') +
+      chip('Profit', fmtCurrency(t.profit), false, allLocked ? TRACKS : '') +
+      chip('Change Order Total', fmtCurrency(t.total), true, totalNote) +
+      chip('Margin', fmtPct(t.marginPct), false, allLocked ? TRACKS : '') +
       chip('Lines', String(t.lineCount));
     paintCoNotices(t);
   }
@@ -1300,6 +1341,39 @@ function p86Ask(message, opts) {
           ? ' ' + t.lockedCount + ' line' + (t.lockedCount === 1 ? '' : 's') + ' with a promised Unit Sell ' +
             (t.lockedCount === 1 ? 'is' : 'are') + ' excluded from the back-solve — a promise is not derived from cost, so a margin target may not restate it.'
           : '') +
+        '</div>';
+    }
+    // A PROMISED PRICE HOLDS THE TOTAL, AND SAYS SO.
+    //
+    // This is the notice that had to exist. The change order's total not
+    // moving when a cost changes is the sell lock working — but the only
+    // explanation that was ever on screen was the amber "needs a real cost"
+    // banner below, and typing a real cost CLEARS costPending, so that banner
+    // deleted itself at the exact moment a person started wondering why the
+    // total was stuck. This one is keyed to the lock itself, so it is still
+    // there afterwards.
+    //
+    // Deliberately not a tooltip: the question ("why did that not move?")
+    // arrives while the caret is in a cell, and nobody hovers a 9px dot to
+    // answer it.
+    if (t.lockedCount) {
+      var everyLine = t.lockedCount === t.lineCount;
+      out += '<div class="p86-co-notice p86-co-notice-locked" style="padding:7px 14px;font-size:11.5px;background:rgba(79,140,255,.08);border-bottom:1px solid rgba(79,140,255,.18);color:#9ec1ff;">' +
+        '<strong>' + (everyLine
+          ? 'Every line’s price is promised.'
+          : t.lockedCount + ' of ' + t.lineCount + ' lines carry a promised Unit Sell.') +
+        '</strong> ' +
+        'Typing a cost on ' + (everyLine ? 'a line' : 'one of those lines') +
+        ' moves <strong>Est. Cost</strong>, <strong>Profit</strong> and <strong>Margin</strong> — ' +
+        'the <strong>Change Order Total</strong> holds at the price quoted, because that price is ' +
+        'the promise and cost is the only free variable. ' +
+        (everyLine ? '' : (function () {
+          var rest = t.lineCount - t.lockedCount;
+          return 'The other ' + rest + (rest === 1 ? ' line still prices' : ' lines still price') +
+            ' from cost × markup. ';
+        })()) +
+        'Promised lines show a blue Amount with a ● marker. Clear a line’s Unit Sell to ' +
+        'price it from cost × markup instead.' +
         '</div>';
     }
     if (t.pendingCount) {
