@@ -274,12 +274,28 @@ function p86Ask(message, opts) {
     if (_state.saveTimer) clearTimeout(_state.saveTimer);
     _state.saveTimer = setTimeout(flushSave, 700);
   }
-  function flushSave() {
-    if (!_state.co || _state.saving) return;
-    var co = _state.co;
-    // Build the data payload from the in-memory record, stripping the
-    // canonical column fields. Server also strips defensively but we
-    // keep the wire clean.
+  // THE save payload. One builder, because there are two savers — flushSave
+  // (debounced, every keystroke) and flushSaveSync (status transitions, i.e.
+  // APPROVE) — and they had hand-copied the same object literal.
+  //
+  // The PUT replaces `data` wholesale, so a key this builder omits is DELETED
+  // from the record. This editor is not the record's only writer: the
+  // allocation window sets `completionMode` + `riderScopeName`, the CO→building
+  // split writes `buildingAllocations`, and the PO cost-draw wiring writes
+  // `costSource`/`costDraws`. None of those has a control in this editor, so
+  // none of them was in the literal — and typing one character into a line
+  // silently erased whichever the record held. A change order set to ride its
+  // scope reverted to the default completion clock on the next keystroke, with
+  // nothing on screen to say so, and approving it did the same.
+  //
+  // Preserve, do not default. A key ABSENT on the record stays absent —
+  // writing `costDraws: []` where there was no key is itself a change, and
+  // `costDraws` is money wiring. A key present is written back untouched.
+  // This editor OWNS the ten fields below and is a CUSTODIAN of the rest.
+  var CO_CUSTODIAL_KEYS = ['completionMode', 'riderScopeName',
+    'buildingAllocations', 'costSource', 'costDraws'];
+
+  function coSavePayload(co) {
     var data = {
       title: co.title || '',
       scope: co.scope || '',
@@ -292,6 +308,18 @@ function p86Ask(message, opts) {
       roundTo: co.roundTo || 0,
       lines: Array.isArray(co.lines) ? co.lines : []
     };
+    CO_CUSTODIAL_KEYS.forEach(function (k) {
+      if (Object.prototype.hasOwnProperty.call(co, k) && co[k] !== undefined) {
+        data[k] = co[k];
+      }
+    });
+    return data;
+  }
+
+  function flushSave() {
+    if (!_state.co || _state.saving) return;
+    var co = _state.co;
+    var data = coSavePayload(co);
     _state.saving = true;
     _state.saveError = null;
     paintSaveStatus();
@@ -1589,18 +1617,7 @@ function p86Ask(message, opts) {
   function flushSaveSync() {
     var co = _state.co;
     if (!co) return Promise.resolve();
-    var data = {
-      title: co.title || '',
-      scope: co.scope || '',
-      terms: co.terms || '',
-      targetMargin: co.targetMargin || '',
-      defaultMarkup: co.defaultMarkup || '',
-      feeFlat: co.feeFlat || 0,
-      feePct: co.feePct || 0,
-      taxPct: co.taxPct || 0,
-      roundTo: co.roundTo || 0,
-      lines: Array.isArray(co.lines) ? co.lines : []
-    };
+    var data = coSavePayload(co);
     _state.saving = true;
     _state.saveError = null;
     paintSaveStatus();
@@ -1677,6 +1694,7 @@ function p86Ask(message, opts) {
         newLineId: newLineId,
         ensureLineIds: ensureLineIds,
         adoptCo: adoptCo,
+        coSavePayload: coSavePayload,
       },
     };
   }
