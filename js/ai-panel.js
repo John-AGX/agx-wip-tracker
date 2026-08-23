@@ -6661,7 +6661,11 @@ function p86Ask(message, opts) {
       detail =
         '<div style="font-size:13px;color:var(--text,#fff);font-weight:600;">' + escapeHTMLLocal(titleStr) + '</div>' +
         '<div style="font-size:11px;color:var(--text-dim,#aaa);margin-top:3px;">' +
-          escapeHTMLLocal(input.project_type || 'Service & Repair') +
+          // A DEFAULT here is a fabrication the human then approves: when the
+          // model omits project_type the card used to read 'Service & Repair'
+          // — a value the lead is not actually given, and one the vocabulary
+          // no longer contains. Say what will be stored.
+          escapeHTMLLocal(input.project_type || 'no type') +
           (locStr ? ' &middot; ' + escapeHTMLLocal(locStr) : '') +
           ' &middot; ' + clientStr +
         '</div>' +

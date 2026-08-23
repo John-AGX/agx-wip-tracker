@@ -32,6 +32,81 @@
     renderSaveIndicator();
   }
 
+  /* ── Job type vocabulary ───────────────────────────────────────────────
+   * ONE list, from ONE place: the org's job-numbering registry
+   * (branding.job_types, via window.p86JobFinalize). An estimate's jobType
+   * feeds the job's classification at conversion, so it cannot be a private
+   * three-value list that the registry has never heard of.
+   *
+   * Deliberately NO local fallback array. A second hardcoded copy is the
+   * drift this is closing, and job-finalize.js already degrades to the
+   * server-served product defaults on a cold cache. When it is absent
+   * entirely, [] makes field() render a free-text input — which preserves
+   * whatever is stored instead of offering a list that might not contain it.
+   * ─────────────────────────────────────────────────────────────────────*/
+  function jobTypeVocabulary() {
+    return (window.p86JobFinalize && window.p86JobFinalize.typeLabels)
+      ? window.p86JobFinalize.typeLabels('')
+      : [];
+  }
+
+  /* THE PICKER INVARIANT, on the estimate side.
+   *
+   * A <select> that does not contain the record's current value silently
+   * resolves to its FIRST option, and the next autosave writes THAT — turning
+   * "I opened the Details tab" into "I reclassified this estimate". So the
+   * stored value is ALWAYS unioned back in, marked "(legacy)", whether or not
+   * the offered list still contains it. Same state rule the job-info picker
+   * holds (js/job-finalize.js typeOptionsHTML), independently required here
+   * because this form has its own option builder.
+   *
+   * Lifted out of field() so it has a seam a test can drive: the bug lives in
+   * the browser's option-selection behaviour, and asserting on a generated
+   * HTML string would miss it.
+   */
+  function pickerOptionsHTML(value, options) {
+    var seen = false;
+    var optHtml = '<option value="">— Select —</option>';
+    (options || []).forEach(function(o) {
+      var v = (typeof o === 'string') ? o : o.value;
+      var lbl = (typeof o === 'string') ? o : (o.label || o.value);
+      var sel = (value === v) ? ' selected' : '';
+      if (sel) seen = true;
+      optHtml += '<option value="' + escapeHTML(v) + '"' + sel + '>' + escapeHTML(lbl) + '</option>';
+    });
+    if (value && !seen) {
+      optHtml += '<option value="' + escapeHTML(value) + '" selected>' + escapeHTML(value) + ' (legacy)</option>';
+    }
+    return optHtml;
+  }
+
+  // The New Estimate create form's #estJobType lives in index.html, so its
+  // markup can only carry the product defaults. Once the registry resolves,
+  // repoint it at the org's actual types. Keeps the leading "— Select —" and
+  // whatever is currently selected (typeLabels unions an unknown value back
+  // in, so this can never blank a selection the user made).
+  function fillEstJobTypeSelect() {
+    var el = document.getElementById('estJobType');
+    if (!el || !(window.p86JobFinalize && window.p86JobFinalize.loadRegistry)) return;
+    window.p86JobFinalize.loadRegistry().then(function () {
+      var cur = el.value || '';
+      el.innerHTML = '';
+      var blank = document.createElement('option');
+      blank.value = ''; blank.textContent = '— Select —';
+      el.appendChild(blank);
+      window.p86JobFinalize.typeLabels(cur).forEach(function (lbl) {
+        var o = document.createElement('option');
+        o.value = lbl; o.textContent = lbl;
+        el.appendChild(o);
+      });
+      el.value = cur;
+    }).catch(function () { /* markup defaults stand */ });
+  }
+  if (typeof document !== 'undefined') {
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fillEstJobTypeSelect);
+    else setTimeout(fillEstJobTypeSelect, 0);
+  }
+
   // Subscribe to the global push pipeline once. Translates
   // app.js push status events into the editor's local state so the
   // save indicator reflects the actual server result instead of an
@@ -1110,6 +1185,14 @@
     var ownerId = (lead && lead.salesperson_id) || (me && me.id) || null;
     var jobId = 'j' + Date.now();
     var nowIso = new Date().toISOString();
+    // Type from the NUMBER the coordinator picked, not from the lead's word
+    // (nor from est.jobType, which is itself lead vocabulary or free text and
+    // can be a value from NEITHER list). Same derivation the server applies in
+    // POST /api/jobs/convert; kept in step here because newJob is pushed into
+    // appData.jobs and a later saveData() would otherwise overwrite the
+    // server's value with a disagreeing local one.
+    var jobTypeFromNumber = (window.p86JobFinalize && window.p86JobFinalize.labelForNumber)
+      ? window.p86JobFinalize.labelForNumber(fin.jobNumber) : '';
     var newJob = {
       id: jobId, jobNumber: fin.jobNumber, title: fin.title || suggestedTitle,
       client: clientName, pm: '', owner_id: ownerId,
@@ -1123,7 +1206,7 @@
       state: (lead && lead.state) || est.state || '',
       zip: (lead && lead.zip) || est.zip || '',
       address: [ (lead && lead.street_address) || est.street_address, (lead && lead.city) || est.city, (lead && lead.state) || est.state, (lead && lead.zip) || est.zip ].filter(Boolean).join(', '),
-      jobType: (lead && lead.project_type) || est.jobType || '', workType: '',
+      jobType: jobTypeFromNumber, workType: '',
       market: (lead && lead.market) || est.market || '', status: 'New',
       // Estimate is the source of truth for estimated costs (its base cost).
       contractAmount: contractAmt, estimatedCosts: (totals && typeof totals.baseCost === 'number' ? totals.baseCost : 0), targetMarginPct: _convMargin,
@@ -1145,6 +1228,12 @@
       var res = await window.p86Api.jobs.convert({ job: newJob, lead_id: leadId, estimate_id: est.id });
       var newId = (res && (res.job_id || res.id)) || jobId;
       newJob.id = newId;
+      // Adopt the identity /convert stored — normalized number + the type it
+      // derived from that number's prefix. The blob is cached below and a
+      // later saveData() writes it back, so a disagreeing local copy is a
+      // queued overwrite of an identity field, not a display nit.
+      if (res && res.jobNumber) newJob.jobNumber = res.jobNumber;
+      if (res && res.jobType) newJob.jobType = res.jobType;
       // Keep local caches consistent so the immediate open finds the job — without
       // this the Site Plan showed "No job loaded" / "Locating the job address…" and
       // you had to refresh (the lead-side convert already does this push).
@@ -3237,23 +3326,7 @@
       if (opts.textarea) {
         input = '<textarea id="' + id + '" rows="' + (opts.rows || 4) + '" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);resize:vertical;">' + escapeHTML(value || '') + '</textarea>';
       } else if (opts.options && opts.options.length) {
-        // Select with a fixed option list. The current value is always
-        // included as a fallback option even if it's not in the list, so
-        // pre-existing free-text values from before this dropdown
-        // landed don't silently get dropped on first save.
-        var seen = false;
-        var optHtml = '<option value="">— Select —</option>';
-        opts.options.forEach(function(o) {
-          var v = (typeof o === 'string') ? o : o.value;
-          var lbl = (typeof o === 'string') ? o : (o.label || o.value);
-          var sel = (value === v) ? ' selected' : '';
-          if (sel) seen = true;
-          optHtml += '<option value="' + escapeHTML(v) + '"' + sel + '>' + escapeHTML(lbl) + '</option>';
-        });
-        if (value && !seen) {
-          optHtml += '<option value="' + escapeHTML(value) + '" selected>' + escapeHTML(value) + ' (legacy)</option>';
-        }
-        input = '<select id="' + id + '" style="width:100%;">' + optHtml + '</select>';
+        input = '<select id="' + id + '" style="width:100%;">' + pickerOptionsHTML(value, opts.options) + '</select>';
       } else {
         input = '<input id="' + id + '" type="' + (opts.type || 'text') + '" value="' + escapeHTML(value == null ? '' : String(value)) + '"' +
                 (opts.step ? ' step="' + opts.step + '"' : '') +
@@ -3276,7 +3349,14 @@
           '<input type="hidden" id="editEst_clientId" value="' + escapeHTML(est.client_id || '') + '" />' +
           '<input type="hidden" id="editEst_leadId" value="' + escapeHTML(est.lead_id || '') + '" />' +
           field('Client Short Name', 'ee-nickName', est.nickName, { placeholder: 'e.g. PAC, Sterling, Greystar — auto-filled from client directory' }) +
-          field('Job Type', 'ee-jobType', est.jobType, { options: ['Renovation', 'Service & Repair', 'Work Order'] }) +
+          // Registry vocabulary, not a hardcoded three. est.jobType feeds the
+          // job's type at conversion, so it has to be sayable in the same
+          // words a job number prefix resolves to — including Mid-Tier
+          // Service, which the old list could not express. field() still
+          // unions the stored value back in as "… (legacy)", so an estimate
+          // carrying 'Service & Repair' or free text is not rewritten by being
+          // opened.
+          field('Job Type', 'ee-jobType', est.jobType, { options: jobTypeVocabulary() }) +
           field('Client Company Name', 'ee-client', est.client) +
           field('Community / Property Name', 'ee-community', est.community) +
           // Structured address — property maps to the canonical filterable
@@ -4299,4 +4379,15 @@
   window.deleteActiveAlternate = deleteActiveAlternate;
   window.toggleGroupInclude = toggleGroupInclude;
   window.setEstimateAIPhase = setEstimateAIPhase;
+
+  // Test seam. This is a browser script, not a module; the two functions that
+  // carry the job-type vocabulary + the picker invariant are re-exported under
+  // Node (jest) so they can be driven directly, the same way
+  // js/job-finalize.js exposes its picker.
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      jobTypeVocabulary: jobTypeVocabulary,
+      pickerOptionsHTML: pickerOptionsHTML,
+    };
+  }
 })();

@@ -2634,10 +2634,16 @@
                 <!-- Job Type — markup is per-section now, set inside the editor -->
                 <div class="form-group">
                     <label>Job Type</label>
+                    <!-- Same one vocabulary as the lead + the job registry.
+                         Product defaults here; js/estimate-editor.js repoints
+                         this at branding.job_types once it resolves. This
+                         value becomes the JOB's type at conversion only via
+                         the number's prefix — it is a hint, not the record. -->
                     <select id="estJobType">
                         <option value="">— Select —</option>
+                        <option value="Service">Service</option>
+                        <option value="Mid-Tier Service">Mid-Tier Service</option>
                         <option value="Renovation">Renovation</option>
-                        <option value="Service &amp; Repair">Service &amp; Repair</option>
                         <option value="Work Order">Work Order</option>
                     </select>
                 </div>
@@ -2907,7 +2913,13 @@
             <input id="leadEditor_estimated_revenue_high" type="hidden" />
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px;">
               <div><label style="display:block;">Source</label><input id="leadEditor_source" type="text" placeholder="Referral, BT, …" /></div>
-              <div><label style="display:block;">Project Type</label><select id="leadEditor_project_type"><option value="">— Select —</option><option value="Renovation">Renovation</option><option value="Service &amp; Repair">Service &amp; Repair</option><option value="Work Order">Work Order</option></select></div>
+              <!-- Project Type — the JOB TYPE vocabulary, one list with the
+                   org's job-numbering registry. These options are the product
+                   defaults only; js/leads.js setField() rebuilds them from
+                   branding.job_types on every editor open and unions in
+                   whatever the lead already carries, so a legacy
+                   'Service & Repair' lead is never rewritten by being opened. -->
+              <div><label style="display:block;">Project Type</label><select id="leadEditor_project_type"><option value="">— Select —</option><option value="Service">Service</option><option value="Mid-Tier Service">Mid-Tier Service</option><option value="Renovation">Renovation</option><option value="Work Order">Work Order</option></select></div>
               <div>
                 <label style="display:block;">Salesperson</label>
                 <select id="leadEditor_salesperson_id">
@@ -3449,7 +3461,7 @@
     <script src="js/table-enhancements.js?v=15"></script>
     <script src="js/bulk-ribbon.js?v=1"></script>
     <script src="js/job-finalize.js?v=8"></script>
-    <script src="js/leads.js?v=95"></script>
+    <script src="js/leads.js?v=96"></script>
     <script src="js/job-costs-import.js?v=16"></script>
     <script src="js/qb-costs-view.js?v=23"></script>
     <script src="js/insights.js?v=13"></script>
@@ -3586,7 +3598,7 @@
     <script src="js/rich-text.js?v=1"></script>
     <script src="js/estimates.js?v=61"></script>
     <script src="js/proposal.js?v=26"></script>
-    <script src="js/estimate-editor.js?v=98"></script>
+    <script src="js/estimate-editor.js?v=99"></script>
     <!-- Change Order editor — overlay opened from the job detail's
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which
@@ -3612,7 +3624,7 @@
          AFTER it (live-writer is idempotent-by-existence: a re-load is a
          no-op, so registration has to go through registerSurface). -->
     <script src="js/cowork.js?v=11"></script>
-    <script src="js/ai-panel.js?v=174"></script>
+    <script src="js/ai-panel.js?v=175"></script>
     <!-- Save-from-chat bridge (Workstream ③). Owns p86SaveCodeBlock /
          p86SaveResponse / p86SaveToPicker, called by inline onclick
          handlers in ai-panel.js renderMarkdown / renderBubble. Loads

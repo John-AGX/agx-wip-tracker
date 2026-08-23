@@ -28,6 +28,16 @@ const { aiChatLimiter, aiChatHourlyLimiter } = require('../rate-limit');
 // memory recalls, entity reads, and any other layer we observe.
 const { logContextLoad } = require('../services/context-registry');
 const { auditActor, auditActorCritical } = require('../audit');
+// The job type registry. A LEAD's project_type is the same vocabulary as a
+// JOB's type — it is the hint that pre-selects the number prefix at
+// conversion — so the tool enums below are DERIVED from the product defaults
+// rather than written out again. The two enums used to be hand-maintained,
+// had already drifted apart from each other, and named a list ('Renovation' /
+// 'Service & Repair' / 'Work Order') that the registry has never contained:
+// no agent could mark a lead Service or Mid-Tier Service, and every agent
+// lead marked 'Service & Repair' was born unfilterable.
+const jobTypes = require('../services/job-types');
+const JOB_TYPE_LABELS = jobTypes.DEFAULT_JOB_TYPES.map((t) => t.label);
 // COs/POs/invoices live in their own tables; this reads them and derives CO
 // money through the same pricing pipeline the browser uses.
 const jobMoney = require('../services/money/change-order-totals');
@@ -5954,7 +5964,7 @@ const LEAD_EXTRACTION_SCHEMA = {
     property_state: { type: 'string', description: 'Property state code or empty string.' },
     property_zip: { type: 'string', description: 'Property ZIP or empty string.' },
     salesperson_name: { type: 'string', description: 'Project 86 salesperson name from the Salesperson section or empty string.' },
-    project_type: { type: 'string', enum: ['', 'Renovation', 'Service & Repair', 'Work Order'], description: 'Project type. Map BT values to this enum: Renovation/Repaint/Restoration → "Renovation"; Service or Repair → "Service & Repair"; Work Order/Urgent/Emergency → "Work Order". Empty string if BT did not specify.' },
+    project_type: { type: 'string', enum: [''].concat(JOB_TYPE_LABELS), description: 'Project type — the same vocabulary jobs are numbered under. Map BT values to this enum: Renovation/Repaint/Restoration → "Renovation"; a single-visit service call or repair → "Service"; multi-day service work with several discrete pieces → "Mid-Tier Service"; Work Order/Urgent/Emergency → "Work Order". Empty string if BT did not specify — do not guess.' },
     market: { type: 'string', description: 'Market field from the custom fields section (e.g., "Tampa", "Orlando"). Empty string if N/A or absent.' },
     gate_code: { type: 'string', description: 'Gate code from the custom fields section. Empty string if N/A or absent.' },
     confidence_pct: { type: 'integer', description: 'Confidence Level as a number 0-100. 0 if absent.' },
@@ -14291,7 +14301,10 @@ const INTAKE_TOOLS = [
         property_name:   { type: 'string', description: 'Property / community name when distinct from the client.' },
         market:          { type: 'string', description: 'Tampa / Orlando / etc.' },
         gate_code:       { type: 'string' },
-        project_type:    { type: 'string', enum: ['Renovation', 'Service & Repair', 'Work Order'] },
+        // Same enum as the BT extraction schema above — one vocabulary, one
+        // source. The two were maintained by hand and had already drifted
+        // (that one carried an '' arm, this one did not).
+        project_type:    { type: 'string', enum: [''].concat(JOB_TYPE_LABELS), description: 'Project type, same vocabulary jobs are numbered under. Empty string when unknown — do not guess.' },
         source:          { type: 'string', description: 'Where the lead came from (Buildertrend / PM referral / etc.).' },
         salesperson_id:  { type: 'string', description: 'Optional users.id of the AGX salesperson.' },
         estimated_revenue_low:  { type: 'number', description: 'Low end of est. revenue ($).' },

@@ -111,6 +111,49 @@ function normalizeJobNumber(value, storedTypes) {
   return prefix + m[2];
 }
 
+/* ── Reading a job number back to its type ─────────────────────────────
+ * THE INVARIANT: a job's TYPE must agree with its NUMBER's prefix.
+ *
+ * The number is IDENTITY — it is printed on purchase orders, pay
+ * applications, signed change orders and the QuickBooks project name — and
+ * its prefix is chosen by the coordinator at creation out of this same
+ * registry. So the prefix already ENCODES the type. Deriving the type from
+ * the number is self-consistent and cannot drift; copying a word off the
+ * lead (which is what both convert paths did) can only ever be right by
+ * coincidence, and 'Service & Repair' is not a job type and never will be.
+ *
+ * These mirror prefixForNumber/labelForPrefix/labelForNumber in
+ * js/job-finalize.js, off the same registry shape. The whole leading letter
+ * RUN is extracted and looked up exactly, so 'RV2044' yields 'RV' and never
+ * 'R' — no longest-prefix-first ordering hazard.
+ * ─────────────────────────────────────────────────────────────────────*/
+function typesOrDefaults(storedTypes) {
+  var types = normJobTypes(storedTypes);
+  return types.length ? types : defaultJobTypes();
+}
+
+function prefixForNumber(value, storedTypes) {
+  var m = String(value == null ? '' : value).trim().toUpperCase().match(/^([A-Z]{1,4})\s*\d/);
+  if (!m) return '';
+  var p = m[1];
+  var t = typesOrDefaults(storedTypes).find(function (x) { return String(x.prefix || '').toUpperCase() === p; });
+  return t ? String(t.prefix).toUpperCase() : '';
+}
+
+function labelForPrefix(prefix, storedTypes) {
+  if (!prefix) return '';
+  var p = String(prefix).toUpperCase();
+  var t = typesOrDefaults(storedTypes).find(function (x) { return String(x.prefix || '').toUpperCase() === p; });
+  return t ? String(t.label || p) : '';
+}
+
+// '' when the number carries no prefix this org numbers under. Callers that
+// have already passed normalizeJobNumber() are guaranteed a non-empty label,
+// because both read the same allowed set.
+function labelForNumber(value, storedTypes) {
+  return labelForPrefix(prefixForNumber(value, storedTypes), storedTypes);
+}
+
 // PURE. Append the named default types that this registry is missing, each
 // placed after the default that precedes it (so Mid-Tier Service lands next
 // to Service rather than at the bottom of the list). `seeds` maps prefix →
@@ -214,6 +257,9 @@ module.exports = {
   padNumber: padNumber,
   allowedPrefixes: allowedPrefixes,
   normalizeJobNumber: normalizeJobNumber,
+  prefixForNumber: prefixForNumber,
+  labelForPrefix: labelForPrefix,
+  labelForNumber: labelForNumber,
   addMissingTypes: addMissingTypes,
   backfill: backfill,
 };

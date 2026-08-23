@@ -414,6 +414,21 @@ function p86Ask(message, opts) {
     out.sort(function(a, b) { return a.toLowerCase().localeCompare(b.toLowerCase()); });
     return out;
   }
+  // Project Type chips: the org registry, plus every value the loaded leads
+  // ACTUALLY carry. A hardcoded three was the whole reason a lead outside it
+  // was unreachable by this filter — the same defect the Jobs list had, where
+  // a 'Service & Repair' job could not be found at all. Registry order first
+  // (so the offer reads as the vocabulary), then the strays, so a legacy value
+  // is still a chip you can turn on rather than a lead you cannot find.
+  function leadTypeFilterOptions() {
+    var reg = (window.p86JobFinalize && window.p86JobFinalize.typeLabels)
+      ? window.p86JobFinalize.typeLabels('') : [];
+    var out = [], seen = {};
+    reg.concat(leadsDistinct('project_type')).forEach(function (v) {
+      v = String(v || ''); if (!v || seen[v]) return; seen[v] = true; out.push({ v: v, label: v });
+    });
+    return out;
+  }
   function leadsFilterFields() {
     var pms = (window.p86Admin && window.p86Admin.getActivePMs && window.p86Admin.getActivePMs()) || [];
     var spOpts = [{ v: '', label: 'Anyone' }].concat(pms.map(function(u) { return { v: String(u.id), label: u.name }; }));
@@ -423,7 +438,7 @@ function p86Ask(message, opts) {
       { key: 'status', label: 'Status', type: 'chips', options: STATUSES.map(function(s) { return { v: s.key, label: s.label }; }) },
       { key: 'salesperson_id', label: 'Salesperson', type: 'select', options: spOpts },
       { key: 'source', label: 'Source', type: 'select', options: [{ v: '', label: 'Any' }].concat(srcOpts) },
-      { key: 'project_type', label: 'Project Type', type: 'chips', options: [{ v: 'Renovation', label: 'Renovation' }, { v: 'Service & Repair', label: 'Service & Repair' }, { v: 'Work Order', label: 'Work Order' }] },
+      { key: 'project_type', label: 'Project Type', type: 'chips', options: leadTypeFilterOptions() },
       { key: 'market', label: 'Market', type: 'select', options: [{ v: '', label: 'Any' }].concat(mktOpts) },
       { key: 'lost_reason', label: 'Lost Reason', type: 'chips', options: [{ v: 'budget', label: 'Budget' }, { v: 'timeline', label: 'Timeline' }, { v: 'competitor', label: 'Competitor' }, { v: 'no_response', label: 'No response' }, { v: 'not_qualified', label: 'Not qualified' }, { v: 'scope', label: 'Scope' }, { v: 'other', label: 'Other' }] },
       { key: 'confidence', label: 'Confidence %', type: 'numrange' },
@@ -973,6 +988,38 @@ function p86Ask(message, opts) {
     if (name === 'market' && el.tagName === 'SELECT' &&
         window.p86Markets && window.p86Markets.fillSelect) {
       window.p86Markets.fillSelect(el, v);
+    }
+    // Project Type is ONE vocabulary with the job type registry, sourced from
+    // the same place (branding.job_types — Admin → Organization → Job
+    // Numbering). It used to be a hardcoded three in index.html —
+    // 'Renovation' / 'Service & Repair' / 'Work Order' — which was a DIFFERENT
+    // list from the one jobs are numbered under, with nothing reconciling
+    // them. Two matched by accident; 'Service & Repair' matched no registry
+    // label at all, and Mid-Tier Service could not be said on a lead even
+    // though the org numbers M jobs. A lead's type is a HINT that pre-selects
+    // the number prefix at conversion, so it has to be sayable in the same
+    // words the prefix resolves to.
+    //
+    // typeLabels(v) unions the record's CURRENT value in first, so a lead
+    // already reading 'Service & Repair' keeps it: opening the editor must
+    // never be able to rewrite a value the user did not touch. Rebuilding the
+    // list also clears the stray options a previous lead's unknown value left
+    // behind on this shared <select>.
+    //
+    // Degrades to the four product defaults before the registry resolves
+    // (job-finalize.js warms it at boot), never to an empty list.
+    if (name === 'project_type' && el.tagName === 'SELECT' &&
+        window.p86JobFinalize && window.p86JobFinalize.typeLabels) {
+      var _ptCur = String(v == null ? '' : v);
+      el.innerHTML = '';
+      var _blank = document.createElement('option');
+      _blank.value = ''; _blank.textContent = '— Select —';
+      el.appendChild(_blank);
+      window.p86JobFinalize.typeLabels(_ptCur).forEach(function (lbl) {
+        var o = document.createElement('option');
+        o.value = lbl; o.textContent = lbl;
+        el.appendChild(o);
+      });
     }
     // Assigning a value a <select> has no option for silently selects NOTHING,
     // and the next blur-save would then write that blank back over a real
@@ -2260,6 +2307,18 @@ function p86Ask(message, opts) {
     var ownerId = l.salesperson_id || (me && me.id) || null;
     var jobId = 'j' + Date.now();
     var nowIso = new Date().toISOString();
+    // The job's TYPE comes from the NUMBER the coordinator just picked, not
+    // from the lead's word. This line used to read `l.project_type`, so a
+    // coordinator who chose the M0001 chip 16 lines above got a job stamped
+    // 'Service & Repair' — a string no job type registry can resolve, which
+    // then hid the job from the Jobs-list filter and the Schedule board.
+    //
+    // POST /api/jobs/convert derives this server-side too and is the
+    // authority. Deriving it here as well is not belt-and-braces decoration:
+    // newJob is pushed straight into appData.jobs below, and a later
+    // saveData() would push a DISAGREEING local copy back over the server's.
+    var jobTypeFromNumber = (window.p86JobFinalize && window.p86JobFinalize.labelForNumber)
+      ? window.p86JobFinalize.labelForNumber(fin.jobNumber) : '';
     var newJob = {
       id: jobId,
       jobNumber: fin.jobNumber,
@@ -2275,7 +2334,7 @@ function p86Ask(message, opts) {
       address: [l.street_address, l.city, l.state, l.zip].filter(Boolean).join(', '),
       pm: '',
       owner_id: ownerId,
-      jobType: l.project_type || '',
+      jobType: jobTypeFromNumber,
       workType: '',
       market: l.market || '',
       status: 'New',
@@ -2319,6 +2378,12 @@ function p86Ask(message, opts) {
       });
       var newId = (res && (res.job_id || res.id)) || jobId;
       newJob.id = newId;
+      // Adopt the identity the SERVER stored. /convert normalizes the number
+      // and derives the type from its prefix; the cached blob below is what a
+      // later saveData() pushes back through PUT /api/jobs/bulk/save, so a
+      // local copy that disagrees is a queued overwrite of an identity field.
+      if (res && res.jobNumber) newJob.jobNumber = res.jobNumber;
+      if (res && res.jobType) newJob.jobType = res.jobType;
       // Keep local caches consistent so the immediate editJob() opens cleanly.
       if (window.appData && Array.isArray(window.appData.jobs)) window.appData.jobs.push(newJob);
       // Seed the job's scopes from the estimate's section breakdown (Paint,
@@ -2640,7 +2705,20 @@ function p86Ask(message, opts) {
     if (!l) return;
     function set(id, v) {
       var el = document.getElementById(id);
-      if (el && v != null) el.value = v;
+      if (!el || v == null) return;
+      // Assigning a value a <select> has no option for silently selects
+      // NOTHING, and the create form then saves a blank over what the lead
+      // actually said. This bites #estJobType specifically: the lead's type is
+      // registry vocabulary now, and a legacy lead reading 'Service & Repair'
+      // must still carry its own word forward rather than arriving as empty.
+      // Same union rule setField() applies on the lead editor.
+      if (el.tagName === 'SELECT' && v !== '' &&
+          !Array.prototype.some.call(el.options, function (o) { return o.value === v; })) {
+        var opt = document.createElement('option');
+        opt.value = v; opt.textContent = v;
+        el.appendChild(opt);
+      }
+      el.value = v;
     }
     // Resolve client fresh on every call. cache may have been empty
     // the first time, or the link may have been added since.
@@ -3368,4 +3446,17 @@ function p86Ask(message, opts) {
       else _leads.push(lead);
     }
   };
+
+  // Test seam. Browser script, not a module; re-exported under Node (jest) so
+  // the lead-editor picker invariant — an unrecognized project_type survives a
+  // round-trip through the real <select> the editor renders — can be driven
+  // against the real setField/getField rather than a re-implementation.
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      setField: setField,
+      getField: getField,
+      leadTypeFilterOptions: leadTypeFilterOptions,
+      _setLeadsCacheForTest: function (rows) { _leads = (rows || []).slice(); },
+    };
+  }
 })();

@@ -131,6 +131,16 @@ const JOB_BLOCKED_FIELDS = new Set([
   // Sub-arrays have their own ops; not free-form
   'buildings', 'phases', 'changeOrders', 'subs',
   'purchaseOrders', 'invoices',
+  // IDENTITY. A job number is printed on purchase orders, pay applications,
+  // signed change orders and the QuickBooks project name, and its PREFIX
+  // encodes the job's type — the two are one fact, chosen by the coordinator
+  // at creation. Neither was blocked, so field_updates let a model write
+  // arbitrary free text into both, from a path with no registry check
+  // anywhere in it (the preflight applies this same Set, so it did not catch
+  // it either). Classification is a human decision made once, at creation;
+  // there is no agent flow that declares either field, so blocking them
+  // removes no stated capability.
+  'jobNumber', 'jobType',
 ]);
 
 // Schedule entry editable fields (matches readEntry's readable shape).

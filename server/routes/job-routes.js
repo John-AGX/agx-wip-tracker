@@ -307,6 +307,37 @@ router.post('/convert', requireAuth, requireRole('admin', 'pm'), requireOrgId, a
     }
     job.jobNumber = normalizedNumber;
 
+    // …and the TYPE is derived from that number, not copied off the lead.
+    //
+    // THE INVARIANT: a job's type must agree with its job number's prefix.
+    // This is enforced HERE, at the state, rather than at the two call sites
+    // that happen to convert today. Both of them wrote the LEAD vocabulary
+    // ('Renovation' / 'Service & Repair' / 'Work Order') straight into the JOB
+    // identity field:
+    //
+    //   js/leads.js            jobType: l.project_type || ''
+    //   js/estimate-editor.js  jobType: (lead && lead.project_type) || est.jobType || ''
+    //
+    // Two of those three matched a registry label by accident. 'Service &
+    // Repair' matched NOTHING, so such a job could never be reached by the
+    // Jobs-list type filter and vanished from the Schedule board whenever any
+    // type pill was on. Mid-Tier Service was inexpressible on a lead at all.
+    //
+    // The coordinator already made this choice: the Finalize Job modal offers
+    // one number chip per registry type, and the prefix they pick IS the type.
+    // Reading it back off the number is the only derivation that cannot drift.
+    // Unconditional on purpose — a jobType the client sent that DISAGREES with
+    // the number it also sent is precisely the defect, so there is nothing to
+    // preserve. normalizeJobNumber() has already refused any prefix this org
+    // does not number under, so this label is never empty.
+    //
+    // This RECLASSIFIES NOTHING. /convert only ever INSERTs; a job that already
+    // exists is never read, rewritten or renumbered by this route. The update
+    // doors (PUT /:id, PUT /bulk/save) deliberately do NOT derive — doing so
+    // would rewrite the type of every legacy job on its next save, which is the
+    // silent reclassification the picker union at js/jobs.js was built to stop.
+    job.jobType = jobTypes.labelForNumber(normalizedNumber, orgJobTypes);
+
     // Resolve owner (mirror POST /): admins may assign, others own their own.
     // Org-scoped for the reason spelled out at POST / — and this path carries a
     // CONTRACT AMOUNT, so the divergent job it could create is a money row.
@@ -391,7 +422,18 @@ router.post('/convert', requireAuth, requireRole('admin', 'pm'), requireOrgId, a
     }
     await client.query('COMMIT');
 
-    res.json({ ok: true, id: id, job_id: id, owner_id: ownerId, lead_id: leadId, estimate_id: estimateId });
+    // Hand back the IDENTITY this route actually stored, not just the row id.
+    // The caller pushes its own blob straight into appData.jobs, and a later
+    // saveData() writes that cache back through PUT /api/jobs/bulk/save — so a
+    // client copy that disagrees with the row is not a cosmetic drift, it is a
+    // pending overwrite of the identity fields. jobNumber is included for the
+    // same reason: it is normalized here ('m0001' → 'M0001') and the caller's
+    // copy would otherwise keep the un-normalized spelling.
+    res.json({
+      ok: true, id: id, job_id: id, owner_id: ownerId,
+      lead_id: leadId, estimate_id: estimateId,
+      jobNumber: job.jobNumber, jobType: job.jobType,
+    });
 
     // Geocode the carried address (after the response; best-effort) so the map /
     // weather / Site Plan satellite get coordinates with no manual step. A failure
