@@ -20,6 +20,9 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireCapability, requireSystemAdmin, hasCapability } = require('../auth');
+// The resync push/skip decision — extracted so the boot case is testable
+// without a process restart. See agent-resync-decision.js for why.
+const { decideResync } = require('../services/agent-resync-decision');
 
 const router = express.Router();
 
@@ -4063,8 +4066,22 @@ const REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 // Per-agent state we track to decide whether the background refresh
 // tick should push a fresh system prompt to Anthropic. Each entry
 // holds the SHA1 of the LAST prompt we pushed and the TIMESTAMP we
-// pushed it. Cleared on process restart — first cycle after boot
-// pushes once, then we throttle.
+// pushed it.
+//
+// 2026-08-23 — this Map is process-local and therefore EMPTY AT BOOT, and
+// the entire throttle below used to sit inside `if (!force && prev)`. With
+// prev undefined every guard was skipped and control fell through to
+// beta.agents.update unconditionally. Every Anthropic agents.update mints a
+// new immutable version — even when the fields you send equal the stored
+// values — and every Railway deploy restarts the process, so the throttle
+// was structurally incapable of firing on the single most frequent event.
+// The live 86 agent had reached version 487 in 97 days: ~5/day, the deploy
+// cadence of a repo with three sessions pushing to main.
+//
+// The fingerprint is now ALSO persisted to managed_agent_registry
+// (last_sync_sys_hash / _tools_hash / _at / _size / _tools_ok) and loaded
+// back at boot, so the boot tick can ask whether anything actually changed
+// instead of assuming it did. See agent-resync-decision.js.
 //
 // Why throttle: every anthropic.beta.agents.update bumps the agent
 // version, which invalidates Anthropic's per-agent prompt cache.
@@ -4082,11 +4099,50 @@ const _lastSyncState = new Map(); // anthropic_agent_id → { sysHash, toolsHash
 const MIN_RESYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
 // Also gate by content-magnitude — sub-2% byte changes are almost
 // always whitespace / timestamp noise from the SharePoint fetcher.
-// Bypassed on the very first sync per agent (boot case).
 const MIN_DRIFT_RATIO = 0.02;
 
 function _sha1(s) {
   return require('crypto').createHash('sha1').update(String(s || ''), 'utf8').digest('hex');
+}
+
+// ONE definition of the two fingerprints, used by the background sweep AND
+// by the admin sync-all endpoint.
+//
+// They used to compute the system hash differently: the sweep joined with
+// '\0' and sync-all joined with ' '. Different hash domains, so the
+// fingerprint sync-all recorded could never match what the sweep computed on
+// the next tick — the sweep saw drift after every manual sync, and the
+// comment claiming it prevented a double-push was describing something the
+// code did not do. A shared helper makes that class of mismatch impossible.
+//
+// NOTE: the separator below is the two-character ESCAPE '\0', not a raw 0x00
+// byte in the source. Both denote U+0000, so the hash domain is unchanged
+// from the sweep's — but a raw NUL made ripgrep abandon this file mid-scan
+// (see test/no-nul-bytes.test.js).
+function _syncFingerprints(composedSystem, model, toolList) {
+  return {
+    sysHash: _sha1(String(composedSystem || '') + '\0' + (model || '')),
+    toolsHash: _sha1(JSON.stringify(toolList || []))
+  };
+}
+
+// Persist the fingerprint so the throttle survives a process restart. Best
+// effort: a failure here costs one redundant push on the next boot, never a
+// missed one, so it must not break the sync it is recording.
+async function _persistSyncFingerprint(agentKey, orgId, fp, toolsOk, size, syncedAtMs) {
+  try {
+    await pool.query(
+      `UPDATE managed_agent_registry
+          SET last_sync_sys_hash = $3, last_sync_tools_hash = $4,
+              last_sync_at = $5, last_sync_size = $6, last_sync_tools_ok = $7
+        WHERE agent_key = $1 AND organization_id = $2`,
+      [agentKey, orgId, fp.sysHash, fp.toolsHash,
+       new Date(syncedAtMs || Date.now()), size, toolsOk !== false]
+    );
+  } catch (e) {
+    console.warn('[reference-links] could not persist sync fingerprint for',
+      agentKey + '/' + orgId, '—', e && e.message);
+  }
 }
 
 // Re-sync every org's registered managed agent IF the composed
@@ -4103,6 +4159,8 @@ async function resyncDriftedAgents(force) {
   try {
     const r = await pool.query(
       `SELECT r.agent_key, r.organization_id, r.anthropic_agent_id,
+              r.last_sync_sys_hash, r.last_sync_tools_hash, r.last_sync_at,
+              r.last_sync_size, r.last_sync_tools_ok,
               o.id AS org_id, o.slug, o.name, o.description, o.identity_body
          FROM managed_agent_registry r
          JOIN organizations o ON o.id = r.organization_id
@@ -4141,39 +4199,60 @@ async function resyncDriftedAgents(force) {
         // (see test/no-nul-bytes.test.js), hiding everything past this line from
         // every directory-recursive search. The escape keeps the semantics and
         // gives the file back to grep.
-        const sysHash = _sha1(composed + '\0' + (model || ''));
-        const toolsHash = _sha1(JSON.stringify(toolList));
-        const prev = _lastSyncState.get(row.anthropic_agent_id);
+        const { sysHash, toolsHash } = _syncFingerprints(composed, model, toolList);
 
-        // Decision logic, in order:
-        //   1. Force=true (admin clicked Sync now): always push.
-        //   2. No prior sync this process: push (boot case).
-        //   3. System+tools both identical AND last tools push landed: skip.
-        //   4. < 6 hours since last push: skip (throttle).
-        //   5. ONLY the system prompt moved, by <2% (whitespace noise): skip.
-        //   6. Real drift (system moved materially, the tool list changed, or a
-        //      prior tools push failed to land → toolsOk=false): push.
-        if (!force && prev) {
-          const prevSys = prev.sysHash || prev.hash;   // tolerate the older {hash} shape
-          const sysSame = prevSys === sysHash;
-          const toolsSame = prev.toolsHash === toolsHash && prev.toolsOk !== false;
-          if (sysSame && toolsSame) continue;
-          if (Date.now() - prev.syncedAt < MIN_RESYNC_INTERVAL_MS) {
-            console.log('[reference-links] skipping resync of', row.anthropic_agent_id,
-              '— throttled (last sync ' + Math.round((Date.now() - prev.syncedAt) / 60000) + 'min ago)');
-            continue;
+        // Prior state: the in-process Map first, then the fingerprint
+        // PERSISTED on the registry row. The disk fallback is the whole fix —
+        // without it `prev` was undefined on every boot, the decision below
+        // was unreachable, and each process start pushed a new agent version
+        // whether or not a byte had moved.
+        let prev = _lastSyncState.get(row.anthropic_agent_id) || null;
+        if (!prev && row.last_sync_sys_hash) {
+          prev = {
+            sysHash: row.last_sync_sys_hash,
+            toolsHash: row.last_sync_tools_hash,
+            toolsOk: row.last_sync_tools_ok !== false,
+            syncedAt: row.last_sync_at ? new Date(row.last_sync_at).getTime() : 0,
+            size: row.last_sync_size != null ? Number(row.last_sync_size) : undefined,
+            // Marks this as the first tick of a new process: a real content
+            // change still lands immediately, bypassing the 6h throttle.
+            fromDisk: true
+          };
+        }
+
+        const decision = decideResync({
+          force: !!force,
+          prev: prev,
+          sysHash: sysHash,
+          toolsHash: toolsHash,
+          composedChars: composed.length,
+          minIntervalMs: MIN_RESYNC_INTERVAL_MS,
+          minDriftRatio: MIN_DRIFT_RATIO
+        });
+
+        if (!decision.push) {
+          console.log('[reference-links] no resync of', row.anthropic_agent_id,
+            '—', decision.reason);
+          if (decision.recordSkip) {
+            // Jitter case: record the new fingerprint but KEEP the old
+            // timestamp, so the 6h clock still runs from the real last push.
+            const at = prev && prev.syncedAt ? prev.syncedAt : Date.now();
+            _lastSyncState.set(row.anthropic_agent_id, {
+              sysHash, toolsHash, toolsOk: true, hash: sysHash,
+              syncedAt: at, size: composed.length
+            });
+            await _persistSyncFingerprint(row.agent_key, row.organization_id,
+              { sysHash, toolsHash }, true, composed.length, at);
+          } else if (prev && prev.fromDisk) {
+            // Warm the Map from disk so the next tick this process uses the
+            // ordinary steady-state rules (including the 6h throttle).
+            _lastSyncState.set(row.anthropic_agent_id, {
+              sysHash: prev.sysHash, toolsHash: prev.toolsHash,
+              toolsOk: prev.toolsOk, hash: prev.sysHash,
+              syncedAt: prev.syncedAt, size: prev.size
+            });
           }
-          // Suppress sub-2% byte jitter ONLY when the tool list is unchanged —
-          // i.e. the system prompt is the sole thing that moved. A tool change
-          // always pushes (its hash flips hard; byte-size of the prompt doesn't).
-          if (toolsSame) {
-            const sizeDelta = Math.abs(composed.length - (prev.size || composed.length));
-            const drift = composed.length ? sizeDelta / composed.length : 1;
-            if (drift < MIN_DRIFT_RATIO) {
-              _lastSyncState.set(row.anthropic_agent_id, { sysHash, toolsHash, toolsOk: true, hash: sysHash, syncedAt: prev.syncedAt, size: composed.length });
-              continue;
-            }
-          }
+          continue;
         }
 
         const remote = await anthropic.beta.agents.retrieve(row.anthropic_agent_id);
@@ -4204,9 +4283,13 @@ async function resyncDriftedAgents(force) {
             '— retrying system+model only:', toolsErr && toolsErr.message);
           await anthropic.beta.agents.update(row.anthropic_agent_id, baseUpdate);
         }
-        _lastSyncState.set(row.anthropic_agent_id, { sysHash, toolsHash, toolsOk, hash: sysHash, syncedAt: Date.now(), size: composed.length });
+        const syncedAt = Date.now();
+        _lastSyncState.set(row.anthropic_agent_id, { sysHash, toolsHash, toolsOk, hash: sysHash, syncedAt: syncedAt, size: composed.length });
+        await _persistSyncFingerprint(row.agent_key, row.organization_id,
+          { sysHash, toolsHash }, toolsOk, composed.length, syncedAt);
         console.log('[reference-links] resynced agent', row.anthropic_agent_id,
           '— pushed system(' + composed.length + ' chars)+model+' + toolList.length + ' tools' +
+          ' [' + decision.reason + ']' +
           (toolsOk ? '' : ' [tools push FELL BACK — will retry next tick]') + (force ? ' [forced]' : ''));
       } catch (e) {
         console.warn('[reference-links] resync failed for', row.anthropic_agent_id, ':', e && e.message);
@@ -4536,14 +4619,31 @@ router.post('/managed/:agentKey/sync',
     if (mcpServers.length) updatePayload.mcp_servers = mcpServers;
     const updated = await anthropic.beta.agents.update(agentId, updatePayload);
 
+    // Record the fingerprint this push just landed, in the Map AND on disk.
+    // Without it the background sweep sees "no prior state" on the next boot
+    // and re-pushes an identical config — a second agent version, and a full
+    // cache_creation on the whole prefix for every session, for nothing.
+    const _fpOne = _syncFingerprints(composedSystem, model, toolList);
+    const _syncedAtOne = Date.now();
+    _lastSyncState.set(agentId, {
+      sysHash: _fpOne.sysHash, toolsHash: _fpOne.toolsHash, toolsOk: true,
+      hash: _fpOne.sysHash, syncedAt: _syncedAtOne, size: composedSystem.length
+    });
+
     await pool.query(
       `UPDATE managed_agent_registry
           SET model = $3,
               tool_count = $4,
               skill_count = $5,
+              last_sync_sys_hash = $6,
+              last_sync_tools_hash = $7,
+              last_sync_at = $8,
+              last_sync_size = $9,
+              last_sync_tools_ok = TRUE,
               updated_at = NOW()
         WHERE agent_key = $1 AND organization_id = $2`,
-      [agentKey, req.organization.id, model, toolCount, skills.length]
+      [agentKey, req.organization.id, model, toolCount, skills.length,
+       _fpOne.sysHash, _fpOne.toolsHash, new Date(_syncedAtOne), composedSystem.length]
     );
 
     res.json({
@@ -4739,8 +4839,16 @@ router.post('/managed/sync-all',
         // the background sweep uses) so the 15-min tick sees system+tools
         // unchanged and doesn't immediately re-push. Without this the admin's
         // Sync button + the auto-resync could double-push and rebuild cache.
-        const _syncSysHash = _sha1(composedSystem + ' ' + (model || ''));
-        _lastSyncState.set(agentId, { sysHash: _syncSysHash, toolsHash: _sha1(JSON.stringify(toolList)), toolsOk: true, hash: _syncSysHash, syncedAt: Date.now(), size: composedSystem.length });
+        // Uses the SHARED fingerprint helper. This line used to join with ' '
+        // while the sweep joined with '\0' — different hash domains, so the
+        // fingerprint recorded here could never match the one the sweep
+        // computed, and the sweep saw drift after every manual sync. The
+        // comment claiming this prevented a double-push described something
+        // the code did not do.
+        const _fp = _syncFingerprints(composedSystem, model, toolList);
+        const _syncedAt = Date.now();
+        _lastSyncState.set(agentId, { sysHash: _fp.sysHash, toolsHash: _fp.toolsHash, toolsOk: true, hash: _fp.sysHash, syncedAt: _syncedAt, size: composedSystem.length });
+        await _persistSyncFingerprint(agentKey, row.organization_id, _fp, true, composedSystem.length, _syncedAt);
 
         await pool.query(
           `UPDATE managed_agent_registry

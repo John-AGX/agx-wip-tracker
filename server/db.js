@@ -2973,6 +2973,28 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_managed_agent_registry_org
       ON managed_agent_registry(organization_id);
 
+    -- Last-push fingerprint, so the resync throttle survives a restart.
+    --
+    -- resyncDriftedAgents throttled against a PROCESS-LOCAL Map. That Map is
+    -- empty at boot, and the entire throttle sat inside the "if (!force and
+    -- prev)" guard — so with prev undefined every boot fell straight through
+    -- to beta.agents.update, unconditionally, whether or not one byte had
+    -- changed. Every Anthropic agents.update mints a new immutable version
+    -- (it does so even when the fields you send equal the stored values), and
+    -- every Railway deploy restarts the process. The live agent was on
+    -- version 487 in 97 days — ~5 a day, exactly the deploy cadence of a repo
+    -- with three sessions pushing to main.
+    --
+    -- Persisting the fingerprint lets the boot tick ask the question it
+    -- always should have: did anything actually change? Nothing changed → no
+    -- push, no version, no cache invalidation. Something changed → push
+    -- immediately, same as before.
+    ALTER TABLE managed_agent_registry ADD COLUMN IF NOT EXISTS last_sync_sys_hash TEXT;
+    ALTER TABLE managed_agent_registry ADD COLUMN IF NOT EXISTS last_sync_tools_hash TEXT;
+    ALTER TABLE managed_agent_registry ADD COLUMN IF NOT EXISTS last_sync_at TIMESTAMPTZ;
+    ALTER TABLE managed_agent_registry ADD COLUMN IF NOT EXISTS last_sync_size INTEGER;
+    ALTER TABLE managed_agent_registry ADD COLUMN IF NOT EXISTS last_sync_tools_ok BOOLEAN;
+
     -- Phase 1b — single shared Anthropic-side Environment that all our
     -- managed agents' Sessions provision containers from. We only ever
     -- need one row here ('default'); the env_key column lets us add more
