@@ -20,6 +20,7 @@
   };
 
   var state = null; // { entityType, items: [ ... ], processing }
+  var _diSubs = null, _diSubsLoading = false; // subs directory cache for PO vendor→sub auto-match
   var _seq = 0;
 
   // ---- small utils -------------------------------------------------------
@@ -262,6 +263,7 @@
     var createBtn = host.querySelector('#di-create');
     if (createBtn && !createBtn.disabled) createBtn.onclick = createAll;
     wireItemHandlers(host);
+    hydratePoSubSelectors(host);   // PO rows: load subs, auto-match vendor→sub
     wireDropZone(host);
   }
 
@@ -348,12 +350,25 @@
           }).join('') +
         '</select>';
     }
+    // Purchase orders get a SUB picker (the sub is the contracted party). It's
+    // filled + auto-matched from the vendor name after render by
+    // hydratePoSubSelectors — the payload now sends the picked sub_id so the PO
+    // imports LINKED, not as loose vendor text.
+    var subSel = '';
+    if (state.entityType === 'po') {
+      subSel =
+        '<div style="font-size:10.5px;color:var(--text-dim,#8b8b96);text-transform:uppercase;letter-spacing:.4px;">Sub</div>' +
+        '<select data-di-f="subId" data-di-subsel="' + it.id + '" data-di-id="' + it.id + '" style="' + fieldCss(!it.subId) + 'min-width:200px;">' +
+          '<option value="">— Select sub —</option>' +
+        '</select>';
+    }
     var meta =
       '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;align-items:center;">' +
         '<div style="font-size:10.5px;color:var(--text-dim,#8b8b96);text-transform:uppercase;letter-spacing:.4px;">Job</div>' + jobSel +
         poSel +
         field(it, 'number', e.number, ENTITIES[state.entityType].label.split(' ')[0] + ' #', 120) +
         field(it, 'vendor', e.vendor, 'Vendor', 160) +
+        subSel +
         field(it, 'date', e.date, 'Date', 120) +
       '</div>' +
       (e.title ? '<div style="margin-top:8px;">' + field(it, 'title', e.title, 'Title / scope', 0, true) + '</div>' : '');
@@ -426,6 +441,7 @@
         var k = inp.getAttribute('data-di-f');
         if (k === 'jobId') { it.jobId = inp.value; it.poId = ''; it.subId = ''; render(); return; }
         if (k === 'poId') { it.poId = inp.value; var opt = inp.options[inp.selectedIndex]; it.subId = (opt && opt.getAttribute('data-sub')) || ''; return; }
+        if (k === 'subId') { it.subId = inp.value; return; }
         it.extracted[k] = inp.value;
       };
     });
@@ -525,11 +541,67 @@
     return { description: desc, qty: q, unitCost: unit }; // po
   }
 
+  // ---- PO vendor→sub auto-match ------------------------------------------
+  // Imported POs used to arrive with NO sub_id — the PDF gives a vendor NAME,
+  // not a link, and the PO payload never sent one — so the sub showed as free
+  // text but wasn't actually attached (uploads/reports keyed on sub_id missed
+  // it, and 86 couldn't attribute the PO). Load the subs directory once and
+  // best-match the extracted vendor to a real sub so the PO comes in LINKED,
+  // still overridable per-row in the review grid.
+  function loadDiSubs(cb) {
+    if (_diSubs) { cb(_diSubs); return; }
+    if (_diSubsLoading) { setTimeout(function () { loadDiSubs(cb); }, 150); return; }
+    _diSubsLoading = true;
+    var api = window.p86Api;
+    if (api && api.subs && api.subs.list) {
+      api.subs.list().then(function (r) {
+        _diSubs = (r && (r.subs || r)) || [];
+        if (!Array.isArray(_diSubs)) _diSubs = [];
+        _diSubsLoading = false; cb(_diSubs);
+      }).catch(function () { _diSubs = []; _diSubsLoading = false; cb(_diSubs); });
+    } else { _diSubs = []; _diSubsLoading = false; cb(_diSubs); }
+  }
+  function _normSub(s) {
+    return String(s || '').toLowerCase().replace(/[.,]/g, '')
+      .replace(/\b(llc|inc|co|corp|company|ltd)\b/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  }
+  // Best sub id for a vendor name, or '' when nothing is close enough.
+  function matchSubByName(name, subs) {
+    var n = _normSub(name); if (!n || !subs || !subs.length) return '';
+    var exact = subs.find(function (s) { return _normSub(s.name) === n; });
+    if (exact) return exact.id;
+    // Containment either way; prefer the longest matching sub name.
+    var cand = subs.filter(function (s) {
+      var sn = _normSub(s.name); return sn && (sn.indexOf(n) >= 0 || n.indexOf(sn) >= 0);
+    }).sort(function (a, b) { return _normSub(b.name).length - _normSub(a.name).length; });
+    return cand.length ? cand[0].id : '';
+  }
+  // Fill every PO sub <select> after a render: load subs, auto-match the vendor
+  // for any row still without a sub_id, and reflect the pick in the dropdown.
+  function hydratePoSubSelectors(host) {
+    if (!state || state.entityType !== 'po') return;
+    var sels = host.querySelectorAll('select[data-di-subsel]');
+    if (!sels.length) return;
+    loadDiSubs(function (subs) {
+      sels.forEach(function (sel) {
+        var it = findItem(sel.getAttribute('data-di-subsel')); if (!it) return;
+        if (!it.subId) {
+          var m = matchSubByName(it.extracted && it.extracted.vendor, subs);
+          if (m) it.subId = m; // default to the auto-matched sub (user can change)
+        }
+        sel.innerHTML = '<option value="">— Select sub —</option>' + subs.map(function (s) {
+          return '<option value="' + esc(s.id) + '"' + (String(s.id) === String(it.subId) ? ' selected' : '') + '>' + esc(s.name || s.id) + '</option>';
+        }).join('');
+        sel.style.borderColor = it.subId ? 'var(--border,#333)' : '#f5734e';
+      });
+    });
+  }
+
   function buildPayload(it) {
     var e = it.extracted, t = state.entityType;
     var lines = (e.lines || []).map(function (l) { return toLine(l, t); });
     if (t === 'po') {
-      return { po_number: e.number || undefined, status: e.status || 'issued', title: e.title || ('Imported PO' + (e.vendor ? ' — ' + e.vendor : '')), vendorName: e.vendor || null, costCode: e.costCode || null, orderedDate: e.date || null, lines: lines };
+      return { po_number: e.number || undefined, status: e.status || 'issued', title: e.title || ('Imported PO' + (e.vendor ? ' — ' + e.vendor : '')), sub_id: it.subId || null, vendorName: e.vendor || null, costCode: e.costCode || null, orderedDate: e.date || null, lines: lines };
     }
     if (t === 'co') {
       return { co_number: e.number || undefined, status: 'approved', title: e.title || 'Imported change order', vendorName: e.vendor || null, date: e.date || null, defaultMarkup: 0, lines: lines };
