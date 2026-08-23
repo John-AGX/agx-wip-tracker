@@ -12,6 +12,11 @@
 
   let layoutApplied = false;
   let currentJobId = null;
+  // The job the left-sidebar identity CARD was last built for. Tracked
+  // separately from currentJobId (which tryInitWorkspace also writes) so the
+  // observer can detect a direct job→job switch that left the card stale and
+  // resync it — otherwise uploads/edits land on whatever job the card shows.
+  let _cardJobId = null;
   let _ngComputing = false;
 
   // ── Tab definitions ──────────────────────────────────────
@@ -730,6 +735,7 @@
     // Single-card rule: a job must never show the lead/estimate context card.
     if (window.p86EntitySubnav && window.p86EntitySubnav.clearAll) window.p86EntitySubnav.clearAll();
     buildJobSubnavShell(job);
+    _cardJobId = (job && job.id) || null;   // remember which job the card now shows
     placeJobSubnav();
     var _jid = job && job.id;
     refreshJobNavChips(_jid);
@@ -2026,6 +2032,7 @@
             cleanup();
             layoutApplied = false;
             currentJobId = null;
+            _cardJobId = null;
           }
           return;
         }
@@ -2042,6 +2049,32 @@
           var stale = document.getElementById('ws-two-col');
           if (stale) { rescuePanels(stale, detail); stale.remove(); }
           applyLayout();
+        } else {
+          // Layout already applied — but the ACTIVE job can change via a
+          // DIRECT job→job switch (a search result, a deep link, or a jobs-list
+          // row) where the detail view never hid. applyLayout only re-runs when
+          // the view goes hidden→visible (layoutApplied resets on close), so a
+          // direct switch left the left-sidebar identity card stuck on the
+          // PREVIOUS job while the content panels re-rendered for the new one.
+          // That stale card is what the user reads to know which job they're on,
+          // so it silently sent uploads/edits to the wrong job. Resync the card
+          // + tracking id to the current job whenever they diverge. Rebuilding
+          // just the subnav (not a full applyLayout) is idempotent —
+          // buildJobSubnavShell re-populates identity on every call — and
+          // self-terminating: once currentJobId matches, this branch no-ops.
+          // Compare against _cardJobId (the job the CARD was last built for),
+          // NOT the module currentJobId — tryInitWorkspace() below also writes
+          // currentJobId for its own workspace-init tracking, so that var can
+          // already match the new job while the card is still stale.
+          var _activeId = (typeof appState !== 'undefined' && appState) ? appState.currentJobId : null;
+          if (_activeId && _activeId !== _cardJobId) {
+            var _activeJob = (typeof appData !== 'undefined' ? (appData.jobs || []) : [])
+              .find(function (j) { return j.id === _activeId; });
+            if (_activeJob) {
+              try { mountJobSubnav(_activeJob); }   // sets _cardJobId
+              catch (e) { if (window.console) console.warn('[job subnav resync] failed:', e && e.message); }
+            }
+          }
         }
 
         tryInitWorkspace();
