@@ -244,9 +244,50 @@ const CO_LINE_KEY_MAP = {
   cost_pending: 'costPending',
 };
 
+function coLineId() {
+  return 'line_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+}
+
+// A change-order line's `id` is its ADDRESS, and identity is part of intake
+// for exactly the same reason `unit_cost` → `unitCost` is.
+//
+// The CO editor renders each row as data-line-id="<l.id>" and every handler
+// on it — unit cost, qty, description, unit sell, markup, the blur
+// reconciler, the delete button, the section $/% toggle — resolves the line
+// by matching that attribute back against lines[].id. A line with NO id
+// renders data-line-id="" and the lookup compares String(undefined) to
+// String("") — false. The handler finds nothing and RETURNS. Nothing is
+// written, the autosave is never armed, and the save pill still reads
+// "Saved". The line is not hard to edit; it is silently uneditable.
+//
+// Two producers shipped id-less lines: the bulk PDF importer and the agent
+// (the documented CO line shape has no `id` key). Those are precisely the
+// change orders that need repairing, so the repair door was the dead one.
+// Stamp on the way IN, at the same choke point that repairs the key names.
+//
+// A DUPLICATE id is the same defect in a different hat — two rows resolve to
+// the first line, so an edit to the second silently lands on the first — so
+// it is re-minted too.
+function stampCoLineIds(lines) {
+  if (!Array.isArray(lines)) return lines;
+  const seen = new Set();
+  return lines.map((l) => {
+    if (!l || typeof l !== 'object' || Array.isArray(l)) return l;
+    const cur = l.id == null ? '' : String(l.id);
+    if (cur !== '' && !seen.has(cur)) { seen.add(cur); return l; }
+    let id;
+    do { id = coLineId(); } while (seen.has(id));
+    seen.add(id);
+    return Object.assign({}, l, { id });
+  });
+}
+
+// Key mapping ONLY. Identity is a separate pass (stampCoLineIds) composed at
+// each door, so a caller that wants one without the other can have it and
+// neither contract has to be read out of the other's name.
 function normalizeCoLines(lines) {
   if (!Array.isArray(lines)) return lines;
-  return lines.map((l) => {
+  return (lines.map((l) => {
     if (!l || typeof l !== 'object' || Array.isArray(l)) return l;
     const out = {};
     for (const k of Object.keys(l)) {
@@ -258,7 +299,7 @@ function normalizeCoLines(lines) {
       out[target] = l[k];
     }
     return out;
-  });
+  }));
 }
 
 function cleanCoData(body) {
@@ -360,7 +401,7 @@ async function createChangeOrder(db, { jobId, orgId, ownerId, fields }) {
   // Normalize the INCOMING lines only. An agent's `unit_cost` used to be
   // stored verbatim and price at $0.
   const data = cleanCoData(Array.isArray(body.lines)
-    ? Object.assign({}, body, { lines: normalizeCoLines(body.lines) })
+    ? Object.assign({}, body, { lines: stampCoLineIds(normalizeCoLines(body.lines)) })
     : body);
   const { rows } = await db.query(
     // organization_id off the PARENT JOB, never off the caller — and this is
@@ -407,7 +448,7 @@ async function updateChangeOrder(db, { id, orgId, jobId, fields, merge = true })
   // nobody asked to touch.
   const incoming = fields || {};
   const data = cleanCoData(Object.assign({}, base, incoming,
-    Array.isArray(incoming.lines) ? { lines: normalizeCoLines(incoming.lines) } : {}));
+    Array.isArray(incoming.lines) ? { lines: stampCoLineIds(normalizeCoLines(incoming.lines)) } : {}));
   const { rows } = await db.query(
     `UPDATE job_change_orders
         SET data = $1::jsonb,
@@ -643,7 +684,7 @@ async function deleteInvoice(db, { id, orgId, jobId }) {
 module.exports = {
   DEFAULT_SCOPE_TEMPLATE,
   nextCoNumber, nextPoNumber, nextInvoiceNumber, orgScopeTemplate,
-  cleanCoData, cleanPoData, normalizeCoLines, poEffectiveTotal, lineAmount, computeInvoiceTotals,
+  cleanCoData, cleanPoData, normalizeCoLines, stampCoLineIds, poEffectiveTotal, lineAmount, computeInvoiceTotals,
   createChangeOrder, updateChangeOrder, deleteChangeOrder,
   createPurchaseOrder, updatePurchaseOrder, deletePurchaseOrder,
   createInvoice, updateInvoice, deleteInvoice,

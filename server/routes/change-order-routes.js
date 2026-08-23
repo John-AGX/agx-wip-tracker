@@ -226,6 +226,13 @@ router.post('/jobs/:jobId/change-orders', requireAuth, requireCapability('ESTIMA
     // Ensure a lines[] array always exists so downstream readers can
     // safely .map / .filter without null-guards.
     if (!Array.isArray(data.lines)) data.lines = [];
+    // …and that every line carries an id. This door is how the BULK PDF
+    // IMPORTER creates change orders, and its line shape has no `id` — which
+    // makes every one of its rows silently uneditable in the CO editor (see
+    // stampCoLineIds). Identity only, deliberately: the key normalizer is NOT
+    // run here, because this door's callers already write camelCase and
+    // remapping their keys would be a pricing change nobody asked for.
+    data.lines = jobFin.stampCoLineIds(data.lines);
 
     const { rows } = await pool.query(
       // organization_id off the PARENT JOB, never off the caller. A change order
@@ -287,6 +294,10 @@ router.put('/change-orders/:id', requireAuth, requireCapability('ESTIMATES_EDIT'
     delete data.created_at;
     delete data.updated_at;
     if (!Array.isArray(data.lines)) data.lines = [];
+    // Identity, same as the create door: a stored line that arrived without an
+    // id is uneditable in the editor, so heal it on the way through rather
+    // than leaving the record permanently dead.
+    data.lines = jobFin.stampCoLineIds(data.lines);
     // Rich-text fields hold sanitized HTML from the p86RichText editor; clean
     // them again server-side so a direct API POST can't store unsafe markup.
     if (typeof data.scope === 'string') data.scope = sanitizeRichText(data.scope);

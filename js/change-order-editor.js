@@ -69,6 +69,51 @@ function p86Ask(message, opts) {
     return 'line_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
   }
 
+  // A line's `id` is its ADDRESS in this editor. paintLines writes it into
+  // data-line-id, and EVERY handler bound to the row — unit cost, qty,
+  // description, unit sell, markup, the blur reconciler, the delete button,
+  // the section $/% toggle — resolves the line by matching that attribute
+  // back against _state.co.lines[].id.
+  //
+  // A line with no id renders data-line-id="" (escapeAttr maps undefined to
+  // ''), and the lookup then compares String(undefined) === String("") —
+  // "undefined" === "", false. The handler finds no line and RETURNS on its
+  // first statement. Nothing is written to the record, markDirty() never
+  // fires, no autosave is armed, and the save pill goes on reading "Saved".
+  // Every chip stays frozen. That is not a pricing bug and not a repaint
+  // bug: the row is inert, and it looks exactly like the app refusing to do
+  // arithmetic.
+  //
+  // Two producers ship id-less lines — the bulk PDF importer and the
+  // agent/Scribe — which are the change orders 1.19 exists to repair. Both
+  // doors now stamp ids server-side, but records ALREADY STORED id-less do
+  // not heal until something writes them, and nothing can write them while
+  // the editor is dead. So heal here too, on the way to the screen.
+  //
+  // A DUPLICATE id is the same defect wearing a different hat: two rows
+  // resolve to the first line, so edits to the second land on the first.
+  // Re-mint those as well.
+  //
+  // Minting does NOT mark the record dirty — opening a change order must not
+  // save it. The ids ride along with the first real edit, which is now
+  // possible.
+  function ensureLineIds(lines) {
+    if (!Array.isArray(lines)) return 0;
+    var seen = {}, minted = 0;
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i];
+      if (!l || typeof l !== 'object') continue;
+      var id = (l.id == null) ? '' : String(l.id);
+      if (id === '' || Object.prototype.hasOwnProperty.call(seen, id)) {
+        do { l.id = newLineId(); } while (Object.prototype.hasOwnProperty.call(seen, String(l.id)));
+        id = String(l.id);
+        minted++;
+      }
+      seen[id] = true;
+    }
+    return minted;
+  }
+
   // ──────────────────────────────────────────────────────────────────
   // Public API
   // ──────────────────────────────────────────────────────────────────
@@ -894,6 +939,9 @@ function p86Ask(message, opts) {
     var host = document.getElementById('p86CoLineTable');
     if (!host) return;
     var lines = Array.isArray(_state.co.lines) ? _state.co.lines : [];
+    // Identity BEFORE markup: the id this writes is the address every
+    // handler bound below resolves against. See ensureLineIds.
+    ensureLineIds(lines);
     if (!lines.length) {
       host.innerHTML = '<div class="p86-co-lines-empty">' +
         'No line items yet. Click <strong>+ Add Line</strong> to add the first one, or <strong>+ Section Header</strong> to group lines by trade.' +
@@ -1482,6 +1530,7 @@ function p86Ask(message, opts) {
         coSectionTotals: coSectionTotals,
         coImpliedMarkup: coImpliedMarkup,
         newLineId: newLineId,
+        ensureLineIds: ensureLineIds,
       },
     };
   }

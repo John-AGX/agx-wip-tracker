@@ -176,9 +176,14 @@ describe('normalization touches only the lines ARRIVING in an op', () => {
   test('the update path normalizes incoming lines and leaves merged ones alone', () => {
     // Repairing a stored row as a side effect of an unrelated field update
     // would move money on a change order nobody asked to touch.
+    // The intake pass is a COMPOSITION — key mapping (normalizeCoLines) and
+    // identity (stampCoLineIds), each a separate contract. What is pinned is
+    // that both are applied to `incoming.lines` / `body.lines` and to nothing
+    // else: a merged-out stored line must not be rewritten by an op that did
+    // not name it.
     const FIN = raw('server', 'services', 'job-financials.js');
-    expect(FIN).toMatch(/Array\.isArray\(incoming\.lines\) \? \{ lines: normalizeCoLines\(incoming\.lines\) \} : \{\}/);
-    expect(FIN).toMatch(/Array\.isArray\(body\.lines\)\s*\n?\s*\? Object\.assign\(\{\}, body, \{ lines: normalizeCoLines\(body\.lines\) \}\)/);
+    expect(FIN).toMatch(/Array\.isArray\(incoming\.lines\) \? \{ lines: stampCoLineIds\(normalizeCoLines\(incoming\.lines\)\) \} : \{\}/);
+    expect(FIN).toMatch(/Array\.isArray\(body\.lines\)\s*\n?\s*\? Object\.assign\(\{\}, body, \{ lines: stampCoLineIds\(normalizeCoLines\(body\.lines\)\) \}\)/);
   });
 
   test('there is no backfill, anywhere, over stored change orders', () => {
