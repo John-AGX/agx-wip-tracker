@@ -41,6 +41,10 @@ const JOB_TYPE_LABELS = jobTypes.DEFAULT_JOB_TYPES.map((t) => t.label);
 // COs/POs/invoices live in their own tables; this reads them and derives CO
 // money through the same pricing pipeline the browser uses.
 const jobMoney = require('../services/money/change-order-totals');
+// The shared write layer for a job's money records. Only its pure helpers are
+// used here (read_change_orders resolves a CO NUMBER the same way the write
+// door does, so a change order the model can read is always one it can name).
+const jobFin = require('../services/job-financials');
 // Job WIP, ported from the browser's getJobWIP — QB actuals, vendor bills,
 // PO/sub accrual and the display figures the job card shows.
 const jobWip = require('../services/money/job-wip');
@@ -7559,6 +7563,37 @@ const PROJECT_INLINE_TOOLS = [
       },
     },
   },
+  {
+    // THE READ THAT DID NOT EXIST.
+    //
+    // A change order was the one money record 86 could see mentioned and
+    // never resolve. read_entity has no change_order type, search_entities
+    // has none, and the per-turn job context prints "- CO-3: <desc> — income
+    // $X, cost $Y [draft]" with no row id and no lines. So "set the cost on
+    // line 3 of CO-3 to $1,650" died before any write was attempted: 86's own
+    // baseline tells it to resolve an entity before writing and to ask rather
+    // than guess, and with no tool that returns a change order, declining WAS
+    // the correct behaviour. That is exactly the report.
+    //
+    // This returns the two addresses a write needs — the co_ row id and each
+    // line's line_id — because a read that cannot be acted on just moves the
+    // dead end one step later.
+    name: 'read_change_orders',
+    tier: 'auto',
+    description:
+      'List/read CHANGE ORDERS on a job, INCLUDING THEIR LINE ITEMS. READ-ONLY. Org-scoped. Pass `job_id` to restrict to one job, `co_id` to read one (accepts the co_ row id OR the CO number like "CO-3"), `status` to scope (draft|approved|applied). Returns the co_ ROW ID, the CO number, status and lock state, the income (the price to the owner) and the cost, and every line with its `line_id`, description, qty, unit cost, promised Unit Sell and markup. THE co_ ID AND THE line_id ARE THE ADDRESSES A WRITE NEEDS: read the change order before asking the Scribe to change a line on it, and pass the ids you read. Use for "what change orders are on job X", "what is on CO-3", "why does CO-3 show no profit", and before ANY change-order edit.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        job_id: { type: 'string', description: 'Optional — restrict to one job.' },
+        co_id: { type: 'string', description: 'Optional — one change order, by co_ row id or by CO number ("CO-3").' },
+        status: { type: 'string', description: 'Optional status filter (draft | approved | applied).' },
+        filter: { type: 'string', description: 'Case-insensitive substring on co_number or title.' },
+        limit: { type: 'number', description: 'Cap results. Default 20, max 100.' },
+      },
+    },
+  },
 ];
 
 // Auto-tier — same as subtask tools, no approval card. The user is
@@ -12294,6 +12329,7 @@ const AI_TOOL_CAPABILITY = new Map([
   // Projects + POs reads — org-domain work; gate to job viewers.
   ['read_projects', 'JOBS_VIEW_ALL'],
   ['read_purchase_orders', 'JOBS_VIEW_ALL'],
+  ['read_change_orders', 'JOBS_VIEW_ALL'],
 ]);
 
 // Effective capability for the consolidated read front door, derived
@@ -13987,11 +14023,88 @@ async function execProjectInlineTool(name, input, ctx) {
     return lines.join('\n');
   }
 
+  if (name === 'read_change_orders') {
+    const orgRow = await pool.query('SELECT organization_id FROM users WHERE id = $1', [userId]);
+    const orgId = orgRow.rows[0] && orgRow.rows[0].organization_id;
+    if (!orgId) throw new Error('User has no organization');
+    const where = ['(j.organization_id = $1 OR j.organization_id IS NULL)'];
+    const params = [orgId];
+    let pn = 2;
+    if (input && input.job_id) { where.push('co.job_id = $' + (pn++)); params.push(String(input.job_id)); }
+    if (input && input.status) { where.push('co.status = $' + (pn++)); params.push(input.status); }
+    // co_id accepts a row id OR the number a human says. The number is what
+    // the job-context block prints, so it is what the model has.
+    const ref = (input && input.co_id || '').trim();
+    if (ref && /^co_/.test(ref)) { where.push('co.id = $' + (pn++)); params.push(ref); }
+    const q = (input && (input.filter || input.q) || '').trim();
+    if (q) { where.push('(co.co_number ILIKE $' + pn + " OR co.data->>'title' ILIKE $" + pn + ')'); params.push('%' + q + '%'); pn++; }
+    const limit = Math.max(1, Math.min(100, Number(input && input.limit) || 20));
+    const cor = await pool.query(
+      `SELECT co.id, co.co_number, co.status, co.job_id, co.is_locked, co.data, co.approved_at,
+              j.job_number, j.data->>'projectName' AS job_name
+         FROM job_change_orders co
+         JOIN jobs j ON j.id = co.job_id
+        WHERE ${where.join(' AND ')}
+        ORDER BY co.created_at DESC
+        LIMIT ${limit}`,
+      params
+    );
+    // A number reference is matched here rather than in SQL so "CO-3",
+    // "co 3", "CO-0003" and "3" all land on the same record — the same
+    // tolerance the write door's resolveCoId applies, so a model that can
+    // read a change order can always address it.
+    let rows = cor.rows;
+    if (ref && !/^co_/.test(ref)) {
+      const want = jobFin.coNumberKey(ref);
+      const hits = rows.filter((r) => jobFin.coNumberKey(r.co_number) === want);
+      if (hits.length) rows = hits;
+      else return `No change order matching ${ref}` + (input && input.job_id ? ' on that job.' : '.');
+    }
+    if (!rows.length) return 'No change orders found.';
+    const money = (v) => '$' + Math.round(Number(v) || 0).toLocaleString();
+    const cell = (v) => (v === '' || v == null ? '—' : String(v));
+    const out = [`${rows.length} change order${rows.length === 1 ? '' : 's'}:`];
+    for (const x of rows) {
+      const d = x.data || {};
+      const m = jobMoney.changeOrderMoney(d);
+      const title = typeof d.title === 'string' ? d.title.slice(0, 80) : '';
+      out.push('- ' + (x.co_number || x.id) + ' [co_id=' + x.id + '] · ' + (x.status || 'draft') +
+        (x.is_locked ? ' · LOCKED (approved — unlock to edit)' : '') +
+        (title ? ' · ' + wrapUserData('change_order.title', title) : '') +
+        ' · income ' + money(m.income) + ' · cost ' + money(m.costs) +
+        (x.job_number ? ' · job ' + x.job_number : (x.job_id ? ' · job ' + x.job_id : '')) +
+        (x.status !== 'approved' && x.status !== 'applied'
+          ? '  [DRAFT — contributes $0 to the job WIP until approved]' : ''));
+      const lines = Array.isArray(d.lines) ? d.lines : [];
+      if (!lines.length) { out.push('    (no line items — this change order is worth $0)'); continue; }
+      let n = 0;
+      for (const l of lines) {
+        if (!l || typeof l !== 'object') continue;
+        if (l.section === '__section_header__') {
+          out.push('    -- section: ' + wrapUserData('change_order.line', String(l.label || '').slice(0, 60)));
+          continue;
+        }
+        n++;
+        out.push('    #' + n + ' [line_id=' + (l.id == null ? '' : l.id) + '] ' +
+          wrapUserData('change_order.line', String(l.description || '(no description)').slice(0, 80)) +
+          ' · qty ' + cell(l.qty) + ' ' + (l.unit || 'ea') +
+          ' · unitCost ' + cell(l.unitCost) +
+          ' · unitSell ' + cell(l.unitSell) + (l.unitSell === '' || l.unitSell == null
+            ? ' (no promise — priced from cost x markup)' : ' (PROMISED — this line\'s price is fixed and its markup is ignored)') +
+          ' · markup ' + cell(l.markup) +
+          (l.costPending ? ' · COST IS A PLACEHOLDER EQUAL TO THE PRICE — needs the real cost' : ''));
+      }
+    }
+    out.push('To change a line, hand the Scribe the co_id and the line_id above and ask for a ' +
+      'line_edits op — never a full lines[] replacement, which drops every line you did not list.');
+    return out.join('\n');
+  }
+
   throw new Error(`Unknown project-inline tool: ${name}`);
 }
 const PROJECT_INLINE_EXECUTOR_TOOLS = new Set([
   'read_photo_comments', 'add_photo_comment', 'read_schedule_blocks', 'read_reminders', 'read_calendar_events',
-  'read_projects', 'read_purchase_orders',
+  'read_projects', 'read_purchase_orders', 'read_change_orders',
 ]);
 
 const ALLOWED_AUTO_TIER_TOOLS = new Set([
@@ -14000,7 +14113,7 @@ const ALLOWED_AUTO_TIER_TOOLS = new Set([
   // primitive (conversational + pure-read respectively). read_reminders
   // is the owner-scoped personal Reminders read (3-tier model).
   'read_photo_comments', 'add_photo_comment', 'read_schedule_blocks', 'read_reminders',
-  'read_calendar_events', 'read_projects', 'read_purchase_orders',
+  'read_calendar_events', 'read_projects', 'read_purchase_orders', 'read_change_orders',
   // C18 — universal read surface. Replaces ~15 narrow reads via two
   // tools (read_entity + search_entities). Routed through
   // execConsolidatedRead → existing narrow handlers.
@@ -14182,10 +14295,20 @@ const SURFACE_PRIMARY_WRITES = {
 // invocations.
 const TOOL_REQUIRED_ENTITY = new Map();
 const ESTIMATE_REQUIRED = [
-  'propose_add_line_item', 'propose_update_line_item', 'propose_remove_line_item',
-  'propose_move_line_item', 'propose_add_section', 'propose_remove_section',
-  'propose_rename_section', 'propose_set_scope', 'propose_set_estimate_field',
-  'propose_add_client_note'
+  'propose_add_line_item', 'propose_update_line_item', 'propose_add_section',
+  'propose_add_client_note',
+  // SIX MORE PHANTOMS WERE HERE, found by the rule that found the seventh:
+  // propose_remove_line_item, propose_move_line_item, propose_remove_section,
+  // propose_rename_section, propose_set_scope, propose_set_estimate_field.
+  // Each appeared exactly once in the whole repo — in this array — with no
+  // schema, no executor and no registration, so TOOL_REQUIRED_ENTITY.get()
+  // could never be reached for any of them. Removed for the same reason the
+  // change-order one was: an entry here is a claim that a tool answers to the
+  // name, and the next person to write one inherits an entity gate decided by
+  // a line nobody meant to leave. The estimate line surgery those names
+  // suggest is done through emit_payload_file's line_adds / line_edits /
+  // line_deletes, which is where a change order's per-line ops now live too.
+  //
   // request_edit_mode INTENTIONALLY EXCLUDED — it's read-like (proposes
   // a mode flip, doesn't mutate the entity) and listed in
   // PLAN_MODE_ALLOWED_JOB_TOOLS so 86 fires it legitimately from the
@@ -14194,7 +14317,19 @@ const ESTIMATE_REQUIRED = [
 ];
 const JOB_REQUIRED = [
   'set_phase_pct_complete', 'set_phase_field', 'set_node_value',
-  'wire_nodes', 'create_node', 'set_phase_buildingId', 'propose_change_order'
+  'wire_nodes', 'create_node', 'set_phase_buildingId',
+  // 'propose_change_order' WAS HERE AND WAS A PHANTOM. No schema, no
+  // executor, no allowlist entry, no registration — the name existed in this
+  // gating map and nowhere else in the repo, so the map pre-armed an
+  // entity gate for a tool that could never be invoked. Removed rather than
+  // left: a name sitting in a gate is a claim that something answers to it,
+  // and the next person to write a change-order tool would have inherited an
+  // entity restriction decided by a line nobody meant to leave behind.
+  //
+  // Change orders are written through scribe_write → emit_payload_file →
+  // job.ops.change_orders, the door that already carries the numbering, the
+  // org and job pins, the applied/locked refusals and the line-key
+  // normalizer. A second implementation is what this map is a fossil of.
 ];
 for (const n of ESTIMATE_REQUIRED) TOOL_REQUIRED_ENTITY.set(n, 'estimate');
 for (const n of JOB_REQUIRED)      TOOL_REQUIRED_ENTITY.set(n, 'job');

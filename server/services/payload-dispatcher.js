@@ -561,6 +561,13 @@ function validateOps(entityType, ops) {
         if (op && op.assembly_adds != null && !Array.isArray(op.assembly_adds)) {
           throw new Error(`job.ops.change_orders[${i}].assembly_adds must be an array`);
         }
+        // Same for the per-line ops. Wrong shape here rather than inside the
+        // transaction, and by name rather than by being ignored.
+        for (const k of ['line_edits', 'line_adds', 'line_deletes']) {
+          if (op && op[k] != null && !Array.isArray(op[k])) {
+            throw new Error(`job.ops.change_orders[${i}].${k} must be an array`);
+          }
+        }
       });
     }
   }
@@ -2331,9 +2338,22 @@ async function dispatchJob(dbClient, target, refTable, ctx) {
   const orgId = (ctx && ctx.organizationId) != null ? ctx.organizationId : null;
   const ownerId = (ctx && ctx.userId) || null;
 
+  const LINE_OP_KEYS = ['line_edits', 'line_adds', 'line_deletes'];
+
   async function applyRecordOps(items, idKey, svc, displayName) {
     for (const op of items) {
       if (!op || !op.op) throw new Error(`${displayName}[].op required`);
+      // A record type that does not understand surgical line ops must SAY so.
+      // Dropping the key would apply the rest of the op and report success
+      // while the edit the instruction was actually about never happened.
+      if (!svc.lineOps) {
+        const stray = LINE_OP_KEYS.filter((k) => op[k] != null);
+        if (stray.length) {
+          throw new Error(
+            `${displayName}[] does not support ${stray.join(' / ')}. ` +
+            `Send fields.lines with the COMPLETE line array instead. Nothing was saved.`);
+        }
+      }
       if (op.op === 'create') {
         const row = await svc.create(op.fields || {});
         // Let later ops in the same payload point at what we just made.
@@ -2346,9 +2366,20 @@ async function dispatchJob(dbClient, target, refTable, ctx) {
       } else if (op.op === 'update') {
         const idVal = resolveRef(op[idKey], refTable);
         if (!idVal) throw new Error(`${displayName}[].update requires ${idKey}`);
-        // `fields` is optional when the op is purely an assembly append.
-        if (op.fields && Object.keys(op.fields).length) await svc.update(idVal, op.fields);
-        else if (!Array.isArray(op.assembly_adds) || !op.assembly_adds.length) await svc.update(idVal, {});
+        // PER-LINE OPS ride with the update. `fields.lines` is a whole-array
+        // replace, which is right for a caller holding the whole record and
+        // catastrophic for one that is not: the Scribe has no read access, so
+        // the only lines array it can build is the one line the instruction
+        // named, and sending it deletes the rest while reporting success.
+        // svc.lineOps declares that this record type understands surgical
+        // ops; the ones that do not still refuse the keys by name below.
+        const lineOps = svc.lineOps ? svc.lineOps(op) : null;
+        // `fields` is optional when the op is purely an assembly or line append.
+        if ((op.fields && Object.keys(op.fields).length) || lineOps) {
+          await svc.update(idVal, op.fields || {}, lineOps);
+        } else if (!Array.isArray(op.assembly_adds) || !op.assembly_adds.length) {
+          await svc.update(idVal, {});
+        }
         if (svc.assemblyAdds && Array.isArray(op.assembly_adds) && op.assembly_adds.length) {
           await svc.assemblyAdds(idVal, op.assembly_adds);
         }
@@ -2367,8 +2398,12 @@ async function dispatchJob(dbClient, target, refTable, ctx) {
       // jobId is passed on update/delete too: without it, an op inside a
       // payload targeting job A could reach job B's CO by id alone.
       create: (fields) => jobFin.createChangeOrder(dbClient, { jobId: id, orgId, ownerId, fields }),
-      update: (rid, fields) => jobFin.updateChangeOrder(dbClient, { id: rid, orgId, jobId: id, fields }),
+      update: (rid, fields, lineOps) => jobFin.updateChangeOrder(dbClient, { id: rid, orgId, jobId: id, fields, lineOps }),
       remove: (rid) => jobFin.deleteChangeOrder(dbClient, { id: rid, orgId, jobId: id }),
+      // Change orders are the one record type where an agent has to be able
+      // to change ONE line — "set the cost on line 3 to $1,650" is the whole
+      // of John's report — without holding the other lines it cannot read.
+      lineOps: (op) => (jobFin.hasCoLineOps(op) ? op : null),
       // A COSTED RECIPE on a change order, intact — one line per cost
       // bucket, `markup: ''` so the cascade prices it, and the SAME
       // refusals the estimate door enforces. This is the alternative to

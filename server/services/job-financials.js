@@ -385,6 +385,223 @@ async function assertJobInOrg(db, jobId, orgId) {
   if (!rowCount) throw new Error(`Job not found: ${jobId}`);
 }
 
+// ────────────────────────────────────────────────────────────────────
+// change-order LINE ops — the per-line door.
+//
+// `fields.lines` is a WHOLE-ARRAY REPLACE and always has been. That is right
+// for the editor, which holds the entire record in memory. It is a data-loss
+// weapon in an agent's hands, because the Scribe has no read access at all:
+// the only lines array it can build is the one line the instruction named.
+// Measured against this very function — a 3-line $5,850 change order sent one
+// line came back a 1-line $2,750 change order, and the payload reported
+// SUCCESS. Deleting revenue and calling it a repair is worse than refusing.
+//
+// So change orders get what estimates have had for a long time: named
+// per-line ops that touch the line they name and nothing else. Same idea as
+// payload-dispatcher's line_adds / line_edits / line_deletes, deliberately
+// the same vocabulary, and living HERE rather than beside them so it shares
+// one read-modify-write with the org pin, the job pin and the applied/locked
+// refusals instead of re-deriving them.
+// ────────────────────────────────────────────────────────────────────
+
+// What an agent may write on a line. Not "everything the editor writes":
+// `id` is an address, `section`/`label` are structure, and the assembly
+// provenance keys (sourceAssemblyId, assemblyBreakdown, assemblyBucket,
+// assemblyParams) are a recipe's audit trail — rewriting them by hand is how
+// a costed assembly becomes an uncosted guess wearing its badge. Recipes go
+// on through assembly_adds.
+const CO_LINE_EDITABLE = new Set([
+  'description', 'qty', 'unit', 'unitCost', 'unitSell', 'markup', 'markupMode', 'costPending',
+]);
+const CO_LINE_CONTROL = new Set(['line_id', 'line_number', 'op', 'fields', 'id']);
+
+function coerceCoLineValue(key, v, where) {
+  if (key === 'qty' || key === 'unitCost' || key === 'unitSell') {
+    // BLANK STAYS BLANK, and that is load-bearing for unitSell: blank means
+    // "no promise, price me from cost x markup" while 0 means "promised at
+    // $0". Coercing blank to 0 here would lock a line at free — and this is
+    // the door an agent uses to REMOVE a promise that turned out not to be
+    // one.
+    if (v === '' || v === null) return '';
+    const n = Number(v);
+    if (!isFinite(n)) {
+      throw new Error(`${where}: ${key} must be a number or blank, got ${JSON.stringify(v)}. Nothing was saved.`);
+    }
+    return n;
+  }
+  if (key === 'markup') {
+    // '' means "inherit the section / record default", which is not 0.
+    if (v === '' || v == null) return '';
+    const n = Number(v);
+    if (!isFinite(n)) {
+      throw new Error(`${where}: markup must be a percentage number or blank, got ${JSON.stringify(v)}. Nothing was saved.`);
+    }
+    return n;
+  }
+  if (key === 'costPending') return !!v;
+  return v;
+}
+
+// The field bag off one line op, key-normalized (so an agent's `unit_cost`
+// cannot land verbatim and price at $0 — the bug c7bfdbd fixed for the other
+// door) and refused by name if it is not a line field.
+function coLineFields(src, where) {
+  const out = {};
+  for (const k of Object.keys(src || {})) {
+    if (CO_LINE_CONTROL.has(k)) continue;
+    const key = CO_LINE_KEY_MAP[k] || k;
+    if (!CO_LINE_EDITABLE.has(key)) {
+      throw new Error(
+        `${where}: '${k}' is not an editable change-order line field. ` +
+        `Editable: ${Array.from(CO_LINE_EDITABLE).join(', ')}. ` +
+        'unitCost is what the work COSTS; unitSell is the price promised to the owner. ' +
+        'Structure (section headers) and assembly provenance are not writable this way — ' +
+        'use assembly_adds for a costed recipe. Nothing was saved.');
+    }
+    out[key] = coerceCoLineValue(key, src[k], where);
+  }
+  return out;
+}
+
+// A line op's field bag is either nested under `fields` or flat on the op,
+// exactly as the estimate door accepts both shapes.
+function coLineBag(spec, where) {
+  const src = (spec && spec.fields && typeof spec.fields === 'object' && !Array.isArray(spec.fields))
+    ? spec.fields : spec;
+  return coLineFields(src, where);
+}
+
+// The lines a human counts. Section headers are structure, not lines, and
+// read_change_orders numbers the priced ones — so line_number means the same
+// thing on both sides of the conversation.
+function pricedCoLines(lines) {
+  return lines
+    .map((l, i) => ({ l, i }))
+    .filter((x) => x.l && typeof x.l === 'object' && x.l.section !== '__section_header__');
+}
+
+// ADDRESSING. `line_id` is the real address and is preferred. `line_number`
+// exists because a change order stored before line ids were stamped has no
+// address at all, and repairing exactly those records is the job — a model
+// that can only see "#3 Stucco patch" has to be able to name it.
+//
+// An unresolvable reference THROWS, listing what the change order actually
+// holds. It must never fall through to "0 lines edited, success": a write
+// that reports success and changes nothing is the failure mode this repo has
+// been bitten by most.
+function resolveCoLineIndex(lines, spec, where) {
+  const rawId = spec && spec.line_id != null ? spec.line_id
+    : (spec && spec.id != null ? spec.id : null);
+  if (rawId != null && String(rawId) !== '') {
+    const idx = lines.findIndex((l) => l && String(l.id) === String(rawId));
+    if (idx >= 0) return idx;
+  }
+  const n = spec && spec.line_number != null ? Number(spec.line_number) : NaN;
+  if (isFinite(n) && Number.isInteger(n)) {
+    const priced = pricedCoLines(lines);
+    if (n >= 1 && n <= priced.length) return priced[n - 1].i;
+  }
+  const inventory = pricedCoLines(lines)
+    .map((x, k) => `#${k + 1} ${x.l.description || '(no description)'} [line_id=${x.l.id}]`)
+    .join('; ') || '(no lines)';
+  throw new Error(
+    `${where}: no such line — line_id=${JSON.stringify(rawId)} line_number=${JSON.stringify(spec && spec.line_number)}. ` +
+    `This change order holds ${pricedCoLines(lines).length} line(s): ${inventory}. ` +
+    'Address a line by line_id (preferred) or by the 1-based line_number read_change_orders prints. Nothing was saved.');
+}
+
+// Apply the ops to `lines` in place-ish, returning a new array and a count of
+// what actually happened.
+//
+// ORDER IS EDITS → DELETES → ADDS, and it is not arbitrary. Every reference
+// in the op resolves against the array AS READ, so a line_number an agent
+// took off a read still means the row it meant; deletes are resolved to ids
+// BEFORE anything is removed; and adds append, so they cannot renumber a
+// reference that has not been used yet.
+function applyCoLineOps(lines, spec) {
+  const out = Array.isArray(lines) ? lines.slice() : [];
+  const summary = { edited: 0, deleted: 0, added: 0 };
+
+  const edits = Array.isArray(spec.line_edits) ? spec.line_edits : [];
+  edits.forEach((e, k) => {
+    const where = `change_orders[].line_edits[${k}]`;
+    const idx = resolveCoLineIndex(out, e, where);
+    const bag = coLineBag(e, where);
+    if (!Object.keys(bag).length) {
+      throw new Error(`${where}: names a line but sets no field. Nothing was saved.`);
+    }
+    out[idx] = Object.assign({}, out[idx], bag);
+    summary.edited++;
+  });
+
+  const deletes = Array.isArray(spec.line_deletes) ? spec.line_deletes : [];
+  const doomed = new Set();
+  deletes.forEach((d, k) => {
+    const where = `change_orders[].line_deletes[${k}]`;
+    const s = (typeof d === 'string' || typeof d === 'number') ? { line_id: d } : d;
+    doomed.add(resolveCoLineIndex(out, s, where));
+  });
+  if (doomed.size) {
+    const kept = out.filter((_l, i) => !doomed.has(i));
+    summary.deleted = out.length - kept.length;
+    out.length = 0;
+    kept.forEach((l) => out.push(l));
+  }
+
+  const adds = Array.isArray(spec.line_adds) ? spec.line_adds : [];
+  adds.forEach((a, k) => {
+    const where = `change_orders[].line_adds[${k}]`;
+    const bag = coLineBag(a, where);
+    if (bag.unitCost === undefined) {
+      throw new Error(`${where}: unitCost is required — a line with no cost is worth $0 of cost and the change order will read as pure profit. Nothing was saved.`);
+    }
+    out.push(Object.assign({ qty: 1, markup: '', markupMode: 'percent' }, bag));
+    summary.added++;
+  });
+
+  return { lines: stampCoLineIds(out), summary };
+}
+
+function hasCoLineOps(spec) {
+  return !!(spec && (
+    (Array.isArray(spec.line_edits) && spec.line_edits.length) ||
+    (Array.isArray(spec.line_adds) && spec.line_adds.length) ||
+    (Array.isArray(spec.line_deletes) && spec.line_deletes.length)));
+}
+
+// `co_id` is supposed to be the co_ row id. A model that has only ever SEEN
+// "CO-3" sends "CO-3", and before this that selected zero rows and threw
+// "Change order not found on this job: CO-3" — a correct refusal with no way
+// forward, and the death John's report actually lands on. Resolve the NUMBER
+// against this job's own change orders, tolerating the ways it gets written
+// ("CO-3", "co 3", "CO-0003", "3"), and refuse loudly on ambiguity rather
+// than picking one.
+function coNumberKey(s) {
+  const m = /^\s*(?:co[-\s_]*)?0*(\d+)\s*$/i.exec(String(s == null ? '' : s));
+  return m ? m[1] : String(s == null ? '' : s).trim().toUpperCase();
+}
+async function resolveCoId(db, { id, orgId, jobId }) {
+  const raw = String(id == null ? '' : id).trim();
+  if (!raw || /^co_/.test(raw) || !jobId) return raw;
+  const { rows } = await db.query(
+    `SELECT co.id, co.co_number FROM job_change_orders co
+       JOIN jobs j ON j.id = co.job_id
+      WHERE co.job_id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
+    [jobId, orgId == null ? null : orgId]
+  );
+  const want = coNumberKey(raw);
+  const hits = rows.filter((r) => coNumberKey(r.co_number) === want);
+  if (hits.length === 1) return hits[0].id;
+  if (hits.length > 1) {
+    throw new Error(
+      `Ambiguous change order reference on this job: ${raw} matches ${hits.length} records ` +
+      `(${hits.map((h) => h.co_number).join(', ')}). Use the co_ row id from read_change_orders. Nothing was saved.`);
+  }
+  // Not a number we know. Hand the original back so the existing not-found
+  // refusal names what the caller actually said.
+  return raw;
+}
+
 const CO_RETURNING = `id, job_id, owner_id, status, co_number, data, approved_at,
                       approved_by, linked_node_id, is_locked, created_at, updated_at`;
 const PO_RETURNING = `id, job_id, organization_id, owner_id, sub_id, status, po_number,
@@ -420,9 +637,18 @@ async function createChangeOrder(db, { jobId, orgId, ownerId, fields }) {
 // `merge` is what separates an agent's partial op from the UI's PUT: the
 // dispatcher sends only the fields it wants changed, the REST route
 // replaces the blob wholesale.
-async function updateChangeOrder(db, { id, orgId, jobId, fields, merge = true }) {
+async function updateChangeOrder(db, { id, orgId, jobId, fields, lineOps, merge = true }) {
   if (!id) throw new Error('change_order update requires co_id');
   rejectFlatMoney(fields, 'change_order');
+  // A payload that sends BOTH a whole-array `fields.lines` and per-line ops
+  // is asking for two different things at once and one of them is a mistake.
+  // Refusing is the only answer that cannot silently discard the other.
+  if (hasCoLineOps(lineOps) && fields && Array.isArray(fields.lines)) {
+    throw new Error(
+      'change_order update: send either fields.lines (a full replacement) or line_edits / ' +
+      'line_adds / line_deletes (a surgical change), not both. Nothing was saved.');
+  }
+  id = await resolveCoId(db, { id, orgId, jobId });
   // jobId, when supplied, pins the record to the job the payload targets.
   // Without it an update op inside a payload for job A could reach job B's
   // CO by id — same org, so the org predicate alone lets it through.
@@ -449,6 +675,20 @@ async function updateChangeOrder(db, { id, orgId, jobId, fields, merge = true })
   const incoming = fields || {};
   const data = cleanCoData(Object.assign({}, base, incoming,
     Array.isArray(incoming.lines) ? { lines: stampCoLineIds(normalizeCoLines(incoming.lines)) } : {}));
+  // PER-LINE OPS, applied to the record as it stands. Everything above has
+  // already run — the org pin, the job pin, the applied and locked refusals —
+  // so a surgical line edit cannot reach a signed change order by a door the
+  // whole-array replace is barred from.
+  //
+  // The stored array is stamped FIRST so a record written before line ids
+  // existed becomes addressable (and stays that way), then the ops resolve
+  // against it.
+  let lineSummary = null;
+  if (hasCoLineOps(lineOps)) {
+    const applied = applyCoLineOps(stampCoLineIds(Array.isArray(data.lines) ? data.lines : []), lineOps);
+    data.lines = applied.lines;
+    lineSummary = applied.summary;
+  }
   const { rows } = await db.query(
     `UPDATE job_change_orders
         SET data = $1::jsonb,
@@ -457,11 +697,13 @@ async function updateChangeOrder(db, { id, orgId, jobId, fields, merge = true })
       RETURNING ${CO_RETURNING}`,
     [JSON.stringify(data), id]
   );
-  return rows[0];
+  // The count the caller reports to the model is the count that HAPPENED.
+  return lineSummary ? Object.assign({}, rows[0], { line_summary: lineSummary }) : rows[0];
 }
 
 async function deleteChangeOrder(db, { id, orgId, jobId }) {
   if (!id) throw new Error('change_order delete requires co_id');
+  id = await resolveCoId(db, { id, orgId, jobId });
   const { rows } = await db.query(
     `SELECT co.status FROM job_change_orders co
        JOIN jobs j ON j.id = co.job_id
@@ -684,7 +926,8 @@ async function deleteInvoice(db, { id, orgId, jobId }) {
 module.exports = {
   DEFAULT_SCOPE_TEMPLATE,
   nextCoNumber, nextPoNumber, nextInvoiceNumber, orgScopeTemplate,
-  cleanCoData, cleanPoData, normalizeCoLines, stampCoLineIds, poEffectiveTotal, lineAmount, computeInvoiceTotals,
+  cleanCoData, cleanPoData, normalizeCoLines, stampCoLineIds, poEffectiveTotal,
+  applyCoLineOps, hasCoLineOps, resolveCoId, coNumberKey, lineAmount, computeInvoiceTotals,
   createChangeOrder, updateChangeOrder, deleteChangeOrder,
   createPurchaseOrder, updatePurchaseOrder, deletePurchaseOrder,
   createInvoice, updateInvoice, deleteInvoice,
