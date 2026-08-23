@@ -129,7 +129,17 @@ describe('tracked source files stay diffable', () => {
 describe('the managed-agent sync-state hash keeps its NUL domain separator', () => {
   const REL = 'server/routes/admin-agents-routes.js';
   const src = fs.readFileSync(path.join(REPO, REL), 'utf8');
-  const m = src.match(/const sysHash = _sha1\(composed \+ (.+?) \+ \(model/);
+  // The separator is what is under test, not the statement it sits in. This
+  // was pinned to `const sysHash = _sha1(composed + …` and went red the moment
+  // c3234c41 lifted the hash into _syncFingerprints as a property
+  // (`sysHash: _sha1(String(composedSystem || '') + '\0' + (model || ''))`) —
+  // with the NUL still exactly where it belongs. A matcher that names the
+  // enclosing syntax fails on every refactor that leaves the invariant intact,
+  // which teaches the next person that the answer to this file is to retype
+  // the regex. Match the shape the value has instead: a sysHash bound by `=`
+  // or `:`, a _sha1 call, and a separator sitting between the composed system
+  // prompt and the model.
+  const m = src.match(/sysHash\s*[:=]\s*_sha1\([\s\S]*?\+ (.+?) \+ \(model/);
 
   test('the sysHash separator literal is still present in the source', () => {
     expect(m).not.toBeNull();
