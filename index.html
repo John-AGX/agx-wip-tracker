@@ -250,7 +250,7 @@
          system fallback if the font is slow/unreachable (offline / PWA cold). -->
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&display=swap">
-    <link rel="stylesheet" href="css/styles.css?v=271">
+    <link rel="stylesheet" href="css/styles.css?v=272">
     <link rel="stylesheet" href="css/report-style-packs.css?v=4">
     <link rel="stylesheet" href="css/workspace-layout.css?v=68">
     <link rel="stylesheet" href="css/workspace.css?v=41">
@@ -441,6 +441,16 @@
                             <div class="header-popover-name" id="avatar-menu-name">&mdash;</div>
                             <div class="header-popover-role" id="avatar-menu-role">&mdash;</div>
                         </div>
+                        <!-- Present this job — Live Rooms entry point. Relocated
+                             here from the floating header strip: js/live-rooms.js
+                             now paints that body-fixed strip only while a session
+                             is LIVE / ENDED (roster / End / status, which must
+                             stay visible and never hide behind a click).
+                             syncMenuBtn() unhides this item only when you're on a
+                             job with nothing live; wireMenuBtn() binds the click
+                             to startHosting(). Starts hidden (shown off-job = no
+                             record to present). -->
+                        <button type="button" id="present-menu-btn" class="header-popover-item" hidden>&#x1F4E1; Present this job</button>
                         <button type="button" id="account-btn" class="header-popover-item">&#x2699; My Account &amp; Notifications</button>
                         <!-- Org Settings — routes to the Admin tab (Organization
                              subtab by default). Visible only to roles with
@@ -3680,7 +3690,7 @@
          Ships the host's own broadcast indicator; the viewer page (/live/:token)
          is a separate bespoke page and loads this same file for its pure core.
          No Present popover, no redaction, no follow-me: those are phase 02. -->
-    <script src="js/live-rooms.js?v=5"></script>
+    <script src="js/live-rooms.js?v=6"></script>
     <!-- Phase 03 — the MIRROR serializer, host side. It observes one authorized
          pane and sends it; it mounts nothing on this body, patches no
          prototype, sets no attribute on any app node, binds no listener to any

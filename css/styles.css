@@ -233,7 +233,11 @@
         header {
             background: linear-gradient(135deg, #0f172a 0%, #1e293b 40%, #2563eb 100%);
             border-bottom: 1px solid #3b82f6;
-            padding: 0 24px;
+            /* Trimmed 24 -> 16 so the brand (left) and the user cluster (right)
+               reach closer to the true window edges — see the max-width:none on
+               .header-content, which drops the old 1600px center-cap that left a
+               big empty gutter on each side of wide monitors. */
+            padding: 0 16px;
             position: sticky;
             top: 0;
             z-index: 100;
@@ -241,8 +245,12 @@
         }
 
         .header-content {
-            max-width: 1600px;
-            margin: 0 auto;
+            /* Was max-width:1600px + margin:0 auto, which centered the row and
+               left the brand + user cluster "stopping short" of the edges on any
+               screen wider than ~1650px. Full-width now: brand hugs the left
+               padding, the margin-left:auto user cluster hugs the right. */
+            max-width: none;
+            margin: 0;
             display: flex;
             align-items: center;
             gap: 24px;

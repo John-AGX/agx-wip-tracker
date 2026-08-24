@@ -996,6 +996,33 @@
     return el;
   }
 
+  // ── Account-menu "Present this job" entry ───────────────────────────────
+  // The idle start action lives in #user-avatar-menu (the name-badge popover)
+  // instead of a floating header button. The LIVE / ENDED strip stays on the
+  // body, unchanged — its roster / End / status must never hide behind a click.
+  // wireMenuBtn() binds the click once; syncMenuBtn() shows/hides the item on
+  // every paintStrip() (1Hz tick + events) so it tracks job + hosting state.
+  function wireMenuBtn() {
+    var btn = document.getElementById('present-menu-btn');
+    if (!btn || btn._p86wired) return;
+    btn._p86wired = true;
+    btn.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      // Close the popover so the live strip is unobstructed the moment we go up.
+      var menu = document.getElementById('user-avatar-menu');
+      if (menu) menu.setAttribute('hidden', '');
+      startHosting();
+    });
+  }
+  function syncMenuBtn(view, jobId) {
+    var btn = document.getElementById('present-menu-btn');
+    if (!btn) return;
+    // Offer the start action only when nothing is live on this tab (idle) and
+    // we're on a job to present. While a session is live or showing its ended
+    // notice, the floating strip owns the controls and this steps aside.
+    btn.hidden = !(view && view.kind === 'idle' && !!jobId);
+  }
+
   function paintStrip() {
     var el = stripEl();
     var jobId = currentJobId();
@@ -1028,23 +1055,25 @@
       view = { kind: 'ended', label: 'Ended', detail: endReasonText(host.lastEndReason), watching: 0 };
     }
 
-    // A room running on ANOTHER record still has to be visible, and the old
-    // guard hid the strip entirely whenever this tab was not on a job — so a
-    // host who navigated away was broadcasting with no indicator at all, which
-    // is the exact defect the strip exists to prevent.
-    if (view.kind === 'idle' && !jobId && !host.elsewhere) { el.style.display = 'none'; return; }
+    // Keep the account-menu "Present this job" item in sync BEFORE the idle-hide
+    // early return below can skip the rest of this function.
+    syncMenuBtn(view, jobId);
+
+    // A room running on ANOTHER record still has to be visible (host.elsewhere).
+    // The idle start button moved to the account menu, so an idle strip now has
+    // nothing of its own to show — hide it in every idle case EXCEPT the
+    // elsewhere warning. (Previously this kept the strip up whenever jobId was
+    // set, purely to paint the now-relocated Present button.)
+    if (view.kind === 'idle' && !host.elsewhere) { el.style.display = 'none'; return; }
     el.style.display = '';
     el.setAttribute('data-state', view.kind);
 
     var html = '';
     if (view.kind === 'idle') {
-      // "One click mints the link and you're live — no room to create first."
-      // That is already what this does: startHosting() mints and copies in one
-      // action. The button says so.
-      if (jobId) {
-        html = '<button type="button" class="p86-live-btn" data-live-act="start">' +
-               '<span class="p86-live-dot"></span>Present</button>';
-      }
+      // The "Present" start button moved to the account menu (#present-menu-btn,
+      // synced by syncMenuBtn above). We only reach this idle branch when
+      // host.elsewhere is set — the idle-hide guard returned otherwise — so the
+      // strip here exists purely to carry the "different record" warning below.
       // Named, not joined. This tab must not take the host row of a room for a
       // record it is not looking at — that is the supersede that killed the
       // presenting tab and pointed every guest at "not shared".
@@ -1525,6 +1554,7 @@
   function boot() {
     if (isGuestPage()) return;
     stripEl();
+    wireMenuBtn();
     wireCursorSampling();
     adoptExistingRooms();
     // Repaint on a timer as well as on events: "can't confirm" is a state
