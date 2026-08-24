@@ -3056,14 +3056,14 @@
     }
     if (sectionId) {
       var arr = appData.estimateLines;
-      var startIdx = arr.findIndex(function(l) { return l.id === sectionId; });
+      var startIdx = arr.findIndex(function(l) { return l && l.id === sectionId; });
       if (startIdx >= 0) {
         // Walk forward from the section header until we hit the next
         // header in the same alternate, or run out of lines.
         var insertAt = arr.length;
         for (var j = startIdx + 1; j < arr.length; j++) {
           var L = arr[j];
-          if (L.estimateId !== est.id || L.alternateId !== est.activeAlternateId) continue;
+          if (!L || L.estimateId !== est.id || L.alternateId !== est.activeAlternateId) continue;
           if (L.section === '__section_header__') { insertAt = j; break; }
         }
         // If we never found a next header, find the index after the last
@@ -3071,7 +3071,7 @@
         if (insertAt === arr.length) {
           for (var k = arr.length - 1; k > startIdx; k--) {
             var M = arr[k];
-            if (M.estimateId === est.id && M.alternateId === est.activeAlternateId) {
+            if (M && M.estimateId === est.id && M.alternateId === est.activeAlternateId) {
               insertAt = k + 1; break;
             }
           }
@@ -3359,8 +3359,8 @@
       return;
     }
     var lines = appData.estimateLines;
-    var fromIdx = lines.findIndex(function(l) { return l.id === _draggedLineId; });
-    var toIdx = lines.findIndex(function(l) { return l.id === targetId; });
+    var fromIdx = lines.findIndex(function(l) { return l && l.id === _draggedLineId; });
+    var toIdx = lines.findIndex(function(l) { return l && l.id === targetId; });
     if (fromIdx < 0 || toIdx < 0) {
       _draggedLineId = null;
       renderLineItems();
@@ -3940,18 +3940,18 @@
       // Same insertion logic as addEstimateLineFromEditor: walk forward to
       // the next section header in the same alternate.
       var arr = appData.estimateLines;
-      var startIdx = arr.findIndex(function(l) { return l.id === sectionId; });
+      var startIdx = arr.findIndex(function(l) { return l && l.id === sectionId; });
       if (startIdx >= 0) {
         var insertAt = arr.length;
         for (var j = startIdx + 1; j < arr.length; j++) {
           var L = arr[j];
-          if (L.estimateId !== est.id || L.alternateId !== alt.id) continue;
+          if (!L || L.estimateId !== est.id || L.alternateId !== alt.id) continue;
           if (L.section === '__section_header__') { insertAt = j; break; }
         }
         if (insertAt === arr.length) {
           for (var k = arr.length - 1; k > startIdx; k--) {
             var M = arr[k];
-            if (M.estimateId === est.id && M.alternateId === alt.id) {
+            if (M && M.estimateId === est.id && M.alternateId === alt.id) {
               insertAt = k + 1; break;
             }
           }
@@ -4087,11 +4087,11 @@
         if (match) {
           appData.estimateLines = appData.estimateLines.filter(function(l) { return !l || l.id !== line.id; });
           var arr = appData.estimateLines;
-          var startIdx = arr.findIndex(function(l) { return l.id === match.id; });
+          var startIdx = arr.findIndex(function(l) { return l && l.id === match.id; });
           var insertAt = arr.length;
           for (var j = startIdx + 1; j < arr.length; j++) {
             var L2 = arr[j];
-            if (L2.estimateId !== line.estimateId || L2.alternateId !== line.alternateId) continue;
+            if (!L2 || L2.estimateId !== line.estimateId || L2.alternateId !== line.alternateId) continue;
             if (L2.section === '__section_header__') { insertAt = j; break; }
           }
           arr.splice(insertAt, 0, line);
@@ -4361,13 +4361,13 @@
       // logic as applyAddLineItem.
       if (targetSectionId) {
         var arr = appData.estimateLines;
-        var fromIdx = arr.findIndex(function(l) { return l.id === lineId; });
+        var fromIdx = arr.findIndex(function(l) { return l && l.id === lineId; });
         if (fromIdx >= 0) {
           var moved = arr.splice(fromIdx, 1)[0];
-          var headIdx = arr.findIndex(function(l) { return l.id === targetSectionId; });
+          var headIdx = arr.findIndex(function(l) { return l && l.id === targetSectionId; });
           var insertAt = arr.length;
           for (var j = headIdx + 1; j < arr.length; j++) {
-            if (arr[j].section === '__section_header__') { insertAt = j; break; }
+            if (arr[j] && arr[j].section === '__section_header__') { insertAt = j; break; }
           }
           arr.splice(insertAt, 0, moved);
         }

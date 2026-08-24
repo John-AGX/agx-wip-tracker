@@ -308,7 +308,15 @@ router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), requi
         }
         const blob = {
           ...est,
-          lines: (estimateLines || []).filter(l => l.estimateId === est.id),
+          // `l &&` — an estimate is a JSONB blob round-tripped verbatim, so a
+          // client holding a stored hole puts one on the wire, and without the
+          // guard this partition throws inside the transaction: the whole bulk
+          // save 500s and every row in it is refused, not just the broken one.
+          // The hole is dropped rather than kept because it cannot be kept —
+          // it carries no estimateId, so no partition can attribute it to an
+          // estimate. The client repairs it in place at its hydrate door,
+          // where the owner is still known.
+          lines: (estimateLines || []).filter(l => l && l.estimateId === est.id),
         };
         // Alternates: the new full-page editor stores them inline on each
         // estimate as est.alternates (with their scope text). Older callers

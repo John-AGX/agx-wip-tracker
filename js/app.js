@@ -2670,6 +2670,49 @@
             });
         }
 
+        // ── holes in a stored lines[] ───────────────────────────────────────
+        // An estimate is a JSONB blob and is round-tripped VERBATIM, so a slot
+        // that was ever `undefined` comes back as `null` and stays there for
+        // good. Every walk downstream either skips it or throws on it, and the
+        // two that throw are the two that matter: the change signature (whose
+        // catch then answers "has this changed?" at RANDOM, i.e. yes, forever,
+        // for EVERY estimate — the array is portfolio-wide) and the push
+        // payload builder (which throws before anything reaches the wire, after
+        // the jobs payload is already built, so one hole in one estimate is a
+        // total save outage for the portfolio, jobs included).
+        //
+        // THIS IS THE ONLY DOOR WHERE IT CAN BE REPAIRED, because it is the
+        // only place the hole's owner is still known: inside `e.lines`. One
+        // line further down the array is flattened portfolio-wide, and BOTH
+        // sides of the wire partition that flat array by `l.estimateId` — a
+        // null carries none, so it cannot survive a round trip by construction.
+        //
+        // SUBSTITUTE, NEVER REMOVE. Section membership in an estimate is ARRAY
+        // ORDER (a line belongs to the nearest __section_header__ above it and
+        // nothing else records that), so dropping the slot re-sections the
+        // estimate and moves money between scopes while the cost total sits
+        // perfectly still. The replacement is a real, empty, $0 line at the
+        // SAME index: it prices to nothing, every line after it stays under the
+        // header it was already under, and — unlike the hole — the estimator
+        // can see it and delete it.
+        //
+        // `id` is deliberately left blank: assigning appData.estimateLines runs
+        // it through the identity boundary, which mints one through the same
+        // door as every other line. `alternateId` is left off for the same
+        // reason — ensureAlternates() backfills it on open exactly as it does
+        // for legacy lines that never carried one.
+        function fillLineHoles(lines, estId) {
+            if (!Array.isArray(lines)) return [];
+            var out = new Array(lines.length);
+            for (var i = 0; i < lines.length; i++) {
+                var l = lines[i];
+                out[i] = (l && typeof l === 'object' && !Array.isArray(l))
+                    ? l
+                    : { estimateId: estId, description: '', qty: 0, unit: '', unitCost: 0, markup: '' };
+            }
+            return out;
+        }
+
         function hydrateFromServerEstimates(serverEstimates) {
             appData.estimates = [];
             appData.estimateLines = [];
@@ -2694,7 +2737,7 @@
             // "scope didn't save" on offline edits.
             appData.estimateAlternates = [];
             (serverEstimates || []).forEach(function(e) {
-                var lines = e.lines || [];
+                var lines = fillLineHoles(e.lines, e.id);
                 var meta = Object.assign({}, e);
                 // Strip lines from the estimate object — the editor always
                 // reads them from appData.estimateLines (a flat array) so
@@ -2805,8 +2848,40 @@
                 ]);
             } catch (e) {
                 // Never let a serialize failure mark a job CLEAN and skip its save.
-                return 'unserializable:' + Date.now() + ':' + Math.random();
+                // But see _sigFailed: the value must be a function of the ROW,
+                // not of the clock and Math.random.
+                return _sigFailed('job', jobId, e);
             }
+        }
+        // ── when a signature cannot be computed ─────────────────────────────
+        // A signature answers exactly one question: "is this row different from
+        // what the server has?" The catch used to answer it with
+        // `Date.now() + Math.random()`, which is not a degraded answer — it is
+        // the wrong one with a stable sign: YES, and yes again next time, and
+        // forever, because a random value can never equal the baseline. The row
+        // is then re-pushed on every cycle for the life of the tab.
+        //
+        // Two changes, both deliberate:
+        //   • the value is DETERMINISTIC, so the row is dirty ONCE relative to
+        //     its baseline instead of dirty perpetually. If the push lands, the
+        //     baseline advances and it goes clean; if the payload cannot be
+        //     serialised either, the push rejects and the baseline never
+        //     advances — so the "never mark a broken row CLEAN" rule still
+        //     holds, by the shape of the code rather than by the randomness.
+        //   • it SAYS SO, once per row. A row this client cannot describe is
+        //     worth naming; silently churning the wire is not.
+        var _sigFailures = {};
+        function _sigFailed(kind, id, err) {
+            var key = kind + ':' + id;
+            if (!_sigFailures[key]) {
+                _sigFailures[key] = true;
+                try {
+                    console.warn('[p86] cannot compute a change signature for ' + kind + ' ' + id +
+                        ' — it will be treated as unsaved until it can be described: ' +
+                        (err && err.message ? err.message : err));
+                } catch (e) {}
+            }
+            return 'unserializable:' + key;
         }
         function estimateSliceSig(estId) {
             var e = (appData.estimates || []).find(function(x) { return x.id === estId; });
@@ -2814,12 +2889,18 @@
             try {
                 return JSON.stringify([
                     _stripPrivate(e),
-                    (appData.estimateLines || []).filter(function(l) { return l.estimateId === estId; })
+                    // `l &&` is not defensive noise. appData.estimateLines is ONE
+                    // flat array across the whole portfolio, so a single stored
+                    // hole in a single estimate threw HERE, inside every other
+                    // estimate's signature too — which is how one bad record
+                    // marked all of them permanently dirty. Holes are SKIPPED,
+                    // never removed: section membership is array position.
+                    (appData.estimateLines || []).filter(function(l) { return l && l.estimateId === estId; })
                 ]);
             } catch (err) {
                 // Same rule as jobSliceSig: a serialize failure must never mark a
                 // row CLEAN and skip its save.
-                return 'unserializable:' + Date.now() + ':' + Math.random();
+                return _sigFailed('estimate', estId, err);
             }
         }
         // ── the dirty set ───────────────────────────────────────────────────
@@ -3660,7 +3741,17 @@
             dirtyEstIds.forEach(function(id) { estIdSet[id] = true; });
             var estimatesPayload = {
                 estimates: appData.estimates.filter(function(e) { return estIdSet[e.id]; }),
-                estimateLines: appData.estimateLines.filter(function(l) { return estIdSet[l.estimateId]; }),
+                // `l &&` — the same guard as estimateSliceSig, and for a sharper
+                // reason: this throw lands BETWEEN the jobs payload (built above)
+                // and notifyPushStatus('saving') below, so it took the JOB save
+                // down with it, and all three flush listeners swallow it in
+                // `catch (e) {}`. The tab closed, the edit was gone, nothing on
+                // screen. A hole cannot be carried on the wire in any case — it
+                // has no estimateId, so this partition can never attribute it to
+                // an estimate — which is why the repair lives at the hydrate
+                // door (fillLineHoles), where the owner is still known, and this
+                // is only the belt.
+                estimateLines: appData.estimateLines.filter(function(l) { return l && estIdSet[l.estimateId]; }),
                 estimateAlternates: []
             };
 

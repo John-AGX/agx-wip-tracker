@@ -2136,7 +2136,12 @@ function applyLineEdits(data, lineEdits) {
   const lines = ensureArray(data, 'lines');
   let edited = 0;
   for (const edit of lineEdits) {
-    const idx = lines.findIndex((l) => l.id === edit.line_id);
+    // `l &&` — the blob is JSONB and round-trips verbatim, so a stored hole
+    // sits in this array and an unguarded predicate throws an opaque TypeError
+    // out of the middle of the transaction. 86's own write to that estimate
+    // then fails with a message about `null` that names neither the line nor
+    // the record.
+    const idx = lines.findIndex((l) => l && l.id === edit.line_id);
     if (idx < 0) throw new Error(`line_id not found: ${edit.line_id}`);
     // The Scribe emits edits FLAT ({line_id, markup, unitCost, description, …});
     // an earlier shape nested them under `fields`. Accept BOTH: use `fields`
@@ -2244,7 +2249,11 @@ function applyLineDeletes(data, lineDeletes) {
   // summary can't report a phantom deletion.
   const ids = new Set(lineDeletes.map((d) => (typeof d === 'string' ? d : (d && (d.line_id || d.id)))).filter(Boolean));
   const before = lines.length;
-  data.lines = lines.filter((l) => !ids.has(l.id));
+  // `!l ||` KEEPS a stored hole rather than throwing on it — and keeping it is
+  // the point: removing an element reindexes the array, and section membership
+  // in an estimate IS array position, so a tidy-up here would re-section the
+  // record and move money between scopes while the cost total sat still.
+  data.lines = lines.filter((l) => !l || !ids.has(l.id));
   return before - data.lines.length;
 }
 
@@ -4085,6 +4094,11 @@ module.exports = {
     // Section placement — pure array surgery over data.lines, no DB.
     applyLineAdds,
     applyLineEdits,
+    // Exported alongside its two siblings so "a stored hole is kept, never
+    // removed" is provable against the runner rather than by reading the
+    // source for a substring — section membership is array position, so the
+    // delete path is exactly where a tidy-up would move money.
+    applyLineDeletes,
     ensureSectionHeader,
     insertIntoSection,
     // Scope (alternate) ops — pure blob surgery, no DB.

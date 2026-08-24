@@ -115,7 +115,7 @@ function makeServer() {
         conflicts.push({ id: est.id, reason: 'stale', serverUpdatedAt: existing.updated_at });
         continue;
       }
-      const blob = { ...est, lines: (body.estimateLines || []).filter((l) => l.estimateId === est.id) };
+      const blob = { ...est, lines: (body.estimateLines || []).filter((l) => l && l.estimateId === est.id) };
       delete blob.updated_at; delete blob.created_at; delete blob.owner_id; delete blob.market_id;
       const changed = !existing || JSON.stringify(existing.data) !== JSON.stringify(blob);
       estimates.set(est.id, { data: blob, updated_at: changed ? stamp() : existing.updated_at });
@@ -170,6 +170,12 @@ function boot(server, opts) {
   global.fetch = jest.fn(() => Promise.resolve({ ok: true, text: () => Promise.resolve('{}') }));
   delete window.p86Refresh;   // no registry in the harness; loadData is called directly
 
+  // Load order mirrors index.html. line-identity.js ships BEFORE app.js
+  // (index.html: 3382 vs 3484) and app.js installs the estimate-line identity
+  // boundary from it the moment appData is created — so a harness that skips
+  // it is running a version of the save path the page never runs, and lines
+  // arriving through the hydrate door come out unaddressed.
+  require('../../js/line-identity.js');
   require('../../js/save-merge.js');
   require('../../js/app.js');
   return { api };
