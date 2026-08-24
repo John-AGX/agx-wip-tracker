@@ -112,7 +112,7 @@
           body: 'Mentions, assignments, reminders, and finished AI work. You can also get these on your phone — see My Account → Notifications.'
         },
         {
-          sel: '#header-ask86-btn, #p86-mobile-nav [data-mobile-nav="ask86"]',
+          sel: '#p86CrewChip, #p86-mobile-nav [data-mobile-nav="ask86"]',
           title: 'And this is the big one',
           body: 'Ask 86 — your AI crew. Ask questions in plain English, have it make changes, or hand it a whole background job. There\'s a separate guide just for the crew.'
         }
@@ -129,7 +129,7 @@
           body: 'Three teammates: your Assistant hosts the conversation, 86 is the deep expert it escalates to, and the Scribe writes the actual records. They hand work between each other automatically.'
         },
         {
-          sel: '#header-ask86-btn, #p86-mobile-nav [data-mobile-nav="ask86"]',
+          sel: '#p86CrewChip, #p86-mobile-nav [data-mobile-nav="ask86"]',
           title: 'One door for everything',
           body: 'Open the chat and just talk: "what\'s slipping this week?", "draft a PO for the fence sub", "remind me Friday at 7". Reads are instant; anything that writes data shows you a card to approve first.'
         },
@@ -139,7 +139,7 @@
           body: 'Watch it narrate in real time — Assistant thinking, 86 digging, Scribe drafting. Idle means everyone\'s ready.'
         },
         {
-          sel: '#ai-crew-activity, #header-ask86-btn, #p86-mobile-nav [data-mobile-nav="ask86"]',
+          sel: '#ai-crew-activity, #p86CrewChip, #p86-mobile-nav [data-mobile-nav="ask86"]',
           title: 'Background work lives in Crew activity',
           body: 'Hand off something big ("audit all my job costs in the background") and close the app. Open the 86 chat and tap the Crew activity button in its header — running tasks, questions waiting on you, and Scribe drafts to approve.'
         },

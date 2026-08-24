@@ -419,10 +419,13 @@
                          + account menu moved to the sidebar footer. Hidden
                          on mobile, where the bottom-nav center slot owns
                          the Ask 86 entry point. -->
-                    <button id="header-ask86-btn" class="p86-ask86-badge in-header" type="button"
-                            title="Ask 86 — global AI surface" aria-label="Ask 86"
-                            data-p86-icon="dna-86"
-                            onclick="if (window.p86AI &amp;&amp; window.p86AI.open) window.p86AI.open({ entityType: 'ask86' });"></button>
+                    <!-- Global "Ask 86" header button REMOVED (John): it was a
+                         redundant SECOND chat entry that opened 86 directly and
+                         bypassed the crew chip. The crew chip (#p86CrewChip,
+                         js/crew-chip.js) is now the SINGLE header chat driver —
+                         click-to-chat, live agent status, and it routes to the
+                         Assistant/86 per the user's host. Mobile keeps its
+                         bottom-nav Ask 86 entry. -->
                     <!-- Initials avatar — account menu trigger. On DESKTOP
                          this is hidden (CSS) because the sidebar footer owns
                          the account surface; it stays visible on MOBILE,
@@ -3490,12 +3493,12 @@
     <!-- Guided tours engine + the Help & What's New center (patch
          notes, guides, feature atlas). help-center.js owns
          window.openHelpOverlay — must load after app.js. -->
-    <script src="js/guide.js?v=6"></script>
+    <script src="js/guide.js?v=7"></script>
     <script src="js/help-center.js?v=2"></script>
     <script src="js/compliance-review-ui.js?v=5"></script>
     <script src="js/messaging.js?v=8"></script>
     <script src="js/email-hub.js?v=24"></script>
-    <script src="js/agent-tasks.js?v=13"></script>
+    <script src="js/agent-tasks.js?v=14"></script>
     <script src="js/crew-chip.js?v=2"></script>
     <script src="js/file-explorer.js?v=16"></script>
     <script src="js/my-files.js?v=26"></script>

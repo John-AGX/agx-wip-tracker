@@ -140,7 +140,10 @@
   // button (recreates the badge span when absent).
   function updateAskBadge() {
     var hosts = [
-      document.getElementById('header-ask86-btn'),
+      // Desktop: the crew chip is now the single header chat entry (the
+      // standalone #header-ask86-btn was removed). Mobile keeps its bottom-nav
+      // Ask-86 slot. Both are null-safe below.
+      document.getElementById('p86CrewChip'),
       document.querySelector('#p86-mobile-nav [data-mobile-nav="ask86"]')
     ];
     hosts.forEach(function (host) {
