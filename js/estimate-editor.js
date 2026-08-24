@@ -183,11 +183,45 @@
     el.innerHTML = '<span style="font-weight:700;margin-right:5px;">' + dot + '</span>' + label;
   }
 
+  // Install (or re-confirm) the estimate-line state boundary on window.appData.
+  // The real install happens in js/app.js the moment appData is created; this
+  // is the editor asserting the same invariant for itself, and the door a test
+  // harness goes through so it can never assemble a state the app could not.
+  //
+  // The heal itself touches `id` and nothing else — never the order, never the
+  // membership, never a money field. That restraint is the whole safety
+  // argument: an estimate's sections are delimited by __section_header__ rows
+  // and a line belongs to the nearest header ABOVE it in the array, so any
+  // heal that moved, dropped or de-duplicated an element would re-section the
+  // estimate and shift money between scopes with the cost total unmoved.
+  function ensureEstimateLineBoundary() {
+    if (!window.appData || !window.p86LineIdentity) return false;
+    window.p86LineIdentity.guardHostArray(window.appData, 'estimateLines', {
+      prefixFor: function(l) { return (l && l.section === '__section_header__') ? 's' : 'l'; }
+    });
+    return true;
+  }
+
   function getEstimate() {
     if (!_currentId || !window.appData) return null;
     return appData.estimates.find(function(e) { return e.id === _currentId; }) || null;
   }
 
+  // ── `l &&` IN EVERY WALK OF appData.estimateLines IS NOT NOISE ────────
+  // Estimates are stored as a JSONB blob and round-tripped verbatim, so a
+  // stray null inside the line array survives the server and comes back. An
+  // unguarded `l.id` then throws — and it throws in ensureAlternates and
+  // computeTotals, both of which run on OPEN, before anything can report.
+  // The user's experience of that is not an error: it is a click that does
+  // nothing, forever, on one specific estimate.
+  //
+  // Every walk therefore SKIPS a non-object and NEVER removes it. Removing
+  // it would be tidier and it is the one thing forbidden here: section
+  // membership is ARRAY POSITION (a line belongs to the nearest
+  // __section_header__ above it), so anything that shortens or reorders this
+  // array re-sections the estimate and moves money between scopes while the
+  // cost total sits still.
+  //
   // Returns lines belonging to the estimate AND to the currently-active
   // alternate. Old estimates without an alternate id fall back to the
   // estimate's default alternate during ensureAlternates().
@@ -196,17 +230,37 @@
     var est = getEstimate();
     var altId = est && est.activeAlternateId;
     return (appData.estimateLines || []).filter(function(l) {
-      return l.estimateId === _currentId && l.alternateId === altId;
+      return l && l.estimateId === _currentId && l.alternateId === altId;
     });
   }
   function getAllLinesForEstimate() {
     if (!_currentId || !window.appData) return [];
-    return (appData.estimateLines || []).filter(function(l) { return l.estimateId === _currentId; });
+    return (appData.estimateLines || []).filter(function(l) { return l && l.estimateId === _currentId; });
   }
   function getActiveAlternate() {
     var est = getEstimate();
     if (!est || !est.alternates) return null;
     return est.alternates.find(function(a) { return a.id === est.activeAlternateId; }) || est.alternates[0] || null;
+  }
+
+  // A GROUP's id is an address too, and it was minted as a bare clock read:
+  // `'alt_' + Date.now()`. Two groups created inside the same millisecond —
+  // which is a scheduling question for the AI applier, not a physical
+  // impossibility, since it drains its ops in one synchronous loop — get the
+  // SAME id. getLines() then returns both groups' lines merged under one tab
+  // and getActiveAlternate() can only ever resolve the first, so the second
+  // group is unreachable and an EXCLUDED group's lines can be priced into the
+  // proposal. Minting against what the estimate already holds makes that
+  // impossible by construction instead of unlikely by clock resolution.
+  function eeNewAlternateId(est) {
+    var taken = Object.create(null);
+    ((est && est.alternates) || []).forEach(function(a) {
+      if (a && a.id != null) taken[String(a.id)] = true;
+    });
+    if (window.p86LineIdentity) return window.p86LineIdentity.mintId(taken, 'alt_');
+    var base = 'alt_' + Date.now(), id = base, n = 0;
+    while (taken[id]) { id = base + '_' + (++n); }
+    return id;
   }
 
   // Resolve an alternate by id against whatever appData holds RIGHT NOW.
@@ -249,7 +303,14 @@
     });
     var defaultId = est.alternates[0].id;
     (appData.estimateLines || []).forEach(function(l) {
-      if (l.estimateId === est.id && !l.alternateId) {
+      // `l &&` is not defensive noise. A stray null inside the stored line
+      // array is round-tripped verbatim by the server (estimates are a JSONB
+      // blob) and this is the FIRST walk that runs on open — without the
+      // guard it throws before anything can report, and the editor simply
+      // never opens: the click does nothing, with no error the user can see.
+      // Nulls are skipped, never removed; removing one would shift array
+      // positions, and section membership IS array position.
+      if (l && l.estimateId === est.id && !l.alternateId) {
         l.alternateId = defaultId;
         changed = true;
       }
@@ -369,6 +430,13 @@
     var est = (window.appData && appData.estimates || []).find(function(e) { return e.id === estimateId; });
     if (!est) { alert('Estimate not found.'); return; }
     _currentId = estimateId;
+    // Belt and braces on the state boundary js/app.js installs at boot (see
+    // the comment there). guardHostArray is idempotent — if the boundary is
+    // already on, this re-heals an array that needs nothing and mints nothing.
+    // It is here so "this editor cannot hold a line without an address" is a
+    // property of the EDITOR, not a property of one install line in another
+    // file that a future refactor could quietly drop.
+    ensureEstimateLineBoundary();
     // Idempotent: ensures the estimate has at least one alternate and that
     // every line is tagged with one. Old records get a "Base" alternate
     // and have their existing lines silently associated to it.
@@ -1354,7 +1422,7 @@
       var isActive = (a.id === activeId);
       var excluded = !!a.excludeFromTotal;
       var lineCount = (appData.estimateLines || []).filter(function(l) {
-        return l.estimateId === est.id && l.alternateId === a.id && l.section !== '__section_header__';
+        return l && l.estimateId === est.id && l.alternateId === a.id && l.section !== '__section_header__';
       }).length;
       var bg = excluded ? 'rgba(255,255,255,0.02)' : (isActive ? 'rgba(79,140,255,0.18)' : 'transparent');
       var border = excluded ? 'var(--border,#333)' : (isActive ? '#4f8cff' : 'var(--border,#333)');
@@ -1426,7 +1494,7 @@
       // Groups are ADDITIVE scopes that sum into one proposal — a new group
       // defaults EXCLUDED so adding it doesn't silently inflate the total until
       // the estimator opts it in via the group strip toggle.
-      var newAlt = { id: 'alt_' + Date.now(), name: name, isDefault: false, scope: '', excludeFromTotal: true };
+      var newAlt = { id: eeNewAlternateId(est), name: name, isDefault: false, scope: '', excludeFromTotal: true };
       est.alternates.push(newAlt);
       est.activeAlternateId = newAlt.id;
       // Auto-seed the four standard subgroups under the new group so the
@@ -1490,12 +1558,12 @@
       var srcAlt = getActiveAlternate();
       // Additive-scope model: a duplicated group also starts EXCLUDED from the
       // total (opt it in via the strip) so it can't silently double the price.
-      var newAlt = { id: 'alt_' + Date.now(), name: name, isDefault: false, scope: (srcAlt && srcAlt.scope) || '', excludeFromTotal: true };
+      var newAlt = { id: eeNewAlternateId(est), name: name, isDefault: false, scope: (srcAlt && srcAlt.scope) || '', excludeFromTotal: true };
       est.alternates.push(newAlt);
       // Clone every line in the active alternate over to the new one. Section
       // headers are cloned too so the structure carries over intact.
       var sourceLines = (appData.estimateLines || []).filter(function(l) {
-        return l.estimateId === est.id && l.alternateId === a.id;
+        return l && l.estimateId === est.id && l.alternateId === a.id;
       });
       sourceLines.forEach(function(l, idx) {
         var copy = Object.assign({}, l);
@@ -1520,7 +1588,7 @@
       return;
     }
     var lineCount = (appData.estimateLines || []).filter(function(l) {
-      return l.estimateId === est.id && l.alternateId === a.id;
+      return l && l.estimateId === est.id && l.alternateId === a.id;
     }).length;
     var msg = lineCount
       ? 'This will also remove ' + lineCount + ' line item' + (lineCount === 1 ? '' : 's') + ' / section header' + (lineCount === 1 ? '' : 's') + '. This cannot be undone.'
@@ -1534,7 +1602,7 @@
       if (!ok) return;
       // Remove the alternate's lines first, then the alternate itself
       appData.estimateLines = (appData.estimateLines || []).filter(function(l) {
-        return !(l.estimateId === est.id && l.alternateId === a.id);
+        return !(l && l.estimateId === est.id && l.alternateId === a.id);
       });
       est.alternates = est.alternates.filter(function(x) { return x.id !== a.id; });
       est.activeAlternateId = est.alternates[0].id;
@@ -1581,7 +1649,7 @@
   function markedUpForGroup(est, alt) {
     if (!est || !alt) return { subtotal: 0, markedUp: 0 };
     var lines = (appData.estimateLines || []).filter(function(l) {
-      return l.estimateId === est.id && l.alternateId === alt.id;
+      return l && l.estimateId === est.id && l.alternateId === alt.id;
     });
     return _P.computeForLines(est, lines);
   }
@@ -1624,7 +1692,7 @@
     // Fees + tax + round → shared p86Pricing.applyFeesAndTax
     var fees = _P.applyFeesAndTax(markedUp, est);
     var lineCount = (appData.estimateLines || []).filter(function(l) {
-      return l.estimateId === est.id && l.section !== '__section_header__';
+      return l && l.estimateId === est.id && l.section !== '__section_header__';
     }).length;
     var activeAlt = getActiveAlternate();
     var activePer = activeAlt ? markedUpForGroup(est, activeAlt) : { subtotal: 0, markedUp: 0 };
@@ -2846,13 +2914,13 @@
       // line re-prices EVERY line — update them all (textContent only, so the
       // focused input node is untouched and Tab still works).
       var byId = {};
-      (appData.estimateLines || []).forEach(function(l) { byId[l.id] = l; });
+      (appData.estimateLines || []).forEach(function(l) { if (l) byId[l.id] = l; });
       container.querySelectorAll('[data-line-id]').forEach(function(row) {
         var L = byId[row.getAttribute('data-line-id')];
         if (L && L.section !== '__section_header__') updateRow(row, L);
       });
     } else {
-      var line = (appData.estimateLines || []).find(function(l) { return l.id === lineId; });
+      var line = (appData.estimateLines || []).find(function(l) { return l && l.id === lineId; });
       if (line) {
         var sel = (window.CSS && CSS.escape) ? CSS.escape(String(lineId)) : String(lineId);
         updateRow(container.querySelector('[data-line-id="' + sel + '"]'), line);
@@ -2881,7 +2949,7 @@
   // line + section subtotals + the totals strip) — no full table rebuild, so
   // Tab-to-next-field and the cell you're aiming at survive the commit.
   function updateLineField(lineId, field, value) {
-    var line = (appData.estimateLines || []).find(function(l) { return l.id === lineId; });
+    var line = (appData.estimateLines || []).find(function(l) { return l && l.id === lineId; });
     if (!line) return;
     // Leave a cleared numeric field EMPTY (don't coerce to 0) so a
     // clear-to-retype doesn't flash a 0 the user has to reselect.
@@ -2900,7 +2968,7 @@
   }
 
   function updateSectionName(lineId, value) {
-    var line = (appData.estimateLines || []).find(function(l) { return l.id === lineId; });
+    var line = (appData.estimateLines || []).find(function(l) { return l && l.id === lineId; });
     if (!line) return;
     line.description = value;
     debouncedSave();
@@ -2914,7 +2982,7 @@
   // checkbox decides whether per-line markups are honored or
   // forcibly replaced by the section value.
   function updateSectionMarkup(lineId, value) {
-    var line = (appData.estimateLines || []).find(function(l) { return l.id === lineId; });
+    var line = (appData.estimateLines || []).find(function(l) { return l && l.id === lineId; });
     if (!line) return;
     var raw = (value == null) ? '' : String(value).trim();
     line.markup = raw === '' ? '' : Number(raw);
@@ -2929,7 +2997,7 @@
   // numeric `markup` value is preserved across the toggle so a 20%
   // section flipped to $ shows "$20" — the user can edit from there.
   function toggleSectionMarkupMode(lineId) {
-    var line = (appData.estimateLines || []).find(function(l) { return l.id === lineId; });
+    var line = (appData.estimateLines || []).find(function(l) { return l && l.id === lineId; });
     if (!line) return;
     line.markupMode = (line.markupMode === 'dollar') ? 'percent' : 'dollar';
     debouncedSave();
@@ -2942,7 +3010,7 @@
   // regardless of any per-line override. Hidden in dollar mode where
   // line markups don't apply anyway.
   function toggleSectionOverride(lineId, checked) {
-    var line = (appData.estimateLines || []).find(function(l) { return l.id === lineId; });
+    var line = (appData.estimateLines || []).find(function(l) { return l && l.id === lineId; });
     if (!line) return;
     line.overrideLineMarkups = !!checked;
     debouncedSave();
@@ -2981,7 +3049,7 @@
     // labor sections, and only when the estimate actually carries a
     // rate, so nothing changes for estimates without a market.
     if (sectionId) {
-      var _sect = (appData.estimateLines || []).find(function (l) { return l.id === sectionId; });
+      var _sect = (appData.estimateLines || []).find(function (l) { return l && l.id === sectionId; });
       var _rate = Number(est.laborRate);
       if (_sect && _sect.btCategory === 'labor' && isFinite(_rate) && _rate > 0) {
         newLine.unitCost = _rate;
@@ -3067,7 +3135,7 @@
   }
 
   function deleteLineFromEditor(lineId) {
-    var line = (appData.estimateLines || []).find(function(l) { return l.id === lineId; });
+    var line = (appData.estimateLines || []).find(function(l) { return l && l.id === lineId; });
     var preview = line && line.description ? line.description : 'this line';
     window.p86Confirm({
       title: 'Delete line item?',
@@ -3076,7 +3144,7 @@
       destructive: true
     }).then(function(ok) {
       if (!ok) return;
-      appData.estimateLines = (appData.estimateLines || []).filter(function(l) { return l.id !== lineId; });
+      appData.estimateLines = (appData.estimateLines || []).filter(function(l) { return !l || l.id !== lineId; });
       debouncedSave();
       renderLineItems();
       renderTotals();
@@ -3084,7 +3152,7 @@
   }
 
   function deleteSectionFromEditor(sectionId) {
-    var section = (appData.estimateLines || []).find(function(l) { return l.id === sectionId; });
+    var section = (appData.estimateLines || []).find(function(l) { return l && l.id === sectionId; });
     var name = section && section.description ? section.description : 'this section';
     window.p86Confirm({
       title: 'Remove section header?',
@@ -3093,7 +3161,7 @@
       destructive: true
     }).then(function(ok) {
       if (!ok) return;
-      appData.estimateLines = (appData.estimateLines || []).filter(function(l) { return l.id !== sectionId; });
+      appData.estimateLines = (appData.estimateLines || []).filter(function(l) { return !l || l.id !== sectionId; });
       debouncedSave();
       renderLineItems();
       renderTotals();
@@ -3120,7 +3188,7 @@
     if (!est) return;
     var altId = est.activeAlternateId;
     var existing = (appData.estimateLines || []).filter(function(l) {
-      return l.estimateId === est.id && l.alternateId === altId && l.section === '__section_header__';
+      return l && l.estimateId === est.id && l.alternateId === altId && l.section === '__section_header__';
     });
     var existingCats = {};
     existing.forEach(function(s) { if (s.btCategory) existingCats[s.btCategory] = true; });
@@ -3158,7 +3226,7 @@
     if (!preset) return false;
     var altId = est.activeAlternateId;
     var dupe = (appData.estimateLines || []).find(function(l) {
-      return l.estimateId === est.id && l.alternateId === altId &&
+      return l && l.estimateId === est.id && l.alternateId === altId &&
              l.section === '__section_header__' && l.btCategory === btCategory;
     });
     if (dupe) {
@@ -3195,7 +3263,7 @@
     var altId = est && est.activeAlternateId;
     var existingCats = {};
     (appData.estimateLines || []).forEach(function(l) {
-      if (l.estimateId === est.id && l.alternateId === altId &&
+      if (l && l.estimateId === est.id && l.alternateId === altId &&
           l.section === '__section_header__' && l.btCategory) {
         existingCats[l.btCategory] = true;
       }
@@ -3775,7 +3843,7 @@
     var preset = STANDARD_SECTIONS_PRESET.find(function(p) { return p.btCategory === btCategory; });
     var presetName = preset ? (preset.name || '').toLowerCase() : null;
     var existing = (appData.estimateLines || []).find(function(l) {
-      if (l.estimateId !== est.id || l.alternateId !== alt.id || l.section !== '__section_header__') return false;
+      if (!l || l.estimateId !== est.id || l.alternateId !== alt.id || l.section !== '__section_header__') return false;
       if (l.btCategory === btCategory) return true;
       // A same-named header with NO btCategory (custom-add / AI / legacy) is the
       // same bucket — adopt it (backfilled below) instead of making a twin.
@@ -3823,7 +3891,7 @@
     if (!sectionId && input.section_name) {
       var needle = String(input.section_name).toLowerCase();
       var match = (appData.estimateLines || []).find(function(l) {
-        return l.estimateId === est.id
+        return l && l.estimateId === est.id
           && l.alternateId === alt.id
           && l.section === '__section_header__'
           && (l.description || '').toLowerCase().indexOf(needle) >= 0;
@@ -3978,11 +4046,11 @@
   function applyDeleteLine(input) {
     var lineId = input.line_id;
     if (!lineId) throw new Error('line_id required');
-    var line = (appData.estimateLines || []).find(function(l) { return l.id === lineId; });
+    var line = (appData.estimateLines || []).find(function(l) { return l && l.id === lineId; });
     if (!line) throw new Error('Line not found.');
     if (line.section === '__section_header__') throw new Error('Use propose_delete_section for section headers.');
     var name = line.description || lineId;
-    appData.estimateLines = appData.estimateLines.filter(function(l) { return l.id !== lineId; });
+    appData.estimateLines = appData.estimateLines.filter(function(l) { return !l || l.id !== lineId; });
     debouncedSave();
     renderLineItems();
     renderTotals();
@@ -3995,7 +4063,7 @@
   // `section_name` does a case-insensitive substring match against section
   // headers in the same alternate and re-positions the line under it.
   function applyUpdateLine(input) {
-    var line = (appData.estimateLines || []).find(function(l) { return l.id === input.line_id; });
+    var line = (appData.estimateLines || []).find(function(l) { return l && l.id === input.line_id; });
     if (!line) throw new Error('Line not found.');
     if (line.section === '__section_header__') throw new Error('Use propose_update_section to change section headers.');
     var changed = [];
@@ -4015,11 +4083,11 @@
       if (alt) {
         var needle = String(input.section_name).toLowerCase();
         var headers = (appData.estimateLines || []).filter(function(L) {
-          return L.estimateId === line.estimateId && L.alternateId === line.alternateId && L.section === '__section_header__';
+          return L && L.estimateId === line.estimateId && L.alternateId === line.alternateId && L.section === '__section_header__';
         });
         var match = headers.find(function(H) { return (H.description || '').toLowerCase().indexOf(needle) >= 0; });
         if (match) {
-          appData.estimateLines = appData.estimateLines.filter(function(l) { return l.id !== line.id; });
+          appData.estimateLines = appData.estimateLines.filter(function(l) { return !l || l.id !== line.id; });
           var arr = appData.estimateLines;
           var startIdx = arr.findIndex(function(l) { return l.id === match.id; });
           var insertAt = arr.length;
@@ -4044,11 +4112,11 @@
   // simply fall under whichever section header now precedes them
   // (or become unsectioned if the deleted header was the first).
   function applyDeleteSection(input) {
-    var section = (appData.estimateLines || []).find(function(l) { return l.id === input.section_id; });
+    var section = (appData.estimateLines || []).find(function(l) { return l && l.id === input.section_id; });
     if (!section) throw new Error('Section not found.');
     if (section.section !== '__section_header__') throw new Error('That id is not a section header.');
     var name = section.description || input.section_id;
-    appData.estimateLines = appData.estimateLines.filter(function(l) { return l.id !== input.section_id; });
+    appData.estimateLines = appData.estimateLines.filter(function(l) { return !l || l.id !== input.section_id; });
     debouncedSave();
     renderLineItems();
     renderTotals();
@@ -4058,7 +4126,7 @@
   // Update fields on an existing section header. Same partial-update
   // semantics as applyUpdateLine — only specified keys get touched.
   function applyUpdateSection(input) {
-    var section = (appData.estimateLines || []).find(function(l) { return l.id === input.section_id; });
+    var section = (appData.estimateLines || []).find(function(l) { return l && l.id === input.section_id; });
     if (!section) throw new Error('Section not found.');
     if (section.section !== '__section_header__') throw new Error('That id is not a section header.');
     var changed = [];
@@ -4113,11 +4181,11 @@
     // Additive-scope model: a new group defaults EXCLUDED from the total (same
     // as the UI "+ Group") so it can't silently inflate the proposal. The
     // caller can pass include:true to add it already-included.
-    var newAlt = { id: 'alt_' + Date.now(), name: name, isDefault: false, scope: (sourceAlt && sourceAlt.scope) || '', excludeFromTotal: !(input.include === true) };
+    var newAlt = { id: eeNewAlternateId(est), name: name, isDefault: false, scope: (sourceAlt && sourceAlt.scope) || '', excludeFromTotal: !(input.include === true) };
     est.alternates.push(newAlt);
     if (copyFromActive && sourceAlt) {
       var sourceLines = (appData.estimateLines || []).filter(function(l) {
-        return l.estimateId === est.id && l.alternateId === sourceAlt.id;
+        return l && l.estimateId === est.id && l.alternateId === sourceAlt.id;
       });
       sourceLines.forEach(function(l, idx) {
         var copy = Object.assign({}, l);
@@ -4171,10 +4239,10 @@
     }
     var name = alt.name;
     var lineCount = (appData.estimateLines || []).filter(function(l) {
-      return l.estimateId === est.id && l.alternateId === alt.id;
+      return l && l.estimateId === est.id && l.alternateId === alt.id;
     }).length;
     appData.estimateLines = (appData.estimateLines || []).filter(function(l) {
-      return !(l.estimateId === est.id && l.alternateId === alt.id);
+      return !(l && l.estimateId === est.id && l.alternateId === alt.id);
     });
     est.alternates = est.alternates.filter(function(a) { return a.id !== alt.id; });
     if (est.activeAlternateId === alt.id) {
@@ -4271,7 +4339,7 @@
     if (changes.section_name) {
       var needle = String(changes.section_name).toLowerCase();
       var match = (appData.estimateLines || []).find(function(l) {
-        return l.estimateId === est.id
+        return l && l.estimateId === est.id
           && (alt ? l.alternateId === alt.id : true)
           && l.section === '__section_header__'
           && (l.description || '').toLowerCase().indexOf(needle) >= 0;
@@ -4282,7 +4350,7 @@
 
     var updated = 0;
     ids.forEach(function(lineId) {
-      var line = (appData.estimateLines || []).find(function(l) { return l.id === lineId; });
+      var line = (appData.estimateLines || []).find(function(l) { return l && l.id === lineId; });
       if (!line || line.section === '__section_header__') return;
       if (changes.description != null)             line.description = String(changes.description);
       if (changes.qty != null)                     line.qty         = Number(changes.qty);
@@ -4322,7 +4390,7 @@
     ids.forEach(function(id) { idSet[id] = true; });
     var before = (appData.estimateLines || []).length;
     appData.estimateLines = (appData.estimateLines || []).filter(function(l) {
-      return !(idSet[l.id] && l.section !== '__section_header__');
+      return !(l && idSet[l.id] && l.section !== '__section_header__');
     });
     var removed = before - appData.estimateLines.length;
     if (!removed) throw new Error('No matching lines found for ids: ' + ids.join(', '));
@@ -4335,6 +4403,43 @@
   window.estimateEditorAPI = {
     isOpenFor: function(estimateId) { return _currentId === estimateId; },
     getOpenId: function() { return _currentId; },
+    // ── currentId + rerender: THE TWO NAMES TWO CALLERS ALREADY USE ──────
+    // js/markup-viewer.js (mergeAppendIntoAppData) and js/sheet-editor.js
+    // (reconvergeEstimate) both replace this estimate's slice of
+    // appData.estimateLines WHOLESALE with the server's fresh rows — new
+    // objects, new ids — and then try to refresh an open editor with
+    //
+    //   if (window.estimateEditorAPI
+    //       && typeof window.estimateEditorAPI.rerender === 'function'
+    //       && window.estimateEditorAPI.currentId
+    //       && String(window.estimateEditorAPI.currentId()) === String(estId))
+    //
+    // Neither name existed on this object. The guard has therefore ALWAYS
+    // been false and the refresh has never once fired: after a take-off push
+    // or an assembly append, every row still on screen is addressed by an id
+    // that is no longer in appData, so every field is inert, delete is a
+    // no-op and the pill says nothing is wrong. That is the change-order
+    // symptom exactly, arriving through a completely different door, and it
+    // needs no missing or duplicated id to happen — it happens with a
+    // perfectly identified record.
+    //
+    // Defining the names the callers already agreed on is the whole repair;
+    // neither of those files changes.
+    currentId: function() { return _currentId; },
+    rerender: function() {
+      if (!_currentId || !getEstimate()) return false;
+      try {
+        renderHeaderChips();
+        renderAlternateTabs();
+        renderTotals();
+        renderLineItems();
+        renderScopePanel();
+        return true;
+      } catch (e) {
+        console.warn('[estimate-editor] rerender failed:', e);
+        return false;
+      }
+    },
     // Called by openEstimateFromLead so close → "Back" lands on the
     // lead the user came from instead of the estimates list.
     setReturnToLead: function(leadId) { _returnToLeadId = leadId || null; },

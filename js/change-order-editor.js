@@ -34,6 +34,20 @@ function p86Ask(message, opts) {
 (function() {
   'use strict';
 
+  // ONE implementation of line identity, shared with the estimate editor —
+  // js/line-identity.js. It was lifted out of this file unchanged; the
+  // functions below keep their names and their call sites so nothing else
+  // here moved. The reason for the move is that the estimate editor needed
+  // the same two-pass uniqueness walk, and a second copy of it is exactly
+  // the thing that drifts silently in this repo.
+  //
+  // Browser: the module is a <script> tag ahead of this one and lands on
+  // window. Node/jest: this file is require()d directly, so it require()s the
+  // module directly — the `typeof require` guard short-circuits in the
+  // browser, where `require` does not exist.
+  var LID = (typeof window !== 'undefined' && window.p86LineIdentity)
+    || (typeof require === 'function' ? require('./line-identity.js') : null);
+
   function escapeHTML(s) {
     if (typeof window.escapeHTML === 'function') return window.escapeHTML(s);
     return String(s == null ? '' : s)
@@ -93,9 +107,7 @@ function p86Ask(message, opts) {
   // Idempotent random-ish id generator for new lines. Same convention
   // as estimate-editor — short enough to be readable in DevTools, long
   // enough that collision inside one CO is effectively impossible.
-  function newLineId() {
-    return 'line_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
-  }
+  function newLineId() { return LID.newLineId(); }
 
   // A line's `id` is its ADDRESS in this editor. paintLines writes it into
   // data-line-id, and EVERY handler bound to the row — unit cost, qty,
@@ -133,47 +145,30 @@ function p86Ask(message, opts) {
   // `do { id = newLineId(); } while (taken[id]);`, which relies on
   // Math.random eventually disagreeing with itself — and spins forever, on
   // the main thread, if it does not.
-  function mintLineId(taken) {
-    var base = newLineId(), id = base, n = 0;
-    while (taken[id]) { id = base + '_' + (++n); }
-    return id;
-  }
+  function mintLineId(taken) { return LID.mintId(taken); }
 
   // Two passes, deliberately. Pass 1 claims every id ALREADY on the record,
   // so a minted id cannot collide with one a LATER line is still holding;
   // pass 2 fills the gaps. A single pass would let row 1's new id land on
   // row 9's existing one.
-  function ensureLineIds(lines) {
-    if (!Array.isArray(lines)) return 0;
-    var taken = Object.create(null), used = Object.create(null), minted = 0;
-    var i, l, id;
-    for (i = 0; i < lines.length; i++) {
-      l = lines[i];
-      if (!l || typeof l !== 'object') continue;
-      id = (l.id == null) ? '' : String(l.id);
-      if (id !== '') taken[id] = true;
-    }
-    for (i = 0; i < lines.length; i++) {
-      l = lines[i];
-      if (!l || typeof l !== 'object') continue;
-      id = (l.id == null) ? '' : String(l.id);
-      if (id !== '' && !used[id]) { used[id] = true; continue; }
-      // Blank, or the SECOND row to claim this address.
-      id = mintLineId(taken);
-      l.id = id;
-      taken[id] = true;
-      used[id] = true;
-      minted++;
-    }
-    return minted;
-  }
+  function ensureLineIds(lines) { return LID.ensureLineIds(lines); }
 
   // THE STATE BOUNDARY. Everything assigned to _state.co passes through
   // here, so "every line this editor holds has its own address" is a fact
   // about the STATE — true before the first paint, and true whether or not
   // anything ever paints.
+  //
+  // THE HOLE THIS USED TO LEAVE OPEN. An accessor on _state.co intercepts
+  // `_state.co = X`. It does NOT intercept `_state.co.lines = X` or
+  // `.lines.push(x)` — both of those read THROUGH the getter and mutate what
+  // it returned, so the record-level boundary never saw them. That was
+  // demonstrated live: assigning the lines array straight onto an adopted
+  // record yielded unhealed lines. guardHostArray moves the boundary down one
+  // level onto `lines` itself — the assignment door and the three
+  // Array.prototype methods that can INSERT (push/unshift/splice) all heal
+  // now, on this record and on every record adopted after it.
   function adoptCo(co) {
-    if (co && typeof co === 'object') ensureLineIds(co.lines);
+    if (co && typeof co === 'object') LID.guardHostArray(co, 'lines');
     return co;
   }
 

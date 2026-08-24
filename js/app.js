@@ -2429,6 +2429,39 @@
         // classic script doesn't auto-attach to window, so we do it manually.
         window.appData = appData;
 
+        // ── THE ESTIMATE-LINE STATE BOUNDARY ──────────────────────────────
+        // A line's `id` is its ADDRESS in the estimate editor: every row is
+        // rendered as data-line-id="<id>" and every handler — qty, unit cost,
+        // markup, description, delete, drag, the section controls — resolves
+        // the line by matching that attribute back against THIS array. An
+        // unaddressed row is not hard to edit; it is silently inert, and the
+        // save pill goes on reading "Saved" while the keystrokes are dropped.
+        // A DUPLICATED address is worse: this array is portfolio-wide and no
+        // handler filters by estimateId, so the write lands on whichever copy
+        // is earlier in the array — possibly in an estimate that is not even
+        // on screen.
+        //
+        // Enforcing that on the PROPERTY rather than at each of the eight
+        // files that mutate it means every door heals: the localStorage boot
+        // seed, the server hydrate, the two take-off/assembly merges that
+        // reassign this array wholesale under a live editor, the editor's own
+        // deletes, and any door added later that nobody remembers to audit.
+        // guardHostArray also guards push/unshift/splice ON the array, so an
+        // insert can't slip an unaddressed line past the assignment door.
+        //
+        // Installed HERE, before anything can load: an estimate that has
+        // never been through this property is an estimate the editor cannot
+        // hold. Healing costs one write of `id` and nothing else — order,
+        // membership and every other field are untouched, which is what keeps
+        // it out of the money (section membership is ARRAY ORDER).
+        if (window.p86LineIdentity) {
+            window.p86LineIdentity.guardHostArray(appData, 'estimateLines', {
+                prefixFor: function (l) {
+                    return (l && l.section === '__section_header__') ? 's' : 'l';
+                }
+            });
+        }
+
         let appState = {
             currentJobId: null,
             currentStatusFilter: '',
@@ -2640,6 +2673,21 @@
         function hydrateFromServerEstimates(serverEstimates) {
             appData.estimates = [];
             appData.estimateLines = [];
+            // Accumulate into a LOCAL array and assign once at the end rather
+            // than pushing per estimate. Two reasons, both deliberate:
+            //   • Array.prototype.push.apply(arr, xs) invokes the prototype
+            //     method directly and steps over the own-property insert guard
+            //     installed on appData.estimateLines — the one form of insert
+            //     the boundary cannot see. One assignment goes through the
+            //     boundary's setter instead, which is the door that heals.
+            //   • It heals the portfolio ONCE (O(n)) instead of once per
+            //     estimate, and it heals BEFORE rebuildBaselines() runs a
+            //     couple of lines later — so the ids are baked into the
+            //     baseline and no record is marked dirty for merely being
+            //     loaded. Healing after the baseline would turn opening an
+            //     estimate to look at it into a server write, and every read
+            //     into a candidate for a stale-version conflict.
+            var flatLines = [];
             // Flat estimateAlternates array kept empty for legacy reads —
             // alternates live INLINE on est.alternates now. Pushing them
             // both places was the dual-source-of-truth bug that caused
@@ -2655,8 +2703,9 @@
                 // directly from there.
                 delete meta.lines;
                 appData.estimates.push(meta);
-                Array.prototype.push.apply(appData.estimateLines, lines);
+                Array.prototype.push.apply(flatLines, lines);
             });
+            appData.estimateLines = flatLines;
         }
 
         // Tracks whether the initial server fetch has completed. Editors
