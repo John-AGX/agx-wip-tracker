@@ -818,6 +818,24 @@ describe('PROPERTY — nothing already saved reprices', () => {
 // never being exercised. So the call sites are counted, and each one's third
 // argument has to be a name bound in the same function from the same lines.
 describe('PROPERTY — every production call site passes a decision from its own lines', () => {
+  // DISCOVERED, NOT LISTED. A fixed list is a list of the call sites that
+  // existed the day it was written: add a call in a file that is not on it and
+  // this whole section goes quietly green, which is the one failure mode a
+  // "holds the code that gets added" property may not have. So js/ and
+  // server/ are walked.
+  function walk(dir, out) {
+    for (const e of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
+      const rel = dir + '/' + e.name;
+      if (e.isDirectory()) { if (e.name !== 'node_modules') walk(rel, out); }
+      else if (e.name.endsWith('.js')) out.push(rel);
+    }
+    return out;
+  }
+  // The pipeline itself is excluded: its own five solve calls go to the
+  // module-private boolean form, which is pinned separately below.
+  const SCANNED = walk('js', walk('server', [])).filter((f) => f !== 'js/pricing-pipeline.js');
+  // The seven files that hold a call today. Named so that a call DISAPPEARING
+  // from one of them is as visible as one appearing somewhere new.
   const FILES = [
     'js/change-order-editor.js', 'js/estimate-editor.js', 'js/estimate-preview.js',
     'js/estimates.js', 'js/jobs.js',
@@ -857,12 +875,20 @@ describe('PROPERTY — every production call site passes a decision from its own
     return out;
   }
 
-  const ALL = FILES.reduce((a, f) => a.concat(callsIn(f)), []);
+  const ALL = SCANNED.reduce((a, f) => a.concat(callsIn(f)), []);
 
-  test('the enumeration found every production call site', () => {
+  test('the enumeration walked the tree and found every production call site', () => {
+    // The walk actually walked — a broken walk finds nothing and everything
+    // below it passes vacuously.
+    expect(SCANNED.length).toBeGreaterThan(100);
+    expect(SCANNED).toContain('js/jobs.js');
+    expect(SCANNED).toContain('server/services/money/change-order-totals.js');
+    expect(SCANNED).not.toContain('js/pricing-pipeline.js');
     // Fifteen shipped: 5 inside the pipeline's own solve (now private and not
     // counted here) + 10 across the two editors, the money modules and jobs.
     expect(ALL.length).toBe(10);
+    // Every call is in one of the seven known files — and every one of those
+    // seven still holds a call.
     expect([...new Set(ALL.map((c) => c.rel))].sort()).toEqual(FILES.slice().sort());
   });
 
