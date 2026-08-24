@@ -210,15 +210,21 @@ describe.each(PRODUCERS)('THE PROPERTY — %s', ({ build }) => {
   // by estimateId — a duplicate address does not freeze a row, it writes into
   // whichever copy is earlier in the array, possibly in a record that is not
   // on screen. A single-estimate fixture cannot see that at all.
-  let h, open, shadow, before;
+  let h, open, shadow, asProduced;
 
   beforeEach(() => {
     open = build('est_open');
     shadow = build('est_shadow');
+    // SNAPSHOT BEFORE ANYTHING HEALS. hydrate pushes these very objects into
+    // appData by reference, so a snapshot taken after the open would be a
+    // snapshot of the heal's own output — every "nothing changed" assertion
+    // below would then be comparing the result to itself and would pass no
+    // matter what the heal did. (Which it was, until a mutation run noticed:
+    // a heal that SORTED the array left this whole block green.)
+    asProduced = clone(open.lines).concat(clone(shadow.lines));
     h = H.boot();
     h.hydrate([open, shadow]);
     h.open('est_open');
-    before = clone(h.lines());
   });
   afterEach(() => { if (h) h.dom.window.close(); });
 
@@ -234,20 +240,29 @@ describe.each(PRODUCERS)('THE PROPERTY — %s', ({ build }) => {
 
   test('the heal touched `id` and NOTHING else — no field, no order, no membership', () => {
     const L = h.lines();
-    // Same objects, same positions: the heal is in place.
-    expect(L.length).toBe(before.length);
-    expect(H.withoutIds(L)).toEqual(H.withoutIds(before));
+    // Nothing added, nothing dropped, nothing moved.
+    expect(L.length).toBe(asProduced.length);
+    expect(H.withoutIds(L)).toEqual(H.withoutIds(asProduced));
     // And the money-safety clause, stated in its own terms.
-    expect(H.membership(L)).toEqual(H.membership(before));
+    expect(H.membership(L)).toEqual(H.membership(asProduced));
   });
 
   test('the heal moves no money — the record prices to the cent as it did', () => {
-    // Priced from the RAW producer output (pre-heal) against the healed
-    // array, through the shared pricing module. Both halves of the estimate.
-    const rawOpen = open.lines.filter((l) => l && l.estimateId === 'est_open');
+    // The RAW producer output (snapshotted pre-heal) against the healed
+    // array, through the shared pricing module. An id is an internal key,
+    // not money: if a single cent moves, the heal is wrong no matter how
+    // tidy the ids look.
+    const rawOpen = asProduced.filter((l) => l && l.estimateId === 'est_open');
     const healedOpen = h.lines().filter((l) => l && l.estimateId === 'est_open');
     const est = h.w.appData.estimates.find((e) => e.id === 'est_open');
     expect(H.priceGroup(P, est, healedOpen)).toEqual(H.priceGroup(P, est, rawOpen));
+    // Same question of the estimate that is NOT on screen — it shares the
+    // array, so a heal aimed at one record can only be proved harmless to
+    // the other by pricing the other.
+    const rawShadow = asProduced.filter((l) => l && l.estimateId === 'est_shadow');
+    const healedShadow = h.lines().filter((l) => l && l.estimateId === 'est_shadow');
+    const est2 = h.w.appData.estimates.find((e) => e.id === 'est_shadow');
+    expect(H.priceGroup(P, est2, healedShadow)).toEqual(H.priceGroup(P, est2, rawShadow));
   });
 
   test('typing into row N changes row N and ONLY row N — and arms the save', () => {
