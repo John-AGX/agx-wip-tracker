@@ -382,7 +382,11 @@
 
   function fmtCurrency(v) {
     if (v == null || isNaN(v)) v = 0;
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(v);
+    var s = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(v);
+    // "-$0.00" is not a number a person reads. See the twin note in
+    // js/change-order-editor.js: only the glyph moves, and the test is on the
+    // formatter's own output so no real number can be caught by it.
+    return s === '-$0.00' ? '$0.00' : s;
   }
   function num(v) { var n = parseFloat(v); return isNaN(n) ? 0 : n; }
 
@@ -2357,29 +2361,66 @@
   window.eeAsmExplode = function (lineId) {
     var line = eeFindLine(lineId);
     if (!line || !Array.isArray(line.assemblyBreakdown)) return;
+    // AN EXPLODE REPLACES THE LINE WITH ITS PARTS, OR IT DOES NOTHING AND
+    // SAYS WHY. IT NEVER REMOVES THE LINE AND LEAVES NOTHING.
+    //
+    // This is the same defect as coAsmExplode in js/change-order-editor.js,
+    // in the same shape, and it carried the LARGER blast radius: appData is
+    // the shared store and saveData() is called from ~88 places across eleven
+    // files, so an orphaned deletion here was committed to localStorage by any
+    // later action anywhere in the app, not only by another estimate edit.
+    //
+    // The component list is built ONCE, BEFORE the sentence is written, so the
+    // count in the sentence is the count the action creates and no path can
+    // remove the rollup and put nothing back. The splice used to be able to
+    // run past applyBulkAddLineItems' empty-specs early return, which sits
+    // ABOVE its debouncedSave() + renderLineItems() + renderTotals().
+    var q = num(line.qty);
+    var specs = line.assemblyBreakdown.map(function (b) {
+      return {
+        description: b.description,
+        qty: Math.round(q * num(b.qty_per_unit) * 100) / 100,
+        unit: b.unit || 'EA',
+        unit_cost: b.unit_cost != null ? num(b.unit_cost) : 0,
+        section_name: ASM_CODE_SECTION[b.cost_code] || 'Materials & Supplies Costs',
+        source_material_id: b.material_id || undefined,
+        source_assembly_id: line.sourceAssemblyId
+      };
+    }).filter(function (s) { return s.qty > 0; });
+    if (!specs.length) {
+      // Same three reasons, same words, as the change-order editor. Credits
+      // are REFUSED rather than exploded into negative component lines: that
+      // is untested money semantics and belongs in its own commit.
+      var why = !line.assemblyBreakdown.length
+        ? 'This line has no recipe items, so there is nothing to explode it into.'
+        : q < 0
+          ? 'This is a credit line (quantity ' + q + '). Exploding it would give every component a negative quantity, which this editor does not price \u2014 so nothing was changed. Edit the rollup line directly, or delete it and enter the deduction as its own line.'
+          : q === 0
+            ? 'This line\u2019s quantity is 0, so every item in the recipe works out to no quantity. Set a quantity first, then explode.'
+            : 'Nothing to explode: every item in this recipe works out to no quantity.';
+      if (window.p86Alert) window.p86Alert({ title: 'Nothing to explode', message: why });
+      else if (typeof alert === 'function') alert(why);
+      return;                                  // ← THE RECORD IS UNTOUCHED
+    }
     var doIt = function () {
-      var q = num(line.qty);
-      var specs = line.assemblyBreakdown.map(function (b) {
-        return {
-          description: b.description,
-          qty: Math.round(q * num(b.qty_per_unit) * 100) / 100,
-          unit: b.unit || 'EA',
-          unit_cost: b.unit_cost != null ? num(b.unit_cost) : 0,
-          section_name: ASM_CODE_SECTION[b.cost_code] || 'Materials & Supplies Costs',
-          source_material_id: b.material_id || undefined,
-          source_assembly_id: line.sourceAssemblyId
-        };
-      }).filter(function (s) { return s.qty > 0; });
       var idx = appData.estimateLines.indexOf(line);
       if (idx >= 0) appData.estimateLines.splice(idx, 1);
       delete _asmOpen[lineId];
+      // Non-empty by construction → always reaches debouncedSave() +
+      // renderLineItems() + renderTotals().
       applyBulkAddLineItems(specs);
     };
+    // ONE SENTENCE, used by both doors. The confirm() fallback used to ask a
+    // different question ("Explode into editable lines?") with no count in it
+    // at all, which is a second model of the same prompt.
+    var msg = 'Explode "' + (line.description || 'assembly') + '" into ' +
+      specs.length + ' editable line' + (specs.length === 1 ? '' : 's') +
+      '? The single rollup line is replaced.';
     // p86Confirm takes an options object and returns a Promise — the old
     // (string, callback) call silently never fired doIt (dead button).
     if (window.p86Confirm) {
-      window.p86Confirm({ title: 'Explode assembly', message: 'Explode "' + (line.description || 'assembly') + '" into ' + line.assemblyBreakdown.length + ' editable lines? The single rollup line is replaced.', confirmText: 'Explode', destructive: true }).then(function(ok) { if (ok) doIt(); });
-    } else if (confirm('Explode into editable lines?')) doIt();
+      window.p86Confirm({ title: 'Explode assembly', message: msg, confirmText: 'Explode', destructive: true }).then(function(ok) { if (ok) doIt(); });
+    } else if (confirm(msg)) doIt();
   };
 
   function renderLineItems() {

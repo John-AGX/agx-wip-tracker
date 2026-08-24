@@ -462,11 +462,18 @@ ${body}
     };
   `);
   let message = null;
+  let notice = null;
   const win = {
     p86Pricing: pricing,
     // Confirm and say yes — so ONE call raises the dialog a person reads AND
     // performs the irreversible change they were shown a number for.
     p86Confirm: (o) => { message = o.message; return { then: (f) => f(true) }; },
+    // THE OTHER DOOR. An explode whose recipe works out to no quantity at all
+    // — a credit rollup, a zero-quantity rollup, an all-"included, no charge"
+    // recipe — raises NO confirm: it refuses, says why, and leaves the record
+    // alone. Without this the harness records those as "no sentence quoted"
+    // and the property below cannot tell a refusal from a lie.
+    p86Alert: (o) => { notice = o.message; },
   };
   const env = build(win);
   return {
@@ -481,8 +488,9 @@ ${body}
     // Returns the two figures out of the sentence a person actually reads —
     // AS PRINTED — and the record the click actually produced.
     run(co, lineId) {
-      message = null;
-      env.setCo(JSON.parse(JSON.stringify(co)));
+      message = null; notice = null;
+      const input = JSON.stringify(co);
+      env.setCo(JSON.parse(input));
       env.explode(lineId);
       // A credit change order prints a NEGATIVE total, and fmtCurrency puts
       // the minus INSIDE the dollar sign ($-3,141.59). A pattern that forgets
@@ -494,6 +502,11 @@ ${body}
       const m = message && message.match(/total from (\$-?[\d,]+\.\d\d) to (\$-?[\d,]+\.\d\d)\./);
       return {
         raised: message != null,
+        // A refusal is not a failure to quote — it is the other outcome, and
+        // it comes with a reason and with the record untouched.
+        refused: notice != null,
+        why: notice,
+        unchanged: JSON.stringify(env.getCo()) === input,
         quoted: m != null,
         beforeText: m ? m[1] : null,
         afterText: m ? m[2] : null,
@@ -544,19 +557,37 @@ describe('PROPERTY — the confirm dialog quotes the totals the change order act
   //     post-explode state — no `qty > 0` filter, and the components
   //     concatenated at the array END instead of routed into their cost-code
   //     sections, which on a change order is what decides their markup.
+  //
+  // AND THE SECOND OUTCOME. An explode that would create nothing raises no
+  // dialog at all: it refuses by name and the record is BYTE-IDENTICAL. That
+  // branch is not an exemption from the property — it is the property's other
+  // half, and it is counted and asserted rather than skipped, because the
+  // shipped bytes reached it on 24.8% of this very corpus and destroyed the
+  // line every time.
   test('36,000 promised-rollup explodes: before AND after are the record own totals', () => {
     const all = coCorpus(201, { count: 12000, promiseRate: 0.6, credits: true, sections: true })
       .concat(coCorpus(202, { count: 12000, promiseRate: 0.9 }))
       .concat(coCorpus(203, { count: 12000, promiseRate: 0.4, sections: true }));
     let raised = 0;
+    let refused = 0;
     const wrongAfter = [];
     const wrongBefore = [];
+    const badRefusal = [];
     for (const co of all) {
       const line = co.lines.find((l) => P.sellLocked(l) && Array.isArray(l.assemblyBreakdown));
       if (!line) continue;
-      raised++;
       const beforeTruth = changeOrderMoney(co).income;
       const r = NOW.run(co, line.id);
+      if (r.refused) {
+        refused++;
+        // Nothing was said about money because nothing moved — and NOTHING
+        // MOVED is checked on the bytes, not on the line's continued presence.
+        if (r.raised || !r.unchanged || !r.why || r.why.length < 20) {
+          badRefusal.push({ id: line.id, raised: r.raised, unchanged: r.unchanged, why: r.why });
+        }
+        continue;
+      }
+      raised++;
       if (!r.quoted) { wrongAfter.push({ id: line.id, quoted: false }); continue; }
       // The oracle is the SERVER's money function over the record the click
       // actually produced. It shares nothing with the dialog but the pipeline.
@@ -578,7 +609,13 @@ describe('PROPERTY — the confirm dialog quotes the totals the change order act
         wrongBefore.push({ quoted: r.beforeText, truth: NOW.fmt(beforeTruth + 0), raw: beforeTruth });
       }
     }
-    expect(raised).toBeGreaterThan(20000);
+    // Both outcomes are reached in force. A run that only ever proceeds proves
+    // nothing about the refusal, and one that only ever refuses proves nothing
+    // about the sentence.
+    expect(raised).toBeGreaterThan(15000);
+    expect(refused).toBeGreaterThan(1500);
+    expect(badRefusal.slice(0, 3)).toEqual([]);
+    expect(badRefusal).toHaveLength(0);
     expect(wrongBefore.slice(0, 3)).toEqual([]);
     expect(wrongBefore).toHaveLength(0);
     expect(wrongAfter.slice(0, 3)).toEqual([]);
@@ -664,10 +701,20 @@ describe('PROPERTY — the confirm dialog quotes the totals the change order act
       ],
     };
     const nowC = NOW.run(C, 'L1');
-    const truthC = changeOrderMoney(nowC.record).income;
     const oldC = OLD.run(C, 'L1');
-    expect(Math.round((nowC.after - truthC) * 100) / 100).toBe(0);
-    expect(Math.round((oldC.after - truthC) * 100) / 100).toBe(-2400);
+    // THE SHIPPED BYTES, PINNED. They raised a dialog, quoted a total two
+    // thousand four hundred dollars away from the one the record would take,
+    // removed the rollup, and created nothing.
+    expect(oldC.raised).toBe(true);
+    expect(Math.round((oldC.after - changeOrderMoney(oldC.record).income) * 100) / 100).toBe(-2400);
+    expect(oldC.record.lines.some((l) => l.id === 'L1')).toBe(false);
+    expect(oldC.record.lines.filter((l) => l.section !== '__section_header__')).toHaveLength(1);
+    // NOW: there is no sentence to be wrong, because there is no move. The
+    // credit is refused by name and the change order is untouched.
+    expect(nowC.raised).toBe(false);
+    expect(nowC.refused).toBe(true);
+    expect(nowC.why).toMatch(/credit line/);
+    expect(nowC.unchanged).toBe(true);
   });
 
   // THE RATES, each stated beside the population it is a rate OF. Two
@@ -678,6 +725,7 @@ describe('PROPERTY — the confirm dialog quotes the totals the change order act
     const OLD = makeEditor(PRIOR_COE, PRIOR);
     const all = coCorpus(205, { count: 16000, promiseRate: 0.6, credits: true, sections: true });
     let raised = 0, exposed = 0, wrongShipped = 0, wrongNow = 0;
+    let refusedNow = 0, destroyedByShipped = 0, mutatedOnRefusal = 0;
     for (const co of all) {
       const line = co.lines.find((l) => P.sellLocked(l) && Array.isArray(l.assemblyBreakdown));
       if (!line) continue;
@@ -687,9 +735,21 @@ describe('PROPERTY — the confirm dialog quotes the totals the change order act
       const t = P.parseMoney(co.targetPrice);
       if (t != null && t > 0 && P.num(co.roundTo) > 0) exposed++;
       const now = NOW.run(co, line.id);
-      const truth = changeOrderMoney(now.record).income;
-      if (OLD.run(co, line.id).afterText !== OLD.fmt(truth)) wrongShipped++;
-      if (now.afterText !== NOW.fmt(truth)) wrongNow++;
+      const old = OLD.run(co, line.id);
+      const oldTruth = changeOrderMoney(old.record).income;
+      if (old.afterText !== OLD.fmt(oldTruth)) wrongShipped++;
+      // WHAT THE SHIPPED BYTES DID ON THE OTHER BRANCH: removed the rollup and
+      // put nothing back. Counted here so the repair's rate is quoted beside
+      // the damage it replaces rather than on its own.
+      const oldContent = old.record.lines.filter((l) => l.section !== '__section_header__');
+      const coContent = co.lines.filter((l) => l.section !== '__section_header__');
+      if (oldContent.length < coContent.length) destroyedByShipped++;
+      if (now.refused) {
+        refusedNow++;
+        if (!now.unchanged) mutatedOnRefusal++;
+        continue;
+      }
+      if (now.afterText !== NOW.fmt(changeOrderMoney(now.record).income)) wrongNow++;
     }
     expect(raised).toBeGreaterThan(6000);
     expect(exposed).toBeGreaterThan(1000);
@@ -699,8 +759,13 @@ describe('PROPERTY — the confirm dialog quotes the totals the change order act
     // floor rather than quoted as a fact; a rate of zero — which is what a
     // broken extraction would produce — fails loudly.
     expect(wrongShipped / raised).toBeGreaterThan(0.25);
-    // Now: zero, against either denominator.
+    // And on 24.8% of the same confirms the shipped bytes deleted a line and
+    // created nothing. Pinned as a floor for the same reason.
+    expect(destroyedByShipped / raised).toBeGreaterThan(0.20);
+    expect(refusedNow / raised).toBeGreaterThan(0.20);
+    // Now: zero wrong sentences, and not one byte moved on a refusal.
     expect(wrongNow).toBe(0);
+    expect(mutatedOnRefusal).toBe(0);
   });
 });
 

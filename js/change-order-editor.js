@@ -58,7 +58,15 @@ function p86Ask(message, opts) {
 
   function fmtCurrency(n) {
     if (n == null || isNaN(n)) n = 0;
-    return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    var s = Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    // "$-0.00" IS NOT A NUMBER A PERSON READS. -0, and every value that rounds
+    // to nothing from below, formatted with a minus sign in front of a zero.
+    // It is reachable: a promised credit line at qty -1 and unitSell 0 makes
+    // exactly -0, and the explode confirm prints it. The value is right and
+    // the glyph is wrong, so only the glyph is touched — the test is on the
+    // FORMATTER'S OWN OUTPUT, so nothing that formats to a real number can be
+    // caught by it.
+    return '$' + (s === '-0.00' ? '0.00' : s);
   }
   // NULL IS NOT ZERO. p86Pricing.grossMarginPct returns null when there is
   // no revenue to divide by, and this used to swallow that into a confident
@@ -989,11 +997,68 @@ function p86Ask(message, opts) {
         };
       }).filter(function (s) { return s.qty > 0; });
     };
+    // AN EXPLODE REPLACES THE LINE WITH ITS PARTS, OR IT DOES NOTHING AND
+    // SAYS WHY. IT NEVER REMOVES THE LINE AND LEAVES NOTHING.
+    //
+    // The list is built ONCE, here, and this is the only place that asks
+    // whether it is empty. Everything downstream — the sentence, the
+    // simulation, the mutation — is that same array.
+    //
+    // THE DECISION CANNOT LIVE INSIDE doIt(). doIt() is the mutation;
+    // simulateExplode() below is the SAME mutation on a clone, and the confirm
+    // quotes its totals. A guard in doIt() alone would leave the dialog
+    // quoting a move that will not happen — measured at $9,000.00 off the
+    // record's true income on the credit fixture in
+    // test/co-fees-decision-is-state.test.js, on 1,275 of 16,000 corpus
+    // records. Refusing BEFORE the dialog is raised keeps ONE model of one
+    // state, which is what this function has already been treated for twice.
+    //
+    // What the splice used to do when this came out empty: the rollup was
+    // removed, coApplyBulkAddLineItems returned early on the empty array
+    // BEFORE its markDirty/paintLines/paintTotals, and so the record lost a
+    // line with no save armed and no repaint. The row stayed on screen. Close
+    // the change order and the deletion was dropped; touch anything else on it
+    // and the deletion was saved along with the unrelated edit.
+    //
+    // A rollup arrives here with nothing to explode three ways, and the person
+    // is told WHICH: its own quantity is 0; its own quantity is NEGATIVE (a
+    // deduct line — every component comes out negative and the qty > 0 filter
+    // drops them all); or every row in the recipe carries a per-unit quantity
+    // of 0 ("included, no charge" rows).
+    //
+    // Exploding a credit into negative component lines is a defensible thing
+    // to want and is deliberately NOT what this does. Nothing in
+    // coApplyAddLineItem or the markup cascade has ever been asked to price
+    // negative-quantity components through find-or-create sections; money
+    // semantics on a deductive change order is its own decision and its own
+    // commit. Until then the honest answer is a refusal that names the reason
+    // — which is the answer the server already gives for the same operation
+    // (server/services/estimate-lines.js: 'assembly_zero_qty' / 'assembly_empty').
+    var specs = explodeSpecs(line);
+    if (!specs.length) {
+      var q = coNum(line.qty);
+      var why = !line.assemblyBreakdown.length
+        ? 'This line has no recipe items, so there is nothing to explode it into.'
+        : q < 0
+          ? 'This is a credit line (quantity ' + q + '). Exploding it would give every component a negative quantity, which this editor does not price \u2014 so nothing was changed. Edit the rollup line directly, or delete it and enter the deduction as its own line.'
+          : q === 0
+            ? 'This line\u2019s quantity is 0, so every item in the recipe works out to no quantity. Set a quantity first, then explode.'
+            : 'Nothing to explode: every item in this recipe works out to no quantity.';
+      // p86Alert, not alert() — native dialogs are a no-op in the installed
+      // PWA, and a refusal nobody sees is the silence this commit is about.
+      if (window.p86Alert) window.p86Alert({ title: 'Nothing to explode', message: why });
+      else if (typeof alert === 'function') alert(why);
+      return;                                  // ← THE RECORD IS UNTOUCHED
+    }
     var doIt = function () {
-      var specs = explodeSpecs(line);
+      // THE SAME ARRAY THE SENTENCE COUNTED. Re-deriving it here would be a
+      // second model of one state thirty lines apart.
       var idx = _state.co.lines.indexOf(line);
       if (idx >= 0) _state.co.lines.splice(idx, 1);
       delete _coAsmOpen[lineId];
+      // Non-empty by construction, so this ALWAYS reaches markDirty() +
+      // paintLines() + paintTotals(): the save is armed and the table is
+      // repainted for every mutation this function performs.
       coApplyBulkAddLineItems(specs);
     };
     // THE SIMULATION RUNS THE REAL MUTATION, ON A CLONE.
@@ -1046,8 +1111,13 @@ function p86Ask(message, opts) {
     // being "we said $2,750" and goes back to cost x markup. On contract
     // money, a confirm dialog that lets a total move silently is not a
     // confirm dialog.
+    // THE COUNT IN THE SENTENCE IS THE COUNT THE ACTION CREATES.
+    // It used to quote line.assemblyBreakdown.length — every row in the
+    // recipe, including the ones the qty > 0 filter drops — so a recipe with
+    // an "included, no charge" row promised a line it would not create.
     var msg = 'Explode "' + (line.description || 'assembly') + '" into ' +
-      line.assemblyBreakdown.length + ' editable lines? The single rollup line is replaced.';
+      specs.length + ' editable line' + (specs.length === 1 ? '' : 's') +
+      '? The single rollup line is replaced.';
     if (window.p86Pricing.sellLocked(line)) {
       var before = (computeTotals() || {}).total || 0;
       // Price the record as it would be AFTER, without touching it.

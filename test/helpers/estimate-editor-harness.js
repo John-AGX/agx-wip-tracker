@@ -99,16 +99,23 @@ function boot(opts) {
     window.fetch = function(){ return Promise.reject(new Error('no net')); };
   `);
 
-  const load = (rel) => {
+  const loadAbs = (abs) => {
     const s = w.document.createElement('script');
-    s.textContent = fs.readFileSync(path.join(REPO, rel), 'utf8');
+    s.textContent = fs.readFileSync(abs, 'utf8');
     w.document.body.appendChild(s);
   };
+  const load = (rel) => loadAbs(path.join(REPO, rel));
   // Load order mirrors index.html: line-identity first (app.js and both
   // editors read window.p86LineIdentity), then pricing, then the editor.
   if (opts.withIdentity !== false) load('js/line-identity.js');
   load('js/pricing-pipeline.js');
-  load('js/estimate-editor.js');
+  // opts.editorFile — an ABSOLUTE path to load INSTEAD of the working tree's
+  // js/estimate-editor.js. The only caller is a test that boots a PRIOR git
+  // blob beside the current one to prove a change moved nothing it did not
+  // mean to move; every other caller gets the shipped file and cannot tell
+  // this option exists.
+  if (opts.editorFile) loadAbs(opts.editorFile);
+  else load('js/estimate-editor.js');
 
   const api = {
     dom,
