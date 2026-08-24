@@ -673,6 +673,37 @@ describe('the boundary is installed where it has to be', () => {
     expect(localSeed).toBeGreaterThan(install);
   });
 
+  test("…and js/app.js's install block, RUN as written, actually guards", () => {
+    // The ordering test above is a source assertion, and a source assertion
+    // is satisfied by text. Wrapping the install in `if (false)` leaves every
+    // string it looks for exactly where it was — which is what a mutation run
+    // found: the boot install could be switched off and nothing named went
+    // red. So the block is lifted out of js/app.js verbatim and EXECUTED.
+    const src = read('js/app.js');
+    const start = src.indexOf('// ── THE ESTIMATE-LINE STATE BOUNDARY');
+    const end = src.indexOf('let appState = {', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const block = src.slice(start, end);
+
+    const h = H.boot();                    // p86LineIdentity present, editor never opened
+    expect(h.w.appData.estimateLines.__p86Guarded).toBeUndefined();
+    h.w.eval('(function(){ var appData = window.appData;\n' + block + '\n})();');
+
+    // The assignment door heals…
+    h.w.appData.estimateLines = [{ description: 'no address', qty: 1, unitCost: 5 }];
+    expect(h.w.appData.estimateLines[0].id).toBeTruthy();
+    // …and so does the insert door, on the array the block installed onto.
+    h.w.appData.estimateLines.push({ description: 'also no address' });
+    expect(h.w.appData.estimateLines[1].id).toBeTruthy();
+    expect(h.w.appData.estimateLines[0].id).not.toBe(h.w.appData.estimateLines[1].id);
+    // The prefixFor it passes is the estimate convention, not the default.
+    h.w.appData.estimateLines.push({ section: '__section_header__', description: 'Sitework' });
+    expect(String(h.w.appData.estimateLines[2].id)[0]).toBe('s');
+    expect(String(h.w.appData.estimateLines[1].id)[0]).toBe('l');
+    h.dom.window.close();
+  });
+
   test('the hydrate heals BEFORE rebuildBaselines — looking at an estimate is not a write', () => {
     // Order matters for more than tidiness. rebuildBaselines() snapshots the
     // per-estimate signature that decides what gets PUSHED, and that
