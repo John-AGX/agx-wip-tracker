@@ -37,6 +37,11 @@ const { JSDOM } = require('jsdom');
 
 const REPO = path.join(__dirname, '..', '..');
 
+// Every window this helper opens, so a suite can shut them all at the end even
+// if a test threw before its own close().
+const OPEN = new Set();
+function closeAll() { OPEN.forEach((w) => { try { w.close(); } catch (e) {} }); OPEN.clear(); }
+
 // The DOM ids js/estimate-editor.js paints into. Nothing here is invented —
 // each one is a getElementById target in the shipped file.
 const SHELL = `<!doctype html><html><body>
@@ -55,11 +60,16 @@ const SHELL = `<!doctype html><html><body>
 
 function boot(opts) {
   opts = opts || {};
+  // pretendToBeVisual is deliberately OFF. It installs a requestAnimationFrame
+  // loop that keeps the jsdom window — and therefore the jest worker — alive
+  // after the test ends ("a worker process has failed to exit gracefully").
+  // Nothing in js/estimate-editor.js needs rAF; the one visual probe it makes,
+  // window.matchMedia, is already guarded for its absence.
   const dom = new JSDOM(SHELL, {
     runScripts: 'dangerously',
-    pretendToBeVisual: true,
     url: 'https://project86.net/',
   });
+  OPEN.add(dom.window);
   const w = dom.window;
 
   // The ambient globals the editor reads. escapeHTML is copied from the
@@ -186,4 +196,4 @@ function priceGroup(P, est, lines, alternateId) {
   };
 }
 
-module.exports = { boot, withoutIds, membership, priceGroup, REPO };
+module.exports = { boot, closeAll, withoutIds, membership, priceGroup, REPO };

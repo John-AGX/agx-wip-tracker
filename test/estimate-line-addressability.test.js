@@ -89,6 +89,11 @@ const estLines = require('../server/services/estimate-lines');
 const dispatcher = require('../server/services/payload-dispatcher').internals;
 
 const read = (rel) => fs.readFileSync(path.join(H.REPO, rel), 'utf8');
+
+// Shut every jsdom window the harness opened, including ones a throwing test
+// never got to close. A leaked window keeps the jest worker alive past the
+// run ("a worker process has failed to exit gracefully").
+afterAll(() => H.closeAll());
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
