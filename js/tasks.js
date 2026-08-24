@@ -84,6 +84,21 @@
   function isoDay(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
   function todayISO() { return isoDay(new Date()); }
   function shiftISO(days) { var d = new Date(); d.setDate(d.getDate() + days); return isoDay(d); }
+  // Short human date for grid columns: "Jul 28" (adds year when not current).
+  function shortDate(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    var sameYear = d.getFullYear() === new Date().getFullYear();
+    var o = sameYear ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' };
+    try { return d.toLocaleDateString(undefined, o); } catch (e) { return isoDay(d); }
+  }
+  // "John Thilking" -> "John T." for the compact Assignee column.
+  function shortName(nm) {
+    var p = String(nm || '').trim().split(/\s+/);
+    if (p.length < 2) return p[0] || '';
+    return p[0] + ' ' + p[p.length - 1].charAt(0).toUpperCase() + '.';
+  }
 
   // Render a due-date chip: relative wording + an overdue/soon class.
   function dueChip(due, isDone) {
@@ -204,8 +219,40 @@
       'body.light-mode .p86-task-link{background:#eef2ff;color:#4338ca;}' +
       'body.light-mode .p86-task-avatar{background:#e0e7ff;color:#3730a3;}' +
       '.p86-task-empty{padding:32px 8px;text-align:center;color:var(--muted,#9ca3af);font-size:13px;}' +
+      // ── Grid view (grouped columnar) — Buildertrend-style columns + our sections.
+      // Reuses .p86-task-check / .p86-task-avatar / .p86-task-due / .p86-task-link.
+      '.p86-taskgrid-wrap{overflow-x:auto;border:1px solid var(--border-strong,#252a35);border-radius:13px;background:var(--surface,#14181f);}' +
+      '.p86-taskgrid{min-width:780px;}' +
+      '.p86-tg-head,.p86-tg-row{display:flex;align-items:center;min-width:0;}' +
+      '.p86-tg-c{padding:0 10px;min-width:0;display:flex;align-items:center;gap:7px;}' +
+      '.p86-tg-check{width:42px;flex:0 0 auto;justify-content:center;padding:0;}' +
+      '.p86-tg-check .p86-task-check{margin-top:0;}' +
+      '.p86-tg-task{flex:1 1 auto;min-width:200px;}' +
+      '.p86-tg-due{width:120px;flex:0 0 auto;}' +
+      '.p86-tg-prio{width:112px;flex:0 0 auto;}' +
+      '.p86-tg-who{width:142px;flex:0 0 auto;}' +
+      '.p86-tg-job{width:152px;flex:0 0 auto;}' +
+      '.p86-tg-made{width:98px;flex:0 0 auto;}' +
+      '.p86-tg-head{height:40px;background:var(--surface2,#10141a);border-bottom:1px solid var(--border-strong,#252a35);font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted,#8b93a3);}' +
+      '.p86-tg-group{display:flex;align-items:center;gap:8px;padding:9px 14px 7px;background:rgba(148,163,184,.05);border-bottom:1px solid var(--border,#e5e7eb);}' +
+      '.p86-tg-glabel{font-size:11px;font-weight:700;letter-spacing:.055em;text-transform:uppercase;color:var(--muted,#94a3b8);}' +
+      '.p86-tg-glabel.is-overdue{color:#f87171;}.p86-tg-glabel.is-today{color:#fbbf24;}' +
+      '.p86-tg-gcount{display:inline-flex;align-items:center;justify-content:center;min-width:19px;height:18px;padding:0 6px;border-radius:999px;background:rgba(148,163,184,.16);color:var(--muted,#94a3b8);font-size:11px;font-weight:600;font-variant-numeric:tabular-nums;}' +
+      '.p86-tg-glabel.is-overdue + .p86-tg-gcount{background:rgba(239,68,68,.16);color:#f87171;}' +
+      '.p86-tg-glabel.is-today + .p86-tg-gcount{background:rgba(245,158,11,.16);color:#fbbf24;}' +
+      '.p86-tg-row{height:46px;border-bottom:1px solid var(--border,#e5e7eb);cursor:pointer;transition:background .1s;}' +
+      '.p86-taskgrid .p86-tg-row:last-child{border-bottom:none;}' +
+      '.p86-tg-row:hover{background:var(--hover,var(--surface2,#1a1f29));}' +
+      '.p86-tg-title{font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;}' +
+      '.p86-tg-row.is-done .p86-tg-title{color:var(--muted,#9ca3af);text-decoration:line-through;font-weight:400;}' +
+      '.p86-tg-prio-tag{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted,#8b93a3);white-space:nowrap;}' +
+      '.p86-tg-prio-dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;}' +
+      '.p86-tg-who-nm{font-size:12.5px;color:var(--muted,#8b93a3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+      '.p86-tg-made-txt{font-size:12px;color:var(--muted,#8b93a3);font-variant-numeric:tabular-nums;white-space:nowrap;}' +
+      '.p86-tg-dash{color:var(--muted,#6b7280);opacity:.55;}' +
+      '.p86-tg-cam{font-size:11px;color:var(--muted,#6b7280);white-space:nowrap;}' +
       // My Tasks page
-      '.p86-tasks-page{padding:24px 20px 40px;max-width:820px;margin:0 auto;}' +
+      '.p86-tasks-page{padding:24px 20px 40px;max-width:1120px;margin:0 auto;}' +
       '.p86-tasks-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px;flex-wrap:wrap;}' +
       '.p86-tasks-head h2{margin:0;font-size:21px;font-weight:650;letter-spacing:-.01em;}' +
       '.p86-tasks-quickbar{display:flex;gap:8px;margin-bottom:16px;}' +
@@ -1119,24 +1166,22 @@
         return;
       }
       if (opts.grouped) {
-        // Group into Overdue / Today / Upcoming / No due date / Completed.
-        // Sections render only when non-empty, so a narrow filter collapses to
-        // a single header. Flat (entity-page widgets) keeps one plain list.
+        // Grid view — Buildertrend-style columns fused with our grouped sections.
+        // Buckets render only when non-empty, so a narrow filter collapses to a
+        // single section header. Flat (entity-page widgets) keeps one plain list.
         var groups = { overdue: [], today: [], upcoming: [], nodate: [], done: [] };
         tasks.forEach(function (t) { groups[taskBucket(t)].push(t); });
-        var html = '';
+        var body = '';
         GROUP_ORDER.forEach(function (g) {
           var arr = groups[g[0]];
           if (!arr.length) return;
-          html += '<section class="p86-task-group">' +
-              '<div class="p86-task-grouphead">' +
-                '<span class="p86-task-grouplabel is-' + g[0] + '">' + esc(g[1]) + '</span>' +
-                '<span class="p86-task-groupcount">' + arr.length + '</span>' +
-              '</div>' +
-              '<div class="p86-task-list">' + arr.map(rowHTML).join('') + '</div>' +
-            '</section>';
+          body += '<div class="p86-tg-group">' +
+              '<span class="p86-tg-glabel is-' + g[0] + '">' + esc(g[1]) + '</span>' +
+              '<span class="p86-tg-gcount is-' + g[0] + '">' + arr.length + '</span>' +
+            '</div>' + arr.map(gridRowHTML).join('');
         });
-        container.innerHTML = html;
+        container.innerHTML =
+          '<div class="p86-taskgrid-wrap"><div class="p86-taskgrid">' + gridHeadHTML() + body + '</div></div>';
       } else {
         container.innerHTML = '<div class="p86-task-list">' + tasks.map(rowHTML).join('') + '</div>';
       }
@@ -1171,10 +1216,51 @@
       '</div>';
     }
 
+    // Grid row (columnar view) — same task, laid out as Buildertrend-style cells.
+    // Carries data-task-id + [data-toggle] + [data-open] so wireRows binds it.
+    function gridRowHTML(t) {
+      var done = t.status === 'done';
+      var pm = priorityMeta(t.priority);
+      var dc = dueChip(t.due_date, done);
+      var whoCell = '<span class="p86-tg-dash">—</span>';
+      if (t.assignee_user_id) {
+        var nm = t.assignee_name || userName(t.assignee_user_id);
+        whoCell = '<span class="p86-task-avatar" title="' + escAttr(nm) + '">' + esc(initialsOf(nm)) + '</span>' +
+                  '<span class="p86-tg-who-nm">' + esc(shortName(nm)) + '</span>';
+      }
+      var jobCell = '<span class="p86-tg-dash">—</span>';
+      if (t.linked_label || (t.entity_type && t.entity_id)) {
+        var jl = t.linked_label ||
+          (window.entityDisplayName ? window.entityDisplayName(t.entity_type, t.entity_id) : t.entity_type);
+        jobCell = '<span class="p86-task-link" title="' + escAttr(jl) + '">' + esc(jl) + '</span>';
+      }
+      var cam = t.photo_count ? '<span class="p86-tg-cam" title="Photos">📷 ' + t.photo_count + '</span>' : '';
+      return '<div class="p86-tg-row' + (done ? ' is-done' : '') + '" data-task-id="' + escAttr(t.id) + '">' +
+          '<div class="p86-tg-c p86-tg-check"><button class="p86-task-check' + (done ? ' done' : '') + '" data-toggle title="' + (done ? 'Mark not done' : 'Mark done') + '"></button></div>' +
+          '<div class="p86-tg-c p86-tg-task"><span class="p86-tg-title" data-open>' + esc(t.title) + '</span>' + cam + '</div>' +
+          '<div class="p86-tg-c p86-tg-due">' + (dc || '<span class="p86-tg-dash">—</span>') + '</div>' +
+          '<div class="p86-tg-c p86-tg-prio"><span class="p86-tg-prio-tag"><span class="p86-tg-prio-dot" style="background:' + pm.color + ';"></span>' + esc(pm.label) + '</span></div>' +
+          '<div class="p86-tg-c p86-tg-who">' + whoCell + '</div>' +
+          '<div class="p86-tg-c p86-tg-job">' + jobCell + '</div>' +
+          '<div class="p86-tg-c p86-tg-made">' + (t.created_at ? '<span class="p86-tg-made-txt">' + esc(shortDate(t.created_at)) + '</span>' : '<span class="p86-tg-dash">—</span>') + '</div>' +
+        '</div>';
+    }
+    function gridHeadHTML() {
+      return '<div class="p86-tg-head">' +
+          '<div class="p86-tg-c p86-tg-check"></div>' +
+          '<div class="p86-tg-c p86-tg-task">Task</div>' +
+          '<div class="p86-tg-c p86-tg-due">Due</div>' +
+          '<div class="p86-tg-c p86-tg-prio">Priority</div>' +
+          '<div class="p86-tg-c p86-tg-who">Assignee</div>' +
+          '<div class="p86-tg-c p86-tg-job">Job</div>' +
+          '<div class="p86-tg-c p86-tg-made">Created</div>' +
+        '</div>';
+    }
+
     function wireRows(root, tasks) {
       var byId = {};
       tasks.forEach(function (t) { byId[t.id] = t; });
-      root.querySelectorAll('.p86-task-item').forEach(function (row) {
+      root.querySelectorAll('.p86-task-item, .p86-tg-row').forEach(function (row) {
         var id = row.getAttribute('data-task-id');
         var toggle = row.querySelector('[data-toggle]');
         var open = row.querySelector('[data-open]');
