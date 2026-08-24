@@ -1207,20 +1207,37 @@ function p86Ask(message, opts) {
         // A target margin already overrode every per-line markup, but the
         // markup cell stayed editable-looking and took keystrokes that
         // changed nothing. The estimate editor greys it. Now so does this.
+        //
+        // A CLIENT PRICE IS A PROMISE TOO, AND IT GREYS WHAT IT OVERRIDES.
+        // This read `locked || targetOn` and knew nothing about a client
+        // price, so under one the Markup % cell stayed live and editable
+        // while the keystrokes it took no longer set the total — the exact
+        // condition the paragraph above forbids. paintSidePanelState already
+        // greys Target Margin and Round to under a client price; the row was
+        // simply left out of the rule 1.19 established.
         var implied = locked ? coImpliedMarkup(l) : null;
-        var markupDead = locked || targetOn;
+        var priceOn = !!alloc;
+        var markupDead = locked || targetOn || priceOn;
         var markupPh = locked
           ? (implied == null ? 'promised' : implied.toFixed(1) + '% implied')
-          : (targetOn ? 'target margin' : m.toFixed(1));
+          // A typed price outranks a target margin, so it is named first —
+          // the placeholder has to say which rule actually priced the row.
+          : (priceOn ? 'client price' : targetOn ? 'target margin' : m.toFixed(1));
         // The per-unit price this line WOULD carry, shown greyed in the
         // Unit Sell cell so the derived answer is always visible next to
         // the field that would override it. Taken from the shared rule and
         // divided back out — the priced amount is never re-derived here.
         // (A zero-qty line has nothing to divide by, so its placeholder is
         // the one place a percentage is applied for display.)
+        // ⚠ FROM `marked`, NOT FROM `mm.sell`. `marked` is the amount this
+        // row actually paints; mm.sell is the UNSCALED markup price. Under a
+        // client price those differ by the allocation factor, so dividing the
+        // unscaled one put a placeholder of $15,000.00 under a row priced at
+        // $15,987.46 — a cell greyed by the promise above it and lying about
+        // the number beside it, which is the pair this rule exists to forbid.
         var derivedSell = coNum(l.qty)
-          ? mm.sell / coNum(l.qty)
-          : coNum(l.unitCost) * (1 + m / 100);
+          ? marked / coNum(l.qty)
+          : coNum(l.unitCost) * (1 + m / 100) * (alloc && !locked ? alloc.scale : 1);
         var pending = !!l.costPending;
 
         html +=
@@ -1235,6 +1252,7 @@ function p86Ask(message, opts) {
             '<td><input type="text" inputmode="decimal" data-line-field="markup" value="' + escapeAttr(l.markup == null ? '' : l.markup) + '" placeholder="' + escapeAttr(markupPh) + '"' +
               (markupDead ? ' readonly tabindex="-1" style="opacity:.45;cursor:not-allowed;" title="' +
                 (locked ? 'This line has a promised Unit Sell, so its markup is implied rather than applied. Clear Unit Sell to price it by markup.'
+                        : priceOn ? 'A Client Price is set on this change order. Per-line markups still set the proportions between lines; they no longer set the total.'
                         : 'A target margin is set on this change order, so per-line markups are ignored.') + '"' : '') + ' /></td>' +
             '<td class="sell"><input type="text" inputmode="decimal" data-line-field="unitSell" value="' + escapeAttr(l.unitSell == null ? '' : l.unitSell) + '" placeholder="' + escapeAttr(fmtCurrency(derivedSell).replace('$', '')) + '" title="The price promised to the owner. Leave blank to derive it from cost x markup." /></td>' +
             '<td class="cost">' + escapeHTML(fmtCurrency(ext)) + '</td>' +
@@ -1386,18 +1404,38 @@ function p86Ask(message, opts) {
     var mk = tr.querySelector('[data-line-field="markup"]');
     if (mk && document.activeElement !== mk) {
       var targetOn = window.p86Pricing.targetMarginActive(_state.co);
-      var dead = mm.locked || targetOn;
+      // Same three-way as the full paint. This copy knowing only two of the
+      // rules is how the incremental repaint and the full repaint come to
+      // disagree about one row — the class of bug the comment above names.
+      var dead = mm.locked || targetOn || !!allocRow;
       mk.readOnly = dead;
       mk.style.opacity = dead ? '.45' : '';
       mk.style.cursor = dead ? 'not-allowed' : '';
       if (mm.locked) {
         var imp = coImpliedMarkup(line);
         mk.placeholder = (imp == null ? 'promised' : imp.toFixed(1) + '% implied');
+      } else if (allocRow) {
+        mk.placeholder = 'client price';
       } else if (targetOn) {
         mk.placeholder = 'target margin';
       } else {
         mk.placeholder = window.p86Pricing.effectiveMarkupForLine(line, lines, _state.co).toFixed(1);
       }
+    }
+    // The Unit Sell placeholder is the DERIVATION of the amount beside it,
+    // so it moves whenever that amount moves. The full paint has always set
+    // it from the priced amount; this repaint never touched it, so under a
+    // client price a keystroke left the old unscaled figure sitting under a
+    // freshly scaled row.
+    var us = tr.querySelector('[data-line-field="unitSell"]');
+    if (us && document.activeElement !== us) {
+      var q = coNum(line.qty);
+      var perUnit = q
+        ? sellNow / q
+        : coNum(line.unitCost)
+          * (1 + window.p86Pricing.effectiveMarkupForLine(line, lines, _state.co) / 100)
+          * (allocRow && !mm.locked ? allocRow.scale : 1);
+      us.placeholder = fmtCurrency(perUnit).replace('$', '');
     }
     paintSectionRows();
   }
@@ -1506,7 +1544,32 @@ function p86Ask(message, opts) {
       : 'background:rgba(79,140,255,.08);border-bottom:1px solid rgba(79,140,255,.18);color:#9ec1ff;';
     return '<div class="p86-co-notice p86-co-notice-clientprice" style="padding:7px 14px;font-size:11.5px;' + skin + '">' + html + '</div>';
   }
-  var CP_FALLBACK = ' This change order is priced from its line markups until it is.';
+  // A REFUSAL MUST DESCRIBE THE FALLBACK IT ACTUALLY TOOK.
+  //
+  // This was a constant reading " …priced from its line markups until it
+  // is." — and on a record that ALSO carries a Target Margin that sentence
+  // is simply untrue: resolveMarkedUp falls through the client price to the
+  // target-margin back-solve, not to the line markups. Measured on a
+  // refused record with a 30% target margin, the band claimed $12,200.00
+  // where the app had actually priced $12,876.92, and two bands then sat on
+  // screen contradicting each other — "priced from its line markups" above
+  // "the total is back-solved from cost" — while the number on the chip was
+  // neither of the things being described.
+  //
+  // A refusal that misdescribes the fallback is the same defect as a
+  // refusal that does not hold: both leave a number on screen that nothing
+  // on screen explains. So this names the rule that actually priced the
+  // document AND the total it produced, in currency, like every other
+  // outcome in this file.
+  function coFallbackTail(t) {
+    var co = _state.co;
+    var amount = ' — <strong>' + escapeHTML(fmtCurrency(t.total)) + '</strong>.';
+    if (window.p86Pricing.targetMarginActive(co)) {
+      return ' This change order is priced from its Target Margin of ' +
+        escapeHTML(fmtPct(coNum(co.targetMargin))) + ' until it is' + amount;
+    }
+    return ' This change order is priced from its line markups until it is' + amount;
+  }
   function coRoundPausedTail(cp) {
     if (!cp.roundToPaused) return '';
     return ' <strong>Round to ' + escapeHTML(fmtCurrency(cp.roundTo)) + ' is paused</strong> while a Client Price is in the field — a round-up is a ceiling, so it cannot land on an exact typed price.';
@@ -1547,6 +1610,7 @@ function p86Ask(message, opts) {
     }
     // ── refusals ────────────────────────────────────────────────
     var typed = co && co.targetPrice != null ? String(co.targetPrice) : '';
+    var CP_FALLBACK = coFallbackTail(t);
     var msg;
     switch (cp.reason) {
       case 'unparseable':
