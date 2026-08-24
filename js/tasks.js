@@ -234,28 +234,28 @@
       '.p86-tg-job{width:152px;flex:0 0 auto;overflow:hidden;}' +
       '.p86-tg-job .p86-task-link{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:19px;}' +
       '.p86-tg-made{width:98px;flex:0 0 auto;}' +
-      '.p86-tg-head{height:40px;background:var(--surface2,#10141a);border-bottom:1px solid var(--border-strong,#252a35);font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted,#8b93a3);}' +
-      '.p86-tg-group{display:flex;align-items:center;gap:8px;padding:9px 14px 7px;background:rgba(148,163,184,.05);border-bottom:1px solid var(--border,#e5e7eb);}' +
+      '.p86-tg-head{height:34px;background:var(--surface2,#10141a);border-bottom:1px solid var(--border-strong,#252a35);font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted,#8b93a3);}' +
+      '.p86-tg-group{display:flex;align-items:center;gap:8px;padding:7px 14px 6px;background:rgba(148,163,184,.05);border-bottom:1px solid var(--border,#e5e7eb);}' +
       '.p86-tg-glabel{font-size:11px;font-weight:700;letter-spacing:.055em;text-transform:uppercase;color:var(--muted,#94a3b8);}' +
       '.p86-tg-glabel.is-overdue{color:#f87171;}.p86-tg-glabel.is-today{color:#fbbf24;}' +
       '.p86-tg-gcount{display:inline-flex;align-items:center;justify-content:center;min-width:19px;height:18px;padding:0 6px;border-radius:999px;background:rgba(148,163,184,.16);color:var(--muted,#94a3b8);font-size:11px;font-weight:600;font-variant-numeric:tabular-nums;}' +
       '.p86-tg-glabel.is-overdue + .p86-tg-gcount{background:rgba(239,68,68,.16);color:#f87171;}' +
       '.p86-tg-glabel.is-today + .p86-tg-gcount{background:rgba(245,158,11,.16);color:#fbbf24;}' +
-      '.p86-tg-row{height:46px;border-bottom:1px solid var(--border,#e5e7eb);cursor:pointer;transition:background .1s;}' +
+      '.p86-tg-row{height:38px;border-bottom:1px solid var(--border,#e5e7eb);cursor:pointer;transition:background .1s;}' +
       '.p86-taskgrid .p86-tg-row:last-child{border-bottom:none;}' +
       '.p86-tg-row:hover{background:var(--hover,var(--surface2,#1a1f29));}' +
-      '.p86-tg-title{font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;}' +
+      '.p86-tg-title{font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;}' +
       '.p86-tg-row.is-done .p86-tg-title{color:var(--muted,#9ca3af);text-decoration:line-through;font-weight:400;}' +
-      '.p86-tg-prio-tag{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted,#8b93a3);white-space:nowrap;}' +
+      '.p86-tg-prio-tag{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted,#8b93a3);white-space:nowrap;}' +
       '.p86-tg-prio-dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;}' +
-      '.p86-tg-who-nm{font-size:12.5px;color:var(--muted,#8b93a3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
-      '.p86-tg-made-txt{font-size:12px;color:var(--muted,#8b93a3);font-variant-numeric:tabular-nums;white-space:nowrap;}' +
+      '.p86-tg-who-nm{font-size:12px;color:var(--muted,#8b93a3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+      '.p86-tg-made-txt{font-size:11.5px;color:var(--muted,#8b93a3);font-variant-numeric:tabular-nums;white-space:nowrap;}' +
       '.p86-tg-dash{color:var(--muted,#6b7280);opacity:.55;}' +
       '.p86-tg-cam{font-size:11px;color:var(--muted,#6b7280);white-space:nowrap;}' +
       // Inline add-task row (bottom of the grid)
-      '.p86-tg-addrow{display:flex;align-items:center;gap:10px;height:46px;padding:0 12px;cursor:text;}' +
-      '.p86-tg-addplus{color:var(--muted,#6b7280);font-size:15px;flex:0 0 auto;}' +
-      '.p86-tg-addinput{flex:1 1 auto;font:inherit;font-size:14px;background:transparent;border:none;outline:none;color:inherit;padding:0;}' +
+      '.p86-tg-addrow{display:flex;align-items:center;gap:9px;height:38px;padding:0 12px;cursor:text;}' +
+      '.p86-tg-addplus{color:var(--muted,#6b7280);font-size:14px;flex:0 0 auto;}' +
+      '.p86-tg-addinput{flex:1 1 auto;font:inherit;font-size:13px;background:transparent;border:none;outline:none;color:inherit;padding:0;}' +
       '.p86-tg-addinput::placeholder{color:var(--muted,#6b7280);}' +
       '.p86-tg-addrow:focus-within{background:var(--hover,var(--surface2,#1a1f29));}' +
       '.p86-tg-emptyrow{padding:22px 14px;text-align:center;color:var(--muted,#8b93a3);font-size:13px;border-bottom:1px solid var(--border,#e5e7eb);}' +
@@ -277,7 +277,9 @@
       // My Tasks page
       '.p86-tasks-page{padding:24px 20px 40px;max-width:1120px;margin:0 auto;}' +
       '.p86-tasks-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px;flex-wrap:wrap;}' +
-      '.p86-tasks-head h2{margin:0;font-size:21px;font-weight:650;letter-spacing:-.01em;}' +
+      '.p86-tasks-head h2{margin:0;font-size:19px;font-weight:650;letter-spacing:-.01em;}' +
+      '.p86-tasks-newbtn{font:inherit;font-size:13px;font-weight:600;color:#fff;background:var(--accent,#4f8cff);border:none;border-radius:8px;padding:7px 14px;cursor:pointer;transition:filter .12s;}' +
+      '.p86-tasks-newbtn:hover{filter:brightness(1.08);}' +
       '.p86-tasks-quickbar{display:flex;gap:8px;margin-bottom:16px;}' +
       '.p86-tasks-quickbar input{flex:1 1 auto;font:inherit;font-size:14px;padding:10px 14px;border:1px solid var(--border,#d4d4d8);border-radius:10px;background:var(--surface,#fff);color:inherit;transition:border-color .12s,box-shadow .12s;}' +
       '.p86-tasks-quickbar input:focus{outline:none;border-color:var(--accent,#4f8cff);box-shadow:0 0 0 3px rgba(79,140,255,.15);}' +
@@ -1569,7 +1571,9 @@
     ensureStyles();
     pane.innerHTML =
       '<div class="p86-tasks-page">' +
-        '<div class="p86-tasks-head"><h2>Tasks &amp; Reminders</h2></div>' +
+        '<div class="p86-tasks-head"><h2>Tasks &amp; Reminders</h2>' +
+          '<button class="p86-tasks-newbtn" id="p86TaskNew">＋ Task</button>' +
+        '</div>' +
         '<div class="p86-tabs" role="tablist">' +
           '<button class="p86-tab" data-tab="team">Team Tasks</button>' +
           '<button class="p86-tab" data-tab="todos">My To-Dos</button>' +
@@ -1577,6 +1581,12 @@
         '</div>' +
         '<div id="p86TabBody"></div>' +
       '</div>';
+
+    var newBtn = pane.querySelector('#p86TaskNew');
+    if (newBtn) newBtn.addEventListener('click', function () {
+      var ai = pane.querySelector('.p86-tg-addinput');
+      if (ai) { ai.focus(); ai.scrollIntoView({ block: 'nearest' }); }
+    });
 
     function selectTab(tab) {
       _activeTab = tab;
