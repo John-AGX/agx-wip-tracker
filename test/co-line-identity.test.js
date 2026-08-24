@@ -66,9 +66,14 @@ function priced(rec) {
     'Est. Cost': per.subtotal,
     Markup: markedUp - per.subtotal,
     'Tax + Fees': fees.feeFlat + fees.feePctAmount + fees.taxAmount,
-    Profit: total - per.subtotal,
+    // Gross profit and gross margin are the marked-up price of the WORK
+    // against its cost. This harness used to carry its own copy of the
+    // editor's old expression — a sixth copy of a rule that had already
+    // disagreed with itself — so it agreed with a chip that was wrong.
+    // It now asks the pricing module, which is the only definition there is.
+    Profit: markedUp - per.subtotal,
     'Change Order Total': total,
-    Margin: total > 0 ? ((total - per.subtotal) / total) * 100 : 0,
+    Margin: P.grossMarginPct(per.subtotal, markedUp),
     Lines: lines.filter((l) => l.section !== '__section_header__').length,
   };
 }
@@ -243,7 +248,12 @@ describe('THE PROPERTY: a keystroke reaches the record, and the chips follow the
               // Each chip is compared at ITS OWN printed resolution — the
               // Margin chip renders one decimal, the money chips two.
               const dp = key === 'Margin' ? 1 : 2;
-              const at = (n) => { const v = Number(Number(n).toFixed(dp)); return v === 0 ? 0 : v; };
+              // null (and the em dash the Margin chip prints for it) is a
+              // VALUE here, not a zero: "there is no revenue to divide by".
+              const at = (n) => {
+                if (n == null || Number.isNaN(n)) return null;
+                const v = Number(Number(n).toFixed(dp)); return v === 0 ? 0 : v;
+              };
               expect({ chip: key, v: at(chipNum(got[key])) })
                 .toEqual({ chip: key, v: at(want[key]) });
             }

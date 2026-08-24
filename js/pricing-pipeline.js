@@ -20,6 +20,7 @@
 //   sectionHeaderFor(line, lines)
 //   sectionMarkupForLine(line, lines, rec)
 //   effectiveMarkupForLine(line, lines, rec)
+//   grossMarginPct(subtotal, markedUp) → percent | null
 //   sellLocked(line) → boolean
 //   lineMoney(line, lines, rec) → { ext, sell, locked, markup }
 //   computeForLines(rec, lines) → { subtotal, markedUp,
@@ -307,8 +308,48 @@
     };
   }
 
+  // GROSS MARGIN — ONE definition, because there were two and they
+  // disagreed by 2.27x on a real change order.
+  //
+  // js/change-order-editor.js computed
+  //     (applyFeesAndTax(...).total - subtotal) / applyFeesAndTax(...).total
+  // and js/estimate-editor.js computed
+  //     (markedUp - subtotal) / markedUp
+  // for the same word, twelve hundred lines apart. Measured on $27,500 of
+  // cost at 10.4173% markup with 7% sales tax and the flat fee that lands
+  // the change order on exactly $34,000: the CO strip printed 19.1176%
+  // where the true figure is 9.4344%, and its Profit chip printed $6,500
+  // against a real $2,864.76 — $3,635.24 of overstatement, 2.27x.
+  //
+  // COLLECTED SALES TAX IS MONEY HELD FOR THE STATE. It is not revenue and
+  // it is not margin. Neither is a round-up, which is a rounding artifact,
+  // nor a fee — a fee may well be profit, but it is not profit ON THE WORK,
+  // and gross margin is a statement about the work. `markedUp` is the
+  // marked-up price of the work and nothing else, so it is the denominator.
+  //
+  // Character-for-character the estimate editor's expression, including its
+  // `> 0` guard and its `null` return, so adopting it moves no estimate
+  // number by a floating-point ulp. A number is handed straight through
+  // with no coercion at all; only a missing or string-typed argument is
+  // num()-coerced, so the legacy path cannot so much as re-associate.
+  //
+  // NULL IS NOT ZERO. With no revenue to divide by there is no margin, and
+  // a chip that prints "0.0%" there is a confident wrong answer on the one
+  // number people read. Callers must render null as an em dash. The guard
+  // also catches the near-zero denominator that makes a percentage explode
+  // (a $500.01 price against a $500 flat fee reads -5.0e+6%): it cannot
+  // return a positive percentage on a loss, because markedUp > 0 and
+  // markedUp < subtotal forces the numerator negative.
+  function grossMarginPct(subtotal, markedUp) {
+    var mu = typeof markedUp === 'number' ? markedUp : num(markedUp);
+    if (!(mu > 0)) return null;
+    var sub = typeof subtotal === 'number' ? subtotal : num(subtotal);
+    return ((mu - sub) / mu) * 100;
+  }
+
   var api = {
     num: num,
+    grossMarginPct: grossMarginPct,
     sectionHeaderFor: sectionHeaderFor,
     sectionMarkupForLine: sectionMarkupForLine,
     effectiveMarkupForLine: effectiveMarkupForLine,

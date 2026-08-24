@@ -60,8 +60,13 @@ function p86Ask(message, opts) {
     if (n == null || isNaN(n)) n = 0;
     return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
+  // NULL IS NOT ZERO. p86Pricing.grossMarginPct returns null when there is
+  // no revenue to divide by, and this used to swallow that into a confident
+  // "0.0%" on the one chip people read. An em dash says "there is no answer"
+  // — which is the true statement — and it is the same glyph the estimate
+  // editor and the Live Rooms margin column already print for it.
   function fmtPct(n) {
-    if (n == null || isNaN(n)) return '0.0%';
+    if (n == null || isNaN(n)) return '—';
     return Number(n).toFixed(1) + '%';
   }
 
@@ -371,7 +376,19 @@ function p86Ask(message, opts) {
     // total and the server's WIP number drift apart.
     var markedUp = window.p86Pricing.resolveMarkedUp(per, co);
     var fees = window.p86Pricing.applyFeesAndTax(markedUp, co);
-    var marginPct = fees.total > 0 ? ((fees.total - subtotal) / fees.total) * 100 : 0;
+    // GROSS MARGIN AND GROSS PROFIT, from the shared definition.
+    //
+    // Both of these used to divide/subtract against `fees.total`, which is
+    // markedUp + feeFlat + feePctAmount + taxAmount + rounded — so the
+    // numerator carried FOUR non-cost additions, and the biggest of them is
+    // sales tax collected on behalf of the state. On a $34,000 change order
+    // at 7% tax this strip printed 19.1176% margin and $6,500 of profit
+    // where the real figures are 9.4344% and $2,864.76.
+    //
+    // Markup and Profit now print the same number, and that is correct
+    // rather than redundant: gross profit IS the markup on the work. They
+    // differed before only because one of them was wrong.
+    var marginPct = window.p86Pricing.grossMarginPct(subtotal, markedUp);
     var lineCount = lines.filter(function(l) { return l.section !== '__section_header__'; }).length;
     var lockedCount = lines.filter(function(l) {
       return l.section !== '__section_header__' && window.p86Pricing.sellLocked(l);
@@ -387,7 +404,7 @@ function p86Ask(message, opts) {
       feePctAmount: fees.feePctAmount,
       taxAmount: fees.taxAmount,
       total: fees.total,
-      profit: fees.total - subtotal,
+      profit: markedUp - subtotal,
       marginPct: marginPct,
       lineCount: lineCount,
       lockedCount: lockedCount,
@@ -1086,10 +1103,10 @@ function p86Ask(message, opts) {
         // all before — which meant a whole trade priced at zero margin
         // looked exactly like one priced at forty.
         var st = secTotals[l.id] || { cost: 0, sell: 0, locked: 0, lines: 0 };
-        var stGm = st.sell ? ((st.sell - st.cost) / st.sell) * 100 : 0;
+        var stGm = window.p86Pricing.grossMarginPct(st.cost, st.sell);
         var gmChip = st.lines
           ? '<span class="p86-co-gm" style="display:inline-block;margin-left:8px;padding:1px 6px;border-radius:8px;font-size:9.5px;font-weight:700;' +
-              (stGm <= 0 ? 'background:rgba(248,113,113,.15);color:#f87171;'
+              (stGm == null || stGm <= 0 ? 'background:rgba(248,113,113,.15);color:#f87171;'
                          : stGm < 15 ? 'background:rgba(251,191,36,.15);color:#fbbf24;'
                                      : 'background:rgba(52,211,153,.13);color:#34d399;') +
               '" title="Gross margin on this section">GM ' + escapeHTML(fmtPct(stGm)) + '</span>'
@@ -1340,10 +1357,10 @@ function p86Ask(message, opts) {
       if (costCell) costCell.textContent = st.lines ? fmtCurrency(st.cost) : '';
       if (!extCell) return;
       if (!st.lines) { extCell.innerHTML = ''; return; }
-      var gm = st.sell ? ((st.sell - st.cost) / st.sell) * 100 : 0;
+      var gm = window.p86Pricing.grossMarginPct(st.cost, st.sell);
       extCell.innerHTML = escapeHTML(fmtCurrency(st.sell)) +
         '<span class="p86-co-gm" style="display:inline-block;margin-left:8px;padding:1px 6px;border-radius:8px;font-size:9.5px;font-weight:700;' +
-          (gm <= 0 ? 'background:rgba(248,113,113,.15);color:#f87171;'
+          (gm == null || gm <= 0 ? 'background:rgba(248,113,113,.15);color:#f87171;'
                    : gm < 15 ? 'background:rgba(251,191,36,.15);color:#fbbf24;'
                              : 'background:rgba(52,211,153,.13);color:#34d399;') +
           '" title="Gross margin on this section">GM ' + escapeHTML(fmtPct(gm)) + '</span>';

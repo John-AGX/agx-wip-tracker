@@ -1744,9 +1744,7 @@
     // Gross margin % — markup as a share of the proposal total, the
     // figure most estimators care about. Falls back to '—' when there's
     // no revenue yet so we don't divide by zero.
-    var marginPct = (t.markedUp > 0)
-      ? (((t.markedUp - t.subtotal) / t.markedUp) * 100)
-      : null;
+    var marginPct = _P.grossMarginPct(t.subtotal, t.markedUp);  // ONE definition — js/pricing-pipeline.js. Byte-identical to the expression that was here.
     // The Margin chip is interactive: lock icon toggles between
     // "computed from line markups" (open lock, read-only) and "target
     // locked" (closed gold lock, editable input that back-calculates

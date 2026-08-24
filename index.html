@@ -3567,7 +3567,7 @@
     <!-- Shared pricing pipeline — math used by estimate-editor +
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->
-    <script src="js/pricing-pipeline.js?v=4"></script>
+    <script src="js/pricing-pipeline.js?v=5"></script>
     <!-- ONE COMPLETION CLOCK. progress-core.js is the pure math that used to be
          welded to appData inside progress.js; co-completion.js is HOW A CHANGE
          ORDER EARNS, the body that used to live inside js/jobs.js. Both are
@@ -3603,12 +3603,12 @@
     <script src="js/rich-text.js?v=1"></script>
     <script src="js/estimates.js?v=61"></script>
     <script src="js/proposal.js?v=26"></script>
-    <script src="js/estimate-editor.js?v=100"></script>
+    <script src="js/estimate-editor.js?v=101"></script>
     <!-- Change Order editor — overlay opened from the job detail's
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which
          carries the window.p86Api.changeOrders wrapper). -->
-    <script src="js/change-order-editor.js?v=25"></script>
+    <script src="js/change-order-editor.js?v=26"></script>
     <script src="js/materials-drawer.js?v=14"></script>
     <script src="js/estimate-preview.js?v=15"></script>
     <script src="js/bt-export.js?v=6b"></script>
