@@ -310,10 +310,25 @@
   // because a rate is linear across a sum; an absolute is not. Change orders
   // carry a flat lines[] and resolve exactly once per record, which is why
   // this side is safe and that side is not. clientPriceRequested therefore
-  // refuses any record carrying `alternates`, and requires the flat
-  // `lines[]` array only a change order has — a structural test, not a
+  // refuses any record carrying `alternates` — a structural test, not a
   // convention, so it survives estimate-editor.js one day calling
   // resolveMarkedUp (which its own TODO already invites it to do).
+  //
+  // ⚠ THAT IS ONE LOCK, NOT TWO. This comment used to add "and requires the
+  // flat `lines[]` array only a change order has". EVERY STORED ESTIMATE
+  // BLOB HAS `lines[]` — server/services/money/estimate-totals.js reads
+  // `est.lines` as its primary input and filters it by alternateId — so the
+  // Array.isArray(rec.lines) test discriminates nothing at all. Measured: a
+  // blob with `lines[]` and no `alternates` returns clientPriceRequested
+  // true. The guard IS sound, and it is sound BECAUSE of `alternates !=
+  // null`. The keys stay (a non-array `lines` would break the walk below
+  // whatever it means), but the belt described here does not exist, and a
+  // reader who believes there are two locks is a reader who deletes one.
+  //
+  // The load on that single lock went UP with the gate collapse, not down:
+  // the decision now rides on computeForLines, which estimates call ONCE
+  // PER INCLUDED ALTERNATE. It is the only thing between an estimate and
+  // the $39,285.71 → $196,428.57 multiplication.
   // ═══════════════════════════════════════════════════════════════════
 
   // A typed client price is CURRENCY. num() above is percent-shaped, and
