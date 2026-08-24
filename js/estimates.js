@@ -1171,7 +1171,13 @@ function renderEstimatesList() {
       const lineId = row.dataset.lineId;
       if (!lineId) return;
       updatedIds.add(lineId);
-      const line = appData.estimateLines.find(l => l.id === lineId);
+      // Coerced, and `l &&`. `lineId` here is row.dataset.lineId — an HTML
+      // attribute, therefore always a STRING — while the stored id is whatever
+      // the producer wrote (payload-dispatcher stored `add.line_id` verbatim,
+      // and validateOps performs no per-line type check). A strict compare
+      // against a stored NUMBER misses, and on the NEXT line that miss is not
+      // inert: the row is absent from updatedIds and the filter DELETES it.
+      const line = appData.estimateLines.find(l => l && String(l.id) === String(lineId));
       if (line) {
         line.description = row.querySelector('[data-field="description"]').value;
         line.qty = parseFloat(row.querySelector('[data-field="qty"]').value) || 0;
@@ -1180,7 +1186,13 @@ function renderEstimatesList() {
         line.markup = parseFloat(row.querySelector('[data-field="markup"]').value) || estimate.defaultMarkup;
       }
     });
-    appData.estimateLines = appData.estimateLines.filter(l => l.estimateId !== estId || updatedIds.has(l.id));
+    // THE DESTRUCTIVE ONE. Any line of this estimate that is not in updatedIds
+    // is removed, so an address that fails to match here is not a dead field —
+    // it is a deleted line. Both sides are coerced to the string the DOM can
+    // carry, and a stored hole is KEPT (`!l ||`) because section membership is
+    // array position.
+    appData.estimateLines = appData.estimateLines.filter(
+      l => !l || l.estimateId !== estId || updatedIds.has(String(l.id)));
     saveData();
     closeModal('editEstimateModal');
     renderEstimatesList();
@@ -1201,8 +1213,11 @@ function renderEstimatesList() {
     }
 
     function removeEstimateLineRow(lineId) {
-    appData.estimateLines = appData.estimateLines.filter(l => l.id !== lineId);
-    const lineItems = appData.estimateLines.filter(l => l.estimateId === currentEditEstimateId);
+    // An empty reference is not a reference: without this, String(l.id) !== ''
+    // would remove every line whose id is blank rather than the one clicked.
+    if (lineId == null || String(lineId) === '') return;
+    appData.estimateLines = appData.estimateLines.filter(l => !l || String(l.id) !== String(lineId));
+    const lineItems = appData.estimateLines.filter(l => l && l.estimateId === currentEditEstimateId);
     renderEditEstimateLineItems(lineItems);
     recalcEstimateTotals();
     }

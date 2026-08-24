@@ -351,7 +351,17 @@ describe('the state cannot hold a line without an address', () => {
   test('id 0 is an address and is kept; null and blank are not and are replaced', () => {
     T.setCo(FIXTURES[8].build());
     const lines = T.getCo().lines;
-    expect(lines[0].id).toBe(0);
+    // 0 is still an ADDRESS and is still KEPT — that is what this test is
+    // about and it is unchanged. What changed is its representation: the
+    // shared heal (js/line-identity.js ensureLineIds) now normalises every
+    // stored id to a STRING, because a row paints as data-line-id="<id>" —
+    // an HTML attribute — and a stored NUMBER therefore painted an address
+    // no strict lookup could ever match. This editor was never bitten by it
+    // (every one of its lookups is already String()-to-String()); the
+    // estimate editor was, on one row, totally. The assertion moves from
+    // "the number 0 survived" to "the address 0 survived".
+    expect(String(lines[0].id)).toBe('0');
+    expect(typeof lines[0].id).toBe('string');
     expect(String(lines[1].id)).not.toBe('null');
     expect(String(lines[1].id)).not.toBe('undefined');
     expect(String(lines[2].id)).not.toBe('');

@@ -43,7 +43,23 @@
 //      new address on every repaint, which detaches the caret from its row
 //      mid-edit and collapses every open assembly strip.
 //
-//   3. PROGRESS BY CONSTRUCTION. `do { id = mint(); } while (seen[id]);`
+//   3. AN ID IS A STRING, because the DOM can only hold a string. Every row
+//      in both editors paints as data-line-id="<line.id>" — an HTML attribute
+//      — and resolves the line back by matching that attribute. The stored
+//      value, though, is whatever the producer put there:
+//      server/services/payload-dispatcher.js stores `add.line_id` verbatim and
+//      validateOps performs no per-line type check, so a model emitting
+//      `line_id: 12345` puts a NUMBER in the column. That row then paints as
+//      data-line-id="12345" and every strict compare misses it, because
+//      12345 === "12345" is false — qty, cost, markup, description, unit and
+//      delete all inert on one row, with nothing else wrong with the record.
+//      So this walk NORMALISES in place. It is a repair of the SAME address,
+//      not a new one, so it is deliberately NOT counted as a mint. It is also
+//      only half the contract: whoever wrote `line_id: 12345` will re-use that
+//      number as a reference, so every LOOKUP has to compare String-to-String
+//      too. Coercing storage alone flips which side is broken.
+//
+//   4. PROGRESS BY CONSTRUCTION. `do { id = mint(); } while (seen[id]);`
 //      relies on Math.random eventually disagreeing with itself and has no
 //      progress guarantee; the client-side version of that loop was measured
 //      exhausting the heap in 39 seconds. mintId's retry suffix strictly
@@ -65,7 +81,7 @@
       Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
   }
 
-  // Mint an id that is taken by NOTHING on the record. See invariant 3.
+  // Mint an id that is taken by NOTHING on the record. See invariant 4.
   // `taken` is a null-prototype map so an id of "constructor" or "toString"
   // cannot masquerade as already-claimed.
   function mintId(taken, prefix) {
@@ -109,7 +125,17 @@
       l = lines[i];
       if (!l || typeof l !== 'object') continue;
       id = idOf(l);
-      if (id !== '' && !used[id]) { used[id] = true; continue; }
+      if (id !== '' && !used[id]) {
+        // NORMALISE IN PLACE (invariant 3). idOf already returns String(l.id),
+        // so this writes only when the stored value was not a string, and
+        // String("l_a") === "l_a" makes it a byte-for-byte no-op on the
+        // ~all-string live population. `id` is still the only key touched, the
+        // element is still at the same index, and the count returned is still
+        // MINTS — a coercion is a repair of the same address, not a new one,
+        // and counting it would move every caller that reads that number.
+        if (l.id !== id) l.id = id;
+        used[id] = true; continue;
+      }
       // Blank, or the SECOND row to claim this address.
       id = mintId(taken, prefixFor ? prefixFor(l) : null);
       l.id = id;

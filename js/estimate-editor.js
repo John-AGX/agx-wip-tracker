@@ -237,6 +237,68 @@
     if (!_currentId || !window.appData) return [];
     return (appData.estimateLines || []).filter(function(l) { return l && l.estimateId === _currentId; });
   }
+  // ── ADDRESSING A LINE ─────────────────────────────────────────────────
+  // ONE comparison, used by every handler in this file.
+  //
+  // An id is an ADDRESS, and it is a TWO-SIDED contract: something WRITES an
+  // address and something LOOKS IT UP. Every row paints as
+  // data-line-id="<l.id>" — an HTML attribute, therefore a STRING — while the
+  // stored value is whatever the producer put there.
+  // server/services/payload-dispatcher.js stores `add.line_id` verbatim and
+  // validateOps performs no per-line type check, so a model that emits
+  // `line_id: 12345` puts a NUMBER in that column. The row then paints as
+  // data-line-id="12345" and every strict compare misses it, because
+  // 12345 === "12345" is false: qty, cost, markup, description, unit and
+  // delete all inert on that one row, no save armed, the pill reading "No
+  // changes", with nothing else wrong with the record.
+  //
+  // Coercing the STORED side alone does not remove that mismatch, it moves
+  // it: the agent that wrote `line_id: 12345` re-uses the NUMBER as its
+  // reference on the next turn, and a strict lookup against a now-string id
+  // fails in the other direction. So both sides compare String-to-String —
+  // the shape js/change-order-editor.js and
+  // server/services/job-financials.js's resolveCoLineIndex already use.
+  //
+  // AN EMPTY REFERENCE IS NOT A REFERENCE, and coercion alone makes that case
+  // WORSE rather than better: String(undefined) === String(undefined) is
+  // true, so an undefined reference would match the first id-less line and
+  // write into a line nobody named. It is refused here, before any compare.
+  //
+  // `l &&` stays. A stored hole must never throw, and a coerced predicate
+  // WITHOUT the guard is strictly worse than the bare one it replaces:
+  // `l && l.id === x` is inert on a null, `String(l.id) === String(x)` throws.
+  function eeSameId(a, b) {
+    if (a == null || b == null) return false;
+    a = String(a);
+    return a !== '' && a === String(b);
+  }
+  // Resolve the OBJECT, never an index. Callers that must splice ask the raw
+  // array for indexOf(object) afterwards: object identity is immune to type
+  // and immune to duplicates, and it is the same shape
+  // js/pricing-pipeline.js's sectionHeaderFor and the dispatcher's
+  // insertIntoSection already rely on.
+  //
+  // Default scope is the RENDERED set (this estimate, active alternate) —
+  // which is all the DOM can ever address. `anyAlternate` widens it to the
+  // whole estimate for the agent appliers, which may legitimately name a line
+  // in a group that is not on screen. Neither reaches into another ESTIMATE,
+  // and that narrowing is deliberate: appData.estimateLines is one flat
+  // portfolio-wide array and no handler used to filter by estimateId, so a
+  // duplicate address wrote silently into a record nobody had open.
+  function eeResolveLine(rawId, opts) {
+    if (rawId == null || String(rawId) === '') return null;
+    var pool = (opts && opts.anyAlternate) ? getAllLinesForEstimate() : getLines();
+    for (var i = 0; i < pool.length; i++) {
+      if (eeSameId(pool[i].id, rawId)) return pool[i];
+    }
+    return null;
+  }
+  // indexOf(null) would find a stored HOLE, so the null case is refused here
+  // rather than at each of the nine call sites.
+  function eeLineIndex(line) {
+    if (!line || typeof line !== 'object') return -1;
+    return (appData.estimateLines || []).indexOf(line);
+  }
   function getActiveAlternate() {
     var est = getEstimate();
     if (!est || !est.alternates) return null;
@@ -2442,11 +2504,7 @@
     // width-only) but keeps inline table editing, not the bottom sheet.
     return !!(window.matchMedia && window.matchMedia('(max-width: 760px) and (pointer: coarse)').matches);
   }
-  function eeFindLine(id) {
-    var lines = getLines() || [];
-    for (var i = 0; i < lines.length; i++) if (String(lines[i].id) === String(id)) return lines[i];
-    return null;
-  }
+  function eeFindLine(id) { return eeResolveLine(id); }
   function eeInheritedMarkup(line) {
     // Effective markup when this line's own markup is blank (section value).
     var clone = {}; for (var k in line) clone[k] = line[k]; clone.markup = '';
@@ -2514,7 +2572,7 @@
     var sectionName = '';
     for (var i = 0; i < lines.length; i++) {
       if (lines[i].section === '__section_header__') sectionName = lines[i].description || '';
-      if (String(lines[i].id) === String(id)) break;
+      if (eeSameId(lines[i].id, id)) break;
     }
     var math = eeLineMath(line);
     var _tmSheet = eeTargetDrives(getEstimate()); // target margin owns pricing → Markup is read-only
@@ -2911,16 +2969,16 @@
       // Target margin drives the WHOLE group via one factor, so editing any
       // line re-prices EVERY line — update them all (textContent only, so the
       // focused input node is untouched and Tab still works).
-      var byId = {};
-      (appData.estimateLines || []).forEach(function(l) { if (l) byId[l.id] = l; });
+      var byId = Object.create(null);
+      (appData.estimateLines || []).forEach(function(l) { if (l && l.id != null) byId[String(l.id)] = l; });
       container.querySelectorAll('[data-line-id]').forEach(function(row) {
         var L = byId[row.getAttribute('data-line-id')];
         if (L && L.section !== '__section_header__') updateRow(row, L);
       });
     } else {
-      var line = (appData.estimateLines || []).find(function(l) { return l && l.id === lineId; });
+      var line = eeResolveLine(lineId);
       if (line) {
-        var sel = (window.CSS && CSS.escape) ? CSS.escape(String(lineId)) : String(lineId);
+        var sel = (window.CSS && CSS.escape) ? CSS.escape(String(line.id)) : String(line.id);
         updateRow(container.querySelector('[data-line-id="' + sel + '"]'), line);
       }
     }
@@ -2947,7 +3005,7 @@
   // line + section subtotals + the totals strip) — no full table rebuild, so
   // Tab-to-next-field and the cell you're aiming at survive the commit.
   function updateLineField(lineId, field, value) {
-    var line = (appData.estimateLines || []).find(function(l) { return l && l.id === lineId; });
+    var line = eeResolveLine(lineId);
     if (!line) return;
     // Leave a cleared numeric field EMPTY (don't coerce to 0) so a
     // clear-to-retype doesn't flash a 0 the user has to reselect.
@@ -2966,7 +3024,7 @@
   }
 
   function updateSectionName(lineId, value) {
-    var line = (appData.estimateLines || []).find(function(l) { return l && l.id === lineId; });
+    var line = eeResolveLine(lineId);
     if (!line) return;
     line.description = value;
     debouncedSave();
@@ -2980,7 +3038,7 @@
   // checkbox decides whether per-line markups are honored or
   // forcibly replaced by the section value.
   function updateSectionMarkup(lineId, value) {
-    var line = (appData.estimateLines || []).find(function(l) { return l && l.id === lineId; });
+    var line = eeResolveLine(lineId);
     if (!line) return;
     var raw = (value == null) ? '' : String(value).trim();
     line.markup = raw === '' ? '' : Number(raw);
@@ -2995,7 +3053,7 @@
   // numeric `markup` value is preserved across the toggle so a 20%
   // section flipped to $ shows "$20" — the user can edit from there.
   function toggleSectionMarkupMode(lineId) {
-    var line = (appData.estimateLines || []).find(function(l) { return l && l.id === lineId; });
+    var line = eeResolveLine(lineId);
     if (!line) return;
     line.markupMode = (line.markupMode === 'dollar') ? 'percent' : 'dollar';
     debouncedSave();
@@ -3008,7 +3066,7 @@
   // regardless of any per-line override. Hidden in dollar mode where
   // line markups don't apply anyway.
   function toggleSectionOverride(lineId, checked) {
-    var line = (appData.estimateLines || []).find(function(l) { return l && l.id === lineId; });
+    var line = eeResolveLine(lineId);
     if (!line) return;
     line.overrideLineMarkups = !!checked;
     debouncedSave();
@@ -3047,7 +3105,7 @@
     // labor sections, and only when the estimate actually carries a
     // rate, so nothing changes for estimates without a market.
     if (sectionId) {
-      var _sect = (appData.estimateLines || []).find(function (l) { return l && l.id === sectionId; });
+      var _sect = eeResolveLine(sectionId);
       var _rate = Number(est.laborRate);
       if (_sect && _sect.btCategory === 'labor' && isFinite(_rate) && _rate > 0) {
         newLine.unitCost = _rate;
@@ -3056,7 +3114,7 @@
     }
     if (sectionId) {
       var arr = appData.estimateLines;
-      var startIdx = arr.findIndex(function(l) { return l && l.id === sectionId; });
+      var startIdx = eeLineIndex(eeResolveLine(sectionId));
       if (startIdx >= 0) {
         // Walk forward from the section header until we hit the next
         // header in the same alternate, or run out of lines.
@@ -3133,8 +3191,13 @@
   }
 
   function deleteLineFromEditor(lineId) {
-    var line = (appData.estimateLines || []).find(function(l) { return l && l.id === lineId; });
-    var preview = line && line.description ? line.description : 'this line';
+    // Resolve ONCE, up front, and delete by object identity. Filtering by id
+    // after an async confirm re-runs the comparison against an array that may
+    // have moved on, and `l.id !== lineId` deletes nothing at all when the
+    // stored id is a number and the button handed back the painted string.
+    var line = eeResolveLine(lineId);
+    if (!line) return;
+    var preview = line.description ? line.description : 'this line';
     window.p86Confirm({
       title: 'Delete line item?',
       message: '"' + preview + '" will be removed from the active group. This cannot be undone.',
@@ -3142,7 +3205,7 @@
       destructive: true
     }).then(function(ok) {
       if (!ok) return;
-      appData.estimateLines = (appData.estimateLines || []).filter(function(l) { return !l || l.id !== lineId; });
+      appData.estimateLines = (appData.estimateLines || []).filter(function(l) { return l !== line; });
       debouncedSave();
       renderLineItems();
       renderTotals();
@@ -3150,8 +3213,9 @@
   }
 
   function deleteSectionFromEditor(sectionId) {
-    var section = (appData.estimateLines || []).find(function(l) { return l && l.id === sectionId; });
-    var name = section && section.description ? section.description : 'this section';
+    var section = eeResolveLine(sectionId);
+    if (!section) return;
+    var name = section.description ? section.description : 'this section';
     window.p86Confirm({
       title: 'Remove section header?',
       message: 'The header "' + name + '" will be removed. The line items underneath it stay where they are.',
@@ -3159,7 +3223,7 @@
       destructive: true
     }).then(function(ok) {
       if (!ok) return;
-      appData.estimateLines = (appData.estimateLines || []).filter(function(l) { return !l || l.id !== sectionId; });
+      appData.estimateLines = (appData.estimateLines || []).filter(function(l) { return l !== section; });
       debouncedSave();
       renderLineItems();
       renderTotals();
@@ -3353,14 +3417,14 @@
 
   function onLineDrop(e, targetId) {
     e.preventDefault();
-    if (!_draggedLineId || _draggedLineId === targetId) {
+    if (!_draggedLineId || eeSameId(_draggedLineId, targetId)) {
       _draggedLineId = null;
       renderLineItems();
       return;
     }
     var lines = appData.estimateLines;
-    var fromIdx = lines.findIndex(function(l) { return l && l.id === _draggedLineId; });
-    var toIdx = lines.findIndex(function(l) { return l && l.id === targetId; });
+    var fromIdx = eeLineIndex(eeResolveLine(_draggedLineId));
+    var toIdx = eeLineIndex(eeResolveLine(targetId));
     if (fromIdx < 0 || toIdx < 0) {
       _draggedLineId = null;
       renderLineItems();
@@ -3940,7 +4004,7 @@
       // Same insertion logic as addEstimateLineFromEditor: walk forward to
       // the next section header in the same alternate.
       var arr = appData.estimateLines;
-      var startIdx = arr.findIndex(function(l) { return l && l.id === sectionId; });
+      var startIdx = eeLineIndex(eeResolveLine(sectionId));
       if (startIdx >= 0) {
         var insertAt = arr.length;
         for (var j = startIdx + 1; j < arr.length; j++) {
@@ -4043,12 +4107,13 @@
   // the lines beneath them are explicit.
   function applyDeleteLine(input) {
     var lineId = input.line_id;
-    if (!lineId) throw new Error('line_id required');
-    var line = (appData.estimateLines || []).find(function(l) { return l && l.id === lineId; });
+    // `!lineId` also refused the number 0, which is an address, not an absence.
+    if (lineId == null || String(lineId) === '') throw new Error('line_id required');
+    var line = eeResolveLine(lineId, { anyAlternate: true });
     if (!line) throw new Error('Line not found.');
     if (line.section === '__section_header__') throw new Error('Use propose_delete_section for section headers.');
     var name = line.description || lineId;
-    appData.estimateLines = appData.estimateLines.filter(function(l) { return !l || l.id !== lineId; });
+    appData.estimateLines = appData.estimateLines.filter(function(l) { return l !== line; });
     debouncedSave();
     renderLineItems();
     renderTotals();
@@ -4061,7 +4126,7 @@
   // `section_name` does a case-insensitive substring match against section
   // headers in the same alternate and re-positions the line under it.
   function applyUpdateLine(input) {
-    var line = (appData.estimateLines || []).find(function(l) { return l && l.id === input.line_id; });
+    var line = eeResolveLine(input.line_id, { anyAlternate: true });
     if (!line) throw new Error('Line not found.');
     if (line.section === '__section_header__') throw new Error('Use propose_update_section to change section headers.');
     var changed = [];
@@ -4085,9 +4150,9 @@
         });
         var match = headers.find(function(H) { return (H.description || '').toLowerCase().indexOf(needle) >= 0; });
         if (match) {
-          appData.estimateLines = appData.estimateLines.filter(function(l) { return !l || l.id !== line.id; });
+          appData.estimateLines = appData.estimateLines.filter(function(l) { return l !== line; });
           var arr = appData.estimateLines;
-          var startIdx = arr.findIndex(function(l) { return l && l.id === match.id; });
+          var startIdx = arr.indexOf(match);
           var insertAt = arr.length;
           for (var j = startIdx + 1; j < arr.length; j++) {
             var L2 = arr[j];
@@ -4110,11 +4175,11 @@
   // simply fall under whichever section header now precedes them
   // (or become unsectioned if the deleted header was the first).
   function applyDeleteSection(input) {
-    var section = (appData.estimateLines || []).find(function(l) { return l && l.id === input.section_id; });
+    var section = eeResolveLine(input.section_id, { anyAlternate: true });
     if (!section) throw new Error('Section not found.');
     if (section.section !== '__section_header__') throw new Error('That id is not a section header.');
     var name = section.description || input.section_id;
-    appData.estimateLines = appData.estimateLines.filter(function(l) { return !l || l.id !== input.section_id; });
+    appData.estimateLines = appData.estimateLines.filter(function(l) { return l !== section; });
     debouncedSave();
     renderLineItems();
     renderTotals();
@@ -4124,7 +4189,7 @@
   // Update fields on an existing section header. Same partial-update
   // semantics as applyUpdateLine — only specified keys get touched.
   function applyUpdateSection(input) {
-    var section = (appData.estimateLines || []).find(function(l) { return l && l.id === input.section_id; });
+    var section = eeResolveLine(input.section_id, { anyAlternate: true });
     if (!section) throw new Error('Section not found.');
     if (section.section !== '__section_header__') throw new Error('That id is not a section header.');
     var changed = [];
@@ -4333,7 +4398,7 @@
 
     // Resolve target section once if section_name is in changes — same
     // substring rule as applyAddLineItem so behavior is consistent.
-    var targetSectionId = null;
+    var targetSectionId = null, targetSection = null;
     if (changes.section_name) {
       var needle = String(changes.section_name).toLowerCase();
       var match = (appData.estimateLines || []).find(function(l) {
@@ -4344,11 +4409,12 @@
       });
       if (!match) throw new Error('Section "' + changes.section_name + '" not found on the active group.');
       targetSectionId = match.id;
+      targetSection = match;
     }
 
     var updated = 0;
     ids.forEach(function(lineId) {
-      var line = (appData.estimateLines || []).find(function(l) { return l && l.id === lineId; });
+      var line = eeResolveLine(lineId, { anyAlternate: true });
       if (!line || line.section === '__section_header__') return;
       if (changes.description != null)             line.description = String(changes.description);
       if (changes.qty != null)                     line.qty         = Number(changes.qty);
@@ -4361,10 +4427,10 @@
       // logic as applyAddLineItem.
       if (targetSectionId) {
         var arr = appData.estimateLines;
-        var fromIdx = arr.findIndex(function(l) { return l && l.id === lineId; });
+        var fromIdx = arr.indexOf(line);
         if (fromIdx >= 0) {
           var moved = arr.splice(fromIdx, 1)[0];
-          var headIdx = arr.findIndex(function(l) { return l && l.id === targetSectionId; });
+          var headIdx = arr.indexOf(targetSection);
           var insertAt = arr.length;
           for (var j = headIdx + 1; j < arr.length; j++) {
             if (arr[j] && arr[j].section === '__section_header__') { insertAt = j; break; }
@@ -4384,11 +4450,11 @@
   function applyBulkDeleteLines(input) {
     var ids = Array.isArray(input.line_ids) ? input.line_ids : [];
     if (!ids.length) throw new Error('line_ids is required and must not be empty.');
-    var idSet = {};
-    ids.forEach(function(id) { idSet[id] = true; });
+    var idSet = Object.create(null);
+    ids.forEach(function(id) { if (id != null && String(id) !== '') idSet[String(id)] = true; });
     var before = (appData.estimateLines || []).length;
     appData.estimateLines = (appData.estimateLines || []).filter(function(l) {
-      return !(l && idSet[l.id] && l.section !== '__section_header__');
+      return !(l && l.id != null && idSet[String(l.id)] && l.section !== '__section_header__');
     });
     var removed = before - appData.estimateLines.length;
     if (!removed) throw new Error('No matching lines found for ids: ' + ids.join(', '));

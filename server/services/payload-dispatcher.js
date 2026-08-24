@@ -2060,7 +2060,7 @@ function applyLineAdds(data, lineAdds) {
     const markup = (markupRaw === '' || markupRaw == null) ? '' : Number(markupRaw);
 
     const row = {
-      id: add.line_id || newLineId(),
+      id: lineIdFrom(add.line_id),
       estimateId: data.id,
       // Use the resolved alternateId from the subgroup_id lookup above
       // when present (the header/alternate match path); fall back to
@@ -2132,17 +2132,67 @@ function normalizeLineFieldKey(k) {
   return k;
 }
 
+// ── addressing an estimate line ──────────────────────────────────────────
+// The same shape as server/services/job-financials.js's resolveCoLineIndex,
+// which is the reference implementation in this repo: null-guarded, coerced,
+// an empty reference refused BEFORE any comparison, and an unresolvable one
+// refused with an INVENTORY rather than guessed at.
+//
+// Coerced, because an id is a two-sided contract. This function stores
+// `add.line_id` verbatim (see lineIdFrom) and the editor paints every row as
+// data-line-id="<id>", an HTML attribute — so the human's reference is always
+// a string while the creating agent's is whatever it emitted. Both must land
+// on the same line.
+//
+// Empty-refused, because `line_id: undefined` used to match the FIRST id-less
+// line through findIndex and write into a line nobody named — reporting
+// `edited: 1`. Coercion alone makes that WORSE, not better:
+// String(undefined) === String(undefined) is true, so the coerced predicate
+// still matches it. The guard has to be explicit and it has to come first.
+function estimateLineInventory(lines) {
+  const rows = (Array.isArray(lines) ? lines : [])
+    .map((l, i) => ((l && l.section !== '__section_header__')
+      ? `#${i} ${l.description || '(no description)'} [line_id=${JSON.stringify(l.id)}]`
+      : null))
+    .filter(Boolean);
+  return rows.length ? rows.join('; ') : '(no lines)';
+}
+
+function resolveEstimateLineIndex(lines, rawId, where) {
+  if (rawId == null || String(rawId) === '') {
+    throw new Error(
+      `${where}: line_id is required and must name a line — got ${JSON.stringify(rawId)}. ` +
+      `This estimate holds: ${estimateLineInventory(lines)}. ` +
+      'Nothing was saved.');
+  }
+  const want = String(rawId);
+  const idx = lines.findIndex((l) => l && l.id != null && String(l.id) === want);
+  if (idx >= 0) return idx;
+  throw new Error(
+    `line_id not found: ${want}. This estimate holds: ${estimateLineInventory(lines)}. ` +
+    'Address a line by the line_id read_estimates prints. Nothing was saved.');
+}
+
+// An id is an ADDRESS, and the editor can only carry a STRING one: every row
+// paints as data-line-id="<id>". Storing a NUMBER here produced a row that
+// painted perfectly and was completely inert — qty, cost, markup, description
+// and delete all dead, with nothing else wrong with the record.
+//
+// `add.line_id || newLineId()` was wrong twice: it stored the raw value, and
+// it threw away the number 0, which is an address rather than an absence. The
+// change-order side already has a shipped test saying exactly that
+// (test/co-line-addressability.test.js, "id 0 is an address and is kept"), so
+// the two editors disagreed about it.
+function lineIdFrom(rawId) {
+  return (rawId == null || String(rawId) === '') ? newLineId() : String(rawId);
+}
+
 function applyLineEdits(data, lineEdits) {
   const lines = ensureArray(data, 'lines');
   let edited = 0;
-  for (const edit of lineEdits) {
-    // `l &&` — the blob is JSONB and round-trips verbatim, so a stored hole
-    // sits in this array and an unguarded predicate throws an opaque TypeError
-    // out of the middle of the transaction. 86's own write to that estimate
-    // then fails with a message about `null` that names neither the line nor
-    // the record.
-    const idx = lines.findIndex((l) => l && l.id === edit.line_id);
-    if (idx < 0) throw new Error(`line_id not found: ${edit.line_id}`);
+  for (let k = 0; k < lineEdits.length; k++) {
+    const edit = lineEdits[k];
+    const idx = resolveEstimateLineIndex(lines, edit.line_id, `estimate.ops.line_edits[${k}]`);
     // The Scribe emits edits FLAT ({line_id, markup, unitCost, description, …});
     // an earlier shape nested them under `fields`. Accept BOTH: use `fields`
     // when present, else the edit's own top-level keys. line_id/op/fields/
@@ -2247,13 +2297,28 @@ function applyLineDeletes(data, lineDeletes) {
   // The Scribe emits deletes as objects [{line_id:'…'}]; accept bare id strings
   // too. Return the count ACTUALLY removed (not the request length) so the apply
   // summary can't report a phantom deletion.
-  const ids = new Set(lineDeletes.map((d) => (typeof d === 'string' ? d : (d && (d.line_id || d.id)))).filter(Boolean));
+  // ONE comparison, the same as resolveEstimateLineIndex's: coerce both sides
+  // and treat only an EMPTY reference as no reference. A Set is SameValueZero,
+  // so the old `ids.has(l.id)` could never match a stored NUMBER against the
+  // string the editor and the model both hand back — a delete that reported
+  // "0 removed" on a line that is plainly there. `d.line_id || d.id` also threw
+  // away the id 0.
+  const ids = new Set(
+    lineDeletes
+      .map((d) => {
+        if (d == null) return null;
+        if (typeof d === 'string' || typeof d === 'number') return d;
+        return d.line_id != null ? d.line_id : d.id;
+      })
+      .filter((v) => v != null && String(v) !== '')
+      .map((v) => String(v))
+  );
   const before = lines.length;
   // `!l ||` KEEPS a stored hole rather than throwing on it — and keeping it is
   // the point: removing an element reindexes the array, and section membership
   // in an estimate IS array position, so a tidy-up here would re-section the
   // record and move money between scopes while the cost total sat still.
-  data.lines = lines.filter((l) => !l || !ids.has(l.id));
+  data.lines = lines.filter((l) => !l || l.id == null || !ids.has(String(l.id)));
   return before - data.lines.length;
 }
 
