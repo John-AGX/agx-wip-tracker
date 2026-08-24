@@ -270,7 +270,7 @@ function priced(rec) {
   const lines = Array.isArray(rec.lines) ? rec.lines.filter(Boolean) : [];
   const per = P.computeForLines(rec, lines);
   const markedUp = P.resolveMarkedUp(per, rec);
-  const fees = P.applyFeesAndTax(markedUp, rec);
+  const fees = P.applyFeesAndTax(markedUp, rec, per);
   return {
     subtotal: per.subtotal,
     markedUp,

@@ -107,7 +107,7 @@ function priceGroup(est, lines) {
   const group = (lines || []).filter((l) => l && l.alternateId === BASE_ALT);
   const per = P.computeForLines(est, group);
   const markedUp = P.resolveMarkedUp(per, est);
-  const ft = P.applyFeesAndTax(P.num(markedUp), est);
+  const ft = P.applyFeesAndTax(P.num(markedUp), est, P.sumOfPriced([per]));
   return { cost: per.subtotal.toFixed(2), sell: P.num(markedUp).toFixed(2), total: ft.total.toFixed(2) };
 }
 

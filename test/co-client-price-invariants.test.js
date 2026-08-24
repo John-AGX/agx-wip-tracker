@@ -115,7 +115,7 @@ function priced(rec) {
   const lines = Array.isArray(rec.lines) ? rec.lines : [];
   const per = P.computeForLines(rec, lines);
   const markedUp = P.resolveMarkedUp(per, rec);
-  return { per, markedUp, fees: P.applyFeesAndTax(markedUp, rec) };
+  return { per, markedUp, fees: P.applyFeesAndTax(markedUp, rec, per) };
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -363,7 +363,13 @@ describe('PROPERTY — nothing already saved reprices', () => {
     const diverged = [];
     for (const rec of all) {
       const lines = rec.lines;
-      const a = P.applyFeesAndTax(P.resolveMarkedUp(P.computeForLines(rec, lines), rec), rec);
+      // NOW: the decision rides on the `per`. PRIOR: the argument did not
+      // exist in the shape it does now, and this side must keep calling the
+      // OLD signature exactly — two arguments, the pause re-derived inside.
+      // That is the point of the comparison: the old code's own answer, from
+      // the old code's own bytes, against the new code's.
+      const perNow = P.computeForLines(rec, lines);
+      const a = P.applyFeesAndTax(P.resolveMarkedUp(perNow, rec), rec, perNow);
       const b = PRIOR.applyFeesAndTax(
         PRIOR.resolveMarkedUp(PRIOR.computeForLines(rec, lines), rec), rec);
       if (a.total !== b.total || a.beforeRound !== b.beforeRound ||
@@ -428,11 +434,15 @@ describe('PROPERTY — what the server reports IS what the totals bar displays',
     const all = corpus(63, { count: 4000, promiseRate: 0.45, credits: true });
     let honoured = 0;
     for (const rec of all) {
-      const st = P.clientPriceState(rec, rec.lines);
+      const per = P.computeForLines(rec, rec.lines);
+      const st = per.clientPrice;
       if (!st || !st.ok) continue;
       honoured++;
       const rows = st.sells.reduce((a, b) => a + b, 0);
-      expect(changeOrderMoney(rec).income).toBe(P.applyFeesAndTax(rows, rec).total);
+      // `rows` IS what this per resolves to — decideClientPrice assigns
+      // st.markedUp = Σ sells, so the sum and the decision are one object's
+      // two readings of the same number. That is why `per` is admissible here.
+      expect(changeOrderMoney(rec).income).toBe(P.applyFeesAndTax(rows, rec, per).total);
     }
     expect(honoured).toBeGreaterThan(100);
   });
@@ -470,7 +480,12 @@ describe('STRUCTURE — a second gate is not currently absent, it is impossible'
   test('clientPriceState is a READ of that decision, not a second taking', () => {
     const body = PIPE.slice(PIPE.indexOf('function clientPriceState(rec, lines)'));
     const fn = code(body.slice(0, body.indexOf('\n  }')));
-    expect(fn).toMatch(/computeForLines\(rec, arr\)\.clientPrice/);
+    // It prices THE ARRAY IT WAS GIVEN. It used to read
+    // `Array.isArray(lines) ? lines : rec.lines` — the same optional-argument
+    // shape applyFeesAndTax shipped, in the same file. There is no `arr`
+    // any more because there is nothing left to choose between.
+    expect(fn).toMatch(/computeForLines\(rec, lines\)\.clientPrice/);
+    expect(fn).not.toMatch(/Array\.isArray\(lines\)\s*\?/);
     expect(fn).not.toMatch(/solveClientPrice|allocateFreePool|lineMoney/);
   });
 

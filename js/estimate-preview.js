@@ -131,11 +131,16 @@
     var includedIds = includedGroupIds(estimate);
     var targetMode = targetMarginActive(estimate);
     var markedUp = 0;
+    // Every priced set summed into this total — applyFeesAndTax's decision
+    // comes from these, not from a second walk of estimate.lines. Twin of the
+    // note in js/estimate-editor.js computeTotals.
+    var parts = [];
     includedIds.forEach(function(gid) {
       var groupLines = (window.appData.estimateLines || []).filter(function(l) {
         return l.estimateId === estimate.id && l.alternateId === gid;
       });
       var per = _P.computeForLines(estimate, groupLines);
+      parts.push(per);
       var groupMarkedUp = per.markedUp;
       // Target-margin override: back-compute this group's marked-up
       // total off its own subtotal so the per-group sum still equals
@@ -143,7 +148,7 @@
       if (targetMode) groupMarkedUp = applyTargetMargin(per.subtotal, estimate);
       markedUp += groupMarkedUp;
     });
-    var fees = _P.applyFeesAndTax(markedUp, estimate);
+    var fees = _P.applyFeesAndTax(markedUp, estimate, _P.sumOfPriced(parts));
     return fees.total;
   }
 

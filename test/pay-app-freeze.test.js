@@ -71,14 +71,14 @@ function harness(appData) {
       const lines = Array.isArray(c && c.lines) ? c.lines : [];
       if (!lines.length) return 0;
       const per = pricing.computeForLines(c, lines);
-      return pricing.applyFeesAndTax(pricing.resolveMarkedUp(per, c), c).total;
+      return pricing.applyFeesAndTax(pricing.resolveMarkedUp(per, c), c, per).total;
     },
     coCompletion(c, jobId) {
       const lines = Array.isArray(c && c.lines) ? c.lines : [];
       const per = lines.length ? pricing.computeForLines(c, lines) : null;
       const job = (appData.jobs || []).find((j) => j.id === jobId);
       return coCompletion(c, {
-        sell: per ? pricing.applyFeesAndTax(pricing.resolveMarkedUp(per, c), c).total : 0,
+        sell: per ? pricing.applyFeesAndTax(pricing.resolveMarkedUp(per, c), c, per).total : 0,
         cost: per ? (per.subtotal || 0) : 0,
         phases: (appData.phases || []).filter((p) => p && p.jobId === jobId),
         buildings: (appData.buildings || []).filter((b) => b && b.jobId === jobId),

@@ -54,6 +54,13 @@ function computeEstimateTotals(blob) {
 
   const targetActive = P.targetMarginActive(est);
   let subtotal = 0, markedUp = 0;
+  // EVERY PRICED SET THAT WENT INTO `markedUp`, kept rather than discarded.
+  // An estimate total is a SUM of per-alternate resolves, so no single `per`
+  // holds it and applyFeesAndTax cannot be handed one. It is handed the parts
+  // instead: the round-to pause is decided from the line sets that were
+  // actually priced here, and never — as it was until this commit — from a
+  // second walk of est.lines taken inside applyFeesAndTax itself.
+  const parts = [];
   const alts = Array.isArray(est.alternates) ? est.alternates : [];
   if (alts.length) {
     // Sum every INCLUDED group; excluded groups keep their bottom-up markup
@@ -61,17 +68,28 @@ function computeEstimateTotals(blob) {
     alts.forEach(function (alt) {
       if (alt.excludeFromTotal) return;
       const per = P.computeForLines(est, allLines.filter(function (l) { return l.alternateId === alt.id; }));
+      parts.push(per);
       subtotal += per.subtotal;
       markedUp += targetActive ? P.applyTargetMargin(per.subtotal, est) : per.markedUp;
     });
   } else {
     // Legacy estimate with no alternates[] — one implicit group of all lines.
     const per = P.computeForLines(est, allLines);
+    parts.push(per);
     subtotal = per.subtotal;
     markedUp = targetActive ? P.applyTargetMargin(per.subtotal, est) : per.markedUp;
   }
 
-  const fees = P.applyFeesAndTax(markedUp, est);
+  // ⚠ THE ESTIMATE LOCK IS NOT TOUCHED HERE, AND DELIBERATELY NOT.
+  // clientPriceRequested refuses any record carrying `alternates`, so on every
+  // estimate that carries the key no part is ever honoured and this pause is
+  // false — byte-identically to before. A blob with NO `alternates` key at all
+  // still returns requested=true, and this still reads that part's decision,
+  // which is what the old fallback read: `allLines` IS `est.lines` here, so
+  // the number does not move. Repairing THAT — a client price standing a
+  // round-up down on an estimate whose markedUp never had the price applied —
+  // is a change to the lock itself and belongs in its own commit.
+  const fees = P.applyFeesAndTax(markedUp, est, P.sumOfPriced(parts));
   const blendedMarkup = subtotal > 0 ? (markedUp / subtotal - 1) * 100 : 0;
   return {
     baseCost: subtotal,

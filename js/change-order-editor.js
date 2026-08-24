@@ -379,7 +379,7 @@ function p86Ask(message, opts) {
     // target margin. Hand-rolling the ternary here is how the editor's
     // total and the server's WIP number drift apart.
     var markedUp = window.p86Pricing.resolveMarkedUp(per, co);
-    var fees = window.p86Pricing.applyFeesAndTax(markedUp, co);
+    var fees = window.p86Pricing.applyFeesAndTax(markedUp, co, per);
     // GROSS MARGIN AND GROSS PROFIT, from the shared definition.
     //
     // Both of these used to divide/subtract against `fees.total`, which is
@@ -970,9 +970,14 @@ function p86Ask(message, opts) {
   function coAsmExplode(lineId) {
     var line = (_state.co.lines || []).find(function (x) { return String(x.id) === String(lineId); });
     if (!line || !Array.isArray(line.assemblyBreakdown)) return;
-    var doIt = function () {
-      var q = coNum(line.qty);
-      var specs = line.assemblyBreakdown.map(function (b) {
+    // ONE LIST OF COMPONENTS, BUILT ONCE.
+    // This map used to be written TWICE in this function — here for the
+    // mutation, and again thirty lines below as the confirm dialog's own
+    // `sim` array — and the two did not agree. The dialog's copy had no
+    // `qty > 0` filter, so it kept components doIt() drops.
+    var explodeSpecs = function (src) {
+      var q = coNum(src.qty);
+      return (src.assemblyBreakdown || []).map(function (b) {
         return {
           description: b.description,
           qty: Math.round(q * coNum(b.qty_per_unit) * 100) / 100,
@@ -980,13 +985,57 @@ function p86Ask(message, opts) {
           unit_cost: b.unit_cost != null ? coNum(b.unit_cost) : 0,
           cost_code: b.cost_code || 'materials',
           source_material_id: b.material_id || undefined,
-          source_assembly_id: line.sourceAssemblyId
+          source_assembly_id: src.sourceAssemblyId
         };
       }).filter(function (s) { return s.qty > 0; });
+    };
+    var doIt = function () {
+      var specs = explodeSpecs(line);
       var idx = _state.co.lines.indexOf(line);
       if (idx >= 0) _state.co.lines.splice(idx, 1);
       delete _coAsmOpen[lineId];
       coApplyBulkAddLineItems(specs);
+    };
+    // THE SIMULATION RUNS THE REAL MUTATION, ON A CLONE.
+    //
+    // It used to be a second hand-written model of the post-explode array:
+    // the components mapped straight to {qty, unitCost, markup:''} and
+    // CONCATENATED AT THE END. The real explode does not do that. It routes
+    // every component through coApplyAddLineItem, which finds-or-creates the
+    // section header for its cost code and inserts the line INSIDE that
+    // section — and section membership on a change order is positional, so
+    // where a line lands decides which markup it takes.
+    //
+    // Measured against the shipped bytes, on ordinary records with no credit
+    // lines and no zero-quantity components, the two models disagreed on
+    // 44.87% of explode confirms — median $84.96, 90th percentile $754.78,
+    // worst $9,702.03. With credits and zero-qty components in the mix it was
+    // 53.55% and $46,852.79 at worst. That is a bigger and more common error
+    // in this dialog than the round-to pause it was written alongside, and it
+    // is the same disease: TWO MODELS OF ONE STATE, thirty lines apart.
+    //
+    // So there is one model. The clone is a JSON round trip — the same trip
+    // this blob makes to the database — and _state.co is swapped for it only
+    // for the duration, so coApplyAddLineItem writes into the clone exactly as
+    // it would write into the record. Each spec goes through with _silent set,
+    // which is what coApplyBulkAddLineItems does; the bulk wrapper itself is
+    // NOT called, because its markDirty/paintLines/paintTotals would paint the
+    // simulated state onto the screen and mark the record dirty.
+    var simulateExplode = function () {
+      var live = _state.co;
+      var clone = JSON.parse(JSON.stringify(live));
+      var target = (clone.lines || []).find(function (x) { return String(x.id) === String(lineId); });
+      if (!target) return null;
+      _state.co = clone;
+      try {
+        var specs = explodeSpecs(target);
+        var i = clone.lines.indexOf(target);
+        if (i >= 0) clone.lines.splice(i, 1);
+        specs.forEach(function (s) {
+          coApplyAddLineItem(Object.assign({ _silent: true }, s));
+        });
+        return clone;
+      } finally { _state.co = live; }
     };
     // EXPLODING A PROMISED LINE MOVES THE CHANGE ORDER TOTAL, and the
     // human has to see the number before the click, not after it.
@@ -1004,15 +1053,17 @@ function p86Ask(message, opts) {
       // Price the record as it would be AFTER, without touching it.
       var after = 0;
       try {
-        var sim = (_state.co.lines || []).filter(function (x) { return x !== line; })
-          .concat(line.assemblyBreakdown.map(function (b) {
-            var q = coNum(line.qty) * coNum(b.qty_per_unit);
-            return { id: 'sim', qty: Math.round(q * 100) / 100,
-              unitCost: b.unit_cost != null ? coNum(b.unit_cost) : 0, markup: '' };
-          }));
-        var perSim = window.p86Pricing.computeForLines(_state.co, sim);
+        // ONE OBJECT. `simRec` carries both the post-explode lines and the
+        // fee/tax/round fields, `perSim` is the decision taken on those very
+        // lines, and applyFeesAndTax is handed both. The third argument used
+        // to be omitted, which sent the round-to pause back to a fresh walk of
+        // the UN-exploded _state.co.lines: measured at +$250.00, +$266.00 and
+        // +$654.33 on three fixtures, always exactly the round-up that should
+        // have stood down and did not.
+        var simRec = simulateExplode();
+        var perSim = window.p86Pricing.computeForLines(simRec, simRec.lines);
         after = window.p86Pricing.applyFeesAndTax(
-          window.p86Pricing.resolveMarkedUp(perSim, _state.co), _state.co).total;
+          window.p86Pricing.resolveMarkedUp(perSim, simRec), simRec, perSim).total;
       } catch (e) { after = null; }
       msg = 'This line has a promised sell price of ' + fmtCurrency(coNum(line.qty) * coNum(line.unitSell)) + '.\n\n' +
         'Exploding returns it to markup pricing and drops that promise' +

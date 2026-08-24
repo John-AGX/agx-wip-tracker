@@ -34,10 +34,32 @@
 //   clientPriceInForce(rec) → boolean
 //   clientPriceState(rec, lines) → null | { ok, reason, target, markedUp,
 //                                           scale, sells[], … }
+//                                  ⚠ `lines` is REQUIRED — see below
 //   resolveMarkedUp(per, rec) → markedUp
-//   applyFeesAndTax(markedUp, rec[, honoured]) → { feeFlat, feePctAmount, preTax,
+//   sumOfPriced([per, …]) → a decision for a total summed from several
+//                           priced sets (every estimate total is one)
+//   applyFeesAndTax(markedUp, rec, priced) → { feeFlat, feePctAmount, preTax,
 //                                       taxAmount, beforeRound,
 //                                       rounded, total }
+//                                  ⚠ `priced` is REQUIRED and is a
+//                                    computeForLines() result or a
+//                                    sumOfPriced(...) — never a boolean
+//
+// NO ARGUMENT ON THIS SURFACE THAT CARRIES A DECISION IS OPTIONAL.
+// ---------------------------------------------------------------
+// An optional argument carrying a decision is two decisions wearing one
+// name: the caller may supply it, and when it does not, the function
+// invents its own answer from whatever it can reach — which is a DIFFERENT
+// object than the one the caller was working from. Both functions marked ⚠
+// above shipped exactly that shape, and applyFeesAndTax shipped it with a
+// live consumer: js/change-order-editor.js priced a MODIFIED line array
+// against an UNMODIFIED record and quoted a destructive confirm dialog's
+// after-total wrong by up to $654.33 on measured fixtures.
+//
+//     AN INVARIANT ENFORCED AT CALL SITES LEAKS. ENFORCE IT AT THE STATE.
+//
+// So the decision now rides on the priced object and the argument is
+// required. A call site that forgets throws; it does not default.
 //
 // COST DRIVES SELL — and, when a price was promised before a cost was
 // known, sell can be stated outright.
@@ -255,9 +277,13 @@
     };
     // THE decision, taken once, here, on the object every consumer already
     // holds. resolveMarkedUp reads it; the row painter reads it; the refusal
-    // band reads it. None of them may take it again.
+    // band reads it; applyFeesAndTax reads it. None of them may take it
+    // again.
     per.clientPrice = decideClientPrice(rec, per);
-    return per;
+    // The brand that makes this object admissible as applyFeesAndTax's
+    // decision. Non-enumerable, so a rebuilt or stripped copy of `per`
+    // cannot pose as one — see the note above applyFeesAndTax.
+    return brand(per);
   }
 
   // Target-margin override. When rec.targetMargin is a sane percent
@@ -402,8 +428,8 @@
   // The closed form does not, and its wrongness is silent.
   function solveMarkedUpForTotal(rec, target) {
     var lo = -1e9, hi = 1e9;
-    var flo = applyFeesAndTax(lo, rec, true).total;
-    var fhi = applyFeesAndTax(hi, rec, true).total;
+    var flo = feesAndTax(lo, rec, true).total;
+    var fhi = feesAndTax(hi, rec, true).total;
     if (!isFinite(flo) || !isFinite(fhi)) return null;
     // THE SINGULARITY. (1+feePct/100)*(1+taxPct/100) === 0 makes every
     // markedUp produce the same total, so nothing can be solved for. An
@@ -415,7 +441,7 @@
     if (inc ? (target < flo || target > fhi) : (target > flo || target < fhi)) return null;
     for (var i = 0; i < 200; i++) {
       var mid = (lo + hi) / 2;
-      var fm = applyFeesAndTax(mid, rec, true).total;
+      var fm = feesAndTax(mid, rec, true).total;
       if (inc ? (fm < target) : (fm > target)) lo = mid; else hi = mid;
     }
     return (lo + hi) / 2;
@@ -456,10 +482,10 @@
     if (!(target > 0)) { out.reason = 'not-positive'; return out; }
     // What this record charges before a dollar of work is priced. Named so
     // the refusal can quote it rather than say "too low".
-    out.floorTotal = applyFeesAndTax(0, rec, true).total;
+    out.floorTotal = feesAndTax(0, rec, true).total;
     var mu = solveMarkedUpForTotal(rec, target);
     if (mu == null || !isFinite(mu) ||
-        Math.abs(applyFeesAndTax(mu, rec, true).total - target) > CP_EPS) {
+        Math.abs(feesAndTax(mu, rec, true).total - target) > CP_EPS) {
       out.reason = 'unreachable'; return out;
     }
     out.markedUp = mu;
@@ -653,11 +679,24 @@
   // the answer computeForLines already put on `per` rather than working it
   // out again, so there is no path by which a caller of this and a caller of
   // resolveMarkedUp can be told different things about the same record.
+  //
+  // ⚠ `lines` IS REQUIRED, and it is required for the reason applyFeesAndTax's
+  // decision is. This read used to fall back to `rec.lines` when the array was
+  // omitted — the identical two-decisions-one-name shape, in the identical
+  // file: hand it a modified array with an unmodified record and it answers
+  // about the record. It was LATENT (every caller in the repo passes an
+  // explicit array, and every one passes the same object as rec.lines), which
+  // is exactly why it is closed in the same commit rather than left as a
+  // supported idiom for the next reader to adopt.
   function clientPriceState(rec, lines) {
+    if (!Array.isArray(lines)) {
+      throw new TypeError(
+        'p86Pricing.clientPriceState: `lines` is REQUIRED and must be an array. ' +
+        'It used to default to rec.lines, which answers about a different array ' +
+        'than the caller is holding.');
+    }
     if (!clientPriceRequested(rec)) return null;
-    var arr = Array.isArray(lines) ? lines
-      : (Array.isArray(rec && rec.lines) ? rec.lines : []);
-    return computeForLines(rec, arr).clientPrice;
+    return computeForLines(rec, lines).clientPrice;
   }
 
   // THE document-level marked-up total, target margin resolved.
@@ -727,21 +766,152 @@
   // render each step. Both estimates and COs share this exactly —
   // the fee/tax/round fields live at the record root with identical
   // names (feeFlat, feePct, taxPct, roundTo).
-  // Was a client price on this record actually HONOURED? Derived from the
-  // one decider, never from a second reading of the fields.
   //
-  // The recursion this would otherwise cause — decide → solve → bisect →
-  // applyFeesAndTax → decide — is cut by the explicit third argument: every
-  // call made from INSIDE the solve passes it, because during a solve the
-  // pause is on by definition (that is what makes a typed price reachable
-  // at all). Only calls from outside ask this question.
-  function clientPriceHonoured(rec) {
-    if (!clientPriceRequested(rec)) return false;
-    var cp = computeForLines(rec, Array.isArray(rec.lines) ? rec.lines : []).clientPrice;
+  // ═══════════════════════════════════════════════════════════════════
+  // THE PAUSE IS NOT A THIRD ARGUMENT ANY MORE. IT IS THE STATE.
+  //
+  // This function used to be applyFeesAndTax(markedUp, rec, honoured) with
+  // an OPTIONAL third argument, and when it was omitted the function
+  // RE-DECIDED the pause from `rec.lines`. That is two decisions wearing one
+  // name: the caller supplies a number derived from one array, and the
+  // function answers "was the price honoured?" off a different one.
+  //
+  // Measured on the shipped code, the confirm dialog that asks a person to
+  // approve exploding a promised assembly line quoted its after-total by
+  // +$250.00, +$266.00 and +$654.33 on three fixtures, because
+  // js/change-order-editor.js handed over a MODIFIED line array (`sim`) with
+  // an UNMODIFIED record (`_state.co`) and omitted the argument. The error is
+  // exactly ceil(target/roundTo)*roundTo − target: the round-up that should
+  // have stood down and did not, because the pause was decided off the
+  // un-exploded record while the number was priced off the exploded one.
+  //
+  // That is the identical shape commit 6103b52d was written to eliminate one
+  // level up — where the Total chip and the server honoured a price the rows
+  // had refused, on 2.52% of client-priced change orders by a median of
+  // $4,857.61 — reintroduced by the SIGNATURE of the function it was fixed
+  // in. This codebase has paid for the same lesson repeatedly, and the lesson
+  // is not "pass the argument":
+  //
+  //     AN INVARIANT ENFORCED AT CALL SITES LEAKS. ENFORCE IT AT THE STATE.
+  //
+  // So the third argument is REQUIRED, and it is not a boolean. A boolean is
+  // still a call-site invariant — a caller can pass `true` while pricing
+  // lines that refuse, and nothing here could tell. What is required instead
+  // is THE PRICED OBJECT ITSELF: the same `per` that produced the number.
+  // From one object this function reads BOTH the markedUp it expects and the
+  // pause, so pricing one set of lines against another set's decision is not
+  // merely unlikely, it is unrepresentable.
+  //
+  // Two accepted forms, and nothing else:
+  //
+  //   • a `per` from computeForLines(rec, lines) — the ordinary case, every
+  //     change-order surface. Pause = per.clientPrice.ok, and `markedUp` is
+  //     VERIFIED to be resolveMarkedUp(per, rec). Hand over a `per` from
+  //     different lines than the number came from and it throws.
+  //
+  //   • sumOfPriced([per, …]) — for a document total assembled from MORE THAN
+  //     ONE priced set. Every estimate total is one: it sums a per-alternate
+  //     resolve, so no single `per` holds its number. The pause still comes
+  //     from the parts that were actually priced, never from rec.lines.
+  //
+  // Anything else — including `undefined`, `true`, and `false` — THROWS.
+  // A missed call site must fail loudly rather than default, which is the
+  // whole reason the option is gone.
+  // ═══════════════════════════════════════════════════════════════════
+
+  // The brand. A private token, stamped NON-ENUMERABLE so it does not
+  // survive a spread, an Object.assign, or a JSON round trip — which is
+  // deliberate. js/estimate-editor.js rebuilds `per` as a fresh
+  // {subtotal, markedUp} literal in two places; such a literal carries no
+  // decision and must not be able to pose as one.
+  var PRICED_BRAND = {};
+  var BRAND_KEY = '__p86Priced';
+  function brand(o) {
+    Object.defineProperty(o, BRAND_KEY, { value: PRICED_BRAND, enumerable: false });
+    return o;
+  }
+  function isPriced(x) {
+    return !!x && typeof x === 'object' && x[BRAND_KEY] === PRICED_BRAND;
+  }
+
+  // A total summed from several priced sets. `parts` are the `per` objects
+  // that were summed; the pause is honoured only when there is at least one
+  // and EVERY one of them decided honoured. Zero parts priced nothing, and
+  // nothing priced was not honoured.
+  //
+  // ⚠ NOTE WHAT THIS DOES NOT DO. It cannot verify the caller's number the
+  // way the `per` form does — the sum is assembled by the caller (included
+  // groups only, target margin applied per group), so there is no expression
+  // here that reproduces it. What it DOES enforce is that the pause is
+  // derived from the same line sets the number was, which is the leak. The
+  // residual is named in the suite rather than papered over.
+  function sumOfPriced(parts) {
+    var arr = Array.isArray(parts) ? parts : null;
+    if (!arr) {
+      throw new TypeError('p86Pricing.sumOfPriced: parts must be an array of computeForLines results');
+    }
+    var honoured = arr.length > 0;
+    for (var i = 0; i < arr.length; i++) {
+      if (!isPriced(arr[i])) {
+        throw new TypeError('p86Pricing.sumOfPriced: part ' + i + ' did not come from computeForLines');
+      }
+      var cp = arr[i].clientPrice;
+      if (!(cp && cp.ok)) honoured = false;
+    }
+    return brand({ __p86Sum: true, honoured: honoured, partCount: arr.length });
+  }
+
+  // NaN-tolerant identity. resolveMarkedUp can return NaN on a `per` that
+  // arrived stripped, and a caller handing that NaN straight back is doing
+  // exactly the right thing — it must not be read as a mismatch.
+  function sameNumber(a, b) {
+    return a === b || (typeof a === 'number' && typeof b === 'number' && a !== a && b !== b);
+  }
+
+  // The pause, read off the priced object. Never off rec.lines.
+  //
+  // The recursion an inside-out reading would otherwise cause — decide →
+  // solve → bisect → fees → decide — does not arise at all now: the solve
+  // calls the private feesAndTax below with an explicit pause, and this
+  // public wrapper is the only thing that reads a decision.
+  function pauseFor(markedUp, rec, priced) {
+    if (!isPriced(priced)) {
+      throw new TypeError(
+        'p86Pricing.applyFeesAndTax: the third argument is REQUIRED and must be a ' +
+        'computeForLines() result or p86Pricing.sumOfPriced([...]). ' +
+        'It carries the client-price decision for the very lines this number ' +
+        'was priced from; omitting it used to re-decide from rec.lines, which ' +
+        'is how a modified line array got a decision from an unmodified record.');
+    }
+    if (priced.__p86Sum) return !!priced.honoured;
+    // THE VERIFY. A `per` states both the number and the decision, so the
+    // number handed in must be the one that `per` resolves to. This is what
+    // closes the longer-fuse case the omission fix on its own leaves open:
+    // a caller that passes the argument but computes it from the wrong
+    // record. It cannot pass the wrong `per` with the right number, because
+    // the wrong `per` resolves to a different number.
+    var expected = resolveMarkedUp(priced, rec);
+    if (!sameNumber(markedUp, expected)) {
+      throw new TypeError(
+        'p86Pricing.applyFeesAndTax: markedUp ' + markedUp + ' was not priced from the ' +
+        '`per` handed in (that per resolves to ' + expected + '). The number and the ' +
+        'client-price decision must come from the SAME computeForLines result.');
+    }
+    var cp = priced.clientPrice;
     return !!(cp && cp.ok);
   }
 
-  function applyFeesAndTax(markedUp, rec, honoured) {
+  function applyFeesAndTax(markedUp, rec, priced) {
+    return feesAndTax(markedUp, rec, pauseFor(markedUp, rec, priced));
+  }
+
+  // The arithmetic, with the pause already decided. MODULE-PRIVATE and not
+  // exported ON PURPOSE: it is the only shape that takes a bare boolean, and
+  // a bare boolean is the thing this commit removed from the public surface.
+  // The five calls inside the solve pass `true` because during a solve the
+  // pause is on by definition — that is what makes a typed price reachable
+  // at all.
+  function feesAndTax(markedUp, rec, honoured) {
     var feeFlat = rec ? num(rec.feeFlat) : 0;
     var feePctAmount = markedUp * (rec ? num(rec.feePct) : 0) / 100;
     var preTax = markedUp + feeFlat + feePctAmount;
@@ -768,10 +938,14 @@
     // on screen still stood roundTo down and moved the total anyway: −$400.00
     // on a no-free-pool record at roundTo 500, −$300.00 on promised-exceeds.
     // A refusal must change NOTHING.
-    if (roundTo > 0) {
-      var pause = honoured === undefined ? clientPriceHonoured(rec) : !!honoured;
-      if (pause) roundTo = 0;
-    }
+    //
+    // ⚠ AND NOT RE-DECIDED HERE. `honoured` is a plain boolean handed down by
+    // the public wrapper, which read it off the priced object. This branch
+    // used to fall back to clientPriceHonoured(rec) — a second walk of
+    // rec.lines — whenever the argument was absent. That fallback is gone;
+    // there is nothing left here that can reach a different line array than
+    // the one the number came from.
+    if (roundTo > 0 && honoured) roundTo = 0;
     var total = beforeRound;
     var rounded = 0;
     if (roundTo > 0) {
@@ -844,6 +1018,7 @@
     clientPriceInForce: clientPriceInForce,
     clientPriceState: clientPriceState,
     resolveMarkedUp: resolveMarkedUp,
+    sumOfPriced: sumOfPriced,
     applyFeesAndTax: applyFeesAndTax
   };
 

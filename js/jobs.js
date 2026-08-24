@@ -349,7 +349,7 @@ function renderJobsMain() {
             if (!window.p86Pricing || !lines.length) return 0;
             const per = window.p86Pricing.computeForLines(c, lines);
             const markedUp = window.p86Pricing.resolveMarkedUp(per, c);
-            return window.p86Pricing.applyFeesAndTax(markedUp, c).total;
+            return window.p86Pricing.applyFeesAndTax(markedUp, c, per).total;
         }
         window.coSellAmount = coSellAmount;
 
@@ -790,7 +790,7 @@ function renderJobsMain() {
                 var lines = Array.isArray(c.lines) ? c.lines : [];
                 var per = window.p86Pricing.computeForLines(c, lines);
                 var markedUp = window.p86Pricing.resolveMarkedUp(per, c);
-                return window.p86Pricing.applyFeesAndTax(markedUp, c).total;
+                return window.p86Pricing.applyFeesAndTax(markedUp, c, per).total;
             }
             // A CO's raw line subtotal — its COST, pre-markup. Same figure
             // job-wip.js folds into revisedEstCosts, and the amount a draw
@@ -4818,7 +4818,7 @@ function renderJobsMain() {
                     if (window.p86Pricing) {
                         var per = window.p86Pricing.computeForLines(srv, lines);
                         var markedUp = window.p86Pricing.resolveMarkedUp(per, srv);
-                        income = window.p86Pricing.applyFeesAndTax(markedUp, srv).total;
+                        income = window.p86Pricing.applyFeesAndTax(markedUp, srv, per).total;
                         cost = per.subtotal;
                     }
                     coEntry = Object.assign({}, srv, { income: income, estimatedCosts: cost });

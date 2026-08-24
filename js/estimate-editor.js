@@ -1727,8 +1727,17 @@
     var includedGroups = [];
     var excludedGroups = [];
     var targetMode = targetMarginActive(est);
+    // Every priced set summed into the proposal total. applyFeesAndTax reads
+    // its round-to pause from these — the line sets that were actually priced
+    // — rather than re-deciding from est.lines, which is a DIFFERENT array
+    // than the appData.estimateLines slices this loop prices. See the note
+    // above applyFeesAndTax in js/pricing-pipeline.js.
+    var parts = [];
     (est.alternates || []).forEach(function(alt) {
       var per = markedUpForGroup(est, alt);
+      // Captured BEFORE the target-margin rebuild below, which replaces `per`
+      // with a bare {subtotal, markedUp} literal carrying no decision.
+      if (!alt.excludeFromTotal) parts.push(per);
       // While target-margin is locked, every included group's markedUp
       // gets rebuilt off subtotal so the per-group breakdown sums to
       // the override total. Excluded groups keep their natural markup.
@@ -1752,7 +1761,7 @@
       }
     });
     // Fees + tax + round → shared p86Pricing.applyFeesAndTax
-    var fees = _P.applyFeesAndTax(markedUp, est);
+    var fees = _P.applyFeesAndTax(markedUp, est, _P.sumOfPriced(parts));
     var lineCount = (appData.estimateLines || []).filter(function(l) {
       return l && l.estimateId === est.id && l.section !== '__section_header__';
     }).length;

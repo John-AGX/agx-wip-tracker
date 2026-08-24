@@ -46,7 +46,10 @@ function changeOrderMoney(rec) {
   // of failing. Records with no promised line — every change order that
   // exists today — take the identical arithmetic they always have.
   const markedUp = pricing.resolveMarkedUp(per, r);
-  const income = pricing.applyFeesAndTax(markedUp, r).total;
+  // `per` is applyFeesAndTax's third argument, not an optional extra: the
+  // round-to pause is read off the SAME object that produced `markedUp`,
+  // never re-derived from r.lines. Passing it is now the only way to call.
+  const income = pricing.applyFeesAndTax(markedUp, r, per).total;
   // costs = raw line cost, pre-markup: Σ qty × unitCost and nothing else.
   // `unitSell` does not touch this number. The ONLY way a change order's
   // cost moves is a human typing in a Unit Cost cell.

@@ -73,7 +73,7 @@ function priced(rec) {
   const lines = Array.isArray(rec.lines) ? rec.lines : [];
   const per = P.computeForLines(rec, lines);
   const markedUp = P.resolveMarkedUp(per, rec);
-  const fees = P.applyFeesAndTax(markedUp, rec);
+  const fees = P.applyFeesAndTax(markedUp, rec, per);
   return {
     subtotal: per.subtotal, markedUp, total: fees.total,
     feePctAmount: fees.feePctAmount, taxAmount: fees.taxAmount, rounded: fees.rounded,
@@ -287,7 +287,11 @@ describe('FINDING 2 — Round to $ stands down, and says so', () => {
     const distinct = (roundTo) => {
       const s = new Set();
       for (let mu = 30000; mu <= 32000; mu += 0.5) {
-        s.add(P.applyFeesAndTax(mu, { roundTo }).total);
+        // sumOfPriced([]) — "no priced set contributed to this number", which
+        // is the literal truth of a bare probe against a bare {roundTo} record.
+        // The pause is off, so the ceiling is live and the collapse is what is
+        // being measured.
+        s.add(P.applyFeesAndTax(mu, { roundTo }, P.sumOfPriced([])).total);
       }
       return s.size;
     };
@@ -400,7 +404,10 @@ describe('FINDING 5 — a price below the fee floor is refused by name', () => {
     // The solve SUCCEEDS — which is exactly why a convergence check alone
     // does not catch this.
     expect(st.markedUp).toBeCloseTo(-1261.68, 2);
-    expect(Math.abs(P.applyFeesAndTax(st.markedUp, rec).total - 4000)).toBeLessThan(0.005);
+    // The price is REFUSED (below-floor), so nothing was honoured and the
+    // pause is off — sumOfPriced([]) says exactly that. roundTo is 0 here
+    // anyway, which is why the solve still lands on the typed price.
+    expect(Math.abs(P.applyFeesAndTax(st.markedUp, rec, P.sumOfPriced([])).total - 4000)).toBeLessThan(0.005);
     expect({ ok: st.ok, reason: st.reason }).toEqual({ ok: false, reason: 'below-floor' });
     expect(st.floorTotal).toBeCloseTo(5350, 6);
   });
@@ -514,9 +521,13 @@ describe('the allocation rule', () => {
       { feeFlat: 5000, feePct: 12, taxPct: 0 },
     ].forEach((fees) => {
       const rec = Object.assign({ targetPrice: '34000', lines: [{ id: 'a', qty: 1, unitCost: 20000, markup: 20 }] }, fees);
-      const st = P.clientPriceState(rec, rec.lines);
+      const per = P.computeForLines(rec, rec.lines);
+      const st = per.clientPrice;
       expect({ fees, ok: st.ok }).toEqual({ fees, ok: true });
-      expect(P.applyFeesAndTax(st.markedUp, rec).total).toBeCloseTo(34000, 6);
+      // The price IS honoured here, so the decision comes from the `per` that
+      // honoured it — and st.markedUp is exactly what that per resolves to,
+      // which is what makes the call legal at all.
+      expect(P.applyFeesAndTax(st.markedUp, rec, per).total).toBeCloseTo(34000, 6);
       expect(money(priced(rec).total)).toBe(money(34000));
     });
   });
@@ -529,8 +540,10 @@ describe('the allocation rule', () => {
     // does not depend on the work at all.
     const rec = { targetPrice: '5350', feeFlat: 5000, feePct: -100, taxPct: 7,
       lines: [{ id: 'a', qty: 1, unitCost: 100, markup: 20 }] };
-    expect(P.applyFeesAndTax(0, rec).total).toBeCloseTo(5350, 9);
-    expect(P.applyFeesAndTax(999999, rec).total).toBeCloseTo(5350, 9);
+    // Bare probes of the arithmetic at two markedUps — nothing was priced to
+    // produce either number, and the price is refused anyway.
+    expect(P.applyFeesAndTax(0, rec, P.sumOfPriced([])).total).toBeCloseTo(5350, 9);
+    expect(P.applyFeesAndTax(999999, rec, P.sumOfPriced([])).total).toBeCloseTo(5350, 9);
     const st = P.clientPriceState(rec, rec.lines);
     expect({ ok: st.ok, reason: st.reason, markedUp: st.markedUp })
       .toEqual({ ok: false, reason: 'unreachable', markedUp: null });

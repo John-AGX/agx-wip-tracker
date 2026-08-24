@@ -65,7 +65,7 @@ function preportCoCompletion(co, jobId, appData) {
     if (!lines.length) return 0;
     const per = pricing.computeForLines(c, lines);
     const markedUp = pricing.resolveMarkedUp(per, c);
-    return pricing.applyFeesAndTax(markedUp, c).total;
+    return pricing.applyFeesAndTax(markedUp, c, per).total;
   }
   function phaseRevenue(p) {
     if (!p) return 0;
@@ -129,7 +129,7 @@ function preportCoCompletion(co, jobId, appData) {
 function portedFromAppData(co, jobId, appData) {
   const lines = Array.isArray(co && co.lines) ? co.lines : [];
   const per = lines.length ? pricing.computeForLines(co, lines) : null;
-  const sell = per ? pricing.applyFeesAndTax(pricing.resolveMarkedUp(per, co), co).total : 0;
+  const sell = per ? pricing.applyFeesAndTax(pricing.resolveMarkedUp(per, co), co, per).total : 0;
   const job = (appData.jobs || []).find((j) => j.id === jobId);
   return coCompletion(co, {
     sell,
@@ -731,9 +731,14 @@ describe('D · the blast radius — what this port may NOT touch', () => {
     // across the client/server line, THIS is what will disagree on a marked-up
     // rider CO — so it is pinned rather than left to be rediscovered.
     const rec = { lines: [{ id: 'x', qty: 1, unitCost: 27500 }], defaultMarkup: 20 };
-    const full = pricing.applyFeesAndTax(pricing.resolveMarkedUp(pricing.computeForLines(rec, rec.lines), rec), rec).total;
+    const perFull = pricing.computeForLines(rec, rec.lines);
+    const full = pricing.applyFeesAndTax(pricing.resolveMarkedUp(perFull, rec), rec, perFull).total;
     const synthetic = { id: 'c', lines: rec.lines };  // what liveComp actually passes
-    const stripped = pricing.applyFeesAndTax(pricing.resolveMarkedUp(pricing.computeForLines(synthetic, synthetic.lines), synthetic), synthetic).total;
+    // The stripped record is priced from ITS OWN per — which is the whole
+    // point: the synthetic blob loses defaultMarkup, so the per built from it
+    // decides differently, and the decision must travel with the number.
+    const perStripped = pricing.computeForLines(synthetic, synthetic.lines);
+    const stripped = pricing.applyFeesAndTax(pricing.resolveMarkedUp(perStripped, synthetic), synthetic, perStripped).total;
     expect(full).toBe(33000);
     expect(stripped).toBe(27500);
     // The synthetic record is still built this way — when someone fixes it,

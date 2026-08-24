@@ -64,6 +64,11 @@ function computeEstimateTotals(est) {
 
     var targetActive = P.targetMarginActive(est);
     var subtotal = 0, markedUp = 0;
+    // Every priced set that went into `markedUp` — see the twin note in
+    // server/services/money/estimate-totals.js. An estimate total is a SUM,
+    // so applyFeesAndTax gets the PARTS and reads its pause from the lines
+    // that were actually priced, not from a second walk of est.lines.
+    var parts = [];
     var alts = Array.isArray(est.alternates) ? est.alternates : [];
     if (alts.length) {
         // Sum every INCLUDED group; excluded groups keep their bottom-up markup
@@ -71,17 +76,19 @@ function computeEstimateTotals(est) {
         alts.forEach(function(alt) {
             if (alt.excludeFromTotal) return;
             var per = P.computeForLines(est, allLines.filter(function(l) { return l.alternateId === alt.id; }));
+            parts.push(per);
             subtotal += per.subtotal;
             markedUp += targetActive ? P.applyTargetMargin(per.subtotal, est) : per.markedUp;
         });
     } else {
         // Legacy estimate with no alternates[] — one implicit group of all lines.
         var per = P.computeForLines(est, allLines);
+        parts.push(per);
         subtotal = per.subtotal;
         markedUp = targetActive ? P.applyTargetMargin(per.subtotal, est) : per.markedUp;
     }
 
-    var fees = P.applyFeesAndTax(markedUp, est);
+    var fees = P.applyFeesAndTax(markedUp, est, P.sumOfPriced(parts));
     var blendedMarkup = subtotal > 0 ? (markedUp / subtotal - 1) * 100 : 0;
     return {
         baseCost: subtotal,
