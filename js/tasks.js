@@ -231,7 +231,8 @@
       '.p86-tg-due{width:120px;flex:0 0 auto;}' +
       '.p86-tg-prio{width:112px;flex:0 0 auto;}' +
       '.p86-tg-who{width:142px;flex:0 0 auto;}' +
-      '.p86-tg-job{width:152px;flex:0 0 auto;}' +
+      '.p86-tg-job{width:152px;flex:0 0 auto;overflow:hidden;}' +
+      '.p86-tg-job .p86-task-link{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:19px;}' +
       '.p86-tg-made{width:98px;flex:0 0 auto;}' +
       '.p86-tg-head{height:40px;background:var(--surface2,#10141a);border-bottom:1px solid var(--border-strong,#252a35);font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted,#8b93a3);}' +
       '.p86-tg-group{display:flex;align-items:center;gap:8px;padding:9px 14px 7px;background:rgba(148,163,184,.05);border-bottom:1px solid var(--border,#e5e7eb);}' +
