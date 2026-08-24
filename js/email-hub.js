@@ -433,6 +433,13 @@
       // already uses at .ci-td-check input.
       '.ehub-pick{flex:0 0 14px;width:14px;height:14px;margin-top:8px;accent-color:var(--accent,#107C41);cursor:pointer;}',
       '.ehub-clip{font-size:11px;color:var(--text-dim,#7f8498);}',
+      // inbound-email attachment chips (reading pane)
+      '.ehub-atts{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border,rgba(127,132,152,.25));}',
+      '.ehub-att{display:inline-flex;align-items:center;gap:8px;max-width:280px;padding:7px 11px;border:1px solid var(--border,rgba(127,132,152,.3));border-radius:9px;background:rgba(127,132,152,.08);color:var(--text,inherit);text-decoration:none;font-size:12.5px;transition:border-color .12s,background .12s;}',
+      '.ehub-att:hover{border-color:var(--accent,#107C41);background:rgba(16,124,65,.1);}',
+      '.ehub-att-ic{color:var(--accent,#107C41);display:inline-flex;flex:0 0 auto;}',
+      '.ehub-att-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;}',
+      '.ehub-att-size{color:var(--text-dim,#7f8498);flex:0 0 auto;font-size:11px;font-variant-numeric:tabular-nums;}',
       // compact density
       '.ehub-list.compact .ehub-row{padding:5px 10px 5px 9px;align-items:center;}',
       '.ehub-list.compact .ehub-av{width:20px;height:20px;flex-basis:20px;font-size:9px;margin-top:0;}',
@@ -1863,6 +1870,27 @@
 
   // One message. Prefers the real HTML body (sandboxed) and falls back to
   // the plain-text body with the quoted tail collapsed.
+  function fmtBytes(n) {
+    n = Number(n) || 0;
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n / 1024).toFixed(n < 10240 ? 1 : 0) + ' KB';
+    return (n / 1048576).toFixed(n < 10485760 ? 1 : 0) + ' MB';
+  }
+  // Inbound-email attachments (forwarded files). Each links to the owner-scoped
+  // stream route; requireAuth reads the `token` cookie so a plain href works.
+  function attachmentsHtml(m) {
+    var atts = (m && m.attachments) || [];
+    if (!atts.length) return '';
+    return '<div class="ehub-atts">' + atts.map(function (a) {
+      return '<a class="ehub-att" href="/api/email-inbox/attachment/' + encodeURIComponent(a.id) +
+          '" target="_blank" rel="noopener" title="' + esc(a.filename || 'file') + '">' +
+          '<span class="ehub-att-ic">' + ico('attachments', '&#128206;') + '</span>' +
+          '<span class="ehub-att-name">' + esc(a.filename || 'file') + '</span>' +
+          '<span class="ehub-att-size">' + esc(fmtBytes(a.size_bytes)) + '</span>' +
+        '</a>';
+    }).join('') + '</div>';
+  }
+
   function renderMessage(m) {
     var isMine = m.direction === 'outbound';
     var who = isMine
@@ -1905,7 +1933,7 @@
         (!isMine && m.is_forward_wrapper ? '<span class="ehub-msg-fwd">forwarded copy</span>' : '') +
         (m.has_attachments ? '<span class="ehub-msg-fwd">' + ico('attachments', '') + ' attachment</span>' : '') +
         '<span class="ehub-msg-when">' + esc(fmtWhen(m.received_at)) + '</span>' +
-      '</div>' + inner +
+      '</div>' + inner + attachmentsHtml(m) +
     '</div>';
   }
 

@@ -4520,6 +4520,29 @@ async function initSchema() {
     CREATE UNIQUE INDEX IF NOT EXISTS uq_email_thread_state
       ON email_thread_state (user_id, thread_id);
 
+    -- Inbound-email attachments: files that arrived on a forwarded/inbound
+    -- email. Metadata here; the bytes live in R2 via server/storage.js
+    -- (storage_key). A DEDICATED table (not the polymorphic attachments one)
+    -- on purpose — that table's entity_type CHECK and its entity-scoped
+    -- /raw download gate don't cover email, and ON DELETE CASCADE here ties
+    -- each file to its message so nothing is orphaned. Personal by the
+    -- email's owner (user_id), matching the rest of the dropbox model.
+    CREATE TABLE IF NOT EXISTS email_attachments (
+      id               TEXT PRIMARY KEY,
+      email_id         TEXT NOT NULL REFERENCES inbound_emails(id) ON DELETE CASCADE,
+      user_id          INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      organization_id  INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+      filename         TEXT NOT NULL,
+      mime_type        TEXT NOT NULL,
+      size_bytes       INTEGER NOT NULL,
+      storage_key      TEXT NOT NULL,
+      storage_url      TEXT,
+      content_id       TEXT,
+      extracted_text   TEXT,
+      created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_email_attachments_email ON email_attachments (email_id);
+
     -- ───────────────────────────────────────────────────────────────
     -- PREMIUM EMAIL HUB — E1, the folder spine (docs/email-hub-premium.md).
     -- Two orthogonal systems, like every modern mail client:

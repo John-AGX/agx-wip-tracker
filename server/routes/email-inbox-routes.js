@@ -393,6 +393,18 @@ async function storeInboundMessage(p) {
     filedFolderId = await require('../services/email-folders')
       .fileNewMessage(user.organization_id, user.id, ins.rows[0].id, isOutbound);
   } catch (e) { /* stored; the backfill will file it */ }
+  // Attachments: store the files the Worker forwarded (bytes → R2, metadata →
+  // email_attachments) and flag the message so the hub shows the clip and the
+  // reading pane lists them. Best-effort — the mail is already durable, so a
+  // storage hiccup just leaves has_attachments false (never loses the message).
+  let hasAttachments = false;
+  try {
+    const n = await storeEmailAttachments(ins.rows[0].id, user, p.attachments);
+    if (n > 0) {
+      hasAttachments = true;
+      await pool.query('UPDATE inbound_emails SET has_attachments = TRUE WHERE id = $1', [ins.rows[0].id]);
+    }
+  } catch (e) { /* stored; attachments are best-effort */ }
   // H3: fire-and-forget triage — extracts needs-reply + dates so the
   // assistant can proactively propose reminders/calendar. Never throws into
   // the caller. Skip MY OWN outbound replies: there's nothing to classify or
@@ -412,11 +424,9 @@ async function storeInboundMessage(p) {
           id: ins.rows[0].id,
           from_email: fromEmail, orig_from_email: origFrom, from_name: fromName,
           to_email: matchedAddress, subject: subject, body_text: bodyText,
-          // has_attachments is not populated by the ingest path yet (see the
-          // handoff's §4 #4) — reported honestly as false rather than
-          // guessed, so a has_attachment rule simply doesn't fire instead of
-          // firing on the wrong mail.
-          has_attachments: false, direction: 'inbound',
+          // Now populated by the ingest path (attachments were stored above),
+          // so an E4 `has:attachment` rule fires on the real signal.
+          has_attachments: hasAttachments, direction: 'inbound',
           entity_type: ent ? ent.type : null,
           folder_id: filedFolderId,
         }
@@ -424,6 +434,42 @@ async function storeInboundMessage(p) {
     } catch (e) { /* stored + triaged; rules are best-effort by design */ }
   }
   return { ok: true, thread_id: threadId, entity: ent || null, direction: isOutbound ? 'outbound' : 'inbound' };
+}
+
+// Store the files that arrived on an inbound email. Bytes → R2 via the shared
+// storage layer; metadata → email_attachments (owner = the dropbox user).
+// Best-effort per file: one failure never blocks the others or the message.
+// Attachments the Worker marked `skipped` (too large to carry) have no
+// contentBase64 and are simply not stored. Returns how many were stored.
+async function storeEmailAttachments(emailId, user, atts) {
+  if (!Array.isArray(atts) || !atts.length) return 0;
+  const { storage } = require('../storage');
+  let stored = 0;
+  for (let i = 0; i < atts.length; i++) {
+    const a = atts[i] || {};
+    if (!a.contentBase64) continue;
+    let buf;
+    try { buf = Buffer.from(String(a.contentBase64), 'base64'); } catch (e) { continue; }
+    if (!buf || !buf.length) continue;
+    const mime = String(a.mimeType || 'application/octet-stream').slice(0, 255);
+    const fname = String(a.filename || ('attachment-' + (i + 1))).slice(0, 255);
+    const extM = fname.match(/\.([A-Za-z0-9]{1,8})$/);
+    const attId = newId('eatt');
+    const key = 'inbound-email/' + emailId + '/' + attId + (extM ? '.' + extM[1].toLowerCase() : '');
+    let url = null;
+    try { url = await storage.put(key, buf, mime); }
+    catch (e) { console.warn('[email-inbox] attachment store failed:', e && e.message); continue; }
+    try {
+      await pool.query(
+        `INSERT INTO email_attachments
+           (id, email_id, user_id, organization_id, filename, mime_type, size_bytes, storage_key, storage_url, content_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        [attId, emailId, user.id, user.organization_id, fname, mime, buf.length, key, url, a.contentId || null]
+      );
+      stored++;
+    } catch (e) { console.warn('[email-inbox] attachment row failed:', e && e.message); }
+  }
+  return stored;
 }
 
 // ── POST /api/email-inbox/inbound-cf — Cloudflare Email Worker (PRIMARY)
@@ -451,6 +497,7 @@ async function inboundCfHandler(req, res) {
       inReplyToRaw: b.inReplyTo,
       referencesRaw: b.references,
       dedupeKey: b.dedupeKey,
+      attachments: b.attachments,
     });
     res.json(result);
   } catch (e) {
@@ -697,6 +744,18 @@ router.get('/threads/:threadId', requireAuth, async (req, res) => {
       [req.user.id, req.params.threadId]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Thread not found' });
+    // Hydrate each message with its inbound attachments (forwarded files).
+    const withAtt = r.rows.filter(function (m) { return m.has_attachments; }).map(function (m) { return m.id; });
+    if (withAtt.length) {
+      const ar = await pool.query(
+        `SELECT id, email_id, filename, mime_type, size_bytes
+           FROM email_attachments WHERE email_id = ANY($1) ORDER BY created_at ASC`,
+        [withAtt]
+      );
+      const byEmail = {};
+      ar.rows.forEach(function (a) { (byEmail[a.email_id] = byEmail[a.email_id] || []).push(a); });
+      r.rows.forEach(function (m) { m.attachments = byEmail[m.id] || []; });
+    }
     // Per-thread working state: the drafted reply + handled stamp.
     const s = await pool.query(
       `SELECT draft_text, draft_source, draft_updated_at, notes, replied_at
@@ -706,6 +765,41 @@ router.get('/threads/:threadId', requireAuth, async (req, res) => {
     res.json({ messages: r.rows, state: s.rows[0] || null });
   } catch (e) {
     console.error('GET /api/email-inbox/threads/:threadId error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── GET /api/email-inbox/attachment/:id — stream an inbound-email file.
+// Owner-scoped: the attachment's email must belong to the caller (the dropbox
+// is personal). requireAuth accepts the `token` cookie, so a plain <a href>
+// download in the reading pane authenticates without a fetch+blob dance.
+router.get('/attachment/:id', requireAuth, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT ea.storage_key, ea.mime_type, ea.filename
+         FROM email_attachments ea
+         JOIN inbound_emails e ON e.id = ea.email_id
+        WHERE ea.id = $1 AND e.user_id = $2 LIMIT 1`,
+      [req.params.id, req.user.id]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
+    const a = r.rows[0];
+    const { storage } = require('../storage');
+    const buf = await storage.getBuffer(a.storage_key);
+    const mime = String(a.mime_type || 'application/octet-stream');
+    // Never MIME-sniff; force a download for anything not safe to render
+    // inline, so an inbound HTML/SVG attachment can't execute in our origin.
+    const INLINE_SAFE = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf', 'text/plain']);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    if (!INLINE_SAFE.has(mime.toLowerCase())) {
+      const safe = String(a.filename || 'download').replace(/[^\w.\- ]+/g, '_').slice(0, 120);
+      res.setHeader('Content-Disposition', 'attachment; filename="' + safe + '"');
+    }
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.send(buf);
+  } catch (e) {
+    console.error('GET /api/email-inbox/attachment/:id error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });

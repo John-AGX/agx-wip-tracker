@@ -50,6 +50,47 @@ export default {
     const addrStr = (a) => { const m = mailbox(a); return m ? (m.name ? `${m.name} <${m.address}>` : m.address) : ''; };
     const addrList = (arr) => (arr || []).map(addrStr).filter(Boolean);
 
+    // Attachments — postal-mime hands us each file's bytes. Base64 them into
+    // the forwarded JSON so the app can store them; before this, attachments
+    // were parsed here and then dropped (never left the Worker). Guard the
+    // total so one huge mail can't blow the app's inbound body cap: skip any
+    // file over PER_FILE, and stop packing once TOTAL_CAP is reached. Skipped
+    // files still forward as metadata so the app can record that they existed.
+    const PER_FILE = 18 * 1024 * 1024;   // 18 MB per file
+    const TOTAL_CAP = 22 * 1024 * 1024;  // 22 MB per message (base64 adds ~33%)
+    const toBase64 = (u8) => {
+      let out = '';
+      const CHUNK = 0x8000;
+      for (let i = 0; i < u8.length; i += CHUNK) {
+        out += String.fromCharCode.apply(null, u8.subarray(i, i + CHUNK));
+      }
+      return btoa(out);
+    };
+    const attachments = [];
+    let packed = 0;
+    for (const a of (parsed.attachments || [])) {
+      const raw = a && a.content;
+      let bytes;
+      if (raw instanceof ArrayBuffer) bytes = new Uint8Array(raw);
+      else if (raw && raw.buffer instanceof ArrayBuffer) bytes = new Uint8Array(raw.buffer);
+      else if (typeof raw === 'string') bytes = enc.encode(raw);
+      else continue;
+      const meta = {
+        filename: a.filename || 'attachment',
+        mimeType: a.mimeType || 'application/octet-stream',
+        size: bytes.length,
+        contentId: a.contentId || null,
+        inline: a.disposition === 'inline' || !!a.contentId,
+      };
+      if (bytes.length > PER_FILE || packed + bytes.length > TOTAL_CAP) {
+        meta.skipped = true;
+      } else {
+        meta.contentBase64 = toBase64(bytes);
+        packed += bytes.length;
+      }
+      attachments.push(meta);
+    }
+
     const payload = {
       // Envelope RCPT — the address Email Routing actually routed on; this
       // is the dropbox address even when the mail was REDIRECTED (headers
@@ -65,6 +106,7 @@ export default {
       inReplyTo: parsed.inReplyTo || '',
       references: parsed.references || '',
       dedupeKey,
+      attachments,
     };
 
     let resp;

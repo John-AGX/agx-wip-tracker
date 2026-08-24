@@ -177,7 +177,9 @@ app.use('/api/workspace', require('./routes/workspace-xlsx-routes'));
 // rate-limits this path — do NOT add the limiter again here or each
 // email is double-counted against the per-IP budget.
 app.post('/api/email-inbox/inbound-cf',
-  express.json({ limit: '2mb' }),
+  // 25mb: the Worker now base64-forwards attachments (it caps the packed
+  // total at ~22MB), so the inbound body is no longer metadata + text only.
+  express.json({ limit: '25mb' }),
   emailInboxRoutes.inboundCfHandler);
 // Email Dropbox reads + my-address.
 app.use('/api/email-inbox', emailInboxRoutes);
