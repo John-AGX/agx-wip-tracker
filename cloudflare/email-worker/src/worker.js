@@ -69,6 +69,11 @@ export default {
     const attachments = [];
     let packed = 0;
     for (const a of (parsed.attachments || [])) {
+      // Skip inline/embedded images — signature logos and cid: images that the
+      // HTML body references, not files a person forwarded. The hub doesn't
+      // render cid: images anyway, so carrying them would just clutter every
+      // message with a phantom attachment. Only real attachments are forwarded.
+      if (a && a.disposition === 'inline') continue;
       const raw = a && a.content;
       let bytes;
       if (raw instanceof ArrayBuffer) bytes = new Uint8Array(raw);
@@ -80,7 +85,6 @@ export default {
         mimeType: a.mimeType || 'application/octet-stream',
         size: bytes.length,
         contentId: a.contentId || null,
-        inline: a.disposition === 'inline' || !!a.contentId,
       };
       if (bytes.length > PER_FILE || packed + bytes.length > TOTAL_CAP) {
         meta.skipped = true;
