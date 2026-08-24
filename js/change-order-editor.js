@@ -300,6 +300,10 @@ function p86Ask(message, opts) {
       title: co.title || '',
       scope: co.scope || '',
       terms: co.terms || '',
+      // NOT `co.targetPrice || ''` — that idiom is lossy here. A typed "0"
+      // is a real (refused) entry a person can see and correct; folding it
+      // to '' would blank the field on the next open with no explanation.
+      targetPrice: co.targetPrice == null ? '' : co.targetPrice,
       targetMargin: co.targetMargin || '',
       defaultMarkup: co.defaultMarkup || '',
       feeFlat: co.feeFlat || 0,
@@ -408,7 +412,11 @@ function p86Ask(message, opts) {
       marginPct: marginPct,
       lineCount: lineCount,
       lockedCount: lockedCount,
-      pendingCount: pendingCount
+      pendingCount: pendingCount,
+      // null when no client price was asked for. Carries `ok` and, when it
+      // is false, the reason the screen has to explain.
+      clientPrice: window.p86Pricing.clientPriceState
+        ? window.p86Pricing.clientPriceState(co, lines) : null
     };
   }
 
@@ -695,6 +703,21 @@ function p86Ask(message, opts) {
               '<span>Terms &amp; Conditions</span>' +
               '<div id="p86CoTermsHost" class="p86-co-rt"></div>' +
             '</div>' +
+            // CLIENT PRICE — type what the client pays; markup and margin
+            // back-compute from it. It sits directly above Target Margin
+            // because the two write the same number and the typed price
+            // wins; putting them apart would hide that.
+            //
+            // type="text", NOT type="number": a person types money as
+            // "$34,000.00", and a number input silently discards the whole
+            // value the moment a $ or a comma appears. The raw string is
+            // stored and p86Pricing.parseMoney reads it — the same parser
+            // the server-side pipeline uses, so an agent writing a raw
+            // string into the blob gets the same answer this field does.
+            '<label class="p86-co-field">' +
+              '<span>Client Price $</span>' +
+              '<input type="text" inputmode="decimal" autocomplete="off" data-field="targetPrice" placeholder="(optional — what the client pays; markup and margin back-compute)" value="' + escapeAttr(co.targetPrice == null ? '' : co.targetPrice) + '" />' +
+            '</label>' +
             '<label class="p86-co-field">' +
               '<span>Target Margin %</span>' +
               '<input type="number" min="0" max="99" step="0.1" data-field="targetMargin" placeholder="(optional — overrides line markups)" value="' + escapeAttr(co.targetMargin == null ? '' : co.targetMargin) + '" />' +
@@ -838,7 +861,7 @@ function p86Ask(message, opts) {
 
   // ── Side-panel field wiring ────────────────────────────────────
   function wireSidePanel(overlay) {
-    var fields = ['targetMargin', 'defaultMarkup', 'feeFlat', 'feePct', 'taxPct', 'roundTo'];
+    var fields = ['targetPrice', 'targetMargin', 'defaultMarkup', 'feeFlat', 'feePct', 'taxPct', 'roundTo'];
     fields.forEach(function(f) {
       var el = overlay.querySelector('[data-field="' + f + '"]');
       if (!el) return;
@@ -847,7 +870,14 @@ function p86Ask(message, opts) {
         // Numeric fields stay numeric in memory; empty strings stay
         // strings so the editor remembers "the user cleared this on
         // purpose" (vs. "this was never set").
-        if (['targetMargin', 'defaultMarkup'].indexOf(f) !== -1) {
+        if (f === 'targetPrice') {
+          // THE RAW STRING, DELIBERATELY. Number('34,000.00') is NaN and
+          // Number('$34,000') is NaN, so coercing here would throw away
+          // exactly the input a person is most likely to type. The pipeline
+          // parses it as currency and refuses on screen if it cannot — and
+          // it must see what was typed to say so.
+          _state.co[f] = v;
+        } else if (['targetMargin', 'defaultMarkup'].indexOf(f) !== -1) {
           _state.co[f] = v === '' ? '' : Number(v);
         } else if (['feeFlat', 'feePct', 'taxPct', 'roundTo'].indexOf(f) !== -1) {
           _state.co[f] = v === '' ? 0 : Number(v);
@@ -856,6 +886,10 @@ function p86Ask(message, opts) {
         }
         markDirty();
         paintTotals();
+        // Line Amounts move with a client price, so the table is stale the
+        // moment this field changes. Target Margin never needed this because
+        // it leaves the rows alone.
+        if (f === 'targetPrice') paintLines();
       });
     });
   }
@@ -1000,25 +1034,41 @@ function p86Ask(message, opts) {
   function coSectionTotals(lines, rec) {
     var map = {};
     var currentId = null;
-    lines.forEach(function (l) {
+    // What each entry is WORTH. Normally cost × markup (or a promised
+    // price); under a client price, its scaled share. One lookup, so the
+    // section amounts, the row amounts and the totals bar cannot disagree
+    // about a line the way five copies of gross margin used to.
+    var alloc = coAllocation(lines, rec);
+    lines.forEach(function (l, i) {
       if (l.section === '__section_header__') {
         currentId = l.id;
         if (!map[currentId]) map[currentId] = { cost: 0, sell: 0, locked: 0, lines: 0 };
         // A $-mode section's flat adder is part of what the section sells
         // for, so it belongs in the section's own amount and margin.
         if (l.markupMode === 'dollar' && l.markup !== '' && l.markup != null) {
-          map[currentId].sell += coNum(l.markup);
+          map[currentId].sell += alloc ? alloc.sells[i] : coNum(l.markup);
         }
         return;
       }
       if (currentId == null) return;
       var mm = window.p86Pricing.lineMoney(l, lines, rec);
       map[currentId].cost += mm.ext;
-      map[currentId].sell += mm.sell;
+      map[currentId].sell += alloc ? alloc.sells[i] : mm.sell;
       map[currentId].lines += 1;
       if (mm.locked) map[currentId].locked += 1;
     });
     return map;
+  }
+
+  // The client-price allocation for the record being painted, or null when
+  // there is no client price in force — which is every change order that
+  // exists today, and every one where the typed price was refused. Callers
+  // read `alloc.sells[i]` BY STORED INDEX; see the remainder-walk warning in
+  // js/pricing-pipeline.js and the standing rule in js/building-sort.js:39.
+  function coAllocation(lines, rec) {
+    if (!window.p86Pricing.clientPriceState) return null;
+    var st = window.p86Pricing.clientPriceState(rec, lines);
+    return (st && st.ok) ? st : null;
   }
 
   // The markup a locked line IMPLIES — what its promised price works out
@@ -1080,6 +1130,7 @@ function p86Ask(message, opts) {
     // invisible: cost and price were never on screen at the same time.
     var rec = _state.co;
     var targetOn = window.p86Pricing.targetMarginActive(rec);
+    var alloc = coAllocation(lines, rec);
     var secTotals = coSectionTotals(lines, rec);
     var html = '<table class="p86-co-line-tbl"><thead>' +
       '<tr>' +
@@ -1093,7 +1144,7 @@ function p86Ask(message, opts) {
         '<th class="ext">Amount</th>' +
         '<th class="del"></th>' +
       '</tr></thead><tbody>';
-    lines.forEach(function(l) {
+    lines.forEach(function(l, lineIdx) {
       if (l.section === '__section_header__') {
         // Section header: name + optional $/% markup mode toggle + an
         // "override lines" checkbox (both drive the shared p86Pricing
@@ -1142,7 +1193,11 @@ function p86Ask(message, opts) {
           ? window.p86Pricing.effectiveMarkupForLine(l, lines, _state.co)
           : mm.markup;
         var ext = mm.ext;
-        var marked = mm.sell;
+        // Under a client price the Amount is the line's SCALED share, not
+        // cost × markup. The markups still set the proportions between
+        // lines; they no longer set the total, and the notice under the chip
+        // bar says exactly that.
+        var marked = alloc ? alloc.sells[lineIdx] : mm.sell;
         var asm = isCoAsmLine(l);
 
         // MARKUP % AND UNIT SELL ARE MUTUALLY EXCLUSIVE. Exactly one is
@@ -1315,11 +1370,16 @@ function p86Ask(message, opts) {
     var line = lines.find(function(x) { return String(x.id) === String(lineId); });
     if (!line || line.section === '__section_header__') return;
     var mm = window.p86Pricing.lineMoney(line, lines, _state.co);
+    // The same allocation the full paint uses, addressed by STORED INDEX.
+    // The incremental repaint and the full repaint disagreeing about one
+    // row is exactly the class of bug this editor has shipped before.
+    var allocRow = coAllocation(lines, _state.co);
+    var sellNow = allocRow ? allocRow.sells[lines.indexOf(line)] : mm.sell;
     var costCell = tr.querySelector('td.cost');
     if (costCell) costCell.textContent = fmtCurrency(mm.ext);
     var cell = tr.querySelector('td.ext');
     if (cell) {
-      cell.innerHTML = escapeHTML(fmtCurrency(mm.sell)) +
+      cell.innerHTML = escapeHTML(fmtCurrency(sellNow)) +
         (mm.locked ? '<span class="p86-co-lockdot" title="Promised price — not derived from cost" style="margin-left:5px;color:#7eb0ff;font-size:9px;">&#9679;</span>' : '');
     }
     tr.classList.toggle('p86-co-line-locked', mm.locked);
@@ -1400,7 +1460,9 @@ function p86Ask(message, opts) {
     var allLocked = t.lineCount > 0 && t.lockedCount === t.lineCount;
     var HELD = 'Held by the promised price';
     var TRACKS = 'Moves with cost';
-    var totalNote = allLocked ? HELD
+    var cpOn = !!(t.clientPrice && t.clientPrice.ok);
+    var totalNote = cpOn ? 'The client price you typed'
+      : allLocked ? HELD
       : (t.lockedCount ? t.lockedCount + ' of ' + t.lineCount + ' lines priced by promise' : '');
     // "Subtotal" was the single most misleading word in this editor. That
     // chip IS the change order's cost — the number that flows into the
@@ -1415,6 +1477,7 @@ function p86Ask(message, opts) {
       chip('Margin', fmtPct(t.marginPct), false, allLocked ? TRACKS : '') +
       chip('Lines', String(t.lineCount));
     paintCoNotices(t);
+    paintSidePanelState(t);
   }
 
   // Two things the totals bar cannot say in a chip.
@@ -1427,6 +1490,138 @@ function p86Ask(message, opts) {
   // 2. Some line's cost is still a placeholder equal to its price. That
   //    change order reads as zero profit and overstates the job's cost by
   //    the difference, and the repair is one cell.
+  // ── The client-price band ──────────────────────────────────────
+  //
+  // EVERY OUTCOME IS ON SCREEN, IN CURRENCY. A client price that lands says
+  // what it did to the lines; one that cannot be honoured says WHY, names
+  // the number that blocks it, and says what the change order is priced
+  // from instead. A field that is silently ignored is the failure mode this
+  // whole feature was written to end, so there is no path through here that
+  // produces nothing.
+  function coBand(tone, html) {
+    var skin = tone === 'bad'
+      ? 'background:rgba(248,113,113,.10);border-bottom:1px solid rgba(248,113,113,.28);color:#fca5a5;'
+      : tone === 'warn'
+      ? 'background:rgba(251,191,36,.08);border-bottom:1px solid rgba(251,191,36,.20);color:#fbbf24;'
+      : 'background:rgba(79,140,255,.08);border-bottom:1px solid rgba(79,140,255,.18);color:#9ec1ff;';
+    return '<div class="p86-co-notice p86-co-notice-clientprice" style="padding:7px 14px;font-size:11.5px;' + skin + '">' + html + '</div>';
+  }
+  var CP_FALLBACK = ' This change order is priced from its line markups until it is.';
+  function coRoundPausedTail(cp) {
+    if (!cp.roundToPaused) return '';
+    return ' <strong>Round to ' + escapeHTML(fmtCurrency(cp.roundTo)) + ' is paused</strong> while a Client Price is in the field — a round-up is a ceiling, so it cannot land on an exact typed price.';
+  }
+  function coClientPriceNotice(t) {
+    var cp = t && t.clientPrice;
+    if (!cp) return '';
+    var co = _state.co;
+    if (cp.ok) {
+      var body = '<strong>Client Price ' + escapeHTML(fmtCurrency(cp.target)) + '</strong> — ' +
+        'every line that is not promised is priced at <strong>×' + escapeHTML(cp.scale.toFixed(6)) + '</strong> ' +
+        'its markup price, so this change order lands on exactly that total. ' +
+        'Per-line markups still set the proportions between lines; they no longer set the total. ' +
+        'The cents settle in stored line order, so the same line carries them on every repaint.';
+      if (cp.promisedCount) {
+        body += ' <strong>' + cp.promisedCount + ' line' + (cp.promisedCount === 1 ? '' : 's') +
+          ' with a promised Unit Sell ' + (cp.promisedCount === 1 ? 'is' : 'are') + ' carved out at ' +
+          escapeHTML(fmtCurrency(cp.lockedSell)) + ' and ' + (cp.promisedCount === 1 ? 'is' : 'are') +
+          ' not scaled</strong> — a promise is not something a document total may restate.';
+      }
+      if (window.p86Pricing.targetMarginActive(co)) {
+        body += ' <strong>Target Margin ' + escapeHTML(fmtPct(coNum(co.targetMargin))) +
+          ' is standing down</strong> — a Client Price and a Target Margin both set the same number, and the typed price is the more specific instruction.';
+      }
+      body += coRoundPausedTail(cp);
+      var band = coBand('info', body);
+      // A price that lands can still be a price that loses money. That is a
+      // legitimate change order and it is not refused — but it is never left
+      // to be inferred from a negative percentage.
+      if (t.profit < 0) {
+        band += coBand('warn',
+          '<strong>This Client Price prices the work below its cost.</strong> ' +
+          escapeHTML(fmtCurrency(cp.target)) + ' leaves ' + escapeHTML(fmtCurrency(t.markedUp)) +
+          ' for work that costs ' + escapeHTML(fmtCurrency(t.subtotal)) + ' — a gross loss of ' +
+          escapeHTML(fmtCurrency(-t.profit)) + '. Margin reads negative because it is.');
+      }
+      return band;
+    }
+    // ── refusals ────────────────────────────────────────────────
+    var typed = co && co.targetPrice != null ? String(co.targetPrice) : '';
+    var msg;
+    switch (cp.reason) {
+      case 'unparseable':
+        msg = '<strong>Client Price “' + escapeHTML(typed) + '” is not an amount this can read.</strong>' +
+          CP_FALLBACK + ' Type it as a plain amount — 34000, 34,000.00 or $34,000.00.';
+        break;
+      case 'not-positive':
+        msg = '<strong>A Client Price must be more than ' + escapeHTML(fmtCurrency(0)) + '.</strong>' +
+          CP_FALLBACK;
+        break;
+      case 'below-floor':
+        msg = '<strong>A Client Price of ' + escapeHTML(fmtCurrency(cp.target)) + ' is below this change order’s floor.</strong> ' +
+          'The flat fee and the tax on it come to ' + escapeHTML(fmtCurrency(cp.floorTotal)) +
+          ' before a dollar of work is priced, so every line would price below zero. ' +
+          'Raise the Client Price above ' + escapeHTML(fmtCurrency(cp.floorTotal)) + ', or lower the Flat Fee.' +
+          CP_FALLBACK;
+        break;
+      case 'unreachable':
+        msg = '<strong>A Client Price of ' + escapeHTML(fmtCurrency(cp.target)) + ' cannot be produced from these fees and tax.</strong> ' +
+          'Check Fee % and Tax %: at −100% every marked-up total collapses to the same number, and no price can be solved for.' +
+          CP_FALLBACK;
+        break;
+      case 'promised-exceeds':
+        msg = '<strong>The promised prices already come to more than a Client Price of ' + escapeHTML(fmtCurrency(cp.target)) + '.</strong> ' +
+          cp.promisedCount + ' line' + (cp.promisedCount === 1 ? '' : 's') + ' with a promised Unit Sell total ' +
+          escapeHTML(fmtCurrency(cp.lockedSell)) + ', and a promise is not something a document total may restate. ' +
+          'Raise the Client Price above ' + escapeHTML(fmtCurrency(cp.lockedSell)) + ', or clear a line’s Unit Sell.' +
+          CP_FALLBACK;
+        break;
+      case 'no-free-pool':
+        if (!cp.lineCount) {
+          msg = '<strong>This change order has no lines, so a Client Price has nothing to scale.</strong> Add a line first.';
+        } else if (cp.promisedCount === cp.lineCount) {
+          msg = '<strong>Every line’s price is already promised, so a Client Price has nothing to scale.</strong> ' +
+            'A promise is not something a document total may restate. Clear a line’s Unit Sell to let it price from cost × markup.' +
+            CP_FALLBACK;
+        } else {
+          msg = '<strong>The lines that are not promised have no price to scale.</strong> ' +
+            cp.zeroPriceCount + ' of ' + cp.unpromisedCount + ' unpromised line' +
+            (cp.unpromisedCount === 1 ? '' : 's') + ' price at ' + escapeHTML(fmtCurrency(0)) +
+            ', and a line at $0 stays at $0 however the document is scaled — so ' +
+            escapeHTML(fmtCurrency(cp.target)) + ' cannot be spread over them. ' +
+            'Give them a Unit Cost, or promise a Unit Sell.' + CP_FALLBACK;
+        }
+        break;
+      default:
+        msg = '<strong>A Client Price of ' + escapeHTML(fmtCurrency(cp.target)) +
+          ' could not be allocated to these lines without the rows disagreeing with the total.</strong>' + CP_FALLBACK;
+    }
+    return coBand('bad', msg + coRoundPausedTail(cp));
+  }
+
+  // Two controls that write the same number must not both look live, and a
+  // paused control must say it is paused where it lives — not only in a band
+  // twelve inches away.
+  function paintSidePanelState(t) {
+    var cp = t && t.clientPrice;
+    var on = !!(cp && cp.ok);
+    var tm = document.querySelector('#co-editor-overlay [data-field="targetMargin"]');
+    if (tm) {
+      tm.readOnly = on;
+      tm.style.opacity = on ? '.45' : '';
+      tm.style.cursor = on ? 'not-allowed' : '';
+      tm.title = on ? 'Standing down — a Client Price is in force and sets this same total.' : '';
+    }
+    var rt = document.querySelector('#co-editor-overlay [data-field="roundTo"]');
+    if (rt) {
+      var paused = !!(cp && cp.roundToPaused);
+      rt.readOnly = paused;
+      rt.style.opacity = paused ? '.45' : '';
+      rt.style.cursor = paused ? 'not-allowed' : '';
+      rt.title = paused ? 'Paused — a round-up cannot land on an exact typed Client Price.' : '';
+    }
+  }
+
   function paintCoNotices(t) {
     var bar = document.getElementById('p86CoTotals');
     if (!bar) return;
@@ -1437,7 +1632,8 @@ function p86Ask(message, opts) {
       bar.parentNode.insertBefore(host, bar.nextSibling);
     }
     var out = '';
-    if (window.p86Pricing.targetMarginActive(_state.co)) {
+    out += coClientPriceNotice(t);
+    if (window.p86Pricing.targetMarginActive(_state.co) && !(t.clientPrice && t.clientPrice.ok)) {
       out += '<div class="p86-co-notice" style="padding:7px 14px;font-size:11.5px;background:rgba(79,140,255,.08);border-bottom:1px solid rgba(79,140,255,.18);color:#9ec1ff;">' +
         '<strong>Target margin ' + escapeHTML(fmtPct(coNum(_state.co.targetMargin))) + '</strong> — per-line markups are ignored and the total is back-solved from cost.' +
         (t.lockedCount

@@ -27,6 +27,11 @@
 //                                   lockedSubtotal, lockedSell }
 //   targetMarginActive(rec) → boolean
 //   applyTargetMargin(subtotal, rec) → markedUp
+//   parseMoney(v) → number | null          (currency, not percent)
+//   clientPriceRequested(rec) → boolean
+//   clientPriceInForce(rec) → boolean
+//   clientPriceState(rec, lines) → null | { ok, reason, target, markedUp,
+//                                           scale, sells[], … }
 //   resolveMarkedUp(per, rec) → markedUp
 //   applyFeesAndTax(markedUp, rec) → { feeFlat, feePctAmount, preTax,
 //                                       taxAmount, beforeRound,
@@ -240,6 +245,314 @@
     return subtotal / divisor;
   }
 
+  // ═══════════════════════════════════════════════════════════════════
+  // CLIENT PRICE — the number the client will pay, typed.
+  //
+  // "This allows me to change the change order total to what I want the
+  // client price to be; the markup and margin are back computed from that.
+  // This is IN ADDITION to being able to set the target margin."
+  //
+  // THE KEY IS `targetPrice`, AND ITS ABSENCE IS THE DISCRIMINATOR — the
+  // same mechanism `markup` and `unitSell` have always used, and the reason
+  // no change order in the database has to be migrated, rewritten or
+  // reinterpreted for this to ship. Every record that exists today has no
+  // targetPrice; the branch never runs; the arithmetic is the arithmetic it
+  // has always been.
+  //
+  // It writes the SAME single variable targetMargin writes — markedUp — so
+  // there is exactly one thing downstream of it, not a parallel pricing
+  // model. When both are set the typed price wins, because it is the more
+  // specific instruction; the editor makes Target Margin stand down on
+  // screen rather than leaving two live controls fighting over one number.
+  //
+  // CHANGE ORDERS ONLY. Both reviewers proved a document-level absolute is
+  // WRONG on an estimate: every estimate total loops `alternates` and SUMS a
+  // per-group resolve, so an absolute price is applied once PER INCLUDED
+  // GROUP. Measured on a $39,285.71 estimate — $78,571.43 at two included
+  // alternates, $196,428.57 at five, silently. A target margin survives that
+  // because a rate is linear across a sum; an absolute is not. Change orders
+  // carry a flat lines[] and resolve exactly once per record, which is why
+  // this side is safe and that side is not. clientPriceRequested therefore
+  // refuses any record carrying `alternates`, and requires the flat
+  // `lines[]` array only a change order has — a structural test, not a
+  // convention, so it survives estimate-editor.js one day calling
+  // resolveMarkedUp (which its own TODO already invites it to do).
+  // ═══════════════════════════════════════════════════════════════════
+
+  // A typed client price is CURRENCY. num() above is percent-shaped, and
+  // measured against a typed price it is dangerous rather than merely
+  // lenient: "34,000.00" prices at $34.00, and "$34,000" and " " price at
+  // $0.00 — while ALL THREE read as "present" to the discriminator, so the
+  // branch fires with a wrong number instead of falling back.
+  //
+  // The DOM cannot be the guard. server/routes/change-order-routes.js
+  // spreads req.body with no whitelist over the document money fields, and
+  // the agent tool surface advertises the sibling fields as writable, so a
+  // raw string reaches this blob whatever the side panel does.
+  //
+  // NULL IS NOT ZERO. Anything unreadable returns null and refuses ON
+  // SCREEN; it never becomes a price.
+  function parseMoney(v) {
+    if (typeof v === 'number') return isFinite(v) ? v : null;
+    if (v == null) return null;
+    var s = String(v).trim();
+    if (!s) return null;
+    var paren = s.charAt(0) === '(' && s.charAt(s.length - 1) === ')';
+    if (paren) s = s.slice(1, -1).trim();
+    s = s.replace(/[$,\s ]/g, '');
+    if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(s)) return null;
+    var n = parseFloat(s);
+    if (!isFinite(n)) return null;
+    return paren ? -n : n;
+  }
+
+  // Is a client price being ASKED FOR on this record? Presence and validity
+  // are deliberately separate: an unparseable price is REQUESTED (so the
+  // editor owes the user an explanation) but not IN FORCE (so it prices
+  // nothing).
+  //
+  // ⚠ The one discriminator mistake that matters: written as
+  // `rec.targetPrice != null`, an empty string leaks true and the branch
+  // fires on a blank field. A field the user cleared, and a field holding
+  // only spaces, are both "no client price" — they look empty, so they
+  // behave empty.
+  function clientPriceRequested(rec) {
+    if (!rec) return false;
+    var v = rec.targetPrice;
+    if (v == null) return false;
+    if (typeof v === 'string' && v.trim() === '') return false;
+    if (rec.alternates != null) return false;        // estimates: see above
+    if (!Array.isArray(rec.lines)) return false;     // change orders only
+    return true;
+  }
+  function clientPriceInForce(rec) {
+    if (!clientPriceRequested(rec)) return false;
+    var t = parseMoney(rec.targetPrice);
+    return t != null && t > 0;
+  }
+
+  // Half a cent. Money is decided at the cent; anything inside this is
+  // float noise, anything outside it is a number a person would notice.
+  var CP_EPS = 0.005;
+
+  // BISECT ON THE REAL applyFeesAndTax — do not invert it by hand.
+  //
+  // Measured, three ways to get this wrong and one to get it right:
+  //   • treat the typed price AS markedUp        → 23.4% out
+  //   • T/((1+fee%)(1+tax%)) - feeFlat           →  0.63% out (feeFlat is
+  //                                                 taxed but not
+  //                                                 fee-percented)
+  //   • (T/(1+tax%) - feeFlat)/(1+fee%)          →  exact, but ONLY while
+  //                                                 roundTo is 0, and it
+  //                                                 re-derives arithmetic
+  //                                                 this module owns
+  // A solve stays correct the day someone adds a step to applyFeesAndTax.
+  // The closed form does not, and its wrongness is silent.
+  function solveMarkedUpForTotal(rec, target) {
+    var lo = -1e9, hi = 1e9;
+    var flo = applyFeesAndTax(lo, rec).total;
+    var fhi = applyFeesAndTax(hi, rec).total;
+    if (!isFinite(flo) || !isFinite(fhi)) return null;
+    // THE SINGULARITY. (1+feePct/100)*(1+taxPct/100) === 0 makes every
+    // markedUp produce the same total, so nothing can be solved for. An
+    // unguarded bisection does not return NaN here — it silently returns
+    // the bracket bound, 1,000,000,000 — and a monotonicity check misses it
+    // because f(lo) === f(hi).
+    if (flo === fhi) return null;
+    var inc = fhi > flo;
+    if (inc ? (target < flo || target > fhi) : (target > flo || target < fhi)) return null;
+    for (var i = 0; i < 200; i++) {
+      var mid = (lo + hi) / 2;
+      var fm = applyFeesAndTax(mid, rec).total;
+      if (inc ? (fm < target) : (fm > target)) lo = mid; else hi = mid;
+    }
+    return (lo + hi) / 2;
+  }
+
+  // RULE A — THE SOLVE IS NOT TRUSTED UNTIL IT IS VERIFIED.
+  // RULE B — TWO CONDITIONS REFUSE INDEPENDENT OF CONVERGENCE.
+  //
+  // Rule A catches an unreachable price and the singularity. It does NOT
+  // catch a price below the fee floor: that one CONVERGES — a $4,000 client
+  // price against a $5,000 flat fee solves to markedUp −$1,261.68, displays
+  // $4,000.00 exactly, and prices every line at −$126.16 — which is why
+  // Rule B exists as a separate gate rather than as a comment on Rule A.
+  //
+  // ⚠ RULE A'S VERIFY IS DELIBERATELY UNREACHABLE TODAY, AND THAT IS THE
+  // POINT OF IT. With the ceiling stood down above, applyFeesAndTax is
+  // LINEAR in markedUp, so a bisection cannot converge on a wrong answer and
+  // deleting the check turns no test red on its own — measured. Delete the
+  // pause as well and it fires immediately: a $34,250 price against
+  // roundTo 500 becomes a silent $34,500 delivery, $250 over. It is what
+  // makes the pause safe rather than lucky, and it is what will catch the
+  // day someone adds a fifth step to applyFeesAndTax. Do not remove it
+  // because a mutation run says nothing depends on it.
+  //
+  // Nothing here clamps. A client price that cannot be honoured is REFUSED,
+  // the change order prices from its line markups exactly as it would with
+  // the field empty, and the editor puts the reason on screen in currency.
+  // A silent wrong number is the failure this whole feature exists to end.
+  function solveClientPrice(rec, lockedSell, naturalFree) {
+    var out = {
+      requested: true, ok: false, reason: null, target: null, markedUp: null,
+      lockedSell: lockedSell, naturalFree: naturalFree, freePool: null,
+      scale: null, floorTotal: null
+    };
+    var target = parseMoney(rec.targetPrice);
+    if (target == null) { out.reason = 'unparseable'; return out; }
+    out.target = target;
+    if (!(target > 0)) { out.reason = 'not-positive'; return out; }
+    // What this record charges before a dollar of work is priced. Named so
+    // the refusal can quote it rather than say "too low".
+    out.floorTotal = applyFeesAndTax(0, rec).total;
+    var mu = solveMarkedUpForTotal(rec, target);
+    if (mu == null || !isFinite(mu) ||
+        Math.abs(applyFeesAndTax(mu, rec).total - target) > CP_EPS) {
+      out.reason = 'unreachable'; return out;
+    }
+    out.markedUp = mu;
+    if (!(mu > 0)) { out.reason = 'below-floor'; return out; }
+    // freePool == 0 is not exotic — measured between 6.7% and 18.5% of
+    // realistic change orders depending on how promise-heavy the corpus is.
+    // Five distinct shapes reach it: every line promised, no lines at all, a
+    // single unpromised line at qty 0, one at unitCost 0, and unpromised
+    // lines whose prices cancel. An unrestricted remainder walk from here
+    // does not merely produce a bad scale factor — it produces NaN and
+    // ±Infinity line prices, and it restates the promised lines the design
+    // carves out.
+    if (!(naturalFree > 0)) { out.reason = 'no-free-pool'; return out; }
+    var freePool = mu - lockedSell;
+    out.freePool = freePool;
+    if (!(freePool > 0)) { out.reason = 'promised-exceeds'; return out; }
+    out.scale = freePool / naturalFree;
+    out.ok = true;
+    return out;
+  }
+
+  // THE ALLOCATION RULE — scale each unpromised line's PRICE by ONE factor.
+  //
+  // Not "flatten every line to one margin": that is what a target margin
+  // means and it should stay its job. Measured on a document taken from
+  // $31,900 to $34,000 — a $15,000 passthrough sub at 0% markup, labor at
+  // 30%, materials at 20% — flatten hands the ZERO-MARGIN PASSTHROUGH
+  // $2,894.74 of markup it must never carry and moves labor −$749.12.
+  // Scaling preserves the relative pricing a person built on purpose.
+  //
+  // Promised (unitSell) lines keep their promise and are carved out
+  // entirely. A promise is not something a document total may restate.
+  //
+  // ⚠⚠ THE REMAINDER WALK READS STORED ORDER, AND MUST.
+  // js/building-sort.js:30-50 carries the standing rule for this repo:
+  // SORT AT THE PRESENTATION BOUNDARY — NEVER re-order an array that
+  // remainder math walks by index. Line order in this editor IS stored
+  // order (section membership is positional here; see coSectionTotals).
+  // The sort below is over a COPY OF THE INDEX LIST, never over `lines`,
+  // and its tie-break is the stored index ascending — so the settling cent
+  // lands on the same line on every repaint, on the server as in the
+  // browser, and re-sorting the table for display cannot move a penny.
+  function allocateFreePool(natural, promised, freePool) {
+    var sells = new Array(natural.length);
+    var idx = [];
+    var naturalFree = 0;
+    for (var i = 0; i < natural.length; i++) {
+      if (promised[i]) { sells[i] = natural[i]; continue; }
+      idx.push(i);
+      naturalFree += natural[i];
+    }
+    var scale = freePool / naturalFree;
+    var poolCents = Math.round(freePool * 100);
+    var floors = new Array(natural.length);
+    var rem = new Array(natural.length);
+    var sum = 0;
+    for (var k = 0; k < idx.length; k++) {
+      var j = idx[k];
+      var exact = natural[j] * scale * 100;
+      var fl = Math.floor(exact);
+      floors[j] = fl; rem[j] = exact - fl; sum += fl;
+    }
+    var short = poolCents - sum;
+    if (short !== 0 && idx.length) {
+      var step = short > 0 ? 1 : -1;
+      var order = idx.slice().sort(function(a, b) {
+        var d = step > 0 ? (rem[b] - rem[a]) : (rem[a] - rem[b]);
+        return d !== 0 ? d : (a - b);   // stored index — never a display sort
+      });
+      var n = Math.abs(short);
+      for (var c = 0; c < n; c++) floors[order[c % order.length]] += step;
+    }
+    for (var m = 0; m < idx.length; m++) sells[idx[m]] = floors[idx[m]] / 100;
+    return sells;
+  }
+
+  // THE WHOLE CLIENT-PRICE ANSWER FOR ONE RECORD, in one call: whether one
+  // was asked for, whether it can be honoured, why not if not, and — when it
+  // can — what each entry in `lines` is worth, index-aligned with the array
+  // as stored. Returns null when no client price was asked for at all, which
+  // is every change order that exists today.
+  //
+  // Index-aligned rather than keyed by line id ON PURPOSE: imported records
+  // do not reliably carry ids, and a suite whose fixtures all have one is a
+  // suite that proves nothing about them.
+  function clientPriceState(rec, lines) {
+    if (!clientPriceRequested(rec)) return null;
+    var arr = Array.isArray(lines) ? lines
+      : (Array.isArray(rec && rec.lines) ? rec.lines : []);
+    var natural = new Array(arr.length);
+    var promised = new Array(arr.length);
+    var lockedSell = 0, naturalFree = 0;
+    var lineCount = 0, promisedCount = 0, zeroPriceCount = 0;
+    for (var i = 0; i < arr.length; i++) {
+      var l = arr[i];
+      if (l && l.section === '__section_header__') {
+        // A $-mode section's flat adder is a price contribution like any
+        // other, and it is not a promise, so it scales with everything else.
+        var add = (l.markupMode === 'dollar' && l.markup !== '' && l.markup != null)
+          ? num(l.markup) : 0;
+        natural[i] = add; promised[i] = false; naturalFree += add;
+        continue;
+      }
+      lineCount++;
+      var mm = lineMoney(l, arr, rec);
+      natural[i] = mm.sell;
+      promised[i] = mm.locked;
+      if (mm.locked) { promisedCount++; lockedSell += mm.sell; }
+      else { naturalFree += mm.sell; if (!mm.sell) zeroPriceCount++; }
+    }
+    var st = solveClientPrice(rec, lockedSell, naturalFree);
+    st.lineCount = lineCount;
+    st.promisedCount = promisedCount;
+    st.unpromisedCount = lineCount - promisedCount;
+    // ZERO-COST LINES ARE THE PROMISED-SET-EMPTY CASE OF freePool == 0, not
+    // a separate defect: three $0-cost lines give subtotal 0, natural
+    // markedUp 0 and lockedSell 0, so there is no pool and no promise. The
+    // amber affordance that keys off PROMISED lines never fires for them —
+    // which is exactly why the refusal below keys off the pool instead, and
+    // why this count exists to name them.
+    st.zeroPriceCount = zeroPriceCount;
+    st.roundTo = num(rec.roundTo);
+    st.roundToPaused = st.roundTo > 0 && clientPriceInForce(rec);
+    st.natural = natural;
+    st.promisedFlags = promised;
+    st.sells = null;
+    if (!st.ok) return st;
+    st.sells = allocateFreePool(natural, promised, st.freePool);
+    // BELT AND BRACES. The rows must account for the total, to the cent,
+    // or the screen is showing a number it cannot explain. If they somehow
+    // do not, this refuses like any other unhonourable price rather than
+    // painting the difference nowhere.
+    //
+    // ⚠ Like Rule A's verify, this is UNREACHABLE while allocateFreePool is
+    // correct — removing it turns no test red on its own, measured. Break
+    // the allocation as well (flatten it, say) and it is the only thing
+    // standing between a wrong row and a total that does not match it.
+    var sum = 0;
+    for (var s = 0; s < st.sells.length; s++) sum += st.sells[s];
+    if (!isFinite(sum) || Math.abs(sum - st.markedUp) > CP_EPS) {
+      st.ok = false; st.reason = 'allocation'; st.sells = null;
+    }
+    return st;
+  }
+
   // THE document-level marked-up total, target margin resolved.
   //
   // Every caller used to hand-roll `targetMarginActive(x) ?
@@ -262,6 +575,20 @@
   // number rather than poisoning the job with NaN.
   function resolveMarkedUp(per, rec) {
     var p = per || {};
+    // A TYPED CLIENT PRICE OUTRANKS EVERYTHING BELOW IT, because it is the
+    // most specific instruction there is: not a rate, a number. It writes
+    // the same variable the target margin writes, so nothing downstream
+    // learns a second pricing model.
+    //
+    // On a refusal this FALLS THROUGH deliberately: the change order prices
+    // exactly as it would with the field empty, and the editor puts the
+    // reason on screen. Returning a clamped or partial number here is the
+    // one outcome this design will not have.
+    if (clientPriceRequested(rec)) {
+      var lockedSell = num(p.lockedSell);
+      var cp = solveClientPrice(rec, lockedSell, num(p.markedUp) - lockedSell);
+      if (cp.ok) return cp.markedUp;
+    }
     if (!targetMarginActive(rec)) return p.markedUp;
     var lockedSell = num(p.lockedSell);
     var lockedSubtotal = num(p.lockedSubtotal);
@@ -291,6 +618,21 @@
     var taxAmount = preTax * (rec ? num(rec.taxPct) : 0) / 100;
     var beforeRound = preTax + taxAmount;
     var roundTo = rec ? num(rec.roundTo) : 0;
+    // ROUND TO $ STANDS DOWN WHILE A CLIENT PRICE IS IN FORCE.
+    //
+    // A ceiling is not injective. Over 150,000 markedUp samples, roundTo 0
+    // yields 150,001 distinct totals, roundTo 25 yields 65, and roundTo 500
+    // yields FOUR — so a typed client price that is not itself a multiple of
+    // roundTo is simply unreachable: $34,250 at roundTo 500 delivers
+    // $34,500.00, silently $250 over. The pause lives HERE rather than in
+    // editor state so that the browser, the server's changeOrderMoney and
+    // the solve below cannot disagree about it.
+    //
+    // The `roundTo > 0` test comes first on purpose: a record with no
+    // targetPrice — every change order that exists today — never reaches
+    // clientPriceInForce at all when roundTo is 0, and gets false in one
+    // property read when it isn't.
+    if (roundTo > 0 && clientPriceInForce(rec)) roundTo = 0;
     var total = beforeRound;
     var rounded = 0;
     if (roundTo > 0) {
@@ -358,6 +700,10 @@
     computeForLines: computeForLines,
     targetMarginActive: targetMarginActive,
     applyTargetMargin: applyTargetMargin,
+    parseMoney: parseMoney,
+    clientPriceRequested: clientPriceRequested,
+    clientPriceInForce: clientPriceInForce,
+    clientPriceState: clientPriceState,
     resolveMarkedUp: resolveMarkedUp,
     applyFeesAndTax: applyFeesAndTax
   };
