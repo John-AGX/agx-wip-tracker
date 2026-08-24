@@ -184,6 +184,27 @@ describe('the null contract — a margin nobody can compute says so', () => {
     T.paintTotals();
     expect(chips()['Margin']).toBe('—');
   });
+
+  test('a section that sells for nothing says so — on BOTH paint paths', () => {
+    // The section GM chip is rendered twice: once by paintLines (full table)
+    // and once by paintSectionRows (the incremental repaint a keystroke
+    // takes). Two renders of one rule is how the rule drifts, so both are
+    // asserted, and the second is reached the way a person reaches it.
+    T.setCo({
+      defaultMarkup: 0,
+      lines: [
+        { id: 's1', section: '__section_header__', label: 'Warranty', markup: '', markupMode: 'percent' },
+        { id: 'a', qty: 1, unitCost: 0, description: 'Included at no charge' },
+      ],
+    });
+    T.paintLines();
+    const sec = () => document.querySelector('tr.p86-co-section-row td.ext').textContent;
+    expect(sec()).toContain('GM —');
+    const qty = document.querySelector('tr.p86-co-line-row [data-line-field="qty"]');
+    qty.value = '2';
+    qty.dispatchEvent(new window.Event('input', { bubbles: true }));
+    expect(sec()).toContain('GM —');
+  });
 });
 
 describe('PROPERTY — margin never reads positive on a loss', () => {
