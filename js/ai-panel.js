@@ -1590,6 +1590,17 @@ function p86Ask(message, opts) {
     } else if (arg && typeof arg === 'object') {
       entityType = arg.entityType || 'estimate';
       entityId = arg.entityId;
+    } else {
+      // Bare open() = a GLOBAL entry: the crew chip (js/crew-chip.js) calls
+      // window.p86AI.open() with no argument, as do programmatic deep-links.
+      // Route it to the entity-less host surface. Without this branch
+      // entityType stayed undefined, tripped requiresEntity below, and alerted
+      // "Save the record first" — which is exactly what made the crew chip look
+      // broken once it became the sole chat entry (the removed #header-ask86-btn
+      // had passed { entityType: 'ask86' }). Every other global caller passes
+      // that explicitly; this makes the bare call match. Host routing (Assistant
+      // vs 86) is still resolved server-side from the user's host key.
+      entityType = 'ask86';
     }
     // Client / staff / intake modes are global to the user — no entity
     // ID needed (the directory / agent observability surface / fresh
