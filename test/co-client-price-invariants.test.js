@@ -13,8 +13,9 @@
 // So the rows painted a refusal while the Total chip, changeOrderMoney,
 // job-wip's totalIncome/revisedMargin/backlog, the WIP report, job-audit R8,
 // Live Rooms and the pay applications all honoured the price. Measured over
-// 300,000 realistic change orders: the two gates split on 4.26% of them, by a
-// median 13% OF THE CHANGE ORDER — not cents.
+// 300,000 realistic change orders: the two gates split on 2.52% of them
+// (7,548 records), by a median of $4,857.61 — 22.1% OF THE CHANGE ORDER, 90th
+// percentile $23,961.66, worst $124,538.13. Not cents.
 //
 // These are PROPERTIES, not screenshots. Every one of them is a statement
 // about EVERY record, and every one of them is red against the code as it
@@ -471,6 +472,62 @@ describe('STRUCTURE — a second gate is not currently absent, it is impossible'
     const fn = code(body.slice(0, body.indexOf('\n  }')));
     expect(fn).toMatch(/computeForLines\(rec, arr\)\.clientPrice/);
     expect(fn).not.toMatch(/solveClientPrice|allocateFreePool|lineMoney/);
+  });
+
+  // ── The three the mutation run left GREEN, now pinned ──────────────
+  //
+  // A bypass that turns no test red is a path nothing is holding. Two of
+  // these are defence-in-depth that is UNREACHABLE while the code around it
+  // is correct — deleting them changes no number, which is exactly why they
+  // need pinning by structure rather than by behaviour. The third is a
+  // deliberate choice that behaviour alone cannot see.
+
+  test('the sub-cent settles on the LARGEST free line, not just any line', () => {
+    // Both choices keep Σ sells === markedUp, so no arithmetic property can
+    // tell them apart — but a half cent on a $0.01 line doubles it, and the
+    // browser and the server must land it on the same row regardless.
+    const rec = { targetPrice: '20000', lines: [
+      { id: 'p', qty: 0.5, unitCost: 900, unitSell: 1650.07 },   // half-cent promise
+      { id: 'small', qty: 1, unitCost: 0.01, markup: 0 },
+      { id: 'big', qty: 1, unitCost: 15000, markup: 20 },
+    ] };
+    const st = P.clientPriceState(rec, rec.lines);
+    expect(st.ok).toBe(true);
+    const cents = (v) => Math.abs(v * 100 - Math.round(v * 100));
+    // exactly one free row carries a fraction of a cent, and it is the big one
+    expect(cents(st.sells[2])).toBeGreaterThan(1e-9);
+    expect(cents(st.sells[1])).toBeLessThan(1e-9);
+    // the promise is still untouched, fraction and all
+    expect(st.sells[0]).toBe(825.035);
+    expect(st.sells.reduce((a, b) => a + b, 0)).toBe(st.markedUp);
+  });
+
+  test('the allocation guard is still there, and still refuses by name', () => {
+    // UNREACHABLE BY CONSTRUCTION, AND KEPT. Removing it turns no test red on
+    // its own — measured, both before this change and after — because
+    // allocateFreePool spends the pool exactly. Break the allocation as well
+    // (flatten it, say) and it is the only thing standing between a wrong row
+    // and a total that cannot explain it. Structure is the only thing that
+    // can hold a guard whose whole job is to never fire.
+    const body = PIPE.slice(PIPE.indexOf('function decideClientPrice(rec, per)'));
+    const fn = body.slice(0, body.indexOf('\n  }'));
+    expect(fn).toMatch(/if \(!isFinite\(sum\) \|\| Math\.abs\(sum - st\.markedUp\)/);
+    expect(fn).toMatch(/st\.ok = false; st\.reason = 'allocation'; st\.sells = null;/);
+    // and 'allocation' is still a reason the screen knows how to explain
+    expect(fs.readFileSync(path.join(__dirname, '..', 'js', 'change-order-editor.js'), 'utf8'))
+      .toMatch(/could not be allocated to these lines/);
+  });
+
+  test('its tolerance is float noise, not half a cent', () => {
+    // THE ORIGINAL DEFECT IN ONE LINE. CP_EPS is 0.005, and the residual
+    // allocateFreePool could produce was bounded by EXACTLY 0.005 — so the
+    // guard fired only when float rounding pushed the difference past its own
+    // bound, on 30% of the records sitting on that edge. A tolerance may
+    // never again be set to the largest error the thing it guards can make.
+    const body = PIPE.slice(PIPE.indexOf('function decideClientPrice(rec, per)'));
+    const fn = body.slice(0, body.indexOf('\n  }'));
+    expect(fn).not.toMatch(/CP_EPS/);
+    expect(fn).toMatch(/1e-6 \+ Math\.abs\(sum\) \* 1e-12/);
   });
 
   // A caller cannot get a document total out of this module without also

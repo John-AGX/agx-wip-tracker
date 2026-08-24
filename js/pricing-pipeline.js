@@ -589,8 +589,9 @@
   // it did not hold `lines`, so it physically could not run the check. So the
   // rows painted a refusal while the Total chip, changeOrderMoney, job-wip,
   // the WIP report, Live Rooms and the pay applications all honoured the
-  // price. On 1%–4% of realistic change orders — 4.26% over 300,000 — they
-  // disagreed, by a median 13% OF THE CHANGE ORDER. The repair is not a third
+  // price. On 2.52% of client-priced change orders — 7,548 of 300,000 —
+  // they disagreed, by a median of $4,857.61: 22.1% OF THE CHANGE ORDER, with
+  // a 90th percentile of $23,961.66. The repair is not a third
   // copy of the check: it is that there is no second answer to keep in sync,
   // because the answer rides on `per` and both paths read that one object.
   //
