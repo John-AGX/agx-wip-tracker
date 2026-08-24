@@ -221,7 +221,7 @@
       '.p86-task-empty{padding:32px 8px;text-align:center;color:var(--muted,#9ca3af);font-size:13px;}' +
       // ── Grid view (grouped columnar) — Buildertrend-style columns + our sections.
       // Reuses .p86-task-check / .p86-task-avatar / .p86-task-due / .p86-task-link.
-      '.p86-taskgrid-wrap{overflow-x:auto;border:1px solid var(--border-strong,#252a35);border-radius:13px;background:var(--surface,#14181f);}' +
+      '.p86-taskgrid-wrap{overflow-x:auto;border-top:1px solid var(--border,#2a2a32);}' +
       '.p86-taskgrid{min-width:780px;}' +
       '.p86-tg-head,.p86-tg-row{display:flex;align-items:center;min-width:0;}' +
       '.p86-tg-c{padding:0 10px;min-width:0;display:flex;align-items:center;gap:7px;}' +
@@ -234,7 +234,7 @@
       '.p86-tg-job{width:152px;flex:0 0 auto;overflow:hidden;}' +
       '.p86-tg-job .p86-task-link{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:19px;}' +
       '.p86-tg-made{width:98px;flex:0 0 auto;}' +
-      '.p86-tg-head{height:34px;background:var(--surface2,#10141a);border-bottom:1px solid var(--border-strong,#252a35);font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted,#8b93a3);}' +
+      '.p86-tg-head{height:34px;background:rgba(255,255,255,.025);border-bottom:1px solid var(--border,#2a2a32);font-size:11px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;color:var(--text-dim,#b4b4bf);}' +
       '.p86-tg-group{display:flex;align-items:center;gap:8px;padding:7px 14px 6px;background:rgba(148,163,184,.05);border-bottom:1px solid var(--border,#e5e7eb);}' +
       '.p86-tg-glabel{font-size:11px;font-weight:700;letter-spacing:.055em;text-transform:uppercase;color:var(--muted,#94a3b8);}' +
       '.p86-tg-glabel.is-overdue{color:#f87171;}.p86-tg-glabel.is-today{color:#fbbf24;}' +
@@ -243,7 +243,7 @@
       '.p86-tg-glabel.is-today + .p86-tg-gcount{background:rgba(245,158,11,.16);color:#fbbf24;}' +
       '.p86-tg-row{height:38px;border-bottom:1px solid var(--border,#e5e7eb);cursor:pointer;transition:background .1s;}' +
       '.p86-taskgrid .p86-tg-row:last-child{border-bottom:none;}' +
-      '.p86-tg-row:hover{background:var(--hover,var(--surface2,#1a1f29));}' +
+      '.p86-tg-row:hover{background:rgba(79,140,255,.06);}' +
       '.p86-tg-title{font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;}' +
       '.p86-tg-row.is-done .p86-tg-title{color:var(--muted,#9ca3af);text-decoration:line-through;font-weight:400;}' +
       '.p86-tg-prio-tag{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted,#8b93a3);white-space:nowrap;}' +
@@ -275,7 +275,7 @@
       '.p86-fbar-spacer{flex:1 1 auto;}' +
       '.p86-fbar-count{font-size:12px;color:var(--muted,#8b93a3);font-variant-numeric:tabular-nums;white-space:nowrap;}' +
       // My Tasks page
-      '.p86-tasks-page{padding:24px 20px 40px;max-width:1120px;margin:0 auto;}' +
+      '.p86-tasks-page{padding:22px 24px 40px;max-width:none;margin:0;}' +
       '.p86-tasks-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px;flex-wrap:wrap;}' +
       '.p86-tasks-head h2{margin:0;font-size:19px;font-weight:650;letter-spacing:-.01em;}' +
       '.p86-tasks-newbtn{font:inherit;font-size:13px;font-weight:600;color:#fff;background:var(--accent,#4f8cff);border:none;border-radius:8px;padding:7px 14px;cursor:pointer;transition:filter .12s;}' +
@@ -1578,6 +1578,7 @@
           '<button class="p86-tab" data-tab="team">Team Tasks</button>' +
           '<button class="p86-tab" data-tab="todos">My To-Dos</button>' +
           '<button class="p86-tab" data-tab="reminders">Reminders</button>' +
+          '<button class="p86-tab" data-tab="punch">Punch list</button>' +
         '</div>' +
         '<div id="p86TabBody"></div>' +
       '</div>';
@@ -1596,6 +1597,7 @@
       var body = pane.querySelector('#p86TabBody');
       if (tab === 'team') renderTeam(body);
       else if (tab === 'todos') renderTodos(body);
+      else if (tab === 'punch') renderTeam(body, 'punch');
       else renderReminders(body);
     }
     pane.querySelectorAll('[data-tab]').forEach(function (b) {
@@ -1605,7 +1607,7 @@
   }
 
   // ── Tab 1: Team Tasks (org-wide, assignable, user-filterable) ──────
-  function renderTeam(body) {
+  function renderTeam(body, kind) {
     body.innerHTML = '<div id="teamBar"></div><div id="teamList"></div>';
     var barHost = body.querySelector('#teamBar');
     var listHost = body.querySelector('#teamList');
@@ -1614,16 +1616,18 @@
     function mountTeam() {
       var f = (TASK_FILTERS.filter(function (x) { return x.key === s.status; })[0] || TASK_FILTERS[0]).build();
       f.scope = 'org';
+      if (kind) f.kind = kind;
       if (s.assignee) f.assignee = s.assignee;
       _ctl.team = mountList(listHost, f, {
         grouped: true,
         priorityFilter: s.priority,
-        emptyText: s.status === 'done' ? 'No completed team tasks.' : 'No team tasks here.',
+        emptyText: s.status === 'done' ? 'No completed items.' : (kind === 'punch' ? 'No punch-list items yet.' : 'No team tasks here.'),
         onCount: function (n) { setChipCount(barHost, n); },
         onAdd: function (title, done) {
           if (!api()) { done(false); return; }
           // Org task assigned to me by default; reassign in the detail editor.
-          api().create({ title: title, assignee_user_id: currentUserId() || undefined }).then(function () {
+          // On the Punch list tab, new rows are created as kind:'punch'.
+          api().create({ title: title, assignee_user_id: currentUserId() || undefined, kind: kind || undefined }).then(function () {
             done(true);
             if (_ctl.team && _ctl.team.refresh) _ctl.team.refresh().then(function () {
               var ni = listHost.querySelector('.p86-tg-addinput'); if (ni) ni.focus();
