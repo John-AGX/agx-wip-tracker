@@ -181,7 +181,7 @@ const EFFORT_PER_AGENT = {
   staff: (process.env.AI_EFFORT_STAFF || '').trim().toLowerCase()
 };
 const EFFORT_SUPPORTED_MODELS = new Set([
-  'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-opus-4-5', 'claude-sonnet-4-6'
+  'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-opus-4-5', 'claude-sonnet-4-6', 'claude-sonnet-5'
 ]);
 function effortClause(agentKey) {
   // Per-agent override beats global default. Resolve in this order:
@@ -206,7 +206,7 @@ function effortClause(agentKey) {
 // adaptive thinking with no display variant (Phase 5b/UI work can
 // hook the summary stream once we're on 4.7).
 const ADAPTIVE_THINKING_SUPPORTED = new Set([
-  'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-opus-4-5', 'claude-sonnet-4-6'
+  'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-opus-4-5', 'claude-sonnet-4-6', 'claude-sonnet-5'
 ]);
 // Opus 4.8 / 4.7 support display:'summarized' — a collapsed thinking
 // summary streams to the UI so the panel can render reasoning progress
