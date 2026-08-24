@@ -178,7 +178,24 @@ describe('target margin back-solves the UNLOCKED remainder only', () => {
 describe('a stripped per-object degrades to today number, never to NaN', () => {
   test('the empty-lines return carries all four keys — one shape from every path', () => {
     const per = pricing.computeForLines({ targetMargin: 30 }, []);
-    expect(per).toEqual({ subtotal: 0, markedUp: 0, lockedSubtotal: 0, lockedSell: 0 });
+    expect(per).toMatchObject({ subtotal: 0, markedUp: 0, lockedSubtotal: 0, lockedSell: 0 });
+    // ONE SHAPE FROM EVERY PATH, stated as the whole key list rather than
+    // four of them: the client-price decision now rides on `per`, and a
+    // return path that omitted it would put a caller back in the position
+    // of working the decision out for itself — which is the defect the
+    // single gate exists to end. Empty lines, a real record and a
+    // non-array all hand back the same keys.
+    const keys = Object.keys(per).sort();
+    expect(keys).toEqual([
+      'clientPrice', 'lineCount', 'lockedSell', 'lockedSubtotal', 'markedUp',
+      'natural', 'naturalFree', 'promisedCount', 'promisedFlags', 'subtotal',
+      'zeroPriceCount',
+    ]);
+    expect(Object.keys(pricing.computeForLines({ targetMargin: 30 }, null)).sort()).toEqual(keys);
+    expect(Object.keys(pricing.computeForLines(
+      { targetMargin: 30 }, [{ id: 'a', qty: 1, unitCost: 10 }])).sort()).toEqual(keys);
+    // No client price asked for → no decision, on every one of those paths.
+    expect(per.clientPrice).toBe(null);
   });
 
   test('...and those two keys are NOT what keeps it out of NaN', () => {
@@ -277,7 +294,18 @@ describe('lineMoney is the single per-line rule the row paints share', () => {
       if (mm.locked) { acc.lockedSubtotal += mm.ext; acc.lockedSell += mm.sell; }
       return acc;
     }, { subtotal: 0, markedUp: 0, lockedSubtotal: 0, lockedSell: 0 });
-    expect(per).toEqual(byHand);
+    expect(per).toMatchObject(byHand);
+    // The four money keys are EXACTLY the hand-rolled sums, to the bit —
+    // toMatchObject is used only because `per` now also carries the
+    // per-line prices and the client-price decision, not to loosen this.
+    expect(per.subtotal).toBe(byHand.subtotal);
+    expect(per.markedUp).toBe(byHand.markedUp);
+    expect(per.lockedSubtotal).toBe(byHand.lockedSubtotal);
+    expect(per.lockedSell).toBe(byHand.lockedSell);
+    // And `natural` is that same per-line rule kept rather than recomputed:
+    // it is what lineMoney returned, index-aligned, summing to markedUp.
+    expect(per.natural).toEqual(lines.map((l) => pricing.lineMoney(l, lines, rec).sell));
+    expect(per.natural.reduce((a, b) => a + b, 0)).toBe(per.markedUp);
   });
 
   test('sellLocked reads the same three states the pricing branch reads', () => {

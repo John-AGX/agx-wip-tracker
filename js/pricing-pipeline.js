@@ -24,7 +24,9 @@
 //   sellLocked(line) → boolean
 //   lineMoney(line, lines, rec) → { ext, sell, locked, markup }
 //   computeForLines(rec, lines) → { subtotal, markedUp,
-//                                   lockedSubtotal, lockedSell }
+//                                   lockedSubtotal, lockedSell,
+//                                   natural[], promisedFlags[], naturalFree,
+//                                   clientPrice }   ← THE one decision
 //   targetMarginActive(rec) → boolean
 //   applyTargetMargin(subtotal, rec) → markedUp
 //   parseMoney(v) → number | null          (currency, not percent)
@@ -33,7 +35,7 @@
 //   clientPriceState(rec, lines) → null | { ok, reason, target, markedUp,
 //                                           scale, sells[], … }
 //   resolveMarkedUp(per, rec) → markedUp
-//   applyFeesAndTax(markedUp, rec) → { feeFlat, feePctAmount, preTax,
+//   applyFeesAndTax(markedUp, rec[, honoured]) → { feeFlat, feePctAmount, preTax,
 //                                       taxAmount, beforeRound,
 //                                       rounded, total }
 //
@@ -197,30 +199,65 @@
   // Defensive, not load-bearing. The distinction is worth the words — a
   // rationale that overstates is how the next reader concludes the guard
   // is here and stops looking for it where it actually is.
+  // ⚠ ONE PASS, ONE DECISION. The per-line PRICES this loop already computes
+  // are kept (`natural`), not thrown away and re-derived by a second function
+  // over the same array. That is not an optimisation — it is the whole repair.
+  // `clientPriceState` used to walk `lines` a second time to rebuild exactly
+  // these numbers, and the two walks did not agree: this one accumulated
+  // `naturalFree` as `markedUp - lockedSell` (a subtraction off an
+  // interleaved accumulator) while that one summed the unpromised lines
+  // directly. Measured, those disagreed numerically on 41% of records, and on
+  // a deduct change order whose add and credit cancel exactly one read 0 and
+  // the other 3.6e-12 — so the state gate refused `no-free-pool` while the
+  // total honoured the price, $8,198.16 apart. There is now one array and one
+  // `naturalFree`, so there is nothing left to disagree.
   function computeForLines(rec, lines) {
-    if (!Array.isArray(lines) || !lines.length) {
-      return { subtotal: 0, markedUp: 0, lockedSubtotal: 0, lockedSell: 0 };
-    }
+    var arr = Array.isArray(lines) ? lines : [];
     var subtotal = 0;
     var markedUp = 0;
     var lockedSubtotal = 0;
     var lockedSell = 0;
-    lines.forEach(function(l) {
+    var naturalFree = 0;
+    var natural = new Array(arr.length);
+    var promised = new Array(arr.length);
+    var lineCount = 0, promisedCount = 0, zeroPriceCount = 0;
+    arr.forEach(function(l, i) {
       if (l.section === '__section_header__') {
-        if (l.markupMode === 'dollar' && l.markup !== '' && l.markup != null) {
-          markedUp += num(l.markup);
-        }
+        // A $-mode section's flat adder is a price contribution like any
+        // other, and it is not a promise, so it scales with everything else.
+        var add = (l.markupMode === 'dollar' && l.markup !== '' && l.markup != null)
+          ? num(l.markup) : 0;
+        markedUp += add;
+        natural[i] = add; promised[i] = false; naturalFree += add;
         return;
       }
-      var mm = lineMoney(l, lines, rec);
+      lineCount++;
+      var mm = lineMoney(l, arr, rec);
       subtotal += mm.ext;
       markedUp += mm.sell;
-      if (mm.locked) { lockedSubtotal += mm.ext; lockedSell += mm.sell; }
+      natural[i] = mm.sell;
+      promised[i] = mm.locked;
+      if (mm.locked) {
+        promisedCount++;
+        lockedSubtotal += mm.ext; lockedSell += mm.sell;
+      } else {
+        naturalFree += mm.sell;
+        if (!mm.sell) zeroPriceCount++;
+      }
     });
-    return {
+    var per = {
       subtotal: subtotal, markedUp: markedUp,
-      lockedSubtotal: lockedSubtotal, lockedSell: lockedSell
+      lockedSubtotal: lockedSubtotal, lockedSell: lockedSell,
+      naturalFree: naturalFree, natural: natural, promisedFlags: promised,
+      lineCount: lineCount, promisedCount: promisedCount,
+      zeroPriceCount: zeroPriceCount,
+      clientPrice: null
     };
+    // THE decision, taken once, here, on the object every consumer already
+    // holds. resolveMarkedUp reads it; the row painter reads it; the refusal
+    // band reads it. None of them may take it again.
+    per.clientPrice = decideClientPrice(rec, per);
+    return per;
   }
 
   // Target-margin override. When rec.targetMargin is a sane percent
@@ -350,8 +387,8 @@
   // The closed form does not, and its wrongness is silent.
   function solveMarkedUpForTotal(rec, target) {
     var lo = -1e9, hi = 1e9;
-    var flo = applyFeesAndTax(lo, rec).total;
-    var fhi = applyFeesAndTax(hi, rec).total;
+    var flo = applyFeesAndTax(lo, rec, true).total;
+    var fhi = applyFeesAndTax(hi, rec, true).total;
     if (!isFinite(flo) || !isFinite(fhi)) return null;
     // THE SINGULARITY. (1+feePct/100)*(1+taxPct/100) === 0 makes every
     // markedUp produce the same total, so nothing can be solved for. An
@@ -363,7 +400,7 @@
     if (inc ? (target < flo || target > fhi) : (target > flo || target < fhi)) return null;
     for (var i = 0; i < 200; i++) {
       var mid = (lo + hi) / 2;
-      var fm = applyFeesAndTax(mid, rec).total;
+      var fm = applyFeesAndTax(mid, rec, true).total;
       if (inc ? (fm < target) : (fm > target)) lo = mid; else hi = mid;
     }
     return (lo + hi) / 2;
@@ -404,10 +441,10 @@
     if (!(target > 0)) { out.reason = 'not-positive'; return out; }
     // What this record charges before a dollar of work is priced. Named so
     // the refusal can quote it rather than say "too low".
-    out.floorTotal = applyFeesAndTax(0, rec).total;
+    out.floorTotal = applyFeesAndTax(0, rec, true).total;
     var mu = solveMarkedUpForTotal(rec, target);
     if (mu == null || !isFinite(mu) ||
-        Math.abs(applyFeesAndTax(mu, rec).total - target) > CP_EPS) {
+        Math.abs(applyFeesAndTax(mu, rec, true).total - target) > CP_EPS) {
       out.reason = 'unreachable'; return out;
     }
     out.markedUp = mu;
@@ -450,14 +487,36 @@
   // and its tie-break is the stored index ascending — so the settling cent
   // lands on the same line on every repaint, on the server as in the
   // browser, and re-sorting the table for display cannot move a penny.
-  function allocateFreePool(natural, promised, freePool) {
+  //
+  // ⚠⚠ THE POOL SETTLES ITS OWN SUB-CENT — IT IS NOT ROUNDED AWAY.
+  // `poolCents` below quantises the pool to whole cents while `freePool`
+  // need not be one: a promised line at qty 0.5 x $1,650.07 contributes
+  // $825.035, so the pool lands on a half cent and the rows come to
+  // $0.005 less than the number they are supposed to explain. That residual
+  // is bounded by EXACTLY half a cent — which is what CP_EPS was set to —
+  // so the old belt-and-braces check fired only when IEEE-754 rounding
+  // pushed the computed difference a few ulps past its own exact bound.
+  // Measured: of ~17,300 records sitting on that knife edge, 30% landed on
+  // the wrong side of a strict `>`, decided by float representation rather
+  // than by anything about the change order. That is why it read as random.
+  //
+  // Rounding the pool harder cannot fix it and widening the tolerance
+  // disables it. The pool is made whole instead: after the cent walk, the
+  // difference between what was spent and the pool it was handed is added
+  // back, so `Σ free sells === freePool` by construction and the check
+  // becomes an assertion about float arithmetic rather than about rounding.
+  //
+  // The sub-cent lands on the LARGEST free line (tie → stored index), where
+  // it cannot distort a displayed row: a half cent on a $16,000 line is
+  // invisible, the same half cent on a $0.01 line doubles it. This is a
+  // choice about VALUE, not about display order, so it does not re-order
+  // anything the remainder walk reads and the building-sort rule above holds.
+  function allocateFreePool(natural, promised, naturalFree, freePool) {
     var sells = new Array(natural.length);
     var idx = [];
-    var naturalFree = 0;
     for (var i = 0; i < natural.length; i++) {
       if (promised[i]) { sells[i] = natural[i]; continue; }
       idx.push(i);
-      naturalFree += natural[i];
     }
     var scale = freePool / naturalFree;
     var poolCents = Math.round(freePool * 100);
@@ -481,76 +540,108 @@
       for (var c = 0; c < n; c++) floors[order[c % order.length]] += step;
     }
     for (var m = 0; m < idx.length; m++) sells[idx[m]] = floors[idx[m]] / 100;
+    // Settle the sub-cent the cent walk could not place. When freePool is
+    // already a whole number of cents — every record whose promised lines
+    // are — `tail` is 0 and this is a no-op, which is why it moves no
+    // existing allocation by a penny.
+    if (idx.length) {
+      var spent = 0;
+      for (var t = 0; t < idx.length; t++) spent += sells[idx[t]];
+      var tail = freePool - spent;
+      if (tail !== 0) {
+        var big = idx[0];
+        for (var b = 1; b < idx.length; b++) {
+          if (Math.abs(natural[idx[b]]) > Math.abs(natural[big])) big = idx[b];
+        }
+        sells[big] += tail;
+      }
+    }
     return sells;
   }
 
-  // THE WHOLE CLIENT-PRICE ANSWER FOR ONE RECORD, in one call: whether one
-  // was asked for, whether it can be honoured, why not if not, and — when it
-  // can — what each entry in `lines` is worth, index-aligned with the array
-  // as stored. Returns null when no client price was asked for at all, which
-  // is every change order that exists today.
+  // THE ONE CLIENT-PRICE DECISION FOR ONE RECORD: whether one was asked for,
+  // whether it can be honoured, why not if not, and — when it can — what each
+  // entry in `lines` is worth, index-aligned with the array as stored.
+  // Returns null when no client price was asked for at all, which is every
+  // change order that exists today.
+  //
+  // ⚠⚠ THIS IS THE ONLY PLACE THE QUESTION IS ANSWERED, AND IT IS CALLED FROM
+  // EXACTLY ONE PLACE — the tail of computeForLines. It is not exported.
+  //
+  // It used to be answered TWICE, by two functions with different signatures:
+  // clientPriceState(rec, lines) ran the allocation and could refuse, while
+  // resolveMarkedUp(per, rec) called solveClientPrice directly and could not —
+  // it did not hold `lines`, so it physically could not run the check. So the
+  // rows painted a refusal while the Total chip, changeOrderMoney, job-wip,
+  // the WIP report, Live Rooms and the pay applications all honoured the
+  // price. On 1%–4% of realistic change orders — 4.26% over 300,000 — they
+  // disagreed, by a median 13% OF THE CHANGE ORDER. The repair is not a third
+  // copy of the check: it is that there is no second answer to keep in sync,
+  // because the answer rides on `per` and both paths read that one object.
   //
   // Index-aligned rather than keyed by line id ON PURPOSE: imported records
   // do not reliably carry ids, and a suite whose fixtures all have one is a
   // suite that proves nothing about them.
-  function clientPriceState(rec, lines) {
+  function decideClientPrice(rec, per) {
     if (!clientPriceRequested(rec)) return null;
-    var arr = Array.isArray(lines) ? lines
-      : (Array.isArray(rec && rec.lines) ? rec.lines : []);
-    var natural = new Array(arr.length);
-    var promised = new Array(arr.length);
-    var lockedSell = 0, naturalFree = 0;
-    var lineCount = 0, promisedCount = 0, zeroPriceCount = 0;
-    for (var i = 0; i < arr.length; i++) {
-      var l = arr[i];
-      if (l && l.section === '__section_header__') {
-        // A $-mode section's flat adder is a price contribution like any
-        // other, and it is not a promise, so it scales with everything else.
-        var add = (l.markupMode === 'dollar' && l.markup !== '' && l.markup != null)
-          ? num(l.markup) : 0;
-        natural[i] = add; promised[i] = false; naturalFree += add;
-        continue;
-      }
-      lineCount++;
-      var mm = lineMoney(l, arr, rec);
-      natural[i] = mm.sell;
-      promised[i] = mm.locked;
-      if (mm.locked) { promisedCount++; lockedSell += mm.sell; }
-      else { naturalFree += mm.sell; if (!mm.sell) zeroPriceCount++; }
-    }
-    var st = solveClientPrice(rec, lockedSell, naturalFree);
-    st.lineCount = lineCount;
-    st.promisedCount = promisedCount;
-    st.unpromisedCount = lineCount - promisedCount;
+    var st = solveClientPrice(rec, per.lockedSell, per.naturalFree);
+    st.lineCount = per.lineCount;
+    st.promisedCount = per.promisedCount;
+    st.unpromisedCount = per.lineCount - per.promisedCount;
     // ZERO-COST LINES ARE THE PROMISED-SET-EMPTY CASE OF freePool == 0, not
     // a separate defect: three $0-cost lines give subtotal 0, natural
     // markedUp 0 and lockedSell 0, so there is no pool and no promise. The
     // amber affordance that keys off PROMISED lines never fires for them —
     // which is exactly why the refusal below keys off the pool instead, and
     // why this count exists to name them.
-    st.zeroPriceCount = zeroPriceCount;
+    st.zeroPriceCount = per.zeroPriceCount;
     st.roundTo = num(rec.roundTo);
-    st.roundToPaused = st.roundTo > 0 && clientPriceInForce(rec);
-    st.natural = natural;
-    st.promisedFlags = promised;
+    st.natural = per.natural;
+    st.promisedFlags = per.promisedFlags;
     st.sells = null;
-    if (!st.ok) return st;
-    st.sells = allocateFreePool(natural, promised, st.freePool);
-    // BELT AND BRACES. The rows must account for the total, to the cent,
-    // or the screen is showing a number it cannot explain. If they somehow
-    // do not, this refuses like any other unhonourable price rather than
-    // painting the difference nowhere.
-    //
-    // ⚠ Like Rule A's verify, this is UNREACHABLE while allocateFreePool is
-    // correct — removing it turns no test red on its own, measured. Break
-    // the allocation as well (flatten it, say) and it is the only thing
-    // standing between a wrong row and a total that does not match it.
-    var sum = 0;
-    for (var s = 0; s < st.sells.length; s++) sum += st.sells[s];
-    if (!isFinite(sum) || Math.abs(sum - st.markedUp) > CP_EPS) {
-      st.ok = false; st.reason = 'allocation'; st.sells = null;
+    if (st.ok) {
+      st.sells = allocateFreePool(per.natural, per.promisedFlags, per.naturalFree, st.freePool);
+      // THE DOCUMENT NUMBER IS THE ROWS. Not a number the rows approximate to
+      // within a tolerance — the sum itself, assigned. `Σ sells` and
+      // `st.markedUp` are the same value read twice from here on, so the
+      // totals path and the row-painting path cannot report different money
+      // however either of them is later changed.
+      //
+      // The check below therefore no longer guards a rounding gap — the pool
+      // settles its own sub-cent in allocateFreePool. It asserts that the
+      // allocation SPENT THE POOL IT WAS HANDED, which is a statement about
+      // IEEE-754: the tolerance is float noise scaled for magnitude, nowhere
+      // near the half cent the residual used to be able to reach. Break the
+      // allocation (flatten it, say) and this is still the only thing between
+      // a wrong row and a total that cannot explain it.
+      var sum = 0;
+      for (var s = 0; s < st.sells.length; s++) sum += st.sells[s];
+      if (!isFinite(sum) || Math.abs(sum - st.markedUp) > 1e-6 + Math.abs(sum) * 1e-12) {
+        st.ok = false; st.reason = 'allocation'; st.sells = null;
+      } else {
+        st.markedUp = sum;
+      }
     }
+    // ROUND TO $ PAUSES ONLY ON A PRICE THAT WAS ACTUALLY HONOURED.
+    // This used to read clientPriceInForce(rec), which tests only that the
+    // string PARSES. A refused price still stood roundTo down and silently
+    // moved the total — measured at −$400.00 and −$300.00 at roundTo 500 on
+    // records whose price the editor was, at that moment, explaining it had
+    // refused. Refusing and then changing the number anyway is the same bug
+    // the gate collapse above exists to end, one field further down.
+    st.roundToPaused = st.roundTo > 0 && st.ok;
     return st;
+  }
+
+  // The public read of that one decision. A wrapper, deliberately: it takes
+  // the answer computeForLines already put on `per` rather than working it
+  // out again, so there is no path by which a caller of this and a caller of
+  // resolveMarkedUp can be told different things about the same record.
+  function clientPriceState(rec, lines) {
+    if (!clientPriceRequested(rec)) return null;
+    var arr = Array.isArray(lines) ? lines
+      : (Array.isArray(rec && rec.lines) ? rec.lines : []);
+    return computeForLines(rec, arr).clientPrice;
   }
 
   // THE document-level marked-up total, target margin resolved.
@@ -584,11 +675,20 @@
     // exactly as it would with the field empty, and the editor puts the
     // reason on screen. Returning a clamped or partial number here is the
     // one outcome this design will not have.
-    if (clientPriceRequested(rec)) {
-      var lockedSell = num(p.lockedSell);
-      var cp = solveClientPrice(rec, lockedSell, num(p.markedUp) - lockedSell);
-      if (cp.ok) return cp.markedUp;
-    }
+    // ⚠⚠ A READER, NOT A SECOND GATE. This used to call solveClientPrice
+    // itself, re-deriving `naturalFree` as `markedUp - lockedSell` because
+    // its signature carries no `lines` and it therefore could not run the
+    // allocation check that clientPriceState ran. That is precisely how the
+    // Total chip and the server came to honour a price the rows had refused.
+    //
+    // There is nothing to solve here any more: computeForLines took the
+    // decision, `per` carries it, and the row painter reads the SAME object.
+    // A `per` that never came from computeForLines carries no decision and
+    // falls through to line markups — which is the safe direction, and is
+    // what every caller in the repo already does, since all seven pass a
+    // `per` from computeForLines(rec, lines) on the line immediately above.
+    var cp = p.clientPrice;
+    if (cp && cp.ok) return cp.markedUp;
     if (!targetMarginActive(rec)) return p.markedUp;
     var lockedSell = num(p.lockedSell);
     var lockedSubtotal = num(p.lockedSubtotal);
@@ -611,7 +711,21 @@
   // render each step. Both estimates and COs share this exactly —
   // the fee/tax/round fields live at the record root with identical
   // names (feeFlat, feePct, taxPct, roundTo).
-  function applyFeesAndTax(markedUp, rec) {
+  // Was a client price on this record actually HONOURED? Derived from the
+  // one decider, never from a second reading of the fields.
+  //
+  // The recursion this would otherwise cause — decide → solve → bisect →
+  // applyFeesAndTax → decide — is cut by the explicit third argument: every
+  // call made from INSIDE the solve passes it, because during a solve the
+  // pause is on by definition (that is what makes a typed price reachable
+  // at all). Only calls from outside ask this question.
+  function clientPriceHonoured(rec) {
+    if (!clientPriceRequested(rec)) return false;
+    var cp = computeForLines(rec, Array.isArray(rec.lines) ? rec.lines : []).clientPrice;
+    return !!(cp && cp.ok);
+  }
+
+  function applyFeesAndTax(markedUp, rec, honoured) {
     var feeFlat = rec ? num(rec.feeFlat) : 0;
     var feePctAmount = markedUp * (rec ? num(rec.feePct) : 0) / 100;
     var preTax = markedUp + feeFlat + feePctAmount;
@@ -630,9 +744,18 @@
     //
     // The `roundTo > 0` test comes first on purpose: a record with no
     // targetPrice — every change order that exists today — never reaches
-    // clientPriceInForce at all when roundTo is 0, and gets false in one
+    // the honoured test at all when roundTo is 0, and gets false in one
     // property read when it isn't.
-    if (roundTo > 0 && clientPriceInForce(rec)) roundTo = 0;
+    //
+    // ⚠ HONOURED, NOT MERELY TYPED. clientPriceInForce asks only whether the
+    // string parses to a positive number, so a price the editor was refusing
+    // on screen still stood roundTo down and moved the total anyway: −$400.00
+    // on a no-free-pool record at roundTo 500, −$300.00 on promised-exceeds.
+    // A refusal must change NOTHING.
+    if (roundTo > 0) {
+      var pause = honoured === undefined ? clientPriceHonoured(rec) : !!honoured;
+      if (pause) roundTo = 0;
+    }
     var total = beforeRound;
     var rounded = 0;
     if (roundTo > 0) {
