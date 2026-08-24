@@ -412,7 +412,17 @@ describe("the presenter's own app is unchanged outside a room", () => {
   });
 
   test('the Present button mints and copies in one action', () => {
-    expect(JS).toMatch(/data-live-act="start">[\s\S]{0,120}Present/);
+    // Present LIVES IN THE ACCOUNT MENU now, not the strip. f4fa4b7e moved it
+    // (`#present-menu-btn`, synced by syncMenuBtn) and left this assertion
+    // pinned to the old `data-live-act="start"` pill, so it went red on main —
+    // a stale test, not a broken feature. Re-pointed rather than deleted: the
+    // affordance still has to EXIST somewhere, or "Present" is unreachable and
+    // nothing would notice.
+    expect(read('index.html')).toMatch(/id="present-menu-btn"[\s\S]{0,160}Present this job/);
+    expect(JS).toContain("getElementById('present-menu-btn')");
+    // The invariant that actually matters, and the half that never broke:
+    // hosting MINTS the session before it copies the link, so the clipboard
+    // can never carry a link to a room that does not exist yet.
     const start = JS.slice(JS.indexOf('function startHosting'));
     expect(start.indexOf('attachSession')).toBeLessThan(start.indexOf('copyLink()'));
   });
