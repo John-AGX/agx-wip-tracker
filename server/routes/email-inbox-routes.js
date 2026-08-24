@@ -400,6 +400,11 @@ async function storeInboundMessage(p) {
   let hasAttachments = false;
   try {
     const n = await storeEmailAttachments(ins.rows[0].id, user, p.attachments);
+    // Diagnostic: received=0 → the Worker didn't forward any (old Worker not
+    // redeployed, or the mail had none); received>0 stored=0 → a storage/insert
+    // problem. Lets us pinpoint from the Railway logs after a test send.
+    console.log('[email-inbox] attachments received=%d stored=%d for %s',
+      Array.isArray(p.attachments) ? p.attachments.length : 0, n, ins.rows[0].id);
     if (n > 0) {
       hasAttachments = true;
       await pool.query('UPDATE inbound_emails SET has_attachments = TRUE WHERE id = $1', [ins.rows[0].id]);

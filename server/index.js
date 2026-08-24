@@ -116,6 +116,19 @@ app.post('/api/email-inbox/inbound',
   express.raw({ type: () => true, limit: '256kb' }),
   emailInboxRoutes.inboundHandler);
 
+// Cloudflare Email Worker inbound (PRIMARY path) — MUST be mounted before the
+// global express.json below, or its 25mb limit is a no-op: a route-level
+// express.json after the global 10mb one is skipped (express.json won't
+// re-parse an already-parsed body), so the effective cap would be 10mb and a
+// larger attachment's base64 body would 413 → the Worker throws → the email
+// never lands. The Worker base64-forwards attachments, so the body is no
+// longer metadata+text only. Shared-secret authed in the handler; the per-IP
+// limiter runs here because we're above the global `app.use('/api', …)` one.
+app.post('/api/email-inbox/inbound-cf',
+  ipGenericLimiter,
+  express.json({ limit: '25mb' }),
+  emailInboxRoutes.inboundCfHandler);
+
 // Middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser());
@@ -171,16 +184,9 @@ app.use('/api/field-tools', fieldToolsRoutes);
 // Workspace ⇄ Excel fidelity — server-side xlsx export (exceljs writes
 // the styles the old client-side SheetJS Community exporter could not).
 app.use('/api/workspace', require('./routes/workspace-xlsx-routes'));
-// Email Dropbox — the Cloudflare Email Worker POSTs parsed JSON here
-// (primary inbound path). Shared-secret authed inside the handler; JSON
-// body. The global `app.use('/api', ipGenericLimiter)` above already
-// rate-limits this path — do NOT add the limiter again here or each
-// email is double-counted against the per-IP budget.
-app.post('/api/email-inbox/inbound-cf',
-  // 25mb: the Worker now base64-forwards attachments (it caps the packed
-  // total at ~22MB), so the inbound body is no longer metadata + text only.
-  express.json({ limit: '25mb' }),
-  emailInboxRoutes.inboundCfHandler);
+// (The Cloudflare Email Worker inbound route /api/email-inbox/inbound-cf is
+// mounted ABOVE — before the global express.json — so its 25mb body limit
+// actually applies to base64-forwarded attachments. See there.)
 // Email Dropbox reads + my-address.
 app.use('/api/email-inbox', emailInboxRoutes);
 // Premium Email Hub — E1 folder spine (docs/email-hub-premium.md).

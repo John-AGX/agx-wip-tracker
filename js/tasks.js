@@ -280,6 +280,15 @@
       '.p86-tasks-head h2{margin:0;font-size:19px;font-weight:650;letter-spacing:-.01em;}' +
       '.p86-tasks-newbtn{font:inherit;font-size:13px;font-weight:600;color:#fff;background:var(--accent,#4f8cff);border:none;border-radius:8px;padding:7px 14px;cursor:pointer;transition:filter .12s;}' +
       '.p86-tasks-newbtn:hover{filter:brightness(1.08);}' +
+      '.p86-tasks-headtools{display:flex;align-items:center;gap:8px;}' +
+      '.p86-tasks-iconbtn{width:34px;height:34px;border-radius:8px;border:1px solid var(--border,#2a2a32);background:transparent;color:var(--muted,#8b93a3);font-size:16px;line-height:1;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:color .12s,border-color .12s,background .12s;}' +
+      '.p86-tasks-iconbtn:hover{color:var(--text,#e7eaf0);border-color:var(--accent-line,rgba(79,140,255,.4));}' +
+      '.p86-tasks-iconbtn.is-on{color:var(--accent,#4f8cff);border-color:var(--accent-line,rgba(79,140,255,.5));background:rgba(79,140,255,.1);}' +
+      '.p86-compact .p86-tg-row{height:31px;}' +
+      '.p86-compact .p86-tg-head{height:30px;}' +
+      '.p86-compact .p86-tg-title{font-size:12.5px;}' +
+      '.p86-compact .p86-tg-group{padding:5px 14px 4px;}' +
+      '.p86-compact .p86-tg-addrow{height:31px;}' +
       '.p86-tasks-quickbar{display:flex;gap:8px;margin-bottom:16px;}' +
       '.p86-tasks-quickbar input{flex:1 1 auto;font:inherit;font-size:14px;padding:10px 14px;border:1px solid var(--border,#d4d4d8);border-radius:10px;background:var(--surface,#fff);color:inherit;transition:border-color .12s,box-shadow .12s;}' +
       '.p86-tasks-quickbar input:focus{outline:none;border-color:var(--accent,#4f8cff);box-shadow:0 0 0 3px rgba(79,140,255,.15);}' +
@@ -1502,6 +1511,7 @@
   var _teamUser = '';          // '' = everyone | 'me' | 'unassigned' | <id>
   var _teamPriority = '';      // '' = any | urgent | high | normal | low (client-side)
   var _todoPriority = '';
+  var _compact = false;        // header density toggle
   var _todoFilter = 'open';
   var _remStatus = 'pending';  // pending | all
   var _ctl = { team: null, todos: null, reminders: null };
@@ -1572,7 +1582,11 @@
     pane.innerHTML =
       '<div class="p86-tasks-page">' +
         '<div class="p86-tasks-head"><h2>Tasks &amp; Reminders</h2>' +
-          '<button class="p86-tasks-newbtn" id="p86TaskNew">＋ Task</button>' +
+          '<div class="p86-tasks-headtools">' +
+            '<button class="p86-tasks-iconbtn" id="p86TaskRefresh" type="button" title="Refresh">&#8635;</button>' +
+            '<button class="p86-tasks-iconbtn" id="p86TaskDensity" type="button" title="Compact rows">&#9776;</button>' +
+            '<button class="p86-tasks-newbtn" id="p86TaskNew" type="button">＋ Task</button>' +
+          '</div>' +
         '</div>' +
         '<div class="p86-tabs" role="tablist">' +
           '<button class="p86-tab" data-tab="team">Team Tasks</button>' +
@@ -1587,6 +1601,15 @@
     if (newBtn) newBtn.addEventListener('click', function () {
       var ai = pane.querySelector('.p86-tg-addinput');
       if (ai) { ai.focus(); ai.scrollIntoView({ block: 'nearest' }); }
+    });
+    var refreshBtn = pane.querySelector('#p86TaskRefresh');
+    if (refreshBtn) refreshBtn.addEventListener('click', function () { selectTab(_activeTab); });
+    var densityBtn = pane.querySelector('#p86TaskDensity');
+    if (_compact) { pane.classList.add('p86-compact'); if (densityBtn) densityBtn.classList.add('is-on'); }
+    if (densityBtn) densityBtn.addEventListener('click', function () {
+      _compact = !_compact;
+      pane.classList.toggle('p86-compact', _compact);
+      densityBtn.classList.toggle('is-on', _compact);
     });
 
     function selectTab(tab) {
