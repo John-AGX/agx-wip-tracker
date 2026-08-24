@@ -3010,15 +3010,6 @@ async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, 
     } catch (e) { /* non-fatal: identity is best-effort */ }
   }
 
-  try {
-    const _tc = String(turnContextText || '').length;
-    const _pb = Array.isArray(photoBlocks) ? photoBlocks.length : 0;
-    if (_tc >= 3000 || _pb) {
-      recordCtxSize('turnContext ' + (entityType || '?') + '/' + (entityId || '?') +
-        ' → ' + _tc + ' chars (~' + Math.round(_tc / 4) + ' tok)' +
-        (_pb ? ' + ' + _pb + ' photo block(s)' : ''));
-    }
-  } catch (_) { /* instrumentation must never break a turn */ }
   return { turnContextText, photoBlocks, entityText };
 }
 
@@ -8283,37 +8274,7 @@ function haversineMiles(aLat, aLng, bLat, bLng) {
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
 }
 
-// ── Per-turn context-size instrumentation (temporary) ─────────────────────
-// Debugging the "112k cache" question: every agent (Assistant, 86, background)
-// routes read_entity / search_entities / find_entities_near through
-// execConsolidatedRead, and those results ride in the conversation + are
-// re-read from cache every turn. These probes log the byte/token size of each
-// read result + the per-turn context so a single live chat reveals exactly
-// which piece is fat (the suspected ~90k). Log-only; no behavior change.
-// Entries also land in a small ring buffer, exposed read-only at
-// GET /api/ai/ctx-size-log so the breakdown is viewable in-browser without
-// Railway logs. Remove all of this once the culprit is fixed.
-const _ctxSizeBuf = [];
-function recordCtxSize(line) {
-  try {
-    _ctxSizeBuf.push({ t: new Date().toISOString(), line: String(line) });
-    while (_ctxSizeBuf.length > 80) _ctxSizeBuf.shift();
-    console.log('[ctx-size] ' + line);
-  } catch (_) { /* never break a turn */ }
-}
-function getCtxSizeLog() { return _ctxSizeBuf.slice(); }
 async function execConsolidatedRead(name, input, ctx) {
-  const out = await _execConsolidatedReadImpl(name, input, ctx);
-  try {
-    const chars = String(out == null ? '' : out).length;
-    if (chars >= 1500) {
-      recordCtxSize('read ' + name + ' → ' + chars + ' chars (~' +
-        Math.round(chars / 4) + ' tok) · ' + JSON.stringify(input || {}).slice(0, 120));
-    }
-  } catch (_) { /* never let instrumentation break a turn */ }
-  return out;
-}
-async function _execConsolidatedReadImpl(name, input, ctx) {
   const inp = input || {};
 
   // Wave 1.B — log entity reads/searches into context_load_events so
@@ -13158,11 +13119,6 @@ async function driveEscalateTo86(intent, ctx) {
     console.warn('[escalate] context-pack build failed (non-fatal — 86 will read):', e && e.message);
     pack = '';
   }
-  try {
-    const _pk = String(pack || '').length;
-    if (_pk >= 2000) recordCtxSize('escalate pack ' + (et || '?') + '/' + (eidResolved || '?') +
-      ' → ' + _pk + ' chars (~' + Math.round(_pk / 4) + ' tok)');
-  } catch (_) {}
 
   // Briefing: Haiku's if it provided one, else synthesize from the reads it
   // ran this turn so 86 still gets the gathered data even with no pack.
@@ -15443,13 +15399,6 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
       res.end();
     } catch (_) {}
   }
-});
-
-// TEMP debug (remove with the [ctx-size] instrumentation): returns the last
-// ~80 per-turn context-size probe entries so the "112k cache" breakdown is
-// viewable in-browser — no Railway logs needed. Newest last.
-router.get('/ctx-size-log', requireAuth, (req, res) => {
-  res.json({ entries: getCtxSizeLog(), note: 'Temporary per-turn context-size probe. Newest last.' });
 });
 
 module.exports = router;
