@@ -35,6 +35,21 @@ var _spSatellite=true; // satellite is permanent now (the toggle is retired); ne
 // Basemap imagery type: 'satellite' (default) or 'roadmap' (street map) — for
 // job locations with no/poor satellite coverage. Persisted; switched live via setMapTypeId.
 var _spBasemapType=(function(){ try{ return localStorage.getItem('ngSitePlanBasemap')==='roadmap' ? 'roadmap' : 'satellite'; }catch(_){ return 'satellite'; } })();
+// THE single place that turns our persisted state into a Google map type. The
+// 'satellite' state renders as HYBRID — the same aerial imagery WITH basemap
+// labels (street names, place names), which is what every other map surface in
+// this app already uses (map-picker/projects/tasks/entities-map/task-share).
+// Bare SATELLITE carries no labels at all, so a survey of an unbuilt lead showed
+// pure unlabelled imagery. Labels are part of the basemap (.ng-basemap z-index 1)
+// and the whole P86 geometry stack rides above it (.ng-canvas z-index 5, polygon
+// layer 6), so labels can never occlude a footprint or a live trace.
+// This exists as ONE function on purpose: the mount and the live toggle used to
+// each spell the rule out separately, so changing one silently left the other
+// serving the old imagery on a cold load. Both now call this.
+// The persisted vocabulary is deliberately UNCHANGED ('satellite'|'roadmap') so
+// values written by older or newer builds stay mutually readable; anything
+// unrecognised degrades to labelled satellite rather than a blank map.
+function spGoogleMapTypeId(){ return _spBasemapType==='roadmap' ? 'roadmap' : 'hybrid'; }
 // 3D Orbit view (Photorealistic 3D Tiles / Google-Earth engine). Rendered in an ISOLATED
 // same-origin iframe (/orbit3d.html) that loads Maps on the BETA channel + Map3DElement, so
 // the main app's maps stay on the production "weekly" channel, untouched. We feed the iframe
@@ -1753,7 +1768,7 @@ function mountBasemap(){
     if(!_spSatellite) return;                              // toggled off while the SDK loaded
     _basemap=new maps.Map(basemapEl, {
       center:{ lat:_spOrigin.lat, lng:_spOrigin.lng }, zoom:19,
-      mapTypeId:(_spBasemapType==='roadmap' ? maps.MapTypeId.ROADMAP : maps.MapTypeId.SATELLITE), tilt:0,
+      mapTypeId:spGoogleMapTypeId(), tilt:0,
       disableDefaultUI:true, gestureHandling:'none', keyboardShortcuts:false,
       clickableIcons:false, backgroundColor:'#0b0e16', isFractionalZoomEnabled:false
     });
@@ -7580,7 +7595,7 @@ function init(){
       _spBasemapType = (_spBasemapType==='roadmap') ? 'satellite' : 'roadmap';
       try{ localStorage.setItem('ngSitePlanBasemap', _spBasemapType); }catch(_){}
       _syncBasemapBtn();
-      if(_basemap && _basemapReady){ try{ _basemap.setMapTypeId(_spBasemapType); }catch(_){} syncBasemapCamera(); }
+      if(_basemap && _basemapReady){ try{ _basemap.setMapTypeId(spGoogleMapTypeId()); }catch(_){} syncBasemapCamera(); }
       else if(E.viewMode && E.viewMode()==='siteplan'){ mountBasemap(); }
     });
   }
