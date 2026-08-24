@@ -1571,7 +1571,7 @@ function p86Ask(message, opts) {
         break;
       case 'promised-exceeds':
         msg = '<strong>The promised prices already come to more than a Client Price of ' + escapeHTML(fmtCurrency(cp.target)) + '.</strong> ' +
-          cp.promisedCount + ' line' + (cp.promisedCount === 1 ? '' : 's') + ' with a promised Unit Sell total ' +
+          cp.promisedCount + ' line' + (cp.promisedCount === 1 ? '' : 's') + ' with a promised Unit Sell total' + (cp.promisedCount === 1 ? 's ' : ' ') +
           escapeHTML(fmtCurrency(cp.lockedSell)) + ', and a promise is not something a document total may restate. ' +
           'Raise the Client Price above ' + escapeHTML(fmtCurrency(cp.lockedSell)) + ', or clear a line’s Unit Sell.' +
           CP_FALLBACK;
