@@ -165,6 +165,19 @@
       '.p86-task-linkpick select{flex:1 1 0;min-width:0;}' +
       // List
       '.p86-task-list{display:flex;flex-direction:column;gap:1px;}' +
+      // Grouped sections — Overdue / Today / Upcoming / No due date / Completed.
+      '.p86-task-group{margin-bottom:20px;}' +
+      '.p86-task-group:last-child{margin-bottom:0;}' +
+      '.p86-task-grouphead{display:flex;align-items:center;gap:8px;padding:0 12px 7px;margin-bottom:3px;border-bottom:1px solid var(--border,#e5e7eb);}' +
+      '.p86-task-grouplabel{font-size:11px;font-weight:700;letter-spacing:.055em;text-transform:uppercase;color:var(--muted,#94a3b8);}' +
+      '.p86-task-grouplabel.is-overdue{color:#f87171;}' +
+      '.p86-task-grouplabel.is-today{color:#fbbf24;}' +
+      '.p86-task-groupcount{display:inline-flex;align-items:center;justify-content:center;min-width:19px;height:18px;padding:0 6px;border-radius:999px;background:rgba(148,163,184,.16);color:var(--muted,#94a3b8);font-size:11px;font-weight:600;}' +
+      '.p86-task-grouplabel.is-overdue + .p86-task-groupcount{background:rgba(239,68,68,.16);color:#f87171;}' +
+      'body.light-mode .p86-task-grouplabel.is-overdue{color:#b91c1c;}' +
+      'body.light-mode .p86-task-grouplabel.is-today{color:#92400e;}' +
+      'body.light-mode .p86-task-groupcount{background:#f1f5f9;color:#475569;}' +
+      'body.light-mode .p86-task-grouplabel.is-overdue + .p86-task-groupcount{background:#fee2e2;color:#b91c1c;}' +
       '.p86-task-item{display:flex;align-items:flex-start;gap:12px;padding:11px 12px;border-radius:9px;border:1px solid transparent;cursor:default;transition:background .12s;}' +
       '.p86-task-item:hover{background:var(--hover,var(--surface2,#202027));}' +
       '.p86-task-check{flex:0 0 auto;width:19px;height:19px;margin-top:1px;border-radius:999px;border:1.5px solid var(--border-strong,#8b93a7);background:transparent;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;color:#fff;transition:border-color .12s,background .12s;}' +
@@ -1085,12 +1098,48 @@
     ensureStyles();
     filter = filter || {};
 
+    // Bucket a task for the grouped view — mirrors dueChip's overdue/today logic.
+    function taskBucket(t) {
+      if (t.status === 'done') return 'done';
+      var d = (t.due_date || '').slice(0, 10);
+      if (!d) return 'nodate';
+      var today = todayISO();
+      if (d < today) return 'overdue';
+      if (d === today) return 'today';
+      return 'upcoming';
+    }
+    var GROUP_ORDER = [
+      ['overdue', 'Overdue'], ['today', 'Today'], ['upcoming', 'Upcoming'],
+      ['nodate', 'No due date'], ['done', 'Completed']
+    ];
+
     function paint(tasks) {
       if (!tasks || !tasks.length) {
         container.innerHTML = '<div class="p86-task-empty">' + esc(opts.emptyText || 'No tasks here.') + '</div>';
         return;
       }
-      container.innerHTML = '<div class="p86-task-list">' + tasks.map(rowHTML).join('') + '</div>';
+      if (opts.grouped) {
+        // Group into Overdue / Today / Upcoming / No due date / Completed.
+        // Sections render only when non-empty, so a narrow filter collapses to
+        // a single header. Flat (entity-page widgets) keeps one plain list.
+        var groups = { overdue: [], today: [], upcoming: [], nodate: [], done: [] };
+        tasks.forEach(function (t) { groups[taskBucket(t)].push(t); });
+        var html = '';
+        GROUP_ORDER.forEach(function (g) {
+          var arr = groups[g[0]];
+          if (!arr.length) return;
+          html += '<section class="p86-task-group">' +
+              '<div class="p86-task-grouphead">' +
+                '<span class="p86-task-grouplabel is-' + g[0] + '">' + esc(g[1]) + '</span>' +
+                '<span class="p86-task-groupcount">' + arr.length + '</span>' +
+              '</div>' +
+              '<div class="p86-task-list">' + arr.map(rowHTML).join('') + '</div>' +
+            '</section>';
+        });
+        container.innerHTML = html;
+      } else {
+        container.innerHTML = '<div class="p86-task-list">' + tasks.map(rowHTML).join('') + '</div>';
+      }
       wireRows(container, tasks);
     }
 
@@ -1380,6 +1429,7 @@
       f.scope = 'org';
       if (_teamUser) f.assignee = _teamUser;
       _ctl.team = mountList(body.querySelector('#teamList'), f, {
+        grouped: true,
         emptyText: _teamFilter === 'done' ? 'No completed team tasks.' : 'No team tasks here.'
       });
     }
@@ -1426,6 +1476,7 @@
       var f = (TASK_FILTERS.filter(function (x) { return x.key === _todoFilter; })[0] || TASK_FILTERS[0]).build();
       f.scope = 'personal';
       _ctl.todos = mountList(body.querySelector('#todoList'), f, {
+        grouped: true,
         emptyText: _todoFilter === 'done' ? 'Nothing completed yet.' : 'No to-dos — you\'re all caught up.'
       });
     }
