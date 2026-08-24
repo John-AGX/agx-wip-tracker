@@ -321,6 +321,31 @@ router.post('/', requireAuth, requireOrg, async (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────────
+// POST /api/ai/sessions/archive-all-threads
+//   Bulk-archive ALL of the caller's rolling chat threads (session_kind =
+//   'user_thread') in one shot — the "Clear all chats" button. The panel only
+//   ever resumes the most-recent NON-archived thread, so archiving them all
+//   means the next panel open starts a clean, small-cache chat instead of
+//   reloading a long accumulated conversation. Soft-delete (archived_at) — rows
+//   are hidden + stop loading but stay recoverable (un-archive via PATCH). Only
+//   the caller's own sessions; nothing else is touched.
+//   Placed BEFORE the /:id routes so the literal path isn't captured by them.
+// ──────────────────────────────────────────────────────────────────
+router.post('/archive-all-threads', requireAuth, async (req, res) => {
+  try {
+    const r = await pool.query(
+      "UPDATE ai_sessions SET archived_at = NOW(), updated_at = NOW() " +
+      " WHERE user_id = $1 AND session_kind = 'user_thread' AND archived_at IS NULL",
+      [req.user.id]
+    );
+    res.json({ ok: true, archived: r.rowCount });
+  } catch (e) {
+    console.error('POST /api/ai/sessions/archive-all-threads error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────
 // PATCH /api/ai/sessions/:id
 //   Body: any subset of { label, summary, pinned, archived, effort_override }
 //

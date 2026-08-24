@@ -1307,6 +1307,11 @@ function p86Ask(message, opts) {
               ' onmouseleave="this.style.background=\'rgba(255,255,255,0.04)\';this.style.borderColor=\'rgba(255,255,255,0.08)\'">' +
                 '<span style="font-size:14px;line-height:1;opacity:0.7;">&#x002B;</span><span>New chat</span>' +
               '</button>' +
+              // Clear all chats — archives every rolling thread (recoverable) so
+              // the panel stops resuming a long accumulated conversation.
+              '<button id="ai-sidebar-clearall" type="button" title="Clear all chats — archives them (recoverable) and starts you fresh" style="flex:0 0 auto;background:rgba(255,255,255,0.04);color:#b4b4bf;border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:7px 9px;font-size:13px;line-height:1;cursor:pointer;transition:background 0.12s, color 0.12s, border-color 0.12s;"' +
+              ' onmouseenter="this.style.background=\'rgba(247,112,102,0.12)\';this.style.color=\'#f77066\';this.style.borderColor=\'rgba(247,112,102,0.3)\'"' +
+              ' onmouseleave="this.style.background=\'rgba(255,255,255,0.04)\';this.style.color=\'#b4b4bf\';this.style.borderColor=\'rgba(255,255,255,0.08)\'">&#x1F5D1;</button>' +
             '</div>' +
             '<div style="padding:6px 12px 8px 12px;">' +
               '<input id="ai-sidebar-search" type="search" placeholder="Search sessions" ' +
@@ -1350,6 +1355,8 @@ function p86Ask(message, opts) {
     panel.querySelector('#ai-clear').onclick = clearConversation;
     panel.querySelector('#ai-send').onclick = onSend;
     panel.querySelector('#ai-sidebar-new').onclick = sidebarStartNewChat;
+    var _clearAllBtn = panel.querySelector('#ai-sidebar-clearall');
+    if (_clearAllBtn) _clearAllBtn.onclick = sidebarClearAllChats;
     // Group-by toggle (By entity / By date): persist the choice + re-render the
     // list from the cached rows (no refetch).
     Array.from(panel.querySelectorAll('.ai-grpmode-btn')).forEach(function(btn) {
@@ -2721,6 +2728,27 @@ function p86Ask(message, opts) {
     }).catch(function(err) {
       alert('Could not start new chat: ' + (err && err.message || 'unknown error'));
     });
+  }
+
+  // Bulk-archive every rolling chat thread, then drop into a fresh one. This is
+  // the "Clear all chats" button — archives are recoverable (server keeps the
+  // rows), so it's a soft reset that stops the panel resuming a long thread.
+  function sidebarClearAllChats() {
+    if (!window.p86Api || !window.p86Api.post) return;
+    var run = function() {
+      window.p86Api.post('/api/ai/sessions/archive-all-threads', {}).then(function(resp) {
+        var n = (resp && resp.archived) || 0;
+        _sessionList = (_sessionList || []).filter(function(s) { return s.session_kind !== 'user_thread'; });
+        if (window.p86Toast) window.p86Toast('Cleared ' + n + ' chat' + (n === 1 ? '' : 's') + ' — starting fresh.', 'success');
+        sidebarStartNewChat();
+      }).catch(function(err) {
+        alert('Could not clear chats: ' + (err && err.message || 'unknown error'));
+      });
+    };
+    var msg = 'Clear all chats? They’ll be archived (recoverable) and you’ll start with a fresh chat.';
+    var c = window.p86Confirm ? window.p86Confirm(msg) : (window.p86Ask ? window.p86Ask(msg) : null);
+    if (c && typeof c.then === 'function') { c.then(function(ok) { if (ok) run(); }); }
+    else if (window.confirm(msg)) { run(); }
   }
 
   function openSessionMenu(sessionId, x, y) {
