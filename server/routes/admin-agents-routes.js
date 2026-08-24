@@ -2713,17 +2713,19 @@ function builtinToolsetFor(agentKey) {
 // without booting this router — see agent-prefix-ledger.js.
 const _builtinToolsetToolNames = ledger.builtinToolsetToolNames;
 
-// Per-agent model. Every agent runs on the code default (Opus) EXCEPT the
-// Scribe — the cheap, write-only worker — which runs on Sonnet. Routed
-// through every agents.create / agents.update site so the background resync
-// sweep and admin "sync all" can't clobber the Scribe back to Opus.
-const SCRIBE_MODEL = 'claude-sonnet-4-6';
+// Per-agent model. 86 (and the archived default keys) run on AI_MODEL; the
+// Scribe and the Assistant — the cheap, high-frequency workers — default to
+// Sonnet. Both are now env-overridable (SCRIBE_MODEL / ASSISTANT_MODEL) so all
+// three tiers can be moved onto one model (e.g. every agent → claude-sonnet-5)
+// for an A/B without a recompile. The default deliberately stays on cheap
+// Sonnet so an UNSET env can never silently promote these high-volume agents to
+// Opus. Routed through every agents.create / agents.update site so the
+// background resync sweep and admin "sync all" can't clobber them.
+const SCRIBE_MODEL = (process.env.SCRIBE_MODEL || 'claude-sonnet-4-6').trim();
 // The Assistant — the personal aide that HOSTS the conversation — runs on
 // Sonnet (upgraded from Haiku 2026-06-24: Haiku over-assumed and was flaky at
-// populating escalate_to_86 params). Like SCRIBE_MODEL, routed through every
-// create/update site so the background resync sweep + "sync all" can't clobber
-// it back to Opus.
-const ASSISTANT_MODEL = 'claude-sonnet-4-6';
+// populating escalate_to_86 params). Env-overridable via ASSISTANT_MODEL.
+const ASSISTANT_MODEL = (process.env.ASSISTANT_MODEL || 'claude-sonnet-4-6').trim();
 function modelForAgentKey(agentKey) {
   if (agentKey === 'scribe') return SCRIBE_MODEL;
   if (agentKey === 'assistant') return ASSISTANT_MODEL;
