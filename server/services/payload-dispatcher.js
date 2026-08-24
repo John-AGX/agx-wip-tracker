@@ -2303,22 +2303,46 @@ function applyLineDeletes(data, lineDeletes) {
   // string the editor and the model both hand back — a delete that reported
   // "0 removed" on a line that is plainly there. `d.line_id || d.id` also threw
   // away the id 0.
-  const ids = new Set(
-    lineDeletes
-      .map((d) => {
-        if (d == null) return null;
-        if (typeof d === 'string' || typeof d === 'number') return d;
-        return d.line_id != null ? d.line_id : d.id;
-      })
-      .filter((v) => v != null && String(v) !== '')
-      .map((v) => String(v))
-  );
+  const refs = lineDeletes
+    .map((d) => {
+      if (d == null) return null;
+      if (typeof d === 'string' || typeof d === 'number') return d;
+      return d.line_id != null ? d.line_id : d.id;
+    })
+    .filter((v) => v != null && String(v) !== '')
+    .map((v) => String(v));
+
+  // ONE REFERENCE REMOVES AT MOST ONE LINE.
+  //
+  // This was a Set and a filter, so a reference removed EVERY line whose id
+  // matched — and once both sides were coerced to strings, a stored NUMBER 7
+  // and a stored STRING "7" became the same address. Measured on the shipped
+  // filter: two lines, one reference, `removed=2`. An agent told to delete one
+  // line deleted two, reported the honest count of what it had done, and the
+  // second line was money nobody asked to remove. Duplicate string ids did the
+  // same thing and had always done it; the coercion only widened what counts
+  // as duplicate.
+  //
+  // Deleting by address is not deleting by predicate. Two lines sharing an
+  // address is a broken record — the client heals that at its state boundary,
+  // but the server stores what it is given, so this path must not treat a
+  // collision as permission to remove more than was asked for.
+  //
+  // Marked by INDEX, then filtered in one pass: `splice` in a loop would shift
+  // the indices of every later match, and array position IS section membership
+  // on an estimate.
+  const doomed = new Set();
+  for (const ref of refs) {
+    const hit = lines.findIndex((l, i) =>
+      !doomed.has(i) && l && l.id != null && String(l.id) === ref);
+    if (hit !== -1) doomed.add(hit);
+  }
   const before = lines.length;
-  // `!l ||` KEEPS a stored hole rather than throwing on it — and keeping it is
-  // the point: removing an element reindexes the array, and section membership
-  // in an estimate IS array position, so a tidy-up here would re-section the
-  // record and move money between scopes while the cost total sat still.
-  data.lines = lines.filter((l) => !l || l.id == null || !ids.has(String(l.id)));
+  // Keeping a stored hole is deliberate: removing an element reindexes the
+  // array, and section membership in an estimate IS array position, so a
+  // tidy-up here would re-section the record and move money between scopes
+  // while the cost total sat still.
+  data.lines = lines.filter((l, i) => !doomed.has(i));
   return before - data.lines.length;
 }
 
