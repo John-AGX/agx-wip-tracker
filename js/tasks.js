@@ -252,6 +252,28 @@
       '.p86-tg-made-txt{font-size:12px;color:var(--muted,#8b93a3);font-variant-numeric:tabular-nums;white-space:nowrap;}' +
       '.p86-tg-dash{color:var(--muted,#6b7280);opacity:.55;}' +
       '.p86-tg-cam{font-size:11px;color:var(--muted,#6b7280);white-space:nowrap;}' +
+      // Inline add-task row (bottom of the grid)
+      '.p86-tg-addrow{display:flex;align-items:center;gap:10px;height:46px;padding:0 12px;cursor:text;}' +
+      '.p86-tg-addplus{color:var(--muted,#6b7280);font-size:15px;flex:0 0 auto;}' +
+      '.p86-tg-addinput{flex:1 1 auto;font:inherit;font-size:14px;background:transparent;border:none;outline:none;color:inherit;padding:0;}' +
+      '.p86-tg-addinput::placeholder{color:var(--muted,#6b7280);}' +
+      '.p86-tg-addrow:focus-within{background:var(--hover,var(--surface2,#1a1f29));}' +
+      '.p86-tg-emptyrow{padding:22px 14px;text-align:center;color:var(--muted,#8b93a3);font-size:13px;border-bottom:1px solid var(--border,#e5e7eb);}' +
+      // ── Filter chip bar (Buildertrend-style) ──
+      '.p86-fbar{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:14px;}' +
+      '.p86-fand{font-size:10.5px;font-weight:700;letter-spacing:.06em;color:var(--muted,#64748b);text-transform:uppercase;}' +
+      '.p86-fchip{display:inline-flex;align-items:center;gap:5px;height:30px;padding:0 4px 0 11px;border:1px solid var(--accent-line,rgba(79,140,255,.4));background:rgba(79,140,255,.1);border-radius:9px;}' +
+      '.p86-fchip-k{font-size:12px;color:var(--muted,#8b93a3);}' +
+      '.p86-fchip-sel{font:inherit;font-size:12.5px;font-weight:600;color:var(--accent,#4f8cff);background:transparent;border:none;outline:none;cursor:pointer;padding:0 2px;max-width:150px;}' +
+      '.p86-fchip-sel option{color:var(--text,#1b1e26);background:var(--surface,#14181f);font-weight:400;}' +
+      '.p86-fchip-x{border:none;background:transparent;color:var(--muted,#8b93a3);font-size:16px;line-height:1;cursor:pointer;padding:0 5px;border-radius:5px;}' +
+      '.p86-fchip-x:hover{color:var(--accent,#4f8cff);background:rgba(79,140,255,.14);}' +
+      '.p86-fbar-add{font:inherit;font-size:12.5px;font-weight:500;height:30px;padding:0 12px;border:1px dashed var(--border-strong,#3a4150);background:transparent;color:var(--muted,#8b93a3);border-radius:9px;cursor:pointer;transition:color .12s,border-color .12s;}' +
+      '.p86-fbar-add:hover{color:var(--accent,#4f8cff);border-color:var(--accent-line,rgba(79,140,255,.5));}' +
+      '.p86-fbar-clear{font:inherit;font-size:12.5px;background:none;border:none;color:var(--muted,#8b93a3);cursor:pointer;text-decoration:underline;text-underline-offset:2px;padding:0 4px;}' +
+      '.p86-fbar-clear:hover{color:var(--text,#e7eaf0);}' +
+      '.p86-fbar-spacer{flex:1 1 auto;}' +
+      '.p86-fbar-count{font-size:12px;color:var(--muted,#8b93a3);font-variant-numeric:tabular-nums;white-space:nowrap;}' +
       // My Tasks page
       '.p86-tasks-page{padding:24px 20px 40px;max-width:1120px;margin:0 auto;}' +
       '.p86-tasks-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px;flex-wrap:wrap;}' +
@@ -1161,9 +1183,39 @@
       ['nodate', 'No due date'], ['done', 'Completed']
     ];
 
+    function inlineAddHTML() {
+      return '<div class="p86-tg-addrow"><span class="p86-tg-addplus">＋</span>' +
+        '<input class="p86-tg-addinput" type="text" placeholder="Add a task and press Enter…" aria-label="Add a task" /></div>';
+    }
+    function wireInlineAdd() {
+      var ai = container.querySelector('.p86-tg-addinput');
+      if (!ai || !opts.onAdd) return;
+      ai.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        var v = (ai.value || '').trim();
+        if (!v) return;
+        ai.disabled = true;
+        opts.onAdd(v, function (ok) { ai.disabled = false; if (ok) ai.value = ''; });
+      });
+    }
+
     function paint(tasks) {
-      if (!tasks || !tasks.length) {
-        container.innerHTML = '<div class="p86-task-empty">' + esc(opts.emptyText || 'No tasks here.') + '</div>';
+      tasks = tasks || [];
+      // Client-side Priority filter (the chip bar's "+ Filter → Priority").
+      if (opts.priorityFilter) {
+        tasks = tasks.filter(function (t) { return t.priority === opts.priorityFilter; });
+      }
+      if (typeof opts.onCount === 'function') opts.onCount(tasks.length);
+      if (!tasks.length) {
+        if (opts.onAdd) {
+          container.innerHTML = '<div class="p86-taskgrid-wrap"><div class="p86-taskgrid">' + gridHeadHTML() +
+            '<div class="p86-tg-emptyrow">' + esc(opts.emptyText || 'No tasks here.') + '</div>' +
+            inlineAddHTML() + '</div></div>';
+          wireInlineAdd();
+        } else {
+          container.innerHTML = '<div class="p86-task-empty">' + esc(opts.emptyText || 'No tasks here.') + '</div>';
+        }
         return;
       }
       if (opts.grouped) {
@@ -1181,12 +1233,14 @@
               '<span class="p86-tg-gcount is-' + g[0] + '">' + arr.length + '</span>' +
             '</div>' + arr.map(gridRowHTML).join('');
         });
+        if (opts.onAdd) body += inlineAddHTML();
         container.innerHTML =
           '<div class="p86-taskgrid-wrap"><div class="p86-taskgrid">' + gridHeadHTML() + body + '</div></div>';
       } else {
         container.innerHTML = '<div class="p86-task-list">' + tasks.map(rowHTML).join('') + '</div>';
       }
       wireRows(container, tasks);
+      wireInlineAdd();
     }
 
     function rowHTML(t) {
@@ -1444,6 +1498,8 @@
   var _activeTab = 'team';     // team | todos | reminders
   var _teamFilter = 'open';
   var _teamUser = '';          // '' = everyone | 'me' | 'unassigned' | <id>
+  var _teamPriority = '';      // '' = any | urgent | high | normal | low (client-side)
+  var _todoPriority = '';
   var _todoFilter = 'open';
   var _remStatus = 'pending';  // pending | all
   var _ctl = { team: null, todos: null, reminders: null };
@@ -1453,6 +1509,58 @@
       return '<button class="p86-tasks-filter' + (f.key === activeKey ? ' active' : '') +
         '" ' + dataAttr + '="' + f.key + '">' + esc(f.label) + '</button>';
     }).join('');
+  }
+
+  // ── Buildertrend-style filter chip bar ─────────────────────────────
+  // Styled native <select>s (robust — no custom dropdown / outside-click /
+  // positioning). `s` holds the live values; the caller wires it. Value
+  // changes just remount the list; structural changes (add/remove a chip,
+  // clear all) re-render the bar and remount.
+  function fbarOpts(list, val) {
+    return list.map(function (o) {
+      return '<option value="' + escAttr(o.v) + '"' + (o.v === val ? ' selected' : '') + '>' + esc(o.label) + '</option>';
+    }).join('');
+  }
+  function chipBarHtml(s) {
+    var statusOpts = TASK_FILTERS.map(function (f) { return { v: f.key, label: f.label }; });
+    var chips = '<span class="p86-fchip"><span class="p86-fchip-k">Status</span>' +
+      '<select class="p86-fchip-sel" data-fc="status">' + fbarOpts(statusOpts, s.status) + '</select></span>';
+    if (s.hasAssignee) {
+      var aOpts = [{ v: '', label: 'Everyone' }, { v: 'me', label: 'Me' }, { v: 'unassigned', label: 'Unassigned' }]
+        .concat((s.users || []).map(function (u) { return { v: String(u.id), label: (u.name || u.email || ('User ' + u.id)) }; }));
+      chips += '<span class="p86-fand">and</span>' +
+        '<span class="p86-fchip"><span class="p86-fchip-k">Assignee</span>' +
+        '<select class="p86-fchip-sel" data-fc="assignee">' + fbarOpts(aOpts, s.assignee) + '</select></span>';
+    }
+    if (s.priority) {
+      var pOpts = PRIORITIES.map(function (p) { return { v: p.v, label: p.label }; });
+      chips += '<span class="p86-fand">and</span>' +
+        '<span class="p86-fchip"><span class="p86-fchip-k">Priority</span>' +
+        '<select class="p86-fchip-sel" data-fc="priority">' + fbarOpts(pOpts, s.priority) + '</select>' +
+        '<button class="p86-fchip-x" data-fc="priority-x" title="Remove filter" aria-label="Remove priority filter">×</button></span>';
+    }
+    var isDefault = s.status === 'open' && (!s.hasAssignee || !s.assignee) && !s.priority;
+    return '<div class="p86-fbar">' + chips +
+        (!s.priority ? '<button class="p86-fbar-add" data-fadd>＋ Filter</button>' : '') +
+        (isDefault ? '' : '<button class="p86-fbar-clear" data-fclear>Clear all</button>') +
+        '<span class="p86-fbar-spacer"></span>' +
+        '<span class="p86-fbar-count" data-fcount></span>' +
+      '</div>';
+  }
+  function wireChipBar(barHost, s, sync, remount, rerender) {
+    barHost.querySelectorAll('.p86-fchip-sel').forEach(function (sel) {
+      sel.addEventListener('change', function () { s[sel.getAttribute('data-fc')] = sel.value; sync(); remount(); });
+    });
+    var addBtn = barHost.querySelector('[data-fadd]');
+    if (addBtn) addBtn.addEventListener('click', function () { s.priority = 'high'; sync(); rerender(); remount(); });
+    var px = barHost.querySelector('[data-fc="priority-x"]');
+    if (px) px.addEventListener('click', function () { s.priority = ''; sync(); rerender(); remount(); });
+    var clr = barHost.querySelector('[data-fclear]');
+    if (clr) clr.addEventListener('click', function () { s.status = 'open'; s.assignee = ''; s.priority = ''; sync(); rerender(); remount(); });
+  }
+  function setChipCount(barHost, n) {
+    var el = barHost && barHost.querySelector('[data-fcount]');
+    if (el) el.textContent = n + (n === 1 ? ' task' : ' tasks');
   }
 
   function renderMyTasksTab() {
@@ -1488,107 +1596,74 @@
 
   // ── Tab 1: Team Tasks (org-wide, assignable, user-filterable) ──────
   function renderTeam(body) {
-    body.innerHTML =
-      '<div class="p86-tasks-quickbar">' +
-        '<input id="teamQuick" type="text" placeholder="Add a team task and press Enter…" />' +
-        '<button class="primary" id="teamQuickBtn">Add</button>' +
-      '</div>' +
-      '<div class="p86-tasks-toolbar">' +
-        '<div class="p86-tasks-filters">' + filterBtns(TASK_FILTERS, _teamFilter, 'data-tf') + '</div>' +
-        '<label class="p86-tasks-userfilter">Who <select id="teamUser"></select></label>' +
-      '</div>' +
-      '<div id="teamList"></div>';
-
-    var sel = body.querySelector('#teamUser');
-    function buildUserOptions() {
-      var list = _users || (window.appData && window.appData.users) || [];
-      var o = ['<option value="">Everyone</option>',
-        '<option value="me">Assigned to me</option>',
-        '<option value="unassigned">Unassigned</option>'];
-      list.forEach(function (u) {
-        o.push('<option value="' + escAttr(u.id) + '">' + esc(u.name || u.email || ('User ' + u.id)) + '</option>');
-      });
-      sel.innerHTML = o.join('');
-      sel.value = _teamUser;
-    }
+    body.innerHTML = '<div id="teamBar"></div><div id="teamList"></div>';
+    var barHost = body.querySelector('#teamBar');
+    var listHost = body.querySelector('#teamList');
+    var s = { status: _teamFilter, assignee: _teamUser, priority: _teamPriority, hasAssignee: true, users: [] };
+    function sync() { _teamFilter = s.status; _teamUser = s.assignee; _teamPriority = s.priority; }
     function mountTeam() {
-      var f = (TASK_FILTERS.filter(function (x) { return x.key === _teamFilter; })[0] || TASK_FILTERS[0]).build();
+      var f = (TASK_FILTERS.filter(function (x) { return x.key === s.status; })[0] || TASK_FILTERS[0]).build();
       f.scope = 'org';
-      if (_teamUser) f.assignee = _teamUser;
-      _ctl.team = mountList(body.querySelector('#teamList'), f, {
+      if (s.assignee) f.assignee = s.assignee;
+      _ctl.team = mountList(listHost, f, {
         grouped: true,
-        emptyText: _teamFilter === 'done' ? 'No completed team tasks.' : 'No team tasks here.'
+        priorityFilter: s.priority,
+        emptyText: s.status === 'done' ? 'No completed team tasks.' : 'No team tasks here.',
+        onCount: function (n) { setChipCount(barHost, n); },
+        onAdd: function (title, done) {
+          if (!api()) { done(false); return; }
+          // Org task assigned to me by default; reassign in the detail editor.
+          api().create({ title: title, assignee_user_id: currentUserId() || undefined }).then(function () {
+            done(true);
+            if (_ctl.team && _ctl.team.refresh) _ctl.team.refresh().then(function () {
+              var ni = listHost.querySelector('.p86-tg-addinput'); if (ni) ni.focus();
+            });
+          }).catch(function (e) { done(false); toast((e && e.message) || 'Could not add task', 'error'); });
+        }
       });
     }
-    loadUsers().then(buildUserOptions);
+    function renderBar() { barHost.innerHTML = chipBarHtml(s); wireChipBar(barHost, s, sync, mountTeam, renderBar); }
+    renderBar();
     mountTeam();
-
-    body.querySelectorAll('[data-tf]').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        _teamFilter = btn.getAttribute('data-tf');
-        body.querySelectorAll('[data-tf]').forEach(function (b) { b.classList.toggle('active', b === btn); });
-        mountTeam();
-      });
+    loadUsers().then(function () {
+      s.users = _users || (window.appData && window.appData.users) || [];
+      renderBar();   // repopulate the Assignee chip's options
     });
-    sel.addEventListener('change', function () { _teamUser = sel.value; mountTeam(); });
-
-    var quick = body.querySelector('#teamQuick');
-    var qbtn = body.querySelector('#teamQuickBtn');
-    function add() {
-      var title = (quick.value || '').trim();
-      if (!title || !api()) return;
-      qbtn.disabled = true;
-      // Org task assigned to me by default; reassign in the detail editor.
-      api().create({ title: title, assignee_user_id: currentUserId() || undefined }).then(function () {
-        quick.value = ''; qbtn.disabled = false; quick.focus();
-        if (_ctl.team) _ctl.team.refresh();
-      }).catch(function (e) { qbtn.disabled = false; toast((e && e.message) || 'Could not add task', 'error'); });
-    }
-    quick.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); add(); } });
-    qbtn.addEventListener('click', add);
   }
 
   // ── Tab 2: My To-Dos (private personal — scope='personal') ─────────
   function renderTodos(body) {
     body.innerHTML =
-      '<div class="p86-tasks-quickbar">' +
-        '<input id="todoQuick" type="text" placeholder="Add a private to-do and press Enter…" />' +
-        '<button class="primary" id="todoQuickBtn">Add</button>' +
-      '</div>' +
-      '<div class="p86-tasks-filters">' + filterBtns(TASK_FILTERS, _todoFilter, 'data-df') + '</div>' +
+      '<div id="todoBar"></div>' +
       '<div class="p86-tasks-hint">Private to you — no one else in the org sees these.</div>' +
       '<div id="todoList"></div>';
-
+    var barHost = body.querySelector('#todoBar');
+    var listHost = body.querySelector('#todoList');
+    var s = { status: _todoFilter, assignee: '', priority: _todoPriority, hasAssignee: false, users: [] };
+    function sync() { _todoFilter = s.status; _todoPriority = s.priority; }
     function mountTodos() {
-      var f = (TASK_FILTERS.filter(function (x) { return x.key === _todoFilter; })[0] || TASK_FILTERS[0]).build();
+      var f = (TASK_FILTERS.filter(function (x) { return x.key === s.status; })[0] || TASK_FILTERS[0]).build();
       f.scope = 'personal';
-      _ctl.todos = mountList(body.querySelector('#todoList'), f, {
+      _ctl.todos = mountList(listHost, f, {
         grouped: true,
-        emptyText: _todoFilter === 'done' ? 'Nothing completed yet.' : 'No to-dos — you\'re all caught up.'
+        priorityFilter: s.priority,
+        emptyText: s.status === 'done' ? 'Nothing completed yet.' : 'No to-dos — you\'re all caught up.',
+        onCount: function (n) { setChipCount(barHost, n); },
+        onAdd: function (title, done) {
+          if (!api()) { done(false); return; }
+          // scope:'personal' → server stamps owner = me; never assignable/visible to others.
+          api().create({ title: title, scope: 'personal' }).then(function () {
+            done(true);
+            if (_ctl.todos && _ctl.todos.refresh) _ctl.todos.refresh().then(function () {
+              var ni = listHost.querySelector('.p86-tg-addinput'); if (ni) ni.focus();
+            });
+          }).catch(function (e) { done(false); toast((e && e.message) || 'Could not add to-do', 'error'); });
+        }
       });
     }
+    function renderBar() { barHost.innerHTML = chipBarHtml(s); wireChipBar(barHost, s, sync, mountTodos, renderBar); }
+    renderBar();
     mountTodos();
-    body.querySelectorAll('[data-df]').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        _todoFilter = btn.getAttribute('data-df');
-        body.querySelectorAll('[data-df]').forEach(function (b) { b.classList.toggle('active', b === btn); });
-        mountTodos();
-      });
-    });
-    var quick = body.querySelector('#todoQuick');
-    var qbtn = body.querySelector('#todoQuickBtn');
-    function add() {
-      var title = (quick.value || '').trim();
-      if (!title || !api()) return;
-      qbtn.disabled = true;
-      // scope:'personal' → server stamps owner = me; never assignable/visible to others.
-      api().create({ title: title, scope: 'personal' }).then(function () {
-        quick.value = ''; qbtn.disabled = false; quick.focus();
-        if (_ctl.todos) _ctl.todos.refresh();
-      }).catch(function (e) { qbtn.disabled = false; toast((e && e.message) || 'Could not add to-do', 'error'); });
-    }
-    quick.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); add(); } });
-    qbtn.addEventListener('click', add);
   }
 
   // ── Tab 3: Reminders (timed nudges on their own list) ──────────────
