@@ -4833,16 +4833,42 @@
     });
   }
 
+  // The photos in the SAME order the feed renders them: filtered by the
+  // active photo filters, then sorted newest-first — mirroring
+  // paintPhotoFeed's items.sort (descending uploaded_at).
+  //
+  // The viewer's index has to line up with what the user is looking at.
+  // Passing the raw _detailState.photos (API order, oldest-first) inverted
+  // it: clicking the 3rd tile in the grid opened as "34 / 36", and the ›
+  // arrow walked BACKWARDS through the grid while ‹ walked forwards. It
+  // also ignored the active filter, so the arrows paged through photos
+  // that weren't even on screen.
+  function photosInFeedOrder() {
+    return _detailState.photos
+      .filter(photoMatchesAllFilters)
+      .sort(function(a, b) {
+        return (new Date(b.uploaded_at).getTime() || 0) - (new Date(a.uploaded_at).getTime() || 0);
+      });
+  }
+
   function openPhotoInLightbox(att) {
-    // Use the existing global lightbox. Pass the full photo list so
-    // swipe nav works. Wave A added a third arg for the side panel's
-    // parent-header band — supply the project's name + address so the
-    // viewer can render "Saddlebrook Resort / 5700 …" like the
-    // CompanyCam screenshot the spec was modeled on.
+    // Use the existing global lightbox. Pass the visible photo list, in feed
+    // order, so the counter matches the tile's position and the arrows track
+    // the grid. Wave A added a third arg for the side panel's parent-header
+    // band — supply the project's name + address so the viewer can render
+    // "Saddlebrook Resort / 5700 …" like the CompanyCam screenshot the spec
+    // was modeled on.
     if (window.p86Attachments && typeof window.p86Attachments.openLightbox === 'function') {
-      var idx = _detailState.photos.findIndex(function(x) { return x.id === att.id; });
+      var ordered = photosInFeedOrder();
+      var idx = ordered.findIndex(function(x) { return x.id === att.id; });
+      // Defensive: a photo opened from outside the visible set (e.g. a pair
+      // tile whose photo the filter excluded) still gets a usable viewer.
+      if (idx < 0) {
+        ordered = _detailState.photos.slice();
+        idx = ordered.findIndex(function(x) { return x.id === att.id; });
+      }
       var p = _detailState.project || {};
-      window.p86Attachments.openLightbox(_detailState.photos, Math.max(0, idx), {
+      window.p86Attachments.openLightbox(ordered, Math.max(0, idx), {
         parentLabel: p.name || '',
         parentSubtitle: p.address_text || ''
       });
