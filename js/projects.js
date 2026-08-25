@@ -2310,6 +2310,9 @@
         paintAnnotationsOver(img, canvas, att.annotations);
       });
 
+      // Same graceful degradation for the preview's static photo-location map.
+      preview.querySelectorAll('.p86-report-preview-map img').forEach(wireStaticMapFallback);
+
       function close() { preview.remove(); }
       preview.querySelectorAll('[data-preview-close]').forEach(function(b) {
         b.addEventListener('click', close);
@@ -2798,6 +2801,10 @@
           paintAnnotationsOver(img, canvas, att.annotations);
         });
 
+        // Static photo-location maps: show a readable note instead of a
+        // broken-image icon when the Maps Static API isn't enabled.
+        sectionEl.querySelectorAll('.p86-report-section-map-print').forEach(wireStaticMapFallback);
+
         // Click the photo image → open the full photo viewer panel.
         // Sends ONLY this section's photo set so prev/next paginates
         // within the section (not the whole project library). Mutations
@@ -3114,11 +3121,13 @@
               if (wrap) {
                 var existing = wrap.querySelector('.p86-report-section-map-print');
                 if (existing) {
+                  wireStaticMapFallback(existing);
                   if (existing.getAttribute('src') !== url) existing.setAttribute('src', url);
                 } else {
                   var img = document.createElement('img');
                   img.className = 'p86-report-section-map-print';
                   img.alt = 'Photo locations';
+                  wireStaticMapFallback(img);   // wire BEFORE src so a cached 403 still fires
                   img.src = url;
                   mapEl.insertAdjacentElement('afterend', img);
                 }
@@ -4516,6 +4525,23 @@
   // at 1600, aspect ratio preserved, never upscaled. Strokes drawn in
   // the markup viewer live in THIS coord space; using the original
   // dimensions would offset/scale them incorrectly.
+  // Google's Maps STATIC API is enabled separately from the JS Maps API, so a
+  // perfectly valid key (interactive maps working) can still 403 with "This
+  // API is not activated on your API project". That left a broken-image icon
+  // sitting in the report. Swap a failed static map for a readable note that
+  // says what to switch on.
+  function wireStaticMapFallback(img) {
+    if (!img || img._p86SmWired) return;
+    img._p86SmWired = true;
+    img.addEventListener('error', function() {
+      if (!img.parentNode) return;
+      var note = document.createElement('div');
+      note.className = 'p86-report-map-unavailable';
+      note.textContent = 'Map image unavailable - enable the "Maps Static API" in Google Cloud for this key so photo locations can print.';
+      img.parentNode.replaceChild(note, img);
+    }, { once: true });
+  }
+
   // Paint annotation strokes onto a canvas overlaying `img`.
   //
   // The canvas's internal bitmap MUST equal the displayed image's TRUE pixel

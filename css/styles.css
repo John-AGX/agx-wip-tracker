@@ -6775,6 +6775,17 @@
    land on the same pixels they would in the viewer / markup tool.
    pointer-events:none so clicks pass through to the image (which
    opens the viewer). */
+/* Shown in place of a static photo-location map that failed to load
+   (Maps Static API not enabled on the key). Readable note, not a broken img. */
+.p86-report-map-unavailable {
+  padding: 14px 16px;
+  border: 1px dashed var(--border, #333);
+  border-radius: 8px;
+  background: rgba(127, 132, 152, 0.06);
+  color: var(--text-dim, #888);
+  font-size: 12px;
+  line-height: 1.5;
+}
 .p86-report-photo-anno,
 .p86-report-photo-single .p86-report-photo-anno {
   position: absolute;
