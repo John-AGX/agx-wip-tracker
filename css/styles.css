@@ -8235,6 +8235,7 @@
   transition: background .12s, color .12s, border-color .12s, box-shadow .12s;
 }
 .p86-pv-mic:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.p86-pv-mic svg { width: 16px; height: 16px; display: block; }
 .p86-pv-mic.listening {
   background: #ef4444;
   border-color: #ef4444;

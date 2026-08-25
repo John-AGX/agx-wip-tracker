@@ -445,7 +445,7 @@
           '</section>' +
           '<section class="p86-pv-section">' +
             '<div class="p86-pv-section-label p86-pv-desc-headrow"><span>Description</span>' +
-              (voiceOK ? '<button type="button" class="p86-pv-mic" title="Dictate (voice → text)" aria-label="Dictate description">🎤</button>' : '') +
+              (voiceOK ? '<button type="button" class="p86-pv-mic" title="Dictate (voice → text)" aria-label="Dictate description">' + (typeof window.p86Icon === 'function' ? window.p86Icon('composer-mic') : '🎤') + '</button>' : '') +
             '</div>' +
             '<fieldset class="p86-pv-desc-fs" data-edit-gate="locked">' +
               '<legend class="p86-pv-desc-legend">&nbsp;</legend>' +
