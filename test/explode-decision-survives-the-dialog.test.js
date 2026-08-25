@@ -268,9 +268,9 @@ const CO_INTERLEAVINGS = [
   // The rollup is REMOVED by the explode, so its own unit cost does not appear
   // anywhere in the post-explode record — two simulations either side of a
   // change to it produce byte-identical answers. But the dialog quoted a
-  // "moving the change order total from $X to $Y" sentence whose $X was priced
-  // WITH that cost, and on a promised line that sentence is the only number
-  // the person is given. Only the rollup's own fingerprint catches this.
+  // "changes the change order total from $X to $Y" sentence whose $X was priced
+  // WITH that cost, and that sentence is the only number the person is given.
+  // Only the rollup's own fingerprint catches this.
   ['the rollup is repriced but the recipe is not', (ed, live) => {
     live.lines.find((l) => l.id === 'ROLLUP').unitCost = 9999; return live; }],
 ];
@@ -874,21 +874,64 @@ describe('P6 an explode on a record that did not move is byte-identical to befor
     }));
   };
 
-  test('CHANGE ORDER — 2,000 ordinary records come out identical to the prior bytes', () => {
+  // ONE THING IS DELIBERATELY DIFFERENT NOW, AND IT IS NAMED.
+  //
+  // "Exploding is a view change, not a repricing" (see
+  // test/explode-does-not-move-money-silently.test.js) makes each component
+  // carry the rollup's own resolved markup where its destination section would
+  // otherwise give it a different one. So a CREATED line may now hold a
+  // `markup` the prior bytes left blank. That is the whole of the difference,
+  // and this property says so precisely rather than being relaxed to fit:
+  // everything else about every line — description, qty, unitCost, unit,
+  // section membership, ARRAY ORDER — is still byte-identical, and no line
+  // that already existed changes at all.
+  const stripMarkupOnCreated = (rec) => {
+    let n = 0;
+    const map = {};
+    (rec.lines || []).forEach((l) => {
+      if (l && String(l.id).indexOf('gen_') === 0) map[l.id] = 'new_' + (++n);
+    });
+    return JSON.stringify((rec.lines || []).map((l) => {
+      if (!l || typeof l !== 'object') return l;
+      const c = Object.assign({}, l);
+      if (map[c.id]) { c.id = map[c.id]; delete c.markup; }
+      return c;
+    }));
+  };
+
+  test('CHANGE ORDER — 2,000 ordinary records differ from the prior bytes ONLY in the markup on lines the explode creates', () => {
     const now = coEditor(NOW_COE);
     const old = coEditor(OLD_COE);
     const cs = corpus(4242, 2000);
-    let compared = 0;
-    const diffs = [];
+    let compared = 0, markupCarried = 0;
+    const structural = [];
+    const preExisting = [];
     for (const rec of cs) {
       const a = now.run(rec, 'ROLLUP', null);
       const b = old.run(rec, 'ROLLUP', null);
       if (!a.raised || !b.raised) continue;      // refusals are covered by P3
       compared++;
-      if (normalize(a.record) !== normalize(b.record)) diffs.push(rec.id);
+      // Everything except the markup on created lines is identical.
+      if (stripMarkupOnCreated(a.record) !== stripMarkupOnCreated(b.record)) structural.push(rec.id);
+      if (normalize(a.record) !== normalize(b.record)) markupCarried++;
+      // NOT ONE LINE THAT ALREADY EXISTED IS TOUCHED.
+      const was = {};
+      rec.lines.forEach((l) => { was[String(l.id)] = JSON.parse(JSON.stringify(l)); });
+      a.record.lines.forEach((l) => {
+        const w = was[String(l.id)];
+        if (!w) return;
+        ['qty', 'unitCost', 'unitSell', 'markup', 'markupMode', 'overrideLineMarkups']
+          .forEach((k) => { if (JSON.stringify(l[k]) !== JSON.stringify(w[k])) preExisting.push(rec.id + ':' + l.id + ':' + k); });
+      });
     }
     expect(compared).toBeGreaterThan(1500);
-    expect(diffs).toEqual([]);
+    expect(structural.slice(0, 3)).toEqual([]);
+    expect(structural).toHaveLength(0);
+    expect(preExisting.slice(0, 3)).toEqual([]);
+    expect(preExisting).toHaveLength(0);
+    // …and the carry is REAL on this corpus, so the exemption above is not a
+    // hole nothing ever falls through.
+    expect(markupCarried).toBeGreaterThan(0);
   });
 
   test('the normalizer is not a blanket — it still sees a real difference', () => {

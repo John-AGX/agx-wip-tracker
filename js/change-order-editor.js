@@ -1145,24 +1145,104 @@ function p86Ask(message, opts) {
     // which is what coApplyBulkAddLineItems does; the bulk wrapper itself is
     // NOT called, because its markDirty/paintLines/paintTotals would paint the
     // simulated state onto the screen and mark the record dirty.
-    var simulateExplode = function () {
+    //
+    // It takes the spec list rather than re-deriving it, and it reports which
+    // LINE each spec became, because the markup decision below has to ask the
+    // cascade what each component would resolve to where it actually lands —
+    // and "where it lands" is only knowable by letting the real router put it
+    // there. Matching by array position would not do: the router inserts each
+    // line INSIDE its own section, so the created lines are not in spec order.
+    var simulateExplode = function (specList) {
       var live = _state.co;
       var clone = JSON.parse(JSON.stringify(live));
       var target = (clone.lines || []).find(function (x) { return String(x.id) === String(lineId); });
       if (!target) return null;
       _state.co = clone;
       try {
-        var specs = explodeSpecs(target);
         var i = clone.lines.indexOf(target);
         if (i >= 0) clone.lines.splice(i, 1);
-        specs.forEach(function (s) {
+        var born = [];
+        (specList || explodeSpecs(target)).forEach(function (s) {
+          var seen = {};
+          clone.lines.forEach(function (l) { seen[String(l.id)] = true; });
           coApplyAddLineItem(Object.assign({ _silent: true }, s));
+          var made = null;
+          for (var k = 0; k < clone.lines.length; k++) {
+            var L = clone.lines[k];
+            if (!seen[String(L.id)] && L.section !== '__section_header__') { made = L; break; }
+          }
+          born.push(made);
         });
-        return clone;
+        return { rec: clone, born: born };
       } finally { _state.co = live; }
     };
-    var simRec = null;
-    try { simRec = simulateExplode(); } catch (e) { simRec = null; }
+    // ── EXPLODING IS A VIEW CHANGE. IT MUST NOT BE A REPRICING. ─────────
+    //
+    // A rollup line takes ONE markup — its own, or the one it inherits from
+    // the section it sits in. Its components are routed by COST CODE, so a
+    // materials-plus-labour recipe lands in two different sections, under two
+    // different markups, and the components were born with `markup: ''` — no
+    // per-line value at all — so each one silently inherited whatever its
+    // DESTINATION section says. Nothing announced that, and nothing had to:
+    // the price simply changed.
+    //
+    // MEASURED on the shipped bytes, 12,000 records per shape, totals read
+    // only from js/pricing-pipeline.js and the rollup's unitCost set to the
+    // sum of its own recipe so the COST is unchanged by construction:
+    //
+    //   rollup markup      recipe          total moves   markup-drop  routing
+    //   blank (inherited)  spans codes        53.9%          0.0%      53.9%
+    //   blank (inherited)  one cost code      41.0%          0.0%       0.0%
+    //   typed on the row   spans codes        89.6%         88.0%       1.6%
+    //   typed on the row   one cost code      88.5%         88.5%       0.0%
+    //
+    // Two reviewers disagreed about the cause and BOTH were right, about
+    // different halves. On a rollup carrying a markup somebody typed, dropping
+    // that markup is essentially the whole of it (88.0 of 89.6 points), and
+    // forcing every component into one cost code still moves 88.5% — so the
+    // re-routing is not the cause there. On a rollup whose markup is BLANK the
+    // drop cannot be the cause, because there is nothing to drop: markup-drop
+    // alone moves 0.0%, and every dollar of the 53.9% is re-routing. Which one
+    // dominates depends entirely on whether a human typed a number in that
+    // row, and an assembly like a pool cage is materials PLUS labour by
+    // construction. Shipping only the markup half would leave the blank case
+    // moving on half of all confirms.
+    //
+    // And in every one of the 48,000 confirms measured, the dialog contained
+    // no dollar sign at all. It moved the total by a median of a few hundred
+    // dollars and said "The single rollup line is replaced."
+    //
+    // SO THE COMPONENTS CARRY THE ROLLUP'S OWN RESOLVED MARKUP. Measured with
+    // this rule in force, the total holds EXACTLY still — 0.00% of 5,000
+    // records move — except where a destination section is in $-mode or
+    // carries overrideLineMarkups, which are the two cascade rules that ignore
+    // a per-line markup BY DESIGN. Those move 4.98%, and every one of them is
+    // detectable before the dialog is raised, because the simulation prices
+    // them. So this is not a hedge, it is a partition: preserved exactly where
+    // it can be, DISCLOSED WITH THE NUMBER where it cannot.
+    //
+    // ONLY WHERE IT IS NEEDED. A component whose destination section resolves
+    // to the rollup's number anyway is left with a BLANK markup, so it keeps
+    // inheriting and a later edit to that section still moves it. Stamping
+    // every component unconditionally would convert an inherited markup into a
+    // typed one across the board and quietly detach those lines from their
+    // section — a second, larger change, made silently, to fix the first.
+    var rollupMarkup = window.p86Pricing.effectiveMarkupForLine(line, _state.co.lines, _state.co);
+    var probe = null;
+    try { probe = simulateExplode(specs); } catch (e) { probe = null; }
+    var priced = specs;
+    if (probe) {
+      priced = specs.map(function (s, i) {
+        var b = probe.born[i];
+        if (!b) return s;
+        var got = window.p86Pricing.effectiveMarkupForLine(b, probe.rec.lines, probe.rec);
+        if (got === rollupMarkup) return s;      // already inherits the number
+        return Object.assign({}, s, { markup_pct: rollupMarkup });
+      });
+    }
+    var simOut = null;
+    try { simOut = simulateExplode(priced); } catch (e) { simOut = null; }
+    var simRec = simOut ? simOut.rec : null;
     // ── WHAT THE DIALOG WAS ANSWERED ABOUT ──────────────────────────────
     //
     // p86Confirm is a DOM overlay. It does not block JavaScript. Everything
@@ -1231,13 +1311,17 @@ function p86Ask(message, opts) {
         return c;
       }));
     };
-    // The rollup's own recipe is fingerprinted SEPARATELY from the outcome.
-    // Here simulateExplode happens to re-derive explodeSpecs from the clone's
-    // target, so a reprice does move its answer — but that is incidental, and
-    // the estimate editor's simulation replays a pre-built `specs` array where
-    // it is not: measured there, an outcome-only check let a mid-dialog reprice
-    // through and wrote the OLD recipe's components against the NEW unit cost.
-    // Both editors state the check, so neither depends on that accident.
+    // The rollup's own recipe is fingerprinted SEPARATELY from the outcome, and
+    // that is now load-bearing rather than belt-and-braces: the simulation is
+    // handed `priced`, a list built ONCE before the dialog, so it no longer
+    // re-derives the recipe and a mid-dialog reprice would be invisible to an
+    // outcome-only comparison. Measured on the estimate side, where the
+    // simulation has always replayed a pre-built list, that case sailed
+    // straight through and wrote the OLD recipe's components against the NEW
+    // unit cost.
+    //
+    // The re-run is handed `priced` too. Comparing against a re-derived list
+    // would be comparing two different actions.
     var quotedRecId = _state.co.id;
     var quotedOutcome = outcomeOf(simRec);
     var quotedSource = JSON.stringify([line.qty, line.unitCost, line.unitSell,
@@ -1249,8 +1333,8 @@ function p86Ask(message, opts) {
       if (JSON.stringify([line.qty, line.unitCost, line.unitSell,
         line.assemblyBreakdown]) !== quotedSource) return false;
       var again = null;
-      try { again = simulateExplode(); } catch (e) { again = null; }
-      return quotedOutcome != null && outcomeOf(again) === quotedOutcome;
+      try { again = simulateExplode(priced); } catch (e) { again = null; }
+      return quotedOutcome != null && outcomeOf(again && again.rec) === quotedOutcome;
     };
     var doIt = function () {
       if (!stillQuoted()) {
@@ -1275,7 +1359,10 @@ function p86Ask(message, opts) {
       var lines = _state.co.lines;
       var before = lines.slice();
       lines.splice(lines.indexOf(line), 1);
-      var res = coApplyBulkAddLineItems(specs);
+      // `priced`, not `specs` — the list the sentence was written from and the
+      // list stillQuoted() just re-simulated. Two lists thirty lines apart is
+      // the disease this function has been treated for three times.
+      var res = coApplyBulkAddLineItems(priced);
       var failed = (res && res.errors) || [];
       if (failed.length) {
         lines.length = 0;
@@ -1331,27 +1418,56 @@ function p86Ask(message, opts) {
         (newSections.length === 1 ? 'those parts' : 'them') + ': ' +
         newSections.map(function (l) { return l.label || '(unnamed)'; }).join(', ') + '.';
     }
+    // ── THE MONEY SENTENCE IS RAISED WHENEVER THE TOTAL WILL MOVE ──────
+    //
+    // It used to be raised ONLY when the line carried a promised sell price,
+    // and the asymmetry was invisible: 12,000 of 12,000 unpromised confirms
+    // contained no dollar sign, while the total moved on between 41% and 90%
+    // of them depending on the shape of the rollup. "Promised" is not the same
+    // question as "does this move money", and only the second one is what a
+    // confirm dialog is for.
+    //
+    // The number is not predicted from a rule, it is MEASURED off the same
+    // simulation everything else here quotes — so the disclosure covers every
+    // reason the total can move, including the two the markup carry cannot
+    // reach ($-mode sections and overrideLineMarkups), a rollup whose stored
+    // unitCost has drifted from its own recipe, and a round-to boundary being
+    // crossed. Nothing has to enumerate the causes; the price is just read.
+    //
+    // ONE OBJECT. `simRec` carries both the post-explode lines and the
+    // fee/tax/round fields, `perSim` is the decision taken on those very
+    // lines, and applyFeesAndTax is handed both. The third argument used to be
+    // omitted, which sent the round-to pause back to a fresh walk of the
+    // UN-exploded _state.co.lines: measured at +$250.00, +$266.00 and +$654.33
+    // on three fixtures, always exactly the round-up that should have stood
+    // down and did not.
+    var before = (computeTotals() || {}).total;
+    var after = null;
+    try {
+      if (!simRec) throw new Error('no simulation');
+      var perSim = window.p86Pricing.computeForLines(simRec, simRec.lines);
+      after = window.p86Pricing.applyFeesAndTax(
+        window.p86Pricing.resolveMarkedUp(perSim, simRec), simRec, perSim).total;
+    } catch (e) { after = null; }
+    var moves = before != null && after != null && Math.abs(after - before) >= 0.005;
     if (window.p86Pricing.sellLocked(line)) {
-      var before = (computeTotals() || {}).total || 0;
-      // Price the record as it would be AFTER, without touching it.
-      var after = 0;
-      try {
-        // ONE OBJECT. `simRec` carries both the post-explode lines and the
-        // fee/tax/round fields, `perSim` is the decision taken on those very
-        // lines, and applyFeesAndTax is handed both. The third argument used
-        // to be omitted, which sent the round-to pause back to a fresh walk of
-        // the UN-exploded _state.co.lines: measured at +$250.00, +$266.00 and
-        // +$654.33 on three fixtures, always exactly the round-up that should
-        // have stood down and did not.
-        if (!simRec) throw new Error('no simulation');
-        var perSim = window.p86Pricing.computeForLines(simRec, simRec.lines);
-        after = window.p86Pricing.applyFeesAndTax(
-          window.p86Pricing.resolveMarkedUp(perSim, simRec), simRec, perSim).total;
-      } catch (e) { after = null; }
+      // The components are correctly born without a Unit Sell — spreading one
+      // promise across every component would multiply it, which would be far
+      // worse. But that means the promise is DROPPED: the line stops being
+      // "we said $2,750" and goes back to cost x markup. On contract money,
+      // that is the one thing the person most needs to read.
       msg = 'This line has a promised sell price of ' + fmtCurrency(coNum(line.qty) * coNum(line.unitSell)) + '.\n\n' +
-        'Exploding returns it to markup pricing and drops that promise' +
-        (after == null ? '.' : ', moving the change order total from ' + fmtCurrency(before) + ' to ' + fmtCurrency(after) + '.') +
-        '\n\n' + msg;
+        'Exploding returns it to markup pricing and drops that promise.\n\n' + msg;
+    }
+    if (moves) {
+      msg += '\n\nThis changes the change order total from ' + fmtCurrency(before) +
+        ' to ' + fmtCurrency(after) + ' — ' +
+        (after > before ? 'up ' : 'down ') + fmtCurrency(Math.abs(after - before)) + '.';
+    } else if (before != null && after != null) {
+      // Said out loud, because "no dollar sign" is exactly what the silent
+      // version looked like. The person cannot tell a dialog that checked from
+      // one that never asked.
+      msg += '\n\nThe change order total does not change.';
     }
     if (window.p86Confirm) {
       window.p86Confirm({ title: 'Explode assembly', message: msg, confirmText: 'Explode', destructive: true }).then(function (ok) { if (ok) doIt(); });

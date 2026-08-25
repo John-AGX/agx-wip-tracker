@@ -557,7 +557,25 @@ describe('exploding a promised line states the number before the click', () => {
     // dialog that lets contract money move silently is not a confirm.
     expect(CO_ED_SRC).toMatch(/if \(window\.p86Pricing\.sellLocked\(line\)\) \{/);
     expect(CO_ED_SRC).toMatch(/This line has a promised sell price of/);
-    expect(CO_ED_SRC).toMatch(/moving the change order total from/);
+    // THE TWO TOTALS ARE NO LONGER INSIDE THE PROMISE BRANCH, and that is the
+    // point rather than a rewording. "Promised" is not the same question as
+    // "does this move money": measured on the bytes that shipped as 1.21,
+    // 12,000 of 12,000 UNPROMISED explode confirms contained no dollar sign
+    // while the total moved on between 41% and 90% of them. The number is now
+    // raised whenever the simulation says the total will move, promised or
+    // not, so this sentence sits OUTSIDE the sellLocked branch — held
+    // behaviourally in test/explode-does-not-move-money-silently.test.js and
+    // pinned here only so it cannot quietly move back inside.
+    expect(CO_ED_SRC).toMatch(/This changes the change order total from/);
+    const promiseBranch = CO_ED_SRC.slice(
+      CO_ED_SRC.indexOf('if (window.p86Pricing.sellLocked(line)) {'),
+      CO_ED_SRC.indexOf('if (window.p86Confirm) {'));
+    expect(promiseBranch).toMatch(/drops that promise/);
+    expect(promiseBranch.slice(0, promiseBranch.indexOf('if (moves) {')))
+      .not.toMatch(/This changes the change order total from/);
+    // …and the still case is said out loud too, so silence never means
+    // "nobody checked".
+    expect(CO_ED_SRC).toMatch(/The change order total does not change/);
   });
 
   test('exploded components carry no promise of their own', () => {

@@ -2451,7 +2451,14 @@
     // which suppresses debouncedSave / renderLineItems / renderTotals — the
     // simulation must not arm a save or paint itself onto the screen. The
     // swap is synchronous and restored in a `finally`, including on a throw.
-    var eeSimulateExplode = function () {
+    //
+    // It reports which LINE each spec became and what the whole estimate
+    // TOTALS to afterwards, because both are questions this dialog has to
+    // answer and neither can be answered without letting the real router put
+    // the line where it goes. computeTotals() reads appData.estimateLines
+    // through markedUpForGroup, so under the swap it prices the clone — the
+    // editor's own total function, not a re-derivation of it.
+    var eeSimulateExplode = function (specList) {
       var live = appData.estimateLines;
       var clone = JSON.parse(JSON.stringify(live));
       var target = null;
@@ -2465,14 +2472,62 @@
       try {
         var at = clone.indexOf(target);
         if (at >= 0) clone.splice(at, 1);
-        specs.forEach(function (s) {
+        var born = [];
+        (specList || specs).forEach(function (s) {
+          var seen = {};
+          clone.forEach(function (l) { if (l) seen[String(l.id)] = true; });
           applyAddLineItem(Object.assign({ _silent: true }, s));
+          var made = null;
+          for (var k = 0; k < clone.length; k++) {
+            var L = clone[k];
+            if (L && !seen[String(L.id)] && L.section !== '__section_header__') { made = L; break; }
+          }
+          born.push(made);
         });
-        return clone;
+        var tot = null;
+        try { tot = (computeTotals() || {}).total; } catch (e) { tot = null; }
+        return { lines: clone, born: born, total: tot };
       } finally { appData.estimateLines = live; }
     };
-    var simLines = null;
-    try { simLines = eeSimulateExplode(); } catch (e) { simLines = null; }
+    // ── EXPLODING IS A VIEW CHANGE. IT MUST NOT BE A REPRICING. ─────────
+    //
+    // The full measurement and the reasoning are in js/change-order-editor.js
+    // beside the identical rule; the short of it is that a rollup takes ONE
+    // markup and its components are routed by COST CODE into sections that may
+    // resolve to different ones, and being born with `markup: ''` meant each
+    // silently inherited its DESTINATION's. On the change-order corpus that
+    // moved the total on between 41% and 90% of confirms depending on the
+    // shape of the rollup, and 12,000 of 12,000 of those confirms contained no
+    // dollar sign.
+    //
+    // This editor was the worse of the two: eeAsmExplode had no simulation, no
+    // sellLocked branch and no money sentence at all, so it could not have said
+    // anything even where the change-order editor did.
+    //
+    // Components therefore carry the rollup's own RESOLVED markup — and only
+    // where they need to. A component whose destination section resolves to
+    // that same number is left BLANK so it keeps inheriting, because stamping
+    // every component unconditionally would convert an inherited markup into a
+    // typed one and quietly detach those lines from their section.
+    var rollupMarkup = _P.effectiveMarkupForLine(line, getLines(), getEstimate());
+    var probe = null;
+    try { probe = eeSimulateExplode(specs); } catch (e) { probe = null; }
+    var priced = specs;
+    if (probe) {
+      var probeGroup = probe.lines.filter(function (l) {
+        return l && l.estimateId === line.estimateId && l.alternateId === line.alternateId;
+      });
+      priced = specs.map(function (s, i) {
+        var b = probe.born[i];
+        if (!b) return s;
+        var got = _P.effectiveMarkupForLine(b, probeGroup, getEstimate());
+        if (got === rollupMarkup) return s;      // already inherits the number
+        return Object.assign({}, s, { markup_pct: rollupMarkup });
+      });
+    }
+    var simOut = null;
+    try { simOut = eeSimulateExplode(priced); } catch (e) { simOut = null; }
+    var simLines = simOut ? simOut.lines : null;
     // ── WHAT THE DIALOG WAS ANSWERED ABOUT ──────────────────────────────
     //
     // p86Confirm is a DOM overlay and does not block JavaScript, so doIt()
@@ -2563,9 +2618,11 @@
       if (appData.estimateLines.indexOf(line) < 0) return false;
       if (JSON.stringify([line.qty, line.unitCost, line.unitSell,
         line.assemblyBreakdown]) !== quotedSource) return false;
+      // Handed `priced`, the same list the sentence was written from. Comparing
+      // against a re-derived list would be comparing two different actions.
       var again = null;
-      try { again = eeSimulateExplode(); } catch (e) { again = null; }
-      return quotedOutcome != null && eeOutcomeOf(again) === quotedOutcome;
+      try { again = eeSimulateExplode(priced); } catch (e) { again = null; }
+      return quotedOutcome != null && eeOutcomeOf(again && again.lines) === quotedOutcome;
     };
     var doIt = function () {
       if (!stillQuoted()) {
@@ -2587,7 +2644,9 @@
       var arr = appData.estimateLines;
       var before = arr.slice();
       arr.splice(arr.indexOf(line), 1);
-      var res = applyBulkAddLineItems(specs);
+      // `priced`, not `specs` — the list the sentence was written from and the
+      // list stillQuoted() just re-simulated.
+      var res = applyBulkAddLineItems(priced);
       var failed = (res && res.errors) || [];
       if (failed.length) {
         arr.length = 0;
@@ -2633,6 +2692,35 @@
         (newSections.length === 1 ? '' : 's') + ' to hold ' +
         (newSections.length === 1 ? 'those parts' : 'them') + ': ' +
         newSections.map(function (l) { return l.description || '(unnamed)'; }).join(', ') + '.';
+    }
+    // ── THE MONEY SENTENCE, WHICH THIS EDITOR NEVER HAD ────────────────
+    //
+    // The change-order editor raised one only for a promised line. This one
+    // raised none at all — `unitSell` appears three times in this entire file
+    // and `sellLocked` zero times — so every explode here has always been
+    // silent about money, on a document that becomes a proposal.
+    //
+    // The number is MEASURED off the simulation rather than predicted from a
+    // rule, so it covers every reason the total can move: the two cascade
+    // rules the markup carry cannot reach ($-mode sections and
+    // overrideLineMarkups), a rollup whose stored unitCost has drifted from
+    // its own recipe, a round-to boundary being crossed, and a target margin
+    // re-solving over a changed subtotal.
+    var beforeTotal = null, afterTotal = null;
+    try { beforeTotal = (computeTotals() || {}).total; } catch (e) { beforeTotal = null; }
+    if (simOut) afterTotal = simOut.total;
+    if (beforeTotal != null && afterTotal != null) {
+      var delta = afterTotal - beforeTotal;
+      if (Math.abs(delta) >= 0.005) {
+        msg += '\n\nThis changes the estimate total from ' + fmtCurrency(beforeTotal) +
+          ' to ' + fmtCurrency(afterTotal) + ' — ' +
+          (delta > 0 ? 'up ' : 'down ') + fmtCurrency(Math.abs(delta)) + '.';
+      } else {
+        // Said out loud, because "no dollar sign" is exactly what the silent
+        // version looked like. The person cannot tell a dialog that checked
+        // from one that never asked.
+        msg += '\n\nThe estimate total does not change.';
+      }
     }
     // p86Confirm takes an options object and returns a Promise — the old
     // (string, callback) call silently never fired doIt (dead button).

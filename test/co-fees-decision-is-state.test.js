@@ -504,9 +504,20 @@ ${body}
       // dialog is most likely to be wrong on, silently excluded from its own
       // property. Measured, not assumed: the first version of this harness
       // did precisely that.
-      const m = message && message.match(/total from (\$-?[\d,]+\.\d\d) to (\$-?[\d,]+\.\d\d)\./);
+      // The sentence now ends with the DELTA ("— down $1,530.35.") rather than
+      // a full stop, and it is raised for every explode that moves the total
+      // rather than only for a promised one. Both totals are still the two the
+      // property is about, so only the terminator moves here — and the
+      // alternation is spelled out rather than made lazy, because a pattern
+      // that stops matching reports "no sentence was quoted" and silently
+      // excludes the record from its own property, which is the mistake the
+      // paragraph above records the harness already making once.
+      const m = message && message.match(/total from (\$-?[\d,]+\.\d\d) to (\$-?[\d,]+\.\d\d)(?:\.| —)/);
       return {
         raised: message != null,
+        // The whole sentence, so a caller can ask which BRANCH was raised and
+        // not only whether two totals appeared in it.
+        message: message,
         // A refusal is not a failure to quote — it is the other outcome, and
         // it comes with a reason and with the record untouched.
         refused: notice != null,
@@ -593,7 +604,26 @@ describe('PROPERTY — the confirm dialog quotes the totals the change order act
         continue;
       }
       raised++;
-      if (!r.quoted) { wrongAfter.push({ id: line.id, quoted: false }); continue; }
+      if (!r.quoted) {
+        // A PROMISED EXPLODE THAT MOVES NOTHING QUOTES NOTHING, and that is
+        // now correct rather than a gap. The two totals used to be printed
+        // unconditionally for a promised line; they are now printed when the
+        // simulation says the total will actually move. A promise that happens
+        // to equal cost × markup exactly is dropped without the total budging,
+        // and "moving the change order total from $X to $X" is a sentence that
+        // tells a person nothing while looking like it tells them something.
+        // Measured on this corpus: 14 of 36,000.
+        //
+        // So the property is the DISJUNCTION, and both halves are checked —
+        // the dialog must still have SAID which case it is.
+        const afterTruth = changeOrderMoney(r.record).income;
+        const stillSaid = /The change order total does not change\./.test(r.message || '');
+        if (!stillSaid || NOW.fmt(afterTruth) !== NOW.fmt(beforeTruth + 0)) {
+          wrongAfter.push({ id: line.id, quoted: false, saidStill: stillSaid,
+            before: NOW.fmt(beforeTruth + 0), after: NOW.fmt(afterTruth) });
+        }
+        continue;
+      }
       // The oracle is the SERVER's money function over the record the click
       // actually produced. It shares nothing with the dialog but the pipeline.
       const afterTruth = changeOrderMoney(r.record).income;
@@ -690,9 +720,24 @@ describe('PROPERTY — the confirm dialog quotes the totals the change order act
     const truthB = changeOrderMoney(nowB.record).income;
     const oldB = OLD.run(B, 'L1');
     expect(Math.round((nowB.after - truthB) * 100) / 100).toBe(0);
-    // The shipped dialog is out by the markup difference on the two components
-    // that do NOT belong in the Materials section.
-    expect(Math.round((oldB.after - truthB) * 100) / 100).toBe(1200);
+    // EACH DIALOG IS MEASURED AGAINST THE RECORD ITS OWN CLICK PRODUCES.
+    //
+    // This used to compare the shipped dialog's number against the REPAIRED
+    // record's money, which was the same record until the components began
+    // carrying the rollup's markup — a per-cost-code recipe now prices
+    // differently after the click than it did, so the two blobs no longer
+    // produce one record to be measured against. Holding the old comparison
+    // would be pinning the shipped dialog's error to a number it was never
+    // about, and it would move again the next time the routing does.
+    //
+    // "The dialog was wrong" means it quoted a total the record it was about
+    // did not take. That statement is independent of anything this repair did.
+    const oldTruthB = changeOrderMoney(oldB.record).income;
+    expect(Math.round((oldB.after - oldTruthB) * 100) / 100).not.toBe(0);
+    expect(Math.abs(oldB.after - oldTruthB)).toBeGreaterThan(100);
+    // …and the repaired one is exact on the record IT produces, which is the
+    // half that matters.
+    expect(nowB.afterText).toBe(NOW.fmt(truthB));
 
     // C: a CREDIT rollup — the component quantities go negative, so doIt()'s
     // `qty > 0` filter drops them and the record keeps only what is left. The
@@ -754,7 +799,18 @@ describe('PROPERTY — the confirm dialog quotes the totals the change order act
         if (!now.unchanged) mutatedOnRefusal++;
         continue;
       }
-      if (now.afterText !== NOW.fmt(changeOrderMoney(now.record).income)) wrongNow++;
+      // THE SENTENCE IS RIGHT EITHER WAY IT COMES OUT. The two totals are now
+      // printed when the total actually MOVES; when it does not, the dialog
+      // says so instead of quoting the same figure twice. Both halves are
+      // checked against the record the click produced — a "does not change"
+      // that is not true is exactly as wrong as a bad number.
+      const nowTruth = changeOrderMoney(now.record).income;
+      if (now.quoted) {
+        if (now.afterText !== NOW.fmt(nowTruth)) wrongNow++;
+      } else if (!/The change order total does not change\./.test(now.message || '')
+                 || NOW.fmt(nowTruth) !== NOW.fmt(changeOrderMoney(co).income + 0)) {
+        wrongNow++;
+      }
     }
     expect(raised).toBeGreaterThan(6000);
     expect(exposed).toBeGreaterThan(1000);

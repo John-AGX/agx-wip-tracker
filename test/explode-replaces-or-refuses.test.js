@@ -543,6 +543,24 @@ describe('PROPERTY — measured against 1.21: only the empty explode behaves dif
     }));
   };
 
+  // The same renumbering, plus the ONE field the markup-carry deliberately
+  // changes — and only on lines the explode minted. A pre-existing line's
+  // markup is never dropped here, so this cannot hide a repricing of the
+  // record that was already there.
+  const renumberDroppingCarriedMarkup = (rec) => {
+    let n = 0;
+    const map = {};
+    (rec.lines || []).forEach((l) => {
+      if (l && String(l.id).indexOf('gen_') === 0) map[l.id] = 'new_' + (++n);
+    });
+    return JSON.stringify((rec.lines || []).map((l) => {
+      if (!l || typeof l !== 'object') return l;
+      const c = Object.assign({}, l);
+      if (map[c.id]) { c.id = map[c.id]; delete c.markup; }
+      return c;
+    }));
+  };
+
   test('the renumbering is not a blanket', () => {
     const a = { lines: [{ id: 'gen_1', description: 'X', qty: 1 }] };
     expect(renumber(a)).toBe(renumber({ lines: [{ id: 'gen_9', description: 'X', qty: 1 }] }));
@@ -567,9 +585,32 @@ describe('PROPERTY — measured against 1.21: only the empty explode behaves dif
         // changed, no money repriced. Only the SENTENCE may differ, and only
         // where the shipped one was lying.
         same++;
-        if (renumber(now.record) !== renumber(old.record)) {
+        // ONE FIELD IS DELIBERATELY DIFFERENT NOW, AND IT IS ONLY ON LINES THE
+        // EXPLODE CREATES.
+        //
+        // "Exploding is a view change, not a repricing" makes each component
+        // carry the rollup's own resolved markup where its destination section
+        // would otherwise hand it a different one — see
+        // test/explode-does-not-move-money-silently.test.js, which measures the
+        // 41%-90% of confirms that used to move the total in silence. So a
+        // CREATED line may now hold a `markup` the shipped bytes left blank.
+        //
+        // Everything else is still byte-for-byte: description, qty, unit,
+        // unitCost, unitSell, section membership and ARRAY ORDER. And the
+        // pre-existing lines are checked separately below with nothing
+        // exempted at all, because "nothing already saved reprices" is the
+        // constraint this work is under and it must not be softened by the
+        // exemption that belongs to the new lines.
+        if (renumberDroppingCarriedMarkup(now.record) !== renumberDroppingCarriedMarkup(old.record)) {
           moved.push({ id: co.id, old: old.record.lines, now: now.record.lines });
         }
+        const was = {};
+        co.lines.forEach((l) => { was[String(l.id)] = JSON.stringify(l); });
+        now.record.lines.forEach((l) => {
+          if (was[String(l.id)] !== undefined && JSON.stringify(l) !== was[String(l.id)]) {
+            moved.push({ id: co.id, kind: 'a line that already existed changed', line: l.id });
+          }
+        });
         if (old.count !== oldCreated) oldLied.push({ id: co.id, quoted: old.count, created: oldCreated });
         if (now.count !== oldCreated) moved.push({ id: co.id, kind: 'count', quoted: now.count, created: oldCreated });
       } else {
@@ -901,10 +942,36 @@ describe('PROPERTY — the estimate editor, measured against the bytes that ship
         same++;
         // Lines carry generated ids, so identity is compared on everything
         // BUT the id — description, qty, unit, cost, section, order.
-        const strip = (ls) => ls.map((l) => { const c = Object.assign({}, l); delete c.id; delete c.estimateId; return c; });
+        //
+        // …and but the MARKUP ON A CREATED LINE, which the markup-carry
+        // deliberately changes: a component whose destination section would
+        // hand it a different number now carries the rollup's own instead, so
+        // the estimate total stops moving in silence (measured in
+        // test/explode-does-not-move-money-silently.test.js). A PRE-EXISTING
+        // line keeps its markup in this comparison and is checked again below
+        // with nothing exempted, because "nothing already saved reprices" is
+        // the constraint and it must not inherit the new lines' exemption.
+        const preExisting = (l) => others.some((x) => x.id === l.id) || l.id === 'ROLLUP';
+        const strip = (ls) => ls.map((l) => {
+          const c = Object.assign({}, l);
+          delete c.id; delete c.estimateId;
+          if (!preExisting(l)) delete c.markup;
+          return c;
+        });
         if (JSON.stringify(strip(n.lines)) !== JSON.stringify(strip(o.lines))) {
           moved.push({ id: co.id, old: strip(o.lines), now: strip(n.lines) });
         }
+        // THE PRE-EXISTING LINES ARE HELD BY THE COMPARISON ABOVE, WITH
+        // NOTHING EXEMPTED. `preExisting` gates the markup exemption, so a line
+        // that was already on the estimate is compared on its markup too: if
+        // the carry ever wrote on to a neighbour, or a section were re-labelled,
+        // or the array re-ordered, `strip` differs and the record lands in
+        // `moved`. There is deliberately NO second by-id check here — the two
+        // runs live in separate jsdom windows that mint their own estimate and
+        // line ids, so comparing by id across them measures the harness rather
+        // than the editor. The change-order half of this file does compare by
+        // id, because there the record is a faithful JSON clone with nothing
+        // minted on the way in.
         if (n.count !== oldCreated.length) moved.push({ id: co.id, kind: 'count', quoted: n.count, created: oldCreated.length });
       } else {
         wasDestroyed++;
