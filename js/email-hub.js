@@ -434,7 +434,7 @@
       '.ehub-pick{flex:0 0 14px;width:14px;height:14px;margin-top:8px;accent-color:var(--accent,#107C41);cursor:pointer;}',
       '.ehub-clip{font-size:11px;color:var(--text-dim,#7f8498);}',
       // inbound-email attachment chips (reading pane)
-      '.ehub-atts{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border,rgba(127,132,152,.25));}',
+      '.ehub-atts{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border,rgba(127,132,152,.25));}',
       '.ehub-att{display:inline-flex;align-items:center;gap:8px;max-width:280px;padding:7px 11px;border:1px solid var(--border,rgba(127,132,152,.3));border-radius:9px;background:rgba(127,132,152,.08);color:var(--text,inherit);text-decoration:none;font-size:12.5px;transition:border-color .12s,background .12s;}',
       '.ehub-att:hover{border-color:var(--accent,#107C41);background:rgba(16,124,65,.1);}',
       '.ehub-att-ic{color:var(--accent,#107C41);display:inline-flex;flex:0 0 auto;}',
@@ -1933,7 +1933,7 @@
         (!isMine && m.is_forward_wrapper ? '<span class="ehub-msg-fwd">forwarded copy</span>' : '') +
         (m.has_attachments ? '<span class="ehub-msg-fwd">' + ico('attachments', '') + ' attachment</span>' : '') +
         '<span class="ehub-msg-when">' + esc(fmtWhen(m.received_at)) + '</span>' +
-      '</div>' + inner + attachmentsHtml(m) +
+      '</div>' + attachmentsHtml(m) + inner +
     '</div>';
   }
 
