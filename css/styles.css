@@ -8083,6 +8083,11 @@
   justify-content: center;
 }
 .p86-pv-tbtn:hover { background: rgba(255,255,255,0.22); }
+/* Icon-based toolbar buttons (camera) — the rest are glyphs/entities. */
+.p86-pv-tbtn svg { width: 18px; height: 18px; display: block; }
+.p86-pv-tbtn.busy { opacity: 0.55; cursor: default; animation: p86-pv-busy 1s ease-in-out infinite; }
+.p86-pv-tbtn:disabled { cursor: default; }
+@keyframes p86-pv-busy { 0%, 100% { opacity: 0.55; } 50% { opacity: 0.9; } }
 
 /* ── PANEL (right rail) ─────────────────────────────────────────── */
 /* The stage (image area) stays dark regardless of theme — that's a

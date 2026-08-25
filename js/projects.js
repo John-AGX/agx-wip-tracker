@@ -4870,7 +4870,10 @@
       var p = _detailState.project || {};
       window.p86Attachments.openLightbox(ordered, Math.max(0, idx), {
         parentLabel: p.name || '',
-        parentSubtitle: p.address_text || ''
+        parentSubtitle: p.address_text || '',
+        // A photo taken with the viewer's camera button lands in this project —
+        // pull it into the feed behind the viewer so it's there on close.
+        onChange: function() { refreshDetailPhotos(); }
       });
     }
   }

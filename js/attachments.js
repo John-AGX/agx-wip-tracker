@@ -173,6 +173,10 @@
     }
     function close() {
       document.removeEventListener('keydown', onKey, true);
+      // The camera input lives on document.body (not inside the overlay, which
+      // render() rebuilds), so it has to be torn down explicitly.
+      if (_camInput && _camInput.parentNode) _camInput.parentNode.removeChild(_camInput);
+      _camInput = null;
       if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
       // Let the caller refresh their UI to reflect anything the user
       // changed in the viewer — annotations saved, description edited,
@@ -303,6 +307,78 @@
       });
     }
 
+    // ── Take a photo from inside the viewer ─────────────────────────
+    // Files the new shot into the SAME entity as the photo on screen, drops
+    // it at the front of the sequence (the feeds sort newest-first) and jumps
+    // to it so it can be tagged / described straight away.
+    //
+    // Camera-ONLY input: accept="image/*" + capture. Deliberately NOT a mixed
+    // camera/library input — that combination re-opens the OS chooser sheet
+    // every time and kills bulk selection (see the photo-capture notes).
+    var _camInput = null;
+    var _capturing = false;
+    function camInput() {
+      if (_camInput) return _camInput;
+      var i = document.createElement('input');
+      i.type = 'file';
+      i.accept = 'image/*';
+      i.setAttribute('capture', 'environment');
+      // Off-screen rather than display:none — some mobile browsers ignore
+      // .click() on a fully hidden input.
+      i.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0;';
+      i.addEventListener('change', function() {
+        var f = i.files && i.files[0];
+        i.value = '';   // so re-shooting the same filename still fires change
+        if (f) uploadCaptured(f);
+      });
+      document.body.appendChild(i);
+      _camInput = i;
+      return i;
+    }
+    function captureNewPhoto() {
+      var a = att();
+      if (!a || !a.entity_type || !a.entity_id || _capturing) return;
+      camInput().click();
+    }
+    function setCameraBusy(busy) {
+      var b = overlay.querySelector('[data-pv="camera"]');
+      if (!b) return;
+      b.classList.toggle('busy', !!busy);
+      b.disabled = !!busy;
+      b.title = busy ? 'Uploading…' : 'Take a photo';
+    }
+    function uploadCaptured(file) {
+      var a = att();
+      if (!a || !a.entity_type || !a.entity_id) return;
+      var entityType = a.entity_type, entityId = a.entity_id;
+      _capturing = true;
+      setCameraBusy(true);
+      // upload() auto-attaches geolocation for images (silent if denied).
+      window.p86Api.attachments.upload(entityType, entityId, file, {})
+        .then(function(r) {
+          var created = r && r.attachment;
+          if (created) {
+            state.attachments.unshift(created);
+            state.idx = 0;
+            state.zoom = 1;
+            state.comments = null;
+            render();
+            fetchComments();
+          }
+          // Let the host refresh its grid so the new photo shows there too.
+          if (typeof opts.onChange === 'function') {
+            try { opts.onChange(created); } catch (e) { /* defensive */ }
+          }
+        })
+        .catch(function(e) {
+          alert('Photo upload failed: ' + (e.message || e));
+        })
+        .then(function() {
+          _capturing = false;
+          setCameraBusy(false);
+        });
+    }
+
     function openAnnotator() {
       var a = att();
       if (!a) return;
@@ -397,7 +473,14 @@
       var btn = function(act, icon, title) {
         return '<button class="p86-pv-tbtn" data-pv="' + act + '" title="' + escapeAttr(title) + '">' + icon + '</button>';
       };
+      // Capture a new photo straight into the SAME entity as the one on
+      // screen (project / job / lead / task …). Only offered when we know
+      // where to file it. Uses the composer-camera icon so it reads as a
+      // sibling of the description mic.
+      var camIcon = (typeof window.p86Icon === 'function' ? window.p86Icon('composer-camera') : '&#x1F4F7;');
+      var canCapture = !!(a.entity_type && a.entity_id);
       return '<div class="p86-pv-toolbar">' +
+        (canCapture ? btn('camera', camIcon, 'Take a photo — saves into this ' + (a.entity_type || 'record')) : '') +
         (canAnnotate ? btn('annotate', '&#9998;', 'Annotate' + (hasAnnotations ? ' (' + a.annotations.length + ')' : '')) : '') +
         btn('fullscreen', state.fullscreen ? '&#x2922;' : '&#x26F6;', state.fullscreen ? 'Show panel' : 'Hide panel') +
         (canAnnotate ? btn('zoomout', '&minus;', 'Zoom out') : '') +
@@ -740,6 +823,7 @@
         if (act === 'close') close();
         else if (act === 'prev') prev();
         else if (act === 'next') next();
+        else if (act === 'camera') captureNewPhoto();
         else if (act === 'annotate') openAnnotator();
         else if (act === 'fullscreen') toggleFullscreen();
         else if (act === 'zoomin') setZoom(1);
