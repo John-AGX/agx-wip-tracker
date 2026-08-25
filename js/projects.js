@@ -28,7 +28,11 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
   function escapeAttr(s) {
-    return String(s == null ? '' : s).replace(/"/g, '&quot;').replace(/&/g, '&amp;');
+    // Escape & FIRST — else the & in a just-inserted &quot; gets re-escaped to
+    // &amp;quot;, double-escaping every quote. That corrupted the map section's
+    // data-photo-ids JSON blob (["att_…",…]) so JSON.parse threw and the map
+    // never mounted (blank box). Canonical order, matching escapeHTML above.
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
   }
   function fmtDate(s) {
     if (!s) return '';
