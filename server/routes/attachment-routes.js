@@ -1078,8 +1078,17 @@ router.post('/:entityType/:entityId',
         // stop coming in sideways; the resized variants drop EXIF entirely
         // so we don't leak GPS coords from contractor phones.
         const meta = await sharp(buf, { limitInputPixels: 50000000 }).rotate().metadata();
-        width = meta.width || null;
-        height = meta.height || null;
+        // metadata() describes the SOURCE, so the .rotate() above (which
+        // applies EXIF orientation at OUTPUT time) is NOT reflected in
+        // meta.width/height. A phone portrait reports 4000x3000 with
+        // orientation 6 while every derivative we actually write is 3000x4000.
+        // Storing the un-swapped values made width/height describe a file that
+        // doesn't exist — clients that sized an annotation overlay off them got
+        // a TRANSPOSED canvas and every stroke landed wrong. Swap for the
+        // orientations that rotate 90 degrees (5-8).
+        const _rot90 = meta.orientation >= 5 && meta.orientation <= 8;
+        width = (_rot90 ? meta.height : meta.width) || null;
+        height = (_rot90 ? meta.width : meta.height) || null;
         // JPEG has no alpha channel — transparent PNGs (org logos etc.) were
         // coming out of this pipeline with the background baked into a solid
         // box that blocked out on the sidebar brand / titleblock. Sources

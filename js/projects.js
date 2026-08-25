@@ -2305,15 +2305,9 @@
       preview.querySelectorAll('[data-anno-photo]').forEach(function(canvas) {
         var pid = canvas.getAttribute('data-anno-photo');
         var att = allPhotos.find(function(a) { return a.id === pid; });
-        if (!att || !window.p86AnnotationRender) return;
-        var dims = (typeof window.p86AnnotationRender.webVariantDims === 'function')
-          ? window.p86AnnotationRender.webVariantDims(att.width, att.height)
-          : null;
-        if (!dims) return;
-        canvas.width = dims.w;
-        canvas.height = dims.h;
-        try { window.p86AnnotationRender.renderAll(canvas.getContext('2d'), att.annotations); }
-        catch (e) { /* defensive */ }
+        if (!att) return;
+        var img = canvas.parentElement && canvas.parentElement.querySelector('img');
+        paintAnnotationsOver(img, canvas, att.annotations);
       });
 
       function close() { preview.remove(); }
@@ -2792,22 +2786,16 @@
           });
         });
 
-        // Paint annotation strokes onto any canvas we emitted next to
-        // a photo. Same coord-space trick as the project-feed tiles:
-        // the canvas's internal bitmap matches the WEB variant
-        // (1600px max edge, see attachment-routes.js sharp pipeline);
-        // CSS scales it to overlay the thumb img with object-fit:
-        // cover. Skips photos without annotations entirely.
+        // Paint annotation strokes onto any canvas we emitted next to a photo.
+        // Sized from the sibling img's real pixel dims once it loads — see
+        // paintAnnotationsOver for why att.width/height can't be trusted.
+        // Skips photos without annotations entirely.
         sectionEl.querySelectorAll('[data-anno-photo]').forEach(function(canvas) {
           var pid = canvas.getAttribute('data-anno-photo');
           var att = allPhotos.find(function(a) { return a.id === pid; });
-          if (!att || !window.p86AnnotationRender) return;
-          var dims = webVariantDims(att.width, att.height);
-          if (!dims) return;
-          canvas.width = dims.w;
-          canvas.height = dims.h;
-          try { window.p86AnnotationRender.renderAll(canvas.getContext('2d'), att.annotations); }
-          catch (e) { /* defensive — bad stroke shouldn't kill the section */ }
+          if (!att) return;
+          var img = canvas.parentElement && canvas.parentElement.querySelector('img');
+          paintAnnotationsOver(img, canvas, att.annotations);
         });
 
         // Click the photo image → open the full photo viewer panel.
@@ -4528,6 +4516,35 @@
   // at 1600, aspect ratio preserved, never upscaled. Strokes drawn in
   // the markup viewer live in THIS coord space; using the original
   // dimensions would offset/scale them incorrectly.
+  // Paint annotation strokes onto a canvas overlaying `img`.
+  //
+  // The canvas's internal bitmap MUST equal the displayed image's TRUE pixel
+  // dimensions: strokes were drawn against the web variant in the markup
+  // viewer, and CSS then stretches the canvas over the img with the same
+  // object-fit, so identical intrinsic dims => identical crop => aligned.
+  //
+  // Read those dims off the LOADED IMAGE — never compute them from
+  // att.width/height. Those are the PRE-EXIF-ROTATION source dims: a phone
+  // portrait is stored 4000x3000 with an orientation flag, sharp's .rotate()
+  // writes the web variant as 1200x1600, but att.width/height still say
+  // 4000x3000. Deriving from them produced a TRANSPOSED 1600x1200 canvas over
+  // a 1200x1600 image, which is why annotations drifted everywhere except the
+  // lightbox (attachments.js already sizes from img.naturalWidth).
+  function paintAnnotationsOver(img, canvas, annotations) {
+    if (!img || !canvas || !window.p86AnnotationRender) return;
+    if (!Array.isArray(annotations) || !annotations.length) return;
+    function go() {
+      var w = img.naturalWidth, h = img.naturalHeight;
+      if (!w || !h) return;
+      canvas.width = w;
+      canvas.height = h;
+      try { window.p86AnnotationRender.renderAll(canvas.getContext('2d'), annotations); }
+      catch (e) { /* defensive — one bad stroke shouldn't kill the render */ }
+    }
+    if (img.complete && img.naturalWidth) go();
+    else img.addEventListener('load', go, { once: true });
+  }
+
   function webVariantDims(origW, origH) {
     var w = Number(origW) || 0;
     var h = Number(origH) || 0;
@@ -4544,10 +4561,17 @@
     if (_detailState.selection.has(att.id)) tile.classList.add('selected');
     tile.setAttribute('data-attachment-id', att.id);
 
-    var isImg = att.mime_type && /^image\//.test(att.mime_type) && att.thumb_url;
+    var isImg = att.mime_type && /^image\//.test(att.mime_type) && (att.thumb_url || att.web_url);
+    var annoN = Array.isArray(att.annotations) ? att.annotations.length : 0;
     var visual;
     if (isImg) {
-      visual = '<img src="' + escapeAttr(att.thumb_url) + '" alt="" class="p86-proj-photo-tile-img" />';
+      // ANNOTATED tiles render the WEB variant instead of the square thumb.
+      // The overlay canvas is sized to the web image's own pixels, and the
+      // thumb is a SQUARE centre-crop — object-fit:cover would crop the two
+      // differently and the strokes would drift. Unannotated tiles keep the
+      // cheap thumb.
+      var tileSrc = (annoN && att.web_url) ? att.web_url : (att.thumb_url || att.web_url);
+      visual = '<img src="' + escapeAttr(tileSrc) + '" alt="" class="p86-proj-photo-tile-img" />';
     } else {
       var ext = (att.filename || '').split('.').pop().slice(0, 4).toUpperCase() || 'DOC';
       visual = '<div class="p86-proj-photo-tile-doc">' + escapeHTML(ext) + '</div>';
@@ -4632,26 +4656,12 @@
     // 4032×3024) would shrink the strokes into the top-left ~40% of
     // the canvas. CSS then scales the canvas via object-fit:cover so
     // it overlays the thumb pixel-for-pixel.
+    // Overlay the strokes on the tile. The img above is the WEB variant
+    // whenever there are annotations, so canvas and img share intrinsic dims
+    // and object-fit:cover crops both identically.
     var annoCanvas = tile.querySelector('.p86-proj-photo-tile-anno');
-    if (annoCanvas && annotationCount && window.p86AnnotationRender) {
-      var dims = webVariantDims(att.width, att.height);
-      if (dims) {
-        // The tile shows the SQUARE thumb (sharp resize 200², fit:cover =
-        // a CENTER crop to square). The strokes live in the FULL web-variant
-        // coord space, so painting them onto a full-aspect canvas and letting
-        // CSS object-fit:cover it into the tile crops DIFFERENTLY than the
-        // square thumb — that's the drift. Fix: size the canvas to the same
-        // center square and translate so the web-coord strokes land in the
-        // exact region the thumb shows. Both are now 1:1 sources → identical
-        // object-fit:cover crop → aligned.
-        var side = Math.min(dims.w, dims.h);
-        annoCanvas.width = side;
-        annoCanvas.height = side;
-        var ctx = annoCanvas.getContext('2d');
-        ctx.translate(-(dims.w - side) / 2, -(dims.h - side) / 2);
-        try { window.p86AnnotationRender.renderAll(ctx, att.annotations); }
-        catch (e) { /* defensive — bad stroke shouldn't kill the tile */ }
-      }
+    if (annoCanvas && annotationCount) {
+      paintAnnotationsOver(tile.querySelector('.p86-proj-photo-tile-img'), annoCanvas, att.annotations);
     }
 
     return tile;
