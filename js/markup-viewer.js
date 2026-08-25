@@ -410,7 +410,12 @@
   function buildOverlay() {
     var overlay = document.createElement('div');
     overlay.id = 'p86-markup-overlay';
-    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:5000;display:flex;flex-direction:column;padding:14px;';
+    // z-index MUST sit above the photo lightbox (.p86-photo-viewer = 9999) so
+    // annotating from inside the lightbox opens the tools IN FRONT of the image
+    // instead of behind it — and Save (which just removes this overlay) reveals
+    // the still-open lightbox underneath, letting the user keep tagging /
+    // describing. The measurement prompt modal (z 10500) stays above this.
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:10000;display:flex;flex-direction:column;padding:14px;';
     // The sticker popup positions itself relative to the overlay
     // bounding box. position:fixed creates its own containing block so
     // child position:absolute is relative to the overlay; no override

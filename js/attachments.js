@@ -183,6 +183,11 @@
       }
     }
     function onKey(e) {
+      // While the markup viewer is open ON TOP of us, it owns the keyboard
+      // (Esc = cancel/close the markup, NOT close the lightbox behind it; arrows
+      // shouldn't page photos underneath). Bail so our capture-phase handler
+      // doesn't intercept its keys.
+      if (document.getElementById('p86-markup-overlay')) return;
       // Don't hijack arrow keys while typing in the panel.
       var tag = e.target && e.target.tagName;
       var typing = tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable);
@@ -416,6 +421,7 @@
       var uploader = userNameFor(a.uploaded_by);
       var when = fmtRelativeTime(a.uploaded_at);
       var caption = a.caption || '';
+      var voiceOK = !!(window.p86VoiceInput && window.p86VoiceInput.isSupported && window.p86VoiceInput.isSupported());
       return (state.parentLabel
           ? '<header class="p86-pv-parent">' +
               '<div class="p86-pv-parent-top">' +
@@ -438,7 +444,9 @@
             '<div class="p86-pv-tags-host"></div>' +
           '</section>' +
           '<section class="p86-pv-section">' +
-            '<div class="p86-pv-section-label">Description</div>' +
+            '<div class="p86-pv-section-label p86-pv-desc-headrow"><span>Description</span>' +
+              (voiceOK ? '<button type="button" class="p86-pv-mic" title="Dictate (voice → text)" aria-label="Dictate description">🎤</button>' : '') +
+            '</div>' +
             '<fieldset class="p86-pv-desc-fs" data-edit-gate="locked">' +
               '<legend class="p86-pv-desc-legend">&nbsp;</legend>' +
               '<textarea class="p86-pv-desc-input" placeholder="Add a description (caption)…">' + escapeHTMLLocal(caption) + '</textarea>' +
@@ -771,6 +779,37 @@
           if ((a.caption || '') === v) return; // no change
           updateAtt({ caption: v });
         });
+      }
+
+      // Dictation mic for the description. Tapping it unlocks the edit-gated
+      // section (so the transcript lands + persists — dictation APPENDS to
+      // whatever's already there), starts/stops voice→text, and debounce-saves
+      // as it goes since closing the viewer won't fire the blur handler.
+      var descMic = overlay.querySelector('.p86-pv-mic');
+      if (descMic) {
+        if (descInput && window.p86VoiceInput && window.p86VoiceInput.isSupported && window.p86VoiceInput.isSupported()) {
+          // Registered BEFORE wire() so the unlock runs ahead of dictation
+          // start on the same click.
+          descMic.addEventListener('click', function() {
+            if (descFs && descFs.getAttribute('data-edit-gate') !== 'unlocked') {
+              var pencil = descFs.querySelector('.edit-gate-toggle');
+              if (pencil) pencil.click();
+            }
+          });
+          var _descVoiceSaveT = null;
+          window.p86VoiceInput.wire(descInput, descMic, {
+            silenceTimeoutMs: 7000,
+            onChange: function(v) {
+              clearTimeout(_descVoiceSaveT);
+              _descVoiceSaveT = setTimeout(function() {
+                var cur = att();
+                if (cur && (cur.caption || '') !== (v || '')) updateAtt({ caption: v });
+              }, 1200);
+            }
+          });
+        } else {
+          descMic.style.display = 'none';
+        }
       }
 
       // Comments list + composer.
