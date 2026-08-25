@@ -42,7 +42,7 @@
     return '📎';
   }
 
-  function escapeAttr(s) { return String(s == null ? '' : s).replace(/"/g, '&quot;').replace(/&/g, '&amp;'); }
+  function escapeAttr(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;'); }
 
   // Sanitize a free-text folder name to the same shape the server
   // applies on PUT/move: lowercased, kebab-cased, alnum + underscore +
