@@ -1986,3 +1986,8 @@ module.exports.entityAccess = {
   writeCapForEntity,
   requireDynamicCapability
 };
+// Text-layer extractor (PDF / Word / Excel / plain text) — reused by the
+// email-attachment reading path (services/email-attachment-text.js) so inbound
+// email attachments get the SAME extractor as uploaded files. Single source of
+// truth; the OCR fallback for images/scans lives in services/attachment-ocr.js.
+module.exports.extractAttachmentText = extractAttachmentText;

@@ -7850,7 +7850,8 @@ const READ_TOOLS = [
     description:
       'Read the signed-in user\'s in-app EMAIL DROPBOX — the PRIMARY way to read their email here. Where mail they redirect/forward from their real inbox lands; needs NO Outlook/Graph connection. Read-only, strictly their own. ' +
       'ALWAYS use this for any email thread id that starts with "th_" (e.g. th_ab12cd… — the dropbox thread-id format) and for general "read/summarize my email/thread" requests. Prefer it over the read_outlook_* tools unless the user is specifically asking about their LIVE Outlook mailbox. ' +
-      'Without thread_id: lists recent conversations (subject, sender, count, last received, preview) with [thread ids], each tagged with the linked client/sub and a triage read (⏎ needs reply + a one-line summary). With thread_id: the FULL conversation plus the triage summary and SUGGESTED FOLLOW-UPS (reminder/calendar/task) extracted from it. ' +
+      'Without thread_id: lists recent conversations (subject, sender, count, last received, preview) with [thread ids], each tagged with the linked client/sub and a triage read (⏎ needs reply + a one-line summary), and a 📎 flag on threads that carry attachments. With thread_id: the FULL conversation plus the triage summary and SUGGESTED FOLLOW-UPS (reminder/calendar/task) extracted from it. ' +
+      'ATTACHMENTS ARE READABLE: opening a thread also reads out each attachment\'s text — PDFs and Word/Excel/text files are read directly, and photos or scanned/image-only PDFs are OCR\'d on demand — so you can answer about what is IN an attached invoice, PO, scope, receipt, or photo, not just its filename. ' +
       'Use for "what emails came in", "anything I need to reply to", "summarize the thread with [person]", "read/summarize thread [th_...]", "draft a reply to [subject]". When the triage suggests a follow-up (a date to calendar, a reply to remember), OFFER to create it using your reminder/calendar/task tools — which confirm with the user first; never create anything silently from an email. ' +
       'q filters by sender/subject/body text. If the dropbox is empty or not set up, say so and point them to My Account → Email Dropbox for the forwarding address + setup steps. ' +
       'Results also show how mail is FILED — its folder, its auto-category (one of: clients, subs-vendors, bids-rfqs, invoices-bills, scheduling, permits-inspections, insurance-legal, internal, newsletters), any labels, and whether a thread is snoozed. Use those to answer "what\'s sitting in invoices", "anything from subs this week", "what did I park". A snoozed thread was deliberately deferred — do not report it as neglected. ' +
@@ -9961,8 +9962,26 @@ async function execStaffTool(name, input, ctx) {
             });
           }
         }
+
+        // Inbound attachments — bytes are in R2; resolve (and cache) their
+        // readable text lazily so the agent can read what's IN a PDF/photo, not
+        // just that one exists. Content is attacker-writable → wrapped as data.
+        let attByEmail = {};
+        try {
+          const ar = await pool.query(
+            `SELECT id, email_id, filename, mime_type, size_bytes, extracted_text, storage_key
+               FROM email_attachments WHERE email_id = ANY($1) ORDER BY created_at ASC`,
+            [r.rows.map((m) => m.id)]
+          );
+          ar.rows.forEach((a) => { (attByEmail[a.email_id] = attByEmail[a.email_id] || []).push(a); });
+        } catch (e) { attByEmail = {}; }
+        let _attResolve = null;
+        try { _attResolve = require('../services/email-attachment-text').resolveEmailAttachmentText; } catch (e) { _attResolve = null; }
+        let attProcessed = 0; const ATT_MAX = 8;
+
         parts.push('');
-        r.rows.forEach((m, i) => {
+        for (let i = 0; i < r.rows.length; i++) {
+          const m = r.rows[i];
           // 'outbound' = a copy that LOOKS like the owner's own reply (matched
           // by From address only). It is NOT cryptographically verified — anyone
           // who knows the secret dropbox address could forge one — so present it
@@ -9981,8 +10000,26 @@ async function execStaffTool(name, input, ctx) {
           // Bodies are attacker-writable (anyone can email the dropbox). Wrap so
           // their text is data, never instructions.
           parts.push(wrapUserData(isMine ? 'unverified_sent_copy_body' : 'inbound_email_body', (m.body_text || '(no body)').slice(0, 6000)));
+          // Attachment CONTENTS (lazy text-layer + OCR, cached). Content is
+          // attacker-writable → wrapUserData; the filename is a short label.
+          const atts = attByEmail[m.id] || [];
+          if (atts.length) {
+            parts.push('Attachments (' + atts.length + '):');
+            for (let k = 0; k < atts.length; k++) {
+              const a = atts[k];
+              let txt = (a.extracted_text && a.extracted_text.length) ? a.extracted_text : null;
+              const tried = (a.extracted_text != null); // '' or text both mean already attempted
+              if (!txt && !tried && _attResolve && attProcessed < ATT_MAX) {
+                try { txt = await _attResolve(a); } catch (e) { txt = null; }
+                attProcessed++;
+              }
+              const kb = a.size_bytes ? ', ' + Math.max(1, Math.round(a.size_bytes / 1024)) + ' KB' : '';
+              parts.push('  • ' + (a.filename || 'file') + ' (' + (a.mime_type || 'file') + kb + ')' + (txt ? ':' : ' — no readable text extracted'));
+              if (txt) parts.push(wrapUserData('email_attachment_content', String(txt).slice(0, 4000)));
+            }
+          }
           parts.push('');
-        });
+        }
         return parts.join('\n');
       }
       const limit = Math.max(1, Math.min(50, Number(input && input.limit) || 15));
@@ -10007,7 +10044,9 @@ async function execStaffTool(name, input, ctx) {
                 (ARRAY_AGG(triage_summary ORDER BY received_at DESC) FILTER (WHERE direction = 'inbound'))[1] AS triage_summary,
                 -- Category on the LIST too, so "what's sitting in Invoices &
                 -- Bills?" is answerable without opening every thread.
-                (ARRAY_AGG(ai_category ORDER BY received_at DESC) FILTER (WHERE direction = 'inbound' AND ai_category IS NOT NULL))[1] AS ai_category
+                (ARRAY_AGG(ai_category ORDER BY received_at DESC) FILTER (WHERE direction = 'inbound' AND ai_category IS NOT NULL))[1] AS ai_category,
+                -- so "which emails have attachments" is answerable from the list
+                BOOL_OR(COALESCE(has_attachments, false)) AS has_attachments
            FROM inbound_emails WHERE ${where}
           GROUP BY thread_id ORDER BY last_at DESC LIMIT ${limit}`,
         params
@@ -10036,6 +10075,7 @@ async function execStaffTool(name, input, ctx) {
         // needs_reply reflects the newest INBOUND message (a trailing captured
         // reply is unauthenticated and never clears it) — trusted bool → plain.
         if (t.needs_reply) lines.push('    ↳ ⏎ likely needs a reply');
+        if (t.has_attachments) lines.push('    ↳ 📎 has attachment(s) — open the thread to read their contents');
         if (t.triage_summary) lines.push(wrapUserData('email_triage_summary', t.triage_summary));
         lines.push('    [thread id: ' + t.thread_id + ']');
       });
