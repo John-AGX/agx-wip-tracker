@@ -2491,14 +2491,56 @@
         //     confirmText: 'Delete',
         //     destructive: true
         //   });
+        //
+        // ── THIS IS THE p86Confirm THE APP RUNS, AND THERE ARE TWO ─────
+        //
+        // js/dialogs.js defines a p86Confirm too and assigns it to
+        // window.p86Confirm. index.html loads dialogs.js at line 3393 and
+        // this file at 3492, both at top level, so THIS assignment happens
+        // second and wins — every p86Confirm call in the app lands here.
+        // Only p86Confirm is shadowed; p86Alert, p86Prompt and
+        // p86ConfirmTernary from dialogs.js are live, which is why that
+        // file does not look dead and why its JSDoc reads authoritative.
+        //
+        // The two spell their options differently — confirmText/destructive/
+        // cancelText here, confirmLabel/danger/cancelLabel there — and the
+        // dead one carries the documentation. Nine call sites were written
+        // against the docs, so their options were read by nothing:
+        //
+        //   js/jobs.js:2809          "Delete job permanently" — and all its
+        //                            buildings, phases, subs and change orders
+        //   js/estimates.js:1056     "Delete estimate"
+        //   js/attachments.js:1109   "Delete attachment"
+        //   js/schedule.js:3027      "Delete event"
+        //   js/schedule.js:3442      "Delete schedule entry"
+        //   js/ai-panel.js:2992      "Clear conversation"
+        //   js/file-explorer.js:157  every file and folder delete
+        //   js/jobs.js:2788          "Archive job"
+        //   js/schedule.js:3548      "Your unsaved changes will be lost"
+        //
+        // Every one of them showed a plain blue button reading "Confirm" on
+        // an irreversible action. Deleting a job looked exactly like saving
+        // one.
+        //
+        // BOTH SPELLINGS ARE ACCEPTED RATHER THAN THE CALL SITES RENAMED.
+        // A rename is 64 edits with a silently plain button wherever one is
+        // missed, and nothing would catch the miss — the wrong spelling is
+        // not an error, it is a default. Accepting both cannot regress: a
+        // caller passing the names this function already read gets exactly
+        // what it got before, which is why `destructive` is tested for
+        // PRESENCE rather than OR'd with `danger`. A bare string is taken as
+        // the message, matching p86Alert in js/dialogs.js, which has always
+        // done that — four call sites pass one and were rendering an empty
+        // body under "Are you sure?", including "Clear all chats".
         // ──────────────────────────────────────────────────────────────
         window.p86Confirm = function(opts) {
+            if (typeof opts === 'string') opts = { message: opts };
             opts = opts || {};
             var title = opts.title || 'Are you sure?';
             var message = opts.message || '';
-            var confirmText = opts.confirmText || 'Confirm';
-            var cancelText = opts.cancelText || 'Cancel';
-            var destructive = !!opts.destructive;
+            var confirmText = opts.confirmText || opts.confirmLabel || 'Confirm';
+            var cancelText = opts.cancelText || opts.cancelLabel || 'Cancel';
+            var destructive = (opts.destructive !== undefined) ? !!opts.destructive : !!opts.danger;
 
             return new Promise(function(resolve) {
                 var overlay = document.createElement('div');

@@ -151,6 +151,21 @@
 
   /**
    * p86Confirm — yes/no confirmation modal.
+   *
+   * ⚠ THIS FUNCTION DOES NOT RUN. js/app.js defines its own p86Confirm and
+   * assigns it to window.p86Confirm too; index.html loads dialogs.js at line
+   * 3393 and app.js at 3492, both at top level, so app.js's assignment is the
+   * one that survives and every p86Confirm call in the app lands there. Only
+   * p86Confirm is shadowed — p86Alert, p86Prompt and p86ConfirmTernary below
+   * are live, which is why this file does not look dead.
+   *
+   * This block used to be the only documentation of either implementation, and
+   * it documents the wrong one: nine call sites were written against
+   * confirmLabel/danger, which the live function did not read, and showed a
+   * plain blue "Confirm" on irreversible actions — including "Delete job
+   * permanently". js/app.js now accepts BOTH spellings, so these names work,
+   * but they work there and not here. Change behaviour in js/app.js.
+   *
    * @param {object} opts
    * @param {string} [opts.title]            — modal heading. Default: "Confirm"
    * @param {string} opts.message            — body text (newlines allowed)
