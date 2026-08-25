@@ -994,6 +994,12 @@ router.get('/recent', requireAuth, async (req, res) => {
 // order; the reverse would have opened an unscoped write.
 router.post('/:id/move', requireAuth, (req, res) => moveAttachment(req, res));
 router.post('/:id/copy', requireAuth, (req, res) => copyAttachment(req, res));
+// POST /api/attachments/from-email/:emailAttId — file an inbound EMAIL
+// attachment (bytes already in R2 under email_attachments.storage_key) into a
+// job's files or the user's personal My Files. Registered BEFORE the
+// 2-wildcard upload route below so 'from-email' can't be parsed as an entity
+// type. Handler defined near copyAttachment.
+router.post('/from-email/:emailAttId', requireAuth, (req, res) => saveEmailAttachmentToFolder(req, res));
 
 // POST /api/attachments/:entityType/:entityId — upload one file as form-data
 // field `file`. Returns the inserted attachment row.
@@ -1655,6 +1661,157 @@ async function copyAttachment(req, res) {
     res.json({ ok: true, attachment: ins.rows[0] });
   } catch (e) {
     console.error('POST /api/attachments/:id/copy error:', e);
+    res.status(500).json({ error: 'Server error: ' + e.message });
+  }
+}
+
+// Save an inbound EMAIL attachment into the file system. The bytes already
+// live in R2 under email_attachments.storage_key (put there by the inbound
+// worker); we duplicate them into a fresh key under the destination prefix and
+// INSERT a normal attachments row — so the file shows up in the job's Files
+// tab / the user's My Files exactly like an uploaded one, and deleting either
+// copy is independent. Mirrors copyAttachment, but the source is the
+// email_attachments table (owner = the dropbox recipient) and — since email
+// attachments carry no thumb/web variants — image derivatives are regenerated
+// the way the upload route does. Destination is limited to a job or the
+// caller's own My Files (John's ask); folder_id is honoured so it lands in the
+// picked folder (the Explorer groups by folder_id, not the legacy string).
+async function saveEmailAttachmentToFolder(req, res) {
+  try {
+    const eaR = await pool.query('SELECT * FROM email_attachments WHERE id = $1', [req.params.emailAttId]);
+    if (!eaR.rows.length) return res.status(404).json({ error: 'Attachment not found' });
+    const ea = eaR.rows[0];
+    // Owner check: you may only file YOUR OWN received attachments. The
+    // dropbox recipient is email_attachments.user_id. A 404 (not 403) so a
+    // guessed id can't confirm another user's attachment exists.
+    if (ea.user_id !== req.user.id) return res.status(404).json({ error: 'Attachment not found' });
+
+    const newType = String((req.body && req.body.entity_type) || '').trim();
+    const newId   = String((req.body && req.body.entity_id)   || '').trim();
+    if (!newType || !newId) return res.status(400).json({ error: 'entity_type and entity_id are required' });
+    // Scope: a job's files, or the user's personal My Files.
+    const VALID = ['job', 'user'];
+    if (VALID.indexOf(newType) === -1) return res.status(400).json({ error: 'invalid entity_type' });
+    if (!entityIdOk(newId)) return res.status(400).json({ error: 'Invalid entity_id' }); // P1-4
+
+    // Tenancy-then-capability on the DESTINATION. canWriteEntity proves the key
+    // is in the caller's org first, then the write cap — '__owner__' for 'user'
+    // means you can only save into your own My Files, JOBS_EDIT_* for a job.
+    if (!(await canWriteEntity(req, newType, newId))) {
+      return res.status(403).json({ error: 'No write access on destination' });
+    }
+
+    // Per-entity file cap, same guard as the upload route.
+    const countRes = await pool.query(
+      'SELECT COUNT(*)::int AS c FROM attachments WHERE entity_type = $1 AND entity_id = $2',
+      [newType, newId]
+    );
+    if (countRes.rows[0].c >= MAX_FILES_PER_ENTITY) {
+      return res.status(400).json({ error: 'Limit of ' + MAX_FILES_PER_ENTITY + ' attachments per ' + newType + ' reached. Delete one to save another.' });
+    }
+
+    let buf = await storage.getBuffer(ea.storage_key);
+    if (!buf) return res.status(404).json({ error: 'Stored file not found' });
+
+    const extM = (ea.filename || '').match(/\.([a-z0-9]+)$/i);
+    const extStr = extM ? extM[1].toLowerCase() : 'bin';
+
+    // The bytes came from OUTSIDE (inbound email), so canonicalize the mime by
+    // sniffing rather than trusting the declared type once we serve it from our
+    // own domain. SVG gets scrubbed before storage.
+    const sniffed = sniffMimeFromBytes(buf);
+    const mime = resolveStoredMime(extStr, ea.mime_type || 'application/octet-stream', sniffed);
+    if (mime === 'image/svg+xml') buf = sanitizeSvg(buf);
+
+    const newAttId = 'att_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    const baseKey = newType + '/' + newId + '/' + newAttId;
+
+    let thumbUrl = null, webUrl = null, originalUrl;
+    let thumbKey = null, webKey = null, originalKey;
+    let width = null, height = null;
+
+    if (isImageMime(mime)) {
+      // Regenerate thumb (200² cover) + web (1600px) so the Explorer shows a
+      // real thumbnail; .rotate() honors EXIF and the resized variants drop it.
+      const meta = await sharp(buf, { limitInputPixels: 50000000 }).rotate().metadata();
+      width = meta.width || null;
+      height = meta.height || null;
+      const hasAlpha = !!meta.hasAlpha;
+      const derivExt = hasAlpha ? 'png' : 'jpg';
+      const derivMime = hasAlpha ? 'image/png' : 'image/jpeg';
+      const thumbPipe = sharp(buf, { limitInputPixels: 50000000 }).rotate().resize(200, 200, { fit: 'cover' });
+      const webPipe = sharp(buf, { limitInputPixels: 50000000 }).rotate().resize(1600, 1600, { fit: 'inside', withoutEnlargement: true });
+      const thumbBuf = await (hasAlpha ? thumbPipe.png({ compressionLevel: 9 }) : thumbPipe.jpeg({ quality: 80 })).toBuffer();
+      const webBuf = await (hasAlpha ? webPipe.png({ compressionLevel: 9 }) : webPipe.jpeg({ quality: 82 })).toBuffer();
+      thumbKey = baseKey + '_thumb.' + derivExt;
+      webKey = baseKey + '_web.' + derivExt;
+      originalKey = baseKey + '_orig.' + extStr;
+      thumbUrl = await storage.put(thumbKey, thumbBuf, derivMime);
+      webUrl = await storage.put(webKey, webBuf, derivMime);
+      originalUrl = await storage.put(originalKey, buf, mime);
+    } else {
+      originalKey = baseKey + '_orig.' + extStr;
+      originalUrl = await storage.put(originalKey, buf, mime);
+    }
+
+    // Free text-layer extraction (PDF/Office/text) so the saved file is
+    // immediately readable by the agents via the attachments AI path. Carry
+    // over anything the email row already had. Image OCR is the separate
+    // Phase-2 email path — not run here.
+    let extractedText = ea.extracted_text || null;
+    let extractedAt = extractedText ? new Date() : null;
+    if (!extractedText) {
+      try {
+        extractedText = await extractAttachmentText(mime, buf);
+        if (extractedText) extractedAt = new Date();
+      } catch (e) {
+        console.warn('[attachment-routes] from-email extraction threw:', e.message);
+      }
+    }
+
+    // Resolve folder_id → validate it belongs to the destination entity →
+    // mirror its true path into the legacy `folder` column (the dual-write the
+    // upload route does). Hard 400 rather than silently landing at root.
+    let folder = 'general';
+    let folderId = null;
+    const reqFolderId = req.body && req.body.folder_id;
+    if (typeof reqFolderId === 'string' && reqFolderId.trim()) {
+      const ff = await pool.query(
+        'SELECT id, path FROM file_folders WHERE id = $1 AND entity_type = $2 AND entity_id = $3',
+        [reqFolderId.trim(), newType, newId]
+      );
+      if (!ff.rows[0]) return res.status(400).json({ error: 'Target folder not found' });
+      folderId = ff.rows[0].id;
+      folder = ff.rows[0].path;
+    }
+
+    const position = countRes.rows[0].c;
+
+    const ins = await pool.query(
+      `INSERT INTO attachments
+         (id, entity_type, entity_id, filename, mime_type, size_bytes,
+          width, height,
+          thumb_url, web_url, original_url,
+          thumb_key, web_key, original_key,
+          position, uploaded_by, extracted_text, extracted_text_at,
+          folder, folder_id,
+          organization_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+               (SELECT organization_id FROM users WHERE id = $16))
+       RETURNING *`,
+      [
+        newAttId, newType, newId,
+        ea.filename, mime, ea.size_bytes,
+        width, height,
+        thumbUrl, webUrl, originalUrl,
+        thumbKey, webKey, originalKey,
+        position, req.user.id, extractedText, extractedAt,
+        folder, folderId
+      ]
+    );
+    res.json({ ok: true, attachment: ins.rows[0], folder_path: folder });
+  } catch (e) {
+    console.error('POST /api/attachments/from-email/:emailAttId error:', e);
     res.status(500).json({ error: 'Server error: ' + e.message });
   }
 }

@@ -440,6 +440,34 @@
       '.ehub-att-ic{color:var(--accent,#107C41);display:inline-flex;flex:0 0 auto;}',
       '.ehub-att-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;}',
       '.ehub-att-size{color:var(--text-dim,#7f8498);flex:0 0 auto;font-size:11px;font-variant-numeric:tabular-nums;}',
+      // download chip + "save to folder" button joined into one pill
+      '.ehub-att-wrap{display:inline-flex;align-items:stretch;}',
+      '.ehub-att-wrap .ehub-att{border-top-right-radius:0;border-bottom-right-radius:0;border-right:none;}',
+      '.ehub-att-save{display:inline-flex;align-items:center;justify-content:center;padding:0 9px;border:1px solid var(--border,rgba(127,132,152,.3));border-left:1px solid var(--border,rgba(127,132,152,.22));border-radius:0 9px 9px 0;background:rgba(127,132,152,.08);color:var(--text-dim,#7f8498);cursor:pointer;transition:border-color .12s,background .12s,color .12s;}',
+      '.ehub-att-save:hover{color:var(--accent,#107C41);background:rgba(16,124,65,.1);border-color:var(--accent,#107C41);}',
+      '.ehub-att-save .ehub-ico{width:15px;height:15px;display:block;}',
+      // "Save to folder" picker modal
+      '.ehub-savep-wrap{position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:20px;}',
+      '.ehub-savep{width:460px;max-width:100%;max-height:82vh;display:flex;flex-direction:column;background:var(--surface,#16161c);border:1px solid var(--border,#31313c);border-radius:12px;box-shadow:0 24px 60px rgba(0,0,0,.55);overflow:hidden;}',
+      '.ehub-savep-hd{padding:14px 16px;border-bottom:1px solid var(--border,#2a2a32);font-size:13.5px;font-weight:600;display:flex;align-items:center;gap:8px;}',
+      '.ehub-savep-x{margin-left:auto;background:none;border:none;color:var(--text-dim,#7f8498);font-size:18px;cursor:pointer;line-height:1;}',
+      '.ehub-savep-body{padding:14px 16px;overflow-y:auto;}',
+      '.ehub-savep-seg{display:flex;gap:6px;margin-bottom:14px;}',
+      '.ehub-savep-seg button{flex:1;padding:8px 10px;border:1px solid var(--border,#31313c);background:none;color:var(--text,#dfe2ec);border-radius:8px;cursor:pointer;font-size:12.5px;font-weight:500;}',
+      '.ehub-savep-seg button.on{background:rgba(16,124,65,.14);border-color:var(--accent,#107C41);color:var(--accent,#5ddb7e);}',
+      '.ehub-savep-lbl{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--text-dim,#6f748a);margin:2px 0 6px;}',
+      '.ehub-savep-search{width:100%;padding:8px 10px;border:1px solid var(--border,#31313c);border-radius:8px;background:var(--surface2,#1c1c22);color:var(--text,#dfe2ec);font-size:12.5px;margin-bottom:8px;}',
+      '.ehub-savep-list{max-height:190px;overflow-y:auto;border:1px solid var(--border,#2a2a32);border-radius:8px;}',
+      '.ehub-savep-list button{display:block;width:100%;text-align:left;padding:8px 11px;background:none;border:none;border-bottom:1px solid var(--border,#242430);color:var(--text,#dfe2ec);font-size:12.5px;cursor:pointer;}',
+      '.ehub-savep-list button:last-child{border-bottom:none;}',
+      '.ehub-savep-list button:hover{background:var(--row-hover,#232329);}',
+      '.ehub-savep-list button.on{background:rgba(16,124,65,.14);color:var(--accent,#5ddb7e);}',
+      '.ehub-savep-empty{padding:10px 11px;font-size:11.5px;color:var(--text-dim,#6f748a);}',
+      '.ehub-savep-ft{padding:12px 16px;border-top:1px solid var(--border,#2a2a32);display:flex;gap:8px;align-items:center;}',
+      '.ehub-savep-hint{font-size:11px;color:var(--text-dim,#6f748a);margin-right:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:190px;}',
+      '.ehub-savep-ft button{padding:8px 14px;border-radius:8px;font-size:12.5px;font-weight:500;cursor:pointer;border:1px solid var(--border,#31313c);background:none;color:var(--text,#dfe2ec);}',
+      '.ehub-savep-save{background:var(--accent,#107C41)!important;border-color:var(--accent,#107C41)!important;color:#fff!important;}',
+      '.ehub-savep-save:disabled{opacity:.5;cursor:default;}',
       // compact density
       '.ehub-list.compact .ehub-row{padding:5px 10px 5px 9px;align-items:center;}',
       '.ehub-list.compact .ehub-av{width:20px;height:20px;flex-basis:20px;font-size:9px;margin-top:0;}',
@@ -1882,12 +1910,18 @@
     var atts = (m && m.attachments) || [];
     if (!atts.length) return '';
     return '<div class="ehub-atts">' + atts.map(function (a) {
-      return '<a class="ehub-att" href="/api/email-inbox/attachment/' + encodeURIComponent(a.id) +
-          '" target="_blank" rel="noopener" title="' + esc(a.filename || 'file') + '">' +
-          '<span class="ehub-att-ic">' + ico('attachments', '&#128206;') + '</span>' +
-          '<span class="ehub-att-name">' + esc(a.filename || 'file') + '</span>' +
-          '<span class="ehub-att-size">' + esc(fmtBytes(a.size_bytes)) + '</span>' +
-        '</a>';
+      var nm = esc(a.filename || 'file');
+      return '<span class="ehub-att-wrap">' +
+          '<a class="ehub-att" href="/api/email-inbox/attachment/' + encodeURIComponent(a.id) +
+            '" target="_blank" rel="noopener" title="' + nm + '">' +
+            '<span class="ehub-att-ic">' + ico('attachments', '&#128206;') + '</span>' +
+            '<span class="ehub-att-name">' + nm + '</span>' +
+            '<span class="ehub-att-size">' + esc(fmtBytes(a.size_bytes)) + '</span>' +
+          '</a>' +
+          '<button type="button" class="ehub-att-save" data-save-att="' + esc(a.id) + '" ' +
+            'data-save-name="' + nm + '" title="Save to a job or your files">' +
+            ico('folder', '&#128193;') + '</button>' +
+        '</span>';
     }).join('') + '</div>';
   }
 
@@ -1953,6 +1987,196 @@
     });
   }
 
+  // "Save to folder" picker for an inbound-email attachment. Files it into a
+  // JOB's Files or the user's personal My Files, then a folder within that
+  // destination. Bytes are copied server-side (the file already lives in R2)
+  // by p86Api.attachments.saveFromEmail.
+  function openSaveToPicker(attId, attName) {
+    if (!attId) return;
+    var api = window.p86Api;
+    if (!api || !api.attachments || !api.attachments.saveFromEmail) { toast('Saving is unavailable right now.'); return; }
+    var prev = document.querySelector('.ehub-savep-wrap');
+    if (prev) prev.remove();
+
+    var me = (window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser()) || null;
+    var myId = me ? String(me.id) : null;
+
+    var mode = 'user';        // 'user' (My Files) | 'job'
+    var jobId = null, jobLabel = '';
+    var folderId = null;      // chosen folder id (null = root)
+    var jobsCache = null;
+    var foldersCache = {};    // `${type}:${id}` -> [folder rows]
+
+    var wrap = document.createElement('div');
+    wrap.className = 'ehub-savep-wrap';
+    wrap.innerHTML =
+      '<div class="ehub-savep" role="dialog" aria-modal="true">' +
+        '<div class="ehub-savep-hd">' + ico('folder', '') +
+          '<span>Save &ldquo;' + esc(attName) + '&rdquo;</span>' +
+          '<button type="button" class="ehub-savep-x" title="Close">&times;</button>' +
+        '</div>' +
+        '<div class="ehub-savep-body">' +
+          '<div class="ehub-savep-seg">' +
+            '<button type="button" data-mode="user" class="on">My Files</button>' +
+            '<button type="button" data-mode="job">A job</button>' +
+          '</div>' +
+          '<div class="ehub-savep-jobpick" style="display:none;">' +
+            '<div class="ehub-savep-lbl">Job</div>' +
+            '<input type="text" class="ehub-savep-search" placeholder="Search jobs…">' +
+            '<div class="ehub-savep-list" data-list="jobs"></div>' +
+          '</div>' +
+          '<div class="ehub-savep-folderpick">' +
+            '<div class="ehub-savep-lbl">Folder</div>' +
+            '<div class="ehub-savep-list" data-list="folders"></div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="ehub-savep-ft">' +
+          '<span class="ehub-savep-hint"></span>' +
+          '<button type="button" class="ehub-savep-cancel">Cancel</button>' +
+          '<button type="button" class="ehub-savep-save" disabled>Save</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(wrap);
+
+    var elSeg = wrap.querySelectorAll('[data-mode]');
+    var elJobPick = wrap.querySelector('.ehub-savep-jobpick');
+    var elJobSearch = wrap.querySelector('.ehub-savep-search');
+    var elJobList = wrap.querySelector('[data-list="jobs"]');
+    var elFolderList = wrap.querySelector('[data-list="folders"]');
+    var elHint = wrap.querySelector('.ehub-savep-hint');
+    var elSave = wrap.querySelector('.ehub-savep-save');
+
+    function close() { wrap.remove(); document.removeEventListener('keydown', onKey); }
+    function onKey(e) { if (e.key === 'Escape') close(); }
+    document.addEventListener('keydown', onKey);
+    wrap.addEventListener('click', function (e) { if (e.target === wrap) close(); });
+    wrap.querySelector('.ehub-savep-x').addEventListener('click', close);
+    wrap.querySelector('.ehub-savep-cancel').addEventListener('click', close);
+
+    function refreshState() {
+      var ready = (mode === 'user' && myId) || (mode === 'job' && jobId);
+      elSave.disabled = !ready;
+      var dest = mode === 'user' ? 'My Files' : (jobLabel || '(pick a job)');
+      var folderName = '';
+      if (folderId) {
+        var arr = foldersCache[(mode === 'user' ? ('user:' + myId) : ('job:' + jobId))] || [];
+        for (var i = 0; i < arr.length; i++) { if (arr[i].id === folderId) { folderName = arr[i].path || arr[i].name; break; } }
+      }
+      elHint.textContent = ready ? ('→ ' + dest + (folderName ? ' / ' + folderName : '')) : '';
+      elHint.title = elHint.textContent;
+    }
+
+    function renderFolders(type, id) {
+      var fkey = type + ':' + id;
+      function draw(folders) {
+        var html = '<button type="button" data-folder="" class="' + (folderId ? '' : 'on') + '">(No folder — root)</button>';
+        folders.forEach(function (f) {
+          var depth = (f.path || '').split('/').length - 1;
+          var pad = depth > 0 ? (' style="padding-left:' + (11 + depth * 14) + 'px;"') : '';
+          html += '<button type="button" data-folder="' + esc(f.id) + '"' + pad + ' class="' + (folderId === f.id ? 'on' : '') + '">' + esc(f.name) + '</button>';
+        });
+        elFolderList.innerHTML = html;
+        elFolderList.querySelectorAll('[data-folder]').forEach(function (b) {
+          b.addEventListener('click', function () {
+            folderId = b.getAttribute('data-folder') || null;
+            elFolderList.querySelectorAll('button').forEach(function (x) { x.classList.remove('on'); });
+            b.classList.add('on');
+            refreshState();
+          });
+        });
+      }
+      if (foldersCache[fkey]) { draw(foldersCache[fkey]); return; }
+      elFolderList.innerHTML = '<div class="ehub-savep-empty">Loading…</div>';
+      api.fileFolders.tree(type, id).then(function (r) {
+        foldersCache[fkey] = (r && r.folders) || [];
+        draw(foldersCache[fkey]);
+      }).catch(function (e) {
+        elFolderList.innerHTML = '<div class="ehub-savep-empty">Could not load folders: ' + esc(e.message || 'error') + '</div>';
+      });
+    }
+
+    function renderJobs(filter) {
+      function draw(jobs) {
+        var q = (filter || '').toLowerCase();
+        var list = jobs.filter(function (j) { return !q || j.label.toLowerCase().indexOf(q) !== -1; }).slice(0, 60);
+        if (!list.length) { elJobList.innerHTML = '<div class="ehub-savep-empty">No jobs match.</div>'; return; }
+        elJobList.innerHTML = list.map(function (j) {
+          return '<button type="button" data-job="' + esc(j.id) + '" class="' + (jobId === j.id ? 'on' : '') + '">' + esc(j.label) + '</button>';
+        }).join('');
+        elJobList.querySelectorAll('[data-job]').forEach(function (b) {
+          b.addEventListener('click', function () {
+            jobId = b.getAttribute('data-job');
+            jobLabel = b.textContent;
+            folderId = null;
+            elJobList.querySelectorAll('button').forEach(function (x) { x.classList.remove('on'); });
+            b.classList.add('on');
+            renderFolders('job', jobId);
+            refreshState();
+          });
+        });
+      }
+      if (jobsCache) { draw(jobsCache); return; }
+      elJobList.innerHTML = '<div class="ehub-savep-empty">Loading jobs…</div>';
+      api.jobs.list().then(function (r) {
+        var raw = Array.isArray(r) ? r : (r && r.jobs) || [];
+        jobsCache = raw.map(function (j) {
+          var num = j.job_number || j.jobNumber || j.number || '';
+          var title = j.title || j.name || j.job_name || '';
+          var label = (num ? (num + ' — ') : '') + (title || ('Job ' + j.id));
+          return { id: String(j.id), label: label };
+        });
+        draw(jobsCache);
+      }).catch(function (e) {
+        elJobList.innerHTML = '<div class="ehub-savep-empty">Could not load jobs: ' + esc(e.message || 'error') + '</div>';
+      });
+    }
+
+    function setMode(m) {
+      mode = m;
+      folderId = null;
+      elSeg.forEach(function (b) { b.classList.toggle('on', b.getAttribute('data-mode') === m); });
+      if (m === 'job') {
+        elJobPick.style.display = '';
+        renderJobs(elJobSearch.value);
+        if (jobId) renderFolders('job', jobId);
+        else elFolderList.innerHTML = '<div class="ehub-savep-empty">Pick a job first.</div>';
+      } else {
+        elJobPick.style.display = 'none';
+        if (myId) renderFolders('user', myId);
+        else elFolderList.innerHTML = '<div class="ehub-savep-empty">Could not identify your account.</div>';
+      }
+      refreshState();
+    }
+
+    elSeg.forEach(function (b) { b.addEventListener('click', function () { setMode(b.getAttribute('data-mode')); }); });
+    var searchT = null;
+    elJobSearch.addEventListener('input', function () {
+      clearTimeout(searchT);
+      searchT = setTimeout(function () { renderJobs(elJobSearch.value); }, 160);
+    });
+
+    elSave.addEventListener('click', function () {
+      var entityId = mode === 'user' ? myId : jobId;
+      if (!entityId) return;
+      elSave.disabled = true;
+      elSave.textContent = 'Saving…';
+      api.attachments.saveFromEmail(attId, { entity_type: mode, entity_id: entityId, folder_id: folderId || undefined })
+        .then(function (r) {
+          var where = mode === 'user' ? 'My Files' : (jobLabel || 'the job');
+          var fp = (r && r.folder_path && r.folder_path !== 'general') ? (' / ' + r.folder_path) : '';
+          toast('Saved to ' + where + fp + '.');
+          close();
+        })
+        .catch(function (e) {
+          elSave.disabled = false;
+          elSave.textContent = 'Save';
+          toast(e.message || 'Could not save that file.');
+        });
+    });
+
+    setMode('user');
+  }
+
   function wirePane(pane, threadId, subject, msgs, isHandled, newest, paneActions) {
     paneActions = paneActions || [];
     var body = document.getElementById('ehubBody');
@@ -1968,6 +2192,16 @@
       el.addEventListener('click', function () {
         var a = paneActions[Number(el.getAttribute('data-actidx'))];
         if (a) runAction(a, threadId, subject, newest);
+      });
+    });
+
+    // "Save to folder" on each inbound-email attachment chip → open the
+    // job / My Files picker for that attachment.
+    pane.querySelectorAll('[data-save-att]').forEach(function (el) {
+      el.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        openSaveToPicker(el.getAttribute('data-save-att'), el.getAttribute('data-save-name') || 'file');
       });
     });
 

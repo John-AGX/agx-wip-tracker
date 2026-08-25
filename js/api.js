@@ -274,6 +274,9 @@
     // Cross-entity duplicate. Same payload shape as move; bytes are
     // copied server-side so source + copy are independent on delete.
     copy: function(id, payload) { return post('/api/attachments/' + encodeURIComponent(id) + '/copy', payload); },
+    // File an inbound EMAIL attachment (an email_attachments row) into a job's
+    // Files or the user's My Files. payload = { entity_type:'job'|'user', entity_id, folder_id? }.
+    saveFromEmail: function(emailAttId, payload) { return post('/api/attachments/from-email/' + encodeURIComponent(emailAttId), payload); },
     // Cross-entity most-recent uploads — drives the "Recent Files"
     // summary widget. limit defaults to 10 server-side; cap at 24.
     recent: function(limit) {
