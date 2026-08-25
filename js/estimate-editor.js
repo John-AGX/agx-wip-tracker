@@ -2274,9 +2274,39 @@
     sub: 'SUBCONTRACTORS'
   };
 
+  // ONE WAY TO SAY "nothing happened, and here is why".
+  // p86Alert, not alert(): native dialogs are a no-op in the installed PWA
+  // (reference_pwa_native_dialogs), and a refusal nobody sees is the same
+  // silence these guards exist to remove.
+  function eeNotice(title, message) {
+    if (window.p86Alert) window.p86Alert({ title: title, message: message });
+    else if (typeof alert === 'function') alert(message);
+  }
+  // A STORED HOLE IN THE RECIPE MUST NOT BE ABLE TO FREEZE THE TABLE.
+  //
+  // Exactly the `l &&` rule that guards every walk of appData.estimateLines,
+  // one level down: assemblyBreakdown is part of the same JSONB blob and
+  // round-trips just as verbatim, so a null survives the server and comes
+  // back inside it. Reading b.qty_per_unit off that null threw — and the
+  // throw was worse than a missing row, because eeToggleAsmBreakdown flips
+  // _asmOpen[id] to true BEFORE calling renderLineItems(). The first click set
+  // the flag, the render threw, and every later render threw with it: the line
+  // table froze at its last good HTML while the record kept accepting edits.
+  // The only escape was clicking the same strip a second time.
+  //
+  // SKIPPED, never removed. This function paints; a painter that edits the
+  // record is how a display bug becomes a data bug — and on this array
+  // removal would also renumber nothing, but on the LINE array it would
+  // re-section the estimate, which is the standing rule two hundred lines up.
+  function eeAsmRecipeRows(line) {
+    return ((line && line.assemblyBreakdown) || []).filter(function (b) {
+      return b && typeof b === 'object';
+    });
+  }
   function renderAsmBreakdownStrip(line) {
     var open = !!_asmOpen[line.id];
-    var n = line.assemblyBreakdown.length;
+    var rows = eeAsmRecipeRows(line);
+    var n = rows.length;
     // Footer of the fused .ee-asm-unit card (the wrapper carries the blue
     // edge + tint) — reads as a caption of the line above, not a sibling row.
     var html =
@@ -2289,7 +2319,7 @@
       '</div>';
     if (!open) return html;
     var q = num(line.qty);
-    line.assemblyBreakdown.forEach(function (b) {
+    rows.forEach(function (b) {
       var bq = Math.round(q * num(b.qty_per_unit) * 100) / 100;
       var uc = b.unit_cost != null ? num(b.unit_cost) : 0;
       html +=
@@ -2376,7 +2406,7 @@
     // run past applyBulkAddLineItems' empty-specs early return, which sits
     // ABOVE its debouncedSave() + renderLineItems() + renderTotals().
     var q = num(line.qty);
-    var specs = line.assemblyBreakdown.map(function (b) {
+    var specs = eeAsmRecipeRows(line).map(function (b) {
       return {
         description: b.description,
         qty: Math.round(q * num(b.qty_per_unit) * 100) / 100,
@@ -2387,35 +2417,223 @@
         source_assembly_id: line.sourceAssemblyId
       };
     }).filter(function (s) { return s.qty > 0; });
-    if (!specs.length) {
+    // ── A CREDIT IS REFUSED BY NAME, NOT BY WHAT SURVIVES A FILTER ──────
+    // Identical to the change-order editor's guard and for the identical
+    // reason: `!specs.length` refused a credit only as a SIDE EFFECT of the
+    // `qty > 0` filter emptying the array, and a recipe row carrying a
+    // NEGATIVE qty_per_unit multiplies with the negative rollup quantity to a
+    // POSITIVE component quantity. The array is then not empty, the guard
+    // stands down, and the credit explodes into a charge.
+    if (q <= 0 || !specs.length) {
       // Same three reasons, same words, as the change-order editor. Credits
       // are REFUSED rather than exploded into negative component lines: that
       // is untested money semantics and belongs in its own commit.
-      var why = !line.assemblyBreakdown.length
+      var why = !eeAsmRecipeRows(line).length
         ? 'This line has no recipe items, so there is nothing to explode it into.'
         : q < 0
           ? 'This is a credit line (quantity ' + q + '). Exploding it would give every component a negative quantity, which this editor does not price \u2014 so nothing was changed. Edit the rollup line directly, or delete it and enter the deduction as its own line.'
           : q === 0
             ? 'This line\u2019s quantity is 0, so every item in the recipe works out to no quantity. Set a quantity first, then explode.'
             : 'Nothing to explode: every item in this recipe works out to no quantity.';
-      if (window.p86Alert) window.p86Alert({ title: 'Nothing to explode', message: why });
-      else if (typeof alert === 'function') alert(why);
+      eeNotice('Nothing to explode', why);
       return;                                  // ← THE RECORD IS UNTOUCHED
     }
+    // THE SIMULATION RUNS THE REAL MUTATION, ON A CLONE — the shape
+    // js/change-order-editor.js already uses, brought here because this editor
+    // has to answer the same two questions it does: how many lines will really
+    // appear, and what will the total be. Both were previously answered by
+    // NOT answering them.
+    //
+    // appData.estimateLines is swapped for a deep clone for the duration, so
+    // applyAddLineItem's find-or-create section routing and its
+    // insert-inside-the-section splice write into the clone exactly as they
+    // would write into the record. Every spec goes through with _silent set,
+    // which suppresses debouncedSave / renderLineItems / renderTotals — the
+    // simulation must not arm a save or paint itself onto the screen. The
+    // swap is synchronous and restored in a `finally`, including on a throw.
+    var eeSimulateExplode = function () {
+      var live = appData.estimateLines;
+      var clone = JSON.parse(JSON.stringify(live));
+      var target = null;
+      for (var si = 0; si < clone.length; si++) {
+        var c = clone[si];
+        if (c && eeSameId(c.id, line.id) && c.estimateId === line.estimateId
+            && c.alternateId === line.alternateId) { target = c; break; }
+      }
+      if (!target) return null;
+      appData.estimateLines = clone;
+      try {
+        var at = clone.indexOf(target);
+        if (at >= 0) clone.splice(at, 1);
+        specs.forEach(function (s) {
+          applyAddLineItem(Object.assign({ _silent: true }, s));
+        });
+        return clone;
+      } finally { appData.estimateLines = live; }
+    };
+    var simLines = null;
+    try { simLines = eeSimulateExplode(); } catch (e) { simLines = null; }
+    // ── WHAT THE DIALOG WAS ANSWERED ABOUT ──────────────────────────────
+    //
+    // p86Confirm is a DOM overlay and does not block JavaScript, so doIt()
+    // runs an unknown time later against whatever appData has become. The
+    // ordinary route is a background hydrate — js/ai-panel.js's
+    // wirePayloadApplied -> p86Refresh.fromTargets -> p86ReloadAllData ->
+    // loadData() -> hydrateFromServerEstimates, which reassigns
+    // appData.estimateLines WHOLESALE, and which fires on any job-or-estimate
+    // write landing anywhere in the app. The online / visibilitychange
+    // load-recovery paths in js/app.js reach the same hydrate.
+    //
+    // MEASURED, driving this exact click path with the confirm left pending:
+    //   the editor closed -> getEstimate() returns null, applyAddLineItem
+    //     throws 'No estimate open.', applyBulkAddLineItems SWALLOWS it - and
+    //     the splice above has already run. Three lines became two, the
+    //     rollup was gone, NOTHING was created, and debouncedSave() (which
+    //     sits below the swallowing loop) committed it. No alert, no error,
+    //     nothing on screen.
+    //   appData.estimates replaced, or est.alternates emptied -> the same
+    //     destruction through 'No active group.'
+    //   hydrateFromServerEstimates -> indexOf(line) is -1 against the new
+    //     array, the splice is skipped, and the parts are added on top: the
+    //     rollup is KEPT and double-counted
+    //   a different estimate opened -> est_1 lost its rollup and est_2 gained
+    //     est_1's components and a Direct Labor header. A CROSS-RECORD write.
+    //
+    // Re-checking is necessary and not sufficient on its own: the sentence
+    // below has already quoted a count and a set of new sections off the
+    // PRE-dialog state, so silently proceeding would make the box a liar
+    // rather than a destroyer. The answer is refuse, and say so.
+    // WHAT IS COMPARED IS THE OUTCOME, NOT THE INPUTS.
+    //
+    // Fingerprinting the rollup's own qty/cost/recipe would catch a reprice
+    // and miss everything else, and "everything else" is what the sentence is
+    // made of: the count and the new sections are properties of the WHOLE
+    // group, because applyAddLineItem find-or-creates its section against the
+    // whole array and section membership is positional. So the thing
+    // re-checked is the SIMULATION'S OWN ANSWER, re-run at commit time and
+    // compared with the one the dialog quoted. One model of one state, asked
+    // twice.
+    //
+    // Scoped to this estimate and this group, because appData.estimateLines is
+    // one flat portfolio-wide array: a change to somebody else's estimate is
+    // not a reason to refuse this one. Minted ids are stripped — applyAddLineItem
+    // mints from Date.now(), so two runs over the same state necessarily
+    // differ there and nowhere else.
+    //
+    // The object-identity check is separate and is about the SPLICE, not the
+    // quote: doIt removes `line` by indexOf, and indexOf(-1) fed to splice
+    // removes the LAST line of the portfolio array — a line belonging to some
+    // other estimate entirely. If the record reloaded into fresh objects, even
+    // byte-identical ones, `line` is not in the array and the only safe answer
+    // is to refuse.
+    var quotedEstId = line.estimateId;
+    var quotedAltId = line.alternateId;
+    var eeOutcomeOf = function (arr) {
+      if (!Array.isArray(arr)) return null;
+      return JSON.stringify(arr.filter(function (l) {
+        return l && l.estimateId === quotedEstId && l.alternateId === quotedAltId;
+      }).map(function (l) {
+        var c = Object.assign({}, l);
+        delete c.id;
+        return c;
+      }));
+    };
+    var quotedOutcome = eeOutcomeOf(simLines);
+    // THE ROLLUP'S OWN RECIPE IS CHECKED SEPARATELY, AND IT HAS TO BE.
+    //
+    // `specs` was derived from the recipe ONCE, above, and eeSimulateExplode
+    // replays that same array — so a reprice landing mid-dialog (coAsmRefresh's
+    // sibling, eeAsmRefresh, whose fetch().then() rewrites assemblyBreakdown
+    // and unitCost) is INVISIBLE to the outcome comparison: both runs replay
+    // the stale specs and agree with each other. Measured — that case sailed
+    // straight through an outcome-only check and wrote the OLD recipe's
+    // components against the NEW unit cost.
+    //
+    // The two fingerprints answer different questions and neither subsumes the
+    // other: the outcome covers the rest of the record, and this covers the
+    // one line the outcome is blind to.
+    var quotedSource = JSON.stringify([line.qty, line.unitCost, line.unitSell,
+      line.assemblyBreakdown]);
+    var stillQuoted = function () {
+      var est = getEstimate();
+      if (!est || est.id !== quotedEstId) return false;
+      var alt = getActiveAlternate();
+      if (!alt || alt.id !== quotedAltId) return false;
+      if (!Array.isArray(appData.estimateLines)) return false;
+      if (appData.estimateLines.indexOf(line) < 0) return false;
+      if (JSON.stringify([line.qty, line.unitCost, line.unitSell,
+        line.assemblyBreakdown]) !== quotedSource) return false;
+      var again = null;
+      try { again = eeSimulateExplode(); } catch (e) { again = null; }
+      return quotedOutcome != null && eeOutcomeOf(again) === quotedOutcome;
+    };
     var doIt = function () {
-      var idx = appData.estimateLines.indexOf(line);
-      if (idx >= 0) appData.estimateLines.splice(idx, 1);
+      if (!stillQuoted()) {
+        eeNotice('Nothing was exploded',
+          'This estimate changed while that box was open — it reloaded in the ' +
+          'background, another record was opened, or the line was repriced — so the ' +
+          'count you were shown is no longer what would happen. Nothing was changed. ' +
+          'Open the assembly strip again and explode from there.');
+        return;                                // ← THE RECORD IS UNTOUCHED
+      }
+      // ── ALL OF IT, OR NONE OF IT ────────────────────────────────────
+      // The splice was unconditional and the add was not. `before` is a
+      // shallow copy of appData.estimateLines taken before either statement;
+      // restoring it puts the record back exactly, because every line the
+      // adder created is a new object the copy does not contain. The restore
+      // is IN PLACE - the array's identity is held by getLines(), by
+      // eeLineIndex, and by the stale check above, and reassigning it would
+      // be the very move that guard exists to detect.
+      var arr = appData.estimateLines;
+      var before = arr.slice();
+      arr.splice(arr.indexOf(line), 1);
+      var res = applyBulkAddLineItems(specs);
+      var failed = (res && res.errors) || [];
+      if (failed.length) {
+        arr.length = 0;
+        Array.prototype.push.apply(arr, before);
+        renderLineItems(); renderTotals();
+        eeNotice('Nothing was exploded',
+          failed.length + ' of ' + specs.length + ' component' +
+          (specs.length === 1 ? '' : 's') + ' could not be added, so the whole explode ' +
+          'was undone and the rollup line is exactly as it was:\n\n' + failed.join('\n'));
+        return;
+      }
+      // Only once the parts are really there does the strip stop being open.
       delete _asmOpen[lineId];
-      // Non-empty by construction → always reaches debouncedSave() +
-      // renderLineItems() + renderTotals().
-      applyBulkAddLineItems(specs);
     };
     // ONE SENTENCE, used by both doors. The confirm() fallback used to ask a
     // different question ("Explode into editable lines?") with no count in it
     // at all, which is a second model of the same prompt.
+    //
+    // AND IT NAMES THE SECTION HEADERS THE SAME ACTION CREATES. Routing a
+    // component to its cost code FINDS OR CREATES that section, so exploding
+    // a materials-plus-labour recipe into a group with no Direct Labor section
+    // adds a header nobody asked for, while the sentence said only "the single
+    // rollup line is replaced". The count comes from the simulation, which is
+    // the one model of the routing.
+    var eeIsHdr = function (l) { return !!(l && l.section === '__section_header__'); };
+    var hadHdr = {};
+    (appData.estimateLines || []).forEach(function (l) {
+      if (eeIsHdr(l) && l.estimateId === quotedEstId && l.alternateId === quotedAltId) {
+        hadHdr[String(l.id)] = true;
+      }
+    });
+    var newSections = simLines
+      ? simLines.filter(function (l) {
+          return eeIsHdr(l) && l.estimateId === quotedEstId
+            && l.alternateId === quotedAltId && !hadHdr[String(l.id)];
+        })
+      : [];
     var msg = 'Explode "' + (line.description || 'assembly') + '" into ' +
       specs.length + ' editable line' + (specs.length === 1 ? '' : 's') +
       '? The single rollup line is replaced.';
+    if (newSections.length) {
+      msg += '\n\nThis also adds ' + newSections.length + ' new section' +
+        (newSections.length === 1 ? '' : 's') + ' to hold ' +
+        (newSections.length === 1 ? 'those parts' : 'them') + ': ' +
+        newSections.map(function (l) { return l.description || '(unnamed)'; }).join(', ') + '.';
+    }
     // p86Confirm takes an options object and returns a Promise — the old
     // (string, callback) call silently never fired doIt (dead button).
     if (window.p86Confirm) {
@@ -4094,15 +4312,33 @@
   // with _silent:true so we don't re-render or save N times, then
   // finalizes with a single save + render. Returns the list of
   // summary strings for the caller to surface in the UI.
+  // AN ERROR SWALLOWED ON A MONEY PATH IS ITS OWN DEFECT.
+  //
+  // The per-spec try/catch and the `errors` list were already here. What was
+  // missing is that every caller DISCARDED the return value, so the list was
+  // built and thrown away and a batch in which every spec threw looked exactly
+  // like a batch that worked: debouncedSave() and the two renders ran
+  // regardless, from BELOW the loop. That is how "created 0" reported as
+  // success on the explode path.
+  //
+  // The failures now come out on `.errors` as well as in the summary line, so
+  // a caller can ACT on them rather than only print them. Attaching them to
+  // the returned array rather than changing the return type is deliberate:
+  // this is one of the four methods in the Materials Drawer's target contract
+  // (js/materials-drawer.js) and one of the appliers
+  // test/estimate-line-addressability.test.js drives, and every one of them
+  // treats the value as an array of strings or ignores it. `.length`,
+  // `.join`, `.forEach` and `.map` are unchanged.
   function applyBulkAddLineItems(lines) {
-    if (!Array.isArray(lines) || !lines.length) return [];
     var summaries = [];
-    var errors = [];
+    summaries.errors = [];
+    if (!Array.isArray(lines) || !lines.length) return summaries;
+    var errors = summaries.errors;
     lines.forEach(function(spec) {
       try {
         summaries.push(applyAddLineItem(Object.assign({ _silent: true }, spec || {})));
       } catch (e) {
-        errors.push(((spec && spec.description) || 'unknown') + ': ' + (e.message || 'failed'));
+        errors.push(((spec && spec.description) || 'unknown') + ': ' + ((e && e.message) || 'failed'));
       }
     });
     // Single save + render after the whole batch lands.

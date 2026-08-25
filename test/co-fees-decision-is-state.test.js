@@ -428,10 +428,11 @@ describe('PROPERTY — for ANY record and ANY two line sets, the pause cannot co
 // So the harness runs the real dialog AND the real mutation, and the oracle is
 // the server's changeOrderMoney — which shares only the pricing pipeline.
 function makeEditor(src, pricing) {
-  const cut = (a, b) => {
+  const cut = (a, b, optional) => {
     const i = src.indexOf(a);
+    if (i < 0) { if (optional) return ''; throw new Error('anchor not found: ' + a); }
     const j = src.indexOf(b, i);
-    if (i < 0 || j < 0) throw new Error('anchor not found: ' + a);
+    if (j < 0) throw new Error('close anchor not found: ' + a);
     return src.slice(i, j + b.length);
   };
   const body = [
@@ -444,6 +445,10 @@ function makeEditor(src, pricing) {
     cut('  function coEnsureSection(bucket) {', '\n  }\n'),
     cut('  function coApplyAddLineItem(input) {', '\n  }\n'),
     cut('  function coApplyBulkAddLineItems(specs) {', '\n  }\n'),
+    // Added by the stale-decision repair, and ABSENT from the prior blobs this
+    // file also loads — so both are optional cuts.
+    cut('  function coNotice(title, message) {', '\n  }\n', true),
+    cut('  function coAsmRecipeRows(line) {', '\n  }\n', true),
     cut('  function coAsmExplode(lineId) {', '    } else if (confirm(msg)) doIt();\n  }\n'),
   ].join('\n');
   // eslint-disable-next-line no-new-func

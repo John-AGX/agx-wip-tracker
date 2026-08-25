@@ -512,11 +512,31 @@ function p86Ask(message, opts) {
     if (!input._silent) { markDirty(); paintLines(); paintTotals(); }
     return 'Added: "' + line.description + '" — qty ' + line.qty + ' @ $' + line.unitCost.toFixed(2);
   }
+  // AN ERROR SWALLOWED ON A MONEY PATH IS ITS OWN DEFECT.
+  //
+  // This used to be `catch (e) {}` with no error list at all, and then
+  // markDirty/paintLines/paintTotals ran unconditionally underneath it. So a
+  // batch in which every single spec threw painted, armed the save, and
+  // returned an empty array that the callers read as "nothing to report".
+  // That is how "created 0" reported as success.
+  //
+  // The failures now come OUT, on `.errors`. Attaching them to the returned
+  // array rather than changing the return type is deliberate: this function is
+  // one of the four methods in the Materials Drawer's target contract
+  // (js/materials-drawer.js), the drawer calls it for its side effects and
+  // discards the value, and `.length` / `.join` / `.forEach` on the summaries
+  // keep working exactly as before. A caller that wants to know reads
+  // `.errors`; a caller that does not is unaffected. The estimate editor's
+  // applyBulkAddLineItems carries the same property for the same reason.
   function coApplyBulkAddLineItems(specs) {
-    if (!Array.isArray(specs) || !specs.length) return [];
     var out = [];
+    out.errors = [];
+    if (!Array.isArray(specs) || !specs.length) return out;
     specs.forEach(function (s) {
-      try { out.push(coApplyAddLineItem(Object.assign({ _silent: true }, s || {}))); } catch (e) {}
+      try { out.push(coApplyAddLineItem(Object.assign({ _silent: true }, s || {}))); }
+      catch (e) {
+        out.errors.push(((s && s.description) || 'unknown') + ': ' + ((e && e.message) || 'failed'));
+      }
     });
     markDirty(); paintLines(); paintTotals();
     return out;
@@ -913,9 +933,39 @@ function p86Ask(message, opts) {
   function isCoAsmLine(l) {
     return !!(l && l.sourceAssemblyId != null && Array.isArray(l.assemblyBreakdown) && l.assemblyBreakdown.length);
   }
+  // ONE WAY TO SAY "nothing happened, and here is why".
+  // p86Alert, not alert(): native dialogs are a no-op in the installed PWA
+  // (see reference_pwa_native_dialogs), and a refusal nobody sees is the same
+  // silence these guards exist to remove.
+  function coNotice(title, message) {
+    if (window.p86Alert) window.p86Alert({ title: title, message: message });
+    else if (typeof alert === 'function') alert(message);
+  }
+  // A STORED HOLE IN THE RECIPE MUST NOT BE ABLE TO FREEZE THE TABLE.
+  //
+  // assemblyBreakdown is JSONB round-tripped verbatim, exactly like the line
+  // array itself (see the `l &&` note in js/estimate-editor.js), so a null can
+  // and does come back inside it. Reading b.qty_per_unit off that null threw —
+  // and the throw is far worse than a missing row, because the toggle handler
+  // flips _coAsmOpen[id] to true BEFORE it calls paintLines(). So the first
+  // click set the flag, the paint threw, and EVERY subsequent paintLines()
+  // threw with it: the line table froze at its last good HTML while
+  // paintTotals() kept working. Typing a new quantity wrote into the record
+  // and the row never redrew — the totals bar moved and the rows did not.
+  // The only escape was clicking the same strip again to flip the flag back,
+  // which nobody would guess.
+  //
+  // The holes are SKIPPED, never removed: this function paints, and a painter
+  // that edits the record is how a display bug becomes a data bug.
+  function coAsmRecipeRows(line) {
+    return ((line && line.assemblyBreakdown) || []).filter(function (b) {
+      return b && typeof b === 'object';
+    });
+  }
   function coAsmStripHTML(line) {
     var open = !!_coAsmOpen[line.id];
-    var n = line.assemblyBreakdown.length;
+    var rows = coAsmRecipeRows(line);
+    var n = rows.length;
     var head =
       '<div class="p86-co-asm-head" data-asm-toggle="' + escapeAttr(line.id) + '" style="display:flex;align-items:center;gap:7px;padding:3px 8px;font-size:10px;cursor:pointer;color:#7eb0ff;">' +
         '<span style="font-size:8px;transition:transform .12s;' + (open ? 'transform:rotate(90deg);' : '') + '">&#9654;</span>' +
@@ -926,7 +976,7 @@ function p86Ask(message, opts) {
     if (!open) return head;
     var q = coNum(line.qty);
     var body = '';
-    line.assemblyBreakdown.forEach(function (b) {
+    rows.forEach(function (b) {
       var bq = Math.round(q * coNum(b.qty_per_unit) * 100) / 100;
       var uc = b.unit_cost != null ? coNum(b.unit_cost) : 0;
       body +=
@@ -985,7 +1035,10 @@ function p86Ask(message, opts) {
     // `qty > 0` filter, so it kept components doIt() drops.
     var explodeSpecs = function (src) {
       var q = coNum(src.qty);
-      return (src.assemblyBreakdown || []).map(function (b) {
+      // Same hole-skip as the painter above, and for the same reason: an
+      // unguarded b.description here threw before the dialog was ever raised,
+      // so the button was simply dead on that one line.
+      return coAsmRecipeRows(src).map(function (b) {
         return {
           description: b.description,
           qty: Math.round(q * coNum(b.qty_per_unit) * 100) / 100,
@@ -1035,32 +1088,38 @@ function p86Ask(message, opts) {
     // — which is the answer the server already gives for the same operation
     // (server/services/estimate-lines.js: 'assembly_zero_qty' / 'assembly_empty').
     var specs = explodeSpecs(line);
-    if (!specs.length) {
-      var q = coNum(line.qty);
-      var why = !line.assemblyBreakdown.length
+    // ── A CREDIT IS REFUSED BY NAME, NOT BY WHAT SURVIVES A FILTER ──────
+    //
+    // The refusal above was reached ONLY through `!specs.length`, and that is
+    // not the same statement as "this is a credit". It relied on a side
+    // effect: a negative rollup quantity times a POSITIVE per-unit quantity
+    // comes out negative, the `qty > 0` filter drops it, the array ends up
+    // empty, and the credit is refused by accident.
+    //
+    // A recipe row carrying a NEGATIVE qty_per_unit — which nothing forbids,
+    // and which is how a recipe expresses a buy-back or a returned item —
+    // multiplies with the negative rollup quantity to a POSITIVE component
+    // quantity. That component survives the filter, `specs.length` is not
+    // zero, and the credit explodes. Measured on a qty −2 credit against the
+    // bytes this replaces: with one negative recipe row the confirm read
+    // "into 1 editable line", the other component was silently dropped, and
+    // the change-order total went from $690.00 to $1,610.00. With every row
+    // negative it went $2,530.00 to $2,570.00. In both cases a CREDIT became
+    // a CHARGE, and neither dialog contained a dollar sign.
+    //
+    // The quantity is now asked about directly, before anything is counted.
+    var q = coNum(line.qty);
+    if (q <= 0 || !specs.length) {
+      var why = !coAsmRecipeRows(line).length
         ? 'This line has no recipe items, so there is nothing to explode it into.'
         : q < 0
           ? 'This is a credit line (quantity ' + q + '). Exploding it would give every component a negative quantity, which this editor does not price \u2014 so nothing was changed. Edit the rollup line directly, or delete it and enter the deduction as its own line.'
           : q === 0
             ? 'This line\u2019s quantity is 0, so every item in the recipe works out to no quantity. Set a quantity first, then explode.'
             : 'Nothing to explode: every item in this recipe works out to no quantity.';
-      // p86Alert, not alert() — native dialogs are a no-op in the installed
-      // PWA, and a refusal nobody sees is the silence this commit is about.
-      if (window.p86Alert) window.p86Alert({ title: 'Nothing to explode', message: why });
-      else if (typeof alert === 'function') alert(why);
+      coNotice('Nothing to explode', why);
       return;                                  // ← THE RECORD IS UNTOUCHED
     }
-    var doIt = function () {
-      // THE SAME ARRAY THE SENTENCE COUNTED. Re-deriving it here would be a
-      // second model of one state thirty lines apart.
-      var idx = _state.co.lines.indexOf(line);
-      if (idx >= 0) _state.co.lines.splice(idx, 1);
-      delete _coAsmOpen[lineId];
-      // Non-empty by construction, so this ALWAYS reaches markDirty() +
-      // paintLines() + paintTotals(): the save is armed and the table is
-      // repainted for every mutation this function performs.
-      coApplyBulkAddLineItems(specs);
-    };
     // THE SIMULATION RUNS THE REAL MUTATION, ON A CLONE.
     //
     // It used to be a second hand-written model of the post-explode array:
@@ -1102,6 +1161,135 @@ function p86Ask(message, opts) {
         return clone;
       } finally { _state.co = live; }
     };
+    var simRec = null;
+    try { simRec = simulateExplode(); } catch (e) { simRec = null; }
+    // ── WHAT THE DIALOG WAS ANSWERED ABOUT ──────────────────────────────
+    //
+    // p86Confirm is a DOM overlay. It does not block JavaScript. Everything
+    // above this point — the refusal, the component list, the count, the
+    // simulated totals — is computed NOW, and doIt() runs an unknown time
+    // LATER, against whatever the record has become in between.
+    //
+    // The overlay blocks CLICKS (position:fixed; inset:0; z-index:10000 in
+    // js/app.js), so a human cannot move the record from behind it. The
+    // routes that move it are ASYNCHRONOUS, and the ordinary one is a
+    // background hydrate: js/ai-panel.js's wirePayloadApplied →
+    // p86Refresh.fromTargets → p86ReloadAllData → loadData(). That fires on
+    // any job-or-estimate write landing — an 86/Scribe write, Live Writer
+    // auto-applying, a background agent job draining — plus the online /
+    // visibilitychange load-recovery paths in js/app.js. On this surface
+    // specifically there is a second one with no network involved at all:
+    // click "Reprice from recipe", click "Explode", and coAsmRefresh's
+    // fetch().then() lands while the box is up, replacing assemblyBreakdown
+    // and unitCost under the answer already given.
+    //
+    // MEASURED, driving this exact click path with a confirm left pending:
+    //   editor closed (_state.co = null) → TypeError as an unhandled
+    //     rejection; the row stays painted and nothing is added — a dead
+    //     click with no message
+    //   the same CO reloaded, or co.lines reassigned → indexOf returns −1,
+    //     the splice is skipped, and the parts are added ON TOP: the rollup
+    //     is KEPT and DOUBLE-COUNTED, with the save armed
+    //   a second change order opened → the components land on THAT record.
+    //     CO-B gained CO-A's Extrusion, a Labor header and CO-A's Crew day.
+    //   a reprice landed → components built from the OLD recipe are written
+    //     against the NEW unit cost
+    //
+    // A re-check that silently proceeded would be worse than none, because
+    // the sentence above already quoted a count and (for a promised line) two
+    // totals off the PRE-dialog state. Proceeding would make the box a liar
+    // instead of a destroyer. So the answer is: refuse, and say so.
+    //
+    // WHAT IS COMPARED IS THE OUTCOME, NOT THE INPUTS.
+    //
+    // Fingerprinting the rollup's own qty/cost/recipe would catch a reprice
+    // and miss everything else, and "everything else" is what the sentence is
+    // made of: the count, the new sections and the two totals are all
+    // properties of the WHOLE record, because routing find-or-creates against
+    // the whole line array and section membership is positional. So the thing
+    // re-checked is simulateExplode()'s own answer — the post-explode record
+    // — re-run at commit time and compared to the one the dialog quoted.
+    // That is one model of one state, asked twice, which is the shape this
+    // function has already been treated for twice.
+    //
+    // Minted ids are stripped before comparing. Two runs of the simulation
+    // over the same state mint different section/line ids by construction
+    // (newLineId is a counter, and the estimate's is a clock read), and an id
+    // that differs while every other field matches is the same outcome.
+    //
+    // The object-identity check is separate and is about the SPLICE, not the
+    // quote: doIt removes `line` by indexOf, and indexOf(-1) fed to splice
+    // removes the LAST line in the array. If the record reloaded into fresh
+    // objects — even byte-identical ones — `line` is no longer in it, and the
+    // only safe answer is to refuse.
+    var outcomeOf = function (rec) {
+      if (!rec || !Array.isArray(rec.lines)) return null;
+      return JSON.stringify(rec.lines.map(function (l) {
+        if (!l || typeof l !== 'object') return l;
+        var c = Object.assign({}, l);
+        delete c.id;
+        return c;
+      }));
+    };
+    // The rollup's own recipe is fingerprinted SEPARATELY from the outcome.
+    // Here simulateExplode happens to re-derive explodeSpecs from the clone's
+    // target, so a reprice does move its answer — but that is incidental, and
+    // the estimate editor's simulation replays a pre-built `specs` array where
+    // it is not: measured there, an outcome-only check let a mid-dialog reprice
+    // through and wrote the OLD recipe's components against the NEW unit cost.
+    // Both editors state the check, so neither depends on that accident.
+    var quotedRecId = _state.co.id;
+    var quotedOutcome = outcomeOf(simRec);
+    var quotedSource = JSON.stringify([line.qty, line.unitCost, line.unitSell,
+      line.assemblyBreakdown]);
+    var stillQuoted = function () {
+      var co = _state.co;
+      if (!co || String(co.id) !== String(quotedRecId)) return false;
+      if (!Array.isArray(co.lines) || co.lines.indexOf(line) < 0) return false;
+      if (JSON.stringify([line.qty, line.unitCost, line.unitSell,
+        line.assemblyBreakdown]) !== quotedSource) return false;
+      var again = null;
+      try { again = simulateExplode(); } catch (e) { again = null; }
+      return quotedOutcome != null && outcomeOf(again) === quotedOutcome;
+    };
+    var doIt = function () {
+      if (!stillQuoted()) {
+        coNotice('Nothing was exploded',
+          'This change order changed while that box was open — it reloaded in the ' +
+          'background, another record was opened, or the line was repriced — so the ' +
+          'count and the totals you were shown are no longer what would happen. ' +
+          'Nothing was changed. Open the assembly strip again and explode from there.');
+        return;                                // ← THE RECORD IS UNTOUCHED
+      }
+      // ── ALL OF IT, OR NONE OF IT ────────────────────────────────────
+      // The splice and the add are two statements, and only the first of
+      // them used to be unconditional. coApplyBulkAddLineItems swallowed
+      // every per-spec failure in a bare `catch (e) {}` and then ran
+      // markDirty/paintLines/paintTotals regardless, so a partial failure
+      // painted as a success on a money record. `before` is a shallow copy
+      // of the array taken before either statement; restoring it puts the
+      // record back exactly, because every line the adder created is a new
+      // object that the copy simply does not contain. The array's IDENTITY
+      // is preserved through the restore — coApplyAddLineItem reads
+      // _state.co.lines and the painters hold the same reference.
+      var lines = _state.co.lines;
+      var before = lines.slice();
+      lines.splice(lines.indexOf(line), 1);
+      var res = coApplyBulkAddLineItems(specs);
+      var failed = (res && res.errors) || [];
+      if (failed.length) {
+        lines.length = 0;
+        Array.prototype.push.apply(lines, before);
+        paintLines(); paintTotals();
+        coNotice('Nothing was exploded',
+          failed.length + ' of ' + specs.length + ' component' +
+          (specs.length === 1 ? '' : 's') + ' could not be added, so the whole explode ' +
+          'was undone and the rollup line is exactly as it was:\n\n' + failed.join('\n'));
+        return;
+      }
+      // Only once the parts are really there does the strip stop being open.
+      delete _coAsmOpen[lineId];
+    };
     // EXPLODING A PROMISED LINE MOVES THE CHANGE ORDER TOTAL, and the
     // human has to see the number before the click, not after it.
     //
@@ -1115,9 +1303,34 @@ function p86Ask(message, opts) {
     // It used to quote line.assemblyBreakdown.length — every row in the
     // recipe, including the ones the qty > 0 filter drops — so a recipe with
     // an "included, no charge" row promised a line it would not create.
+    //
+    // AND IT INCLUDES THE SECTION HEADERS THE SAME ACTION CREATES. Routing a
+    // component to its cost code FINDS OR CREATES that section, so exploding
+    // a materials-plus-labour recipe on a change order that has no Labor
+    // section adds a header the person never asked for and was never told
+    // about. Measured on the bytes this replaces: 9,196 of 12,000 confirms
+    // (76.6%) silently added at least one, while the sentence said only "the
+    // single rollup line is replaced".
+    //
+    // The count comes from simRec — the SAME simulation the money sentence
+    // below already quotes from, run once here and reused. Deriving it any
+    // other way would be a second model of the routing, which is the exact
+    // mistake simulateExplode was written to end.
+    var isHdr = function (l) { return !!(l && l.section === '__section_header__'); };
+    var hadHdr = {};
+    (_state.co.lines || []).forEach(function (l) { if (isHdr(l)) hadHdr[String(l.id)] = true; });
+    var newSections = simRec
+      ? (simRec.lines || []).filter(function (l) { return isHdr(l) && !hadHdr[String(l.id)]; })
+      : [];
     var msg = 'Explode "' + (line.description || 'assembly') + '" into ' +
       specs.length + ' editable line' + (specs.length === 1 ? '' : 's') +
       '? The single rollup line is replaced.';
+    if (newSections.length) {
+      msg += '\n\nThis also adds ' + newSections.length + ' new section' +
+        (newSections.length === 1 ? '' : 's') + ' to hold ' +
+        (newSections.length === 1 ? 'those parts' : 'them') + ': ' +
+        newSections.map(function (l) { return l.label || '(unnamed)'; }).join(', ') + '.';
+    }
     if (window.p86Pricing.sellLocked(line)) {
       var before = (computeTotals() || {}).total || 0;
       // Price the record as it would be AFTER, without touching it.
@@ -1130,7 +1343,7 @@ function p86Ask(message, opts) {
         // the UN-exploded _state.co.lines: measured at +$250.00, +$266.00 and
         // +$654.33 on three fixtures, always exactly the round-up that should
         // have stood down and did not.
-        var simRec = simulateExplode();
+        if (!simRec) throw new Error('no simulation');
         var perSim = window.p86Pricing.computeForLines(simRec, simRec.lines);
         after = window.p86Pricing.applyFeesAndTax(
           window.p86Pricing.resolveMarkedUp(perSim, simRec), simRec, perSim).total;

@@ -242,10 +242,11 @@ function expectedParts(rollup) {
 // ══════════════════════════════════════════════════════════════════════
 function coEditor(src, opts) {
   const o = opts || {};
-  const cut = (a, b) => {
+  const cut = (a, b, optional) => {
     const i = src.indexOf(a);
+    if (i < 0) { if (optional) return ''; throw new Error('anchor not found: ' + a); }
     const j = src.indexOf(b, i);
-    if (i < 0 || j < 0) throw new Error('anchor not found: ' + a);
+    if (j < 0) throw new Error('close anchor not found: ' + a);
     return src.slice(i, j + b.length);
   };
   const body = [
@@ -258,6 +259,10 @@ function coEditor(src, opts) {
     cut('  function coEnsureSection(bucket) {', '\n  }\n'),
     cut('  function coApplyAddLineItem(input) {', '\n  }\n'),
     cut('  function coApplyBulkAddLineItems(specs) {', '\n  }\n'),
+    // Added by the stale-decision repair, and ABSENT from the SHIPPED blob this
+    // file also loads — so both are optional cuts.
+    cut('  function coNotice(title, message) {', '\n  }\n', true),
+    cut('  function coAsmRecipeRows(line) {', '\n  }\n', true),
     cut('  function coAsmExplode(lineId) {', '    } else if (confirm(msg)) doIt();\n  }\n'),
   ].join('\n');
   // eslint-disable-next-line no-new-func
@@ -505,6 +510,49 @@ describe('PROPERTY — measured against 1.21: only the empty explode behaves dif
   const OLD = coEditor(SHIPPED_COE);
   const corpus = rollupCorpus(711, { count: 6000 }).concat(rollupCorpus(712, { count: 6000, oneCode: true }));
 
+  // MINTED IDS ARE RENUMBERED BEFORE COMPARING.
+  //
+  // The stale-decision repair runs simulateExplode BEFORE it mints anything
+  // real — once to count the lines and the sections the sentence promises, and
+  // once again inside stillQuoted() when the dialog comes back — and each of
+  // those consumes newLineId on its own clone. So the real lines come out
+  // gen_7, gen_8 where they used to be gen_1, gen_2. That is a per-session
+  // COUNTER moving, not the record: nothing reads meaning out of the number,
+  // and the id a line is finally addressed by is minted the same way either
+  // side of the change.
+  //
+  // Measured before this normaliser was written, so it is a decision and not a
+  // convenience: of the 5,540 corpus records whose explode used to create a
+  // line, 5,540 differ on the raw bytes and 0 differ once the counter is
+  // renumbered. Nothing moved, nothing repriced, and nothing became a refusal.
+  //
+  // The renumbering is positional and total — a different NUMBER of lines, a
+  // different ORDER, or different CONTENT all still differ. Only the digits
+  // move, and the test below this one proves the normaliser can still say no.
+  const renumber = (rec) => {
+    let n = 0;
+    const map = {};
+    (rec.lines || []).forEach((l) => {
+      if (l && String(l.id).indexOf('gen_') === 0) map[l.id] = 'new_' + (++n);
+    });
+    return JSON.stringify((rec.lines || []).map((l) => {
+      if (!l || typeof l !== 'object') return l;
+      const c = Object.assign({}, l);
+      if (map[c.id]) c.id = map[c.id];
+      return c;
+    }));
+  };
+
+  test('the renumbering is not a blanket', () => {
+    const a = { lines: [{ id: 'gen_1', description: 'X', qty: 1 }] };
+    expect(renumber(a)).toBe(renumber({ lines: [{ id: 'gen_9', description: 'X', qty: 1 }] }));
+    expect(renumber(a)).not.toBe(renumber({ lines: [{ id: 'gen_9', description: 'X', qty: 2 }] }));
+    expect(renumber(a)).not.toBe(renumber({ lines: [{ id: 'gen_1', description: 'Y', qty: 1 }] }));
+    expect(renumber(a)).not.toBe(renumber({ lines: [{ id: 'gen_1', description: 'X', qty: 1 },
+      { id: 'gen_2', description: 'X', qty: 1 }] }));
+    expect(renumber(a)).not.toBe(renumber({ lines: [{ id: 'kept', description: 'X', qty: 1 }] }));
+  });
+
   test('12,000 explodes: every one that used to create a line produces the SAME record', () => {
     let same = 0, destroyed = 0;
     const moved = [], stillDestroys = [], oldLied = [];
@@ -519,7 +567,7 @@ describe('PROPERTY — measured against 1.21: only the empty explode behaves dif
         // changed, no money repriced. Only the SENTENCE may differ, and only
         // where the shipped one was lying.
         same++;
-        if (JSON.stringify(now.record) !== JSON.stringify(old.record)) {
+        if (renumber(now.record) !== renumber(old.record)) {
           moved.push({ id: co.id, old: old.record.lines, now: now.record.lines });
         }
         if (old.count !== oldCreated) oldLied.push({ id: co.id, quoted: old.count, created: oldCreated });
