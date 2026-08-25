@@ -3631,7 +3631,13 @@
                   '" draggable="true" data-photo-id="' + escapeAttr(pid) + '" data-photo-idx="' + idx + '">' +
                 '<div class="p86-report-photo-mainstack">' +
                   photoDragHandleHTML() +
-                  '<img src="' + escapeAttr(att.thumb_url || att.web_url) + '" alt="" data-open-photo="' + escapeAttr(pid) + '" />' +
+                  // WEB variant (not the square thumb): the annotation overlay
+                  // canvas is sized to the full web-variant aspect, so pairing
+                  // it with the 1:1 thumb (a center cover-crop) makes the two
+                  // object-fit:cover DIFFERENTLY and the strokes drift. The web
+                  // image shares the canvas's aspect → identical crop → aligned,
+                  // and it's higher-res for the printed PDF.
+                  '<img src="' + escapeAttr(att.web_url || att.thumb_url) + '" alt="" data-open-photo="' + escapeAttr(pid) + '" />' +
                   photoAnnotationCanvasHTML(att, pid) +
                   '<button type="button" class="p86-report-photo-remove" data-rm-photo="' + escapeAttr(pid) + '" title="Remove from section">&times;</button>' +
                   '<input class="p86-report-photo-caption" value="' + escapeAttr(caption) + '" data-caption-input="' + escapeAttr(pid) + '" placeholder="Caption (optional)" />' +
@@ -4626,9 +4632,19 @@
     if (annoCanvas && annotationCount && window.p86AnnotationRender) {
       var dims = webVariantDims(att.width, att.height);
       if (dims) {
-        annoCanvas.width = dims.w;
-        annoCanvas.height = dims.h;
+        // The tile shows the SQUARE thumb (sharp resize 200², fit:cover =
+        // a CENTER crop to square). The strokes live in the FULL web-variant
+        // coord space, so painting them onto a full-aspect canvas and letting
+        // CSS object-fit:cover it into the tile crops DIFFERENTLY than the
+        // square thumb — that's the drift. Fix: size the canvas to the same
+        // center square and translate so the web-coord strokes land in the
+        // exact region the thumb shows. Both are now 1:1 sources → identical
+        // object-fit:cover crop → aligned.
+        var side = Math.min(dims.w, dims.h);
+        annoCanvas.width = side;
+        annoCanvas.height = side;
         var ctx = annoCanvas.getContext('2d');
+        ctx.translate(-(dims.w - side) / 2, -(dims.h - side) / 2);
         try { window.p86AnnotationRender.renderAll(ctx, att.annotations); }
         catch (e) { /* defensive — bad stroke shouldn't kill the tile */ }
       }
