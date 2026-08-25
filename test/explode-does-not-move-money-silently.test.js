@@ -93,6 +93,15 @@ function coEditor(src) {
     cut('  function coApplyAddLineItem(input) {', '\n  }\n'),
     cut('  function coApplyBulkAddLineItems(specs) {', '\n  }\n'),
     cut('  function coNotice(title, message) {', '\n  }\n', true),
+    // The record-lock guard, added when the locked-record explode was fixed.
+    // Optional because the PRIOR blobs this suite also boots do not have it —
+    // there, coAsmExplode has no lock guard at all, which is the defect. Lifted
+    // rather than stubbed so the fixtures below (all unlocked) run the REAL
+    // predicate instead of a harness's idea of it.
+    cut('  function coLockReason(co) {', '\n  }\n', true),
+    cut('  function coRefuse(what) {', '\n  }\n', true),
+    cut('  function coMutate(what, fn) {', '\n  }\n', true),
+    cut('  function coAssertEditable(what) {', '\n  }\n', true),
     cut('  function coAsmRecipeRows(line) {', '\n  }\n', true),
     cut('  function coAsmExplode(lineId) {', '    } else if (confirm(msg)) doIt();\n  }\n'),
   ].join('\n');

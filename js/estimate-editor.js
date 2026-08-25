@@ -12,7 +12,10 @@
   'use strict';
 
   var _currentId = null;
-  var _estimateLocked = false;  // sold estimate, locked on lead→job convert (read-only)
+  // NO _estimateLocked MIRROR. A cached copy of "is this record locked" is a
+  // second spelling of the question that can disagree with the record, which
+  // is how this codebase came to hold sixteen of them. eeLockReason() reads
+  // the estimate itself, every time it is asked.
   var _saveTimer = null;
   // When the editor was opened from inside a lead detail (via
   // openEstimateFromLead), this holds the lead id so close → "Back"
@@ -127,7 +130,30 @@
   }
 
   function debouncedSave() {
-    if (_estimateLocked) return;  // sold/locked estimate — read-only, no saves
+    // A BACKSTOP, NOT THE GUARD, AND DELIBERATELY NOT A DIALOG.
+    //
+    // Every user-initiated mutation is meant to arrive through eeMutate() /
+    // eeRefuse(), which refuse in FRONT of the write and say why in words at
+    // the control. This funnel runs AFTER the write, so it can only report,
+    // never prevent — it exists to keep a forgotten wrapper from reaching the
+    // server, and to leave a trace when one does.
+    //
+    // It must NOT raise a dialog, and that is measured rather than assumed:
+    // ensureAlternates() calls debouncedSave() from inside
+    // openEstimateEditor() as ordinary housekeeping, so a dialog here fires on
+    // merely OPENING a sold estimate. This funnel cannot tell a user gesture
+    // from internal backfill, and a modal on open is exactly the "the app is
+    // broken" feeling this work exists to remove. The sentence the person is
+    // owed belongs at the control, where they are; what belongs here is a
+    // refusal that is inert to the record and obvious to whoever is reading
+    // the console.
+    if (eeLockReason()) {
+      if (window.console && console.warn) {
+        console.warn('[estimate-editor] save refused: this estimate is locked. '
+          + 'If a control just appeared to do nothing, it mutated without going through eeMutate().');
+      }
+      return;
+    }
     if (_saveTimer) clearTimeout(_saveTimer);
     setSaveState('pending');
     _saveTimer = setTimeout(function() {
@@ -377,7 +403,18 @@
         changed = true;
       }
     });
-    if (changed) debouncedSave();
+    // The backfill above is a SHAPE migration this editor needs in order to
+    // paint at all (an alternates array, an alternateId on legacy lines) — it
+    // is not user intent and it moves no money. On a LOCKED record it stays in
+    // memory and is never persisted: a read-only estimate must not be
+    // rewritten just because somebody opened it to look at it.
+    //
+    // Asked here explicitly, with the record in hand, rather than left to the
+    // save's own refusal — this runs inside openEstimateEditor(), so leaving it
+    // to the funnel made every open of a sold estimate log "a control mutated
+    // without going through eeMutate". A backstop that cries wolf on open is
+    // not a backstop.
+    if (changed && !eeLockReason(est)) debouncedSave();
   }
 
   function fmtCurrency(v) {
@@ -431,7 +468,6 @@
       window.p86Api.put('/api/estimates/' + encodeURIComponent(id) + '/lock', { locked: false })
         .then(function () {
           var e = getEstimate(); if (e) e.is_locked = false;
-          _estimateLocked = false;
           applyEstimateLockState(getEstimate());
         })
         .catch(function (err) {
@@ -512,7 +548,6 @@
     var editorView = document.getElementById('estimate-editor-view');
     if (listView) listView.style.display = 'none';
     if (editorView) editorView.style.display = '';
-    _estimateLocked = !!(est && est.is_locked);
     applyEstimateLockState(est, editorView);
     // The legacy Leads/Estimates/Clients/Subs sub-tab row
     // (#estimates-main-tabs) is permanently hidden now that Leads +
@@ -2282,6 +2317,88 @@
     if (window.p86Alert) window.p86Alert({ title: title, message: message });
     else if (typeof alert === 'function') alert(message);
   }
+
+  // ── THE ONE QUESTION: MAY THIS RECORD BE MUTATED? ─────────────────────
+  //
+  // An estimate has ONE notion of locked — `is_locked`, set when the lead is
+  // won and converted to a job — and this is the only place that asks it.
+  //
+  // It was already the right fact; it was simply never asked by any of the
+  // fifty-seven things that write. It was asked twice: once to toggle the
+  // .ee-locked class, whose entire selector list is `input, textarea, select,
+  // [contenteditable]`, and once by debouncedSave(). A <span> is none of those
+  // and neither is a <button>, so on a SOLD estimate "Refresh price from
+  // recipe", "Explode to editable lines", the row delete and the drag handle
+  // were all fully live. They rewrote appData.estimateLines and the save
+  // silently declined afterwards.
+  //
+  // WHY THE SILENT DECLINE WAS NOT ENOUGH. appData is the whole app's shared
+  // store and saveData() in js/app.js calls writeToLocalStorage() as its FIRST
+  // statement, before any lock, auth or push check. So the moment any of the
+  // other call sites anywhere in the app fired for any reason, the mutated
+  // sold estimate was committed to the local cache — the cache-resurrection
+  // class, from a record nobody was allowed to edit.
+  //
+  // PRESENTATION IS NOT A PERMISSION. The fix is not to widen that CSS
+  // selector list to cover spans and buttons: that is enumerating control
+  // TYPES again, and it would kill inspecting the recipe — opening the strip,
+  // reading the breakdown — which is a thing people need to do on a signed-off
+  // estimate. Inspection is not editing. The refusal belongs in front of the
+  // state, and it is here.
+  //
+  // Returns null when the record may be mutated, otherwise the sentence the
+  // person is owed.
+  function eeLockReason(est) {
+    est = est || (typeof getEstimate === 'function' ? getEstimate() : null);
+    if (!est) return null;
+    if (est.is_locked) {
+      return {
+        title: 'Sold — locked',
+        message: 'This estimate was won and converted to a job, so it is read-only and its numbers are the ones the job was sold on. '
+               + 'Press “Unlock to edit” in the banner at the top to correct it, or raise a change order against the job instead.'
+      };
+    }
+    return null;
+  }
+
+  // THE ONE DOOR EVERY MUTATION GOES THROUGH.
+  //
+  // Not the save, and not the control. debouncedSave() runs AFTER
+  // appData.estimateLines has already been rewritten, so a guard there can
+  // only report, never prevent. And a guard on the control — hiding it,
+  // disabling it, never binding it — is presentation: it makes the button hard
+  // to press rather than making the record refuse.
+  //
+  // eeRefuse guards actions that mutate later (inside a fetch .then or after
+  // an await'd confirm) and returns true once it has said why. eeMutate guards
+  // synchronous ones: `fn` runs ONLY on an editable record, and arming the save
+  // is this function's job rather than the caller's — so a control added next
+  // month that routes through here inherits the refusal, and one that forgets
+  // does not arm a save either. Forgetting is inert and loud (see the backstop
+  // in debouncedSave), never silent and wrong.
+  function eeRefuse(what) {
+    var why = eeLockReason();
+    if (!why) return false;
+    eeNotice(why.title, (what ? what + '\n\n' : '') + why.message);
+    return true;
+  }
+  function eeMutate(what, fn) {
+    if (eeRefuse(what)) return false;
+    fn();
+    debouncedSave();
+    return true;
+  }
+  // THE SAME QUESTION, ON THE SURFACE THAT REFUSES BY THROWING.
+  // The estimateEditorAPI.apply* doors (the agent write path and the Materials
+  // Drawer) report failure to their caller as an exception rather than to the
+  // person as a dialog — that is their established contract, and the payload
+  // dispatcher already surfaces the message. So the refusal takes the shape
+  // that surface already uses. Same predicate, same sentence, one channel per
+  // surface — not a tenth spelling of the question.
+  function eeAssertEditable(what) {
+    var why = eeLockReason();
+    if (why) throw new Error(why.title + ' — ' + why.message + (what ? ' (' + what + ')' : ''));
+  }
   // A STORED HOLE IN THE RECIPE MUST NOT BE ABLE TO FREEZE THE TABLE.
   //
   // Exactly the `l &&` rule that guards every walk of appData.estimateLines,
@@ -2352,6 +2469,13 @@
   window.eeAsmRefresh = function (lineId) {
     var line = eeFindLine(lineId);
     if (!line || !line.sourceAssemblyId) return;
+    // NOTHING ALREADY SAVED MAY REPRICE. This was the worst of the strip's
+    // controls: it raised no dialog at all, so on a SOLD estimate it silently
+    // pulled today's catalog price over the one the job was sold on. The
+    // server already holds this exact policy for the same operation in bulk —
+    // server/routes/assembly-routes.js refuses a locked estimate with
+    // `why: 'locked (sold)'`. The per-line button simply never asked.
+    if (eeRefuse('Repricing “' + (line.description || 'this line') + '” from its recipe would change what this estimate costs.')) return;
     // Parametric lines (added from Plans & Takeoffs with typed dimensions)
     // have formula-driven quantities — per-unit repricing would lose the
     // formula (and zero the line when qty_per_unit is 0). The server's bulk
@@ -2391,6 +2515,11 @@
   window.eeAsmExplode = function (lineId) {
     var line = eeFindLine(lineId);
     if (!line || !Array.isArray(line.assemblyBreakdown)) return;
+    // THE CONTROL JOHN NAMED. Refuse BEFORE the confirm, so the person is told
+    // the estimate is locked instead of being asked to approve a change that
+    // cannot happen — the old dialog quoted the component count, named the new
+    // section it would add, and never mentioned the lock at all.
+    if (eeRefuse('Exploding “' + (line.description || 'this line') + '” would replace it with its components.')) return;
     // AN EXPLODE REPLACES THE LINE WITH ITS PARTS, OR IT DOES NOTHING AND
     // SAYS WHY. IT NEVER REMOVES THE LINE AND LEAVES NOTHING.
     //
@@ -3363,6 +3492,10 @@
   function updateLineField(lineId, field, value) {
     var line = eeResolveLine(lineId);
     if (!line) return;
+    // The ONLY thing that stopped a keystroke landing here was
+    // `.ee-locked input { pointer-events: none }` — styling. Ask the record,
+    // then repaint so a refused keystroke cannot sit on screen looking saved.
+    if (eeRefuse('Editing a line on this estimate.')) { renderLineItems(); return; }
     // Leave a cleared numeric field EMPTY (don't coerce to 0) so a
     // clear-to-retype doesn't flash a 0 the user has to reselect.
     if (field === 'qty' || field === 'unitCost') line[field] = (value === '' || value == null) ? '' : num(value);
@@ -3553,6 +3686,13 @@
     // stored id is a number and the button handed back the painted string.
     var line = eeResolveLine(lineId);
     if (!line) return;
+    // A DELETE BUTTON IS A WRITER. It carries data-edit-gate-passthrough,
+    // which is a rule about the TOUCH row gate — "you should not have to arm a
+    // row before deleting it" — and that rule is deliberate and stays. The
+    // RECORD lock is a different mechanism and has never had an opinion about
+    // delete at all: this was live on a sold estimate because a <button> is
+    // not an <input>, not because anyone decided it should be.
+    if (eeRefuse('Deleting a line from this estimate.')) return;
     var preview = line.description ? line.description : 'this line';
     window.p86Confirm({
       title: 'Delete line item?',
@@ -3774,6 +3914,19 @@
   function onLineDrop(e, targetId) {
     e.preventDefault();
     if (!_draggedLineId || eeSameId(_draggedLineId, targetId)) {
+      _draggedLineId = null;
+      renderLineItems();
+      return;
+    }
+    // REORDERING IS A MONEY WRITE ON THIS RECORD. A line's section is its
+    // position in the array — membership is delimited by __section_header__
+    // rows and nothing on the line records it — so a drag on a sold estimate
+    // moves money between scopes while the cost total sits still. The handle
+    // carries data-edit-gate-passthrough for the touch row gate; the record
+    // lock never reached it because a <div> is not an <input>.
+    // Refused at the DROP, which is where the mutation is, so the person sees
+    // why at the moment they tried it rather than finding the handle inert.
+    if (eeRefuse('Reordering the lines on this estimate would move them between sections.')) {
       _draggedLineId = null;
       renderLineItems();
       return;
@@ -4293,6 +4446,7 @@
   }
 
   function applyAddLineItem(input) {
+    eeAssertEditable('adding a line');
     var est = getEstimate();
     if (!est) throw new Error('No estimate open.');
     var alt = getActiveAlternate();
@@ -4421,6 +4575,14 @@
     var summaries = [];
     summaries.errors = [];
     if (!Array.isArray(lines) || !lines.length) return summaries;
+    // The Materials Drawer, Plans & Takeoffs and the agent write door all
+    // arrive here. They are controls too, and a locked record refuses them for
+    // the same reason it refuses the strip. Refused BEFORE the loop, so
+    // nothing is half-added.
+    if (eeRefuse('Adding ' + lines.length + ' line' + (lines.length === 1 ? '' : 's') + ' to this estimate.')) {
+      summaries.errors.push('This estimate is sold and read-only — no lines were added.');
+      return summaries;
+    }
     var errors = summaries.errors;
     lines.forEach(function(spec) {
       try {
@@ -4440,6 +4602,7 @@
   }
 
   function applyAddSection(input) {
+    eeAssertEditable('adding a section');
     var est = getEstimate();
     if (!est) throw new Error('No estimate open.');
     var alt = getActiveAlternate();
@@ -4461,6 +4624,7 @@
   }
 
   function applyUpdateScope(input) {
+    eeAssertEditable('updating the scope');
     var alt = getActiveAlternate();
     if (!alt) throw new Error('No active group.');
     var mode = input.mode === 'append' ? 'append' : 'replace';
@@ -4480,6 +4644,7 @@
   // here — those go through applyDeleteSection so the side-effects on
   // the lines beneath them are explicit.
   function applyDeleteLine(input) {
+    eeAssertEditable('deleting a line');
     var lineId = input.line_id;
     // `!lineId` also refused the number 0, which is an address, not an absence.
     if (lineId == null || String(lineId) === '') throw new Error('line_id required');
@@ -4500,6 +4665,7 @@
   // `section_name` does a case-insensitive substring match against section
   // headers in the same alternate and re-positions the line under it.
   function applyUpdateLine(input) {
+    eeAssertEditable('updating a line');
     var line = eeResolveLine(input.line_id, { anyAlternate: true });
     if (!line) throw new Error('Line not found.');
     if (line.section === '__section_header__') throw new Error('Use propose_update_section to change section headers.');
@@ -4549,6 +4715,7 @@
   // simply fall under whichever section header now precedes them
   // (or become unsectioned if the deleted header was the first).
   function applyDeleteSection(input) {
+    eeAssertEditable('deleting a section');
     var section = eeResolveLine(input.section_id, { anyAlternate: true });
     if (!section) throw new Error('Section not found.');
     if (section.section !== '__section_header__') throw new Error('That id is not a section header.');
@@ -4563,6 +4730,7 @@
   // Update fields on an existing section header. Same partial-update
   // semantics as applyUpdateLine — only specified keys get touched.
   function applyUpdateSection(input) {
+    eeAssertEditable('updating a section');
     var section = eeResolveLine(input.section_id, { anyAlternate: true });
     if (!section) throw new Error('Section not found.');
     if (section.section !== '__section_header__') throw new Error('That id is not a section header.');

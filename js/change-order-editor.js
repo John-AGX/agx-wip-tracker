@@ -277,6 +277,25 @@ function p86Ask(message, opts) {
   // Save flow — debounced PUT + save-state indicator
   // ──────────────────────────────────────────────────────────────────
   function markDirty() {
+    // A BACKSTOP, NOT THE GUARD, AND DELIBERATELY NOT A DIALOG.
+    //
+    // Every user-initiated mutation is meant to arrive through coMutate() /
+    // coRefuse(), which refuse in FRONT of the write and say why in words at
+    // the control. This funnel runs AFTER the write, so it can only report,
+    // never prevent — it exists to keep a forgotten wrapper from reaching the
+    // server (which would 409 anyway) and to leave a trace when one does.
+    //
+    // No dialog here, for the reason measured on the estimate side: a funnel
+    // cannot tell a user gesture from internal housekeeping, and a modal
+    // raised by housekeeping is exactly the "the app is broken" feeling this
+    // work exists to remove. The sentence belongs at the control.
+    if (coLockReason()) {
+      if (window.console && console.warn) {
+        console.warn('[change-order-editor] save refused: this change order is read-only. '
+          + 'If a control just appeared to do nothing, it mutated without going through coMutate().');
+      }
+      return;
+    }
     _state.dirty = true;
     paintSaveStatus();
     if (_state.saveTimer) clearTimeout(_state.saveTimer);
@@ -478,7 +497,16 @@ function p86Ask(message, opts) {
   }
   // Translate one drawer spec → a CO line, inserted inside its section
   // (right before the next section header, mirroring the estimate).
+  // THE SAME QUESTION, ON THE SURFACE THAT REFUSES BY THROWING. The single-add
+  // door reports failure to its caller as an exception (coApplyBulkAddLineItems
+  // catches each one onto `.errors`), so the refusal takes the shape that
+  // surface already uses rather than inventing another.
+  function coAssertEditable(what) {
+    var why = coLockReason();
+    if (why) throw new Error(why.title + ' — ' + why.message + (what ? ' (' + what + ')' : ''));
+  }
   function coApplyAddLineItem(input) {
+    coAssertEditable('adding a line');
     if (!_state.co) throw new Error('No change order open.');
     var lines = _state.co.lines = (Array.isArray(_state.co.lines) ? _state.co.lines : []);
     var bucket = coBucketFor(input) || 'materials';
@@ -532,6 +560,18 @@ function p86Ask(message, opts) {
     var out = [];
     out.errors = [];
     if (!Array.isArray(specs) || !specs.length) return out;
+    // The Materials Drawer and the agent write door both arrive here. They are
+    // controls too, and a locked record refuses them for the same reason it
+    // refuses the strip. Refused BEFORE the loop, so nothing is half-added,
+    // and reported on `.errors` — the channel this function already uses to
+    // tell its caller what did not happen.
+    var whyBulk = coLockReason();
+    if (whyBulk) {
+      out.errors.push(whyBulk.title + ' — no lines were added. ' + whyBulk.message);
+      coNotice(whyBulk.title, 'Adding ' + specs.length + ' line' + (specs.length === 1 ? '' : 's')
+        + ' to this change order.\n\n' + whyBulk.message);
+      return out;
+    }
     specs.forEach(function (s) {
       try { out.push(coApplyAddLineItem(Object.assign({ _silent: true }, s || {}))); }
       catch (e) {
@@ -941,6 +981,91 @@ function p86Ask(message, opts) {
     if (window.p86Alert) window.p86Alert({ title: title, message: message });
     else if (typeof alert === 'function') alert(message);
   }
+
+  // ── THE ONE QUESTION: MAY THIS RECORD BE MUTATED? ─────────────────────
+  //
+  // Everything in this editor that writes asks THIS, and nothing asks it any
+  // other way. Before, the record lock was asked in exactly one place —
+  // applyCoLockState — and the answer was used only to toggle a CSS class
+  // whose whole selector list is `input, textarea, select, [contenteditable]`.
+  // A <span> is none of those and neither is a <button>, so "Reprice from
+  // recipe", "Explode to editable lines" and the row delete were fully live on
+  // an approved, signed-off change order: they mutated _state.co.lines and
+  // armed the save. The server then refused the PUT with a 409 and the screen
+  // went on showing the exploded record with the lock banner above it. Nothing
+  // was ever stored — but the person was reading a change order that did not
+  // exist, in three contradicting statements on one screen.
+  //
+  // PRESENTATION IS NOT A PERMISSION. pointer-events, hidden, disabled and a
+  // missing attribute are all styling. A mutating action must refuse because
+  // the RECORD is locked, not because the control was hard to click — so the
+  // refusal lives here, in front of the state, and the CSS is left alone.
+  //
+  // THE TWO QUESTIONS AND THEIR ORDER ARE THE SERVER'S, VERBATIM.
+  // server/routes/change-order-routes.js (PUT /change-orders/:id) asks
+  // `status === 'applied'` first and `is_locked` second, for two different
+  // reasons and with two different messages. This client asked only the second
+  // one, and that gap is REACHABLE rather than theoretical: PUT
+  // /change-orders/:id/lock never looks at status, so an admin can clear the
+  // lock on an APPLIED change order. On that row the editor painted no banner,
+  // no .co-locked and every input live, while every save 409'd — the whole
+  // editor was a lie, not just the assembly strip.
+  //
+  // Returns null when the record may be mutated, otherwise the sentence the
+  // person is owed.
+  function coLockReason(co) {
+    co = co || (_state && _state.co);
+    if (!co) return null;
+    // APPLIED — the WIP and the job reporting have already consumed this.
+    // Unlocking does NOT make it editable; the server refuses it either way.
+    if (co.status === 'applied') {
+      return {
+        title: 'Applied — read-only',
+        message: 'This change order has been applied, so the job’s WIP and reporting already include it. '
+               + 'Editing it now would move money that has already been reported, so it cannot be changed — '
+               + 'and unlocking it will not change that. Raise a new change order instead.'
+      };
+    }
+    // APPROVED — a committed scope change. Correctable, but deliberately.
+    if (co.is_locked) {
+      return {
+        title: 'Approved — locked',
+        message: 'This change order is approved and read-only. Move it back to Draft with the status pill, '
+               + 'or press “Unlock to edit” in the banner at the top, and then try again.'
+      };
+    }
+    return null;
+  }
+
+  // THE ONE DOOR EVERY MUTATION GOES THROUGH.
+  //
+  // Not the save, and not the control. The save is DOWNSTREAM of the mutation
+  // — markDirty() runs after _state.co.lines has already been spliced — so a
+  // guard there can only report, never prevent, which is precisely how the
+  // screen came to disagree with the record. And a guard on the control
+  // (hiding it, disabling it, never binding its listener) is presentation: it
+  // makes the button hard to press rather than making the record refuse.
+  //
+  // coRefuse is the guard for actions that mutate later (a fetch .then), and
+  // returns true when it has already told the person why. coMutate is the
+  // guard for synchronous ones: `fn` runs ONLY on an editable record, and
+  // arming the save is this function's job rather than the caller's — so a
+  // control added next month that routes through here inherits the refusal,
+  // and one that forgets to route through here does not arm a save either.
+  // Forgetting is inert and loud (see the backstop in markDirty), never
+  // silent and wrong.
+  function coRefuse(what) {
+    var why = coLockReason();
+    if (!why) return false;
+    coNotice(why.title, (what ? what + '\n\n' : '') + why.message);
+    return true;
+  }
+  function coMutate(what, fn) {
+    if (coRefuse(what)) return false;
+    fn();
+    markDirty();
+    return true;
+  }
   // A STORED HOLE IN THE RECIPE MUST NOT BE ABLE TO FREEZE THE TABLE.
   //
   // assemblyBreakdown is JSONB round-tripped verbatim, exactly like the line
@@ -1002,6 +1127,10 @@ function p86Ask(message, opts) {
   function coAsmRefresh(lineId) {
     var line = (_state.co.lines || []).find(function (x) { return String(x.id) === String(lineId); });
     if (!line || line.sourceAssemblyId == null) return;
+    // NOTHING ALREADY SAVED MAY REPRICE. This was the worst of the strip's
+    // controls: it raised no dialog at all, so on a signed-off change order it
+    // silently pulled today's catalog price over the agreed one.
+    if (coRefuse('Repricing “' + (line.description || 'this line') + '” from its recipe would change what this change order costs.')) return;
     if (line.assemblyParams) {
       alert('This line was quantified from typed dimensions (a parametric assembly), so its quantities come from formulas — per-unit repricing would be wrong.\n\nTo reprice, re-add it from Plans & Takeoffs with the same measurements.');
       return;
@@ -1028,6 +1157,10 @@ function p86Ask(message, opts) {
   function coAsmExplode(lineId) {
     var line = (_state.co.lines || []).find(function (x) { return String(x.id) === String(lineId); });
     if (!line || !Array.isArray(line.assemblyBreakdown)) return;
+    // Refuse BEFORE the confirm, so the person is told the record is locked
+    // instead of being asked to approve a change that cannot happen. The old
+    // dialog quoted the component count and never mentioned the lock.
+    if (coRefuse('Exploding “' + (line.description || 'this line') + '” would replace it with its components.')) return;
     // ONE LIST OF COMPONENTS, BUILT ONCE.
     // This map used to be written TWICE in this function — here for the
     // mutation, and again thirty lines below as the confirm dialog's own
@@ -1729,6 +1862,18 @@ function p86Ask(message, opts) {
           var line = (_state.co.lines || []).find(function(x) { return String(x.id) === String(lineId); });
           if (!line) return;
           var f = input.getAttribute('data-line-field');
+          // The ONLY thing that stopped a keystroke landing here was
+          // `.co-locked input { pointer-events: none }` — styling, and on an
+          // APPLIED-but-unlocked change order that class was never even
+          // applied. Ask the record, then put the field back to what the
+          // record actually holds so a refused keystroke cannot sit on screen
+          // looking saved.
+          if (coRefuse('Editing a line on this change order.')) {
+            var held = line[f];
+            if (input.type === 'checkbox') input.checked = !!held;
+            else input.value = (held === '' || held == null) ? '' : String(held);
+            return;
+          }
           if (input.type === 'checkbox') {
             line[f] = input.checked;
             markDirty(); paintLines(); paintTotals();   // affects every child line's markup
@@ -1795,9 +1940,17 @@ function p86Ask(message, opts) {
         }
       });
       var del = tr.querySelector('[data-line-del]');
+      // A DELETE BUTTON IS A WRITER. It was live on a signed-off change order
+      // for the same reason the strip's actions were — a <button> is not an
+      // <input>, so the lock CSS never reached it. That was never a policy
+      // decision: the row edit gate's "delete works without arming the row"
+      // rule is about the touch gate, and the RECORD lock has never had an
+      // opinion about delete at all.
       if (del) del.addEventListener('click', function() {
-        _state.co.lines = (_state.co.lines || []).filter(function(x) { return String(x.id) !== String(lineId); });
-        markDirty();
+        var ok = coMutate('Deleting a line from this change order.', function() {
+          _state.co.lines = (_state.co.lines || []).filter(function(x) { return String(x.id) !== String(lineId); });
+        });
+        if (!ok) return;
         paintLines();
         paintTotals();
       });
@@ -2221,10 +2374,14 @@ function p86Ask(message, opts) {
   function applyCoLockState() {
     var host = document.querySelector('#co-editor-overlay .p86-co-host');
     if (!host) return;
-    var locked = !!(_state.co && _state.co.is_locked);
-    host.classList.toggle('co-locked', locked);
+    // ONE predicate, the same one every mutation asks. This used to read
+    // `_state.co.is_locked` on its own, which is why an APPLIED change order
+    // whose lock an admin had cleared painted as fully editable while every
+    // save 409'd.
+    var why = coLockReason();
+    host.classList.toggle('co-locked', !!why);
     var banner = document.getElementById('co-lock-banner');
-    if (!locked) { if (banner) banner.remove(); return; }
+    if (!why) { if (banner) banner.remove(); return; }
     if (!banner) {
       banner = document.createElement('div');
       banner.id = 'co-lock-banner';
@@ -2235,10 +2392,13 @@ function p86Ask(message, opts) {
       if (topbar && topbar.nextSibling) host.insertBefore(banner, topbar.nextSibling);
       else host.appendChild(banner);
     }
+    // An APPLIED change order gets no "Unlock to edit" button, because
+    // unlocking one does not make it editable — the server refuses the PUT on
+    // status alone. Offering the button there was offering a door into a wall.
+    var applied = !!(_state.co && _state.co.status === 'applied');
     banner.innerHTML =
-      '<span><strong>🔒 Approved — locked.</strong> This change order is approved and read-only. ' +
-      'Move it back to Draft via the status pill, or unlock it to make corrections.</span>' +
-      '<button type="button" id="co-unlock-btn" class="ee-btn small">Unlock to edit</button>';
+      '<span><strong>🔒 ' + escapeHTML(why.title) + '.</strong> ' + escapeHTML(why.message) + '</span>' +
+      (applied ? '' : '<button type="button" id="co-unlock-btn" class="ee-btn small">Unlock to edit</button>');
     var btn = document.getElementById('co-unlock-btn');
     if (btn) btn.onclick = unlockCo;
   }
@@ -2417,6 +2577,19 @@ function p86Ask(message, opts) {
         ensureLineIds: ensureLineIds,
         adoptCo: adoptCo,
         coSavePayload: coSavePayload,
+        // The lock paint and the predicate behind it. Exposed because the
+        // banner IS the answer to "why can I not edit this", and an APPLIED
+        // change order whose lock an admin cleared used to paint no banner at
+        // all while every save 409'd — a divergence nothing could see.
+        applyCoLockState: applyCoLockState,
+        coLockReason: coLockReason,
+        // The 4-method contract the Materials Drawer and the agent write path
+        // talk to. In the browser it reaches this editor as
+        // window.p86ActiveLineTarget, which only openCatalogDrawer() sets — so
+        // a test that never opens the drawer cannot reach the bulk adder at
+        // all, and a suite driving it through a guessed name passes while
+        // touching nothing. It is the same object, not a copy.
+        lineTarget: coLineTarget,
       },
     };
   }
