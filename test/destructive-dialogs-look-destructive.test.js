@@ -302,20 +302,37 @@ describe('D4 every p86Confirm call site in js/ gets the dialog it asked for', ()
     // these have existed, deleting a job permanently showed the same plain
     // blue "Confirm" as saving one. The list is derived from the walk, not
     // typed in, so it cannot drift from the source.
+    // KEYED ON WHAT THE DIALOG SAYS, NOT WHAT LINE IT SITS ON.
+    //
+    // This assertion pinned `file:line` and went red TWICE in two days — both
+    // times because another session edited something ABOVE one of these call
+    // sites and shifted it. Neither edit touched a dialog. A test that fails
+    // for a reason unrelated to what it tests trains everyone to read the
+    // suite as noise, which is worse than the defect it guards.
+    //
+    // The list is still DERIVED from the source walk, so it cannot drift from
+    // reality — it just no longer depends on an integer that carries no
+    // meaning. A title is what the user sees and what identifies the dialog.
+    const titleOf = (s) => {
+      const m = s.arg.match(/\btitle\s*:\s*(['"`])([\s\S]*?)\1/);
+      if (m) return m[2].trim();
+      const g = s.arg.match(/\bmessage\s*:\s*(['"`])([\s\S]*?)\1/);
+      return g ? g[2].trim().slice(0, 40) : '(no title)';
+    };
     const brokenBefore = SITES
       .filter((s) => (s.confirmLabel || s.danger || s.cancelLabel)
                   && !(s.confirmText || s.destructive || s.cancelText))
-      .map((s) => s.file + ':' + s.line);
+      .map((s) => s.file + ' — ' + titleOf(s));
     expect(brokenBefore.sort()).toEqual([
-      'ai-panel.js:2992',        // "Clear conversation"
-      'attachments.js:1109',     // "Delete attachment"
-      'estimates.js:1056',       // "Delete estimate"
-      'file-explorer.js:157',    // every file and folder delete — red dropped
-      'jobs.js:2788',            // "Archive job" — label dropped
-      'jobs.js:2809',            // "Delete job permanently" + all its children
-      'schedule.js:3027',        // "Delete event"
-      'schedule.js:3442',        // "Delete schedule entry"
-      'schedule.js:3548',        // "Your unsaved changes will be lost"
+      'ai-panel.js — Clear conversation',
+      'attachments.js — Delete',
+      'estimates.js — Delete estimate',
+      'file-explorer.js — Confirm',                 // every file and folder delete — generic title, which is part of the point
+      'jobs.js — Archive job',                      // label dropped
+      'jobs.js — Delete job permanently',           // and all its children
+      'schedule.js — Delete event',
+      'schedule.js — Delete schedule entry',
+      'schedule.js — Entry changed elsewhere',
     ].sort());
 
     // Each of them, rendered through the live function, now shows what it asked
