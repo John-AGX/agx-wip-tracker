@@ -2058,6 +2058,11 @@
           photo_ids: (s.photo_ids || []).slice(),
           captions: Object.assign({}, s.captions || {}),
           text_body: s.text_body || '',
+          // pin_style MUST hydrate. Without it, reopening a saved report reset
+          // the map to the default and the 600ms autosave then wrote that loss
+          // straight back to the server — the user's choice silently died on
+          // every open.
+          pin_style: s.pin_style || DEFAULT_PIN_STYLE,
           attachment_ids: Array.isArray(s.attachment_ids) ? s.attachment_ids.slice() : []
         };
       }),
@@ -2909,10 +2914,14 @@
         });
         // Text-block layout: textarea writes back into state.text_body.
         var textInput = sectionEl.querySelector('.p86-report-section-text-input');
-        if (textInput) textInput.addEventListener('input', function(e) {
-          state.sections[sIdx].text_body = e.target.value;
-          debouncedSave();
-        });
+        if (textInput) {
+          autoGrowTextBlocks(sectionEl);   // size to saved content on mount
+          textInput.addEventListener('input', function(e) {
+            state.sections[sIdx].text_body = e.target.value;
+            autoGrowTextBlocks(sectionEl); // keep it fully visible as they type
+            debouncedSave();
+          });
+        }
         // Attachment-list layout: per-row remove button.
         sectionEl.querySelectorAll('[data-rm-att]').forEach(function(btn) {
           btn.addEventListener('click', function() {
@@ -3741,8 +3750,19 @@
         var att = allPhotos.find(function(a) { return a.id === pid; });
         if (!att) return '<div class="p86-report-photo-pair p86-report-photo-missing">(photo deleted)</div>';
         var caption = section.captions[pid] || fallbackLabel;
+        // Before/after used to render image + caption + remove and nothing
+        // else, so a paired photo silently lost the number badge, the
+        // annotation overlay and the metadata column that every other layout
+        // gets. Same card furniture as the grid now.
         return '<div class="p86-report-photo-pair">' +
-          '<img src="' + escapeAttr(att.web_url || att.thumb_url) + '" alt="" />' +
+          reportPhotoNumHTML(pid) +
+          // Media wrapper so the annotation canvas overlays the IMAGE only —
+          // anchored to the whole card it would stretch across the caption row
+          // and the strokes would land wrong.
+          '<div class="p86-report-pair-media">' +
+            '<img src="' + escapeAttr(att.web_url || att.thumb_url) + '" alt="" data-open-photo="' + escapeAttr(pid) + '" />' +
+            photoAnnotationCanvasHTML(att, pid) +
+          '</div>' +
           '<input class="p86-report-photo-caption" value="' + escapeAttr(caption) + '" data-caption-input="' + escapeAttr(pid) + '" placeholder="' + escapeAttr(fallbackLabel) + '" />' +
           '<button type="button" class="p86-report-photo-remove" data-rm-photo="' + escapeAttr(pid) + '" title="Remove">&times;</button>' +
         '</div>';
@@ -3755,9 +3775,27 @@
 
     function sectionTextBlockBodyHTML(section) {
       var body = section.text_body || '';
+      // The PRINT path renders this editor DOM, so a fixed-height textarea
+      // silently cut every narrative past ~6 rows out of the PDF. The textarea
+      // is auto-grown to its content (see autoGrowTextBlocks, called after each
+      // paint and on input), which fixes the editor and the printed page at
+      // once. A print rule in styles.css also drops the frame/scrollbar.
       return '<div class="p86-report-section-text">' +
         '<textarea class="p86-report-section-text-input" rows="6" placeholder="Type your narrative here…">' + escapeHTML(body) + '</textarea>' +
       '</div>';
+    }
+
+    // Size every narrative textarea to its full content. Without this the
+    // report PRINTS truncated — browsers print only the visible box of a
+    // scrolling textarea, with no indication anything was lost.
+    function autoGrowTextBlocks(root) {
+      (root || document).querySelectorAll('.p86-report-section-text-input').forEach(function(ta) {
+        ta.style.height = 'auto';
+        // +2px so the last line never sits against the border and re-triggers
+        // a scrollbar at some zoom levels.
+        ta.style.height = (ta.scrollHeight + 2) + 'px';
+        ta.style.overflowY = 'hidden';
+      });
     }
 
     // Photo Map layout — picks the same way photo-grid does (photo_ids
@@ -3814,12 +3852,18 @@
       var markerStrs = pickedPhotos.slice(0, 60).map(function(p, idx) {
         var color = '0xef4444';
         var label = '';
+        // Use the SAME report-wide number the photo badge shows, so the printed
+        // map cross-references the same way the on-screen one does. (Static
+        // Maps still can't draw multi-character labels, so 10+ degrades to a
+        // plain coloured dot exactly as before — just now consistently.)
+        var repNum = _reportPhotoNums[p.id];
+        var seq = (typeof repNum === 'number' && repNum > 0) ? (repNum - 1) : idx;
         if (pinStyle === 'numbered') {
-          var n = idx + 1;
+          var n = seq + 1;
           if (n <= 9) { label = String(n); color = '0x4f8cff'; }
           else        { color = '0x4f8cff'; }
         } else if (pinStyle === 'lettered') {
-          var letters = indexToLetters(idx);
+          var letters = indexToLetters(seq);
           if (letters.length === 1) { label = letters; color = '0x22d3ee'; }
           else                       { color = '0x22d3ee'; }
         } else if (pinStyle === 'dot' || pinStyle === 'photo') {
@@ -3856,10 +3900,18 @@
     function buildPinMarker(maps, photo, pinIdx, pinStyle) {
       // Standard 28px circle + drop shadow, varied per style.
       var bg, fg, glyph, tagSpec = null;
+      // A numbered/lettered pin must carry the SAME number as the photo's badge
+      // in the body of the report — that cross-reference is the whole point of
+      // numbering. pinIdx is only this map section's own index over its
+      // geo-located photos, so it drifted from the report-wide sequence: badge
+      // "12" could sit beside pin "3". Prefer the report-wide number, and fall
+      // back to pinIdx when a photo somehow isn't in the numbering map.
+      var reportNum = _reportPhotoNums[photo.id];
+      var seq = (typeof reportNum === 'number' && reportNum > 0) ? (reportNum - 1) : pinIdx;
       if (pinStyle === 'numbered') {
-        bg = '#4f8cff'; fg = '#fff'; glyph = String(pinIdx + 1);
+        bg = '#4f8cff'; fg = '#fff'; glyph = String(seq + 1);
       } else if (pinStyle === 'lettered') {
-        bg = '#22d3ee'; fg = '#0a0a0a'; glyph = indexToLetters(pinIdx);
+        bg = '#22d3ee'; fg = '#0a0a0a'; glyph = indexToLetters(seq);
       } else if (pinStyle === 'dot') {
         var icon = window.p86TagIcons ? window.p86TagIcons.forPhoto(photo) : null;
         bg = (icon && icon.bg) || '#6b7280'; fg = '#fff'; glyph = '';

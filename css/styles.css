@@ -6358,6 +6358,9 @@
   aspect-ratio: 4/3;
   object-fit: cover;
 }
+/* Positioning context for the before/after annotation overlay, so the canvas
+   covers the image and not the caption row beneath it. */
+.p86-report-pair-media { position: relative; display: block; }
 .p86-report-photo-pair-empty {
   border: 1px dashed var(--border, #333);
   border-radius: 8px;
@@ -6393,6 +6396,25 @@
   outline: none;
 }
 .p86-report-section-text-input:focus { border-color: var(--accent, #4f8cff); }
+/* PRINT: the report prints this editor DOM, so a narrative textarea printed as
+   an input box — framed, and clipped to its visible height. autoGrowTextBlocks
+   sizes it to its full content; these rules strip the control chrome so it
+   reads as body copy on paper, and let it break across pages instead of being
+   cut off at the bottom of one. */
+@media print {
+  .p86-report-section-text-input {
+    min-height: 0 !important;
+    height: auto !important;
+    overflow: visible !important;
+    border: 0 !important;
+    background: transparent !important;
+    color: #000 !important;
+    padding: 0 !important;
+    resize: none !important;
+    break-inside: auto;
+    page-break-inside: auto;
+  }
+}
 
 /* Attachment-list layout: download rows for non-image files
    (PDFs, Excel, etc.). Each row mirrors the Files-tab styling. */

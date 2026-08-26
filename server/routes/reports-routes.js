@@ -145,8 +145,12 @@ function normalizeSections(raw) {
     // Whitelisted enum — anything else clamps to 'tag'. Only
     // meaningful when layout === 'photo-map' but stored unconditionally
     // so switching layouts doesn't lose the user's choice.
+    // Default is 'photo' (thumbnail pins) and MUST match the client's
+    // DEFAULT_PIN_STYLE in js/projects.js. They disagreed ('tag' here vs
+    // 'photo' there), so a section saved without an explicit choice came back
+    // as tag pins even though the user had been looking at thumbnails.
     const PIN_STYLES = ['tag', 'numbered', 'lettered', 'photo', 'dot'];
-    const pinStyle = PIN_STYLES.indexOf(s.pin_style) >= 0 ? s.pin_style : 'tag';
+    const pinStyle = PIN_STYLES.indexOf(s.pin_style) >= 0 ? s.pin_style : 'photo';
     return {
       id: id,
       label: label,
