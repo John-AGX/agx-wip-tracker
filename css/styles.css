@@ -6815,22 +6815,34 @@
    restyles the container; every other InfoWindow in the app is untouched. */
 .gm-style-iw-c:has(.p86-pin-card) {
   padding: 0 !important;
+  /* Google stamps an INLINE max-height on this element sized from its own
+     measurement, and it is a FLEX container whose close button is a sibling
+     eating ~48px — which left the content 145px for a 195px card and silently
+     clipped the action buttons. Let it size to the card instead. */
+  max-height: none !important;
+  height: auto !important;
+  position: relative !important;
   border-radius: 12px !important;
   overflow: hidden !important;
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4) !important;
 }
 .gm-style-iw-c:has(.p86-pin-card) .gm-style-iw-d {
   overflow: hidden !important;
+  height: auto !important;
   max-height: none !important;
   max-width: none !important;
 }
-/* Google's close button overlaps a full-bleed image — float it on the photo. */
+/* Close button: taken OUT of flow (as a flex sibling it stole the height the
+   card needed) and floated over the photo. */
 .gm-style-iw-c:has(.p86-pin-card) button.gm-ui-hover-effect {
-  top: 2px !important;
-  right: 2px !important;
+  position: absolute !important;
+  top: 4px !important;
+  right: 4px !important;
+  margin: 0 !important;
   background: rgba(0, 0, 0, 0.45) !important;
   border-radius: 50% !important;
   opacity: 1 !important;
+  z-index: 2 !important;
 }
 .gm-style-iw-c:has(.p86-pin-card) button.gm-ui-hover-effect > span { background-color: #fff !important; }
 /* The little pointer under the bubble is drawn separately and defaults to
