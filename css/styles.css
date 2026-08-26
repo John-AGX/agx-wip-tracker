@@ -6821,7 +6821,11 @@
      clipped the action buttons. Let it size to the card instead. */
   max-height: none !important;
   height: auto !important;
-  position: relative !important;
+  /* NEVER set `position` here. Google positions this bubble with
+     position:absolute + a translate() that anchors it to the marker; forcing
+     it to relative left the transform applied on top of normal flow and the
+     card opened ~212px ABOVE the pin. It is already a positioned element, so
+     the absolutely-positioned close button below anchors to it either way. */
   border-radius: 12px !important;
   overflow: hidden !important;
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4) !important;
