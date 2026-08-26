@@ -6808,6 +6808,101 @@
    land on the same pixels they would in the viewer / markup tool.
    pointer-events:none so clicks pass through to the image (which
    opens the viewer). */
+/* ── Map pin popup: compact photo mini-card ─────────────────────────
+   Google wraps InfoWindow content in .gm-style-iw-c (padded) and
+   .gm-style-iw-d (overflow:auto + a max-height) — that wrapper is what put
+   scrollbars around the old popup. Scoped with :has() so ONLY our photo card
+   restyles the container; every other InfoWindow in the app is untouched. */
+.gm-style-iw-c:has(.p86-pin-card) {
+  padding: 0 !important;
+  border-radius: 12px !important;
+  overflow: hidden !important;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4) !important;
+}
+.gm-style-iw-c:has(.p86-pin-card) .gm-style-iw-d {
+  overflow: hidden !important;
+  max-height: none !important;
+  max-width: none !important;
+}
+/* Google's close button overlaps a full-bleed image — float it on the photo. */
+.gm-style-iw-c:has(.p86-pin-card) button.gm-ui-hover-effect {
+  top: 2px !important;
+  right: 2px !important;
+  background: rgba(0, 0, 0, 0.45) !important;
+  border-radius: 50% !important;
+  opacity: 1 !important;
+}
+.gm-style-iw-c:has(.p86-pin-card) button.gm-ui-hover-effect > span { background-color: #fff !important; }
+/* The little pointer under the bubble is drawn separately and defaults to
+   white — match it to the card or it reads as a stray white notch. */
+.gm-style .gm-style-iw-t:has(.p86-pin-card)::after {
+  background: var(--card-bg, #16161c) !important;
+}
+
+.p86-pin-card {
+  width: 210px;
+  font-family: inherit;
+  background: var(--card-bg, #16161c);
+  color: var(--text, #e6e6e6);
+  overflow: hidden;
+}
+.p86-pin-card-img {
+  display: block;
+  width: 100%;
+  height: 118px;
+  object-fit: cover;
+  background: #0d0d12;
+}
+.p86-pin-card-body {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 6px;
+  min-width: 0;
+}
+.p86-pin-card-avatar {
+  flex: 0 0 24px;
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  background: var(--accent, #4f8cff);
+  color: #fff;
+  font-size: 9.5px; font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center;
+  letter-spacing: 0.3px;
+}
+.p86-pin-card-meta { min-width: 0; flex: 1 1 auto; }
+.p86-pin-card-when {
+  font-size: 11px;
+  color: var(--text-dim, #9aa0b4);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+.p86-pin-card-cap {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text, #e6e6e6);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.p86-pin-card-actions {
+  display: flex;
+  gap: 6px;
+  padding: 0 10px 10px;
+}
+.p86-pin-card-btn {
+  flex: 1;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border, #33333f);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text, #e6e6e6);
+  cursor: pointer;
+}
+.p86-pin-card-btn:hover { background: rgba(255, 255, 255, 0.14); }
+.p86-pin-card-btn.danger { color: #f87171; border-color: rgba(248, 113, 113, 0.35); }
+
 /* Continuous photo number, pinned to the LEFT edge of a report photo.
    Doubles as the "show me this on the map" control. */
 .p86-report-photo-num {

@@ -3009,7 +3009,9 @@
           // dispatches a custom event on mapEl that the section's
           // handler-attaching code (in paint()) listens for, so we
           // don't have to capture sIdx in this closure.
-          var infoWin = new maps.InfoWindow();
+          // maxWidth matches the mini card so Google never adds its own
+          // scrolling wrapper around it.
+          var infoWin = new maps.InfoWindow({ maxWidth: 230 });
           // Pin style for this section. Read off the closest section
           // wrap element so the choice persists across paint()s
           // without us threading it through every closure.
@@ -3033,22 +3035,10 @@
             _reportPinRegistry[photo.id] = { map: map, marker: marker, el: mapEl };
             bounds.extend(pos);
             marker.addListener('click', function() {
-              var thumb = photo.thumb_url || photo.web_url || '';
-              var cap = photo.caption || photo.filename || 'Photo';
-              var safeCap = String(cap).replace(/</g, '&lt;').replace(/>/g, '&gt;');
-              // Use onclick on the buttons since InfoWindow content
-              // is created in a sub-DOM; pointing at IDs is simpler
-              // than wrangling event delegation across the boundary.
-              var html =
-                '<div style="min-width:200px;max-width:260px;font-family:system-ui,sans-serif;">' +
-                  (thumb ? '<img src="' + thumb + '" style="width:100%;max-height:140px;object-fit:cover;border-radius:4px;display:block;margin-bottom:8px;" alt="" />' : '') +
-                  '<div style="font-size:12px;font-weight:600;color:#111;margin-bottom:8px;word-break:break-word;">' + safeCap + '</div>' +
-                  '<div style="display:flex;gap:6px;">' +
-                    '<button id="p86InfoOpen" style="flex:1;font-size:12px;padding:6px 8px;border-radius:4px;border:1px solid #ccc;background:#fff;color:#111;font-weight:600;cursor:pointer;">Open</button>' +
-                    '<button id="p86InfoRemove" style="flex:1;font-size:12px;padding:6px 8px;border-radius:4px;border:1px solid #ddd;background:#fff;color:#dc2626;font-weight:600;cursor:pointer;">Remove</button>' +
-                  '</div>' +
-                '</div>';
-              infoWin.setContent(html);
+              // Compact mini card — thumbnail, uploader initials, date/time.
+              // Button wiring still keys off the ids below (InfoWindow content
+              // lives in its own sub-DOM, so ids beat event delegation here).
+              infoWin.setContent(pinCardHTML(photo, { removable: true }));
               infoWin.open(map, marker);
               // Defer button wiring to next tick so the InfoWindow
               // DOM is in place. Both buttons close the window after
@@ -5734,6 +5724,39 @@
     '</svg>';
   }
 
+  // Compact mini-card shown in a map pin's popup: thumbnail, uploader
+  // initials, date + time, and the caption when there is one. Sized to fit so
+  // Google's InfoWindow never has to scroll (its .gm-style-iw-d wrapper is
+  // overflow:auto, which is where the scrollbars came from — see the
+  // .p86-pin-card rules in styles.css for the container overrides).
+  function pinCardHTML(photo, opts) {
+    opts = opts || {};
+    var thumb = photo.thumb_url || photo.web_url || '';
+    var who = photo.uploaded_by_name || '';
+    var initials = who ? initialsOf(who) : '';
+    var when = photo.uploaded_at || photo.taken_at || '';
+    var whenLabel = when ? (fmtDate(when) + ' · ' + fmtTime(when)) : '';
+    var cap = photo.caption || '';
+    return '<div class="p86-pin-card">' +
+      (thumb ? '<img class="p86-pin-card-img" src="' + escapeAttr(thumb) + '" alt="" />' : '') +
+      '<div class="p86-pin-card-body">' +
+        (initials
+          ? '<span class="p86-pin-card-avatar" title="' + escapeAttr(who) + '">' + escapeHTML(initials) + '</span>'
+          : '') +
+        '<div class="p86-pin-card-meta">' +
+          (whenLabel ? '<div class="p86-pin-card-when">' + escapeHTML(whenLabel) + '</div>' : '') +
+          (cap ? '<div class="p86-pin-card-cap">' + escapeHTML(cap) + '</div>' : '') +
+        '</div>' +
+      '</div>' +
+      '<div class="p86-pin-card-actions">' +
+        '<button type="button" id="p86InfoOpen" class="p86-pin-card-btn">Open</button>' +
+        (opts.removable
+          ? '<button type="button" id="p86InfoRemove" class="p86-pin-card-btn danger">Remove</button>'
+          : '') +
+      '</div>' +
+    '</div>';
+  }
+
   // Bumped by every mount so an in-flight async mount can tell it has been
   // superseded (see mountDetailMap).
   var _detailMapGen = 0;
@@ -5826,6 +5849,9 @@
       });
       var bounds = new maps.LatLngBounds();
       var pinCount = 0;
+      // One shared InfoWindow: opening a second pin closes the first. maxWidth
+      // matches the mini card so Google adds no scrolling wrapper.
+      var info = new maps.InfoWindow({ maxWidth: 230 });
 
       if (hasSite) {
         new maps.Marker({
@@ -5858,8 +5884,19 @@
         // Upgrade to the circular photo thumbnail once its pixels land — same
         // treatment the report map uses, so a pin is recognisable at a glance.
         applyThumbPin(maps, marker, a);
-        // Click a pin -> open that photo in the viewer.
-        marker.addListener('click', function() { openPhotoInLightbox(a); });
+        // Click a pin -> the same mini card the report map shows; "Open" is
+        // what actually opens the photo.
+        marker.addListener('click', function() {
+          info.setContent(pinCardHTML(a));      // no Remove: nothing to unpin here
+          info.open(map, marker);
+          setTimeout(function() {
+            var openBtn = document.getElementById('p86InfoOpen');
+            if (openBtn) openBtn.addEventListener('click', function() {
+              info.close();
+              openPhotoInLightbox(a);
+            });
+          }, 0);
+        });
       });
 
       if (pinCount > 1) map.fitBounds(bounds, 28);
