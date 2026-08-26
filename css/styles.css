@@ -6836,6 +6836,16 @@
   max-height: none !important;
   max-width: none !important;
 }
+/* Google reserves a 17px header row for the close button. With the button
+   floated over the photo (below) that row is empty but still occupied 17px
+   above the card, showing as a white strip. Collapse it — it can't be
+   display:none because the close button is its child; the button is absolutely
+   positioned, so it overflows the zero-height row happily. */
+.gm-style-iw-c:has(.p86-pin-card) .gm-style-iw-chr {
+  height: 0 !important;
+  min-height: 0 !important;
+  overflow: visible !important;
+}
 /* Close button: taken OUT of flow (as a flex sibling it stole the height the
    card needed) and floated over the photo. */
 .gm-style-iw-c:has(.p86-pin-card) button.gm-ui-hover-effect {
