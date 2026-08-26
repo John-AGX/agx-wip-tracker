@@ -2175,6 +2175,36 @@
     // behind a fingerprint guard, and reparenting a live Maps container blanks
     // its tiles and loses the user's scroll/focus. The clone leaves the editor
     // completely untouched.
+    // Turn the cloned editor into a DOCUMENT before it prints.
+    //
+    // The report is authored in <input>/<textarea> fields, and printing them
+    // as-is put the editor on the page: an empty caption printed its
+    // placeholder ("Caption (optional)") inside a visible input box, right
+    // under the photo, in the PDF the client receives.
+    //
+    // Every field becomes a plain element carrying the SAME classes, so the
+    // existing print typography still applies; empty ones are dropped entirely
+    // rather than leaving a blank framed row. Operates on the throwaway clone,
+    // so the live editor is untouched.
+    function flattenFieldsForPrint(clone) {
+      // Placeholders can never reach paper, whatever else happens below.
+      clone.querySelectorAll('[placeholder]').forEach(function(el) { el.removeAttribute('placeholder'); });
+
+      clone.querySelectorAll('textarea, input').forEach(function(f) {
+        var tag = f.tagName.toLowerCase();
+        var type = (f.getAttribute('type') || 'text').toLowerCase();
+        // Checkboxes/radios/selects are editor controls that existing print
+        // rules already hide; leave them alone.
+        if (tag === 'input' && type !== 'text' && type !== 'search') return;
+        var val = (tag === 'textarea' ? f.textContent : f.getAttribute('value')) || '';
+        if (!val.trim()) { f.remove(); return; }   // no empty framed rows
+        var div = document.createElement('div');
+        div.className = f.className + ' p86-print-static';
+        div.textContent = val;
+        f.parentNode.replaceChild(div, f);
+      });
+    }
+
     function printReport() {
       var host = overlay.querySelector('.p86-report-host');
       if (!host) { window.print(); return; }
@@ -2203,7 +2233,9 @@
         // rules to .p86-report-host inside it, and all seven break if the host
         // class is renamed or the wrapper class dropped.
         root.className = 'p86-report-overlay';
-        root.appendChild(host.cloneNode(true));
+        var clone = host.cloneNode(true);
+        flattenFieldsForPrint(clone);
+        root.appendChild(clone);
         document.body.appendChild(root);
         document.body.classList.add('p86-report-printing');
       }

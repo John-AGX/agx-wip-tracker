@@ -7647,6 +7647,34 @@
     aspect-ratio: auto !important;
     object-fit: cover;
   }
+  /* STACK layout photos had NO height cap in print — only max-width, forced to
+     100% above — so a portrait phone photo printed ~10in tall and exactly one
+     fit per page regardless of the S/M/L control. The grid had caps; this
+     layout was simply missed. Tie the cap to the size so the control finally
+     means "how many per page": S≈3, M≈2, L≈1-2. */
+  .p86-report-section-singles.size-small  .p86-report-photo-single img,
+  .p86-report-photo-single.size-small  img { max-height: 2.6in; }
+  .p86-report-section-singles.size-medium .p86-report-photo-single img,
+  .p86-report-photo-single.size-medium img { max-height: 3.6in; }
+  .p86-report-section-singles.size-large  .p86-report-photo-single img,
+  .p86-report-photo-single.size-large  img { max-height: 5.2in; }
+  /* Fallback when no size class is present — never let one photo own a page. */
+  .p86-report-photo-single img { max-height: 3.6in; }
+
+  /* Fields flattened to static text by flattenFieldsForPrint. They keep their
+     original classes so the print typography above still applies; these rules
+     just remove the last of the form appearance. */
+  .p86-print-static {
+    background: transparent !important;
+    border: 0 !important;
+    padding: 0 !important;
+    color: #000 !important;
+    white-space: pre-wrap;
+    overflow: visible !important;
+    height: auto !important;
+    min-height: 0 !important;
+  }
+
   .p86-report-section-photos.size-small  .p86-report-photo img { max-height: 2.4in; }
   .p86-report-section-photos.size-medium .p86-report-photo img { max-height: 1.7in; }
   .p86-report-section-photos.size-large  .p86-report-photo img { max-height: 2.8in; }
