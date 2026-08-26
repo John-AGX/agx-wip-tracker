@@ -2033,6 +2033,19 @@
   function paintReportEditor(overlay, report) {
     var p = _detailState.project;
     var allPhotos = (_detailState.photos || []).filter(function(a) { return a.mime_type && /^image\//.test(a.mime_type); });
+    // A photo id in a section that no longer resolves = the photo was deleted
+    // from the project. Those used to render a "(photo deleted)" card, which
+    // sat in the report AND printed into the client's PDF, and still consumed a
+    // number so the sequence jumped (3, 5, 6…).
+    //
+    // GUARD: only conclude "deleted" when we actually have photos to compare
+    // against. allPhotos is captured once when the editor opens, so if the feed
+    // hadn't loaded yet an unguarded check would call EVERY photo deleted and
+    // render an empty report.
+    function photoIsGone(pid) {
+      if (!allPhotos.length) return false;
+      return !allPhotos.some(function(a) { return a.id === pid; });
+    }
     var me = currentUser();
     // Track sections as mutable state. sections_raw is what we PATCH
     // back; sections is the hydrated render. We mirror updates to
@@ -2399,7 +2412,8 @@
         '<div class="p86-report-preview-paper" data-style-pack="' + escapeAttr(state.stylePack || 'clean') + '">' +
           (state.cover.enabled ? renderPrintCoverHTML() : '') +
           (state.report.summary ? '<div class="p86-report-preview-summary">' + escapeHTML(state.report.summary) + '</div>' : '') +
-          (buildReportPhotoNumbers(state.sections), state.sections.map(previewSectionHTML).join('')) +
+          (buildReportPhotoNumbers(state.sections, function(pid) { return !photoIsGone(pid); }),
+           state.sections.map(previewSectionHTML).join('')) +
         '</div>';
 
       document.body.appendChild(preview);
@@ -2524,7 +2538,9 @@
       var host = overlay.querySelector('.p86-report-host');
       // Number every photo before any section renders — the sequence runs
       // across the whole report, so it can't be computed per section.
-      buildReportPhotoNumbers(state.sections);
+      // Skip deleted photos so the sequence stays contiguous — deleting one
+      // renumbers the rest instead of leaving a hole.
+      buildReportPhotoNumbers(state.sections, function(pid) { return !photoIsGone(pid); });
       var emptyStateHTML = state.sections.length ? '' :
         '<div class="p86-report-empty">' +
           '<div class="p86-report-empty-title">Add your first section</div>' +
@@ -3744,7 +3760,9 @@
           ? '<div class="p86-proj-empty-line" style="grid-column:1/-1;">No photos in this section yet.</div>'
           : section.photo_ids.map(function(pid, idx) {
               var att = allPhotos.find(function(a) { return a.id === pid; });
-              if (!att) return '<div class="p86-report-photo p86-report-photo-missing">(photo deleted)</div>';
+              // Deleted from the project — render nothing at all rather than a
+              // "(photo deleted)" card that would print into the client's PDF.
+              if (!att) return photoIsGone(pid) ? '' : '<div class="p86-report-photo p86-report-photo-missing">(photo deleted)</div>';
               var caption = section.captions[pid] || '';
               var hasSide = attHasSideContent(att);
               var photoSide = descSideFor(section, pid);
@@ -3799,7 +3817,7 @@
           ? '<div class="p86-proj-empty-line">No photos yet — tap "+ Add photos".</div>'
           : section.photo_ids.map(function(pid, idx) {
               var att = allPhotos.find(function(a) { return a.id === pid; });
-              if (!att) return '<div class="p86-report-photo-single p86-report-photo-missing">(photo deleted)</div>';
+              if (!att) return photoIsGone(pid) ? '' : '<div class="p86-report-photo-single p86-report-photo-missing">(photo deleted)</div>';
               var caption = section.captions[pid] || '';
               var hasSide = attHasSideContent(att);
               var photoSide = descSideFor(section, pid);
@@ -3840,7 +3858,7 @@
           return '<div class="p86-report-photo-pair-empty">' + escapeHTMLLocal(fallbackLabel) + '<br/><span>No photo selected</span></div>';
         }
         var att = allPhotos.find(function(a) { return a.id === pid; });
-        if (!att) return '<div class="p86-report-photo-pair p86-report-photo-missing">(photo deleted)</div>';
+        if (!att) return photoIsGone(pid) ? '' : '<div class="p86-report-photo-pair p86-report-photo-missing">(photo deleted)</div>';
         var caption = section.captions[pid] || fallbackLabel;
         // Before/after used to render image + caption + remove and nothing
         // else, so a paired photo silently lost the number badge, the
@@ -5739,11 +5757,19 @@
   // appears, so "Photo 12" means one thing anywhere in the document and can be
   // cross-referenced to its pin on the map.
   var _reportPhotoNums = {};
-  function buildReportPhotoNumbers(sections) {
+  // `exists` (optional) answers "does this photo still exist?". Deleting a
+  // photo does NOT remove its id from a report's photo_ids, and numbering every
+  // id regardless meant a deleted photo kept its number and left a HOLE in the
+  // sequence — the report jumped 3, 5, 6 and every later photo was numbered one
+  // higher than its position. Numbers now skip ids that no longer resolve, so
+  // deleting a photo simply renumbers the rest.
+  function buildReportPhotoNumbers(sections, exists) {
     var nums = {}, n = 0;
     (sections || []).forEach(function(sec) {
       (sec && sec.photo_ids ? sec.photo_ids : []).forEach(function(pid) {
-        if (pid && !nums[pid]) nums[pid] = ++n;
+        if (!pid || nums[pid]) return;
+        if (typeof exists === 'function' && !exists(pid)) return;   // deleted — no number
+        nums[pid] = ++n;
       });
     });
     _reportPhotoNums = nums;

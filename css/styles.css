@@ -7652,14 +7652,22 @@
      fit per page regardless of the S/M/L control. The grid had caps; this
      layout was simply missed. Tie the cap to the size so the control finally
      means "how many per page": S≈3, M≈2, L≈1-2. */
+  /* Sized so S/M/L means the SAME thing here as in the photo grid, whose
+     PER_PAGE is {small:4, medium:3, large:2}. Usable page height is
+     11in - 0.8in margins = 10.2in; each block is the photo plus ~0.5in of
+     caption and gap, so the caps are 10.2/n - 0.5. Before this the stack
+     layout had no cap at all and printed exactly one photo per page. */
   .p86-report-section-singles.size-small  .p86-report-photo-single img,
-  .p86-report-photo-single.size-small  img { max-height: 2.6in; }
+  .p86-report-photo-single.size-small  img { max-height: 2.0in; }   /* ~4 per page */
   .p86-report-section-singles.size-medium .p86-report-photo-single img,
-  .p86-report-photo-single.size-medium img { max-height: 3.6in; }
+  .p86-report-photo-single.size-medium img { max-height: 2.8in; }   /* ~3 per page */
   .p86-report-section-singles.size-large  .p86-report-photo-single img,
-  .p86-report-photo-single.size-large  img { max-height: 5.2in; }
+  .p86-report-photo-single.size-large  img { max-height: 4.4in; }   /* ~2 per page */
   /* Fallback when no size class is present — never let one photo own a page. */
-  .p86-report-photo-single img { max-height: 3.6in; }
+  .p86-report-photo-single img { max-height: 2.8in; }
+  /* A photo deleted from the project must never print as a placeholder row.
+     The renderers already drop them; this is the belt-and-braces. */
+  .p86-report-photo-missing { display: none !important; }
 
   /* Fields flattened to static text by flattenFieldsForPrint. They keep their
      original classes so the print typography above still applies; these rules
