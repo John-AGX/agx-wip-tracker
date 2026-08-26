@@ -2162,19 +2162,72 @@
       }, 600);
     }
 
+    // Printing used to depend on WHERE the report lived in the DOM: the rule
+    // was `body * { visibility: hidden }` + `.p86-report-overlay { visibility:
+    // visible; position: absolute; top/left: 0 }`, which only works while the
+    // overlay is a direct child of <body>. A visibility:hidden ancestor still
+    // has a BOX and still CLIPS, so the moment the report is nested inside a
+    // page (.container is height:100vh; overflow:hidden) a 12-page photo report
+    // would silently print as one viewport slice. Rather than discover that
+    // during the drill-in move, print now renders from a body-level root.
+    //
+    // We print a CLONE, not the live node: photo-map sections mount Google Maps
+    // behind a fingerprint guard, and reparenting a live Maps container blanks
+    // its tiles and loses the user's scroll/focus. The clone leaves the editor
+    // completely untouched.
     function printReport() {
-      // The print view uses CSS @media print; we open a print dialog
-      // after triggering a "report-print" mode class so the chrome
-      // hides and the photo blocks expand to full-bleed.
-      overlay.classList.add('p86-report-printing');
+      var host = overlay.querySelector('.p86-report-host');
+      if (!host) { window.print(); return; }
+
+      function buildPrintRoot() {
+        teardownPrintRoot();
+        // cloneNode copies an input's DEFAULT value, not what the user typed —
+        // so a narrative typed since load would print BLANK. Push live values
+        // into the attributes the clone will inherit.
+        host.querySelectorAll('textarea').forEach(function(ta) { ta.textContent = ta.value; });
+        host.querySelectorAll('input').forEach(function(i) {
+          if (i.type === 'checkbox' || i.type === 'radio') {
+            if (i.checked) i.setAttribute('checked', ''); else i.removeAttribute('checked');
+          } else {
+            i.setAttribute('value', i.value);
+          }
+        });
+        host.querySelectorAll('select').forEach(function(s) {
+          Array.prototype.forEach.call(s.options, function(o) {
+            if (o.selected) o.setAttribute('selected', ''); else o.removeAttribute('selected');
+          });
+        });
+        var root = document.createElement('div');
+        root.id = 'p86PrintRoot';
+        // Keep the .p86-report-overlay class: every style pack scopes its print
+        // rules to .p86-report-host inside it, and all seven break if the host
+        // class is renamed or the wrapper class dropped.
+        root.className = 'p86-report-overlay';
+        root.appendChild(host.cloneNode(true));
+        document.body.appendChild(root);
+        document.body.classList.add('p86-report-printing');
+      }
+      function teardownPrintRoot() {
+        var prior = document.getElementById('p86PrintRoot');
+        if (prior) prior.remove();
+        document.body.classList.remove('p86-report-printing');
+      }
+
+      var done = false;
+      function cleanup() { if (done) return; done = true; teardownPrintRoot(); }
+      window.addEventListener('afterprint', cleanup, { once: true });
+
       save().then(function() {
+        buildPrintRoot();
         setTimeout(function() {
           window.print();
-          setTimeout(function() { overlay.classList.remove('p86-report-printing'); }, 300);
+          // afterprint is unreliable in a few browsers — keep the old fallback.
+          setTimeout(cleanup, 300);
         }, 200);
       }).catch(function() {
-        overlay.classList.remove('p86-report-printing');
-        window.print(); // print anyway with the unsaved state
+        buildPrintRoot();          // print anyway with the unsaved state
+        window.print();
+        setTimeout(cleanup, 300);
       });
     }
 

@@ -7548,11 +7548,22 @@
      looked in the editor. 0.4" gives plenty of bleed for printers
      while keeping the photo cells close to editor-size. */
   @page { size: letter portrait; margin: 0.4in; }
-  body * { visibility: hidden; }
-  .p86-report-overlay,
-  .p86-report-overlay * { visibility: visible; }
-  .p86-report-overlay {
-    position: absolute; left: 0; top: 0; right: 0;
+  /* Print from a body-level clone (#p86PrintRoot, built by printReport) rather
+     than from wherever the editor happens to live.
+     The old approach — `body * { visibility: hidden }` plus a visible
+     .p86-report-overlay pinned at top/left 0 — only worked while that overlay
+     was a direct child of <body>. visibility:hidden ancestors KEEP their boxes
+     and KEEP CLIPPING, so nesting the report inside a page (.container is
+     height:100vh; overflow:hidden) would silently truncate a multi-page report
+     to a single viewport slice. display:none removes those ancestors from
+     layout entirely, which also beats the legacy `.tab-content{display:block
+     !important}` print rule that would otherwise force all 18 tab panes into
+     the printout.
+     The :not() guard is permanent — the live editor also carries
+     .p86-report-overlay, and without it the report would print twice. */
+  body.p86-report-printing > *:not(#p86PrintRoot) { display: none !important; }
+  #p86PrintRoot {
+    position: static;
     background: #fff; color: #000;
     overflow: visible;
   }
