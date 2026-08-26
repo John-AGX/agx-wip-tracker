@@ -1442,12 +1442,13 @@
           '</fieldset>' +
           '<fieldset class="p86-proj-fieldset" style="padding:0;overflow:hidden;">' +
             '<legend style="margin-left:8px;">Map</legend>' +
-            (addr
-              ? '<iframe class="p86-proj-detail-map-frame" src="https://www.google.com/maps?q=' + encodeURIComponent(addr) + '&output=embed&z=16" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>'
-              : '<div class="p86-proj-detail-map-empty">Add an address to drop a pin here.</div>') +
+            // Interactive photo-pin map (mounted by mountDetailMap after the
+            // panel is in the DOM). Replaces the old Google embed iframe,
+            // which showed one static, non-clickable address pin.
+            '<div class="p86-proj-detail-map" id="projDetailMap"></div>' +
           '</fieldset>' +
-          // The map above is a non-clickable embed; add a real "Open in
-          // Google Maps" link (full-width row) so the address opens the app.
+          // Keep a real "Open in Google Maps" link so the address can still be
+          // handed to the phone's maps app for navigation.
           ((addr && window.p86MapLink && window.p86MapLink.linkHTML)
             ? '<div style="grid-column:1/-1;text-align:right;padding:2px 4px 0;">' +
                 window.p86MapLink.linkHTML('Open in Google Maps ↗', addr,
@@ -1608,6 +1609,9 @@
     paintPhotoFeed();
     paintActivityFeed();
     paintProjectWeather();
+    // Interactive pin map in the "Project details" panel. Safe to call on
+    // every paint — it no-ops when the pins haven't changed.
+    mountDetailMap();
 
     // Gate the Description fieldset. The textarea already autosaves
     // on blur via _fieldBlur('description', ...) — the gate just
@@ -5078,6 +5082,7 @@
     window.p86Api.attachments.list('project', _detailState.projectId).then(function(r) {
       _detailState.photos = (r && r.attachments) || [];
       paintPhotoFeed();
+      mountDetailMap();   // photos (and their pins) may have only just arrived
     }).catch(function() {});
   }
 
@@ -5577,32 +5582,144 @@
     try { paintList(); } catch (e) { /* defensive */ }
   }
 
-  function refreshInlineMap() {
-    var p = _detailState.project;
-    if (!p) return;
-    var frame = document.querySelector('.p86-proj-detail-map-frame');
-    var emptyEl = document.querySelector('.p86-proj-detail-map-empty');
-    var addr = (p.address_text || '').trim();
-    if (!frame && !emptyEl) return;
-    if (addr) {
-      if (frame) {
-        frame.src = 'https://www.google.com/maps?q=' + encodeURIComponent(addr) + '&output=embed&z=16';
-      } else if (emptyEl) {
-        // Empty stub was rendered — swap it for a live iframe.
-        var iframe = document.createElement('iframe');
-        iframe.className = 'p86-proj-detail-map-frame';
-        iframe.loading = 'lazy';
-        iframe.setAttribute('referrerpolicy', 'no-referrer-when-downgrade');
-        iframe.src = 'https://www.google.com/maps?q=' + encodeURIComponent(addr) + '&output=embed&z=16';
-        emptyEl.parentNode.replaceChild(iframe, emptyEl);
-      }
-    } else if (frame) {
-      // Address was cleared — swap iframe back to the "add an address" stub.
-      var stub = document.createElement('div');
-      stub.className = 'p86-proj-detail-map-empty';
-      stub.textContent = 'Add an address to drop a pin here.';
-      frame.parentNode.replaceChild(stub, frame);
+  // Pin marker for a photo — mirrors the one projects-map.js draws so photo
+  // pins look the same everywhere in the app.
+  function detailPhotoPinSvg(icon) {
+    var glyph = (window.p86TagIcons && window.p86TagIcons.glyphMarkup)
+      ? window.p86TagIcons.glyphMarkup(icon, 11, 11, 12)
+      : '<text x="11" y="14.5" text-anchor="middle" font-size="10" font-family="Arial,sans-serif" font-weight="bold" fill="' + (icon.fg || '#fff') + '">' + escapeHTML(icon.glyph || '') + '</text>';
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22">' +
+      '<defs><filter id="s" x="-20%" y="-20%" width="140%" height="140%">' +
+        '<feDropShadow dx="0" dy="1" stdDeviation="1" flood-opacity="0.4"/>' +
+      '</filter></defs>' +
+      '<circle cx="11" cy="11" r="9" fill="' + icon.bg + '" stroke="white" stroke-width="2" filter="url(#s)"/>' +
+      glyph +
+    '</svg>';
+  }
+
+  // Interactive photo-pin map for the "Project details" panel. Every geotagged
+  // photo becomes a tag-coloured pin you can click to open it; the project's
+  // own geocoded address gets a standard marker. Replaces the old
+  // google.com/maps embed iframe, which was a single static pin.
+  function mountDetailMap() {
+    var host = document.getElementById('projDetailMap');
+    if (!host) return;
+    var p = _detailState.project || {};
+    var photos = (_detailState.photos || []).filter(function(a) {
+      var la = Number(a.lat), ln = Number(a.lng);
+      return Number.isFinite(la) && Number.isFinite(ln) && !(la === 0 && ln === 0) &&
+             la >= -90 && la <= 90 && ln >= -180 && ln <= 180;
+    });
+    var sLat = Number(p.geocode_lat), sLng = Number(p.geocode_lng);
+    var hasSite = Number.isFinite(sLat) && Number.isFinite(sLng) && !(sLat === 0 && sLng === 0);
+
+    if (!photos.length && !hasSite) {
+      host.removeAttribute('data-map-fp');
+      host.innerHTML = '<div class="p86-proj-detail-map-empty">Add an address, or take geotagged photos, to plot this project.</div>';
+      return;
     }
+    // paintDetail re-runs often; don't tear down a good map for no reason.
+    var fp = (hasSite ? sLat.toFixed(6) + ',' + sLng.toFixed(6) : '-') + '|' +
+      photos.map(function(a) { return a.id + ':' + Number(a.lat).toFixed(6) + ',' + Number(a.lng).toFixed(6); }).join('|');
+    if (host.getAttribute('data-map-fp') === fp && host.firstElementChild) return;
+    host.setAttribute('data-map-fp', fp);
+
+    if (!window.p86Maps || typeof window.p86Maps.ready !== 'function') {
+      host.innerHTML = '<div class="p86-proj-detail-map-empty">Maps module not loaded.</div>';
+      return;
+    }
+    host.innerHTML = '<div class="p86-proj-detail-map-empty">Loading map&hellip;</div>';
+    // Warm the org's per-tag pin colours. Not awaited — a slow config must
+    // never hold up (or blank) the map.
+    if (window.p86TagIcons && window.p86TagIcons.ensureConfig) {
+      try { window.p86TagIcons.ensureConfig(); } catch (e) { /* non-fatal */ }
+    }
+
+    window.p86Maps.ready().then(function(maps) {
+      if (!host.isConnected || host.getAttribute('data-map-fp') !== fp) return null;
+      // One frame so the panel's grid layout commits first. Google reads the
+      // host's size at construction; a 0x0 mount renders blank until resized.
+      return new Promise(function(res) { requestAnimationFrame(function() { res(maps); }); });
+    }).then(function(maps) {
+      if (!maps || !host.isConnected || host.getAttribute('data-map-fp') !== fp) return;
+      host.innerHTML = '';
+      var center = photos.length
+        ? { lat: Number(photos[0].lat), lng: Number(photos[0].lng) }
+        : { lat: sLat, lng: sLng };
+      var map = new maps.Map(host, {
+        center: center,
+        zoom: 17,
+        mapTypeControl: false,
+        streetViewControl: false,
+        fullscreenControl: true,
+        mapTypeId: maps.MapTypeId.HYBRID,   // satellite + roads, same as the site maps
+        gestureHandling: 'cooperative'
+      });
+      var bounds = new maps.LatLngBounds();
+      var pinCount = 0;
+
+      if (hasSite) {
+        new maps.Marker({
+          position: { lat: sLat, lng: sLng },
+          map: map,
+          title: p.name || 'Project site',
+          zIndex: 2
+        });
+        bounds.extend({ lat: sLat, lng: sLng });
+        pinCount++;
+      }
+      photos.forEach(function(a) {
+        var icon = (window.p86TagIcons && window.p86TagIcons.forPhoto)
+          ? window.p86TagIcons.forPhoto(a)
+          : { bg: '#ef4444', fg: '#fff', glyph: '●' };
+        var pos = { lat: Number(a.lat), lng: Number(a.lng) };
+        var marker = new maps.Marker({
+          position: pos,
+          map: map,
+          zIndex: 1,
+          title: a.caption || a.filename || 'Photo',
+          icon: {
+            url: 'data:image/svg+xml;utf8,' + encodeURIComponent(detailPhotoPinSvg(icon)),
+            anchor: new maps.Point(11, 22),
+            scaledSize: new maps.Size(22, 22)
+          }
+        });
+        bounds.extend(pos);
+        pinCount++;
+        // Click a pin -> open that photo in the viewer.
+        marker.addListener('click', function() { openPhotoInLightbox(a); });
+      });
+
+      if (pinCount > 1) map.fitBounds(bounds, 28);
+      else { map.setCenter(center); map.setZoom(17); }
+
+      // The panel lives in a <details> inside a responsive grid, so the box can
+      // be resized (or revealed) after mount. Nudge Google and re-fit when that
+      // happens, otherwise the tiles stay sized to the old box.
+      try {
+        var ro = new ResizeObserver(function() {
+          if (!host.isConnected) { ro.disconnect(); return; }
+          maps.event.trigger(map, 'resize');
+          if (pinCount > 1) map.fitBounds(bounds, 28);
+        });
+        ro.observe(host);
+      } catch (e) { /* ResizeObserver unavailable — initial mount still fine */ }
+    }).catch(function(err) {
+      host.removeAttribute('data-map-fp');   // let a later paint retry
+      host.innerHTML = '<div class="p86-proj-detail-map-empty">Map unavailable: ' +
+        escapeHTML((err && err.message) || 'unknown') + '</div>';
+    });
+  }
+
+  // The map is now the interactive pin map, so "refresh" means re-mount it.
+  // Clearing the fingerprint forces mountDetailMap past its no-op guard —
+  // the address just changed, so the site pin has to move (once the server
+  // re-geocodes, a later paint picks up the new geocode_lat/lng).
+  function refreshInlineMap() {
+    if (!_detailState.project) return;
+    var host = document.getElementById('projDetailMap');
+    if (host) host.removeAttribute('data-map-fp');
+    mountDetailMap();
   }
 
   // ──────────────────────────────────────────────────────────────────
