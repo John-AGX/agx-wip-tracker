@@ -7155,6 +7155,17 @@
   border-bottom: 1px solid #ccc;
   margin-bottom: 40px;
 }
+/* Same org logo the printed cover gets — the preview renders the identical
+   renderPrintCoverHTML output, so it needs its own scoped rule. */
+.p86-report-preview-paper .p86-report-cover-logo {
+  display: block;
+  max-width: 240px;
+  max-height: 84px;
+  width: auto;
+  height: auto;
+  margin: 0 auto 16px;
+  object-fit: contain;
+}
 .p86-report-preview-paper .p86-report-cover-company {
   font-size: 14px;
   font-weight: 700;
@@ -7435,6 +7446,18 @@
     padding: 80px 40px 40px;
     text-align: center;
     color: #000;
+  }
+  /* Org logo above the company name on the printed cover. Capped so a large
+     upload can't push the title off the page, and never inverted — printed
+     paper is always a light ground whatever theme the app is in. */
+  .p86-report-cover-logo {
+    display: block;
+    max-width: 260px;
+    max-height: 90px;
+    width: auto;
+    height: auto;
+    margin: 0 auto 18px;
+    object-fit: contain;
   }
   .p86-report-cover-company {
     font-size: 14px;

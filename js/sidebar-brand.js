@@ -73,9 +73,29 @@
     if (!(window.p86Api && window.p86Api.org && window.p86Api.org.branding)) return;
     window.p86Api.org.branding().then(function (r) {
       _brand = r || null;
+      // PUBLISH it. This module was the only thing fetching org branding and it
+      // kept the result private, so every other surface that wanted the company
+      // name or logo either hardcoded one (the report cover said "AGX Central
+      // Florida" regardless of market) or read window.p86Branding, which was
+      // never actually assigned (js/pay-applications.js:961 — its fallback was
+      // dead). One fetch on boot, shared by everyone.
+      window.p86Branding = _brand;
+      try { document.dispatchEvent(new CustomEvent('p86-branding-loaded', { detail: _brand })); }
+      catch (e) { /* older browsers — consumers can still poll window.p86Branding */ }
       render();
     }).catch(function () { /* leave the brand absent on failure (e.g. not authed yet) */ });
   }
+
+  // Pick the best logo for a light background (printed paper is always light,
+  // whatever theme the app is in). Exposed so report covers and PDFs don't each
+  // reimplement the light/dark/primary fallback chain.
+  window.p86BrandLogoForPrint = function () {
+    var b = (window.p86Branding && window.p86Branding.branding) || {};
+    return b.logo_light_url || b.logo_url || (b.logos && b.logos[0] && b.logos[0].url) || '';
+  };
+  window.p86BrandName = function () {
+    return (window.p86Branding && window.p86Branding.name) || '';
+  };
 
   // Theme toggle only changes which logo image to show — no refetch needed.
   document.addEventListener('p86-theme-change', render);

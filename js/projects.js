@@ -2419,8 +2419,15 @@
         if (key === 'company_name' || key === 'subtitle' || key === 'address') return '';
         return '<div><span class="k">' + escapeHTML(meta.label) + '</span><span class="v">' + escapeHTML(String(v)) + '</span></div>';
       }).filter(Boolean).join('');
+      // Company identity comes from the ORG record, not a hardcoded string.
+      // It used to read "AGX Central Florida" for every report regardless of
+      // which market the job was in. An explicit cover_name still wins, so a
+      // report can be issued under a different entity when needed.
+      var brandName = state.cover.company_name || (window.p86BrandName && window.p86BrandName()) || '';
+      var brandLogo = (window.p86BrandLogoForPrint && window.p86BrandLogoForPrint()) || '';
       return '<div class="p86-report-cover-rendered print-only">' +
-        '<div class="p86-report-cover-company">' + escapeHTML(state.cover.company_name || 'AGX Central Florida') + '</div>' +
+        (brandLogo ? '<img class="p86-report-cover-logo" src="' + escapeAttr(brandLogo) + '" alt="" />' : '') +
+        (brandName ? '<div class="p86-report-cover-company">' + escapeHTML(brandName) + '</div>' : '') +
         (state.cover.subtitle ? '<div class="p86-report-cover-subtitle">' + escapeHTML(state.cover.subtitle) + '</div>' : '') +
         '<h1 class="p86-report-cover-title">' + escapeHTML(state.report.title || tpl.label || 'Project Report') + '</h1>' +
         (state.cover.address ? '<div class="p86-report-cover-addr">' + escapeHTML(state.cover.address) + '</div>' : '') +
