@@ -1228,6 +1228,16 @@
     if (!_detailState.projectId) return;
     _detailState.projectId = null;
     _detailState.project = null;
+    // Closing only hides the overlay (the nodes stay in the DOM and stay
+    // "connected"), so the detail map has to be released explicitly or it
+    // keeps a live Google Map + ResizeObserver for a project nobody is
+    // looking at.
+    var mapHost = document.getElementById('projDetailMap');
+    if (mapHost) {
+      detachDetailMap(mapHost);
+      mapHost.removeAttribute('data-map-fp');   // force a fresh mount next open
+      mapHost.innerHTML = '';
+    }
     var overlay = document.getElementById('projDetailOverlay');
     if (overlay) overlay.style.display = 'none';
     document.body.style.overflow = '';
@@ -5724,6 +5734,24 @@
     '</svg>';
   }
 
+  // Bumped by every mount so an in-flight async mount can tell it has been
+  // superseded (see mountDetailMap).
+  var _detailMapGen = 0;
+
+  // Release the Map + ResizeObserver a previous mount left on this host.
+  // MUST be called before mounting again and when the detail closes: the host
+  // node is reused across remounts, so nothing else ever frees them.
+  function detachDetailMap(host) {
+    if (!host) return;
+    if (host._p86DetailObs) {
+      try { host._p86DetailObs.disconnect(); } catch (e) { /* already gone */ }
+      host._p86DetailObs = null;
+    }
+    // Dropping the reference lets the Map, its markers and its tile DOM be
+    // collected once innerHTML is cleared.
+    host._p86DetailMap = null;
+  }
+
   // Interactive photo-pin map for the "Project details" panel. Every geotagged
   // photo becomes a tag-coloured pin you can click to open it; the project's
   // own geocoded address gets a standard marker. Replaces the old
@@ -5741,6 +5769,7 @@
     var hasSite = Number.isFinite(sLat) && Number.isFinite(sLng) && !(sLat === 0 && sLng === 0);
 
     if (!photos.length && !hasSite) {
+      detachDetailMap(host);   // nothing to plot — release any prior map
       host.removeAttribute('data-map-fp');
       host.innerHTML = '<div class="p86-proj-detail-map-empty">Add an address, or take geotagged photos, to plot this project.</div>';
       return;
@@ -5748,8 +5777,21 @@
     // paintDetail re-runs often; don't tear down a good map for no reason.
     var fp = (hasSite ? sLat.toFixed(6) + ',' + sLng.toFixed(6) : '-') + '|' +
       photos.map(function(a) { return a.id + ':' + Number(a.lat).toFixed(6) + ',' + Number(a.lng).toFixed(6); }).join('|');
-    if (host.getAttribute('data-map-fp') === fp && host.firstElementChild) return;
+    if (host.getAttribute('data-map-fp') === fp && host._p86DetailMap) return;
     host.setAttribute('data-map-fp', fp);
+
+    // Identity guard for the async mount. The fingerprint alone is NOT enough:
+    // refreshInlineMap() clears it and remounts with an IDENTICAL fingerprint
+    // (it isn't derived from address_text), so an in-flight mount would still
+    // match and both chains would build a Map into the same host. A generation
+    // counter is unambiguous — only the newest mount may finish.
+    var gen = ++_detailMapGen;
+    // Drop the previous mount's observer. The host node SURVIVES the hot
+    // remount paths (refreshDetailPhotos / refreshInlineMap), so the
+    // observer's own !isConnected self-check never fires and every remount
+    // would otherwise leave a live observer — and a live Map — behind.
+    // Same pattern the report photo-map uses.
+    detachDetailMap(host);
 
     if (!window.p86Maps || typeof window.p86Maps.ready !== 'function') {
       host.innerHTML = '<div class="p86-proj-detail-map-empty">Maps module not loaded.</div>';
@@ -5763,12 +5805,12 @@
     }
 
     window.p86Maps.ready().then(function(maps) {
-      if (!host.isConnected || host.getAttribute('data-map-fp') !== fp) return null;
+      if (!host.isConnected || gen !== _detailMapGen) return null;
       // One frame so the panel's grid layout commits first. Google reads the
       // host's size at construction; a 0x0 mount renders blank until resized.
       return new Promise(function(res) { requestAnimationFrame(function() { res(maps); }); });
     }).then(function(maps) {
-      if (!maps || !host.isConnected || host.getAttribute('data-map-fp') !== fp) return;
+      if (!maps || !host.isConnected || gen !== _detailMapGen) return;
       host.innerHTML = '';
       var center = photos.length
         ? { lat: Number(photos[0].lat), lng: Number(photos[0].lng) }
@@ -5826,15 +5868,20 @@
       // The panel lives in a <details> inside a responsive grid, so the box can
       // be resized (or revealed) after mount. Nudge Google and re-fit when that
       // happens, otherwise the tiles stay sized to the old box.
+      host._p86DetailMap = map;
       try {
         var ro = new ResizeObserver(function() {
-          if (!host.isConnected) { ro.disconnect(); return; }
+          // Stop if this host went away OR a newer mount replaced us — a stale
+          // observer must never resize/re-fit a map that is no longer shown.
+          if (!host.isConnected || host._p86DetailMap !== map) { ro.disconnect(); return; }
           maps.event.trigger(map, 'resize');
           if (pinCount > 1) map.fitBounds(bounds, 28);
         });
         ro.observe(host);
+        host._p86DetailObs = ro;
       } catch (e) { /* ResizeObserver unavailable — initial mount still fine */ }
     }).catch(function(err) {
+      if (gen !== _detailMapGen) return;     // superseded; leave the newer mount alone
       host.removeAttribute('data-map-fp');   // let a later paint retry
       host.innerHTML = '<div class="p86-proj-detail-map-empty">Map unavailable: ' +
         escapeHTML((err && err.message) || 'unknown') + '</div>';
