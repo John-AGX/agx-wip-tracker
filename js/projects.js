@@ -2999,7 +2999,10 @@
             mapTypeControl: false,
             streetViewControl: false,
             fullscreenControl: true,
-            mapTypeId: maps.MapTypeId.HYBRID,  // satellite + roads — best for site walkthrough context
+            // SATELLITE, not HYBRID: hybrid overlays street names and Google's
+            // POI pins ("First Watch", "7-Eleven"…), which just compete with
+            // the photo pins on a site map. Clean imagery reads better.
+            mapTypeId: maps.MapTypeId.SATELLITE,
             gestureHandling: 'cooperative'
           });
           var bounds = new maps.LatLngBounds();
@@ -3832,7 +3835,9 @@
         return 'markers=' + parts.join('%7C') + '%7C' + Number(p.lat) + ',' + Number(p.lng);
       });
       return 'https://maps.googleapis.com/maps/api/staticmap'
-        + '?size=640x360&maptype=hybrid&scale=2'
+        // satellite (not hybrid) so the printed map matches the interactive
+        // one — imagery only, no street names or POI labels.
+        + '?size=640x360&maptype=satellite&scale=2'
         + '&' + markerStrs.join('&')
         + '&key=' + encodeURIComponent(key);
     }
@@ -5844,7 +5849,7 @@
         mapTypeControl: false,
         streetViewControl: false,
         fullscreenControl: true,
-        mapTypeId: maps.MapTypeId.HYBRID,   // satellite + roads, same as the site maps
+        mapTypeId: maps.MapTypeId.SATELLITE,  // imagery only — see the report map
         gestureHandling: 'cooperative'
       });
       var bounds = new maps.LatLngBounds();
