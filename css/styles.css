@@ -5678,6 +5678,11 @@
   -webkit-appearance: none;
   width: 20px; height: 20px;
   margin: 0;
+  /* MUST be zero. A global input rule gives this 10px padding, and with
+     box-sizing:border-box the padding+border floor (10+10+1+1 = 22px) wins
+     over any smaller width — which is why the box measured 22px however
+     small the width was set. The previous 22px only matched by coincidence. */
+  padding: 0;
   box-sizing: border-box;
   border-radius: 5px;
   background: rgba(255,255,255,0.92);
@@ -6803,6 +6808,38 @@
    land on the same pixels they would in the viewer / markup tool.
    pointer-events:none so clicks pass through to the image (which
    opens the viewer). */
+/* Continuous photo number, pinned to the LEFT edge of a report photo.
+   Doubles as the "show me this on the map" control. */
+.p86-report-photo-num {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 3;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 5px;
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  border-radius: 11px;
+  background: var(--accent, #4f8cff);
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 700;
+  font-family: inherit;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+  font-variant-numeric: tabular-nums;
+}
+.p86-report-photo-num:hover { filter: brightness(1.15); }
+/* In the printed/preview paper the badge is a label, not a control. */
+.p86-report-preview-photo-img-wrap { position: relative; }
+@media print {
+  .p86-report-photo-num { box-shadow: none; }
+}
+
 /* Shown in place of a static photo-location map that failed to load
    (Maps Static API not enabled on the key). Readable note, not a broken img. */
 .p86-report-map-unavailable {

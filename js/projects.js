@@ -2215,7 +2215,7 @@
             var la = Number(p.lat), ln = Number(p.lng);
             return Number.isFinite(la) && Number.isFinite(ln) && !(la === 0 && ln === 0);
           });
-          var pmStyle = section.pin_style || 'tag';
+          var pmStyle = section.pin_style || DEFAULT_PIN_STYLE;
           var pmUrl = (typeof buildStaticMapsUrl === 'function') ? buildStaticMapsUrl(pmCoords, pmStyle) : '';
           if (pmUrl) {
             var legend = '';
@@ -2264,6 +2264,7 @@
               var imgSrc = att.web_url || att.thumb_url;
               return '<div class="p86-report-preview-photo' + sideClass + '">' +
                 '<div class="p86-report-preview-photo-img-wrap">' +
+                  reportPhotoNumHTML(pid) +
                   '<img src="' + escapeAttr(imgSrc) + '" alt="" />' +
                   // Inline annotation canvas (drawn after DOM mounts)
                   (Array.isArray(att.annotations) && att.annotations.length
@@ -2298,7 +2299,7 @@
         '<div class="p86-report-preview-paper" data-style-pack="' + escapeAttr(state.stylePack || 'clean') + '">' +
           (state.cover.enabled ? renderPrintCoverHTML() : '') +
           (state.report.summary ? '<div class="p86-report-preview-summary">' + escapeHTML(state.report.summary) + '</div>' : '') +
-          state.sections.map(previewSectionHTML).join('') +
+          (buildReportPhotoNumbers(state.sections), state.sections.map(previewSectionHTML).join('')) +
         '</div>';
 
       document.body.appendChild(preview);
@@ -2414,6 +2415,9 @@
 
     function paint() {
       var host = overlay.querySelector('.p86-report-host');
+      // Number every photo before any section renders — the sequence runs
+      // across the whole report, so it can't be computed per section.
+      buildReportPhotoNumbers(state.sections);
       var emptyStateHTML = state.sections.length ? '' :
         '<div class="p86-report-empty">' +
           '<div class="p86-report-empty-title">Add your first section</div>' +
@@ -2741,7 +2745,7 @@
         if (styleSel) styleSel.addEventListener('change', function() {
           var v = styleSel.value;
           var ALLOWED = ['tag', 'numbered', 'lettered', 'photo', 'dot'];
-          state.sections[sIdx].pin_style = ALLOWED.indexOf(v) >= 0 ? v : 'tag';
+          state.sections[sIdx].pin_style = ALLOWED.indexOf(v) >= 0 ? v : DEFAULT_PIN_STYLE;
           paint();
           debouncedSave();
         });
@@ -2808,6 +2812,17 @@
         // Static photo-location maps: show a readable note instead of a
         // broken-image icon when the Maps Static API isn't enabled.
         sectionEl.querySelectorAll('.p86-report-section-map-print').forEach(wireStaticMapFallback);
+
+        // Photo number badge -> scroll to the map section and open that pin.
+        sectionEl.querySelectorAll('[data-jump-pin]').forEach(function(btn) {
+          btn.addEventListener('click', function(ev) {
+            ev.preventDefault();
+            ev.stopPropagation();   // don't also open the photo viewer
+            if (!jumpToReportPin(btn.getAttribute('data-jump-pin'))) {
+              alert('That photo isn\'t pinned on a map in this report yet. Add a Map section and use "Auto-pin all".');
+            }
+          });
+        });
 
         // Click the photo image → open the full photo viewer panel.
         // Sends ONLY this section's photo set so prev/next paginates
@@ -2991,7 +3006,7 @@
           var sectionWrap = mapEl.closest('.p86-report-section');
           var sectionId = sectionWrap ? sectionWrap.getAttribute('data-sec') : null;
           var sectionRow = sectionId ? state.sections.find(function(s) { return s.id === sectionId; }) : null;
-          var pinStyle = (sectionRow && sectionRow.pin_style) || 'tag';
+          var pinStyle = (sectionRow && sectionRow.pin_style) || DEFAULT_PIN_STYLE;
           pickedPhotos.forEach(function(photo, pinIdx) {
             var pos = { lat: Number(photo.lat), lng: Number(photo.lng) };
             var markerSpec = buildPinMarker(maps, photo, pinIdx, pinStyle);
@@ -3002,6 +3017,10 @@
               title: photo.caption || photo.filename || 'Photo',
               label: markerSpec.label || undefined
             });
+            // Photo-thumb style: swap in the real thumbnail once fetched.
+            if (pinStyle === 'photo') applyThumbPin(maps, marker, photo);
+            // Register so a photo card's number chip can open this pin.
+            _reportPinRegistry[photo.id] = { map: map, marker: marker, el: mapEl };
             bounds.extend(pos);
             marker.addListener('click', function() {
               var thumb = photo.thumb_url || photo.web_url || '';
@@ -3455,7 +3474,7 @@
       var mapBtns = '';
       if (layout === 'photo-map') {
         var pickCount = Array.isArray(section.photo_ids) ? section.photo_ids.length : 0;
-        var pinStyle = section.pin_style || 'tag';
+        var pinStyle = section.pin_style || DEFAULT_PIN_STYLE;
         var pinStyleSelect =
           '<select class="p86-report-section-pinstyle" title="Pin style — how each photo appears on the map">' +
             '<option value="tag"' + (pinStyle === 'tag' ? ' selected' : '') + '>Tag colors</option>' +
@@ -3635,6 +3654,7 @@
               var cardHTML = '<div class="p86-report-photo' + sideClasses +
                   '" draggable="true" data-photo-id="' + escapeAttr(pid) + '" data-photo-idx="' + idx + '">' +
                 '<div class="p86-report-photo-mainstack">' +
+                  reportPhotoNumHTML(pid) +
                   photoDragHandleHTML() +
                   // WEB variant (not the square thumb): the annotation overlay
                   // canvas is sized to the full web-variant aspect, so pairing
@@ -3685,6 +3705,7 @@
               var cardHTML = '<div class="p86-report-photo-single size-' + escapeAttr(size) + sideClasses +
                   '" draggable="true" data-photo-id="' + escapeAttr(pid) + '" data-photo-idx="' + idx + '">' +
                 '<div class="p86-report-photo-mainstack">' +
+                  reportPhotoNumHTML(pid) +
                   photoDragHandleHTML() +
                   '<img src="' + escapeAttr(att.web_url || att.thumb_url) + '" alt="" data-open-photo="' + escapeAttr(pid) + '" />' +
                   photoAnnotationCanvasHTML(att, pid) +
@@ -3838,33 +3859,10 @@
         var icon = window.p86TagIcons ? window.p86TagIcons.forPhoto(photo) : null;
         bg = (icon && icon.bg) || '#6b7280'; fg = '#fff'; glyph = '';
       } else if (pinStyle === 'photo') {
-        // Photo-thumb pins: a circular clipped img. We can't put an
-        // <img> inside an SVG data URL reliably across all map
-        // renderers, so we use an SVG <image href="…"> referencing
-        // the photo's thumb_url. Browsers + Google Maps handle it.
-        var thumb = photo.thumb_url || photo.web_url || '';
-        if (thumb) {
-          var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36">' +
-            '<defs>' +
-              '<clipPath id="pclip"><circle cx="18" cy="18" r="15"/></clipPath>' +
-              '<filter id="psh" x="-20%" y="-20%" width="140%" height="140%">' +
-                '<feDropShadow dx="0" dy="1" stdDeviation="1.5" flood-opacity="0.5"/>' +
-              '</filter>' +
-            '</defs>' +
-            '<circle cx="18" cy="18" r="17" fill="white" filter="url(#psh)"/>' +
-            '<image href="' + thumb + '" x="3" y="3" width="30" height="30" clip-path="url(#pclip)" preserveAspectRatio="xMidYMid slice"/>' +
-            '<circle cx="18" cy="18" r="15" fill="none" stroke="white" stroke-width="2"/>' +
-          '</svg>';
-          return {
-            icon: {
-              url: 'data:image/svg+xml;utf8,' + encodeURIComponent(svg),
-              anchor: new maps.Point(18, 36),
-              scaledSize: new maps.Size(36, 36)
-            },
-            label: null
-          };
-        }
-        // Fallback to tag style when the photo has no thumbnail.
+        // Render the TAG pin synchronously; applyThumbPin swaps in the real
+        // circular thumbnail as soon as its pixels are fetched + drawn (see
+        // pinThumbDataUrl above for why the image must be inlined). If that
+        // fetch fails the tag pin simply stays — never a blank circle.
         pinStyle = 'tag';
       }
       if (pinStyle === 'tag' || !bg) {
@@ -3956,7 +3954,7 @@
       // soft limit). On the very first paint of a saved report the
       // URL is empty (key not yet cached); the photo-map mount loop
       // re-injects it post-mount.
-      var pinStyleBody = section.pin_style || 'tag';
+      var pinStyleBody = section.pin_style || DEFAULT_PIN_STYLE;
       var staticUrl = buildStaticMapsUrl(withCoords, pinStyleBody);
       var staticImg = staticUrl
         ? '<img class="p86-report-section-map-print" alt="Photo locations" src="' + escapeAttr(staticUrl) + '" />'
@@ -5582,6 +5580,135 @@
     try { paintList(); } catch (e) { /* defensive */ }
   }
 
+  // Photo thumbnails are the most useful pin at a glance — you can tell which
+  // photo a pin is without opening it — so they're the default for new map
+  // sections. The other styles stay available in the pin-style dropdown.
+  var DEFAULT_PIN_STYLE = 'photo';
+
+  // Continuous photo numbering across the WHOLE report (not per section):
+  // walk the sections in order and number each photo the first time it
+  // appears, so "Photo 12" means one thing anywhere in the document and can be
+  // cross-referenced to its pin on the map.
+  var _reportPhotoNums = {};
+  function buildReportPhotoNumbers(sections) {
+    var nums = {}, n = 0;
+    (sections || []).forEach(function(sec) {
+      (sec && sec.photo_ids ? sec.photo_ids : []).forEach(function(pid) {
+        if (pid && !nums[pid]) nums[pid] = ++n;
+      });
+    });
+    _reportPhotoNums = nums;
+    return nums;
+  }
+  // Number badge shown on the left edge of a report photo. Clicking it jumps
+  // to that photo's pin on the report map (wired by delegation in paint()).
+  function reportPhotoNumHTML(pid) {
+    var n = _reportPhotoNums[pid];
+    if (!n) return '';
+    return '<button type="button" class="p86-report-photo-num" data-jump-pin="' + escapeAttr(pid) + '" ' +
+      'title="Show this photo on the map">' + n + '</button>';
+  }
+
+  // Live report photo-map pins, keyed by attachment id:
+  //   { map, marker, el }
+  // Populated as each report map mounts so a photo card's number chip can
+  // scroll to the map and open that photo's pin.
+  var _reportPinRegistry = {};
+
+  // Scroll the report map into view and open the pin for one photo.
+  // Returns false when that photo isn't on a mounted map (not pinned, or the
+  // map section isn't rendered) so callers can fall back.
+  function jumpToReportPin(photoId) {
+    var entry = _reportPinRegistry[photoId];
+    if (!entry || !entry.marker || !entry.el || !entry.el.isConnected) return false;
+    try {
+      entry.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      entry.map.panTo(entry.marker.getPosition());
+      // Reuse the marker's own click handler so the InfoWindow contents stay
+      // in one place (thumbnail + caption + Open).
+      google.maps.event.trigger(entry.marker, 'click');
+    } catch (e) { return false; }
+    return true;
+  }
+
+  // ── Photo-thumb pins ────────────────────────────────────────────
+  // These never worked: buildPinMarker emitted an SVG containing
+  // <image href="https://…thumb.jpg"> and handed that SVG to Google as a
+  // data: URL — but an SVG used AS AN IMAGE cannot load external references,
+  // so the photo never painted and the pin was an empty white circle.
+  //
+  // Fix: inline the pixels. Pull the thumb through our OWN raw endpoint
+  // (?variant=thumb) — the public R2 urls are cross-origin and CORS-blocked,
+  // so they can neither be fetch()ed nor drawn to a canvas without tainting
+  // it — then paint the circular pin on a 36px canvas and export a small PNG
+  // data URL. Cached per attachment id; in-flight requests are shared so a
+  // repaint doesn't refetch.
+  var _pinThumbCache = {};
+  var _pinThumbPending = {};
+  function pinThumbDataUrl(photo) {
+    var id = photo && photo.id;
+    if (!id) return Promise.resolve(null);
+    if (_pinThumbCache[id]) return Promise.resolve(_pinThumbCache[id]);
+    if (_pinThumbPending[id]) return _pinThumbPending[id];
+    var headers = {};
+    var token = null;
+    try {
+      token = (window.p86Auth && window.p86Auth.getToken && window.p86Auth.getToken()) ||
+              localStorage.getItem('p86-auth-token');
+    } catch (e) { /* storage blocked — cookie auth still applies */ }
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    var pr = fetch('/api/attachments/raw/' + encodeURIComponent(id) + '?variant=thumb',
+                   { headers: headers, credentials: 'same-origin' })
+      .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
+      .then(function(blob) {
+        return new Promise(function(resolve, reject) {
+          var objUrl = URL.createObjectURL(blob);
+          var img = new Image();
+          img.onload = function() {
+            try {
+              var S = 36, c = document.createElement('canvas');
+              c.width = S; c.height = S;
+              var ctx = c.getContext('2d');
+              ctx.beginPath(); ctx.arc(18, 18, 17, 0, Math.PI * 2);
+              ctx.fillStyle = '#fff'; ctx.fill();
+              ctx.save();
+              ctx.beginPath(); ctx.arc(18, 18, 15, 0, Math.PI * 2); ctx.clip();
+              // cover-fit the thumb inside the 30px circle
+              var iw = img.naturalWidth || 1, ih = img.naturalHeight || 1;
+              var s = Math.max(30 / iw, 30 / ih);
+              ctx.drawImage(img, 18 - (iw * s) / 2, 18 - (ih * s) / 2, iw * s, ih * s);
+              ctx.restore();
+              resolve(c.toDataURL('image/png'));
+            } catch (e) { reject(e); }
+            finally { URL.revokeObjectURL(objUrl); }
+          };
+          img.onerror = function() { URL.revokeObjectURL(objUrl); reject(new Error('decode failed')); };
+          img.src = objUrl;
+        });
+      })
+      .then(function(dataUrl) {
+        _pinThumbCache[id] = dataUrl;
+        delete _pinThumbPending[id];
+        return dataUrl;
+      })
+      .catch(function() { delete _pinThumbPending[id]; return null; });
+    _pinThumbPending[id] = pr;
+    return pr;
+  }
+  // Upgrade an already-placed marker to its photo-thumb icon once the
+  // pixels are in hand. Keeps marker creation synchronous (the tag pin shows
+  // immediately) and simply swaps the icon when ready.
+  function applyThumbPin(maps, marker, photo) {
+    pinThumbDataUrl(photo).then(function(url) {
+      if (!url || !marker.getMap()) return;
+      marker.setIcon({
+        url: url,
+        anchor: new maps.Point(18, 36),
+        scaledSize: new maps.Size(36, 36)
+      });
+    });
+  }
+
   // Pin marker for a photo — mirrors the one projects-map.js draws so photo
   // pins look the same everywhere in the app.
   function detailPhotoPinSvg(icon) {
@@ -5686,6 +5813,9 @@
         });
         bounds.extend(pos);
         pinCount++;
+        // Upgrade to the circular photo thumbnail once its pixels land — same
+        // treatment the report map uses, so a pin is recognisable at a glance.
+        applyThumbPin(maps, marker, a);
         // Click a pin -> open that photo in the viewer.
         marker.addListener('click', function() { openPhotoInLightbox(a); });
       });

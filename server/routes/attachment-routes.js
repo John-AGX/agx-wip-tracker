@@ -687,8 +687,15 @@ router.get('/raw/:id', requireAuth, async (req, res) => {
       if (!ok) return res.status(403).json({ error: 'Forbidden' });
     }
 
+    // 'thumb' added for map pins: the client needs the 200px square through a
+    // SAME-ORIGIN url so it can draw it to a canvas (the public R2 urls are
+    // cross-origin and CORS-blocked, which both fails fetch() and taints a
+    // canvas). Falls back up the chain when a derivative is missing.
     const variant = (req.query.variant || 'web').toLowerCase();
-    const key = (variant === 'original' || !att.web_key) ? att.original_key : att.web_key;
+    let key;
+    if (variant === 'original') key = att.original_key;
+    else if (variant === 'thumb') key = att.thumb_key || att.web_key || att.original_key;
+    else key = att.web_key || att.original_key;
     if (!key) return res.status(404).json({ error: 'No bytes for this variant' });
 
     const buf = await storage.getBuffer(key);
