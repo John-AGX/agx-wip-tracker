@@ -130,27 +130,65 @@ async function recomputeInvoicePaid(invoiceId, orgId) {
   );
 }
 
-// Every invoice_id on a payment's applications[] must be one the caller can
-// actually see. The ids come straight off the request body and nothing
-// compared them to the caller's org, so a payment recorded in org A could name
-// an invoice in org B and move its money. Returns the ids that are NOT the
-// caller's, so the refusal can NAME them rather than silently dropping the
-// application and answering 200 — a dropped application is indistinguishable
-// from a successful one on the client, and leaves cash unapplied on a live
-// pilot's AR.
+// Every invoice_id a request SUPPLIES on a payment's applications[] must be
+// one the caller can actually see. The ids come straight off the request body
+// and nothing compared them to the caller's org, so a payment recorded in
+// org A could name an invoice in org B and move its money. The refusal NAMES
+// the ids rather than silently dropping the application and answering 200 —
+// a dropped application is indistinguishable from a successful one on the
+// client, and leaves cash unapplied on a live pilot's AR.
 //
-// Tolerance arm included: a legacy un-stamped invoice is still applicable.
-async function foreignInvoiceIds(ids, orgId) {
+// "NOT YOURS" AND "NOT THERE" ARE DIFFERENT FACTS AND ARE HELD APART HERE.
+// The first version of this guard returned one flat list of "ids that are not
+// the caller's", which folded a row owned by another tenant together with a
+// row that does not exist anywhere. That conflation shipped a regression:
+// PUT /payments/:id falls back to the payment's STORED applications[] when the
+// body omits them, so a payment whose history named a DELETED invoice could no
+// longer have its DATE or its NOTE edited — refused 404 over an id the caller
+// had not sent and was not touching. Measured against the two builds:
+// pre-fix 200/applied, post-fix 404/refused, same request.
+//
+// The two facts carry different policy:
+//   FOREIGN — a row exists and belongs to someone else. Never applicable, on
+//             any path, at any time. Refused.
+//   ABSENT  — no row exists in any tenant. There is no money to move and no
+//             victim. Refused when the CALLER supplied the id in this request
+//             (they are asserting it exists, and a silent inert application is
+//             the "dropped application" failure above); TOLERATED when it was
+//             merely carried forward out of the row's own stored history.
+//
+// The WIRE SENTENCE is deliberately identical for both classes wherever a
+// refusal is issued. The split drives POLICY, not disclosure — telling a
+// caller "that one exists but is not yours" would rebuild the batched
+// existence oracle the estimates bulk save was just stopped from being.
+//
+// Tolerance arm included on the ownership read: a legacy un-stamped invoice
+// (organization_id IS NULL) is still applicable, and must not read as foreign.
+async function classifyInvoiceIds(ids, orgId) {
   const want = Array.from(new Set((ids || []).filter(Boolean).map(String)));
-  if (!want.length) return [];
-  const found = new Set();
+  const foreign = [], absent = [];
   for (const id of want) {
-    const r = await pool.query(
+    const mine = await pool.query(
       `SELECT id FROM invoices WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)`,
       [id, orgId == null ? null : orgId]);
-    if (r.rowCount) found.add(String(r.rows[0].id));
+    if (mine.rowCount) continue;
+    // Not visible to this caller. Now establish WHY, because the two answers
+    // are not interchangeable. This second read is the only place in the file
+    // that looks at invoices without a tenant predicate; it returns no column
+    // and no content, only the fact of existence, and that fact never reaches
+    // the caller.
+    const anywhere = await pool.query(`SELECT id FROM invoices WHERE id = $1`, [id]);
+    (anywhere.rowCount ? foreign : absent).push(id);
   }
-  return want.filter((id) => !found.has(id));
+  return { foreign, absent };
+}
+
+// One sentence for every refusal on this path, whatever the cause.
+function refuseInvoiceIds(res, ids, tail) {
+  return res.status(404).json({
+    error: 'No such invoice on this account: ' + ids.join(', ') + '. ' + tail,
+    invoice_ids: ids
+  });
 }
 
 // Org guard for a job (for per-job routes).
@@ -391,13 +429,20 @@ router.post('/payments', requireAuth, requireCapability('ESTIMATES_EDIT'), requi
     // application that points outside the tenant. Answering 200 and quietly
     // not applying it would leave the cash looking applied on one screen and
     // the invoice open on another.
-    const foreign = await foreignInvoiceIds(apps.map((a) => a.invoice_id), org);
-    if (foreign.length) {
-      return res.status(404).json({
-        error: 'No such invoice on this account: ' + foreign.join(', ') +
-               '. Nothing was recorded.',
-        invoice_ids: foreign
-      });
+    //
+    // DECIDED, not inherited: an ABSENT id is refused here too. Every id on
+    // this request was supplied by the caller a moment ago, so it is an
+    // assertion they can see and correct, and recording an inert application
+    // against a ghost is the same "cash looks applied, invoice stays open"
+    // failure the paragraph above refuses. Before the tenant fix this path
+    // accepted an absent id and recorded the payment with a dead application;
+    // that behaviour is NOT restored, and it is a behaviour change no release
+    // sentence describes. The tolerance for absent ids lives on PUT, where the
+    // id can arrive from the row's own history rather than from the caller.
+    const cls = await classifyInvoiceIds(apps.map((a) => a.invoice_id), org);
+    const refused = cls.foreign.concat(cls.absent);
+    if (refused.length) {
+      return refuseInvoiceIds(res, refused, 'Nothing was recorded.');
     }
     const id = genId('pay');
     const { rows } = await pool.query(
@@ -419,24 +464,59 @@ router.put('/payments/:id', requireAuth, requireCapability('ESTIMATES_EDIT'), as
       [req.params.id, org]);
     if (!cur.rowCount) return res.status(404).json({ error: 'Not found' });
     const prevApps = (cur.rows[0].data && Array.isArray(cur.rows[0].data.applications)) ? cur.rows[0].data.applications : [];
-    const apps = Array.isArray(b.applications) ? b.applications
-      .filter(a => a && a.invoice_id).map(a => ({ invoice_id: a.invoice_id, amount: round2(a.amount) })) : prevApps;
+    // SUPPLIED vs CARRIED FORWARD. `null` here means the body said nothing
+    // about applications at all, which is a different request from one that
+    // sent `applications: []` (that one CLEARS them, and is validated).
+    const suppliedApps = Array.isArray(b.applications) ? b.applications
+      .filter(a => a && a.invoice_id).map(a => ({ invoice_id: a.invoice_id, amount: round2(a.amount) })) : null;
+    const apps = suppliedApps || prevApps;
     const data = { applications: apps, notes: b.notes != null ? b.notes : ((cur.rows[0].data || {}).notes || '') };
     // Same refusal as POST /payments — re-applying an existing payment is the
-    // other door onto the same applications[] array.
-    const foreign = await foreignInvoiceIds(apps.map((a) => a.invoice_id), org);
-    if (foreign.length) {
-      return res.status(404).json({
-        error: 'No such invoice on this account: ' + foreign.join(', ') +
-               '. Nothing was changed.',
-        invoice_ids: foreign
-      });
+    // other door onto the same applications[] array — but ONLY over the ids
+    // this request actually supplied.
+    //
+    // VALIDATE WHAT THE CALLER ASSERTS, NOT WHAT THE ROW REMEMBERS. When the
+    // body omits applications, the array is carried forward verbatim: no new
+    // pointer is created, so there is nothing new to authorize. Validating the
+    // carried-forward set instead is what made editing a note on a payment
+    // whose history names a deleted invoice impossible — a legitimate user
+    // refused over an id they never sent and cannot remove, because removing it
+    // would itself require a PUT that supplies applications and is refused for
+    // the same reason. That deadlock is the regression this replaces.
+    //
+    // Safe to carry a stale or even a foreign id forward, and this is load-
+    // bearing rather than lucky: the only thing done with these ids afterwards
+    // is recomputeInvoicePaid(), whose SELECT and UPDATE both carry
+    // `(organization_id = $n OR organization_id IS NULL)`. An id belonging to
+    // another tenant matches no row there and moves no money. The row is left
+    // exactly as its owner wrote it rather than silently scrubbed — rewriting
+    // someone's money record to make a guard pass is a worse answer than
+    // leaving it visible.
+    if (suppliedApps) {
+      const cls = await classifyInvoiceIds(suppliedApps.map((a) => a.invoice_id), org);
+      const refused = cls.foreign.concat(cls.absent);
+      if (refused.length) {
+        return refuseInvoiceIds(res, refused, 'Nothing was changed.');
+      }
     }
+    // The tenant predicate rides on the STATEMENT, not only on the SELECT
+    // fifteen lines above it. `payments` is a money table and this was a bare
+    // `WHERE id = $1` — the org-scoped read was the whole guard, which is
+    // exactly the one-JS-line-deep shape that let PUT /estimates/bulk/save
+    // overwrite another tenant's estimate for four months. It refuses today
+    // either way; the point is that it keeps refusing after the next refactor
+    // moves the read.
     const { rows } = await pool.query(
       `UPDATE payments SET client_id = $2, payment_date = $3, amount = $4, method = $5, reference = $6,
-          data = $7::jsonb, updated_at = NOW() WHERE id = $1 RETURNING *`,
+          data = $7::jsonb, updated_at = NOW()
+        WHERE id = $1 AND (organization_id = $8 OR organization_id IS NULL) RETURNING *`,
       [req.params.id, b.client_id != null ? String(b.client_id) : null, b.payment_date || null,
-       round2(b.amount), b.method || null, b.reference || null, JSON.stringify(data)]);
+       round2(b.amount), b.method || null, b.reference || null, JSON.stringify(data),
+       org == null ? null : org]);
+    // The org-scoped read above already proved the row; this is the second
+    // layer and should be unreachable. If it fires the two disagree, which is
+    // a server bug, and the caller must not be told the edit landed.
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
     // recompute every invoice touched by the old OR new application set
     const touched = new Set([...prevApps, ...apps].map(a => a.invoice_id).filter(Boolean));
     for (const invId of touched) await recomputeInvoicePaid(invId, org);
@@ -452,7 +532,11 @@ router.delete('/payments/:id', requireAuth, requireCapability('ESTIMATES_EDIT'),
       [req.params.id, org]);
     if (!cur.rowCount) return res.status(404).json({ error: 'Not found' });
     const apps = (cur.rows[0].data && Array.isArray(cur.rows[0].data.applications)) ? cur.rows[0].data.applications : [];
-    await pool.query(`DELETE FROM payments WHERE id = $1`, [req.params.id]);
+    // Second layer, same reason as the UPDATE above: a DELETE on a money table
+    // must defend itself rather than lean on the read that preceded it.
+    await pool.query(
+      `DELETE FROM payments WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)`,
+      [req.params.id, org == null ? null : org]);
     for (const a of apps) if (a && a.invoice_id) await recomputeInvoicePaid(a.invoice_id, org);
     res.json({ ok: true });
   } catch (e) { console.error('DELETE payment error:', e); res.status(500).json({ error: 'Server error' }); }

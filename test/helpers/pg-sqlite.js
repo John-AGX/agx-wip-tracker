@@ -68,8 +68,33 @@ function translate(sql) {
 
   // Casts. Postgres-only, and meaningless to a dynamically typed engine.
   s = s.replace(/::text\[\]/g, '').replace(/::jsonb/g, '').replace(/::json/g, '')
-       .replace(/::int\b/g, '').replace(/::integer\b/g, '').replace(/::text\b/g, '');
+       .replace(/::int\b/g, '').replace(/::integer\b/g, '').replace(/::text\b/g, '')
+       .replace(/::bigint\b/g, '').replace(/::numeric\b/g, '')
+       .replace(/::float\b/g, '').replace(/::boolean\b/g, '');
   s = s.replace(/\bNOW\(\)/gi, 'CURRENT_TIMESTAMP');
+
+  // `CURRENT_TIMESTAMP - INTERVAL '7 days'` -> `datetime('now','-7 days')`.
+  // Applied AFTER the NOW() rewrite above so both spellings land here. The
+  // rows selected are the same rows; only the dialect differs. Needed because
+  // the AI introspection tools bound their reads by a rolling window, and
+  // those are exactly the reads that were missing a tenant predicate — left
+  // untranslated the statement throws and the tenant assertion never runs.
+  s = s.replace(/CURRENT_TIMESTAMP\s*-\s*INTERVAL\s*'(\d+)\s+([a-z]+)'/gi,
+                (_m, n, unit) => `datetime('now','-${n} ${unit}')`);
+
+  // `COUNT(DISTINCT (a, b))` — Postgres counts distinct ROW VALUES; sqlite has
+  // no row constructor, so the pair is joined with a separator that cannot
+  // occur in either id. Same count, and it stays a real DISTINCT rather than
+  // being dropped: a rule that quietly reduced this to COUNT(*) would make a
+  // "conversations" assertion pass for the wrong reason.
+  s = s.replace(/COUNT\s*\(\s*DISTINCT\s*\(\s*([a-z_][a-z_0-9]*)\s*,\s*([a-z_][a-z_0-9]*)\s*\)\s*\)/gi,
+                (_m, a, b) => 'COUNT(DISTINCT (' + a + " || char(1) || " + b + '))');
+
+  // `STRING_AGG(DISTINCT col, ',')` -> sqlite's GROUP_CONCAT. sqlite rejects
+  // DISTINCT together with a custom separator, and ',' is what the callers
+  // ask for anyway, so the separator argument is the one that goes.
+  s = s.replace(/STRING_AGG\s*\(\s*DISTINCT\s+([a-z_][a-z_0-9.]*)\s*,\s*'[^']*'\s*\)/gi,
+                (_m, col) => `GROUP_CONCAT(DISTINCT ${col})`);
 
   // `FOR UPDATE` is a ROW-LOCK HINT. It cannot appear in, and cannot change,
   // a WHERE clause — which is the only thing this shim exists to keep honest.

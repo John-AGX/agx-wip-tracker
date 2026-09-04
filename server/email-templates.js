@@ -595,13 +595,23 @@ async function getOverride(eventKey, orgId) {
       if (rows.length) return { subject: rows[0].subject, html_body: rows[0].html_body };
       return null;
     }
-    // No org context — return any row (most-recently-updated) so the
-    // legacy single-org behavior keeps working.
-    const { rows } = await pool.query(
-      'SELECT subject, html_body FROM email_template_overrides WHERE event_key = $1 ORDER BY updated_at DESC LIMIT 1',
-      [eventKey]
-    );
-    return rows.length ? { subject: rows[0].subject, html_body: rows[0].html_body } : null;
+    // NO ORG CONTEXT — the baked-in default, not somebody's override.
+    //
+    // This used to be `ORDER BY updated_at DESC LIMIT 1` over the whole table:
+    // "return any row". On a single-tenant install that read your own row and
+    // was harmless, which is why it was written. On a multi-tenant one it
+    // returns WHICHEVER TENANT EDITED THAT TEMPLATE MOST RECENTLY — so a
+    // system-level send with no org context rendered one tenant's subject line
+    // and HTML body, and the admin template PREVIEW showed another tenant's
+    // copy to anyone with no organization of their own. The choice of victim
+    // moved every time somebody saved a template.
+    //
+    // This is a deliberate behaviour change and it is worth naming: an email
+    // sent with no org context now carries the platform default rather than a
+    // customization. That is the honest answer to "whose branding applies when
+    // nobody owns this message", and it is strictly better than the previous
+    // answer, which was "a tenant picked at random".
+    return null;
   } catch (e) {
     console.warn('[email-templates] override lookup failed:', e.message);
     return null;

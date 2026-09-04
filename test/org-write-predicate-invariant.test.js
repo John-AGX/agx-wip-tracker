@@ -23,9 +23,30 @@
 //      conflict target, so a cross-tenant match is impossible by
 //      construction), or carry an organization_id predicate on the DO UPDATE
 //      arm, or be named below with a reason.
-//   2. Every UPDATE / DELETE on `estimates` or `invoices` — the two tables
-//      this wave found holes in — carries an organization_id predicate, or is
-//      named below with a reason.
+//   2. Every UPDATE / DELETE on `estimates`, `invoices` or `payments` —
+//      the money tables this wave found holes in — carries an organization_id
+//      predicate, or is named below with a reason.
+//   3. Every UPDATE / DELETE on the MONEY SPINE (change orders, purchase
+//      orders, vendor bills, pay applications) that does NOT carry a predicate
+//      has the org-scoped read it leans on within reach above it. See the long
+//      note over MONEY_SPINE below for why the bar is different there.
+//
+// WHY `payments` JOINED THE LIST IN 2. It is a money table, and its two
+// statements — `PUT /payments/:id` and `DELETE /payments/:id` — were bare
+// `WHERE id = $1` with an org-scoped SELECT above them as the entire guard.
+// They refused a cross-tenant caller when attacked, and they are one edit away
+// from the exact shape that started this wave: the estimates upsert was also
+// "guarded" by a read, right up until a branch was added that reached the
+// write without going through it. Both statements now carry the predicate, so
+// adding the table here costs nothing and locks in what was just fixed.
+//
+// WHY THE LIST STOPS THERE. `job_change_orders`, `job_purchase_orders`,
+// `job_vendor_bills` and `pay_applications` are money tables too, and 26 of
+// their 26 UPDATE/DELETE statements are unpredicated. Adding them to
+// INVARIANT 2 would mean either 26 rewrites on a live pilot in one commit, or
+// 26 allowlist entries — and an allowlist entry is a claim that someone read
+// the guard, so 26 unread entries would turn this file into decoration.
+// INVARIANT 3 holds them at the bar they can actually meet today.
 //
 // WHAT IT DOES NOT ASSERT. It reads SQL text; it cannot know whether an
 // upstream JS guard is correct, only whether the statement defends itself. A
@@ -85,11 +106,21 @@ const UPSERT_EXEMPT = {
   'server/routes/field-tools-routes.js::field_tool_drafts':
     'Keyed on the caller\'s own user_id; the worst case is overwriting your own draft.',
 
-  // A browser push endpoint IS the row's identity. A shared device whose user
-  // changes MUST re-point the row, so re-assignment is the correct behaviour,
-  // not a defect. Endpoints are high-entropy and the app never exposes them.
+  // A browser push endpoint IS the row's identity, and a shared device whose
+  // user changes MUST re-point the row — that part was always correct. What
+  // the entry used to rest on was "endpoints are high-entropy and the app
+  // never exposes them", which is an argument about how hard the row is to
+  // FIND, not about what happens once someone has it. Executed: a user who
+  // knew another user's endpoint POSTed it with their own keys and took the
+  // row over, 200, victim silently unsubscribed. The DO UPDATE arm now
+  // carries a WHERE requiring either the same user or a matching key pair, so
+  // the re-point costs possession of the device rather than knowledge of a
+  // string, and a refusal answers 409 instead of a 200 that wrote nothing.
+  // Still exempt from the ORG invariant because the table has no
+  // organization_id to predicate on — the risk here is cross-USER, and it is
+  // held behaviourally in test/push-subscription-takeover.test.js.
   'server/routes/push-routes.js::push_subscriptions':
-    'The push endpoint URL is the row identity; re-pointing it at the current user is required for shared devices. Not tenant data.',
+    'No organization_id column exists (not tenant data). The endpoint is the row identity; re-pointing is required for shared devices and is now gated on the caller presenting the subscription keys, so knowing an endpoint is not enough. See push-subscription-takeover.test.js.',
 
   // Platform stores behind SYSTEM_ADMIN. A child cannot carry a tenant its
   // parent does not have (app_settings has none).
@@ -102,6 +133,76 @@ const EST_INV_EXEMPT = {
     'Boot migrations and one-time backfills. They run at init with no caller and no tenant to scope to; org-boundary-audit.js is what watches their results.',
   'server/services/markets.js':
     'Market backfill. market_id is the OPERATING dimension, never the tenant; the statement only fills NULLs and joins estimates to their own job / lead.',
+};
+
+// The tables INVARIANT 2 governs. Each one is a table where a cross-tenant
+// write MOVES MONEY, and each is at zero unpredicated statements today, which
+// is what makes the bar affordable.
+const MONEY_TABLES = ['estimates', 'invoices', 'payments'];
+
+// ── INVARIANT 3's population ───────────────────────────────────────────────
+// The rest of the money spine. These carry contract dollars (change orders,
+// purchase orders, vendor bills, AIA draws) and every one of their
+// UPDATE/DELETE statements today is a bare `WHERE id = $1` sitting under an
+// org-scoped SELECT in the same handler. Attacked, they refuse — the read is a
+// real guard. What they lack is a guard that survives the read being MOVED,
+// and that is not a hypothetical: `PUT /api/estimates/bulk/save` had exactly
+// this arrangement, and the hole opened when a branch was added that reached
+// the upsert without passing the read.
+//
+// Requiring a predicate here means rewriting 26 money statements in one commit
+// on a pilot with real money in it. Requiring the TWO-LAYER PATTERN instead
+// costs nothing today (all 26 already satisfy it, the furthest guard being 84
+// lines up) and fails the moment someone deletes the read — which is the
+// failure this whole wave is about.
+//
+// WHAT THIS CANNOT DO, stated plainly because a check that is trusted for more
+// than it proves is worse than no check. It is PROXIMITY, not dataflow. It
+// cannot tell that the guard reads the same id the write uses, cannot tell
+// that the guard's result is actually branched on, and cannot see a guard that
+// lives in a helper called from an outer function. It is strictly weaker than
+// a predicate on the statement, and weaker again than Postgres row-level
+// security. It is worth having for one reason: the estimates hole would have
+// been caught by it on the day the unguarded branch was added.
+const MONEY_SPINE = [
+  'job_change_orders', 'job_purchase_orders', 'job_vendor_bills', 'pay_applications',
+];
+
+// How far above an unpredicated write the org-scoped read may sit. 120 lines
+// is chosen from the measured worst case (change-order-routes.js:434, 84 lines
+// below its guard) with room for a handler to grow, not from taste. Widening
+// it later weakens the check; that should take an argument.
+const TWO_LAYER_WINDOW = 120;
+
+// AND THE SEARCH STOPS AT THE ENCLOSING HANDLER. This is not a detail, it is
+// what makes the check mean anything: route files stack handlers a few dozen
+// lines apart, so a bare line-distance window finds the PREVIOUS handler's
+// org guard and pronounces the current one safe. Measured, not reasoned —
+// the first version of this invariant used distance alone, the org-scoped
+// read above `DELETE FROM pay_applications WHERE id = $1` was deleted as a
+// refactor would delete it, and all 13 tests still passed. It was reading
+// `req.user.organization_id` out of the /status handler 30 lines further up.
+// A guard belonging to a different request is not a second layer.
+//
+// Anchored at indentation 0-2, because that is where a handler or a top-level
+// function begins and a statement inside one never does. Without the anchor
+// the pattern matches ordinary code — `const nodes = ((graph.rows[0]…` in the
+// CO link-node handler was read as the start of a new function and cut the
+// search off two lines above the write, reporting a guard that is sitting
+// right there at line 757 as missing. Both directions of that mistake are
+// silent, so the anchor is load-bearing in both.
+const HANDLER_START =
+  /^\s{0,2}(?:router\.(?:get|post|put|patch|delete|use)\s*\(|(?:async\s+)?function\s+\w+|(?:const|let|var)\s+\w+\s*=\s*async\s*(?:function\b|\()|module\.exports)/;
+
+// Tokens that count as "an org-scoped guard happened here". `organization_id`
+// covers the inline SELECTs; the named helpers cover the routes that factor
+// the check out (subInOrg, ownedJob, jobInOrg…). `orgId` covers the service
+// layer, which receives an already-resolved tenant rather than a req.
+const TWO_LAYER_GUARD = /organization_id|orgPred|orgScope|InOrg|ownedJob|\borgId\b/;
+
+const TWO_LAYER_EXEMPT = {
+  'server/db.js':
+    'Boot migrations and one-time backfills — no caller, no tenant to scope to. Same reason as EST_INV_EXEMPT above.',
 };
 
 function walk(dir, out) {
@@ -135,8 +236,16 @@ function joined(lits, i) {
 function collect() {
   const upserts = [];
   const estInv = [];
+  const spine = [];
+  const moneyRe = new RegExp(
+    '\\b(?:UPDATE\\s+(' + MONEY_TABLES.join('|') + ')\\b|DELETE\\s+FROM\\s+(' +
+    MONEY_TABLES.join('|') + ')\\b)', 'i');
+  const spineRe = new RegExp(
+    '\\b(?:UPDATE\\s+(' + MONEY_SPINE.join('|') + ')\\b|DELETE\\s+FROM\\s+(' +
+    MONEY_SPINE.join('|') + ')\\b)', 'i');
   for (const f of walk(SERVER, [])) {
     const text = fs.readFileSync(f, 'utf8');
+    const srcLines = text.split(/\r?\n/);
     const r = rel(f);
     const lits = extractSqlLiterals(text);
     lits.forEach((lit, i) => {
@@ -153,21 +262,39 @@ function collect() {
           armPredicated: /\bWHERE\b[\s\S]*organization_id/i.test(arm)
         });
       }
-      const w = /\b(?:UPDATE\s+(estimates|invoices)\b|DELETE\s+FROM\s+(estimates|invoices)\b)/i.exec(lit.sql);
+      // The predicate can live in this literal, in the source concatenated
+      // straight after it ('… WHERE ' + orgPred(x)), or in an interpolation.
+      const predicated =
+        /organization_id/i.test(lit.sql) ||
+        /organization_id|orgPred|orgScope|InOrg/i.test(lit.trailing || '') ||
+        /\$\{[^}]*[Oo]rg[^}]*\}/.test(lit.raw || '');
+
+      const w = moneyRe.exec(lit.sql);
       if (w) {
         const table = (w[1] || w[2]).toLowerCase();
-        // The predicate can live in this literal, in the source concatenated
-        // straight after it ('… WHERE ' + orgPred(x)), or in an interpolation.
-        const predicated =
-          /organization_id/i.test(lit.sql) ||
-          /organization_id|orgPred|orgScope|InOrg/i.test(lit.trailing || '') ||
-          /\$\{[^}]*[Oo]rg[^}]*\}/.test(lit.raw || '');
         estInv.push({ file: r, line: lit.line, table, predicated,
+          sql: lit.sql.replace(/\s+/g, ' ').trim().slice(0, 180) });
+      }
+
+      const s = spineRe.exec(lit.sql);
+      if (s) {
+        const table = (s[1] || s[2]).toLowerCase();
+        // Walk BACK from the statement looking for the org-scoped read it
+        // leans on. `lit.line` is 1-based, so the statement's own line is
+        // index lit.line - 1; start one line above it so the statement's own
+        // parameter list cannot vouch for itself. Stop at the top of the
+        // enclosing handler — see HANDLER_START.
+        let guardAt = null, stoppedAt = null;
+        for (let k = lit.line - 2; k >= 0 && k >= lit.line - 2 - TWO_LAYER_WINDOW; k--) {
+          if (TWO_LAYER_GUARD.test(srcLines[k])) { guardAt = k + 1; break; }
+          if (HANDLER_START.test(srcLines[k])) { stoppedAt = k + 1; break; }
+        }
+        spine.push({ file: r, line: lit.line, table, predicated, guardAt, stoppedAt,
           sql: lit.sql.replace(/\s+/g, ' ').trim().slice(0, 180) });
       }
     });
   }
-  return { upserts, estInv };
+  return { upserts, estInv, spine };
 }
 
 const found = collect();
@@ -190,8 +317,25 @@ describe('the scan itself is honest before anything is asserted with it', () => 
     expect(unresolved).toEqual([]);
   });
 
-  test('it finds the estimates / invoices writes', () => {
+  test('it finds the estimates / invoices / payments writes', () => {
     expect(found.estInv.length).toBeGreaterThanOrEqual(20);
+  });
+
+  test('it finds a write on every money table it claims to govern', () => {
+    // A table whose name stops matching — renamed, or the statement moved to
+    // a builder this tokenizer cannot see — must fail LOUDLY. Silently
+    // governing zero statements is the way this invariant would rot without
+    // ever going red.
+    const seen = new Set(found.estInv.map((e) => e.table));
+    expect(MONEY_TABLES.filter((t) => !seen.has(t))).toEqual([]);
+    const spineSeen = new Set(found.spine.map((e) => e.table));
+    expect(MONEY_SPINE.filter((t) => !spineSeen.has(t))).toEqual([]);
+  });
+
+  test('it finds the money-spine writes INVARIANT 3 is built on', () => {
+    // Measured at 26 unpredicated of 26 across the four spine tables when this
+    // was written. The floor is on the POPULATION, not on the failures.
+    expect(found.spine.length).toBeGreaterThanOrEqual(26);
   });
 
   test('every allowlist entry still corresponds to a real statement', () => {
@@ -256,11 +400,51 @@ describe('INVARIANT 1 — an upsert on a tenant table cannot reach another tenan
   });
 });
 
-describe('INVARIANT 2 — every estimates / invoices write names its tenant', () => {
-  test('no UPDATE or DELETE on estimates or invoices is unpredicated', () => {
+describe('INVARIANT 2 — every estimates / invoices / payments write names its tenant', () => {
+  test('no UPDATE or DELETE on a money table is unpredicated', () => {
     const violations = found.estInv
       .filter((e) => !e.predicated && !EST_INV_EXEMPT[e.file])
       .map((e) => e.file + ':' + e.line + ' → ' + e.sql);
     expect(violations).toEqual([]);
+  });
+
+  test('the payments statements specifically carry it', () => {
+    // Named, because these are the two that were bare `WHERE id = $1` with the
+    // org-scoped SELECT above them as the whole guard — the same one-JS-line-
+    // deep arrangement the estimates upsert had. A regression here reads as a
+    // generic list entry otherwise.
+    const pay = found.estInv.filter((e) => e.table === 'payments');
+    expect(pay.length).toBeGreaterThanOrEqual(2);
+    expect(pay.filter((e) => !e.predicated)).toEqual([]);
+  });
+});
+
+describe('INVARIANT 3 — an unpredicated money-spine write keeps its second layer', () => {
+  // Not "these statements are safe". The claim is narrower and it is the claim
+  // that can actually be held today: each of these writes leans on an
+  // org-scoped read, and that read is still there. Delete the read and this
+  // goes red — which is the one thing that did NOT happen when the estimates
+  // upsert lost its guard.
+  test('every unpredicated spine write has an org-scoped read within reach above it', () => {
+    const violations = found.spine
+      .filter((e) => !e.predicated && !e.guardAt && !TWO_LAYER_EXEMPT[e.file])
+      .map((e) => e.file + ':' + e.line + ' → ' + e.table + ' — no org-scoped read within ' +
+                  TWO_LAYER_WINDOW + ' lines above; add the predicate to the statement');
+    expect(violations).toEqual([]);
+  });
+
+  test('the sites the sweep named by hand are all in the population', () => {
+    // The audit that produced this invariant listed these by file:line. If a
+    // refactor moves one out of the tokenizer's view, the invariant would go
+    // green by seeing less — so the named sites are pinned to their table
+    // rather than to their line, which survives edits above them.
+    const byTable = {};
+    found.spine.forEach((e) => { (byTable[e.table] = byTable[e.table] || []).push(e.file); });
+    expect(new Set(byTable.job_change_orders)).toContain('server/routes/change-order-routes.js');
+    expect(new Set(byTable.job_change_orders)).toContain('server/services/job-financials.js');
+    expect(new Set(byTable.job_purchase_orders)).toContain('server/routes/purchase-order-routes.js');
+    expect(new Set(byTable.job_purchase_orders)).toContain('server/services/job-financials.js');
+    expect(new Set(byTable.job_vendor_bills)).toContain('server/routes/bill-routes.js');
+    expect(new Set(byTable.pay_applications)).toContain('server/routes/pay-application-routes.js');
   });
 });

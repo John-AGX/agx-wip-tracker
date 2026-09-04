@@ -428,15 +428,18 @@ router.get('/templates/:key',
       // for their primary org see their overrides; org admins see
       // theirs.
       const orgId = (req.user && req.user.organization_id) || null;
+      // The READ partner of the DELETE below. Its else-arm took "the most
+      // recently edited override for this key, from anyone" — so an org-less
+      // admin opening the template editor was shown, and could then re-save,
+      // another tenant's subject line and HTML body. An org-less admin has no
+      // override of their own (the PUT refuses them), so the honest answer is
+      // "no override", i.e. the baked-in default.
       const overrideRows = orgId != null
         ? await pool.query(
             'SELECT subject, html_body, updated_at FROM email_template_overrides WHERE event_key = $1 AND organization_id = $2',
             [eventKey, orgId]
           )
-        : await pool.query(
-            'SELECT subject, html_body, updated_at FROM email_template_overrides WHERE event_key = $1 ORDER BY updated_at DESC LIMIT 1',
-            [eventKey]
-          );
+        : { rows: [] };
       const override = overrideRows.rows.length ? overrideRows.rows[0] : null;
 
       // Try to render preview — wired events have baked-in defaults;
@@ -534,17 +537,22 @@ router.delete('/templates/:key',
     try {
       const eventKey = req.params.key;
       const orgId = (req.user && req.user.organization_id) || null;
-      if (orgId != null) {
-        await pool.query(
-          'DELETE FROM email_template_overrides WHERE event_key = $1 AND organization_id = $2',
-          [eventKey, orgId]
-        );
-      } else {
-        await pool.query(
-          'DELETE FROM email_template_overrides WHERE event_key = $1',
-          [eventKey]
-        );
-      }
+      // The else-arm this replaces ran `DELETE … WHERE event_key = $1` with no
+      // tenant predicate, so one admin with no organization clearing "their"
+      // override wiped EVERY tenant's customization of that template — the
+      // whole platform's branded emails silently reverting to the baked-in
+      // default, with a 200 and no indication anything but one row moved.
+      //
+      // It was also unreachable-by-construction and therefore never going to
+      // be noticed: PUT /templates/:key (line 505) refuses an org-less admin
+      // with 400 before it writes, so an org-less admin has no override to
+      // delete. Deleting on their behalf could only ever hit other people's
+      // rows. Mirroring the PUT is the whole fix.
+      if (orgId == null) return res.status(400).json({ error: 'No organization context for this user.' });
+      await pool.query(
+        'DELETE FROM email_template_overrides WHERE event_key = $1 AND organization_id = $2',
+        [eventKey, orgId]
+      );
       res.json({ ok: true });
     } catch (e) {
       console.error('DELETE /api/email/templates/:key error:', e);

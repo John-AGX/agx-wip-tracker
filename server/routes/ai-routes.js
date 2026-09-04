@@ -1460,20 +1460,35 @@ const JOB_TOOLS = [
 async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, organization) {
   // Estimate row carries the JSONB blob with all the editor fields plus
   // alternates and lines (the bulk-save routes serialize them this way).
-  // Wave A (A6): the client supplies entity_id, so scope the estimate to the
-  // caller's org (owner -> users.organization_id). A cross-org id yields no row
-  // -> "Estimate not found" -> the caller's try/catch degrades to empty context.
-  // OR-IS-NULL (org tolerance) + conditional-on-org-present = no-op for AGX.
+  // The client supplies entity_id, so the estimate is scoped to the caller's
+  // org before a single line of it is put in front of the model.
+  //
+  // THE AXIS IS THE ROW'S OWN organization_id, NOT ITS OWNER'S. This read used
+  // to join `users` and compare `u.organization_id` — the org of whoever
+  // happens to own the row — which is a different question from "whose row is
+  // this", and the only door in the app that asked it. The two answers come
+  // apart in three ways, all silent: a user moved between organizations drags
+  // every estimate they own with them; an estimate whose owner_id is NULL (or
+  // points at a deleted user) fails the JOIN and becomes invisible to its own
+  // tenant; and — the one that matters — an estimate owned by an ORG-LESS user
+  // matched `u.organization_id IS NULL` for EVERY caller, so it was readable by
+  // every tenant on the platform. estimates.organization_id is what the write
+  // side predicates on (estimate-routes.js, and INVARIANT 2 in
+  // test/org-write-predicate-invariant.test.js); the read side agrees with it
+  // now, and `OR e.organization_id IS NULL` is the same legacy tolerance arm
+  // used everywhere else rather than an accident of a join.
+  //
+  // FAILS CLOSED on a missing org. The old else-arm dropped the predicate
+  // entirely and read the estimate by bare id, so an org-less caller got
+  // ANY tenant's estimate — and a cross-tenant read through an agent tool is
+  // worse than through a UI route, because the model summarises what it reads
+  // into a chat someone else is watching. Same rule read_active_lines follows.
   const _orgId = organization && organization.id;
-  const estRes = _orgId != null
-    ? await pool.query(
-        `SELECT e.id, e.owner_id, e.data FROM estimates e
-           JOIN users u ON u.id = e.owner_id
-          WHERE e.id = $1 AND (u.organization_id = $2 OR u.organization_id IS NULL)`,
-        [estimateId, _orgId])
-    : await pool.query(
-        'SELECT id, owner_id, data FROM estimates WHERE id = $1',
-        [estimateId]);
+  if (_orgId == null) throw new Error('Estimate not found');
+  const estRes = await pool.query(
+    `SELECT e.id, e.owner_id, e.data FROM estimates e
+      WHERE e.id = $1 AND (e.organization_id = $2 OR e.organization_id IS NULL)`,
+    [estimateId, _orgId]);
   if (!estRes.rows.length) throw new Error('Estimate not found');
   const blob = estRes.rows[0].data || {};
 
@@ -2681,19 +2696,17 @@ const _entityCtxSent = new Map();
 // leads.organization_id (leads carry the column directly; OR-IS-NULL keeps
 // it a no-op for single-org AGX). Returns { system:string, photoBlocks }.
 async function buildLeadContext(leadId, organization) {
+  // Fails closed on a missing org — the else-arm here used to drop the
+  // predicate and read the lead by bare id. See buildEstimateContext for the
+  // full reasoning; an org-less caller gets nothing rather than everything.
   const _orgId = organization && organization.id;
-  const lRes = _orgId != null
-    ? await pool.query(
-        `SELECT l.*, u.name AS salesperson_name
-           FROM leads l
-           LEFT JOIN users u ON u.id = l.salesperson_id
-          WHERE l.id = $1 AND (l.organization_id = $2 OR l.organization_id IS NULL)`,
-        [leadId, _orgId])
-    : await pool.query(
-        `SELECT l.*, u.name AS salesperson_name
-           FROM leads l LEFT JOIN users u ON u.id = l.salesperson_id
-          WHERE l.id = $1`,
-        [leadId]);
+  if (_orgId == null) throw new Error('Lead not found');
+  const lRes = await pool.query(
+    `SELECT l.*, u.name AS salesperson_name
+       FROM leads l
+       LEFT JOIN users u ON u.id = l.salesperson_id
+      WHERE l.id = $1 AND (l.organization_id = $2 OR l.organization_id IS NULL)`,
+    [leadId, _orgId]);
   if (!lRes.rows.length) throw new Error('Lead not found');
   const lead = lRes.rows[0];
 
@@ -2720,10 +2733,16 @@ async function buildLeadContext(leadId, organization) {
   // total accurate without a second query. The proper expression index on
   // (data->>'lead_id') lands with the lineage resolver (slice 2/3, gap G10).
   try {
+    // Org-scoped like every other estimates read. `data->>'lead_id'` is a
+    // caller-influenced value, not a tenant boundary: a lead id learned
+    // anywhere listed the titles and statuses of estimates in other tenants,
+    // straight into the model's context for this turn.
     const est = await pool.query(
       `SELECT id, data->>'title' AS title, data->>'status' AS status, count(*) OVER() AS _total
-         FROM estimates WHERE data->>'lead_id' = $1 LIMIT 8`,
-      [leadId]);
+         FROM estimates
+        WHERE data->>'lead_id' = $1 AND (organization_id = $2 OR organization_id IS NULL)
+        LIMIT 8`,
+      [leadId, _orgId]);
     if (est.rows.length) {
       const total = Number(est.rows[0]._total) || est.rows.length;
       lines.push('');
@@ -5311,14 +5330,16 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   // Wave A (A6): scope the job to the caller's org (owner -> users.org). A
   // cross-org id yields no row -> caught upstream -> empty context. OR-IS-NULL
   // (org tolerance) + conditional-on-org-present = no-op for AGX.
+  // Same two corrections as buildEstimateContext, for the same reasons: the
+  // axis is the JOB's own organization_id rather than its owner's (an
+  // org-less owner made the job readable by every tenant), and a caller with
+  // no org gets nothing instead of an unpredicated read by bare id.
   const _orgId = organization && organization.id;
-  const jobRes = _orgId != null
-    ? await pool.query(
-        `SELECT j.id, j.owner_id, j.data FROM jobs j
-           JOIN users u ON u.id = j.owner_id
-          WHERE j.id = $1 AND (u.organization_id = $2 OR u.organization_id IS NULL)`,
-        [jobId, _orgId])
-    : await pool.query('SELECT id, owner_id, data FROM jobs WHERE id = $1', [jobId]);
+  if (_orgId == null) throw new Error('Job not found');
+  const jobRes = await pool.query(
+    `SELECT j.id, j.owner_id, j.data FROM jobs j
+      WHERE j.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
+    [jobId, _orgId]);
   if (!jobRes.rows.length) throw new Error('Job not found');
   const job = { id: jobRes.rows[0].id, owner_id: jobRes.rows[0].owner_id, ...jobRes.rows[0].data };
 
@@ -5339,7 +5360,17 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
       [jobId]
     );
     linkedAtts.push(...jobAtts.rows.map(r => ({ ...r, source: 'job' })));
-    const leadR = await pool.query(`SELECT id FROM leads WHERE job_id=$1 LIMIT 1`, [jobId]);
+    // The job above is org-proved, but the rows hung off it are NOT proved by
+    // that: `leads.job_id` and `estimates.data->>'lead_id'` are ordinary
+    // columns any tenant can hold a value of, so the cascade walked from a job
+    // this caller owns to leads and estimates that may not be theirs, and
+    // rolled the resulting photos and documents into the model's context.
+    // Each hop carries the predicate now.
+    const leadR = await pool.query(
+      `SELECT id FROM leads
+        WHERE job_id = $1 AND (organization_id = $2 OR organization_id IS NULL)
+        LIMIT 1`,
+      [jobId, _orgId]);
     if (leadR.rows.length) {
       const leadId = leadR.rows[0].id;
       const leadAtts = await pool.query(
@@ -5348,7 +5379,10 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
         [leadId]
       );
       linkedAtts.push(...leadAtts.rows.map(r => ({ ...r, source: 'lead' })));
-      const estR = await pool.query(`SELECT id FROM estimates WHERE data->>'lead_id'=$1`, [leadId]);
+      const estR = await pool.query(
+        `SELECT id FROM estimates
+          WHERE data->>'lead_id' = $1 AND (organization_id = $2 OR organization_id IS NULL)`,
+        [leadId, _orgId]);
       if (estR.rows.length) {
         const estIds = estR.rows.map(r => r.id);
         const estAtts = await pool.query(
@@ -8627,6 +8661,20 @@ async function execConsolidatedRead(name, input, ctx) {
   return 'read_entity: unsupported entity_type "' + et + '". Supported: job, wip, estimate, client, lead, task, pipeline.';
 }
 
+// The caller's tenant, off whichever shape of ctx the three live entry points
+// build (dispatchReadTool, the streaming dispatcher, POST /api/ai/exec-tool).
+// Returns null when there is none, and every caller of this treats null as
+// "serve nothing" — an org-less caller must get less than a normal one, never
+// more. Named rather than re-inlined so the next tool that needs it cannot
+// quietly pick a different axis.
+function ctxOrgId(ctx) {
+  if (!ctx) return null;
+  if (ctx.orgId != null) return ctx.orgId;
+  if (ctx.organizationId != null) return ctx.organizationId;
+  if (ctx.user && ctx.user.organization_id != null) return ctx.user.organization_id;
+  return null;
+}
+
 async function execStaffTool(name, input, ctx) {
   // ctx is optional — currently only self_diagnose uses ctx.userId
   // (it needs to scope the introspection to the calling user). Other
@@ -8645,6 +8693,14 @@ async function execStaffTool(name, input, ctx) {
   switch (name) {
     case 'read_metrics': {
       const range = (input && input.range === '30d') ? '30 days' : '7 days';
+      // ai_messages IS TENANT DATA and this read had no tenant predicate.
+      // INSIGHTS_VIEW is held by `corporate` and `pm`, not just admins, so
+      // any PM was aggregating every other tenant's AI usage. The rollup is
+      // only counts — read_conversation_detail below is where the actual
+      // transcripts were — but a count is still someone else's activity, and
+      // the model narrates it into this tenant's chat window.
+      const _orgId = ctxOrgId(ctx);
+      if (_orgId == null) return 'read_metrics: your account is not attached to an organization, so there is nothing to report.';
       const aggSql = `
         SELECT
           entity_type,
@@ -8660,10 +8716,11 @@ async function execStaffTool(name, input, ctx) {
         FROM ai_messages
         WHERE created_at >= NOW() - INTERVAL '${range}'
           AND entity_type IN ('estimate','job','client')
+          AND (organization_id = $1 OR organization_id IS NULL)
         GROUP BY entity_type
         ORDER BY entity_type
       `;
-      const r = await pool.query(aggSql);
+      const r = await pool.query(aggSql, [_orgId]);
       const out = [];
       const labels = { estimate: '86 (estimate)', job: '86 (job/WIP)', client: '86 (directory)' };
       const all = ['estimate', 'job', 'client'];
@@ -8689,8 +8746,16 @@ async function execStaffTool(name, input, ctx) {
     case 'read_recent_conversations': {
       const range = (input && input.range === '30d') ? '30 days' : '7 days';
       const limit = Math.max(1, Math.min(200, Number(input && input.limit) || 50));
-      const params = [];
-      const conds = [`created_at >= NOW() - INTERVAL '${range}'`];
+      // Tenant predicate first, so it cannot be lost among the optional
+      // filters appended below. Without it this listed every tenant's
+      // conversations — entity titles, user emails, token counts — and handed
+      // the caller the `key` needed to open any of them in
+      // read_conversation_detail, which returns the message bodies.
+      const _orgId = ctxOrgId(ctx);
+      if (_orgId == null) return 'read_recent_conversations: your account is not attached to an organization, so no conversations can be read.';
+      const params = [_orgId];
+      const conds = [`created_at >= NOW() - INTERVAL '${range}'`,
+                     `(organization_id = $1 OR organization_id IS NULL)`];
       if (input && input.entity_type) {
         params.push(input.entity_type);
         conds.push(`entity_type = $${params.length}`);
@@ -8716,8 +8781,17 @@ async function execStaffTool(name, input, ctx) {
       // Enrich with user emails + entity titles.
       const userIds = [...new Set(r.rows.map(x => x.user_id).filter(x => x != null))];
       const userMap = new Map();
+      // The three enrichment reads below take their ids from the rollup, which
+      // is org-scoped now — so these are the SECOND layer, not the first, and
+      // like every second layer in this codebase they exist because the first
+      // one is one refactor from moving. An unnamed row renders as its id,
+      // which is the correct degradation: a title the caller may not see is
+      // not worth resolving.
       if (userIds.length) {
-        const u = await pool.query('SELECT id, email FROM users WHERE id = ANY($1::int[])', [userIds]);
+        const u = await pool.query(
+          `SELECT id, email FROM users
+            WHERE id = ANY($1::int[]) AND (organization_id = $2 OR organization_id IS NULL)`,
+          [userIds, _orgId]);
         u.rows.forEach(row => userMap.set(row.id, row.email));
       }
       const titleByKey = new Map();
@@ -8725,12 +8799,18 @@ async function execStaffTool(name, input, ctx) {
       const eIds = ids('estimate');
       if (eIds.length) {
         // estimates / jobs store title + name in JSONB `data`; pull via ->>.
-        const er = await pool.query(`SELECT id, data->>'title' AS title FROM estimates WHERE id = ANY($1::text[])`, [eIds]);
+        const er = await pool.query(
+          `SELECT id, data->>'title' AS title FROM estimates
+            WHERE id = ANY($1::text[]) AND (organization_id = $2 OR organization_id IS NULL)`,
+          [eIds, _orgId]);
         er.rows.forEach(x => titleByKey.set('estimate|' + x.id, x.title));
       }
       const jIds = ids('job');
       if (jIds.length) {
-        const jr = await pool.query(`SELECT id, COALESCE(NULLIF(data->>'name',''), NULLIF(data->>'jobName',''), 'Job '||id) AS title FROM jobs WHERE id = ANY($1::text[])`, [jIds]);
+        const jr = await pool.query(
+          `SELECT id, COALESCE(NULLIF(data->>'name',''), NULLIF(data->>'jobName',''), 'Job '||id) AS title
+             FROM jobs WHERE id = ANY($1::text[]) AND (organization_id = $2 OR organization_id IS NULL)`,
+          [jIds, _orgId]);
         jr.rows.forEach(x => titleByKey.set('job|' + x.id, x.title));
       }
       const lines = [];
@@ -8754,13 +8834,26 @@ async function execStaffTool(name, input, ctx) {
       const [et, eid, uidRaw] = parts;
       const uid = Number(uidRaw);
       if (!Number.isFinite(uid)) throw new Error('user_id portion of key is not a number');
+      // THE WORST OF THE THREE. This returns message BODIES — the verbatim
+      // prose of a conversation, plus every tool call and its input — and the
+      // key that selects one is three plain values a caller can type. With no
+      // tenant predicate, any holder of INSIGHTS_VIEW (which includes `pm` and
+      // `corporate`, not merely admins) could read another tenant's chats
+      // through their own assistant, which would then summarise them in a
+      // window that tenant is watching.
+      //
+      // Same sentence for "not yours" as for "does not exist", so the tool
+      // does not become an oracle over which conversations exist.
+      const _orgId = ctxOrgId(ctx);
+      if (_orgId == null) return 'No messages found for that key.';
       const r = await pool.query(
         `SELECT role, content, model, input_tokens, output_tokens,
                 tool_use_count, tool_uses, photos_included, created_at
            FROM ai_messages
           WHERE entity_type=$1 AND estimate_id=$2 AND user_id=$3
+            AND (organization_id = $4 OR organization_id IS NULL)
           ORDER BY created_at ASC`,
-        [et, eid, uid]
+        [et, eid, uid, _orgId]
       );
       if (!r.rows.length) return 'No messages found for that key.';
       const out = [];
@@ -15602,6 +15695,15 @@ module.exports.internals = {
   buildTurnContext,
   buildEstimateContext,
   buildJobContext,
+  buildLeadContext,
+  // The read-tool dispatcher. Exported so the TENANT BOUNDARY on the read
+  // side can be held by executing the tools rather than by reading them:
+  // read_metrics, read_recent_conversations and read_conversation_detail all
+  // queried `ai_messages` with no organization predicate, and the last of
+  // those returns verbatim message bodies. INSIGHTS_VIEW, which gates them,
+  // is held by `pm` and `corporate` as well as admins. See
+  // test/ai-read-tenant-scope.test.js.
+  execStaffTool,
   buildClientDirectoryContext,
   buildStaffContext,
   sectionsForAgent,
