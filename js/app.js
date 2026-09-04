@@ -192,7 +192,7 @@
             custom.forEach((item, i) => {
                 listHtml += lt + 'div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid var(--border,#333);"' + gt +
                     lt + 'span style="color:var(--text,#fff);"' + gt + item + lt + '/span' + gt +
-                    lt + 'button onclick="deleteCustomItem(\''+storageKey+'\','+i+',\''+selectId+'\',\''+placeholder+'\')" style="background:var(--red,#e74c3c);color:#fff;border:none;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:12px;"' + gt + 'Delete' + lt + '/button' + gt +
+                    lt + 'button onclick="deleteCustomItem(p86Dec(\'' + p86Enc(storageKey) + '\'),'+p86Code(i)+',p86Dec(\'' + p86Enc(selectId) + '\'),p86Dec(\'' + p86Enc(placeholder) + '\'))" style="background:var(--red,#e74c3c);color:#fff;border:none;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:12px;"' + gt + 'Delete' + lt + '/button' + gt +
                     lt + '/div' + gt;
             });
             overlay.innerHTML = lt + 'div style="background:var(--card-bg,#1a1a2e);border-radius:12px;padding:20px;min-width:300px;max-width:400px;border:1px solid var(--border,#333);"' + gt +
@@ -1358,7 +1358,6 @@
                 var threads = (out[0] && out[0].threads) || [];
                 var tasks = out[1] || [];
                 var items = [];
-                function q(s) { return String(s == null ? '' : s).replace(/'/g, "\\'"); }
                 // 1) Emails needing a reply (urgency from triage).
                 //
                 // needs_reply is written ONCE by the Haiku triage pass on the
@@ -1396,7 +1395,7 @@
                         sev: hi ? 2 : 1, color: hi ? '#f87171' : '#fbbf24', icon: 'clients',
                         title: l.title || l.property_name || 'Lead',
                         sub: 'Follow-up ' + days + 'd overdue',
-                        onclick: "if(window.openEditLeadModal)window.openEditLeadModal('" + q(l.id) + "')"
+                        onclick: "if(window.openEditLeadModal)window.openEditLeadModal(p86Dec('" + p86Enc(l.id) + "'))"
                     });
                 });
                 // 3) Overdue tasks.
@@ -1407,7 +1406,7 @@
                     items.push({
                         sev: 2, color: '#f87171', icon: 'reports',
                         title: t.title || '(untitled task)', sub: 'Task overdue',
-                        onclick: "if(window.p86Tasks&&window.p86Tasks.openDetail)window.p86Tasks.openDetail('" + q(t.id) + "')"
+                        onclick: "if(window.p86Tasks&&window.p86Tasks.openDetail)window.p86Tasks.openDetail(p86Dec('" + p86Enc(t.id) + "'))"
                     });
                 });
                 items.sort(function (a, b) { return b.sev - a.sev; });

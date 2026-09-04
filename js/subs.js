@@ -313,7 +313,7 @@ function p86Ask(message, opts) {
       return '<span style="font-size:10px;padding:1px 8px;border-radius:8px;background:rgba(' + c[0] + ',0.12);color:' + c[1] + ';text-transform:uppercase;letter-spacing:0.4px;font-weight:600;">' + (st || 'active') + '</span>';
     };
 
-    return '<tr style="border-bottom:1px solid var(--border,#333);cursor:pointer;" onclick="window.p86Subs.openEdit(\'' + escapeAttr(s.id) + '\')">' +
+    return '<tr style="border-bottom:1px solid var(--border,#333);cursor:pointer;" onclick="window.p86Subs.openEdit(p86Dec(\'' + p86Enc(s.id) + '\'))">' +
       td('<strong>' + escapeHTML(s.name) + '</strong>' + (s.parent_sub_id ? ' <span style="font-size:10px;color:var(--text-dim,#888);">(child)</span>' : ''), { col: 'name' }) +
       td(s.trade || '<span style="color:var(--text-dim,#666);">—</span>', { dim: !s.trade, size: 12, col: 'trade' }) +
       td(
@@ -326,7 +326,7 @@ function p86Ask(message, opts) {
       td(compliance, { size: 11, col: 'compliance' }) +
       td(statusChip(s.status), { align: 'left', col: 'status' }) +
       td(
-        '<button class="ee-btn-icon ghost" style="font-size:11px;padding:2px 8px;" onclick="event.stopPropagation();window.p86Subs.openEdit(\'' + escapeAttr(s.id) + '\')" title="Edit">&#x270F;</button>',
+        '<button class="ee-btn-icon ghost" style="font-size:11px;padding:2px 8px;" onclick="event.stopPropagation();window.p86Subs.openEdit(p86Dec(\'' + p86Enc(s.id) + '\'))" title="Edit">&#x270F;</button>',
         { align: 'right', col: 'actions' }
       ) +
     '</tr>';

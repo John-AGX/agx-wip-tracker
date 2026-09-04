@@ -108,6 +108,12 @@ function boot(opts) {
   // Load order mirrors index.html: line-identity first (app.js and both
   // editors read window.p86LineIdentity), then pricing, then the editor.
   if (opts.withIdentity !== false) load('js/line-identity.js');
+  // js/dom-ref.js — the encoder that carries a stored id into an attribute and
+  // back without either parser touching it. index.html loads it beside
+  // line-identity.js, before everything that paints, and both editors treat
+  // it as a hard dependency: without it eeKey paints an empty address on
+  // purpose rather than falling back to interpolating the stored bytes.
+  if (opts.withDomRef !== false) load('js/dom-ref.js');
   load('js/pricing-pipeline.js');
   // opts.editorFile — an ABSOLUTE path to load INSTEAD of the working tree's
   // js/estimate-editor.js. The only caller is a test that boots a PRIOR git
@@ -138,10 +144,19 @@ function boot(opts) {
     open(id) { w.openEstimateEditor(id); return api; },
     lines() { return w.appData.estimateLines; },
     // Every rendered row, in document order, with the id it is ADDRESSED by.
+    //
+    // `id` is the STORED id the row resolves to — the attribute is the
+    // ENCODED form of it (js/dom-ref.js), because an attribute value the HTML
+    // parser has normalised is no longer the stored bytes. `key` is the raw
+    // attribute, for the tests that are about the encoding itself.
     rows() {
+      const dec = (v) => (w.p86DomRef ? w.p86DomRef.dec(v) : v);
       return Array.from(
         w.document.querySelectorAll('#ee-lines-container [data-line-id]')
-      ).map((el) => ({ el, id: el.getAttribute('data-line-id') }));
+      ).map((el) => {
+        const key = el.getAttribute('data-line-id');
+        return { el, key, id: dec(key) };
+      });
     },
     // Drive a real inline onchange the way a user's blur does.
     typeInto(rowEl, cellField, value) {

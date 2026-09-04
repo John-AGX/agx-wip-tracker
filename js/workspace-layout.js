@@ -384,7 +384,7 @@
         // "Open Estimate" — only when this job has a linked estimate (job.estimate_id).
         var estId = jobForActions && jobForActions.estimate_id ? String(jobForActions.estimate_id).replace(/['"\\]/g, '') : '';
         var openEstBtn = estId
-          ? '<button type="button" data-co-open-est="1" onclick="if(window.openEstimateFromJob)window.openEstimateFromJob(\'' + estId + '\')" title="Open the linked estimate (locked once sold)" style="' + btnBase + 'color:#4f8cff;border-color:rgba(79,140,255,.45);">Open Estimate</button>'
+          ? '<button type="button" data-co-open-est="1" onclick="if(window.openEstimateFromJob)window.openEstimateFromJob(p86Dec(\'' + p86Enc(estId) + '\'))" title="Open the linked estimate (locked once sold)" style="' + btnBase + 'color:#4f8cff;border-color:rgba(79,140,255,.45);">Open Estimate</button>'
           : '';
         jobActions.innerHTML =
           openEstBtn +

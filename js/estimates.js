@@ -269,7 +269,7 @@ function estimatesHeaderCell(label, key, opts) {
     if (opts.num) classes += ' num';
     var alignAttr = opts.num ? ' style="text-align:right;"' : '';
     return '<th class="' + classes + '" data-col="' + key + '" data-sort="' + key + '"' + alignAttr +
-        ' onclick="sortEstimatesBy(\'' + key + '\')">' + label + '</th>';
+        ' onclick="sortEstimatesBy(p86Dec(\'' + p86Enc(key) + '\'))">' + label + '</th>';
 }
 
 function fmtRelativeDate(s) {
@@ -355,7 +355,7 @@ function renderEstimatesMap(listEl, filtered) {
             '<div class="est-map-filterbtns">' +
                 ['active', 'all', 'won'].map(function(s) {
                     var label = s === 'active' ? 'Active' : (s === 'won' ? 'Won' : 'All');
-                    return '<button type="button" class="est-map-fbtn' + (_estMapStatus === s ? ' active' : '') + '" onclick="setEstimatesMapStatus(\'' + s + '\')">' + label + '</button>';
+                    return '<button type="button" class="est-map-fbtn' + (_estMapStatus === s ? ' active' : '') + '" onclick="setEstimatesMapStatus(p86Dec(\'' + p86Enc(s) + '\'))">' + label + '</button>';
                 }).join('') +
             '</div>' +
             '<span class="est-map-count">' + mapped + ' of ' + items.length + ' plotted</span>' +
@@ -781,15 +781,15 @@ function renderEstimatesList() {
                     : '<span style="color:var(--text-dim,#888);">—</span>';
                 var sm = estStatusMeta(est);
                 var statusAction = sm.key === 'draft'
-                    ? ' <button type="button" class="est-mark-sent" onclick="event.stopPropagation();markEstimateSent(\'' + est.id + '\',true)" title="Record that this proposal was sent">Mark sent</button>'
+                    ? ' <button type="button" class="est-mark-sent" onclick="event.stopPropagation();markEstimateSent(p86Dec(\'' + p86Enc(est.id) + '\'),true)" title="Record that this proposal was sent">Mark sent</button>'
                     : (sm.key === 'sent'
-                        ? ' <button type="button" class="est-mark-sent est-unsend" onclick="event.stopPropagation();markEstimateSent(\'' + est.id + '\',false)" title="Clear the sent status">undo</button>'
+                        ? ' <button type="button" class="est-mark-sent est-unsend" onclick="event.stopPropagation();markEstimateSent(p86Dec(\'' + p86Enc(est.id) + '\'),false)" title="Clear the sent status">undo</button>'
                         : '');
                 var sentCell = est.sent_at
                     ? escapeHTML(fmtRelativeDate(est.sent_at)) + (est.sent_count > 1 ? '<span style="color:var(--text-dim,#888);"> ·' + est.sent_count + '×</span>' : '')
                     : '<span style="color:var(--text-dim,#666);">—</span>';
-                return '<tr style="cursor:pointer;" onclick="editEstimate(\'' + est.id + '\')">' +
-                    '<td class="est-check-cell" style="width:34px;text-align:center;" onclick="event.stopPropagation();"><input type="checkbox" class="est-check" data-id="' + est.id + '"' + (_estSelected.has(est.id) ? ' checked' : '') + ' onclick="event.stopPropagation();window.p86EstSelect(\'' + est.id + '\',this.checked);"></td>' +
+                return '<tr style="cursor:pointer;" onclick="editEstimate(p86Dec(\'' + p86Enc(est.id) + '\'))">' +
+                    '<td class="est-check-cell" style="width:34px;text-align:center;" onclick="event.stopPropagation();"><input type="checkbox" class="est-check" data-id="' + est.id + '"' + (_estSelected.has(est.id) ? ' checked' : '') + ' onclick="event.stopPropagation();window.p86EstSelect(p86Dec(\'' + p86Enc(est.id) + '\'),this.checked);"></td>' +
                     '<td data-col="title"><strong>' + escapeHTML(est.title || '(untitled)') + '</strong>' + titleSuffix + '</td>' +
                     '<td data-col="client">' + clientLabel + '</td>' +
                     '<td data-col="status" style="white-space:nowrap;"><span class="est-status-badge p86-statuschip" style="--c:' + sm.color + ';">' + sm.label + '</span>' + statusAction + '</td>' +
@@ -1269,7 +1269,7 @@ function renderEstimatesList() {
     Object.keys(sections).forEach(name => {
       const hdr = document.createElement('tr');
       hdr.className = 'section-header';
-      hdr.innerHTML = '<td colspan="5" style="padding:10px 8px;">' + escapeHTML(name) + '</td><td colspan="2" style="padding:10px 8px;text-align:right;"><button class="secondary small" onclick="addEstimateLineRow(currentEditEstimateId, \'' + escapeHTML(name).replace(/'/g, "\\'") + '\')" style="font-size:11px;padding:3px 8px;">+ Line Item</button></td>';
+      hdr.innerHTML = '<td colspan="5" style="padding:10px 8px;">' + escapeHTML(name) + '</td><td colspan="2" style="padding:10px 8px;text-align:right;"><button class="secondary small" onclick="addEstimateLineRow(currentEditEstimateId, p86Dec(\'' + p86Enc(name) + '\'))" style="font-size:11px;padding:3px 8px;">+ Line Item</button></td>';
       tbody.appendChild(hdr);
       sections[name].forEach(l => tbody.appendChild(createEditLineItemRow(l)));
     });
@@ -1296,7 +1296,7 @@ function renderEstimatesList() {
       '<td style="padding:8px;"><input type="text" inputmode="decimal" data-field="unitCost" value="' + (line.unitCost || 0) + '" oninput="recalcEstimateTotals()" style="width:100%;text-align:right;"></td>' +
       '<td style="padding:8px;"><input type="text" inputmode="decimal" data-field="markup" value="' + (line.markup || 0) + '" oninput="recalcEstimateTotals()" style="width:100%;text-align:center;"></td>' +
       '<td style="padding:8px;text-align:right;color:var(--green);font-weight:bold;"><span data-field="lineTotal">' + formatCurrency(client) + '</span></td>' +
-      '<td style="padding:8px;text-align:center;"><button class="estimate-line-delete" onclick="removeEstimateLineRow(\'' + line.id + '\')">X</button></td>';
+      '<td style="padding:8px;text-align:center;"><button class="estimate-line-delete" onclick="removeEstimateLineRow(p86Dec(\'' + p86Enc(line.id) + '\'))">X</button></td>';
     return row;
     }
 

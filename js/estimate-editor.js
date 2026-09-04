@@ -325,6 +325,67 @@
     if (!line || typeof line !== 'object') return -1;
     return (appData.estimateLines || []).indexOf(line);
   }
+
+  // ── AN ADDRESS IN THE DOM IS NOT THE STORED BYTES ─────────────────────
+  // A row's DOM address is p86DomRef.enc(line.id) — see js/dom-ref.js for
+  // why. Two things it buys, and this file needed both:
+  //
+  //   1. NOTHING STORED IS COMPILED AS JAVASCRIPT. Every handler in this
+  //      file used to be inline — onclick="deleteLineFromEditor('<id>')" —
+  //      which is a JS string literal inside an HTML attribute, and the HTML
+  //      parser decodes escapeHTML's &#39; back to a bare apostrophe BEFORE
+  //      the JavaScript parser sees it. An id shaped like  ');f();//  fired
+  //      three script executions in one interaction. Those handlers are gone:
+  //      the id lives in data-line-id and eeBindLineRows binds the listener.
+  //   2. THE ADDRESS SURVIVES THE HTML PARSER. Binding alone is not enough,
+  //      which is the part the change-order editor got wrong: attribute
+  //      values are NORMALISED on the way in — CR and CRLF collapse to LF,
+  //      NUL becomes U+FFFD — so a stored CR id painted an address that could
+  //      never match the record again. enc's output contains no character the
+  //      parser rewrites, so getAttribute hands back exactly what was
+  //      painted and dec restores the stored bytes byte for byte.
+  //
+  // If js/dom-ref.js is missing, eeKey returns '' rather than falling back to
+  // the raw value: an unaddressable row is caught and SHOWN by eeUnreachable
+  // below, whereas an identity fallback would quietly re-open the hole.
+  function eeDomRef() {
+    var R = (typeof window !== 'undefined') && window.p86DomRef;
+    if (R && typeof R.enc === 'function') return R;
+    return { enc: function () { return ''; }, dec: function (v) { return v == null ? '' : String(v); } };
+  }
+  function eeKey(id) { return eeDomRef().enc(id); }
+  function eeUnkey(key) { return eeDomRef().dec(key); }
+  // The selector for one painted row. enc's alphabet excludes " and \, so a
+  // quoted attribute selector is always well-formed and CSS.escape — which is
+  // for UNQUOTED identifiers and mangles a space into "\ " inside quotes — is
+  // not wanted here.
+  function eeRowSelector(id) { return '[data-line-id="' + eeKey(id) + '"]'; }
+
+  // A ROW THAT CANNOT BE ADDRESSED MUST BE VISIBLY BROKEN. `if (!line)
+  // return;` is the exact shape that cost this project days: the field takes
+  // the keystroke, the record never moves, and the save pill goes on reading
+  // "No changes". Encoding removes every shape we know of, so nothing should
+  // route here — which is precisely why it must SHOUT when it does, rather
+  // than being the silent floor it was.
+  //
+  // Only the DOM path routes through this. The exported functions keep their
+  // early return: they are also the agent-applier API, where a miss is a
+  // reported op result rather than a person staring at a screen.
+  function eeUnreachable(where, storedId) {
+    var msg = 'This row has lost its address, so ' + where + ' was NOT saved. ' +
+      'Reload the estimate; if it comes back, the line needs repair.';
+    try {
+      var row = document.querySelector(eeRowSelector(storedId));
+      if (row) {
+        row.setAttribute('data-line-unreachable', '1');
+        row.style.outline = '2px solid #f87171';
+        row.title = msg;
+      }
+    } catch (e) {}
+    if (typeof window.p86Toast === 'function') window.p86Toast(msg, 'error');
+    else if (typeof window.alert === 'function') window.alert(msg);
+    return null;
+  }
   function getActiveAlternate() {
     var est = getEstimate();
     if (!est || !est.alternates) return null;
@@ -954,6 +1015,22 @@
       '</button>';
     }
     chipsEl.innerHTML = html;
+    eeBindChips(chipsEl);
+  }
+
+  // The three proposal buttons, bound the same way as the line table: the
+  // estimate id travels as data and is decoded, never compiled.
+  function eeBindChips(host) {
+    if (!host) return;
+    host.querySelectorAll('[data-ee-prop]').forEach(function (b) {
+      var id = eeUnkey(b.getAttribute('data-ee-est'));
+      var what = b.getAttribute('data-ee-prop');
+      b.addEventListener('click', function () {
+        if (what === 'send') return openProposalSend(id);
+        if (what === 'approve') return openProposalApprove(id);
+        if (what === 'decline') return proposalDecline(id);
+      });
+    });
   }
 
   // Inline AGX icon, falling back to nothing rather than a raw emoji if the
@@ -980,12 +1057,17 @@
     else { lbl = 'Draft'; col = 'var(--text-dim,#8b90a5)'; }
     var h = '<span class="ee-prop-pill" title="Proposal status" style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;padding:4px 10px;border-radius:999px;background:rgba(255,255,255,0.05);color:' + col + ';border:1px solid ' + col + '44;">' + lbl + '</span>';
     if (est.job_id) return h;   // already converted — proposal actions no longer apply
-    h += '<button class="ee-btn secondary" onclick="openProposalSend(\'' + escapeHTML(est.id) + '\')" title="Print or email this proposal to any recipient" style="display:inline-flex;align-items:center;gap:6px;">' + ic('composer-send') + 'Send</button>';
+    // An ESTIMATE's id is a stored value too, and this one is worse than a
+    // line's: it is the client-supplied primary key on PUT /api/estimates/
+    // bulk/save. These three buttons fired three more script executions on a
+    // break-out shaped estimate id.
+    var ek = eeKey(est.id);
+    h += '<button class="ee-btn secondary" data-ee-prop="send" data-ee-est="' + ek + '" title="Print or email this proposal to any recipient" style="display:inline-flex;align-items:center;gap:6px;">' + ic('composer-send') + 'Send</button>';
     if (st !== 'approved') {
-      h += '<button class="ee-btn secondary" onclick="openProposalApprove(\'' + escapeHTML(est.id) + '\')" title="Record that the proposal was approved / signed" style="display:inline-flex;align-items:center;gap:6px;">' + ic('edit') + 'Record approval</button>';
+      h += '<button class="ee-btn secondary" data-ee-prop="approve" data-ee-est="' + ek + '" title="Record that the proposal was approved / signed" style="display:inline-flex;align-items:center;gap:6px;">' + ic('edit') + 'Record approval</button>';
     }
     if (st === 'sent') {
-      h += '<button class="ee-btn secondary" onclick="proposalDecline(\'' + escapeHTML(est.id) + '\')" title="Record that the client declined" style="font-size:11px;opacity:.85;">Declined?</button>';
+      h += '<button class="ee-btn secondary" data-ee-prop="decline" data-ee-est="' + ek + '" title="Record that the client declined" style="font-size:11px;opacity:.85;">Declined?</button>';
     }
     return h;
   }
@@ -1537,10 +1619,10 @@
       html += '<div style="display:inline-flex;align-items:stretch;border:1px solid ' + border + ';border-radius:18px;background:' + bg + ';overflow:hidden;">' +
         '<label title="' + checkboxTitle + '" style="display:inline-flex;align-items:center;padding:0 8px;cursor:pointer;border-right:1px solid var(--border,#333);">' +
           '<input type="checkbox" ' + (excluded ? '' : 'checked') + ' ' +
-            'onchange="toggleGroupInclude(\'' + escapeHTML(a.id) + '\', this.checked)" ' +
+            'data-ee-alt="include" data-ee-altid="' + eeKey(a.id) + '" ' +
             'style="margin:0;cursor:pointer;accent-color:#4f8cff;" />' +
         '</label>' +
-        '<button onclick="switchAlternate(\'' + escapeHTML(a.id) + '\')" ' +
+        '<button data-ee-alt="switch" data-ee-altid="' + eeKey(a.id) + '" ' +
           'style="padding:6px 14px;border:none;background:transparent;color:' + color + ';font-size:12px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px;' + nameStyle + '">' +
           escapeHTML(a.name) +
           '<span style="font-size:10px;color:var(--text-dim,#888);font-weight:400;">' + lineCount + '</span>' +
@@ -1548,11 +1630,26 @@
       '</div>';
     });
     wrap.innerHTML = html;
+    eeBindAltTabs(wrap);
 
     // Disable Delete when only one group exists — there's always at least
     // one group on an estimate.
     var deleteBtn = document.getElementById('ee-altDeleteBtn');
     if (deleteBtn) deleteBtn.disabled = (est.alternates.length <= 1);
+  }
+
+  // A GROUP's id is an address too, minted as 'alt_' + Date.now() and stored
+  // on the estimate blob, so it reaches the DOM the same way a line id does.
+  function eeBindAltTabs(wrap) {
+    if (!wrap) return;
+    wrap.querySelectorAll('[data-ee-alt]').forEach(function (el) {
+      var id = eeUnkey(el.getAttribute('data-ee-altid'));
+      if (el.getAttribute('data-ee-alt') === 'switch') {
+        el.addEventListener('click', function () { switchAlternate(id); });
+      } else {
+        el.addEventListener('change', function () { toggleGroupInclude(id, !!el.checked); });
+      }
+    });
   }
 
   function toggleGroupInclude(altId, included) {
@@ -2427,7 +2524,7 @@
     // Footer of the fused .ee-asm-unit card (the wrapper carries the blue
     // edge + tint) — reads as a caption of the line above, not a sibling row.
     var html =
-      '<div class="ee-asm-strip" data-edit-gate-passthrough onclick="eeToggleAsmBreakdown(\'' + line.id + '\')" ' +
+      '<div class="ee-asm-strip" data-edit-gate-passthrough data-ee-act="asm-toggle" data-ee-line="' + eeKey(line.id) + '" ' +
         'style="display:flex;align-items:center;gap:7px;padding:2px 10px 4px 40px;font-size:10px;cursor:pointer;color:#7eb0ff;border-top:1px dashed rgba(79,140,255,0.25);">' +
         '<span style="display:inline-block;transition:transform .12s;font-size:8px;' + (open ? 'transform:rotate(90deg);' : '') + '">▶</span>' +
         '<span style="font-weight:700;letter-spacing:.04em;">🧩 ASSEMBLY' +
@@ -2452,9 +2549,9 @@
     });
     html +=
       '<div data-edit-gate-passthrough style="display:flex;gap:16px;padding:4px 10px 6px 52px;font-size:10px;">' +
-        '<span onclick="eeAsmRefresh(\'' + line.id + '\')" style="color:#4f8cff;cursor:pointer;">⟳ Refresh price from recipe</span>' +
-        '<span onclick="eeAsmExplode(\'' + line.id + '\')" style="color:#4f8cff;cursor:pointer;">⇣ Explode to editable lines</span>' +
-        '<span onclick="if(window.p86Assemblies)p86Assemblies.openEditor(' + num(line.sourceAssemblyId) + ')" style="color:#4f8cff;cursor:pointer;">✎ Open assembly</span>' +
+        '<span data-ee-act="asm-refresh" data-ee-line="' + eeKey(line.id) + '" style="color:#4f8cff;cursor:pointer;">⟳ Refresh price from recipe</span>' +
+        '<span data-ee-act="asm-explode" data-ee-line="' + eeKey(line.id) + '" style="color:#4f8cff;cursor:pointer;">⇣ Explode to editable lines</span>' +
+        '<span data-ee-act="asm-open" data-ee-asm="' + num(line.sourceAssemblyId) + '" style="color:#4f8cff;cursor:pointer;">✎ Open assembly</span>' +
       '</div>';
     return html;
   }
@@ -2858,6 +2955,99 @@
     } else if (confirm(msg)) doIt();
   };
 
+  // ── THE BINDER ────────────────────────────────────────────────────────
+  // Every control in the line table used to carry its line's id inside an
+  // inline handler. The id now travels as data — read back with
+  // getAttribute, decoded, never compiled. This is also the reason the two
+  // editors can finally agree about the same stored record: the change-order
+  // editor has bound this way since it shipped, and the only shapes it lost
+  // were the three the HTML parser rewrites, which eeKey/eeUnkey now carry.
+  //
+  // PER ELEMENT, NOT DELEGATED, and that is a decision rather than an
+  // oversight. An inline handler belongs to its element and keeps firing
+  // after a repaint has detached it; a container-level listener does not, so
+  // delegation would silently change what a held reference does — measured:
+  // a second keystroke aimed at a row captured before an unrelated repaint
+  // landed nowhere and armed no save, which is the exact silence this whole
+  // change exists to remove. The elements are discarded wholesale on the next
+  // innerHTML, and their listeners with them, so there is nothing to leak.
+  // js/change-order-editor.js rebinds the same way on every paint.
+
+  // Which DOM event each action listens to. A table rather than a switch so
+  // the dispatcher and the wiring cannot drift apart.
+  var EE_ACT_EVENT = {
+    'sect-mode': 'click', 'sect-add-line': 'click', 'sect-delete': 'click',
+    'sect-markup': 'change', 'sect-override': 'change', 'sect-name': 'input',
+    'line-field': 'change', 'line-delete': 'click',
+    'asm-toggle': 'click', 'asm-refresh': 'click', 'asm-explode': 'click',
+    'asm-open': 'click'
+  };
+
+  // Human-readable name of the operation, used only by the unreachable
+  // notice so it can say what was refused.
+  var EE_ACT_LABEL = {
+    'sect-mode': 'the markup mode switch', 'sect-add-line': 'adding a line',
+    'sect-delete': 'removing the section', 'sect-markup': 'the section markup',
+    'sect-override': 'the section override', 'sect-name': 'the section name',
+    'line-field': 'that edit', 'line-delete': 'the delete',
+    'asm-toggle': 'opening the assembly', 'asm-refresh': 'the recipe refresh',
+    'asm-explode': 'the explode'
+  };
+
+  function eeDispatch(el) {
+    var act = el.getAttribute('data-ee-act');
+    // asm-open carries a NUMBER, not a stored reference, and addresses the
+    // assembly catalog rather than a line on this record.
+    if (act === 'asm-open') {
+      if (window.p86Assemblies) window.p86Assemblies.openEditor(num(el.getAttribute('data-ee-asm')));
+      return;
+    }
+    var row = el.closest('[data-line-id]');
+    var id = eeUnkey(row ? row.getAttribute('data-line-id') : el.getAttribute('data-ee-line'));
+    // The row's address is checked HERE, once, so no handler below can fail
+    // silently on a row the record no longer holds.
+    if (!eeResolveLine(id)) { eeUnreachable(EE_ACT_LABEL[act] || 'that action', id); return; }
+    if (act === 'sect-mode') return toggleSectionMarkupMode(id);
+    if (act === 'sect-markup') return updateSectionMarkup(id, el.value);
+    if (act === 'sect-override') return toggleSectionOverride(id, !!el.checked);
+    if (act === 'sect-name') return updateSectionName(id, el.value);
+    if (act === 'sect-add-line') return addEstimateLineFromEditor(id);
+    if (act === 'sect-delete') return deleteSectionFromEditor(id);
+    if (act === 'line-field') return updateLineField(id, el.getAttribute('data-ee-field'), el.value);
+    if (act === 'line-delete') return deleteLineFromEditor(id);
+    if (act === 'asm-toggle') return eeToggleAsmBreakdown(id);
+    if (act === 'asm-refresh') return eeAsmRefresh(id);
+    if (act === 'asm-explode') return eeAsmExplode(id);
+  }
+
+  function eeBindLineRows(container) {
+    if (!container) return;
+    container.querySelectorAll('[data-ee-act]').forEach(function (el) {
+      var ev = EE_ACT_EVENT[el.getAttribute('data-ee-act')];
+      if (!ev) return;
+      el.addEventListener(ev, function () { eeDispatch(el); });
+    });
+    // The autogrow that used to live in the textarea's oninput, plus the
+    // once-per-paint sizing that used to run in renderLineItems.
+    container.querySelectorAll('[data-ee-autogrow]').forEach(function (ta) {
+      var fit = function () { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 180) + 'px'; };
+      fit();
+      ta.addEventListener('input', fit);
+    });
+    container.querySelectorAll('[data-ee-drag]').forEach(function (h) {
+      var id = eeUnkey(h.getAttribute('data-ee-drag'));
+      h.addEventListener('dragstart', function (e) { onLineDragStart(e, id); });
+      h.addEventListener('dragend', function (e) { onLineDragEnd(e); });
+    });
+    // dragover/dragleave/drop were per-row inline attributes and read
+    // e.currentTarget for the highlight, so the row is passed explicitly.
+    container.querySelectorAll('[data-ee-row]').forEach(function (row) {
+      row.addEventListener('dragover', function (e) { onLineDragOver(e, row); });
+      row.addEventListener('dragleave', function (e) { onLineDragLeave(e, row); });
+      row.addEventListener('drop', function (e) { onLineDrop(e, eeUnkey(row.getAttribute('data-line-id'))); });
+    });
+  }
+
   function renderLineItems() {
     var container = document.getElementById('ee-lines-container');
     if (!container) return;
@@ -2951,14 +3141,12 @@
 
     html += '</div></div>';
     container.innerHTML = html;
+    eeBindLineRows(container);
 
-    // Auto-size every description textarea to fit its current content.
-    // The HTML strings can't compute scrollHeight (no DOM yet), so we
-    // do it once after innerHTML is committed.
-    container.querySelectorAll('textarea').forEach(function(ta) {
-      ta.style.height = 'auto';
-      ta.style.height = Math.min(ta.scrollHeight, 180) + 'px';
-    });
+    // (Auto-sizing every description textarea to fit its content — the HTML
+    // strings can't compute scrollHeight, so it happens after innerHTML is
+    // committed — now lives in eeBindLineRows beside the input listener that
+    // keeps it sized, so the two cannot drift.)
 
     // Arm the accidental-edit gate. attachRowContainer is idempotent —
     // it tracks the container via WeakSet and binds at most one
@@ -3039,7 +3227,7 @@
       if (!row) return;
       e.preventDefault();
       e.stopPropagation();
-      openEeLineSheet(row.getAttribute('data-line-id'));
+      openEeLineSheet(eeUnkey(row.getAttribute('data-line-id')));
     }, true);
   }
 
@@ -3171,14 +3359,19 @@
     return '<div ' +
       'draggable="true" ' +
       'data-edit-gate-passthrough ' +
-      'ondragstart="onLineDragStart(event, \'' + escapeHTML(id) + '\')" ' +
-      'ondragend="onLineDragEnd(event)" ' +
+      'data-ee-drag="' + eeKey(id) + '" ' +
       'style="flex:0 0 28px;text-align:center;cursor:grab;color:var(--text-dim,#888);font-size:14px;user-select:none;padding:6px 0;line-height:1;" ' +
       'title="Drag to reorder">&#x2630;</div>';
   }
 
   function renderSectionHeaderRow(line) {
-    var idAttr = escapeHTML(line.id);
+    // The DOM address, not the stored bytes. A dead section header is worse
+    // than a dead line: it is the MULTIPLIER for every line beneath it, so a
+    // section whose six controls are inert still paints its name and its
+    // markup box, accepts a re-price, and moves nothing — measured at
+    // $1,335.87 of client price on one keystroke on one section, with the
+    // save pill reading "No changes" underneath it.
+    var idAttr = eeKey(line.id);
     var markupVal = (line.markup === '' || line.markup == null) ? '' : num(line.markup);
     var mode = (line.markupMode === 'dollar') ? 'dollar' : 'percent';
     var override = !!line.overrideLineMarkups;
@@ -3209,14 +3402,14 @@
       // Section markup pill — number input + $/% toggle + override checkbox.
       '<div style="display:inline-flex;align-items:center;gap:6px;background:rgba(0,0,0,0.18);padding:4px 10px;border-radius:14px;border:1px solid var(--border,#333);">' +
         '<span style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.4px;font-weight:600;">Markup</span>' +
-        '<button type="button" onclick="toggleSectionMarkupMode(\'' + idAttr + '\')" ' +
+        '<button type="button" data-ee-act="sect-mode" ' +
           'title="Switch between percentage and flat dollar markup" ' +
           'style="background:rgba(79,140,255,0.18);color:#4f8cff;border:1px solid rgba(79,140,255,0.35);border-radius:4px;width:24px;height:24px;font-size:12px;font-weight:700;cursor:pointer;line-height:1;">' +
           (isDollar ? '$' : '%') +
         '</button>' +
         (prefix ? '<span style="font-size:11px;color:var(--text-dim,#888);">' + prefix + '</span>' : '') +
         '<input type="text" inputmode="decimal" placeholder="0" value="' + markupVal + '" ' +
-          'onchange="updateSectionMarkup(\'' + idAttr + '\', this.value)" ' +
+          'data-ee-act="sect-markup" ' +
           'style="width:64px;padding:2px 4px;font-size:12px;background:transparent;border:1px solid transparent;border-radius:4px;color:var(--text,#fff);text-align:right;font-variant-numeric:tabular-nums;" ' +
           'onfocus="this.style.borderColor=\'var(--border,#333)\';" onblur="this.style.borderColor=\'transparent\';" />' +
         (suffix ? '<span style="font-size:11px;color:var(--text-dim,#888);">' + suffix + '</span>' : '') +
@@ -3225,7 +3418,7 @@
       '<label title="Override per-line markups (use the section value for every line below)" ' +
         'style="display:inline-flex;align-items:center;cursor:pointer;padding:0 4px;">' +
         '<input type="checkbox" ' + (override ? 'checked' : '') + ' ' +
-          'onchange="toggleSectionOverride(\'' + idAttr + '\', this.checked)" ' +
+          'data-ee-act="sect-override" ' +
           'style="cursor:pointer;width:14px;height:14px;" />' +
       '</label>'
       );
@@ -3233,18 +3426,16 @@
     // section row) so subgroups stand out clearly from line items. Soft
     // amber tint background instead of the old blue so it doesn't fight
     // with the per-line blue focus rings.
-    return '<div data-section-id="' + idAttr + '" data-line-id="' + idAttr + '" ' +
-        'ondragover="onLineDragOver(event)" ondragleave="onLineDragLeave(event)" ' +
-        'ondrop="onLineDrop(event, \'' + idAttr + '\')" ' +
+    return '<div data-section-id="' + idAttr + '" data-line-id="' + idAttr + '" data-ee-row="section" ' +
         'style="display:flex;align-items:center;flex-wrap:wrap;background:rgba(251,191,36,0.05);border-top:1px solid rgba(251,191,36,0.15);border-bottom:1px solid rgba(251,191,36,0.15);padding:6px 10px;gap:8px;">' +
       dragHandleHTML(line.id) +
       '<input type="text" value="' + escapeHTML(line.description || '') + '" placeholder="Section name" ' +
-        'oninput="updateSectionName(\'' + idAttr + '\', this.value)" ' +
+        'data-ee-act="sect-name" ' +
         'style="flex:1;min-width:140px;font-size:13px;font-weight:700;background:transparent;border:1px solid transparent;border-radius:4px;padding:4px 8px;color:#fbbf24;text-transform:uppercase;letter-spacing:0.5px;" ' +
         'onfocus="this.style.borderColor=\'var(--border,#333)\';" onblur="this.style.borderColor=\'transparent\';" />' +
       markupControlHTML +
-      '<button class="ee-btn primary" onclick="addEstimateLineFromEditor(\'' + idAttr + '\')" title="Add a line under this section">&#x2795; Line Item</button>' +
-      '<button class="ee-btn ee-icon-btn ghost" onclick="deleteSectionFromEditor(\'' + idAttr + '\')" title="Remove section header (lines stay)">&#x1F5D1;</button>' +
+      '<button class="ee-btn primary" data-ee-act="sect-add-line" title="Add a line under this section">&#x2795; Line Item</button>' +
+      '<button class="ee-btn ee-icon-btn ghost" data-ee-act="sect-delete" title="Remove section header (lines stay)">&#x1F5D1;</button>' +
     '</div>';
   }
 
@@ -3273,14 +3464,14 @@
       : (sectionDollarMode
           ? (line.markup === '' || line.markup == null ? '0' : '')
           : (line.markup === '' || line.markup == null ? inherited + ' (section)' : ''));
-    var idAttr = escapeHTML(line.id);
+    var idAttr = eeKey(line.id);
 
     var input = function(field, value, opts) {
       opts = opts || {};
       var inputAttrs =
         ' value="' + escapeHTML(value == null ? '' : String(value)) + '"' +
         (opts.placeholder ? ' placeholder="' + escapeHTML(opts.placeholder) + '"' : '') +
-        ' onchange="updateLineField(\'' + idAttr + '\', \'' + field + '\', this.value)"' +
+        ' data-ee-act="line-field" data-ee-field="' + escapeHTML(field) + '"' +
         ' style="width:100%;padding:6px 8px;font-size:12px;background:transparent;border:1px solid var(--border,#333);border-radius:4px;color:var(--text,#fff);' +
         (opts.align ? 'text-align:' + opts.align + ';' : '') +
         (opts.mono ? 'font-variant-numeric:tabular-nums;' : '') +
@@ -3313,8 +3504,7 @@
       var v = line.description == null ? '' : String(line.description);
       return '<div data-cell="description" style="flex:2 1 200px;padding:4px 6px;">' +
         '<textarea rows="1" ' +
-          ' onchange="updateLineField(\'' + idAttr + '\', \'description\', this.value)"' +
-          ' oninput="this.style.height=\'auto\';this.style.height=Math.min(this.scrollHeight,180)+\'px\';"' +
+          ' data-ee-act="line-field" data-ee-field="description" data-ee-autogrow="1"' +
           ' style="width:100%;padding:6px 8px;font-size:12px;background:transparent;border:1px solid var(--border,#333);border-radius:4px;color:var(--text,#fff);resize:none;overflow:hidden;line-height:1.45;font-family:inherit;display:block;">' +
           escapeHTML(v) +
         '</textarea>' +
@@ -3352,10 +3542,8 @@
           '</div>' +
         '</div>'
       : input('markup', line.markup, { flex: '0 0 90px', type: 'number', align: 'right', mono: true, placeholder: markupPlaceholder, label: 'Markup %' });
-    return '<div data-line-id="' + idAttr + '" ' +
+    return '<div data-line-id="' + idAttr + '" data-ee-row="line" ' +
         (_gated ? 'data-row-edit-gate data-editing="false" ' : '') +
-        'ondragover="onLineDragOver(event)" ondragleave="onLineDragLeave(event)" ' +
-        'ondrop="onLineDrop(event, \'' + idAttr + '\')" ' +
         'style="display:flex;align-items:flex-start;border-bottom:1px solid var(--border,#333);">' +
       dragHandleHTML(line.id) +
       descTextarea() +
@@ -3366,7 +3554,7 @@
       readOnly(fmtCurrency(ext), '0 0 110px', null, 'ee-line-ext') +
       readOnly(fmtCurrency(clientPrice), '0 0 120px', null, 'ee-line-amount') +
       '<div data-cell="delete" data-edit-gate-passthrough style="flex:0 0 36px;text-align:center;padding-top:8px;">' +
-        '<button class="ee-btn ee-icon-btn danger" onclick="deleteLineFromEditor(\'' + idAttr + '\')" title="Delete line">&#x1F5D1;</button>' +
+        '<button class="ee-btn ee-icon-btn danger" data-ee-act="line-delete" title="Delete line">&#x1F5D1;</button>' +
       '</div>' +
     '</div>';
   }
@@ -3454,18 +3642,17 @@
       // Target margin drives the WHOLE group via one factor, so editing any
       // line re-prices EVERY line — update them all (textContent only, so the
       // focused input node is untouched and Tab still works).
-      var byId = Object.create(null);
-      (appData.estimateLines || []).forEach(function(l) { if (l && l.id != null) byId[String(l.id)] = l; });
+      // Keyed by the PAINTED address, not the stored bytes, so a row whose id
+      // the HTML parser would have rewritten still finds its line.
+      var byKey = Object.create(null);
+      (appData.estimateLines || []).forEach(function(l) { if (l && l.id != null) byKey[eeKey(l.id)] = l; });
       container.querySelectorAll('[data-line-id]').forEach(function(row) {
-        var L = byId[row.getAttribute('data-line-id')];
+        var L = byKey[row.getAttribute('data-line-id')];
         if (L && L.section !== '__section_header__') updateRow(row, L);
       });
     } else {
       var line = eeResolveLine(lineId);
-      if (line) {
-        var sel = (window.CSS && CSS.escape) ? CSS.escape(String(line.id)) : String(line.id);
-        updateRow(container.querySelector('[data-line-id="' + sel + '"]'), line);
-      }
+      if (line) updateRow(container.querySelector(eeRowSelector(line.id)), line);
     }
     var subs = eeAllSectionSubtotals();
     var cells = container.querySelectorAll('.ee-section-total');
@@ -3644,8 +3831,7 @@
     setTimeout(function() {
       var c = document.getElementById('ee-lines-container');
       if (!c) return;
-      var sel = (window.CSS && CSS.escape) ? CSS.escape(String(lineId)) : String(lineId);
-      var row = c.querySelector('[data-line-id="' + sel + '"]');
+      var row = c.querySelector(eeRowSelector(lineId));
       if (!row) return;
       try { row.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) { row.scrollIntoView(); }
       if (!eeLineIsMobile()) {
@@ -3883,16 +4069,18 @@
     if (row) row.style.opacity = '0.45';
   }
 
-  function onLineDragOver(e) {
+  // `rowEl` is passed by the delegated binder. It used to be e.currentTarget,
+  // which only worked while every row carried its own inline ondragover.
+  function onLineDragOver(e, rowEl) {
     if (!_draggedLineId) return;
     e.preventDefault();
     try { e.dataTransfer.dropEffect = 'move'; } catch (_) {}
-    var row = e.currentTarget;
+    var row = rowEl || e.currentTarget;
     if (row && row.style) row.style.background = 'rgba(79,140,255,0.10)';
   }
 
-  function onLineDragLeave(e) {
-    var row = e.currentTarget;
+  function onLineDragLeave(e, rowEl) {
+    var row = rowEl || e.currentTarget;
     if (!row || !row.style) return;
     // Restore the original background. Section headers + subtotals have
     // their own background; resetting to '' lets the inline style win

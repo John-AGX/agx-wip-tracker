@@ -198,7 +198,7 @@ function p86Ask(message, opts) {
     var nameCell;
     if (role === 'parent') {
       nameCell =
-        '<button class="ee-btn ee-icon-btn ghost" onclick="event.stopPropagation();toggleClientParent(\'' + escapeAttr(c.id) + '\')" title="' + (expanded ? 'Collapse' : 'Expand') + '">' + (expanded ? '▾' : '▸') + '</button>' +
+        '<button class="ee-btn ee-icon-btn ghost" onclick="event.stopPropagation();toggleClientParent(p86Dec(\'' + p86Enc(c.id) + '\'))" title="' + (expanded ? 'Collapse' : 'Expand') + '">' + (expanded ? '▾' : '▸') + '</button>' +
         '<strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(c.name) + '</strong>' +
         '<span style="padding:1px 7px;border-radius:9px;background:rgba(79,140,255,0.12);color:#4f8cff;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600;">Parent · ' + childCount + '</span>';
     } else if (role === 'child') {
@@ -221,16 +221,16 @@ function p86Ask(message, opts) {
     if (c.market) location = c.market + (location ? ' · ' + location : '');
 
     var actions =
-      '<button class="ee-btn ee-icon-btn secondary" onclick="event.stopPropagation();openEditClientModal(\'' + escapeAttr(c.id) + '\')" title="Edit">&#x270F;&#xFE0F;</button>' +
-      '<button class="ee-btn ee-icon-btn ghost" onclick="event.stopPropagation();openClientMergeModal(\'' + escapeAttr(c.id) + '\')" title="Merge into another client">&#x1F500;</button>' +
-      (role === 'flat' ? '<button class="ee-btn ee-icon-btn ghost" onclick="event.stopPropagation();openClientSplitModal(\'' + escapeAttr(c.id) + '\')" title="Split into parent + property">&#x2702;</button>' : '');
+      '<button class="ee-btn ee-icon-btn secondary" onclick="event.stopPropagation();openEditClientModal(p86Dec(\'' + p86Enc(c.id) + '\'))" title="Edit">&#x270F;&#xFE0F;</button>' +
+      '<button class="ee-btn ee-icon-btn ghost" onclick="event.stopPropagation();openClientMergeModal(p86Dec(\'' + p86Enc(c.id) + '\'))" title="Merge into another client">&#x1F500;</button>' +
+      (role === 'flat' ? '<button class="ee-btn ee-icon-btn ghost" onclick="event.stopPropagation();openClientSplitModal(p86Dec(\'' + p86Enc(c.id) + '\'))" title="Split into parent + property">&#x2702;</button>' : '');
 
     // Note: keep display:flex on a wrapper DIV inside the td, not on the
     // td itself. Flex on a <td> breaks the table-cell layout — the cell
     // shrinks to content width and the rest of the row lines up next to
     // it instead of across the full table, which renders as a stray
     // vertical seam halfway across the body.
-    return '<tr ' + rowAttrs + ' style="cursor:pointer;' + rowStyle + '" onclick="openClientDashboard(\'' + escapeAttr(c.id) + '\')">' +
+    return '<tr ' + rowAttrs + ' style="cursor:pointer;' + rowStyle + '" onclick="openClientDashboard(p86Dec(\'' + p86Enc(c.id) + '\'))">' +
       '<td data-col="name"><div style="display:flex;align-items:center;gap:8px;">' + nameCell + '</div></td>' +
       '<td data-col="contact">' + escapeHTML(contact) + '</td>' +
       '<td data-col="location">' + escapeHTML(location) + '</td>' +
@@ -299,7 +299,7 @@ function p86Ask(message, opts) {
     var color = active ? '#4f8cff' : 'var(--text-dim,#888)';
     var align = opts.align || 'left';
     var width = opts.width ? ('width:' + opts.width + ';') : '';
-    return '<th data-col="' + key + '" style="text-align:' + align + ';' + width + '" onclick="sortClientsBy(\'' + key + '\')">' +
+    return '<th data-col="' + key + '" style="text-align:' + align + ';' + width + '" onclick="sortClientsBy(p86Dec(\'' + p86Enc(key) + '\'))">' +
       '<span style="cursor:pointer;color:' + color + ';font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;user-select:none;">' +
       label + arrow +
       '</span>' +
@@ -987,7 +987,7 @@ function p86Ask(message, opts) {
               '<div style="font-size:13px;color:var(--text,#fff);line-height:1.4;">' + escapeHTML(n.body || '') + '</div>' +
               '<div style="margin-top:4px;font-size:10px;color:var(--text-dim,#888);">' + badge + (when ? '<span>' + escapeHTML(when) + '</span>' : '') + '</div>' +
             '</div>' +
-            '<button class="ee-btn ee-icon-btn ghost" type="button" title="Delete note" onclick="deleteClientNote(\'' + escapeAttr(clientId) + '\', \'' + escapeAttr(n.id || '') + '\')">&#x1F5D1;</button>' +
+            '<button class="ee-btn ee-icon-btn ghost" type="button" title="Delete note" onclick="deleteClientNote(p86Dec(\'' + p86Enc(clientId) + '\'), p86Dec(\'' + p86Enc(n.id || '') + '\'))">&#x1F5D1;</button>' +
           '</div>';
       }).join('');
     }).catch(function(err) {

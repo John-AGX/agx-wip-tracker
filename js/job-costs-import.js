@@ -727,7 +727,7 @@ function p86Ask(message, opts) {
           '<td style="padding:8px 10px;color:var(--text,#fff);">' + escapeHTML(p.name) + '</td>' +
           '<td style="text-align:right;padding:8px 10px;font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);">' + fmtMoney(p.computedTotal) + '</td>' +
           '<td style="text-align:right;padding:6px 10px;">' +
-            '<button class="ee-btn primary" style="padding:4px 10px;font-size:11px;" onclick="qbCostsCreateStub(' + idx + ')"' +
+            '<button class="ee-btn primary" style="padding:4px 10px;font-size:11px;" onclick="qbCostsCreateStub(' + p86Code(idx) + ')"' +
               (p.code ? '' : ' disabled title="No job code parsed; cannot create a stub job"') +
             '>+ Create stub job</button>' +
           '</td>' +

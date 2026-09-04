@@ -1510,7 +1510,12 @@
     var ep = FLASH.claim();
     var painted = 0, i = 0;
     function paint(o) {
-      var el = view.querySelector('[data-line-id="' + String(o.lineId).replace(/"/g, '\\"') + '"]');
+      // The row's DOM address is the ENCODED id (js/dom-ref.js), not the
+      // stored bytes — the raw value could carry a quote, or a CR the HTML
+      // parser would have rewritten on the way in, and the flash would land
+      // on nothing.
+      var _enc = window.p86DomRef ? window.p86DomRef.enc(o.lineId) : String(o.lineId).replace(/"/g, '\\"');
+      var el = view.querySelector('[data-line-id="' + _enc + '"]');
       if (!el) return;
       var cls = 'p86lw-flash-' + (o.kind === 'add' ? 'add' : 'edit');
       el.classList.remove(cls);

@@ -90,7 +90,7 @@ function p86Ask(message, opts) {
           : '<span style="color:#e74c3c;">&#x2717;</span>';
         var deleteBtn = (u.id === myId)
           ? '<button class="ee-btn ghost" disabled title="You cannot delete your own account" style="margin-left:4px;">Delete</button>'
-          : '<button class="ee-btn danger" onclick="deleteAdminUser(' + u.id + ')" style="margin-left:4px;">Delete</button>';
+          : '<button class="ee-btn danger" onclick="deleteAdminUser(' + p86Code(u.id) + ')" style="margin-left:4px;">Delete</button>';
         var av = '<span style="display:inline-flex;width:30px;height:30px;border-radius:50%;background:var(--accent,#4f8cff);color:#fff;align-items:center;justify-content:center;font-weight:600;font-size:12px;flex:0 0 auto;">' + escapeHTML(uInitials(u.name)) + '</span>';
         var nameCell = '<div style="display:flex;align-items:center;gap:9px;">' + av +
           '<div style="min-width:0;"><div style="font-weight:600;color:var(--text,#e4e6f0);">' + escapeHTML(u.name || '') + '</div>' +
@@ -103,7 +103,7 @@ function p86Ask(message, opts) {
         var createdCell = '<div>' + fmtDate(u.created_at) + '</div>' +
           '<div style="font-size:11px;color:var(--text-dim,#888);">seen ' + escapeHTML(uSeenAgo(u.last_seen_at)) + '</div>';
         var actAsBtn = (canActAs && u.id !== myId && u.active)
-          ? '<button class="ee-btn ghost" onclick="window.p86ActAs(' + u.id + ')" title="Act as this user (disguise)" style="margin-left:4px;">Act as</button>'
+          ? '<button class="ee-btn ghost" onclick="window.p86ActAs(' + p86Code(u.id) + ')" title="Act as this user (disguise)" style="margin-left:4px;">Act as</button>'
           : '';
         html += '<tr>' +
           '<td>' + nameCell + '</td>' +
@@ -112,7 +112,7 @@ function p86Ask(message, opts) {
           '<td style="text-align:center;">' + activeBadge + '</td>' +
           '<td>' + createdCell + '</td>' +
           '<td style="text-align:center;white-space:nowrap;">' +
-            '<button class="ee-btn secondary" onclick="openEditUserModal(' + u.id + ')">Edit</button>' +
+            '<button class="ee-btn secondary" onclick="openEditUserModal(' + p86Code(u.id) + ')">Edit</button>' +
             actAsBtn +
             deleteBtn +
           '</td>' +
@@ -343,13 +343,13 @@ function p86Ask(message, opts) {
             '<td style="padding:6px 8px;">' + escapeHTML(s.name || '') + '</td>' +
             '<td style="padding:6px 8px;font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(s.role || '') + '</td>' +
             '<td style="padding:6px 8px;">' +
-              '<select onchange="updateJobAccessLevel(' + s.user_id + ', this.value)" style="font-size:11px;padding:2px 4px;background:var(--card-bg,#141419);color:var(--text,#fff);border:1px solid var(--border,#333);border-radius:4px;">' +
+              '<select onchange="updateJobAccessLevel(' + p86Code(s.user_id) + ', this.value)" style="font-size:11px;padding:2px 4px;background:var(--card-bg,#141419);color:var(--text,#fff);border:1px solid var(--border,#333);border-radius:4px;">' +
                 '<option value="edit"' + (s.access_level === 'edit' ? ' selected' : '') + '>edit</option>' +
                 '<option value="view"' + (s.access_level === 'view' ? ' selected' : '') + '>view</option>' +
               '</select>' +
             '</td>' +
             '<td style="padding:6px 8px;text-align:right;">' +
-              '<button onclick="revokeJobAccess(' + s.user_id + ')" style="font-size:10px;padding:2px 8px;background:#e74c3c;color:#fff;border:none;border-radius:4px;cursor:pointer;">Revoke</button>' +
+              '<button onclick="revokeJobAccess(' + p86Code(s.user_id) + ')" style="font-size:10px;padding:2px 8px;background:#e74c3c;color:#fff;border:none;border-radius:4px;cursor:pointer;">Revoke</button>' +
             '</td>' +
           '</tr>';
         });
@@ -486,7 +486,7 @@ function p86Ask(message, opts) {
           '<td>' + escapeHTML(j.client || '—') + '</td>' +
           '<td><span class="badge">' + escapeHTML(j.status || '—') + '</span></td>' +
           '<td>' +
-            '<select onchange="reassignJobOwner(\'' + escapeHTML(j.id) + '\', this.value)" ' +
+            '<select onchange="reassignJobOwner(p86Dec(\'' + p86Enc(j.id) + '\'), this.value)" ' +
               'style="font-size:12px;padding:4px 8px;background:var(--card-bg,#141419);color:var(--text,#fff);border:1px solid var(--border,#333);border-radius:4px;min-width:180px;">' +
               ownerOpts +
             '</select>' +
@@ -495,7 +495,7 @@ function p86Ask(message, opts) {
             '<span style="color:var(--text-dim,#888);font-size:11px;">…</span>' +
           '</td>' +
           '<td style="text-align:center;">' +
-            '<button onclick="openJobShareManager(\'' + escapeHTML(j.id) + '\')" style="font-size:11px;padding:4px 10px;">Manage Sharing</button>' +
+            '<button onclick="openJobShareManager(p86Dec(\'' + p86Enc(j.id) + '\'))" style="font-size:11px;padding:4px 10px;">Manage Sharing</button>' +
           '</td>' +
         '</tr>';
       });
@@ -604,13 +604,13 @@ function p86Ask(message, opts) {
           '<td style="padding:6px 8px;">' + escapeHTML(s.name || '') + '</td>' +
           '<td style="padding:6px 8px;font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(s.role || '') + '</td>' +
           '<td style="padding:6px 8px;">' +
-            '<select onchange="updateAdminJobAccessLevel(' + s.user_id + ', this.value)" style="font-size:11px;padding:2px 4px;background:var(--card-bg,#141419);color:var(--text,#fff);border:1px solid var(--border,#333);border-radius:4px;">' +
+            '<select onchange="updateAdminJobAccessLevel(' + p86Code(s.user_id) + ', this.value)" style="font-size:11px;padding:2px 4px;background:var(--card-bg,#141419);color:var(--text,#fff);border:1px solid var(--border,#333);border-radius:4px;">' +
               '<option value="edit"' + (s.access_level === 'edit' ? ' selected' : '') + '>edit</option>' +
               '<option value="view"' + (s.access_level === 'view' ? ' selected' : '') + '>view</option>' +
             '</select>' +
           '</td>' +
           '<td style="padding:6px 8px;text-align:right;">' +
-            '<button onclick="revokeAdminJobAccess(' + s.user_id + ')" style="font-size:10px;padding:2px 8px;background:#e74c3c;color:#fff;border:none;border-radius:4px;cursor:pointer;">Revoke</button>' +
+            '<button onclick="revokeAdminJobAccess(' + p86Code(s.user_id) + ')" style="font-size:10px;padding:2px 8px;background:#e74c3c;color:#fff;border:none;border-radius:4px;cursor:pointer;">Revoke</button>' +
           '</td>' +
         '</tr>';
       });
@@ -855,8 +855,8 @@ function p86Ask(message, opts) {
         '<td class="num" style="font-family:\'SF Mono\',monospace;">' + (m.purchase_count || 0) + '</td>' +
         '<td style="font-size:11px;color:var(--text-dim,#aaa);">' + fmtDate(m.last_seen) + '</td>' +
         '<td style="text-align:right;white-space:nowrap;">' +
-          '<button class="ee-btn ee-icon-btn secondary" onclick="openMaterialEditor(' + m.id + ')" title="Edit">&#x270F;&#xFE0F;</button>' +
-          '<button class="ee-btn ee-icon-btn ghost" onclick="toggleMaterialHidden(' + m.id + ')" title="' + (m.is_hidden ? 'Unhide' : 'Hide') + '">' + (m.is_hidden ? '&#x1F441;' : '&#x1F441;&#xFE0F;') + '</button>' +
+          '<button class="ee-btn ee-icon-btn secondary" onclick="openMaterialEditor(' + p86Code(m.id) + ')" title="Edit">&#x270F;&#xFE0F;</button>' +
+          '<button class="ee-btn ee-icon-btn ghost" onclick="toggleMaterialHidden(' + p86Code(m.id) + ')" title="' + (m.is_hidden ? 'Unhide' : 'Hide') + '">' + (m.is_hidden ? '&#x1F441;' : '&#x1F441;&#xFE0F;') + '</button>' +
         '</td>' +
       '</tr>';
     });
@@ -1239,7 +1239,7 @@ function p86Ask(message, opts) {
       var bg = isActive ? 'rgba(79,140,255,0.18)' : 'transparent';
       var border = isActive ? '#4f8cff' : 'var(--border,#333)';
       var color = isActive ? '#fff' : 'var(--text-dim,#888)';
-      return '<button onclick="switchEmailView(\'' + key + '\')" ' +
+      return '<button onclick="switchEmailView(p86Dec(\'' + p86Enc(key) + '\'))" ' +
         'style="padding:6px 14px;border:1px solid ' + border + ';border-radius:18px;background:' + bg + ';color:' + color + ';font-size:12px;font-weight:600;cursor:pointer;">' +
         label +
       '</button>';
@@ -2087,7 +2087,7 @@ function p86Ask(message, opts) {
       var sched = r.scheduled_at ? new Date(r.scheduled_at).toLocaleString() : '—';
       var safeId = String(r.id).replace(/'/g, '');
       tbl +=
-        '<tr style="border-bottom:1px solid var(--border,#2a2a3a);cursor:pointer;" onclick="openCampaignBuilder(\'' + safeId + '\')">' +
+        '<tr style="border-bottom:1px solid var(--border,#2a2a3a);cursor:pointer;" onclick="openCampaignBuilder(p86Dec(\'' + p86Enc(safeId) + '\'))">' +
           '<td style="padding:10px 12px;font-weight:600;">' + escapeHTML(r.name) + '</td>' +
           '<td style="padding:10px 12px;color:var(--text-dim,#aaa);">' + escapeHTML(recDesc) + '</td>' +
           '<td style="padding:10px 12px;">' + statusPill(r.status) + '</td>' +
@@ -2098,9 +2098,9 @@ function p86Ask(message, opts) {
           '<td style="padding:10px 12px;color:var(--text-dim,#aaa);">' + escapeHTML(sched) + '</td>' +
           '<td style="padding:10px 12px;text-align:right;" onclick="event.stopPropagation();">' +
             (r.status === 'draft' || r.status === 'scheduled'
-              ? '<button class="ghost small" onclick="cancelCampaign(\'' + safeId + '\')" title="Cancel" style="color:#f59e0b;">&#x2715;</button>'
+              ? '<button class="ghost small" onclick="cancelCampaign(p86Dec(\'' + p86Enc(safeId) + '\'))" title="Cancel" style="color:#f59e0b;">&#x2715;</button>'
               : '') +
-            ' <button class="ghost small" onclick="deleteCampaign(\'' + safeId + '\')" title="Archive" style="color:#f87171;">&#x1F5D1;</button>' +
+            ' <button class="ghost small" onclick="deleteCampaign(p86Dec(\'' + p86Enc(safeId) + '\'))" title="Archive" style="color:#f87171;">&#x1F5D1;</button>' +
           '</td>' +
         '</tr>';
     });
@@ -2220,7 +2220,7 @@ function p86Ask(message, opts) {
               (schedVal ? '&#x1F4C5; Schedule send' : '&#x1F4E4; Send now') +
             '</button>'
           : c.status === 'scheduled'
-            ? '<button class="secondary" onclick="cancelCampaign(\'' + escapeHTML(c.id) + '\')">Cancel schedule</button>'
+            ? '<button class="secondary" onclick="cancelCampaign(p86Dec(\'' + p86Enc(c.id) + '\'))">Cancel schedule</button>'
             : '<div style="color:var(--text-dim,#888);font-size:12px;align-self:center;">Campaign is ' + escapeHTML(c.status) + ' &mdash; no further edits.</div>') +
       '</div>';
 
@@ -3561,13 +3561,13 @@ function p86Ask(message, opts) {
           : '';
         html += '<div data-mem-idx="' + idx + '" style="border:1px solid var(--border,#333);border-radius:6px;padding:10px 12px;margin-bottom:10px;background:rgba(255,255,255,0.02);">';
         html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
-          '<input type="text" data-mem-name="' + idx + '" value="' + escapeHTML(row.name || '') + '" placeholder="Memory name (e.g., Talk-through workflow)" style="flex:1;font-weight:600;" oninput="markMemoryDirty(' + idx + ')" />' +
-          '<input type="number" data-mem-sort="' + idx + '" value="' + (row.sort_order || 0) + '" title="Sort order (lower = earlier in prompt)" style="width:70px;font-size:12px;" oninput="markMemoryDirty(' + idx + ')" />' +
+          '<input type="text" data-mem-name="' + idx + '" value="' + escapeHTML(row.name || '') + '" placeholder="Memory name (e.g., Talk-through workflow)" style="flex:1;font-weight:600;" oninput="markMemoryDirty(' + p86Code(idx) + ')" />' +
+          '<input type="number" data-mem-sort="' + idx + '" value="' + (row.sort_order || 0) + '" title="Sort order (lower = earlier in prompt)" style="width:70px;font-size:12px;" oninput="markMemoryDirty(' + p86Code(idx) + ')" />' +
           dirtyBadge + newBadge +
-          '<button class="ee-btn primary" onclick="saveMemoryRow(' + idx + ')" title="Save this row">&#x1F4BE;</button>' +
-          '<button class="ee-btn ee-icon-btn danger" onclick="deleteMemoryRow(' + idx + ')" title="Archive (soft-delete)">&#x1F5D1;</button>' +
+          '<button class="ee-btn primary" onclick="saveMemoryRow(' + p86Code(idx) + ')" title="Save this row">&#x1F4BE;</button>' +
+          '<button class="ee-btn ee-icon-btn danger" onclick="deleteMemoryRow(' + p86Code(idx) + ')" title="Archive (soft-delete)">&#x1F5D1;</button>' +
         '</div>';
-        html += '<textarea data-mem-body="' + idx + '" rows="8" style="width:100%;resize:vertical;font-family:\'SF Mono\',monospace;font-size:12px;line-height:1.5;" placeholder="Posture body. Markdown OK. Be tight - this fires on every turn." oninput="markMemoryDirty(' + idx + ')">' + escapeHTML(row.body || '') + '</textarea>';
+        html += '<textarea data-mem-body="' + idx + '" rows="8" style="width:100%;resize:vertical;font-family:\'SF Mono\',monospace;font-size:12px;line-height:1.5;" placeholder="Posture body. Markdown OK. Be tight - this fires on every turn." oninput="markMemoryDirty(' + p86Code(idx) + ')">' + escapeHTML(row.body || '') + '</textarea>';
         html += '<div data-mem-status="' + idx + '" style="margin-top:6px;font-size:11px;color:var(--text-dim,#888);min-height:14px;"></div>';
         html += '</div>';
       });
@@ -3787,9 +3787,9 @@ function p86Ask(message, opts) {
         '<span style="flex:0 0 28px;text-align:right;color:var(--text-dim,#888);font-size:12px;padding-top:8px;font-family:\'SF Mono\',monospace;">' + (idx + 1) + '.</span>' +
         '<textarea data-excl-idx="' + idx + '" rows="3" style="flex:1;resize:vertical;font-size:12px;">' + escapeHTML(item) + '</textarea>' +
         '<div style="display:flex;flex-direction:column;gap:4px;">' +
-          '<button class="ghost small" onclick="moveExclusion(' + idx + ', -1)" ' + (idx === 0 ? 'disabled' : '') + ' title="Move up">&#x25B2;</button>' +
-          '<button class="ghost small" onclick="moveExclusion(' + idx + ', 1)" ' + (idx === exclusions.length - 1 ? 'disabled' : '') + ' title="Move down">&#x25BC;</button>' +
-          '<button class="ghost small" onclick="deleteExclusion(' + idx + ')" title="Remove" style="color:#f87171;">&#x1F5D1;</button>' +
+          '<button class="ghost small" onclick="moveExclusion(' + p86Code(idx) + ', -1)" ' + (idx === 0 ? 'disabled' : '') + ' title="Move up">&#x25B2;</button>' +
+          '<button class="ghost small" onclick="moveExclusion(' + p86Code(idx) + ', 1)" ' + (idx === exclusions.length - 1 ? 'disabled' : '') + ' title="Move down">&#x25BC;</button>' +
+          '<button class="ghost small" onclick="deleteExclusion(' + p86Code(idx) + ')" title="Remove" style="color:#f87171;">&#x1F5D1;</button>' +
         '</div>' +
       '</div>';
     }).join('');
@@ -3848,7 +3848,7 @@ function p86Ask(message, opts) {
       var bg = isActive ? 'rgba(79,140,255,0.18)' : 'transparent';
       var border = isActive ? '#4f8cff' : 'var(--border,#333)';
       var color = isActive ? '#fff' : 'var(--text-dim,#888)';
-      tabsHTML += '<button onclick="switchTemplatesTab(\'' + tab.key + '\')" ' +
+      tabsHTML += '<button onclick="switchTemplatesTab(p86Dec(\'' + p86Enc(tab.key) + '\'))" ' +
         'style="padding:6px 14px;border:1px solid ' + border + ';border-radius:18px;background:' + bg + ';color:' + color + ';font-size:12px;font-weight:600;cursor:pointer;">' +
         tab.label +
       '</button>';
@@ -4106,8 +4106,8 @@ function p86Ask(message, opts) {
         'style="width:100%;resize:vertical;font-family:\'SF Mono\',monospace;font-size:12px;" ' +
         'placeholder="site-photos&#10;plans-specs&#10;proposals">' + escapeHTML(eff.join('\n')) + '</textarea>';
       html += '<div style="display:flex;gap:8px;align-items:center;margin-top:8px;">' +
-        '<button class="primary small" onclick="saveFolderTemplate(\'' + t.key + '\')">&#x1F4BE; Save</button>' +
-        '<button class="secondary small" onclick="resetFolderTemplate(\'' + t.key + '\')"' + (customized ? '' : ' disabled title="Already using the built-in defaults"') + '>&#x21BA; Reset to default</button>' +
+        '<button class="primary small" onclick="saveFolderTemplate(p86Dec(\'' + p86Enc(t.key) + '\'))">&#x1F4BE; Save</button>' +
+        '<button class="secondary small" onclick="resetFolderTemplate(p86Dec(\'' + p86Enc(t.key) + '\'))"' + (customized ? '' : ' disabled title="Already using the built-in defaults"') + '>&#x21BA; Reset to default</button>' +
         '<span id="folder-tpl-status-' + t.key + '" style="margin-left:6px;color:var(--text-dim,#888);font-size:12px;"></span>' +
       '</div>';
       html += '</fieldset>';
@@ -4245,14 +4245,14 @@ function p86Ask(message, opts) {
         var syncBadge;
         if (skill.anthropic_skill_id) {
           syncBadge = '<span title="Mirrored to Anthropic native Skills (' + escapeAttr(skill.anthropic_skill_id) + ')" style="display:inline-flex;align-items:center;gap:4px;background:rgba(52,211,153,0.12);color:#34d399;font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">&#x1F310; Synced</span>' +
-            ' <button class="ee-btn ee-icon-btn ghost" onclick="unsyncSkillFromAnthropic(' + idx + ')" title="Delete the Anthropic-side mirror so the next sync uploads a fresh copy" style="font-size:11px;padding:2px 6px;">&#x21BA;</button>';
+            ' <button class="ee-btn ee-icon-btn ghost" onclick="unsyncSkillFromAnthropic(' + p86Code(idx) + ')" title="Delete the Anthropic-side mirror so the next sync uploads a fresh copy" style="font-size:11px;padding:2px 6px;">&#x21BA;</button>';
         } else {
-          syncBadge = '<button class="ee-btn secondary" onclick="syncSkillToAnthropic(' + idx + ')" title="Mirror this pack to Anthropic native Skills" style="font-size:11px;padding:2px 8px;">&#x1F310; Mirror</button>';
+          syncBadge = '<button class="ee-btn secondary" onclick="syncSkillToAnthropic(' + p86Code(idx) + ')" title="Mirror this pack to Anthropic native Skills" style="font-size:11px;padding:2px 8px;">&#x1F310; Mirror</button>';
         }
         html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
           '<input type="text" data-skill-name="' + idx + '" value="' + escapeHTML(skill.name || '') + '" placeholder="Skill name (e.g., Project 86 Estimating Playbook)" style="flex:1;font-weight:600;" />' +
           syncBadge +
-          '<button class="ee-btn ee-icon-btn danger" onclick="deleteSkill(' + idx + ')" title="Remove skill">&#x1F5D1;</button>' +
+          '<button class="ee-btn ee-icon-btn danger" onclick="deleteSkill(' + p86Code(idx) + ')" title="Remove skill">&#x1F5D1;</button>' +
         '</div>';
         // Agent checkboxes — which agents load this skill
         html += '<div style="display:flex;gap:14px;margin-bottom:8px;font-size:11px;color:var(--text-dim,#aaa);">';
@@ -4509,7 +4509,7 @@ function p86Ask(message, opts) {
           : '';
         var deleteBtn = r.builtin
           ? '<button class="ee-btn ghost" disabled title="Built-in roles cannot be deleted">Delete</button>'
-          : '<button class="ee-btn danger" onclick="deleteAdminRole(\'' + escapeHTML(r.name) + '\')">Delete</button>';
+          : '<button class="ee-btn danger" onclick="deleteAdminRole(p86Dec(\'' + p86Enc(r.name) + '\'))">Delete</button>';
         html += '<div class="card" style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;gap:14px;">' +
           '<div style="min-width:0;flex:1;">' +
             '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:2px;">' +
@@ -4521,7 +4521,7 @@ function p86Ask(message, opts) {
             '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:4px;">' + capCount + ' capabilit' + (capCount === 1 ? 'y' : 'ies') + '</div>' +
           '</div>' +
           '<div style="display:flex;gap:6px;flex-shrink:0;">' +
-            '<button class="ee-btn secondary" onclick="openEditRoleModal(\'' + escapeHTML(r.name) + '\')">Edit</button>' +
+            '<button class="ee-btn secondary" onclick="openEditRoleModal(p86Dec(\'' + p86Enc(r.name) + '\'))">Edit</button>' +
             deleteBtn +
           '</div>' +
         '</div>';
@@ -4812,9 +4812,9 @@ function p86Ask(message, opts) {
         ? '<span style="display:inline-block;padding:2px 10px;border-radius:10px;background:rgba(52,211,153,0.15);color:#34d399;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Live</span>'
         : '<span style="display:inline-block;padding:2px 10px;border-radius:10px;background:rgba(251,191,36,0.15);color:#fbbf24;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Draft</span>';
       var actionBtn = isLive
-        ? '<button onclick="captureNowForJob(\'' + escapeHTML(j.id) + '\')" style="font-size:11px;padding:4px 10px;background:rgba(79,140,255,0.15);color:#4f8cff;border:1px solid rgba(79,140,255,0.3);border-radius:5px;cursor:pointer;margin-right:6px;">Capture Now</button>' +
-          '<button onclick="toggleJobLiveStatus(\'' + escapeHTML(j.id) + '\', false)" style="font-size:11px;padding:4px 12px;background:rgba(251,191,36,0.15);color:#fbbf24;border:1px solid rgba(251,191,36,0.3);border-radius:5px;cursor:pointer;">Revert to Draft</button>'
-        : '<button onclick="toggleJobLiveStatus(\'' + escapeHTML(j.id) + '\', true)" style="font-size:11px;padding:4px 12px;background:#34d399;color:#0a0a0f;border:none;border-radius:5px;cursor:pointer;font-weight:600;">Go Live</button>';
+        ? '<button onclick="captureNowForJob(p86Dec(\'' + p86Enc(j.id) + '\'))" style="font-size:11px;padding:4px 10px;background:rgba(79,140,255,0.15);color:#4f8cff;border:1px solid rgba(79,140,255,0.3);border-radius:5px;cursor:pointer;margin-right:6px;">Capture Now</button>' +
+          '<button onclick="toggleJobLiveStatus(p86Dec(\'' + p86Enc(j.id) + '\'), false)" style="font-size:11px;padding:4px 12px;background:rgba(251,191,36,0.15);color:#fbbf24;border:1px solid rgba(251,191,36,0.3);border-radius:5px;cursor:pointer;">Revert to Draft</button>'
+        : '<button onclick="toggleJobLiveStatus(p86Dec(\'' + p86Enc(j.id) + '\'), true)" style="font-size:11px;padding:4px 12px;background:#34d399;color:#0a0a0f;border:none;border-radius:5px;cursor:pointer;font-weight:600;">Go Live</button>';
 
       html += '<tr>' +
         '<td><strong>' + escapeHTML(label) + '</strong>' +
@@ -5012,8 +5012,8 @@ function p86Ask(message, opts) {
         var dim = c.archived ? 'opacity:0.5;' : '';
         return '<div data-cat-id="' + _catEsc(c.id) + '" style="display:flex;align-items:center;gap:8px;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:8px;padding:7px 10px;' + dim + '">' +
           '<span style="flex:1;color:var(--text,#fff);font-size:13px;">' + _catEsc(c.name) + (c.archived ? ' <span style="font-size:11px;color:var(--text-dim,#888);">(archived)</span>' : '') + '</span>' +
-          '<button class="secondary" style="padding:3px 9px;font-size:12px;" onclick="renameAdminCostCategory(\'' + _catEsc(c.id) + '\',\'' + _catEsc((c.name || '').replace(/'/g, '\\\'')) + '\')">Rename</button>' +
-          '<button class="secondary" style="padding:3px 9px;font-size:12px;' + (c.archived ? '' : 'color:#ff6b6b;border-color:#5a2230;') + '" onclick="archiveAdminCostCategory(\'' + _catEsc(c.id) + '\',' + (c.archived ? 'false' : 'true') + ')">' + (c.archived ? 'Restore' : 'Archive') + '</button>' +
+          '<button class="secondary" style="padding:3px 9px;font-size:12px;" onclick="renameAdminCostCategory(p86Dec(\'' + p86Enc(c.id) + '\'),p86Dec(\'' + p86Enc(c.name || '') + '\'))">Rename</button>' +
+          '<button class="secondary" style="padding:3px 9px;font-size:12px;' + (c.archived ? '' : 'color:#ff6b6b;border-color:#5a2230;') + '" onclick="archiveAdminCostCategory(p86Dec(\'' + p86Enc(c.id) + '\'),' + (c.archived ? 'false' : 'true') + ')">' + (c.archived ? 'Restore' : 'Archive') + '</button>' +
         '</div>';
       }).join('');
     }).catch(function () { listEl.innerHTML = '<div style="color:#ff6b6b;font-size:12px;">Could not load categories.</div>'; });
@@ -5270,7 +5270,7 @@ function p86Ask(message, opts) {
       var bg = isActive ? 'rgba(79,140,255,0.18)' : 'transparent';
       var border = isActive ? '#4f8cff' : 'var(--border,#333)';
       var color = isActive ? '#fff' : 'var(--text-dim,#888)';
-      tabsHTML += '<button onclick="switchOrgTab(\'' + tab.key + '\')" ' +
+      tabsHTML += '<button onclick="switchOrgTab(p86Dec(\'' + p86Enc(tab.key) + '\'))" ' +
         'style="padding:6px 14px;border:1px solid ' + border + ';border-radius:18px;background:' + bg + ';color:' + color + ';font-size:12px;font-weight:600;cursor:pointer;">' +
         tab.label +
       '</button>';
@@ -5797,9 +5797,9 @@ function p86Ask(message, opts) {
       '<td style="padding:6px 4px;color:var(--text-dim,#aaa);">' + Number(t.use_count || 0) + '</td>' +
       '<td style="padding:6px 4px;color:' + (archived ? '#888' : '#34d399') + ';font-size:11px;">' + (archived ? 'Archived' : 'Active') + '</td>' +
       '<td style="padding:6px 4px;text-align:right;">' +
-        '<button class="ee-btn secondary" onclick="window.adminTagCatalog.openPinStyle(' + t.id + ')" style="font-size:11px;padding:4px 8px;" title="Map-pin icon + color">Pin</button> ' +
-        '<button class="ee-btn secondary" onclick="window.adminTagCatalog.openRename(' + t.id + ')" style="font-size:11px;padding:4px 8px;">Rename</button> ' +
-        '<button class="ee-btn secondary" onclick="window.adminTagCatalog.toggleArchive(' + t.id + ')" style="font-size:11px;padding:4px 8px;">' + (archived ? 'Unarchive' : 'Archive') + '</button>' +
+        '<button class="ee-btn secondary" onclick="window.adminTagCatalog.openPinStyle(' + p86Code(t.id) + ')" style="font-size:11px;padding:4px 8px;" title="Map-pin icon + color">Pin</button> ' +
+        '<button class="ee-btn secondary" onclick="window.adminTagCatalog.openRename(' + p86Code(t.id) + ')" style="font-size:11px;padding:4px 8px;">Rename</button> ' +
+        '<button class="ee-btn secondary" onclick="window.adminTagCatalog.toggleArchive(' + p86Code(t.id) + ')" style="font-size:11px;padding:4px 8px;">' + (archived ? 'Unarchive' : 'Archive') + '</button>' +
       '</td>' +
     '</tr>';
   }
@@ -5886,14 +5886,14 @@ function p86Ask(message, opts) {
     var editing = st.editTrade === t.id && !isSeed;
     var header = editing
       ? '<input id="asmTradeName_' + t.id + '" value="' + escapeHTML(t.name) + '" style="padding:5px 8px;font-size:13px;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:6px;color:var(--text,#fff);width:200px;" />' +
-        ' <button class="ee-btn primary" onclick="window.adminAsmCodes.saveTradeName(' + t.id + ')" style="font-size:11px;padding:4px 8px;">Save</button>' +
+        ' <button class="ee-btn primary" onclick="window.adminAsmCodes.saveTradeName(' + p86Code(t.id) + ')" style="font-size:11px;padding:4px 8px;">Save</button>' +
         ' <button class="ee-btn secondary" onclick="window.adminAsmCodes.cancelEdit()" style="font-size:11px;padding:4px 8px;">Cancel</button>'
       : '<strong style="color:var(--text,#fff);font-size:14px;">' + escapeHTML(t.name) + '</strong>' +
         ' <span style="font-family:monospace;font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(t.code) + '</span>' +
         (isSeed
           ? ' <span style="font-size:9px;text-transform:uppercase;letter-spacing:.5px;color:#8a93a6;background:rgba(255,255,255,0.06);padding:1px 6px;border-radius:8px;">seed</span>'
-          : ' <button class="ee-btn secondary" onclick="window.adminAsmCodes.beginEditTrade(' + t.id + ')" style="font-size:11px;padding:3px 8px;">Rename</button>' +
-            ' <button class="ee-btn secondary" onclick="window.adminAsmCodes.archiveTrade(' + t.id + ')" style="font-size:11px;padding:3px 8px;">Archive</button>');
+          : ' <button class="ee-btn secondary" onclick="window.adminAsmCodes.beginEditTrade(' + p86Code(t.id) + ')" style="font-size:11px;padding:3px 8px;">Rename</button>' +
+            ' <button class="ee-btn secondary" onclick="window.adminAsmCodes.archiveTrade(' + p86Code(t.id) + ')" style="font-size:11px;padding:3px 8px;">Archive</button>');
     var sysRows = systems.slice().sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); }).map(asmSystemBlockHTML).join('');
     return '<div style="border:1px solid var(--border,#2a2f3a);border-radius:8px;margin-bottom:10px;overflow:hidden;">' +
       '<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:rgba(255,255,255,0.03);flex-wrap:wrap;">' + header + '</div>' +
@@ -5903,7 +5903,7 @@ function p86Ask(message, opts) {
           asmMiniInput('System code', 'asmNewSysCode_' + escapeHTML(t.code), 'e.g. PV', 90) +
           asmMiniInput('System name', 'asmNewSysName_' + escapeHTML(t.code), 'e.g. Panel', 150) +
           asmMiniInput('Unit', 'asmNewSysUnit_' + escapeHTML(t.code), 'EA', 60) +
-          '<button class="ee-btn secondary" onclick="window.adminAsmCodes.addSystem(\'' + escapeHTML(t.code) + '\')" style="font-size:11px;padding:5px 9px;">+ Add system</button>' +
+          '<button class="ee-btn secondary" onclick="window.adminAsmCodes.addSystem(p86Dec(\'' + p86Enc(t.code) + '\'))" style="font-size:11px;padding:5px 9px;">+ Add system</button>' +
         '</div>' +
       '</div>' +
     '</div>';
@@ -5917,7 +5917,7 @@ function p86Ask(message, opts) {
       return '<div style="display:flex;gap:6px;align-items:center;padding:3px 0;">' +
         '<input id="asmSysName_' + s.id + '" value="' + escapeHTML(s.name) + '" style="padding:4px 7px;font-size:12px;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:6px;color:var(--text,#fff);width:150px;" />' +
         '<input id="asmSysUnit_' + s.id + '" value="' + escapeHTML(s.default_unit || '') + '" placeholder="Unit" style="padding:4px 7px;font-size:12px;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:6px;color:var(--text,#fff);width:56px;" />' +
-        '<button class="ee-btn primary" onclick="window.adminAsmCodes.saveSystem(' + s.id + ')" style="font-size:11px;padding:3px 8px;">Save</button>' +
+        '<button class="ee-btn primary" onclick="window.adminAsmCodes.saveSystem(' + p86Code(s.id) + ')" style="font-size:11px;padding:3px 8px;">Save</button>' +
         '<button class="ee-btn secondary" onclick="window.adminAsmCodes.cancelEdit()" style="font-size:11px;padding:3px 8px;">Cancel</button>' +
       '</div>';
     }
@@ -5929,8 +5929,8 @@ function p86Ask(message, opts) {
       (isSeed
         ? '<span style="font-size:9px;text-transform:uppercase;color:#8a93a6;background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:8px;">seed</span>'
         : '<span style="margin-left:auto;"></span>' +
-          '<button class="ee-btn secondary" onclick="window.adminAsmCodes.beginEditSystem(' + s.id + ')" style="font-size:10px;padding:2px 7px;">Rename</button>' +
-          '<button class="ee-btn secondary" onclick="window.adminAsmCodes.archiveSystem(' + s.id + ')" style="font-size:10px;padding:2px 7px;">Archive</button>') +
+          '<button class="ee-btn secondary" onclick="window.adminAsmCodes.beginEditSystem(' + p86Code(s.id) + ')" style="font-size:10px;padding:2px 7px;">Rename</button>' +
+          '<button class="ee-btn secondary" onclick="window.adminAsmCodes.archiveSystem(' + p86Code(s.id) + ')" style="font-size:10px;padding:2px 7px;">Archive</button>') +
     '</div>';
   }
 
@@ -5940,7 +5940,7 @@ function p86Ask(message, opts) {
     var key = String(s.trade_code).toUpperCase() + '_' + String(s.code).toUpperCase();
     var variants = (st._varBySys && st._varBySys[key]) || [];
     var expanded = !!st.expandSys[key];
-    var toggle = '<span onclick="window.adminAsmCodes.toggleSysVariants(\'' + key + '\')" style="cursor:pointer;font-size:10px;color:var(--accent,#4f8cff);white-space:nowrap;">' +
+    var toggle = '<span onclick="window.adminAsmCodes.toggleSysVariants(p86Dec(\'' + p86Enc(key) + '\'))" style="cursor:pointer;font-size:10px;color:var(--accent,#4f8cff);white-space:nowrap;">' +
       (expanded ? '▾' : '▸') + ' ' + variants.length + ' variant' + (variants.length === 1 ? '' : 's') + '</span>';
     var body = '';
     if (expanded) {
@@ -5951,7 +5951,7 @@ function p86Ask(message, opts) {
           asmMiniInput('Variant code', 'asmNewVarCode_' + key, 'e.g. 612', 80) +
           asmMiniInput('Name', 'asmNewVarName_' + key, 'e.g. 6:12 pitch', 140) +
           asmMiniInput('Note', 'asmNewVarNote_' + key, 'optional', 140) +
-          '<button class="ee-btn secondary" onclick="window.adminAsmCodes.addVariant(\'' + escapeHTML(s.trade_code) + '\',\'' + escapeHTML(s.code) + '\')" style="font-size:10px;padding:4px 8px;">+ Add</button>' +
+          '<button class="ee-btn secondary" onclick="window.adminAsmCodes.addVariant(p86Dec(\'' + p86Enc(s.trade_code) + '\'),p86Dec(\'' + p86Enc(s.code) + '\'))" style="font-size:10px;padding:4px 8px;">+ Add</button>' +
         '</div>' +
       '</div>';
     }
@@ -5966,7 +5966,7 @@ function p86Ask(message, opts) {
       return '<div style="display:flex;gap:5px;align-items:center;padding:2px 0;">' +
         '<input id="asmVarName_' + v.id + '" value="' + escapeHTML(v.name) + '" style="padding:3px 6px;font-size:11.5px;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:5px;color:var(--text,#fff);width:130px;" />' +
         '<input id="asmVarNote_' + v.id + '" value="' + escapeHTML(v.note || '') + '" placeholder="note" style="padding:3px 6px;font-size:11.5px;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:5px;color:var(--text,#fff);width:150px;" />' +
-        '<button class="ee-btn primary" onclick="window.adminAsmCodes.saveVariant(' + v.id + ')" style="font-size:10px;padding:2px 7px;">Save</button>' +
+        '<button class="ee-btn primary" onclick="window.adminAsmCodes.saveVariant(' + p86Code(v.id) + ')" style="font-size:10px;padding:2px 7px;">Save</button>' +
         '<button class="ee-btn secondary" onclick="window.adminAsmCodes.cancelEdit()" style="font-size:10px;padding:2px 7px;">Cancel</button>' +
       '</div>';
     }
@@ -5977,8 +5977,8 @@ function p86Ask(message, opts) {
       (isSeed
         ? '<span style="margin-left:auto;font-size:8px;text-transform:uppercase;color:#8a93a6;">seed</span>'
         : '<span style="margin-left:auto;"></span>' +
-          '<button class="ee-btn secondary" onclick="window.adminAsmCodes.beginEditVariant(' + v.id + ')" style="font-size:9px;padding:1px 6px;">Rename</button>' +
-          '<button class="ee-btn secondary" onclick="window.adminAsmCodes.archiveVariant(' + v.id + ')" style="font-size:9px;padding:1px 6px;">Archive</button>') +
+          '<button class="ee-btn secondary" onclick="window.adminAsmCodes.beginEditVariant(' + p86Code(v.id) + ')" style="font-size:9px;padding:1px 6px;">Rename</button>' +
+          '<button class="ee-btn secondary" onclick="window.adminAsmCodes.archiveVariant(' + p86Code(v.id) + ')" style="font-size:9px;padding:1px 6px;">Archive</button>') +
     '</div>';
   }
 
@@ -6197,8 +6197,8 @@ function p86Ask(message, opts) {
           (s.description ? '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:4px;">' + escapeHTML(s.description) + '</div>' : '') +
         '</div>' +
         '<div style="display:flex;flex-direction:column;gap:4px;">' +
-          '<button class="ee-btn ghost" onclick="openMcpServerModal(\'' + escapeAttr(s.id) + '\')" style="padding:2px 8px;font-size:11px;">Edit</button>' +
-          '<button class="ee-btn ghost" onclick="archiveMcpServer(\'' + escapeAttr(s.id) + '\', \'' + escapeAttr(s.name) + '\')" style="padding:2px 8px;font-size:11px;color:#f87171;">Archive</button>' +
+          '<button class="ee-btn ghost" onclick="openMcpServerModal(p86Dec(\'' + p86Enc(s.id) + '\'))" style="padding:2px 8px;font-size:11px;">Edit</button>' +
+          '<button class="ee-btn ghost" onclick="archiveMcpServer(p86Dec(\'' + p86Enc(s.id) + '\'), p86Dec(\'' + p86Enc(s.name) + '\'))" style="padding:2px 8px;font-size:11px;color:#f87171;">Archive</button>' +
         '</div>' +
       '</div>';
     }).join('');
@@ -6292,7 +6292,7 @@ function p86Ask(message, opts) {
         +   '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">'
         +     '<input type="text" data-pack-field="name" value="' + escapeAttr(p.name || '') + '" placeholder="Pack name" style="flex:1;font-weight:600;" />'
         +     dirtyBadge + ' ' + mirrorChip
-        +     '<button class="ee-btn ee-icon-btn danger" onclick="deleteOrgPack(' + idx + ')" title="Soft-delete (sets archived_at)">&#x1F5D1;</button>'
+        +     '<button class="ee-btn ee-icon-btn danger" onclick="deleteOrgPack(' + p86Code(idx) + ')" title="Soft-delete (sets archived_at)">&#x1F5D1;</button>'
         +   '</div>'
         +   '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;font-size:11px;color:var(--text-dim,#aaa);">'
         +     '<div><label style="display:block;margin-bottom:3px;">Description</label>'
@@ -6332,7 +6332,7 @@ function p86Ask(message, opts) {
           '<span style="flex:1;color:var(--text,#e6e6e6);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">\u{1F4C4} ' + escapeHTML(a.filename) + '</span>' +
           '<span style="color:var(--text-dim,#888);font-size:11px;">' + escapeHTML(a.mime_type || '') + size + ' · ' + escapeHTML(when) + '</span>' +
           '<a href="' + escapeAttr(a.original_url || ('/api/attachments/raw/' + a.id)) + '" target="_blank" rel="noopener" style="color:#4f8cff;text-decoration:none;font-size:11px;">open</a>' +
-          '<button type="button" onclick="deleteOrgKBFile(\'' + escapeAttr(a.id) + '\')" style="background:transparent;border:none;color:#f87171;cursor:pointer;font-size:14px;padding:0 4px;" title="Delete">&times;</button>' +
+          '<button type="button" onclick="deleteOrgKBFile(p86Dec(\'' + p86Enc(a.id) + '\'))" style="background:transparent;border:none;color:#f87171;cursor:pointer;font-size:14px;padding:0 4px;" title="Delete">&times;</button>' +
           '</div>';
       });
       html += '</div>';
@@ -6906,7 +6906,7 @@ function p86Ask(message, opts) {
           '<td style="padding:8px 10px;font-size:11px;color:var(--text-dim,#888);white-space:nowrap;">' + new Date(o.created_at).toLocaleDateString() + '</td>' +
           '<td style="padding:8px 10px;text-align:right;white-space:nowrap;">' +
             (o.archived_at ? '' :
-              '<button class="ee-btn ghost" onclick="archiveOrg(' + o.id + ', \'' + escapeAttr(o.slug) + '\')" style="font-size:11px;padding:3px 8px;color:#f87171;">&#x1F5D1; Archive</button>') +
+              '<button class="ee-btn ghost" onclick="archiveOrg(' + p86Code(o.id) + ', p86Dec(\'' + p86Enc(o.slug) + '\'))" style="font-size:11px;padding:3px 8px;color:#f87171;">&#x1F5D1; Archive</button>') +
           '</td>' +
         '</tr>';
       }).join('');
@@ -6962,7 +6962,7 @@ function p86Ask(message, opts) {
           '<td style="padding:8px 10px;font-size:11px;color:var(--text-dim,#888);white-space:nowrap;">' + escapeHTML(expDate) + '</td>' +
           '<td style="padding:8px 10px;font-size:11px;color:var(--text-dim,#888);white-space:nowrap;">' + escapeHTML(inv.invited_by_name || '—') + '</td>' +
           '<td style="padding:8px 10px;text-align:right;white-space:nowrap;">' +
-            '<button class="ee-btn ghost" style="font-size:11px;padding:3px 8px;" onclick="copyOrgInviteLink(\'' + escapeAttr(inv.accept_url) + '\', this)">&#x1F517; Copy link</button>' +
+            '<button class="ee-btn ghost" style="font-size:11px;padding:3px 8px;" onclick="copyOrgInviteLink(p86Dec(\'' + p86Enc(inv.accept_url) + '\'), this)">&#x1F517; Copy link</button>' +
           '</td>' +
         '</tr>';
       }).join('');
@@ -7038,7 +7038,7 @@ function p86Ask(message, opts) {
               '<div style="margin-top:4px;font-family:\'SF Mono\',monospace;font-size:11px;color:var(--text,#fff);word-break:break-all;background:rgba(0,0,0,0.4);padding:8px;border-radius:4px;">' +
                 escapeHTML(resp.accept_url) +
               '</div>' +
-              '<button class="ee-btn ghost" style="font-size:11px;padding:3px 8px;margin-top:6px;" onclick="copyOrgInviteLink(\'' + escapeAttr(resp.accept_url) + '\', this)">&#x1F517; Copy link</button>' +
+              '<button class="ee-btn ghost" style="font-size:11px;padding:3px 8px;margin-top:6px;" onclick="copyOrgInviteLink(p86Dec(\'' + p86Enc(resp.accept_url) + '\'), this)">&#x1F517; Copy link</button>' +
             '</div>';
           btn.disabled = false; btn.textContent = '✓ Sent';
           // Refresh the pending invitations panel behind the modal.
@@ -7361,10 +7361,10 @@ function p86Ask(message, opts) {
           '<td style="padding:8px 10px;text-align:right;font-family:monospace;">' + rowCount + '</td>' +
           '<td style="padding:8px 10px;color:var(--text-dim,#888);font-size:11px;white-space:nowrap;">' + escapeHTML(when) + '</td>' +
           '<td style="padding:8px 10px;text-align:right;white-space:nowrap;">' +
-            '<button class="ee-btn ghost" onclick="refreshReferenceLink(\'' + escapeAttr(l.id) + '\')" style="font-size:11px;padding:3px 8px;">&#x21BB; Refresh</button> ' +
-            '<button class="ee-btn ghost" onclick="previewReferenceLink(\'' + escapeAttr(l.id) + '\')" style="font-size:11px;padding:3px 8px;">&#x1F441; Preview</button> ' +
-            '<button class="ee-btn ghost" onclick="editReferenceLink(\'' + escapeAttr(l.id) + '\')" style="font-size:11px;padding:3px 8px;">&#x270F; Edit</button> ' +
-            '<button class="ee-btn ghost" onclick="deleteReferenceLink(\'' + escapeAttr(l.id) + '\')" style="font-size:11px;padding:3px 8px;color:#f87171;">&#x1F5D1; Delete</button>' +
+            '<button class="ee-btn ghost" onclick="refreshReferenceLink(p86Dec(\'' + p86Enc(l.id) + '\'))" style="font-size:11px;padding:3px 8px;">&#x21BB; Refresh</button> ' +
+            '<button class="ee-btn ghost" onclick="previewReferenceLink(p86Dec(\'' + p86Enc(l.id) + '\'))" style="font-size:11px;padding:3px 8px;">&#x1F441; Preview</button> ' +
+            '<button class="ee-btn ghost" onclick="editReferenceLink(p86Dec(\'' + p86Enc(l.id) + '\'))" style="font-size:11px;padding:3px 8px;">&#x270F; Edit</button> ' +
+            '<button class="ee-btn ghost" onclick="deleteReferenceLink(p86Dec(\'' + p86Enc(l.id) + '\'))" style="font-size:11px;padding:3px 8px;color:#f87171;">&#x1F5D1; Delete</button>' +
           '</td>' +
         '</tr>';
       }).join('');
@@ -7442,7 +7442,7 @@ function p86Ask(message, opts) {
         '</div>' +
         '<div class="modal-footer" style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">' +
           '<button class="ee-btn secondary" onclick="closeReferenceLinkEditor()">Cancel</button>' +
-          '<button class="ee-btn primary" onclick="saveReferenceLink(' + (existing ? '\'' + escapeAttr(l.id) + '\'' : 'null') + ')">' + (existing ? 'Save' : 'Add') + '</button>' +
+          '<button class="ee-btn primary" onclick="saveReferenceLink(' + (existing ? 'p86Dec(\'' + p86Enc(l.id) + '\')' : 'null') + ')">' + (existing ? 'Save' : 'Add') + '</button>' +
         '</div>' +
       '</div>';
     document.body.appendChild(modal);
@@ -7925,7 +7925,7 @@ function p86Ask(message, opts) {
         var when = '';
         try { when = new Date(c.last_at).toLocaleString(); } catch (e) {}
         var totalTok = (Number(c.input_tokens) || 0) + (Number(c.output_tokens) || 0);
-        html += '<tr style="cursor:pointer;" onclick="openAgentConversation(\'' + escapeAttr(c.key) + '\')">' +
+        html += '<tr style="cursor:pointer;" onclick="openAgentConversation(p86Dec(\'' + p86Enc(c.key) + '\'))">' +
           '<td>' + escapeHTML(agentLabel) + '</td>' +
           '<td>' + escapeHTML(c.entity_title || (window.entityDisplayName && window.entityDisplayName(c.entity_type, c.entity_id)) || '') + '</td>' +
           '<td>' + escapeHTML(c.user_email || c.user_name || ('user ' + c.user_id)) + '</td>' +
@@ -7968,7 +7968,7 @@ function p86Ask(message, opts) {
             '<div style="font-size:14px;font-weight:600;color:var(--text,#fff);">' + escapeHTML(c.entity_title || (window.entityDisplayName && window.entityDisplayName(c.entity_type, c.entity_id)) || '') + '</div>' +
             '<div style="font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(c.entity_type) + ' &middot; ' + escapeHTML(c.user_email || ('user ' + c.user_id)) + ' &middot; ' + (c.messages || []).length + ' messages</div>' +
           '</div>' +
-          '<button class="ee-btn" onclick="openReplayDialog(\'' + escapeAttr(key) + '\')" style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border:none;font-weight:600;">&#x1F501; Replay last turn</button>' +
+          '<button class="ee-btn" onclick="openReplayDialog(p86Dec(\'' + p86Enc(key) + '\'))" style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border:none;font-weight:600;">&#x1F501; Replay last turn</button>' +
         '</div>';
       var msgs = (c.messages || []).map(renderAgentMessage).join('');
       if (!msgs) msgs = '<div style="color:var(--text-dim,#888);font-style:italic;">No messages.</div>';
@@ -8344,8 +8344,8 @@ function p86Ask(message, opts) {
           '<td style="font-size:11px;color:var(--text-dim,#aaa);">' + (v.comment ? escapeHTML(v.comment) : '<span style="color:var(--text-dim,#666);">—</span>') + '</td>' +
           '<td style="text-align:right;font-family:\'SF Mono\',monospace;">' + (v.skill_count || 0) + '</td>' +
           '<td style="text-align:right;">' +
-            '<button class="ee-btn secondary" onclick="viewSkillsVersion(' + v.id + ')">View</button>' +
-            ' <button class="ee-btn primary" onclick="restoreSkillsVersion(' + v.id + ')">Restore</button>' +
+            '<button class="ee-btn secondary" onclick="viewSkillsVersion(' + p86Code(v.id) + ')">View</button>' +
+            ' <button class="ee-btn primary" onclick="restoreSkillsVersion(' + p86Code(v.id) + ')">Restore</button>' +
           '</td>' +
         '</tr>';
       });
@@ -8498,7 +8498,7 @@ function p86Ask(message, opts) {
             '<td style="padding:3px 0;font-family:\'SF Mono\',monospace;font-size:10px;color:var(--text-dim,#aaa);">' + escapeHTML(sid) + '</td>' +
             '<td style="padding:3px 0;text-align:right;width:1%;white-space:nowrap;">' +
               (isPlatformOwner()
-                ? '<button type="button" onclick="window.detachAgentSkill && window.detachAgentSkill(\'' + escapeAttr(agentKey) + '\', \'' + escapeAttr(sid) + '\')" ' +
+                ? '<button type="button" onclick="window.detachAgentSkill && window.detachAgentSkill(p86Dec(\'' + p86Enc(agentKey) + '\'), p86Dec(\'' + p86Enc(sid) + '\'))" ' +
                     'style="font-size:11px;padding:3px 8px;border-radius:4px;border:1px solid #f87171;background:transparent;color:#f87171;cursor:pointer;">Detach</button>'
                 : '') +
             '</td>' +
@@ -8521,7 +8521,7 @@ function p86Ask(message, opts) {
               return '<option value="' + escapeAttr(s.id) + '">' + escapeHTML(t) + ' — ' + escapeHTML(s.id) + '</option>';
             }).join('') +
           '</select>' +
-          '<button type="button" onclick="window.attachAgentSkill && window.attachAgentSkill(\'' + escapeAttr(agentKey) + '\')" ' +
+          '<button type="button" onclick="window.attachAgentSkill && window.attachAgentSkill(p86Dec(\'' + p86Enc(agentKey) + '\'))" ' +
             'style="font-size:12px;padding:5px 12px;border-radius:4px;border:1px solid #4f8cff;background:rgba(79,140,255,0.1);color:#4f8cff;cursor:pointer;">Attach</button>' +
         '</div>';
       } else {
@@ -8606,13 +8606,13 @@ function p86Ask(message, opts) {
             '<td style="text-align:right;font-family:\'SF Mono\',monospace;">' + (r.skill_count || 0) + '</td>' +
             '<td style="font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(when) + '</td>' +
             '<td id="agent-state-' + escapeAttr(k) + '" style="font-size:11px;color:var(--text-dim,#888);">Checking…</td>' +
-            '<td><button class="ee-btn secondary" onclick="syncManagedAgent(\'' + escapeAttr(k) + '\')" title="Push the local config to Anthropic as a new version of this same agent id.">Sync</button></td>' +
+            '<td><button class="ee-btn secondary" onclick="syncManagedAgent(p86Dec(\'' + p86Enc(k) + '\'))" title="Push the local config to Anthropic as a new version of this same agent id.">Sync</button></td>' +
           '</tr>';
         } else {
           rowsHtml += '<tr style="opacity:0.7;">' +
             '<td>' + escapeHTML(labels[k] || k) + '</td>' +
             '<td colspan="6" style="font-style:italic;color:var(--text-dim,#888);font-size:11px;">not yet registered</td>' +
-            '<td><button class="ee-btn secondary" onclick="bootstrapManagedAgents(\'' + escapeAttr(k) + '\')">Register</button></td>' +
+            '<td><button class="ee-btn secondary" onclick="bootstrapManagedAgents(p86Dec(\'' + p86Enc(k) + '\'))">Register</button></td>' +
           '</tr>';
         }
       });
@@ -8631,7 +8631,7 @@ function p86Ask(message, opts) {
           staleHtml += '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;">' +
             '<span style="font-family:\'SF Mono\',monospace;font-size:11px;color:var(--text,#fff);">' + escapeHTML(k) + '</span>' +
             '<span style="font-family:\'SF Mono\',monospace;font-size:10px;color:var(--text-dim,#aaa);flex:1;">' + escapeHTML(r.anthropic_agent_id) + '</span>' +
-            '<button class="ee-btn secondary" onclick="deleteStaleAgentRow(\'' + escapeAttr(k) + '\')" style="font-size:11px;">Delete row</button>' +
+            '<button class="ee-btn secondary" onclick="deleteStaleAgentRow(p86Dec(\'' + p86Enc(k) + '\'))" style="font-size:11px;">Delete row</button>' +
           '</div>';
         });
         staleHtml += '</div>';
@@ -8777,7 +8777,7 @@ function p86Ask(message, opts) {
           '<td>' + escapeHTML(name) + '</td>' +
           '<td style="font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML((s.description || '').slice(0, 120)) + '</td>' +
           '<td style="font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(when) + '</td>' +
-          '<td><button type="button" onclick="window.deleteNativeSkill && window.deleteNativeSkill(\'' + encodeURIComponent(id) + '\', \'' + encodeURIComponent(name).replace(/'/g, "\\'") + '\')" ' +
+          '<td><button type="button" onclick="window.deleteNativeSkill && window.deleteNativeSkill(p86Dec(\'' + p86Enc(encodeURIComponent(id)) + '\'), p86Dec(\'' + p86Enc(encodeURIComponent(name)) + '\'))" ' +
             'style="font-size:11px;padding:3px 8px;border-radius:4px;border:1px solid #f87171;background:transparent;color:#f87171;cursor:pointer;">Delete</button></td>' +
         '</tr>';
       });
@@ -9086,7 +9086,7 @@ function p86Ask(message, opts) {
           '<td>' + escapeHTML(s.name || s.eval_id) + (s.error ? '<div style="font-size:11px;color:#f87171;margin-top:2px;">' + escapeHTML(s.error) + '</div>' : '') + '</td>' +
           '<td>' + pill + '</td>' +
           '<td style="text-align:right;font-family:\'SF Mono\',monospace;font-size:11px;color:var(--text-dim,#aaa);">' + (s.duration_ms ? Math.round(s.duration_ms / 100) / 10 + 's' : '—') + '</td>' +
-          '<td><button class="ee-btn secondary" onclick="openEvalDetail(\'' + escapeAttr(s.eval_id) + '\')">View</button></td>' +
+          '<td><button class="ee-btn secondary" onclick="openEvalDetail(p86Dec(\'' + p86Enc(s.eval_id) + '\'))">View</button></td>' +
         '</tr>';
       });
       html += '</tbody></table></div>';
@@ -9261,13 +9261,13 @@ function p86Ask(message, opts) {
         }
         var when = '';
         try { if (lr.run_at) when = new Date(lr.run_at).toLocaleString(); } catch (ex) {}
-        html += '<tr style="cursor:pointer;" onclick="openEvalDetail(\'' + escapeAttr(e.id) + '\')">' +
+        html += '<tr style="cursor:pointer;" onclick="openEvalDetail(p86Dec(\'' + p86Enc(e.id) + '\'))">' +
           '<td>' + escapeHTML(e.name) + (e.description ? '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:2px;">' + escapeHTML(e.description) + '</div>' : '') + '</td>' +
           '<td>' + escapeHTML(e.kind) + '</td>' +
           '<td>' + (e.run_count || 0) + '</td>' +
           '<td>' + pill + (lr.duration_ms ? ' <span style="color:var(--text-dim,#888);font-size:11px;">(' + Math.round(lr.duration_ms / 100) / 10 + 's)</span>' : '') + '</td>' +
           '<td style="font-size:11px;color:var(--text-dim,#aaa);">' + escapeHTML(when) + '</td>' +
-          '<td><button class="ee-btn primary" type="button" onclick="event.stopPropagation();runEval(\'' + escapeAttr(e.id) + '\')">&#x25B6; Run</button></td>' +
+          '<td><button class="ee-btn primary" type="button" onclick="event.stopPropagation();runEval(p86Dec(\'' + p86Enc(e.id) + '\'))">&#x25B6; Run</button></td>' +
         '</tr>';
       });
       html += '</tbody></table></div>';
@@ -9317,8 +9317,8 @@ function p86Ask(message, opts) {
       var html = '<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">' +
           '<button class="ee-btn secondary" onclick="closeEvalDetail()">&larr; Back to evals</button>' +
           '<div style="flex:1;font-size:14px;font-weight:600;color:var(--text,#fff);">' + escapeHTML(ev.name) + '</div>' +
-          '<button class="ee-btn primary" onclick="runEval(\'' + escapeAttr(ev.id) + '\')">&#x25B6; Run now</button>' +
-          '<button class="ee-btn danger" onclick="deleteEval(\'' + escapeAttr(ev.id) + '\')">&#x1F5D1; Delete</button>' +
+          '<button class="ee-btn primary" onclick="runEval(p86Dec(\'' + p86Enc(ev.id) + '\'))">&#x25B6; Run now</button>' +
+          '<button class="ee-btn danger" onclick="deleteEval(p86Dec(\'' + p86Enc(ev.id) + '\'))">&#x1F5D1; Delete</button>' +
         '</div>';
       if (ev.description) html += '<div style="font-size:12px;color:var(--text-dim,#aaa);margin-bottom:14px;">' + escapeHTML(ev.description) + '</div>';
       html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;">' +

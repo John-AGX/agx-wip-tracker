@@ -78,6 +78,9 @@ function boot(opts) {
     w.document.body.appendChild(s);
   };
   loadAbs(path.join(REPO, 'js/line-identity.js'));
+  // js/dom-ref.js — a row's DOM address is enc(id), so the editor cannot
+  // paint one without it. index.html loads it in the same slot.
+  loadAbs(path.join(REPO, 'js/dom-ref.js'));
   loadAbs(path.join(REPO, 'js/pricing-pipeline.js'));
   // editorFile — an ABSOLUTE path loaded INSTEAD of the working tree's editor.
   // The only caller is the suite that boots a PRIOR git blob beside the current

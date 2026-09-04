@@ -357,7 +357,7 @@
       (addr ? '<div style="font-size:11px;color:#555;margin-bottom:4px;">' + escapeHTML(addr) + '</div>' : '') +
       (meta ? '<div style="font-size:11px;color:#888;margin-bottom:6px;">' + escapeHTML(meta) + '</div>' : '') +
       '<a href="#" style="display:inline-block;font-size:12px;color:#fff;background:#0a66c2;text-decoration:none;font-weight:600;border-radius:6px;padding:5px 12px;margin-top:4px;" ' +
-        'onclick="event.preventDefault();window.__p86MapOpen&&window.__p86MapOpen(\'' + escapeAttr(p.id) + '\');">Open &rarr;</a>' +
+        'onclick="event.preventDefault();window.__p86MapOpen&&window.__p86MapOpen(p86Dec(\'' + p86Enc(p.id) + '\'));">Open &rarr;</a>' +
     '</div>';
   }
 

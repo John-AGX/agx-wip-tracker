@@ -133,6 +133,12 @@ function coEditor(src) {
     function alert(m) { env.natives.push(String(m)); }
     function escapeAttr(s) { return String(s == null ? '' : s); }
     function escapeHTML(s) { return String(s == null ? '' : s); }
+    // coKey/coUnkey are how a line id reaches an attribute and comes back
+    // (js/change-order-editor.js). The REAL encoder is injected rather than
+    // stubbed with identity: a stub would let this lift paint an address the
+    // shipped editor never would.
+    function coKey(id) { return env.domRef.enc(id); }
+    function coUnkey(k) { return env.domRef.dec(k); }
 ${body}
     return {
       setCo: function (c) { _state.co = c; },
@@ -145,7 +151,7 @@ ${body}
       totals: computeTotals
     };
   `);
-  const env = { dirty: 0, paints: 0, totals: 0, natives: [] };
+  const env = { dirty: 0, paints: 0, totals: 0, natives: [], domRef: require('../js/dom-ref.js') };
   const state = { pending: null, message: null, notices: [] };
   const win = {
     p86Pricing: P,

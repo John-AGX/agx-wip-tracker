@@ -425,7 +425,7 @@ function p86Ask(message, opts) {
           // double-quotes that terminated the attribute early — the
           // chip click did nothing.
           html += '<button class="ee-btn ' + (isActive ? '' : 'secondary') + '" ' +
-            'onclick="window.qbCostsView.' + setterName + '(\'' + escapeAttr(k) + '\')" ' +
+            'onclick="window.qbCostsView.' + setterName + '(p86Dec(\'' + p86Enc(k) + '\'))" ' +
             'style="font-size:11px;padding:3px 9px;">' +
             escapeHTML(k) + ' &middot; ' + fmtMoney(bucket[k]) + ' (' + pct + '%)' +
           '</button>';
@@ -449,7 +449,7 @@ function p86Ask(message, opts) {
         // Single-quoted JS literal inside double-quoted attr —
         // matches the chip palette pattern above.
         return '<button class="ee-btn secondary" style="font-size:11px;" ' +
-          'onclick="window.qbCostsView.' + setter + '(\'' + escapeAttr(val || '') + '\')">&times; ' +
+          'onclick="window.qbCostsView.' + setter + '(p86Dec(\'' + p86Enc(val || '') + '\'))">&times; ' +
           escapeHTML(label) + '</button>';
       }
       if (_state.filterCategory) activeFilterChips += chipReset(_state.filterCategory, 'filterByCategory');
@@ -577,7 +577,7 @@ function p86Ask(message, opts) {
     return '<th style="padding:8px 10px;text-align:' + (align || 'left') + ';font-size:10px;color:' +
       (active ? 'var(--accent,#22d3ee)' : 'var(--text-dim,#888)') +
       ';text-transform:uppercase;letter-spacing:0.5px;font-weight:700;cursor:pointer;user-select:none;" ' +
-      'onclick="window.qbCostsView.toggleSort(\'' + escapeAttr(key) + '\')">' + label + arrow + '</th>';
+      'onclick="window.qbCostsView.toggleSort(p86Dec(\'' + p86Enc(key) + '\'))">' + label + arrow + '</th>';
   }
 
   function statCard(label, value, color) {
@@ -653,7 +653,7 @@ function p86Ask(message, opts) {
           (delta > 0 ? '▲' : '▼') + ' ' + fmtMoney(Math.abs(delta)) + '</span>';
       var barPct = Math.round((row.total / peak) * 100);
       return '<tr style="border-top:1px solid var(--border,#333);cursor:pointer;" ' +
-          'onclick="window.qbCostsView.setWeek(\'' + escapeAttr(w) + '\')" ' +
+          'onclick="window.qbCostsView.setWeek(p86Dec(\'' + p86Enc(w) + '\'))" ' +
           'title="Filter the table to this week">' +
         '<td style="padding:5px 8px;font-size:11px;color:#c8cbe0;white-space:nowrap;">' + escapeHTML(weekLabel(w)) + '</td>' +
         buckets.map(function (b) {
@@ -738,7 +738,7 @@ function p86Ask(message, opts) {
     var dim = l.bucket ? '' : 'opacity:0.7;';
     return '<select title="' + (l.bucket ? 'Manual override — pick the account\'s bucket to reset' : 'Auto-mapped from the QB account') + '" ' +
       'style="font-size:11px;padding:2px 4px;max-width:135px;' + dim + '" ' +
-      'onchange="window.qbCostsView.setLineBucket(\'' + escapeAttr(l.id) + '\', this.value)">' + opts + '</select>';
+      'onchange="window.qbCostsView.setLineBucket(p86Dec(\'' + p86Enc(l.id) + '\'), this.value)">' + opts + '</select>';
   }
   function buildingSelectHtml(l, jobId) {
     var blds = jobBuildingsList(jobId);
@@ -749,7 +749,7 @@ function p86Ask(message, opts) {
           escapeHTML(b.name || b.label || b.id) + '</option>';
       }).join('');
     return '<select title="Attribute this cost to a building" style="font-size:11px;padding:2px 4px;max-width:120px;" ' +
-      'onchange="window.qbCostsView.setLineBuilding(\'' + escapeAttr(l.id) + '\', this.value)">' + opts + '</select>';
+      'onchange="window.qbCostsView.setLineBuilding(p86Dec(\'' + p86Enc(l.id) + '\'), this.value)">' + opts + '</select>';
   }
   // Persist a bucket override. If the pick equals the account's auto-map,
   // store null (back to auto). Optimistic; reverts on server failure.
@@ -894,7 +894,7 @@ function p86Ask(message, opts) {
       '<td style="padding:6px 8px;width:28px;">' +
         '<input type="checkbox" ' + (checked ? 'checked' : '') + ' ' +
           'data-qbc-select="' + escapeAttr(l.id) + '" ' +
-          'onchange="window.qbCostsView.toggleSelect(\'' + escapeAttr(l.id) + '\')" ' +
+          'onchange="window.qbCostsView.toggleSelect(p86Dec(\'' + p86Enc(l.id) + '\'))" ' +
           // Size intentionally NOT set here — the global input[type="checkbox"]
           // 10x10 rule owns it. An inline width beats every stylesheet, so
           // hard-coding it here made this table unreachable by any CSS fix.

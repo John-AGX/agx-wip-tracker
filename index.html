@@ -3388,6 +3388,12 @@
          is created, and the change-order + estimate editors both resolve every
          row back to its record by the line's `id`. First in, no dependencies. -->
     <script src="js/line-identity.js?v=2"></script>
+    <!-- DOM references (window.p86DomRef / p86Enc / p86Dec). MUST load before
+         anything that paints a row: a stored id reaches an HTML attribute and
+         an inline handler through enc(), and comes back through dec(). No
+         dependencies; sits beside line-identity for the same reason — both
+         are about what a stored address is allowed to be. -->
+    <script src="js/dom-ref.js?v=1"></script>
     <script src="js/modal-drag.js?v=1b"></script>
     <script src="js/auth.js?v=19"></script>
     <script src="js/dialogs.js?v=2c"></script>
@@ -3445,26 +3451,26 @@
     <script src="js/dash-shell.js?v=2"></script>
     <script src="js/settings-registry.js?v=3"></script>
     <script src="js/admin-dashboard.js?v=3"></script>
-    <script src="js/admin.js?v=141"></script>
+    <script src="js/admin.js?v=142"></script>
     <!-- Act-as / disguise mode: persistent "Acting as NAME — Exit" banner +
          window.p86ActAs(userId). Self-contained; re-fetches /api/auth/me. -->
     <script src="js/actas.js?v=1"></script>
     <script src="js/admin-context-registry.js?v=5"></script>
-    <script src="js/field-tools.js?v=12"></script>
+    <script src="js/field-tools.js?v=13"></script>
     <div id="clientDashboardModal" class="modal">
       <div class="modal-content" style="max-width:1120px;width:96vw;max-height:92vh;display:flex;flex-direction:column;">
         <div id="clientDashboard_body" style="padding:20px 22px;overflow-y:auto;flex:1;"></div>
       </div>
     </div>
-    <script src="js/clients.js?v=28"></script>
-    <script src="js/clients-dashboard.js?v=7"></script>
+    <script src="js/clients.js?v=29"></script>
+    <script src="js/clients-dashboard.js?v=8"></script>
     <!-- Folder taxonomy — default folder structure per entity type
          (lead / estimate / job / client). Loads before subs.js and
          my-files.js, which merge it with live folders for the grant
          dropdown and the My Files tree. -->
     <script src="js/folder-taxonomy.js?v=2"></script>
-    <script src="js/subs.js?v=16"></script>
-    <script src="js/assemblies.js?v=12"></script>
+    <script src="js/subs.js?v=17"></script>
+    <script src="js/assemblies.js?v=13"></script>
     <script src="js/job-audit.js?v=4f"></script>
     <script src="js/job-reports.js?v=4"></script>
     <!-- Shared table enhancements (reorder / resize / freeze first column /
@@ -3474,10 +3480,10 @@
     <script src="js/table-enhancements.js?v=15"></script>
     <script src="js/bulk-ribbon.js?v=1"></script>
     <script src="js/job-finalize.js?v=8"></script>
-    <script src="js/leads.js?v=96"></script>
-    <script src="js/job-costs-import.js?v=16"></script>
-    <script src="js/qb-costs-view.js?v=23"></script>
-    <script src="js/insights.js?v=13"></script>
+    <script src="js/leads.js?v=97"></script>
+    <script src="js/job-costs-import.js?v=17"></script>
+    <script src="js/qb-costs-view.js?v=24"></script>
+    <script src="js/insights.js?v=14"></script>
     <script src="js/schedule.js?v=52"></script>
     <script src="js/my-day.js?v=9"></script>
     <!-- Shared entity card (job/lead/estimate Pulse card) — window.p86EntityCard.
@@ -3489,7 +3495,7 @@
          app.js: loadData consults p86SaveMerge.shouldVetoHydrate() on the very
          first hydrate. -->
     <script src="js/save-merge.js?v=5"></script>
-    <script src="js/app.js?v=151"></script>
+    <script src="js/app.js?v=152"></script>
     <!-- The visible signal for a write that has not reached the server.
          Loads AFTER app.js so window.p86PushStatus exists to subscribe to. -->
     <script src="js/save-banner.js?v=3"></script>
@@ -3506,7 +3512,7 @@
     <script src="js/agent-tasks.js?v=14"></script>
     <script src="js/crew-chip.js?v=2"></script>
     <script src="js/file-explorer.js?v=16"></script>
-    <script src="js/my-files.js?v=26"></script>
+    <script src="js/my-files.js?v=27"></script>
     <!-- Tasks / To-Do UI. Loads after my-files.js (reuses window.p86Toast)
          and after api.js/auth.js (p86Api.tasks + p86Auth). -->
     <script src="js/tasks.js?v=28"></script>
@@ -3536,7 +3542,7 @@
          order is irrelevant. -->
     <script src="js/maps-link.js?v=2"></script>
     <script src="js/tag-icons.js?v=2"></script>
-    <script src="js/projects-map.js?v=12"></script>
+    <script src="js/projects-map.js?v=13"></script>
     <script src="js/map-pins.js?v=3"></script>
     <!-- Combined leads+jobs map for the Summary "Map" card (Phase 1 — D2).
          Self-contained renderer (window.p86EntitiesMap) that reuses
@@ -3552,7 +3558,7 @@
          calls into window.p86ReportTemplates. -->
     <script src="js/report-templates.js?v=1"></script>
     <script src="js/report-style-packs.js?v=2"></script>
-    <script src="js/projects.js?v=89"></script>
+    <script src="js/projects.js?v=90"></script>
     <script src="js/receipt-scanner.js?v=2"></script>
     <script src="js/receipt-cropper.js?v=1"></script>
     <script src="js/list-filter.js?v=1"></script>
@@ -3598,7 +3604,7 @@
     <script src="js/progress-core.js?v=1"></script>
     <script src="js/co-completion.js?v=1"></script>
     <script src="js/progress.js?v=4"></script>
-    <script src="js/jobs.js?v=234"></script>
+    <script src="js/jobs.js?v=235"></script>
     <script src="js/doc-import.js?v=8"></script>
     <script src="js/job-workflow-ui.js?v=6"></script>
     <!-- Job sidebar Files + Photos tabs (renderJobFiles / renderJobPhotos).
@@ -3609,16 +3615,16 @@
          Scope / Terms / notes / proposals / reports. Load before the editors
          that mount it. -->
     <script src="js/rich-text.js?v=1"></script>
-    <script src="js/estimates.js?v=63"></script>
+    <script src="js/estimates.js?v=64"></script>
     <script src="js/proposal.js?v=26"></script>
-    <script src="js/estimate-editor.js?v=108"></script>
+    <script src="js/estimate-editor.js?v=109"></script>
     <!-- Change Order editor — overlay opened from the job detail's
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which
          carries the window.p86Api.changeOrders wrapper). -->
-    <script src="js/change-order-editor.js?v=34"></script>
+    <script src="js/change-order-editor.js?v=35"></script>
     <script src="js/materials-drawer.js?v=14"></script>
-    <script src="js/estimate-preview.js?v=16"></script>
+    <script src="js/estimate-preview.js?v=17"></script>
     <script src="js/bt-export.js?v=6b"></script>
     <!-- Payload inline approval card (used by ai-panel.js). Must load
          BEFORE ai-panel.js so window.PayloadArtifact exists when the
@@ -3632,7 +3638,7 @@
     <!-- The Live Writer ENGINE — ingest + dedupe + the one differ + the one
          estimate row model, plus surface B (the docked notification). Every
          other surface registers against it. It DRAWS; the model above decides. -->
-    <script src="js/live-writer.js?v=18"></script>
+    <script src="js/live-writer.js?v=19"></script>
     <!-- Surface A — the Cowork page. Consumes the engine, so it must load
          AFTER it (live-writer is idempotent-by-existence: a re-load is a
          no-op, so registration has to go through registerSurface). -->
@@ -3645,9 +3651,9 @@
     <script src="js/save-from-chat.js?v=2"></script>
     <script src="js/tab-slider.js?v=1b"></script>
 
-    <script src="js/workspace.js?v=55"></script>
+    <script src="js/workspace.js?v=56"></script>
     <script src="js/workspace-gc.js?v=1"></script>
-    <script src="js/workspace-layout.js?v=106"></script>
+    <script src="js/workspace-layout.js?v=107"></script>
 
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
@@ -3918,7 +3924,7 @@
     </div>
     <script src="nodegraph/engine.js?v=125"></script>
     <script src="js/cost-buckets.js?v=5"></script>
-    <script src="nodegraph/ui.js?v=335"></script>
+    <script src="nodegraph/ui.js?v=336"></script>
     <!-- Ribbon popovers (Layers / More) + layer visibility persistence.
          Loads after ui.js; only owns the popover chrome — the moved
          ribbon buttons stay wired by ui.js itself. -->

@@ -160,7 +160,7 @@
         '<span title="' + esc((s.health && s.health.reason) || '') + '" style="padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:.5px;background:' + h.c + '22;color:' + h.c + ';">● ' + h.l + '</span>' +
       '</div>' +
       '<div style="display:flex;gap:8px;">' +
-        '<button class="ee-btn secondary" onclick="openClientDashboardEdit(\'' + esc(c.id) + '\')">✏️ Edit</button>' +
+        '<button class="ee-btn secondary" onclick="openClientDashboardEdit(p86Dec(\'' + p86Enc(c.id) + '\'))">✏️ Edit</button>' +
         '<button class="ee-btn ghost" onclick="closeClientDashboard()">✕ Close</button>' +
       '</div></div>';
 

@@ -3260,7 +3260,7 @@ function renderInspector(){
   else if(!sel && _inspSection){ return; }
   if(sel && sel.type==='t1'){
     if(hdr) hdr.innerHTML='<span class="ng-insp-ic">'+ngIco('buildings')+'</span> '+luEsc(sel.label||'Building')+'<span class="ng-insp-type">Building</span>'
-      +'<button class="ng-insp-cards" onclick="event.stopPropagation();window.p86NcBldgToggle&&window.p86NcBldgToggle(\''+sel.id+'\')" title="Open this building as nested cards on the map">Cards</button>';
+      +'<button class="ng-insp-cards" onclick="event.stopPropagation();window.p86NcBldgToggle&&window.p86NcBldgToggle(p86Dec(\'' + p86Enc(sel.id) + '\'))" title="Open this building as nested cards on the map">Cards</button>';
     body.innerHTML='<div class="ng-insp-sec">'+buildingKpiGridHtml(sel)+'</div>'+buildingRevBreakdownHtml(sel)+buildingSubsHtml(sel)+'<div class="ng-sp-struct"></div>';
     renderBuildingStructure(body, sel);
     fillBuildingSubs(sel);
@@ -3566,7 +3566,7 @@ function inspectorInvoicesHtml(jid){
   invs.forEach(function(i){ total+=i.amount||0; if(i.status==='Paid') paid+=i.amount||0; });
   var rows=invs.map(function(i){
     var sc=i.status==='Paid'?'#34d399':i.status==='Sent'?'#fbbf24':'#8aa0c0';
-    return '<tr style="cursor:pointer;border-top:1px solid rgba(255,255,255,.05);" onclick="editInvoice(\''+luEsc(i.id)+'\')" title="Edit invoice">'+
+    return '<tr style="cursor:pointer;border-top:1px solid rgba(255,255,255,.05);" onclick="editInvoice(p86Dec(\'' + p86Enc(i.id) + '\'))" title="Edit invoice">'+
       '<td style="padding:5px 8px;font-weight:600;white-space:nowrap;">'+luEsc(i.invNumber||'INV')+'</td>'+
       '<td style="padding:5px 8px;color:#aab;">'+luEsc(i.vendor||'')+'</td>'+
       '<td style="padding:5px 8px;text-align:right;font-weight:600;white-space:nowrap;">'+E.fmtC(i.amount||0)+'</td>'+
@@ -4519,7 +4519,7 @@ function injectSpawnRow(body, sel){
   if(!body || !sel) return;
   var kids=SPAWN_CHILDREN[sel.type]; if(!kids || !kids.length) return;
   body.insertAdjacentHTML('afterbegin',
-    '<div class="ng-addbar"><button class="ng-addbtn" title="Add to '+luEsc(sel.label||sel.type)+'" onclick="event.stopPropagation();window.p86NgAddMenu&&window.p86NgAddMenu(\''+sel.id+'\',this)">'
+    '<div class="ng-addbar"><button class="ng-addbtn" title="Add to '+luEsc(sel.label||sel.type)+'" onclick="event.stopPropagation();window.p86NgAddMenu&&window.p86NgAddMenu(p86Dec(\'' + p86Enc(sel.id) + '\'),this)">'
     +'<span class="ng-addbtn-ic">'+ngIco('plus')+'</span><span>Add</span><span class="ng-addbtn-caret">▾</span></button></div>');
 }
 // The "+ Add" dropdown — one row per spawnable child type. 'Cost' opens the bucket submenu.
@@ -4609,8 +4609,8 @@ function childGroupsHtml(sel){
     var list=wired[t]||[];
     var label=(t==='cost')?'Costs':((SPAWN_LABEL[t]||t)+'s');
     var add=(t==='cost')
-      ? "window.p86NgCostMenu&&window.p86NgCostMenu('"+sel.id+"',this)"
-      : "window.p86NgSpawn&&window.p86NgSpawn('"+sel.id+"','"+t+"')";
+      ? "window.p86NgCostMenu&&window.p86NgCostMenu(p86Dec('"+p86Enc(sel.id)+"'),this)"
+      : "window.p86NgSpawn&&window.p86NgSpawn(p86Dec('"+p86Enc(sel.id)+"'),p86Dec('"+p86Enc(t)+"'))";
     var rows;
     if(t==='t2' && sel.type==='t1' && (list.length || mxScopes.length)){
       // Scope rows on a BUILDING inspector carry inline completion controls: a
@@ -4627,7 +4627,7 @@ function childGroupsHtml(sel){
         var uDone=w?Math.max(0,Math.min(w.unitsDone||0,bUnits)):0;
         var wpc=hasPh ? (E.scopePctFromPhases(k)||0) : (w?(w.pctComplete||0):0);
         var wpcColor=wpc>=100?'#34d399':wpc>=50?'#fbbf24':'#4f8cff';
-        var sel1="event.stopPropagation();window.p86NgSelect&&window.p86NgSelect('"+k.id+"')";
+        var sel1="event.stopPropagation();window.p86NgSelect&&window.p86NgSelect(p86Dec('"+p86Enc(k.id)+"'))";
         var open=!!ngOpenScopes[k.id];
         var r='<div class="ng-cg-row ng-cg-scope">'
           +'<span class="ng-cg-cvt" data-ph-act="ph-toggle" data-scope="'+k.id+'" title="'+(hasPh?(phList.length+' phase'+(phList.length===1?'':'s')+' — expand'):'Break into phases')+'" style="cursor:pointer;flex:0 0 auto;width:14px;text-align:center;color:'+(hasPh?'#a78bfa':'#6b6f82')+';font-size:10px;">'+(open?'▾':'▸')+'</span>'
@@ -4665,19 +4665,19 @@ function childGroupsHtml(sel){
         var _pc=Math.max(0,Math.min(100,Math.round(p.pctComplete||0)));
         var _pcc=_pc>=100?'#34d399':_pc>=50?'#fbbf24':'#4f8cff';
         var _eid=luEsc(p.id);
-        var _edit="event.stopPropagation();window.editPhase&&window.editPhase('"+_eid+"')";
+        var _edit="event.stopPropagation();window.editPhase&&window.editPhase(p86Dec('"+p86Enc(_eid)+"'))";
         return '<div class="ng-cg-row ng-cg-scope ng-cg-matrix" title="Allocated via the phase matrix">'
           +'<span class="ng-cg-cvt" style="flex:0 0 auto;width:14px;"></span>'
           +'<span class="ng-cg-ic" onclick="'+_edit+'">'+ngTypeIco('t2')+'</span>'
           +'<span class="ng-cg-nm" onclick="'+_edit+'" title="Edit scope">'+luEsc(p.phase||'Scope')+'</span>'
           +'<span class="ng-cg-mx-badge">matrix</span>'
           +(_rev?'<span style="flex:0 0 auto;color:#8b90a5;font-family:inherit;font-size:10px;">$'+Math.round(_rev).toLocaleString()+'</span>':'')
-          +'<span class="ng-mx-pct" onclick="event.stopPropagation();window.p86NgScopePct&&window.p86NgScopePct(\''+_eid+'\',this)" title="Tap to set % complete" style="cursor:pointer;flex:0 0 auto;color:'+_pcc+';font-family:inherit;font-size:11px;min-width:34px;text-align:right;">'+_pc+'%</span>'
+          +'<span class="ng-mx-pct" onclick="event.stopPropagation();window.p86NgScopePct&&window.p86NgScopePct(p86Dec(\'' + p86Enc(_eid) + '\'),this)" title="Tap to set % complete" style="cursor:pointer;flex:0 0 auto;color:'+_pcc+';font-family:inherit;font-size:11px;min-width:34px;text-align:right;">'+_pc+'%</span>'
           +'</div>';
       }).join('');
     } else {
       rows=list.length ? list.map(function(k){
-        return '<div class="ng-cg-row" onclick="event.stopPropagation();window.p86NgSelect&&window.p86NgSelect(\''+k.id+'\')" title="Open on canvas">'
+        return '<div class="ng-cg-row" onclick="event.stopPropagation();window.p86NgSelect&&window.p86NgSelect(p86Dec(\'' + p86Enc(k.id) + '\'))" title="Open on canvas">'
           +'<span class="ng-cg-ic">'+ngTypeIco(k.type)+'</span><span class="ng-cg-nm">'+luEsc(k.label||k.type)+'</span></div>';
       }).join('') : '<div class="ng-cg-empty">None yet</div>';
     }

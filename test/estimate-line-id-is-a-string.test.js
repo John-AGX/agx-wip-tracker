@@ -488,9 +488,16 @@ describe('the legacy edit-estimate modal', () => {
       window.appData = { estimates: [], estimateLines: [], leads: [], clients: [], jobs: [] };
       appData = window.appData;
     `);
-    const s = w.document.createElement('script');
-    s.textContent = fs.readFileSync(path.join(H.REPO, 'js', 'estimates.js'), 'utf8');
-    w.document.body.appendChild(s);
+    // js/dom-ref.js FIRST, exactly as index.html loads it. It is a hard
+    // dependency of anything that paints a row: a stored id reaches an inline
+    // handler through p86Enc and comes back through p86Dec, so a page that
+    // forgets it fails LOUDLY with a ReferenceError on the first paint rather
+    // than quietly painting an address nothing can resolve.
+    [['js', 'dom-ref.js'], ['js', 'estimates.js']].forEach((parts) => {
+      const s = w.document.createElement('script');
+      s.textContent = fs.readFileSync(path.join(H.REPO, ...parts), 'utf8');
+      w.document.body.appendChild(s);
+    });
 
     const meta = Object.assign({}, rec);
     delete meta.lines;

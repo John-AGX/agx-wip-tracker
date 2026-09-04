@@ -56,6 +56,25 @@ function p86Ask(message, opts) {
   }
   function escapeAttr(s) { return escapeHTML(s).replace(/"/g, '&quot;'); }
 
+  // ── AN ADDRESS IN THE DOM IS NOT THE STORED BYTES ─────────────────────
+  // This editor has always bound with addEventListener and read its line id
+  // back out of data-line-id rather than compiling it, which is why it
+  // survived the shape that fires arbitrary script in the estimate editor.
+  // It still lost three shapes, and for a reason no escaper could have
+  // reached: the HTML PARSER NORMALISES an attribute value on the way in —
+  // CR and CRLF collapse to LF, NUL becomes U+FFFD — so a line stored with a
+  // CR in its id painted an address that could never match the record again.
+  // Every field on that row inert, delete a no-op, nothing in the console.
+  //
+  // coKey/coUnkey put the id through js/dom-ref.js on the way out and back,
+  // whose output alphabet contains nothing the parser rewrites. The estimate
+  // editor uses the same pair, so the two editors now agree about every
+  // stored shape rather than each being able to reach rows the other cannot.
+  var DREF = (typeof window !== 'undefined' && window.p86DomRef)
+    || (typeof require === 'function' ? require('./dom-ref.js') : null);
+  function coKey(id) { return DREF ? DREF.enc(id) : ''; }
+  function coUnkey(k) { return DREF ? DREF.dec(k) : (k == null ? '' : String(k)); }
+
   function fmtCurrency(n) {
     if (n == null || isNaN(n)) n = 0;
     var s = Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -885,7 +904,7 @@ function p86Ask(message, opts) {
       markDirty();
       paintLines();
       paintTotals();
-      var row = document.querySelector('#p86CoLineTable tr[data-line-id="' + id + '"]');
+      var row = document.querySelector('#p86CoLineTable tr[data-line-id="' + coKey(id) + '"]');
       var nameInput = row && row.querySelector('[data-line-field="label"]');
       if (nameInput) { nameInput.focus(); }
     });
@@ -1092,7 +1111,7 @@ function p86Ask(message, opts) {
     var rows = coAsmRecipeRows(line);
     var n = rows.length;
     var head =
-      '<div class="p86-co-asm-head" data-asm-toggle="' + escapeAttr(line.id) + '" style="display:flex;align-items:center;gap:7px;padding:3px 8px;font-size:10px;cursor:pointer;color:#7eb0ff;">' +
+      '<div class="p86-co-asm-head" data-asm-toggle="' + coKey(line.id) + '" style="display:flex;align-items:center;gap:7px;padding:3px 8px;font-size:10px;cursor:pointer;color:#7eb0ff;">' +
         '<span style="font-size:8px;transition:transform .12s;' + (open ? 'transform:rotate(90deg);' : '') + '">&#9654;</span>' +
         '<span style="font-weight:700;letter-spacing:.04em;">&#129513; ASSEMBLY' +
           (line.assemblyBucket ? ' &middot; ' + escapeHTML(CO_BUCKET_LABEL[line.assemblyBucket] || String(line.assemblyBucket).toUpperCase()) : '') + '</span>' +
@@ -1117,8 +1136,8 @@ function p86Ask(message, opts) {
     });
     var acts =
       '<div style="display:flex;flex-wrap:wrap;gap:16px;padding:4px 8px 6px 24px;font-size:10px;">' +
-        '<span data-asm-refresh="' + escapeAttr(line.id) + '" style="color:#4f8cff;cursor:pointer;">&#10227; Reprice from recipe</span>' +
-        '<span data-asm-explode="' + escapeAttr(line.id) + '" style="color:#4f8cff;cursor:pointer;">&#8675; Explode to editable lines</span>' +
+        '<span data-asm-refresh="' + coKey(line.id) + '" style="color:#4f8cff;cursor:pointer;">&#10227; Reprice from recipe</span>' +
+        '<span data-asm-explode="' + coKey(line.id) + '" style="color:#4f8cff;cursor:pointer;">&#8675; Explode to editable lines</span>' +
         (line.sourceAssemblyId != null ? '<span data-asm-open="' + escapeAttr(line.sourceAssemblyId) + '" style="color:#4f8cff;cursor:pointer;">&#9998; Open assembly</span>' : '') +
       '</div>';
     return head + body + acts;
@@ -1746,7 +1765,7 @@ function p86Ask(message, opts) {
               '" title="Gross margin on this section">GM ' + escapeHTML(fmtPct(stGm)) + '</span>'
           : '';
         html +=
-          '<tr class="p86-co-section-row" data-line-id="' + escapeAttr(l.id) + '">' +
+          '<tr class="p86-co-section-row" data-line-id="' + coKey(l.id) + '">' +
             '<td colspan="4">' +
               '<div style="display:flex;align-items:center;gap:12px;">' +
                 '<input class="p86-co-section-label" type="text" data-line-field="label" value="' + escapeAttr(l.label || '') + '" placeholder="Section name" style="flex:1;min-width:0;" />' +
@@ -1755,7 +1774,7 @@ function p86Ask(message, opts) {
               '</div>' +
             '</td>' +
             '<td class="markup" style="white-space:nowrap;">' +
-              '<button type="button" class="p86-co-sec-mode" data-sec-mode="' + escapeAttr(l.id) + '" title="Toggle percent markup / flat dollar add" style="min-width:24px;padding:2px 6px;font-size:11px;font-weight:700;border-radius:5px;border:1px solid rgba(255,255,255,0.18);background:rgba(255,255,255,0.06);color:inherit;cursor:pointer;vertical-align:middle;">' + (dollar ? '$' : '%') + '</button> ' +
+              '<button type="button" class="p86-co-sec-mode" data-sec-mode="' + coKey(l.id) + '" title="Toggle percent markup / flat dollar add" style="min-width:24px;padding:2px 6px;font-size:11px;font-weight:700;border-radius:5px;border:1px solid rgba(255,255,255,0.18);background:rgba(255,255,255,0.06);color:inherit;cursor:pointer;vertical-align:middle;">' + (dollar ? '$' : '%') + '</button> ' +
               '<input class="p86-co-section-markup" type="text" inputmode="decimal" data-line-field="markup" value="' + escapeAttr(l.markup == null ? '' : l.markup) + '" placeholder="' + (dollar ? 'Section $' : 'Section %') + '" />' +
             '</td>' +
             '<td class="sell"></td>' +
@@ -1824,7 +1843,7 @@ function p86Ask(message, opts) {
         var pending = !!l.costPending;
 
         html +=
-          '<tr class="p86-co-line-row' + (asm ? ' p86-co-asm-line' : '') + (locked ? ' p86-co-line-locked' : '') + '" data-line-id="' + escapeAttr(l.id) + '">' +
+          '<tr class="p86-co-line-row' + (asm ? ' p86-co-asm-line' : '') + (locked ? ' p86-co-line-locked' : '') + '" data-line-id="' + coKey(l.id) + '">' +
             '<td>' + (asm ? '<span title="From assembly" style="color:#7eb0ff;margin-right:3px;">&#129513;</span>' : '') +
               '<input type="text" data-line-field="description" value="' + escapeAttr(l.description || '') + '" placeholder="Line description"' + (asm ? ' style="width:calc(100% - 22px);"' : '') + ' />' +
               (pending ? '<span class="p86-co-pending" title="This line&#39;s cost is a placeholder equal to its price — type the real cost into Unit Cost." style="display:inline-block;margin-left:6px;padding:1px 6px;border-radius:8px;font-size:9px;font-weight:700;background:rgba(251,191,36,.15);color:#fbbf24;white-space:nowrap;">COST?</span>' : '') +
@@ -1843,7 +1862,7 @@ function p86Ask(message, opts) {
             '<td class="del"><button type="button" class="p86-co-line-del" data-line-del title="Delete line">&times;</button></td>' +
           '</tr>';
         if (asm) {
-          html += '<tr class="p86-co-asm-strip-row" data-asm-strip-for="' + escapeAttr(l.id) + '">' +
+          html += '<tr class="p86-co-asm-strip-row" data-asm-strip-for="' + coKey(l.id) + '">' +
             '<td colspan="9" style="padding:0;border-top:1px dashed rgba(79,140,255,.25);background:rgba(79,140,255,.05);">' + coAsmStripHTML(l) + '</td></tr>';
         }
       }
@@ -1855,7 +1874,7 @@ function p86Ask(message, opts) {
     // table rebuild → focus/caret survive); section-header changes that
     // shift multiple child lines' markup re-render the table.
     host.querySelectorAll('tr[data-line-id]').forEach(function(tr) {
-      var lineId = tr.getAttribute('data-line-id');
+      var lineId = coUnkey(tr.getAttribute('data-line-id'));
       var isHeaderRow = tr.classList.contains('p86-co-section-row');
       tr.querySelectorAll('[data-line-field]').forEach(function(input) {
         input.addEventListener('input', function() {
@@ -1959,7 +1978,7 @@ function p86Ask(message, opts) {
     // Section $/% mode toggle.
     host.querySelectorAll('[data-sec-mode]').forEach(function(btn) {
       btn.addEventListener('click', function() {
-        var line = (_state.co.lines || []).find(function(x) { return String(x.id) === String(btn.getAttribute('data-sec-mode')); });
+        var line = (_state.co.lines || []).find(function(x) { return String(x.id) === String(coUnkey(btn.getAttribute('data-sec-mode'))); });
         if (!line) return;
         line.markupMode = (line.markupMode === 'dollar') ? 'percent' : 'dollar';
         markDirty(); paintLines(); paintTotals();
@@ -1967,13 +1986,13 @@ function p86Ask(message, opts) {
     });
     // Assembly rollup strip: toggle / reprice / explode / open.
     host.querySelectorAll('[data-asm-toggle]').forEach(function(el) {
-      el.addEventListener('click', function() { var id = el.getAttribute('data-asm-toggle'); _coAsmOpen[id] = !_coAsmOpen[id]; paintLines(); });
+      el.addEventListener('click', function() { var id = coUnkey(el.getAttribute('data-asm-toggle')); _coAsmOpen[id] = !_coAsmOpen[id]; paintLines(); });
     });
     host.querySelectorAll('[data-asm-refresh]').forEach(function(el) {
-      el.addEventListener('click', function() { coAsmRefresh(el.getAttribute('data-asm-refresh')); });
+      el.addEventListener('click', function() { coAsmRefresh(coUnkey(el.getAttribute('data-asm-refresh'))); });
     });
     host.querySelectorAll('[data-asm-explode]').forEach(function(el) {
-      el.addEventListener('click', function() { coAsmExplode(el.getAttribute('data-asm-explode')); });
+      el.addEventListener('click', function() { coAsmExplode(coUnkey(el.getAttribute('data-asm-explode'))); });
     });
     host.querySelectorAll('[data-asm-open]').forEach(function(el) {
       el.addEventListener('click', function() { var id = Number(el.getAttribute('data-asm-open')); if (window.p86Assemblies && window.p86Assemblies.openEditor) window.p86Assemblies.openEditor(id); });
@@ -1986,7 +2005,7 @@ function p86Ask(message, opts) {
   // takes the line out of the markup cascade the instant it has a value,
   // and a cell that has stopped mattering must stop looking editable.
   function paintLineRow(tr) {
-    var lineId = tr.getAttribute('data-line-id');
+    var lineId = coUnkey(tr.getAttribute('data-line-id'));
     var lines = _state.co.lines || [];
     var line = lines.find(function(x) { return String(x.id) === String(lineId); });
     if (!line || line.section === '__section_header__') return;
@@ -2051,7 +2070,7 @@ function p86Ask(message, opts) {
     var lines = _state.co.lines || [];
     var totals = coSectionTotals(lines, _state.co);
     host.querySelectorAll('tr.p86-co-section-row').forEach(function (tr) {
-      var st = totals[tr.getAttribute('data-line-id')];
+      var st = totals[coUnkey(tr.getAttribute('data-line-id'))];
       if (!st) return;
       var costCell = tr.querySelector('td.cost');
       var extCell = tr.querySelector('td.ext');

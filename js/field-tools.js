@@ -112,10 +112,10 @@ function p86Ask(message, opts) {
         var border = sys ? '1px solid rgba(245,166,35,0.55)' : '1px solid #222';
         // System tools: Open only (no edit/delete). Custom tools keep edit/delete.
         var actions = sys
-          ? '<button type="button" class="ee-btn primary" style="flex:1;" onclick="window.openFieldTool && window.openFieldTool(\'' + escapeAttr(t.id) + '\')">Open</button>'
-          : '<button type="button" class="ee-btn primary" style="flex:1;" onclick="window.openFieldTool && window.openFieldTool(\'' + escapeAttr(t.id) + '\')">Open</button>' +
-            '<button type="button" class="ee-btn secondary" onclick="window.editFieldTool && window.editFieldTool(\'' + escapeAttr(t.id) + '\')" title="Edit">✎</button>' +
-            '<button type="button" class="ee-btn secondary" onclick="window.deleteFieldTool && window.deleteFieldTool(\'' + escapeAttr(t.id) + '\', \'' + escapeAttr(t.name) + '\')" title="Delete">×</button>';
+          ? '<button type="button" class="ee-btn primary" style="flex:1;" onclick="window.openFieldTool && window.openFieldTool(p86Dec(\'' + p86Enc(t.id) + '\'))">Open</button>'
+          : '<button type="button" class="ee-btn primary" style="flex:1;" onclick="window.openFieldTool && window.openFieldTool(p86Dec(\'' + p86Enc(t.id) + '\'))">Open</button>' +
+            '<button type="button" class="ee-btn secondary" onclick="window.editFieldTool && window.editFieldTool(p86Dec(\'' + p86Enc(t.id) + '\'))" title="Edit">✎</button>' +
+            '<button type="button" class="ee-btn secondary" onclick="window.deleteFieldTool && window.deleteFieldTool(p86Dec(\'' + p86Enc(t.id) + '\'), p86Dec(\'' + p86Enc(t.name) + '\'))" title="Delete">×</button>';
         gridHtml +=
           '<div style="position:relative;background:#141414;border:' + border + ';border-radius:6px;padding:14px;display:flex;flex-direction:column;gap:8px;">' +
             star +

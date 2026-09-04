@@ -306,9 +306,9 @@ function p86Ask(message, opts) {
     var selCell = canBulkEditLeads()
       ? '<td class="lead-check-cell" style="width:34px;text-align:center;" onclick="event.stopPropagation();">' +
           '<input type="checkbox" class="lead-check" data-id="' + escapeAttr(l.id) + '"' + (_leadsSelected.has(l.id) ? ' checked' : '') +
-          ' onclick="event.stopPropagation();window.p86LeadsSelect(\'' + escapeAttr(l.id) + '\',this.checked);"></td>'
+          ' onclick="event.stopPropagation();window.p86LeadsSelect(p86Dec(\'' + p86Enc(l.id) + '\'),this.checked);"></td>'
       : '';
-    return '<tr class="leads-row" onclick="openEditLeadModal(\'' + escapeAttr(l.id) + '\')">' +
+    return '<tr class="leads-row" onclick="openEditLeadModal(p86Dec(\'' + p86Enc(l.id) + '\'))">' +
       selCell +
       leadVisibleCols().map(function (c) { return leadCellFor(l, c.key); }).join('') +
     '</tr>';
@@ -392,7 +392,7 @@ function p86Ask(message, opts) {
     if (opts.num) classes += ' num';
     var alignAttr = opts.num ? ' style="text-align:right;"' : '';
     return '<th class="' + classes + '" data-col="' + key + '" data-sort="' + key + '"' + alignAttr +
-      ' onclick="sortLeadsBy(\'' + key + '\')">' + label + '</th>';
+      ' onclick="sortLeadsBy(p86Dec(\'' + p86Enc(key) + '\'))">' + label + '</th>';
   }
 
   function matchesSearch(l, q) {
@@ -2549,8 +2549,8 @@ function p86Ask(message, opts) {
         '</div>' +
       '</div>' +
       '<div style="display:flex;gap:6px;flex-shrink:0;">' +
-        '<button class="ee-btn secondary" onclick="openEstimateFromLead(\'' + escapeAttr(est.id) + '\', false);">Edit</button>' +
-        '<button class="ee-btn secondary" onclick="openEstimateFromLead(\'' + escapeAttr(est.id) + '\', true);">Preview</button>' +
+        '<button class="ee-btn secondary" onclick="openEstimateFromLead(p86Dec(\'' + p86Enc(est.id) + '\'), false);">Edit</button>' +
+        '<button class="ee-btn secondary" onclick="openEstimateFromLead(p86Dec(\'' + p86Enc(est.id) + '\'), true);">Preview</button>' +
       '</div>' +
     '</div>';
   }
@@ -2585,14 +2585,14 @@ function p86Ask(message, opts) {
     var footer = '';
     if (readyToConvert) {
       footer = '<div style="margin-top:7px;">' +
-        '<button onclick="event.stopPropagation(); convertLeadToJob(\'' + escapeAttr(est.id) + '\'); return false;" ' +
+        '<button onclick="event.stopPropagation(); convertLeadToJob(p86Dec(\'' + p86Enc(est.id) + '\')); return false;" ' +
         'style="display:inline-flex;align-items:center;gap:5px;font:inherit;font-size:11px;font-weight:700;padding:5px 10px;border-radius:7px;border:1px solid #34d399;background:#34d399;color:#04210f;cursor:pointer;">' +
         '<span>&#x1F3D7;&#xFE0F;</span>Create Job from approved &rarr;</button>' +
       '</div>';
     } else if (converted) {
       footer = '<div style="margin-top:7px;font-size:10.5px;color:#34d399;font-weight:600;">&#x2713; Job created</div>';
     }
-    return '<div onclick="openEstimateFromLead(\'' + escapeAttr(est.id) + '\', false);" ' +
+    return '<div onclick="openEstimateFromLead(p86Dec(\'' + p86Enc(est.id) + '\'), false);" ' +
       'style="cursor:pointer;padding:8px 10px;border:1px solid var(--border,#333);' + accent + 'border-radius:6px;margin-bottom:6px;background:var(--overlay-light,rgba(255,255,255,0.02));transition:border-color 0.12s, background 0.12s;" ' +
       'onmouseover="this.style.borderColor=\'rgba(79,140,255,0.5)\';this.style.background=\'rgba(79,140,255,0.04)\';" ' +
       'onmouseout="this.style.borderColor=\'var(--border,#333)\';this.style.background=\'var(--overlay-light, rgba(255,255,255,0.02))\';">' +

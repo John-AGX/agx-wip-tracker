@@ -159,7 +159,7 @@
   function assemblyRows(rows) {
     return rows.map(function (a) {
       var warn = a.incomplete ? ' <span title="Some items have no price yet" style="color:#fbbf24;">⚠</span>' : '';
-      return '<tr style="cursor:pointer;" onclick="p86Assemblies.openEditor(' + a.id + ')">' +
+      return '<tr style="cursor:pointer;" onclick="p86Assemblies.openEditor(' + p86Code(a.id) + ')">' +
         '<td><strong style="color:var(--text,#fff);">' + esc(a.name) + '</strong>' +
           (a.code ? ' <span style="font-family:monospace;font-size:10px;color:var(--text-dim,#888);">' + esc(a.code) + '</span>' : ' <span style="font-size:10px;color:#fbbf24;">unclassified</span>') +
           (a.description ? '<div style="font-size:11px;color:var(--text-dim,#8a93a6);">' + esc(String(a.description).slice(0, 90)) + '</div>' : '') +
@@ -168,8 +168,8 @@
         '<td style="text-align:right;font-family:monospace;">' + (a.item_count || 0) + '</td>' +
         '<td><span style="padding:1px 7px;border-radius:9px;font-size:10px;text-transform:uppercase;background:rgba(79,140,255,0.12);color:#4f8cff;">' + esc(a.source || 'manual') + '</span></td>' +
         '<td style="text-align:right;white-space:nowrap;">' +
-          '<button class="ee-btn ee-icon-btn ghost" onclick="event.stopPropagation();p86Assemblies.openSpinVariants(' + a.id + ')" title="Spin size variants (2x6 → 2x8 …)">&#x1F9EC;</button>' +
-          '<button class="ee-btn ee-icon-btn ghost" onclick="event.stopPropagation();p86Assemblies.remove(' + a.id + ')" title="Delete">&#x1F5D1;</button>' +
+          '<button class="ee-btn ee-icon-btn ghost" onclick="event.stopPropagation();p86Assemblies.openSpinVariants(' + p86Code(a.id) + ')" title="Spin size variants (2x6 → 2x8 …)">&#x1F9EC;</button>' +
+          '<button class="ee-btn ee-icon-btn ghost" onclick="event.stopPropagation();p86Assemblies.remove(' + p86Code(a.id) + ')" title="Delete">&#x1F5D1;</button>' +
         '</td></tr>';
     }).join('');
   }
@@ -222,7 +222,7 @@
       var group = byTrade[tc];
       var collapsed = !!_collapsed[tc];
       html += '<div style="margin-bottom:6px;">' +
-        '<div onclick="p86Assemblies.toggleGroup(\'' + esc(tc) + '\')" style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:8px 10px;background:rgba(255,255,255,0.03);border:1px solid var(--border,#2a2f3a);border-radius:8px;">' +
+        '<div onclick="p86Assemblies.toggleGroup(p86Dec(\'' + p86Enc(tc) + '\'))" style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:8px 10px;background:rgba(255,255,255,0.03);border:1px solid var(--border,#2a2f3a);border-radius:8px;">' +
           '<span style="width:12px;color:var(--text-dim,#8a93a6);">' + (collapsed ? '▸' : '▾') + '</span>' +
           '<strong style="color:var(--text,#fff);">' + esc(tradeName(tc)) + '</strong>' +
           (tc !== '(UNCLASSIFIED)' ? ' <span style="font-family:monospace;font-size:10px;color:var(--text-dim,#888);">' + esc(tc) + '</span>' : '') +
@@ -621,7 +621,7 @@
         '<td><input data-f="unit" data-i="' + i + '" value="' + esc(it.unit || '') + '" style="width:100%;background:rgba(255,255,255,0.04);border:1px solid var(--border,#2a2f3a);border-radius:6px;padding:5px;color:var(--text,#fff);" /></td>' +
         '<td><input data-f="unit_cost" data-i="' + i + '" value="' + esc(it.unit_cost != null && it.unit_cost !== '' ? it.unit_cost : '') + '" placeholder="' + esc(costPlaceholder) + '" inputmode="decimal" style="width:100%;text-align:right;background:rgba(255,255,255,0.04);border:1px solid var(--border,#2a2f3a);border-radius:6px;padding:5px;color:var(--text,#fff);font-family:monospace;" /></td>' +
         '<td><input data-f="waste_pct" data-i="' + i + '" value="' + esc(it.waste_pct || 0) + '" inputmode="decimal" style="width:100%;text-align:right;background:rgba(255,255,255,0.04);border:1px solid var(--border,#2a2f3a);border-radius:6px;padding:5px;color:var(--text,#fff);font-family:monospace;" /></td>' +
-        '<td style="text-align:center;"><button class="ee-btn ee-icon-btn ghost" onclick="p86Assemblies.removeItem(' + i + ')" title="Remove">✕</button></td>' +
+        '<td style="text-align:center;"><button class="ee-btn ee-icon-btn ghost" onclick="p86Assemblies.removeItem(' + p86Code(i) + ')" title="Remove">✕</button></td>' +
       '</tr>';
     }).join('') + '</tbody></table>';
   }
@@ -957,13 +957,13 @@
         '<strong style="color:var(--text,#fff);font-size:13px;">' + esc(a.name) + '</strong>' +
         (a.code ? '<span style="font-family:monospace;font-size:10px;color:var(--text-dim,#888);">' + esc(a.code) + '</span>' : '') +
         '<span class="la-cost" style="margin-left:auto;font-family:monospace;font-size:12px;color:' + (a.incomplete ? '#fbbf24' : '#4fd1c5') + ';">' + money(a.unit_cost) + '/' + esc(a.unit || 'EA') + (a.incomplete ? ' ⚠' : '') + '</span>' +
-        '<button class="ee-btn ghost" style="font-size:11px;" onclick="p86Assemblies.editFromAudit(' + a.id + ')">Open</button>' +
+        '<button class="ee-btn ghost" style="font-size:11px;" onclick="p86Assemblies.editFromAudit(' + p86Code(a.id) + ')">Open</button>' +
       '</div><div class="la-gaps">' + a.gaps.map(function (g) { return laGapRow(a, g); }).join('') + '</div></div>';
   }
   function laGapRow(a, g) {
     var sugg = (g.suggestions || []).map(function (s) {
       var rsch = s.price_basis === 'researched' ? ' ·R' : '';
-      return '<button class="la-sugg" onclick="p86Assemblies.laLink(' + a.id + ',' + g.item_id + ',' + s.id + ',this)" ' +
+      return '<button class="la-sugg" onclick="p86Assemblies.laLink(' + p86Code(a.id) + ',' + p86Code(g.item_id) + ',' + p86Code(s.id) + ',this)" ' +
         'style="border:1px solid var(--border,#2a2f3a);background:rgba(79,140,255,0.08);color:var(--text,#fff);border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;margin:2px 4px 2px 0;">' +
         esc(String(s.description).slice(0, 40)) + ' <span style="color:#4fd1c5;font-family:monospace;">' + money(s.last_unit_price) + '/' + esc(s.unit || 'ea') + rsch + '</span></button>';
     }).join('');
@@ -971,7 +971,7 @@
       '<div style="font-size:12px;color:var(--text,#fff);margin-bottom:5px;">' + esc(g.description || '(no description)') +
         ' <span style="font-size:9px;text-transform:uppercase;color:var(--text-dim,#888);">' + esc(g.cost_code) + '</span></div>' +
       '<div class="la-actions">' + (sugg || '<span style="font-size:11px;color:var(--text-dim,#888);">no catalog matches — </span>') +
-        '<button onclick="p86Assemblies.laCreate(' + a.id + ',' + g.item_id + ',this)" style="border:1px solid rgba(251,191,36,0.35);background:rgba(251,191,36,0.08);color:#fbbf24;border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;font-weight:600;">➕ Create researched</button>' +
+        '<button onclick="p86Assemblies.laCreate(' + p86Code(a.id) + ',' + p86Code(g.item_id) + ',this)" style="border:1px solid rgba(251,191,36,0.35);background:rgba(251,191,36,0.08);color:#fbbf24;border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;font-weight:600;">➕ Create researched</button>' +
       '</div></div>';
   }
   function laMarkLinked(gapEl, res) {
@@ -1010,8 +1010,8 @@
       '</div>' +
       '<input id="la-mc-why" placeholder="Pricing rationale — required" style="width:100%;margin-top:5px;background:rgba(255,255,255,0.05);border:1px solid var(--border,#2a2f3a);border-radius:5px;padding:5px;color:var(--text,#fff);font-size:11px;" />' +
       '<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:5px;">' +
-        '<button class="ee-btn ghost" style="font-size:11px;" onclick="p86Assemblies.laCreateCancel(' + asmId + ',' + itemId + ')">Cancel</button>' +
-        '<button class="ee-btn primary" style="font-size:11px;" onclick="p86Assemblies.laCreateSave(' + asmId + ',' + itemId + ',this)">Create &amp; link</button>' +
+        '<button class="ee-btn ghost" style="font-size:11px;" onclick="p86Assemblies.laCreateCancel(' + p86Code(asmId) + ',' + p86Code(itemId) + ')">Cancel</button>' +
+        '<button class="ee-btn primary" style="font-size:11px;" onclick="p86Assemblies.laCreateSave(' + p86Code(asmId) + ',' + p86Code(itemId) + ',this)">Create &amp; link</button>' +
       '</div>';
   }
   function laCreateCancel(asmId, itemId) {
@@ -1084,7 +1084,7 @@
     }).join('');
     var sizeChips = _spin.sizes.map(function (s, i) {
       return '<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(79,140,255,0.12);color:#4f8cff;border-radius:6px;padding:2px 8px;font-size:12px;font-family:monospace;margin:2px 4px 2px 0;">' + esc(s) +
-        ' <span style="cursor:pointer;" onclick="p86Assemblies.spinRmSize(' + i + ')">✕</span></span>';
+        ' <span style="cursor:pointer;" onclick="p86Assemblies.spinRmSize(' + p86Code(i) + ')">✕</span></span>';
     }).join('');
     var preview = _spin.sizes.length ? _spin.sizes.map(function (s) {
       return '<div style="font-size:12px;color:var(--text-dim,#8a93a6);padding:2px 0;">' + esc(b.name) + ' — <b style="color:var(--text,#fff);font-family:monospace;">' + esc(s) + '</b></div>';

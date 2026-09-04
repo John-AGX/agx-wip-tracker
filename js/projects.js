@@ -351,7 +351,7 @@
           '<div class="p86-projects-filter-chips">' +
             chips.map(function(c) {
               var active = c.id === _listState.filter;
-              return '<button class="p86-chip' + (active ? ' active' : '') + '" onclick="window.p86Projects.setFilter(\'' + c.id + '\')">' +
+              return '<button class="p86-chip' + (active ? ' active' : '') + '" onclick="window.p86Projects.setFilter(p86Dec(\'' + p86Enc(c.id) + '\'))">' +
                 escapeHTML(c.label) +
               '</button>';
             }).join('') +
@@ -377,7 +377,7 @@
                     if (!unmapped.length) return '';
                     return '<div class="p86-projects-unmapped"><strong>Unmapped (' + unmapped.length + ')</strong> · ' +
                       unmapped.map(function(p) {
-                        return '<a href="#" onclick="window.openProject(\'' + escapeAttr(p.id) + '\'); return false;">' + escapeHTML(p.name) + '</a>';
+                        return '<a href="#" onclick="window.openProject(p86Dec(\'' + p86Enc(p.id) + '\')); return false;">' + escapeHTML(p.name) + '</a>';
                       }).join(' · ') +
                     '</div>';
                   })()
@@ -468,7 +468,7 @@
       var updated = p.updated_at ? new Date(p.updated_at).getTime() : 0;
       if (((Date.now() - updated) / 86400000) > 7) dot = '🟡';
     }
-    return '<div class="p86-projects-list-row" onclick="window.openProject(\'' + escapeAttr(p.id) + '\')" title="Open project">' +
+    return '<div class="p86-projects-list-row" onclick="window.openProject(p86Dec(\'' + p86Enc(p.id) + '\'))" title="Open project">' +
       thumb +
       '<div class="p86-projects-list-body">' +
         '<div class="p86-projects-list-name">' + dot + ' ' + escapeHTML(p.name || 'Untitled') + '</div>' +
@@ -501,7 +501,7 @@
       ? '<span class="p86-proj-card-wx" title="' + escapeAttr(wxToday.shortForecast || '') + '">' + weatherEmoji(wxToday) + ' ' + escapeHTML(String(wxToday.temperature || '')) + '°</span>'
       : '';
 
-    return '<div class="p86-proj-card" onclick="window.openProject(\'' + escapeAttr(p.id) + '\')">' +
+    return '<div class="p86-proj-card" onclick="window.openProject(p86Dec(\'' + p86Enc(p.id) + '\'))">' +
       visual +
       '<div class="p86-proj-card-body">' +
         '<div class="p86-proj-card-name">' + escapeHTML(p.name) + '</div>' +
@@ -1753,13 +1753,13 @@
               date = d.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
             }
           }
-          return '<div class="p86-proj-report-row" data-report-id="' + escapeAttr(r.id) + '" onclick="window.p86Projects.openReport(\'' + escapeAttr(r.id) + '\')">' +
+          return '<div class="p86-proj-report-row" data-report-id="' + escapeAttr(r.id) + '" onclick="window.p86Projects.openReport(p86Dec(\'' + p86Enc(r.id) + '\'))">' +
             '<div class="p86-proj-report-row-thumb">' + thumbHTML + '</div>' +
             '<div class="p86-proj-report-row-body">' +
               '<div class="p86-proj-report-row-title">' + escapeHTML(r.title || 'Untitled report') + '</div>' +
               '<div class="p86-proj-report-row-date">' + escapeHTML(date) + '</div>' +
             '</div>' +
-            '<button class="p86-proj-report-row-menu" title="Delete" onclick="event.stopPropagation(); window.p86Projects.deleteReport(\'' + escapeAttr(r.id) + '\')">&hellip;</button>' +
+            '<button class="p86-proj-report-row-menu" title="Delete" onclick="event.stopPropagation(); window.p86Projects.deleteReport(p86Dec(\'' + p86Enc(r.id) + '\'))">&hellip;</button>' +
           '</div>';
         }).join('') +
       '</div>';
@@ -6292,7 +6292,7 @@
     api().list(opts).then(function(r) {
       ctx._retried = false;
       var rows = (r && r.projects) || [];
-      var newBtn = '<button class="ee-btn secondary p86-proj-linked-newbtn" onclick="window.p86Projects.createForEntity(\'' + escapeAttr(ctx.kind) + '\', \'' + escapeAttr(ctx.id) + '\')">&#x2795; New Project</button>';
+      var newBtn = '<button class="ee-btn secondary p86-proj-linked-newbtn" onclick="window.p86Projects.createForEntity(p86Dec(\'' + p86Enc(ctx.kind) + '\'), p86Dec(\'' + p86Enc(ctx.id) + '\'))">&#x2795; New Project</button>';
       if (!rows.length) {
         host.innerHTML =
           '<div class="p86-proj-empty-line">No projects linked yet.</div>' +
@@ -6304,7 +6304,7 @@
         var thumb = coverUrl
           ? '<img src="' + escapeAttr(coverUrl) + '" alt="" class="p86-proj-linked-thumb" />'
           : '<div class="p86-proj-linked-thumb p86-proj-linked-thumb-empty">&#x1F4F8;</div>';
-        return '<div class="p86-proj-linked-row" onclick="window.openProject(\'' + escapeAttr(p.id) + '\')">' +
+        return '<div class="p86-proj-linked-row" onclick="window.openProject(p86Dec(\'' + p86Enc(p.id) + '\'))">' +
           thumb +
           '<div class="p86-proj-linked-row-body">' +
             '<div class="p86-proj-linked-name">' + escapeHTML(p.name) + '</div>' +

@@ -722,7 +722,7 @@
     var modeBtn = function(key, label) {
       var active = mode === key;
       return '<button class="' + (active ? 'primary' : 'ghost') + ' small" ' +
-        'onclick="window.setEstimatePreviewMode(\'' + key + '\')" ' +
+        'onclick="window.setEstimatePreviewMode(p86Dec(\'' + p86Enc(key) + '\'))" ' +
         'style="' + (active ? '' : 'opacity:0.85;') + '">' +
         label + '</button>';
     };

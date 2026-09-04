@@ -6976,8 +6976,8 @@ function p86Ask(message, opts) {
       return '<div style="display:flex;align-items:center;gap:8px;padding:5px 4px;border-bottom:1px solid var(--grid-border);">' +
         '<div style="flex:0 0 34%;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHTML(displayName) + (nr.comment ? ' — ' + escapeHTML(nr.comment) : '') + '">' + escapeHTML(displayName) + '</div>' +
         '<div style="flex:1;font-family:monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHTML(nr.ref) + '">' + refDisplay + '</div>' +
-        '<button class="ws-btn" title="Go to" onclick="window.wsGotoNamedRange(\'' + encodeURIComponent(k) + '\')" style="padding:1px 7px;">&#x2197;</button>' +
-        '<button class="ws-btn" title="Delete" onclick="window.wsDeleteNamedRange(\'' + encodeURIComponent(k) + '\')" style="padding:1px 7px;">×</button>' +
+        '<button class="ws-btn" title="Go to" onclick="window.wsGotoNamedRange(p86Dec(\'' + p86Enc(encodeURIComponent(k)) + '\'))" style="padding:1px 7px;">&#x2197;</button>' +
+        '<button class="ws-btn" title="Delete" onclick="window.wsDeleteNamedRange(p86Dec(\'' + p86Enc(encodeURIComponent(k)) + '\'))" style="padding:1px 7px;">×</button>' +
       '</div>';
     }).join('');
   }

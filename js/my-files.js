@@ -226,9 +226,9 @@ function p86Ask(message, opts) {
       // keep it keyboard-accessible; stopPropagation stops the row's
       // selectFolder from also firing on a caret click.
       var caret = kids.length
-        ? '<span class="mf-rail-caret" role="button" tabindex="0" onclick="event.stopPropagation();window.myFiles.toggleFolder(\'' + escapeAttr(path) + '\')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();event.stopPropagation();window.myFiles.toggleFolder(\'' + escapeAttr(path) + '\');}" aria-label="' + (expanded ? 'Collapse' : 'Expand') + '">' + (expanded ? '&#x25BE;' : '&#x25B8;') + '</span>'
+        ? '<span class="mf-rail-caret" role="button" tabindex="0" onclick="event.stopPropagation();window.myFiles.toggleFolder(p86Dec(\'' + p86Enc(path) + '\'))" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();event.stopPropagation();window.myFiles.toggleFolder(p86Dec(\'' + p86Enc(path) + '\'));}" aria-label="' + (expanded ? 'Collapse' : 'Expand') + '">' + (expanded ? '&#x25BE;' : '&#x25B8;') + '</span>'
         : '<span class="mf-rail-caret mf-rail-caret-empty"></span>';
-      var html = '<button class="mf-rail-row' + (active ? ' active' : '') + '" style="padding-left:' + (8 + depth * 14) + 'px;" data-folder="' + escapeAttr(path) + '" onclick="window.myFiles.selectFolder(\'' + escapeAttr(path) + '\')">' +
+      var html = '<button class="mf-rail-row' + (active ? ' active' : '') + '" style="padding-left:' + (8 + depth * 14) + 'px;" data-folder="' + escapeAttr(path) + '" onclick="window.myFiles.selectFolder(p86Dec(\'' + p86Enc(path) + '\'))">' +
         caret +
         '<span class="mf-rail-row-glyph">' + (kids.length ? (expanded ? '&#x1F4C2;' : '&#x1F4C1;') : '&#x1F4C1;') + '</span>' +
         '<span class="mf-rail-row-label">' + escapeHTML(folderLeaf(path) || prettyFolder(path)) + '</span>' +
@@ -1113,7 +1113,7 @@ function p86Ask(message, opts) {
         if (r.inputs && Object.keys(r.inputs).length) io.push(Object.keys(r.inputs).length + ' input' + (Object.keys(r.inputs).length === 1 ? '' : 's'));
         if (r.outputs && Object.keys(r.outputs).length) io.push(Object.keys(r.outputs).length + ' output' + (Object.keys(r.outputs).length === 1 ? '' : 's'));
         var ioLabel = io.length ? io.join(' · ') : 'no captured data';
-        html += '<div class="mf-printout-row" style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:#141414;border:1px solid #222;border-radius:6px;cursor:pointer;" onclick="window.myFiles.openPrintout(\'' + escapeAttr(r.id) + '\')">' +
+        html += '<div class="mf-printout-row" style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:#141414;border:1px solid #222;border-radius:6px;cursor:pointer;" onclick="window.myFiles.openPrintout(p86Dec(\'' + p86Enc(r.id) + '\'))">' +
           '<div style="flex:1;min-width:0;">' +
             '<div style="font-size:13px;color:var(--text,#e8e0d0);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + preview + '</div>' +
             '<div style="font-size:10px;color:var(--text-dim,#666);margin-top:2px;">' +
@@ -1121,8 +1121,8 @@ function p86Ask(message, opts) {
               (r.user_name ? ' · ' + escapeHTML(r.user_name) : '') +
             '</div>' +
           '</div>' +
-          '<button type="button" class="ee-btn secondary" style="font-size:11px;flex-shrink:0;" onclick="event.stopPropagation();window.myFiles.openPrintout(\'' + escapeAttr(r.id) + '\')">View</button>' +
-          '<button type="button" class="ee-btn secondary" style="font-size:11px;flex-shrink:0;" title="Delete" onclick="event.stopPropagation();window.myFiles.deletePrintout(\'' + escapeAttr(r.id) + '\')">×</button>' +
+          '<button type="button" class="ee-btn secondary" style="font-size:11px;flex-shrink:0;" onclick="event.stopPropagation();window.myFiles.openPrintout(p86Dec(\'' + p86Enc(r.id) + '\'))">View</button>' +
+          '<button type="button" class="ee-btn secondary" style="font-size:11px;flex-shrink:0;" title="Delete" onclick="event.stopPropagation();window.myFiles.deletePrintout(p86Dec(\'' + p86Enc(r.id) + '\'))">×</button>' +
         '</div>';
       });
       html += '</div></div>';

@@ -208,7 +208,7 @@
     var FD = window.p86FilterDrawer;
     var n = (_drawer && FD) ? FD.countActive(insFilterFields(), _drawer) : 0;
     var tab = function (id, label) {
-      return '<button type="button" class="ins-tab' + (_view === id ? ' on' : '') + '" onclick="insightsSetView(\'' + id + '\')">' + label + '</button>';
+      return '<button type="button" class="ins-tab' + (_view === id ? ' on' : '') + '" onclick="insightsSetView(p86Dec(\'' + p86Enc(id) + '\'))">' + label + '</button>';
     };
     var grpOpts = [['none', 'No grouping'], ['market', 'By market'], ['jobType', 'By job type'], ['status', 'By status']]
       .map(function (o) { return '<option value="' + o[0] + '"' + (_groupBy === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('');
@@ -402,7 +402,7 @@
   function reportsBody(jobs) {
     var picker = REPORT_ORDER.map(function (id) {
       var on = _report === id;
-      return '<button type="button" class="ins-rpick' + (on ? ' on' : '') + '" onclick="insightsSetReport(\'' + id + '\')">' + esc(REPORTS[id].name) + '</button>';
+      return '<button type="button" class="ins-rpick' + (on ? ' on' : '') + '" onclick="insightsSetReport(p86Dec(\'' + p86Enc(id) + '\'))">' + esc(REPORTS[id].name) + '</button>';
     }).join('');
     var report = REPORTS[_report] || REPORTS.wip;
     var rows = report.rows(jobs);

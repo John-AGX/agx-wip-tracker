@@ -1751,7 +1751,11 @@ function renderJobsMain() {
         function p86JobsSelectAll(checked) {
             document.querySelectorAll('#jobs-table .job-check').forEach(function(b) {
                 b.checked = checked;
-                var id = b.getAttribute('data-id');
+                // data-id carries the ENCODED job id (js/dom-ref.js), the same
+                // value the row's own onclick decodes — otherwise Select All
+                // and a row click would key _jobsSelected differently for any
+                // id the HTML parser rewrites on the way into the attribute.
+                var id = p86Dec(b.getAttribute('data-id'));
                 if (checked) _jobsSelected.add(id); else _jobsSelected.delete(id);
             });
             updateJobsBulkBar();
@@ -2154,7 +2158,7 @@ function renderJobsMain() {
                 var pmCell = escapeHTML(getJobOwnerName(job));
                 if (readOnly) pmCell += ' <span style="font-size:9px;color:var(--text-dim,#888);margin-left:4px;">view only</span>';
                 row.innerHTML = `
-                    <td class="job-check-cell" style="width:34px;text-align:center;" onclick="event.stopPropagation();"><input type="checkbox" class="job-check" data-id="${escapeHTML(job.id)}" ${_jobsSelected.has(job.id) ? 'checked' : ''} onclick="event.stopPropagation();window.p86JobsSelect('${escapeHTML(job.id)}',this.checked);"></td>
+                    <td class="job-check-cell" style="width:34px;text-align:center;" onclick="event.stopPropagation();"><input type="checkbox" class="job-check" data-id="${p86Enc(job.id)}" ${_jobsSelected.has(job.id) ? 'checked' : ''} onclick="event.stopPropagation();window.p86JobsSelect(p86Dec('${p86Enc(job.id)}'),this.checked);"></td>
                     <td data-col="name"><strong>${escapeHTML(window.p86JobLabel.fromJob(job))}</strong>${typeLabel}</td>
                     <td data-col="client">${escapeHTML(job.client) || '—'}</td>
                     <td data-col="pm">${pmCell}</td>
@@ -2332,7 +2336,7 @@ function renderJobsMain() {
                         var addr = c.property_address || c.address || '';
                         var meta = [c.city, c.state].filter(Boolean).join(', ');
                         return '<button type="button" class="ee-btn secondary" ' +
-                                'onclick="confirmLinkJobClient(\'' + escapeHTML(jobId) + '\', \'' + escapeHTML(c.id) + '\')" ' +
+                                'onclick="confirmLinkJobClient(p86Dec(\'' + p86Enc(jobId) + '\'), p86Dec(\'' + p86Enc(c.id) + '\'))" ' +
                                 'style="display:block;width:100%;text-align:left;margin-bottom:4px;padding:8px 10px;">' +
                             '<div style="font-weight:600;">' + escapeHTML(c.name || '(unnamed)') +
                               (s.score === 100 ? ' <span style="color:#34d399;font-size:10px;">EXACT MATCH</span>' : '') + '</div>' +
@@ -2373,7 +2377,7 @@ function renderJobsMain() {
                     '<div class="modal-footer" style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">' +
                       (current
                         ? '<button class="ee-btn" style="margin-right:auto;color:#f87171;border-color:rgba(248,113,113,0.4);" ' +
-                          'onclick="confirmLinkJobClient(\'' + escapeHTML(jobId) + '\', \'\')">Unlink</button>'
+                          'onclick="confirmLinkJobClient(p86Dec(\'' + p86Enc(jobId) + '\'), \'\')">Unlink</button>'
                         : '') +
                       '<button class="ee-btn secondary" onclick="closeJobClientLinkModal()">Cancel</button>' +
                       '<button class="ee-btn primary" id="jobClientLinkConfirm" disabled>Link</button>' +
@@ -2472,8 +2476,8 @@ function renderJobsMain() {
                   '<input id="job-addr-zip" placeholder="Zip" maxlength="10" value="' + esc(job.zip) + '" />' +
                 '</div>' +
                 '<div style="display:flex;gap:6px;">' +
-                  '<button onclick="saveJobAddress(\'' + esc(jobId) + '\')" class="btn-primary" style="padding:4px 12px;cursor:pointer;">Save</button>' +
-                  '<button onclick="renderJobDetail(\'' + esc(jobId) + '\')" style="padding:4px 12px;cursor:pointer;">Cancel</button>' +
+                  '<button onclick="saveJobAddress(p86Dec(\'' + p86Enc(jobId) + '\'))" class="btn-primary" style="padding:4px 12px;cursor:pointer;">Save</button>' +
+                  '<button onclick="renderJobDetail(p86Dec(\'' + p86Enc(jobId) + '\'))" style="padding:4px 12px;cursor:pointer;">Cancel</button>' +
                 '</div>';
             if (window.p86AddressAutocomplete) {
                 window.p86AddressAutocomplete.attach({
@@ -3523,19 +3527,19 @@ function renderJobsMain() {
                         var _leadsC = (window.p86Leads && window.p86Leads.getCached && window.p86Leads.getCached()) || [];
                         var _ld = _leadsC.find(function (x) { return x.id === job.lead_id; });
                         var _lt = _ld ? (_ld.title || 'lead') : 'lead';
-                        _chips += '<button onclick="openLeadFromJob(\'' + escapeHTML(job.lead_id) + '\')" class="badge" style="cursor:pointer;border:none;background:rgba(251,191,36,0.12);color:var(--yellow,#fbbf24);">&larr; From lead: ' + escapeHTML(_lt) + '</button>';
+                        _chips += '<button onclick="openLeadFromJob(p86Dec(\'' + p86Enc(job.lead_id) + '\'))" class="badge" style="cursor:pointer;border:none;background:rgba(251,191,36,0.12);color:var(--yellow,#fbbf24);">&larr; From lead: ' + escapeHTML(_lt) + '</button>';
                     }
                     if (job.estimate_id) {
                         var _estC = (window.appData && window.appData.estimates) || [];
                         var _es = _estC.find(function (x) { return x.id === job.estimate_id; });
                         var _en = _es ? (_es.name || _es.title || 'estimate') : 'estimate';
-                        _chips += '<button onclick="openEstimateFromJob(\'' + escapeHTML(job.estimate_id) + '\')" class="badge" style="cursor:pointer;border:none;background:rgba(79,140,255,0.14);color:#4f8cff;">&larr; From estimate: ' + escapeHTML(_en) + '</button>';
+                        _chips += '<button onclick="openEstimateFromJob(p86Dec(\'' + p86Enc(job.estimate_id) + '\'))" class="badge" style="cursor:pointer;border:none;background:rgba(79,140,255,0.14);color:#4f8cff;">&larr; From estimate: ' + escapeHTML(_en) + '</button>';
                     }
                     // No estimate backing the job → its estimated costs aren't
                     // flowing into WIP. Flag it with a one-click "Add estimate"
                     // (the estimate is the source of truth for estimated costs).
                     if (!job.estimate_id) {
-                        _chips += '<button onclick="addEstimateToJob(\'' + escapeHTML(job.id) + '\')" class="badge" title="No estimate is backing this job, so estimated costs aren&#39;t flowing into its WIP. Click to attach one." style="cursor:pointer;border:none;background:rgba(239,68,68,0.14);color:var(--red,#ef4444);">&#9888;&#xFE0F; No estimate &mdash; costs not flowing &middot; Add estimate</button>';
+                        _chips += '<button onclick="addEstimateToJob(p86Dec(\'' + p86Enc(job.id) + '\'))" class="badge" title="No estimate is backing this job, so estimated costs aren&#39;t flowing into its WIP. Click to attach one." style="cursor:pointer;border:none;background:rgba(239,68,68,0.14);color:var(--red,#ef4444);">&#9888;&#xFE0F; No estimate &mdash; costs not flowing &middot; Add estimate</button>';
                     }
                     _srcHost.innerHTML = _chips;
                     _srcHost.style.display = _chips ? 'flex' : 'none';
@@ -3615,7 +3619,7 @@ function renderJobsMain() {
             if (_jobAddrCell) {
                 var _jobAddrDisp = (_jobAddr && window.p86MapLink && window.p86MapLink.linkHTML) ? window.p86MapLink.linkHTML(_jobAddr, _jobAddr) : escapeHTML(_jobAddr || '—');
                 _jobAddrCell.innerHTML = _jobAddrDisp +
-                    ' <button onclick="editJobAddress(\'' + escapeHTML(job.id) + '\')" title="Edit address" style="margin-left:8px;cursor:pointer;background:none;border:none;color:var(--accent,#4f8cff);font-size:12px;padding:0;">&#9998; Edit</button>';
+                    ' <button onclick="editJobAddress(p86Dec(\'' + p86Enc(job.id) + '\'))" title="Edit address" style="margin-left:8px;cursor:pointer;background:none;border:none;color:var(--accent,#4f8cff);font-size:12px;padding:0;">&#9998; Edit</button>';
             }
             // Explain a $0 estimated cost when the job DOES have an estimate (the
             // lead-only case is already covered by the red "Add estimate" chip).
@@ -3808,7 +3812,7 @@ function renderJobsMain() {
             var canManageSharing = me && jobObj && (me.role === 'admin' || me.id === jobObj.owner_id);
             if (canManageSharing && window.p86Api && window.p86Api.isAuthenticated()) {
                 btnRow.insertAdjacentHTML('beforeend',
-                    '<button class="ee-btn primary" onclick="openJobShareManager(\'' + escapeHTML(jobId) + '\')" ' +
+                    '<button class="ee-btn primary" onclick="openJobShareManager(p86Dec(\'' + p86Enc(jobId) + '\'))" ' +
                     'data-readonly-allowed ' +
                     'id="job-overview-share-btn">&#x1F517; Sharing <span id="job-overview-share-count" style="opacity:0.7;font-size:10px;"></span></button>'
                 );
@@ -4015,7 +4019,7 @@ function renderJobsMain() {
                 invs.forEach(i => { invTotalAmt += i.amount || 0; if (i.status === 'Paid') invTotalPaid += i.amount || 0; });
                 const invRows = invs.map(function(i) {
                     const statusColor = i.status === 'Paid' ? 'var(--green)' : i.status === 'Sent' ? 'var(--yellow)' : 'var(--text-dim)';
-                    return '<tr class="overview-row" style="cursor:pointer;border-bottom:1px solid var(--overlay-light,rgba(255,255,255,0.04));" onclick="editInvoice(\'' + escapeHTML(i.id) + '\')" title="Click to edit">' +
+                    return '<tr class="overview-row" style="cursor:pointer;border-bottom:1px solid var(--overlay-light,rgba(255,255,255,0.04));" onclick="editInvoice(p86Dec(\'' + p86Enc(i.id) + '\'))" title="Click to edit">' +
                         '<td style="white-space:nowrap;padding:6px 10px;"><strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(i.invNumber || 'INV') + '</strong></td>' +
                         '<td style="padding:6px 10px;font-size:12px;color:var(--text-dim,#aaa);">' + escapeHTML(i.vendor || '') + '</td>' +
                         '<td style="padding:6px 10px;font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(i.description || '') + '</td>' +
@@ -4459,7 +4463,7 @@ function renderJobsMain() {
                     ? ' <a href="' + window.p86MapLink.url(building.address).replace(/&/g, '&amp;') + '" target="_blank" rel="noopener" onclick="event.stopPropagation();" title="Open in Google Maps" style="text-decoration:none;margin-left:2px;">' + (window.p86Icon ? window.p86Icon('map-pin') : '') + '</a>'
                     : '';
                 let body =
-                    '<div class="p86-mline" onclick="(function(el){var d=document.getElementById(\'' + uid + '\');var a=document.getElementById(\'' + arrowId + '\');var closed=d.style.display===\'none\';d.style.display=closed?\'block\':\'none\';a.textContent=closed?\'' + ARROW_DOWN + '\':\'' + ARROW_RIGHT + '\';el.classList.toggle(\'is-open\',closed);})(this)">' +
+                    '<div class="p86-mline" onclick="(function(el){var d=document.getElementById(p86Dec(\'' + p86Enc(uid) + '\'));var a=document.getElementById(p86Dec(\'' + p86Enc(arrowId) + '\'));var closed=d.style.display===\'none\';d.style.display=closed?\'block\':\'none\';a.textContent=closed?p86Dec(\'' + p86Enc(ARROW_DOWN) + '\'):p86Dec(\'' + p86Enc(ARROW_RIGHT) + '\');el.classList.toggle(\'is-open\',closed);})(this)">' +
                         '<div class="p86-mline-top">' +
                             '<div class="p86-mline-id">' +
                                 '<span id="' + arrowId + '" class="p86-mline-arrow">' + ARROW_RIGHT + '</span>' +
@@ -4505,7 +4509,7 @@ function renderJobsMain() {
                         // not the whole chip): done (green) / mid (amber) / dim.
                         var pMod = p.pctComplete >= 100 ? 'done' : p.pctComplete >= 50 ? 'mid' : 'dim';
                         var allocStr = wp.allocPct !== 100 ? ' (' + fmtAllocPct(wp.allocPct) + '%)' : '';
-                        body += '<button class="p86-bldg-phase-chip" onclick="event.stopPropagation();editPhase(\'' + escapeHTML(p.id) + '\')">' +
+                        body += '<button class="p86-bldg-phase-chip" onclick="event.stopPropagation();editPhase(p86Dec(\'' + p86Enc(p.id) + '\'))">' +
                             escapeHTML(p.phase) + allocStr + ' <b class="' + pMod + '">' + (p.pctComplete || 0) + '%</b> ' + formatCurrency(pCost) + '</button>';
                     });
                     body += '</div>';
@@ -4522,7 +4526,7 @@ function renderJobsMain() {
                     body += '<div class="p86-bldg-co-list">';
                     cosWired.forEach(function(item) {
                         const c = item.co;
-                        body += '<div class="p86-bldg-co-row" onclick="event.stopPropagation();editCO(\'' + escapeHTML(c.id) + '\')">' +
+                        body += '<div class="p86-bldg-co-row" onclick="event.stopPropagation();editCO(p86Dec(\'' + p86Enc(c.id) + '\'))">' +
                             '<span><b>' + escapeHTML(c.co_number || c.coNumber || 'CO') + '</b> ' + escapeHTML((c.description || '').substring(0, 60)) + '</span>' +
                             '<span class="p86-bldg-co-row-meta">Inc: <b>' + formatCurrency((c.income || 0) * item.allocPct / 100) + '</b> (' + fmtAllocPct(item.allocPct) + '%)</span>' +
                             '</div>';
@@ -4532,7 +4536,7 @@ function renderJobsMain() {
 
                 // Edit lives in the expanded body now — the row itself stays clean
                 // (this is what retired the always-visible "Edit" column).
-                body += '<div style="margin-top:10px;"><button class="p86-mline-edit" onclick="event.stopPropagation();editBuilding(\'' + escapeHTML(building.id) + '\')">&#x270F;&#xFE0F; Edit building</button></div>';
+                body += '<div style="margin-top:10px;"><button class="p86-mline-edit" onclick="event.stopPropagation();editBuilding(p86Dec(\'' + p86Enc(building.id) + '\'))">&#x270F;&#xFE0F; Edit building</button></div>';
                 body += '</div></div>';   // close .p86-mline-body + .p86-mline
                 return body;
             }).join('');
@@ -5073,7 +5077,7 @@ function renderJobsMain() {
                     '<span class="sp"></span>' +
                     (_showMatrix ? '<div class="p86-sc-seg"><button class="on" data-scv="list" onclick="p86ScopeViewSet(this,\'list\')">List</button><button data-scv="matrix" onclick="p86ScopeViewSet(this,\'matrix\')">Matrix</button></div>' : '') +
                     (groupKeys.length ? '<button class="ee-btn ghost" style="font-size:12px;padding:3px 10px;white-space:nowrap;" onclick="openManagePhasesModal()">Manage</button>' : '') +
-                    '<button class="ee-btn ghost" style="font-size:12px;padding:3px 10px;white-space:nowrap;" onclick="addJobLevelPhase(\'' + escapeHTML(jobId) + '\')">+ Add scope</button>' +
+                    '<button class="ee-btn ghost" style="font-size:12px;padding:3px 10px;white-space:nowrap;" onclick="addJobLevelPhase(p86Dec(\'' + p86Enc(jobId) + '\'))">+ Add scope</button>' +
                 '</div>';
 
             // A JOB-LEVEL scope (no buildingId) can't let a building drive its own
@@ -5087,7 +5091,7 @@ function renderJobsMain() {
             var fixBannerHTML = (_bldgs.length && _jlCount)
                 ? '<div class="p86-sc-fixbanner" style="margin:6px 0;padding:8px 10px;border:1px solid #b45309;background:rgba(180,83,9,.12);border-radius:8px;font-size:12px;line-height:1.4;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
                     + '<span>&#9888; ' + _jlCount + ' scope' + (_jlCount > 1 ? 's aren’t' : ' isn’t') + ' split per building, so the buildings can’t track their own %.</span>'
-                    + '<button class="ee-btn" style="font-size:12px;padding:3px 10px;white-space:nowrap;" onclick="p86SplitJobLevelScopes(\'' + escapeHTML(jobId) + '\')">Split across ' + _bldgs.length + ' building' + (_bldgs.length > 1 ? 's' : '') + '</button>'
+                    + '<button class="ee-btn" style="font-size:12px;padding:3px 10px;white-space:nowrap;" onclick="p86SplitJobLevelScopes(p86Dec(\'' + p86Enc(jobId) + '\'))">Split across ' + _bldgs.length + ' building' + (_bldgs.length > 1 ? 's' : '') + '</button>'
                     + '</div>'
                 : '';
 
@@ -5118,8 +5122,8 @@ function renderJobsMain() {
                 return '<div class="p86-sc-row">' +
                     '<div class="p86-sc-top">' +
                         '<div class="p86-sc-nm"><div class="n">' + escapeHTML(phaseName) + '</div>' + (chips ? '<div class="p86-sc-chips">' + chips + '</div>' : '') + '</div>' +
-                        '<button class="p86-sc-icon" title="Edit scope" onclick="editPhase(\'' + escapeHTML(repId) + '\')">&#x270F;&#xFE0F;</button>' +
-                        '<button class="p86-sc-icon del" title="Delete scope" onclick="p86ScopeDelete(\'' + escapeHTML(jobId) + '\',\'' + escapeHTML(repId) + '\')">&#128465;</button>' +
+                        '<button class="p86-sc-icon" title="Edit scope" onclick="editPhase(p86Dec(\'' + p86Enc(repId) + '\'))">&#x270F;&#xFE0F;</button>' +
+                        '<button class="p86-sc-icon del" title="Delete scope" onclick="p86ScopeDelete(p86Dec(\'' + p86Enc(jobId) + '\'),p86Dec(\'' + p86Enc(repId) + '\'))">&#128465;</button>' +
                     '</div>' +
                     '<div class="p86-sc-btm">' +
                         '<div class="p86-sc-rev">' + formatCurrency(revTotal) + '<small>cost ' + formatCurrency(costTotal) + '</small></div>' +
@@ -6181,7 +6185,7 @@ function renderJobsMain() {
 
                 const summaryRow =
                     '<tr class="sub-row" style="cursor:pointer;user-select:none;border-bottom:1px solid var(--overlay-light,rgba(255,255,255,0.04));" ' +
-                        'onclick="(function(){var d=document.getElementById(\'' + uid + '\');var a=document.getElementById(\'' + arrowId + '\');var closed=d.style.display===\'none\';d.style.display=closed?\'table-row\':\'none\';var open=closed;a.textContent=open?\'' + ARROW_DOWN + '\':\'' + ARROW_RIGHT + '\';})()">' +
+                        'onclick="(function(){var d=document.getElementById(p86Dec(\'' + p86Enc(uid) + '\'));var a=document.getElementById(p86Dec(\'' + p86Enc(arrowId) + '\'));var closed=d.style.display===\'none\';d.style.display=closed?\'table-row\':\'none\';var open=closed;a.textContent=open?p86Dec(\'' + p86Enc(ARROW_DOWN) + '\'):p86Dec(\'' + p86Enc(ARROW_RIGHT) + '\');})()">' +
                         '<td style="white-space:nowrap;padding:6px 10px;">' +
                             '<span id="' + arrowId + '" style="font-size:10px;color:var(--text-dim);display:inline-block;width:10px;">' + ARROW_RIGHT + '</span> ' +
                             '<strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(sub.name) + '</strong>' +
@@ -6202,7 +6206,7 @@ function renderJobsMain() {
                             pctBilled + '%' +
                         '</td>' +
                         '<td style="white-space:nowrap;padding:6px 10px;text-align:right;">' +
-                            '<button class="ee-btn ghost" style="font-size:11px;padding:3px 8px;" onclick="event.stopPropagation();editSub(\'' + escapeHTML(sub.id) + '\')">&#x270F;&#xFE0F; Edit</button>' +
+                            '<button class="ee-btn ghost" style="font-size:11px;padding:3px 8px;" onclick="event.stopPropagation();editSub(p86Dec(\'' + p86Enc(sub.id) + '\'))">&#x270F;&#xFE0F; Edit</button>' +
                         '</td>' +
                     '</tr>';
 
@@ -6423,7 +6427,7 @@ function renderJobsMain() {
                     '<input type="text" inputmode="decimal" data-phase-id="' + p.id + '" value="' + asSold + '" style="width:110px;font-size:12px;padding:4px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);text-align:right;" oninput="onPhaseBreakdownInput(this)">' +
                     (co ? '<span style="font-size:10px;color:var(--green);white-space:nowrap;">+' + formatCurrency(co) + ' CO</span>' : '') +
                     '<span style="font-size:12px;font-weight:600;color:var(--accent);width:90px;text-align:right;">' + formatCurrency(total) + '</span>' +
-                    '<button type="button" data-edit-gate-passthrough onclick="removePhaseFromBreakdown(\'' + p.id + '\')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;padding:2px 4px;" title="Delete phase">&times;</button>';
+                    '<button type="button" data-edit-gate-passthrough onclick="removePhaseFromBreakdown(p86Dec(\'' + p86Enc(p.id) + '\'))" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;padding:2px 4px;" title="Delete phase">&times;</button>';
                 rowsEl.appendChild(row);
             });
 
@@ -6603,7 +6607,7 @@ function renderJobsMain() {
                     escapeHTML(co.description || 'CO') + '</span>' +
                     '<input type="text" inputmode="decimal" data-co-id="' + co.id + '" data-field="income" value="' + inc + '" title="Income (budget add)" style="width:100px;font-size:12px;padding:4px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--green);text-align:right;" oninput="onCOBreakdownInput(this)">' +
                     '<input type="text" inputmode="decimal" data-co-id="' + co.id + '" data-field="estimatedCosts" value="' + cost + '" title="Estimated cost" style="width:100px;font-size:12px;padding:4px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--yellow);text-align:right;" oninput="onCOBreakdownInput(this)">' +
-                    '<button type="button" data-edit-gate-passthrough onclick="removeCOFromBreakdown(\'' + co.id + '\')" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;padding:2px 4px;" title="Delete CO">&times;</button>';
+                    '<button type="button" data-edit-gate-passthrough onclick="removeCOFromBreakdown(p86Dec(\'' + p86Enc(co.id) + '\'))" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;padding:2px 4px;" title="Delete CO">&times;</button>';
                 rowsEl.appendChild(row);
             });
             if (window.p86EditGate) {
@@ -7045,11 +7049,11 @@ function renderJobsMain() {
                 html += '<div style="font-size:11px;color:var(--text-dim);white-space:nowrap;">' + count + ' record' + (count > 1 ? 's' : '') + '</div>';
                 html += '<input type="text" inputmode="decimal" data-mp-rev="' + key + '" value="' + totalRev.toFixed(2) + '" style="width:120px;padding:6px 8px;background:var(--input-bg,#101014);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:13px;text-align:right;" title="Total revenue" />';
                 if (isDup) {
-                    html += '<button class="btn btn-primary small" style="padding:5px 10px;font-size:11px;" onclick="mergePhaseGroup(\'' + key + '\')">Merge</button>';
+                    html += '<button class="btn btn-primary small" style="padding:5px 10px;font-size:11px;" onclick="mergePhaseGroup(p86Dec(\'' + p86Enc(key) + '\'))">Merge</button>';
                 } else {
-                    html += '<button class="btn btn-secondary small" style="padding:5px 10px;font-size:11px;" onclick="saveManagedPhase(\'' + key + '\')">Save</button>';
+                    html += '<button class="btn btn-secondary small" style="padding:5px 10px;font-size:11px;" onclick="saveManagedPhase(p86Dec(\'' + p86Enc(key) + '\'))">Save</button>';
                 }
-                html += '<button class="btn danger small" style="padding:5px 10px;font-size:11px;" onclick="deletePhaseGroup(\'' + key + '\')">&#x1F5D1;</button>';
+                html += '<button class="btn danger small" style="padding:5px 10px;font-size:11px;" onclick="deletePhaseGroup(p86Dec(\'' + p86Enc(key) + '\'))">&#x1F5D1;</button>';
                 html += '</div>';
                 if (isDup) {
                     html += '<div style="font-size:10px;color:var(--text-dim);margin-top:6px;padding-top:6px;border-top:1px dashed var(--border);">';
@@ -7548,9 +7552,9 @@ function renderJobsMain() {
 
                 // Right: action buttons
                 html += '<div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0;">';
-                html += '<button onclick="editJob(\'' + escapeHTML(job.id) + '\')" class="ee-btn secondary">Edit</button>';
-                html += '<button onclick="restoreJob(\'' + escapeHTML(job.id) + '\')" class="ee-btn success">Restore</button>';
-                html += '<button onclick="deleteArchivedJob(\'' + escapeHTML(job.id) + '\')" class="ee-btn danger">Delete</button>';
+                html += '<button onclick="editJob(p86Dec(\'' + p86Enc(job.id) + '\'))" class="ee-btn secondary">Edit</button>';
+                html += '<button onclick="restoreJob(p86Dec(\'' + p86Enc(job.id) + '\'))" class="ee-btn success">Restore</button>';
+                html += '<button onclick="deleteArchivedJob(p86Dec(\'' + p86Enc(job.id) + '\'))" class="ee-btn danger">Delete</button>';
                 html += '</div>';
 
                 html += '</div></div>';
