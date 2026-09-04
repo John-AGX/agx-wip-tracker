@@ -1452,16 +1452,23 @@ async function dispatchEstimate(dbClient, target, refTable, ctx) {
     // Strip computed/runtime fields that should never persist.
     delete data.__totals;
 
-    await dbClient.query(
+    // assertTargetOrg at the top of dispatchEstimate already proved this row is
+    // the caller's (and fails closed on a missing org), so this predicate is
+    // the SECOND layer. The jobs twin of this statement already binds the org
+    // in its own WHERE and throws when it matches nothing (see the end of
+    // dispatchJob); estimates was the odd one out. Delete the assertTargetOrg
+    // line and nothing else noticed — now something does.
+    const wrote = await dbClient.query(
       `UPDATE estimates
           SET data = $1,
               updated_at = CASE
                 WHEN data IS DISTINCT FROM $1::jsonb THEN NOW()
                 ELSE updated_at
               END
-        WHERE id = $2`,
-      [JSON.stringify(data), id]
+        WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)`,
+      [JSON.stringify(data), id, (ctx && ctx.organizationId) == null ? null : ctx.organizationId]
     );
+    if (!wrote.rowCount) throw new Error(`Estimate not found: ${id}`);
 
     return {
       entity_type: 'estimate',

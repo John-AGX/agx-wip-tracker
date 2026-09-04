@@ -96,7 +96,22 @@ async function recomputeInvoicePaid(invoiceId, orgId) {
     apps.forEach(a => { if (a && a.invoice_id === invoiceId) paid += num(a.amount); });
   }
   paid = round2(paid);
-  const inv = await pool.query(`SELECT total, status FROM invoices WHERE id = $1`, [invoiceId]);
+  // The tenant predicate on BOTH statements below, not just the payments read
+  // above. This function is handed an invoice_id that came off a request body
+  // (applications[].invoice_id) and it was the only thing standing between
+  // that id and four money columns on a row in another tenant: an org-A caller
+  // could flip an org-B invoice to `paid` for an amount they chose, or knock a
+  // genuinely paid one back to `sent` with amount 0 — silently, answering 200.
+  // The callers validate the ids up front now; this is the second layer, and
+  // like the DO UPDATE guard on the estimates save it should be unreachable.
+  //
+  // `OR organization_id IS NULL` is the legacy tolerance arm every other read
+  // in this file uses (ownedJob, GET /ar/aging, PUT /invoices/:id). Dropping it
+  // would orphan un-stamped invoices — they would stop settling, with no error.
+  const inv = await pool.query(
+    `SELECT total, status FROM invoices
+      WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)`,
+    [invoiceId, orgId == null ? null : orgId]);
   if (!inv.rowCount) return;
   const total = num(inv.rows[0].total), cur = inv.rows[0].status;
   let status = cur;
@@ -109,9 +124,33 @@ async function recomputeInvoicePaid(invoiceId, orgId) {
   await pool.query(
     `UPDATE invoices SET amount_paid = $1, status = $2,
         paid_at = CASE WHEN $2 = 'paid' THEN COALESCE(paid_at, NOW()) ELSE NULL END,
-        updated_at = NOW() WHERE id = $3`,
-    [paid, status, invoiceId]
+        updated_at = NOW()
+      WHERE id = $3 AND (organization_id = $4 OR organization_id IS NULL)`,
+    [paid, status, invoiceId, orgId == null ? null : orgId]
   );
+}
+
+// Every invoice_id on a payment's applications[] must be one the caller can
+// actually see. The ids come straight off the request body and nothing
+// compared them to the caller's org, so a payment recorded in org A could name
+// an invoice in org B and move its money. Returns the ids that are NOT the
+// caller's, so the refusal can NAME them rather than silently dropping the
+// application and answering 200 — a dropped application is indistinguishable
+// from a successful one on the client, and leaves cash unapplied on a live
+// pilot's AR.
+//
+// Tolerance arm included: a legacy un-stamped invoice is still applicable.
+async function foreignInvoiceIds(ids, orgId) {
+  const want = Array.from(new Set((ids || []).filter(Boolean).map(String)));
+  if (!want.length) return [];
+  const found = new Set();
+  for (const id of want) {
+    const r = await pool.query(
+      `SELECT id FROM invoices WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)`,
+      [id, orgId == null ? null : orgId]);
+    if (r.rowCount) found.add(String(r.rows[0].id));
+  }
+  return want.filter((id) => !found.has(id));
 }
 
 // Org guard for a job (for per-job routes).
@@ -269,13 +308,21 @@ router.put('/invoices/:id', requireAuth, requireCapability('ESTIMATES_EDIT'), as
           issue_date = $4, due_date = $5, terms = $6,
           subtotal = $7, tax_pct = $8, tax_amount = $9, retainage_amount = $10, total = $11,
           data = $12::jsonb, updated_at = NOW()
-        WHERE id = $1 RETURNING *`,
+        WHERE id = $1 AND (organization_id = $13 OR organization_id IS NULL)
+        RETURNING *`,
       [req.params.id, b.job_id || null, b.client_id != null ? String(b.client_id) : null,
        b.issue_date || null, b.due_date || null, b.terms || null,
-       t.subtotal, num(b.tax_pct), t.taxAmount, t.retainageAmount, t.total, JSON.stringify(data)]
+       t.subtotal, num(b.tax_pct), t.taxAmount, t.retainageAmount, t.total, JSON.stringify(data),
+       org == null ? null : org]
     );
+    // Unreachable under the org-scoped read above; loud if the two ever
+    // disagree, rather than an obscure TypeError three lines down when
+    // shapeInvoice is handed undefined.
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
     await recomputeInvoicePaid(req.params.id, org); // total may have changed → status
-    const fresh = await pool.query(`SELECT * FROM invoices WHERE id = $1`, [req.params.id]);
+    const fresh = await pool.query(
+      `SELECT * FROM invoices WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)`,
+      [req.params.id, org == null ? null : org]);
     res.json({ invoice: shapeInvoice(fresh.rows[0]) });
   } catch (e) { console.error('PUT invoice error:', e); res.status(500).json({ error: 'Server error' }); }
 });
@@ -292,9 +339,12 @@ router.post('/invoices/:id/status', requireAuth, requireCapability('ESTIMATES_ED
     if (!cur.rowCount) return res.status(404).json({ error: 'Not found' });
     const sentAt = next === 'sent' ? ', sent_at = COALESCE(sent_at, NOW())' : '';
     const { rows } = await pool.query(
-      `UPDATE invoices SET status = $1${sentAt}, updated_at = NOW() WHERE id = $2 RETURNING *`,
-      [next, req.params.id]
+      `UPDATE invoices SET status = $1${sentAt}, updated_at = NOW()
+        WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL) RETURNING *`,
+      [next, req.params.id,
+       req.user.organization_id == null ? null : req.user.organization_id]
     );
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
     res.json({ invoice: shapeInvoice(rows[0]) });
   } catch (e) { console.error('POST invoice status error:', e); res.status(500).json({ error: 'Server error' }); }
 });
@@ -309,7 +359,10 @@ router.delete('/invoices/:id', requireAuth, requireCapability('ESTIMATES_EDIT'),
     if (cur.rows[0].status === 'paid' || num(cur.rows[0].amount_paid) > 0.005) {
       return res.status(409).json({ error: 'Cannot delete an invoice with payments applied; void it instead' });
     }
-    await pool.query(`DELETE FROM invoices WHERE id = $1`, [req.params.id]);
+    await pool.query(
+      `DELETE FROM invoices WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)`,
+      [req.params.id,
+       req.user.organization_id == null ? null : req.user.organization_id]);
     res.json({ ok: true });
   } catch (e) { console.error('DELETE invoice error:', e); res.status(500).json({ error: 'Server error' }); }
 });
@@ -334,6 +387,18 @@ router.post('/payments', requireAuth, requireCapability('ESTIMATES_EDIT'), requi
     const apps = Array.isArray(b.applications) ? b.applications
       .filter(a => a && a.invoice_id).map(a => ({ invoice_id: a.invoice_id, amount: round2(a.amount) })) : [];
     const data = { applications: apps, notes: b.notes || '' };
+    // Refuse the whole request rather than record a payment carrying an
+    // application that points outside the tenant. Answering 200 and quietly
+    // not applying it would leave the cash looking applied on one screen and
+    // the invoice open on another.
+    const foreign = await foreignInvoiceIds(apps.map((a) => a.invoice_id), org);
+    if (foreign.length) {
+      return res.status(404).json({
+        error: 'No such invoice on this account: ' + foreign.join(', ') +
+               '. Nothing was recorded.',
+        invoice_ids: foreign
+      });
+    }
     const id = genId('pay');
     const { rows } = await pool.query(
       `INSERT INTO payments (id, organization_id, owner_id, client_id, payment_date, amount, method, reference, data)
@@ -357,6 +422,16 @@ router.put('/payments/:id', requireAuth, requireCapability('ESTIMATES_EDIT'), as
     const apps = Array.isArray(b.applications) ? b.applications
       .filter(a => a && a.invoice_id).map(a => ({ invoice_id: a.invoice_id, amount: round2(a.amount) })) : prevApps;
     const data = { applications: apps, notes: b.notes != null ? b.notes : ((cur.rows[0].data || {}).notes || '') };
+    // Same refusal as POST /payments — re-applying an existing payment is the
+    // other door onto the same applications[] array.
+    const foreign = await foreignInvoiceIds(apps.map((a) => a.invoice_id), org);
+    if (foreign.length) {
+      return res.status(404).json({
+        error: 'No such invoice on this account: ' + foreign.join(', ') +
+               '. Nothing was changed.',
+        invoice_ids: foreign
+      });
+    }
     const { rows } = await pool.query(
       `UPDATE payments SET client_id = $2, payment_date = $3, amount = $4, method = $5, reference = $6,
           data = $7::jsonb, updated_at = NOW() WHERE id = $1 RETURNING *`,

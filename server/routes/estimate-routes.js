@@ -99,11 +99,21 @@ router.post('/:id/append-assembly', requireAuth, requireCapability('ESTIMATES_ED
 // geocode that string and cache coords on dedicated columns; geocode_addr
 // records the exact string we resolved so we self-skip when unchanged.
 // Best-effort + 'failed'-is-sticky, mirroring geocodeLead.
-async function geocodeEstimate(id) {
+// orgId is EXPLICIT and required at every call site. Pass the caller's org on
+// any request-driven path — this function is handed an estimate id that came
+// off a request body, and geocode_lat/lng/status/at/addr are columns on a
+// tenant's row like any other. Pass null ONLY for the boot backfill below,
+// which selects its own ids platform-wide by design and has no caller to scope
+// to. The null case is spelled out in the SQL rather than achieved by omitting
+// a predicate, so a new call site cannot get the org-less behaviour by
+// forgetting an argument.
+async function geocodeEstimate(id, orgId) {
+  const org = orgId == null ? null : orgId;
   try {
     const r = await pool.query(
-      "SELECT NULLIF(TRIM(data->>'propertyAddr'), '') AS addr, geocode_lat, geocode_addr FROM estimates WHERE id = $1",
-      [id]
+      "SELECT NULLIF(TRIM(data->>'propertyAddr'), '') AS addr, geocode_lat, geocode_addr FROM estimates " +
+      "WHERE id = $1 AND ($2::int IS NULL OR organization_id = $2 OR organization_id IS NULL)",
+      [id, org]
     );
     if (!r.rowCount) return;
     const addr = r.rows[0].addr;
@@ -113,13 +123,15 @@ async function geocodeEstimate(id) {
     const g = await geocodeAddress(addr);
     if (g && Number.isFinite(g.lat) && Number.isFinite(g.lng) && !(g.lat === 0 && g.lng === 0)) {
       await pool.query(
-        "UPDATE estimates SET geocode_lat = $1, geocode_lng = $2, geocode_status = 'ok', geocode_at = NOW(), geocode_addr = $3 WHERE id = $4",
-        [g.lat, g.lng, addr, id]
+        "UPDATE estimates SET geocode_lat = $1, geocode_lng = $2, geocode_status = 'ok', geocode_at = NOW(), geocode_addr = $3 " +
+        "WHERE id = $4 AND ($5::int IS NULL OR organization_id = $5 OR organization_id IS NULL)",
+        [g.lat, g.lng, addr, id, org]
       );
     } else {
       await pool.query(
-        "UPDATE estimates SET geocode_status = 'failed', geocode_at = NOW(), geocode_addr = $1 WHERE id = $2",
-        [addr, id]
+        "UPDATE estimates SET geocode_status = 'failed', geocode_at = NOW(), geocode_addr = $1 " +
+        "WHERE id = $2 AND ($3::int IS NULL OR organization_id = $3 OR organization_id IS NULL)",
+        [addr, id, org]
       );
     }
   } catch (e) { console.error('[estimates] geocode error:', e && e.message); }
@@ -137,7 +149,9 @@ async function backfillEstimateGeocodes() {
       "AND geocode_status IS DISTINCT FROM 'failed' LIMIT 500"
     );
     for (const e of rows) {
-      await geocodeEstimate(e.id);
+      // null org: the boot sweep is platform-wide by design and selected its
+      // own ids above. It is the ONLY caller entitled to pass null.
+      await geocodeEstimate(e.id, null);
       await new Promise(r => setTimeout(r, 250));
     }
     if (rows.length) console.log('[estimates] geocode backfill: processed ' + rows.length + ' estimate(s)');
@@ -277,9 +291,67 @@ router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), requi
       for (const est of orderedEstimates) {
         // FOR UPDATE holds the row to COMMIT, so the check below cannot race a
         // concurrent write between the read and the upsert.
+        //
+        // organization_id rides in the PROJECTION, not in the WHERE clause —
+        // the same shape, for the same reason, as PUT /api/jobs/bulk/save
+        // (job-routes.js, commit aebad8a8, whose message describes THIS
+        // statement). Filtering the read looks like the smaller change and is
+        // strictly worse: a filtered SELECT can only say "no rows", and "no
+        // rows" is already load-bearing here. A foreign-tenant row would land
+        // in `!existing.rows.length` —
+        //   with a base → conflict 'deleted', which the client escalates to an
+        //     unrecoverable-data-loss modal, for a row that is alive and
+        //     untouched in another tenant;
+        //   with no base → straight through to INSERT … ON CONFLICT (id) DO
+        //     UPDATE, which finds the foreign row BY PRIMARY KEY and overwrites
+        //     it anyway.
+        // The predicate on the SELECT does not close this. It relocates it into
+        // the arm that has no guard at all. So the read stays unfiltered, the
+        // tenant becomes DATA the branch below decides on under the same lock,
+        // and no second round-trip opens a TOCTOU window.
         const existing = await client.query(
-          'SELECT updated_at FROM estimates WHERE id = $1 FOR UPDATE', [est.id]
+          'SELECT updated_at, organization_id FROM estimates WHERE id = $1 FOR UPDATE', [est.id]
         );
+        // ── the row belongs to ANOTHER TENANT ───────────────────────────────
+        // Terminal, and FIRST — ahead of the lock branch, because `lockedIds`
+        // is built org-scoped and therefore cannot contain another tenant's
+        // SOLD estimate. Before this branch existed, a signed, approved,
+        // sold-and-locked estimate in org B could have its entire blob replaced
+        // by org A while it went on rendering as approved and signed: is_locked,
+        // approval_status, signature, sent_at and owner_id are COLUMNS and all
+        // survive the upsert, so nothing on the row said it had changed except
+        // updated_at.
+        //
+        // Deliberately NOT 'deleted': the two carry the same
+        // serverUpdatedAt: null, so the reason string is the only discriminator
+        // on the wire and they mean opposite things. 'deleted' = the row you
+        // loaded is gone and your edit is unrecoverable. 'not_in_org' = this row
+        // was never yours, nothing of yours was lost, and no data-loss modal is
+        // warranted. js/app.js:3696 already renders this sentence, and
+        // handleSaveConflicts is already shared with the jobs save.
+        //
+        // serverUpdatedAt is NULL and that is the point. This endpoint takes up
+        // to 5000 ids a call (the cap above) and, before the fix, answered a
+        // foreign id with reason 'stale' AND the victim row's real updated_at —
+        // a batched existence + last-modified oracle over every tenant's
+        // estimates, needing no write at all. The timestamp is gone. What
+        // remains is one bit ('not_in_org' vs 'deleted') to a caller who
+        // already knows the exact id, which is the same residual the jobs save
+        // accepts for the same reason, and the alternative is lying to a
+        // legitimate user about data loss.
+        if (existing.rows.length) {
+          const rowOrg = existing.rows[0].organization_id;
+          // `rowOrg != null &&` is the LEGACY TOLERANCE ARM, in branch form: a
+          // NULL-org estimate never satisfies this and so is never refused.
+          // Tightening to `Number(rowOrg) !== Number(req.orgId)` alone would
+          // orphan every un-stamped legacy row — invisible and unsaveable, with
+          // no error. Their claim belongs to the evidence-based backfill in
+          // db.js, never to a routine save. Same arm as line 51 of this file.
+          if (rowOrg != null && Number(rowOrg) !== Number(req.orgId)) {
+            conflicts.push({ id: est.id, reason: 'not_in_org', serverUpdatedAt: null });
+            continue;
+          }
+        }
         const base = ebv[est.id];
         if (lockedIds.has(est.id)) {
           // Reported, not skipped. A silent `continue` re-baselined the row on
@@ -384,15 +456,40 @@ router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), requi
                    WHEN estimates.data IS DISTINCT FROM EXCLUDED.data THEN NOW()
                    ELSE estimates.updated_at
                  END
+             -- The SECOND LAYER under the JS tenant branch above, and it
+             -- should be unreachable — that is the point of it. An upsert
+             -- matches BY PRIMARY KEY, so without a predicate here the DO
+             -- UPDATE arm reaches any row in the database that shares an id,
+             -- whatever the JS above believed. organization_id stays out of
+             -- the SET list (a row's org is its tenancy; letting a save
+             -- rewrite it would make every bulk save a potential tenant move),
+             -- so the tolerance arm is what admits legacy NULL-org rows.
+             WHERE estimates.organization_id = $4 OR estimates.organization_id IS NULL
            RETURNING updated_at`,
           // owner_id = attributed user (acted-as target when disguised). Set
           // on CREATE only (ON CONFLICT DO UPDATE doesn't re-stamp owner). The
           // DELETE /:id 403 guard keeps comparing owner_id to req.user.id.
           [est.id, getAttributedUserId(req), JSON.stringify(blob), req.orgId, estMarketId]
         );
+        // A DO UPDATE whose WHERE filters the row out returns ZERO rows. The
+        // old `if (_up.rows[0])` turned that into a SILENT skip: no version, no
+        // conflict, nothing said. That is precisely what the locked branch
+        // above refuses to do ("Reported, not skipped… which turned 'this
+        // estimate is sold and immutable' into a dropped edit"), and a silent
+        // skip here would be worse, because the client re-baselines the row as
+        // though it had been written.
+        //
+        // Throw rather than push a conflict: reaching here means a row passed
+        // the JS tenant branch and was then refused by SQL, so the two
+        // disagree. That is a SERVER BUG and should read as one (500 +
+        // ROLLBACK, nothing written), not as something the user did.
+        if (!_up.rows[0]) {
+          throw new Error('bulk/save: estimate ' + est.id + ' passed the tenant branch but the ' +
+            'DO UPDATE org guard refused it — the two disagree, nothing was written');
+        }
         // Hand back the new version so the client can advance its base and not
         // false-conflict on its own next save.
-        if (_up.rows[0]) versions[est.id] = new Date(_up.rows[0].updated_at).toISOString();
+        versions[est.id] = new Date(_up.rows[0].updated_at).toISOString();
       }
       await client.query('COMMIT');
     } catch (e) {
@@ -405,10 +502,19 @@ router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), requi
     // geocodeEstimate self-skips when coords already match the current
     // address, so this only does work for new/changed addresses. Capped so
     // a full-portfolio save can't spawn an unbounded geocode burst.
+    //
+    // It walks `versions`, NOT the request array. The request array still
+    // contains every id the caller SENT, including the ones the tenant branch
+    // above refused — and geocodeEstimate writes five columns on whatever row
+    // that id names. Iterating the refused ids would have re-opened the hole
+    // one statement past the guard that closed it, on a path whose errors are
+    // swallowed by design.
     try {
+      const saved = new Set(Object.keys(versions));
       for (const est of estimates.slice(0, 200)) {
-        if (est && typeof est.propertyAddr === 'string' && est.propertyAddr.trim()) {
-          geocodeEstimate(est.id).catch(() => {});
+        if (est && saved.has(est.id) &&
+            typeof est.propertyAddr === 'string' && est.propertyAddr.trim()) {
+          geocodeEstimate(est.id, req.orgId).catch(() => {});
         }
       }
     } catch (_) { /* never let geocoding affect the save response */ }

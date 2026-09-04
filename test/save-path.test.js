@@ -557,7 +557,15 @@ describe('route fidelity', () => {
     const estBulk = EST_ROUTES.slice(EST_ROUTES.indexOf("router.put('/bulk/save'"));
     expect(estBulk).toMatch(/INSERT INTO estimates[\s\S]*ON CONFLICT \(id\) DO UPDATE/);
     expect(estBulk).toMatch(/const ebv = \(baseVersions && typeof baseVersions === 'object'\)/);
-    expect(estBulk).toMatch(/SELECT updated_at FROM estimates WHERE id = \$1 FOR UPDATE/);
+    // organization_id joined updated_at in this PROJECTION when the tenant
+    // branch landed (see test/estimate-org-boundary.test.js). It is asserted
+    // here rather than the old exact string being relaxed: the read must stay
+    // UNFILTERED — a `WHERE … AND organization_id = $2` would make a foreign
+    // row indistinguishable from a deleted one and push it into the arm that
+    // has no guard — while still carrying the tenant, because a branch cannot
+    // decide on a column the SELECT did not fetch.
+    expect(estBulk).toMatch(/SELECT updated_at, organization_id FROM estimates WHERE id = \$1 FOR UPDATE/);
+    expect(estBulk).toMatch(/reason: 'not_in_org'/);
     expect(estBulk).toMatch(/reason: 'deleted'/);
     expect(estBulk).toMatch(/reason: 'unverifiable'/);
     expect(estBulk).toMatch(/reason: 'stale'/);

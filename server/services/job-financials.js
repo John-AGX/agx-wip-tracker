@@ -891,13 +891,17 @@ async function updateInvoice(db, { id, orgId, jobId, fields, merge = true }) {
             retainage_amount = $10, total = $11,
             status = $13,
             data = $12::jsonb, updated_at = NOW()
-      WHERE id = $1
+      WHERE id = $1 AND (organization_id = $14 OR organization_id IS NULL)
       RETURNING ${INV_RETURNING}`,
     [id, b.job_id || null, b.client_id != null ? String(b.client_id) : null,
      b.issue_date || null, b.due_date || null, b.terms || null,
      t.subtotal, num(taxPct), t.taxAmount, t.retainageAmount, t.total,
-     JSON.stringify(data), status]
+     JSON.stringify(data), status, orgId == null ? null : orgId]
   );
+  // The org-scoped read above already proved the row; this is the second layer
+  // and should be unreachable. If it ever fires the two disagree, which is a
+  // server bug, and the caller must not be told the edit landed.
+  if (!rows.length) throw new Error(`Invoice not found on this job: ${id}`);
   return rows[0];
 }
 
@@ -919,7 +923,9 @@ async function deleteInvoice(db, { id, orgId, jobId }) {
   if (rows[0].status === 'paid') {
     throw new Error(`Cannot delete a paid invoice: ${id} — void it instead`);
   }
-  await db.query('DELETE FROM invoices WHERE id = $1', [id]);
+  await db.query(
+    'DELETE FROM invoices WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+    [id, orgId == null ? null : orgId]);
   return { id };
 }
 

@@ -576,7 +576,16 @@ router.post('/:id/refresh-estimates', requireAuth, requireCapability('ROLES_MANA
       });
       if (!touched) { results.push({ id: estId, ok: false, why: 'no rollup lines' }); continue; }
       blob.lines = lines;
-      await pool.query('UPDATE estimates SET data = $1, updated_at = NOW() WHERE id = $2', [JSON.stringify(blob), estId]);
+      // The org-scoped SELECT above already proved this row is the caller's,
+      // so this predicate is the SECOND layer and should be unreachable. It is
+      // here because a one-layer guard is one edit away from no guard: the
+      // read and the write are separate statements on separate pool
+      // connections, and nothing but the eleven lines between them tied the
+      // write to the tenant. Tolerance arm matches the SELECT it guards.
+      await pool.query(
+        `UPDATE estimates SET data = $1, updated_at = NOW()
+          WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)`,
+        [JSON.stringify(blob), estId, orgId == null ? null : orgId]);
       results.push({ id: estId, ok: true, lines: touched, new_unit_cost: cost.unitCost });
     }
     const okCount = results.filter((r) => r.ok).length;

@@ -8801,7 +8801,29 @@ async function execStaffTool(name, input, ctx) {
       if (!estimateId) {
         return 'read_active_lines: estimate_id is required. (turn_context shows the id at the top of the estimate block.)';
       }
-      const e = await pool.query(`SELECT data FROM estimates WHERE id = $1`, [estimateId]);
+      // The READ half of the estimates tenant boundary. This was a bare
+      // `WHERE id = $1` gated only on ESTIMATES_VIEW — which every role but
+      // `sub` holds — so an id learned anywhere (a link, a PDF, an export, a
+      // transcript) read another tenant's line items, quantities, unit costs
+      // and markup. It was the read partner of the bulk-save write hole:
+      // read the estimate here, overwrite it there.
+      //
+      // Fails CLOSED on a missing org, the same rule assertTargetOrg follows —
+      // an org-less caller gets nothing rather than everything. All three live
+      // entry points (dispatchReadTool, the streaming dispatcher, and
+      // POST /api/ai/exec-tool) build ctx with a non-null orgId.
+      const _orgId = ctx && (ctx.orgId != null ? ctx.orgId
+                    : (ctx.organizationId != null ? ctx.organizationId
+                    : (ctx.user && ctx.user.organization_id)));
+      if (_orgId == null) {
+        return 'read_active_lines: your account is not attached to an organization, so no estimate can be read.';
+      }
+      const e = await pool.query(
+        `SELECT data FROM estimates
+          WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)`,
+        [estimateId, _orgId]);
+      // Same sentence for "not yours" as for "does not exist" — a read tool
+      // must not become the existence oracle the save endpoint stopped being.
       if (!e.rows.length) return 'No estimate with id ' + estimateId + '.';
       const blob = e.rows[0].data || {};
       const allLines = Array.isArray(blob.lines) ? blob.lines : [];
@@ -9099,7 +9121,16 @@ async function execStaffTool(name, input, ctx) {
       // Current estimate state — proves whether the change actually landed.
       if (targetEstimateId) {
         try {
-          const e = await pool.query(`SELECT data FROM estimates WHERE id = $1`, [targetEstimateId]);
+          // targetEstimateId can come straight off input.estimate_id, so this
+          // diagnostic is a read door like any other. Org-scoped, tolerance
+          // arm, and a missing org reads nothing rather than everything.
+          const _dOrg = ctx && (ctx.orgId != null ? ctx.orgId
+                       : (ctx.organizationId != null ? ctx.organizationId
+                       : (ctx.user && ctx.user.organization_id)));
+          const e = _dOrg == null ? { rows: [] } : await pool.query(
+            `SELECT data FROM estimates
+              WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)`,
+            [targetEstimateId, _dOrg]);
           if (!e.rows.length) {
             out.push('');
             out.push('## Estimate state (' + targetEstimateId + '): NOT FOUND in DB.');
