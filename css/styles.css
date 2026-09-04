@@ -6986,6 +6986,13 @@
      black-outlined circle, legible whether or not the viewer has "background
      graphics" enabled. print-color-adjust keeps it right when they do. */
   .p86-report-photo-num {
+    /* MUST re-assert display. A legacy global print rule
+       (`header, nav, .action-buttons, button, .modal { display:none !important }`)
+       hides EVERY <button> on paper, and the number badge is a button because
+       in the editor it is clickable — it jumps to that photo's map pin. So the
+       numbers were not merely invisible on the printed page, they were never
+       rendered at all. The class selector outranks that rule's bare `button`. */
+    display: inline-flex !important;
     background: #fff !important;
     color: #000 !important;
     border: 1.5px solid #000 !important;
