@@ -7687,6 +7687,54 @@
      The renderers already drop them; this is the belt-and-braces. */
   .p86-report-photo-missing { display: none !important; }
 
+  /* ── The printed document ──────────────────────────────────────────
+     Print now renders the SAME markup the preview does
+     (renderReportDocumentHTML), so the printed page is styled from the
+     preview classes. That is the point: one document, one set of rules, so
+     what you preview is what comes out — page breaks included. */
+
+  /* The paper's on-screen chrome (fixed width, centring margin, drop shadow)
+     exists for the overlay. On paper @page owns the geometry. */
+  .p86-report-preview-paper {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    background: #fff !important;
+    color: #000 !important;
+  }
+  .p86-report-preview-bar { display: none !important; }
+
+  /* A section may flow across pages; a single photo card may not be split. */
+  .p86-report-preview-section { break-inside: auto; page-break-inside: auto; }
+  .p86-report-preview-photo { break-inside: avoid; page-break-inside: avoid; }
+
+  /* Keep the real aspect ratio: let width follow the capped height rather than
+     forcing full width and cropping (the old letterbox bug). */
+  .p86-report-preview-photo-img-wrap img {
+    width: auto;
+    max-width: 100%;
+    height: auto;
+    object-fit: contain;
+  }
+  /* The wrap's hairline border is screen chrome. */
+  .p86-report-preview-photo-img-wrap { border: 0 !important; border-radius: 0 !important; }
+
+  /* Photos per page. Usable height is 11in - 0.8in margins = 10.2in, and each
+     block is the photo plus roughly 0.5in of caption and gap, so the cap is
+     10.2/n - 0.5. Stack: small 4 per page, medium 3, large 2 — the same
+     meaning S/M/L already carries in the grid. */
+  .p86-report-preview-section-stack.size-small  .p86-report-preview-photo-img-wrap img { max-height: 2.0in; }
+  .p86-report-preview-section-stack.size-medium .p86-report-preview-photo-img-wrap img { max-height: 2.8in; }
+  .p86-report-preview-section-stack.size-large  .p86-report-preview-photo-img-wrap img { max-height: 4.4in; }
+  /* The grid is 2 / 3 / 2 columns, so cap by row height instead. */
+  .p86-report-preview-section-grid.size-small  .p86-report-preview-photo-img-wrap img { max-height: 2.6in; }
+  .p86-report-preview-section-grid.size-medium .p86-report-preview-photo-img-wrap img { max-height: 1.9in; }
+  .p86-report-preview-section-grid.size-large  .p86-report-preview-photo-img-wrap img { max-height: 3.4in; }
+  /* Never let one photo own a page when no size class is present. */
+  .p86-report-preview-photo-img-wrap img { max-height: 2.8in; }
+
   /* The photo card frame + fill is on-screen chrome. On paper it drew a box
      around every photo, and now that the image sizes to its own aspect ratio it
      would frame the empty space beside it too. Strip it so a photo prints as a

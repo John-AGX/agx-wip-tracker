@@ -2175,81 +2175,55 @@
       }, 600);
     }
 
-    // Printing used to depend on WHERE the report lived in the DOM: the rule
-    // was `body * { visibility: hidden }` + `.p86-report-overlay { visibility:
-    // visible; position: absolute; top/left: 0 }`, which only works while the
-    // overlay is a direct child of <body>. A visibility:hidden ancestor still
-    // has a BOX and still CLIPS, so the moment the report is nested inside a
-    // page (.container is height:100vh; overflow:hidden) a 12-page photo report
-    // would silently print as one viewport slice. Rather than discover that
-    // during the drill-in move, print now renders from a body-level root.
-    //
-    // We print a CLONE, not the live node: photo-map sections mount Google Maps
-    // behind a fingerprint guard, and reparenting a live Maps container blanks
-    // its tiles and loses the user's scroll/focus. The clone leaves the editor
-    // completely untouched.
-    // Turn the cloned editor into a DOCUMENT before it prints.
-    //
-    // The report is authored in <input>/<textarea> fields, and printing them
-    // as-is put the editor on the page: an empty caption printed its
-    // placeholder ("Caption (optional)") inside a visible input box, right
-    // under the photo, in the PDF the client receives.
-    //
-    // Every field becomes a plain element carrying the SAME classes, so the
-    // existing print typography still applies; empty ones are dropped entirely
-    // rather than leaving a blank framed row. Operates on the throwaway clone,
-    // so the live editor is untouched.
-    function flattenFieldsForPrint(clone) {
-      // Placeholders can never reach paper, whatever else happens below.
-      clone.querySelectorAll('[placeholder]').forEach(function(el) { el.removeAttribute('placeholder'); });
-
-      clone.querySelectorAll('textarea, input').forEach(function(f) {
-        var tag = f.tagName.toLowerCase();
-        var type = (f.getAttribute('type') || 'text').toLowerCase();
-        // Checkboxes/radios/selects are editor controls that existing print
-        // rules already hide; leave them alone.
-        if (tag === 'input' && type !== 'text' && type !== 'search') return;
-        var val = (tag === 'textarea' ? f.textContent : f.getAttribute('value')) || '';
-        if (!val.trim()) { f.remove(); return; }   // no empty framed rows
-        var div = document.createElement('div');
-        div.className = f.className + ' p86-print-static';
-        div.textContent = val;
-        f.parentNode.replaceChild(div, f);
+    // Mount the canonical document into a container and finish the bits that
+    // need the DOM to exist: annotation overlays are painted onto canvases
+    // sized from each loaded image, and a static map that fails to load is
+    // replaced with a readable note instead of a broken-image icon.
+    // Shared by the preview and the printed page so neither can drift.
+    function wireReportDocument(container) {
+      container.querySelectorAll('[data-anno-photo]').forEach(function(canvas) {
+        var pid = canvas.getAttribute('data-anno-photo');
+        var att = allPhotos.find(function(a) { return a.id === pid; });
+        if (!att) return;
+        var img = canvas.parentElement && canvas.parentElement.querySelector('img');
+        paintAnnotationsOver(img, canvas, att.annotations);
       });
+      container.querySelectorAll('.p86-report-preview-map img').forEach(wireStaticMapFallback);
+      return container;
+    }
+    // Render the document into a container and wire it up. Print uses this;
+    // the preview builds its own shell around the same HTML and calls
+    // wireReportDocument directly.
+    function mountReportDocument(container) {
+      container.innerHTML = renderReportDocumentHTML();
+      return wireReportDocument(container);
     }
 
+    // Printing renders the CANONICAL DOCUMENT (renderReportDocumentHTML), the
+    // same thing the preview shows — so what you previewed is what prints,
+    // page breaks included. It used to render the EDITOR's own DOM instead,
+    // which meant two renderers for one document: the preview simulated its
+    // page breaks while the printer computed real ones from editor markup, and
+    // the two never agreed. That also required syncing and flattening every
+    // input before printing, all of which is now unnecessary — the document
+    // renderer has no form fields in it at all.
+    //
+    // It prints into a BODY-LEVEL root because the old approach
+    // (`body * { visibility: hidden }` plus a visible overlay pinned at
+    // top/left 0) only works while that overlay is a direct child of <body>: a
+    // visibility:hidden ancestor still has a box and still CLIPS, so once the
+    // report is nested inside a page (.container is height:100vh;
+    // overflow:hidden) a 12-page report would silently print as one viewport
+    // slice. A body-level root is immune to wherever the editor lives.
     function printReport() {
-      var host = overlay.querySelector('.p86-report-host');
-      if (!host) { window.print(); return; }
-
       function buildPrintRoot() {
         teardownPrintRoot();
-        // cloneNode copies an input's DEFAULT value, not what the user typed —
-        // so a narrative typed since load would print BLANK. Push live values
-        // into the attributes the clone will inherit.
-        host.querySelectorAll('textarea').forEach(function(ta) { ta.textContent = ta.value; });
-        host.querySelectorAll('input').forEach(function(i) {
-          if (i.type === 'checkbox' || i.type === 'radio') {
-            if (i.checked) i.setAttribute('checked', ''); else i.removeAttribute('checked');
-          } else {
-            i.setAttribute('value', i.value);
-          }
-        });
-        host.querySelectorAll('select').forEach(function(s) {
-          Array.prototype.forEach.call(s.options, function(o) {
-            if (o.selected) o.setAttribute('selected', ''); else o.removeAttribute('selected');
-          });
-        });
         var root = document.createElement('div');
         root.id = 'p86PrintRoot';
-        // Keep the .p86-report-overlay class: every style pack scopes its print
-        // rules to .p86-report-host inside it, and all seven break if the host
-        // class is renamed or the wrapper class dropped.
+        // Keeps .p86-report-overlay so the existing print rules still match.
         root.className = 'p86-report-overlay';
-        var clone = host.cloneNode(true);
-        flattenFieldsForPrint(clone);
-        root.appendChild(clone);
         document.body.appendChild(root);
+        mountReportDocument(root);
         document.body.classList.add('p86-report-printing');
       }
       function teardownPrintRoot() {
@@ -2264,15 +2238,19 @@
 
       save().then(function() {
         buildPrintRoot();
+        // One beat for the images (and their annotation overlays) to lay out
+        // before the print dialog snapshots the page.
         setTimeout(function() {
           window.print();
-          // afterprint is unreliable in a few browsers — keep the old fallback.
+          // afterprint is unreliable in a few browsers — keep the fallback.
           setTimeout(cleanup, 300);
-        }, 200);
+        }, 350);
       }).catch(function() {
         buildPrintRoot();          // print anyway with the unsaved state
-        window.print();
-        setTimeout(cleanup, 300);
+        setTimeout(function() {
+          window.print();
+          setTimeout(cleanup, 300);
+        }, 350);
       });
     }
 
@@ -2284,6 +2262,126 @@
     // and metadata). Top bar has a "Print / Save PDF" so users can
     // commit directly from the preview without going back to the
     // editor.
+    function previewSectionHTML(section) {
+      var layout = section.layout || 'photo-grid';
+      var label = section.label || '';
+      var bodyHTML = '';
+      if (layout === 'text-block') {
+        bodyHTML = '<div class="p86-report-preview-text">' + escapeHTML(section.text_body || '') + '</div>';
+      } else if (layout === 'attachment-list') {
+        var ids = Array.isArray(section.attachment_ids) ? section.attachment_ids : [];
+        var allFiles = (_detailState.photos || []).filter(function(a) { return a && a.mime_type && a.mime_type.indexOf('image/') !== 0; });
+        bodyHTML = '<div class="p86-report-preview-files">' +
+          ids.map(function(aid) {
+            var att = allFiles.find(function(a) { return a.id === aid; });
+            if (!att) return '';
+            var ext = (att.filename || '').split('.').pop().toUpperCase();
+            return '<div class="p86-report-preview-file-row">' +
+              '<span class="p86-report-preview-file-ext">' + escapeHTML(ext) + '</span>' +
+              '<span class="p86-report-preview-file-name">' + escapeHTML(att.filename || '') + '</span>' +
+            '</div>';
+          }).join('') +
+        '</div>';
+      } else if (layout === 'photo-map') {
+        // Photo-map preview/print — render the Static Maps snapshot
+        // (the interactive map can't print), with a tag-color legend.
+        // Falls back to a located-photo grid if the maps key isn't
+        // cached yet (so the section is never blank).
+        var pmIds = section.photo_ids || [];
+        var pmPhotos = pmIds.map(function(pid) { return allPhotos.find(function(a) { return a.id === pid; }); }).filter(Boolean);
+        var pmCoords = pmPhotos.filter(function(p) {
+          var la = Number(p.lat), ln = Number(p.lng);
+          return Number.isFinite(la) && Number.isFinite(ln) && !(la === 0 && ln === 0);
+        });
+        var pmStyle = section.pin_style || DEFAULT_PIN_STYLE;
+        var pmUrl = (typeof buildStaticMapsUrl === 'function') ? buildStaticMapsUrl(pmCoords, pmStyle) : '';
+        if (pmUrl) {
+          var legend = '';
+          if (pmStyle === 'tag' && window.p86TagIcons && window.p86TagIcons.forTag) {
+            var seen = {};
+            pmCoords.forEach(function(p) {
+              var tg = (Array.isArray(p.tags) && p.tags[0]) ? p.tags[0] : '';
+              var key = tg.toLowerCase();
+              if (key && !seen[key]) seen[key] = window.p86TagIcons.forTag(tg);
+            });
+            var items = Object.keys(seen).map(function(k) {
+              return '<span style="display:inline-flex;align-items:center;gap:5px;margin:0 12px 6px 0;font-size:12px;">' +
+                '<span style="display:inline-block;width:13px;height:13px;border-radius:50%;background:' + escapeAttr(seen[k].bg) + ';"></span>' +
+                escapeHTML(k) + '</span>';
+            }).join('');
+            if (items) legend = '<div class="p86-report-preview-map-legend" style="margin-top:8px;">' + items + '</div>';
+          }
+          bodyHTML = '<div class="p86-report-preview-map">' +
+            '<img src="' + escapeAttr(pmUrl) + '" alt="Photo locations" style="width:100%;max-width:680px;border-radius:8px;display:block;" />' +
+            legend +
+          '</div>';
+        } else if (pmCoords.length) {
+          bodyHTML = '<div class="p86-report-preview-section-grid size-small">' +
+            pmCoords.map(function(p) {
+              var src = p.web_url || p.thumb_url;
+              return '<div class="p86-report-preview-photo"><div class="p86-report-preview-photo-img-wrap"><img src="' + escapeAttr(src) + '" alt="" /></div></div>';
+            }).join('') +
+          '</div>';
+        } else {
+          bodyHTML = '<div class="p86-report-preview-empty">No located photos in this section.</div>';
+        }
+      } else {
+        // photo-grid / single-photo / before-after — same render but
+        // without the edit chrome.
+        var size = section.photoSize || 'small';
+        var photoIds = section.photo_ids || [];
+        if (!photoIds.length) {
+          bodyHTML = '<div class="p86-report-preview-empty">No photos in this section.</div>';
+        } else {
+          var photoCardsHTML = photoIds.map(function(pid) {
+            var att = allPhotos.find(function(a) { return a.id === pid; });
+            if (!att) return '';
+            var caption = section.captions[pid] || '';
+            var photoSide = (typeof descSideFor === 'function') ? descSideFor(section, pid) : 'right';
+            var sideClass = attHasSideContent(att) ? ' has-sidedesc' + (photoSide === 'left' ? ' desc-left' : '') : '';
+            var imgSrc = att.web_url || att.thumb_url;
+            return '<div class="p86-report-preview-photo' + sideClass + '">' +
+              '<div class="p86-report-preview-photo-img-wrap">' +
+                reportPhotoNumHTML(pid) +
+                '<img src="' + escapeAttr(imgSrc) + '" alt="" />' +
+                // Inline annotation canvas (drawn after DOM mounts)
+                (Array.isArray(att.annotations) && att.annotations.length
+                  ? '<canvas class="p86-report-preview-photo-anno" data-anno-photo="' + escapeAttr(pid) + '"></canvas>'
+                  : '') +
+              '</div>' +
+              (caption ? '<div class="p86-report-preview-photo-cap">' + escapeHTML(caption) + '</div>' : '') +
+              photoSideColumnHTML(att) +
+            '</div>';
+          }).join('');
+          var sectionCls = (layout === 'single-photo')
+            ? 'p86-report-preview-section-stack size-' + escapeAttr(size)
+            : 'p86-report-preview-section-grid size-' + escapeAttr(size);
+          bodyHTML = '<div class="' + sectionCls + '">' + photoCardsHTML + '</div>';
+        }
+      }
+      return '<section class="p86-report-preview-section">' +
+        (label ? '<h2 class="p86-report-preview-section-label">' + escapeHTML(label) + '</h2>' : '') +
+        bodyHTML +
+      '</section>';
+    }
+
+    // ── THE canonical report document ────────────────────────────────
+    // Preview and print render THIS, and the server PDF + shared read-only
+    // page will too. Before, the preview built its own HTML while printing
+    // rendered the EDITOR's DOM — two renderers for one document, which is
+    // exactly why printed page breaks never matched what the preview showed.
+    // Anything that should appear in the finished report belongs in here.
+    function renderReportDocumentHTML() {
+      // Number first: the sequence runs across the whole document, and skips
+      // photos deleted from the project so it stays contiguous.
+      buildReportPhotoNumbers(state.sections, function(pid) { return !photoIsGone(pid); });
+      return '<div class="p86-report-preview-paper" data-style-pack="' + escapeAttr(state.stylePack || 'clean') + '">' +
+        (state.cover.enabled ? renderPrintCoverHTML() : '') +
+        (state.report.summary ? '<div class="p86-report-preview-summary">' + escapeHTML(state.report.summary) + '</div>' : '') +
+        state.sections.map(previewSectionHTML).join('') +
+      '</div>';
+    }
+
     function openReportPreview() {
       var prior = document.getElementById('projReportPreview');
       if (prior) prior.remove();
@@ -2297,108 +2395,6 @@
       // layouts intact. For photo cards we drop the drag handle, the
       // remove ×, the side-swap button, the annotate ✏ — readers
       // shouldn't see any of those affordances.
-      function previewSectionHTML(section) {
-        var layout = section.layout || 'photo-grid';
-        var label = section.label || '';
-        var bodyHTML = '';
-        if (layout === 'text-block') {
-          bodyHTML = '<div class="p86-report-preview-text">' + escapeHTML(section.text_body || '') + '</div>';
-        } else if (layout === 'attachment-list') {
-          var ids = Array.isArray(section.attachment_ids) ? section.attachment_ids : [];
-          var allFiles = (_detailState.photos || []).filter(function(a) { return a && a.mime_type && a.mime_type.indexOf('image/') !== 0; });
-          bodyHTML = '<div class="p86-report-preview-files">' +
-            ids.map(function(aid) {
-              var att = allFiles.find(function(a) { return a.id === aid; });
-              if (!att) return '';
-              var ext = (att.filename || '').split('.').pop().toUpperCase();
-              return '<div class="p86-report-preview-file-row">' +
-                '<span class="p86-report-preview-file-ext">' + escapeHTML(ext) + '</span>' +
-                '<span class="p86-report-preview-file-name">' + escapeHTML(att.filename || '') + '</span>' +
-              '</div>';
-            }).join('') +
-          '</div>';
-        } else if (layout === 'photo-map') {
-          // Photo-map preview/print — render the Static Maps snapshot
-          // (the interactive map can't print), with a tag-color legend.
-          // Falls back to a located-photo grid if the maps key isn't
-          // cached yet (so the section is never blank).
-          var pmIds = section.photo_ids || [];
-          var pmPhotos = pmIds.map(function(pid) { return allPhotos.find(function(a) { return a.id === pid; }); }).filter(Boolean);
-          var pmCoords = pmPhotos.filter(function(p) {
-            var la = Number(p.lat), ln = Number(p.lng);
-            return Number.isFinite(la) && Number.isFinite(ln) && !(la === 0 && ln === 0);
-          });
-          var pmStyle = section.pin_style || DEFAULT_PIN_STYLE;
-          var pmUrl = (typeof buildStaticMapsUrl === 'function') ? buildStaticMapsUrl(pmCoords, pmStyle) : '';
-          if (pmUrl) {
-            var legend = '';
-            if (pmStyle === 'tag' && window.p86TagIcons && window.p86TagIcons.forTag) {
-              var seen = {};
-              pmCoords.forEach(function(p) {
-                var tg = (Array.isArray(p.tags) && p.tags[0]) ? p.tags[0] : '';
-                var key = tg.toLowerCase();
-                if (key && !seen[key]) seen[key] = window.p86TagIcons.forTag(tg);
-              });
-              var items = Object.keys(seen).map(function(k) {
-                return '<span style="display:inline-flex;align-items:center;gap:5px;margin:0 12px 6px 0;font-size:12px;">' +
-                  '<span style="display:inline-block;width:13px;height:13px;border-radius:50%;background:' + escapeAttr(seen[k].bg) + ';"></span>' +
-                  escapeHTML(k) + '</span>';
-              }).join('');
-              if (items) legend = '<div class="p86-report-preview-map-legend" style="margin-top:8px;">' + items + '</div>';
-            }
-            bodyHTML = '<div class="p86-report-preview-map">' +
-              '<img src="' + escapeAttr(pmUrl) + '" alt="Photo locations" style="width:100%;max-width:680px;border-radius:8px;display:block;" />' +
-              legend +
-            '</div>';
-          } else if (pmCoords.length) {
-            bodyHTML = '<div class="p86-report-preview-section-grid size-small">' +
-              pmCoords.map(function(p) {
-                var src = p.web_url || p.thumb_url;
-                return '<div class="p86-report-preview-photo"><div class="p86-report-preview-photo-img-wrap"><img src="' + escapeAttr(src) + '" alt="" /></div></div>';
-              }).join('') +
-            '</div>';
-          } else {
-            bodyHTML = '<div class="p86-report-preview-empty">No located photos in this section.</div>';
-          }
-        } else {
-          // photo-grid / single-photo / before-after — same render but
-          // without the edit chrome.
-          var size = section.photoSize || 'small';
-          var photoIds = section.photo_ids || [];
-          if (!photoIds.length) {
-            bodyHTML = '<div class="p86-report-preview-empty">No photos in this section.</div>';
-          } else {
-            var photoCardsHTML = photoIds.map(function(pid) {
-              var att = allPhotos.find(function(a) { return a.id === pid; });
-              if (!att) return '';
-              var caption = section.captions[pid] || '';
-              var photoSide = (typeof descSideFor === 'function') ? descSideFor(section, pid) : 'right';
-              var sideClass = attHasSideContent(att) ? ' has-sidedesc' + (photoSide === 'left' ? ' desc-left' : '') : '';
-              var imgSrc = att.web_url || att.thumb_url;
-              return '<div class="p86-report-preview-photo' + sideClass + '">' +
-                '<div class="p86-report-preview-photo-img-wrap">' +
-                  reportPhotoNumHTML(pid) +
-                  '<img src="' + escapeAttr(imgSrc) + '" alt="" />' +
-                  // Inline annotation canvas (drawn after DOM mounts)
-                  (Array.isArray(att.annotations) && att.annotations.length
-                    ? '<canvas class="p86-report-preview-photo-anno" data-anno-photo="' + escapeAttr(pid) + '"></canvas>'
-                    : '') +
-                '</div>' +
-                (caption ? '<div class="p86-report-preview-photo-cap">' + escapeHTML(caption) + '</div>' : '') +
-                photoSideColumnHTML(att) +
-              '</div>';
-            }).join('');
-            var sectionCls = (layout === 'single-photo')
-              ? 'p86-report-preview-section-stack size-' + escapeAttr(size)
-              : 'p86-report-preview-section-grid size-' + escapeAttr(size);
-            bodyHTML = '<div class="' + sectionCls + '">' + photoCardsHTML + '</div>';
-          }
-        }
-        return '<section class="p86-report-preview-section">' +
-          (label ? '<h2 class="p86-report-preview-section-label">' + escapeHTML(label) + '</h2>' : '') +
-          bodyHTML +
-        '</section>';
-      }
 
       // Build the overlay's full HTML — top bar + paper. The paper
       // gets the data-style-pack attribute so the existing style-pack
@@ -2409,28 +2405,14 @@
           '<div class="p86-report-preview-bar-title">Preview</div>' +
           '<button type="button" class="p86-report-preview-print">&#x1F5A8; Print / Save PDF</button>' +
         '</div>' +
-        '<div class="p86-report-preview-paper" data-style-pack="' + escapeAttr(state.stylePack || 'clean') + '">' +
-          (state.cover.enabled ? renderPrintCoverHTML() : '') +
-          (state.report.summary ? '<div class="p86-report-preview-summary">' + escapeHTML(state.report.summary) + '</div>' : '') +
-          (buildReportPhotoNumbers(state.sections, function(pid) { return !photoIsGone(pid); }),
-           state.sections.map(previewSectionHTML).join('')) +
-        '</div>';
+        // Same document object the printed page renders - see renderReportDocumentHTML.
+        renderReportDocumentHTML();
 
       document.body.appendChild(preview);
 
-      // Paint annotation strokes on each photo (same coord-space
-      // trick the project feed + report editor use — canvas internal
-      // dims = web variant, CSS scales the canvas to the img).
-      preview.querySelectorAll('[data-anno-photo]').forEach(function(canvas) {
-        var pid = canvas.getAttribute('data-anno-photo');
-        var att = allPhotos.find(function(a) { return a.id === pid; });
-        if (!att) return;
-        var img = canvas.parentElement && canvas.parentElement.querySelector('img');
-        paintAnnotationsOver(img, canvas, att.annotations);
-      });
-
-      // Same graceful degradation for the preview's static photo-location map.
-      preview.querySelectorAll('.p86-report-preview-map img').forEach(wireStaticMapFallback);
+      // Exactly the post-mount wiring the printed page gets — annotation
+      // overlays and the static-map fallback — from one shared function.
+      wireReportDocument(preview);
 
       function close() { preview.remove(); }
       preview.querySelectorAll('[data-preview-close]').forEach(function(b) {
