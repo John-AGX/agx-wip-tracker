@@ -7687,6 +7687,17 @@
      The renderers already drop them; this is the belt-and-braces. */
   .p86-report-photo-missing { display: none !important; }
 
+  /* The photo card frame + fill is on-screen chrome. On paper it drew a box
+     around every photo, and now that the image sizes to its own aspect ratio it
+     would frame the empty space beside it too. Strip it so a photo prints as a
+     photo, and let the caption sit under it rather than inside a panel. */
+  .p86-report-photo-mainstack {
+    border: 0 !important;
+    background: transparent !important;
+    border-radius: 0 !important;
+    overflow: visible !important;
+  }
+
   /* Fields flattened to static text by flattenFieldsForPrint. They keep their
      original classes so the print typography above still applies; these rules
      just remove the last of the form appearance. */
