@@ -6980,7 +6980,19 @@
 /* In the printed/preview paper the badge is a label, not a control. */
 .p86-report-preview-photo-img-wrap { position: relative; }
 @media print {
-  .p86-report-photo-num { box-shadow: none; }
+  /* The badge is white text on a coloured background, and browsers do NOT print
+     background colours by default - so on paper it printed white-on-white and the
+     number simply was not there. Invert it for print: a black number inside a
+     black-outlined circle, legible whether or not the viewer has "background
+     graphics" enabled. print-color-adjust keeps it right when they do. */
+  .p86-report-photo-num {
+    background: #fff !important;
+    color: #000 !important;
+    border: 1.5px solid #000 !important;
+    box-shadow: none !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
 }
 
 /* Shown in place of a static photo-location map that failed to load
@@ -7641,11 +7653,17 @@
      stack; 2.8in for size-large (1x2). */
   .p86-report-photo img,
   .p86-report-photo-single img {
-    width: 100%;
+    /* Was width:100% + object-fit:cover. Combined with the max-height caps below,
+       that made the box full-width by (say) 2in and CROPPED the photo to a thin
+       letterbox - the "not scaling right" bug. Letting the width follow the height
+       keeps the real aspect ratio: the photo shrinks to fit its per-page
+       allowance instead of being cut down to it. */
+    width: auto;
+    max-width: 100%;
     height: auto;
     display: block;
     aspect-ratio: auto !important;
-    object-fit: cover;
+    object-fit: contain;
   }
   /* STACK layout photos had NO height cap in print — only max-width, forced to
      100% above — so a portrait phone photo printed ~10in tall and exactly one
