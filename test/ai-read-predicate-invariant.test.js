@@ -169,8 +169,26 @@ const EXEMPT = {
   // deleted with the defect, never edited to say something else.
   'server/routes/ai-routes.js::fn buildTurnContext::users':
     { n: 1, why: 'WHERE u.id = $1 — the CALLER\'s own identity row, so the model knows who it is assisting. Its only organization_id is on a LEFT JOIN to organizations for the org NAME, which is why it appears here rather than as LITERAL: an outer join\'s ON clause constrains nothing. Correctly classified, correctly exempt.' },
-  'server/routes/ai-routes.js::GET /86/messages::ai_messages':
-    { n: 3, why: 'THREE arms, each loading by session_id AFTER `SELECT entity_type, entity_id, session_kind FROM ai_sessions WHERE id = $1 AND user_id = $2` has proved the session belongs to the caller (404 otherwise), or off a deal thread that same probe returned. This entry used to say FIVE and call all five "caller-scoped": the other two carried the legacy entity tuple / `entity_type=\'86\' AND user_id=$1` and NOTHING ELSE, and painted a mover\'s former tenant\'s turns into their current tenant\'s chat pane. Those two now carry the predicate and have left this count — which is what the count is for.' },
+  // ── A TWELFTH ENTRY IS GONE, AND IT WAS THIS FILE'S OWN BLIND SPOT ──────
+  // 'server/routes/ai-routes.js::GET /86/messages::ai_messages' claimed n: 3,
+  // on the ground that each of the three arms loads by session_id AFTER
+  // `SELECT … FROM ai_sessions WHERE id = $1 AND user_id = $2` has proved the
+  // session belongs to the caller.
+  //
+  // That reason is R4's OWN FALSE PREMISE wearing one extra table. The session
+  // probe is the OWNER AXIS — it answers "does this person own this thread",
+  // and users.organization_id is mutable, so a mover owns the threads they
+  // opened for their FORMER tenant and this endpoint painted those turns into
+  // their CURRENT tenant's chat pane. The entry survived the round that
+  // deleted the other eleven precisely because its reason named a different
+  // table and therefore did not READ like the premise being retired — a
+  // reason two steps removed from `user_id = $1` is still a reason about
+  // authorship.
+  //
+  // All three arms now carry `(organization_id = $n OR organization_id IS
+  // NULL)`, bound to the `msgOrgId` the handler had already resolved at its
+  // top and was spending on only two of its five statements. They need no
+  // exemption and have none.
   'server/routes/ai-routes.js::case read_receipts::receipts':
     { n: 3, why: 'All three share the `W` clause built directly above them, which opens `r.organization_id = $1`. The builder is a plain string rather than an array so the resolver cannot follow it; the predicate is present and strict (no tolerance arm).' },
 

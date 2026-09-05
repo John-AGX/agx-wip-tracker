@@ -15400,15 +15400,23 @@ router.get('/subtasks', requireAuth, (req, res) => res.json({ subtasks: [], reti
 
 router.get('/86/messages', requireAuth, async (req, res) => {
   try {
-    // ── THE TWO LEGACY ARMS READ BY AUTHORSHIP ALONE ────────────────────
-    // Three of the five statements below load by session_id AFTER the session
-    // has been proved to belong to the caller. The other two — the entity-tuple
-    // fallback and the bare `entity_type='86' AND user_id=$1` arm — carry an
-    // authorship column and nothing else, and the read invariant's allowlist
-    // called all five "caller-scoped" as though that settled the tenant. It
-    // does not: a user who moved organisations keeps user_id on every turn they
-    // took for their former one, and this endpoint paints them into the chat
-    // pane.
+    // ── ALL FIVE ARMS READ BY AUTHORSHIP ALONE ──────────────────────────
+    // The entity-tuple fallback and the bare `entity_type='86' AND user_id=$1`
+    // arm carry an authorship column and nothing else, and the read invariant's
+    // allowlist called all five "caller-scoped" as though that settled the
+    // tenant. It does not: a user who moved organisations keeps user_id on
+    // every turn they took for their former one, and this endpoint paints them
+    // into the chat pane.
+    //
+    // CORRECTION — the first version of this comment exempted the other three
+    // on the ground that they "load by session_id AFTER the session has been
+    // proved to belong to the caller". That proof is the SAME OWNER AXIS this
+    // paragraph rejects, applied one table earlier: `ai_sessions.user_id = $2`
+    // establishes who owns the thread, not which tenant its turns were taken
+    // for, and a moved user owns their former tenant's threads. Two of the
+    // three arms are reached with only a session id in hand, one of them
+    // straight off the query string. All five now carry the predicate; the
+    // three that did not are marked at the point they were fixed.
     //
     // resolveOrgId, not req.user.organization_id: the JWT claim can be a stale
     // NULL from before an adoption, and a NULL here would blank a real user's
@@ -15442,10 +15450,24 @@ router.get('/86/messages', requireAuth, async (req, res) => {
             [req.user.id, resolved.lineage_root]
           );
           if (dt.rows.length) {
+            // THE THIRD ARM THE COMMENT ABOVE COUNTED AND DID NOT CLOSE. The
+            // header at the top of this handler says "Three of the five
+            // statements below load by session_id AFTER the session has been
+            // proved to belong to the caller" and treats that as settling
+            // them. It does not, for exactly the reason the same comment gives
+            // about the other two: the session-ownership proof is an OWNER
+            // AXIS, and a user who moved organisations owns their former
+            // tenant's threads. `msgOrgId` was already resolved at the top of
+            // this handler and spent only on the two legacy arms — the same
+            // shape as the /metrics leak: the tenant was in hand and three
+            // statements did not take it.
             const mr = await pool.query(
               `SELECT id, role, content, output_files, created_at
-                 FROM ai_messages WHERE session_id = $1 ORDER BY created_at ASC`,
-              [dt.rows[0].id]
+                 FROM ai_messages
+                WHERE session_id = $1
+                  AND (organization_id = $2 OR organization_id IS NULL)
+                ORDER BY created_at ASC`,
+              [dt.rows[0].id, msgOrgId]
             );
             return res.json({ messages: mr.rows, deal_thread_id: dt.rows[0].id });
           }
@@ -15480,8 +15502,11 @@ router.get('/86/messages', requireAuth, async (req, res) => {
       if (s.session_kind === 'deal_thread') {
         const dmr = await pool.query(
           `SELECT id, role, content, output_files, created_at
-             FROM ai_messages WHERE session_id = $1 ORDER BY created_at ASC`,
-          [sid]
+             FROM ai_messages
+            WHERE session_id = $1
+              AND (organization_id = $2 OR organization_id IS NULL)
+            ORDER BY created_at ASC`,
+          [sid, msgOrgId]
         );
         return res.json({ messages: dmr.rows, deal_thread_id: sid });
       }
@@ -15495,8 +15520,11 @@ router.get('/86/messages', requireAuth, async (req, res) => {
       if (s.session_kind === 'user_thread') {
         const umr = await pool.query(
           `SELECT id, role, content, output_files, created_at
-             FROM ai_messages WHERE session_id = $1 ORDER BY created_at ASC`,
-          [sid]
+             FROM ai_messages
+            WHERE session_id = $1
+              AND (organization_id = $2 OR organization_id IS NULL)
+            ORDER BY created_at ASC`,
+          [sid, msgOrgId]
         );
         return res.json({ messages: umr.rows });
       }

@@ -123,6 +123,76 @@ router.get('/metrics',
     // big metrics block with a "by surface" breakdown inside.
     const ENTITY_TYPES_FOR_86 = ['estimate', 'job', 'intake', 'ask86', '86', 'client', 'staff'];
 
+    // ── THE ORG THIS ROUTE ALREADY HELD, AND SPENT ON TWO STATEMENTS ────────
+    // `orgId` is resolved above, on the line after `range`. It was then bound
+    // into agent_jobs, payloads, ai_memories and org_mcp_servers — four of ten
+    // statements — while the six ai_messages statements below aggregated the
+    // WHOLE TABLE. Nothing was hidden and nothing was subtle: the tenant was in
+    // a local variable, in scope, three lines above the first query that
+    // ignored it.
+    //
+    // What that produced is not a row leak, it is worse per byte: an admin in
+    // any tenant read every OTHER tenant's turn count, user count, distinct
+    // conversation count, token spend, cache ratio, TOOL NAMES BY FREQUENCY and
+    // MODEL MIX — a usage profile of a competitor's business, already summed.
+    // `cost_usd` is a dollar figure computed off those sums, so the number
+    // rendered on the card was every affiliate's Anthropic bill added together
+    // and labelled as this org's.
+    //
+    // ── THE CONTRACT CONTRADICTION, AND WHICH SIDE WAS ACTUALLY WRONG ───────
+    // This route is gated on ROLES_MANAGE, which db.js grants to the built-in
+    // `admin` role, whose seeded description reads "Full access within ONE
+    // organization … Does NOT see cross-tenant operations (those require System
+    // Admin)". Read against the code as it stood, one of those two had to be a
+    // lie.
+    //
+    // Neither is. The third thing in the room was wrong. `system_admin` is
+    // separated from `admin` by exactly one capability — SYSTEM_ADMIN, whose
+    // own registered label is "Platform-owner access (cross-tenant
+    // operations)" — and the system_admin description names "see cross-org
+    // metrics" as one of the three things that capability buys. So the platform
+    // had already written down which capability authorises a cross-org metric,
+    // and this route was performing one without holding it. An org admin
+    // reading THEIR OWN org's agent metrics is precisely what ROLES_MANAGE and
+    // that description both describe. Scoping the data is what MAKES the
+    // description true; it is not a concession to it.
+    //
+    // The gate is therefore left exactly as it is. Deliberately, and not from
+    // caution: role capability sets are DB ROWS an admin can edit after the
+    // seed (the seed's own ON CONFLICT preserves those edits), so swapping this
+    // gate to ADMIN_METRICS — arguably the better-named capability for a
+    // metrics route, and held by both seeded admin roles today — could change
+    // WHO can reach this endpoint on a live deployment carrying a custom role.
+    // That is a behaviour change in production, which this commit is not
+    // allowed to make. Filed, not done.
+    //
+    // ── WHY THE TOLERANCE ARM, AND WHAT IT STILL ADMITS ─────────────────────
+    // `(organization_id = $n OR organization_id IS NULL)` is the idiom already
+    // used by the message-body read on /conversations/:key below, by
+    // services/entity-labels.js and by services/session-search.js. Every
+    // INSERT INTO ai_messages in ai-routes.js stamps organization_id (all seven
+    // of them), so the NULL arm covers pre-migration rows and the rare turn
+    // taken by an org-less caller — the rows db.js's boot backfill sweeps up
+    // from users.organization_id. Keeping them visible is what makes this
+    // commit a NO-OP on a single-tenant deployment: with one organisation every
+    // row matches one arm or the other and every count below is unchanged to
+    // the digit. That is the property test/admin-agents-metrics-org-scope.test.js
+    // asserts by execution, not by reading.
+    //
+    // Said plainly rather than left for the next reader to discover: an
+    // UNSTAMPED row is still counted by every org's admin. With one tenant that
+    // set is this tenant's own rows and the statement is exact. With two, the
+    // residual is real and it closes by making organization_id NOT NULL, which
+    // is a MIGRATION and belongs to the scaffold, not here.
+    //
+    // ONE DEFINITION, SIX STATEMENTS. Written once and interpolated at each
+    // site, taking only the parameter position, so a seventh aggregate cannot
+    // be added later with one arm of the two — which is exactly how the four
+    // already-scoped statements in this handler failed to spread to the other
+    // six. The position is a parameter because the statements do not agree on
+    // one: four bind ENTITY_TYPES_FOR_86 as $1, two bind nothing at all.
+    const orgArm = (n) => `(organization_id = $${n} OR organization_id IS NULL)`;
+
     const aggSql = `
       SELECT
         COUNT(*) FILTER (WHERE role = 'assistant')                AS turns,
@@ -138,8 +208,9 @@ router.get('/metrics',
       FROM ai_messages
       WHERE created_at >= NOW() - INTERVAL '${range}'
         AND entity_type = ANY($1)
+        AND ${orgArm(2)}
     `;
-    const aggRes = await pool.query(aggSql, [ENTITY_TYPES_FOR_86]);
+    const aggRes = await pool.query(aggSql, [ENTITY_TYPES_FOR_86, orgId]);
     const agg = aggRes.rows[0] || {};
 
     // Surface breakdown — how 86 is being used: estimate panel vs
@@ -156,10 +227,11 @@ router.get('/metrics',
       FROM ai_messages
       WHERE created_at >= NOW() - INTERVAL '${range}'
         AND entity_type = ANY($1)
+        AND ${orgArm(2)}
       GROUP BY entity_type
       ORDER BY turns DESC
     `;
-    const surfaceRes = await pool.query(surfaceSql, [ENTITY_TYPES_FOR_86]);
+    const surfaceRes = await pool.query(surfaceSql, [ENTITY_TYPES_FOR_86, orgId]);
 
     // Tool breakdown — pull tool_use names out of the JSONB array.
     // Only counts approval-tier proposals (auto-tier reads aren't
@@ -173,11 +245,12 @@ router.get('/metrics',
         AND tool_uses IS NOT NULL
         AND jsonb_typeof(tool_uses) = 'array'
         AND entity_type = ANY($1)
+        AND ${orgArm(2)}
       GROUP BY tool_name
       ORDER BY uses DESC
       LIMIT 15
     `;
-    const toolRes = await pool.query(toolSql, [ENTITY_TYPES_FOR_86]);
+    const toolRes = await pool.query(toolSql, [ENTITY_TYPES_FOR_86, orgId]);
 
     // Model-mix breakdown.
     const modelSql = `
@@ -190,10 +263,11 @@ router.get('/metrics',
       WHERE created_at >= NOW() - INTERVAL '${range}'
         AND role = 'assistant'
         AND entity_type = ANY($1)
+        AND ${orgArm(2)}
       GROUP BY model
       ORDER BY turns DESC
     `;
-    const modelRes = await pool.query(modelSql, [ENTITY_TYPES_FOR_86]);
+    const modelRes = await pool.query(modelSql, [ENTITY_TYPES_FOR_86, orgId]);
 
     // Background tasks (agent_jobs) — the ACTUAL biggest token consumer
     // (headless runs roll tokens up per job, not per ai_messages row).
@@ -245,23 +319,29 @@ router.get('/metrics',
 
     // Escalations (assistant → 86) + unmetered turns (usage never landed —
     // stream drops / crashes; keeps the token totals honest).
+    // These two took NO parameters at all, which is why they read as innocent:
+    // there was no `orgId` on the line to be wrong about. A statement with an
+    // empty parameter array is the easiest kind of unscoped read to skim past,
+    // and both of these count assistant turns across every tenant.
     const escRes = await pool.query(`
       SELECT COUNT(*)::int AS n
         FROM ai_messages
        WHERE created_at >= NOW() - INTERVAL '${range}'
          AND role = 'assistant'
          AND tool_uses IS NOT NULL AND jsonb_typeof(tool_uses) = 'array'
+         AND ${orgArm(1)}
          AND EXISTS (
            SELECT 1 FROM jsonb_array_elements(tool_uses) tu
             WHERE tu->>'name' = 'escalate_to_86'
          )
-    `);
+    `, [orgId]);
     const unmeteredRes = await pool.query(`
       SELECT COUNT(*)::int AS n
         FROM ai_messages
        WHERE created_at >= NOW() - INTERVAL '${range}'
          AND role = 'assistant' AND input_tokens IS NULL
-    `);
+         AND ${orgArm(1)}
+    `, [orgId]);
 
     // Phase 4 — memory counts (active + recently saved).
     const memorySql = `
@@ -515,10 +595,32 @@ router.get('/conversations', requireAuth, require('../auth').requireOrg, require
     // Tenant isolation: scope ai_messages by user.organization_id.
     // Audit finding C1 — without this scope, an admin in any org could
     // read every other org's conversations.
+    // ── THE OWNER AXIS IN SUBQUERY FORM — AND WHY NO SCANNER SAW IT ─────────
+    // `user_id IN (SELECT id FROM users WHERE organization_id = $1)` is the
+    // SAME premise the sibling at /conversations/:key was corrected for: it
+    // asks whose row this is by asking who WROTE it, and users.organization_id
+    // is mutable (PUT /api/auth/users/:id writes it; moving somebody between
+    // orgs is a one-click admin action). A user who moves keeps user_id on
+    // every turn they took for their FORMER tenant, so those turns re-appear in
+    // their NEW org admin's list — with token counts, model names and the
+    // conversation keys needed to open each one.
+    //
+    // The R2 read invariant did not flag this because R2 matches the JOIN
+    // spelling of the owner axis and this is the IN-subquery spelling. That is
+    // a fact about the scanner, not about the query: the two forms are the same
+    // predicate. It is recorded here because "the invariant is green" is
+    // exactly the reassurance that let this sit.
+    //
+    // The owner subquery STAYS — it is what keeps a forged user_id filter from
+    // listing another tenant's threads at all — and the row's own tenant is
+    // added beside it, so a row is served only when BOTH its author and its
+    // stamp belong to the caller. Tolerance arm, single-tenant no-op, same as
+    // every other read in this file.
     const params = [req.organization.id];
     const conds = [
       `created_at >= NOW() - INTERVAL '${range}'`,
-      `user_id IN (SELECT id FROM users WHERE organization_id = $1)`
+      `user_id IN (SELECT id FROM users WHERE organization_id = $1)`,
+      `(organization_id = $1 OR organization_id IS NULL)`
     ];
     if (entityType) {
       params.push(entityType);
@@ -575,19 +677,31 @@ router.get('/conversations', requireAuth, require('../auth').requireOrg, require
       }
       return [...out.keys()];
     };
+    // The SIBLINGS of the two title lookups on /conversations/:key. Same
+    // defect, one axis wider: this arm resolves a whole BATCH of ids in a
+    // single statement. The ids reaching it are ai_messages.estimate_id values
+    // — and ai_messages.estimate_id is not a foreign key to anything, it is
+    // whatever the chat surface stamped, including the literal '__global__'
+    // sentinel. Scoped for the same reason and in the same shape; an id that
+    // does not resolve simply has no entry in the map, and the render below
+    // already falls back to the id itself.
     const estIds = groupBy('estimate');
     if (estIds.length) {
       // estimates / jobs store everything in a JSONB `data` column —
       // title and name are NOT top-level columns. Extract via ->>.
-      const r = await pool.query(`SELECT id, data->>'title' AS title FROM estimates WHERE id = ANY($1::text[])`, [estIds]);
+      const r = await pool.query(
+        `SELECT id, data->>'title' AS title FROM estimates
+          WHERE id = ANY($1::text[]) AND (organization_id = $2 OR organization_id IS NULL)`,
+        [estIds, req.organization.id]);
       r.rows.forEach(x => entityTitleByKey.set('estimate|' + x.id, x.title));
     }
     const jobIds = groupBy('job');
     if (jobIds.length) {
       // jobs.id is text in this schema; same lookup pattern.
       const r = await pool.query(
-        `SELECT id, COALESCE(NULLIF(data->>'name', ''), NULLIF(data->>'jobName', ''), 'Job ' || id) AS title FROM jobs WHERE id = ANY($1::text[])`,
-        [jobIds]
+        `SELECT id, COALESCE(NULLIF(data->>'name', ''), NULLIF(data->>'jobName', ''), 'Job ' || id) AS title
+           FROM jobs WHERE id = ANY($1::text[]) AND (organization_id = $2 OR organization_id IS NULL)`,
+        [jobIds, req.organization.id]
       );
       r.rows.forEach(x => entityTitleByKey.set('job|' + x.id, x.title));
     }
@@ -716,12 +830,42 @@ router.get('/conversations/:key', requireAuth, require('../auth').requireOrg, re
     // Lookup the user + entity title for the header.
     const uRes = await pool.query('SELECT id, email, name FROM users WHERE id = $1', [userId]);
     const user = uRes.rows[0] || null;
+    // ── THE MESSAGE BODY WAS SCOPED. THE HEADER ABOVE IT WAS NOT. ───────────
+    // Three lines after the predicate that stopped this endpoint serving
+    // another tenant's conversation, these two statements read a title out of
+    // `estimates` / `jobs` BY THE ID IN THE URL, with no predicate at all. The
+    // C1 owner guard does not reach them: it proves the USER in the key belongs
+    // to the calling admin's org, and says nothing about the ENTITY half of the
+    // key, which is a separate axis the caller also controls. Mint a key naming
+    // one of your own users and any id you like, and the messages array comes
+    // back empty while `entity_title` comes back full — a batched enumeration
+    // oracle over every tenant's job and estimate NAMES, one request per id,
+    // costing nothing and leaving a 200.
+    //
+    // WHAT A REFUSAL LOOKS LIKE HERE, and why it is not the payment-edit
+    // mistake. Nothing is being authorised at this line — the endpoint has
+    // ALREADY decided (404, above) whether this caller may see this
+    // conversation. This is a display lookup, and `entityTitle` was
+    // initialised to `entityId` precisely so a title that cannot be resolved
+    // renders as the raw id. So an out-of-org entity now shows the ID THE
+    // CALLER TYPED, which is not another tenant's name and not a claim that the
+    // row is absent. The caller learns nothing they did not supply.
+    //
+    // Tolerance arm for the same reason as the message read above it: on a
+    // single-tenant deployment a legacy un-stamped estimate keeps rendering
+    // with its title instead of silently degrading to a bare id.
     let entityTitle = entityId;
     if (entityType === 'estimate') {
-      const e = await pool.query(`SELECT data->>'title' AS title FROM estimates WHERE id = $1`, [entityId]);
+      const e = await pool.query(
+        `SELECT data->>'title' AS title FROM estimates
+          WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)`,
+        [entityId, req.organization.id]);
       if (e.rows[0]) entityTitle = e.rows[0].title || entityId;
     } else if (entityType === 'job') {
-      const j = await pool.query(`SELECT COALESCE(NULLIF(data->>'name', ''), NULLIF(data->>'jobName', ''), 'Job ' || id) AS title FROM jobs WHERE id = $1`, [entityId]);
+      const j = await pool.query(
+        `SELECT COALESCE(NULLIF(data->>'name', ''), NULLIF(data->>'jobName', ''), 'Job ' || id) AS title
+           FROM jobs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)`,
+        [entityId, req.organization.id]);
       if (j.rows[0]) entityTitle = j.rows[0].title || entityId;
     } else if (entityId === '__global__' || entityId === 'global') {
       entityTitle = entityType === 'staff' ? 'Chief of Staff' : 'Customer directory';
@@ -3201,16 +3345,87 @@ router.post('/managed/bootstrap',
   }
 );
 
+// ══════════════════════════════════════════════════════════════════════
+// registryScope — who may see the WHOLE managed_agent_registry, and who
+// may see only their own tenant's rows. Shared by /managed and
+// /managed/audit so the two cannot drift; they are the same panel.
+//
+// NOT `requireOrg` AS MIDDLEWARE, and the reason is the whole point of the
+// helper. requireOrg 403s a caller with no organisation, and a SYSTEM_ADMIN
+// does not need one to take the platform-wide arm — bolting the middleware on
+// would have locked an org-less platform owner out of the two endpoints
+// written for them, which is a behaviour change on a live deployment and the
+// exact "the app cannot see its own data" failure this work is forbidden to
+// introduce. So the org is resolved ONLY on the branch that needs it.
+//
+// FAIL CLOSED, LOUDLY, NEVER EMPTY. A non-system-admin whose org cannot be
+// resolved gets the same 403 sentence every sibling route in this file gives.
+// It must never fall through to an unscoped read, and equally must never
+// return `{agents: []}` — an empty list reads as "you have no managed agents",
+// which is a wrong answer wearing a success code, and silent-success is the
+// class behind every defect this pass is cleaning up.
+//
+// Returns null AFTER responding when it refuses, so the caller's `if (!scope)
+// return;` is the whole error path.
+async function registryScope(req, res) {
+  if (hasCapability(req.user, 'SYSTEM_ADMIN')) {
+    return { where: () => '', params: [] };
+  }
+  let org;
+  try {
+    org = await require('../auth').resolveUserOrg(req);
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to resolve organization: ' + (e.message || 'unknown') });
+    return null;
+  }
+  if (!org) {
+    res.status(403).json({ error: 'User is not associated with an organization. Contact an admin.' });
+    return null;
+  }
+  return {
+    where: (col) => `WHERE (${col} = $1 OR ${col} IS NULL)`,
+    params: [org.id]
+  };
+}
+
 // GET /api/admin/agents/managed
 //   Returns the current registry — agent_key + anthropic_agent_id +
 //   counts. Drives the admin "Managed agents" panel.
+//
+//   TENANCY. managed_agent_registry is per-(agent_key, org) since Phase 2c —
+//   each tenant gets their own Anthropic agent so the registered system prompt
+//   can carry that org's identity_body. This statement had NO WHERE CLAUSE AT
+//   ALL, so it listed every affiliate's agent_key, model and — the part that
+//   is not merely metadata — their ANTHROPIC AGENT ID, which is the handle the
+//   sibling DELETE and the audit/kill endpoint both act on.
+//
+//   Unlike /metrics, the gate here was genuinely part of the problem: the panel
+//   this feeds is described in its own header as a hunt for "stale per-tenant
+//   agents" across the registry, i.e. an Anthropic-account-wide operation, and
+//   the seeded system_admin description names "manage Anthropic-account-wide
+//   resources" as one of the three things SYSTEM_ADMIN buys, while the admin
+//   description says a tenant admin does NOT see cross-tenant operations. So
+//   the cross-tenant view is not deleted — it is MOVED BEHIND THE CAPABILITY
+//   THAT ALREADY PROMISED IT, and a tenant admin gets their own tenant's rows.
+//
+//   On a single-tenant deployment this is a no-op in both directions: a
+//   system_admin takes the unscoped arm exactly as before, and a plain org
+//   admin's scoped arm matches every row, because with one organisation every
+//   registry row is either stamped with it or un-stamped (the `no_org` case the
+//   audit exists to surface, which the tolerance arm deliberately keeps
+//   visible — a row belonging to nobody must not become invisible to everybody
+//   on the one endpoint whose job is to find it).
 router.get('/managed', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
+    const scope = await registryScope(req, res);
+    if (!scope) return;
     const r = await pool.query(
       `SELECT agent_key, anthropic_agent_id, model, tool_count, skill_count,
               registered_at, updated_at
          FROM managed_agent_registry
-        ORDER BY agent_key`
+        ${scope.where('organization_id')}
+        ORDER BY agent_key`,
+      scope.params
     );
     res.json({ agents: r.rows });
   } catch (e) {
@@ -3238,16 +3453,34 @@ router.get('/managed', requireAuth, requireCapability('ROLES_MANAGE'), async (re
 //   DELETE /managed/:agentKey to clean up flagged rows (or the new
 //   /managed/audit/kill endpoint below to also archive the
 //   Anthropic-side agent in one shot).
+//
+//   TENANCY — A LIVE INSTANCE OF "MENTIONING IS NOT FILTERING". This statement
+//   names `organization_id` FOUR TIMES — in the projection, in the LEFT JOIN
+//   ON, and twice in the ORDER BY — and filtered on none of them. Any scan that
+//   asks "does this query mention the tenant column" passes it; the query
+//   returned the whole registry. Worse than /managed above, because the JOIN to
+//   `organizations` means it did not merely leak agent ids, it NAMED every
+//   affiliate: org_slug and org_name, one row per tenant per agent, plus the
+//   Anthropic-side agent name (which by its own expected_name pattern embeds
+//   the org name again) and description.
+//
+//   Same resolution as /managed: platform-wide for SYSTEM_ADMIN, own tenant for
+//   an org admin, tolerance arm so a `no_org` row stays visible to the endpoint
+//   whose stated purpose is to flag it.
 router.get('/managed/audit', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
     const anthropic = getAnthropic();
+    const scope = await registryScope(req, res);
+    if (!scope) return;
     const r = await pool.query(
       `SELECT r.agent_key, r.organization_id, r.anthropic_agent_id,
               r.model, r.tool_count, r.skill_count, r.registered_at, r.updated_at,
               o.slug AS org_slug, o.name AS org_name
          FROM managed_agent_registry r
          LEFT JOIN organizations o ON o.id = r.organization_id
-        ORDER BY r.organization_id, r.agent_key`
+        ${scope.where('r.organization_id')}
+        ORDER BY r.organization_id, r.agent_key`,
+      scope.params
     );
     // The live 3-tier roster: assistant (Haiku host) → job (=86, Opus) →
     // scribe (Sonnet writer). Anything else (legacy 'cra'/'staff'/'ag', the
@@ -4206,7 +4439,17 @@ router.post('/reference-links/:id/refresh', requireAuth, requireCapability('ROLE
     );
     if (!r.rowCount) return res.status(404).json({ error: 'not found' });
     const result = await refreshLinkRow(r.rows[0]);
-    const updated = await pool.query('SELECT * FROM agent_reference_links WHERE id = $1', [req.params.id]);
+    // DEFENCE IN DEPTH, NOT A FIX — and the distinction is worth the two lines
+    // it costs to say. This re-read is NOT reachable cross-tenant: the SELECT
+    // above already refused an out-of-org id with a 404, and nothing between
+    // the two statements can change a row's organization_id. It carries the
+    // predicate anyway because it is the only statement in this handler that
+    // does not, and an unpredicated read sitting one line below a predicated
+    // one is an invitation to the next editor who reorders them or lifts this
+    // line into a new handler. Same rows, same response, today and after.
+    const updated = await pool.query(
+      'SELECT * FROM agent_reference_links WHERE id = $1 AND organization_id = $2',
+      [req.params.id, req.organization.id]);
     res.json({ link: updated.rows[0], result: result });
   } catch (e) {
     console.error('POST /reference-links/:id/refresh error:', e);

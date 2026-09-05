@@ -93,9 +93,26 @@ function translate(sql) {
   // reduced this to TRUE would make the assertion meaningless. encodeParam
   // already JSON-stringifies array parameters, which is exactly what json_each
   // wants.
+  //
+  // `IN (SELECT value FROM json_each(…))`, NOT `EXISTS (… WHERE json_each.value
+  // = col)`. json_each's own result table has columns named `key`, `value`,
+  // `type`, `atom`, `id`, `parent`, `fullkey` and `path` — so the EXISTS form
+  // this rule used to emit put the outer column INSIDE json_each's scope, where
+  // sqlite resolved `id` to JSON_EACH'S OWN `id` (the array index) instead of
+  // the table's. `WHERE id = ANY($1::text[])` therefore compared an element to
+  // an index, matched nothing, and returned an EMPTY RESULT SET — silently,
+  // with no error, for every one of the eight shadowed names. Two batched
+  // lookups in the admin console (`estimates WHERE id = ANY(…)` and `users
+  // WHERE id = ANY(…)`) came back empty against this shim, which reads exactly
+  // like a tenant predicate excluding everything: the wrong-reason pass this
+  // file exists to refuse, in the file itself.
+  //
+  // The IN form leaves the outer column in the OUTER scope, where nothing can
+  // shadow it, and `value` inside resolves to json_each's. Same rows, and no
+  // column name can break it.
   s = s.replace(
     /([a-z_][a-z_0-9]*(?:\.[a-z_][a-z_0-9]*)?)\s*=\s*ANY\s*\(\s*(\$\d+)(?:::[a-z_]+(?:\[\])?)?\s*\)/gi,
-    (_m, col, param) => 'EXISTS (SELECT 1 FROM json_each(' + param + ') WHERE json_each.value = ' + col + ')'
+    (_m, col, param) => col + ' IN (SELECT value FROM json_each(' + param + '))'
   );
 
   // A PARAMETERISED interval: `NOW() - ($1 || ' days')::interval`, which the
@@ -152,9 +169,61 @@ function translate(sql) {
   // read (the pricing-IP door) is the statement that needs this.
   const setReturning = /\bjsonb?_array_elements(?:_text)?\s*\(/i;
   if (setReturning.test(s)) {
+    // ── THE SAME CALL IN THE SELECT LIST, WHICH IS A LATERAL JOIN ─────────
+    // Postgres allows a set-returning function in the SELECT list, where it
+    // means an implicit LATERAL cross join against the row's own array:
+    //
+    //   SELECT (jsonb_array_elements(tool_uses)->>'name') AS tool_name,
+    //          COUNT(*) FROM ai_messages WHERE … GROUP BY tool_name
+    //
+    // sqlite has no such position, and the FROM-clause rule below does not
+    // reach it, so the call arrived at the engine as `json_each(...)` used as
+    // a SCALAR and sqlite answered "no such function: json_each". That left
+    // the admin metrics TOOL BREAKDOWN — one of the six statements this shim
+    // was extended to prove the tenant predicate on — impossible to execute.
+    //
+    // Rewritten to the join it already is: the call moves into the FROM list
+    // as a table-valued function correlated to the row, and the projection
+    // becomes json_extract over that alias's `value`. Same rows, same groups.
+    // Only the `->>'key'` shape is handled, which is the only one these routes
+    // emit; anything else is left untouched and throws, because a
+    // set-returning call silently reduced to a scalar is exactly the
+    // wrong-reason pass this file exists to refuse.
+    const fromAt = s.search(/\bFROM\b/i);
+    if (fromAt !== -1 && setReturning.test(s.slice(0, fromAt))) {
+      const lateral = [];
+      const head = s.slice(0, fromAt).replace(
+        /\(?\s*\bjsonb?_array_elements(?:_text)?\s*\(\s*([a-z_][a-z_0-9.]*)\s*\)\s*->>\s*'([^']+)'\s*\)?/gi,
+        (_m, col, key) => {
+          const alias = '_sre' + lateral.length;
+          lateral.push(`json_each(${col}) ${alias}`);
+          return `json_extract(${alias}.value, '$.${key}')`;
+        }
+      );
+      if (lateral.length) {
+        // Splice the lateral aliases in after the FIRST table reference, which
+        // is where the correlation has to sit for sqlite to see the column.
+        const rest = s.slice(fromAt);
+        // The optional trailing group is a TABLE ALIAS, and it must not eat the
+        // next keyword. Without the negative lookahead `FROM ai_messages WHERE`
+        // parsed "WHERE" as the alias and the aliases spliced in after it,
+        // producing `FROM ai_messages WHERE, json_each(…)` — a syntax error,
+        // which is at least loud, but the same greed against `GROUP`/`ORDER`
+        // would have produced a statement that PREPARED and selected the wrong
+        // rows.
+        const m = /^\s*FROM\s+([a-z_][a-z_0-9]*(?:\s+(?!WHERE\b|GROUP\b|ORDER\b|LIMIT\b|HAVING\b|JOIN\b|LEFT\b|INNER\b|CROSS\b|UNION\b|ON\b)[a-z_][a-z_0-9]*)?)/i.exec(rest);
+        if (!m) throw new Error('pg-sqlite: set-returning call in the SELECT list, but the FROM clause is not a plain table: ' + rest.slice(0, 80));
+        s = head + rest.slice(0, m[0].length) + ', ' + lateral.join(', ') + rest.slice(m[0].length);
+      }
+    }
     const aliases = [];
+    // `AS` is OPTIONAL in a Postgres FROM alias and these routes leave it out
+    // (`FROM jsonb_array_elements(tool_uses) tu`). Requiring it sent that form
+    // to the engine untranslated, where it read as a TABLE named
+    // jsonb_array_elements — "no such table" — so the escalations count could
+    // not be executed either.
     s = s.replace(
-      /\bjsonb?_array_elements(?:_text)?\s*\(([\s\S]*?)\)\s+AS\s+([a-z_][a-z0-9_]*)/gi,
+      /\bjsonb?_array_elements(?:_text)?\s*\(([\s\S]*?)\)\s+(?:AS\s+)?([a-z_][a-z0-9_]*)/gi,
       (_m, expr, alias) => { aliases.push(alias); return `json_each(${expr}) AS ${alias}`; }
     );
     for (const alias of aliases) {
@@ -174,13 +243,31 @@ function translate(sql) {
   s = s.replace(/CURRENT_TIMESTAMP\s*-\s*INTERVAL\s*'(\d+)\s+([a-z]+)'/gi,
                 (_m, n, unit) => `datetime('now','-${n} ${unit}')`);
 
-  // `COUNT(DISTINCT (a, b))` — Postgres counts distinct ROW VALUES; sqlite has
-  // no row constructor, so the pair is joined with a separator that cannot
-  // occur in either id. Same count, and it stays a real DISTINCT rather than
-  // being dropped: a rule that quietly reduced this to COUNT(*) would make a
-  // "conversations" assertion pass for the wrong reason.
-  s = s.replace(/COUNT\s*\(\s*DISTINCT\s*\(\s*([a-z_][a-z_0-9]*)\s*,\s*([a-z_][a-z_0-9]*)\s*\)\s*\)/gi,
-                (_m, a, b) => 'COUNT(DISTINCT (' + a + " || char(1) || " + b + '))');
+  // `COUNT(DISTINCT (a, b, …))` — Postgres counts distinct ROW VALUES; sqlite
+  // has no row constructor, so the tuple is joined with a separator that
+  // cannot occur in any id. Same count, and it stays a real DISTINCT rather
+  // than being dropped: a rule that quietly reduced this to COUNT(*) would make
+  // a "conversations" assertion pass for the wrong reason.
+  //
+  // ANY ARITY, not two. This was written for the 2-tuple the email thread list
+  // uses and hard-coded that width, so the admin metrics route's
+  // `COUNT(DISTINCT (entity_type, estimate_id, user_id))` fell through it
+  // untranslated and sqlite answered "row value misused" — i.e. the one
+  // statement carrying the conversation count could not be executed at all,
+  // which is how a tenant assertion goes unwritten. Widened rather than
+  // duplicated so a 4-tuple cannot re-open the same hole.
+  s = s.replace(/COUNT\s*\(\s*DISTINCT\s*\(\s*([a-z_][a-z_0-9]*(?:\s*,\s*[a-z_][a-z_0-9]*)+)\s*\)\s*\)/gi,
+                (_m, cols) => 'COUNT(DISTINCT (' +
+                  cols.split(',').map((c) => c.trim()).join(" || char(1) || ") + '))');
+
+  // `jsonb_typeof(col) = 'array'` -> `json_type(col) = 'array'`. The two
+  // functions disagree on the SCALAR type names (pg says 'number' and 'string'
+  // where sqlite says 'integer'/'real' and 'text'), so this is translated only
+  // as the whole comparison against 'array' or 'object', where they agree
+  // exactly. A bare jsonb_typeof used any other way is left alone and throws,
+  // rather than being rewritten into a comparison that quietly never matches.
+  s = s.replace(/\bjsonb?_typeof\s*\(([^()]*)\)\s*=\s*'(array|object)'/gi,
+                (_m, expr, kind) => `json_type(${expr}) = '${kind}'`);
 
   // `STRING_AGG(DISTINCT col, ',')` -> sqlite's GROUP_CONCAT. sqlite rejects
   // DISTINCT together with a custom separator, and ',' is what the callers
