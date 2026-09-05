@@ -194,11 +194,48 @@ const TWO_LAYER_WINDOW = 120;
 const HANDLER_START =
   /^\s{0,2}(?:router\.(?:get|post|put|patch|delete|use)\s*\(|(?:async\s+)?function\s+\w+|(?:const|let|var)\s+\w+\s*=\s*async\s*(?:function\b|\()|module\.exports)/;
 
-// Tokens that count as "an org-scoped guard happened here". `organization_id`
-// covers the inline SELECTs; the named helpers cover the routes that factor
-// the check out (subInOrg, ownedJob, jobInOrg…). `orgId` covers the service
-// layer, which receives an already-resolved tenant rather than a req.
-const TWO_LAYER_GUARD = /organization_id|orgPred|orgScope|InOrg|ownedJob|\borgId\b/;
+// What counts as "an org-scoped guard happened here" — AND THE BAR IS NOW A
+// STATEMENT, NOT A WORD.
+//
+// The first version of this was a bare token match, `/organization_id|orgPred|
+// orgScope|InOrg|ownedJob|\borgId\b/`, tested against the raw source LINE. It
+// asserted that the string is PRESENT somewhere above the write, not that a
+// scoped READ guards it — and those are different claims. Measured by
+// mutation: deleting the tenant predicate out of the org-scoped read above
+// `DELETE FROM pay_applications`, while leaving its parameter line
+// `[req.params.id, req.user.organization_id]` in place, kept all 13 tests
+// GREEN. The parameter line was the guard, as far as the check could tell. It
+// is also the likelier refactor — the predicate is what someone edits, and the
+// params list is what they forget to edit with it. INVARIANT 3 was, in that
+// one respect, decoration.
+//
+// The stricter bar, which all 26 spine statements meet today:
+//   • `organization_id` INSIDE A SQL LITERAL — the scanner already extracts
+//     those, so "the predicate is in the WHERE clause" is directly checkable,
+//     and a mention in a parameter list, a variable name or a comment no
+//     longer answers TRUE.
+//   • or a named org-guard being CALLED (`subInOrg(…)`, `ownedJob(…)`,
+//     `jobInOrg(…)`, `orgPred(…)`), for the routes that factor the read out.
+//     A call, not a mention: `// see ownedJob` is not a guard.
+//
+// `\borgId\b` is gone. It was the loosest of the tokens — every service that
+// takes a resolved tenant names a variable that — and nothing in the spine
+// needs it: all 26 pass without it. Deleting the whole read still goes red, so
+// the handler-boundary work this sits on is unaffected.
+const TWO_LAYER_GUARD_CALL = /\b(?:orgPred|orgScope|[A-Za-z_$][\w$]*InOrg|ownedJob)\s*\(/;
+
+// The line numbers a SQL literal containing `organization_id` covers, 1-based.
+// Built from the tokenizer rather than from a line regex, so a comment or a
+// parameter list mentioning the column cannot be mistaken for a predicate.
+function sqlOrgGuardLines(src) {
+  const set = new Set();
+  for (const lit of extractSqlLiterals(src)) {
+    if (!/organization_id/i.test(lit.sql)) continue;
+    const span = (lit.raw.match(/\n/g) || []).length;
+    for (let n = lit.line; n <= lit.line + span; n++) set.add(n);
+  }
+  return set;
+}
 
 const TWO_LAYER_EXEMPT = {
   'server/db.js':
@@ -246,6 +283,15 @@ function collect() {
   for (const f of walk(SERVER, [])) {
     const text = fs.readFileSync(f, 'utf8');
     const srcLines = text.split(/\r?\n/);
+    // A comment-blanked copy, for the guard-CALL check below: a helper NAMED
+    // in a comment above a write is not a guard, the same way a predicate
+    // named in a comment is not a predicate. Blanked rather than removed so
+    // the line numbers still line up with srcLines.
+    const codeLines = text
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+      .replace(/(^|[^:])\/\/[^\n]*/g, (m, a) => a + ' '.repeat(m.length - a.length))
+      .split(/\r?\n/);
+    const orgSqlLines = sqlOrgGuardLines(text);
     const r = rel(f);
     const lits = extractSqlLiterals(text);
     lits.forEach((lit, i) => {
@@ -286,7 +332,9 @@ function collect() {
         // enclosing handler — see HANDLER_START.
         let guardAt = null, stoppedAt = null;
         for (let k = lit.line - 2; k >= 0 && k >= lit.line - 2 - TWO_LAYER_WINDOW; k--) {
-          if (TWO_LAYER_GUARD.test(srcLines[k])) { guardAt = k + 1; break; }
+          // A SQL literal that carries the predicate, or a named org guard
+          // being CALLED. Not a word appearing on a line.
+          if (orgSqlLines.has(k + 1) || TWO_LAYER_GUARD_CALL.test(codeLines[k] || '')) { guardAt = k + 1; break; }
           if (HANDLER_START.test(srcLines[k])) { stoppedAt = k + 1; break; }
         }
         spine.push({ file: r, line: lit.line, table, predicated, guardAt, stoppedAt,

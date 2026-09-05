@@ -322,6 +322,94 @@ describe('PATH P2 — a SUPPLIED id is an assertion and is checked', () => {
   });
 });
 
+// ── PATH P2b — the half of the deadlock that was still open ───────────────
+// The tolerance a21563bb added applied only to the CARRIED-FORWARD set, i.e.
+// to a body that OMITS applications. That is not the shape the client sends:
+// js/api.js's payments.update posts the whole array back, dead ids included,
+// because it round-trips what it loaded. So the deadlock survived on the only
+// door a UI has — supply the array and the absent id is refused; omit it and
+// the dead id can never be removed. Nothing calls payments.update yet, which
+// is the only reason it was not a live incident, and is exactly what makes it
+// a trap for whoever wires that button.
+//
+// The rule, stated once: REFUSE FOREIGN ALWAYS; refuse ABSENT only when the id
+// is NOT already in the row's stored set.
+describe('PATH P2b — an ABSENT id already ON the row survives being sent back', () => {
+  test('supplying an already-stored ABSENT id lets the edit land', async () => {
+    // The payment's history names an invoice that no longer exists anywhere —
+    // the state PATH P5's delete test reaches legitimately, without touching
+    // another tenant.
+    seedPayment('pay-dl', ORG_A, [{ invoice_id: 'inv-gone', amount: 0 }]);
+    const res = await call('PUT', '/api/payments/pay-dl', A_ADMIN, {
+      payment_date: '2026-09-06', amount: 0, notes: 'note edited via the real client shape',
+      applications: [{ invoice_id: 'inv-gone', amount: 0 }]
+    });
+    expect(res.status).toBe(200);
+    expect(paymentData('pay-dl').notes).toBe('note edited via the real client shape');
+  });
+
+  test('…and the dead application can finally be REMOVED', async () => {
+    // The other half of the deadlock: escaping the state at all. Before, the
+    // request that drops the dead id was refused because it had to supply the
+    // array that still contained it.
+    seedPayment('pay-dl2', ORG_A, [{ invoice_id: 'inv-gone', amount: 0 }]);
+    const res = await call('PUT', '/api/payments/pay-dl2', A_ADMIN, {
+      payment_date: '2026-09-06', amount: 0, applications: []
+    });
+    expect(res.status).toBe(200);
+    expect(paymentData('pay-dl2').applications).toEqual([]);
+  });
+
+  test('an ABSENT id the caller INVENTS is still refused', async () => {
+    // The tolerance is for ids the row already carries, never for new ones.
+    // A silently inert application against a ghost is the "cash looks applied,
+    // invoice stays open" failure the whole guard exists for.
+    seedPayment('pay-dl3', ORG_A, [{ invoice_id: 'inv-gone', amount: 0 }]);
+    const before = snapshotPayment('pay-dl3');
+    const res = await call('PUT', '/api/payments/pay-dl3', A_ADMIN, {
+      payment_date: '2026-09-06', amount: 10,
+      applications: [{ invoice_id: 'inv-gone', amount: 0 }, { invoice_id: 'inv-invented', amount: 10 }]
+    });
+    expect(res.status).toBe(404);
+    expect(res.body.invoice_ids).toEqual(['inv-invented']);
+    expect(snapshotPayment('pay-dl3')).toBe(before);
+  });
+
+  test('a FOREIGN id already ON the row is STILL refused — the tolerance is absence, not history', async () => {
+    // The line that must not move. "Already stored" is not a laundering
+    // mechanism: a row that exists and belongs to another tenant is never
+    // applicable, however it got onto this payment.
+    seedInvoice('inv-b-live', ORG_B, { status: 'sent', paid: 0 });
+    seedPayment('pay-dl4', ORG_A, [{ invoice_id: 'inv-b-live', amount: 0 }]);
+    const beforeInv = snapshotInvoice('inv-b-live');
+    const beforePay = snapshotPayment('pay-dl4');
+    const res = await call('PUT', '/api/payments/pay-dl4', A_ADMIN, {
+      payment_date: '2026-09-06', amount: 999,
+      applications: [{ invoice_id: 'inv-b-live', amount: 999 }]
+    });
+    expect(res.status).toBe(404);
+    expect(res.body.invoice_ids).toEqual(['inv-b-live']);
+    expect(snapshotInvoice('inv-b-live')).toBe(beforeInv);
+    expect(snapshotPayment('pay-dl4')).toBe(beforePay);
+  });
+
+  test('the refusal still says the same thing for foreign and for invented-absent', async () => {
+    // P5 again, on the new arm: the policy split must stay invisible.
+    seedInvoice('inv-b-live2', ORG_B);
+    seedPayment('pay-dl5', ORG_A, []);
+    seedPayment('pay-dl6', ORG_A, []);
+    const foreign = await call('PUT', '/api/payments/pay-dl5', A_ADMIN, {
+      payment_date: '2026-09-06', amount: 1, applications: [{ invoice_id: 'inv-b-live2', amount: 1 }]
+    });
+    const absent = await call('PUT', '/api/payments/pay-dl6', A_ADMIN, {
+      payment_date: '2026-09-06', amount: 1, applications: [{ invoice_id: 'inv-nowhere', amount: 1 }]
+    });
+    expect(foreign.status).toBe(absent.status);
+    expect(foreign.body.error.replace('inv-b-live2', 'ID'))
+      .toBe(absent.body.error.replace('inv-nowhere', 'ID'));
+  });
+});
+
 // ── PATH P3 — the payment row's own tenancy, over a matrix ─────────────────
 describe('PATH P3 — PUT / DELETE /payments/:id land only on the caller\'s own rows', () => {
   const CALLERS = [

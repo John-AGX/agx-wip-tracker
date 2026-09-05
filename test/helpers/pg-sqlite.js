@@ -66,12 +66,72 @@ function translate(sql) {
     (_m, col, param) => 'EXISTS (SELECT 1 FROM json_each(' + param + ') WHERE json_each.value = ' + col + ')'
   );
 
+  // A PARAMETERISED interval: `NOW() - ($1 || ' days')::interval`, which the
+  // AI read tools use to bound a rolling window whose width the model chooses.
+  // Translated BEFORE the cast-stripping below, because stripping `::interval`
+  // first would leave `CURRENT_TIMESTAMP - (?1 || ' days')`, which sqlite
+  // happily evaluates as arithmetic on a string and returns a number — a
+  // statement that prepares, runs, and selects the wrong rows. Those windows
+  // sit on exactly the tenant reads this shim exists to keep honest, so the
+  // failure mode to avoid is the silent one.
+  s = s.replace(
+    /(?:NOW\(\)|CURRENT_TIMESTAMP)\s*-\s*\(\s*(\$\d+)(?:::[a-z]+)?\s*\|\|\s*'\s*([a-z]+)'\s*\)\s*::interval/gi,
+    (_m, param, unit) => `datetime('now', '-' || ${param} || ' ${unit}')`
+  );
+
   // Casts. Postgres-only, and meaningless to a dynamically typed engine.
+  // `::date` and `::timestamp` join the list for the same reason the others
+  // are here: they appear inside WHERE clauses (`s.start_date >= $2::date`),
+  // and left in place sqlite refuses to prepare, which would make the schedule
+  // read — one of the owner-org-axis doors — untestable here.
   s = s.replace(/::text\[\]/g, '').replace(/::jsonb/g, '').replace(/::json/g, '')
        .replace(/::int\b/g, '').replace(/::integer\b/g, '').replace(/::text\b/g, '')
-       .replace(/::bigint\b/g, '').replace(/::numeric\b/g, '')
-       .replace(/::float\b/g, '').replace(/::boolean\b/g, '');
+       .replace(/::bigint\b/g, '').replace(/::numeric(?:\(\d+(?:,\s*\d+)?\))?/gi, '')
+       .replace(/::float\b/g, '').replace(/::boolean\b/g, '')
+       .replace(/::date\b/g, '').replace(/::timestamptz\b/g, '').replace(/::timestamp\b/g, '');
   s = s.replace(/\bNOW\(\)/gi, 'CURRENT_TIMESTAMP');
+
+  // ILIKE → LIKE. sqlite's LIKE is already case-insensitive for ASCII, which
+  // is what every ILIKE in these routes is doing (name / description / city
+  // substring search). This is a spelling change, not a loosening: the same
+  // rows match. It is needed because the search arms of the tenant reads —
+  // read_clients, read_subs, read_past_estimate_lines — are ILIKE-based, and
+  // an untranslated ILIKE throws at prepare, which would leave exactly those
+  // doors unexercised.
+  s = s.replace(/\bILIKE\b/gi, 'LIKE');
+
+  // ── Postgres JSON builders → sqlite's JSON1 spellings ───────────────────
+  // Same rows, different function names. Named individually rather than by a
+  // catch-all so an unrecognised builder still throws instead of being quietly
+  // dropped. `json_agg(x ORDER BY y)` keeps its ORDER BY — sqlite has accepted
+  // ORDER BY inside an aggregate since 3.44.
+  s = s.replace(/\bjsonb?_build_object\s*\(/gi, 'json_object(')
+       .replace(/\bjsonb?_agg\s*\(/gi, 'json_group_array(')
+       .replace(/\bjsonb?_array_length\s*\(/gi, 'json_array_length(');
+
+  // `FROM t, jsonb_array_elements(<expr>) AS <alias>` — a set-returning
+  // function in the FROM list. sqlite's equivalent is `json_each(<expr>)
+  // <alias>`, whose element is `<alias>.value`, NOT the alias itself. BOTH
+  // halves are rewritten together and deliberately: translating the call while
+  // leaving `line->>'description'` alone produces a statement that prepares,
+  // runs, and returns NULL for every projected column — an empty result that
+  // reads as "the predicate excluded everything", which is precisely the
+  // wrong-reason pass this shim was written to prevent. The estimate-lines
+  // read (the pricing-IP door) is the statement that needs this.
+  const setReturning = /\bjsonb?_array_elements(?:_text)?\s*\(/i;
+  if (setReturning.test(s)) {
+    const aliases = [];
+    s = s.replace(
+      /\bjsonb?_array_elements(?:_text)?\s*\(([\s\S]*?)\)\s+AS\s+([a-z_][a-z0-9_]*)/gi,
+      (_m, expr, alias) => { aliases.push(alias); return `json_each(${expr}) AS ${alias}`; }
+    );
+    for (const alias of aliases) {
+      s = s.replace(new RegExp('\\b' + alias + '\\s*->>', 'g'), alias + '.value ->>');
+      s = s.replace(new RegExp('\\b' + alias + '\\s*->(?!>)', 'g'), alias + '.value ->');
+    }
+    // Any remaining untranslated set-returning call would silently prepare as
+    // an unknown function error, which is the loud path — left as is.
+  }
 
   // `CURRENT_TIMESTAMP - INTERVAL '7 days'` -> `datetime('now','-7 days')`.
   // Applied AFTER the NOW() rewrite above so both spellings land here. The
@@ -112,13 +172,26 @@ function translate(sql) {
   return s;
 }
 
-function decodeRow(row, extra) {
+function decodeRow(row, extra, dates) {
   const ex = extra || EMPTY;
+  const dt = dates || EMPTY;
   const out = {};
   Object.keys(row).forEach((k) => {
     let v = row[k];
     if ((JSON_COLUMNS.has(k) || ex.has(k)) && typeof v === 'string') {
       try { v = JSON.parse(v); } catch (e) { /* leave the raw text */ }
+    } else if (dt.has(k) && typeof v === 'string' && v) {
+      // TIMESTAMP columns. pg hands these back as Date objects and the routes
+      // rely on it — `row.updated_at.toISOString()`, with no guard, because in
+      // Postgres there is nothing to guard against. sqlite hands back the
+      // text, so an unconverted column makes the handler THROW on a line that
+      // has nothing to do with the property under test, and the tenant
+      // assertion never runs. Opt-in PER ENGINE for the same reason
+      // jsonColumns is: an existing consumer of this shim keeps exactly the
+      // decoding it was written against, because a silent decoding change is a
+      // silent assertion change.
+      const d = new Date(v.indexOf('T') === -1 ? v.replace(' ', 'T') + 'Z' : v);
+      if (!isNaN(d.getTime())) v = d;
     }
     out[k] = v;
   });
@@ -136,6 +209,7 @@ function createPgSqlite(schemaSql, opts) {
   const db = new DatabaseSync(':memory:');
   db.exec(schemaSql);
   const extraJson = new Set((opts && opts.jsonColumns) || []);
+  const dateCols = new Set((opts && opts.dateColumns) || []);
 
   // Every statement the routes ran, in order — so a test can assert that a
   // door did NOT reach the database at all, which is a different (and
@@ -156,7 +230,7 @@ function createPgSqlite(schemaSql, opts) {
     const isSelect = /^\s*(SELECT|WITH)/i.test(translated);
     const returning = /\bRETURNING\b/i.test(translated);
     if (isSelect || returning) {
-      const rows = stmt.all(...args).map((r) => decodeRow(r, extraJson));
+      const rows = stmt.all(...args).map((r) => decodeRow(r, extraJson, dateCols));
       return { rows, rowCount: rows.length };
     }
     const info = stmt.run(...args);
@@ -176,7 +250,7 @@ function createPgSqlite(schemaSql, opts) {
     db,
     log,
     // Synchronous escape hatch for assertions — never used by route code.
-    all: (sql, ...args) => db.prepare(sql).all(...args).map((r) => decodeRow(r, extraJson)),
+    all: (sql, ...args) => db.prepare(sql).all(...args).map((r) => decodeRow(r, extraJson, dateCols)),
     count: (sql, ...args) => {
       const r = db.prepare(sql).all(...args);
       return r.length;

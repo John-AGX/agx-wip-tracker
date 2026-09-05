@@ -2824,7 +2824,7 @@ async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, 
     // Admin context — only the live metrics snapshot is added to the
     // turn. 86's baseline carries identity; there is no separate
     // "admin agent" or "CoS surface".
-    const ctx = await buildStaffContext();
+    const ctx = await buildStaffContext(organization);
     turnContextText = ctxDynamicText(ctx.system);
   }
   // No matching entity (e.g. a global chat with no entity in focus) →
@@ -8229,7 +8229,13 @@ function isStaffToolAutoTier(name) {
 // Build the chief-of-staff system prompt. Stable identity + role +
 // tools rolled into one cached block; a slim live snapshot of the
 // current week as a second block (refreshed each turn).
-async function buildStaffContext() {
+// `organization` is REQUIRED to emit the snapshot. It used to take no
+// arguments at all — the same shape as execIntakeRead — and its one query
+// counted every tenant's assistant turns into the admin surface's per-turn
+// context, unasked. An org-less caller (the admin prompt-PREVIEW tooling in
+// admin-agents-routes.js is one) now gets the prose with no snapshot, which is
+// the fail-closed answer: less than a normal caller, never more.
+async function buildStaffContext(organization) {
   // 2026-05-21 — Chief-of-Staff prose retired. Architecture is one
   // agent (86) reachable from any page; there is no separate "CoS
   // surface" with a different identity. Identity + tone live in 86's
@@ -8238,13 +8244,16 @@ async function buildStaffContext() {
   // usage questions without burning a tool call. Failures degrade
   // silently — the model will call read_metrics if it needs detail.
   const liveLines = [];
+  const _scOrgId = organization && organization.id != null ? organization.id : null;
   try {
+    if (_scOrgId == null) throw new Error('no organization — snapshot omitted');
     const r = await pool.query(`
       SELECT entity_type, COUNT(*) FILTER (WHERE role='assistant') AS turns
         FROM ai_messages
        WHERE created_at >= NOW() - INTERVAL '7 days'
+         AND (organization_id = $1 OR organization_id IS NULL)
        GROUP BY entity_type
-    `);
+    `, [_scOrgId]);
     if (r.rows.length) {
       liveLines.push('# Recent assistant activity (last 7 days)');
       r.rows.forEach(row => {
@@ -8308,6 +8317,14 @@ async function buildStaffContext() {
 // catch is narrow — only "Unknown ... tool: <name>" falls through;
 // real errors (DB, validation) propagate as before.
 async function dispatchReadTool(name, input, ctx) {
+  // The tenant gate first, for the same reason the streaming dispatcher runs
+  // requireTurnOrg before any executor branch: a fallback chain that tries
+  // three executors in turn must not be three chances to reach one without a
+  // tenant. Both `execIntakeRead` below and `execFieldToolRead` used to be
+  // called from here with no ctx at all.
+  if (ctxOrgId(ctx) == null && !ORGLESS_ALLOWED_TOOLS.has(name)) {
+    return orgLessToolRefusal(name);
+  }
   const isUnknownToolError = (e) =>
     e && typeof e.message === 'string' &&
     /^Unknown (?:staff )?tool:\s/.test(e.message);
@@ -8317,7 +8334,7 @@ async function dispatchReadTool(name, input, ctx) {
   catch (e) { if (!isUnknownToolError(e)) throw e; }
   // execIntakeRead handles read_existing_clients / read_existing_leads
   // (it's an if-chain, not a switch — returns undefined for unknowns).
-  const intakeResult = await execIntakeRead(name, input);
+  const intakeResult = await execIntakeRead(name, input, ctx);
   if (intakeResult !== undefined) return intakeResult;
   return 'Tool "' + name + '" is registered as a schema but has no executor implementation yet. ' +
     'Tell the user this read capability is on the roadmap; pick a different approach to answer ' +
@@ -8575,14 +8592,27 @@ async function execConsolidatedRead(name, input, ctx) {
   }
   if (et === 'client') {
     if (!id) return 'read_entity(client) requires id';
-    const r = await pool.query('SELECT * FROM clients WHERE id = $1', [id]);
+    // Was a bare `WHERE id = $1`: name, email, phone, site address, CAM name
+    // and email, and the agent_notes free text, for any client id in any
+    // tenant. The refusal below is the SAME sentence an absent id gets, so
+    // this door is not an existence oracle over every affiliate's client list.
+    const _ceOrgId = ctxOrgId(ctx);
+    if (_ceOrgId == null) return 'Client not found: ' + id;
+    const r = await pool.query(
+      'SELECT * FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [id, _ceOrgId]
+    );
     if (!r.rows.length) return 'Client not found: ' + id;
     const c = r.rows[0];
     if (depth === 'full' || includes.length) {
       const notes = Array.isArray(c.agent_notes) ? c.agent_notes : [];
+      // The child-property walk is predicated in its own right rather than
+      // leaning on the parent read above. A parent-scoped child that carries
+      // its own tenant column and does not use it is one refactor away from
+      // being reached without the parent.
       const propsRes = await pool.query(
-        'SELECT id, name, property_address FROM clients WHERE parent_client_id = $1',
-        [id]
+        'SELECT id, name, property_address FROM clients WHERE parent_client_id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+        [id, _ceOrgId]
       );
       const lines = [];
       lines.push('Client: ' + (c.name || '(unnamed)') + '  [' + id + ']');
@@ -8617,13 +8647,22 @@ async function execConsolidatedRead(name, input, ctx) {
   }
   if (et === 'lead') {
     if (!id) return 'read_entity(lead) requires id';
+    // Was a bare `WHERE l.id = $1`: title, status, client, full site address,
+    // revenue band, and at depth='full' the free-text notes — for any lead id
+    // in any tenant. Written as ONE literal rather than five concatenated
+    // fragments: the concatenated form is invisible to a SQL-literal scanner
+    // (no single fragment contains both a FROM and a WHERE), which is exactly
+    // how this statement stayed off the unpredicated list.
+    const _leOrgId = ctxOrgId(ctx);
+    if (_leOrgId == null) return 'Lead not found: ' + id;
     const r = await pool.query(
-      'SELECT l.*, c.name AS client_name, u.name AS salesperson_name ' +
-      'FROM leads l ' +
-      'LEFT JOIN clients c ON c.id = l.client_id ' +
-      'LEFT JOIN users u   ON u.id = l.salesperson_id ' +
-      'WHERE l.id = $1',
-      [id]
+      `SELECT l.*, c.name AS client_name, u.name AS salesperson_name
+         FROM leads l
+         LEFT JOIN clients c ON c.id = l.client_id
+         LEFT JOIN users u   ON u.id = l.salesperson_id
+        WHERE l.id = $1
+          AND (l.organization_id = $2 OR l.organization_id IS NULL)`,
+      [id, _leOrgId]
     );
     if (!r.rows.length) return 'Lead not found: ' + id;
     const l = r.rows[0];
@@ -8673,6 +8712,87 @@ function ctxOrgId(ctx) {
   if (ctx.organizationId != null) return ctx.organizationId;
   if (ctx.user && ctx.user.organization_id != null) return ctx.user.organization_id;
   return null;
+}
+
+// ── THE TENANT BINDING, AT THE STATE RATHER THAN AT THE CALL SITE ──────────
+//
+// Every per-door predicate below fixes one door and leaves the next tool
+// author to remember. A new agent read tool lands most weeks, and the two
+// clearest pieces of evidence that remembering does not work are in this file:
+// `execIntakeRead` took NO ctx argument at all, so it could not be scoped from
+// any of its three call sites even by an author who wanted to; and
+// `execFieldToolRead` was called without ctx from both live entry points.
+//
+// So the org is bound HERE, once, in front of every executor. `execAgentTool`
+// is the only way in from the three live doors (POST /api/ai/exec-tool, the
+// streaming turn dispatcher, dispatchReadTool). It refuses before any executor
+// branch is reached when the caller has no tenant, and it passes ctx to every
+// executor whether that executor uses it or not — so an executor that starts
+// needing the org can read it without a signature change and without a second
+// call site being missed.
+//
+// This is the affordable half of "authorize at execution". The whole of it is
+// Postgres row-level security: `SET LOCAL app.org_id` on a per-request
+// connection, with the predicate in the POLICY where no handler can write
+// around it. That is the endgame and it is NOT what this commit does, for two
+// stated costs — the pool is shared and untenanted (every route would need a
+// per-request connection checkout, on a live pilot, in the same week as the
+// fix), and the `OR organization_id IS NULL` legacy tolerance every predicate
+// in this repo carries would have to be expressed as policy and then RETIRED,
+// which is gated on the un-stamped row count reaching zero. Until then the
+// gate below plus the build-time read invariant
+// (test/ai-read-predicate-invariant.test.js) is what holds the line: the gate
+// makes an org-less caller impossible, the predicates make a foreign row
+// impossible, and the invariant makes a NEW unpredicated tenant read fail the
+// build instead of failing an affiliate.
+//
+// Tools that are NOT tenant data and must keep working for a caller with no
+// organization. Everything not named here is refused without an org.
+// Deliberately tiny: web search, navigation hints, and self-introspection
+// scoped to the caller's own user id.
+// Every name here is a tool that EXISTS and that reads no tenant row. The
+// first draft of this set also carried `web_fetch`, `navigate_to`,
+// `open_entity` and the four memory tools. The first three answer to nothing —
+// a name sitting in a gate is a claim that something answers to it, which is
+// the fossil read_change_orders' own comment warns about — and the memory
+// tools read `ai_memories`, which IS tenant data (execMemoryTool refuses an
+// org-less caller itself; letting the gate refuse them uniformly is one
+// answer instead of two).
+const ORGLESS_ALLOWED_TOOLS = new Set([
+  // Not tenant data at all.
+  'web_search', 'navigate',
+  // The CALLER'S OWN rows, keyed on their user id, never on an org:
+  // self_diagnose reads ai_messages WHERE user_id = ctx.userId, and
+  // search_my_kb reads attachments WHERE uploaded_by = ctx.userId. An org-less
+  // caller seeing their own uploads is not a tenant leak, and refusing them
+  // would break the one surface such an account legitimately has.
+  'self_diagnose', 'search_my_kb',
+]);
+
+// The refusal. It is VISIBLE — the caller is told the read was refused and
+// why — and it is the same sentence for every tool, so it can never be
+// mistaken for "this record does not exist". Those two answers being
+// interchangeable is what made the payment-edit regression, and a boundary
+// that answers "not found" to its own tenant is a lockout nobody can debug.
+function orgLessToolRefusal(name) {
+  return 'Refused: "' + name + '" reads organization data and your account is not ' +
+    'attached to an organization, so there is no tenant to read. This is a refusal, ' +
+    'not an empty result — tell the user their account needs an organization before ' +
+    'this tool can answer.';
+}
+
+// The ONE door into the agent tool executors. See the note above.
+async function execAgentTool(name, input, ctx) {
+  if (ctxOrgId(ctx) == null && !ORGLESS_ALLOWED_TOOLS.has(name)) {
+    return orgLessToolRefusal(name);
+  }
+  if (INTAKE_EXECUTOR_TOOLS.has(name))         return execIntakeRead(name, input, ctx);
+  if (FIELD_TOOLS_EXECUTOR_TOOLS.has(name))    return execFieldToolRead(name, input, ctx);
+  if (CLIENT_EXECUTOR_TOOLS.has(name))         return execClientDirectoryTool(name, input, ctx);
+  if (MEMORY_EXECUTOR_TOOLS.has(name))         return execMemoryTool(name, input, ctx);
+  if (WAVE3_EXECUTOR_TOOLS.has(name))          return execWave3Tool(name, input, ctx);
+  if (PROJECT_INLINE_EXECUTOR_TOOLS.has(name)) return execProjectInlineTool(name, input, ctx);
+  return execStaffTool(name, input, ctx);
 }
 
 async function execStaffTool(name, input, ctx) {
@@ -8983,12 +9103,26 @@ async function execStaffTool(name, input, ctx) {
       const attachmentId = String((input && input.attachment_id) || '').trim();
       const maxChars = Math.max(500, Math.min(200000, Number(input && input.max_chars) || 60000));
       if (!attachmentId) return 'read_attachment_text: attachment_id is required.';
+      // Up to 200,000 characters of extracted document text, keyed on nothing
+      // but an enumerable `att_<ms>_<rand>` id. The rule for a caller-supplied
+      // attachment id is already written down and already executed by the
+      // human doors: services/attachment-org-scope.js. Reused rather than
+      // re-derived — a second rule for the same key is how the two drift.
+      // organization_id is in the projection so attachmentInOrg's ladder can
+      // fall back to the row's own stamp for an orphan.
+      const _atOrgId = ctxOrgId(ctx);
+      const { attachmentInOrg: _atInOrg } = require('../services/attachment-org-scope');
       const r = await pool.query(
-        `SELECT id, filename, entity_type, mime_type, size_bytes, extracted_text
+        `SELECT id, filename, entity_type, entity_id, mime_type, size_bytes,
+                organization_id, uploaded_by, extracted_text
            FROM attachments WHERE id = $1`,
         [attachmentId]
       );
       if (!r.rows.length) return 'No attachment with id ' + attachmentId + '.';
+      // Same sentence for a foreign file as for one that does not exist.
+      if (_atOrgId == null || !(await _atInOrg(pool, r.rows[0], _atOrgId))) {
+        return 'No attachment with id ' + attachmentId + '.';
+      }
       const row = r.rows[0];
       const txt = row.extracted_text || '';
       if (!txt) {
@@ -9013,13 +9147,20 @@ async function execStaffTool(name, input, ctx) {
       // that consumes `decision.blocks` for the wire format.
       const attachmentId = String((input && input.attachment_id) || '').trim();
       if (!attachmentId) return 'view_attachment_image: attachment_id is required.';
+      // The twin of read_attachment_text, and the worse of the two: this one
+      // returns the PIXELS. Same key, same rule, same refusal sentence.
+      const _viOrgId = ctxOrgId(ctx);
+      const { attachmentInOrg: _viInOrg } = require('../services/attachment-org-scope');
       const r = await pool.query(
         `SELECT id, filename, entity_type, entity_id, mime_type, size_bytes,
-                web_key, anthropic_file_id
+                organization_id, uploaded_by, web_key, anthropic_file_id
            FROM attachments WHERE id = $1`,
         [attachmentId]
       );
       if (!r.rows.length) return 'No attachment with id ' + attachmentId + '.';
+      if (_viOrgId == null || !(await _viInOrg(pool, r.rows[0], _viOrgId))) {
+        return 'No attachment with id ' + attachmentId + '.';
+      }
       const row = r.rows[0];
       if (!row.mime_type || !row.mime_type.startsWith('image/')) {
         return 'Attachment "' + (row.filename || attachmentId) + '" is not an image (mime=' +
@@ -9437,6 +9578,26 @@ async function execStaffTool(name, input, ctx) {
       // The query unions in the org filter through whichever join is
       // available for the row\'s entity_type. Rows without a clear
       // org link (legacy data) are dropped to avoid cross-tenant leaks.
+      //
+      // THE ANCHOR FOR AN ENTITY BUCKET IS THE PARENT, NOT THE UPLOADER.
+      // The entity-bucket arm used to read `u_owner.organization_id = $1` —
+      // the org of whoever UPLOADED the file — for job / estimate / lead /
+      // client / sub attachments. That is the same owner-org axis the three
+      // job reads carried, and it is wrong in both directions here too:
+      // users.organization_id is MUTABLE, so a file uploaded onto an org-B job
+      // by a person who later moved to org A followed them and became
+      // searchable by org A; and a file with a null or dangling uploaded_by
+      // vanished from the tenant that owns its parent. `jobs` and `estimates`
+      // were already joined in — for two unused *_check columns — while the
+      // predicate looked past them at the uploader.
+      //
+      // The ladder below is services/attachment-org-scope.js's, expressed in
+      // one statement: the PARENT ENTITY first (NOT NULL on every row, written
+      // by every insert path), the row's own stamp next, the uploader last.
+      // The personal ('user') bucket keeps the uploader arm, because there the
+      // owning user's tenant genuinely IS the file's tenant. A row where
+      // nothing names a tenant stays dropped, which is what the sentence above
+      // already promised.
       const r = await pool.query(
         `SELECT a.id, a.filename, a.mime_type, a.size_bytes, a.folder,
                 a.entity_type, a.entity_id, a.uploaded_by, a.created_at,
@@ -9451,13 +9612,18 @@ async function execStaffTool(name, input, ctx) {
            LEFT JOIN users u_owner ON u_owner.id = a.uploaded_by
            LEFT JOIN jobs   j ON a.entity_type = 'job'      AND j.id = a.entity_id
            LEFT JOIN estimates e ON a.entity_type = 'estimate' AND e.id = a.entity_id
+           LEFT JOIN leads   l ON a.entity_type = 'lead'     AND l.id = a.entity_id
+           LEFT JOIN clients c ON a.entity_type = 'client'   AND c.id = a.entity_id
+           LEFT JOIN subs    s ON a.entity_type = 'sub'      AND s.id = a.entity_id
           WHERE (a.filename ILIKE $2 OR a.extracted_text ILIKE $2)
             ${entityTypeWhere}
             AND (
               (a.entity_type = 'org'  AND a.entity_id = $1)
               OR (a.entity_type = 'user' AND u_owner.organization_id = $1)
               OR (a.entity_type IN ('job','estimate','lead','client','sub')
-                  AND u_owner.organization_id = $1)
+                  AND COALESCE(j.organization_id, e.organization_id, l.organization_id,
+                               c.organization_id, s.organization_id,
+                               a.organization_id, u_owner.organization_id) = $1)
             )
           ORDER BY a.created_at DESC
           LIMIT $3`,
@@ -9598,9 +9764,16 @@ async function execStaffTool(name, input, ctx) {
            LIMIT $${p}`,
         params
       );
-      const totalQ = _matOrgId
-        ? await pool.query('SELECT COUNT(*)::int AS c FROM materials WHERE (organization_id = $1 OR organization_id IS NULL)', [_matOrgId])
-        : await pool.query('SELECT COUNT(*)::int AS c FROM materials');
+      // The ternary's false arm counted EVERY tenant's catalog rows and
+      // printed the number to the model. It is the same dead-defensive-branch
+      // shape read_users' comment describes: unreachable once the caller must
+      // have an org, and its only reachable behaviour was the wrong answer. So
+      // it is deleted rather than left as a fallback.
+      if (_matOrgId == null) return orgLessToolRefusal('read_materials');
+      const totalQ = await pool.query(
+        'SELECT COUNT(*)::int AS c FROM materials WHERE (organization_id = $1 OR organization_id IS NULL)',
+        [_matOrgId]
+      );
       const total = totalQ.rows[0].c;
       if (!r.rows.length) {
         const queryDesc = q ? '"' + q + '"' : '(no filter)';
@@ -9683,6 +9856,13 @@ async function execStaffTool(name, input, ctx) {
       const where = [];
       const params = [];
       let p = 1;
+      // Every tenant's subcontractor list — names, trades, phones, emails,
+      // licence numbers and insurance-certificate expiries — 200 rows a call.
+      // A competitor's trade list IS the pricing IP's other half.
+      const _subOrgId = ctxOrgId(ctx);
+      if (_subOrgId == null) return orgLessToolRefusal('read_subs');
+      where.push('(s.organization_id = $' + p++ + ' OR s.organization_id IS NULL)');
+      params.push(_subOrgId);
       if (status !== 'all') { where.push('s.status = $' + p++); params.push(status); }
       if (input && input.trade && input.trade.trim()) {
         where.push('s.trade ILIKE $' + p++);
@@ -9756,6 +9936,13 @@ async function execStaffTool(name, input, ctx) {
       const where = [];
       const params = [];
       let p = 1;
+      // Had NO predicate at all — not a wrong one, none — and its rollup below
+      // printed the words "Pipeline rollup (all leads)" to the model with
+      // cross-tenant dollar totals per status. INSIGHTS-class roles hold this.
+      const _lpOrgId = ctxOrgId(ctx);
+      if (_lpOrgId == null) return orgLessToolRefusal('read_lead_pipeline');
+      where.push('(l.organization_id = $' + p++ + ' OR l.organization_id IS NULL)');
+      params.push(_lpOrgId);
       if (input && input.status) { where.push('l.status = $' + p++); params.push(input.status); }
       if (input && input.market) { where.push('l.market ILIKE $' + p++); params.push('%' + input.market + '%'); }
       if (input && input.q && input.q.trim()) {
@@ -9787,10 +9974,16 @@ async function execStaffTool(name, input, ctx) {
       const rollupQ = await pool.query(
         `SELECT status, COUNT(*)::int AS n,
                 COALESCE(SUM((estimated_revenue_low + estimated_revenue_high) / 2), 0)::numeric AS midpoint_rev
-           FROM leads GROUP BY status ORDER BY status`
+           FROM leads
+          WHERE (organization_id = $1 OR organization_id IS NULL)
+          GROUP BY status ORDER BY status`,
+        [_lpOrgId]
       );
       const out = [];
-      out.push('Pipeline rollup (all leads): ' +
+      // "all leads" now means all of THIS tenant's leads, which is what the
+      // sentence was always read as. Left in words rather than made vaguer:
+      // an aggregate the model narrates should say what it counted.
+      out.push('Pipeline rollup (all leads in your organization): ' +
         rollupQ.rows.map(x => x.status + '=' + x.n + ' ($' + Math.round(Number(x.midpoint_rev || 0) / 1000) + 'K)').join(', ') || '(empty)');
       out.push('');
       if (!r.rows.length) {
@@ -10243,6 +10436,12 @@ async function execStaffTool(name, input, ctx) {
       // via the HOA or community label, not just the row's own name.
       const q = (input && input.q || '').trim();
       const limit = Math.max(1, Math.min(100, Number(input && input.limit) || 20));
+      // Every tenant's client directory, 100 rows a call, WITH EMAILS AND
+      // PHONES — and the unfiltered arm needed no search term to get it.
+      // BOTH arms are predicated: the else-arm carrying no predicate at all is
+      // the exact shape the estimate and job context builders had.
+      const _rcOrgId = ctxOrgId(ctx);
+      if (_rcOrgId == null) return orgLessToolRefusal('read_clients');
       let r;
       if (q) {
         const like = '%' + q.replace(/[\\%_]/g, m => '\\' + m) + '%';
@@ -10254,16 +10453,18 @@ async function execStaffTool(name, input, ctx) {
                   COALESCE(jsonb_array_length(c.agent_notes), 0) AS note_count
              FROM clients c
              LEFT JOIN clients p ON p.id = c.parent_client_id
-            WHERE c.name ILIKE $1
+                                AND (p.organization_id = $3 OR p.organization_id IS NULL)
+            WHERE (c.organization_id = $3 OR c.organization_id IS NULL)
+              AND (c.name ILIKE $1
                OR p.name ILIKE $1
                OR c.community_name ILIKE $1
                OR c.company_name ILIKE $1
                OR c.city ILIKE $1
                OR c.first_name ILIKE $1
-               OR c.last_name ILIKE $1
+               OR c.last_name ILIKE $1)
             ORDER BY (c.name ILIKE $1) DESC, lower(c.name)
             LIMIT $2`,
-          [like, limit]
+          [like, limit, _rcOrgId]
         );
       } else {
         r = await pool.query(
@@ -10274,9 +10475,11 @@ async function execStaffTool(name, input, ctx) {
                   COALESCE(jsonb_array_length(c.agent_notes), 0) AS note_count
              FROM clients c
              LEFT JOIN clients p ON p.id = c.parent_client_id
+                                AND (p.organization_id = $2 OR p.organization_id IS NULL)
+            WHERE (c.organization_id = $2 OR c.organization_id IS NULL)
             ORDER BY lower(c.name)
             LIMIT $1`,
-          [limit]
+          [limit, _rcOrgId]
         );
       }
       if (!r.rows.length) return q ? 'No clients matched "' + q + '".' : 'No clients in directory.';
@@ -10484,6 +10687,19 @@ async function execStaffTool(name, input, ctx) {
       // Estimates store lines inside the JSONB blob (data->>'lines'). Walk
       // the blob server-side via jsonb_array_elements so we can ILIKE on
       // descriptions without pulling every estimate to Node first.
+      // THE PRICING IP. Line descriptions, quantities, UNIT COSTS and MARKUP
+      // %, plus a median/range "unit-cost anchor" computed across whatever
+      // matched — which was every affiliate's book, summarised into one
+      // affiliate's chat window.
+      //
+      // THE LEGITIMATE FEATURE SURVIVES. This tool exists so 86 can answer
+      // "what did we charge for gutters last year" across JOBS. The scope
+      // added here is the TENANT, not the entity: every estimate in the
+      // caller's own org still matches, so cross-job history is untouched.
+      // What changes is that the anchor is now computed from the caller's own
+      // history, which is the number they were always being told it was.
+      const _pelOrgId = ctxOrgId(ctx);
+      if (_pelOrgId == null) return orgLessToolRefusal('read_past_estimate_lines');
       const r = await pool.query(
         `SELECT e.id AS estimate_id, e.data->>'title' AS title, e.updated_at,
                 line->>'description' AS description,
@@ -10495,11 +10711,12 @@ async function execStaffTool(name, input, ctx) {
            FROM estimates e,
                 jsonb_array_elements(COALESCE(e.data->'lines', '[]'::jsonb)) AS line
           WHERE e.updated_at >= NOW() - ($1 || ' days')::interval
+            AND (e.organization_id = $4 OR e.organization_id IS NULL)
             AND COALESCE(line->>'section', '') <> '__section_header__'
             AND line->>'description' ILIKE $2
           ORDER BY e.updated_at DESC
           LIMIT $3`,
-        [String(days), '%' + q + '%', limit]
+        [String(days), '%' + q + '%', limit, _pelOrgId]
       );
       if (!r.rows.length) return 'No past estimate lines matched "' + q + '" in the last ' + days + ' days. Quote a defensible Central-FL estimate and mark "first-time line — no Project 86 history yet."';
       // Median + range across the matching lines for a quick anchor.
@@ -10527,9 +10744,18 @@ async function execStaffTool(name, input, ctx) {
       const q = (input && input.q || '').trim();
       const days = Math.max(30, Math.min(1825, Number(input && input.days) || 730));
       const limit = Math.max(1, Math.min(50, Number(input && input.limit) || 15));
+      // Title, client, status and TOTAL PROPOSAL $ for every tenant's
+      // estimates — and it handed back their estimate IDS, which is the READ
+      // twin of the write hole a21563bb closed. Reachable twice: by name and
+      // as search_entities(estimate). Cross-JOB history inside the org is
+      // exactly as wide as it was.
+      const _peOrgId = ctxOrgId(ctx);
+      if (_peOrgId == null) return orgLessToolRefusal('read_past_estimates');
       const where = ['e.updated_at >= NOW() - ($1 || \' days\')::interval'];
       const params = [String(days)];
       let p = 2;
+      where.push('(e.organization_id = $' + p++ + ' OR e.organization_id IS NULL)');
+      params.push(_peOrgId);
       if (q) {
         where.push("(e.data->>'title' ILIKE $" + p + " OR c.name ILIKE $" + p + ')');
         params.push('%' + q + '%');
@@ -10547,6 +10773,7 @@ async function execStaffTool(name, input, ctx) {
                 COALESCE((e.data->>'totalProposal')::numeric, 0) AS total
            FROM estimates e
            LEFT JOIN clients c ON c.id = (e.data->>'clientId')
+                              AND (c.organization_id = $2 OR c.organization_id IS NULL)
           WHERE ${where.join(' AND ')}
           ORDER BY e.updated_at DESC
           LIMIT $${p}`,
@@ -10584,9 +10811,17 @@ async function execStaffTool(name, input, ctx) {
       } catch (e) {
         return 'read_qb_cost_lines requires a signed-in user context.';
       }
+      // THE AXIS. This asked for the org of whoever OWNS the job, which is a
+      // different question from "whose job is this", and it is wrong in BOTH
+      // directions: a job owned by an ORG-LESS user matched `u.organization_id
+      // IS NULL` for every caller on the platform and leaked, while a job with
+      // a null or dangling owner_id was dropped by the INNER JOIN and became
+      // invisible to the tenant that owns it. The row's own organization_id is
+      // the answer, and the users join is deleted rather than corrected — it
+      // was only ever there to reach an org, and jobs carries its own.
       const where = ['job_id = $1',
-        'EXISTS (SELECT 1 FROM jobs j JOIN users u ON u.id = j.owner_id ' +
-        'WHERE j.id = qb_cost_lines.job_id AND (u.organization_id = $2 OR u.organization_id IS NULL))'];
+        'EXISTS (SELECT 1 FROM jobs j ' +
+        'WHERE j.id = qb_cost_lines.job_id AND (j.organization_id = $2 OR j.organization_id IS NULL))'];
       const params = [jobId, _orgId];
       let p = 3;
       if (input.account) { where.push('account ILIKE $' + p); params.push('%' + input.account + '%'); p++; }
@@ -10626,9 +10861,12 @@ async function execStaffTool(name, input, ctx) {
     case 'read_building_breakdown': {
       const jobId = String(input.jobId || input.job_id || '').trim();
       if (!jobId) return 'read_building_breakdown requires jobId.';
-      // A6-class org-scope by owner -> users.org. Fail-closed on no user
-      // context; tolerant OR-IS-NULL = no-op for AGX; a cross-org jobId
-      // resolves no row -> "Job not found".
+      // Org-scoped on THE ROW's organization_id. It used to read the org of
+      // whoever OWNS the job (`JOIN users u ON u.id = j.owner_id`), which
+      // leaked a job owned by an org-less user to every tenant and hid a job
+      // with no owner from its own. Fail-closed on no user context; the
+      // OR-IS-NULL arm is the legacy un-stamped tolerance; a cross-org jobId
+      // resolves no row -> "Job not found", the same answer an absent one gets.
       let _orgId;
       try {
         _orgId = await resolveOrgIdFromCtx(ctx);
@@ -10636,8 +10874,8 @@ async function execStaffTool(name, input, ctx) {
         return 'read_building_breakdown requires a signed-in user context.';
       }
       const r = await pool.query(
-        'SELECT j.data FROM jobs j JOIN users u ON u.id = j.owner_id ' +
-        'WHERE j.id = $1 AND (u.organization_id = $2 OR u.organization_id IS NULL)',
+        `SELECT j.data FROM jobs j
+          WHERE j.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
         [jobId, _orgId]
       );
       if (!r.rows.length) return 'Job not found: ' + jobId;
@@ -10649,8 +10887,13 @@ async function execStaffTool(name, input, ctx) {
       // Site Plan's geometry store, not a money model — `wires` is no longer
       // read here at all (see the deleted wire block below).
       let graph = {};
+      // The job above is proved in-org, and this is its geometry store — but
+      // node_graphs carries its own organization_id and a child that has a
+      // tenant column and does not use it is one refactor away from being
+      // reached without its parent. Predicated in its own right.
       const gRes = await pool.query(
-        'SELECT data FROM node_graphs WHERE job_id = $1', [jobId]
+        'SELECT data FROM node_graphs WHERE job_id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+        [jobId, _orgId]
       );
       if (gRes.rowCount) graph = gRes.rows[0].data || {};
       const nodes     = Array.isArray(graph.nodes) ? graph.nodes : [];
@@ -10713,9 +10956,12 @@ async function execStaffTool(name, input, ctx) {
     case 'read_job_pct_audit': {
       const jobId = String(input.jobId || input.job_id || '').trim();
       if (!jobId) return 'read_job_pct_audit requires jobId.';
-      // A6-class org-scope by owner -> users.org. Fail-closed on no user
-      // context; tolerant OR-IS-NULL = no-op for AGX; a cross-org jobId
-      // resolves no row -> "Job not found".
+      // Org-scoped on THE ROW's organization_id. It used to read the org of
+      // whoever OWNS the job (`JOIN users u ON u.id = j.owner_id`), which
+      // leaked a job owned by an org-less user to every tenant and hid a job
+      // with no owner from its own. Fail-closed on no user context; the
+      // OR-IS-NULL arm is the legacy un-stamped tolerance; a cross-org jobId
+      // resolves no row -> "Job not found", the same answer an absent one gets.
       let _orgId;
       try {
         _orgId = await resolveOrgIdFromCtx(ctx);
@@ -10723,8 +10969,8 @@ async function execStaffTool(name, input, ctx) {
         return 'read_job_pct_audit requires a signed-in user context.';
       }
       const r = await pool.query(
-        'SELECT j.data FROM jobs j JOIN users u ON u.id = j.owner_id ' +
-        'WHERE j.id = $1 AND (u.organization_id = $2 OR u.organization_id IS NULL)',
+        `SELECT j.data FROM jobs j
+          WHERE j.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
         [jobId, _orgId]
       );
       if (!r.rows.length) return 'Job not found: ' + jobId;
@@ -11364,7 +11610,18 @@ async function buildIntakeContext(userId, organization) {
 
 // Auto-tier intake reads — dedupe checks against existing clients
 // and recent leads.
-async function execIntakeRead(name, input) {
+// THE SIGNATURE IS THE FINDING. This function took `(name, input)` — no ctx —
+// so it could not be scoped from ANY of its three call sites even by an author
+// who set out to. Both of its reads were bare. That is the clearest evidence
+// in this file that per-door discipline is not what holds a tenant boundary,
+// and it is why execAgentTool now binds the org in front of every executor.
+// ctx is threaded here as well as gated there, so the predicate is on the
+// statement and not only on the door.
+async function execIntakeRead(name, input, ctx) {
+  const _ixOrgId = ctxOrgId(ctx);
+  if (_ixOrgId == null && (name === 'read_existing_clients' || name === 'read_existing_leads')) {
+    return orgLessToolRefusal(name);
+  }
   if (name === 'read_existing_clients') {
     const q = String((input && input.query) || '').trim();
     if (!q) {
@@ -11381,10 +11638,12 @@ async function execIntakeRead(name, input) {
               c.community_name, c.property_address, c.city, c.state
          FROM clients c
          LEFT JOIN clients p ON p.id = c.parent_client_id
-        WHERE c.name ILIKE $1 OR p.name ILIKE $1 OR c.community_name ILIKE $1
+                            AND (p.organization_id = $2 OR p.organization_id IS NULL)
+        WHERE (c.organization_id = $2 OR c.organization_id IS NULL)
+          AND (c.name ILIKE $1 OR p.name ILIKE $1 OR c.community_name ILIKE $1)
         ORDER BY (c.name ILIKE $1) DESC, c.name
         LIMIT 30`,
-      [like]
+      [like, _ixOrgId]
     );
     if (!r.rows.length) {
       // Phrase the zero-match case unambiguously as a successful tool
@@ -11414,12 +11673,14 @@ async function execIntakeRead(name, input) {
               c.name AS client_name
          FROM leads l
          LEFT JOIN clients c ON c.id = l.client_id
-        WHERE (l.title ILIKE $1 OR l.property_name ILIKE $1 OR l.city ILIKE $1
+                            AND (c.organization_id = $2 OR c.organization_id IS NULL)
+        WHERE (l.organization_id = $2 OR l.organization_id IS NULL)
+          AND (l.title ILIKE $1 OR l.property_name ILIKE $1 OR l.city ILIKE $1
                OR c.name ILIKE $1)
           AND l.created_at >= NOW() - INTERVAL '180 days'
         ORDER BY l.updated_at DESC
         LIMIT 20`,
-      [like]
+      [like, _ixOrgId]
     );
     if (!r.rows.length) {
       return 'Search complete. Query: "' + q + '". Matches found: 0 (looked back 180 days). No recent leads at that property / title / city. This is a valid result — proceed with propose_create_lead (do NOT retry the search with the same query).';
@@ -11442,13 +11703,21 @@ async function execIntakeRead(name, input) {
 // — name, id, description, category, updated. Keeps the prompt
 // short; 86 can call propose_update_field_tool with the id later
 // to swap out the body without needing to re-render the existing.
-async function execFieldToolRead(name, input) {
+// Same missing-ctx signature as execIntakeRead, same consequence: both live
+// entry points called it as `execFieldToolRead(name, input)`. The APPROVAL
+// executor below has taken a required orgId since P0-2 — the READ twin sitting
+// three lines above it did not, which is the whole shape of this wave.
+async function execFieldToolRead(name, input, ctx) {
   if (name === 'read_field_tools') {
+    const _ftOrgId = ctxOrgId(ctx);
+    if (_ftOrgId == null) return orgLessToolRefusal('read_field_tools');
     const r = await pool.query(
       `SELECT id, name, description, category, updated_at,
               LENGTH(html_body) AS html_size
          FROM field_tools
-        ORDER BY updated_at DESC`
+        WHERE (organization_id = $1 OR organization_id IS NULL)
+        ORDER BY updated_at DESC`,
+      [_ftOrgId]
     );
     if (!r.rows.length) {
       return 'No field tools yet. Use propose_create_field_tool to add the first one.';
@@ -12814,22 +13083,11 @@ function make86OnCustomToolUse(userId, parentSession, turnContextText, gateUser,
         return { tier: 'auto', summary: note };
       }
       try {
-        let result;
-        if (INTAKE_EXECUTOR_TOOLS.has(name)) {
-          result = await execIntakeRead(name, input);
-        } else if (FIELD_TOOLS_EXECUTOR_TOOLS.has(name)) {
-          result = await execFieldToolRead(name, input);
-        } else if (CLIENT_EXECUTOR_TOOLS.has(name)) {
-          result = await execClientDirectoryTool(name, input, ctx);
-        } else if (MEMORY_EXECUTOR_TOOLS.has(name)) {
-          result = await execMemoryTool(name, input, ctx);
-        } else if (WAVE3_EXECUTOR_TOOLS.has(name)) {
-          result = await execWave3Tool(name, input, ctx);
-        } else if (PROJECT_INLINE_EXECUTOR_TOOLS.has(name)) {
-          result = await execProjectInlineTool(name, input, ctx);
-        } else {
-          result = await execStaffTool(name, input, ctx);
-        }
+        // ONE door. The per-executor if-chain that used to live here dropped
+        // ctx on two of its seven branches (execIntakeRead, execFieldToolRead)
+        // — the same two the /exec-tool route dropped it on, because the chain
+        // was copied. execAgentTool binds the tenant in front of all of them.
+        const result = await execAgentTool(name, input, ctx);
         // Structured result with `blocks` (e.g. view_attachment_image
         // returns an image block + text label). Pass it through so
         // runV2SessionStream forwards the content blocks verbatim on
@@ -13295,9 +13553,12 @@ async function driveEscalateTo86(intent, ctx) {
       // 86 re-reading the whole job (the latency we're trying to kill).
       try {
         const jr = await pool.query(
-          `SELECT j.id FROM jobs j JOIN users u ON u.id = j.owner_id
+          // Same axis correction as read_job_pct_audit: the ROW's org, not the
+          // owner's. This one resolves a job NUMBER, so the owner axis made it
+          // possible to resolve another tenant's job number to their row id.
+          `SELECT j.id FROM jobs j
              WHERE (j.id = $1 OR j.data->>'jobNumber' = $1)
-               AND (u.organization_id = $2 OR u.organization_id IS NULL)
+               AND (j.organization_id = $2 OR j.organization_id IS NULL)
              LIMIT 1`,
           [eid, organization.id]
         );
@@ -13944,14 +14205,36 @@ async function execProjectInlineTool(name, input, ctx) {
   if (name === 'read_photo_comments') {
     const attId = String(input.attachment_id || '').trim();
     if (!attId) throw new Error('attachment_id is required');
+    // `thread_key = 'attachment:' + <caller-supplied id>` and nothing else:
+    // another tenant's photo comment threads, verbatim, with author names.
+    // TWO predicates, because the thread and the photo are two different
+    // objects and each can be foreign on its own: the ATTACHMENT must be in
+    // the caller's org (the repo's own rule for a caller-supplied attachment
+    // id), and the messages rows carry their own stamp, which the human door
+    // in message-routes.js writes.
+    const _pcOrgId = ctxOrgId(ctx);
+    const { attachmentInOrg: _pcInOrg } = require('../services/attachment-org-scope');
+    const attRow = await pool.query(
+      `SELECT id, entity_type, entity_id, organization_id, uploaded_by
+         FROM attachments WHERE id = $1`,
+      [attId]
+    );
+    // Same sentence for foreign, absent, and empty is WRONG here — "no
+    // comments yet" is a fact about a photo the caller can see. A photo they
+    // may not see answers as a photo that is not there.
+    if (!attRow.rows.length || _pcOrgId == null ||
+        !(await _pcInOrg(pool, attRow.rows[0], _pcOrgId))) {
+      return `Attachment ${attId} not found.`;
+    }
     const r = await pool.query(
       `SELECT m.id, m.user_id, u.name AS user_name, m.body, m.created_at
          FROM messages m
          LEFT JOIN users u ON u.id = m.user_id
         WHERE m.thread_key = $1
+          AND (m.organization_id = $2 OR m.organization_id IS NULL)
         ORDER BY m.created_at ASC
         LIMIT 500`,
-      [`attachment:${attId}`]
+      [`attachment:${attId}`, _pcOrgId]
     );
     if (!r.rows.length) return `No comments on attachment ${attId} yet.`;
     return `${r.rows.length} comment(s) on attachment ${attId}:\n` +
@@ -13966,8 +14249,21 @@ async function execProjectInlineTool(name, input, ctx) {
     // Confirm the attachment exists (helps 86 fail loud if it
     // hallucinated the id rather than silently posting to a stub
     // thread).
-    const attChk = await pool.query('SELECT id FROM attachments WHERE id = $1', [attId]);
-    if (!attChk.rows.length) throw new Error(`Attachment ${attId} not found.`);
+    // Existence AND tenancy. The read twin above leaked; this one WRITES a
+    // comment onto whatever photo the id names, so an unscoped existence check
+    // let an org-A caller post into an org-B photo's thread. Same rule, same
+    // refusal sentence.
+    const _acOrgId = ctxOrgId(ctx);
+    const { attachmentInOrg: _acInOrg } = require('../services/attachment-org-scope');
+    const attChk = await pool.query(
+      `SELECT id, entity_type, entity_id, organization_id, uploaded_by
+         FROM attachments WHERE id = $1`,
+      [attId]
+    );
+    if (!attChk.rows.length || _acOrgId == null ||
+        !(await _acInOrg(pool, attChk.rows[0], _acOrgId))) {
+      throw new Error(`Attachment ${attId} not found.`);
+    }
 
     const msgId = 'msg_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
     await pool.query(
@@ -14003,7 +14299,13 @@ async function execProjectInlineTool(name, input, ctx) {
     }
     const limit = Math.max(1, Math.min(500, Number(input.limit) || 200));
     const params = [orgId, fromDate, toDate];
-    let where = 'u.organization_id = $1 AND s.start_date >= $2::date AND s.start_date <= $3::date';
+    // Same owner-org axis as the three job reads above, found by the same
+    // scan: `u.organization_id` is the org of the job's OWNER. A job owned by
+    // an org-less user has no row in that predicate at all under strict
+    // equality, and the INNER JOIN on users dropped owner-less jobs from their
+    // own tenant's schedule. The row's own stamp is the answer; the users join
+    // is deleted because reaching an org was the only thing it did.
+    let where = '(j.organization_id = $1 OR j.organization_id IS NULL) AND s.start_date >= $2::date AND s.start_date <= $3::date';
     if (input.job_id) {
       params.push(String(input.job_id));
       where += ` AND s.job_id = $${params.length}`;
@@ -14014,7 +14316,6 @@ async function execProjectInlineTool(name, input, ctx) {
               COALESCE(j.data->>'title', '')     AS job_title
          FROM schedule_entries s
          JOIN jobs j ON j.id = s.job_id
-         JOIN users u ON u.id = j.owner_id
         WHERE ${where}
         ORDER BY s.start_date ASC, s.id ASC
         LIMIT ${limit}`,
@@ -14637,19 +14938,14 @@ router.post('/exec-tool', requireAuth, requireCapability('ESTIMATES_VIEW'), asyn
     // this endpoint any more than it can via the chat dispatcher.
     const capDenial = aiToolCapabilityDenial(name, input, req.user);
     if (capDenial) return res.status(403).json({ error: capDenial });
-    const ctx = { userId: req.user.id, orgId: req.user.organization_id || null, user: req.user };
-    let summary;
-    if (INTAKE_EXECUTOR_TOOLS.has(name)) {
-      summary = await execIntakeRead(name, input);
-    } else if (FIELD_TOOLS_EXECUTOR_TOOLS.has(name)) {
-      summary = await execFieldToolRead(name, input);
-    } else if (CLIENT_EXECUTOR_TOOLS.has(name)) {
-      summary = await execClientDirectoryTool(name, input, ctx);
-    } else if (PROJECT_INLINE_EXECUTOR_TOOLS.has(name)) {
-      summary = await execProjectInlineTool(name, input, ctx);
-    } else {
-      summary = await execStaffTool(name, input, ctx);
-    }
+    const ctx = { userId: req.user.id, orgId: req.user.organization_id == null ? null : req.user.organization_id, user: req.user };
+    // ONE door — execAgentTool. The if-chain this replaces was a COPY of the
+    // streaming dispatcher's, and it had drifted: it dropped ctx on the intake
+    // and field-tool branches, and it had no branch at all for the memory or
+    // wave-3 executors, so `list_workflow_items` via this endpoint fell
+    // through to execStaffTool and answered "Unknown tool". Two copies of a
+    // routing table is how a boundary ends up enforced on one of them.
+    const summary = await execAgentTool(name, input, ctx);
     res.json({ ok: true, summary });
   } catch (e) {
     console.error('POST /api/ai/exec-tool error:', e);
@@ -15704,6 +16000,22 @@ module.exports.internals = {
   // is held by `pm` and `corporate` as well as admins. See
   // test/ai-read-tenant-scope.test.js.
   execStaffTool,
+  // The rest of the read surface, exported for the same reason execStaffTool
+  // is: the tenant boundary on these is held by EXECUTING them. execAgentTool
+  // is the one door the three live entry points now use, so it is what a test
+  // of "can an org-less caller reach a tenant read" has to drive.
+  execAgentTool,
+  // The gate's own exception list, exported so a test can assert that every
+  // name on it answers to something and reads no tenant row — an exemption
+  // nobody can enumerate is an exemption nobody can review.
+  ORGLESS_ALLOWED_TOOLS,
+  ALLOWED_AUTO_TIER_TOOLS,
+  dispatchReadTool,
+  execIntakeRead,
+  execFieldToolRead,
+  execProjectInlineTool,
+  execWave3Tool,
+  execMemoryTool,
   buildClientDirectoryContext,
   buildStaffContext,
   sectionsForAgent,

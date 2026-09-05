@@ -492,9 +492,40 @@ router.put('/payments/:id', requireAuth, requireCapability('ESTIMATES_EDIT'), as
     // exactly as its owner wrote it rather than silently scrubbed — rewriting
     // someone's money record to make a guard pass is a worse answer than
     // leaving it visible.
+    //
+    // THE DEADLOCK WAS ONLY HALF CLOSED, AND THE HALF LEFT OPEN IS THE HALF
+    // THE CLIENT USES. Carrying applications forward is what happens when the
+    // body OMITS them; the editor does not omit them — js/api.js's
+    // payments.update sends the whole array, dead ids included, because it
+    // round-trips what it loaded. So a payment whose history names a deleted
+    // invoice was still unfixable through the only door the UI has: supply the
+    // array and the absent id is refused; omit the array and the dead id
+    // cannot be removed. Nothing calls payments.update yet, which is the only
+    // reason this is not a live incident — it is a trap set for whoever wires
+    // that button.
+    //
+    // The rule is the one this handler's own note already states, applied to
+    // the supplied set as well as the carried one:
+    //   FOREIGN — refused ALWAYS. A row that exists and belongs to someone
+    //             else is never applicable, on any path, at any time, however
+    //             it got onto this payment.
+    //   ABSENT  — refused only when the id is NEW TO THIS ROW. An absent id
+    //             the row already stores is being carried forward, not
+    //             asserted: no new pointer is created, and there is no money
+    //             to move and no victim. An absent id the caller INVENTS is
+    //             still refused — that is a claim the invoice exists, and a
+    //             silently inert application is the "dropped application"
+    //             failure this guard exists to prevent.
+    //
+    // This does not weaken the tenant boundary by one row. `foreign` is
+    // untouched, and an absent id moves nothing: recomputeInvoicePaid's SELECT
+    // and UPDATE both carry the org predicate, so an id matching no invoice
+    // anywhere matches no row there either.
     if (suppliedApps) {
       const cls = await classifyInvoiceIds(suppliedApps.map((a) => a.invoice_id), org);
-      const refused = cls.foreign.concat(cls.absent);
+      const stored = new Set(prevApps.map((a) => a && a.invoice_id).filter(Boolean).map(String));
+      const absentAndNew = cls.absent.filter((id) => !stored.has(String(id)));
+      const refused = cls.foreign.concat(absentAndNew);
       if (refused.length) {
         return refuseInvoiceIds(res, refused, 'Nothing was changed.');
       }
