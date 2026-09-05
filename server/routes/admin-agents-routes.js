@@ -3189,7 +3189,7 @@ async function ensureManagedAgent(agentKey, organization) {
 
   const createPayload = {
     model: model,
-    name: 'Project 86 ' + agentKey.toUpperCase() + ' · ' + (organization.name || organization.slug),
+    name: managedAgentName(agentKey, organization),
     description: (organization.description || baseline).slice(0, 200),
     system: composedSystem,
     skills: skills,
@@ -4600,9 +4600,24 @@ function _sha1(s) {
 // byte in the source. Both denote U+0000, so the hash domain is unchanged
 // from the sweep's — but a raw NUL made ripgrep abandon this file mid-scan
 // (see test/no-nul-bytes.test.js).
-function _syncFingerprints(composedSystem, model, toolList) {
+// The agent's display name on Anthropic's side. ONE definition — the create
+// path and the drift sweep must agree, or the sweep chases a difference it
+// can never resolve.
+function managedAgentName(agentKey, organization) {
+  return 'Project 86 ' + String(agentKey).toUpperCase() + ' · ' +
+    ((organization && (organization.name || organization.slug)) || '');
+}
+
+// `name` is part of the SYSTEM fingerprint. It was left out, and because the
+// sweep only ever pushed { version, system, model }, an org rename could
+// neither trigger a sync nor be sent by one — so the live agents kept the old
+// org name and anthropic-state reported up_to_date:false forever. A drift
+// flag that is permanently false is a smoke detector taped to the ceiling: it
+// can no longer tell you about drift that matters. Folding the name in costs
+// one version bump per rename (rare) and gives the flag its meaning back.
+function _syncFingerprints(composedSystem, model, toolList, agentName) {
   return {
-    sysHash: _sha1(String(composedSystem || '') + '\0' + (model || '')),
+    sysHash: _sha1(String(composedSystem || '') + '\0' + (model || '') + '\0' + (agentName || '')),
     toolsHash: _sha1(JSON.stringify(toolList || []))
   };
 }
@@ -4680,7 +4695,8 @@ async function resyncDriftedAgents(force) {
         // (see test/no-nul-bytes.test.js), hiding everything past this line from
         // every directory-recursive search. The escape keeps the semantics and
         // gives the file back to grep.
-        const { sysHash, toolsHash } = _syncFingerprints(composed, model, toolList);
+        const agentName = managedAgentName(row.agent_key, org);
+        const { sysHash, toolsHash } = _syncFingerprints(composed, model, toolList, agentName);
 
         // Prior state: the in-process Map first, then the fingerprint
         // PERSISTED on the registry row. The disk fallback is the whole fix —
@@ -4743,7 +4759,9 @@ async function resyncDriftedAgents(force) {
           continue;
         }
         const baseUpdate = Object.assign(
-          { version: remote.version, system: composed },
+          // name included: without it a rename could never land, however many
+          // times the sweep ran.
+          { version: remote.version, system: composed, name: agentName },
           model ? { model } : {}
         );
         // Defense-in-depth: a single malformed tool entry must never block the
@@ -5031,7 +5049,7 @@ router.post('/managed/:agentKey/sync',
     const toolList = [...builtinTools, ...customTools];
     const toolCount = customTools.length + builtinTools.length;
     const mcpServers = await collectMcpServersFor(req.organization);
-    const name = 'Project 86 ' + agentKey.toUpperCase() + ' · ' + (req.organization.name || req.organization.slug);
+    const name = managedAgentName(agentKey, req.organization);
     const description = (req.organization.description || baseline).slice(0, 200);
     // Compose: platform baseline + org.identity_body + SECTION_DEFAULTS.
     // Per-org content is cached on the Anthropic agent.
@@ -5104,7 +5122,7 @@ router.post('/managed/:agentKey/sync',
     // Without it the background sweep sees "no prior state" on the next boot
     // and re-pushes an identical config — a second agent version, and a full
     // cache_creation on the whole prefix for every session, for nothing.
-    const _fpOne = _syncFingerprints(composedSystem, model, toolList);
+    const _fpOne = _syncFingerprints(composedSystem, model, toolList, name);
     const _syncedAtOne = Date.now();
     _lastSyncState.set(agentId, {
       sysHash: _fpOne.sysHash, toolsHash: _fpOne.toolsHash, toolsOk: true,
@@ -5265,7 +5283,7 @@ router.post('/managed/sync-all',
         const builtinTools = builtinToolsetFor(agentKey);
         const toolList = [...builtinTools, ...customTools];
         const toolCount = customTools.length + builtinTools.length;
-        const name = 'Project 86 ' + agentKey.toUpperCase() + ' · ' + (org.name || org.slug);
+        const name = managedAgentName(agentKey, org);
         const description = (org.description || baseline).slice(0, 200);
         const composedSystem = (aiInternals && aiInternals.composedAgentSystem)
           ? await aiInternals.composedAgentSystem(agentKey, baseline, org)
@@ -5326,7 +5344,7 @@ router.post('/managed/sync-all',
         // computed, and the sweep saw drift after every manual sync. The
         // comment claiming this prevented a double-push described something
         // the code did not do.
-        const _fp = _syncFingerprints(composedSystem, model, toolList);
+        const _fp = _syncFingerprints(composedSystem, model, toolList, name);
         const _syncedAt = Date.now();
         _lastSyncState.set(agentId, { sysHash: _fp.sysHash, toolsHash: _fp.toolsHash, toolsOk: true, hash: _fp.sysHash, syncedAt: _syncedAt, size: composedSystem.length });
         await _persistSyncFingerprint(agentKey, row.organization_id, _fp, true, composedSystem.length, _syncedAt);
