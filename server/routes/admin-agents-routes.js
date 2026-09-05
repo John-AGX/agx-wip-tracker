@@ -18,6 +18,9 @@
 // hints in the UI, NOT for billing. Update when models change.
 
 const express = require('express');
+// The rollback switch for the tenant repairs on this router. See
+// server/tenant-scope-flag.js: two values, default enforce, loud on every use.
+const TENANT_SCOPE = require('../tenant-scope-flag');
 const { pool } = require('../db');
 const { requireAuth, requireCapability, requireSystemAdmin, hasCapability } = require('../auth');
 // The resync push/skip decision — extracted so the boot case is testable
@@ -191,7 +194,11 @@ router.get('/metrics',
     // already-scoped statements in this handler failed to spread to the other
     // six. The position is a parameter because the statements do not agree on
     // one: four bind ENTITY_TYPES_FOR_86 as $1, two bind nothing at all.
-    const orgArm = (n) => `(organization_id = $${n} OR organization_id IS NULL)`;
+    // Routed through the rollback switch. With P86_TENANT_SCOPE unset (the
+    // default, and the only value CI runs) this returns the SAME STRING it
+    // returned before the switch existed — see test/tenant-scope-flag.test.js,
+    // which asserts that byte-for-byte.
+    const orgArm = (n) => TENANT_SCOPE.orgArm(n, 'admin-agents:/metrics');
 
     const aggSql = `
       SELECT
@@ -3379,11 +3386,19 @@ async function registryScope(req, res) {
     return null;
   }
   if (!org) {
+    // THE ONE LOCKOUT VECTOR THE NO-OP PROOF DOES NOT COVER. Before the
+    // repair this route had no WHERE clause and served an org-less
+    // ROLES_MANAGE holder every row; now it refuses them. `legacy` restores
+    // the pre-repair platform-wide arm rather than the 403.
+    if (TENANT_SCOPE.isLegacy()) {
+      TENANT_SCOPE.announce('admin-agents:registryScope:no-org');
+      return { where: () => '', params: [] };
+    }
     res.status(403).json({ error: 'User is not associated with an organization. Contact an admin.' });
     return null;
   }
   return {
-    where: (col) => `WHERE (${col} = $1 OR ${col} IS NULL)`,
+    where: (col) => `WHERE ` + TENANT_SCOPE.orgArm(1, 'admin-agents:registryScope', col),
     params: [org.id]
   };
 }
