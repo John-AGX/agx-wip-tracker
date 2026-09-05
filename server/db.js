@@ -4268,6 +4268,62 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_task_shares_task ON task_shares(task_id, created_at DESC);
 
+    -- Report share links — publish a FINISHED project report to a client,
+    -- owner or insurer who has no account. Same bearer-token shape as
+    -- task_shares, with three deliberate differences:
+    --
+    --  1. token_hash, not token. task_shares stores the raw token, so any
+    --     read of that table (or a leaked backup) hands over every live link.
+    --     The raw token exists only in the mint response and the email.
+    --  2. document JSONB — the published SNAPSHOT. A share is a frozen
+    --     artifact, not a live read: later edits do not leak to an already-
+    --     sent link, a photo deleted from the project does not blank out a
+    --     page the client already has, and the guest read is one indexed row
+    --     with no id-joins (so it cannot reach across tenants the way a
+    --     live hydrate could). Re-sharing is an explicit "update the shared
+    --     copy" action, which is the honest behaviour for a document you
+    --     told someone was final.
+    --  3. scope + hide_financials — two ORTHOGONAL gates. Conflating "may
+    --     comment" with "may see money" is how one of them ends up wrong.
+    --
+    -- See server/services/report-shares.js for the rules and
+    -- server/routes/report-share-routes.js for the doors.
+    CREATE TABLE IF NOT EXISTS report_shares (
+      id                TEXT PRIMARY KEY,
+      organization_id   INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      report_id         TEXT NOT NULL REFERENCES job_reports(id) ON DELETE CASCADE,
+      entity_type       TEXT NOT NULL,
+      entity_id         TEXT NOT NULL,
+      token_hash        TEXT NOT NULL UNIQUE,
+      scope             TEXT NOT NULL DEFAULT 'view',
+      hide_financials   BOOLEAN NOT NULL DEFAULT TRUE,
+      document          JSONB NOT NULL,
+      recipient_email   TEXT,
+      recipient_name    TEXT,
+      expires_at        TIMESTAMPTZ NOT NULL,
+      opened_at         TIMESTAMPTZ,
+      revoked_at        TIMESTAMPTZ,
+      last_used_at      TIMESTAMPTZ,
+      view_count        INTEGER NOT NULL DEFAULT 0,
+      created_by        INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    -- Scope is CHECKed in the database as well as normalized in the service.
+    -- The service narrows an unknown value to view; this stops one being
+    -- written at all, so a bad row cannot sit there waiting to be widened by
+    -- a later build that adds the scope for real.
+    DO $report_shares_scope_chk$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'report_shares_scope_chk') THEN
+        ALTER TABLE report_shares ADD CONSTRAINT report_shares_scope_chk
+          CHECK (scope IN ('view','comment'));
+      END IF;
+    END $report_shares_scope_chk$;
+    CREATE INDEX IF NOT EXISTS idx_report_shares_report ON report_shares(report_id, created_at DESC);
+    -- The guest lookup: one equality on the hash. UNIQUE already indexes it,
+    -- but naming it here documents that the public read path has exactly one
+    -- access pattern.
+    CREATE INDEX IF NOT EXISTS idx_report_shares_org ON report_shares(organization_id, created_at DESC);
+
     -- ───────────────────────────────────────────────────────────────
     -- My Notes — a personal, PRIVATE scratchpad (Phase 1 / Deliverable
     -- 3). Unlike tasks (org-shared, assignee-driven), a note belongs to

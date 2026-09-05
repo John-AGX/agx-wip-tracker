@@ -61,7 +61,8 @@ const DIRECT = [
   'managed_agent_registry', 'markets', 'oauth_tokens', 'org_folder_templates',
   'org_mcp_servers', 'org_memory', 'org_skill_packs', 'org_tags',
   'payload_templates', 'payloads', 'plan_versions', 'plans', 'projects',
-  'receipt_ocr_feedback', 'receipts', 'reminders', 'reports', 'staff_agents',
+  'receipt_ocr_feedback', 'receipts', 'reminders', 'report_shares', 'reports',
+  'staff_agents',
   'subs', 'task_shares', 'tasks', 'usage_counters', 'user_notes', 'users',
 ];
 
