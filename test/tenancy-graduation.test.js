@@ -34,7 +34,15 @@ const path = require('path');
 const DOC = path.join(__dirname, '..', 'docs', 'TENANCY-GRADUATION.md');
 const SERVER = path.join(__dirname, '..', 'server');
 
-const doc = fs.readFileSync(DOC, 'utf8');
+// LINE ENDINGS NORMALIZED AT READ TIME, and this is not cosmetic. This repo
+// carries a mix — server/routes/ai-routes.js is CRLF, server/services/
+// session-search.js is LF — and git converts on checkout, so the bytes on disk
+// depend on how the file arrived rather than on how it was written. The first
+// version of this file asserted a substring spanning a line break, passed
+// locally, and failed the moment a rebase rewrote the working tree. An
+// assertion whose result depends on the checkout is not an assertion about the
+// document.
+const doc = fs.readFileSync(DOC, 'utf8').replace(/\r\n/g, '\n');
 
 function read(p) { return fs.readFileSync(path.join(SERVER, p), 'utf8'); }
 
