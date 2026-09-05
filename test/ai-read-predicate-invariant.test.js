@@ -89,7 +89,47 @@ const REPO = path.resolve(__dirname, '..');
 //
 // The list is asserted CLOSED below: a new module that hosts agent tool
 // executors has to be added here, and the test says so by name.
-const FILES = ['server/routes/ai-routes.js'];
+//
+// ── WHY THE LIST GREW, AND EXACTLY WHERE THE LINE IS NOW ──────────────────
+// The first version scanned ONE file, and its closure test looked for modules
+// in server/routes/ that DEFINE AN EXECUTOR. `server/services/session-search.js`
+// is neither in server/routes/ nor an executor — it is a service a tool CALLS —
+// so the three statements in it that carried `WHERE s.user_id = $1` and no
+// tenant predicate were STRUCTURALLY INVISIBLE to this scan. One of them was
+// then executed cross-tenant and returned the verbatim body of an ai_messages
+// row belonging to another affiliate.
+//
+// The prior pass considered widening to ALL human REST doors and declined,
+// because that is ~100 rewrites or ~100 unread allowlist entries on a live
+// pilot, and an unread entry is what turns a file like this into decoration.
+// That judgement stands. The line is drawn at a smaller, sharper set:
+//
+//   AGENT-REACHABLE SQL THAT CARRIES THE DEFECT SHAPE — a module required by
+//   ai-routes.js that contains a SELECT on a tenant table scoped by an
+//   AUTHORSHIP column (user_id / uploaded_by / owner_id / created_by /
+//   assignee_user_id).
+//
+// That is where the model narrates rows into a chat window, and it is the
+// exact premise this whole wave is about ("a user id implies a tenant" — it
+// does not, because org membership is mutable). Computed mechanically by the
+// closure test below rather than maintained by hand, so the next service to
+// grow such a statement is added by a FAILING TEST and not by memory.
+//
+// WHAT REMAINS OUTSIDE, said plainly:
+//   • every human REST door in server/routes/* other than ai-routes.js — held
+//     by requireOrgId plus their own per-route tests;
+//   • the other ~15 SQL-bearing modules ai-routes.js requires (assemblies,
+//     job-financials, deal-memory, payload-dispatcher, the money services and
+//     friends, ~200 statements). They are in scope for the WRITE invariant
+//     where they write, and they are outside this READ scan because none of
+//     them contains an authorship-scoped tenant SELECT — which is checkable,
+//     and is checked, rather than assumed;
+//   • server/*-cron.js and the workers.
+const FILES = [
+  'server/routes/ai-routes.js',
+  'server/services/outlook-mail.js',
+  'server/services/session-search.js',
+];
 
 // ── THE REVIEWED ALLOWLIST ────────────────────────────────────────────────
 // Key: '<file>::<handler>::<tables>'. Value: { n, why }.
@@ -114,14 +154,15 @@ const EXEMPT = {
     { n: 1, why: 'WHERE user_id = $1 — the caller\'s own history, re-seeded into their own recovered session.' },
   'server/routes/ai-routes.js::case self_diagnose::ai_messages':
     { n: 1, why: 'WHERE user_id = $1 AND entity_type = \'86\'. The tool introspects the CALLER\'S own last hour; ctx.userId is required and the handler refuses without it.' },
-  'server/routes/ai-routes.js::case search_my_kb::attachments':
-    { n: 1, why: 'WHERE uploaded_by = $1 — the personal-KB bucket is BY DEFINITION the caller\'s own uploads.' },
-  'server/routes/ai-routes.js::fn buildTodayDigest::tasks':
-    { n: 1, why: 'WHERE assignee_user_id = $1 AND scope = \'org\' — tasks assigned to the CALLER. A task assigned to you is in your org by construction.' },
-  'server/routes/ai-routes.js::fn buildTurnContext::payloads':
-    { n: 2, why: 'WHERE user_id = $1 — the caller\'s own emitted payload files, surfaced back into their own turn.' },
-  'server/routes/ai-routes.js::fn buildTurnContext::agent_jobs':
-    { n: 1, why: 'WHERE user_id = $1 — the caller\'s own background jobs.' },
+  // ── FOUR ENTRIES WERE REMOVED FROM HERE, NOT REWRITTEN ────────────────
+  // search_my_kb::attachments, buildTodayDigest::tasks and
+  // buildTurnContext::payloads / ::agent_jobs each carried a reason of the form
+  // "keyed on the caller's own user id, so there is no tenant to cross". That
+  // is the false premise R4 below is named after — users.organization_id is
+  // mutable — and search_my_kb's version of it was executed and leaked. All
+  // four statements now carry a tenant predicate, so they need no exemption and
+  // have none. An exemption whose reason has been disproved is deleted with the
+  // defect, never edited to say something else.
   'server/routes/ai-routes.js::fn buildTurnContext::users':
     { n: 1, why: 'WHERE u.id = $1 — the CALLER\'s own identity row, so the model knows who it is assisting. Its only organization_id is on a LEFT JOIN to organizations for the org NAME, which is why it appears here rather than as LITERAL: an outer join\'s ON clause constrains nothing. Correctly classified, correctly exempt.' },
   'server/routes/ai-routes.js::case read_email_inbox::inbound_emails':
@@ -335,9 +376,16 @@ function analyse(file) {
           orgQualifiers.every((q) => userAliases.indexOf(q) !== -1)) ownerAxis = true;
     }
 
+    // R4 — is this statement scoped by an AUTHORSHIP column? Recorded on every
+    // row rather than only on the offenders, so the detector itself can be
+    // asserted to still see the shape.
+    const ownerHit = body.match(
+      new RegExp('\\b(?:[a-z_]\\w*\\.)?(' + OWNER_COLUMNS + '|assignee_user_id)\\s*=\\s*\\$\\d', 'i'));
+    const ownerScoped = ownerHit ? ownerHit[1].toLowerCase() : null;
+
     out.push({
       file, line: c.line, site: site.name, tenant: tenant.sort().join(','),
-      status, ownerAxis,
+      status, ownerAxis, ownerScoped,
       key: file + '::' + site.name + '::' + tenant.sort().join(','),
       head: c.sql.replace(/\s+/g, ' ').trim().slice(0, 100),
     });
@@ -413,6 +461,48 @@ describe('R1 — every tenant read in the agent surface defends itself', () => {
   });
 });
 
+// ── R4 — A USER ID IS NOT A TENANT ────────────────────────────────────────
+// R1 asks whether a statement carries a tenant predicate at all. R4 asks the
+// question that actually let two doors stay open through three commits: does
+// the statement scope by an AUTHORSHIP column and then treat that as the
+// boundary?
+//
+// Both open doors rested on one premise, written down in both places as a
+// comment asserting a security property:
+//
+//   "Cross-tenant access is blocked implicitly because uploads outside the
+//    user's org would never have uploaded_by set to them."
+//
+// `users.organization_id` is MUTABLE. `PUT /api/auth/users/:id` writes it, and
+// moving a person between organisations is a documented one-click admin action
+// (services/user-org-scope.js calls it "the adoption door"). A user who moves
+// keeps `uploaded_by` / `user_id` on every row they ever authored for their
+// former tenant. The premise is false in exactly the case multi-tenancy exists
+// for, and R1 could not see it because R1's allowlist is where the premise was
+// recorded as a reason.
+//
+// So the rule is stated on the STATEMENT CLASS rather than left to the next
+// author to remember: a SELECT on a tenant table whose only scoping is an
+// authorship column FAILS unless it is on the allowlist above with a reason
+// that does not depend on the false premise.
+describe('R4 — an authorship column is not a tenant boundary', () => {
+  test('no authorship-scoped tenant read is unpredicated outside the allowlist', () => {
+    const bad = ALL.filter((r) => r.ownerScoped && (r.status === 'NONE' || r.status === 'UNCHECKED'));
+    const offenders = bad
+      .filter((r) => !EXEMPT[r.key])
+      .map((r) => r.file + ':' + r.line + ' <' + r.site + '> scoped by ' + r.ownerScoped +
+        ' on [' + r.tenant + '] — ' + r.head);
+    expect(offenders).toEqual([]);
+  });
+
+  test('the scan can still SEE the shape it is asserting about', () => {
+    // R0's lesson, applied to R4: a rule that matches nothing passes forever.
+    // The agent surface has many caller-scoped reads; if this drops to zero the
+    // detector broke, not the code.
+    expect(ALL.filter((r) => r.ownerScoped).length).toBeGreaterThan(8);
+  });
+});
+
 // ── R2 — the axis ─────────────────────────────────────────────────────────
 describe('R2 — the tenant is the ROW\'s org, never the owner\'s', () => {
   test('no tenant read reaches its org through a users row joined on authorship', () => {
@@ -436,6 +526,43 @@ describe('the scanned surface is closed', () => {
         hosts.push('server/routes/' + f);
       }
     }
-    expect(hosts.sort()).toEqual(FILES.slice().sort());
+    expect(hosts.every((h) => FILES.indexOf(h) !== -1)).toBe(true);
+  });
+
+  // THE HOLE THAT LET #3 THROUGH. The test above finds files that DEFINE an
+  // executor. session-search.js is a file an executor CALLS, so no shape it
+  // looks for existed there and its three unpredicated statements could never
+  // have been reported. This computes the other half of the surface the same
+  // way — by the shape, not by the list — and it is deliberately narrow: a
+  // module ai-routes.js requires, that runs a SELECT on a tenant table scoped
+  // by an AUTHORSHIP column. That is the statement class this whole wave is
+  // about, and it is where the model reads rows out loud.
+  test('every agent-reachable module hosting an authorship-scoped tenant SELECT is scanned', () => {
+    const src = fs.readFileSync(path.join(REPO, 'server', 'routes', 'ai-routes.js'), 'utf8');
+    const required = new Set();
+    const re = /require\((['"])\.\.\/(services\/[a-zA-Z0-9_\-/]+|[a-zA-Z0-9_\-]+)\1\)/g;
+    let m;
+    while ((m = re.exec(src))) required.add('server/' + m[2] + '.js');
+
+    const ownerScoped = new RegExp(
+      '\\b(?:[a-z_]\\w*\\.)?(?:' + OWNER_COLUMNS + '|assignee_user_id)\\s*=\\s*\\$\\d', 'i');
+    const hosts = [];
+    for (const rel of [...required].sort()) {
+      const p = path.join(REPO, rel);
+      if (rel === 'server/db.js' || !fs.existsSync(p)) continue;
+      const text = fs.readFileSync(p, 'utf8');
+      let calls = [];
+      try { calls = extractQueryCalls(text); } catch (e) { continue; }
+      const hit = calls.some((c) => {
+        const sql = c.sql || '';
+        if (!/\bSELECT\b/i.test(sql) || !ownerScoped.test(sql)) return false;
+        const tables = [...sql.matchAll(/\b(?:FROM|JOIN)\s+([a-z_][a-z0-9_]*)/gi)].map((x) => x[1].toLowerCase());
+        return tables.some((t) => ['direct', 'parent', 'mixed_shared'].indexOf(classify(t)) !== -1);
+      });
+      if (hit) hosts.push(rel);
+    }
+    // Every such module must be in FILES. Reported as a list so a new one
+    // names itself in the failure.
+    expect(hosts.filter((h) => FILES.indexOf(h) === -1)).toEqual([]);
   });
 });

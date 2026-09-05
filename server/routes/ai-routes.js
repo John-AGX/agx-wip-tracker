@@ -1153,7 +1153,7 @@ const JOB_TOOLS = [
   {
     name: 'search_my_sessions',
     description:
-      'Search the current user\'s prior chat sessions for relevant past conversations. Use when the user references something you discussed previously ("you mentioned this last week", "what did we decide about Job RV2018?") or when you think prior context would help answer the current question. Searches labels, summaries, and message bodies; returns up to 10 matches with snippets. Auto-tier (no approval). Sessions are per-user — you only see the current user\'s history.',
+      'Search the current user\'s prior chat sessions for relevant past conversations. Use when the user references something you discussed previously ("you mentioned this last week", "what did we decide about Job RV2018?") or when you think prior context would help answer the current question. Searches labels, summaries, and message bodies; returns up to 10 matches with snippets. Auto-tier (no approval). Sessions are per-user AND per-organisation — you only see the current user\'s history inside the organisation they belong to now.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -1167,7 +1167,7 @@ const JOB_TOOLS = [
   {
     name: 'search_my_kb',
     description:
-      'Search every file the current user has uploaded — across all buckets (My Files, plus anything they attached to a job, estimate, lead, client, or sub). Returns up to 20 matches with filename, where the file lives (entity_type + id), folder, mime, size, and a snippet of extracted text. Use when the user references something they uploaded ("the spreadsheet I uploaded last week", "the proposal I just exported", "the photo I attached to the Latitude job"). Auto-tier (no approval). Scope: uploaded_by = ctx.userId — never another user\'s files. Call read_attachment_text({attachment_id}) to fetch the full body.',
+      'Search every file the current user has uploaded — across all buckets (My Files, plus anything they attached to a job, estimate, lead, client, or sub). Returns up to 20 matches with filename, where the file lives (entity_type + id), folder, mime, size, and a snippet of extracted text. Use when the user references something they uploaded ("the spreadsheet I uploaded last week", "the proposal I just exported", "the photo I attached to the Latitude job"). Auto-tier (no approval). Scope: files the current user uploaded THAT BELONG TO THEIR ORGANISATION — never another user\'s files, and never a file whose job / estimate / lead / client / sub belongs to a different organisation. Call read_attachment_text({attachment_id}) to fetch the full body.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -2655,16 +2655,28 @@ const STAFF_HINT_BY_SURFACE = {};
 // today). Fail-safe by design: ANY error returns '' — never breaks the turn. The
 // prompt guidance tells the model to use it with restraint (surface it when it bears
 // on the ask; do not recite the list unprompted).
-async function buildTodayDigest(userId) {
+//
+// THE ORG PREDICATE IS NOT DECORATION HERE. This read used to say
+// `assignee_user_id = $1 … AND scope = 'org'` and nothing else, and the
+// allowlist entry excusing it read "a task assigned to you is in your org by
+// construction". That is the same false premise search_my_kb was built on:
+// `users.organization_id` is MUTABLE, so a person moved from org B to org A
+// stays the assignee on org B's tasks, and this block — which fires on the
+// FIRST TURN OF EVERY FRESH SESSION, unbounded by any time window — would
+// recite their former tenant's task titles into their new tenant's chat.
+// `scope = 'org'` is the tell: the statement already knew these rows belong to
+// an organisation, and then did not ask which one.
+async function buildTodayDigest(userId, orgId) {
   try {
     if (!userId) return '';
     const r = await pool.query(
       "SELECT title, priority, (due_date < CURRENT_DATE) AS overdue " +
       "  FROM tasks " +
       " WHERE assignee_user_id = $1 AND archived_at IS NULL AND status <> 'done' AND scope = 'org' " +
+      "   AND (organization_id = $2 OR organization_id IS NULL) " +
       "   AND due_date IS NOT NULL AND due_date <= CURRENT_DATE " +
       " ORDER BY due_date ASC LIMIT 10",
-      [userId]
+      [userId, orgId == null ? null : orgId]
     );
     if (!r.rows.length) return '';
     const label = function (t) { return String(t.title || '(untitled)') + (t.priority && t.priority !== 'normal' ? ' [' + t.priority + ']' : ''); };
@@ -2862,15 +2874,24 @@ async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, 
   // want me to draft a follow-up?" without the user having to re-prompt.
   if (userId) {
     try {
+      // The three blocks in this section are keyed on the caller's user id and
+      // now also on their tenant. A user id is not a tenant — users.organization_id
+      // is mutable — so without the second predicate a person who changed orgs
+      // inside the window had their FORMER tenant's payload titles, apply
+      // summaries and failure details pushed into their NEW tenant's turn,
+      // unprompted. The window (10 minutes / 1 hour / 24 hours) narrows the
+      // exposure; it does not close it, and a narrow leak into a model's
+      // context arrives already explained.
       const recent = await pool.query(
         `SELECT id, filename, title, summary, applied_at, apply_summary, targets
            FROM payloads
           WHERE user_id = $1
+            AND (organization_id = $2 OR organization_id IS NULL)
             AND status = 'applied'
             AND applied_at > NOW() - INTERVAL '10 minutes'
           ORDER BY applied_at DESC
           LIMIT 5`,
-        [userId]
+        [userId, organization && organization.id != null ? organization.id : null]
       );
       if (recent.rows.length) {
         const lines = ['<recent_applied_payloads>'];
@@ -2903,11 +2924,12 @@ async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, 
         `SELECT id, status, title, result, error, pause_question, updated_at
            FROM agent_jobs
           WHERE user_id = $1
+            AND (organization_id = $2 OR organization_id IS NULL)
             AND status IN ('done','failed','needs_input')
             AND updated_at > NOW() - INTERVAL '24 hours'
           ORDER BY updated_at DESC
           LIMIT 4`,
-        [userId]
+        [userId, organization && organization.id != null ? organization.id : null]
       );
       if (bg.rows.length) {
         const lines = ['<recent_background_tasks>'];
@@ -2943,12 +2965,13 @@ async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, 
         `SELECT id, filename, title, summary, apply_error, apply_error_detail, created_at
            FROM payloads
           WHERE user_id = $1
+            AND (organization_id = $2 OR organization_id IS NULL)
             AND status = 'failed'
             AND apply_error_detail IS NOT NULL
             AND created_at > NOW() - INTERVAL '1 hour'
           ORDER BY created_at DESC
           LIMIT 3`,
-        [userId]
+        [userId, organization && organization.id != null ? organization.id : null]
       );
       if (failures.rows.length) {
         const lines = ['<recent_failed_payloads>'];
@@ -8761,11 +8784,19 @@ function ctxOrgId(ctx) {
 const ORGLESS_ALLOWED_TOOLS = new Set([
   // Not tenant data at all.
   'web_search', 'navigate',
-  // The CALLER'S OWN rows, keyed on their user id, never on an org:
-  // self_diagnose reads ai_messages WHERE user_id = ctx.userId, and
-  // search_my_kb reads attachments WHERE uploaded_by = ctx.userId. An org-less
-  // caller seeing their own uploads is not a tenant leak, and refusing them
-  // would break the one surface such an account legitimately has.
+  // The CALLER'S OWN rows. self_diagnose reads ai_messages WHERE
+  // user_id = ctx.userId; search_my_kb reads attachments WHERE
+  // uploaded_by = ctx.userId AND the row's tenant is the caller's.
+  //
+  // THE SECOND HALF OF THAT SENTENCE IS NEW, AND IT IS THE POINT. This entry
+  // used to rest on "uploaded_by is the caller, therefore the row is theirs,
+  // therefore there is no tenant to leak". `users.organization_id` is mutable,
+  // so a user who moves orgs keeps uploaded_by on their former tenant's files
+  // and the middle step is false. search_my_kb now carries the parent-anchored
+  // predicate from services/attachment-org-scope.js, and with no org resolved
+  // every `= $n` arm of it is NULL: an org-less caller sees their own
+  // un-stamped rows and nothing that names a tenant. That is what makes this
+  // entry safe — being keyed on a user id never was.
   'self_diagnose', 'search_my_kb',
 ]);
 
@@ -9454,8 +9485,12 @@ async function execStaffTool(name, input, ctx) {
     case 'search_my_sessions': {
       // Cross-session memory: lets 86 reference work from prior chat
       // threads when the user invokes something he discussed before.
-      // Scoped strictly to ctx.userId — the agent never sees another
-      // user's history. Matches labels + summaries + message bodies
+      // Scoped to ctx.userId AND to the caller's tenant — the agent never sees
+      // another user's history, and never a thread belonging to an
+      // organisation the caller is not in NOW. Those are two different claims:
+      // the second one used to be missing, because `user_id` was being read as
+      // proof of tenancy and users.organization_id is mutable. See the header
+      // block in services/session-search.js. Matches labels + summaries + message bodies
       // and returns short snippets so 86 can decide whether to follow
       // up with a more specific question or pull the user back into
       // the original session.
@@ -9503,30 +9538,92 @@ async function execStaffTool(name, input, ctx) {
     }
 
     case 'search_my_kb': {
-      // Personal knowledge base = every attachment the caller has
-      // uploaded, across every bucket (user / job / estimate / lead /
-      // client / sub). Matches against filename + extracted_text.
-      // Scoped by uploaded_by = ctx.userId. Cross-tenant access is
-      // blocked implicitly because uploads outside the user's org
-      // would never have uploaded_by set to them.
+      // Personal knowledge base = every attachment the caller has uploaded,
+      // across every bucket (user / job / estimate / lead / client / sub).
+      // Matches against filename + extracted_text.
+      //
+      // ── A USER ID IS NOT A TENANT ─────────────────────────────────────
+      // What stood here was a claim, and the claim was false:
+      //
+      //   "Scoped by uploaded_by = ctx.userId. Cross-tenant access is blocked
+      //    implicitly because uploads outside the user's org would never have
+      //    uploaded_by set to them."
+      //
+      // `users.organization_id` is MUTABLE — PUT /api/auth/users/:id writes it
+      // and is the documented one-click way to move somebody between orgs — so
+      // a user who moves keeps `uploaded_by` on every file they ever uploaded
+      // for their PREVIOUS tenant. Executed, an org-A caller got two org-B
+      // attachments back: filename, folder, parent entity id, and a 180-char
+      // snippet reading "subcontract price $987654 … markup 42 percent". The
+      // wrong comment is why nobody looked: a comment that asserts a security
+      // property is load-bearing, and this one was holding up nothing.
+      //
+      // THE ANCHOR IS THE PARENT, exactly as services/attachment-org-scope.js
+      // states it and as search_org_kb below now expresses it: parent entity
+      // first (NOT NULL on every row, written by every insert path), the row's
+      // own stamp next, the uploader last, and a row where NOTHING names a
+      // tenant stays visible — that is the same `OR organization_id IS NULL`
+      // tolerance every read in this repo carries, and here it is what keeps a
+      // user's own legacy rows reachable by them.
+      //
+      // STILL PERSONAL. `uploaded_by = $1` is unchanged and does all the work
+      // it ever did; the tenant predicate is added BESIDE it, not instead of
+      // it. This does not become org-wide search — that is search_org_kb.
+      //
+      // ORG-LESS CALLER. search_my_kb stays on ORGLESS_ALLOWED_TOOLS, and with
+      // $4/$5 NULL every `= $n` arm is NULL (false) while the IS NULL arms
+      // still match: such a caller sees their own un-stamped rows and NOTHING
+      // that names a tenant. Nothing rather than everything.
       const userId = ctx && ctx.userId;
       if (!userId) return 'No user context — cannot search personal KB.';
       const q = String((input && input.query) || '').trim();
       if (!q) return 'query is required.';
       const limit = Math.min(50, Math.max(1, parseInt((input && input.limit), 10) || 20));
       const pattern = '%' + q.replace(/[\\%_]/g, m => '\\' + m) + '%';
+      // The caller's tenant, read off users the same way search_org_kb does.
+      // ctx may not carry it; the JWT's copy is not trusted for a boundary.
+      const myOrgRes = await pool.query(`SELECT organization_id FROM users WHERE id = $1`, [userId]);
+      const myOrgId = (myOrgRes.rows[0] && myOrgRes.rows[0].organization_id) != null
+        ? myOrgRes.rows[0].organization_id : null;
+      // TWO PARAMETERS FOR ONE VALUE, ON PURPOSE. `attachments.entity_id` is
+      // TEXT and `organization_id` is INTEGER, and Postgres resolves an unknown
+      // parameter's type ONCE, from its first use. One parameter compared
+      // against both columns is therefore resolved to whichever side the
+      // planner reaches first, and the other comparison has no operator. Two
+      // explicitly-typed values remove the question instead of betting on it.
+      const orgInt = myOrgId;                                        // integer columns
+      const orgTxt = myOrgId == null ? null : String(myOrgId);       // entity_id (TEXT)
       const r = await pool.query(
-        `SELECT id, filename, mime_type, size_bytes, folder,
-                entity_type, entity_id, created_at,
-                substr(COALESCE(extracted_text, ''), 1, 220) AS snippet,
-                (extracted_text ILIKE $2) AS body_match,
-                (filename ILIKE $2)       AS name_match
-           FROM attachments
-          WHERE uploaded_by = $1
-            AND (filename ILIKE $2 OR extracted_text ILIKE $2)
-          ORDER BY created_at DESC
+        `SELECT a.id, a.filename, a.mime_type, a.size_bytes, a.folder,
+                a.entity_type, a.entity_id, a.uploaded_at,
+                substr(COALESCE(a.extracted_text, ''), 1, 220) AS snippet,
+                (a.extracted_text ILIKE $2) AS body_match,
+                (a.filename ILIKE $2)       AS name_match
+           FROM attachments a
+           LEFT JOIN users u_bucket ON a.entity_type = 'user' AND u_bucket.id::text = a.entity_id
+           LEFT JOIN users u_owner  ON u_owner.id = a.uploaded_by
+           LEFT JOIN jobs      j ON a.entity_type = 'job'      AND j.id = a.entity_id
+           LEFT JOIN estimates e ON a.entity_type = 'estimate' AND e.id = a.entity_id
+           LEFT JOIN leads     l ON a.entity_type = 'lead'     AND l.id = a.entity_id
+           LEFT JOIN clients   c ON a.entity_type = 'client'   AND c.id = a.entity_id
+           LEFT JOIN subs      s ON a.entity_type = 'sub'      AND s.id = a.entity_id
+          WHERE a.uploaded_by = $1
+            AND (a.filename ILIKE $2 OR a.extracted_text ILIKE $2)
+            AND (
+                  (a.entity_type = 'org'  AND a.entity_id = $5)
+               OR (a.entity_type = 'user'
+                   AND (u_bucket.organization_id = $4 OR u_bucket.organization_id IS NULL))
+               OR (a.entity_type NOT IN ('org', 'user')
+                   AND (COALESCE(j.organization_id, e.organization_id, l.organization_id,
+                                 c.organization_id, s.organization_id,
+                                 a.organization_id, u_owner.organization_id) = $4
+                     OR COALESCE(j.organization_id, e.organization_id, l.organization_id,
+                                 c.organization_id, s.organization_id,
+                                 a.organization_id, u_owner.organization_id) IS NULL))
+            )
+          ORDER BY a.uploaded_at DESC
           LIMIT $3`,
-        [String(userId), pattern, limit]
+        [String(userId), pattern, limit, orgInt, orgTxt]
       );
       if (!r.rows.length) return 'No personal-KB files matched "' + q + '".';
       const lines = ['Found ' + r.rows.length + ' file(s) you have uploaded matching "' + q + '":'];
@@ -9568,10 +9665,18 @@ async function execStaffTool(name, input, ctx) {
       if (!orgId) return 'No organization scope — cannot search company KB.';
 
       // entity_type filter per scope.
+      //
+      // TWO PARAMETERS FOR ONE VALUE, ON PURPOSE — see search_my_kb above.
+      // `attachments.entity_id` is TEXT and `organization_id` is INTEGER, and
+      // this statement compares the caller's org against BOTH. A single
+      // parameter is resolved to one type and then has no operator for the
+      // other column; $1 (text) serves entity_id and $4 (integer) serves every
+      // organization_id. This was never noticed because the statement could not
+      // run at all — see the ORDER BY note below.
       let entityTypeWhere = '';
-      const params = [String(orgId), pattern, limit];
+      const params = [String(orgId), pattern, limit, orgId];
       if (scope === 'org_bucket')       entityTypeWhere = `AND a.entity_type = 'org' AND a.entity_id = $1`;
-      else if (scope === 'user_buckets') entityTypeWhere = `AND a.entity_type = 'user' AND u_owner.organization_id = $1`;
+      else if (scope === 'user_buckets') entityTypeWhere = `AND a.entity_type = 'user' AND u_owner.organization_id = $4`;
       else if (scope === 'entity_buckets') entityTypeWhere = `AND a.entity_type IN ('job','estimate','lead','client','sub')`;
       // 'all' (default) keeps everything; org-id filter still applies via joins.
 
@@ -9594,22 +9699,40 @@ async function execStaffTool(name, input, ctx) {
       // The ladder below is services/attachment-org-scope.js's, expressed in
       // one statement: the PARENT ENTITY first (NOT NULL on every row, written
       // by every insert path), the row's own stamp next, the uploader last.
-      // The personal ('user') bucket keeps the uploader arm, because there the
-      // owning user's tenant genuinely IS the file's tenant. A row where
-      // nothing names a tenant stays dropped, which is what the sentence above
-      // already promised.
+      // The personal ('user') bucket resolves through the user whose bucket it
+      // IS — `u_bucket`, joined on entity_id — and not through whoever happened
+      // to upload the file. That is what entityOrgVerdict() does for
+      // entity_type 'user', and the difference is real: an admin uploading into
+      // another person's My Files makes uploader and bucket owner two different
+      // people in two possibly different tenants. A row where nothing names a
+      // tenant stays dropped, which is what the sentence above already promised.
+      //
+      // ── THE COLUMN THIS STATEMENT ORDERED BY DID NOT EXIST ────────────
+      // `attachments` has `uploaded_at` (server/db.js:1239) and has never had
+      // `created_at` — no ALTER anywhere adds it. So this SELECT and its
+      // ORDER BY raised 42703 on every call, which means THE LADDER BELOW HAD
+      // NEVER EXECUTED IN PRODUCTION: it shipped in a4d2cd85 as the fix for a
+      // cross-tenant read and has been throwing ever since. The suite was green
+      // because test/ai-read-tenant-doors.test.js's fixture HAND-DECLARED the
+      // column. test/helpers/db-schema.js now derives fixture schemas from
+      // server/db.js so a column that does not exist cannot be invented by a
+      // test, and test/schema-truth.test.js fails on any statement naming one.
+      // `uploaded_at` is the column that exists and no consumer is affected:
+      // neither tool prints this field, both only order by it.
       const r = await pool.query(
         `SELECT a.id, a.filename, a.mime_type, a.size_bytes, a.folder,
-                a.entity_type, a.entity_id, a.uploaded_by, a.created_at,
+                a.entity_type, a.entity_id, a.uploaded_by, a.uploaded_at,
                 substr(COALESCE(a.extracted_text, ''), 1, 220) AS snippet,
                 (a.extracted_text ILIKE $2) AS body_match,
                 (a.filename ILIKE $2)       AS name_match,
-                u_owner.name AS owner_name,
+                COALESCE(CASE WHEN a.entity_type = 'user' THEN u_bucket.name END,
+                         u_owner.name) AS owner_name,
                 u_owner.organization_id AS owner_org_id,
                 j.id AS job_id_check,
                 e.id AS est_id_check
            FROM attachments a
            LEFT JOIN users u_owner ON u_owner.id = a.uploaded_by
+           LEFT JOIN users u_bucket ON a.entity_type = 'user' AND u_bucket.id::text = a.entity_id
            LEFT JOIN jobs   j ON a.entity_type = 'job'      AND j.id = a.entity_id
            LEFT JOIN estimates e ON a.entity_type = 'estimate' AND e.id = a.entity_id
            LEFT JOIN leads   l ON a.entity_type = 'lead'     AND l.id = a.entity_id
@@ -9619,13 +9742,13 @@ async function execStaffTool(name, input, ctx) {
             ${entityTypeWhere}
             AND (
               (a.entity_type = 'org'  AND a.entity_id = $1)
-              OR (a.entity_type = 'user' AND u_owner.organization_id = $1)
+              OR (a.entity_type = 'user' AND u_bucket.organization_id = $4)
               OR (a.entity_type IN ('job','estimate','lead','client','sub')
                   AND COALESCE(j.organization_id, e.organization_id, l.organization_id,
                                c.organization_id, s.organization_id,
-                               a.organization_id, u_owner.organization_id) = $1)
+                               a.organization_id, u_owner.organization_id) = $4)
             )
-          ORDER BY a.created_at DESC
+          ORDER BY a.uploaded_at DESC
           LIMIT $3`,
         params
       );
@@ -14617,8 +14740,14 @@ async function execProjectInlineTool(name, input, ctx) {
     if (q) { where.push('(co.co_number ILIKE $' + pn + " OR co.data->>'title' ILIKE $" + pn + ')'); params.push('%' + q + '%'); pn++; }
     const limit = Math.max(1, Math.min(100, Number(input && input.limit) || 20));
     const cor = await pool.query(
+      // `jobs` HAS NO job_number COLUMN. The number lives in the `data` blob as
+      // `jobNumber`, which is how bill-routes, invoice-routes, pay-application-
+      // routes and search-routes all read it. `j.job_number` raised 42703, so
+      // read_change_orders — the tool the model uses to answer "what change
+      // orders are on this job" — has been throwing on every call. Same class
+      // as the attachments.created_at defect above, found by the same scan.
       `SELECT co.id, co.co_number, co.status, co.job_id, co.is_locked, co.data, co.approved_at,
-              j.job_number, j.data->>'projectName' AS job_name
+              j.data->>'jobNumber' AS job_number, j.data->>'projectName' AS job_name
          FROM job_change_orders co
          JOIN jobs j ON j.id = co.job_id
         WHERE ${where.join(' AND ')}
@@ -15531,7 +15660,7 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
     // before initialization"). First-turn only; fail-safe ('' on any error).
     if (session._freshlyCreated) {
       try {
-        const digest = await buildTodayDigest(req.user.id);
+        const digest = await buildTodayDigest(req.user.id, req.organization && req.organization.id);
         if (digest) turnContextText = turnContextText ? (digest + '\n\n' + turnContextText) : digest;
       } catch (_) { /* never blocks the chat */ }
     }

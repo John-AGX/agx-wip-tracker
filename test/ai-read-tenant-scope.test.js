@@ -98,7 +98,7 @@ const SCHEMA = `
   CREATE TABLE qb_cost_lines (
     id TEXT PRIMARY KEY, organization_id INTEGER, job_id TEXT, amount REAL DEFAULT 0,
     linked_node_id TEXT, report_date TEXT, account TEXT, account_type TEXT,
-    bucket TEXT, vendor TEXT, memo TEXT, source TEXT
+    bucket TEXT, vendor TEXT, memo TEXT, source_file TEXT
   );
   CREATE TABLE ai_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

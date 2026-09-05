@@ -107,18 +107,23 @@ const SCHEMA = `
     data TEXT NOT NULL, is_locked INTEGER DEFAULT 0,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP
   );
+  -- jobs has NO job_number column. The number lives in the data blob as
+  -- 'jobNumber' and every route reads it as data->>'jobNumber'. Declaring it
+  -- here made read_change_orders' \`j.job_number\` — a 42703 in production —
+  -- look like a working statement. See test/schema-truth.test.js.
   CREATE TABLE jobs (
-    id TEXT PRIMARY KEY, owner_id INTEGER, organization_id INTEGER, data TEXT,
-    job_number TEXT
+    id TEXT PRIMARY KEY, owner_id INTEGER, organization_id INTEGER, data TEXT
   );
+  -- node_graphs is keyed on job_id; it has no id of its own.
   CREATE TABLE node_graphs (
-    id TEXT PRIMARY KEY, organization_id INTEGER, job_id TEXT, data TEXT
+    organization_id INTEGER, job_id TEXT, data TEXT
   );
+  -- qb_cost_lines has source_file, not source.
   CREATE TABLE qb_cost_lines (
     id TEXT PRIMARY KEY, organization_id INTEGER, job_id TEXT, amount REAL DEFAULT 0,
     linked_node_id TEXT, report_date TEXT, txn_date TEXT, num TEXT,
     account TEXT, account_type TEXT,
-    txn_type TEXT, klass TEXT, bucket TEXT, vendor TEXT, memo TEXT, source TEXT
+    txn_type TEXT, klass TEXT, bucket TEXT, vendor TEXT, memo TEXT, source_file TEXT
   );
   CREATE TABLE schedule_entries (
     id TEXT PRIMARY KEY, organization_id INTEGER, job_id TEXT, start_date TEXT,
@@ -131,8 +136,12 @@ const SCHEMA = `
     size_bytes INTEGER, extracted_text TEXT, web_key TEXT, anthropic_file_id TEXT,
     uploaded_by INTEGER, folder TEXT, caption TEXT, tags TEXT,
     lat REAL, lng REAL, taken_at TEXT,
-    position INTEGER DEFAULT 0, uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    position INTEGER DEFAULT 0, uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP
+    -- NO created_at. server/db.js:1239 declares uploaded_at and nothing adds
+    -- the other name. This line used to be here, and while it was, both
+    -- search_my_kb and search_org_kb passed here and raised 42703 in
+    -- production. The fixture was the second schema, and it was the one the
+    -- suite believed.
   );
   CREATE TABLE messages (
     id TEXT PRIMARY KEY, organization_id INTEGER, thread_key TEXT,
@@ -285,8 +294,8 @@ function seed() {
   // on users dropped it from its own tenant's results.
   job.run('j-a-noowner', null, ORG_A, jobBlob('ALPHANOOWNER'));
 
-  engine.db.prepare('INSERT INTO node_graphs (id, organization_id, job_id, data) VALUES (?,?,?,?)')
-    .run('g-b1', ORG_B, 'j-b1', JSON.stringify({ nodes: [] }));
+  engine.db.prepare('INSERT INTO node_graphs (organization_id, job_id, data) VALUES (?,?,?)')
+    .run(ORG_B, 'j-b1', JSON.stringify({ nodes: [] }));
 
   const qb = engine.db.prepare(
     `INSERT INTO qb_cost_lines (id, organization_id, job_id, amount, account, account_type, vendor, memo)

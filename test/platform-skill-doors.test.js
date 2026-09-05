@@ -89,7 +89,7 @@ const SCHEMA = `
   CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);
   CREATE TABLE agent_skills_versions (
     id INTEGER PRIMARY KEY AUTOINCREMENT, saved_by INTEGER, value TEXT,
-    comment TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    comment TEXT, saved_at TEXT DEFAULT CURRENT_TIMESTAMP
   );
   CREATE TABLE managed_agent_skills (
     agent_key TEXT NOT NULL, skill_id TEXT NOT NULL,
@@ -100,7 +100,7 @@ const SCHEMA = `
   CREATE TABLE managed_agent_registry (
     agent_key TEXT NOT NULL, organization_id INTEGER NOT NULL,
     anthropic_agent_id TEXT, model TEXT, tool_count INTEGER, skill_count INTEGER,
-    system_hash TEXT, updated_at TEXT,
+    last_sync_sys_hash TEXT, updated_at TEXT,
     PRIMARY KEY (agent_key, organization_id)
   );
   CREATE TABLE org_skill_packs (

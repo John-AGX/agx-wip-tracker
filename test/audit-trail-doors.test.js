@@ -36,7 +36,7 @@ const SCHEMA = `
   CREATE TABLE users (
     id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, password_hash TEXT,
     name TEXT, role TEXT, active INTEGER DEFAULT 1, organization_id INTEGER,
-    owner_id INTEGER, phone_number TEXT, timezone TEXT, title TEXT,
+    phone_number TEXT, timezone TEXT, title TEXT,
     notification_prefs TEXT DEFAULT '{}', last_seen_at TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP
   );
@@ -50,7 +50,7 @@ const SCHEMA = `
   );
   CREATE TABLE agent_skills_versions (
     id INTEGER PRIMARY KEY AUTOINCREMENT, saved_by INTEGER, value TEXT, comment TEXT,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    saved_at TEXT DEFAULT CURRENT_TIMESTAMP
   );
   CREATE TABLE managed_agent_skills (
     agent_key TEXT, skill_id TEXT, position INTEGER, PRIMARY KEY (agent_key, skill_id)

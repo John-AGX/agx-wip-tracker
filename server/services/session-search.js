@@ -173,6 +173,47 @@ async function searchSessions(opts) {
 
   const pattern = '%' + q.replace(/[\\%_]/g, (m) => '\\' + m) + '%';
 
+  // ── A USER ID IS NOT A TENANT ────────────────────────────────────────────
+  // The two lineage walks above already carry
+  // `AND (organization_id = $2 OR organization_id IS NULL)`. The three
+  // statements below carried only `WHERE s.user_id = $1`, and the premise under
+  // that — "these are the caller's own threads, so there is no tenant to cross"
+  // — is the same false one search_my_kb was written on:
+  // `users.organization_id` is MUTABLE (PUT /api/auth/users/:id writes it, and
+  // moving somebody between orgs is a documented one-click admin action), so a
+  // user who moves keeps `user_id` on every thread they ever had in their
+  // FORMER tenant. Executed, this returned the verbatim body of an
+  // ai_messages row stamped organization_id = 2 to an org-1 caller — "unit cost
+  // 987.65 markup 42" — narrated back into an org-1 chat window.
+  //
+  // `ai_sessions` HAS NO organization_id COLUMN, so there is nothing on the row
+  // itself to predicate on and adding one would be a migration. The tenant of a
+  // thread is therefore the tenant of ITS MESSAGES: every INSERT into
+  // ai_messages in ai-routes.js stamps organization_id, so the anchor is
+  // current, not merely backfilled.
+  //
+  //   arm 1  at least one of the thread's messages names the caller's tenant,
+  //          or names none (the `IS NULL` tolerance every read here carries —
+  //          it is what keeps a user's own legacy rows visible to them).
+  //   arm 2  the thread has no messages joined to it at all. That covers a
+  //          freshly created thread and every pre-cutover row whose messages
+  //          predate the session_id column, and it is a deliberate tolerance:
+  //          refusing them would hide a user's own history from them, which is
+  //          the lockout half of this boundary and just as much a defect.
+  //
+  // An org-less caller matches neither `= $n` arm, so they see un-stamped
+  // threads and nothing that names a tenant — nothing rather than everything.
+  //
+  // ONE DEFINITION, THREE STATEMENTS. Written once here and interpolated, so a
+  // fourth branch cannot be added with two of the three arms.
+  const sessionTenantSql =
+    '(EXISTS (SELECT 1 FROM ai_messages sm WHERE sm.session_id = s.id' +
+    '           AND (sm.organization_id = $ORG OR sm.organization_id IS NULL))' +
+    ' OR NOT EXISTS (SELECT 1 FROM ai_messages sx WHERE sx.session_id = s.id))';
+  const metaOrgGuard   = sessionTenantSql.replace('$ORG', '$4');
+  const msgOrgGuard    = sessionTenantSql.replace('$ORG', '$5');
+  const entityOrgGuard = sessionTenantSql.replace('$ORG', '$6');
+
   // Candidate discovery runs alongside the two ILIKE branches — it touches
   // different tables and neither waits on the other.
   const [cand, metaRows, msgRows] = await Promise.all([
@@ -193,16 +234,25 @@ async function searchSessions(opts) {
         WHERE s.user_id = $1
           AND s.archived_at IS NULL
           AND (s.label ILIKE $2 OR s.summary ILIKE $2)
+          AND ${metaOrgGuard}
         ORDER BY s.pinned DESC, s.last_used_at DESC
         LIMIT $3`,
-      [userId, pattern, limit]
+      [userId, pattern, limit, orgId]
     ),
-    // Branch B — message bodies. Unchanged, including its join key: it joins
-    // on (user_id, entity_type, estimate_id) rather than m.session_id = s.id,
-    // so one matching message fans out to every session sharing that tuple.
-    // That is a real, pre-existing defect, but fixing it here would move which
-    // rows and which snippets appear and mask whether the name fix worked.
-    // Ranking it last blunts it; it is filed separately.
+    // Branch B — message bodies. Its join key is still (user_id, entity_type,
+    // estimate_id) rather than m.session_id = s.id, so one matching message
+    // fans out to every session sharing that tuple. That is a real,
+    // pre-existing defect, filed separately.
+    //
+    // IT IS ALSO WHY THIS BRANCH NEEDS TWO PREDICATES, NOT ONE. Because the
+    // join does not go through session_id, the message that produces the
+    // SNIPPET need not belong to the matched session at all — for a 'general'
+    // thread both sides carry a NULL entity_id, so every one of the user's
+    // general messages joins to every one of their general sessions, across
+    // tenants. The session-level guard cannot see that: it asks about the
+    // session's OWN messages. So the message is scoped on its own stamp here,
+    // and that is the predicate the executed proof actually needed — the row it
+    // leaked was an ai_messages body, not a session title.
     pool.query(
       `WITH matches AS (
          SELECT s.id AS session_id, s.label, s.summary, s.entity_type, s.entity_id,
@@ -219,6 +269,8 @@ async function searchSessions(opts) {
           WHERE s.user_id = $1
             AND s.archived_at IS NULL
             AND m.content ILIKE $2
+            AND (m.organization_id = $5 OR m.organization_id IS NULL)
+            AND ${msgOrgGuard}
        )
        SELECT session_id AS id, label, summary, entity_type, entity_id, pinned,
               last_used_at, turn_count, session_kind, lineage_root,
@@ -230,7 +282,7 @@ async function searchSessions(opts) {
         WHERE rn = 1
         ORDER BY last_used_at DESC
         LIMIT $3`,
-      [userId, pattern, limit, snippetLen]
+      [userId, pattern, limit, snippetLen, orgId]
     )
   ]);
 
@@ -268,9 +320,10 @@ async function searchSessions(opts) {
                OR dm.numbers->>'estimateId' = ANY($4::text[])
                OR dm.numbers->>'jobId'      = ANY($4::text[])
             )
+            AND ${entityOrgGuard}
           ORDER BY s.pinned DESC, s.last_used_at DESC
           LIMIT $5`,
-        [userId, cand.types, cand.ids, cand.lineage, limit]
+        [userId, cand.types, cand.ids, cand.lineage, limit, orgId]
       );
     } catch (e) {
       // Best-effort, same posture as the resolver: a failure here must fall
