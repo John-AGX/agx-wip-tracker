@@ -319,17 +319,36 @@ router.post('/invites/:token/accept', async (req, res) => {
     );
     const org = orgIns.rows[0];
     // Create the owner user. Role 'admin' so they have full access
-    // inside their org from day one.
+    // inside their org from day one. `organization_id` is the ONLY tenant
+    // stamp on this row and it is the new org, never the inviter's.
+    //
+    // ── WHY THERE IS NO owner_id HERE ANY MORE ────────────────────────────
+    // This INSERT named `users.owner_id`, and a follow-up UPDATE set it to the
+    // new user's own id, "so the user is the org's owner record (the bootstrap
+    // pattern other org-scoped queries assume)". `users` HAS NO owner_id
+    // COLUMN — server/db.js:66 plus ten ALTERs, none of them that one — so
+    // Postgres raised 42703, the catch below rolled back, and AFFILIATE
+    // ONBOARDING FAILED ON EVERY SINGLE ATTEMPT SINCE THE FLOW SHIPPED IN
+    // 18d6e724. No second organization has ever been created.
+    //
+    // The pattern that comment names is real and is a different column:
+    // server/org-access.js scopes a job or estimate by `jobs.owner_id ->
+    // users.organization_id`, an AUTHORSHIP pointer from a content row to the
+    // user who wrote it. There is no self-pointer on `users`, nothing in
+    // server/, js/ or test/ reads one, and no query would be satisfied by one.
+    //
+    // So this is a deletion and NOT a migration, argued rather than assumed:
+    // who founded this org is already recorded in columns that exist —
+    // org_invitations.accepted_user_id / .accepted_org_id below, and the
+    // org.invite_accept audit row's detail.owner_user_id. A third copy of that
+    // fact is not worth an ALTER on a live pilot's users table.
     const hash = bcrypt.hashSync(password, 10);
     const userIns = await client.query(
-      `INSERT INTO users (email, password_hash, name, role, organization_id, owner_id)
-       VALUES ($1, $2, $3, 'admin', $4, NULL) RETURNING id, email, name, role, organization_id`,
+      `INSERT INTO users (email, password_hash, name, role, organization_id)
+       VALUES ($1, $2, $3, 'admin', $4) RETURNING id, email, name, role, organization_id`,
       [inv.email, hash, fullName, org.id]
     );
     const user = userIns.rows[0];
-    // Set owner_id = user.id so the user is the org's owner record
-    // (the bootstrap pattern other org-scoped queries assume).
-    await client.query('UPDATE users SET owner_id = $1 WHERE id = $1', [user.id]);
     // Mark the invitation accepted.
     await client.query(
       `UPDATE org_invitations

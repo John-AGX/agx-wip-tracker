@@ -50,6 +50,16 @@
 // about. They are written down here, with counts, so the next person finds
 // them by reading a test instead of by an incident.
 //
+// ONE OF THE FOUR IS NOW REPAIRED AND ITS ENTRY IS GONE. `users.owner_id` was
+// two statements in the affiliate-onboarding transaction, so no second
+// organization could ever be created — which made it the gate on the entire
+// multi-tenant plan rather than one more broken feature, and it got the
+// separate commit and the route coverage this entry said it wanted. The
+// repair was a DELETION, not a migration: nothing read the column. See
+// test/affiliate-onboarding.test.js, which executes the flow against a schema
+// derived from server/db.js and asserts a second tenant exists afterwards.
+// THREE ENTRIES REMAIN, and the count below is three.
+//
 // ── THE COUNT IS THE GUARD, SO THE DERIVATION IS THE TEST ─────────────────
 // This ledger was reported short by one, at org-manifest-routes.js:157. That
 // specific claim is REFUTED — line 157 is `] = await Promise.all([` and the
@@ -72,8 +82,8 @@
 // `Promise.all([pool.query(…)])` is not counted twice). S4 below asserts the
 // wrapper statements are actually in the population, because a widening nobody
 // checks is the same decoration as a narrow scan nobody checks. Re-derived, the
-// findings are the same four keys — which is now a measured result rather than
-// an assumption.
+// findings were the same four keys — a measured result rather than an
+// assumption — and are three now that affiliate onboarding is fixed.
 'use strict';
 
 const fs = require('fs');
@@ -100,18 +110,12 @@ const AGENT_SURFACE = [
 //   why    what is actually wrong and why it is not repaired here.
 // Everything in this map raises 42703 in Postgres. None of it is in the agent
 // surface; all of it is live.
+// 'users.owner_id' WAS HERE AND IS REPAIRED — see the header. The entry is
+// deleted rather than zeroed, because this file's own rule is that a ledger
+// entry for a fixed defect is a lie that reads as diligence, and because the
+// deletion is what arms the guard: a statement naming users.owner_id again now
+// fails S3 with "NOT ON THE LEDGER" instead of inheriting an exemption.
 const KNOWN_BROKEN = {
-  'users.owner_id': {
-    n: 2,
-    where: 'server/routes/admin-organizations-routes.js',
-    why:
-      '`users` has no owner_id column (server/db.js:66 + ten ALTERs, none of them this). ' +
-      'POST /api/admin/organizations/invitations/:token/accept INSERTs it and then UPDATEs it, ' +
-      'inside one transaction — so AFFILIATE SELF-ONBOARDING THROWS AND ROLLS BACK, every time. ' +
-      'Nothing anywhere READS users.owner_id, so the repair is to delete both references; that ' +
-      'is a change to the org-signup flow and wants its own commit and its own test, which no ' +
-      'test currently covers.',
-  },
   'leads.data': {
     n: 4,
     where: 'message-routes.js:105, org-manifest-routes.js:184, weekly-digest-cron.js:144 and :151',
