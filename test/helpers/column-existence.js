@@ -34,7 +34,17 @@
 
 const fs = require('fs');
 const path = require('path');
-const { extractQueryCalls } = require('./sql-literals');
+// extractSqlCalls, NOT extractQueryCalls. The ledger IS the count, and a
+// ledger that undercounts is worse than none — `.query(` misses every
+// statement handed to a wrapper, and this repo has three of those running 66
+// statements between them (`safeCount` in org-manifest-routes.js,
+// `countOrNull` in admin-push-routes.js, and `run = q(client)` in
+// services/email-folders.js), two of which SWALLOW the error a missing column
+// raises. The re-derivation is mechanical rather than a patched-in extra
+// entry, because the entry that was missing was missing for a structural
+// reason and the next one would be too. See the header over extractSqlCalls
+// in ./sql-literals.js.
+const { extractSqlCalls } = require('./sql-literals');
 const schema = require('./db-schema');
 
 // Reserved words and built-ins that can appear where an identifier would.
@@ -147,9 +157,17 @@ function aliasesIn(sql) {
 
 // Findings for one file, relative to `repo`.
 function scanFile(repo, rel) {
-  const text = fs.readFileSync(path.join(repo, rel), 'utf8');
+  return scanText(fs.readFileSync(path.join(repo, rel), 'utf8'), rel);
+}
+
+// The same scan over source held in memory, so the scanner can be shown a
+// statement with a KNOWN defect and asserted to report it. Without this the
+// ledger's derivation could be narrowed back to `<x>.query(` and every
+// assertion over it would still pass by finding nothing — which is the exact
+// failure mode this whole family of tests exists to refuse.
+function scanText(text, rel) {
   let calls;
-  try { calls = extractQueryCalls(text); } catch (e) { return []; }
+  try { calls = extractSqlCalls(text); } catch (e) { return []; }
   const out = [];
   for (const c of calls) {
     if (!c.sql || !/\S/.test(c.sql)) continue;
@@ -211,4 +229,4 @@ function scanFile(repo, rel) {
   return out;
 }
 
-module.exports = { scanFile, tablesIn, aliasesIn, SQL_WORDS };
+module.exports = { scanFile, scanText, tablesIn, aliasesIn, SQL_WORDS };

@@ -49,12 +49,38 @@
 // tenant-boundary commit on a live pilot is the risk the hard rules warn
 // about. They are written down here, with counts, so the next person finds
 // them by reading a test instead of by an incident.
+//
+// ── THE COUNT IS THE GUARD, SO THE DERIVATION IS THE TEST ─────────────────
+// This ledger was reported short by one, at org-manifest-routes.js:157. That
+// specific claim is REFUTED — line 157 is `] = await Promise.all([` and the
+// file's only leads.data reference is the histogram at :184, which was already
+// counted — and the refutation is recorded on the entry itself, with the sites
+// spelled out, so it can be checked rather than re-litigated.
+//
+// But the report was pointing at something real. The derivation keyed on
+// `<x>.query(`, and this repo hands 66 statements to WRAPPERS instead:
+// `safeCount` (org-manifest-routes.js) and `countOrNull` (admin-push-routes.js)
+// both SWALLOW the error a missing column raises — which is precisely how the
+// lead histogram has been rendering 0 for months with nothing on screen — and
+// `run = q(client)` (services/email-folders.js) is a transaction helper. Every
+// one of those was outside the population, so the ledger could not have been
+// short by one; it could have been short by sixty-six and looked identical.
+//
+// So the whole ledger is re-derived mechanically rather than patched: the unit
+// is now "a call whose first argument IS a statement", whatever the callee
+// (test/helpers/sql-literals.js `extractSqlCalls`, innermost-only so a
+// `Promise.all([pool.query(…)])` is not counted twice). S4 below asserts the
+// wrapper statements are actually in the population, because a widening nobody
+// checks is the same decoration as a narrow scan nobody checks. Re-derived, the
+// findings are the same four keys — which is now a measured result rather than
+// an assumption.
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
 const schema = require('./helpers/db-schema');
-const { scanFile } = require('./helpers/column-existence');
+const { scanFile, scanText } = require('./helpers/column-existence');
+const { extractQueryCalls, extractSqlCalls } = require('./helpers/sql-literals');
 
 const REPO = path.resolve(__dirname, '..');
 
@@ -88,14 +114,18 @@ const KNOWN_BROKEN = {
   },
   'leads.data': {
     n: 4,
-    where: 'server/routes/message-routes.js, server/routes/org-manifest-routes.js, server/weekly-digest-cron.js',
+    where: 'message-routes.js:105, org-manifest-routes.js:184, weekly-digest-cron.js:144 and :151',
     why:
       '`leads` is a COLUMN table (title, status, city, notes ... server/db.js:1097), not a blob ' +
       'table — it has no `data`. The weekly SALES digest reads data->>\'title\' / \'status\' / ' +
       '\'client_company\'; that file\'s own header already records the sales digest silently ' +
       'skipping every week, and this is the reason it still does. The repair is not a rename: ' +
       'client_company has no leads column at all and has to come through clients.company_name, ' +
-      'which is a decision about what that email should say.',
+      'which is a decision about what that email should say. ' +
+      'A FIFTH SITE WAS REPORTED AT org-manifest-routes.js:157 AND IS REFUTED: line 157 is ' +
+      '`] = await Promise.all([`, and the only leads.data reference in that file is the status ' +
+      'histogram at :184, which is already one of these four. The sites are spelled out above ' +
+      'rather than left as filenames so the next reader can check the claim instead of the count.',
   },
   'projects.geocode_address': {
     n: 3,
@@ -238,5 +268,89 @@ describe('S3 — everything else in server/ is on a counted ledger', () => {
       expect(typeof e.n).toBe('number');
       expect(key).toMatch(/^[a-z_]+\.[a-z_]+$/);
     }
+  });
+});
+
+// ── S4 — THE DERIVATION ITSELF ────────────────────────────────────────────
+// The ledger's value IS the count, so the population it counts over has to be
+// asserted rather than assumed. Before this commit the population was every
+// `<x>.query(` — which excluded every statement handed to a wrapper, and two of
+// the three wrappers in this repo swallow the error a missing column raises.
+// A ledger that cannot see the statements whose failure is SILENT is looking
+// away from exactly the ones that need it.
+describe('S4 — the derivation sees statements a `.query(` scan cannot', () => {
+  const files = allServerFiles();
+  const wide = [];
+  const narrow = [];
+  for (const rel of files) {
+    const text = fs.readFileSync(path.join(REPO, rel), 'utf8');
+    let a = [], b = [];
+    try { a = extractSqlCalls(text); } catch (e) { a = []; }
+    try { b = extractQueryCalls(text).filter((c) => c.sql && /\S/.test(c.sql)); } catch (e) { b = []; }
+    a.forEach((c) => wide.push(Object.assign({ file: rel }, c)));
+    b.forEach((c) => narrow.push(Object.assign({ file: rel }, c)));
+  }
+
+  test('THE LEDGER\'S OWN SCANNER reports a defect inside a wrapper call', () => {
+    // The assertions below are about the helper. This one is about the scanner
+    // the ledger actually runs: shown a statement with a known-missing column
+    // handed to `safeCount` rather than to `.query(`, it must report it. Narrow
+    // the derivation back and this fails — every other assertion here would
+    // still pass by finding nothing.
+    const src = [
+      'async function h(orgId) {',
+      '  const n = await safeCount(',
+      '    "SELECT COUNT(*)::int c FROM leads l WHERE l.organization_id = $1 AND l.no_such_column = 1",',
+      '    [orgId]);',
+      '  return n;',
+      '}',
+    ].join('\n');
+    const found = scanText(src, 'synthetic.js').map((r) => r.key);
+    expect(found).toContain('leads.no_such_column');
+    // …and it is genuinely the WRAPPER that carries it: the same statement
+    // through `.query(` is what the old scan could already see, so a scanner
+    // that only reported this one would prove nothing.
+    expect(scanText(src.replace('safeCount(', 'pool.query('), 'synthetic.js')
+      .map((r) => r.key)).toContain('leads.no_such_column');
+  });
+
+  test('the three SQL-running wrappers are in the population, by name and by count', () => {
+    // Named individually so a failure says WHICH wrapper fell out. These are
+    // the ones that exist today; the RULE is the shape (any call whose first
+    // argument is a statement), which is why a fourth wrapper needs no edit.
+    const byCallee = {};
+    wide.forEach((c) => { byCallee[c.callee] = (byCallee[c.callee] || 0) + 1; });
+    expect(byCallee.safeCount).toBeGreaterThanOrEqual(18);    // org-manifest-routes.js — swallows
+    expect(byCallee.countOrNull).toBeGreaterThanOrEqual(5);   // admin-push-routes.js — swallows
+    expect(byCallee.run).toBeGreaterThanOrEqual(40);          // services/email-folders.js
+    expect(byCallee.query).toBeGreaterThan(1000);             // and it did not lose the direct ones
+  });
+
+  test('a statement is counted ONCE — a wrapped `.query(` is not two statements', () => {
+    // `Promise.all([ pool.query(…) ])` and `promises.push(pool.query(…))` both
+    // present an outer call whose first argument contains SQL. Counting both
+    // would inflate the number the ledger is built on.
+    const spans = wide.map((c) => c.file + ':' + c.argStart + ':' + c.argEnd);
+    expect(new Set(spans).size).toBe(spans.length);
+    const nested = wide.filter((a) => wide.some((b) =>
+      b !== a && b.file === a.file && b.argStart >= a.argStart && b.argEnd <= a.argEnd &&
+      (b.argStart > a.argStart || b.argEnd < a.argEnd)));
+    expect(nested.map((c) => c.file + ':' + c.line + ' <' + c.callee + '>')).toEqual([]);
+  });
+
+  test('and it loses nothing from the old population but transaction control', () => {
+    // The widening must be a superset in substance. The only `.query(` calls
+    // it does not carry are `BEGIN` / `COMMIT` / `ROLLBACK` / `SET LOCAL …`
+    // and one statement whose TABLE is interpolated — none of which name a
+    // column this scan could judge anyway.
+    const wideSpans = new Set(wide.map((c) => c.file + ':' + c.argStart + ':' + c.argEnd));
+    const lost = narrow
+      .filter((c) => !wideSpans.has(c.file + ':' + c.argStart + ':' + c.argEnd))
+      .map((c) => ({ at: c.file + ':' + c.line, sql: c.sql.replace(/\s+/g, ' ').trim() }))
+      .filter((x) => !/^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|SET\s+LOCAL)\b/i.test(x.sql))
+      // `UPDATE ${src.table} …` — the table is a substitution, so neither scan
+      // can resolve it and column-existence skips it either way.
+      .filter((x) => !/^\s*UPDATE\s*$|^UPDATE\s+\$\{/.test(x.sql));
+    expect(lost.map((x) => x.at + '  ' + x.sql.slice(0, 90))).toEqual([]);
   });
 });

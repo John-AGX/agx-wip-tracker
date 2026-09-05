@@ -248,6 +248,108 @@ const JS_KEYWORDS = new Set([
   'filter', 'slice', 'push', 'concat', 'toString', 'trim',
 ]);
 
+/* ── AND A STATEMENT IS NOT ALWAYS PASSED TO `.query(` ────────────────────
+ *
+ * `extractQueryCalls` keys on `<x>.query(`. That is the right unit for the
+ * READ INVARIANT, whose scope is a hand-reviewed list of three files. It is the
+ * WRONG unit for a LEDGER, whose whole value is the count — and the ledger
+ * built on it undercounted, because a statement handed to a WRAPPER is
+ * invisible to it. Three wrappers in this repo run SQL:
+ *
+ *   safeCount(sql, params)   org-manifest-routes.js — 18 statements, and it
+ *                            SWALLOWS the error, which is exactly how the lead
+ *                            histogram has been reporting 0 since it was
+ *                            written without anybody seeing a stack trace;
+ *   countOrNull(sql)         admin-push-routes.js — 5, same swallow;
+ *   run = q(client)          services/email-folders.js — 43, a transaction
+ *                            helper that returns pool.query or client.query.
+ *
+ * 66 statements, none of them in the ledger's population. The fix is not to
+ * name those three functions — the next wrapper would be invisible again — but
+ * to make the unit "a call whose first argument IS a statement", whatever it is
+ * called, and then keep the INNERMOST such call so `promises.push(pool.query(…))`
+ * is counted once rather than twice.
+ *
+ * The same fields come back, plus `callee`, so a caller can tell a direct
+ * `.query(` from a wrapper if it wants to.
+ */
+function extractSqlCalls(text) {
+  const { literals, comments } = tokenizeSpans(text);
+  const spans = comments.concat(literals.map((l) => [l.start, l.end]))
+    .sort((a, b) => a[0] - b[0]);
+  const inSpan = (idx) => {
+    let lo = 0, hi = spans.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (idx < spans[mid][0]) hi = mid - 1;
+      else if (idx >= spans[mid][1]) lo = mid + 1;
+      else return true;
+    }
+    return false;
+  };
+  const litAt = new Map(literals.map((l) => [l.start, l]));
+  const commentAt = new Map(comments.map((c) => [c[0], c]));
+
+  // Words that open a block, not a call.
+  const NOT_A_CALL = new Set(['if', 'for', 'while', 'switch', 'catch', 'function', 'return', 'typeof', 'new', 'do']);
+
+  const found = [];
+  const re = /(?:\.\s*)?\b([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/g;
+  let m;
+  while ((m = re.exec(text))) {
+    if (inSpan(m.index)) continue;
+    const callee = m[1];
+    if (NOT_A_CALL.has(callee)) continue;
+    let i = m.index + m[0].length;
+    let depth = 0;
+    const argStart = i;
+    let argEnd = -1;
+    while (i < text.length) {
+      const lit = litAt.get(i);
+      if (lit) { i = lit.end; continue; }
+      const com = commentAt.get(i);
+      if (com) { i = com[1]; continue; }
+      const c = text[i];
+      if (c === '(' || c === '[' || c === '{') depth++;
+      else if (c === ')' && depth === 0) { argEnd = i; break; }
+      else if (c === ')' || c === ']' || c === '}') depth--;
+      else if (c === ',' && depth === 0) { argEnd = i; break; }
+      i++;
+    }
+    if (argEnd === -1) continue;
+    const argLits = literals.filter((l) => l.start >= argStart && l.end <= argEnd);
+    if (!argLits.length) continue;
+    const sql = argLits.map((l) => l.raw).join(' ').replace(/--[^\n]*/g, ' ');
+    if (!/\b(INSERT\s+INTO|UPDATE\s+[a-z_]|DELETE\s+FROM|SELECT\s)/i.test(sql)) continue;
+
+    let code = '';
+    let cursor = argStart;
+    for (const l of argLits) {
+      code += text.slice(cursor, l.start);
+      for (const s of l.subs) code += ' ' + text.slice(s[0], s[1]) + ' ';
+      cursor = l.end;
+    }
+    code += text.slice(cursor, argEnd);
+    const refs = [...new Set(
+      (code.match(/[A-Za-z_$][A-Za-z0-9_$]*/g) || []).filter((w) => !JS_KEYWORDS.has(w))
+    )];
+
+    let line = 1;
+    for (let k = 0; k < m.index; k++) if (text[k] === '\n') line++;
+    found.push({ callee, line, index: m.index, argStart, argEnd,
+      argSource: text.slice(argStart, argEnd), sql, refs });
+  }
+
+  // INNERMOST ONLY. `Promise.all([ pool.query(…), … ])` and
+  // `promises.push(pool.query(…))` both wrap a real call, and counting the
+  // wrapper as a second statement would inflate the very number the ledger
+  // exists to hold. A candidate is dropped when another candidate's argument
+  // span sits strictly inside its own.
+  return found.filter((a) => !found.some((b) =>
+    b !== a && b.argStart >= a.argStart && b.argEnd <= a.argEnd &&
+    (b.argStart > a.argStart || b.argEnd < a.argEnd)));
+}
+
 function extractQueryCalls(text) {
   const { literals, comments } = tokenizeSpans(text);
   const spans = comments.concat(literals.map((l) => [l.start, l.end]))
@@ -316,4 +418,4 @@ function extractQueryCalls(text) {
   return out;
 }
 
-module.exports = { extractSqlLiterals, tokenizeSpans, extractQueryCalls };
+module.exports = { extractSqlLiterals, tokenizeSpans, extractQueryCalls, extractSqlCalls };

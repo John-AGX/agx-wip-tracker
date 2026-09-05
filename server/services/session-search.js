@@ -195,21 +195,70 @@ async function searchSessions(opts) {
   //   arm 1  at least one of the thread's messages names the caller's tenant,
   //          or names none (the `IS NULL` tolerance every read here carries —
   //          it is what keeps a user's own legacy rows visible to them).
-  //   arm 2  the thread has no messages joined to it at all. That covers a
-  //          freshly created thread and every pre-cutover row whose messages
-  //          predate the session_id column, and it is a deliberate tolerance:
-  //          refusing them would hide a user's own history from them, which is
-  //          the lockout half of this boundary and just as much a defect.
+  //   arm 2  the thread has no messages joined to it at all.
+  //
+  // ── ARM 2 WAS NOT "A FEW FRESH THREADS". IT WAS THE BACK CATALOGUE ───────
+  // `ai_messages.session_id` is a LATE ALTER and server/db.js says so in its
+  // own words — "This is the DUAL-WRITE phase … A later slice (3a-2) backfills
+  // historical rows". That slice has not run: there is NO backfill anywhere in
+  // db.js. So EVERY message written before the cutover carries session_id
+  // NULL, every pre-cutover session therefore joined to nothing, and arm 2
+  // admitted all of them to every caller regardless of tenant. What arm 2
+  // serves is `label` and `summary` — and `summary` is written by
+  // maybeGenerateSessionLabel out of the conversation itself, so the tolerance
+  // was handing over a MODEL-WRITTEN PARAPHRASE of another tenant's chat.
+  //
+  // The fix is to stop asking the wrong question. "Has this thread got any
+  // messages" must be asked the way the messages are actually reachable, which
+  // for a pre-cutover row is the LEGACY KEY the whole read path already uses:
+  // (user_id, entity_type, estimate_id) — branch B joins on exactly that.
+  //
+  // On its own that key FANS OUT: for a 'general' thread both sides are NULL,
+  // so every one of a user's general messages matches every one of their
+  // general sessions. So it is bounded by THE THREAD'S OWN LIFESPAN
+  // (created_at … last_used_at), and that bound is not a heuristic — a user
+  // belongs to exactly one organisation AT ANY INSTANT (there is no route that
+  // puts them in two, see below), so the messages inside one thread's window
+  // are all from one tenant. The window makes the legacy key answer the same
+  // question session_id answers, for rows session_id cannot reach.
+  //
+  // Degradation direction, said out loud: if the window is too TIGHT the probe
+  // finds nothing, arm 2 fires, and the row is visible — i.e. it degrades to
+  // exactly today's behaviour, never to a lockout. That is the safe direction
+  // for a boundary that must not hide a person's own history from them.
+  //
+  // WHAT ARM 2 STILL ADMITS, AND WHY THAT IS NOT THE ENTITY ANCHOR'S JOB.
+  // After this, arm 2 admits only a thread with NO messages under either link.
+  // Such a thread has no conversation in it: `summary` cannot exist (
+  // maybeGenerateSessionLabel returns before writing one unless it finds at
+  // least two messages), the boot migration NULLed every machine-minted
+  // `label`, and branch C's entity candidates are org-scoped upstream by
+  // findEntityIdsByName. So the entire content a message-less foreign thread
+  // could expose is a label its owner TYPED THEMSELVES. The session's
+  // entity_id does resolve to an org-stamped row and could be probed here, but
+  // that is a five-table UNION inside a per-row correlated subquery on a live
+  // pilot, bought to cover a title the caller wrote. Considered, priced,
+  // declined — recorded here rather than left as an unexplained gap.
   //
   // An org-less caller matches neither `= $n` arm, so they see un-stamped
   // threads and nothing that names a tenant — nothing rather than everything.
   //
   // ONE DEFINITION, THREE STATEMENTS. Written once here and interpolated, so a
-  // fourth branch cannot be added with two of the three arms.
+  // fourth branch cannot be added with two of the three arms — and the LINK
+  // itself is written once inside it, so the "any messages" probe and the
+  // "in-tenant messages" probe can never drift apart and re-open arm 2.
+  const legacyLink = (a) =>
+    '(' + a + '.session_id = s.id' +
+    '  OR (' + a + '.session_id IS NULL' +
+    '      AND ' + a + '.user_id = s.user_id' +
+    '      AND ' + a + '.entity_type = s.entity_type' +
+    '      AND COALESCE(' + a + ".estimate_id, '') = COALESCE(s.entity_id, '')" +
+    '      AND ' + a + '.created_at >= s.created_at' +
+    '      AND ' + a + '.created_at <= s.last_used_at))';
   const sessionTenantSql =
-    '(EXISTS (SELECT 1 FROM ai_messages sm WHERE sm.session_id = s.id' +
+    '(EXISTS (SELECT 1 FROM ai_messages sm WHERE ' + legacyLink('sm') +
     '           AND (sm.organization_id = $ORG OR sm.organization_id IS NULL))' +
-    ' OR NOT EXISTS (SELECT 1 FROM ai_messages sx WHERE sx.session_id = s.id))';
+    ' OR NOT EXISTS (SELECT 1 FROM ai_messages sx WHERE ' + legacyLink('sx') + '))';
   const metaOrgGuard   = sessionTenantSql.replace('$ORG', '$4');
   const msgOrgGuard    = sessionTenantSql.replace('$ORG', '$5');
   const entityOrgGuard = sessionTenantSql.replace('$ORG', '$6');

@@ -668,6 +668,18 @@ router.get('/conversations/:key', requireAuth, require('../auth').requireOrg, re
       return res.status(404).json({ error: 'Conversation not found.' });
     }
 
+    // ── AND THE ROW'S OWN TENANT, NOT JUST ITS AUTHOR'S ──────────────────
+    // The C1 guard above proves the TARGET USER is in the calling admin's org.
+    // That is the owner axis, and it answers a different question from "whose
+    // row is this": users.organization_id is mutable, so a user who moved
+    // organisations passes that check while every message they wrote for their
+    // FORMER tenant still carries their user_id. This endpoint returns the
+    // message CONTENT, 16KB per turn, over a whole thread.
+    //
+    // The guard above stays — it is what makes a forged key 404 rather than
+    // leak an existence signal — and the predicate is added beside it. The
+    // tolerance arm keeps a legacy un-stamped conversation visible to the
+    // admin whose user wrote it.
     const r = await pool.query(
       `SELECT id, role, content, model, input_tokens, output_tokens,
               cache_creation_input_tokens, cache_read_input_tokens,
@@ -675,8 +687,9 @@ router.get('/conversations/:key', requireAuth, require('../auth').requireOrg, re
               tool_use_count, photos_included, created_at
          FROM ai_messages
         WHERE entity_type = $1 AND estimate_id = $2 AND user_id = $3
+          AND (organization_id = $4 OR organization_id IS NULL)
         ORDER BY created_at ASC`,
-      [entityType, entityId, userId]
+      [entityType, entityId, userId, req.organization.id]
     );
 
     const messages = r.rows.map(m => {
@@ -2097,11 +2110,16 @@ router.post('/conversations/:key/replay', requireAuth, require('../auth').requir
     // Pull the conversation. Replay needs the FULL row content (not the
     // 16KB-trimmed view the conversation detail endpoint returns) so we
     // can faithfully reconstruct what the model originally saw.
+    // Same pair as the read door above: the owner-axis guard on the line
+    // before, plus the ROW's own tenant. This one is worse if it is wrong —
+    // it does not just return the transcript, it RE-RUNS THE MODEL over it and
+    // stores the response.
     const msgsRes = await pool.query(
       `SELECT role, content, model FROM ai_messages
         WHERE entity_type=$1 AND estimate_id=$2 AND user_id=$3
+          AND (organization_id = $4 OR organization_id IS NULL)
         ORDER BY created_at ASC`,
-      [entityType, entityId, userId]
+      [entityType, entityId, userId, req.organization.id]
     );
     const allMessages = msgsRes.rows;
     if (!allMessages.length) return res.status(404).json({ error: 'Conversation has no messages' });

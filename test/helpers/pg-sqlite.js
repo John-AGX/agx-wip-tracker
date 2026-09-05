@@ -41,6 +41,38 @@ const JSON_COLUMNS = new Set(['value', 'detail', 'capabilities']);
 // silent decoding change and therefore a silent assertion change.
 const EMPTY = new Set();
 
+// Find `(ARRAY_AGG( … ) [FILTER (WHERE …)])[1]` and rewrite it in place,
+// tracking parenthesis depth so nested calls in the aggregated expression, the
+// ORDER BY and the FILTER are all consumed whole. Anything that is NOT
+// subscripted with [1] is left alone and will throw at prepare — an ARRAY_AGG
+// whose result is used as an actual array is not this idiom and must not be
+// silently reinterpreted as its first element.
+function rewriteArrayAggSubscript(sql) {
+  let s = sql;
+  for (let guard = 0; guard < 64; guard++) {
+    const m = /\(\s*ARRAY_AGG\s*\(/i.exec(s);
+    if (!m) break;
+    // Walk from the outer '(' to its match.
+    let depth = 0;
+    let end = -1;
+    for (let i = m.index; i < s.length; i++) {
+      const c = s[i];
+      if (c === "'") { i++; while (i < s.length && s[i] !== "'") i++; continue; }
+      if (c === '(') depth++;
+      else if (c === ')') { depth--; if (depth === 0) { end = i; break; } }
+    }
+    if (end === -1) break;                       // unbalanced — leave it, sqlite will complain
+    if (s.slice(end + 1, end + 4) !== '[1]') break;   // not the idiom
+    // Inner text: everything between `(ARRAY_AGG` … the outer close, with the
+    // ARRAY_AGG token swapped for json_group_array. FILTER, if present, sits
+    // inside the outer parens after the aggregate's own close, exactly where
+    // sqlite wants it.
+    const inner = s.slice(m.index + 1, end).replace(/^\s*ARRAY_AGG\s*\(/i, 'json_group_array(');
+    s = s.slice(0, m.index) + "json_extract(" + inner + ", '$[0]')" + s.slice(end + 4);
+  }
+  return s;
+}
+
 function translate(sql) {
   let s = String(sql);
 
@@ -155,6 +187,37 @@ function translate(sql) {
   // ask for anyway, so the separator argument is the one that goes.
   s = s.replace(/STRING_AGG\s*\(\s*DISTINCT\s+([a-z_][a-z_0-9.]*)\s*,\s*'[^']*'\s*\)/gi,
                 (_m, col) => `GROUP_CONCAT(DISTINCT ${col})`);
+
+  // ── `(ARRAY_AGG(x ORDER BY y) FILTER (WHERE p))[1]` — "the newest one" ───
+  // Postgres's idiom for picking a single value out of a group. The email
+  // dropbox's THREAD LIST is built entirely out of it (subject, last sender,
+  // preview, triage), and that list arm is the DISCOVERY door — it ILIKEs
+  // subject / from_email / body_text across the whole mailbox, so it is the
+  // arm most worth executing rather than reading.
+  //
+  // sqlite has no arrays, but it has had ORDER BY inside an aggregate since
+  // 3.44 and FILTER since 3.30, so `json_extract(json_group_array(x ORDER BY
+  // y) FILTER (WHERE p), '$[0]')` selects THE SAME ELEMENT. That is the point:
+  // it is a spelling change, not a loosening — subscript [1] is the first
+  // element of the ordered aggregate either way, so a row that should not be
+  // in the group cannot become the answer.
+  //
+  // Scanned with balanced parens rather than matched with a regex, because the
+  // aggregated expressions here are `COALESCE(orig_from_email, from_email)`
+  // and `LEFT(body_text, 160)` and the ORDER BY carries `(entity_type IS
+  // NULL), received_at DESC`. A non-greedy `\)` would cut inside those and
+  // produce a statement that prepares and returns the wrong column — the
+  // silent failure this shim exists to refuse.
+  s = rewriteArrayAggSubscript(s);
+
+  // `BOOL_OR(x)` -> `MAX(x)`. sqlite has no boolean aggregate; MAX over 0/1 is
+  // the same predicate ("did any row in the group have it"), and sqlite reads
+  // `false` as 0 so the COALESCE inside keeps working.
+  s = s.replace(/\bBOOL_OR\s*\(/gi, 'MAX(');
+
+  // `LEFT(x, n)` -> `SUBSTR(x, 1, n)`. Same characters.
+  s = s.replace(/\bLEFT\s*\(([^,()]*(?:\([^()]*\)[^,()]*)*),\s*(\d+)\s*\)/gi,
+                (_m, expr, n) => `SUBSTR(${expr}, 1, ${n})`);
 
   // `FOR UPDATE` is a ROW-LOCK HINT. It cannot appear in, and cannot change,
   // a WHERE clause — which is the only thing this shim exists to keep honest.

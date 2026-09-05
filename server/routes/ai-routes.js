@@ -21,7 +21,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 // local packs to Anthropic native Skills via the approval flow.
 const { toFile } = require('@anthropic-ai/sdk');
 const { pool } = require('../db');
-const { requireAuth, requireCapability, hasCapability, requireOrg } = require('../auth');
+const { requireAuth, requireCapability, hasCapability, requireOrg, resolveOrgId } = require('../auth');
 const { storage } = require('../storage');
 const { aiChatLimiter, aiChatHourlyLimiter } = require('../rate-limit');
 // Wave 1.B context registry — fire-and-forget event logger for
@@ -3661,14 +3661,33 @@ async function maybeGenerateSessionLabel(sessionOrId) {
     // Load the first user + assistant exchange. We summarize from text
     // only — image content is dropped because it would blow up the
     // prompt for no quality gain on a label task.
+    //
+    // ── THE SUMMARY IS WHERE THE LEAK IS AUTHORED ────────────────────────
+    // This read is on the LEGACY key (user_id, entity_type, estimate_id), and
+    // for a 'general' thread both sides are NULL — so every one of this user's
+    // general turns matches, across tenants. The rows it selects are handed to
+    // a model and the model's paraphrase is written back onto
+    // ai_sessions.summary, which search_my_sessions then serves. A tenant
+    // boundary on the SEARCH is worth nothing if the string being searched was
+    // composed out of the other tenant's conversation in the first place.
+    //
+    // ai_sessions has no organization_id, so the caller's tenant is read off
+    // the thread's own user. That is not R2's owner-axis defect: the ROW is
+    // predicated on its OWN stamp, and the users lookup only answers "which
+    // tenant is this person in now" — exactly what resolveOrgId does for every
+    // HTTP door. Tolerance arm carried: un-stamped legacy turns are theirs.
+    const labelOrg = await pool.query(
+      'SELECT organization_id FROM users WHERE id = $1', [session.user_id]);
+    const labelOrgId = labelOrg.rows.length ? labelOrg.rows[0].organization_id : null;
     const mRes = await pool.query(
       `SELECT role, content FROM ai_messages
          WHERE user_id = $1
            AND entity_type = $2
            AND COALESCE(estimate_id, '') = COALESCE($3, '')
+           AND (organization_id = $4 OR organization_id IS NULL)
          ORDER BY created_at ASC
          LIMIT 4`,
-      [session.user_id, session.entity_type, session.entity_id]
+      [session.user_id, session.entity_type, session.entity_id, labelOrgId]
     );
     if (mRes.rows.length < 2) return; // need at least one exchange
 
@@ -3831,6 +3850,17 @@ async function recoverStuckSession({ anthropic, sessionRow }) {
 // the conversation as a whole, not just the active surface.
 async function seedRecoveredSession(anthropic, freshSession, oldSessionRow) {
   const TURN_LIMIT = 6;
+  // ── "CROSS-ENTITY BY DESIGN" IS NOT "CROSS-TENANT BY DESIGN" ───────────
+  // This read is deliberately unbounded by surface — recovery preserves the
+  // conversation as a whole. It was also unbounded by TENANT, and it injects
+  // up to six turns of 1500 characters each into a fresh Anthropic session as
+  // trusted context. For a user who moved organisations that is their former
+  // tenant's conversation, pasted verbatim into their current tenant's thread,
+  // by the server, with no tool call to attribute it to. Same tenant read as
+  // the label generator, same reason, same tolerance arm.
+  const recapOrg = await pool.query(
+    'SELECT organization_id FROM users WHERE id = $1', [oldSessionRow.user_id]);
+  const recapOrgId = recapOrg.rows.length ? recapOrg.rows[0].organization_id : null;
   const r = await pool.query(
     `SELECT role, content, entity_type, estimate_id
        FROM ai_messages
@@ -3838,9 +3868,10 @@ async function seedRecoveredSession(anthropic, freshSession, oldSessionRow) {
         AND role IN ('user', 'assistant')
         AND content IS NOT NULL
         AND TRIM(content) != ''
+        AND (organization_id = $3 OR organization_id IS NULL)
       ORDER BY created_at DESC
       LIMIT $2`,
-    [oldSessionRow.user_id, TURN_LIMIT]
+    [oldSessionRow.user_id, TURN_LIMIT, recapOrgId]
   );
   if (!r.rows.length) {
     console.log('[recoverStuckSession] no prior turns to seed; fresh session starts cold');
@@ -8769,6 +8800,48 @@ function ctxOrgId(ctx) {
 // impossible, and the invariant makes a NEW unpredicated tenant read fail the
 // build instead of failing an affiliate.
 //
+// ── ROUND FIVE ASKED WHETHER THAT IS STILL THE RIGHT ANSWER ───────────────
+// Five rounds of per-query predicates have not stopped new instances
+// appearing, and the previous commit shipped tools that needed fixing in the
+// same commit that fixed others. The proposal on the table was to bind the
+// tenant somewhere a tool CANNOT execute without it — a dispatcher that
+// refuses, a query helper taking the org as a required argument, a fail-closed
+// ctx. The answer is NO, and the evidence is the shape of this round's
+// findings rather than a preference:
+//
+//   EVERY ONE OF THE TEN DOORS CLOSED THIS ROUND RAN WITH A CORRECTLY
+//   RESOLVED ORG ALREADY IN HAND.
+//
+// read_email_inbox had ctx; self_diagnose had ctx; draft_email_reply had ctx
+// AND used it to STAMP THE ROW IT WROTE; GET /86/messages had req.user;
+// POST /86/chat had requireOrg in its own middleware chain; admin-agents'
+// two had `req.organization.id` and spent it on the wrong axis one line
+// earlier. Not one of them was reachable by an org-less caller. A dispatcher
+// that refuses without a tenant already exists — it is `execAgentTool` twenty
+// lines below — and it would have caught NONE of these, because none of them
+// was missing the org. They were missing the PREDICATE. A helper taking orgId
+// as a required argument fails the same way: it can force the value to be
+// passed, and it cannot make the statement use it. That is ceremony, and
+// ceremony is what an author satisfies while the defect walks through.
+//
+// The thing that DID find all ten is the build-time invariant's population.
+// Every one of them was already in it, with status NONE and an authorship
+// column, and the only reason they were not reported is that R4 consulted R1's
+// allowlist — where the false premise had been written down as a reason. The
+// mechanism was sound; the exemption discipline was not. So the fix this round
+// is to the discipline: R4 no longer reads that allowlist, its own list admits
+// nothing without a named behavioural proof that varies ONLY the org, R5 closes
+// the "name the column in the projection" dodge, and the closure test walks
+// './siblings' and transitively — which is what surfaced the admin-agents pair
+// that seven `require('./admin-agents-routes')` call sites had been hiding.
+//
+// What is NOT claimed: this holds a statement someone writes in a module the
+// walk cannot reach, and it reads SQL text rather than proving behaviour. RLS
+// remains the endgame and its two costs are unchanged. The judgement is that a
+// guard which fails at commit time, over a population computed by shape, is
+// worth more per unit of live-pilot risk than a binding that every door in
+// this round would have satisfied on its way to leaking.
+//
 // Tools that are NOT tenant data and must keep working for a caller with no
 // organization. Everything not named here is refused without an org.
 // Deliberately tiny: web search, navigation hints, and self-introspection
@@ -9299,7 +9372,22 @@ async function execStaffTool(name, input, ctx) {
       const windowMinutes = Math.max(5, Math.min(1440, Number(input && input.window_minutes) || 60));
       const userId = ctx && ctx.userId; // injected by /api/ai/exec-tool
       if (!userId) return 'self_diagnose requires a user context (call from a /api/ai/exec-tool route).';
-
+      // ── AND THE CALLER'S TENANT ─────────────────────────────────────────
+      // This statement carried `WHERE user_id = $1 AND entity_type = '86'` and
+      // printed `m.content` VERBATIM, and its read-invariant allowlist entry
+      // gave the reason as "the tool introspects the CALLER'S own last hour;
+      // ctx.userId is required" — the same false premise, written down as a
+      // security property. A user who moved tenants keeps user_id on every 86
+      // turn they took for their former one, and self_diagnose is on
+      // ORGLESS_ALLOWED_TOOLS, so it is the one door here an org-less caller
+      // reaches at all.
+      //
+      // The tolerance arm IS carried, unlike read_email_inbox's: ai_messages
+      // .organization_id is a nullable ALTER, so un-stamped legacy turns exist
+      // and they are the caller's own. With no org resolved the `= $n` arm is
+      // NULL and only those un-stamped rows come back — their own history, and
+      // nothing that names a tenant.
+      const diagOrgId = ctxOrgId(ctx);
       // Recent turns with tool_uses OR approval traces, plus matching
       // user messages so the model sees what was asked.
       const rowsR = await pool.query(
@@ -9307,9 +9395,10 @@ async function execStaffTool(name, input, ctx) {
            FROM ai_messages
           WHERE user_id = $1
             AND entity_type = '86'
+            AND (organization_id = $3 OR organization_id IS NULL)
             AND created_at >= NOW() - ($2::int || ' minutes')::interval
           ORDER BY created_at ASC`,
-        [userId, windowMinutes]
+        [userId, windowMinutes, diagOrgId]
       );
       if (!rowsR.rows.length) {
         return 'No 86-side activity in the last ' + windowMinutes + ' minutes for this user.';
@@ -9389,13 +9478,13 @@ async function execStaffTool(name, input, ctx) {
           // targetEstimateId can come straight off input.estimate_id, so this
           // diagnostic is a read door like any other. Org-scoped, tolerance
           // arm, and a missing org reads nothing rather than everything.
-          const _dOrg = ctx && (ctx.orgId != null ? ctx.orgId
-                       : (ctx.organizationId != null ? ctx.organizationId
-                       : (ctx.user && ctx.user.organization_id)));
-          const e = _dOrg == null ? { rows: [] } : await pool.query(
+          // `diagOrgId` is the SAME value the message read above used — this
+          // used to be a hand-inlined second copy of ctxOrgId, and one fact
+          // read twice is a disagreement waiting to happen.
+          const e = diagOrgId == null ? { rows: [] } : await pool.query(
             `SELECT data FROM estimates
               WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)`,
-            [targetEstimateId, _dOrg]);
+            [targetEstimateId, diagOrgId]);
           if (!e.rows.length) {
             out.push('');
             out.push('## Estimate state (' + targetEstimateId + '): NOT FOUND in DB.');
@@ -10298,14 +10387,29 @@ async function execStaffTool(name, input, ctx) {
       // the caller's, so a foreign/guessed thread id can't seed a row.
       const userId = (ctx && ctx.userId) || null;
       if (!userId) return 'I could not identify your account, so I can\'t save a draft.';
+      // ── THE TENANT OF THE ROW WE WRITE IS THE CALLER'S, NOT THE ROW WE READ'S
+      // The ownership probe below carried `WHERE user_id = $1 AND thread_id =
+      // $2` and no org predicate, and the INSERT then stamped the new
+      // email_thread_state row with `own.rows[0].organization_id` — the org of
+      // whatever inbound_emails row came back. On the same false premise as the
+      // read arms above, an org-A caller holding rows they authored for a
+      // former tenant would have READ an org-B thread and WRITTEN A ROW INTO
+      // ORG B. A read hole that ends in a write is not a read hole.
+      //
+      // Two changes, and each closes it on its own: the probe is scoped to the
+      // caller's tenant, and the stamp comes from the CALLER'S org rather than
+      // from the row that was found. Belt and braces on a write.
+      const draftOrgId = ctxOrgId(ctx);
+      if (draftOrgId == null) return 'I could not tell which organization your account belongs to, so I can\'t save a draft.';
       const threadId = String((input && input.thread_id) || '').trim();
       const draftBody = String((input && input.body) || '').trim();
       if (!threadId) return 'I need the thread id (a "th_…" id from read_email_inbox) to save the draft against.';
       if (!draftBody) return 'The draft came through empty, so nothing was saved.';
       const own = await pool.query(
         `SELECT organization_id, subject FROM inbound_emails
-          WHERE user_id = $1 AND thread_id = $2 ORDER BY received_at DESC LIMIT 1`,
-        [userId, threadId]
+          WHERE user_id = $1 AND thread_id = $2 AND organization_id = $3
+          ORDER BY received_at DESC LIMIT 1`,
+        [userId, threadId, draftOrgId]
       );
       if (!own.rows.length) {
         return 'I could not find thread "' + threadId.slice(0, 40) + '" in your email dropbox, so there is nothing to draft against.';
@@ -10318,7 +10422,7 @@ async function execStaffTool(name, input, ctx) {
            SET draft_text = EXCLUDED.draft_text, draft_source = 'assistant',
                draft_updated_at = NOW(), updated_at = NOW()`,
         ['ets_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
-         own.rows[0].organization_id, userId, threadId, draftBody.slice(0, 20000)]
+         draftOrgId, userId, threadId, draftBody.slice(0, 20000)]
       );
       return 'Draft saved on "' + (own.rows[0].subject || '(no subject)') +
              '" — it\'s waiting in the Assistant draft box on that email in the Email tab. ' +
@@ -10328,9 +10432,36 @@ async function execStaffTool(name, input, ctx) {
     case 'read_email_inbox': {
       // The caller's OWN email dropbox — inbound_emails rows scoped by
       // ctx.userId (the real user; act-as never reaches here with the
-      // target's id by construction).
+      // target's id by construction) AND BY THE CALLER'S TENANT.
+      //
+      // ── WHY THE SECOND HALF IS HERE NOW ──────────────────────────────────
+      // All three arms below carried `WHERE user_id = $1` and nothing else,
+      // and the read invariant's allowlist recorded the reason as "the Email
+      // Dropbox is the CALLER'S OWN mailbox … an org-B thread id returns
+      // nothing to org A because the thread is not in the caller's user_id".
+      // That reason is the false premise this whole wave is about
+      // (`users.organization_id` is mutable, so a user keeps `user_id` on
+      // every row they authored for a FORMER tenant) — and the cross-tenant
+      // check it cited VARIED THE USER AND THE ORG TOGETHER, so it could only
+      // ever prove "another user's mail is not yours". Vacuous for the
+      // property it claimed. Executed properly, an org-A caller got a foreign
+      // tenant's sender, subject, preview, the full 6000-char body and the
+      // OCR'd text of its attachments.
+      //
+      // The predicate is STRICT — no `OR organization_id IS NULL` tolerance —
+      // because `inbound_emails.organization_id` is `INTEGER NOT NULL`
+      // (server/db.js): there is no legacy un-stamped row to keep visible, so
+      // a tolerance arm here would be dead SQL that reads as a hole. An
+      // org-less caller is refused by ORGLESS_ALLOWED_TOOLS before this runs,
+      // and if one ever reached the executor door directly, `= NULL` is NULL
+      // and the answer is empty. Fail-closed either way.
+      //
+      // The q/search arm is DISCOVERY, not re-entry: it ILIKEs subject,
+      // from_email and body_text across the whole mailbox, so it hands back
+      // rows the caller never knew existed. It gets the same predicate.
       const userId = (ctx && ctx.userId) || null;
       if (!userId) return 'I could not identify your account, so I can\'t read your email dropbox.';
+      const emailOrgId = ctxOrgId(ctx);
       const threadId = String((input && input.thread_id) || '').trim();
       const fmtWhen = (s) => { if (!s) return ''; const d = new Date(s); return isNaN(d.getTime()) ? '' : d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); };
       if (threadId) {
@@ -10348,9 +10479,10 @@ async function execStaffTool(name, input, ctx) {
                FROM inbound_emails e
                LEFT JOIN email_folders f ON f.id = e.folder_id
               WHERE e.user_id = $1 AND e.thread_id = $2
+                AND e.organization_id = $3
               ORDER BY e.received_at DESC LIMIT 100
            ) t ORDER BY received_at ASC`,
-          [userId, threadId]
+          [userId, threadId, emailOrgId]
         );
         if (!r.rows.length) return 'No conversation with that thread id in your dropbox.';
         // Labels are org-shared and authored by authenticated colleagues —
@@ -10365,8 +10497,9 @@ async function execStaffTool(name, input, ctx) {
                JOIN email_message_labels ml ON ml.message_id = e.id
                JOIN email_labels l ON l.id = ml.label_id AND l.archived_at IS NULL
               WHERE e.user_id = $1 AND e.thread_id = $2
+                AND e.organization_id = $3
               ORDER BY l.name`,
-            [userId, threadId]
+            [userId, threadId, emailOrgId]
           );
           threadLabels = lr.rows.map((x) => x.name);
         } catch (e) { threadLabels = []; }   // labels are colour, never a blocker
@@ -10491,11 +10624,14 @@ async function execStaffTool(name, input, ctx) {
       }
       const limit = Math.max(1, Math.min(50, Number(input && input.limit) || 15));
       const q = String((input && input.q) || '').trim();
-      const params = [userId];
-      let where = 'user_id = $1';
+      // organization_id is in the WHERE from the first param onward, not
+      // appended behind a conditional, so the q arm cannot be reached with the
+      // tenant left off.
+      const params = [userId, emailOrgId];
+      let where = 'user_id = $1 AND organization_id = $2';
       if (q) {
         params.push('%' + q + '%');
-        where += ` AND (subject ILIKE $2 OR from_email ILIKE $2 OR COALESCE(orig_from_email, '') ILIKE $2 OR body_text ILIKE $2)`;
+        where += ` AND (subject ILIKE $3 OR from_email ILIKE $3 OR COALESCE(orig_from_email, '') ILIKE $3 OR body_text ILIKE $3)`;
       }
       const r = await pool.query(
         `SELECT thread_id, COUNT(*)::int AS n, MAX(received_at) AS last_at,
@@ -15264,6 +15400,29 @@ router.get('/subtasks', requireAuth, (req, res) => res.json({ subtasks: [], reti
 
 router.get('/86/messages', requireAuth, async (req, res) => {
   try {
+    // ── THE TWO LEGACY ARMS READ BY AUTHORSHIP ALONE ────────────────────
+    // Three of the five statements below load by session_id AFTER the session
+    // has been proved to belong to the caller. The other two — the entity-tuple
+    // fallback and the bare `entity_type='86' AND user_id=$1` arm — carry an
+    // authorship column and nothing else, and the read invariant's allowlist
+    // called all five "caller-scoped" as though that settled the tenant. It
+    // does not: a user who moved organisations keeps user_id on every turn they
+    // took for their former one, and this endpoint paints them into the chat
+    // pane.
+    //
+    // resolveOrgId, not req.user.organization_id: the JWT claim can be a stale
+    // NULL from before an adoption, and a NULL here would blank a real user's
+    // own history. The DB fallback is what keeps a boundary from becoming a
+    // lockout. A resolution FAILURE is retryable and says so, exactly as
+    // requireOrgId answers it — it is not a verdict about this caller.
+    let msgOrgId;
+    try { msgOrgId = await resolveOrgId(req); }
+    catch (e) {
+      return res.status(503).json({
+        error: 'Could not determine your organization right now — retry shortly.',
+        code: 'ORG_LOOKUP_FAILED',
+      });
+    }
     // Deal-thread history (slice 3a-2). When deal threads are on and the caller
     // is on a deal surface, show the DEAL thread's OWN conversation — loaded by
     // session_id (the cross-stage key stamped in 3a-1) rather than the legacy
@@ -15347,8 +15506,9 @@ router.get('/86/messages', requireAuth, async (req, res) => {
           WHERE user_id = $1
             AND entity_type = $2
             AND COALESCE(estimate_id, '') = COALESCE($3, '')
+            AND (organization_id = $4 OR organization_id IS NULL)
           ORDER BY created_at ASC`,
-        [req.user.id, s.entity_type, s.entity_id]
+        [req.user.id, s.entity_type, s.entity_id, msgOrgId]
       );
       return res.json({ messages: mr.rows });
     }
@@ -15356,8 +15516,9 @@ router.get('/86/messages', requireAuth, async (req, res) => {
       `SELECT id, role, content, output_files, created_at
          FROM ai_messages
         WHERE entity_type='86' AND user_id=$1
+          AND (organization_id = $2 OR organization_id IS NULL)
         ORDER BY created_at ASC`,
-      [req.user.id]
+      [req.user.id, msgOrgId]
     );
     res.json({ messages: r.rows });
   } catch (e) {
@@ -15535,16 +15696,34 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
     const pageBlock = renderPageContextBlock(currentContext);
     // Surface files the user uploaded THIS turn, so a doc dropped mid-chat is
     // visible on the turn it arrives regardless of the deduped entity manifest.
-    // Rides in the per-turn user message (never deduped). Org+owner scoped.
+    // Rides in the per-turn user message (never deduped).
+    //
+    // ── THE COMMENT SAID "Org+owner scoped" AND THE STATEMENT SAID uploaded_by
+    // There was no organization predicate here at all — a sentence asserting a
+    // security property over a statement that did not have it, which is the
+    // exact shape the read invariant's header is about. `freshAttachmentIds`
+    // comes off the REQUEST BODY, so a caller could name any attachment id
+    // they had ever uploaded, including one they uploaded for a former tenant,
+    // and its filename and text-availability were narrated into this turn.
+    //
+    // Scoped on the row's OWN stamp rather than search_my_kb's full
+    // parent-anchored ladder: these are rows the upload endpoint created
+    // minutes ago and stamps on insert, and services/attachment-org-scope.js
+    // says the row-keyed door falls through to the row's own stamp. The
+    // tolerance arm keeps a pre-stamp legacy file the caller uploaded visible
+    // to them.
     let freshUploadBlock = '';
+    const freshOrgId = (req.organization && req.organization.id != null)
+      ? req.organization.id : null;
     if (freshAttachmentIds.length) {
       try {
         const fr = await pool.query(
           `SELECT id, filename, mime_type, size_bytes,
                   (extracted_text IS NOT NULL AND length(extracted_text) > 0) AS has_text
              FROM attachments
-            WHERE id = ANY($1::text[]) AND uploaded_by = $2`,
-          [freshAttachmentIds, req.user.id]
+            WHERE id = ANY($1::text[]) AND uploaded_by = $2
+              AND (organization_id = $3 OR organization_id IS NULL)`,
+          [freshAttachmentIds, req.user.id, freshOrgId]
         );
         if (fr.rows.length) {
           const items = fr.rows.map(r => {
@@ -16139,6 +16318,21 @@ module.exports.internals = {
   // nobody can enumerate is an exemption nobody can review.
   ORGLESS_ALLOWED_TOOLS,
   ALLOWED_AUTO_TIER_TOOLS,
+  // Two functions that are not tools and take no request, exported for the
+  // same stated reason as everything above: the tenant boundary on them is
+  // held by RUNNING them. Both read `ai_messages` on the LEGACY key
+  // (user_id, entity_type, estimate_id) — which for a 'general' thread is
+  // (user, 'general', NULL) and therefore matches every general turn the user
+  // ever took, in any tenant — and both then hand what they read TO THE MODEL:
+  // maybeGenerateSessionLabel writes the model's paraphrase back onto
+  // ai_sessions.summary (the string search_my_sessions serves), and
+  // seedRecoveredSession pastes six turns verbatim into a fresh session as
+  // trusted context. A predicate on the search is worth nothing if the string
+  // being searched was composed out of the other tenant's conversation, so the
+  // assertion has to be about what the model was HANDED, not about a response
+  // body — and that needs these two callable.
+  maybeGenerateSessionLabel,
+  seedRecoveredSession,
   dispatchReadTool,
   execIntakeRead,
   execFieldToolRead,

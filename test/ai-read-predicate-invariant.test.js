@@ -148,33 +148,29 @@ const EXEMPT = {
     { n: 1, why: 'WHERE id = $1 where $1 is the CALLER. Reads their own role + host agent key.' },
   'server/routes/ai-routes.js::fn buildIntakeContext::users':
     { n: 1, why: 'WHERE id = $1 where $1 is the caller, to greet them by name in the intake context.' },
-  'server/routes/ai-routes.js::fn maybeGenerateSessionLabel::ai_messages':
-    { n: 1, why: 'WHERE user_id = $1 — the caller\'s own turns, to auto-title their own session.' },
-  'server/routes/ai-routes.js::fn seedRecoveredSession::ai_messages':
-    { n: 1, why: 'WHERE user_id = $1 — the caller\'s own history, re-seeded into their own recovered session.' },
-  'server/routes/ai-routes.js::case self_diagnose::ai_messages':
-    { n: 1, why: 'WHERE user_id = $1 AND entity_type = \'86\'. The tool introspects the CALLER\'S own last hour; ctx.userId is required and the handler refuses without it.' },
-  // ── FOUR ENTRIES WERE REMOVED FROM HERE, NOT REWRITTEN ────────────────
-  // search_my_kb::attachments, buildTodayDigest::tasks and
-  // buildTurnContext::payloads / ::agent_jobs each carried a reason of the form
-  // "keyed on the caller's own user id, so there is no tenant to cross". That
-  // is the false premise R4 below is named after — users.organization_id is
-  // mutable — and search_my_kb's version of it was executed and leaked. All
-  // four statements now carry a tenant predicate, so they need no exemption and
-  // have none. An exemption whose reason has been disproved is deleted with the
-  // defect, never edited to say something else.
+  // ── ELEVEN ENTRIES HAVE NOW BEEN REMOVED FROM HERE, NOT REWRITTEN ─────
+  // Round four took search_my_kb::attachments, buildTodayDigest::tasks and
+  // buildTurnContext::payloads / ::agent_jobs. THIS round took
+  // maybeGenerateSessionLabel::ai_messages, seedRecoveredSession::ai_messages,
+  // self_diagnose::ai_messages, read_email_inbox::{inbound_emails,
+  // email_folders+…, email_labels+…}, POST /86/chat::attachments, and half of
+  // GET /86/messages.
+  //
+  // Every one carried a reason of the form "keyed on the caller's own user id,
+  // so there is no tenant to cross". That is the false premise R4 below is
+  // named after — users.organization_id is mutable — and read_email_inbox's
+  // version of it went further and cited a cross-tenant VERIFICATION that had
+  // varied the user and the org together, which can only ever prove "another
+  // user's mail is not yours". Vacuous for the property it claimed, and
+  // R4 could never catch it because R4 read this very list.
+  //
+  // All eleven statements now carry a tenant predicate, so they need no
+  // exemption and have none. An exemption whose reason has been disproved is
+  // deleted with the defect, never edited to say something else.
   'server/routes/ai-routes.js::fn buildTurnContext::users':
     { n: 1, why: 'WHERE u.id = $1 — the CALLER\'s own identity row, so the model knows who it is assisting. Its only organization_id is on a LEFT JOIN to organizations for the org NAME, which is why it appears here rather than as LITERAL: an outer join\'s ON clause constrains nothing. Correctly classified, correctly exempt.' },
-  'server/routes/ai-routes.js::case read_email_inbox::inbound_emails':
-    { n: 1, why: 'WHERE user_id = $1 — the Email Dropbox is the CALLER\'S OWN mailbox. Executed cross-tenant and refused: an org-B thread id returns nothing to org A because the thread is not in the caller\'s user_id.' },
-  'server/routes/ai-routes.js::case read_email_inbox::email_folders,inbound_emails':
-    { n: 1, why: 'Same: WHERE e.user_id = $1 AND e.thread_id = $2. The folder join hangs off the caller\'s own row.' },
-  'server/routes/ai-routes.js::case read_email_inbox::email_labels,inbound_emails':
-    { n: 1, why: 'Same: WHERE e.user_id = $1 AND e.thread_id = $2. Labels are colour on the caller\'s own thread.' },
   'server/routes/ai-routes.js::GET /86/messages::ai_messages':
-    { n: 5, why: 'Every arm is caller-scoped. Three load by session_id AFTER `SELECT … FROM ai_sessions WHERE id = $1 AND user_id = $2` has proved the session belongs to the caller (404 otherwise); the other two carry WHERE user_id = $1 directly.' },
-  'server/routes/ai-routes.js::POST /86/chat::attachments':
-    { n: 1, why: 'WHERE id = ANY($1) AND uploaded_by = $2 — files the CALLER attached to THIS message, surfaced back into their own turn.' },
+    { n: 3, why: 'THREE arms, each loading by session_id AFTER `SELECT entity_type, entity_id, session_kind FROM ai_sessions WHERE id = $1 AND user_id = $2` has proved the session belongs to the caller (404 otherwise), or off a deal thread that same probe returned. This entry used to say FIVE and call all five "caller-scoped": the other two carried the legacy entity tuple / `entity_type=\'86\' AND user_id=$1` and NOTHING ELSE, and painted a mover\'s former tenant\'s turns into their current tenant\'s chat pane. Those two now carry the predicate and have left this count — which is what the count is for.' },
   'server/routes/ai-routes.js::case read_receipts::receipts':
     { n: 3, why: 'All three share the `W` clause built directly above them, which opens `r.organization_id = $1`. The builder is a plain string rather than an array so the resolver cannot follow it; the predicate is present and strict (no tolerance arm).' },
 
@@ -214,6 +210,71 @@ const EXEMPT = {
     { n: 1, why: 'Same.' },
 };
 
+// ── R4'S OWN LIST, AND WHY IT IS NOT THIS ONE ─────────────────────────────
+// R4 exists to REFUTE exemptions of a particular shape: "this statement is
+// scoped by an authorship column, therefore it is scoped to a tenant". Until
+// this commit R4's test read
+//
+//     ALL.filter(ownerScoped).filter(r => !EXEMPT[r.key])
+//
+// — so a statement was excused from the rule by the very list the rule was
+// written to audit, and the entries doing the excusing gave THE FALSE PREMISE
+// ITSELF as their reason. The rule could not fire on its own subject matter.
+//
+// The interaction is now decided rather than left implicit, and it is decided
+// the strict way: **R1's allowlist has no authority over an authorship-scoped
+// statement at all.** That class has its own list, below, admission to which
+// requires something an English sentence cannot fake — a NAMED TEST that
+// varies ONLY the org. The two lists are asserted DISJOINT over this class, so
+// an author cannot re-open the door by writing a persuasive `why` in EXEMPT.
+//
+// It is currently EMPTY, and that is the substantive result of this round: all
+// eight authorship-scoped unpredicated statements were fixed rather than
+// excused. An entry here would be shaped:
+//
+//   '<file>::<handler>::<tables>': {
+//     n: 1,
+//     why: '…',
+//     provedBy: { file: 'test/xyz.test.js', test: 'a sentence from the test name' },
+//   }
+//
+// and `validateOwnerExemption` below decides whether it is admissible: the
+// named file must exist, must contain a test whose name contains that string,
+// and must run it through `test/helpers/org-only.js`'s `proveOrgOnly` — the
+// one helper in this repo that CANNOT vary the caller, because it derives both
+// arms from a single caller record. A reason without a passing proof of that
+// shape is not an exemption; it is an open door wearing one.
+const OWNER_SCOPED_PROVEN = {};
+
+// The admissibility test, as a function so it can be exercised against
+// deliberately-bad entries below. A validator nobody has seen reject anything
+// is the same kind of decoration as a scan that matches nothing.
+function validateOwnerExemption(key, entry, readFile) {
+  const problems = [];
+  if (!entry || typeof entry !== 'object') return ['no entry'];
+  if (typeof entry.n !== 'number') problems.push(key + ': n must be a number');
+  if (typeof entry.why !== 'string' || entry.why.length < 40) {
+    problems.push(key + ': why must be a real reading, not a label');
+  }
+  const p = entry.provedBy;
+  if (!p || typeof p.file !== 'string' || typeof p.test !== 'string') {
+    problems.push(key + ': provedBy { file, test } is REQUIRED — an authorship-scoped ' +
+      'exemption needs a named behavioural proof, not a sentence');
+    return problems;
+  }
+  let src;
+  try { src = readFile(p.file); } catch (e) { src = null; }
+  if (src == null) { problems.push(key + ': provedBy.file ' + p.file + ' does not exist'); return problems; }
+  if (src.indexOf(p.test) === -1) {
+    problems.push(key + ': ' + p.file + ' contains no test named "' + p.test + '"');
+  }
+  if (!/\bproveOrgOnly\s*\(/.test(src)) {
+    problems.push(key + ': ' + p.file + ' does not use proveOrgOnly — a cross-tenant claim ' +
+      'proved by varying the user AND the org proves nothing about the tenant');
+  }
+  return problems;
+}
+
 // Column names that mean "who made this", i.e. an axis that is NOT the row's
 // tenant. R2 flags a statement that reaches the org through one of these.
 const OWNER_COLUMNS = 'owner_id|created_by|created_by_user_id|uploaded_by|user_id';
@@ -242,6 +303,20 @@ function constrainingSql(sql) {
     /\b(?:LEFT|RIGHT|FULL)\s+(?:OUTER\s+)?JOIN\b[\s\S]*?(?=\b(?:WHERE|GROUP\s+BY|ORDER\s+BY|LIMIT|HAVING|UNION|LEFT\s+JOIN|RIGHT\s+JOIN|FULL\s+JOIN|INNER\s+JOIN|CROSS\s+JOIN|JOIN)\b|$)/gi,
     ' '
   );
+}
+
+// ── AND NEITHER DOES A PREDICATE IN THE SELECT LIST ───────────────────────
+// The other half of the same mistake, and the one this round would have
+// shipped: `SELECT organization_id FROM users WHERE id = $1` NAMES the column
+// and predicates on nothing, so a token-presence check over the whole statement
+// answers LITERAL. Harmless there — it is the caller's-own-org lookup that
+// every door in this file starts with — but it means an author could satisfy
+// this invariant on an authorship-scoped read by adding the column to the
+// projection and nothing else. R5 closes that; this is the blanking it needs.
+// Every SELECT's projection is blanked, so it works on subqueries too.
+function predicatingSql(sql) {
+  return constrainingSql(sql)
+    .replace(/\bSELECT\b(?:\s+DISTINCT\b)?[\s\S]*?(?=\bFROM\b|$)/gi, ' SELECT ');
 }
 
 function analyse(file) {
@@ -383,9 +458,29 @@ function analyse(file) {
       new RegExp('\\b(?:[a-z_]\\w*\\.)?(' + OWNER_COLUMNS + '|assignee_user_id)\\s*=\\s*\\$\\d', 'i'));
     const ownerScoped = ownerHit ? ownerHit[1].toLowerCase() : null;
 
+    // R5 — does organization_id appear ONLY in the projection? Recorded on
+    // every row, same reason as ownerScoped.
+    //
+    // NOT COMPUTED FOR AN OPAQUE CALL. When the statement text came out of the
+    // builder resolver, `body` is a slice of JAVASCRIPT (`conds.push(...)`,
+    // `params.push(...)`), not SQL — blanking "the SELECT list" of that is
+    // meaningless, and read_recent_conversations (correctly predicated through
+    // a `conds` array) was reported as a projection-only scan the first time
+    // this ran. An opaque call's predicate is judged by R1's BUILDER status;
+    // R5 is a claim about statement TEXT and only text can carry it.
+    const projectionOnly = !opaque &&
+      /organization_id/i.test(constrainingSql(body)) &&
+      !/organization_id/i.test(predicatingSql(body));
+    // A single-row primary-key lookup: the caller gets ONE row back and has to
+    // prove it in JS (attachmentInOrg's ladder) or is simply reading their own
+    // identity. A scan hands back a SET, which is a different thing entirely.
+    const cons = constrainingSql(body);
+    const byPrimaryId = /(^|[^.\w])(?:[a-z_]\w*\s*\.\s*)?id\s*=\s*\$\d/i.test(cons);
+    const scanShaped = /\bILIKE\b|=\s*ANY\s*\(/i.test(cons);
+
     out.push({
       file, line: c.line, site: site.name, tenant: tenant.sort().join(','),
-      status, ownerAxis, ownerScoped,
+      status, ownerAxis, ownerScoped, projectionOnly, byPrimaryId, scanShaped,
       key: file + '::' + site.name + '::' + tenant.sort().join(','),
       head: c.sql.replace(/\s+/g, ' ').trim().slice(0, 100),
     });
@@ -483,16 +578,95 @@ describe('R1 — every tenant read in the agent surface defends itself', () => {
 //
 // So the rule is stated on the STATEMENT CLASS rather than left to the next
 // author to remember: a SELECT on a tenant table whose only scoping is an
-// authorship column FAILS unless it is on the allowlist above with a reason
-// that does not depend on the false premise.
+// authorship column FAILS.
+//
+// ── AND THE RULE USED TO EXEMPT EXACTLY WHAT IT EXISTS TO CATCH ───────────
+// The first version of the test below was, in substance,
+//
+//     ALL.filter(ownerScoped).filter(r => !EXEMPT[r.key])
+//
+// which GRANDFATHERED R1's allowlist — and the allowlist entries for
+// read_email_inbox (three of them) and self_diagnose gave THE FALSE PREMISE
+// ABOVE as their reason. R4 could therefore never fire on the statements it was
+// written for, by construction, and it did not: three doors stayed open through
+// a further commit that was about this exact class.
+//
+// The interaction is now decided, and decided strictly. R1's allowlist has NO
+// authority over this class: an authorship-scoped unpredicated statement must
+// be on OWNER_SCOPED_PROVEN, whose admission test is a NAMED BEHAVIOURAL PROOF
+// that varies only the org. The lists are asserted disjoint over the class, so
+// an entry in EXEMPT can neither excuse one of these nor hide one.
 describe('R4 — an authorship column is not a tenant boundary', () => {
-  test('no authorship-scoped tenant read is unpredicated outside the allowlist', () => {
-    const bad = ALL.filter((r) => r.ownerScoped && (r.status === 'NONE' || r.status === 'UNCHECKED'));
-    const offenders = bad
-      .filter((r) => !EXEMPT[r.key])
-      .map((r) => r.file + ':' + r.line + ' <' + r.site + '> scoped by ' + r.ownerScoped +
-        ' on [' + r.tenant + '] — ' + r.head);
+  const readFile = (rel) => fs.readFileSync(path.join(REPO, rel), 'utf8');
+  const bad = ALL.filter((r) => r.ownerScoped && (r.status === 'NONE' || r.status === 'UNCHECKED'));
+
+  test('no authorship-scoped tenant read is unpredicated', () => {
+    // The whole class, with no reference to EXEMPT. Anything here must be on
+    // R4's OWN list, and this round that list is empty because all eight were
+    // fixed instead of excused.
+    const byKey = {};
+    bad.forEach((r) => { (byKey[r.key] = byKey[r.key] || []).push(r); });
+    const offenders = [];
+    for (const key of Object.keys(byKey)) {
+      const rows = byKey[key];
+      const entry = OWNER_SCOPED_PROVEN[key];
+      if (!entry) {
+        offenders.push('NOT PROVEN  ' + key + '  (' + rows.length + ' statement(s), line(s) ' +
+          rows.map((r) => r.line).join(', ') + ') scoped by ' + rows[0].ownerScoped +
+          '\n              ' + rows[0].head +
+          '\n              An entry in EXEMPT does NOT cover this — see OWNER_SCOPED_PROVEN.');
+        continue;
+      }
+      if (entry.n !== rows.length) {
+        offenders.push('COUNT MOVED ' + key + '  list says ' + entry.n + ', found ' + rows.length);
+      }
+    }
     expect(offenders).toEqual([]);
+  });
+
+  test('R1\'s allowlist has no authority over this class — the lists are disjoint', () => {
+    // The grandfathering, asserted gone. If somebody re-opens one of these
+    // doors and writes a persuasive `why` in EXEMPT, this fails and names it.
+    const smuggled = bad
+      .filter((r) => EXEMPT[r.key])
+      .map((r) => r.file + ':' + r.line + ' <' + r.site + '> is authorship-scoped and unpredicated, ' +
+        'and EXEMPT claims: ' + EXEMPT[r.key].why.slice(0, 120));
+    expect(smuggled).toEqual([]);
+  });
+
+  test('every OWNER_SCOPED_PROVEN entry names a proof that varies ONLY the org', () => {
+    const problems = [];
+    for (const [key, entry] of Object.entries(OWNER_SCOPED_PROVEN)) {
+      problems.push(...validateOwnerExemption(key, entry, readFile));
+    }
+    expect(problems).toEqual([]);
+  });
+
+  test('and the validator REJECTS the four ways an entry could be decoration', () => {
+    // R0's lesson applied to the admission test itself. The list is empty
+    // today, so without this the validator is a function nobody has watched
+    // say no — which is how the last two "invariants" turned out to be
+    // decoration when they were finally mutated.
+    const ok = { n: 1, why: 'x'.repeat(50), provedBy: { file: 'test/helpers/org-only.js', test: 'proveOrgOnly' } };
+    expect(validateOwnerExemption('k', ok, readFile)).toEqual([]);
+
+    // 1. no proof at all — the shape every deleted entry had.
+    expect(validateOwnerExemption('k', { n: 1, why: 'x'.repeat(50) }, readFile).join(' '))
+      .toMatch(/provedBy .* is REQUIRED/);
+    // 2. a proof file that does not exist.
+    expect(validateOwnerExemption('k', Object.assign({}, ok, {
+      provedBy: { file: 'test/does-not-exist.test.js', test: 'anything' } }), readFile).join(' '))
+      .toMatch(/does not exist/);
+    // 3. a real file that contains no such test.
+    expect(validateOwnerExemption('k', Object.assign({}, ok, {
+      provedBy: { file: 'test/helpers/org-only.js', test: 'a test nobody wrote' } }), readFile).join(' '))
+      .toMatch(/contains no test named/);
+    // 4. a real test in a file that does NOT go through proveOrgOnly — i.e.
+    //    one free to vary the user and the org together, which is the exact
+    //    mistake the read_email_inbox entry was wearing.
+    expect(validateOwnerExemption('k', Object.assign({}, ok, {
+      provedBy: { file: 'test/helpers/sql-literals.js', test: 'extractQueryCalls' } }), readFile).join(' '))
+      .toMatch(/does not use proveOrgOnly/);
   });
 
   test('the scan can still SEE the shape it is asserting about', () => {
@@ -500,6 +674,46 @@ describe('R4 — an authorship column is not a tenant boundary', () => {
     // The agent surface has many caller-scoped reads; if this drops to zero the
     // detector broke, not the code.
     expect(ALL.filter((r) => r.ownerScoped).length).toBeGreaterThan(8);
+  });
+});
+
+// ── R5 — NAMING THE COLUMN IS NOT PREDICATING ON IT ───────────────────────
+// R1 answers LITERAL when `organization_id` appears anywhere outside an outer
+// join's ON clause — which includes the SELECT LIST. That is how
+// `SELECT organization_id FROM users WHERE id = $1` reads as compliant, and it
+// is benign there (31 statements in this surface are that idiom or its
+// attachment twin, all single-row primary-key lookups whose verdict is then
+// reached in JS by services/attachment-org-scope.js). But it is also a way to
+// satisfy R1 and R4 on an authorship-scoped read by adding the column to the
+// projection and changing nothing that constrains anything — the same "NAMES
+// organization_id while PREDICATING on nothing" shape R2's header describes,
+// one clause to the left.
+//
+// So the projection-only population is bounded rather than trusted: none of it
+// may be authorship-scoped, and all of it must key on a primary id rather than
+// scan. A statement that hands back a SET on a projection-only "predicate" is
+// not this idiom and has to say so by failing.
+describe('R5 — organization_id in the SELECT list predicates nothing', () => {
+  const projectionOnly = ALL.filter((r) => r.projectionOnly);
+
+  test('the detector sees the shape (it is 31 statements, not zero)', () => {
+    expect(projectionOnly.length).toBeGreaterThan(20);
+  });
+
+  test('no authorship-scoped read is compliant only by naming the column', () => {
+    const offenders = projectionOnly
+      .filter((r) => r.ownerScoped)
+      .map((r) => r.file + ':' + r.line + ' <' + r.site + '> scoped by ' + r.ownerScoped +
+        ' with organization_id in the PROJECTION only — ' + r.head);
+    expect(offenders).toEqual([]);
+  });
+
+  test('every projection-only statement is a single-row lookup, never a scan', () => {
+    const offenders = projectionOnly
+      .filter((r) => !r.byPrimaryId || r.scanShaped)
+      .map((r) => r.file + ':' + r.line + ' <' + r.site + '> returns a SET on a projection-only ' +
+        'tenant reference — ' + r.head);
+    expect(offenders).toEqual([]);
   });
 });
 
@@ -534,15 +748,61 @@ describe('the scanned surface is closed', () => {
   // looks for existed there and its three unpredicated statements could never
   // have been reported. This computes the other half of the surface the same
   // way — by the shape, not by the list — and it is deliberately narrow: a
-  // module ai-routes.js requires, that runs a SELECT on a tenant table scoped
-  // by an AUTHORSHIP column. That is the statement class this whole wave is
-  // about, and it is where the model reads rows out loud.
-  test('every agent-reachable module hosting an authorship-scoped tenant SELECT is scanned', () => {
-    const src = fs.readFileSync(path.join(REPO, 'server', 'routes', 'ai-routes.js'), 'utf8');
-    const required = new Set();
-    const re = /require\((['"])\.\.\/(services\/[a-zA-Z0-9_\-/]+|[a-zA-Z0-9_\-]+)\1\)/g;
-    let m;
-    while ((m = re.exec(src))) required.add('server/' + m[2] + '.js');
+  // module ai-routes.js reaches, that runs a SELECT on a tenant table scoped
+  // by an AUTHORSHIP column AND CARRIES NO TENANT PREDICATE. That is the
+  // statement class this whole wave is about, and it is where the model reads
+  // rows out loud.
+  //
+  // ── TWO THINGS WERE WRONG WITH IT, AND BOTH ARE PATH ASSUMPTIONS ────────
+  // 1. The require pattern was `require('../…')` ONLY, so a SIBLING ROUTE
+  //    module — `require('./payload-routes')`, `require('./admin-agents-routes')`,
+  //    seven call sites between them — was structurally invisible. That is the
+  //    same shape as the miss it was written to fix, one directory across.
+  //    admin-agents-routes.js was hiding TWO authorship-scoped ai_messages
+  //    reads behind it: GET /conversations/:key returns 16KB of every turn's
+  //    CONTENT, and POST /conversations/:key/replay re-runs the model over the
+  //    transcript. Both were guarded — by a `SELECT 1 FROM users WHERE id = $1
+  //    AND organization_id = $2` on the line above, which is R2's owner axis
+  //    written in JavaScript instead of SQL, and false for exactly the same
+  //    reason. Both now carry the row's own predicate.
+  // 2. It walked ONE hop. A module required by a required module could host
+  //    the class and answer to nothing. The walk is transitive now (depth
+  //    capped, visited set), which reaches 68 modules instead of 31.
+  //
+  // ── AND THE CRITERION IS THE DEFECT, NOT THE SHAPE ─────────────────────
+  // It used to demand FILES contain every module hosting an authorship-scoped
+  // tenant SELECT at all, predicated or not. Held literally that is ~24 unread
+  // allowlist entries for two admin route files whose statements are correct —
+  // and an unread entry is what turns a file like this into decoration, which
+  // is the reason this scan is scoped to three files in the first place. The
+  // criterion is now "hosts an UNPREDICATED one". Nothing is weakened: a module
+  // whose predicates are all present stays outside, and the day one of them is
+  // removed the module hosts the defect and this fails by name — which is the
+  // property the old criterion was reaching for.
+  test('every agent-reachable module hosting an UNPREDICATED authorship-scoped tenant SELECT is scanned', () => {
+    // Transitive require walk from ai-routes.js, relative paths resolved so a
+    // './sibling' is followed exactly like a '../services/x'.
+    const reached = new Set();
+    (function walk(rel, depth) {
+      if (reached.has(rel) || depth > 6) return;
+      reached.add(rel);
+      const p = path.join(REPO, rel);
+      if (!fs.existsSync(p)) return;
+      const dir = path.posix.dirname(rel.replace(/\\/g, '/'));
+      const re = /require\((['"])(\.\.?\/[A-Za-z0-9_\-./]+)\1\)/g;
+      const s = fs.readFileSync(p, 'utf8');
+      let mm;
+      while ((mm = re.exec(s))) {
+        let t = path.posix.normalize(path.posix.join(dir, mm[2]));
+        if (!t.endsWith('.js')) t += '.js';
+        walk(t, depth + 1);
+      }
+    })('server/routes/ai-routes.js', 0);
+    const required = reached;
+    // The walk has to actually go somewhere. Before the './' fix it reached 31
+    // modules; a regression to a one-hop or '../'-only walk shows up here
+    // rather than as a silent green.
+    expect(required.size).toBeGreaterThan(60);
 
     const ownerScoped = new RegExp(
       '\\b(?:[a-z_]\\w*\\.)?(?:' + OWNER_COLUMNS + '|assignee_user_id)\\s*=\\s*\\$\\d', 'i');
@@ -555,6 +815,10 @@ describe('the scanned surface is closed', () => {
       try { calls = extractQueryCalls(text); } catch (e) { continue; }
       const hit = calls.some((c) => {
         const sql = c.sql || '';
+        // Predicated is not this class. Judged on the CONSTRAINING text, so an
+        // outer join's ON clause cannot launder it, and on the PREDICATING
+        // text, so naming the column in the projection cannot either.
+        if (/organization_id/i.test(predicatingSql(sql))) return false;
         if (!/\bSELECT\b/i.test(sql) || !ownerScoped.test(sql)) return false;
         const tables = [...sql.matchAll(/\b(?:FROM|JOIN)\s+([a-z_][a-z0-9_]*)/gi)].map((x) => x[1].toLowerCase());
         return tables.some((t) => ['direct', 'parent', 'mixed_shared'].indexOf(classify(t)) !== -1);
@@ -564,5 +828,37 @@ describe('the scanned surface is closed', () => {
     // Every such module must be in FILES. Reported as a list so a new one
     // names itself in the failure.
     expect(hosts.filter((h) => FILES.indexOf(h) === -1)).toEqual([]);
+  });
+
+  test('the widened walk really does reach the siblings the old one could not', () => {
+    // R0's lesson applied to the walk itself: the fix above is a path change,
+    // and a path change that quietly stopped matching would leave this test
+    // passing by reaching nothing. These two are required as `./sibling` from
+    // ai-routes.js — the exact form the old pattern could not see — and both
+    // host authorship-scoped tenant SELECTs (predicated ones, now).
+    const src = fs.readFileSync(path.join(REPO, 'server', 'routes', 'ai-routes.js'), 'utf8');
+    expect(src).toMatch(/require\('\.\/admin-agents-routes'\)/);
+    expect(src).toMatch(/require\('\.\/payload-routes'\)/);
+    const old = /require\((['"])\.\.\/(services\/[a-zA-Z0-9_\-/]+|[a-zA-Z0-9_\-]+)\1\)/g;
+    const oldReach = new Set();
+    let m;
+    while ((m = old.exec(src))) oldReach.add('server/' + m[2] + '.js');
+    expect(oldReach.has('server/routes/admin-agents-routes.js')).toBe(false);
+    expect(oldReach.has('server/routes/payload-routes.js')).toBe(false);
+  });
+
+  test('and the two statements it was hiding now carry the row\'s own tenant', () => {
+    // Behaviourally these sit behind ROLES_MANAGE on an admin console, so they
+    // are held here at the statement rather than by driving the route — named
+    // explicitly instead of left to the reader to infer from a scan that is
+    // now, correctly, silent about them.
+    const src = fs.readFileSync(path.join(REPO, 'server', 'routes', 'admin-agents-routes.js'), 'utf8');
+    const stmts = extractQueryCalls(src).filter((c) =>
+      /FROM ai_messages/i.test(c.sql || '') && /user_id\s*=\s*\$\d/i.test(c.sql || ''));
+    expect(stmts.length).toBe(2);                                  // both doors found
+    stmts.forEach((c) => {
+      expect(predicatingSql(c.sql)).toMatch(/organization_id\s*=\s*\$\d/);
+      expect(c.sql).toMatch(/organization_id IS NULL/);            // and the legacy tolerance
+    });
   });
 });
