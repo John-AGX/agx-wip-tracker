@@ -7,8 +7,27 @@
 const assert = require('assert');
 const d = require('../server/services/report-document');
 
+// ── WHY test() DELEGATES TO JEST WHEN JEST IS PRESENT ────────────────────
+// This file is a standalone node script that ends in process.exit(). It is
+// NAMED *.test.js, so jest collects it — and process.exit() inside a jest
+// worker KILLS THE WORKER:
+//
+//     A jest worker process (pid=…) crashed for an unknown reason: exitCode=0
+//
+//  — this file's assertions then count as ZERO tests, and anything still queued
+// on that worker goes with them. A worker that exits mid-run can TRUNCATE A
+// FAILURE REPORT, and this suite is the instrument every claim in this repo
+// leans on; an instrument that can drop the failure it was run to find is
+// worse than a slow one.
+//
+// So test() hands off to jest when jest is there, and keeps the script
+// behaviour — exit code included — under plain `node`. Nothing asserted
+// changes. Only who counts it.
+const UNDER_JEST = typeof global.it === 'function' && typeof global.expect === 'function';
+
 let failures = 0;
 function test(name, fn) {
+  if (UNDER_JEST) return global.it(name, fn);
   try { fn(); console.log('  ok  ' + name); }
   catch (e) { failures++; console.error('  FAIL ' + name + '\n       ' + e.message); }
 }
@@ -70,7 +89,7 @@ function build(over) {
   }, over || {}));
 }
 
-console.log('report-document');
+if (!UNDER_JEST) console.log('report-document');
 
 test('no internal attachment field survives into the document', function () {
   const json = JSON.stringify(build());
@@ -169,5 +188,7 @@ test('a malformed report does not throw', function () {
   });
 });
 
-console.log(failures ? '\nreport-document: ' + failures + ' FAILED' : '\nreport-document: all passed');
-process.exit(failures ? 1 : 0);
+if (!UNDER_JEST) {
+  console.log(failures ? '\nreport-document: ' + failures + ' FAILED' : '\nreport-document: all passed');
+  process.exit(failures ? 1 : 0);
+}

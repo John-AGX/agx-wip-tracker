@@ -82,10 +82,10 @@ worktree and recording what the unrepaired code returned for 56 agent tools and
   model is offered; 58 driven, 54 derived-waived, counts committed. Plus the
   four admin-console routes, through the identical oracle.
 - `test/tenant-register2-http.test.js` — **REGISTER 2**, added after the scaffold was
-  measured driving 4 routes out of 565. `server/index.js` mounts 75 things; 74 of them
-  are routers declaring 565 routes; 137 are param-less GETs and every one is now driven,
+  measured driving 4 routes out of 569. `server/index.js` mounts 76 things; 75 of them
+  are routers declaring 569 routes; 137 are param-less GETs and every one is now driven,
   twice (as an org admin and as the platform owner), through the same oracle. The other
-  428 are writes or need a path parameter and are COUNTED. It found three unplanted
+  432 are writes or need a path parameter and are COUNTED. It found three unplanted
   cross-tenant reads on its first run — see items 15 and 16.
 - `test/tenant-attack-classes.test.js` — all eight attack classes planted and
   caught, with seven correctly-predicated counterparts proving the oracle
@@ -401,7 +401,7 @@ claims eight registers and has five.
 
 **It can now catch, and could not before:**
 
-- A route added anywhere in the server that reads across tenants. 565 routes are
+- A route added anywhere in the server that reads across tenants. 569 routes are
   enumerated from `router.stack`; 137 are driven. Previously 4 were.
 - An IDOR — a door answering a foreign id it never checked. The recipes now carry a
   FOREIGN-ID axis, derived, so a recipe added next week gets its foreign twin for free.
@@ -423,7 +423,7 @@ claims eight registers and has five.
   with three rows per table no default limit hides anything anyway. A real second page
   needs the fixture padded until org B falls off page one.
 - **A leak that needs a WRITE to expose it.** Item 6.
-- **A leak in the 428 routes that need a path parameter.** Counted, not driven.
+- **A leak in the 432 routes that need a path parameter.** Counted, not driven.
 - **A wrong QUERY.** Every failure is a marker, a magnitude or a diff. The harness says
   an ANSWER is wrong; a human finds the statement.
 - **A leak welded to a letter with no delimiter** — `org900000002`. Arm 2 stopped reading
