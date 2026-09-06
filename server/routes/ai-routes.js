@@ -15431,6 +15431,37 @@ router.get('/86/messages', requireAuth, async (req, res) => {
         code: 'ORG_LOOKUP_FAILED',
       });
     }
+    // ── THE NULL THAT IS NOT A TENANT, REFUSED BEFORE IT BECOMES A PREDICATE ──
+    // resolveOrgId RETURNS NULL — it does not throw — for a user whose `users`
+    // row carries no organization_id (auth.js:372-388; only a DB failure is a
+    // throw). Every arm below then runs
+    //     (organization_id = NULL OR organization_id IS NULL)
+    // whose first half is UNKNOWN for every row and whose second half matches
+    // only un-stamped ones. Once db.js's boot backfill has stamped ai_messages,
+    // THAT PREDICATE CAN ONLY MATCH NOTHING — and the handler answers 200 with
+    // `{"messages":[]}`. The chat pane renders empty, with no error, forever.
+    // Measured, caller held fixed and only the code version varying:
+    //     69f2cabd -> {"messages":[o1,o2]}     eaebc098 -> {"messages":[]}
+    //
+    // REACHABILITY. Today: effectively nil, because db.js:320 re-adopts every
+    // org-less user into AGX at each boot. That guard is `NEVER_MULTI_ORG`
+    // ((SELECT COUNT(*) FROM organizations) <= 1), so THE DAY ORG #2 EXISTS it
+    // stops, org-less users stop being adopted, and the blanking becomes real,
+    // silent and permanent. P86_TENANT_SCOPE has zero reach into this file, so
+    // there is no rollback for it either.
+    //
+    // So: refuse, with the same 409 sentence requireOrgId already writes for a
+    // write it will not perform. "I cannot tell whose this is" and "you have no
+    // history" are different answers, and only one of them is true here. FAIL
+    // CLOSED, NEVER SILENTLY — a silent empty is the exact defect class this
+    // whole wave exists to eliminate, and this endpoint is where a user would
+    // meet it first.
+    if (msgOrgId == null) {
+      return res.status(409).json({
+        error: 'This account is not attached to an organization, so your chat history cannot be scoped to a tenant. Nothing was lost — ask an administrator to open your user in Admin → Users and save it, which attaches you to their organization.',
+        code: 'ORG_UNRESOLVED',
+      });
+    }
     // Deal-thread history (slice 3a-2). When deal threads are on and the caller
     // is on a deal surface, show the DEAL thread's OWN conversation — loaded by
     // session_id (the cross-stage key stamped in 3a-1) rather than the legacy
