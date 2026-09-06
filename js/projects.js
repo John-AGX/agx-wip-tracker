@@ -2180,15 +2180,11 @@
     // sized from each loaded image, and a static map that fails to load is
     // replaced with a readable note instead of a broken-image icon.
     // Shared by the preview and the printed page so neither can drift.
+    // Post-mount work — annotation overlays and the static-map fallback — also
+    // comes from the shared module, so the app and the portal cannot wire the
+    // same document two different ways.
     function wireReportDocument(container) {
-      container.querySelectorAll('[data-anno-photo]').forEach(function(canvas) {
-        var pid = canvas.getAttribute('data-anno-photo');
-        var att = allPhotos.find(function(a) { return a.id === pid; });
-        if (!att) return;
-        var img = canvas.parentElement && canvas.parentElement.querySelector('img');
-        paintAnnotationsOver(img, canvas, att.annotations);
-      });
-      container.querySelectorAll('.p86-report-preview-map img').forEach(wireStaticMapFallback);
+      window.p86ReportDocument.wire(container, buildReportDoc());
       return container;
     }
     // Render the document into a container and wire it up. Print uses this;
@@ -2404,133 +2400,101 @@
       });
     }
 
-    // Preview overlay — paper-styled full-screen modal that renders
-    // EXACTLY what the printed PDF would look like with the current
-    // style pack applied. Reuses renderPrintCoverHTML for the cover
-    // and renders sections in read-only form (no toggle buttons, no
-    // remove ×, no editable inputs — just photos, captions as text,
-    // and metadata). Top bar has a "Print / Save PDF" so users can
-    // commit directly from the preview without going back to the
-    // editor.
-    function previewSectionHTML(section) {
-      var layout = section.layout || 'photo-grid';
-      var label = section.label || '';
-      var bodyHTML = '';
-      if (layout === 'text-block') {
-        bodyHTML = '<div class="p86-report-preview-text">' + escapeHTML(section.text_body || '') + '</div>';
-      } else if (layout === 'attachment-list') {
-        var ids = Array.isArray(section.attachment_ids) ? section.attachment_ids : [];
-        var allFiles = (_detailState.photos || []).filter(function(a) { return a && a.mime_type && a.mime_type.indexOf('image/') !== 0; });
-        bodyHTML = '<div class="p86-report-preview-files">' +
-          ids.map(function(aid) {
-            var att = allFiles.find(function(a) { return a.id === aid; });
-            if (!att) return '';
-            var ext = (att.filename || '').split('.').pop().toUpperCase();
-            return '<div class="p86-report-preview-file-row">' +
-              '<span class="p86-report-preview-file-ext">' + escapeHTML(ext) + '</span>' +
-              '<span class="p86-report-preview-file-name">' + escapeHTML(att.filename || '') + '</span>' +
-            '</div>';
-          }).join('') +
-        '</div>';
-      } else if (layout === 'photo-map') {
-        // Photo-map preview/print — render the Static Maps snapshot
-        // (the interactive map can't print), with a tag-color legend.
-        // Falls back to a located-photo grid if the maps key isn't
-        // cached yet (so the section is never blank).
-        var pmIds = section.photo_ids || [];
-        var pmPhotos = pmIds.map(function(pid) { return allPhotos.find(function(a) { return a.id === pid; }); }).filter(Boolean);
-        var pmCoords = pmPhotos.filter(function(p) {
-          var la = Number(p.lat), ln = Number(p.lng);
-          return Number.isFinite(la) && Number.isFinite(ln) && !(la === 0 && ln === 0);
-        });
-        var pmStyle = section.pin_style || DEFAULT_PIN_STYLE;
-        var pmUrl = (typeof buildStaticMapsUrl === 'function') ? buildStaticMapsUrl(pmCoords, pmStyle) : '';
-        if (pmUrl) {
-          var legend = '';
-          if (pmStyle === 'tag' && window.p86TagIcons && window.p86TagIcons.forTag) {
-            var seen = {};
-            pmCoords.forEach(function(p) {
-              var tg = (Array.isArray(p.tags) && p.tags[0]) ? p.tags[0] : '';
-              var key = tg.toLowerCase();
-              if (key && !seen[key]) seen[key] = window.p86TagIcons.forTag(tg);
-            });
-            var items = Object.keys(seen).map(function(k) {
-              return '<span style="display:inline-flex;align-items:center;gap:5px;margin:0 12px 6px 0;font-size:12px;">' +
-                '<span style="display:inline-block;width:13px;height:13px;border-radius:50%;background:' + escapeAttr(seen[k].bg) + ';"></span>' +
-                escapeHTML(k) + '</span>';
-            }).join('');
-            if (items) legend = '<div class="p86-report-preview-map-legend" style="margin-top:8px;">' + items + '</div>';
-          }
-          bodyHTML = '<div class="p86-report-preview-map">' +
-            '<img src="' + escapeAttr(pmUrl) + '" alt="Photo locations" style="width:100%;max-width:680px;border-radius:8px;display:block;" />' +
-            legend +
-          '</div>';
-        } else if (pmCoords.length) {
-          bodyHTML = '<div class="p86-report-preview-section-grid size-small">' +
-            pmCoords.map(function(p) {
-              var src = p.web_url || p.thumb_url;
-              return '<div class="p86-report-preview-photo"><div class="p86-report-preview-photo-img-wrap"><img src="' + escapeAttr(src) + '" alt="" /></div></div>';
-            }).join('') +
-          '</div>';
-        } else {
-          bodyHTML = '<div class="p86-report-preview-empty">No located photos in this section.</div>';
-        }
-      } else {
-        // photo-grid / single-photo / before-after — same render but
-        // without the edit chrome.
-        var size = section.photoSize || 'small';
-        var photoIds = section.photo_ids || [];
-        if (!photoIds.length) {
-          bodyHTML = '<div class="p86-report-preview-empty">No photos in this section.</div>';
-        } else {
-          var photoCardsHTML = photoIds.map(function(pid) {
-            var att = allPhotos.find(function(a) { return a.id === pid; });
-            if (!att) return '';
-            var caption = section.captions[pid] || '';
-            var photoSide = (typeof descSideFor === 'function') ? descSideFor(section, pid) : 'right';
-            var sideClass = attHasSideContent(att) ? ' has-sidedesc' + (photoSide === 'left' ? ' desc-left' : '') : '';
-            var imgSrc = att.web_url || att.thumb_url;
-            return '<div class="p86-report-preview-photo' + sideClass + '">' +
-              '<div class="p86-report-preview-photo-img-wrap">' +
-                reportPhotoNumHTML(pid) +
-                '<img src="' + escapeAttr(imgSrc) + '" alt="" />' +
-                // Inline annotation canvas (drawn after DOM mounts)
-                (Array.isArray(att.annotations) && att.annotations.length
-                  ? '<canvas class="p86-report-preview-photo-anno" data-anno-photo="' + escapeAttr(pid) + '"></canvas>'
-                  : '') +
-              '</div>' +
-              (caption ? '<div class="p86-report-preview-photo-cap">' + escapeHTML(caption) + '</div>' : '') +
-              photoSideColumnHTML(att) +
-            '</div>';
-          }).join('');
-          var sectionCls = (layout === 'single-photo')
-            ? 'p86-report-preview-section-stack size-' + escapeAttr(size)
-            : 'p86-report-preview-section-grid size-' + escapeAttr(size);
-          bodyHTML = '<div class="' + sectionCls + '">' + photoCardsHTML + '</div>';
-        }
-      }
-      return '<section class="p86-report-preview-section">' +
-        (label ? '<h2 class="p86-report-preview-section-label">' + escapeHTML(label) + '</h2>' : '') +
-        bodyHTML +
-      '</section>';
+    // previewSectionHTML lived here. It is gone: js/report-document.js renders
+    // every section now, for the preview, the printed page AND the public share
+    // portal. Keeping a second copy here is what let printed page breaks drift
+    // away from the preview in the first place.
+
+    // Build the DOCUMENT object from the editor's live state — the same shape
+    // server/services/report-document.js produces when publishing a share.
+    //
+    // This is what makes "one renderer" literally true rather than nearly true:
+    // the preview, the printed page and the public portal all render the same
+    // object through the same module, so a change to how a section looks cannot
+    // land in one and miss the others. Two renderers for one document is exactly
+    // what made printed page breaks disagree with the preview.
+    //
+    // The internal document carries uploaded_by_name; the published snapshot
+    // does not. The renderer shows the uploader only when the document has one,
+    // so "who took this" stays internal without the renderer knowing why.
+    function buildReportDoc() {
+      buildReportPhotoNumbers(state.sections, function(pid) { return !photoIsGone(pid); });
+      return {
+        v: 1,
+        title: state.report.title || '',
+        summary: state.report.summary || '',
+        template_type: state.report.template_type || 'walkthrough',
+        style_pack: state.stylePack || 'clean',
+        cover_page: state.cover.enabled
+          ? Object.assign({}, state.cover, { enabled: true })
+          : { enabled: false },
+        org_name: (window.p86BrandName && window.p86BrandName()) || '',
+        project_name: (_detailState.project && _detailState.project.name) || '',
+        project_address: (_detailState.project && _detailState.project.address_text) || '',
+        sections: (state.sections || []).map(function(s) {
+          var captions = s.captions || {};
+          var ids = Array.isArray(s.photo_ids) ? s.photo_ids : [];
+          var attIds = Array.isArray(s.attachment_ids) ? s.attachment_ids : [];
+          var files = (_detailState.photos || []).filter(function(a) {
+            return a && a.mime_type && a.mime_type.indexOf('image/') !== 0;
+          });
+          return {
+            id: s.id,
+            label: s.label || '',
+            layout: s.layout || 'photo-grid',
+            photoSize: s.photoSize || 'small',
+            descSide: s.descSide || 'right',
+            descSides: s.descSides || {},
+            pin_style: s.pin_style || DEFAULT_PIN_STYLE,
+            text_body: s.text_body || '',
+            // A photo deleted from the project is dropped, never rendered as a
+            // placeholder — the same rule the published snapshot applies.
+            photos: ids.map(function(pid) {
+              var att = allPhotos.find(function(a) { return a.id === pid; });
+              if (!att) return null;
+              return {
+                id: att.id,
+                filename: att.filename || '',
+                mime_type: att.mime_type || '',
+                thumb_url: att.thumb_url || null,
+                web_url: att.web_url || null,
+                caption: captions[pid] != null ? captions[pid] : (att.caption || ''),
+                shot_at: att.taken_at || att.uploaded_at || null,
+                uploaded_by_name: att.uploaded_by_name || '',
+                annotations: Array.isArray(att.annotations) ? att.annotations : null,
+                lat: att.lat == null ? null : Number(att.lat),
+                lng: att.lng == null ? null : Number(att.lng),
+                num: _reportPhotoNums[pid] || null
+              };
+            }).filter(Boolean),
+            files: attIds.map(function(aid) {
+              var f = files.find(function(a) { return a.id === aid; });
+              return f ? { id: f.id, filename: f.filename || '' } : null;
+            }).filter(Boolean),
+            // The editor CAN build a keyed static-map URL because it holds the
+            // browser Maps key. The published snapshot cannot, and bakes the
+            // image server-side instead — which is why this is a property of the
+            // DOCUMENT rather than something the renderer works out.
+            map_url: (s.layout === 'photo-map' && typeof buildStaticMapsUrl === 'function')
+              ? buildStaticMapsUrl(
+                  ids.map(function(pid) { return allPhotos.find(function(a) { return a.id === pid; }); })
+                     .filter(function(p) {
+                       return p && Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng)) &&
+                              !(Number(p.lat) === 0 && Number(p.lng) === 0);
+                     }),
+                  s.pin_style || DEFAULT_PIN_STYLE
+                ) || ''
+              : ''
+          };
+        })
+      };
     }
 
-    // ── THE canonical report document ────────────────────────────────
-    // Preview and print render THIS, and the server PDF + shared read-only
-    // page will too. Before, the preview built its own HTML while printing
-    // rendered the EDITOR's DOM — two renderers for one document, which is
-    // exactly why printed page breaks never matched what the preview showed.
-    // Anything that should appear in the finished report belongs in here.
     function renderReportDocumentHTML() {
-      // Number first: the sequence runs across the whole document, and skips
-      // photos deleted from the project so it stays contiguous.
-      buildReportPhotoNumbers(state.sections, function(pid) { return !photoIsGone(pid); });
-      return '<div class="p86-report-preview-paper" data-style-pack="' + escapeAttr(state.stylePack || 'clean') + '">' +
-        (state.cover.enabled ? renderPrintCoverHTML() : '') +
-        (state.report.summary ? '<div class="p86-report-preview-summary">' + escapeHTML(state.report.summary) + '</div>' : '') +
-        state.sections.map(previewSectionHTML).join('') +
-      '</div>';
+      return window.p86ReportDocument.render(buildReportDoc());
     }
+
+
 
     function openReportPreview() {
       var prior = document.getElementById('projReportPreview');

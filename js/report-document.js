@@ -62,7 +62,7 @@
   }
 
   function hasSideContent(photo) {
-    return !!(photo && (photo.caption || photo.shot_at));
+    return !!(photo && (photo.caption || photo.shot_at || photo.uploaded_by_name));
   }
 
   // The metadata column beside a photo. Deliberately NOT the editor's version:
@@ -71,10 +71,17 @@
   function sideColumnHTML(photo) {
     if (!hasSideContent(photo)) return '';
     var when = fmtDate(photo.shot_at);
+    // The uploader is rendered only when the DOCUMENT carries one. The editor
+    // includes it; the published snapshot omits it, because who on the crew
+    // took a photo is internal. Same renderer, different data — the decision
+    // lives in the document, not in a flag threaded through here.
+    var who = photo.uploaded_by_name || '';
+    var meta = [who, when].filter(Boolean);
     return '<div class="p86-report-photo-sidedesc">' +
       (photo.caption ? '<div class="p86-report-photo-sidedesc-text">' + esc(photo.caption) + '</div>' : '') +
-      (when ? '<div class="p86-report-photo-meta"><div class="p86-report-photo-meta-row">' +
-        '<span class="p86-report-photo-meta-val">' + esc(when) + '</span></div></div>' : '') +
+      (meta.length ? '<div class="p86-report-photo-meta">' + meta.map(function (m) {
+        return '<div class="p86-report-photo-meta-row"><span class="p86-report-photo-meta-val">' + esc(m) + '</span></div>';
+      }).join('') + '</div>' : '') +
     '</div>';
   }
 
