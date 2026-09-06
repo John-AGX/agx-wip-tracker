@@ -62,6 +62,7 @@ const marketRoutes = require('./routes/market-routes');
 const folderTemplatesRoutes = require('./routes/folder-templates-routes');
 const tasksRoutes = require('./routes/tasks-routes');
 const taskShareRoutes = require('./routes/task-share-routes');
+const reportShareRoutes = require('./routes/report-share-routes');
 const notesRoutes = require('./routes/notes-routes');
 const remindersCrudRoutes = require('./routes/reminders-crud-routes');
 const receiptRoutes = require('./routes/receipt-routes');
@@ -294,6 +295,7 @@ app.use('/api/subs', subRoutes);
 // through to here only for the invite endpoints it doesn't define.
 app.use('/api', subPortalRoutes);
 app.use('/api', taskShareRoutes);
+app.use('/api', reportShareRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/agent-jobs', require('./routes/agent-jobs-routes'));
 app.use('/api/push', require('./routes/push-routes'));
@@ -417,6 +419,24 @@ app.get('/accept-org-invite', (req, res) => {
 // talks to the token-gated /api/task-share/* endpoints. No login, no app shell.
 app.get('/t/:token', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'task-share.html'));
+});
+
+// Public report portal — a client, owner or insurer lands here from a share
+// email (/r/<token>). Registered BEFORE express.static and the SPA fallback so
+// the token page wins over the app shell.
+//
+// The three headers are copied deliberately from /live/:token, and for the same
+// reason: this URL carries a CREDENTIAL in its path. no-referrer keeps the token
+// out of Referer headers when the reader clicks a link in the report; noindex
+// keeps a forwarded link out of search results; no-store keeps a shared or
+// public machine from holding the page after the reader walks away. Browser
+// defaults happen to cover some of this today, but "the default is currently
+// fine" is not a decision.
+app.get('/r/:token', (req, res) => {
+  res.set('Referrer-Policy', 'no-referrer');
+  res.set('X-Robots-Tag', 'noindex, nofollow');
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.sendFile(path.join(__dirname, '..', 'report-share.html'));
 });
 
 // Public live-room viewer page — someone lands here from a forwarded link

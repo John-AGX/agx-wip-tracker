@@ -44,7 +44,7 @@
 // Local dev (no Railway env var) → sw.js is served byte-for-byte
 // from this file, so the base version below IS the active version.
 
-const CACHE_VERSION = 'p86-shell-v14';
+const CACHE_VERSION = 'p86-shell-v15';
 
 // NOTE: /index.html and / are deliberately NOT in this list. HTML
 // goes through the network-first handler below; pre-caching it with
@@ -148,8 +148,10 @@ self.addEventListener('fetch', function (event) {
   // prevent that: it is a fetch() option with no effect on a top-level
   // navigation, and cache.put() ignores Cache-Control entirely. The only thing
   // that actually stops it is not entering the branch. Same reasoning applies
-  // to /t/ (task shares), whose token is in the path for the same reason.
-  if (url.pathname.startsWith('/live/') || url.pathname.startsWith('/t/')) return;
+  // to /t/ (task shares) and /r/ (report share portal), whose tokens are in
+  // the path for the same reason.
+  if (url.pathname.startsWith('/live/') || url.pathname.startsWith('/t/') ||
+      url.pathname.startsWith('/r/')) return;
 
   // Cross-origin (R2 attachments, Anthropic, etc.) → bypass.
   if (url.origin !== self.location.origin) return;

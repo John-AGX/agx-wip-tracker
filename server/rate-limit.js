@@ -354,6 +354,61 @@ const liveRoomSnapLimiter = rateLimit({
   },
 });
 
+// 10. Report share links — the public report portal (/api/report-share/:token).
+//
+// TWO buckets, because they defend different things and a single one cannot do
+// both jobs:
+//
+//   * reportShareIpLimiter is keyed on the CLIENT IP and is the brute-force
+//     defence. The token is the entire credential, so an attacker walking the
+//     64-hex space must be throttled by WHO IS ASKING. Keying this one on the
+//     token would be useless — every guess is a different token and every
+//     bucket would be empty. 60/min is far above any human opening a link and
+//     far below a useful search rate. (256 bits is not brute-forceable anyway;
+//     this exists so the attempt costs the attacker something and shows up in
+//     the logs rather than running silently.)
+//
+//   * reportShareViewLimiter is keyed on the TOKEN and protects the SERVER
+//     from one popular link — a report forwarded to a whole owner group and
+//     opened by everyone at once, or a client hammering refresh. 240/min per
+//     link is generous for real reading and still bounds the blast radius of a
+//     single URL leaking into somewhere public.
+//
+// Order matters at the mount: IP first, so a scanner is stopped before it can
+// consume anyone else's token bucket.
+const reportShareIpLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: function (req) {
+    return 'rsip:' + (req.ip || 'unknown');
+  },
+  handler: function (req, res) {
+    const retryAfter = Math.ceil(res.getHeader('Retry-After') || 60);
+    console.warn('[rate-limit] report-share IP throttle from', req.ip, '(retry in', retryAfter, 's)');
+    jsonHandler(res, retryAfter);
+  },
+});
+
+const reportShareViewLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 240,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: function (req) {
+    const t = (req.params && req.params.token) || '';
+    // Key on a PREFIX of the token, never the whole thing: rate-limit keys end
+    // up in memory and in log lines, and the token is a live credential.
+    return t ? ('rsv:' + t.slice(0, 16)) : ('ip:' + (req.ip || 'unknown'));
+  },
+  handler: function (req, res) {
+    const retryAfter = Math.ceil(res.getHeader('Retry-After') || 60);
+    console.warn('[rate-limit] report-share view throttle on', req.originalUrl, '(retry in', retryAfter, 's)');
+    jsonHandler(res, retryAfter);
+  },
+});
+
 module.exports = {
   ipLoginLimiter,
   ipGenericLimiter,
@@ -367,4 +422,6 @@ module.exports = {
   liveMirrorLimiter,
   liveSnapLimiter,
   liveRoomSnapLimiter,
+  reportShareIpLimiter,
+  reportShareViewLimiter,
 };
