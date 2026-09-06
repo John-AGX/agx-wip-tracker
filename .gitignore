@@ -8,3 +8,6 @@ data/
 # landing in main.
 probe*.js
 docs/scope-rework-brief.md
+
+# Cloudflare worker build output — wrangler builds from src/worker.js
+cloudflare/email-worker/dist/
