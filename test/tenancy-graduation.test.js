@@ -23,7 +23,7 @@
 // The obvious reading of "a test fails while any box is unchecked" would put
 // the suite in permanent failure, which means it gets muted in a week and the
 // checklist protects nothing while wearing the costume of protection. What is
-// asserted instead is AGREEMENT between the document and the code. Nine items
+// asserted instead is AGREEMENT between the document and the code. Eleven items
 // are open today; this suite is green today; and the day one of them changes
 // state in either direction, this suite says so.
 'use strict';
@@ -103,7 +103,7 @@ const CONDITION = {
   // OPEN: ai_sessions has no tenant column and no classification.
   8: () => require('../server/services/org-table-classification').classify('ai_sessions') !== 'unclassified',
 
-  // OPEN: 483 tolerance arms. Closed when the marked arms are gone.
+  // OPEN: 485 tolerance arms. Closed when the marked arms are gone.
   9: () => countToleranceArms() === 0,
 
   // OPEN: creates an organizations row and no user — a tenant nobody can sign into.
@@ -121,6 +121,39 @@ const CONDITION = {
     const cols = columnsFor('roles');
     return !!(cols && cols.has('organization_id'));
   },
+
+  // OPEN: email_log and managed_agent_skills carry no tenant column, so the
+  // routes that read them serve every tenant's rows to any org admin. Closed
+  // only by a migration — the column, then the predicate, in that order.
+  // `roles` is item 11 and is not re-checked here.
+  15: () => {
+    const { columnsFor } = require('./helpers/db-schema');
+    return ['email_log', 'managed_agent_skills'].every((t) => {
+      const cols = columnsFor(t);
+      return !!(cols && cols.has('organization_id'));
+    });
+  },
+
+  // DONE: prompt-audit refuses a foreign org_id without SYSTEM_ADMIN.
+  //
+  // The condition asks the ROUTE, not the test file, because a test file that
+  // exists proves only that somebody wrote one. It reads the handler body and
+  // requires both halves of the guard — the capability check AND the comparison
+  // against the caller's own org — so deleting either one reopens the item.
+  16: () => {
+    const src = read('routes/admin-agents-routes.js');
+    const i = src.indexOf("router.get('/managed/prompt-audit'");
+    if (i === -1) return true;                     // route gone => closed
+    const body = src.slice(i, i + 4000);
+    return /askedOrgId/.test(body)
+        && /hasCapability\(req\.user, 'SYSTEM_ADMIN'\)/.test(body)
+        && fs.existsSync(path.join(__dirname, 'prompt-audit-org-id-idor.test.js'));
+  },
+
+  // OPEN: Registers 3 (cron/boot) and 4 (model context) do not exist. Named
+  // rather than half-built — see the item for what each would have to assert.
+  17: () => fs.existsSync(path.join(__dirname, 'tenant-register3-cron.test.js'))
+         && fs.existsSync(path.join(__dirname, 'tenant-register4-model.test.js')),
 };
 
 function countToleranceArms() {
@@ -140,9 +173,9 @@ function countToleranceArms() {
 describe('the graduation checklist agrees with the code', () => {
   test('the document parses, and has the number of items it says it has', () => {
     const list = items();
-    expect(list.length).toBe(14);
-    expect(doc).toContain('| Total items | 14 |');
-    expect(list.map((i) => i.n)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+    expect(list.length).toBe(17);
+    expect(doc).toContain("| Total items | 17 |");
+    expect(list.map((i) => i.n)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
   });
 
   test('the DONE / OPEN counts in the summary match the items', () => {
@@ -151,7 +184,7 @@ describe('the graduation checklist agrees with the code', () => {
     const open = list.filter((i) => i.state === 'OPEN').length;
     expect(doc).toContain('| DONE | ' + done + ' |');
     expect(doc).toContain('| OPEN | ' + open + ' |');
-    expect(done + open).toBe(14);
+    expect(done + open).toBe(17);
   });
 
   // ── THE LEDGER, BOTH DIRECTIONS ────────────────────────────────────────

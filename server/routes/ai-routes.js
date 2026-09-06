@@ -16392,6 +16392,28 @@ module.exports.internals = {
   // body — and that needs these two callable.
   maybeGenerateSessionLabel,
   seedRecoveredSession,
+  // ── THE APPROVAL-TIER EXECUTORS, EXPORTED FOR THE SAME STATED REASON ─────
+  // The two-org harness waived 54 of 112 published names on the ground that
+  // `execAgentTool` does not dispatch them, and then satisfied itself with a
+  // NAME REGEX — /^(read_|search_|list_|view_|recall$|self_diagnose$)/ — that
+  // "no read tool is waived". A read named get_*, fetch_* or update_* would
+  // have been waived permanently after one count bump, and the executor that
+  // DOES serve those names was never driven at all: a cross-tenant clients read
+  // planted in it was caught by the static scanner alone.
+  //
+  // These are the branches of the `else if` chain in POST /86/chat/continue.
+  // Exporting them lets the harness ask, BY EXECUTION, which of the 54 names
+  // any server-side executor actually serves — instead of inferring it from
+  // their spelling. The remainder fall through to `summary = r.applied_summary
+  // || 'User approved. Change applied.'`, i.e. they are applied CLIENT-side and
+  // no server statement runs for them, and that set is now enumerated rather
+  // than assumed.
+  execStaffApprovalTool,
+  execFieldToolApproval,
+  execClientDirectoryToolWithCtx,
+  execProposeCreateLead,
+  execLinkJobToClient,
+  execBulkLinkJobsToClients,
   dispatchReadTool,
   execIntakeRead,
   execFieldToolRead,

@@ -2,12 +2,25 @@
 // repairs, so a lockout can be undone from a phone at 9pm without a code push.
 //
 // ── WHAT IT GOVERNS, AND WHAT IT DELIBERATELY DOES NOT ────────────────────
-// It governs the ADMIN AGENT CONSOLE repairs in
-// server/routes/admin-agents-routes.js, and nothing else:
+// It governs THREE CALL SITES, all in server/routes/admin-agents-routes.js,
+// and nothing else:
 //
 //   * the six ai_messages aggregates on GET /metrics          (orgArm)
-//   * the four entity_title lookups on the conversations pair (orgArm)
 //   * registryScope, which backs GET /managed and /managed/audit
+//   * registryScope's no-org 403, the one real lockout vector
+//
+// THE FOUR entity_title LOOKUPS ON THE CONVERSATIONS PAIR ARE NOT ON THAT
+// LIST. An earlier draft of this header named them here AND named them forty
+// lines below under "WHAT IS DELIBERATELY NOT HERE", so the file contradicted
+// itself about its own blast radius. The body was right and this paragraph was
+// wrong: those lookups hardcode their predicate and never call `orgArm`. Grep
+// says three call sites, test/tenant-scope-flag.test.js DERIVES the number and
+// fails if this file disagrees, and the reason they are excluded is stated in
+// full at GOVERNED_SITES below.
+//
+// A file header that contradicts its own body is exactly how the `owner_id`
+// comment survived four rounds of review: a reader who checks one half and
+// finds it plausible stops reading.
 //
 // IT DOES NOT REACH THE AGENT TOOL SURFACE. That is a deliberate limit rather
 // than an oversight. Every agent read tool already refused an org-less caller
@@ -30,6 +43,18 @@
 // That is a genuine behaviour change for a genuine account shape, it is not
 // covered by the one-org golden (which has an org), and "the app cannot see its
 // own data" is the failure mode this whole wave is forbidden to introduce.
+//
+// ── WHAT ELSE IT DOES NOT REACH, SAID BEFORE SOMEBODY RELIES ON IT ───────
+// P86_TENANT_SCOPE REACHES THREE CALL SITES. The repo writes the tolerance
+// predicate `(organization_id = $n OR organization_id IS NULL)` 236 times
+// across server/, so the switch governs THREE of them and 233 are unreachable
+// from it. It reaches ZERO statements in server/routes/ai-routes.js — grep that
+// file for TENANT_SCOPE and the only hit is a comment saying so. So the chat
+// surface, GET /86/messages included, has NO rollback
+// switch at all: a tenant repair there can only be undone by `git revert` and a
+// deploy. That is recorded here and in docs/TENANCY-GRADUATION.md item 5 rather
+// than left for somebody to discover at 9pm with a phone, having been told
+// "there is a kill switch".
 //
 // ── TWO VALUES. NOT THREE. ────────────────────────────────────────────────
 //   enforce  (the default when unset, and the only value CI ever runs)

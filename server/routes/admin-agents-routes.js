@@ -3900,9 +3900,34 @@ router.get('/managed/prompt-audit', requireAuth, requireCapability('ROLES_MANAGE
       return res.status(503).json({ error: 'ai-routes internals (composedAgentSystemBreakdown) not available' });
     }
     const agentKey = String(req.query.agent_key || 'job').toLowerCase().trim();
-    const orgId = req.query.org_id != null
-      ? Number(req.query.org_id)
-      : (req.organization && req.organization.id);
+    // ── AN ID IN THE QUERY STRING IS NOT AN AUTHORISATION ───────────────────
+    // `org_id` came straight off the URL and was used verbatim: an ORG ADMIN —
+    // ROLES_MANAGE, which both seeded admin roles hold — could name any
+    // organisation and read its composed agent prompt, its reference-link
+    // titles, and its `managed_agent_registry` row. That row carries
+    // `anthropic_agent_id`, WHICH IS THE HANDLE THE SIBLING DELETE ACTS ON, and
+    // the composed prompt embeds the tenant's own name and skill packs.
+    //
+    // This is the same defect `3e2c70a2` closed on the entity_title lookups,
+    // one route over and with the tenant supplied instead of inferred: the
+    // capability gate proves the caller may see A console, and says nothing
+    // about WHOSE. Found by driving it — REGISTER 2 in
+    // test/tenant-register2-http.test.js — not by reading it.
+    //
+    // SYSTEM_ADMIN keeps the parameter, because inspecting another tenant's
+    // prompt is exactly the platform-owner operation the capability is for and
+    // the admin console links here with an explicit org_id. Everyone else is
+    // REFUSED rather than silently redirected to their own org: substituting a
+    // different answer for the one that was asked for is how a boundary becomes
+    // a mystery. Their own org still needs no parameter at all.
+    const askedOrgId = req.query.org_id != null ? Number(req.query.org_id) : null;
+    const ownOrgId = req.organization && req.organization.id;
+    if (askedOrgId != null && askedOrgId !== ownOrgId && !hasCapability(req.user, 'SYSTEM_ADMIN')) {
+      return res.status(403).json({
+        error: 'This prompt audit belongs to another organization. Only a System Admin may read across tenants; omit org_id to audit your own.'
+      });
+    }
+    const orgId = askedOrgId != null ? askedOrgId : ownOrgId;
     if (!orgId || !Number.isFinite(orgId)) return res.status(400).json({ error: 'org_id required' });
 
     // Resolve the org row + baseline so the breakdown reflects what

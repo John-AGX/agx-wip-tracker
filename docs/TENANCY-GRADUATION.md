@@ -30,10 +30,10 @@ everything else: until it is true, org #2 cannot be created at all.
 
 | | |
 |---|---|
-| Total items | 14 |
-| DONE | 5 |
-| OPEN | 9 |
-| Hard blockers on creating org #2 | 9 |
+| Total items | 17 |
+| DONE | 6 |
+| OPEN | 11 |
+| Hard blockers on creating org #2 | 11 |
 
 ---
 
@@ -81,6 +81,12 @@ worktree and recording what the unrepaired code returned for 56 agent tools and
 - `test/tenant-conformance.test.js` — 112 published tools, derived from what the
   model is offered; 58 driven, 54 derived-waived, counts committed. Plus the
   four admin-console routes, through the identical oracle.
+- `test/tenant-register2-http.test.js` — **REGISTER 2**, added after the scaffold was
+  measured driving 4 routes out of 565. `server/index.js` mounts 75 things; 74 of them
+  are routers declaring 565 routes; 137 are param-less GETs and every one is now driven,
+  twice (as an org admin and as the platform owner), through the same oracle. The other
+  428 are writes or need a path parameter and are COUNTED. It found three unplanted
+  cross-tenant reads on its first run — see items 15 and 16.
 - `test/tenant-attack-classes.test.js` — all eight attack classes planted and
   caught, with seven correctly-predicated counterparts proving the oracle
   discriminates rather than flagging everything.
@@ -103,6 +109,21 @@ worktree at `69f2cabd`, the harness fails **10 of 40** — every arm of
 `P86_TENANT_SCOPE` (`server/tenant-scope-flag.js`), two values, default
 `enforce`, loud on every use, three governed call sites derived by grep rather
 than claimed by a list.
+
+**READ THE NEXT PARAGRAPH BEFORE RELYING ON THIS SWITCH.** "The rollback switch
+exists" is true and it is not the whole sentence. It reaches **three call sites**,
+all in `server/routes/admin-agents-routes.js`. The repo writes the tolerance
+predicate `(organization_id = $n OR organization_id IS NULL)` **236 times** across
+`server/`; the switch governs three of them.
+
+It reaches **ZERO statements in `server/routes/ai-routes.js`** — grep that file for
+`TENANT_SCOPE` and the only hit is a comment saying so. So **the chat surface has no
+kill switch**, `GET /86/messages` included. A tenant repair there can only be undone
+by `git revert` and a deploy: a laptop, a build, and a deploy window — not a phone.
+
+That is a limit, not a defect: the switch exists to undo a LOCKOUT, and the one real
+lockout vector (`registryScope`'s no-org 403) is inside its three sites. But somebody
+told "there is a kill switch" at 9pm must not discover its edges by trying it.
 
 ---
 
@@ -171,7 +192,7 @@ the caller's org. This is covered by a named test
 
 ## 9. The `OR organization_id IS NULL` tolerance is retired — **OPEN** `[machine]` — **HIGHEST RISK ITEM ON THIS LIST**
 
-**483** occurrences of `organization_id IS NULL` across `server/`.
+**485** occurrences of `organization_id IS NULL` across `server/`.
 
 Every tenant predicate in this repo is written as
 `(organization_id = $n OR organization_id IS NULL)`. With **one** organisation
@@ -182,8 +203,42 @@ the column late, `:721` backfills at every boot, `:761` guesses).
 **The day org #2 exists, an un-stamped row is visible to EVERY tenant.** The
 tolerance stops being a no-op and becomes the leak.
 
-**To close:** `reportOrgStampAudit` returns zero un-stamped rows on every
-`direct` table, then the marked arms are deleted.
+**To close:** zero un-stamped rows on every `direct` table, then the marked arms are
+deleted.
+
+**How to actually check that, as a person, today.** The earlier wording named
+`reportOrgStampAudit` as if it were something John could run. It is
+`server/db.js:5851`, called only from boot at `:5974`/`:5976` — so its answer is a
+line in a Railway deploy log, not an endpoint, and "run the audit" was an instruction
+pointing at nothing. There are two doors that a human has:
+
+1. **From a browser, signed in as a System Admin:**
+   `GET /api/admin/console/org-boundary` — the same audit, on demand, as JSON. It
+   reports per-table un-stamped counts. This is the one to use.
+2. **From the Railway deploy log:** search the boot output for `[org-boundary]`. Same
+   numbers, only available at boot.
+
+`POST /api/admin/console/org-boundary/backfill` is the paired stamper: dry by default,
+evidence-only, idempotent, and it logs its actor when applied. Read the count, stamp
+what is derivable, read the count again.
+
+### ⚠ THE SECOND THING THAT STOPS THE DAY ORG #2 EXISTS
+
+This item is about un-stamped **rows**. `NEVER_MULTI_ORG` also gates
+**`server/db.js:320`**, which re-adopts every org-less **USER** into AGX at every boot.
+Both statements stop at the same instant — the moment `(SELECT COUNT(*) FROM
+organizations) <= 1` becomes false.
+
+So the day org #2 is created, a user with no `organization_id` stops being adopted and
+stays org-less permanently. `resolveOrgId` RETURNS NULL for that user (it does not
+throw), and every predicate written as `(organization_id = $n OR organization_id IS
+NULL)` with a NULL bound to `$n` **can only match nothing**. That is a silent empty
+behind a 200, and `GET /86/messages` is where a user would meet it first —
+measured, and fixed to refuse loudly instead, in `9d2522ef`.
+
+**Before creating org #2:** run
+`SELECT id, email FROM users WHERE organization_id IS NULL;`
+and attach or deactivate every row it returns. There is no boot sweep after that day.
 
 > **Do not touch `shared` or `mixed_shared` tables.** Their NULLs are correct
 > data, re-inserted at every boot by `seedGlobalTaxonomy()`, and their uniqueness
@@ -247,6 +302,82 @@ Four things no test can do:
 4. **Record the SHAs** of every repair with its revert command and an
    `/api/health` confirmation.
 
+## 15. Three tables are read cross-tenant because they have NO tenant column — **OPEN** `[machine]`
+
+Found by REGISTER 2 on its first run, at HEAD, with nothing planted. Each is a real
+cross-tenant read served to an ordinary org admin today, and none of them is a missing
+predicate — **there is no column to filter on**:
+
+| Route | Table | What crosses |
+|---|---|---|
+| `GET /api/email/log` | `email_log` | recipient addresses and subject lines of every tenant's outbound mail. Gated on `requireRole('admin')`. |
+| `GET /api/admin/agents/managed/prompt-audit` | `managed_agent_skills` | the Anthropic skill ids attached to every tenant's agent (`collectSkillsFor`, `admin-agents-routes.js:2762`). The router says so itself at `:3657`. |
+| `GET /api/roles` | `roles` | the platform-wide role catalogue — this is item 11, listed here too because the harness cannot tell the three apart. |
+
+All three are ledgered BY NAME in `test/tenant-register2-http.test.js`, with the reason,
+and that ledger fails **in both directions** — a fourth is red, and one of these three
+silently closing is red too.
+
+**Closing any of them is a MIGRATION** (add the column, backfill from a parent, then the
+predicate — and the column and its first predicate must be separate commits, in that
+order). That is why they are not fixed in the wave that found them.
+
+- **Check:** `email_log` and `managed_agent_skills` both carry `organization_id`.
+
+## 16. `prompt-audit` honoured a caller-supplied `org_id` — **DONE** `[machine]`
+
+`GET /api/admin/agents/managed/prompt-audit?org_id=<anyone>` took the id straight off the
+query string. The gate is `ROLES_MANAGE`, which **both** seeded admin roles hold, so any
+affiliate admin naming any organisation received that tenant's
+`managed_agent_registry` row — including `anthropic_agent_id`, **the handle the sibling
+DELETE on the same router acts on** — plus its composed agent prompt (which embeds the
+org's name and skill packs) and its reference-link titles.
+
+Six rounds of static scanning missed it, and the reason is worth keeping: the statement
+**is** scoped. `SELECT * FROM organizations WHERE id = $1` binds a parameter and reads
+perfectly to a scanner. It is scoped to a value the caller chose.
+
+Found by executing it. Fixed by refusing a foreign `org_id` unless the caller holds
+`SYSTEM_ADMIN` — refused **loudly**, not silently redirected to the caller's own org,
+because substituting a different answer for the one that was asked for is how a boundary
+becomes a mystery. The platform-owner operation is intact and asserted.
+
+- **Verified by:** `test/prompt-audit-org-id-idor.test.js` (6 tests). Against the code as
+  it stood it fails 2 of 6 — 200 where 403 is required, with the victim's marker in the
+  body. Two anti-lobotomy arms prove an admin still audits their own agent, with and
+  without an explicit `org_id`.
+- **Check:** the route refuses a foreign `org_id` without `SYSTEM_ADMIN`.
+
+## 17. Registers 3 and 4 are not built — **OPEN** `[machine]`
+
+Said plainly rather than half-built. The wave that added Register 2 did **not** add:
+
+**REGISTER 3 — cron and boot.** Five modules (`reminders-cron`, `cert-expiry-cron`,
+`weekly-digest-cron`, `email-snooze-cron`, `ai-spend-cron`) plus `server/db.js`'s boot
+backfills. A cron sweeps every tenant **by design**, so the property is not "it must not
+see two orgs" — it is "it must not COMBINE them into one output, and must not deliver
+one tenant's rows to another's recipient". That is a different assertion and it needs a
+per-recipient fixture.
+
+What exists today is **one accidental door**: `GET /api/admin/reminders/cron-preview`
+runs three of the five in dry mode, and Register 2 drives it. That is coverage of three
+modules' happy path against a second organisation — real, and not a register.
+
+**REGISTER 4 — model context.** What the model is HANDED never appears in a response
+body, so no arm in any register can see it. `maybeGenerateSessionLabel` and
+`seedRecoveredSession` are exported in writing for this and the conformance harness's SDK
+mock is `{ messages: {}, beta: {} }` — it **records nothing**. A plant that put every
+tenant's estimates into `buildEstimateContext` would be invisible to all of it.
+
+The machinery already exists one file over: `test/ai-personal-surface-tenant.test.js`
+records every `messages.create` and `beta.sessions.events.send` argument into
+`__P86_MODEL_SAW__` and asserts on that. Register 4 is that recorder, plus the context
+builders driven, plus the same two arms. It is a day of work, not a week, and it is the
+register whose absence hides the most.
+
+- **Check:** `test/tenant-register3-cron.test.js` and `test/tenant-register4-model.test.js`
+  exist.
+
 ---
 
 ## Rollback, written down before it is needed
@@ -262,6 +393,39 @@ Verify by SHA at `/api/health`. It writes `[TENANT-SCOPE:legacy]` to the log on
 **One commit must never be reverted:** the `users.owner_id` removal (`f829e682`).
 It deletes a reference to a column that never existed; reverting it re-breaks a
 flow that is already broken.
+
+## What the harness can and cannot catch
+
+Written here because a harness that reports its own limits is worth more than one that
+claims eight registers and has five.
+
+**It can now catch, and could not before:**
+
+- A route added anywhere in the server that reads across tenants. 565 routes are
+  enumerated from `router.stack`; 137 are driven. Previously 4 were.
+- An IDOR — a door answering a foreign id it never checked. The recipes now carry a
+  FOREIGN-ID axis, derived, so a recipe added next week gets its foreign twin for free.
+- A tool group smuggled in behind a new accessor. The accessor list is derived from
+  `internals` by shape, not typed.
+- A door that PROVES NOTHING. Arm 0 runs Arm 3 backwards — org A's answer must CHANGE
+  when org A's own data disappears — and it found that of 58 "driven" tools only **34**
+  are exercised. The other 24 are ledgered by name and category.
+- A leak in the approval-tier executor, which no behavioural test reached before.
+
+**It still cannot catch:**
+
+- **Anything a cron does.** Register 3 is not built; see item 17.
+- **Anything handed to the model rather than returned to a caller.** Register 4 is not
+  built; see item 17. This is the largest hole.
+- **A leak past the first page.** The widened-bounds arm pushes every limit to its
+  maximum, which catches a handler that clamps LIMIT before applying its predicate. It
+  is **not** a true page-2 axis: **no OFFSET** is accepted by any of these tools, and
+  with three rows per table no default limit hides anything anyway. A real second page
+  needs the fixture padded until org B falls off page one.
+- **A leak that needs a WRITE to expose it.** Item 6.
+- **A leak in the 428 routes that need a path parameter.** Counted, not driven.
+- **A wrong QUERY.** Every failure is a marker, a magnitude or a diff. The harness says
+  an ANSWER is wrong; a human finds the statement.
 
 ## What this checklist does not cover
 

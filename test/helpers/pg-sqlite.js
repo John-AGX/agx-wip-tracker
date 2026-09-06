@@ -364,27 +364,58 @@ function createPgSqlite(schemaSql, opts) {
   // Every statement the routes ran, in order — so a test can assert that a
   // door did NOT reach the database at all, which is a different (and
   // stronger) claim than "no rows changed".
+  //
+  // ── WHAT EACH ENTRY CARRIES, AND WHY IT GREW ─────────────────────────────
+  // `{sql, params}` was enough to say "this door touched the database". It is
+  // NOT enough to say "this door was EXERCISED", and the difference is a whole
+  // class of vacuous pass: two published agent tools counted as driven while
+  // THROWING AT PREPARE, and two more counted as driven while every statement
+  // they ran returned zero rows. A boundary assertion over an empty answer is
+  // satisfied by the emptiness, not by the boundary.
+  //
+  // So each entry now also records:
+  //   ok        the statement PREPARED and RAN (false => `error` says why)
+  //   error     the prepare/run failure message, if any
+  //   rowCount  rows returned for a SELECT / RETURNING, changes otherwise
+  //   read      whether this statement was row-returning at all
+  //
+  // These are EVIDENCE, exactly like the existing `sql` field: a test may count
+  // rows that came back. A test that reads `sql` as a pass/fail condition has
+  // rebuilt the static scanner inside the fixture and is back to being beaten
+  // by a comment.
   const log = [];
 
   function query(sql, params) {
     const text = String(sql).replace(/\s+/g, ' ').trim();
-    log.push({ sql: text, params: params || [] });
+    const entry = { sql: text, params: params || [], ok: false, error: null, rowCount: 0, read: false };
+    log.push(entry);
     const translated = translate(sql);
     const args = (params || []).map(encodeParam);
     let stmt;
     try {
       stmt = db.prepare(translated);
     } catch (e) {
+      entry.error = e.message;
       throw new Error('pg-sqlite could not prepare: ' + translated + '\n  from: ' + text + '\n  ' + e.message);
     }
     const isSelect = /^\s*(SELECT|WITH)/i.test(translated);
     const returning = /\bRETURNING\b/i.test(translated);
-    if (isSelect || returning) {
-      const rows = stmt.all(...args).map((r) => decodeRow(r, extraJson, dateCols));
-      return { rows, rowCount: rows.length };
+    entry.read = isSelect || returning;
+    try {
+      if (entry.read) {
+        const rows = stmt.all(...args).map((r) => decodeRow(r, extraJson, dateCols));
+        entry.ok = true;
+        entry.rowCount = rows.length;
+        return { rows, rowCount: rows.length };
+      }
+      const info = stmt.run(...args);
+      entry.ok = true;
+      entry.rowCount = Number(info.changes || 0);
+      return { rows: [], rowCount: Number(info.changes || 0) };
+    } catch (e) {
+      entry.error = e.message;
+      throw e;
     }
-    const info = stmt.run(...args);
-    return { rows: [], rowCount: Number(info.changes || 0) };
   }
 
   const pool = {

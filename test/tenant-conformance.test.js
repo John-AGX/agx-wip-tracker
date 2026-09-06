@@ -97,139 +97,14 @@ process.env.JWT_SECRET = process.env.JWT_SECRET
 
 const TWO = require('./helpers/two-org');
 const { proveOrgOnly } = require('./helpers/org-only');
-
 const { ORG_A, ORG_B, MARK } = TWO;
 
-// A FIXED recent instant, computed once and shared by BOTH worlds. The rolling
-// windows in these tools are `NOW() - INTERVAL '7 days'`, so a row has to be
-// recent to be in scope at all; taking `new Date()` separately per engine would
-// put a different timestamp in each world and make Arm 3 report a difference
-// that is an artefact of the fixture rather than of the code.
-const RECENT = new Date(Date.now() - 3600 * 1000).toISOString().slice(0, 19).replace('T', ' ');
-
-// A poisoned money figure for org B. In the band by construction.
-const P = 900007000;
-
-function estBlob(tag, total, unitCost) {
-  return JSON.stringify({
-    title: tag + ' Clubhouse Re-roof', clientId: 'clients-' + tag,
-    totalProposal: total, status: 'sent',
-    lines: [{
-      id: 'l1', description: tag + ' seamless gutters 6in', qty: 40, unit: 'lf',
-      unitCost: unitCost, markup: 42, section: 'Gutters',
-    }],
-  });
-}
-
-function jobBlob(tag, money) {
-  return JSON.stringify({
-    jobNumber: 'J-' + tag, title: tag + ' Job', clientId: 'clients-' + tag,
-    buildings: [{ id: 'b1', name: tag + ' Building One', pctComplete: 50 }],
-    phases: [{
-      id: 'p1', buildingId: 'b1', name: tag + ' Phase',
-      phaseBudget: money, asSoldRevenue: money, pctComplete: 50,
-    }],
-  });
-}
-
-// ── THE OVERLAY ───────────────────────────────────────────────────────────
-// The generic seeder in test/helpers/two-org.js already puts three rows in
-// every one of the 108 tables, so no door can pass by reading an empty table.
-// This overlay only makes the rows the driven doors KEY ON realistic: a jobs
-// blob with buildings and phases, an attachment pointing at an estimate that
-// exists, JSON where a handler calls JSON.parse.
-//
-// It sets VALUES ONLY. Every column named here is checked against the derived
-// schema before it is written (applyOverlay in the helper), so this overlay
-// cannot invent a column — which is the exact failure that let a hand-written
-// `attachments.created_at` keep two shipped agent tools green while both raised
-// 42703 in production.
-//
-// EVERY ID IS DERIVED, never typed. TWO.idFor(table, tenant) returns the id the
-// generic seeder used, in the type server/db.js declares for that table's key.
-// The first draft of this overlay typed them, and got two of them exactly
-// backwards: `ai_sessions.id` is BIGSERIAL and `ai_messages.id` is TEXT, not the
-// other way round. sqlite answered with the bare words "datatype mismatch" and
-// no table name. Deriving the id makes that class of mistake unwritable, and
-// makes the overlay and the generic seed incapable of disagreeing about which
-// row they mean.
-const ID = (t, tag) => TWO.idFor(t, tag);
-
-const OVERLAY = {
-  organizations: [
-    { id: ORG_A, name: 'Affiliate Alpha', slug: 'alpha' },
-    { id: ORG_B, name: MARK + ' Affiliate', slug: 'zzvictimbravo' },
-  ],
-  roles: [{
-    name: 'admin', label: 'Admin',
-    capabilities: JSON.stringify(['ESTIMATES_VIEW', 'ESTIMATES_EDIT', 'FINANCIALS_VIEW',
-      'INSIGHTS_VIEW', 'JOBS_VIEW', 'LEADS_VIEW', 'CLIENTS_VIEW', 'SUBS_VIEW', 'SCHEDULE_VIEW',
-      'TASKS_VIEW', 'FILES_VIEW', 'REPORTS_VIEW', 'JOBS_EDIT', 'LEADS_EDIT', 'CLIENTS_EDIT',
-      'ROLES_MANAGE']),
-  }],
-  users: [
-    { id: ID('users', 'A'), organization_id: ORG_A, email: 'a@a.a', name: 'A Admin', role: 'admin', active: 1 },
-    { id: ID('users', 'B'), organization_id: ORG_B, email: MARK + '@b.b', name: MARK + ' Admin', role: 'admin', active: 1 },
-    { id: ID('users', 'N'), organization_id: null, email: 'n@n.n', name: 'Orphan', role: 'admin', active: 1 },
-  ],
-  estimates: [
-    { id: ID('estimates', 'A'), organization_id: ORG_A, owner_id: ID('users', 'A'), data: estBlob('A-0', 250, 11), is_locked: 0, updated_at: RECENT },
-    { id: ID('estimates', 'B'), organization_id: ORG_B, owner_id: ID('users', 'B'), data: estBlob(MARK, P, P), is_locked: 0, updated_at: RECENT },
-    { id: ID('estimates', 'N'), organization_id: null, owner_id: null, data: estBlob('N-2', 100, 9), is_locked: 0, updated_at: RECENT },
-  ],
-  jobs: [
-    { id: ID('jobs', 'A'), organization_id: ORG_A, owner_id: ID('users', 'A'), data: jobBlob('A-0', 1000) },
-    { id: ID('jobs', 'B'), organization_id: ORG_B, owner_id: ID('users', 'B'), data: jobBlob(MARK, P) },
-    { id: ID('jobs', 'N'), organization_id: null, owner_id: null, data: jobBlob('N-2', 10) },
-  ],
-  clients: [
-    { id: ID('clients', 'A'), organization_id: ORG_A, name: 'Alpha HOA', agent_notes: '[]', client_type: 'hoa', city: 'Orlando', activation_status: 'active' },
-    { id: ID('clients', 'B'), organization_id: ORG_B, name: MARK + ' Property Group', agent_notes: JSON.stringify([{ body: MARK + ' confidential note' }]), client_type: 'hoa', city: 'Orlando', activation_status: 'active' },
-    { id: ID('clients', 'N'), organization_id: null, name: 'Legacy Client', agent_notes: '[]', client_type: 'hoa', city: 'Orlando', activation_status: 'active' },
-  ],
-  attachments: [
-    { id: ID('attachments', 'A'), organization_id: ORG_A, entity_type: 'estimate', entity_id: ID('estimates', 'A'), filename: 'alpha.pdf', mime_type: 'application/pdf', extracted_text: 'ALPHA scope text', uploaded_by: ID('users', 'A'), web_key: 'k/a' },
-    { id: ID('attachments', 'B'), organization_id: ORG_B, entity_type: 'estimate', entity_id: ID('estimates', 'B'), filename: MARK + '.pdf', mime_type: 'application/pdf', extracted_text: MARK + ' contract text', uploaded_by: ID('users', 'B'), web_key: 'k/b' },
-    { id: ID('attachments', 'N'), organization_id: null, entity_type: 'estimate', entity_id: ID('estimates', 'N'), filename: 'legacy.pdf', mime_type: 'application/pdf', extracted_text: 'LEGACY text', uploaded_by: null, web_key: 'k/n' },
-  ],
-  qb_cost_lines: [
-    { id: ID('qb_cost_lines', 'A'), organization_id: ORG_A, job_id: ID('jobs', 'A'), amount: 150, vendor: 'Alpha Supply' },
-    { id: ID('qb_cost_lines', 'B'), organization_id: ORG_B, job_id: ID('jobs', 'B'), amount: P, vendor: MARK + ' Supply' },
-    { id: ID('qb_cost_lines', 'N'), organization_id: null, job_id: ID('jobs', 'N'), amount: 7, vendor: 'Legacy Supply' },
-  ],
-  messages: [
-    { id: ID('messages', 'A'), organization_id: ORG_A, thread_key: 'attachment:' + ID('attachments', 'A'), user_id: ID('users', 'A'), body: 'alpha comment', created_at: RECENT },
-    { id: ID('messages', 'B'), organization_id: ORG_B, thread_key: 'attachment:' + ID('attachments', 'B'), user_id: ID('users', 'B'), body: MARK + ' comment', created_at: RECENT },
-  ],
-  ai_messages: [
-    { id: ID('ai_messages', 'A'), organization_id: ORG_A, entity_type: 'estimate', estimate_id: ID('estimates', 'A'), user_id: ID('users', 'A'), session_id: ID('ai_sessions', 'A'), role: 'assistant', content: 'alpha turn', model: 'claude-sonnet-5', input_tokens: 10, output_tokens: 20, tool_use_count: 1, tool_uses: '[{"name":"read_jobs"}]', created_at: RECENT },
-    { id: ID('ai_messages', 'B'), organization_id: ORG_B, entity_type: 'estimate', estimate_id: ID('estimates', 'B'), user_id: ID('users', 'B'), session_id: ID('ai_sessions', 'B'), role: 'assistant', content: MARK + ' turn', model: 'claude-opus-5', input_tokens: P, output_tokens: P, tool_use_count: 1, tool_uses: '[{"name":"zzvictim_tool"}]', created_at: RECENT },
-    { id: ID('ai_messages', 'N'), organization_id: null, entity_type: 'estimate', estimate_id: ID('estimates', 'N'), user_id: ID('users', 'N'), session_id: ID('ai_sessions', 'N'), role: 'assistant', content: 'legacy turn', model: 'claude-sonnet-5', input_tokens: 5, output_tokens: 6, tool_use_count: 0, tool_uses: '[]', created_at: RECENT },
-    // ── THE ROW WITHOUT WHICH THE L2 DEFECT IS UNREACHABLE ────────────────
-    // An ORG-A thread whose entity id NAMES AN ORG-B ESTIMATE. `ai_messages`
-    // .estimate_id is not a foreign key to anything, so this shape is legal and
-    // occurs in practice.
-    //
-    // It is here because of a specific, documented near-miss: when the L2 fix
-    // was mutation-tested in `3e2c70a2`, reverting the two batched title
-    // lookups killed NO test — the conversation list's own row-stamp predicate
-    // already kept foreign ids out of the batch, so the title lookup was never
-    // ASKED for one, and a real repair was indistinguishable from its absence.
-    // Without this row the harness is green on the pre-repair code for L2, and
-    // "green" would mean "not exercised".
-    { id: 'am-a-points-at-b', organization_id: ORG_A, entity_type: 'estimate', estimate_id: ID('estimates', 'B'), user_id: ID('users', 'A'), session_id: ID('ai_sessions', 'A'), role: 'assistant', content: 'alpha thread about a foreign id', model: 'claude-sonnet-5', input_tokens: 3, output_tokens: 4, tool_use_count: 0, tool_uses: '[]', created_at: RECENT },
-  ],
-  // `ai_sessions` names its user-typed string `label`, not `title` — the first
-  // draft of this overlay typed `title` and the fixture REFUSED TO LOAD. That
-  // refusal is the point: an overlay that could invent a column would be a
-  // second schema, and a second schema drifts toward whatever the code under
-  // test happens to ask for. It is also the table with no tenant column at all
-  // (see the G3 waiver in docs/TENANCY-GRADUATION.md).
-  ai_sessions: [
-    { id: ID('ai_sessions', 'A'), user_id: ID('users', 'A'), label: 'alpha session', summary: 'alpha summary', entity_type: 'general' },
-    { id: ID('ai_sessions', 'B'), user_id: ID('users', 'B'), label: MARK + ' session', summary: MARK + ' summary', entity_type: 'general' },
-  ],
-};
+// ── THE OVERLAY LIVES IN test/helpers/tenant-overlay.js ──────────────────
+// It moved out of this file when REGISTER 2 (test/tenant-register2-http.test.js)
+// needed the same rows. A second hand-written copy is exactly what the
+// two-org header warns about: a differential built on two independently
+// written seeds compares the seeds, not the code. One fixture, both registers.
+const { overlay: OVERLAY, ID, RECENT, P } = require('./helpers/tenant-overlay');
 
 // ── THE TWO WORLDS, AND THE SWITCHABLE POOL ───────────────────────────────
 // Route and tool modules DESTRUCTURE `pool` at module load. A per-test engine
@@ -285,11 +160,26 @@ jest.useRealTimers();
 const I = aiRoutes.internals;
 
 // ── REGISTER 1: the published tool population, derived ────────────────────
-const TOOL_ACCESSORS = [
-  'estimateTools', 'jobTools', 'clientTools', 'staffTools', 'subtaskTools',
-  'memoryTools', 'projectInlineTools', 'watchTools', 'payloadTools',
-  'readTools', 'wave3Tools',
-];
+//
+// ── THE ELEVEN HARD-CODED STRINGS THAT USED TO BE HERE ───────────────────
+// This was a literal array of eleven accessor names, in a file whose own header
+// spends four paragraphs on why nothing may be listed. It was attack class A8
+// alive inside the code written to kill A8, and it was EXPLOITED: an auditor
+// added a LENS_TOOLS group behind a new `lensTools` accessor and spread it into
+// the managed-agent tool list exactly like every other group. Measured in one
+// process — SCAFFOLD POPULATION 112, DERIVED POPULATION 113, missing
+// `read_portfolio_digest`, which returned org B's estimate. The assertion "the
+// population size is committed (112)" PASSED. All 165 suites passed.
+//
+// A published accessor is a function on `internals` whose name ends in `Tools`.
+// That is the convention every one of the eleven already followed and the one
+// admin-agents-routes.js spells when it composes an agent's tool set
+// (`aiInternals.<x>Tools()`), so a new group either follows it and is caught
+// here, or does not and is not offered to any agent.
+const TOOL_ACCESSORS = Object.entries(I)
+  .filter(([k, v]) => /Tools$/.test(k) && typeof v === 'function')
+  .map(([k]) => k)
+  .sort();
 
 function publishedTools() {
   const origin = new Map();
@@ -358,6 +248,22 @@ const RECIPES = {
   link_property_to_parent:   { property_client_id: ID('clients', 'A'), parent_client_id: ID('clients', 'A') },
 };
 
+// Inputs for the APPROVAL-ROUTED names, so the executor reaches a body instead
+// of stopping at its own argument check. Same rule as RECIPES above: a name
+// with no entry is still driven, with {}.
+const APPROVAL_RECIPES = {
+  add_client_note:            { client_id: ID('clients', 'A'), body: 'note' },
+  propose_link_job_to_client: { job_id: ID('jobs', 'A'), client_id: ID('clients', 'A') },
+  propose_bulk_link_jobs_to_clients: { links: [{ job_id: ID('jobs', 'A'), client_id: ID('clients', 'A') }] },
+  propose_create_lead:        { title: 'x', client_name: 'y' },
+  propose_skill_pack_add:     { name: 'p', body: 'b' },
+  propose_skill_pack_edit:    { name: 'p', body: 'b' },
+  propose_skill_pack_delete:  { name: 'p' },
+  propose_create_field_tool:  { name: 'ft', html_body: '<div>x</div>' },
+  propose_update_field_tool:  { id: 'ft-x', name: 'ft' },
+  propose_delete_field_tool:  { id: 'ft-x' },
+};
+
 // THE DISPATCHER DECIDES WHAT IS WAIVED, NOT A LIST IN THIS FILE.
 // `execAgentTool` is the one door the three live entry points use. A name it
 // answers "Unknown … tool:" to is not reachable through it — those are the
@@ -387,16 +293,105 @@ function normalize(s) {
     .replace(/\b\d+\s*(seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s*(ago|from now)/gi, '<REL>');
 }
 
+// The two doors that MINT AN ID from Date.now() and print it. Module-level
+// because Arm 0 needs them too: a minted id differs between any two runs, so
+// a starvation comparison on these two would report a difference that is an
+// artefact of the mint rather than of the data.
+const WAIVED_ND_NAMES = ['create_property', 'remember'];
+
 let DISPATCHED = [];
 let NOT_DISPATCHED = [];
 
+// ── ARM 0'S THIRD WORLD: THE CALLER'S OWN TENANT, STARVED ────────────────
+// An organisation that EXISTS and owns NOTHING. Not in the poison band (so it
+// cannot be mistaken for org B) and above the seeded ids (so it collides with
+// nothing).
+//
+// THE CALLER'S USERS ROW MOVES WITH `ctx.orgId`, and that is not optional. Four
+// published doors — every one routed through execProjectInlineTool — resolve
+// their tenant with `SELECT organization_id FROM users WHERE id = $1` and never
+// look at ctx at all (ai-routes.js:14814). Moving only ctx would leave those
+// doors reading org A in both worlds, and Arm 0 would then report "identical"
+// for a door that is working perfectly. Vary the org in EVERY place the code
+// can read it, or the arm measures the fixture.
+const ORG_EMPTY = 424242;
+
+function starve(engine) {
+  engine.db.prepare('UPDATE organizations SET id = id').run();   // fail loudly if the table is missing
+  engine.db.prepare(
+    'INSERT OR REPLACE INTO organizations (id, name, slug) VALUES (?, ?, ?)'
+  ).run(ORG_EMPTY, 'Starved Co', 'starved');
+  engine.db.prepare('UPDATE users SET organization_id = ? WHERE id = ?').run(ORG_EMPTY, ID('users', 'A'));
+  return engine;
+}
+
 // ONE PASS, EVERY ARM, FRESH FIXTURES. Each dispatched tool is measured once
-// here and the describe blocks below assert on the recording, so a 46-tool
-// matrix costs ~140 engine builds instead of one per assertion.
+// here and the describe blocks below assert on the recording, so the matrix
+// costs a bounded number of engine builds instead of one per assertion.
 //   twoA / twoA2  the same call, twice, against two IDENTICAL fresh two-org
 //                 worlds — the determinism probe.
 //   oneA          the same call against a world where org B never existed.
+//   starvedA      the same call from a caller whose organisation owns nothing.
+//   foreignA      the same call with every org-A id in the recipe swapped for
+//                 org B's — the IDOR axis.
+//   wideA         the same call with every bound widened to its maximum — the
+//                 deeper-page axis.
 const MEASURED = new Map();
+
+// ── THE INPUT AXES ───────────────────────────────────────────────────────
+// Every recipe passed an ORG-A id and nothing else. None passed a FOREIGN id,
+// so an IDOR — "the id is in the URL and nobody checks whose it is" — produced
+// an IDENTICAL answer in both worlds and Arms 1, 2 and 3 were ALL GREEN on it.
+// That is not a gap in the oracle, it is a gap in the INPUT: the question was
+// never asked. It is asked here.
+//
+// The swap is derived, never typed: any recipe value that equals a seeded org-A
+// id is replaced by the SAME TABLE's org-B id, so a recipe added next week gets
+// its foreign twin without anybody remembering to write one.
+const A_TO_B = (() => {
+  const map = new Map();
+  for (const t of TWO.ALL_TABLES) {
+    let a, b;
+    try { a = TWO.idFor(t, 'A'); b = TWO.idFor(t, 'B'); } catch (e) { continue; }
+    map.set(String(a), b);
+  }
+  return map;
+})();
+
+function foreignify(input) {
+  if (!input) return null;
+  const out = {};
+  let swapped = 0;
+  for (const [k, v] of Object.entries(input)) {
+    const hit = (typeof v === 'string' || typeof v === 'number') && A_TO_B.get(String(v));
+    if (hit !== undefined && hit !== false && hit != null) { out[k] = hit; swapped++; continue; }
+    // Composite keys — read_conversation_detail's `estimate|<id>|<user>`.
+    if (typeof v === 'string' && v.indexOf('|') !== -1) {
+      const parts = v.split('|').map((p) => {
+        const h = A_TO_B.get(p);
+        if (h == null) return p;
+        swapped++;
+        return String(h);
+      });
+      out[k] = parts.join('|');
+      continue;
+    }
+    out[k] = v;
+  }
+  return swapped ? out : null;
+}
+
+// The deeper-page axis. Every bound a recipe carries is pushed to the maximum
+// the handler will clamp to, so a door that scoped page 1 and not the rest, or
+// clamped its LIMIT before its predicate, answers differently here.
+const WIDE = { limit: 1000, days: 3650, radius_miles: 25000, depth: 'full', range: '30d' };
+function widen(input) {
+  if (!input) return null;
+  const out = Object.assign({}, input);
+  let touched = 0;
+  for (const k of Object.keys(WIDE)) if (k in out) { out[k] = WIDE[k]; touched++; }
+  return touched ? out : null;
+}
 
 beforeAll(async () => {
   for (const name of ALL_TOOL_NAMES) {
@@ -406,7 +401,12 @@ beforeAll(async () => {
     const twoA = out;
     const twoA2 = await callAsOrg(freshTwo(), ORG_A, name, RECIPES[name]);
     const oneA = await callAsOrg(freshOne(), ORG_A, name, RECIPES[name]);
-    MEASURED.set(name, { twoA, twoA2, oneA });
+    const starvedA = await callAsOrg(starve(freshTwo()), ORG_EMPTY, name, RECIPES[name]);
+    const fInput = foreignify(RECIPES[name]);
+    const foreignA = fInput ? await callAsOrg(freshTwo(), ORG_A, name, fInput) : null;
+    const wInput = widen(RECIPES[name]);
+    const wideA = wInput ? await callAsOrg(freshTwo(), ORG_A, name, wInput) : null;
+    MEASURED.set(name, { twoA, twoA2, oneA, starvedA, foreignA, wideA, fInput, wInput });
   }
 }, 120000);
 
@@ -459,6 +459,126 @@ describe('R1 — the published tool population', () => {
     const unexplained = NOT_DISPATCHED
       .filter((n) => !WRITE_SHAPED.test(n) && EXECUTORLESS.indexOf(n) === -1);
     expect(unexplained).toEqual([]);
+  });
+
+  // ── THE WAIVER, MEASURED INSTEAD OF SPELLED ─────────────────────────────
+  // The two assertions above are NAME SHAPES. They were the whole waiver, and a
+  // name shape is exactly what attack class A8 picks around: a read named
+  // `get_*`, `fetch_*` or `update_*` satisfies both of them and is waived
+  // permanently after one count bump. Worse, "the approval-tier executor serves
+  // these 54" was an assumption nobody had executed — and a cross-tenant
+  // clients read planted in that executor was caught by the static source
+  // scanner alone, by nothing behavioural.
+  //
+  // So the waiver now carries a MEASUREMENT. Every waived name is offered to
+  // every server-side approval executor `POST /86/chat/continue` can reach, and
+  // what comes back decides which of three sets it is in:
+  //
+  //   SERVED     an executor dispatches it. It runs SQL, so it is a tenant
+  //              surface and it is NOT covered by this file — the write suites
+  //              hold it, and the count below is what makes that claim
+  //              falsifiable.
+  //   FALLTHROUGH  no executor answers. In production the chain's final `else`
+  //              writes `summary = r.applied_summary || 'User approved. Change
+  //              applied.'` — the ledgered misroute sentence — and NO SERVER
+  //              STATEMENT RUNS. These are client-applied mutations.
+  //   EXECUTORLESS  no executor at all, anywhere (navigate, web_search).
+  //
+  // The three counts are committed. A name moving between them is red.
+  // THE ROUTED SET IS DERIVED FROM THE CHAIN ITSELF, not from a refusal
+  // pattern. Every executor spells "I do not know this name" differently
+  // ('Unknown staff tool:', 'Unknown field tool approval action:', …), so
+  // sniffing refusals classified all 52 as served and 0 as fallthrough — a
+  // measurement that says everything is covered is the same lie as a name
+  // regex, arrived at more slowly.
+  //
+  // So the population comes from the DISPATCH CONDITION: the literal names the
+  // `else if` chain in POST /86/chat/continue tests, plus the ClientDirectory
+  // branch's runtime set. Parsing the chain is a POPULATION step — the worst a
+  // mis-parse can do is leave a name out of the routed set, where it lands in
+  // FALLTHROUGH and is reported by name.
+  const CONTINUE_SRC = (() => {
+    const src = require('fs').readFileSync(
+      require('path').join(__dirname, '..', 'server', 'routes', 'ai-routes.js'), 'utf8');
+    const start = src.indexOf('const capDenial = (r.approved && !r.apply_error)');
+    const end = src.indexOf("summary = r.applied_summary || 'User approved. Change applied.'");
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    return src.slice(start, end);
+  })();
+
+  const ROUTED_LITERALS = [...CONTINUE_SRC.matchAll(/r\.name === '([a-z0-9_]+)'/g)].map((m) => m[1]);
+  const CLIENT_DIRECTORY_NAMES = (I.clientTools() || []).map((t) => t && t.name).filter(Boolean);
+  const ROUTED = new Set(ROUTED_LITERALS.concat(
+    CONTINUE_SRC.indexOf('ClientDirectoryTools.some') !== -1 ? CLIENT_DIRECTORY_NAMES : []));
+
+  const EXECUTORLESS = ['navigate', 'web_search'];
+  // LAZY, because NOT_DISPATCHED is filled by beforeAll and a describe body
+  // runs first. Computing these eagerly measured an empty array and reported
+  // 0/0 — a split that says nothing is a split that cannot fail.
+  const served = () => NOT_DISPATCHED.filter((n) => ROUTED.has(n) && EXECUTORLESS.indexOf(n) === -1).sort();
+  const fallthrough = () => NOT_DISPATCHED.filter((n) => !ROUTED.has(n) && EXECUTORLESS.indexOf(n) === -1).sort();
+
+  test('the chain the parse is built on is still there (a parse of nothing routes nothing)', () => {
+    expect(ROUTED_LITERALS.length).toBe(9);
+    expect(CONTINUE_SRC).toContain('ClientDirectoryTools.some');
+    expect(CLIENT_DIRECTORY_NAMES.length).toBeGreaterThan(10);
+  });
+
+  test('the approval-tier split is DERIVED and committed', () => {
+    expect({ served: served().length, fallthrough: fallthrough().length, executorless: EXECUTORLESS.length })
+      .toEqual({ served: 17, fallthrough: 35, executorless: 2 });
+    expect(served().length + fallthrough().length + EXECUTORLESS.length).toBe(NOT_DISPATCHED.length);
+  });
+
+  test('NO SERVED APPROVAL NAME IS READ-SHAPED — the measured version of the same rule', () => {
+    // The name-shape assertion above says no read is waived. This says the same
+    // thing about the surface that actually runs SQL, and derives it from the
+    // dispatch chain rather than from spelling.
+    expect(served().filter((n) => READ_SHAPED.test(n))).toEqual([]);
+  });
+
+  // ── THE APPROVAL EXECUTOR, DRIVEN. Repair 5's actual point. ─────────────
+  // Every name the chain routes is now EXECUTED against the second
+  // organisation, through the same oracle as the read surface. A cross-tenant
+  // read planted in this executor used to be caught by the static scanner
+  // alone; it is now caught by a row coming back.
+  test('ARM 1+2 — no approval-routed name leaks org B to an org-A caller', async () => {
+    const leaked = [];
+    for (const name of served()) {
+      const prev = globalThis.__P86_TC_ACTIVE__;
+      globalThis.__P86_TC_ACTIVE__ = freshTwo();
+      let out;
+      try {
+        const ctx = { userId: ID('users', 'A'), orgId: ORG_A,
+          user: { id: ID('users', 'A'), organization_id: ORG_A, role: 'admin', email: 'a@a.a' } };
+        const input = APPROVAL_RECIPES[name] || {};
+        try {
+          if (name.indexOf('field_tool') !== -1) out = await I.execFieldToolApproval(name, input, ctx.userId, ctx.orgId);
+          else if (name === 'propose_create_lead') out = await I.execProposeCreateLead(input, ctx.userId);
+          else if (name === 'propose_link_job_to_client') out = await I.execLinkJobToClient(input, ctx.orgId);
+          else if (name === 'propose_bulk_link_jobs_to_clients') out = await I.execBulkLinkJobsToClients(input, ctx.orgId);
+          else if (name.indexOf('skill_pack') !== -1) out = await I.execStaffApprovalTool(name, input, ctx);
+          else out = await I.execClientDirectoryToolWithCtx(name, input, ctx);
+        } catch (e) { out = 'THREW: ' + (e && e.message); }
+      } finally { globalThis.__P86_TC_ACTIVE__ = prev; }
+      const s = TWO.scanAnswer(TWO.flatten(out));
+      if (s.marked || s.poisoned.length) {
+        leaked.push(name + ' -> marked=' + s.marked + ' poison=' + s.poisoned.slice(0, 4).join(',')
+          + ' :: ' + s.text.slice(0, 240));
+      }
+    }
+    expect(leaked).toEqual([]);
+  }, 120000);
+
+  test('the FALLTHROUGH set runs NO server statement, and is named rather than assumed', () => {
+    // These reach the chain's final `else`, which writes
+    //   summary = r.applied_summary || 'User approved. Change applied.'
+    // — the ledgered misroute sentence. They are CLIENT-applied mutations: no
+    // server executor runs, so this file has nothing to say about them and
+    // says so. What it must not do is count them as covered.
+    expect(fallthrough().length).toBe(35);
+    expect(fallthrough().some((n) => ROUTED.has(n))).toBe(false);
   });
 
   // A8's closure property, stated behaviourally. A name outside the published
@@ -526,7 +646,7 @@ describe('R2 — every dispatched tool, against a second organisation', () => {
     create_property: 'mints `client_<Date.now()>_<random>` and prints it (execClientDirectoryTool).',
     remember:        'mints `mem_<base36 time>_<random>` and prints it (execMemoryTool).',
   };
-  const WAIVED_ND = Object.keys(NON_DETERMINISTIC).sort();
+  const WAIVED_ND = WAIVED_ND_NAMES;
 
   test('the NON-DETERMINISTIC ledger matches measurement exactly, in both directions', () => {
     const measuredFlaky = DISPATCHED.filter((name) => {
@@ -558,6 +678,225 @@ describe('R2 — every dispatched tool, against a second organisation', () => {
 
   test('ARM 3 covers all but the two ledgered doors — the covered count is committed', () => {
     expect(DISPATCHED.length - WAIVED_ND.length).toBe(56);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// ARM 0 — "DRIVEN" IS NOT "EXERCISED", AND THE DIFFERENCE IS MEASURED
+// ══════════════════════════════════════════════════════════════════════════
+//
+// ── THE VACUOUS PASS, WHICH IS THE MOST EXPENSIVE KIND OF GREEN ──────────
+// Arms 1, 2 and 3 all ask what came back. NONE OF THEM ASKS WHETHER ANYTHING
+// CAME BACK. A door that answers "No projects." to everybody satisfies every
+// one of them — no marker, no poisoned number, and identical in a world with no
+// org B, because it was identical in every world. It is counted as covered, it
+// contributes to the committed 58, and it proves precisely nothing.
+//
+// This was not hypothetical. Two published doors — `read_projects` and
+// `read_change_orders` — answered "No projects." / "No change orders found."
+// for BOTH organisations, because the generic seeder stamps `archived_at` on
+// every row and seeds a `job_id` matching no job. Two more, `add_photo_comment`
+// and `list_compliance_expiring`, THREW AT SQL PREPARE and still counted as
+// driven; `list_compliance_expiring` is a READ tool and was satisfying "NO READ
+// TOOL IS WAIVED" BY THROWING.
+//
+// ── THE ORACLE, AND WHY IT IS NOT A HEURISTIC ────────────────────────────
+// Not a regex for "No ", not a row count, not a marker for org-A text. Those
+// are all guesses about what an answer looks like, and a guess is what the last
+// five guards were made of.
+//
+// ARM 0 IS ARM 3 RUN IN THE OTHER DIRECTION. Arm 3 says org A's answer must NOT
+// change when org B disappears. Arm 0 says org A's answer MUST change when ORG
+// A'S OWN DATA disappears — same call, same caller record, from a caller whose
+// organisation exists and owns nothing. If the two answers are identical, the
+// door showed org A nothing, and whatever the other arms said about it they
+// said about an empty string.
+//
+// MEASURED AT HEAD: 58 driven, 24 VACUOUS. That is the honest coverage number,
+// and it is 34, not 58.
+describe('ARM 0 — every DRIVEN door either shows org A its own data, or is ledgered', () => {
+  // ── THE VACUITY LEDGER ──────────────────────────────────────────────────
+  // Every name here is a door the harness DRIVES and does not EXERCISE. It is
+  // not a skip list: these doors still take Arms 1, 2 and 3, and a leak on one
+  // of them is still red. What the ledger records is that a GREEN on this door
+  // is worth nothing, so nobody reads the committed 58 as 58 proofs.
+  //
+  // Grouped by WHY, because the four reasons need different work:
+  //
+  //   FIXTURE   the seed does not reach the door's filter. Cheapest to fix and
+  //             the highest-value: these are doors that WOULD prove something.
+  //   INPUT     the recipe does not satisfy the door's own argument check, so
+  //             it stops before the database. A recipe, not a fixture.
+  //   SHIM      pg-sqlite cannot translate the statement, so the door throws at
+  //             prepare. Real Postgres would run it; the shim is the limit.
+  //   ABSENT    the feature is not configured in a unit test at all (Outlook),
+  //             and no fixture can change that.
+  const VACUOUS = {
+    // FIXTURE — the seeded row exists and the door's filter excludes it.
+    read_users:              'FIXTURE: the users overlay gives org A exactly one user — the caller themselves — and this door lists the OTHERS, so the answer is the same empty list whichever tenant asks.',
+    read_projects:           'FIXTURE: the generic seeder stamps archived_at on every row, and this door filters it out. It answers "No projects." to every tenant.',
+    read_change_orders:      'FIXTURE: same archived_at, plus a seeded job_id that matches no job — the JOIN drops it.',
+    read_assemblies:         'FIXTURE: assemblies are seeded but the door filters on a status the generic seeder does not produce.',
+    read_assembly_taxonomy:  'FIXTURE: reads the taxonomy tables, which the generic seeder fills with placeholder text the grouping discards.',
+    read_calendar_events:    'FIXTURE: the seeded dates are fixed at 2026-08-01 and the door reads a window relative to NOW().',
+    read_schedule_blocks:    'FIXTURE: same fixed-date window — every seeded _at column is the fixed instant 2026-08-01, and this door reads a window relative to NOW().',
+    read_reminders:          'FIXTURE: seeded reminders are already past their fixed due date, so the pending filter drops them.',
+    read_skill_packs:        'FIXTURE: org_skill_packs rows are seeded archived (archived_at is stamped like every other _at column).',
+    search_reference_sheet:  'FIXTURE: agent_reference_links rows are seeded but the door requires an inline fetch status the seed does not set.',
+    list_workflow_items:     'FIXTURE: workflow items are seeded assigned to nobody, and the door asks for the caller\'s own.',
+    list_memories:           'FIXTURE: ai_memories rows are seeded under a different user id than the caller\'s.',
+    recall:                  'FIXTURE: same — the memory rows exist and belong to another user.',
+    forget:                  'FIXTURE: same. Also a WRITE, kept in the driven set deliberately so its refusal path is exercised.',
+    draft_email_reply:       'FIXTURE: the recipe names thread th_x, which no seeded inbound_emails row carries.',
+    read_email_inbox:        'FIXTURE: inbound_emails rows are seeded but filed into a folder the default view excludes.',
+    self_diagnose:           'FIXTURE: reads a 60-minute window; every seeded row is at the fixed 2026-08-01 instant.',
+    find_entities_near:      'FIXTURE: no seeded row carries a lat/lng near the recipe\'s coordinates.',
+    // INPUT — the recipe never reaches the database.
+    search_my_kb:            'INPUT: the recipe passes {q}, the handler wants {query}. It answers "query is required." and runs no statement.',
+    search_org_kb:           'INPUT: same argument-name mismatch as search_my_kb — the recipe passes {q} and the handler wants {query}, so it stops at its own validator.',
+    read_workspace_sheet_full: 'INPUT: the handler wants jobId or estimateId, or a chat session anchored to one; the recipe passes sheet_id.',
+    // SHIM — pg-sqlite cannot translate the statement.
+    list_compliance_expiring: 'SHIM: `(expiration_date - CURRENT_DATE)` is Postgres date arithmetic the shim does not translate, so the door throws at prepare. A READ TOOL THAT WAS SATISFYING "NO READ TOOL IS WAIVED" BY THROWING.',
+    // ABSENT — not configurable in a unit test.
+    read_outlook_mail:       'ABSENT: Outlook is not configured on a test server, and the door says so before touching the database. No fixture can change this.',
+    read_outlook_message:    'ABSENT: same as read_outlook_mail — Outlook is not configured on a test server and the door says so before touching the database.',
+  };
+
+  const VACUOUS_NAMES = Object.keys(VACUOUS).sort();
+
+  function measuredVacuous() {
+    return DISPATCHED.filter((name) => {
+      const m = MEASURED.get(name);
+      if (WAIVED_ND_NAMES.indexOf(name) !== -1) return false;  // minted ids differ by construction
+      return normalize(m.twoA) === normalize(m.starvedA);
+    }).sort();
+  }
+
+  test('the vacuity ledger matches measurement EXACTLY, in both directions', () => {
+    // A NEW vacuous door is red — somebody widened the population without
+    // widening the fixture. A LEDGERED door that starts returning real data is
+    // ALSO red, so an entry cannot outlive the reason for it and the coverage
+    // number cannot quietly drift back up.
+    expect(measuredVacuous()).toEqual(VACUOUS_NAMES);
+  });
+
+  test('every vacuity waiver carries a category and a stated reason', () => {
+    for (const n of VACUOUS_NAMES) {
+      expect(VACUOUS[n]).toMatch(/^(FIXTURE|INPUT|SHIM|ABSENT):/);
+      expect(String(VACUOUS[n]).length).toBeGreaterThan(60);
+    }
+  });
+
+  test('THE HONEST COVERAGE NUMBER IS COMMITTED: 58 driven, 24 vacuous, 34 EXERCISED', () => {
+    // The number that must never be reported as 58 again.
+    expect({
+      driven: DISPATCHED.length,
+      vacuous: VACUOUS_NAMES.length,
+      exercised: DISPATCHED.length - VACUOUS_NAMES.length,
+    }).toEqual({ driven: 58, vacuous: 24, exercised: 34 });
+  });
+
+  test('NO DRIVEN DOOR THROWS, except the three that are ledgered by name', () => {
+    // A door that throws executed nothing. It counted as driven anyway, which
+    // is how a read tool satisfied "NO READ TOOL IS WAIVED" without running a
+    // single statement.
+    const THROWS = {
+      add_photo_comment:        'SHIM: its ON CONFLICT arm on message_reads uses CURRENT_TIMESTAMP in a way pg-sqlite does not translate.',
+      list_compliance_expiring: 'SHIM: `(expiration_date - CURRENT_DATE)` date arithmetic.',
+      link_property_to_parent:  'BY DESIGN: the recipe passes the same client as child and parent, and the handler refuses with "A client cannot be its own parent." That is the door working.',
+    };
+    const measured = DISPATCHED.filter((n) => MEASURED.get(n).twoA.startsWith('THREW: ')).sort();
+    expect(measured).toEqual(Object.keys(THROWS).sort());
+    for (const why of Object.values(THROWS)) expect(String(why).length).toBeGreaterThan(50);
+  });
+
+  test('THE EXERCISED SET IS NOT EMPTY, and it is what the boundary arms actually prove', () => {
+    const exercised = DISPATCHED.filter((n) => VACUOUS_NAMES.indexOf(n) === -1);
+    expect(exercised.length).toBe(34);
+    // Spot-anchored: these four are the doors whose leak would matter most, and
+    // they must be in the exercised set, not merely in the driven one.
+    for (const n of ['read_clients', 'read_entity', 'read_attachment_text', 'read_metrics']) {
+      expect(exercised).toContain(n);
+    }
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// ARM 4 — THE FOREIGN ID. The axis that was pinned, and the one that caught
+//         the planted IDOR when Arms 1, 2 and 3 were all green on it.
+// ══════════════════════════════════════════════════════════════════════════
+describe('ARM 4 — the same door, asked for ANOTHER TENANT\'S id', () => {
+  test('the foreign-id axis actually swapped something (an axis nobody drives is not an axis)', () => {
+    const withForeign = DISPATCHED.filter((n) => MEASURED.get(n).fInput);
+    expect(withForeign.length).toBe(16);
+  });
+
+  test('ARM 4 (MARK) — naming an org-B id does not make org B\'s row appear', () => {
+    // The whole IDOR class in one assertion. An id is not an authorisation: the
+    // caller controls it, and a door that answers it without asking whose it is
+    // hands over a row by request.
+    const leaked = [];
+    for (const name of DISPATCHED) {
+      const m = MEASURED.get(name);
+      if (!m.foreignA) continue;
+      if (TWO.scanAnswer(m.foreignA).marked) {
+        leaked.push(name + ' <- ' + JSON.stringify(m.fInput) + '\n   ' + m.foreignA.slice(0, 300));
+      }
+    }
+    expect(leaked).toEqual([]);
+  });
+
+  test('ARM 4 (POISON) — naming an org-B id does not make org B\'s numbers appear', () => {
+    const leaked = [];
+    for (const name of DISPATCHED) {
+      const m = MEASURED.get(name);
+      if (!m.foreignA) continue;
+      const s = TWO.scanAnswer(m.foreignA);
+      if (s.poisoned.length) {
+        leaked.push(name + ' -> ' + s.poisoned.slice(0, 6).join(',') + ' :: ' + s.text.slice(0, 250));
+      }
+    }
+    expect(leaked).toEqual([]);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// ARM 5 — THE DEEPER PAGE. Every bound pushed to its maximum.
+// ══════════════════════════════════════════════════════════════════════════
+describe('ARM 5 — the same door, with every bound widened', () => {
+  test('the widened axis actually widened something', () => {
+    expect(DISPATCHED.filter((n) => MEASURED.get(n).wInput).length).toBe(8);
+  });
+
+  test('ARM 5 (MARK) — a wider window does not reach into another tenant', () => {
+    const leaked = DISPATCHED
+      .filter((n) => MEASURED.get(n).wideA && TWO.scanAnswer(MEASURED.get(n).wideA).marked)
+      .map((n) => n + ' <- ' + JSON.stringify(MEASURED.get(n).wInput));
+    expect(leaked).toEqual([]);
+  });
+
+  test('ARM 5 (POISON) — nor does it reach another tenant\'s numbers', () => {
+    const leaked = [];
+    for (const n of DISPATCHED) {
+      const m = MEASURED.get(n);
+      if (!m.wideA) continue;
+      const s = TWO.scanAnswer(m.wideA);
+      if (s.poisoned.length) leaked.push(n + ' -> ' + s.poisoned.slice(0, 6).join(','));
+    }
+    expect(leaked).toEqual([]);
+  });
+
+  // ── WHAT THIS ARM CANNOT YET DO, SAID PLAINLY ───────────────────────────
+  // With three rows per table, no door's DEFAULT limit hides anything, so this
+  // arm's discriminating power today is against a handler that clamps its LIMIT
+  // BEFORE applying its predicate — real, and narrower than a true page-2 axis.
+  // A genuine second page needs the fixture padded with enough org-A rows to
+  // push org B past the first, and none of these tools accepts an OFFSET at
+  // all. That is named in docs/TENANCY-GRADUATION.md rather than claimed here.
+  test('the limitation of this arm is recorded where a reader will find it', () => {
+    const doc = require('fs').readFileSync(
+      require('path').join(__dirname, '..', 'docs', 'TENANCY-GRADUATION.md'), 'utf8');
+    expect(doc).toContain('no OFFSET');
   });
 });
 
