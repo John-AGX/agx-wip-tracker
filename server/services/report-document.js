@@ -97,6 +97,9 @@ function coverFor(raw, hideFinancials) {
 
 // A photo as the guest sees it. WHITELIST, not a delete-list: a column added
 // to attachments later cannot leak into a public document by default.
+// shot_at IS included: on a construction report the capture date is part of
+// what the document proves, and a client reading a punch list needs it. The
+// person who took it is internal, and is not.
 // Deliberately absent — uploaded_by, uploader name, entity_type/entity_id,
 // folder, extracted_text, thumb_key, size_bytes, original_url.
 function publicPhoto(row, caption, num) {
@@ -107,6 +110,7 @@ function publicPhoto(row, caption, num) {
     thumb_url: row.thumb_url || null,
     web_url: row.web_url || null,
     caption: str(caption != null ? caption : (row.caption || ''), 500),
+    shot_at: row.shot_at || row.taken_at || row.uploaded_at || null,
     annotations: Array.isArray(row.annotations) ? row.annotations : null,
     lat: row.lat == null ? null : Number(row.lat),
     lng: row.lng == null ? null : Number(row.lng),
@@ -206,7 +210,8 @@ async function loadReportDocument(pool, opts) {
   let rows = [];
   if (ids.length) {
     const r = await pool.query(
-      `SELECT id, filename, mime_type, thumb_url, web_url, caption, annotations, lat, lng
+      `SELECT id, filename, mime_type, thumb_url, web_url, caption, annotations, lat, lng,
+              COALESCE(taken_at, uploaded_at) AS shot_at
          FROM attachments
         WHERE id = ANY($1::text[])
           AND entity_type = $2

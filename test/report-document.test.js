@@ -86,7 +86,7 @@ test('no internal attachment field survives into the document', function () {
 test('a photo exposes exactly the whitelisted keys', function () {
   const p = build().sections[0].photos[0];
   assert.deepStrictEqual(Object.keys(p).sort(),
-    ['annotations', 'caption', 'filename', 'id', 'lat', 'lng', 'mime_type', 'num', 'thumb_url', 'web_url']);
+    ['annotations', 'caption', 'filename', 'id', 'lat', 'lng', 'mime_type', 'num', 'shot_at', 'thumb_url', 'web_url']);
 });
 
 test('financials are DROPPED from the payload, not merely hidden', function () {
