@@ -4849,10 +4849,27 @@ async function backgroundRefreshAll() {
   }
 }
 // Run at boot (after a small delay so DB init has time) and every
-// 15 minutes thereafter. setInterval reference is intentionally not
-// stored — process exit cleans up.
-setTimeout(backgroundRefreshAll, 30 * 1000);
-setInterval(backgroundRefreshAll, REFRESH_INTERVAL_MS);
+// 15 minutes thereafter.
+//
+// ── .unref(), AND WHY IT IS NOT A BEHAVIOUR CHANGE ───────────────────────
+// "process exit cleans up" is true of the server and false of everything else
+// that requires this module. FIFTEEN TEST SUITES require it, and an armed
+// interval holds the jest worker's event loop open past the last assertion, so
+// jest force-exits the worker — and A FORCE-EXITED WORKER CAN TRUNCATE A
+// FAILURE REPORT. This suite is the instrument every tenancy claim in the repo
+// leans on; an instrument that can drop the failure it was run to find is worse
+// than a slow one.
+//
+// unref() says "do not keep the process alive FOR MY SAKE". In the server the
+// HTTP listener is what holds the loop open, so both timers still fire on
+// exactly their old schedule and nothing about the refresh sweep changes. In a
+// test worker, or any script that merely requires this file, there is no
+// listener — so the process is now free to exit when its work is done instead
+// of being killed while it is still writing.
+const _bootRefreshTimer = setTimeout(backgroundRefreshAll, 30 * 1000);
+const _periodicRefreshTimer = setInterval(backgroundRefreshAll, REFRESH_INTERVAL_MS);
+if (typeof _bootRefreshTimer.unref === 'function') _bootRefreshTimer.unref();
+if (typeof _periodicRefreshTimer.unref === 'function') _periodicRefreshTimer.unref();
 
 // ──────── Anthropic-side agent inspection & sync (Phase 2) ────────
 //

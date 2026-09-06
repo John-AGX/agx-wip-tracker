@@ -7,13 +7,32 @@
 const assert = require('assert');
 const s = require('../server/services/report-shares');
 
+// ── HOW THIS FILE RUNS IN BOTH WORLDS, AND WHY IT HAD TO CHANGE ──────────
+// This was written as a standalone node script ending in process.exit(). It is
+// NAMED *.test.js, so jest collects it — and process.exit() inside a jest
+// worker KILLS THE WORKER. The full run reported
+//
+//     A jest worker process (pid=19012) crashed for an unknown reason: exitCode=0
+//
+//  — this file's 22 assertions counted as ZERO tests, and anything still queued
+// on that worker went with it. That is the force-exit hazard the tenancy work is
+// written around, in its loudest form: a worker that exits 0 mid-run can
+// TRUNCATE A FAILURE REPORT, and this suite is the instrument every tenancy
+// claim in this repo leans on.
+//
+// So the local test() DELEGATES TO JEST when jest is present, and keeps the
+// script behaviour — including the exit code — when run directly with `node`.
+// Nothing about what is asserted changes. Only who counts it.
+const UNDER_JEST = typeof global.it === 'function' && typeof global.expect === 'function';
+
 let failures = 0;
 function test(name, fn) {
+  if (UNDER_JEST) return global.it(name, fn);
   try { fn(); console.log('  ok  ' + name); }
   catch (e) { failures++; console.error('  FAIL ' + name + '\n       ' + e.message); }
 }
 
-console.log('report-shares');
+if (!UNDER_JEST) console.log('report-shares');
 
 // ── Token ───────────────────────────────────────────────────────────────
 test('token is 64 hex chars and unique per call', function () {
@@ -128,5 +147,7 @@ test('publicShare narrows a hostile scope on the way out', function () {
   assert.strictEqual(s.publicShare({ scope: 'edit' }).scope, 'view');
 });
 
-console.log(failures ? '\nreport-shares: ' + failures + ' FAILED' : '\nreport-shares: all passed');
-process.exit(failures ? 1 : 0);
+if (!UNDER_JEST) {
+  console.log(failures ? '\nreport-shares: ' + failures + ' FAILED' : '\nreport-shares: all passed');
+  process.exit(failures ? 1 : 0);
+}

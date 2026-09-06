@@ -796,7 +796,14 @@ describe('R4 — classify() is checked, never consulted', () => {
     }
   });
 
-  test('the fixture carries every table server/db.js creates (108) — nothing curated out', () => {
-    expect(TWO.ALL_TABLES.length).toBe(108);
+  // 108 -> 109 on 4d8d0c8a, which added `report_shares` (the report share-link
+  // portal's schema). Recorded rather than silently bumped: THIS IS THE LEDGER
+  // DOING ITS JOB. A table landed from another session, this number moved, the
+  // suite went red on `main`, and a human had to look at what arrived and say
+  // out loud that the fixture now seeds it — three rows, org A / org B /
+  // un-stamped, like every other table, with no curation step. A count that
+  // never fails is a count nobody is keeping.
+  test('the fixture carries every table server/db.js creates (109) — nothing curated out', () => {
+    expect(TWO.ALL_TABLES.length).toBe(109);
   });
 });
