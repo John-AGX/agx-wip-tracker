@@ -1,0 +1,1 @@
+This folder contains the built output assets for the worker "p86-email-inbound" generated at 2026-08-24T21:18:25.536Z.

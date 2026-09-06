@@ -2199,6 +2199,156 @@
       return wireReportDocument(container);
     }
 
+    // ── Share panel ──────────────────────────────────────────────────
+    // Publish this report to someone with no account. The panel ALWAYS shows
+    // the link, even when email is off or the send fails, because the link is
+    // the deliverable and the server keeps only its HASH — a link not copied
+    // here cannot be recovered later, only replaced.
+    function openSharePanel() {
+      var prior = document.getElementById('rptSharePanel');
+      if (prior) prior.remove();
+
+      var proj = _detailState.project || {};
+      var wrap = document.createElement('div');
+      wrap.id = 'rptSharePanel';
+      wrap.className = 'p86-share-overlay';
+      wrap.innerHTML =
+        '<div class="p86-share-modal">' +
+          '<div class="p86-share-head">' +
+            '<div><strong>Share this report</strong>' +
+              '<div class="p86-share-sub">Anyone with the link can open it — no account needed.</div>' +
+            '</div>' +
+            '<button type="button" class="p86-modal-close" data-share-close>&times;</button>' +
+          '</div>' +
+          '<div class="p86-share-body">' +
+            '<label class="p86-field"><span>Send to (optional)</span>' +
+              '<input type="email" id="shEmail" placeholder="client@example.com" autocomplete="off" />' +
+            '</label>' +
+            '<label class="p86-field"><span>Their name (optional)</span>' +
+              '<input type="text" id="shName" placeholder="Property manager" autocomplete="off" />' +
+            '</label>' +
+            '<div class="p86-share-row">' +
+              '<label class="p86-field"><span>They can</span>' +
+                '<select id="shScope">' +
+                  '<option value="view">View only</option>' +
+                  '<option value="comment">View and comment</option>' +
+                '</select>' +
+              '</label>' +
+              '<label class="p86-field"><span>Expires in (days)</span>' +
+                '<input type="number" id="shDays" min="1" max="90" value="30" />' +
+              '</label>' +
+            '</div>' +
+            '<label class="p86-share-check">' +
+              '<input type="checkbox" id="shHideMoney" checked />' +
+              '<span>Hide financial figures from this copy</span>' +
+            '</label>' +
+            '<div class="p86-share-note">The link opens a <strong>snapshot</strong> taken now. Later edits to this report will not change what they see.</div>' +
+            '<button class="primary" id="shCreate">Create link</button>' +
+            '<div id="shResult" class="p86-share-result"></div>' +
+            '<div class="p86-share-list-head">Existing links</div>' +
+            '<div id="shList" class="p86-share-list">Loading&hellip;</div>' +
+          '</div>' +
+        '</div>';
+      document.body.appendChild(wrap);
+
+      function closePanel() { wrap.remove(); }
+      wrap.querySelectorAll('[data-share-close]').forEach(function(b) {
+        b.addEventListener('click', closePanel);
+      });
+      wrap.addEventListener('click', function(e) { if (e.target === wrap) closePanel(); });
+
+      function refreshList() {
+        var list = wrap.querySelector('#shList');
+        window.p86Api.reports.shares('project', proj.id, state.report.id).then(function(r) {
+          var rows = (r && r.shares) || [];
+          if (!rows.length) {
+            list.innerHTML = '<div class="p86-share-empty">No links yet.</div>';
+            return;
+          }
+          list.innerHTML = rows.map(function(x) {
+            var who = x.recipient_email || x.recipient_name || 'Link';
+            var when = x.expires_at ? new Date(x.expires_at).toLocaleDateString() : '';
+            var live = (x.state === 'sent' || x.state === 'opened');
+            var views = x.view_count ? (' · ' + x.view_count + ' view' + (x.view_count === 1 ? '' : 's')) : '';
+            return '<div class="p86-share-row-item" data-state="' + escapeAttr(x.state) + '">' +
+              '<div class="p86-share-row-main">' +
+                '<div class="p86-share-who">' + escapeHTML(who) + '</div>' +
+                '<div class="p86-share-meta">' +
+                  escapeHTML(x.scope) + ' · ' + escapeHTML(x.state) +
+                  (when ? ' · expires ' + escapeHTML(when) : '') + views +
+                '</div>' +
+              '</div>' +
+              (live ? '<button class="ee-btn secondary" data-revoke="' + escapeAttr(x.id) + '">Turn off</button>' : '') +
+            '</div>';
+          }).join('');
+          list.querySelectorAll('[data-revoke]').forEach(function(b) {
+            b.addEventListener('click', function() {
+              b.disabled = true;
+              b.textContent = 'Turning off…';
+              window.p86Api.reports.revokeShare('project', proj.id, state.report.id, b.getAttribute('data-revoke'))
+                .then(refreshList)
+                .catch(function(e) {
+                  b.disabled = false;
+                  b.textContent = 'Turn off';
+                  alert('Could not turn off that link: ' + (e && e.message ? e.message : e));
+                });
+            });
+          });
+        }).catch(function() {
+          list.innerHTML = '<div class="p86-share-empty">Could not load existing links.</div>';
+        });
+      }
+      refreshList();
+
+      wrap.querySelector('#shCreate').addEventListener('click', function() {
+        var btn = wrap.querySelector('#shCreate');
+        var out = wrap.querySelector('#shResult');
+        btn.disabled = true;
+        btn.textContent = 'Creating…';
+        // Save FIRST. The snapshot is built from what is stored, so an unsaved
+        // edit would simply be missing from the copy the client receives.
+        save().catch(function() {}).then(function() {
+          return window.p86Api.reports.share('project', proj.id, state.report.id, {
+            email: (wrap.querySelector('#shEmail').value || '').trim(),
+            name: (wrap.querySelector('#shName').value || '').trim(),
+            scope: wrap.querySelector('#shScope').value,
+            days: Number(wrap.querySelector('#shDays').value) || 30,
+            hide_financials: !!wrap.querySelector('#shHideMoney').checked
+          });
+        }).then(function(r) {
+          btn.disabled = false;
+          btn.textContent = 'Create link';
+          var link = (r && r.link) || '';
+          out.innerHTML =
+            '<div class="p86-share-ok">' +
+              (r.email_sent ? 'Sent. ' : '') +
+              'Copy this link — it is shown once:' +
+            '</div>' +
+            '<div class="p86-share-link">' +
+              '<input type="text" readonly value="' + escapeAttr(link) + '" id="shLink" />' +
+              '<button class="ee-btn secondary" id="shCopy">Copy</button>' +
+            '</div>' +
+            ((r.email_error && !r.email_sent)
+              ? '<div class="p86-share-warn">Email not sent (' + escapeHTML(String(r.email_error)) +
+                '). The link above still works.</div>'
+              : '');
+          var inp = out.querySelector('#shLink');
+          out.querySelector('#shCopy').addEventListener('click', function() {
+            inp.select();
+            try { document.execCommand('copy'); } catch (e) {}
+            if (navigator.clipboard) navigator.clipboard.writeText(link).catch(function() {});
+            out.querySelector('#shCopy').textContent = 'Copied';
+          });
+          refreshList();
+        }).catch(function(e) {
+          btn.disabled = false;
+          btn.textContent = 'Create link';
+          out.innerHTML = '<div class="p86-share-warn">Could not create the link: ' +
+            escapeHTML(String(e && e.message ? e.message : e)) + '</div>';
+        });
+      });
+    }
+
     // Printing renders the CANONICAL DOCUMENT (renderReportDocumentHTML), the
     // same thing the preview shows — so what you previewed is what prints,
     // page breaks included. It used to render the EDITOR's own DOM instead,
@@ -2555,6 +2705,7 @@
             '<button class="ee-btn secondary" id="rptDesign" title="Choose a visual style for this report">&#x1F3A8; Design</button>' +
             '<button class="ee-btn secondary" id="rptPreview" title="See what this report will look like when printed">&#x1F441;&#xFE0F; Preview</button>' +
             '<button class="ee-btn secondary" id="rptPrint">&#x1F5A8; Print / Save PDF</button>' +
+            '<button class="ee-btn secondary" id="rptShare" title="Send this report to a client — no account needed">&#x1F517; Share</button>' +
             '<button class="ee-btn secondary" id="rptAddSection">&#x2795; Section</button>' +
             '<button class="ee-btn secondary" id="rptSave">Save</button>' +
             '<button class="p86-modal-close" id="rptClose">&times;</button>' +
@@ -2667,6 +2818,8 @@
         });
       });
       host.querySelector('#rptPrint').addEventListener('click', printReport);
+      var shareBtn = host.querySelector('#rptShare');
+      if (shareBtn) shareBtn.addEventListener('click', openSharePanel);
       host.querySelector('#rptAddSection').addEventListener('click', function() { addCustomSection(); });
       // Design button — opens the visual style-pack gallery. Picking
       // a card mutates state.stylePack, swaps the data attribute,

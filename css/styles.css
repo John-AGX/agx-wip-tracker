@@ -12291,3 +12291,131 @@ body.light-mode .p86-mktpnl-table th { color: #6b6b76; border-bottom-color: rgba
 body.light-mode .p86-mktpnl-total td { background: rgba(0,0,0,.03); border-top-color: rgba(0,0,0,.16); }
 body.light-mode .p86-mktpnl-tile { background: #fff; border-color: rgba(0,0,0,.1); }
 body.light-mode .p86-mktpnl-warn { background: rgba(180, 120, 10, .10); border-color: rgba(180, 120, 10, .3); color: #4a3708; }
+
+/* ── Share panel (report editor) ────────────────────────────────────
+   Publishing a report to someone outside the company. Sits above the
+   report editor overlay, which is z-index 1050. */
+.p86-share-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 6vh 16px 24px;
+  overflow-y: auto;
+}
+.p86-share-modal {
+  width: 100%;
+  max-width: 460px;
+  background: var(--card-bg, #16161c);
+  border: 1px solid var(--border, #33333f);
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+.p86-share-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border, #33333f);
+}
+.p86-share-head > div:first-child { flex: 1 1 auto; min-width: 0; }
+.p86-share-sub {
+  color: var(--text-dim, #9aa0b4);
+  font-size: 12.5px;
+  margin-top: 3px;
+}
+.p86-share-body { padding: 16px 18px 18px; }
+.p86-share-body .p86-field { display: block; margin-bottom: 12px; }
+.p86-share-body .p86-field > span {
+  display: block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-dim, #9aa0b4);
+  margin-bottom: 4px;
+}
+.p86-share-body .p86-field input,
+.p86-share-body .p86-field select {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border, #33333f);
+  background: var(--input-bg, #101014);
+  color: var(--text, #e6e6e6);
+  font: inherit;
+  font-size: 14px;
+}
+.p86-share-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.p86-share-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  margin: 4px 0 12px;
+  cursor: pointer;
+}
+.p86-share-check input { width: 16px; height: 16px; padding: 0; margin: 0; }
+.p86-share-note {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-dim, #9aa0b4);
+  background: rgba(127, 132, 152, 0.08);
+  border: 1px solid var(--border, #33333f);
+  border-radius: 8px;
+  padding: 9px 11px;
+  margin-bottom: 14px;
+}
+.p86-share-body button.primary { width: 100%; }
+.p86-share-result:empty { display: none; }
+.p86-share-result { margin-top: 14px; }
+.p86-share-ok { font-size: 13px; color: var(--good, #58c295); margin-bottom: 6px; }
+.p86-share-warn { font-size: 12.5px; color: #f0837a; margin-top: 8px; line-height: 1.45; }
+.p86-share-link { display: flex; gap: 6px; }
+.p86-share-link input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border, #33333f);
+  background: var(--input-bg, #101014);
+  color: var(--text, #e6e6e6);
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  font-size: 12px;
+}
+.p86-share-list-head {
+  margin: 20px 0 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-dim, #9aa0b4);
+}
+.p86-share-list { display: flex; flex-direction: column; gap: 6px; }
+.p86-share-empty { color: var(--text-dim, #9aa0b4); font-size: 13px; font-style: italic; }
+.p86-share-row-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--border, #33333f);
+  border-radius: 8px;
+}
+.p86-share-row-main { flex: 1 1 auto; min-width: 0; }
+.p86-share-who {
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.p86-share-meta { font-size: 11.5px; color: var(--text-dim, #9aa0b4); margin-top: 2px; }
+/* A dead link should read as dead at a glance rather than needing the label. */
+.p86-share-row-item[data-state="revoked"],
+.p86-share-row-item[data-state="expired"] { opacity: 0.55; }
+.p86-share-row-item[data-state="opened"] { border-color: rgba(88, 194, 149, 0.4); }
+@media (max-width: 520px) {
+  .p86-share-row { grid-template-columns: 1fr; }
+}

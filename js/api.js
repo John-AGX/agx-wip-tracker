@@ -512,6 +512,23 @@
     create: function(entityType, entityId, payload) {
       return post('/api/reports/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId), payload || {});
     },
+
+    // ── Share portal ────────────────────────────────────────────────
+    // Publish a finished report to someone with no account. The raw token
+    // comes back exactly once, inside `link` — the server stores only its
+    // hash, so a link that is not copied here cannot be recovered later.
+    share: function(entityType, entityId, reportId, payload) {
+      return post('/api/reports/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId) +
+        '/' + encodeURIComponent(reportId) + '/share', payload || {});
+    },
+    shares: function(entityType, entityId, reportId) {
+      return get('/api/reports/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId) +
+        '/' + encodeURIComponent(reportId) + '/shares');
+    },
+    revokeShare: function(entityType, entityId, reportId, shareId) {
+      return post('/api/reports/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId) +
+        '/' + encodeURIComponent(reportId) + '/shares/' + encodeURIComponent(shareId) + '/revoke', {});
+    },
     update: function(entityType, entityId, reportId, payload) {
       return patch('/api/reports/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId) + '/' + encodeURIComponent(reportId), payload);
     },
