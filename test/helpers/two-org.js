@@ -349,12 +349,38 @@ function flatten(v) {
 // fall apart into three small ones.
 const ISO_TS = /\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?Z?)?/g;
 
+// ── A DIGIT RUN INSIDE A WORD IS NOT A NUMBER ────────────────────────────
+// The first version of this matched `/-?\d+(?:\.\d+)?/g` anywhere, and that
+// produced a MEASURED, REPRODUCIBLE FALSE POSITIVE — roughly one run in twelve.
+// `GET /api/email-folders` mints ids like
+//
+//     efld_mtp4sz915488502d
+//
+// from a base36 clock plus randomness, and the middle of that token is
+// `915488502`, which sits inside the reserved band by pure chance. Arm 2 called
+// it a leak, the ledger disagreed, and the suite went red on nothing at all.
+//
+// A flaky boundary assertion is worse than a missing one. It gets muted, and a
+// muted harness protects nothing while wearing the costume of protection — so
+// this is the one place where narrowing the oracle is the right move rather
+// than a concession.
+//
+// THE RULE: a number is a digit run whose neighbours are not word characters.
+// `"input_tokens":900007000` qualifies (`:` and `}`). `jobs-900001001`
+// qualifies (`-` on both sides), so a leaked composite id is still seen.
+// `mtp4sz915488502d` does NOT, on either side.
+//
+// WHAT THIS GIVES UP, SAID OUT LOUD: a leak that arrives welded to a letter
+// with no delimiter — `org900000002` — is now invisible to Arm 2. Arm 1 still
+// sees it if it carries the marker, and Arm 3 still sees it as a difference.
+// Nothing in this codebase emits that shape today; if something starts to, this
+// rule is where to look.
 function numbersIn(text) {
   const cleaned = String(text)
     .replace(ISO_TS, ' ')
     .replace(/(\d),(?=\d{3}\b)/g, '$1');   // 1,234,567 -> 1234567
   const out = [];
-  const re = /-?\d+(?:\.\d+)?/g;
+  const re = /(?<![A-Za-z0-9_])-?\d+(?:\.\d+)?(?![A-Za-z0-9_])/g;
   let m;
   while ((m = re.exec(cleaned))) {
     const n = Number(m[0]);

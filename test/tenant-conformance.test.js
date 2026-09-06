@@ -273,6 +273,19 @@ const APPROVAL_RECIPES = {
 // this file goes red.
 const UNKNOWN_RE = /^Unknown (?:staff |approval-tier staff |intake read |memory |Wave 3 |project-inline )?tool:/;
 
+// EVERY THROWAWAY WORLD IS CLOSED. DatabaseSync is a NATIVE handle and nothing
+// here used to close one, so a run left hundreds open for the garbage
+// collector to finalize whenever it liked. A finalizer running over a live
+// native database is how a Node process exits with 0xC0000409 and NO OUTPUT AT
+// ALL — measured elsewhere in this wave, where the crash rate tracked the
+// number of un-closed handles and nothing else. Cheap, correct, and it removes
+// the one failure mode an instrument must never have.
+async function callFresh(makeEngine, orgId, name, input) {
+  const engine = makeEngine();
+  try { return await callAsOrg(engine, orgId, name, input); }
+  finally { if (engine && engine.close) engine.close(); }
+}
+
 async function callAsOrg(engine, orgId, name, input) {
   const prev = globalThis.__P86_TC_ACTIVE__;
   globalThis.__P86_TC_ACTIVE__ = engine;
@@ -395,17 +408,17 @@ function widen(input) {
 
 beforeAll(async () => {
   for (const name of ALL_TOOL_NAMES) {
-    const out = await callAsOrg(freshTwo(), ORG_A, name, RECIPES[name]);
+    const out = await callFresh(freshTwo, ORG_A, name, RECIPES[name]);
     if (out.startsWith('THREW: ') && UNKNOWN_RE.test(out.slice(7))) { NOT_DISPATCHED.push(name); continue; }
     DISPATCHED.push(name);
     const twoA = out;
-    const twoA2 = await callAsOrg(freshTwo(), ORG_A, name, RECIPES[name]);
-    const oneA = await callAsOrg(freshOne(), ORG_A, name, RECIPES[name]);
-    const starvedA = await callAsOrg(starve(freshTwo()), ORG_EMPTY, name, RECIPES[name]);
+    const twoA2 = await callFresh(freshTwo, ORG_A, name, RECIPES[name]);
+    const oneA = await callFresh(freshOne, ORG_A, name, RECIPES[name]);
+    const starvedA = await callFresh(() => starve(freshTwo()), ORG_EMPTY, name, RECIPES[name]);
     const fInput = foreignify(RECIPES[name]);
-    const foreignA = fInput ? await callAsOrg(freshTwo(), ORG_A, name, fInput) : null;
+    const foreignA = fInput ? await callFresh(freshTwo, ORG_A, name, fInput) : null;
     const wInput = widen(RECIPES[name]);
-    const wideA = wInput ? await callAsOrg(freshTwo(), ORG_A, name, wInput) : null;
+    const wideA = wInput ? await callFresh(freshTwo, ORG_A, name, wInput) : null;
     MEASURED.set(name, { twoA, twoA2, oneA, starvedA, foreignA, wideA, fInput, wInput });
   }
 }, 120000);
@@ -547,7 +560,8 @@ describe('R1 — the published tool population', () => {
     const leaked = [];
     for (const name of served()) {
       const prev = globalThis.__P86_TC_ACTIVE__;
-      globalThis.__P86_TC_ACTIVE__ = freshTwo();
+      const world = freshTwo();
+      globalThis.__P86_TC_ACTIVE__ = world;
       let out;
       try {
         const ctx = { userId: ID('users', 'A'), orgId: ORG_A,
@@ -561,7 +575,7 @@ describe('R1 — the published tool population', () => {
           else if (name.indexOf('skill_pack') !== -1) out = await I.execStaffApprovalTool(name, input, ctx);
           else out = await I.execClientDirectoryToolWithCtx(name, input, ctx);
         } catch (e) { out = 'THREW: ' + (e && e.message); }
-      } finally { globalThis.__P86_TC_ACTIVE__ = prev; }
+      } finally { globalThis.__P86_TC_ACTIVE__ = prev; if (world.close) world.close(); }
       const s = TWO.scanAnswer(TWO.flatten(out));
       if (s.marked || s.poisoned.length) {
         leaked.push(name + ' -> marked=' + s.marked + ' poison=' + s.poisoned.slice(0, 4).join(',')
@@ -586,7 +600,7 @@ describe('R1 — the published tool population', () => {
   // be smuggled into the executor without ever being published, and no
   // enumeration of the published set would find it.
   test('A8 — a name outside the published union is NOT reachable through execAgentTool', async () => {
-    const out = await callAsOrg(freshTwo(), ORG_A, 'zz_unpublished_smuggled_tool', {});
+    const out = await callFresh(freshTwo, ORG_A, 'zz_unpublished_smuggled_tool', {});
     expect(out.slice(7)).toMatch(UNKNOWN_RE);
   });
 
@@ -1071,7 +1085,7 @@ describe('R3b — a session the caller authored for their FORMER tenant', () => 
   }
 
   test('search_my_sessions refuses it — the caller\'s own id is NOT proof of tenancy', async () => {
-    const out = await callAsOrg(movedFixture(true), ORG_A, 'search_my_sessions', { query: 'tenant' });
+    const out = await callFresh(() => movedFixture(true), ORG_A, 'search_my_sessions', { query: 'tenant' });
     // The row is the caller's by user_id and NOT theirs by tenant. The user axis
     // alone would have served it; the parent anchor through ai_messages is what
     // refuses it.
@@ -1081,7 +1095,7 @@ describe('R3b — a session the caller authored for their FORMER tenant', () => 
   test('the same session IS served to the caller as a member of org B', async () => {
     // The mirror. Without this the assertion above is satisfied by a predicate
     // that serves nobody, which is a lockout rather than a boundary.
-    const out = await callAsOrg(movedFixture(true), ORG_B, 'search_my_sessions', { query: 'tenant' });
+    const out = await callFresh(() => movedFixture(true), ORG_B, 'search_my_sessions', { query: 'tenant' });
     expect(out).toContain(MARK);
   });
 
@@ -1102,7 +1116,7 @@ describe('R3b — a session the caller authored for their FORMER tenant', () => 
       id: 556, user_id: ID('users', 'A'), entity_type: 'general',
       label: MARK + ' orphan thread', summary: MARK + ' orphan summary',
     }]);
-    const out = await callAsOrg(TWO.buildEngine({ overlay }), ORG_A, 'search_my_sessions', { query: 'orphan' });
+    const out = await callFresh(() => TWO.buildEngine({ overlay }), ORG_A, 'search_my_sessions', { query: 'orphan' });
     expect(out).toContain(MARK);
   });
 });

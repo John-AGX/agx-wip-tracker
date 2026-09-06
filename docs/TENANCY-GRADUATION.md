@@ -426,6 +426,54 @@ claims eight registers and has five.
 - **A leak in the 428 routes that need a path parameter.** Counted, not driven.
 - **A wrong QUERY.** Every failure is a marker, a magnitude or a diff. The harness says
   an ANSWER is wrong; a human finds the statement.
+- **A leak welded to a letter with no delimiter** — `org900000002`. Arm 2 stopped reading
+  digit runs inside words after a minted folder id (`efld_mtp4sz915488502d`) landed in the
+  reserved band by chance and turned the suite red on nothing, one run in three. Arms 1
+  and 3 still see that shape; Arm 2 no longer does.
+
+### The instrument itself, and what had to be fixed in it
+
+Three faults in the harness were found by running it many times rather than once. They are
+recorded because each one produced a GREEN or a SILENCE that meant nothing, and the next
+person to extend this will meet them again.
+
+1. **`process.exit()` in a file named `*.test.js` kills the jest worker.**
+   `test/report-shares.test.js` did this at module scope. Its 22 assertions counted as
+   ZERO tests and anything queued behind it on that worker went too. Fixed by delegating
+   to jest when jest is present.
+
+2. **A native database left open crashes the process with no output at all.**
+   `node:sqlite`’s `DatabaseSync` is a native handle and nothing closed one, so a run left
+   hundreds open for the GC to finalize whenever it liked. Driving 137 real routes then
+   killed the process with exit `0xC0000409` (STATUS_STACK_BUFFER_OVERRUN) — no exception,
+   no stack, **zero bytes of output**. THE CRASH RATE TRACKED THE NUMBER OF UN-CLOSED
+   HANDLES and nothing else: three engines 3 runs in 20, two engines 1 in 20, one engine 0
+   in 24. `createPgSqlite` now exposes `close()`, both registers call it, and Register 2
+   additionally retries its child up to three times and PRINTS any retry it needed.
+   Measured after the fix: 0 bad runs in 25, 0 retries used.
+
+3. **A per-request fixture makes background work look like a leak.**
+   Several handlers keep working after they respond. With a fresh engine per request those
+   continuations land in whichever world is active when they finally run — some later
+   route's — and `/api/email-folders` came back 'leaking' about one run in three while the
+   same route driven 30 times alone was clean every time. One engine per pass removes the
+   class. **A flaky boundary assertion is worse than a missing one:** it gets muted, and a
+   muted harness protects nothing while wearing the costume of protection.
+
+### The plants, and how to re-run them
+
+The only evidence that counts for "the harness catches X" is a plant of X that turns it
+red. `test/fixtures/tenant-plants.js` holds **17 real defects**, one shape each, and runs
+them one at a time — applying, running the affected suites, restoring, and verifying the
+restore by sha256. Every plant REFUSES a non-unique or missing match, so it cannot
+silently no-op and report a false green.
+
+    node test/fixtures/tenant-plants.js list
+    node test/fixtures/tenant-plants.js run all
+
+Measured: **14 caught, 3 escape.** The three are the two cron plants and the model-context
+plant — i.e. every escape is inside Registers 3 and 4, which item 17 says are not built.
+Nothing escapes in a register that exists.
 
 ## What this checklist does not cover
 
