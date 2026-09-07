@@ -80,7 +80,50 @@ function scriptRoots(html) {
   });
   return [...roots].sort();
 }
-const SCRIPT_ROOTS = scriptRoots(INDEX_HTML);
+// ── VENDORED THIRD-PARTY CODE IS NOT CLIENT CODE ───────────────────────────
+// `js/vendor/` arrived with 8721bd1a (Leaflet, for the report location map) and
+// this file went red, because the roots are derived and the assertion was a
+// literal. Widening that literal to ['js', 'js/vendor', 'nodegraph'] is the one
+// fix that must not be made: a hardcoded root list is the exact defect the
+// derivation above exists to delete, and it would go red again the next time
+// anyone vendors anything.
+//
+// The registry's contract is "every mutation site patches the store AND
+// repaints, in that order, through p86Refresh". That contract is only
+// meaningful for code we write. It cannot be satisfied inside Leaflet, and
+// nobody would ever edit Leaflet to satisfy it — so including vendor/ can only
+// ever produce allowlist entries that exist to permanently excuse third-party
+// code, and an allowlist entry that can never be retired is a false negative
+// with a comment on it.
+//
+// The concrete harm is not hypothetical. SOURCES reads WHOLE DIRECTORIES, and
+// the injection group below picks the LARGEST file in each root as its host:
+// js/vendor/leaflet.js is 147KB on a SINGLE LINE (wc -l reports 0 newlines), so
+// it would become the host that the store-then-surface detector is proved
+// against. Every line- and window-based check in this suite is meaningless on
+// minified code, and a 147KB line is exactly as likely to match a mutation
+// shape by coincidence as by fact.
+//
+// So vendor roots are dropped BY RULE, not by name — the day someone adds
+// css/vendor's counterpart under a new directory it is excluded too — and the
+// two properties that keep the rule honest are asserted below: nothing inside a
+// vendor root may be ours, and no local script may fall outside both sets.
+const VENDOR_RE = /(?:^|\/)vendor(?:\/|$)/;
+// The markers that say "this file is ours". Hoisted and asserted against a
+// planted positive below: a guard that scans for an EMPTY list of markers finds
+// nothing and passes, which is indistinguishable from a guard that works.
+const OURS_MARKERS = [/\bp86Refresh\b/, /\bwindow\.p86[A-Z]/, /\bappData\b/];
+// A local script tag that lands in neither the scanned nor the vendored set is
+// in a directory nobody decided about. Pure, so it can be shown to say yes.
+function unaccounted(loadedPaths, scanned, vendored) {
+  return loadedPaths.filter((p) => {
+    const dir = p.slice(0, p.lastIndexOf('/'));
+    return scanned.indexOf(dir) === -1 && vendored.indexOf(dir) === -1;
+  });
+}
+const ALL_SCRIPT_ROOTS = scriptRoots(INDEX_HTML);
+const VENDOR_ROOTS = ALL_SCRIPT_ROOTS.filter((d) => VENDOR_RE.test(d));
+const SCRIPT_ROOTS = ALL_SCRIPT_ROOTS.filter((d) => !VENDOR_RE.test(d));
 // The whole DIRECTORY is read, not just the files index.html happens to name:
 // a module that is loaded dynamically, or added to the tree before its script
 // tag, is still client code and still must not bypass the registry.
@@ -269,23 +312,112 @@ beforeEach(() => {
 // Plan and its money editors — was a blind spot no test could report, because
 // a file that is not read cannot fail anything.
 describe('scanned roots', () => {
-  test('the roots come from index.html, and nodegraph is one of them', () => {
-    expect(SCRIPT_ROOTS).toEqual(['js', 'nodegraph']);
-    // Asserted by name as well as by list: if someone re-narrows the derivation,
-    // "it still returns something" is not the property that matters.
+  test('the roots come from index.html, minus vendor — a PROPERTY, not a list', () => {
+    // Stated as the rule rather than the answer. The literal ['js','nodegraph']
+    // that used to be here went red the day js/vendor/ was added by a parallel
+    // session, and "update the expectation" would have re-armed it for the next
+    // directory. What must hold is the derivation, not today's output of it.
+    // NOT `SCRIPT_ROOTS === ALL.filter(!VENDOR_RE)` — that is how SCRIPT_ROOTS
+    // is defined, so it restates the definition and can never fail. The checks
+    // below are written WITHOUT VENDOR_RE, so a regex that stopped matching
+    // would break them rather than move them.
+    const segs = (p) => String(p).split('/');
+    expect(SOURCES.filter((s) => segs(s.file).indexOf('vendor') !== -1)).toEqual([]);
+    expect(SCRIPT_ROOTS.filter((d) => segs(d).indexOf('vendor') !== -1)).toEqual([]);
+    // SOURCES is what every check in this file is as wide as; if the derivation
+    // collapsed, "no vendor files" would also be satisfied by reading nothing.
+    expect(SOURCES.length).toBeGreaterThan(100);
+
+    // The partition is TOTAL: a root derived from index.html that fell out of
+    // both sets would be silently unscanned and unaccounted for. Asserted as a
+    // set, and then shown to be capable of failing.
+    expect([].concat(SCRIPT_ROOTS, VENDOR_ROOTS).sort()).toEqual(ALL_SCRIPT_ROOTS.slice().sort());
+    const partition = (all) => [all.filter((d) => !VENDOR_RE.test(d)), all.filter((d) => VENDOR_RE.test(d))];
+    const [keep, vend] = partition(['js', 'js/vendor', 'nodegraph']);
+    expect([].concat(keep, vend).sort()).toEqual(['js', 'js/vendor', 'nodegraph']);
+    expect(keep).toEqual(['js', 'nodegraph']);
+    expect(vend).toEqual(['js/vendor']);
+
+    // Asserted by name as well as by rule: if someone re-narrows the derivation,
+    // "it still returns something" is not the property that matters. nodegraph/
+    // is 10k lines holding the Site Plan and its money editors, and was a blind
+    // spot no test could report for as long as the scan was js/-only.
+    expect(SCRIPT_ROOTS).toContain('js');
     expect(SCRIPT_ROOTS).toContain('nodegraph');
+
+    // The scan must never be narrowed to a single directory again.
+    expect(SCRIPT_ROOTS.length).toBeGreaterThanOrEqual(2);
+  });
+
+  test('the vendor rule is a rule, and it is not vacuous', () => {
+    // Driven through the pure function, so this holds whether or not the tree
+    // happens to vendor anything today. A rule that is only ever exercised by
+    // the current contents of the repo stops being exercised the day they
+    // change, and nobody finds out.
+    const roots = (h) => scriptRoots(h).filter((d) => !VENDOR_RE.test(d));
+    expect(roots('<script src="js/a.js"></script><script src="js/vendor/leaflet.js"></script>'))
+      .toEqual(['js']);
+    expect(roots('<script src="nodegraph/ui.js"></script><script src="vendor/x.js"></script>'))
+      .toEqual(['nodegraph']);
+    expect(roots('<script src="js/lib/vendor/deep.js"></script>')).toEqual([]);
+    // "vendors.js" and "js/vendored" are NOT vendor directories — the rule is
+    // anchored on the whole path segment, not a substring.
+    expect(roots('<script src="js/vendors/a.js"></script>')).toEqual(['js/vendors']);
+    expect(roots('<script src="js/vendored/a.js"></script>')).toEqual(['js/vendored']);
+    // and a first-party root is never dropped
+    expect(roots('<script src="widgets/b.js"></script>')).toEqual(['widgets']);
+  });
+
+  test('nothing inside a vendor root is OURS — the exclusion is not a hiding place', () => {
+    // The cost of excluding a directory is that code put there stops being
+    // checked. So the tree is asked whether anything in there is ours: a file
+    // under vendor/ that calls p86Refresh, or defines a p86 global, is
+    // first-party code in a directory that is no longer scanned, and that is a
+    // silent hole of exactly the shape this suite exists to close.
+    const offenders = [];
+    for (const dir of VENDOR_ROOTS) {
+      for (const f of fs.readdirSync(path.join(REPO, dir)).filter((x) => x.endsWith('.js'))) {
+        const src = fs.readFileSync(path.join(REPO, dir, f), 'utf8');
+        for (const marker of OURS_MARKERS) {
+          if (marker.test(src)) offenders.push(dir + '/' + f + ' :: ' + marker);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+
+    // POSITIVE CONTROL. An empty marker list also finds no offenders, and a
+    // guard that cannot be shown saying "yes" has not been shown to work.
+    expect(OURS_MARKERS.length).toBeGreaterThan(0);
+    for (const planted of ['x = p86Refresh(1)', 'window.p86Explorer.open()', 'appData.jobs = []']) {
+      expect([planted, OURS_MARKERS.some((re) => re.test(planted))]).toEqual([planted, true]);
+    }
+    // and stays quiet on genuine third-party text
+    for (const innocent of ['var L = {};', 'function addLayer(){}', 'this._map = null;']) {
+      expect([innocent, OURS_MARKERS.some((re) => re.test(innocent))]).toEqual([innocent, false]);
+    }
   });
 
   test('every local script index.html loads is in a scanned root', () => {
     const loaded = scriptSrcs(INDEX_HTML);
     // No local tag may sit outside the scanned set — that is the exact failure
-    // shape, one directory at a time.
-    const outside = loaded.filter((p) => SCRIPT_ROOTS.indexOf(p.slice(0, p.lastIndexOf('/'))) === -1);
-    expect(outside).toEqual([]);
-    // ...and every one of them is a file the scan actually holds.
+    // shape, one directory at a time. A VENDORED tag is accounted for rather
+    // than ignored: it must land in a vendor root, so "outside" still means
+    // "in a directory nobody decided about", which is the thing worth catching.
+    const dirOf = (p) => p.slice(0, p.lastIndexOf('/'));
+    expect(unaccounted(loaded, SCRIPT_ROOTS, VENDOR_ROOTS)).toEqual([]);
+
+    // POSITIVE CONTROL, for the same reason as above: on this tree the filter
+    // is empty, so an `outside = []` that stopped looking would be identical to
+    // one that looked and found nothing. Driven with a directory that IS
+    // unaccounted for, it must say so — and a vendored one must not count.
+    expect(unaccounted(['js/a.js', 'widgets/b.js'], ['js'], [])).toEqual(['widgets/b.js']);
+    expect(unaccounted(['js/vendor/leaflet.js'], ['js'], ['js/vendor'])).toEqual([]);
+    expect(unaccounted(['js/vendor/leaflet.js'], ['js'], [])).toEqual(['js/vendor/leaflet.js']);
+    // ...and every first-party one is a file the scan actually holds.
     const keys = new Set(SOURCES.map((s) => s.file));
     const unread = loaded.filter((p) => {
-      const dir = p.slice(0, p.lastIndexOf('/')), base = p.slice(p.lastIndexOf('/') + 1);
+      const dir = dirOf(p), base = p.slice(p.lastIndexOf('/') + 1);
+      if (VENDOR_ROOTS.indexOf(dir) !== -1) return false;    // deliberately not scanned
       return !keys.has(dir === 'js' ? base : dir + '/' + base);
     });
     expect(unread).toEqual([]);
