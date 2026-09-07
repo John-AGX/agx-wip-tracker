@@ -4541,7 +4541,15 @@ function renderJobsMain() {
                     cosWired.forEach(function(item) {
                         const c = item.co;
                         body += '<div class="p86-bldg-co-row" onclick="event.stopPropagation();editCO(p86Dec(\'' + p86Enc(c.id) + '\'))">' +
-                            '<span><b>' + escapeHTML(c.co_number || c.coNumber || 'CO') + '</b> ' + escapeHTML((c.description || '').substring(0, 60)) + '</span>' +
+                            // description FIRST so a pre-server row that really
+                            // carries one is unchanged, then title — which is
+                            // what a server change-order row actually has. No
+                            // create path writes `description` on a CO (that
+                            // field belongs to its LINES), so with description
+                            // alone every row here rendered as a change-order
+                            // number followed by nothing. Invisible until now
+                            // only because the list itself never painted.
+                            '<span><b>' + escapeHTML(c.co_number || c.coNumber || 'CO') + '</b> ' + escapeHTML((c.description || c.title || '').substring(0, 60)) + '</span>' +
                             '<span class="p86-bldg-co-row-meta">Inc: <b>' + formatCurrency((c.income || 0) * item.allocPct / 100) + '</b> (' + fmtAllocPct(item.allocPct) + '%)</span>' +
                             '</div>';
                     });

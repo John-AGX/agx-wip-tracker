@@ -636,9 +636,78 @@ describe('7 · card change-order dollars reconcile to the G703, per building', (
  *     is not a fix
  * ═══════════════════════════════════════════════════════════════════════════ */
 describe('8 · js/jobs.js is served at a version that carries this change', () => {
-  test('8a · index.html requests js/jobs.js at v239 or later', () => {
+  test('8a · index.html requests js/jobs.js at v240 or later', () => {
     const m = INDEX_HTML.match(/js\/jobs\.js\?v=(\d+)/);
     expect(m).not.toBeNull();
-    expect(Number(m[1])).toBeGreaterThanOrEqual(239);
+    expect(Number(m[1])).toBeGreaterThanOrEqual(240);
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 9 · THE ROW SAYS WHAT THE CHANGE ORDER IS
+ *
+ * The row printed `c.description`. A server change-order row has no such
+ * field: every create path writes `title`, and shapeRow stamps nothing called
+ * description (description belongs to a change order's LINES, not to the
+ * change order). While the key bug hid this list entirely the defect was
+ * unobservable. The moment the list paints, every row ships as a change-order
+ * number followed by nothing — so this is repaired in the same wave that made
+ * the list reachable, rather than shipped as a fresh visible defect.
+ *
+ * `description` is still read FIRST, so any pre-server row that genuinely
+ * carries one renders exactly as it did.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+describe('9 · a change-order row is named, not left blank', () => {
+  test('9a · the rows this store holds carry title and no description at all', () => {
+    expect(CO_APPROVED_B1.title).toBe('Add lanai');
+    expect('description' in CO_APPROVED_B1).toBe(false);
+  });
+
+  test('9b · the painted row shows the change order title beside its number', () => {
+    const app = makeAppData();
+    const html = paintCards(app, build(app).getCOsConnectedTo);
+    expect(html).toContain('CO-0001');
+    expect(html).toContain('Add lanai');
+    expect(html).toContain('Regrade');
+  });
+
+  test('9c · MUTATION — reading description alone leaves every row nameless', () => {
+    const app = makeAppData();
+    const html = paintCards(app, build(app).getCOsConnectedTo,
+      (src) => src.replace("(c.description || c.title || '')", "(c.description || '')"));
+    expect(html).toContain('CO-0001');          // the number still paints
+    expect(html).not.toContain('Add lanai');    // and nothing else does
+    expect(html).not.toContain('Regrade');
+  });
+
+  test('9d · a legacy row that really carries a description still wins', () => {
+    const app = makeAppData();
+    app.jobChangeOrders = [Object.assign({}, CO_APPROVED_B1,
+      { description: 'Legacy words', title: 'Not this one' })];
+    const html = paintCards(app, build(app).getCOsConnectedTo);
+    expect(html).toContain('Legacy words');
+    expect(html).not.toContain('Not this one');
+  });
+
+  test('9e · a row with neither still renders — no crash, no "undefined"', () => {
+    const app = makeAppData();
+    const bare = Object.assign({}, CO_APPROVED_B1);
+    delete bare.title;
+    app.jobChangeOrders = [bare];
+    const html = paintCards(app, build(app).getCOsConnectedTo);
+    expect(html).toContain('CO-0001');
+    expect(html).not.toContain('undefined');
+  });
+
+  test('9f · the title is escaped, not injected', () => {
+    const app = makeAppData();
+    app.jobChangeOrders = [serverCO({
+      id: 'co-x', status: 'approved', co_number: 'CO-0010',
+      data: { title: '<img src=x onerror=alert(1)>', lines: line(1000),
+              buildingAllocations: [{ buildingId: B.one, pct: 100 }] },
+    })];
+    const html = paintCards(app, build(app).getCOsConnectedTo);
+    expect(html).not.toContain('<img src=x');
+    expect(html).toContain('&lt;img');
   });
 });
