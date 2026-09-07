@@ -63,6 +63,11 @@ const ORG_VISIBLE_ACTIONS = [
   'user.create',
   'user.update',
   'user.role_change',
+  // Without this line the org admin who changed a colleague's address could
+  // not see it in their OWN audit feed — the row would exist only in the
+  // platform trail they cannot read. A surface that succeeds while showing
+  // nothing is the failure this list exists to avoid.
+  'user.email_key_change',
   'user.delete',
   'user.password_reset',
   'user.password_change',

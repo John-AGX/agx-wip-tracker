@@ -8,6 +8,10 @@ const { auditLog, auditCritical, auditActor, actorFromRequest, hashId } = requir
 // The tenant boundary on a caller-supplied USER id. See the block comment in
 // that file: four admin doors here are keyed on users.id, which is SERIAL.
 const { guardUserTarget } = require('../services/user-org-scope');
+// The address shape lives in ONE file — construction, validation and the
+// delivery-side extraction — so this door and the delivery matcher cannot
+// disagree about what a legal address is.
+const { validateAssignedLocalPart, normalizeLocalPart, TAKEN_MESSAGE } = require('../services/inbound-address');
 
 // Record a SYSTEM_ADMIN deliberately reaching into another tenant through one
 // of the by-id user doors. Nothing else may reach one — see guardUserTarget —
@@ -430,7 +434,13 @@ router.get('/users', requireAuth, async (req, res) => {
     // OR-IS-NULL (org tolerance) — legacy un-stamped users stay visible.
     params.push(orgId); where += ' AND (organization_id = $1 OR organization_id IS NULL)';
     const { rows } = await pool.query(
-      'SELECT id, email, name, role, active, phone_number, timezone, title, notification_prefs, created_at, last_seen_at FROM users ' +
+      // inbound_email_key is the PRIMARY address only — the one a person hands
+      // to clients, so it is not a secret and the admin Users table needs it to
+      // display anything. The ALIAS LIST is deliberately NOT here: this
+      // endpoint is open to every authenticated non-sub staff user (it feeds PM
+      // pickers and crew assignment), and a user's old addresses are visible
+      // only to their owner via /api/email-inbox/my-address.
+      'SELECT id, email, name, role, active, phone_number, timezone, title, notification_prefs, inbound_email_key, created_at, last_seen_at FROM users ' +
       where + ' ORDER BY name ASC',
       params
     );
@@ -722,6 +732,82 @@ router.put('/users/:id', requireAuth, requireRole('admin'), async (req, res) => 
       }
     }
 
+    // ── The Project 86 inbound address, set by the org's own admin ───────────
+    // Shape: <local>.<orgslug>@<domain> — john.agx@project86.net. The admin
+    // types ONLY the <local> half; the slug is appended by the server from the
+    // TARGET user's resolved organization and is never read from the body. An
+    // org can therefore only ever mint inside its own namespace, which is what
+    // lets two organizations both hold a `john` without either being able to
+    // reach or even probe the other's.
+    //
+    // GATED ON THE CAPABILITY, AT EXECUTION. The route's own gate is
+    // requireRole('admin'), and requireRole admits the system_admin ROLE by
+    // name — a role-name test here would be satisfied by the gate that already
+    // let the caller in. USERS_MANAGE is the key that actually means "may
+    // administer users", and it is consulted here, in the handler, immediately
+    // before the write, because this repo has an incident where an endpoint ran
+    // writes with no capability check at all.
+    //
+    // VALIDATED BEFORE ANY WRITE, WRITTEN AFTER THE MAIN UPDATE. Every refusal
+    // below (bad name, reserved, taken, no org) happens before a single row is
+    // touched, so a rejected address never leaves a half-saved user. The write
+    // itself is placed after the UPDATE so a user being ADOPTED into an org in
+    // this same save can be given an address in the same save — the slug they
+    // need does not exist until that UPDATE lands. The one residual split is a
+    // uniqueness race lost between the probe and the insert; it is reported as
+    // a 409 naming exactly that, rather than swallowed.
+    const wantsAddress = Object.prototype.hasOwnProperty.call(req.body, 'inbound_local_part');
+    let addressPlan = null;
+    if (wantsAddress) {
+      if (!hasCapability(req.user, 'USERS_MANAGE')) {
+        auditLog(req, {
+          action: 'user.email_key_change', outcome: 'denied', reason: 'not_entitled', tier: 'A',
+          targetType: 'user', targetId: req.params.id,
+          organizationId: user.organization_id || null,
+          detail: { primary_before: user.inbound_email_key || null },
+        });
+        return res.status(403).json({ error: 'You do not have permission to change email addresses.' });
+      }
+      // The org the address is built from: the target's own, or the one this
+      // save is about to adopt them into. scope.callerOrg is the SAME resolved
+      // value the tenant guard reached its verdict with — one fact, read once.
+      const effectiveOrgId = user.organization_id != null ? user.organization_id : scope.callerOrg;
+      let slug = null;
+      if (effectiveOrgId != null) {
+        const org = await getOrgById(effectiveOrgId);
+        slug = org && org.slug ? org.slug : null;
+      }
+      const v = validateAssignedLocalPart(req.body.inbound_local_part, slug);
+      if (!v.ok) {
+        auditLog(req, {
+          action: 'user.email_key_change', outcome: 'denied', reason: v.code, tier: 'A',
+          targetType: 'user', targetId: req.params.id,
+          organizationId: user.organization_id || null,
+          detail: { primary_before: user.inbound_email_key || null, attempted: normalizeLocalPart(req.body.inbound_local_part) },
+        });
+        return res.status(400).json({ error: v.error });
+      }
+      if (v.localPart !== (user.inbound_email_key || '').toLowerCase()) {
+        // Held by anyone, anywhere, including a reserved tombstone and a
+        // deleted user's burned string. ONE refusal for every case — see
+        // TAKEN_MESSAGE: a distinguishable answer would be a cross-tenant
+        // existence oracle, and this probe runs AFTER guardUserTarget so it
+        // is not reachable at all for a foreign target.
+        const held = await pool.query(
+          'SELECT user_id FROM user_email_aliases WHERE local_part = $1', [v.localPart]);
+        if (held.rows.length && String(held.rows[0].user_id) !== String(user.id)) {
+          auditLog(req, {
+            action: 'user.email_key_change', outcome: 'denied', reason: 'taken', tier: 'A',
+            targetType: 'user', targetId: req.params.id,
+            organizationId: user.organization_id || null,
+            detail: { primary_before: user.inbound_email_key || null, attempted: v.localPart },
+          });
+          return res.status(409).json({ error: TAKEN_MESSAGE });
+        }
+        addressPlan = v;
+      }
+    }
+
     // ── The remediation requireOrgId's 409 promises ──────────────────────────
     // "An administrator must set your organization" named an action no endpoint
     // performed: nothing in this repo wrote users.organization_id after insert.
@@ -762,6 +848,60 @@ router.put('/users/:id', requireAuth, requireRole('admin'), async (req, res) => 
         organizationId: adoptOrgId,
         detail: { organization_id_after: adoptOrgId, source: 'calling admin' },
       });
+    }
+
+    // ── The address write: new alias, new primary, audit — ONE transaction ──
+    // The old primary is NOT retired from delivery and is NOT deleted. It keeps
+    // its row, keeps its owner, and keeps receiving forever; retired_at only
+    // records that it stopped being the address we display. That is the whole
+    // point: a client, a supplier or an Outlook redirect rule is holding the
+    // old string, and when an address stops resolving the mail is discarded
+    // with a 2xx and NOBODY IS TOLD.
+    //
+    // All three statements are in one transaction because a crash between them
+    // would leave the delivery table and the displayed address disagreeing —
+    // and auditCritical is inside it, fail-closed, so an address cannot move
+    // without a record of where it moved from.
+    if (addressPlan) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(
+          'INSERT INTO user_email_aliases (local_part, user_id, original_user_id, organization_id, source, created_by_user_id) ' +
+          'VALUES ($1, $2, $2, $3, $4, $5)',
+          [addressPlan.localPart, user.id, user.organization_id != null ? user.organization_id : adoptOrgId, 'assigned', req.user.id]
+        );
+        if (user.inbound_email_key) {
+          await client.query(
+            'UPDATE user_email_aliases SET retired_at = NOW() WHERE local_part = $1 AND retired_at IS NULL',
+            [String(user.inbound_email_key).toLowerCase()]
+          );
+        }
+        await client.query('UPDATE users SET inbound_email_key = $1, updated_at = NOW() WHERE id = $2',
+          [addressPlan.localPart, user.id]);
+        await auditCritical(req, {
+          action: 'user.email_key_change',
+          tier: 'A',
+          targetType: 'user',
+          targetId: req.params.id,
+          organizationId: user.organization_id || adoptOrgId || null,
+          detail: {
+            primary_before: user.inbound_email_key || null,
+            primary_after: addressPlan.localPart,
+            org_slug: addressPlan.slug,
+            address_after: addressPlan.address,
+          },
+        }, { client });
+        await client.query('COMMIT');
+      } catch (e) {
+        try { await client.query('ROLLBACK'); } catch (_) { /* the connection is going back either way */ }
+        if (e && e.code === '23505') {
+          return res.status(409).json({ error: TAKEN_MESSAGE });
+        }
+        throw e;
+      } finally {
+        client.release();
+      }
     }
 
     // Audit — role change is the privileged one; record before/after.

@@ -38,9 +38,13 @@ const { requireAuth } = require('../auth');
 
 const router = express.Router();
 
-function inboundDomain() {
-  return process.env.INBOUND_EMAIL_DOMAIN || 'in.project86.net';
-}
+// The address shape — construction, validation and the delivery-side
+// extraction — lives in ONE place so the four consumers cannot drift into four
+// opinions about what a legal address is. Re-exported here because this file's
+// existing callers already say inboundDomain().
+const {
+  inboundDomain, formatAddress, localPartFromAddress,
+} = require('../services/inbound-address');
 // Configured when EITHER ingest path is wired: the Cloudflare Email
 // Worker (primary — just its shared secret) or the Resend webhook
 // (dormant alt — needs its signing secret + API key to fetch bodies).
@@ -246,30 +250,52 @@ async function storeInboundMessage(p) {
   const envelopeList = toAddressList(p.envelopeRecipients);
   const headerList = toAddressList(p.headerRecipients);
   const scanOrder = envelopeList.concat(headerList);
-  let user = null, matchedAddress = null;
+  let user = null, matchedAddress = null, matchedLocal = null;
+  // WHY THE ALIAS TABLE AND NOT users.inbound_email_key.
+  // An address that a client, a supplier or an Outlook redirect rule wrote
+  // down must keep delivering after the owner is given a nicer one. The
+  // column holds only the CURRENT primary, so matching on it would destroy
+  // mail to every previous address the moment one changed — silently, because
+  // this function answers 2xx and the Worker then consumes the message.
+  // user_email_aliases holds every address including the current primary, so
+  // this is one exact-match probe on a primary key rather than the LOWER()
+  // sequential scan (and the unordered LIMIT 1) it replaces.
+  //
+  // STILL A WHOLE-STRING MATCH. localPartFromAddress hands back one opaque
+  // string; nothing here splits on the dot to recover an org, and nothing may.
+  let refusal = null;
   for (const addr of scanOrder) {
-    const at = addr.indexOf('@');
-    if (at < 0) continue;
-    if (addr.slice(at + 1) !== domain) continue;
-    const key = addr.slice(0, at).replace(/\+.*$/, '');
+    const key = localPartFromAddress(addr);
+    if (!key) continue;
     const r = await pool.query(
-      'SELECT id, organization_id, email FROM users WHERE LOWER(inbound_email_key) = $1 AND active = TRUE LIMIT 1',
-      [key.toLowerCase()]
+      'SELECT a.local_part, a.user_id, a.source, u.id, u.organization_id, u.email, u.active ' +
+      '  FROM user_email_aliases a LEFT JOIN users u ON u.id = a.user_id ' +
+      ' WHERE a.local_part = $1',
+      [key]
     );
-    if (r.rows.length) { user = r.rows[0]; matchedAddress = addr; break; }
+    if (!r.rows.length) continue;
+    const row = r.rows[0];
+    // A row exists, so the string is KNOWN. Say which kind of dead it is —
+    // "no matching dropbox" for a reserved name, a deleted owner and a
+    // deactivated owner alike is three different operational problems wearing
+    // one label, and this is the only trace any of them ever leaves.
+    if (row.source === 'reserved') { refusal = refusal || 'address is reserved'; continue; }
+    if (row.user_id == null) { refusal = refusal || 'address belonged to a deleted user'; continue; }
+    if (!row.active) { refusal = refusal || 'address belongs to a deactivated user'; continue; }
+    user = { id: row.id, organization_id: row.organization_id, email: row.email };
+    matchedAddress = addr;
+    matchedLocal = row.local_part;
+    break;
   }
   if (!user) {
-    console.warn('[email-inbox] no active user match for:', scanOrder.join(', ') || '(no recipients)');
-    return { ignored: true, reason: 'no matching dropbox' };
+    const reason = refusal || 'no matching dropbox';
+    console.warn('[email-inbox] ' + reason + ' for:', scanOrder.join(', ') || '(no recipients)');
+    return { ignored: true, reason: reason };
   }
   // Direct-delivery = dropbox present in a HEADER recipient (to/cc/bcc),
   // not only the envelope. Redirected mail carries the dropbox only in
   // the envelope; direct-to-dropbox mail didn't transit the real inbox.
-  const matchedLocal = String(matchedAddress).slice(0, String(matchedAddress).indexOf('@')).replace(/\+.*$/, '').toLowerCase();
-  const deliveredDirect = headerList.some((a) => {
-    const at = a.indexOf('@');
-    return at > 0 && a.slice(at + 1) === domain && a.slice(0, at).replace(/\+.*$/, '').toLowerCase() === matchedLocal;
-  });
+  const deliveredDirect = headerList.some((a) => localPartFromAddress(a) === matchedLocal);
 
   // Dedupe is PER-USER: the Cloudflare content-hash key is identical
   // across recipients of the same message, so a global check would drop
@@ -577,13 +603,47 @@ router.get('/my-address', requireAuth, async (req, res) => {
       }
       if (!key) return res.status(500).json({ error: 'Could not allocate an address' });
     }
+    // THE MINT KEEPS THE HASH, DELIBERATELY.
+    //
+    // <name>.<slug> is the tempting auto-mint and it is the wrong one. It has
+    // no random component, so two Johns in one org collide with nowhere to
+    // retry — the loop would emit john2.agx, which LOOKS chosen and, by the
+    // never-reissue rule, is then claimed forever. It would also have to fail
+    // or guess for a user with no organization, a state this system explicitly
+    // supports, which reintroduces exactly the "mail is impossible until
+    // somebody fixes your record" failure the mint exists to prevent. And the
+    // hash being ugly is the whole prompt to go set a nice one; john.agx looks
+    // final, so nobody would ever open the admin screen.
+    //
+    // Delivery reads the alias table, so the mint must land there or a
+    // brand-new user's automatic address would resolve to nothing. Idempotent:
+    // a key minted before this table existed is inserted on first read.
+    await pool.query(
+      'INSERT INTO user_email_aliases (local_part, user_id, original_user_id, organization_id, source) ' +
+      'SELECT LOWER($1), id, id, organization_id, $3 FROM users WHERE id = $2 ' +
+      'ON CONFLICT (local_part) DO NOTHING',
+      [key, req.user.id, 'minted']
+    );
+    // Every address this person has ever held, so somebody whose address just
+    // changed can SEE that the old one still works without having to ask.
+    // Aliases are otherwise invisible plumbing; this is the one place they
+    // surface, and only to their own owner.
+    const aliasRows = await pool.query(
+      'SELECT local_part, source, created_at FROM user_email_aliases ' +
+      ' WHERE user_id = $1 AND LOWER(local_part) <> LOWER($2) ORDER BY created_at ASC',
+      [req.user.id, key]
+    );
     // Freshness = last genuinely RECEIVED mail (so my own captured replies
     // don't keep it looking "fresh" and mask a redirect rule that went quiet).
     const last = await pool.query("SELECT MAX(received_at) AS last FROM inbound_emails WHERE user_id = $1 AND direction = 'inbound'", [req.user.id]);
     res.json({
-      address: key + '@' + inboundDomain(),
+      address: formatAddress(key),
       configured: dropboxConfigured(),
       last_received_at: (last.rows[0] && last.rows[0].last) || null,
+      aliases: aliasRows.rows.map((r) => ({
+        address: formatAddress(r.local_part),
+        source: r.source,
+      })),
     });
   } catch (e) {
     console.error('GET /api/email-inbox/my-address error:', e);

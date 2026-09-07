@@ -121,6 +121,9 @@ const TIER_A_ACTIONS = new Set([
   // privilege
   'role.create', 'role.update', 'role.delete',
   'user.role_change', 'user.org_adopted', 'user.delete',
+  // Changing where a person's mail is delivered is a redirection primitive and
+  // belongs beside the role change, not in tier B with an HR field edit.
+  'user.email_key_change',
   'user.act_as_start',
   'user.cross_tenant_write',
   // secrets / platform config
