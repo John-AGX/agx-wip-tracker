@@ -72,6 +72,58 @@
   var _savedActiveTabId = null;
   var _inWorkspaceMode = false;
 
+  // ── Which job sub-tab is selected ─────────────────────────
+  // ONE choice, but the DOM carries TWO strips for it: the legacy hidden
+  // .sub-tab-btn-job buttons in index.html and the .ws-right-tab strip
+  // built from RIGHT_TABS above. The legacy strip has only nine buttons
+  // — every section added after that markup froze (Reports, Service
+  // Tickets, Photos, Files, Daily Logs, Details, Estimates, Detailed,
+  // Subs) has none — so it cannot represent the selection at all, and
+  // the .ws-right-tab strip is destroyed and rebuilt by buildLayout on
+  // every job open, so it cannot carry the selection ACROSS one.
+  //
+  // Hence a third thing that is neither: _activeJobSubTab, the record of
+  // the choice. markJobSubTab() is its only writer and it drives both
+  // strips, so no path can move one without the other. Every activation
+  // route goes through it — the tab click (activateTab), switchJobSubTab
+  // in js/app.js (which the router's deep-link and Back replay calls),
+  // and the workspace-close restore (activateTabFromOutside).
+  //
+  // buildLayout + populateRightPanels READ it. That is what fixes cold
+  // deep links: /jobs/:id/job-reports marks the tab while the job detail
+  // is still hidden and the strip doesn't exist yet, and the layout pass
+  // that runs a moment later honors the record instead of defaulting to
+  // tab index 0. Previously it consulted the legacy strip, which for
+  // job-reports had nothing to say, so the URL said Reports and the app
+  // showed Overview.
+  //
+  // Deliberately NOT reset when a job closes: the legacy strip kept its
+  // .active across a close, so reopening landed on the section you left.
+  // That behaviour now simply extends to the sections that never had a
+  // button. See test/job-subtab-deeplink.test.js.
+  var _activeJobSubTab = null;
+
+  function markJobSubTab(targetId) {
+    if (!targetId) return;
+    _activeJobSubTab = targetId;
+    // Re-queried rather than closed over: placeJobSubnav reparents the
+    // strip between the sidebar and the page column, and buildLayout
+    // replaces the nodes outright on every job open.
+    document.querySelectorAll('.ws-right-tab[data-panel]').forEach(function (t) {
+      t.classList.toggle('active', t.getAttribute('data-panel') === targetId);
+    });
+    // A section with no legacy button clears the strip rather than
+    // leaving a stale one lit — captureRouteFromDOM reads it as the
+    // fallback for the URL's sub-tab segment.
+    document.querySelectorAll('.sub-tab-btn-job').forEach(function (b) {
+      b.classList.toggle('active', b.getAttribute('data-subtab') === targetId);
+    });
+  }
+  // js/app.js's switchJobSubTab is the other activation path and lives in
+  // a different file, so the writer has to be reachable from window.
+  window.p86MarkJobSubTab = markJobSubTab;
+  window.p86ActiveJobSubTab = function () { return _activeJobSubTab; };
+
   // ── Contextual sidebar state ──────────────────────────────
   // While a job is open, the job's RIGHT_TABS strip is relocated out of
   // the page body and into the left sidebar (#app-sidebar), the main nav
@@ -781,9 +833,16 @@
     var mainCol = document.createElement('div');
     mainCol.className = 'ws-col-right';
 
+    // Which tab starts lit. The strip is built fresh on every job open, so
+    // hardcoding index 0 threw away any selection made before this point —
+    // which on a deep link is the whole point of the URL. Honor the recorded
+    // sub-tab when it names one of these tabs; fall back to the first.
+    var _wantTab = _activeJobSubTab;
+    var _haveWant = RIGHT_TABS.some(function(t) { return t.id === _wantTab; });
     var tabsHtml = '<div class="ws-right-tabs">';
     RIGHT_TABS.forEach(function(tab, i) {
-      tabsHtml += '<button class="ws-right-tab' + (i === 0 ? ' active' : '') + '" data-panel="' + tab.id + '"' + (tab.icon ? ' data-p86-icon="' + tab.icon + '"' : '') + '>' + tab.label + '<span class="ws-right-tab-chip" data-jobchip="' + tab.id + '"></span></button>';
+      var _on = _haveWant ? (tab.id === _wantTab) : (i === 0);
+      tabsHtml += '<button class="ws-right-tab' + (_on ? ' active' : '') + '" data-panel="' + tab.id + '"' + (tab.icon ? ' data-p86-icon="' + tab.icon + '"' : '') + '>' + tab.label + '<span class="ws-right-tab-chip" data-jobchip="' + tab.id + '"></span></button>';
     });
     // Only the global Ask 86 badge lives here now. The Workspace opener moved to
     // the left sidebar (app-jobnav) so it's the single entry point.
@@ -1334,10 +1393,10 @@
     _inWorkspaceMode = false;
     var rc = document.getElementById('wsRightContent');
     if (!rc) return;
-    var tabs = document.querySelectorAll('.ws-right-tab[data-panel]');
-    tabs.forEach(function(t) {
-      t.classList.toggle('active', t.getAttribute('data-panel') === targetId);
-    });
+    // Through the same writer as every other activation path: this used to
+    // move only the .ws-right-tab strip, leaving the legacy one — and so the
+    // URL that captureRouteFromDOM builds from it — on the previous section.
+    markJobSubTab(targetId);
     var allPanels = Array.from(rc.children);
     allPanels.forEach(function(p) { if (!p.classList.contains('ws-job-info-details')) p.style.display = 'none'; });
     var target = document.getElementById(targetId);
@@ -1663,21 +1722,23 @@
       extraPanels.forEach(function(p) { rc.appendChild(p); });
       var allPanels = Array.from(rc.children);
       allPanels.forEach(function(p) { if (!p.classList.contains('ws-job-info-details')) p.style.display = 'none'; });
-      // The router (switchJobSubTab) marks the legacy .sub-tab-btn-job strip
-      // BEFORE this layout pass runs — honor that routed subtab instead of
-      // clobbering it with whichever ws-right-tab happens to be .active
-      // (buildLayout hardcodes index 0 = Overview, which silently overrode
-      // /jobs/:id/:sub deep links). Fall back to the ws-right-tab state when
-      // the legacy strip points at a pane that doesn't exist here.
+      // A deep link, a Back or a jobs-hub row picks its sub-tab BEFORE this
+      // layout pass runs, so honor that choice instead of whichever tab
+      // buildLayout happened to light. _activeJobSubTab is what to read: this
+      // used to consult the legacy .sub-tab-btn-job strip, which has no button
+      // for job-reports / job-service-tickets / the rest of the newer
+      // sections, so those deep links found nothing here and silently fell
+      // through to Overview. The legacy strip stays as a fallback for a
+      // pre-fix caller that only touched it.
       var activeId = null;
-      var routedBtn = document.querySelector('.sub-tab-btn-job.active');
-      var routedId = routedBtn ? routedBtn.getAttribute('data-subtab') : null;
+      var routedId = _activeJobSubTab;
+      if (!routedId || !document.getElementById(routedId)) {
+        var routedBtn = document.querySelector('.sub-tab-btn-job.active');
+        routedId = routedBtn ? routedBtn.getAttribute('data-subtab') : null;
+      }
       if (routedId && document.getElementById(routedId)) {
         activeId = routedId;
-        // Keep the visible ws-right-tab strip in sync with the routed subtab.
-        document.querySelectorAll('.ws-right-tab[data-panel]').forEach(function(t) {
-          t.classList.toggle('active', t.getAttribute('data-panel') === activeId);
-        });
+        markJobSubTab(activeId);   // both strips land on the pane we show
       } else {
         var activeTab = document.querySelector('.ws-right-tab.active');
         activeId = activeTab ? activeTab.getAttribute('data-panel') : 'job-wip-report';
@@ -1740,18 +1801,19 @@
 
     function activateTab(targetId) {
       var jobId = (typeof appState !== 'undefined') ? appState.currentJobId : null;
-      // Keep the legacy .sub-tab-btn-job strip in sync with the picked
-      // section. It's hidden, but the router's captureRouteFromDOM reads it
-      // for the /jobs/:id/:sub URL segment and populateRightPanels honors it
-      // when re-picking the visible pane — without this sync a layout re-run
-      // would revert the user's tab choice back to the stale legacy state.
-      document.querySelectorAll('.sub-tab-btn-job').forEach(function(b) {
-        b.classList.toggle('active', b.getAttribute('data-subtab') === targetId);
-      });
       // "Site Map" is a dedicated tab: it OPENS the node-graph overlay (used
       // for job/building/phase structural editing). Every other section is a
       // full-width pane in #wsRightContent.
       if (targetId === 'job-site-map') {
+        // The overlay COVERS the panes rather than replacing the selection, so
+        // it deliberately does not go through markJobSubTab: the strip keeps
+        // pointing at the pane underneath (which is what the user returns to
+        // when the graph closes), and captureRouteFromDOM detects the open
+        // overlay itself for the URL. Clearing the legacy strip is what this
+        // path has always done — it has no job-site-map button to light.
+        document.querySelectorAll('.sub-tab-btn-job').forEach(function(b) {
+          b.classList.remove('active');
+        });
         if (typeof window.openNodeGraph === 'function') window.openNodeGraph(jobId);
         // Push /jobs/:id/job-site-map (the .ws-right-tab strip calls activateTab,
         // which the router doesn't wrap — so sync the URL explicitly). No-op
@@ -1759,6 +1821,10 @@
         if (window.p86Router && window.p86Router.sync) window.p86Router.sync();
         return;
       }
+      // Record the choice and light BOTH strips from the one writer. The
+      // legacy .sub-tab-btn-job strip is hidden, but captureRouteFromDOM reads
+      // it as the fallback for the /jobs/:id/:sub URL segment.
+      markJobSubTab(targetId);
       // Any non-map section: if the Site Map overlay is open it's covering the
       // full-width panes, so close it first, then render the pane below.
       var _ngt = document.getElementById('nodeGraphTab');
@@ -1768,9 +1834,6 @@
         _ngt.classList.remove('active');
         _inWorkspaceMode = false;
       }
-      tabs.forEach(function(t) {
-        t.classList.toggle('active', t.getAttribute('data-panel') === targetId);
-      });
       // If we're returning from workspace mode, tear down graph + panel.
       if (_inWorkspaceMode) {
         var graphTab = document.getElementById('nodeGraphTab');

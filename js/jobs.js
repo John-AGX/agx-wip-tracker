@@ -3674,8 +3674,18 @@ function renderJobsMain() {
             // a half-typed row dropped. The other three are inactive panes —
             // nothing is on screen to keep fresh, and switching to one paints it.
             // Isolated because a missing legacy element must not blank the body.
+            //
+            // WHICH subtab is active comes from the recorded selection
+            // (p86ActiveJobSubTab, js/workspace-layout.js). Reading the legacy
+            // .sub-tab-btn-job strip alone answered "Overview" for every section
+            // that has no button there — job-reports, job-service-tickets and the
+            // rest — so a post-write refresh swapped the pane out from under a
+            // user who was sitting on one of them.
+            const _selSub = (typeof window.p86ActiveJobSubTab === 'function')
+                ? window.p86ActiveJobSubTab() : null;
             const activeSubTab = document.querySelector('.sub-tab-btn-job.active');
-            const activeTabName = activeSubTab ? activeSubTab.getAttribute('data-subtab') : 'job-overview';
+            const activeTabName = _selSub
+                || (activeSubTab ? activeSubTab.getAttribute('data-subtab') : 'job-overview');
             try { switchJobSubTab(activeTabName); } catch (e) { console.warn('[job detail] subtab render:', e && e.message); }
 
             // Refresh sticky header metrics strip

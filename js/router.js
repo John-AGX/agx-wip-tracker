@@ -59,6 +59,12 @@
     'job-overview', 'job-buildings', 'job-wip-report',
     'job-changeorders', 'job-invoices', 'job-labor', 'job-purchaseorders',
     'job-payapps', 'job-subs', 'job-reports', 'job-qb-costs', 'job-details', 'job-estimates',
+    // Field / document cluster. Missing here until now, so clicking Photos,
+    // Files or Daily Logs serialized back to the job's bare URL and the
+    // section was not linkable at all — the same registry drift that kept
+    // job-reports from deep-linking. test/router-job-subtabs.test.js pins
+    // this list against RIGHT_TABS so the next tab added can't repeat it.
+    'job-photos', 'job-files', 'job-daily-logs',
     // Site Map — the node-graph structural-editing overlay, now a dedicated tab.
     'job-site-map',
     // Workflow (RFIs / Submittals / Transmittals) — jobs-hub row clicks

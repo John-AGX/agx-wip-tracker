@@ -2407,10 +2407,23 @@
             }
 
             document.querySelectorAll('.sub-tab-content-job').forEach(stc => stc.classList.remove('active'));
-            document.querySelectorAll('.sub-tab-btn-job').forEach(btn => btn.classList.remove('active'));
-
             document.getElementById(subtabName)?.classList.add('active');
-            document.querySelector(`[data-subtab="${subtabName}"]`)?.classList.add('active');
+
+            // ONE writer for the tab strips. This used to hand-toggle only the
+            // legacy .sub-tab-btn-job buttons — and index.html has buttons for
+            // just nine of the sections, so for job-reports, job-service-tickets
+            // and the rest of the newer ones this marked NOTHING: the visible
+            // .ws-right-tab strip stayed on Overview, and the layout pass on a
+            // cold deep link found no selection to honor and showed Overview's
+            // pane. p86MarkJobSubTab (js/workspace-layout.js) records the choice
+            // and drives both strips, so they cannot disagree.
+            if (typeof window.p86MarkJobSubTab === 'function') {
+                window.p86MarkJobSubTab(subtabName);
+            } else {
+                // workspace-layout.js not loaded (mobile/no-layout fallback).
+                document.querySelectorAll('.sub-tab-btn-job').forEach(btn => btn.classList.remove('active'));
+                document.querySelector(`.sub-tab-btn-job[data-subtab="${subtabName}"]`)?.classList.add('active');
+            }
             // The section panes live in #wsRightContent (workspace layout), which
             // controls visibility via INLINE display — that overrides the .active
             // class above. Reconcile it here so the activated pane actually shows
