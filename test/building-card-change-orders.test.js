@@ -636,10 +636,10 @@ describe('7 · card change-order dollars reconcile to the G703, per building', (
  *     is not a fix
  * ═══════════════════════════════════════════════════════════════════════════ */
 describe('8 · js/jobs.js is served at a version that carries this change', () => {
-  test('8a · index.html requests js/jobs.js at v240 or later', () => {
+  test('8a · index.html requests js/jobs.js at v241 or later', () => {
     const m = INDEX_HTML.match(/js\/jobs\.js\?v=(\d+)/);
     expect(m).not.toBeNull();
-    expect(Number(m[1])).toBeGreaterThanOrEqual(240);
+    expect(Number(m[1])).toBeGreaterThanOrEqual(241);
   });
 });
 
@@ -709,5 +709,115 @@ describe('9 · a change-order row is named, not left blank', () => {
     const html = paintCards(app, build(app).getCOsConnectedTo);
     expect(html).not.toContain('<img src=x');
     expect(html).toContain('&lt;img');
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 10 · A CREDIT CHANGE ORDER IS STILL A CHANGE ORDER
+ *
+ * The card admitted a building's share only when `b.share > 0`, and divided by
+ * `comp.sell` only when `comp.sell > 0`. A DEDUCTIVE change order — one that
+ * takes work out of the contract — has a negative sell and a negative share, so
+ * it failed both, and the card said "No change orders allocated to this
+ * building" about a building the G703 was billing minus five thousand dollars
+ * against. A true "some" reported as "none", on a money surface, disagreeing
+ * with the pay application.
+ *
+ * While the key bug hid every change order this was unreachable. Repointing the
+ * key makes it reachable, so it is repaired in the same wave rather than shipped
+ * as a new disagreement between two money screens.
+ *
+ * Both edits are STRICTLY ADDITIVE and 10f holds it byte-for-byte: for every
+ * share and every sell that is not negative, the old and new predicates accept
+ * exactly the same rows and compute exactly the same percentage. Nothing that
+ * shows today can stop showing.
+ *
+ * The dollar THRESHOLDS still differ across the three per-building readers —
+ * this card admits any non-zero share, deriveSOV gates on pct, and the Site
+ * Plan's buildingRevSources uses fifty cents. Harmonising them would move money
+ * on three surfaces at once, so they are deliberately left alone and named here
+ * instead of quietly aligned inside this commit.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+describe('10 · a deductive change order reaches the card it is allocated to', () => {
+  const CREDIT = serverCO({
+    id: 'co-neg', status: 'approved', co_number: 'CO-0007',
+    data: { title: 'Deleted the lanai', lines: line(-5000),
+            buildingAllocations: [{ buildingId: B.one, pct: 100 }] },
+  });
+
+  function creditApp() {
+    const app = makeAppData();
+    app.jobChangeOrders = [Object.assign({}, CREDIT)];
+    return app;
+  }
+
+  test('10a · it appears on its building, at its real negative dollars', () => {
+    const rows = build(creditApp()).getCOsConnectedTo('t1', B.one);
+    expect(coNumbers(rows)).toEqual(['CO-0007']);
+    expect(rows[0].allocPct).toBe(100);
+    expect(round2(dollars(rows))).toBe(-5000);
+  });
+
+  test('10b · and it agrees with what the G703 bills for that same building', () => {
+    const app = creditApp();
+    window.appData = app;
+    const deriveSOV = compile([
+      extractFunction(PA_SRC, 'num'), extractFunction(PA_SRC, 'round2'),
+      extractFunction(PA_SRC, 'bldgSort'), extractFunction(PA_SRC, 'deriveSOV'),
+    ], ['window'], [window], 'deriveSOV');
+    const sov = deriveSOV(JOB);
+    const onB1 = (Array.isArray(sov) ? sov : (sov.lines || []))
+      .filter((l) => l.type === 'co' && l.buildingId === B.one)
+      .reduce((s, l) => s + l.scheduledValue, 0);
+    expect(round2(onB1)).toBe(-5000);
+    expect(round2(dollars(build(creditApp()).getCOsConnectedTo('t1', B.one)))).toBe(round2(onB1));
+  });
+
+  test('10c · the other buildings still say the words — three honest "none"s', () => {
+    const app = creditApp();
+    const html = paintCards(app, build(app).getCOsConnectedTo);
+    expect(html.split(EMPTY_WORDS).length - 1).toBe(3);   // B2, B3, B4
+    expect(html).toContain('CHANGE ORDERS (1)');           // B1
+  });
+
+  test('10d · MUTATION — the old sign gate hides it while the G703 bills it', () => {
+    const H = build(creditApp(),
+      mutate('if (!b || !(Math.abs(b.share) > 0)) return;', 'if (!b || !(b.share > 0)) return;'));
+    expect(H.getCOsConnectedTo('t1', B.one)).toEqual([]);
+  });
+
+  test('10e · MUTATION — the old divisor renders a $5,000 credit as $0', () => {
+    const H = build(creditApp(), mutate('comp.sell !== 0 ?', 'comp.sell > 0 ?'));
+    const rows = H.getCOsConnectedTo('t1', B.one);
+    expect(rows.length).toBe(1);
+    expect(round2(dollars(rows))).toBe(0);
+  });
+
+  test('10f · STRICTLY ADDITIVE — nothing that shows today stops showing', () => {
+    // The whole safety argument for this commit, held byte-for-byte over the
+    // main fixture: every positive change order, both predicates, identical.
+    const oldGate = mutate('comp.sell !== 0 ?', 'comp.sell > 0 ?',
+      mutate('if (!b || !(Math.abs(b.share) > 0)) return;', 'if (!b || !(b.share > 0)) return;'));
+    const now = build(makeAppData());
+    const before = build(makeAppData(), oldGate);
+    BUILDINGS.forEach((b) => {
+      expect(JSON.stringify(now.getCOsConnectedTo('t1', b.id)))
+        .toBe(JSON.stringify(before.getCOsConnectedTo('t1', b.id)));
+    });
+  });
+
+  test('10g · a genuinely $0 change order is still excluded from the card', () => {
+    const app = makeAppData();
+    app.jobChangeOrders = [serverCO({
+      id: 'co-zero', status: 'approved', co_number: 'CO-0000',
+      data: { lines: line(0), buildingAllocations: [{ buildingId: B.one, pct: 100 }] },
+    })];
+    expect(build(app).getCOsConnectedTo('t1', B.one)).toEqual([]);
+  });
+
+  test('10h · a draft credit is still excluded — the status filter still rules', () => {
+    const app = makeAppData();
+    app.jobChangeOrders = [Object.assign({}, CREDIT, { status: 'draft' })];
+    expect(build(app).getCOsConnectedTo('t1', B.one)).toEqual([]);
   });
 });

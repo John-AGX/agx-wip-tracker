@@ -4826,13 +4826,30 @@ function renderJobsMain() {
                     var comp;
                     try { comp = coCompletion(c, jobId); } catch (e) { return; }
                     var b = comp && comp.byBuilding && comp.byBuilding[targetDataId];
-                    if (!b || !(b.share > 0)) return;
+                    // Math.abs, so a DEDUCTIVE (credit) change order — one that
+                    // takes work out of the contract — still reaches the card it
+                    // is allocated to. `b.share > 0` rejected its negative share,
+                    // so the card said "No change orders allocated to this
+                    // building" about a building the G703 was billing minus five
+                    // thousand dollars against: a true "some" reported as "none",
+                    // on a money surface, disagreeing with the pay application.
+                    // deriveSOV and buildingRevSources both carry Math.abs with
+                    // comments saying exactly this; the card was the odd one out.
+                    // STRICTLY ADDITIVE: for every non-negative share this accepts
+                    // precisely the rows `> 0` accepted, so nothing that shows
+                    // today can stop showing (held byte-for-byte in 10f).
+                    if (!b || !(Math.abs(b.share) > 0)) return;
                     seenCo[c.id] = 1;
                     results.push({
                         co: Object.assign({}, c, { income: comp.sell, estimatedCosts: comp.cost }),
                         // Express the building's dollar share as a % of the CO
                         // so the row's `income × allocPct` renders that share.
-                        allocPct: comp.sell > 0 ? (b.share / comp.sell * 100) : 0
+                        // !== 0, not > 0: a credit CO's sell is negative, and
+                        // `> 0` handed it allocPct 0, which rendered a $5,000
+                        // credit as $0.00 (100% became 0%). deriveSOV divides by
+                        // its own sell the same way, `sell !== 0`. Also strictly
+                        // additive — identical for every non-negative sell.
+                        allocPct: comp.sell !== 0 ? (b.share / comp.sell * 100) : 0
                     });
                 });
             }
