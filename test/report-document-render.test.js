@@ -185,7 +185,10 @@ test('a photo-map section never builds a maps URL', function () {
   // No baked map_url → degrades to a photo grid. It must NEVER construct a
   // Google Maps URL, because that needs a key an anonymous page cannot hold.
   assert.ok(h.indexOf('googleapis') < 0, 'guest renderer must not build a maps URL');
-  assert.ok(h.indexOf('p86-report-preview-section-grid') >= 0, 'should degrade to a grid');
+  // The layered fallback: with no baked image AND no Leaflet, the section must
+  // still show the photos rather than an empty map box.
+  assert.ok(h.indexOf('p86-report-map-fallback') >= 0, 'should keep a photo-grid fallback layer');
+  assert.ok(h.indexOf('p86-report-preview-section-grid') >= 0, 'the fallback should be a grid');
 });
 
 test('a baked map_url renders as an image', function () {

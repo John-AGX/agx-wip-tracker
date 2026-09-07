@@ -12432,3 +12432,37 @@ body.light-mode .p86-mktpnl-warn { background: rgba(180, 120, 10, .10); border-c
 /* The typed name is a CLAIM, not identity — it is styled as emphasis, not as
    an authored byline, and always sits beside the invitation it arrived through. */
 .p86-share-comment-who { font-weight: 600; color: var(--text, #e6e6e6); }
+/* ── Report location map: three layers, one winner ──────────────────
+   .p86-report-map-live      interactive (added by wire() when Leaflet loads)
+   .p86-report-map-static    the server-baked image — also what PRINTS
+   .p86-report-map-fallback  the photo grid, when there is neither
+   Each layer hides the ones beneath it, so no combination yields an empty box. */
+.p86-report-map-wrap { position: relative; }
+.p86-report-map-live { height: 420px; border-radius: 6px; overflow: hidden; }
+.p86-report-map-static { display: block; width: 100%; max-width: 680px; border-radius: 6px; }
+.p86-report-map-fallback { display: grid; gap: 12px; }
+
+/* A baked image beats the grid; a live map beats both (on screen). */
+.p86-report-map-wrap.has-static .p86-report-map-fallback { display: none; }
+.p86-report-map-wrap.has-live-map .p86-report-map-fallback { display: none; }
+.p86-report-map-wrap.has-live-map .p86-report-map-static { display: none; }
+
+.p86-report-map-pin {
+  width: 26px; height: 26px; border-radius: 50%;
+  background: #2f6feb; color: #fff; border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,.5);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+.p86-report-map-pop img { width: 190px; display: block; border-radius: 4px; margin-bottom: 6px; }
+.p86-report-map-pop-n { color: #777; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
+.p86-report-map-pop-cap { font-weight: 600; font-size: 13.5px; }
+
+@media print {
+  /* A live map would print whatever the reader last panned to, so print the
+     BAKED image instead — it is the view that was published. With no baked
+     image the photo grid comes back, which still carries the information. */
+  .p86-report-map-live { display: none !important; }
+  .p86-report-map-wrap.has-live-map .p86-report-map-static { display: block !important; }
+  .p86-report-map-wrap.has-live-map:not(.has-static) .p86-report-map-fallback { display: grid !important; }
+}

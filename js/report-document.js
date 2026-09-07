@@ -132,23 +132,47 @@
         : '<div class="p86-report-preview-empty">No files in this section.</div>';
 
     } else if (layout === 'photo-map') {
-      // The map image is BAKED at publish time and arrives as section.map_url.
-      // This renderer never builds a Maps URL, because doing so would need the
-      // API key — and handing a Maps key to an anonymous page is how a key
-      // ends up being billed by strangers. No baked map degrades to the photo
-      // grid rather than showing a broken image.
+      // BOTH, deliberately layered:
+      //
+      //   1. an interactive map, upgraded in by wire() when Leaflet is present
+      //   2. the BAKED static image underneath it as the fallback — shown when
+      //      Leaflet is unavailable, and the thing that prints
+      //   3. the photo grid if there is no baked image either
+      //
+      // The pin DATA is not embedded in an attribute; wire() reads it from the
+      // document it is already given. That avoids serialising JSON into markup,
+      // which is exactly where a double-escaping bug corrupted this feature
+      // once before.
+      //
+      // This renderer still never builds a Maps URL. Interactive tiles need no
+      // key at all, and the static image is baked server-side — because a URL
+      // that carries an API key must never reach a stranger's browser.
       var mapped = (section.photos || []).filter(function (p) { return p.lat != null && p.lng != null; });
-      if (section.map_url) {
+      if (mapped.length) {
+        // THREE layers, so there is no arrangement that yields an empty box:
+        //   .p86-report-map-live     — added by wire() when Leaflet is present
+        //   .p86-report-map-static   — the server-baked image (also what prints)
+        //   .p86-report-map-fallback — the photo grid, when there is neither
+        // CSS hides the lower layers once a higher one exists.
+        body =
+          '<div class="p86-report-map-wrap' + (section.map_url ? ' has-static' : '') +
+            '" data-map-section="' + escAttr(section.id || '') + '">' +
+            (section.map_url
+              ? '<img class="p86-report-map-static" src="' + escAttr(section.map_url) + '" alt="Photo locations" />'
+              : '') +
+            '<div class="p86-report-map-fallback p86-report-preview-section-grid size-' + esc(size) + '">' +
+              mapped.map(function (p) { return photoCardHTML(section, p); }).join('') +
+            '</div>' +
+          '</div>';
+      } else if (section.map_url) {
         body = '<div class="p86-report-preview-map">' +
           '<img src="' + escAttr(section.map_url) + '" alt="Photo locations" />' +
-        '</div>';
-      } else if (mapped.length) {
-        body = '<div class="p86-report-preview-section-grid size-' + esc(size) + '">' +
-          mapped.map(function (p) { return photoCardHTML(section, p); }).join('') +
         '</div>';
       } else {
         body = '<div class="p86-report-preview-empty">No located photos in this section.</div>';
       }
+
+
 
     } else {
       var photos = Array.isArray(section.photos) ? section.photos : [];
@@ -259,6 +283,84 @@
       if (img.complete && img.naturalWidth) paint();
       else img.addEventListener('load', paint, { once: true });
     });
+
+    // Upgrade each photo-map section to an interactive map — ONLY if Leaflet is
+    // actually present. Same optional-capability pattern as the annotation
+    // renderer above: absent, the baked static image underneath simply stays,
+    // and the section still delivers its information. A guest page that cannot
+    // load a map library must not lose the report.
+    if (window.L && window.L.map) {
+      Array.prototype.forEach.call(container.querySelectorAll('[data-map-section]'), function (host) {
+        var sid = host.getAttribute('data-map-section');
+        var section = (((doc || {}).sections) || []).find(function (s) { return String(s.id || '') === sid; });
+        if (!section) return;
+        var pins = (section.photos || []).filter(function (p) { return p.lat != null && p.lng != null; });
+        if (!pins.length) return;
+
+        var live = document.createElement('div');
+        live.className = 'p86-report-map-live';
+        host.appendChild(live);
+
+        try {
+          var map = window.L.map(live, { scrollWheelZoom: true, attributionControl: true });
+          window.L.tileLayer(
+            'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+            { maxZoom: 21, maxNativeZoom: 19,
+              attribution: 'Imagery &copy; Esri, Maxar, Earthstar Geographics' }
+          ).addTo(map);
+
+          // Crews shoot several things standing in one spot, so photos share a
+          // coordinate constantly. Stacked pins mean only the top one is ever
+          // clickable — fan identical points into a small ring (~5m) so each
+          // photo can be opened.
+          var byPoint = {};
+          pins.forEach(function (p) {
+            var k = Number(p.lat).toFixed(6) + ',' + Number(p.lng).toFixed(6);
+            (byPoint[k] = byPoint[k] || []).push(p);
+          });
+
+          var bounds = [];
+          Object.keys(byPoint).forEach(function (k) {
+            var group = byPoint[k];
+            group.forEach(function (p, i) {
+              var lat = Number(p.lat), lng = Number(p.lng);
+              if (group.length > 1) {
+                var a = (2 * Math.PI * i) / group.length;
+                var r = 0.000045;
+                lat += r * Math.cos(a);
+                lng += r * Math.sin(a) / Math.cos(lat * Math.PI / 180);
+              }
+              bounds.push([lat, lng]);
+              var marker = window.L.marker([lat, lng], {
+                icon: window.L.divIcon({
+                  className: '',
+                  html: '<div class="p86-report-map-pin">' + esc(String(p.num || '')) + '</div>',
+                  iconSize: [26, 26], iconAnchor: [13, 13]
+                })
+              }).addTo(map);
+              var thumb = p.thumb_url || p.web_url || '';
+              marker.bindPopup(
+                '<div class="p86-report-map-pop">' +
+                  (thumb ? '<img src="' + escAttr(thumb) + '" alt="" />' : '') +
+                  (p.num ? '<div class="p86-report-map-pop-n">Photo ' + esc(String(p.num)) + '</div>' : '') +
+                  (p.caption ? '<div class="p86-report-map-pop-cap">' + esc(p.caption) + '</div>' : '') +
+                '</div>', { minWidth: 200 });
+            });
+          });
+
+          if (bounds.length > 1) map.fitBounds(bounds, { padding: [36, 36] });
+          else map.setView(bounds[0], 18);
+
+          // The interactive map replaced the static one on screen. The static
+          // image stays in the DOM and comes back for print, where a live map
+          // would print whatever the reader happened to pan to.
+          host.classList.add('has-live-map');
+        } catch (e) {
+          // Any failure leaves the baked image visible rather than an empty box.
+          if (live.parentNode) live.parentNode.removeChild(live);
+        }
+      });
+    }
 
     Array.prototype.forEach.call(container.querySelectorAll('.p86-report-preview-map img'), function (img) {
       img.addEventListener('error', function () {
