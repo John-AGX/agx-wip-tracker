@@ -5237,10 +5237,15 @@
    made it a "modal over the list". Now it is ordinary page content: the
    PAGE scrolls, child modals stack over it with no z-index negotiation, and
    the browser's own back button is the way out because the router owns the
-   URL. The .p86-proj-detail-overlay backdrop rule is gone with it. */
+   URL. The .p86-proj-detail-overlay backdrop rule is gone with it.
+
+   It FILLS the pane and does not scroll itself. #jobs-job-detail-view carries
+   no width or overflow rule of its own — the drill-in IS the page and <main>
+   is the scroller — so this matches it. The old centred 1100px column with
+   max-height:100vh + overflow-y:auto was right for a floating panel and wrong
+   here: it put a second scrollbar inside the first and left the drill-in
+   sitting in the middle of a wider pane. */
 .p86-proj-detail-host {
-  width: min(1100px, 100%);
-  margin: 0 auto;
   padding: 18px 22px;
 }
 .p86-proj-detail-topbar {
