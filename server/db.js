@@ -2528,6 +2528,7 @@ async function initSchema() {
     --   ALTER TABLE receipts DROP COLUMN IF EXISTS store_name;
     --   ALTER TABLE receipts DROP COLUMN IF EXISTS store_address;
     --   ALTER TABLE receipts DROP COLUMN IF EXISTS store_phone;
+    --   ALTER TABLE receipts DROP COLUMN IF EXISTS store_phone_kind;
     -- Clean precisely because nothing is backfilled and no existing read path
     -- changed: COLS in receipt-routes.js is an explicit list, and the one
     -- aggregate that touches receipt money (GET /api/receipts/rollup) groups
@@ -2536,6 +2537,18 @@ async function initSchema() {
     ALTER TABLE receipts ADD COLUMN IF NOT EXISTS store_name TEXT;     -- merchant name as printed on THIS receipt
     ALTER TABLE receipts ADD COLUMN IF NOT EXISTS store_address TEXT;  -- the SELLER's street address, never bill-to/ship-to
     ALTER TABLE receipts ADD COLUMN IF NOT EXISTS store_phone TEXT;    -- normalized (NNN) NNN-NNNN, NANP-valid or NULL
+    -- THE FIFTH, AND THE "REVISIT" THE NOTE ABOVE ASKED FOR. It is not a fifth
+    -- IDENTITY field; it is the second half of store_phone. The design that
+    -- shipped with these columns says a number is TWO FACTS -- the digits, and
+    -- WHAT KIND OF LINE they are -- and the second fact was being re-derived
+    -- from the digits at read time. That works for a 1-800 number, whose kind
+    -- is in its area code, and cannot work for a FAX LINE, whose kind exists
+    -- only in the word printed beside it on the paper. That word survives one
+    -- instant, in the model's raw output, and normalizePhone() then throws it
+    -- away. Nothing downstream can recover it, so it is written down here.
+    -- NULL = never classified (every row that predates this), and the reader
+    -- falls back to classifying from the digits: exactly today's behaviour.
+    ALTER TABLE receipts ADD COLUMN IF NOT EXISTS store_phone_kind TEXT;  -- branch | toll_free | fax | premium, or NULL
 
     -- Receipt OCR feedback — one row per captured receipt that had an OCR
     -- suggestion. Records what the model guessed vs what the user actually
