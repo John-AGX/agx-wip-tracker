@@ -8,7 +8,12 @@
     "dev": "node server/index.js",
     "test": "jest"
   },
-  "jest": { "testPathIgnorePatterns": ["/node_modules/", "/\\.claude/"] },
+  "jest": {
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "/\\.claude/"
+    ]
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
@@ -33,7 +38,8 @@
     "resend": "^4.8.0",
     "sharp": "^0.33.5",
     "twilio": "^6.0.0",
-    "web-push": "^3.6.7"
+    "web-push": "^3.6.7",
+    "puppeteer": "^23.11.1"
   },
   "devDependencies": {
     "jest": "^30.4.2",

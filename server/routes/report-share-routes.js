@@ -23,6 +23,7 @@ const { reportShareIpLimiter, reportShareViewLimiter, reportShareCommentLimiter 
 const shares = require('../services/report-shares');
 const { loadReportDocument } = require('../services/report-document');
 const { bakeDocumentMaps } = require('../services/report-map-bake');
+const { renderReportPdf } = require('../services/report-pdf');
 const { storage } = require('../storage');
 
 const router = express.Router();
@@ -286,6 +287,84 @@ router.get('/report-share/:token',
       share: shares.publicShare(req.share)
     });
   });
+
+// ── Save a PDF into the project ─────────────────────────────────────────
+// ON DEMAND, never on publish: Chromium is the most expensive thing this
+// server does, and a report is shared far more often than it is filed.
+//
+// The result is stored as an ordinary project ATTACHMENT, so it turns up in
+// Files/Explorer beside everything else and can be emailed or attached to a pay
+// application — which is the entire reason to render server-side rather than
+// letting the browser print.
+router.post('/reports/:entityType/:entityId/:reportId/pdf', requireAuth, async (req, res) => {
+  const { entityType, entityId, reportId } = req.params;
+  if (!entityTypeOk(entityType)) return res.status(400).json({ error: 'Unsupported entity type' });
+  return requireCapability(writeCapFor(entityType))(req, res, async () => {
+    try {
+      const owned = await loadOwnedProject(entityId, req);
+      if (owned.error) return res.status(owned.error).json({ error: owned.message });
+
+      const rR = await pool.query(
+        'SELECT * FROM job_reports WHERE id = $1 AND entity_type = $2 AND entity_id = $3',
+        [reportId, entityType, entityId]
+      );
+      if (!rR.rows.length) return res.status(404).json({ error: 'Report not found' });
+      const report = rR.rows[0];
+      report.sections_raw = Array.isArray(report.sections) ? report.sections : [];
+
+      // The INTERNAL document: financials kept, because this file is being
+      // filed into the project rather than sent to a client. Anything meant for
+      // a client goes out through a share link, which redacts.
+      const orgName = await orgNameFor(owned.orgId);
+      const document = await loadReportDocument(pool, {
+        report: report, entityType: entityType, entityId: entityId,
+        project: owned.project, orgName: orgName, hideFinancials: false
+      });
+
+      // Bake the location map first — the PDF prints the baked image, since a
+      // live map cannot exist in a PDF. Never fatal.
+      const mapNote = await bakeDocumentMaps(storage, document, 'pdf_' + reportId);
+
+      let pdf;
+      try {
+        pdf = await renderReportPdf(document);
+      } catch (e) {
+        // A missing or unlaunchable browser is an operational fact the user
+        // should see plainly, not a 500 with a stack trace.
+        console.error('report pdf render failed:', e && e.message);
+        return res.status(503).json({ error: (e && e.message) || 'Could not render the PDF.' });
+      }
+
+      const safeTitle = String(report.title || 'Report').replace(/[^\w\s.-]/g, '').trim().slice(0, 80) || 'Report';
+      const stamp = new Date().toISOString().slice(0, 10);
+      const filename = safeTitle + ' — ' + stamp + '.pdf';
+      const attId = newId('att');
+      const key = 'project/' + entityId + '/' + attId + '.pdf';
+      const url = await storage.put(key, pdf, 'application/pdf');
+
+      await pool.query(
+        // NOTE: attachments has no organization_id. Its tenancy comes from the
+        // PARENT entity — the project proven to be the caller's above — which is
+        // the model services/attachment-org-scope.js documents.
+        `INSERT INTO attachments
+           (id, entity_type, entity_id, filename, mime_type, size_bytes,
+            original_key, original_url, uploaded_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [attId, entityType, entityId, filename, 'application/pdf', pdf.length,
+         key, url, req.user.id]
+      );
+
+      res.json({
+        ok: true,
+        attachment: { id: attId, filename: filename, url: url, size_bytes: pdf.length },
+        map_note: mapNote
+      });
+    } catch (e) {
+      console.error('POST report pdf error:', e);
+      res.status(500).json({ error: 'Server error: ' + e.message });
+    }
+  });
+});
 
 // ── Guest comments ──────────────────────────────────────────────────────
 // A share with scope 'comment' may APPEND to a thread. It may not edit, delete,

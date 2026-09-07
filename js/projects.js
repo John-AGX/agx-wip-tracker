@@ -2721,6 +2721,7 @@
             '<button class="ee-btn secondary" id="rptPreview" title="See what this report will look like when printed">&#x1F441;&#xFE0F; Preview</button>' +
             '<button class="ee-btn secondary" id="rptPrint">&#x1F5A8; Print / Save PDF</button>' +
             '<button class="ee-btn secondary" id="rptShare" title="Send this report to a client — no account needed">&#x1F517; Share</button>' +
+            '<button class="ee-btn secondary" id="rptSavePdf" title="Render a PDF and file it into this project">&#x1F4C4; Save PDF to project</button>' +
             '<button class="ee-btn secondary" id="rptAddSection">&#x2795; Section</button>' +
             '<button class="ee-btn secondary" id="rptSave">Save</button>' +
             '<button class="p86-modal-close" id="rptClose">&times;</button>' +
@@ -2835,6 +2836,30 @@
       host.querySelector('#rptPrint').addEventListener('click', printReport);
       var shareBtn = host.querySelector('#rptShare');
       if (shareBtn) shareBtn.addEventListener('click', openSharePanel);
+      var pdfBtn = host.querySelector('#rptSavePdf');
+      if (pdfBtn) pdfBtn.addEventListener('click', function() {
+        var label = pdfBtn.textContent;
+        pdfBtn.disabled = true;
+        pdfBtn.textContent = 'Rendering…';
+        // Save first: the PDF is rendered from what is STORED, so an unsaved
+        // edit would be missing from the filed copy.
+        save().catch(function() {}).then(function() {
+          return window.p86Api.reports.savePdf('project', _detailState.project.id, state.report.id);
+        }).then(function(r) {
+          pdfBtn.disabled = false;
+          pdfBtn.textContent = label;
+          var where = (r && r.attachment && r.attachment.filename) || 'the project files';
+          var note = (r && r.map_note)
+            ? '  (no location map in this PDF: ' + r.map_note + ')'
+            : '';
+          alert('Saved to this project as: ' + where + note);
+          if (typeof refreshDetailPhotos === 'function') refreshDetailPhotos();
+        }).catch(function(e) {
+          pdfBtn.disabled = false;
+          pdfBtn.textContent = label;
+          alert('Could not save the PDF: ' + (e && e.message ? e.message : e));
+        });
+      });
       host.querySelector('#rptAddSection').addEventListener('click', function() { addCustomSection(); });
       // Design button — opens the visual style-pack gallery. Picking
       // a card mutates state.stylePack, swaps the data attribute,

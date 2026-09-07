@@ -525,6 +525,13 @@
       return get('/api/reports/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId) +
         '/' + encodeURIComponent(reportId) + '/shares');
     },
+    // Render this report to a PDF server-side and file it into the project.
+    // On demand only — the server renders with a real browser engine, which is
+    // expensive, so it happens when asked rather than on every publish.
+    savePdf: function(entityType, entityId, reportId) {
+      return post('/api/reports/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId) +
+        '/' + encodeURIComponent(reportId) + '/pdf', {});
+    },
     // Every guest comment on this report, across all its links.
     reportComments: function(entityType, entityId, reportId) {
       return get('/api/reports/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId) +

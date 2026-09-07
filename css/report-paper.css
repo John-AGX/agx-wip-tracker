@@ -1,0 +1,163 @@
+/* THE REPORT DOCUMENT, on paper.
+ *
+ * One stylesheet for the document wherever it is rendered:
+ *   - the public share portal (report-share.html)
+ *   - the server-side PDF (server/services/report-pdf.js inlines this file)
+ *
+ * It pairs with js/report-document.js, which is the one renderer. Splitting the
+ * markup and the styling across two copies would reintroduce exactly the drift
+ * that made printed page breaks disagree with the preview — so this file is
+ * shared the same way the renderer is.
+ *
+ * It styles ONLY the document (.p86-report-*). Page chrome — a portal's header,
+ * a comment box — belongs to whatever page is hosting it, because those parts
+ * legitimately differ and must not follow the document into a PDF.
+ *
+ * Written for a WHITE PAGE. The app renders a dark editing surface; a client
+ * receives a document. The renderer and the class names are shared; the
+ * presentation is meant to differ.
+ */
+
+.p86-report-preview-paper {
+  background: #fff;
+  color: #000;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+/* ── Cover ───────────────────────────────────────────────────────── */
+.p86-report-cover-rendered {
+  text-align: center;
+  padding-bottom: 26px;
+  border-bottom: 1px solid #d9d5cd;
+  margin-bottom: 30px;
+}
+.p86-report-cover-company {
+  font-size: 13px; font-weight: 700; color: #666;
+  text-transform: uppercase; letter-spacing: 2px; margin-bottom: 6px;
+}
+.p86-report-cover-subtitle { font-size: 14px; color: #666; font-style: italic; margin-bottom: 14px; }
+.p86-report-cover-title { font-size: 30px; line-height: 1.2; margin: 8px 0 10px; text-wrap: balance; }
+.p86-report-cover-addr { color: #555; font-size: 14px; }
+.p86-report-cover-meta { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px 34px; margin-top: 22px; }
+.p86-report-cover-meta > div { text-align: left; }
+.p86-report-cover-meta .k { display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px; color: #888; }
+.p86-report-cover-meta .v { display: block; font-size: 14px; font-weight: 600; }
+.p86-report-cover-logo { display: block; max-width: 240px; max-height: 84px; margin: 0 auto 16px; object-fit: contain; }
+
+/* ── Body ────────────────────────────────────────────────────────── */
+.p86-report-preview-summary { font-size: 15px; color: #333; margin-bottom: 26px; white-space: pre-wrap; }
+.p86-report-preview-section { margin-bottom: 34px; }
+.p86-report-preview-section-label {
+  font-size: 17px; margin: 0 0 12px; padding-bottom: 6px; border-bottom: 1px solid #d9d5cd;
+}
+.p86-report-preview-text { white-space: pre-wrap; font-size: 14.5px; color: #222; }
+.p86-report-preview-empty { color: #999; font-size: 13px; font-style: italic; }
+
+.p86-report-preview-section-grid { display: grid; gap: 14px; }
+.p86-report-preview-section-grid.size-small  { grid-template-columns: repeat(2, minmax(0,1fr)); }
+.p86-report-preview-section-grid.size-medium { grid-template-columns: repeat(3, minmax(0,1fr)); }
+.p86-report-preview-section-grid.size-large  { grid-template-columns: repeat(2, minmax(0,1fr)); }
+.p86-report-preview-section-stack { display: flex; flex-direction: column; gap: 18px; }
+
+.p86-report-preview-photo { display: flex; flex-direction: column; }
+.p86-report-preview-photo.has-sidedesc {
+  display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 16px; align-items: start;
+}
+.p86-report-preview-photo.has-sidedesc.desc-left .p86-report-preview-photo-img-wrap { order: 2; }
+.p86-report-preview-photo.has-sidedesc.desc-left .p86-report-photo-sidedesc { order: 1; text-align: right; }
+.p86-report-preview-photo-img-wrap { position: relative; overflow: hidden; border-radius: 3px; }
+.p86-report-preview-photo-img-wrap img { display: block; width: 100%; height: auto; }
+.p86-report-preview-photo-anno { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+
+/* The number badge is a SPAN, never a button — a legacy global print rule hides
+   every <button>, which is how these numbers once vanished from a printed page. */
+.p86-report-photo-num {
+  position: absolute; top: 6px; left: 6px; z-index: 3;
+  min-width: 22px; height: 22px; padding: 0 5px;
+  border: 1.5px solid #000; border-radius: 11px;
+  background: #fff; color: #000;
+  font-size: 11.5px; font-weight: 700; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-variant-numeric: tabular-nums;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+.p86-report-photo-sidedesc { min-width: 0; padding-top: 2px; }
+.p86-report-photo-sidedesc-text { font-size: 14.5px; font-weight: 600; margin-bottom: 8px; white-space: pre-wrap; }
+.p86-report-photo-meta { font-size: 12px; color: #666; }
+.p86-report-photo-meta-row { display: flex; gap: 6px; }
+
+.p86-report-preview-files { display: flex; flex-direction: column; gap: 6px; }
+.p86-report-preview-file-row {
+  display: flex; align-items: center; gap: 10px; padding: 7px 10px;
+  border: 1px solid #d9d5cd; border-radius: 6px;
+}
+.p86-report-preview-file-ext {
+  font-size: 10px; font-weight: 700; letter-spacing: .5px; color: #fff;
+  background: #7a828e; padding: 2px 6px; border-radius: 3px;
+  -webkit-print-color-adjust: exact; print-color-adjust: exact;
+}
+.p86-report-preview-file-name { font-size: 13.5px; }
+
+/* ── Location map: three layers ──────────────────────────────────── */
+.p86-report-map-wrap { position: relative; }
+.p86-report-map-live { height: 420px; border-radius: 6px; overflow: hidden; }
+.p86-report-map-static { display: block; width: 100%; max-width: 680px; border-radius: 6px; }
+.p86-report-map-fallback { display: grid; gap: 12px; }
+.p86-report-map-wrap.has-static .p86-report-map-fallback { display: none; }
+.p86-report-map-wrap.has-live-map .p86-report-map-fallback { display: none; }
+.p86-report-map-wrap.has-live-map .p86-report-map-static { display: none; }
+.p86-report-map-pin {
+  width: 26px; height: 26px; border-radius: 50%;
+  background: #2f6feb; color: #fff; border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,.5);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+.p86-report-map-pop img { width: 190px; display: block; border-radius: 4px; margin-bottom: 6px; }
+.p86-report-map-pop-n { color: #777; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
+.p86-report-map-pop-cap { font-weight: 600; font-size: 13.5px; }
+.p86-report-preview-map img { display: block; width: 100%; max-width: 680px; border-radius: 6px; }
+.p86-report-map-unavailable {
+  padding: 14px 16px; border: 1px dashed #d9d5cd; border-radius: 8px; color: #888; font-size: 13px;
+}
+
+@media (max-width: 640px) {
+  .p86-report-preview-photo.has-sidedesc { grid-template-columns: 1fr; }
+  .p86-report-preview-section-grid.size-small,
+  .p86-report-preview-section-grid.size-medium,
+  .p86-report-preview-section-grid.size-large { grid-template-columns: 1fr; }
+}
+
+/* ── Print / PDF ─────────────────────────────────────────────────── */
+@media print {
+  /* A photo card must not be split across a page; a section may flow. */
+  .p86-report-preview-photo { break-inside: avoid; page-break-inside: avoid; }
+  .p86-report-preview-section { break-inside: auto; page-break-inside: auto; }
+
+  /* Width follows the capped height, so a photo shrinks to fit its allowance
+     rather than being cropped to it. */
+  .p86-report-preview-photo-img-wrap img {
+    width: auto; max-width: 100%; height: auto; object-fit: contain;
+  }
+  /* Photos per page: usable height is 11in - 0.8in margins = 10.2in, and each
+     block is the photo plus ~0.5in of caption and gap, so the cap is 10.2/n
+     minus 0.5. Stack: small 4 per page, medium 3, large 2. */
+  .p86-report-preview-section-stack.size-small  .p86-report-preview-photo-img-wrap img { max-height: 2.0in; }
+  .p86-report-preview-section-stack.size-medium .p86-report-preview-photo-img-wrap img { max-height: 2.8in; }
+  .p86-report-preview-section-stack.size-large  .p86-report-preview-photo-img-wrap img { max-height: 4.4in; }
+  .p86-report-preview-section-grid.size-small   .p86-report-preview-photo-img-wrap img { max-height: 2.6in; }
+  .p86-report-preview-section-grid.size-medium  .p86-report-preview-photo-img-wrap img { max-height: 1.9in; }
+  .p86-report-preview-section-grid.size-large   .p86-report-preview-photo-img-wrap img { max-height: 3.4in; }
+  .p86-report-preview-photo-img-wrap img { max-height: 2.8in; }
+
+  /* A live map would print whatever the reader last panned to, so print the
+     BAKED image — the view that was actually published. With no baked image the
+     photo grid returns, which still carries the information. */
+  .p86-report-map-live { display: none !important; }
+  .p86-report-map-wrap.has-live-map .p86-report-map-static { display: block !important; }
+  .p86-report-map-wrap.has-live-map:not(.has-static) .p86-report-map-fallback { display: grid !important; }
+}
