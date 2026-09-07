@@ -190,6 +190,20 @@ async function resetOrgData(orgId) {
     //    subs side; removing these rows first removes any doubt).
     await del('job_subs', 'DELETE FROM job_subs WHERE job_id IN (' + jobsQ(incNull) + ')');
 
+    // 8) Service tickets (work orders) and their children, in dependency
+    //    order. This is NOT optional cleanup — without it the `leads` anchor
+    //    delete below FAILS: service_tickets.lead_id is ON DELETE SET NULL, so
+    //    dropping a lead nulls it, and a ticket raised on a lead with no job
+    //    then violates service_tickets_parent_chk (job_id OR lead_id must be
+    //    set). The transaction would roll the whole reset back.
+    //
+    //    Events and shares cascade from the ticket, but they are deleted
+    //    explicitly so the reset REPORTS what it removed — a count of 0 where
+    //    rows existed is how a missed table hides.
+    await del('service_ticket_events', 'DELETE FROM service_ticket_events WHERE organization_id = $1');
+    await del('service_ticket_shares', 'DELETE FROM service_ticket_shares WHERE organization_id = $1');
+    await del('service_tickets', 'DELETE FROM service_tickets WHERE organization_id = $1');
+
     // ── ANCHORS (atomic — a throw rolls back everything above). FK cascade
     //    removes their remaining children. Cross-anchor refs are SET NULL.
     async function delAnchor(label, sql) {

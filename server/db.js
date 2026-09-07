@@ -4405,6 +4405,241 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_report_share_comments_share
       ON report_share_comments(share_id, created_at);
 
+    -- ───────────────────────────────────────────────────────────────
+    -- SERVICE TICKETS — the WORK ORDER tier that sits above tasks.
+    --
+    -- A ticket is a unit of dispatchable work with an owner, an address, a
+    -- proposed scope and a lifecycle: raised on a JOB (warranty call, punch
+    -- return, extra work) or on a LEAD (pre-sale survey, a service call not
+    -- sold yet). Tasks hang under it as the checklist of what has to happen;
+    -- the ticket is the thing you send to a crew and share with a client.
+    --
+    -- WHY TWO PARENT COLUMNS AND NOT entity_type/entity_id.
+    -- tasks/attachments/reports use a polymorphic (entity_type, entity_id)
+    -- pair and it was the obvious thing to copy. It is wrong here, for a
+    -- reason the convert route proves: POST /api/jobs/convert re-points
+    -- exactly ONE child table when a lead becomes a job -- "receipts"
+    -- (server/routes/job-routes.js). attachments, file_folders and tasks all
+    -- keep pointing at the lead forever. A polymorphic ticket would inherit
+    -- that: raise a ticket on a lead, win the job, and the ticket vanishes
+    -- from the job it is now about.
+    --
+    -- Two nullable FK columns instead — the shape "jobs" already uses for its
+    -- own provenance (jobs.lead_id / jobs.estimate_id). A ticket raised on a
+    -- lead keeps lead_id FOREVER (that is where it came from) and GAINS
+    -- job_id at conversion, so it appears in the job's ticket manager without
+    -- losing its history. One extra UPDATE in the convert transaction.
+    --
+    -- lead_id is ON DELETE SET NULL rather than CASCADE: after conversion a
+    -- ticket is about the JOB, and deleting the originating lead must not take
+    -- the job's live work order with it.
+    CREATE TABLE IF NOT EXISTS service_tickets (
+      id                  TEXT PRIMARY KEY,
+      organization_id     INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      ticket_number       TEXT,
+      title               TEXT NOT NULL,
+      -- Parentage. At least one is always set (see service_tickets_parent_chk).
+      job_id              TEXT REFERENCES jobs(id)  ON DELETE CASCADE,
+      lead_id             TEXT REFERENCES leads(id) ON DELETE SET NULL,
+      status              TEXT NOT NULL DEFAULT 'draft',
+      -- draft | open | scheduled | in_progress | work_complete | approved | closed | cancelled
+      priority            TEXT NOT NULL DEFAULT 'normal',   -- low | normal | high | urgent
+      -- The work-order body. scope_proposed is what the office wrote (or 86
+      -- drafted); scope_approved is what the client/PM signed off on. Two
+      -- columns, not one with a flag, because a work order routinely goes out
+      -- with a proposal and comes back amended and you need both texts.
+      scope_proposed      TEXT,
+      scope_approved      TEXT,
+      internal_notes      TEXT,
+      -- The ticket's OWN checklist — the crew-facing "what has to happen on
+      -- site" list, same [{text,done}] shape as tasks.checklist so the
+      -- punch-list renderer works unchanged. Distinct from the child TASKS,
+      -- which are assignable, dated, org-visible work items; this is the
+      -- tick-list printed on the work order itself.
+      checklist           JSONB NOT NULL DEFAULT '[]'::jsonb,
+      -- APPEND-ONLY field-report log written by share-link holders. Separate
+      -- from internal_notes ON PURPOSE: a guest must never be able to grow a
+      -- field the office writes into. task-share-routes.js appends a guest's
+      -- note into tasks.notes — the same column the authed editor overwrites —
+      -- so a guest note and an office edit race each other. Two columns
+      -- removes the race and the question.
+      guest_log           TEXT,
+      -- WHO + WHERE. Copied from the parent at create time, then editable.
+      -- Copied rather than joined on purpose: a work order is a document that
+      -- travels, and the address on it must be the address it was issued for
+      -- even if the job's address is corrected next month.
+      requested_by        TEXT,
+      site_contact_name   TEXT,
+      site_contact_phone  TEXT,
+      street_address      TEXT,
+      city                TEXT,
+      state               TEXT,
+      zip                 TEXT,
+      lat                 REAL,
+      lng                 REAL,
+      access_notes        TEXT,
+      scheduled_for       DATE,
+      due_date            DATE,
+      assignee_user_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      completed_at        TIMESTAMPTZ,
+      closed_at           TIMESTAMPTZ,
+      archived_at         TIMESTAMPTZ,
+      created_by          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    DO $service_tickets_parent_chk$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'service_tickets_parent_chk') THEN
+        ALTER TABLE service_tickets ADD CONSTRAINT service_tickets_parent_chk
+          CHECK (job_id IS NOT NULL OR lead_id IS NOT NULL);
+      END IF;
+    END $service_tickets_parent_chk$;
+    DO $service_tickets_status_chk$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'service_tickets_status_chk') THEN
+        ALTER TABLE service_tickets ADD CONSTRAINT service_tickets_status_chk
+          CHECK (status IN ('draft','open','scheduled','in_progress',
+                            'work_complete','approved','closed','cancelled'));
+      END IF;
+    END $service_tickets_status_chk$;
+    DO $service_tickets_priority_chk$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'service_tickets_priority_chk') THEN
+        ALTER TABLE service_tickets ADD CONSTRAINT service_tickets_priority_chk
+          CHECK (priority IN ('low','normal','high','urgent'));
+      END IF;
+    END $service_tickets_priority_chk$;
+    -- The job's Service Tickets tab, and the lead's panel.
+    CREATE INDEX IF NOT EXISTS idx_service_tickets_job
+      ON service_tickets(job_id, created_at DESC)
+      WHERE job_id IS NOT NULL AND archived_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_service_tickets_lead
+      ON service_tickets(lead_id, created_at DESC)
+      WHERE lead_id IS NOT NULL AND archived_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_service_tickets_org
+      ON service_tickets(organization_id, created_at DESC);
+    -- "My open tickets" + the org-wide board.
+    CREATE INDEX IF NOT EXISTS idx_service_tickets_assignee
+      ON service_tickets(organization_id, assignee_user_id, status)
+      WHERE archived_at IS NULL;
+    -- Ticket numbers are per-org and optional (a draft has none until issued).
+    -- This unique index is the real arbiter for the derived number: on a
+    -- concurrent collision the INSERT raises 23505 and the route retries,
+    -- which avoids standing up a second atomic claimer beside the job-number
+    -- one. One counter registry is enough.
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_service_tickets_number
+      ON service_tickets(organization_id, ticket_number)
+      WHERE ticket_number IS NOT NULL;
+
+    -- Share links for a service ticket. Same bearer-token shape as
+    -- report_shares — token HASHED at rest, absolute expiry, soft revoke —
+    -- with two deliberate differences from that table and one from task_shares.
+    --
+    --  1. NO "document" SNAPSHOT COLUMN. A report is a finished artifact and
+    --     freezing it is the honest behaviour. A work order is LIVE: the crew
+    --     must see the scope as it stands today, and the PM must be able to
+    --     revise a ticket after sending the link. So the guest read joins the
+    --     ticket. That costs report_shares' "one indexed row, no id-joins"
+    --     property, and it is paid for by publicTicket() in
+    --     services/service-tickets.js — a whitelist — so a column added to
+    --     service_tickets later cannot leak here by default.
+    --  2. scope is view | respond | propose. There is deliberately NO 'edit'.
+    --  3. token_hash, not token. task_shares keeps the raw token; a leaked
+    --     backup of that table hands over every live link. Not repeated here.
+    CREATE TABLE IF NOT EXISTS service_ticket_shares (
+      id                TEXT PRIMARY KEY,
+      organization_id   INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      ticket_id         TEXT NOT NULL REFERENCES service_tickets(id) ON DELETE CASCADE,
+      token_hash        TEXT NOT NULL UNIQUE,
+      scope             TEXT NOT NULL DEFAULT 'view',   -- view | respond | propose
+      hide_financials   BOOLEAN NOT NULL DEFAULT TRUE,
+      recipient_email   TEXT,
+      recipient_name    TEXT,
+      sub_id            TEXT,
+      expires_at        TIMESTAMPTZ NOT NULL,
+      opened_at         TIMESTAMPTZ,
+      completed_at      TIMESTAMPTZ,
+      revoked_at        TIMESTAMPTZ,
+      last_used_at      TIMESTAMPTZ,
+      view_count        INTEGER NOT NULL DEFAULT 0,
+      created_by        INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    -- CHECKed in the database as well as normalized in the service, so a row a
+    -- future build writes cannot sit there waiting to be widened. The literal
+    -- 'edit' is refused by this constraint.
+    DO $service_ticket_shares_scope_chk$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'service_ticket_shares_scope_chk') THEN
+        ALTER TABLE service_ticket_shares ADD CONSTRAINT service_ticket_shares_scope_chk
+          CHECK (scope IN ('view','respond','propose'));
+      END IF;
+    END $service_ticket_shares_scope_chk$;
+    CREATE INDEX IF NOT EXISTS idx_service_ticket_shares_ticket
+      ON service_ticket_shares(ticket_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_service_ticket_shares_org
+      ON service_ticket_shares(organization_id, created_at DESC);
+
+    -- APPEND-ONLY event log. This is three things at once, which is why it
+    -- earns a table rather than a JSONB column:
+    --   * "its progress" in the owner's request — the PM's timeline.
+    --   * the audit trail that makes a token write defensible. Every guest
+    --     write appends a row naming the SHARE it came through; a bearer token
+    --     cannot identify a person, so the honest record is "this arrived via
+    --     the link sent to <recipient>".
+    --   * the undo evidence. Nothing here is ever UPDATEd or DELETEd.
+    --
+    -- detail is SHAPE, not contents — field names, counts, enum codes, the
+    -- old/new value of a status. Never money, never PII, never a whole row.
+    -- Same rule server/audit.js states for admin_audit_log.
+    CREATE TABLE IF NOT EXISTS service_ticket_events (
+      id                TEXT PRIMARY KEY,
+      organization_id   INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      ticket_id         TEXT NOT NULL REFERENCES service_tickets(id) ON DELETE CASCADE,
+      kind              TEXT NOT NULL,
+      -- created | status_changed | field_changed | note_added | photo_added |
+      -- task_added | task_completed | shared | share_revoked | share_opened |
+      -- revision_proposed | revision_accepted | revision_rejected | agent_drafted
+      actor_kind        TEXT NOT NULL DEFAULT 'user',  -- user | share | agent | system
+      actor_user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      share_id          TEXT REFERENCES service_ticket_shares(id) ON DELETE SET NULL,
+      -- What the guest typed as their name, or the recipient on the
+      -- invitation. A CLAIM, never identity — the UI labels it that way.
+      actor_label       TEXT,
+      detail            JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    DO $service_ticket_events_actor_chk$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'service_ticket_events_actor_chk') THEN
+        ALTER TABLE service_ticket_events ADD CONSTRAINT service_ticket_events_actor_chk
+          CHECK (actor_kind IN ('user','share','agent','system'));
+      END IF;
+    END $service_ticket_events_actor_chk$;
+    CREATE INDEX IF NOT EXISTS idx_service_ticket_events_ticket
+      ON service_ticket_events(ticket_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_service_ticket_events_org
+      ON service_ticket_events(organization_id, created_at DESC);
+
+    -- Tasks under a service ticket. ADDITIVE + SAFE: every existing row gets
+    -- NULL, zero UPDATEs, nothing moves.
+    --
+    -- MUST come after the service_tickets CREATE above — this blob runs
+    -- top-to-bottom in one query and the FK would fail on a fresh database.
+    --
+    -- A separate column and NOT entity_type='service_ticket', which would have
+    -- been free, because that would consume the task's ONLY parent pointer:
+    -- tasks has no job_id and no lead_id. A task under a ticket on a job would
+    -- then silently vanish from the job overview Tasks panel, the My Tasks
+    -- "Job" column, read_entity(job, include:['tasks']) and the idx_tasks_entity
+    -- index path. With a separate column a task keeps entity_type='job' AND
+    -- carries service_ticket_id — both facts are true at once, which is what
+    -- is actually the case.
+    --
+    -- ON DELETE SET NULL, not CASCADE: deleting a ticket must never delete
+    -- field work a crew completed. The task survives, orphaned back to its job.
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS service_ticket_id TEXT
+      REFERENCES service_tickets(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS idx_tasks_service_ticket
+      ON tasks(service_ticket_id, updated_at DESC)
+      WHERE service_ticket_id IS NOT NULL AND archived_at IS NULL;
+
 
     -- ───────────────────────────────────────────────────────────────
     -- My Notes — a personal, PRIVATE scratchpad (Phase 1 / Deliverable

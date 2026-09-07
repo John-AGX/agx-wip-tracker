@@ -58,29 +58,22 @@ function loadRouter(pathname) {
   return { router: win.p86Router, win, pushed };
 }
 
-let failures = 0;
-function ok(name, fn) {
-  try { fn(); console.log('  ok  ' + name); }
-  catch (e) { failures++; console.log('  FAIL  ' + name + '\n        ' + (e && e.message)); }
-}
 
-console.log('\nrouter /projects/:projectId');
-
-ok('a bare /projects parses to the tab with no project', () => {
+test('a bare /projects parses to the tab with no project', () => {
   const { router } = loadRouter('/projects');
   const r = router.route();
   assert.strictEqual(r.top, 'projects');
   assert.strictEqual(r.projectId, undefined);
 });
 
-ok('/projects/:id carries the project id', () => {
+test('/projects/:id carries the project id', () => {
   const { router } = loadRouter('/projects/proj_1787667006389_92npse');
   const r = router.route();
   assert.strictEqual(r.top, 'projects');
   assert.strictEqual(r.projectId, 'proj_1787667006389_92npse');
 });
 
-ok('THE SILENT DROPPER: serialize round-trips the id instead of falling through to /projects', () => {
+test('THE SILENT DROPPER: serialize round-trips the id instead of falling through to /projects', () => {
   const { router, win, pushed } = loadRouter('/projects');
   router.navigate({ top: 'projects', projectId: 'proj_abc123' });
   assert.deepStrictEqual(pushed, ['/projects/proj_abc123'],
@@ -88,7 +81,7 @@ ok('THE SILENT DROPPER: serialize round-trips the id instead of falling through 
   assert.strictEqual(win.location.pathname, '/projects/proj_abc123');
 });
 
-ok('parse ∘ serialize is identity for a project route', () => {
+test('parse ∘ serialize is identity for a project route', () => {
   const { router } = loadRouter('/projects/proj_abc123');
   const first = router.route();
   const { router: r2 } = loadRouter('/projects/' + first.projectId);
@@ -98,19 +91,19 @@ ok('parse ∘ serialize is identity for a project route', () => {
   assert.strictEqual(JSON.stringify(r2.route()), JSON.stringify(first));
 });
 
-ok('a project route with no id serializes back to the bare tab', () => {
+test('a project route with no id serializes back to the bare tab', () => {
   const { router, pushed } = loadRouter('/projects');
   router.navigate({ top: 'projects' });
   assert.deepStrictEqual(pushed, ['/projects']);
 });
 
-ok('canGo accepts both shapes', () => {
+test('canGo accepts both shapes', () => {
   const { router } = loadRouter('/projects');
   assert.strictEqual(router.canGo('/projects'), true);
   assert.strictEqual(router.canGo('/projects/proj_abc123'), true);
 });
 
-ok('an id needing encoding survives the round trip', () => {
+test('an id needing encoding survives the round trip', () => {
   // Project ids are TEXT primary keys. They are stored raw and encoded on
   // the way out, mirroring route.jobId — so a hostile id must not be able to
   // inject a path segment.
@@ -128,7 +121,7 @@ ok('an id needing encoding survives the round trip', () => {
 // project rather than becoming a separate top-level route, because the editor
 // cannot paint without the project's photos already loaded.
 
-ok('/projects/:id/reports/:rid carries both ids', () => {
+test('/projects/:id/reports/:rid carries both ids', () => {
   const { router } = loadRouter('/projects/proj_abc/reports/rep_123');
   const r = router.route();
   assert.strictEqual(r.top, 'projects');
@@ -136,13 +129,13 @@ ok('/projects/:id/reports/:rid carries both ids', () => {
   assert.strictEqual(r.projectReportId, 'rep_123');
 });
 
-ok('a report route serializes back to the same path', () => {
+test('a report route serializes back to the same path', () => {
   const { router, pushed } = loadRouter('/projects');
   router.navigate({ top: 'projects', projectId: 'proj_abc', projectReportId: 'rep_123' });
   assert.deepStrictEqual(pushed, ['/projects/proj_abc/reports/rep_123']);
 });
 
-ok('the literal "reports" segment is required', () => {
+test('the literal "reports" segment is required', () => {
   // /projects/:id/<anything-else> must NOT be read as a report id, or a future
   // sub-tab segment would silently open a report that does not exist.
   const { router } = loadRouter('/projects/proj_abc/photos/xyz');
@@ -151,33 +144,31 @@ ok('the literal "reports" segment is required', () => {
   assert.strictEqual(r.projectReportId, undefined);
 });
 
-ok('a dangling /reports with no id does not set a report', () => {
+test('a dangling /reports with no id does not set a report', () => {
   const { router } = loadRouter('/projects/proj_abc/reports');
   const r = router.route();
   assert.strictEqual(r.projectId, 'proj_abc');
   assert.strictEqual(r.projectReportId, undefined);
 });
 
-ok('a report id cannot inject a path segment', () => {
+test('a report id cannot inject a path segment', () => {
   const { router, pushed } = loadRouter('/projects');
   router.navigate({ top: 'projects', projectId: 'p1', projectReportId: 'a/b' });
   assert.strictEqual(pushed[0].split('/').length, 5,
     '/projects/p1/reports/<encoded> — the slash inside the id must be encoded');
 });
 
-ok('projectReportId without projectId cannot produce an orphan path', () => {
+test('projectReportId without projectId cannot produce an orphan path', () => {
   const { router, pushed } = loadRouter('/projects');
   router.navigate({ top: 'projects', projectReportId: 'rep_123' });
   assert.deepStrictEqual(pushed, ['/projects'],
     'a report with no project is not addressable — fall back to the tab');
 });
 
-ok('the projects branch does not disturb the jobs route', () => {
+test('the projects branch does not disturb the jobs route', () => {
   const { router } = loadRouter('/jobs/j123/job-overview');
   const r = router.route();
   assert.strictEqual(r.top, 'jobs');
   assert.strictEqual(r.jobId, 'j123');
 });
 
-console.log(failures ? '\nrouter-projects-route: ' + failures + ' FAILED' : '\nrouter-projects-route: all passed');
-process.exit(failures ? 1 : 0);

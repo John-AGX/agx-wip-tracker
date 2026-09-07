@@ -292,7 +292,16 @@ describe('the guard covers every loose pointer the schema declares', () => {
       //   task_shares.sub_id is loose but is PROVENANCE, not money: the token
       //     is the access and the share keeps working. Blocking a delete on an
       //     expired share link would be a new refusal, not a fixed one.
-      'attachment_folder_grants', 'sub_certificates', 'sub_invites', 'task_shares', 'users',
+      //   service_ticket_shares.sub_id is the same shape as task_shares and is
+      //     here for the same reason: it records WHICH SUB a work order was
+      //     sent to, and the token — not this column — is what grants access.
+      //     A revoked or expired link is not a debt, so a sub with an
+      //     outstanding ticket link is still deletable. Note this is a bare
+      //     TEXT column with no REFERENCES, deliberately matching task_shares:
+      //     the share is a historical record of who was dispatched, and it
+      //     should survive the sub being removed from the roster.
+      'attachment_folder_grants', 'sub_certificates', 'service_ticket_shares',
+      'sub_invites', 'task_shares', 'users',
     ].sort());
   });
 

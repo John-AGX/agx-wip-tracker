@@ -1168,7 +1168,22 @@ describe('R4 — classify() is checked, never consulted', () => {
   // arrived UNCLASSIFIED would have been dropped from a classify()-derived
   // population, which is attack class A1, and moving this number without
   // looking is how that goes unnoticed.
-  test('the fixture carries every table server/db.js creates (110) — nothing curated out', () => {
-    expect(TWO.ALL_TABLES.length).toBe(110);
+  // 110 -> 113 with the Service Tickets schema (S0): `service_tickets`, the
+  // work-order tier above tasks, plus `service_ticket_shares` and
+  // `service_ticket_events`. Same drill, and the check that matters was done
+  // before the number moved: all three are classified DIRECT in
+  // org-table-classification.js because all three carry their own NOT NULL
+  // organization_id, so the generic seeder plants org A / org B / un-stamped
+  // rows in each with no curation step. None of them is PARENT-scoped — a
+  // ticket's organization_id is its own column and never inferred from the
+  // job or lead it hangs off, which is what keeps the tenant predicate on
+  // every ticket query a direct equality rather than a join.
+  //
+  // Note this ALSO covers a column, not just tables: tasks gained
+  // service_ticket_id in the same commit. That is deliberately NOT a new
+  // parent pointer — a task keeps entity_type='job' and carries the ticket id
+  // alongside — so the tasks fixture is unchanged and no count moves for it.
+  test('the fixture carries every table server/db.js creates (113) — nothing curated out', () => {
+    expect(TWO.ALL_TABLES.length).toBe(113);
   });
 });

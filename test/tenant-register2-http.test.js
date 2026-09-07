@@ -179,12 +179,25 @@ describe('REGISTER 2 — the route population', () => {
     //      (DIRECT tenancy) with qb_cost_lines (PARENT, through jobs), two
     //      different predicates in one statement, and that is exactly the
     //      shape a one-org production can never disprove on its own.
-    expect(R.routes).toBe(573);
+    //   573 -> 574, +1 WAIVED, from f4af3fd6 (the on-demand server-side PDF),
+    //      which landed without this ledger being moved — so main was red here
+    //      again, for the same reason and by the same author as the +3 above.
+    //      Read individually before the number moved:
+    //        POST /reports/:entityType/:entityId/:reportId/pdf
+    //      It is a POST and it takes three path parameters, so it joins the
+    //      waived set BY CONSTRUCTION and the driven count is unmoved — which
+    //      is why only `waived` changes below. Its tenancy is the one worth
+    //      stating: it loads the document through
+    //      services/report-document.js#loadReportDocument, whose section read
+    //      is PARENT-scoped (`WHERE id = ANY($1) AND entity_type = $2 AND
+    //      entity_id = $3`), not the unscoped `WHERE id = ANY($1)` that
+    //      hydrateSections still uses on the internal path.
+    expect(R.routes).toBe(574);
     expect(R.routers).toBe(75);
   });
 
-  test('the DRIVEN / COUNTED-WAIVED split is committed (138 driven, 435 counted)', () => {
-    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 138, waived: 435 });
+  test('the DRIVEN / COUNTED-WAIVED split is committed (138 driven, 436 counted)', () => {
+    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 138, waived: 436 });
   });
 
   test('every counted-waived route is a write or needs a path parameter — nothing else is waived', () => {

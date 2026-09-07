@@ -7,15 +7,11 @@
 const assert = require('assert');
 const bake = require('../server/services/report-map-bake');
 
-let failures = 0;
-function test(name, fn) {
-  const done = function () { console.log('  ok  ' + name); };
-  try {
-    const r = fn();
-    if (r && typeof r.then === 'function') return r.then(done, function (e) { failures++; console.error('  FAIL ' + name + '\n       ' + e.message); });
-    done();
-  } catch (e) { failures++; console.error('  FAIL ' + name + '\n       ' + e.message); }
-}
+// No local harness: these are plain jest tests, and jest awaits an async test
+// function natively. The hand-rolled `test()` that used to live here SHADOWED
+// jest's global, so the suite reported success through console.log while jest
+// saw zero tests — and the trailing process.exit() crashed the worker, turning
+// `npm test` red on a file that was actually passing.
 
 const photos = [
   { id: 'a', lat: 28.5, lng: -81.4, num: 1 },
@@ -133,7 +129,3 @@ test('with no key configured, publish still succeeds with no map', async functio
   }
 });
 
-setTimeout(function () {
-  console.log(failures ? '\nreport-map-bake: ' + failures + ' FAILED' : '\nreport-map-bake: all passed');
-  process.exit(failures ? 1 : 0);
-}, 250);

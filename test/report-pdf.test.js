@@ -7,11 +7,11 @@
 const assert = require('assert');
 const svc = require('../server/services/report-pdf');
 
-let failures = 0;
-function test(name, fn) {
-  try { fn(); console.log('  ok  ' + name); }
-  catch (e) { failures++; console.error('  FAIL ' + name + '\n       ' + e.message); }
-}
+// No local harness: this file's cases are plain jest tests. It used to define
+// its own `test()`, which SHADOWED jest's global and left the suite reporting
+// success through console.log while jest saw zero tests — and the trailing
+// process.exit() then crashed the worker, so `npm test` went red on a file
+// that was actually passing.
 
 const doc = {
   title: 'Punch List / QC',
@@ -103,5 +103,3 @@ test('renderReportPdf reports a missing browser clearly rather than crashing', a
   }
 });
 
-console.log(failures ? '\nreport-pdf: ' + failures + ' FAILED' : '\nreport-pdf: all passed');
-process.exit(failures ? 1 : 0);
