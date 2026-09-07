@@ -212,12 +212,79 @@ async function httpGet(url, user) {
   return { status: res.status, body };
 }
 
-// Absolute time out — a golden captured on another day must still compare.
+// ── WHY THE GOLDEN IS NORMALISED TOO, AND WHY REGENERATING IS NOT THE FIX ──
+// This file went red on 2026-09-06 with `age 36d` against `age 37d`. No code
+// changed. `read_lead_pipeline` (ai-routes.js:10221) prints
+// `Math.round((Date.now() - created_at) / 86400000) + 'd'`, so one door's bytes
+// advance by one every midnight. The golden was captured at 69f2cabd on a
+// particular day, and that day is now in the past.
+//
+// THE OBVIOUS REACTION IS THE DESTRUCTIVE ONE. Re-running with
+// P86_CAPTURE_GOLDEN=1 makes the red go away and, in the same stroke, replaces
+// answers recorded at the PRE-REPAIR commit with answers recorded at HEAD. The
+// file would still be named a golden and would still assert deep equality; it
+// would simply have stopped being evidence, because it would no longer say
+// anything about 69f2cabd. There is no way to re-capture it from this tree —
+// the only machine that can produce it is a worktree at 69f2cabd, and the
+// value of the artifact is precisely that it came from there.
+//
+// So the fuse is defused on the COMPARISON side, not the artifact side. The
+// golden's bytes on disk are never rewritten. Both sides are pushed through
+// `stable()` at compare time (see `diffDoors`), which means adding a rule here
+// retro-normalises the stored answers without touching them.
+//
+// `stable()` must therefore be IDEMPOTENT — the golden's strings were already
+// normalised once by the `stable()` of the day they were captured, and are
+// normalised again now. `stable(stable(x)) === stable(x)` is asserted below.
+//
+// Every rule here is a hole in the differential, so each one is narrow and
+// anchored. `age <N>d` is matched only after the literal word "age"; a bare
+// `\d+d` would also swallow a quantity, and a rule that swallowed `$250` or
+// `conf 111%` would let a repair move John's money without this file noticing.
 function stable(s) {
   return String(s)
     .replace(/\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?Z?)?/g, '<TS>')
     .replace(/\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b[^,\n"]{0,24}/g, '<DAY>')
-    .replace(/\b\d+\s*(seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s*(ago|from now)/gi, '<REL>');
+    .replace(/\b\d+\s*(seconds?|minutes?|hours?|days?|weeks?|months?|years?)\s*(ago|from now)/gi, '<REL>')
+    // read_lead_pipeline: ' · age ' + days + 'd'. Anchored on the word.
+    .replace(/\bage \d+d\b/g, 'age <AGE>');
+}
+
+// Anything left that still looks like it was computed from the wall clock. This
+// is the guard that keeps the list above honest: a NEW door that starts
+// printing a computed age would otherwise sit green until the day it rolled
+// over, which is the exact failure this file just had.
+const CLOCK_SHAPED = [
+  ['bare age',        /\bage \d+/],
+  ['duration suffix', /\b\d+\s?(?:d|hr?|min|w|mo|yr)s?\b/],
+  ['ago / from now',  /\b\d+[^\n]{0,12}\b(?:ago|from now)\b/i],
+  ['ISO date',        /\b\d{4}-\d{2}-\d{2}\b/],
+  ['month name',      /\b(?:Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\b/],
+];
+
+// The one comparison, named so it can be driven directly with fabricated
+// answers. A diff routine that is only ever exercised by the happy path is a
+// diff routine nobody has ever seen say "different".
+// It is SYMMETRIC on purpose. A door that vanished would otherwise pass by not
+// being compared, and a door that APPEARED would pass by not being in the
+// golden's key list at all — so both directions are the same function's job
+// rather than a separate assertion someone can weaken without noticing.
+function diffDoors(goldenAnswers, nowAnswers) {
+  const moved = [];
+  for (const k of Object.keys(goldenAnswers)) {
+    // BOTH SIDES through the CURRENT stable(). The golden on disk is untouched.
+    if (stable(goldenAnswers[k]) !== stable(nowAnswers[k])) {
+      moved.push(k + '\n    then: ' + String(goldenAnswers[k]).slice(0, 220)
+                   + '\n    now : ' + String(nowAnswers[k]).slice(0, 220));
+    }
+  }
+  for (const k of Object.keys(nowAnswers)) {
+    if (!Object.prototype.hasOwnProperty.call(goldenAnswers, k)) {
+      moved.push(k + '\n    then: <ABSENT FROM THE GOLDEN — this door is new>'
+                   + '\n    now : ' + String(nowAnswers[k]).slice(0, 220));
+    }
+  }
+  return moved;
 }
 
 // ── the recording ─────────────────────────────────────────────────────────
@@ -280,14 +347,75 @@ afterAll((done) => {
 // disagrees is not a golden, it is a rubber stamp.
 const CAPTURING = process.env.P86_CAPTURE_GOLDEN === '1';
 
+function headSha() {
+  try {
+    return require('child_process')
+      .execFileSync('git', ['rev-parse', '--short=8', 'HEAD'], { encoding: 'utf8' }).trim();
+  } catch (e) { return ''; }
+}
+
+// ── THE GUARD ON THE ONLY DESTRUCTIVE PATH IN THIS FILE ───────────────────
+// Returns a refusal message, or '' to allow the write.
+//
+// This exists because P86_CAPTURE_GOLDEN was set by accident during an
+// unrelated experiment on 2026-09-06. The capture ran, the golden was rewritten
+// with a provenance of 'UNKNOWN', and the only reason the evidence still exists
+// is that git had a copy. The old code ACCEPTED a missing SHA and recorded the
+// string 'UNKNOWN' — which is to say the most valuable file in this suite could
+// be destroyed by setting one environment variable and running the tests.
+//
+// Refusing is not defensive tidiness. There is no way to re-derive this artifact
+// from this tree: it can only be produced by a worktree at the pre-repair
+// commit, so a bad overwrite is not a mistake you fix, it is one you restore
+// from history or lose. It is a pure function so every branch can be asserted
+// without spawning a capture to find out.
+function captureRefusal(sha, head) {
+  // Trimmed HERE, not by the caller: a guard that depends on being handed clean
+  // input is a guard with a way around it.
+  sha = String(sha == null ? '' : sha).trim();
+  head = String(head == null ? '' : head).trim();
+  if (!sha || sha === 'UNKNOWN') {
+    return 'REFUSING to write the golden: P86_CAPTURE_SHA is not set.\n' +
+      'The golden records what a SPECIFIC pre-repair commit answered. A capture that\n' +
+      'cannot name its commit is not evidence, and writing one destroys the evidence\n' +
+      'already there. Restore with:  git checkout -- ' + GOLDEN_PATH;
+  }
+  // A golden captured from the tree under test proves only that HEAD equals
+  // itself — the exact failure this whole file exists to avoid. Refused at the
+  // point of writing rather than caught later at compare.
+  if (head && (head.startsWith(sha) || sha.startsWith(head))) {
+    return 'REFUSING to write the golden: P86_CAPTURE_SHA (' + sha + ') is the HEAD of the\n' +
+      'tree being measured. Capture must run in a detached worktree at the PRE-REPAIR\n' +
+      'commit (' + PRE_REPAIR_SHA + '); a self-capture is a rubber stamp.';
+  }
+  return '';
+}
+
 describe('single-tenant inertness, against the pre-repair commit', () => {
   test(CAPTURING ? 'CAPTURE the golden' : 'every door answers exactly what 69f2cabd answered', async () => {
     const now = await record();
 
     if (CAPTURING) {
+      // ── THE GUARD ON THE ONLY DESTRUCTIVE PATH IN THIS FILE ──────────────
+      // This was written after `P86_CAPTURE_GOLDEN` was set by accident during
+      // an unrelated experiment on 2026-09-06. The capture ran, the golden was
+      // rewritten with `generated_from: 'UNKNOWN'`, and the only reason the
+      // evidence still exists is that git had a copy. The old code accepted a
+      // missing SHA and recorded the string 'UNKNOWN' — which is to say the
+      // single most valuable file in this suite could be destroyed by setting
+      // one environment variable and running the tests.
+      //
+      // Refusing is not defensive tidiness. There is no way to re-derive this
+      // artifact from this tree: it can only be produced by a worktree at the
+      // pre-repair commit, so a bad overwrite is not a mistake you fix, it is
+      // one you restore from history or lose.
+      const sha = (process.env.P86_CAPTURE_SHA || '').trim();
+      const refusal = captureRefusal(sha, headSha());
+      if (refusal) throw new Error(refusal);
+
       fs.mkdirSync(path.dirname(GOLDEN_PATH), { recursive: true });
       fs.writeFileSync(GOLDEN_PATH, JSON.stringify({
-        generated_from: process.env.P86_CAPTURE_SHA || 'UNKNOWN',
+        generated_from: sha,
         note: 'Captured by running this file inside a detached worktree at the named commit. Do NOT regenerate from HEAD.',
         answers: now,
       }, null, 1) + '\n');
@@ -301,13 +429,7 @@ describe('single-tenant inertness, against the pre-repair commit', () => {
     expect(golden.generated_from).toBe(PRE_REPAIR_SHA);
 
     // Per DOOR, never a rate: the diff names every door whose bytes moved.
-    const moved = [];
-    for (const k of Object.keys(golden.answers)) {
-      if (golden.answers[k] !== now[k]) {
-        moved.push(k + '\n    then: ' + String(golden.answers[k]).slice(0, 220)
-                     + '\n    now : ' + String(now[k]).slice(0, 220));
-      }
-    }
+    const moved = diffDoors(golden.answers, now);
     expect(moved).toEqual([]);
 
     // And nothing appeared or vanished. A door that stopped answering would
@@ -329,5 +451,171 @@ describe('single-tenant inertness, against the pre-repair commit', () => {
     const rows = engine.all('SELECT organization_id FROM ai_messages');
     expect(rows.some((r) => r.organization_id === null)).toBe(true);
     expect(rows.some((r) => r.organization_id === ORG_A)).toBe(true);
+  });
+});
+
+// ── THE PROPERTIES OF THE COMPARISON ITSELF ───────────────────────────────
+// These drive `diffDoors` and `stable` with fabricated answers, so they hold
+// whatever the database says and whatever day it is. The point of the group is
+// that the differential must be BOTH deaf to the calendar AND still able to
+// shout — a normaliser can always be made to pass by normalising everything.
+describe('the differential is clock-independent, and still differential', () => {
+  test('stable() is idempotent — the golden is normalised a second time at compare', () => {
+    // The stored answers were normalised once, by the stable() of the day they
+    // were captured; diffDoors normalises them again. If a rule were not a
+    // fixed point, that second pass would silently rewrite the evidence.
+    const golden = JSON.parse(fs.readFileSync(GOLDEN_PATH, 'utf8'));
+    for (const [door, v] of Object.entries(golden.answers)) {
+      expect([door, stable(stable(v))]).toEqual([door, stable(v)]);
+    }
+  });
+
+  test('an age that advanced overnight is NOT a moved door', () => {
+    // The literal failure of 2026-09-06, reduced.
+    const then = '- A · active · conf 111% · $0K-$0K · src web · age 36d';
+    const now  = '- A · active · conf 111% · $0K-$0K · src web · age 37d';
+    expect(diffDoors({ 'tool:read_lead_pipeline': then },
+                     { 'tool:read_lead_pipeline': now })).toEqual([]);
+    // and any other day, including three-digit ages and a same-day zero.
+    for (const d of [0, 1, 9, 99, 100, 4821]) {
+      expect(diffDoors({ d: 'age 36d' }, { d: 'age ' + d + 'd' })).toEqual([]);
+    }
+  });
+
+  test('MONEY still moves the differential — the normaliser must not swallow it', () => {
+    // The whole point of the file is that a repair must not change what John
+    // sees. If normalisation ate a figure, it would pass while doing so.
+    const pairs = [
+      ['$0K-$0K', '$1K-$0K'],
+      ['conf 111%', 'conf 112%'],
+      ['active=2 ($0K)', 'active=1 ($0K)'],
+      ['phaseBudget 1000', 'phaseBudget 1001'],
+      ['amount 150', 'amount 151'],
+      ['· age 36d · $250', '· age 36d · $260'],
+    ];
+    for (const [a, b] of pairs) {
+      expect([a, b, diffDoors({ k: a }, { k: b }).length]).toEqual([a, b, 1]);
+    }
+  });
+
+  test('a door that changes, VANISHES or APPEARS is caught — both directions', () => {
+    expect(diffDoors({ k: 'alpha' }, { k: 'beta' }).length).toBe(1);   // changed
+    expect(diffDoors({ k: 'alpha' }, {}).length).toBe(1);              // vanished
+    expect(diffDoors({}, { k: 'alpha' }).length).toBe(1);              // appeared
+    expect(diffDoors({}, { k: 'alpha' })[0]).toMatch(/ABSENT FROM THE GOLDEN/);
+    expect(diffDoors({ a: '1' }, { b: '1' }).length).toBe(2);          // one of each
+    expect(diffDoors({ k: 'alpha' }, { k: 'alpha' })).toEqual([]);     // unchanged
+    // an undefined answer is not silently equal to a missing one
+    expect(diffDoors({ k: 'alpha' }, { k: undefined }).length).toBe(1);
+  });
+
+  test('NO answer in the golden still carries a clock-shaped token after normalisation', () => {
+    // The guard that keeps `stable()` current. A new door that begins printing
+    // a computed age would otherwise be green until the night it rolled over —
+    // which is exactly how this suite failed. Named PER DOOR, never a count.
+    const golden = JSON.parse(fs.readFileSync(GOLDEN_PATH, 'utf8'));
+    const dirty = [];
+    for (const [door, v] of Object.entries(golden.answers)) {
+      const s = stable(v);
+      for (const [label, re] of CLOCK_SHAPED) {
+        const m = s.match(re);
+        if (m) dirty.push(door + ' :: ' + label + ' :: ' + JSON.stringify(m[0]));
+      }
+    }
+    expect(dirty).toEqual([]);
+  });
+
+  test('the LIVE recording is clock-shaped-free too, not just the stored golden', async () => {
+    // The golden is frozen; the live side is what actually moves. Asserting
+    // only against the file would let a newly-added door rot undetected.
+    const now = await record();
+    const dirty = [];
+    for (const [door, v] of Object.entries(now)) {
+      const s = stable(v);
+      for (const [label, re] of CLOCK_SHAPED) {
+        const m = s.match(re);
+        if (m) dirty.push(door + ' :: ' + label + ' :: ' + JSON.stringify(m[0]));
+      }
+    }
+    expect(dirty).toEqual([]);
+  }, 120000);
+
+  test('capture mode REFUSES to run without a named commit — and the bytes survive', () => {
+    // Behavioural, not structural: a real child jest is started with
+    // P86_CAPTURE_GOLDEN=1 and no P86_CAPTURE_SHA — the exact accident that
+    // overwrote this golden on 2026-09-06 — and the file's bytes are compared
+    // before and after. If the guard is ever removed this test fails AND puts
+    // the bytes back, so the test that protects the evidence can never be the
+    // thing that destroys it.
+    const before = fs.readFileSync(GOLDEN_PATH);
+    const cp = require('child_process');
+    const r = cp.spawnSync(process.execPath, [
+      // NOT require.resolve — jest sandboxes the resolver inside a test file.
+      path.join(__dirname, '..', 'node_modules', 'jest', 'bin', 'jest.js'),
+      '--roots=./test', '--testPathPatterns', 'tenant-noop-differential',
+      '-t', 'CAPTURE the golden',
+    ], {
+      cwd: path.join(__dirname, '..'),
+      encoding: 'utf8',
+      env: Object.assign({}, process.env, {
+        P86_CAPTURE_GOLDEN: '1',
+        P86_CAPTURE_SHA: '',
+      }),
+      timeout: 120000,
+    });
+    const after = fs.readFileSync(GOLDEN_PATH);
+    if (!after.equals(before)) fs.writeFileSync(GOLDEN_PATH, before);   // put it back, always
+
+    expect(after.equals(before)).toBe(true);
+    expect(r.status).not.toBe(0);
+    expect(String(r.stdout) + String(r.stderr)).toMatch(/REFUSING to write the golden/);
+  }, 180000);
+
+  test('capture mode is OFF by default, and the guard precedes the write', () => {
+    // The default matters more than the guard: a golden that regenerates itself
+    // whenever it disagrees is a rubber stamp, and the guard is only reached if
+    // someone has already opted in.
+    expect(CAPTURING).toBe(false);
+    const src = fs.readFileSync(__filename, 'utf8');
+    const branch = src.slice(src.indexOf('if (CAPTURING) {'));
+    const guard = branch.indexOf('captureRefusal(');
+    const write = branch.indexOf('fs.writeFileSync(GOLDEN_PATH');
+    expect(guard).toBeGreaterThan(-1);
+    expect(write).toBeGreaterThan(guard);                // guard precedes the write
+    // The recorded provenance is the VALIDATED sha, never a fallback literal.
+    expect(branch).toMatch(/generated_from: sha,/);
+    expect(branch).not.toMatch(/generated_from:[^\n]*\|\|/);
+  });
+
+  test('captureRefusal: every branch, without spawning a capture to find out', () => {
+    // A missing, blank or placeholder provenance is refused.
+    for (const bad of ['', '   ', 'UNKNOWN']) {
+      expect([bad, /^REFUSING/.test(captureRefusal(bad, 'a7ca98f4'))]).toEqual([bad, true]);
+    }
+    // Capturing at the tree's own HEAD is refused, in either abbreviation.
+    expect(captureRefusal('a7ca98f4', 'a7ca98f4')).toMatch(/is the HEAD/);
+    expect(captureRefusal('a7ca98f4f37b', 'a7ca98f4')).toMatch(/is the HEAD/);
+    expect(captureRefusal('a7ca98f4', 'a7ca98f4f37b')).toMatch(/is the HEAD/);
+    // A real pre-repair capture, from a worktree at another commit, is allowed.
+    expect(captureRefusal(PRE_REPAIR_SHA, 'a7ca98f4')).toBe('');
+    // No git available: the SHA check still stands, the HEAD check cannot.
+    expect(captureRefusal('', '')).toMatch(/^REFUSING/);
+    expect(captureRefusal(PRE_REPAIR_SHA, '')).toBe('');
+  });
+
+  test('CLOCK_SHAPED actually detects clock-shaped text — the guard is not empty', () => {
+    // A guard list that has been emptied still passes every test that only asks
+    // "did it find anything?". So it is asked the opposite question too.
+    expect(CLOCK_SHAPED.length).toBeGreaterThan(0);
+    const caught = (s) => CLOCK_SHAPED.some(([, re]) => re.test(s));
+    for (const s of ['age 36d', 'age 0', '· age 412d', '2026-09-01', '14 days ago',
+                     '3 hrs from now', 'Sep 2026', '7d', '30 min']) {
+      expect([s, caught(s)]).toEqual([s, true]);
+    }
+    // and does not fire on the things the differential must keep watching
+    for (const s of ['$250', 'conf 111%', '<TS>', '<DAY>', '<REL>', 'age <AGE>',
+                     'phaseBudget 1000', 'active=2 ($0K)']) {
+      expect([s, caught(s)]).toEqual([s, false]);
+    }
   });
 });
