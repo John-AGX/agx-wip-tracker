@@ -863,7 +863,7 @@ const JOB_TOOLS = [
     name: 'wire_nodes',
     description:
       'Connect two nodes in the cost-flow graph (from output port of source → input port of target). ' +
-      'Use when audit findings list a disconnected node and the right parent is obvious from context. Both ids MUST exist in the # Node graph block. ' +
+      'Use when audit findings list a disconnected node and the right parent is obvious from context. Your per-turn context does NOT carry a node graph, so resolve both ids with a read first rather than expecting to see them. ' +
       'Default ports are 0 unless the user specified another port.\n\n' +
       'Recommended topologies for cost flow:\n' +
       '  • inv → po → sub → phase (legacy): sub fans cost to every wired phase. Use ONLY when one PO/sub maps 1:1 to one phase. With multiple phases it double-counts the sub accrued on every phase — fix with set_wire_alloc_pct on each sub→phase wire so they sum to 100, OR migrate to the direct pattern below.\n' +
@@ -887,7 +887,7 @@ const JOB_TOOLS = [
     description:
       'Set the QuickBooks Total / value field on a cost-bucket node in the graph (labor / mat / gc / other / sub / burden). ' +
       'Use this when the user wants a QB account total (e.g. "Materials & Supplies - COGS = $43,078" or "Direct Burden = $1,883") loaded into a specific cost node so it flows up through the graph. ' +
-      'node_id MUST be a node id from the # Node graph block (e.g. "n38"), NOT a phase id from # Structure. ' +
+      'node_id MUST be a cost-graph node id (e.g. "n38"), NOT a phase id. Your per-turn context carries neither a node graph nor a structure block, so resolve the id with a read first. ' +
       'For phase-level fields (materials/labor/sub/equipment on a phase record) use set_phase_field instead. ' +
       'Only valid on labor / mat / gc / other / sub / burden node types — will error on t1, t2, wip, watch, note, co, po, inv. ' +
       'Note: "burden" (Direct Burden) is the payroll-burden bucket — taxes/insurance/benefits layered on labor — and rolls into the labor cost total at building/phase/job levels.',
@@ -965,8 +965,8 @@ const JOB_TOOLS = [
     name: 'read_workspace_sheet_full',
     description:
       'Read the entire contents of a workspace sheet. Read-only — no approval card; auto-applies and the full sheet text returns as the tool_result so you can analyze it. ' +
-      'Use this when the # Workspace sheets preview shows "preview truncated" or the user asks for data that\'s past row 100 / column Z. ' +
-      'sheet_name MUST exactly match one of the names listed in the # Workspace sheets headings. ' +
+      'On an ESTIMATE, use this when the "# Workspace sheets" preview shows "preview truncated" or the user asks for data past row 100 / column Z; sheet_name must match a name listed there verbatim. ' +
+      'On a JOB there is no sheet index in your context — name the sheet the user named, or read the job first. ' +
       'DO NOT call on "QB Costs YYYY-MM-DD" sheets or the "Detailed Costs" tab — use read_qb_cost_lines for QuickBooks data instead.',
     input_schema: {
       type: 'object',
@@ -982,7 +982,7 @@ const JOB_TOOLS = [
     description:
       'Read QuickBooks cost lines for the current job from the canonical Detailed Costs view (server-persisted qb_cost_lines table). ' +
       'Read-only — auto-applies, full result returned as tool_result. ' +
-      'Use this whenever the user asks about specific QB transactions, vendor totals, account roll-ups, or unlinked lines that aren\'t in the # QuickBooks cost data summary block. ' +
+      'Use this whenever the user asks about specific QB transactions, vendor totals, account roll-ups or unlinked lines. Your per-turn job context carries no QuickBooks summary, so this read is the only place those numbers come from. ' +
       'Optional filters narrow the result — supply none to get every line. ' +
       'This is the ONLY way to get individual QB lines; never try to read "QB Costs YYYY-MM-DD" sheets one at a time.',
     input_schema: {
@@ -1016,7 +1016,7 @@ const JOB_TOOLS = [
     description:
       'Read the complete phase composition + computed rollup for a single building. Auto-applies, no approval. ' +
       'Returns every phase under the building (no truncation) with its pctComplete + budget + weight, and the budget-weighted average those produce — which IS the building\'s % complete. There is no other input to it. ' +
-      'Use this when the truncated # Structure block in your context isn\'t enough — i.e. the building has more phases than were shown.',
+      'Your per-turn job context does not carry a structure block, so this read IS how you see a building\'s phases — call it rather than waiting for them to appear.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -7681,11 +7681,25 @@ const PROJECT_INLINE_TOOLS = [
   {
     // THE READ THAT DID NOT EXIST.
     //
-    // A change order was the one money record 86 could see mentioned and
-    // never resolve. read_entity has no change_order type, search_entities
-    // has none, and the per-turn job context prints "- CO-3: <desc> — income
-    // $X, cost $Y [draft]" with no row id and no lines. So "set the cost on
-    // line 3 of CO-3 to $1,650" died before any write was attempted: 86's own
+    // A change order was the one money record 86 could not resolve.
+    // read_entity has no change_order type and search_entities has none.
+    //
+    // THIS COMMENT USED TO SAY the per-turn job context prints
+    // "- CO-3: <desc> — income $X, cost $Y [draft]" with no row id and no
+    // lines. IT DOES NOT, AND HAS NOT SINCE ab8d9e51 (17 May). That block sits
+    // inside `if (!slimForRouter)` (ai-routes.js:5571-5956); slimForRouter
+    // DEFAULTS TRUE, and the only call site that passes false (:13828) also
+    // passes escalationLean, which returns at :5598 before reaching it. The
+    // live /86/chat path calls buildJobContext with no opts at all (:2821), and
+    // measured with one approved CO in the stub pool it returns 80 characters:
+    // "# Job", the id, the title and the job number. Nothing else.
+    //
+    // The sentence was wrong for four months and was believed, twice, by
+    // readers checking this exact question — which is the whole reason
+    // test/agent-instruction-honesty.test.js now executes the builders instead
+    // of reading them. So "set the cost on line 3 of CO-3 to $1,650" died
+    // before any write was attempted, and for a WORSE reason than recorded:
+    // 86 could not see the change order at all. 86's own
     // baseline tells it to resolve an entity before writing and to ask rather
     // than guess, and with no tool that returns a change order, declining WAS
     // the correct behaviour. That is exactly the report.

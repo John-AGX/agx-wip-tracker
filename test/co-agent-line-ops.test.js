@@ -505,15 +505,37 @@ describe('read_change_orders is registered on every surface a tool needs', () =>
   test('86 is TOLD to read a change order before writing one', () => {
     // The tool existing is not the same as 86 knowing to reach for it. Its
     // baseline already said change orders were writable and left it with no
-    // way to resolve one; the instruction has to name the read AND the reason
-    // the job-context block is not enough.
-    const baseline = AGENTS.slice(AGENTS.indexOf('CHANGE ORDERS: the job-context block'));
-    expect(AGENTS).toContain('CHANGE ORDERS: the job-context block');
-    const para = baseline.slice(0, 1400);
-    expect(para).toContain('carries no ids and no lines');
+    // way to resolve one; the instruction has to name the read AND the reason.
+    //
+    // THIS TEST USED TO PIN THE REASON AS A LITERAL — 'CHANGE ORDERS: the
+    // job-context block' — and that sentence was FALSE. The job-context block
+    // does not name change orders and has not since ab8d9e51 (17 May): the
+    // "# Change orders" block sits inside `if (!slimForRouter)` and
+    // slimForRouter defaults true, so the live path emits "# Job" and nothing
+    // else. Measured, not read — see test/agent-instruction-honesty.test.js,
+    // which executes buildJobContext on the live defaults.
+    //
+    // So this asserts the PROPERTY (86 is told to read first, and told why)
+    // and separately refuses the specific falsehood, rather than pinning
+    // whichever wording happens to be there. A test that pins a sentence
+    // enforces that sentence — including when it is wrong, which is what
+    // happened here: this assertion kept the lie in place.
+    const anchor = 'CHANGE ORDERS:';
+    expect(AGENTS).toContain(anchor);
+    const para = AGENTS.slice(AGENTS.indexOf(anchor)).slice(0, 1400);
+
+    // named the read, and the two ops that make it actionable
     expect(para).toContain('read_change_orders');
     expect(para).toContain('line_edits');
     expect(para).toContain('NEVER ask for a full `fields.lines` replacement');
+
+    // told WHY the read is necessary: the context does not carry them
+    expect(para).toMatch(/context does NOT list them/);
+
+    // and the falsehood cannot come back, in this paragraph or anywhere in the
+    // shipped baselines.
+    expect(AGENTS).not.toContain('the job-context block above names them');
+    expect(para).not.toMatch(/carries no ids and no lines/);
   });
 
   test('the Scribe is told that fields.lines is a REPLACEMENT, and given the alternative', () => {
