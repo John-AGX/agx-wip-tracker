@@ -409,6 +409,24 @@ const reportShareViewLimiter = rateLimit({
   },
 });
 
+// Guest comment WRITES get their own, much tighter bucket. A read is cheap and
+// a client refreshing a report should never be throttled; a write creates a row
+// an owner has to read, so the abuse shape is different. Keyed on IP because
+// the token is not the attacker's constraint — someone who has one link can
+// post through it as fast as they like.
+const reportShareCommentLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 12,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: function (req) { return 'rsc:' + (req.ip || 'unknown'); },
+  handler: function (req, res) {
+    const retryAfter = Math.ceil(res.getHeader('Retry-After') || 60);
+    console.warn('[rate-limit] report-share comment throttle from', req.ip);
+    jsonHandler(res, retryAfter);
+  },
+});
+
 module.exports = {
   ipLoginLimiter,
   ipGenericLimiter,
@@ -424,4 +442,5 @@ module.exports = {
   liveRoomSnapLimiter,
   reportShareIpLimiter,
   reportShareViewLimiter,
+  reportShareCommentLimiter,
 };

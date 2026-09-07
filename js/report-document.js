@@ -164,7 +164,7 @@
       }
     }
 
-    return '<section class="p86-report-preview-section">' +
+    return '<section class="p86-report-preview-section" data-section-id="' + escAttr(section.id || '') + '">' +
       (section.label ? '<h2 class="p86-report-preview-section-label">' + esc(section.label) + '</h2>' : '') +
       body +
     '</section>';

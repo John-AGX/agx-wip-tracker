@@ -164,9 +164,25 @@
     .p86-report-preview-section-grid.size-large { grid-template-columns: 1fr; }
   }
 
+  /* ── Comments (added by this page, not the renderer) ─────────── */
+  .rs-c-block { margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--rule); }
+  .rs-c-head { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: #8a8f98; margin-bottom: 8px; }
+  .rs-c-empty { font-size: 13px; color: #9aa0a8; font-style: italic; }
+  .rs-c-item { padding: 8px 10px; background: #f6f4f0; border-radius: 7px; margin-bottom: 6px; }
+  .rs-c-meta { font-size: 11.5px; color: #7a808a; margin-bottom: 3px; }
+  .rs-c-body { font-size: 14px; white-space: pre-wrap; }
+  .rs-c-form { margin-top: 8px; }
+  .rs-c-text, .rs-c-name {
+    width: 100%; font: inherit; font-size: 14px; padding: 8px 10px;
+    border: 1px solid var(--rule); border-radius: 7px; background: #fff; color: var(--ink);
+  }
+  .rs-c-actions { display: flex; gap: 8px; margin-top: 6px; }
+  .rs-c-actions .rs-c-name { flex: 1 1 auto; }
+  .rs-c-note { font-size: 12px; color: #7a808a; margin-top: 5px; min-height: 1em; }
+
   @media print {
     @page { size: letter portrait; margin: 0.4in; }
-    .rs-bar, .rs-foot, .rs-lb { display: none !important; }
+    .rs-bar, .rs-foot, .rs-lb, .rs-c-block { display: none !important; }
     body { background: #fff; }
     .rs-wrap { padding: 0; }
     .p86-report-preview-paper { width: 100%; margin: 0; padding: 0; box-shadow: none; }
@@ -264,6 +280,113 @@
       window.p86ReportDocument.mount(document.getElementById('rsDoc'), doc);
 
       document.getElementById('rsPrint').addEventListener('click', function () { window.print(); });
+
+      // ── Comments ──────────────────────────────────────────────────
+      // Attached by THIS PAGE, after the document is mounted — never by the
+      // renderer, which is contractually forbidden from emitting inputs (a
+      // guest must not be handed a control that posts nowhere, and the same
+      // renderer draws the printed page). The server refuses a comment on a
+      // view-only link regardless of what this page draws; hiding the box is
+      // courtesy, not the control.
+      var canComment = (share.scope === 'comment');
+
+      function renderThread(list, comments) {
+        if (!comments.length) {
+          list.innerHTML = '<div class="rs-c-empty">No comments yet.</div>';
+          return;
+        }
+        list.innerHTML = comments.map(function (c) {
+          var when = '';
+          try { when = new Date(c.created_at).toLocaleString(); } catch (e) {}
+          return '<div class="rs-c-item">' +
+            '<div class="rs-c-meta">' + esc(c.author_name || 'Someone') +
+              (when ? ' · ' + esc(when) : '') + '</div>' +
+            '<div class="rs-c-body">' + esc(c.body) + '</div>' +
+          '</div>';
+        }).join('');
+      }
+
+      function loadComments() {
+        return fetch('/api/report-share/' + encodeURIComponent(token) + '/comments', {
+          headers: { 'Accept': 'application/json' }, credentials: 'omit'
+        }).then(function (r) { return r.json(); })
+          .then(function (j) { return (j && j.comments) || []; })
+          .catch(function () { return []; });
+      }
+
+      function mountComments(all) {
+        var sections = Array.prototype.slice.call(
+          document.querySelectorAll('#rsDoc .p86-report-preview-section'));
+
+        sections.forEach(function (secEl) {
+          var sid = secEl.getAttribute('data-section-id') || '';
+          var mine = all.filter(function (c) { return (c.section_id || '') === sid; });
+          if (!mine.length && !canComment) return;   // nothing to show, nothing to offer
+
+          var box = document.createElement('div');
+          box.className = 'rs-c-block';
+          box.innerHTML =
+            '<div class="rs-c-head">' + (canComment ? 'Comments' : 'Comments') + '</div>' +
+            '<div class="rs-c-list"></div>' +
+            (canComment
+              ? '<div class="rs-c-form">' +
+                  '<textarea class="rs-c-text" rows="2" placeholder="Add a comment about this section…"></textarea>' +
+                  '<div class="rs-c-actions">' +
+                    '<input class="rs-c-name" type="text" placeholder="Your name (optional)" />' +
+                    '<button type="button" class="rs-btn rs-c-send">Send</button>' +
+                  '</div>' +
+                  '<div class="rs-c-note"></div>' +
+                '</div>'
+              : '');
+          secEl.appendChild(box);
+          renderThread(box.querySelector('.rs-c-list'), mine);
+
+          if (!canComment) return;
+          var ta = box.querySelector('.rs-c-text');
+          var nameEl = box.querySelector('.rs-c-name');
+          var send = box.querySelector('.rs-c-send');
+          var note = box.querySelector('.rs-c-note');
+
+          send.addEventListener('click', function () {
+            var body = (ta.value || '').trim();
+            if (!body) { note.textContent = 'Write something first.'; return; }
+            send.disabled = true;
+            send.textContent = 'Sending…';
+            note.textContent = '';
+            fetch('/api/report-share/' + encodeURIComponent(token) + '/comments', {
+              method: 'POST',
+              headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+              credentials: 'omit',
+              body: JSON.stringify({
+                body: body,
+                author_name: (nameEl.value || '').trim(),
+                section_id: sid
+              })
+            }).then(function (r) {
+              return r.json().then(function (j) { return { status: r.status, body: j }; });
+            }).then(function (res) {
+              send.disabled = false;
+              send.textContent = 'Send';
+              if (res.status !== 200) {
+                note.textContent = (res.body && res.body.error) || 'Could not send that.';
+                return;
+              }
+              ta.value = '';
+              note.textContent = 'Sent.';
+              return loadComments().then(function (fresh) {
+                renderThread(box.querySelector('.rs-c-list'),
+                  fresh.filter(function (c) { return (c.section_id || '') === sid; }));
+              });
+            }).catch(function () {
+              send.disabled = false;
+              send.textContent = 'Send';
+              note.textContent = 'Could not send that. Check your connection.';
+            });
+          });
+        });
+      }
+
+      loadComments().then(mountComments);
 
       // Click a photo to see it full size. Delegated, so it covers photos the
       // renderer produced without the renderer needing to know about it.

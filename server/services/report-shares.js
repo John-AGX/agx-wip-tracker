@@ -120,6 +120,42 @@ function publicShare(row) {
   };
 }
 
+// ── Comments ────────────────────────────────────────────────────────────
+// A guest comment is UNTRUSTED free text from an anonymous holder of a
+// forwarded URL. Caps are enforced here rather than at the route so the limits
+// are testable without a database.
+const COMMENT_MAX = 4000;
+const AUTHOR_MAX = 120;
+
+// Returns a normalized comment, or null when there is nothing worth storing.
+// Null is the caller's cue to answer 400 — an empty comment is a mistake, not
+// a silent no-op that leaves the guest thinking they were heard.
+function normalizeComment(raw) {
+  var body = String((raw && raw.body) || '').trim();
+  if (!body) return null;
+  // Collapse runs of blank lines without a regex, so there is no escaping to
+  // get wrong in a path that handles untrusted text.
+  var LF = String.fromCharCode(10);
+  var triple = LF + LF + LF, dbl = LF + LF;
+  while (body.indexOf(triple) >= 0) body = body.split(triple).join(dbl);
+  body = body.slice(0, COMMENT_MAX);
+  var author = String((raw && raw.author_name) || '').trim().slice(0, AUTHOR_MAX);
+  var section = String((raw && raw.section_id) || '').trim().slice(0, 80);
+  return { body: body, author_name: author || null, section_id: section || null };
+}
+
+// What a guest may see of a comment — including their own. No ids, no share id,
+// no organization. The author name is a CLAIM the guest typed, never identity.
+function publicComment(row) {
+  if (!row) return null;
+  return {
+    body: row.body || '',
+    author_name: row.author_name || null,
+    section_id: row.section_id || null,
+    created_at: row.created_at || null
+  };
+}
+
 module.exports = {
   HEX64,
   genToken,
@@ -136,5 +172,9 @@ module.exports = {
   expiryFrom,
   shareLifecycle,
   isLive,
+  COMMENT_MAX,
+  AUTHOR_MAX,
+  normalizeComment,
+  publicComment,
   publicShare
 };

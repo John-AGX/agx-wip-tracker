@@ -4323,6 +4323,37 @@ async function initSchema() {
     -- but naming it here documents that the public read path has exactly one
     -- access pattern.
     CREATE INDEX IF NOT EXISTS idx_report_shares_org ON report_shares(organization_id, created_at DESC);
+    -- Comments left by a share-link holder on a published report.
+    --
+    -- Attribution is to the SHARE, not to a person: a bearer token cannot
+    -- identify who is holding it, so the honest record is "this came in through
+    -- the link sent to <recipient>". author_name is what the guest typed and is
+    -- treated as a claim, never as identity — the UI labels it accordingly.
+    --
+    -- APPEND-ONLY by design. A guest can add a comment and nothing else: no
+    -- edit, no delete. That keeps the thread evidential (nobody can quietly
+    -- rewrite what they asked for) and removes a whole class of authorization
+    -- questions that a token cannot answer.
+    --
+    -- section_id is a plain string, not a foreign key, because report sections
+    -- live inside a JSONB blob and are renumbered freely; a comment that points
+    -- at a section which later disappears should survive as a document-level
+    -- comment rather than block the delete.
+    CREATE TABLE IF NOT EXISTS report_share_comments (
+      id                TEXT PRIMARY KEY,
+      organization_id   INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      share_id          TEXT NOT NULL REFERENCES report_shares(id) ON DELETE CASCADE,
+      report_id         TEXT NOT NULL REFERENCES job_reports(id) ON DELETE CASCADE,
+      section_id        TEXT,
+      body              TEXT NOT NULL,
+      author_name       TEXT,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_report_share_comments_report
+      ON report_share_comments(report_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_report_share_comments_share
+      ON report_share_comments(share_id, created_at);
+
 
     -- ───────────────────────────────────────────────────────────────
     -- My Notes — a personal, PRIVATE scratchpad (Phase 1 / Deliverable

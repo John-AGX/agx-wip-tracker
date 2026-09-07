@@ -19,7 +19,7 @@ const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireCapability } = require('../auth');
 const { sendEmail, isEnabled: emailIsEnabled } = require('../email');
-const { reportShareIpLimiter, reportShareViewLimiter } = require('../rate-limit');
+const { reportShareIpLimiter, reportShareViewLimiter, reportShareCommentLimiter } = require('../rate-limit');
 const shares = require('../services/report-shares');
 const { loadReportDocument } = require('../services/report-document');
 const { bakeDocumentMaps } = require('../services/report-map-bake');
@@ -282,5 +282,91 @@ router.get('/report-share/:token',
       share: shares.publicShare(req.share)
     });
   });
+
+// ── Guest comments ──────────────────────────────────────────────────────
+// A share with scope 'comment' may APPEND to a thread. It may not edit, delete,
+// or touch the report itself. That is the whole capability, and it is checked
+// here from the STORED scope re-read through normalizeScope on every request —
+// never from the request body, and never by the guest page hiding a box.
+router.get('/report-share/:token/comments',
+  reportShareIpLimiter, reportShareViewLimiter, loadReportShare,
+  async (req, res) => {
+    try {
+      // Readable by any live share, including a view-only one: seeing what has
+      // already been said is part of reading the document, and the thread is
+      // scoped to THIS share so one recipient never reads another's remarks.
+      const { rows } = await pool.query(
+        `SELECT body, author_name, section_id, created_at
+           FROM report_share_comments
+          WHERE share_id = $1
+          ORDER BY created_at ASC
+          LIMIT 200`,
+        [req.share.id]
+      );
+      res.json({ comments: rows.map(shares.publicComment) });
+    } catch (e) {
+      console.error('GET report-share comments error:', e);
+      res.status(500).json({ error: 'Server error' });
+    }
+  });
+
+router.post('/report-share/:token/comments',
+  reportShareIpLimiter, reportShareCommentLimiter, loadReportShare,
+  async (req, res) => {
+    try {
+      // THE capability check. Re-derived from the row, so a share minted before
+      // this feature existed — or one carrying a value a future build wrote —
+      // narrows to view and is refused.
+      if (!shares.scopeAllows(req.share.scope, 'comment')) {
+        return res.status(403).json({ error: 'This link is view-only.' });
+      }
+      const c = shares.normalizeComment(req.body || {});
+      // An empty comment is a mistake, not a silent success — answering ok
+      // would leave the reader believing they had been heard.
+      if (!c) return res.status(400).json({ error: 'Write something first.' });
+
+      const id = newId('rcmt');
+      await pool.query(
+        `INSERT INTO report_share_comments
+           (id, organization_id, share_id, report_id, section_id, body, author_name)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [id, req.share.organization_id, req.share.id, req.share.report_id,
+         c.section_id, c.body, c.author_name]
+      );
+      res.json({ ok: true, comment: shares.publicComment(Object.assign({ created_at: new Date() }, c)) });
+    } catch (e) {
+      console.error('POST report-share comment error:', e);
+      res.status(500).json({ error: 'Server error' });
+    }
+  });
+
+// Owner side: every guest comment on a report, across all its links, with the
+// SHARE it arrived through. The recipient on the invitation is the closest
+// thing to an identity a bearer token can offer, so it is shown alongside the
+// name the guest typed — which is a claim, not identity.
+router.get('/reports/:entityType/:entityId/:reportId/comments', requireAuth, async (req, res) => {
+  const { entityType, entityId, reportId } = req.params;
+  if (!entityTypeOk(entityType)) return res.status(400).json({ error: 'Unsupported entity type' });
+  return requireCapability(readCapFor(entityType))(req, res, async () => {
+    try {
+      const owned = await loadOwnedProject(entityId, req);
+      if (owned.error) return res.status(owned.error).json({ error: owned.message });
+      const { rows } = await pool.query(
+        `SELECT c.id, c.body, c.author_name, c.section_id, c.created_at,
+                s.recipient_email, s.recipient_name, s.id AS share_id
+           FROM report_share_comments c
+           JOIN report_shares s ON s.id = c.share_id
+          WHERE c.report_id = $1 AND c.organization_id = $2
+          ORDER BY c.created_at DESC
+          LIMIT 200`,
+        [reportId, owned.orgId]
+      );
+      res.json({ comments: rows });
+    } catch (e) {
+      console.error('GET report comments error:', e);
+      res.status(500).json({ error: 'Server error' });
+    }
+  });
+});
 
 module.exports = router;
