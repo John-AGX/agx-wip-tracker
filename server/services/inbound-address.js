@@ -28,21 +28,29 @@
 
 'use strict';
 
-// THE DOMAIN. Left EXACTLY as it was found, on purpose.
+// THE DOMAIN. Settled by DNS on 2026-09-07.
 //
-// server/routes/email-inbox-routes.js has defaulted this to 'in.project86.net'
-// since the feature shipped, while cloudflare/email-worker/README.md step 3
-// instructs setting INBOUND_EMAIL_DOMAIN = 'project86.net' (bare) and step 4
-// points a catch-all on the BARE domain at the Worker. The two disagree.
+// This defaulted to in.project86.net since the feature shipped, while
+// cloudflare/email-worker/README.md step 3 instructs setting
+// INBOUND_EMAIL_DOMAIN to the bare domain and step 4 points a catch-all
+// there. INBOUND_EMAIL_DOMAIN was never set in production, so the default
+// was live — and storeInboundMessage hard-rejects any recipient whose
+// domain is not equal to this string.
 //
-// This value is DNS-backed: `storeInboundMessage` hard-rejects any recipient
-// whose domain is not equal to this string, so changing the default would
-// instantly stop every address that currently works if production is relying
-// on the default. That is not a code decision and it is not made here. The
-// live value is readable from My Account → Email Dropbox, which renders
-// exactly `key + '@' + inboundDomain()`.
+// The lookup that settles it:
+//   project86.net      MX -> route1/2/3.mx.cloudflare.net
+//   in.project86.net   NO MX RECORD
+//
+// Nothing was ever deliverable to in.project86.net. So every inbound
+// message since the feature shipped fell out of the matcher and was
+// discarded with a 200 — no bounce to the sender, no row for us, one line
+// in a log. Changing this default cannot break a working address because
+// there has never been one on that domain.
+//
+// Still worth setting INBOUND_EMAIL_DOMAIN explicitly in Railway: a value
+// this consequential should not live only in a default.
 function inboundDomain() {
-  return process.env.INBOUND_EMAIL_DOMAIN || 'in.project86.net';
+  return process.env.INBOUND_EMAIL_DOMAIN || 'project86.net';
 }
 
 // Reserved WHOLE addresses. Bare (dotless) by construction — see the header.

@@ -57,8 +57,9 @@ const {
 console.log('[email-inbox] inbound domain = ' + inboundDomain() +
   (process.env.INBOUND_EMAIL_DOMAIN
     ? ' (from INBOUND_EMAIL_DOMAIN)'
-    : ' (DEFAULT — INBOUND_EMAIL_DOMAIN is unset; the deployment guide says to set it,'
-      + ' and mail addressed to any other domain is discarded with no bounce)'));
+    : ' (default — INBOUND_EMAIL_DOMAIN is unset. This default now matches the'
+      + ' catch-all MX, but set it explicitly: mail to any other domain is'
+      + ' discarded with no bounce and no row)'));
 // Configured when EITHER ingest path is wired: the Cloudflare Email
 // Worker (primary — just its shared secret) or the Resend webhook
 // (dormant alt — needs its signing secret + API key to fetch bodies).
