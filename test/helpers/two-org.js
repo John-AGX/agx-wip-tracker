@@ -174,11 +174,51 @@ const ENUM_VALUE = {
 const TRUEISH = /^(is_|has_|can_)|(_enabled|_active|active|enabled|approved|published|visible|include|included|is_system|is_locked|archived|deleted|dismissed|resolved|read|sent|paid|locked|hidden)$/;
 const FALSEISH = new Set(['archived', 'deleted', 'dismissed', 'is_locked', 'hidden']);
 
-// Fixed timestamps. Nothing in this fixture is allowed to depend on the wall
-// clock: a numeric multiset that moves between two runs of the same engine is
-// the flake that would get this suite muted, and a muted harness protects
-// nothing while wearing the costume of protection.
-const T_OLD = '2026-08-01 00:00:00';
+// ── SEEDED ROWS HOLD A CONSTANT AGE, NOT A CONSTANT DATE ──────────────────
+// This was the literal '2026-08-01 00:00:00', under the note "nothing in this
+// fixture is allowed to depend on the wall clock: a numeric multiset that moves
+// between two runs of the same engine is the flake that would get this suite
+// muted". That intent is right and the literal inverted it.
+//
+// The fixture is not read back as bytes. It is read back through queries that
+// measure against NOW() — pg-sqlite rewrites `NOW() - INTERVAL '7 days'` to
+// `datetime('now','-7 days')` (helpers/pg-sqlite.js:237), read_existing_leads
+// looks back 180 days, and read_lead_pipeline prints
+// `Math.round((Date.now() - created_at) / 86400000) + 'd'`. Against a moving
+// NOW(), a row pinned to a fixed DATE has a MOVING AGE. It is stable between
+// two runs on one afternoon and walks out of one window after another on days
+// when nobody changed any code.
+//
+// tenant-noop-differential.test.js has been red for this twice. `age 36d` vs
+// `age 37d` on 2026-09-06 was the visible one, and it was defused on the
+// comparison side in cdfac62e. The one that was still armed when this was
+// written is worse and quieter: the ai_messages seeded at '2026-09-01 12:00:00'
+// were about 30 hours from ageing out of the 7-day metrics window, and when
+// they did, FOUR doors would have moved — turns, conversations, unique users
+// and token totals, on read_metrics, read_recent_conversations, route:metrics
+// and route:conversations. Nothing would have caught that early: those bytes
+// are COUNTS, so the `stable()` scrubber cannot normalise them and must not
+// try — scrubbing a count is the one thing that file's MONEY test forbids.
+//
+// An offset from now delivers what the original note was reaching for. Every
+// seeded row is the same age on every run AND on every day, so window
+// membership is fixed forever instead of only until the next boundary.
+//
+// The offsets are the ages the golden was captured at, so the recorded answers
+// keep the membership they were recorded with: 36 days is past every 30-day
+// window and well inside the 180-day lead lookback. The other side of that
+// band is RECENT in tenant-noop-differential.test.js.
+const DAY_MS = 86400000;
+
+// 'YYYY-MM-DD HH:MM:SS' — the shape the dateColumns coercion in buildEngine and
+// every `datetime()` comparison in pg-sqlite already expect. `now` is injectable
+// so the relativeness itself can be asserted without waiting a day to find out.
+function daysAgo(n, now) {
+  return new Date((now === undefined ? Date.now() : now) - (n * DAY_MS))
+    .toISOString().slice(0, 19).replace('T', ' ');
+}
+
+const T_OLD = daysAgo(36);
 
 function isNumericType(ty) {
   return /^(INTEGER|REAL)$/.test(ty);
@@ -432,7 +472,7 @@ function unclassifiedTenantTables() {
 }
 
 module.exports = {
-  ORG_A, ORG_B, MARK, BRAVO_LO, BRAVO_HI, ALPHA_MAX, T_OLD,
+  ORG_A, ORG_B, MARK, BRAVO_LO, BRAVO_HI, ALPHA_MAX, T_OLD, DAY_MS, daysAgo,
   ALL_TABLES, SCHEMA, PK,
   idFor, isPoisoned, buildEngine, scanAnswer, flatten, numbersIn, statementTail,
   unclassifiedTenantTables, classifyIsUnclassified,

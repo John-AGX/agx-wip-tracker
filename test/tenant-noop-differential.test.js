@@ -57,7 +57,16 @@ const GOLDEN_PATH = path.join(__dirname, 'golden', 'single-tenant-answers.json')
 // The commit the golden was captured at: the parent of the first repair.
 const PRE_REPAIR_SHA = '69f2cabd';
 
-const RECENT = '2026-09-01 12:00:00';
+// FIVE DAYS OLD, AND RELATIVE FOR THE SAME REASON T_OLD IS (see two-org.js).
+// This was the literal '2026-09-01 12:00:00'. The doors below read these rows
+// back through `datetime('now','-7 days')`, so what has to stay constant is the
+// AGE, not the date — and pinned to that literal these rows were about 30 hours
+// from ageing out of the metrics window, which moves four doors' bytes with no
+// code change behind it. Five days is the age the golden was captured at, so
+// the recorded answers keep the window membership they were recorded with:
+// inside 7 days, and not so fresh that a narrower window would now include a
+// row the golden recorded as excluded.
+const RECENT = TWO.daysAgo(5);
 
 // ── THE ONE-ORGANISATION WORLD ────────────────────────────────────────────
 // Org A plus un-stamped legacy rows. No org B, because org B does not exist in
@@ -480,6 +489,76 @@ describe('the differential is clock-independent, and still differential', () => 
     for (const d of [0, 1, 9, 99, 100, 4821]) {
       expect(diffDoors({ d: 'age 36d' }, { d: 'age ' + d + 'd' })).toEqual([]);
     }
+  });
+
+  // ── THE FUSE THE SCRUBBER CANNOT REACH ──────────────────────────────────
+  // `stable()` defuses a printed duration. It cannot defuse the other half of
+  // this class, and the two tests below are the half it cannot reach.
+  //
+  // When a seeded row ages out of a window the query measures against NOW(),
+  // what moves is not a token that changed SHAPE — it is a COUNT that changed
+  // VALUE. `turns: 1` becomes `turns: 0`. No normaliser may touch that: the
+  // MONEY test directly below is the standing promise that a figure moving is
+  // always a failure, so the fixture has to be held in band instead.
+  //
+  // Measured, not assumed. With the anchors pinned to literals, moving the
+  // ai_messages seed two days further back turned four doors red at once —
+  // tool:read_metrics, tool:read_recent_conversations, route:metrics and
+  // route:conversations — and every clock-shaped guard in this file stayed
+  // green while it happened.
+  test('the fixture anchors are OFFSETS FROM NOW, not calendar dates', () => {
+    // The regression is re-pinning an anchor to a literal. A literal is stable
+    // between two runs on one afternoon, which is exactly why it survives
+    // review; it is the passage of DAYS that breaks it. So the clock is
+    // injected rather than waited for.
+    const t1 = Date.parse('2026-09-07T12:00:00Z');
+    const t2 = t1 + (365 * TWO.DAY_MS);
+    expect(TWO.daysAgo(5, t1)).toBe('2026-09-02 12:00:00');
+    expect(TWO.daysAgo(5, t2)).toBe('2027-09-02 12:00:00');
+    // The age is what is constant. The date is not, and must not be.
+    expect(TWO.daysAgo(5, t1)).not.toBe(TWO.daysAgo(5, t2));
+    for (const n of [0, 1, 5, 36, 180, 4821]) {
+      expect([n, Math.round((t1 - Date.parse(TWO.daysAgo(n, t1).replace(' ', 'T') + 'Z')) / TWO.DAY_MS)])
+        .toEqual([n, n]);
+    }
+  });
+
+  test('the seeded rows are a FIXED AGE, inside the windows the golden was captured in', () => {
+    // Asserted as an EXACT age rather than as a band, so re-pinning an anchor
+    // to a literal fails on the next run instead of on the day the drift
+    // finally crosses a boundary. A band alone would have let '2026-08-01' sit
+    // here for another five months before the 180-day lookback noticed.
+    //
+    // The tolerance is ~14 minutes: these are computed at module load and read
+    // back a few seconds later, and nothing here may care about those seconds.
+    const ageDays = (v) => (Date.now() - Date.parse(v)) / TWO.DAY_MS;
+    const isAbout = (v, n) => Math.abs(ageDays(v) - n) < 0.01;
+
+    // read_metrics, read_recent_conversations, route:metrics and
+    // route:conversations all read these back through `datetime('now','-7
+    // days')`, and the golden records them as COUNTED — so: 5 days, inside 7.
+    const msgs = engine.all('SELECT id, created_at FROM ai_messages');
+    expect(msgs.length).toBeGreaterThan(0);
+    for (const r of msgs) {
+      expect([r.id, isAbout(r.created_at, 5), ageDays(r.created_at) < 7])
+        .toEqual([r.id, true, true]);
+    }
+
+    // read_existing_leads looks back 180 days and the golden records "Matches
+    // found: 2". The 30-day floor is the other edge: the golden was captured
+    // with these leads already outside every 30-day window, and a row drifting
+    // back inside one moves a count just as loudly as one drifting out.
+    const leads = engine.all('SELECT id, created_at FROM leads');
+    expect(leads.length).toBeGreaterThan(0);
+    for (const r of leads) {
+      const a = ageDays(r.created_at);
+      expect([r.id, isAbout(r.created_at, 36), a > 30 && a < 180])
+        .toEqual([r.id, true, true]);
+    }
+
+    // And the anchor itself, so a re-pin is named at its source rather than
+    // only through the rows it seeded.
+    expect(['T_OLD', isAbout(TWO.T_OLD.replace(' ', 'T') + 'Z', 36)]).toEqual(['T_OLD', true]);
   });
 
   test('MONEY still moves the differential — the normaliser must not swallow it', () => {
