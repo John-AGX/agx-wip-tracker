@@ -230,6 +230,7 @@
           (t.guest_log
             ? '<label class="p86-st-lbl">Field log</label><div class="p86-st-ro p86-st-guestlog">' + esc(t.guest_log) + '</div>'
             : '') +
+          tasksHTML(r.tasks || [], canEdit) +
         '</div>' +
         '<div class="p86-st-detail-side">' +
           metaRow('Status', statusControl(t, canEdit)) +
@@ -258,6 +259,41 @@
       '</div>' : '');
 
     wireDetail(d, t);
+  }
+
+  // The ticket's child tasks — what makes this the tier ABOVE tasks.
+  //
+  // These are real org tasks, not a private sub-list: each one keeps its
+  // entity_type='job' / entity_id, so it ALSO appears on the job's Tasks panel
+  // and in the My Tasks "Job" column. That is the entire reason the ticket got
+  // its own column on tasks rather than claiming the polymorphic slot, and the
+  // note below says so on screen because it is otherwise invisible and someone
+  // will eventually "tidy it up".
+  function tasksHTML(tasks, canEdit) {
+    var live = tasks.filter(function (t) { return !t.archived_at; });
+    var done = live.filter(function (t) { return t.status === 'done'; }).length;
+    var pct = live.length ? Math.round((done / live.length) * 100) : 0;
+    return '<label class="p86-st-lbl">Tasks' +
+        (live.length ? ' <span class="p86-st-taskcount">' + done + ' of ' + live.length + ' done</span>' : '') +
+      '</label>' +
+      (live.length
+        ? '<div class="p86-st-bar-track"><div class="p86-st-bar-fill" style="width:' + pct + '%"></div></div>' +
+          '<div class="p86-st-tasklist">' + live.map(function (t) {
+            return '<div class="p86-st-task' + (t.status === 'done' ? ' is-done' : '') + '">' +
+              '<span class="p86-st-task-dot"></span>' +
+              '<span class="p86-st-task-title">' + esc(t.title || 'Untitled') + '</span>' +
+              (t.due_date ? '<span class="p86-st-task-due">' + esc(fmtDate(t.due_date)) + '</span>' : '') +
+            '</div>';
+          }).join('') + '</div>'
+        : '<div class="p86-st-ro"><em>No tasks under this ticket yet.</em></div>') +
+      (canEdit
+        ? '<div class="p86-st-task-add">' +
+            '<input type="text" class="p86-st-task-new" placeholder="Add a task to this work order…" />' +
+            '<button class="ee-btn secondary p86-st-task-go">Add</button>' +
+          '</div>' +
+          '<div class="p86-st-task-note">Tasks added here stay on the job\'s Tasks list and in My Tasks — ' +
+            'the ticket groups them, it does not hide them.</div>'
+        : '');
   }
 
   function metaRow(label, html) {
@@ -352,6 +388,34 @@
         _state.busy = false;
         if (save) save.disabled = false;
       });
+    });
+
+    // Add a task under this ticket. entity_type/entity_id are stamped from the
+    // ticket's own parent so the task lands on the JOB as well — sending only
+    // service_ticket_id would create a task that belongs to a work order and
+    // to no job, which is exactly the disappearance this design avoids.
+    var addGo = d.querySelector('.p86-st-task-go');
+    var addIn = d.querySelector('.p86-st-task-new');
+    function addTask() {
+      var title = (addIn && addIn.value || '').trim();
+      if (!title || !window.p86Api || !window.p86Api.tasks) return;
+      addGo.disabled = true;
+      window.p86Api.tasks.create({
+        title: title,
+        service_ticket_id: t.id,
+        entity_type: t.job_id ? 'job' : 'lead',
+        entity_id: t.job_id || t.lead_id
+      }).then(function () {
+        if (addIn) addIn.value = '';
+        _state.openId = t.id;
+        return reload();
+      }).catch(function (e) {
+        toast(e && e.message ? e.message : 'Could not add the task', 'error');
+      }).then(function () { if (addGo) addGo.disabled = false; });
+    }
+    if (addGo) addGo.addEventListener('click', addTask);
+    if (addIn) addIn.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); addTask(); }
     });
 
     var arch = d.querySelector('.p86-st-archive');

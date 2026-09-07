@@ -939,6 +939,11 @@
         qs.push('entity_type=' + encodeURIComponent(opts.entity_type));
         if (opts.entity_id) qs.push('entity_id=' + encodeURIComponent(opts.entity_id));
       }
+      // The work order a task belongs to. Independent of entity_type/entity_id
+      // and combinable with it — a task under a ticket on a job carries BOTH,
+      // which is why the ticket got its own column instead of the polymorphic
+      // slot.
+      if (opts.service_ticket_id) qs.push('service_ticket_id=' + encodeURIComponent(opts.service_ticket_id));
       if (opts.due_before) qs.push('due_before=' + encodeURIComponent(opts.due_before));
       if (opts.due_after) qs.push('due_after=' + encodeURIComponent(opts.due_after));
       if (opts.q) qs.push('q=' + encodeURIComponent(opts.q));

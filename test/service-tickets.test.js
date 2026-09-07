@@ -410,3 +410,73 @@ test('ids are prefixed, unique and contain no path separator', () => {
   assert.strictEqual(a.indexOf('/'), -1, 'an id must never be able to inject a path segment');
 });
 
+
+// ── The tier-above-tasks invariant ──────────────────────────────────────
+// THE assertion for S2, and the reason tasks got their own service_ticket_id
+// column instead of reusing entity_type='service_ticket'.
+//
+// tasks has no job_id and no lead_id — its ONLY parent pointer is the
+// (entity_type, entity_id) pair. If a ticket claimed that slot, a task under a
+// ticket on a job would silently vanish from four shipped surfaces: the job
+// overview Tasks panel, the My Tasks "Job" column,
+// read_entity(job, include:['tasks']) and the idx_tasks_entity index path.
+//
+// These are source-level assertions rather than DB ones because this suite
+// runs with no database — but they pin the exact shapes that would break.
+describe('a task under a ticket still belongs to its job', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const routes = fs.readFileSync(
+    path.join(__dirname, '..', 'server', 'routes', 'tasks-routes.js'), 'utf8');
+  const ui = fs.readFileSync(
+    path.join(__dirname, '..', 'js', 'service-tickets.js'), 'utf8');
+
+  test("service_ticket_id is a SEPARATE column, never an entity_type value", () => {
+    // If this string ever appears, the polymorphic slot has been claimed and
+    // the four surfaces above are broken.
+    assert.strictEqual(routes.indexOf("'service_ticket'"), -1,
+      "tasks must never use entity_type='service_ticket' — it consumes the " +
+      "task's only parent pointer");
+    assert.ok(routes.indexOf("'service_ticket_id'") > -1,
+      'the separate column must be in EDITABLE_FIELDS');
+  });
+
+  test('the UI stamps the ticket AND the parent entity when adding a task', () => {
+    // Sending only service_ticket_id would create a task that belongs to a
+    // work order and to no job — the exact disappearance this design avoids.
+    const add = ui.slice(ui.indexOf('function addTask()'), ui.indexOf('if (addGo) addGo.addEventListener'));
+    assert.ok(add.indexOf('service_ticket_id') > -1, 'must stamp the ticket');
+    assert.ok(add.indexOf('entity_type') > -1, 'must ALSO stamp entity_type');
+    assert.ok(add.indexOf('entity_id') > -1, 'must ALSO stamp entity_id');
+    assert.ok(/entity_type:\s*t\.job_id\s*\?\s*'job'\s*:\s*'lead'/.test(add),
+      'the entity type must follow the ticket\'s own parent');
+  });
+
+  test('a caller-supplied ticket id is PROVED in-org before it is written', () => {
+    // The FK only proves the ticket EXISTS, never whose it is. Without this a
+    // caller could file their task under another tenant's work order.
+    assert.ok(routes.indexOf('async function serviceTicketOk') > -1,
+      'a validator must exist');
+    assert.ok(/SELECT 1 FROM service_tickets WHERE id = \$1 AND organization_id = \$2/.test(routes),
+      'the validator must carry the org predicate');
+    // Both write doors — create and patch — must use it.
+    const createGuard = routes.indexOf('body.service_ticket_id && !(await serviceTicketOk');
+    const patchGuard = routes.indexOf('if (!(await serviceTicketOk(orgId, val)))');
+    assert.ok(createGuard > -1, 'POST /api/tasks must prove the ticket');
+    assert.ok(patchGuard > -1, 'PATCH /api/tasks/:id must prove the ticket');
+  });
+
+  test('the ticket filter does not replace the entity filter', () => {
+    // Both clauses must be independently applicable, so "this job's tasks" and
+    // "this ticket's tasks" are different questions with different answers.
+    assert.ok(/req\.query\.service_ticket_id/.test(routes));
+    assert.ok(/req\.query\.entity_type/.test(routes));
+    const stIdx = routes.indexOf('req.query.service_ticket_id');
+    const entIdx = routes.indexOf('req.query.entity_type');
+    assert.notStrictEqual(stIdx, entIdx);
+    // Neither may be inside an else-branch of the other.
+    const between = routes.slice(Math.min(stIdx, entIdx), Math.max(stIdx, entIdx));
+    assert.strictEqual(between.indexOf('} else if (req.query'), -1,
+      'the two filters must be independent, not alternatives');
+  });
+});

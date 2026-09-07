@@ -253,7 +253,13 @@ function maybeNotifyAssignee(task, actorUserId, opts) {
 const EDITABLE_FIELDS = new Set([
   'title', 'notes', 'kind', 'status', 'priority',
   'due_date', 'assignee_user_id', 'entity_type', 'entity_id', 'checklist',
-  'lat', 'lng', 'geo_accuracy', 'directions'
+  'lat', 'lng', 'geo_accuracy', 'directions',
+  // The work order this task belongs to, if any. A SEPARATE pointer from
+  // (entity_type, entity_id) on purpose: a task under a ticket on a job keeps
+  // entity_type='job' so it still appears on the job's Tasks panel, in the My
+  // Tasks "Job" column and in read_entity(job, include:['tasks']). Both facts
+  // are true at once. Validated in-org below — it is a caller-supplied id.
+  'service_ticket_id'
 ]);
 
 // Validate that a candidate assignee belongs to the caller's org.
@@ -265,6 +271,20 @@ async function assigneeOk(orgId, assigneeId) {
   const { rows } = await pool.query(
     'SELECT 1 FROM users WHERE id = $1 AND organization_id = $2',
     [n, orgId]
+  );
+  return rows.length > 0;
+}
+
+// Same shape as assigneeOk, for the same reason: service_ticket_id arrives in
+// a request body, so it must be PROVED to belong to the caller's org before it
+// is written. Without this a caller could file their task under another
+// tenant's work order — the FK only proves the row exists, never whose it is.
+// Returns true for null (unlink).
+async function serviceTicketOk(orgId, ticketId) {
+  if (ticketId == null || ticketId === '') return true;
+  const { rows } = await pool.query(
+    'SELECT 1 FROM service_tickets WHERE id = $1 AND organization_id = $2',
+    [String(ticketId), orgId]
   );
   return rows.length > 0;
 }
@@ -335,6 +355,17 @@ router.get('/', requireAuth, async (req, res) => {
       if (req.query.entity_id) {
         where.push('t.entity_id = $' + (pn++)); params.push(String(req.query.entity_id));
       }
+    }
+    // The work-order filter — "this ticket's tasks". Independent of the
+    // entity_type/entity_id pair above, and both may be applied at once, which
+    // is the point: a task carries its job AND its ticket.
+    //
+    // No in-org proof needed here (unlike the write path): the base WHERE
+    // already pins organization_id, so a foreign ticket id simply matches
+    // nothing rather than reaching another tenant's rows.
+    if (req.query.service_ticket_id) {
+      where.push('t.service_ticket_id = $' + (pn++));
+      params.push(String(req.query.service_ticket_id));
     }
     if (req.query.due_before) {
       where.push('t.due_date IS NOT NULL AND t.due_date <= $' + (pn++));
@@ -434,6 +465,10 @@ router.post('/', requireAuth, async (req, res) => {
     if (!wantPersonal && body.assignee_user_id != null && !(await assigneeOk(orgId, body.assignee_user_id))) {
       return res.status(400).json({ error: 'Invalid assignee' });
     }
+    // Same proof for the work order, and for the same reason.
+    if (body.service_ticket_id && !(await serviceTicketOk(orgId, body.service_ticket_id))) {
+      return res.status(400).json({ error: 'Invalid service ticket' });
+    }
 
     const id = newId();
     const cols = ['id', 'organization_id', 'title', 'created_by'];
@@ -462,6 +497,12 @@ router.post('/', requireAuth, async (req, res) => {
     if (body.entity_type && body.entity_id && LINKABLE_ENTITY_TYPES.has(String(body.entity_type))) {
       cols.push('entity_type'); vals.push('$' + pn++); params.push(String(body.entity_type));
       cols.push('entity_id');   vals.push('$' + pn++); params.push(String(body.entity_id));
+    }
+    // The work order this task belongs to. Proved in-org above, alongside the
+    // assignee check, because the FK only proves the ticket EXISTS — never
+    // whose it is.
+    if (body.service_ticket_id) {
+      cols.push('service_ticket_id'); vals.push('$' + pn++); params.push(String(body.service_ticket_id));
     }
     if (Array.isArray(body.checklist)) {
       cols.push('checklist'); vals.push('$' + pn++ + '::jsonb'); params.push(JSON.stringify(normalizeChecklist(body.checklist)));
@@ -554,6 +595,15 @@ router.patch('/:id', requireAuth, async (req, res) => {
         }
         // Did the assignee actually change?
         if (Number(before.assignee_user_id) !== Number(val)) assigneeChangedTo = val;
+      } else if (key === 'service_ticket_id') {
+        if (val === '' || val == null) {
+          val = null;
+        } else {
+          if (!(await serviceTicketOk(orgId, val))) {
+            return res.status(400).json({ error: 'Invalid service ticket' });
+          }
+          val = String(val);
+        }
       } else if (key === 'entity_type') {
         val = (val === '' || val == null) ? null : (LINKABLE_ENTITY_TYPES.has(String(val)) ? String(val) : before.entity_type);
       } else if (key === 'entity_id') {

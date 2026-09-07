@@ -12760,3 +12760,30 @@ body.light-mode .p86-mktpnl-warn { background: rgba(180, 120, 10, .10); border-c
   .p86-st-detail-grid { grid-template-columns: 1fr; }
   .p86-st-modal-row { grid-template-columns: 1fr; }
 }
+
+/* Service-ticket child tasks — the tier-above-tasks made visible. */
+.p86-st-taskcount { text-transform: none; letter-spacing: 0; opacity: 0.8; font-variant-numeric: tabular-nums; }
+.p86-st-bar-track {
+  height: 4px; border-radius: 999px; margin-bottom: 8px;
+  background: var(--surface2, rgba(255,255,255,0.08)); overflow: hidden;
+}
+.p86-st-bar-fill { height: 100%; background: var(--green, #059669); }
+.p86-st-tasklist { display: flex; flex-direction: column; gap: 3px; }
+.p86-st-task { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text, #fff); }
+.p86-st-task.is-done { color: var(--text-dim, #888); text-decoration: line-through; }
+.p86-st-task-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--accent, #4f8cff);
+}
+.p86-st-task.is-done .p86-st-task-dot { background: var(--green, #059669); }
+.p86-st-task-title { flex: 1 1 auto; min-width: 0; }
+.p86-st-task-due { font-size: 11px; color: var(--text-dim, #888); flex: 0 0 auto; }
+.p86-st-task-add { display: flex; gap: 6px; margin-top: 8px; }
+.p86-st-task-new {
+  flex: 1 1 auto; background: var(--input-bg, #101014); color: var(--text, #fff);
+  border: 1px solid var(--border, #333); border-radius: 6px;
+  padding: 6px 9px; font-size: 12.5px; font-family: inherit;
+}
+/* Says out loud what is otherwise invisible: the ticket GROUPS tasks, it does
+   not take them off the job. Someone will eventually try to "tidy" that. */
+.p86-st-task-note { font-size: 11px; color: var(--text-dim, #888); margin-top: 5px; line-height: 1.4; }
