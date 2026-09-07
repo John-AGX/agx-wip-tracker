@@ -5176,6 +5176,19 @@ function renderJobsMain() {
         // byte-identical duplicate that could drift from phaseRevenue).
         function phaseDollar(r) { return phaseRevenue(r); }
 
+        // Quantise a dollar amount to the cent. These are dollars held as JS
+        // numbers in a JSON blob, so every division in this path can leave
+        // binary residue (0.1 + 0.2 is 0.30000000000000004), and THREE separate
+        // comparisons downstream change their answer on a residue of 5.55e-17:
+        // pruneEmptyUnassignedPhases tests `money === 0` (a bucket that never
+        // prunes lingers for ever as a "$0.00 Job-level (unassigned)" row),
+        // phasePctShares tests `phaseDollar(rec) > 0` (a residue freezes an
+        // auto share into a manual ~0% one and starves it out of the
+        // rebalance), and allocCoveredSet tests the same thing to decide which
+        // buildings a scope covers. Quantising at the point of WRITE is what
+        // keeps all three honest without an epsilon at every read.
+        function money2(v) { var n = Number(v); return isFinite(n) ? Math.round(n * 100) / 100 : 0; }
+
         function phaseAllocInfo(jobId, name) {
             var recs = (appData.phases || []).filter(function(p) { return p.jobId === jobId && (p.phase || 'Unnamed') === name; });
             var mode = 'pct', totalStored = null;
@@ -5221,10 +5234,13 @@ function renderJobsMain() {
             return rec;
         }
 
+        // The ONE place dollars land on a phase record. Quantised to the cent
+        // here so nothing anywhere else has to carry an epsilon.
         function setPhaseDollar(rec, val) {
-            rec.asSoldPhaseBudget = val;
-            rec.phaseBudget = val + (rec.coPhaseBudget || 0);
-            rec.asSoldRevenue = val; // mirror — the graph weights phases by revenue
+            var v = money2(val);
+            rec.asSoldPhaseBudget = v;
+            rec.phaseBudget = money2(v + (rec.coPhaseBudget || 0));
+            rec.asSoldRevenue = v; // mirror — the graph weights phases by revenue
         }
 
         // Resolve each building's % share for a % -mode phase. A share is MANUAL
@@ -5296,17 +5312,30 @@ function renderJobsMain() {
             if (info.mode !== 'pct') return;
             var total = info.total || 0;
             var res = phasePctShares(jobId, name);
-            // Whole-dollar LARGEST REMAINDER, so the cells sum EXACTLY to what
-            // the percentages describe. Rounding each cell on its own drifts —
-            // a $92,000 Gutters row spread over 10 buildings landed as $92,003 —
+            // LARGEST REMAINDER IN CENTS, so the cells sum EXACTLY to what the
+            // percentages describe. Rounding each cell on its own drifts — a
+            // $92,000 Gutters row spread over 10 buildings landed as $92,003 —
             // and a scope that cannot reconcile to its own total can never
-            // reconcile to the contract. distributeContractToPhases already uses
-            // this technique for the same reason.
+            // reconcile to the contract.
+            //
+            // The quantum is the CENT, not the dollar. It was the dollar, which
+            // meant a total carrying cents could not be represented at all: a
+            // $10,000.50 scope came back as $10,001 of cells, so the cents were
+            // not merely dropped — fifty of them were invented, and the row
+            // total said one number while the footer summed to another.
+            //
+            // The sub-cent remainder that is left over (a third of a cent, on a
+            // three-way split) is absorbed by the largest-remainder pass below,
+            // because a third of a cent cannot be paid to anyone. That is the
+            // ONLY thing absorbed here. A scope whose percentages genuinely do
+            // not reach 100 is a different matter — that is money the user has
+            // not placed, and phaseAllocResidual names it on the row rather
+            // than letting it disappear between the total and the footer.
             var plan = res.targets.map(function(bid) {
                 var key = bid || '__un__';
                 var share = res.shares[key] || { pct: 0, auto: true };
-                var exact = total * (share.pct || 0) / 100;
-                return { bid: bid, share: share, exact: exact, base: Math.floor(exact), dollars: 0 };
+                var exact = total * (share.pct || 0) / 100 * 100; // exact CENTS
+                return { bid: bid, share: share, exact: exact, base: Math.floor(exact), cents: 0 };
             });
             var assigned = plan.reduce(function(s, p) { return s + p.base; }, 0);
             var exactSum = plan.reduce(function(s, p) { return s + p.exact; }, 0);
@@ -5315,20 +5344,53 @@ function renderJobsMain() {
             // intentionally leave the phase under-allocated, forcing the cells up
             // to `total` would invent money the user never allocated.
             var rem = Math.round(exactSum) - assigned;
-            plan.forEach(function(p) { p.dollars = p.base; });
+            plan.forEach(function(p) { p.cents = p.base; });
             plan.slice()
                 .sort(function(a, b) { return (b.exact - b.base) - (a.exact - a.base); })
-                .forEach(function(p, i) { if (i < rem) p.dollars += 1; });
+                .forEach(function(p, i) { if (i < rem) p.cents += 1; });
             plan.forEach(function(p) {
                 var rec = info.recs.find(function(r) { return (r.buildingId || null) === (p.bid || null); });
-                if (!rec && p.dollars === 0) return; // don't materialize empty cells
+                if (!rec && p.cents === 0) return; // don't materialize empty cells
                 rec = rec || phaseRecFor(jobId, name, p.bid);
                 rec.allocMode = 'pct';
                 rec.phaseAllocTotal = total;
                 if (p.share.auto) { rec.allocAuto = true; }
                 else { rec.allocPct = p.share.pct || 0; rec.allocAuto = false; }
-                setPhaseDollar(rec, p.dollars);
+                setPhaseDollar(rec, p.cents / 100);
             });
+        }
+
+        // What a % -mode scope has NOT placed: its total, less the dollars its
+        // shares actually put on records. This is NOT the rounding remainder
+        // (that is absorbed to the cent above) — it is the gap left when the
+        // percentages do not reach 100, which is real money the user has not
+        // allocated. Returns null when the scope ties, so the caller renders
+        // nothing and the chip keeps its meaning. Sub-cent differences are not
+        // a gap: below half a cent there is nothing anybody could type.
+        function phaseAllocResidual(jobId, name) {
+            var info = phaseAllocInfo(jobId, name);
+            if (info.mode !== 'pct') return null;
+            var total = money2(info.total || 0);
+            var allocated = money2(info.sumDollars);
+            var residual = money2(total - allocated);
+            if (Math.abs(residual) < 0.005) return null;
+            return { total: total, allocated: allocated, residual: residual };
+        }
+
+        // The chip that says it on the row. A row whose total and whose cells
+        // disagree with no explanation on screen is the failure mode this
+        // exists to prevent.
+        function phaseAllocResidualChip(jobId, name, attrEsc) {
+            var r = phaseAllocResidual(jobId, name);
+            if (!r) return '';
+            var over = r.residual < 0;
+            var txt = formatCurrency(Math.abs(r.residual)) + (over ? ' over' : ' left');
+            var title = over
+                ? 'The shares on this scope add up to more than its total — ' + formatCurrency(Math.abs(r.residual)) + ' more than ' + formatCurrency(r.total) + '.'
+                : formatCurrency(Math.abs(r.residual)) + ' of this scope’s ' + formatCurrency(r.total) + ' is not on any building yet.';
+            return '<span data-mx-residual="' + attrEsc(name) + '" title="' + attrEsc(title) + '" ' +
+                'style="margin-left:5px;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;white-space:nowrap;' +
+                'background:rgba(224,164,88,0.15);color:var(--orange,#e0a458);">' + txt + '</span>';
         }
 
         // Collapse duplicate (phase, building) records for a job into one. The
@@ -5407,7 +5469,7 @@ function renderJobsMain() {
                     '<span style="font-size:10px;color:var(--text-dim);">%</span></span></td>';
             }
             function dollarCell(name, bid, v, dashed) {
-                return '<td style="text-align:right;padding:3px 4px;"><input type="number" min="0" step="100" value="' + (v || '') + '" ' +
+                return '<td style="text-align:right;padding:3px 4px;"><input type="number" min="0" step="0.01" value="' + (v || '') + '" ' +
                     'data-mx-phase="' + attr(name) + '" data-mx-bldg="' + attr(bid || '') + '" oninput="onPhaseMatrixCell(this)" onchange="onPhaseMatrixCommit(this)" ' +
                     'style="width:76px;font-size:12px;padding:3px 5px;text-align:right;background:var(--bg);border:1px ' + (dashed ? 'dashed' : 'solid') + ' var(--border);border-radius:4px;color:var(--text' + (dashed ? '-dim' : '') + ');"/></td>';
             }
@@ -5436,7 +5498,7 @@ function renderJobsMain() {
                 var modeChip = '<button type="button" data-mx-phase="' + attr(name) + '" onclick="onPhaseMatrixModeToggle(this)" title="Toggle percent / dollar allocation for this scope" style="margin-left:6px;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;border:1px solid var(--border);background:var(--overlay-light,rgba(255,255,255,0.05));color:var(--accent);cursor:pointer;">' + (isPct ? '%' : '$') + '</button>';
                 var accrChip = (poAccr[name] > 0) ? '<span title="Open PO commitment — accrued until billed/paid" style="margin-left:6px;font-size:10px;padding:1px 6px;border-radius:10px;background:rgba(224,164,88,0.15);color:var(--orange,#e0a458);white-space:nowrap;">&#9203; ' + formatCurrency(poAccr[name]) + '</span>' : '';
                 var totalCell = isPct
-                    ? '<td style="text-align:right;padding:3px 4px;"><input type="number" min="0" step="100" value="' + (info.total || '') + '" data-mx-phase="' + attr(name) + '" oninput="onPhaseMatrixTotal(this)" onchange="onPhaseMatrixCommit(this)" placeholder="total $" style="width:90px;font-size:12.5px;font-weight:700;padding:3px 5px;text-align:right;background:var(--bg);border:1px solid var(--accent);border-radius:4px;color:var(--accent);font-family:inherit;"/></td>'
+                    ? '<td style="text-align:right;padding:3px 4px;"><input type="number" min="0" step="0.01" value="' + (info.total || '') + '" data-mx-phase="' + attr(name) + '" oninput="onPhaseMatrixTotal(this)" onchange="onPhaseMatrixCommit(this)" placeholder="total $" style="width:90px;font-size:12.5px;font-weight:700;padding:3px 5px;text-align:right;background:var(--bg);border:1px solid var(--accent);border-radius:4px;color:var(--accent);font-family:inherit;"/>' + phaseAllocResidualChip(jobId, name, attr) + '</td>'
                     : '<td data-mx-rowtot="' + attr(name) + '" style="text-align:right;padding:4px 8px;font-size:12.5px;font-weight:700;color:var(--accent);font-family:inherit;">' + formatCurrency(rowTot) + '</td>';
                 var costCell = '<td style="text-align:right;padding:4px 8px;font-size:12px;font-family:inherit;color:var(--orange,#e0a458);border-left:1px solid var(--border);">' + formatCurrency(pcost) + '</td>';
                 var profitCell = '<td style="text-align:right;padding:4px 8px;font-size:12px;font-family:inherit;color:' + (pprofit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(pprofit) + '</td>';
@@ -5534,11 +5596,20 @@ function renderJobsMain() {
                 var hasBudget = ((info.total || 0) > 0) || (info.sumDollars > 0);
                 // Green ✓ requires an actual budget to allocate — a $0 phase with
                 // buildings ticked is 100% of nothing, not "fully allocated".
-                var meterOk = hasBudget && coveredCount > 0 && allocRounded >= 99 && allocRounded <= 101;
+                //
+                // It also requires the DOLLARS to tie, not just the rounded
+                // percent. allocRounded is Math.round(bldgPctSum), so three
+                // shares of 33.33% summed to 99.99 and rounded to a green
+                // "Allocated 100% ✓" while a whole dollar of the scope sat on no
+                // building at all. The meter now names that money instead, in
+                // the same words the grid's chip uses.
+                var resid = phaseAllocResidual(jobId, name);
+                var meterOk = hasBudget && coveredCount > 0 && allocRounded >= 99 && allocRounded <= 101 && !resid;
                 var meterColor = meterOk ? 'var(--green)' : ((coveredCount === 0 || !hasBudget) ? 'var(--text-dim)' : 'var(--orange,#e0a458)');
                 var meterText = coveredCount === 0 ? 'No buildings assigned'
                     : (!hasBudget ? 'No budget set'
-                    : ('Allocated ' + allocRounded + '%' + (meterOk ? ' ✓' : ' ⚠')));
+                    : (resid ? (formatCurrency(Math.abs(resid.residual)) + (resid.residual < 0 ? ' over-allocated ⚠' : ' not on any building ⚠'))
+                    : ('Allocated ' + allocRounded + '%' + (meterOk ? ' ✓' : ' ⚠'))));
 
                 // ── Header: name + mode chip + accrued + Rev/Cost/Profit + %Done
                 var modeChip = '<button type="button" data-mx-phase="' + attr(name) + '" onclick="onPhaseMatrixModeToggle(this)" title="Toggle percent / dollar allocation for this scope" style="font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;border:1px solid var(--border);background:var(--overlay-light,rgba(255,255,255,0.05));color:var(--accent);cursor:pointer;">' + (isPct ? '%' : '$') + '</button>';
@@ -5562,7 +5633,7 @@ function renderJobsMain() {
                         '<div style="display:flex;align-items:center;gap:6px;">' +
                             '<span style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.4px;">Budget</span>' +
                             (isPct
-                                ? '<input type="number" min="0" step="100" value="' + (info.total || '') + '" data-mx-phase="' + attr(name) + '" oninput="onPhaseMatrixTotal(this)" onchange="onPhaseMatrixCommit(this)" placeholder="total $" style="width:110px;font-size:13px;font-weight:700;padding:3px 6px;text-align:right;background:var(--bg);border:1px solid var(--accent);border-radius:5px;color:var(--accent);font-family:inherit;"/>'
+                                ? '<input type="number" min="0" step="0.01" value="' + (info.total || '') + '" data-mx-phase="' + attr(name) + '" oninput="onPhaseMatrixTotal(this)" onchange="onPhaseMatrixCommit(this)" placeholder="total $" style="width:110px;font-size:13px;font-weight:700;padding:3px 6px;text-align:right;background:var(--bg);border:1px solid var(--accent);border-radius:5px;color:var(--accent);font-family:inherit;"/>'
                                 : '<span style="font-size:13px;font-weight:700;color:var(--accent);font-family:inherit;">' + formatCurrency(info.sumDollars) + '</span>') +
                         '</div>' +
                         '<div style="display:flex;align-items:center;gap:5px;">' +
@@ -5610,7 +5681,7 @@ function renderJobsMain() {
                         var sh = isPct ? (shares[b.id] || { pct: 0, auto: true }) : { pct: bldgPct(b.id), auto: false };
                         var input = isPct
                             ? '<input type="number" min="0" max="100" step="1" value="' + (sh.pct != null ? Math.round(sh.pct * 10) / 10 : '') + '" data-mx-phase="' + attr(name) + '" data-mx-bldg="' + attr(b.id) + '" oninput="onPhaseMatrixPctCell(this)" onchange="onPhaseMatrixCommit(this)" title="' + (sh.auto ? 'Auto — type to override' : 'Manual override') + '" style="width:52px;font-size:12px;padding:2px 5px;text-align:right;background:var(--bg);border:1px ' + (sh.auto ? 'dashed' : 'solid') + ' var(--border);border-radius:4px;color:var(--text' + (sh.auto ? '-dim' : '') + ');"/><span style="font-size:10px;color:var(--text-dim);">%</span>'
-                            : '<input type="number" min="0" step="100" value="' + (d || '') + '" data-mx-phase="' + attr(name) + '" data-mx-bldg="' + attr(b.id) + '" oninput="onPhaseMatrixCell(this)" onchange="onPhaseMatrixCommit(this)" style="width:82px;font-size:12px;padding:2px 5px;text-align:right;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:inherit;"/>';
+                            : '<input type="number" min="0" step="0.01" value="' + (d || '') + '" data-mx-phase="' + attr(name) + '" data-mx-bldg="' + attr(b.id) + '" oninput="onPhaseMatrixCell(this)" onchange="onPhaseMatrixCommit(this)" style="width:82px;font-size:12px;padding:2px 5px;text-align:right;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:inherit;"/>';
                         return '<span style="display:inline-flex;align-items:center;gap:5px;padding:2px 0;">' +
                             '<span style="font-size:12px;color:var(--text);min-width:0;">' + escapeHTML(b.name || 'Building') + '</span>' +
                             input +
@@ -5623,7 +5694,7 @@ function renderJobsMain() {
                 var meter =
                     '<div style="display:flex;align-items:center;gap:6px;font-size:11.5px;">' +
                         '<span style="width:8px;height:8px;border-radius:50%;background:' + meterColor + ';display:inline-block;"></span>' +
-                        '<span style="color:' + meterColor + ';font-weight:600;">' + meterText + '</span>' +
+                        '<span' + (resid ? ' data-mx-residual="' + attr(name) + '"' : '') + ' style="color:' + meterColor + ';font-weight:600;">' + meterText + '</span>' +
                         (isPct ? '' : '<span style="color:var(--text-dim);margin-left:4px;">(dollar mode — type each building\'s amount)</span>') +
                     '</div>';
 
@@ -5808,12 +5879,13 @@ function renderJobsMain() {
                     hoursWeek: 0, hoursTotal: 0, rate: 40, notes: '' };
                 appData.phases.push(rec);
             }
-            rec.asSoldPhaseBudget = val;
-            rec.phaseBudget = val + (rec.coPhaseBudget || 0);
-            // Matrix = source of truth: mirror the cell into the phase's as-sold
-            // REVENUE, not just its budget. The graph's WIP roll-up weights each
-            // phase by revenue — leaving this at 0 was why the job % never totaled.
-            rec.asSoldRevenue = val;
+            // Matrix = source of truth: setPhaseDollar mirrors the cell into the
+            // phase's as-sold REVENUE, not just its budget (the graph's WIP
+            // roll-up weights each phase by revenue — leaving that at 0 was why
+            // the job % never totaled), and quantises to the cent. This used to
+            // be a byte-identical copy of setPhaseDollar written out longhand,
+            // which is how the cell path missed the quantise.
+            setPhaseDollar(rec, val);
             // If this edit emptied the "Unassigned" bucket while buildings hold the
             // phase, drop the remnant so it never lingers as a $0 job-level row.
             pruneEmptyUnassignedPhases(jobId);
@@ -5839,7 +5911,7 @@ function renderJobsMain() {
             var name = input.getAttribute('data-mx-phase');
             var jobId = (typeof appState !== 'undefined' && appState.currentJobId);
             if (!name || !jobId) return;
-            var val = parseFloat(input.value) || 0;
+            var val = money2(parseFloat(input.value) || 0);
             (appData.phases || []).filter(function(p) { return p.jobId === jobId && (p.phase || 'Unnamed') === name; })
                 .forEach(function(r) { r.allocMode = 'pct'; r.phaseAllocTotal = val; });
         }
@@ -5854,7 +5926,7 @@ function renderJobsMain() {
             if (!jobId || !name) return false;
             var recs = (appData.phases || []).filter(function(p) { return p.jobId === jobId && (p.phase || 'Unnamed') === name; });
             if (!recs.length) return false;
-            var val = Number(amount); if (!isFinite(val) || val < 0) val = 0;
+            var val = money2(amount); if (val < 0) val = 0;
             recs.forEach(function(r) { r.allocMode = 'pct'; r.phaseAllocTotal = val; });
             recomputePhasePctAllocation(jobId, name);   // largest-remainder → cells sum exactly
             pruneEmptyUnassignedPhases(jobId);
@@ -6148,7 +6220,12 @@ function renderJobsMain() {
         function recomputePhaseMatrixTotals(input, jobId) {
             var table = input.closest('table'); if (!table) return;
             var phases = (appData.phases || []).filter(function(p) { return p.jobId === jobId; });
-            function sum(pred) { return phases.filter(pred).reduce(function(s, p) { return s + (p.asSoldPhaseBudget || p.phaseBudget || 0); }, 0); }
+            // Sum the SAME chain the paint sums (phaseDollar → phaseRevenue).
+            // This read (asSoldPhaseBudget || phaseBudget) skipped asSoldRevenue,
+            // so a legacy row carrying only asSoldRevenue counted in the painted
+            // footer and vanished from this live one: typing in any cell rewrote
+            // the totals to a different number than a repaint would show.
+            function sum(pred) { return phases.filter(pred).reduce(function(s, p) { return s + phaseDollar(p); }, 0); }
             table.querySelectorAll('[data-mx-rowtot]').forEach(function(td) {
                 var name = td.getAttribute('data-mx-rowtot');
                 td.textContent = formatCurrency(sum(function(p) { return (p.phase || 'Unnamed') === name; }));
@@ -6529,9 +6606,9 @@ function renderJobsMain() {
                     '<input class="p86-dialog-input" id="jlpName" type="text" placeholder="e.g. Roofing, Framing, Sitework" />' +
                     '<div style="display:flex;gap:10px;">' +
                         '<div style="flex:1;"><label style="display:block;font-size:12px;margin:12px 0 4px;">Budget / cost ($)</label>' +
-                        '<input class="p86-dialog-input" id="jlpBudget" type="number" min="0" step="100" placeholder="0" /></div>' +
+                        '<input class="p86-dialog-input" id="jlpBudget" type="number" min="0" step="0.01" placeholder="0" /></div>' +
                         '<div style="flex:1;"><label style="display:block;font-size:12px;margin:12px 0 4px;">Revenue ($)</label>' +
-                        '<input class="p86-dialog-input" id="jlpRev" type="number" min="0" step="100" placeholder="0" /></div>' +
+                        '<input class="p86-dialog-input" id="jlpRev" type="number" min="0" step="0.01" placeholder="0" /></div>' +
                     '</div>' +
                     '<div class="p86-dialog-actions" style="margin-top:16px;">' +
                         '<button class="p86-dialog-btn" data-cancel>Cancel</button>' +

@@ -177,8 +177,16 @@ describe('every remainder distribution still walks an unsorted array', () => {
     const body = between(JOBS, /function recomputePhasePctAllocation\(/, /\n {8}function /);
     // The tie-break: a STABLE sort by fractional remainder, so equal remainders
     // keep phasePctShares' order. That is the behaviour being preserved.
+    //
+    // The unit the remainder is handed out in changed from the dollar to the
+    // CENT (a scope total carrying cents could not otherwise be represented —
+    // $10,000.50 was allocating $10,001.00), so the accumulator is `p.cents`
+    // where it used to be `p.dollars`. The walk itself is untouched, and that
+    // is what this test is here to hold: whichever unit it is, it is handed out
+    // by array index over an unsorted array, so sorting the buildings can never
+    // move it from one building to another.
     expect(body).toMatch(/\.sort\(function\(a, b\) \{ return \(b\.exact - b\.base\) - \(a\.exact - a\.base\); \}\)/);
-    expect(body).toMatch(/forEach\(function\(p, i\) \{ if \(i < rem\) p\.dollars \+= 1; \}\)/);
+    expect(body).toMatch(/forEach\(function\(p, i\) \{ if \(i < rem\) p\.cents \+= 1; \}\)/);
     expect(body).not.toMatch(/p86SortBuildings|p86BuildingSort/);
   });
 
