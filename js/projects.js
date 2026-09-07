@@ -2243,6 +2243,8 @@
             '<div id="shResult" class="p86-share-result"></div>' +
             '<div class="p86-share-list-head">Existing links</div>' +
             '<div id="shList" class="p86-share-list">Loading&hellip;</div>' +
+            '<div class="p86-share-list-head">Comments from recipients</div>' +
+            '<div id="shComments" class="p86-share-list">Loading&hellip;</div>' +
           '</div>' +
         '</div>';
       document.body.appendChild(wrap);
@@ -2295,6 +2297,51 @@
         });
       }
       refreshList();
+
+      // Comments that came back through the links. Attribution is deliberately
+      // two-part: the RECIPIENT the invitation was sent to (which we know) and
+      // the name the guest typed (which is only a claim — a bearer token cannot
+      // tell us who is holding it). Showing both, labelled, is the honest
+      // rendering; showing the typed name alone would read as identity.
+      function refreshComments() {
+        var box = wrap.querySelector('#shComments');
+        if (!box) return;
+        window.p86Api.reports.reportComments('project', proj.id, state.report.id).then(function(r) {
+          var rows = (r && r.comments) || [];
+          if (!rows.length) {
+            box.innerHTML = '<div class="p86-share-empty">No comments yet.</div>';
+            return;
+          }
+          box.innerHTML = rows.map(function(c) {
+            var when = '';
+            try { when = new Date(c.created_at).toLocaleString(); } catch (e) {}
+            var via = c.recipient_email || c.recipient_name || 'a link';
+            var claimed = c.author_name ? escapeHTML(c.author_name) : 'Unnamed';
+            var sec = c.section_id ? sectionLabelFor(c.section_id) : '';
+            return '<div class="p86-share-comment">' +
+              '<div class="p86-share-comment-body">' + escapeHTML(c.body || '') + '</div>' +
+              '<div class="p86-share-comment-meta">' +
+                '<span class="p86-share-comment-who">' + claimed + '</span>' +
+                ' · via ' + escapeHTML(via) +
+                (sec ? ' · on “' + escapeHTML(sec) + '”' : '') +
+                (when ? ' · ' + escapeHTML(when) : '') +
+              '</div>' +
+            '</div>';
+          }).join('');
+        }).catch(function() {
+          box.innerHTML = '<div class="p86-share-empty">Could not load comments.</div>';
+        });
+      }
+
+      // A comment points at a section id; show the section's NAME instead, and
+      // fall back to nothing when that section has since been renamed away or
+      // deleted (the id is intentionally not a foreign key).
+      function sectionLabelFor(sid) {
+        var s = (state.sections || []).find(function(x) { return x.id === sid; });
+        return (s && s.label) || '';
+      }
+      refreshComments();
+
 
       wrap.querySelector('#shCreate').addEventListener('click', function() {
         var btn = wrap.querySelector('#shCreate');

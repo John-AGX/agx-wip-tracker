@@ -525,6 +525,11 @@
       return get('/api/reports/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId) +
         '/' + encodeURIComponent(reportId) + '/shares');
     },
+    // Every guest comment on this report, across all its links.
+    reportComments: function(entityType, entityId, reportId) {
+      return get('/api/reports/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId) +
+        '/' + encodeURIComponent(reportId) + '/comments');
+    },
     revokeShare: function(entityType, entityId, reportId, shareId) {
       return post('/api/reports/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId) +
         '/' + encodeURIComponent(reportId) + '/shares/' + encodeURIComponent(shareId) + '/revoke', {});
