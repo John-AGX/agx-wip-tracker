@@ -22,6 +22,8 @@ const { sendEmail, isEnabled: emailIsEnabled } = require('../email');
 const { reportShareIpLimiter, reportShareViewLimiter } = require('../rate-limit');
 const shares = require('../services/report-shares');
 const { loadReportDocument } = require('../services/report-document');
+const { bakeDocumentMaps } = require('../services/report-map-bake');
+const { storage } = require('../storage');
 
 const router = express.Router();
 
@@ -106,8 +108,15 @@ router.post('/reports/:entityType/:entityId/:reportId/share', requireAuth, async
         hideFinancials: hideFinancials
       });
 
-      const token = shares.genToken();
       const id = newId('rshare');
+      // Bake each photo-map section into a STORED image before the snapshot is
+      // written. The Static Maps URL carries the API key, so it must never
+      // reach the snapshot a stranger can read — the server fetches the image
+      // and stores it, and the document carries a plain image URL. A map that
+      // cannot be baked is simply absent; publishing never fails over one.
+      await bakeDocumentMaps(storage, document, id);
+
+      const token = shares.genToken();
       await pool.query(
         `INSERT INTO report_shares
            (id, organization_id, report_id, entity_type, entity_id, token_hash,
