@@ -412,269 +412,6 @@
 }
 
 /* ─────────────────────────────────────────────────────────────────
-   Preview overlay — style pack cover rules mirrored so the in-app
-   preview shows the same typography + chrome the PDF will get.
-   The @media print blocks above target .p86-report-host (the
-   editor). These selectors target .p86-report-preview-paper (the
-   preview overlay's content container) — same rules, different
-   scope. Duplicated rather than abstracted because @media queries
-   can't be combined with selectors in plain CSS.
-   ───────────────────────────────────────────────────────────────── */
-
-/* Classic Corporate — preview */
-.p86-report-preview-paper[data-style-pack="classic-corporate"] .p86-report-cover-rendered {
-  background: #fcfaf5;
-  border-top: 4px double #1e3a5f;
-  border-bottom: 4px double #1e3a5f;
-  padding: 100px 60px;
-}
-.p86-report-preview-paper[data-style-pack="classic-corporate"] .p86-report-cover-title {
-  font-family: Georgia, 'Times New Roman', serif;
-  color: #1e3a5f;
-  letter-spacing: 0.5px;
-}
-.p86-report-preview-paper[data-style-pack="classic-corporate"] .p86-report-cover-subtitle {
-  font-family: Georgia, serif;
-  color: #b8941f;
-  letter-spacing: 1px;
-}
-.p86-report-preview-paper[data-style-pack="classic-corporate"] .p86-report-cover-meta {
-  border-top: 1px solid #b8941f;
-}
-
-/* Modern Bold — preview */
-.p86-report-preview-paper[data-style-pack="modern-bold"] .p86-report-cover-rendered {
-  background: #fff;
-  padding: 60px 50px;
-  text-align: left;
-}
-.p86-report-preview-paper[data-style-pack="modern-bold"] .p86-report-cover-title {
-  font-size: clamp(40px, 9vw, 64px);
-  font-weight: 900;
-  letter-spacing: -1.5px;
-  line-height: 1.05;
-  margin-top: 60px;
-}
-.p86-report-preview-paper[data-style-pack="modern-bold"] .p86-report-cover-subtitle {
-  color: #4f8cff;
-  font-weight: 700;
-  font-style: normal;
-  letter-spacing: 3px;
-}
-.p86-report-preview-paper[data-style-pack="modern-bold"] .p86-report-cover-meta {
-  justify-content: flex-start;
-  gap: 40px;
-}
-.p86-report-preview-paper[data-style-pack="modern-bold"] .p86-report-preview-section-label {
-  background: #1e293b;
-  color: #fff;
-  padding: 10px 14px;
-  border-radius: 6px;
-  font-size: 18px;
-  font-weight: 800;
-}
-
-/* Field Notebook — preview */
-.p86-report-preview-paper[data-style-pack="field-notebook"] {
-  background: #f8f4e8;
-}
-.p86-report-preview-paper[data-style-pack="field-notebook"] .p86-report-cover-rendered {
-  background: #f8f4e8;
-  padding: 80px 50px;
-  text-align: left;
-  background-image: linear-gradient(to bottom, transparent 47px, #d6cdb1 48px, transparent 49px);
-  background-size: 100% 48px;
-}
-.p86-report-preview-paper[data-style-pack="field-notebook"] .p86-report-cover-title {
-  color: #3a3528;
-  font-family: Georgia, serif;
-  border-bottom: 2px dashed #8a7f5e;
-  padding-bottom: 12px;
-}
-.p86-report-preview-paper[data-style-pack="field-notebook"] .p86-report-cover-meta {
-  border-top: 1px dashed #8a7f5e;
-  font-family: 'Courier New', monospace;
-}
-.p86-report-preview-paper[data-style-pack="field-notebook"] .p86-report-cover-meta .v {
-  font-family: 'Courier New', monospace;
-}
-.p86-report-preview-paper[data-style-pack="field-notebook"] .p86-report-preview-section {
-  border-top: 1px dashed #8a7f5e;
-  padding-top: 14px;
-}
-.p86-report-preview-paper[data-style-pack="field-notebook"] .p86-report-preview-photo-cap {
-  font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
-  background: transparent;
-  border: 0;
-  border-top: 1px dashed #8a7f5e;
-  color: #8a7f5e;
-}
-.p86-report-preview-paper[data-style-pack="field-notebook"] .p86-report-preview-photo-img-wrap {
-  border: 1px dashed #8a7f5e;
-}
-
-/* Inspection Pro — preview */
-.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-cover-rendered {
-  background: #fff;
-  padding: 60px 50px;
-  border-top: 10px solid #0f172a;
-  text-align: left;
-}
-.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-cover-title {
-  color: #0f172a;
-  font-weight: 800;
-  border-bottom: 2px solid #0f172a;
-  padding-bottom: 12px;
-  margin-top: 30px;
-}
-.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-cover-subtitle {
-  color: #475569;
-  text-transform: uppercase;
-  letter-spacing: 3px;
-  font-style: normal;
-}
-.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-cover-meta {
-  background: #f1f5f9;
-  padding: 16px;
-  border: 1px solid #cbd5e1;
-  border-top-width: 4px;
-  border-top-color: #0f172a;
-}
-.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-preview-section {
-  border: 1px solid #cbd5e1;
-  border-left: 4px solid #0f172a;
-  padding: 12px 14px;
-  border-radius: 0 4px 4px 0;
-  margin-bottom: 18px;
-}
-.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-preview-section-label {
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  font-size: 13px;
-}
-
-/* Blueprint — preview */
-.p86-report-preview-paper[data-style-pack="blueprint"] .p86-report-cover-rendered {
-  background: #0e2a4a;
-  color: #f0f9ff;
-  padding: 80px 50px;
-  background-image:
-    linear-gradient(rgba(103,232,249,0.12) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(103,232,249,0.12) 1px, transparent 1px);
-  background-size: 24px 24px;
-  border-bottom: 0;
-}
-.p86-report-preview-paper[data-style-pack="blueprint"] .p86-report-cover-company,
-.p86-report-preview-paper[data-style-pack="blueprint"] .p86-report-cover-subtitle,
-.p86-report-preview-paper[data-style-pack="blueprint"] .p86-report-cover-addr {
-  color: #67e8f9;
-}
-.p86-report-preview-paper[data-style-pack="blueprint"] .p86-report-cover-title {
-  color: #fff;
-  font-family: 'Futura', 'Trebuchet MS', sans-serif;
-  text-transform: uppercase;
-  letter-spacing: 2px;
-  font-weight: 600;
-}
-.p86-report-preview-paper[data-style-pack="blueprint"] .p86-report-cover-meta {
-  border-top: 1px solid #67e8f9;
-}
-.p86-report-preview-paper[data-style-pack="blueprint"] .p86-report-cover-meta .k {
-  color: #67e8f9;
-}
-.p86-report-preview-paper[data-style-pack="blueprint"] .p86-report-cover-meta .v {
-  color: #fff;
-}
-.p86-report-preview-paper[data-style-pack="blueprint"] .p86-report-preview-section-label {
-  font-family: 'Futura', 'Trebuchet MS', sans-serif;
-  font-weight: 700;
-  letter-spacing: 1px;
-  text-transform: uppercase;
-  color: #0e2a4a;
-}
-
-/* Editorial Spread — preview */
-.p86-report-preview-paper[data-style-pack="editorial-spread"] .p86-report-cover-rendered {
-  background: #fff;
-  padding: 100px 80px;
-  text-align: left;
-  border-bottom: 0;
-}
-.p86-report-preview-paper[data-style-pack="editorial-spread"] .p86-report-cover-title {
-  font-size: clamp(48px, 11vw, 88px);
-  line-height: 0.95;
-  letter-spacing: -2.5px;
-  font-weight: 900;
-  margin-top: 100px;
-}
-.p86-report-preview-paper[data-style-pack="editorial-spread"] .p86-report-cover-subtitle {
-  font-family: Georgia, serif;
-  font-style: italic;
-  font-size: 18px;
-  color: #333;
-  letter-spacing: 0;
-}
-.p86-report-preview-paper[data-style-pack="editorial-spread"] .p86-report-cover-addr {
-  margin-bottom: 120px;
-  font-size: 14px;
-  color: #555;
-}
-.p86-report-preview-paper[data-style-pack="editorial-spread"] .p86-report-cover-meta {
-  justify-content: flex-start;
-  gap: 40px;
-  border-top: 2px solid #000;
-}
-.p86-report-preview-paper[data-style-pack="editorial-spread"] .p86-report-preview-section-label {
-  font-family: Georgia, 'Times New Roman', serif;
-  font-size: 22px;
-  font-weight: 700;
-  font-style: italic;
-}
-
-/* Polaroid Journal — preview */
-.p86-report-preview-paper[data-style-pack="polaroid-journal"] {
-  background: #e8d9b8;
-}
-.p86-report-preview-paper[data-style-pack="polaroid-journal"] .p86-report-cover-rendered {
-  background: #e8d9b8;
-  padding: 80px 50px;
-  text-align: center;
-  border-bottom: 0;
-}
-.p86-report-preview-paper[data-style-pack="polaroid-journal"] .p86-report-cover-title {
-  font-family: 'Caveat', 'Patrick Hand', 'Bradley Hand', cursive;
-  color: #2e1f0d;
-  font-weight: 700;
-}
-.p86-report-preview-paper[data-style-pack="polaroid-journal"] .p86-report-cover-subtitle {
-  font-family: 'Caveat', cursive;
-  color: #6b4f2a;
-  font-style: normal;
-}
-.p86-report-preview-paper[data-style-pack="polaroid-journal"] .p86-report-cover-meta {
-  border-top: 1px dashed #6b4f2a;
-}
-.p86-report-preview-paper[data-style-pack="polaroid-journal"] .p86-report-preview-section-label {
-  font-family: 'Caveat', 'Patrick Hand', cursive;
-  font-size: 24px;
-  font-weight: 600;
-}
-.p86-report-preview-paper[data-style-pack="polaroid-journal"] .p86-report-preview-photo-img-wrap {
-  background: #fff;
-  border: 0;
-  padding: 6px 6px 22px 6px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-  border-radius: 2px;
-}
-.p86-report-preview-paper[data-style-pack="polaroid-journal"] .p86-report-preview-photo-cap {
-  font-family: 'Caveat', cursive;
-  font-size: 16px;
-  background: transparent;
-  border: 0;
-  color: #2e1f0d;
-}
-
-/* ─────────────────────────────────────────────────────────────────
    Style picker — gallery modal
    ───────────────────────────────────────────────────────────────── */
 .p86-report-style-gallery {
@@ -718,4 +455,659 @@
   font-size: 11.5px;
   color: var(--text-dim, #888);
   line-height: 1.4;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   STYLE PACKS
+   ═══════════════════════════════════════════════════════════════════════
+
+   A pack has to change the SHAPE of the document, not only its typeface. The
+   first version of this file was a colour-and-font swap: every pack produced
+   the same cover plate, the same underlined section label, the same photo in
+   the same frame, the same bordered file row. Held side by side they read as
+   one report in seven fonts, which is exactly what they were.
+
+   So each pack is now two things:
+
+     TOKENS     colour, type and rule — the skin, shared by rules below
+     STRUCTURE  a per-pack block that changes the skeleton: how the cover is
+                composed, whether sections are numbered, how a photo is
+                framed, where the caption sits, how dense the page is
+
+   The structure blocks come LAST in the file on purpose. A pack must be able
+   to overrule anything the shared layer decided, and equal-specificity
+   selectors are settled by source order.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.p86-report-preview-paper {
+  --pk-paper:      #ffffff;
+  --pk-ink:        #111111;
+  --pk-ink-soft:   #666666;
+  --pk-accent:     #333333;
+  --pk-rule:       1px solid #d9d5cd;
+  --pk-display:    -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+  --pk-body:       -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+  --pk-mono:       ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  --pk-badge-bg:   #ffffff;
+  --pk-badge-ink:  #000000;
+  --pk-radius:     3px;
+  --pk-label-tt:   none;         /* section-label text-transform */
+  --pk-label-ls:   normal;       /* and letter-spacing */
+  --pk-label-bg:   transparent;  /* a filled label bar, for packs that want one */
+  --pk-label-ink:  var(--pk-ink);
+  --pk-label-pad:  0 0 6px;
+  --pk-gap:        14px;         /* between photos */
+  --pk-section-gap: 34px;        /* between sections */
+}
+
+/* ── Per-pack tokens ────────────────────────────────────────────────── */
+
+.p86-report-preview-paper[data-style-pack="classic-corporate"] {
+  --pk-paper: #fcfaf5;
+  --pk-ink: #1e3a5f;
+  --pk-ink-soft: #6b7a8f;
+  --pk-accent: #b8941f;
+  --pk-rule: 1px solid #d8cfae;
+  --pk-display: Georgia, 'Times New Roman', serif;
+  --pk-body: Georgia, 'Times New Roman', serif;
+  --pk-badge-bg: #1e3a5f;
+  --pk-badge-ink: #ffffff;
+  --pk-radius: 2px;
+  --pk-label-ls: 0.4px;
+}
+
+.p86-report-preview-paper[data-style-pack="modern-bold"] {
+  --pk-ink: #1e293b;
+  --pk-ink-soft: #64748b;
+  --pk-accent: #4f8cff;
+  --pk-rule: 2px solid #1e293b;
+  --pk-display: 'Segoe UI', -apple-system, Arial, sans-serif;
+  --pk-badge-bg: #4f8cff;
+  --pk-badge-ink: #ffffff;
+  --pk-radius: 10px;
+  --pk-label-tt: uppercase;
+  --pk-label-ls: 1.2px;
+  --pk-label-bg: #1e293b;
+  --pk-label-ink: #ffffff;
+  --pk-label-pad: 11px 16px;
+  --pk-gap: 20px;
+  --pk-section-gap: 40px;
+}
+
+.p86-report-preview-paper[data-style-pack="field-notebook"] {
+  --pk-paper: #f8f4e8;
+  --pk-ink: #3a3528;
+  --pk-ink-soft: #8a7f5e;
+  --pk-accent: #8a7f5e;
+  --pk-rule: 1px dashed #8a7f5e;
+  --pk-display: Georgia, serif;
+  --pk-body: Georgia, serif;
+  --pk-mono: 'Courier New', monospace;
+  --pk-badge-bg: #f8f4e8;
+  --pk-badge-ink: #3a3528;
+  --pk-radius: 0;
+}
+
+.p86-report-preview-paper[data-style-pack="inspection-pro"] {
+  --pk-ink: #0f172a;
+  --pk-ink-soft: #475569;
+  --pk-accent: #0f172a;
+  --pk-rule: 1px solid #94a3b8;
+  --pk-display: -apple-system, 'Segoe UI', Arial, sans-serif;
+  --pk-mono: ui-monospace, Menlo, monospace;
+  --pk-badge-bg: #0f172a;
+  --pk-badge-ink: #ffffff;
+  --pk-radius: 0;
+  --pk-label-tt: uppercase;
+  --pk-label-ls: 1px;
+  --pk-label-bg: #e2e8f0;
+  --pk-label-ink: #0f172a;
+  --pk-label-pad: 6px 10px;
+  --pk-gap: 8px;
+  --pk-section-gap: 16px;
+}
+
+.p86-report-preview-paper[data-style-pack="blueprint"] {
+  --pk-paper: #0e2a4a;
+  --pk-ink: #e6f3ff;
+  --pk-ink-soft: #9dc3e0;
+  --pk-accent: #67e8f9;
+  --pk-rule: 1px solid #2b5a86;
+  --pk-display: 'Futura', 'Trebuchet MS', sans-serif;
+  --pk-body: 'Trebuchet MS', sans-serif;
+  --pk-mono: 'Courier New', monospace;
+  --pk-badge-bg: #67e8f9;
+  --pk-badge-ink: #0e2a4a;
+  --pk-radius: 0;
+  --pk-label-tt: uppercase;
+  --pk-label-ls: 1.4px;
+  --pk-label-ink: #67e8f9;
+}
+
+.p86-report-preview-paper[data-style-pack="editorial-spread"] {
+  --pk-ink: #111111;
+  --pk-ink-soft: #555555;
+  --pk-accent: #000000;
+  --pk-rule: 1px solid #000000;
+  --pk-display: Georgia, 'Times New Roman', serif;
+  --pk-body: Georgia, 'Times New Roman', serif;
+  --pk-badge-bg: #000000;
+  --pk-badge-ink: #ffffff;
+  --pk-radius: 0;
+  --pk-label-ls: 0.2px;
+  --pk-gap: 30px;
+  --pk-section-gap: 54px;
+}
+
+.p86-report-preview-paper[data-style-pack="polaroid-journal"] {
+  --pk-paper: #e8d9b8;
+  --pk-ink: #2e1f0d;
+  --pk-ink-soft: #7a6647;
+  --pk-accent: #7a6647;
+  --pk-rule: 1px solid #c9b48a;
+  --pk-display: 'Caveat', 'Patrick Hand', 'Bradley Hand', 'Segoe Script', cursive;
+  --pk-body: 'Caveat', 'Patrick Hand', 'Bradley Hand', 'Segoe Script', cursive;
+  --pk-badge-bg: #ffffff;
+  --pk-badge-ink: #2e1f0d;
+  --pk-radius: 0;
+  --pk-gap: 34px;
+  --pk-section-gap: 46px;
+}
+
+/* ── Shared layer: rules that spend the tokens ───────────────────────
+   Applies to every pack including "clean", which simply takes the defaults.
+   This is what reaches the caption, the number, the narrative and the file
+   list — the parts an earlier version left identical in all seven packs. */
+
+.p86-report-preview-paper[data-style-pack] {
+  background: var(--pk-paper);
+  color: var(--pk-ink);
+  font-family: var(--pk-body);
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+.p86-report-preview-paper[data-style-pack] .p86-report-preview-section {
+  margin-bottom: var(--pk-section-gap);
+}
+.p86-report-preview-paper[data-style-pack] .p86-report-preview-section-grid,
+.p86-report-preview-paper[data-style-pack] .p86-report-preview-section-stack {
+  gap: var(--pk-gap);
+}
+
+.p86-report-preview-paper[data-style-pack] .p86-report-preview-section-label {
+  font-family: var(--pk-display);
+  color: var(--pk-label-ink);
+  background: var(--pk-label-bg);
+  padding: var(--pk-label-pad);
+  border-bottom: var(--pk-rule);
+  text-transform: var(--pk-label-tt);
+  letter-spacing: var(--pk-label-ls);
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+.p86-report-preview-paper[data-style-pack] .p86-report-preview-summary,
+.p86-report-preview-paper[data-style-pack] .p86-report-preview-text {
+  font-family: var(--pk-body);
+  color: var(--pk-ink);
+}
+
+.p86-report-preview-paper[data-style-pack] .p86-report-photo-sidedesc-text {
+  font-family: var(--pk-body);
+  color: var(--pk-ink);
+}
+.p86-report-preview-paper[data-style-pack] .p86-report-photo-meta {
+  font-family: var(--pk-mono);
+  color: var(--pk-ink-soft);
+}
+
+.p86-report-preview-paper[data-style-pack] .p86-report-preview-photo-img-wrap {
+  border-radius: var(--pk-radius);
+}
+
+/* The number badge is the most repeated mark in the document, so it carries
+   the pack more than anything else on the page. */
+.p86-report-preview-paper[data-style-pack] .p86-report-photo-num {
+  background: var(--pk-badge-bg);
+  color: var(--pk-badge-ink);
+  border-color: var(--pk-badge-ink);
+  font-family: var(--pk-mono);
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+.p86-report-preview-paper[data-style-pack] .p86-report-preview-file-row {
+  border: var(--pk-rule);
+  border-radius: var(--pk-radius);
+  font-family: var(--pk-body);
+}
+.p86-report-preview-paper[data-style-pack] .p86-report-preview-file-ext {
+  background: var(--pk-accent);
+  color: var(--pk-paper);
+  font-family: var(--pk-mono);
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+.p86-report-preview-paper[data-style-pack] .p86-report-preview-file-name { color: var(--pk-ink); }
+.p86-report-preview-paper[data-style-pack] .p86-report-preview-empty { color: var(--pk-ink-soft); }
+
+.p86-report-preview-paper[data-style-pack] .p86-report-map-live,
+.p86-report-preview-paper[data-style-pack] .p86-report-map-static {
+  border-radius: var(--pk-radius);
+}
+.p86-report-preview-paper[data-style-pack] .p86-report-map-pin {
+  background: var(--pk-badge-bg);
+  color: var(--pk-badge-ink);
+  font-family: var(--pk-mono);
+}
+
+.p86-report-preview-paper[data-style-pack] .p86-report-cover-company,
+.p86-report-preview-paper[data-style-pack] .p86-report-cover-addr { color: var(--pk-ink-soft); }
+.p86-report-preview-paper[data-style-pack] .p86-report-cover-meta .k { color: var(--pk-ink-soft); font-family: var(--pk-mono); }
+.p86-report-preview-paper[data-style-pack] .p86-report-cover-meta .v { color: var(--pk-ink); }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   STRUCTURE — what actually makes the packs different documents
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── Classic Corporate ────────────────────────────────────────────────
+   The engineering-firm letter. Its signature is the numbered section: an
+   auto counter so the report reads as a formal, itemised document, and a
+   meta block ruled into columns like a title sheet. */
+
+.p86-report-preview-paper[data-style-pack="classic-corporate"] {
+  counter-reset: p86sec;
+}
+.p86-report-preview-paper[data-style-pack="classic-corporate"] .p86-report-cover-rendered {
+  border-top: 3px double var(--pk-accent);
+  border-bottom: 3px double var(--pk-accent);
+  padding: 26px 0;
+}
+.p86-report-preview-paper[data-style-pack="classic-corporate"] .p86-report-cover-meta {
+  border-top: 1px solid #d8cfae;
+  padding-top: 16px;
+  margin-top: 20px;
+}
+.p86-report-preview-paper[data-style-pack="classic-corporate"] .p86-report-cover-meta > div {
+  padding: 0 22px;
+  border-left: 1px solid #e3dcc4;
+}
+.p86-report-preview-paper[data-style-pack="classic-corporate"] .p86-report-cover-meta > div:first-child {
+  border-left: 0;
+}
+.p86-report-preview-paper[data-style-pack="classic-corporate"] .p86-report-preview-section-label::before {
+  counter-increment: p86sec;
+  content: counter(p86sec) ".  ";
+  color: var(--pk-accent);
+  font-weight: 700;
+}
+.p86-report-preview-paper[data-style-pack="classic-corporate"] .p86-report-preview-photo-img-wrap {
+  border: 1px solid #d8cfae;
+  padding: 4px;
+  background: #fff;
+}
+/* File rows as a table of contents, not as cards. */
+.p86-report-preview-paper[data-style-pack="classic-corporate"] .p86-report-preview-file-row {
+  border: 0;
+  border-bottom: 1px dotted #c9bd94;
+  border-radius: 0;
+  padding: 6px 0;
+}
+
+/* ── Modern Bold ──────────────────────────────────────────────────────
+   The agency deck. Full-bleed dark cover, the title set as large as the page
+   will take, and section labels as solid bars rather than underlines. */
+
+.p86-report-preview-paper[data-style-pack="modern-bold"] .p86-report-cover-rendered {
+  background: #1e293b;
+  color: #fff;
+  text-align: left;
+  padding: 38px 34px 32px;
+  border: 0;
+  border-radius: 12px;
+  margin-bottom: 34px;
+}
+.p86-report-preview-paper[data-style-pack="modern-bold"] .p86-report-cover-title {
+  font-size: 42px;
+  font-weight: 800;
+  letter-spacing: -1.2px;
+  line-height: 1.05;
+  color: #fff;
+}
+.p86-report-preview-paper[data-style-pack="modern-bold"] .p86-report-cover-company {
+  color: #4f8cff;
+}
+.p86-report-preview-paper[data-style-pack="modern-bold"] .p86-report-cover-addr,
+.p86-report-preview-paper[data-style-pack="modern-bold"] .p86-report-cover-subtitle {
+  color: #94a3b8;
+}
+.p86-report-preview-paper[data-style-pack="modern-bold"] .p86-report-cover-meta {
+  justify-content: flex-start;
+  gap: 10px;
+  margin-top: 26px;
+}
+/* Meta as chips along the bottom of the cover block. */
+.p86-report-preview-paper[data-style-pack="modern-bold"] .p86-report-cover-meta > div {
+  background: rgba(255,255,255,.08);
+  border: 1px solid rgba(255,255,255,.16);
+  border-radius: 8px;
+  padding: 8px 14px;
+}
+.p86-report-preview-paper[data-style-pack="modern-bold"] .p86-report-cover-meta .k { color: #94a3b8; }
+.p86-report-preview-paper[data-style-pack="modern-bold"] .p86-report-cover-meta .v { color: #fff; }
+.p86-report-preview-paper[data-style-pack="modern-bold"] .p86-report-preview-section-label {
+  border-bottom: 0;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 800;
+  margin-bottom: 16px;
+}
+.p86-report-preview-paper[data-style-pack="modern-bold"] .p86-report-preview-photo-img-wrap {
+  box-shadow: 0 4px 14px rgba(15,23,42,.18);
+}
+.p86-report-preview-paper[data-style-pack="modern-bold"] .p86-report-photo-num {
+  min-width: 26px; height: 26px; font-size: 13px;
+  border: 0; top: 10px; left: 10px;
+}
+.p86-report-preview-paper[data-style-pack="modern-bold"] .p86-report-photo-sidedesc-text {
+  font-size: 16px; font-weight: 700;
+}
+.p86-report-preview-paper[data-style-pack="modern-bold"] .p86-report-preview-file-row {
+  border: 0;
+  background: #f1f5f9;
+  padding: 11px 14px;
+}
+
+/* ── Field Notebook ───────────────────────────────────────────────────
+   A ruled page carried on site. The narrative genuinely sits on ruled lines,
+   photos are taped in, and the section head is written in the margin. */
+
+.p86-report-preview-paper[data-style-pack="field-notebook"] .p86-report-cover-rendered {
+  border-top: 1px dashed #8a7f5e;
+  border-bottom: 1px dashed #8a7f5e;
+  padding: 20px 0;
+}
+.p86-report-preview-paper[data-style-pack="field-notebook"] .p86-report-preview-summary,
+.p86-report-preview-paper[data-style-pack="field-notebook"] .p86-report-preview-text {
+  /* Ruled paper: one line per line of text, so the writing sits on the rule
+     rather than floating over a tint. 27px matches the 1.8 line-height below. */
+  line-height: 27px;
+  background-image: repeating-linear-gradient(
+    to bottom, transparent 0 26px, #d8cca8 26px 27px);
+  padding: 0 6px 3px;
+}
+.p86-report-preview-paper[data-style-pack="field-notebook"] .p86-report-preview-section-label {
+  border-bottom: 1px dashed #8a7f5e;
+  padding-left: 16px;
+  position: relative;
+}
+.p86-report-preview-paper[data-style-pack="field-notebook"] .p86-report-preview-section-label::before {
+  content: "\2022";
+  position: absolute; left: 0; top: 0;
+  color: var(--pk-accent);
+}
+/* Taped in: a white border, a soft shadow and a slight tilt. */
+.p86-report-preview-paper[data-style-pack="field-notebook"] .p86-report-preview-photo-img-wrap {
+  border: 6px solid #fffdf6;
+  box-shadow: 0 2px 8px rgba(58,53,40,.28);
+  transform: rotate(-0.6deg);
+}
+.p86-report-preview-paper[data-style-pack="field-notebook"] .p86-report-preview-photo:nth-child(even) .p86-report-preview-photo-img-wrap {
+  transform: rotate(0.7deg);
+}
+.p86-report-preview-paper[data-style-pack="field-notebook"] .p86-report-photo-num {
+  border-radius: 0;
+  border-width: 1px;
+}
+.p86-report-preview-paper[data-style-pack="field-notebook"] .p86-report-preview-file-row {
+  border: 0;
+  border-bottom: 1px dashed #b8ab84;
+  border-radius: 0;
+  padding: 6px 2px;
+}
+
+/* ── Inspection Pro ───────────────────────────────────────────────────
+   The compliance form: dense, boxed, numbered, and readable at a glance by
+   someone checking it against a list. Every section is a bordered block and
+   every caption is a field in that block. */
+
+.p86-report-preview-paper[data-style-pack="inspection-pro"] {
+  counter-reset: p86sec;
+  font-size: 13.5px;
+}
+.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-cover-rendered {
+  text-align: left;
+  padding-bottom: 14px;
+  border-bottom: 2px solid #0f172a;
+  margin-bottom: 20px;
+}
+.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-cover-title {
+  font-size: 22px; font-weight: 700;
+}
+/* Meta as a real boxed field table, the way a form carries its header. */
+.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-cover-meta {
+  justify-content: flex-start;
+  gap: 0;
+  border: 1px solid #94a3b8;
+  margin-top: 14px;
+}
+.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-cover-meta > div {
+  padding: 6px 12px;
+  border-right: 1px solid #94a3b8;
+  min-width: 150px;
+}
+.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-cover-meta > div:last-child { border-right: 0; }
+.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-preview-section {
+  border: 1px solid #94a3b8;
+  padding: 0;
+}
+.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-preview-section-label {
+  border-bottom: 1px solid #94a3b8;
+  font-size: 12px;
+  font-weight: 700;
+  margin: 0 0 10px;
+}
+.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-preview-section-label::before {
+  counter-increment: p86sec;
+  content: counter(p86sec, decimal-leading-zero) " \00a0\2014\00a0 ";
+}
+/* Everything under the label is inset; the label itself runs edge to edge. */
+.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-preview-section-grid,
+.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-preview-section-stack,
+.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-preview-text,
+.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-preview-files,
+.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-preview-empty,
+.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-map-wrap {
+  margin: 0 10px 10px;
+}
+.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-preview-photo-img-wrap {
+  border: 1px solid #94a3b8;
+}
+.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-photo-num {
+  border-radius: 0; top: 0; left: 0;
+}
+.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-photo-sidedesc {
+  border-left: 3px solid #0f172a;
+  padding-left: 10px;
+}
+.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-photo-sidedesc-text {
+  font-size: 13px;
+}
+.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-preview-file-row {
+  border-radius: 0;
+  padding: 5px 8px;
+}
+
+/* ── Blueprint ────────────────────────────────────────────────────────
+   A drawing sheet: grid paper, a ruled border around the whole sheet, and
+   labels that read like drawing callouts. */
+
+.p86-report-preview-paper[data-style-pack="blueprint"] {
+  /* Grid paper, drawn rather than tinted. */
+  background-image:
+    repeating-linear-gradient(to right,  transparent 0 23px, rgba(120,180,230,.16) 23px 24px),
+    repeating-linear-gradient(to bottom, transparent 0 23px, rgba(120,180,230,.16) 23px 24px);
+  padding: 22px;
+  border: 1px solid #2b5a86;
+  outline: 3px solid #0e2a4a;
+  outline-offset: -8px;
+  counter-reset: p86sec;
+}
+.p86-report-preview-paper[data-style-pack="blueprint"] .p86-report-cover-rendered {
+  border: 1px solid #2b5a86;
+  padding: 22px;
+  background: rgba(6,20,36,.55);
+}
+.p86-report-preview-paper[data-style-pack="blueprint"] .p86-report-cover-title {
+  font-family: var(--pk-mono);
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  font-size: 24px;
+}
+.p86-report-preview-paper[data-style-pack="blueprint"] .p86-report-preview-section-label {
+  border-bottom: 1px solid #67e8f9;
+  font-family: var(--pk-mono);
+  font-size: 14px;
+}
+.p86-report-preview-paper[data-style-pack="blueprint"] .p86-report-preview-section-label::before {
+  counter-increment: p86sec;
+  content: "[" counter(p86sec, decimal-leading-zero) "] ";
+  color: var(--pk-ink-soft);
+}
+.p86-report-preview-paper[data-style-pack="blueprint"] .p86-report-preview-photo-img-wrap {
+  border: 1px solid #67e8f9;
+  padding: 3px;
+}
+.p86-report-preview-paper[data-style-pack="blueprint"] .p86-report-photo-num {
+  border-radius: 0;
+  border: 0;
+}
+.p86-report-preview-paper[data-style-pack="blueprint"] .p86-report-photo-sidedesc-text {
+  font-family: var(--pk-mono);
+  font-size: 13px;
+}
+.p86-report-preview-paper[data-style-pack="blueprint"] .p86-report-preview-file-row {
+  border: 1px solid #2b5a86;
+  background: rgba(6,20,36,.45);
+}
+
+/* ── Editorial Spread ─────────────────────────────────────────────────
+   A magazine feature. Air, a measure that is actually readable, a drop cap
+   on the opening paragraph, and section heads that hang in the margin. */
+
+.p86-report-preview-paper[data-style-pack="editorial-spread"] .p86-report-cover-rendered {
+  text-align: left;
+  border-bottom: 4px solid #000;
+  padding-bottom: 22px;
+  margin-bottom: 40px;
+}
+.p86-report-preview-paper[data-style-pack="editorial-spread"] .p86-report-cover-title {
+  font-size: 46px;
+  line-height: 1.02;
+  letter-spacing: -1px;
+  max-width: 16ch;
+}
+.p86-report-preview-paper[data-style-pack="editorial-spread"] .p86-report-cover-subtitle {
+  font-size: 17px;
+}
+.p86-report-preview-paper[data-style-pack="editorial-spread"] .p86-report-cover-meta {
+  justify-content: flex-start;
+  gap: 0 46px;
+  border-top: 1px solid #000;
+  padding-top: 14px;
+}
+/* The opening paragraph gets a drop cap — the one move that says "feature"
+   before a word is read. */
+.p86-report-preview-paper[data-style-pack="editorial-spread"] .p86-report-preview-summary {
+  font-size: 17px;
+  line-height: 1.62;
+  max-width: 62ch;
+}
+.p86-report-preview-paper[data-style-pack="editorial-spread"] .p86-report-preview-summary::first-letter {
+  float: left;
+  font-size: 58px;
+  line-height: .82;
+  padding: 4px 10px 0 0;
+  font-weight: 700;
+}
+.p86-report-preview-paper[data-style-pack="editorial-spread"] .p86-report-preview-text {
+  max-width: 62ch;
+  font-size: 15.5px;
+  line-height: 1.62;
+}
+/* The section head hangs in the margin instead of sitting on a rule. */
+.p86-report-preview-paper[data-style-pack="editorial-spread"] .p86-report-preview-section-label {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 2.4px;
+  border-bottom: 0;
+  border-top: 1px solid #000;
+  padding-top: 10px;
+  margin-bottom: 22px;
+}
+.p86-report-preview-paper[data-style-pack="editorial-spread"] .p86-report-photo-sidedesc-text {
+  font-style: italic;
+  font-weight: 400;
+  font-size: 15px;
+}
+.p86-report-preview-paper[data-style-pack="editorial-spread"] .p86-report-photo-num {
+  border-radius: 0;
+  border: 0;
+  top: 0; left: 0;
+  height: 20px; min-width: 20px;
+  font-size: 10.5px;
+}
+.p86-report-preview-paper[data-style-pack="editorial-spread"] .p86-report-preview-file-row {
+  border: 0;
+  border-bottom: 1px solid #000;
+  border-radius: 0;
+  padding: 9px 0;
+}
+
+/* ── Polaroid Journal ─────────────────────────────────────────────────
+   A scrapbook. Real polaroids — thick white frame with the deep chin at the
+   bottom, tilted, with the caption written underneath rather than beside. */
+
+.p86-report-preview-paper[data-style-pack="polaroid-journal"] .p86-report-cover-rendered {
+  border-bottom: 2px solid #c9b48a;
+}
+.p86-report-preview-paper[data-style-pack="polaroid-journal"] .p86-report-cover-title {
+  font-size: 40px;
+}
+.p86-report-preview-paper[data-style-pack="polaroid-journal"] .p86-report-preview-section-label {
+  font-size: 24px;
+  border-bottom: 2px solid #c9b48a;
+}
+/* Caption under the photo, not beside it — a photo album, not a report. */
+.p86-report-preview-paper[data-style-pack="polaroid-journal"] .p86-report-preview-photo.has-sidedesc {
+  grid-template-columns: minmax(0, 1fr);
+}
+.p86-report-preview-paper[data-style-pack="polaroid-journal"] .p86-report-preview-photo.has-sidedesc.desc-left .p86-report-preview-photo-img-wrap { order: 1; }
+.p86-report-preview-paper[data-style-pack="polaroid-journal"] .p86-report-preview-photo.has-sidedesc.desc-left .p86-report-photo-sidedesc { order: 2; text-align: left; }
+.p86-report-preview-paper[data-style-pack="polaroid-journal"] .p86-report-preview-photo-img-wrap {
+  border: 10px solid #fff;
+  border-bottom-width: 34px;
+  box-shadow: 0 3px 12px rgba(46,31,13,.34);
+  transform: rotate(-1.4deg);
+  background: #fff;
+}
+.p86-report-preview-paper[data-style-pack="polaroid-journal"] .p86-report-preview-photo:nth-child(even) .p86-report-preview-photo-img-wrap {
+  transform: rotate(1.6deg);
+}
+.p86-report-preview-paper[data-style-pack="polaroid-journal"] .p86-report-photo-num {
+  border-radius: 0;
+  border: 1px solid #2e1f0d;
+  top: 8px; left: 8px;
+}
+.p86-report-preview-paper[data-style-pack="polaroid-journal"] .p86-report-photo-sidedesc {
+  padding-top: 10px;
+}
+.p86-report-preview-paper[data-style-pack="polaroid-journal"] .p86-report-photo-sidedesc-text {
+  font-size: 20px;
+  font-weight: 400;
+}
+.p86-report-preview-paper[data-style-pack="polaroid-journal"] .p86-report-preview-file-row {
+  background: rgba(255,255,255,.5);
 }
