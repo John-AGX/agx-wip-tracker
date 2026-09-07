@@ -1472,12 +1472,20 @@ function p86Ask(message, opts) {
   }
 
   async function deleteFromModal(modal) {
-    if (!(await p86Ask('Delete this sub from the directory? Only allowed if it has no job assignments.'))) return;
+    // The copy tracks the server guard. It used to say "only allowed if it has
+    // no job assignments", which was true of the probe and NOT true of the
+    // money: purchase orders, vendor bills and receipts all carry a loose
+    // sub_id that nothing refused. See DELETE /api/subs/:id in sub-routes.js.
+    if (!(await p86Ask('Delete this sub from the directory? Only allowed if nothing points at it — no job assignments, purchase orders, bills or receipts. To retire a sub you have used, set its status to Closed instead.'))) return;
     window.p86Api.subs.remove(_editingId).then(function() {
       modal.remove();
       return refresh();
     }).catch(function(err) {
-      alert('Delete failed: ' + (err.message || err));
+      // NOT alert(). A native alert is a no-op in the installed PWA, so on a
+      // phone the 409 — which now names WHICH rows are holding the sub — landed
+      // nowhere and the delete looked like it silently did nothing.
+      var msg = 'Delete failed: ' + (err.message || err);
+      if (window.p86Toast) window.p86Toast(msg, 'error'); else alert(msg);
     });
   }
 

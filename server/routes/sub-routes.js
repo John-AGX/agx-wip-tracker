@@ -11,7 +11,8 @@
 //   GET    /api/subs                — directory list
 //   POST   /api/subs                — create
 //   PUT    /api/subs/:id            — update directory profile
-//   DELETE /api/subs/:id            — delete (only if no job_subs)
+//   DELETE /api/subs/:id            — delete (only if NOTHING points at it:
+//                                     job_subs, POs, vendor bills, receipts)
 //   GET    /api/subs/:id            — single record + cross-job
 //                                     summary (every job that's used
 //                                     them)
@@ -289,7 +290,52 @@ router.put('/:id',
   }
 );
 
-// DELETE /api/subs/:id — only if no job_subs assignments exist
+// EVERY TABLE THAT POINTS AT A SUB, NOT THE ONE POSTGRES ALREADY DEFENDS.
+//
+// The guard used to probe `job_subs` and nothing else — which is the ONLY one
+// of the four the database would have refused on its own:
+//
+//   server/db.js:1833  job_subs.sub_id            REFERENCES subs(id) ON DELETE RESTRICT
+//   server/db.js:845   job_purchase_orders.sub_id TEXT, no REFERENCES
+//   server/db.js:880   job_vendor_bills.sub_id    TEXT, no REFERENCES  ("-- vendor (subs.id, loose)")
+//   server/db.js:2481  receipts.sub_id            TEXT, no REFERENCES
+//
+// So the guard duplicated Postgres and covered nothing, and deleting a sub that
+// had a purchase order, a bill or a receipt left those rows pointing at an id
+// that no longer resolves — with NO error, in either layer. On receipts the
+// orphan is also invisible: attachSubNames (receipt-routes.js:110) only sets
+// sub_name when the sub row still exists, so the Cost Inbox renders "—", which
+// is the same thing it renders for "no sub linked".
+//
+// UNSCOPED ON PURPOSE. The caller's ownership of the sub is already proved one
+// line above; these counts are of rows pointing AT that proven-own sub. Scoping
+// each arm by organization_id would make the guard fail OPEN for exactly the
+// mis-attributed row that most needs catching.
+//
+// A sub that is genuinely finished is closed (status), not deleted — that is
+// what the 409 says, and it is now true of money as well as of assignments.
+const SUB_POINTERS = [
+  { table: 'job_subs',            label: 'job assignment' },
+  { table: 'job_purchase_orders', label: 'purchase order' },
+  { table: 'job_vendor_bills',    label: 'vendor bill' },
+  { table: 'receipts',            label: 'receipt' },
+];
+
+// Which of the four hold this sub, with counts. One round trip.
+async function subPointerHolds(subId) {
+  const sql = SUB_POINTERS
+    .map((p) => "SELECT '" + p.label + "' AS label, COUNT(*)::int AS n FROM " + p.table + ' WHERE sub_id = $1')
+    .join(' UNION ALL ');
+  const { rows } = await pool.query(sql, [subId]);
+  return rows.map((r) => ({ label: r.label, n: Number(r.n) || 0 })).filter((r) => r.n > 0);
+}
+
+function plural(n, word) {
+  return n + ' ' + word + (n === 1 ? '' : 's');
+}
+
+// DELETE /api/subs/:id — only if NOTHING points at the sub (assignments,
+// purchase orders, vendor bills, receipts). See SUB_POINTERS above.
 router.delete('/:id',
   requireAuth, requireCapability('JOBS_EDIT_ANY'), requireOrgId,
   async (req, res) => {
@@ -298,9 +344,15 @@ router.delete('/:id',
       // foreign sub id answers 409-or-200 and that difference is itself a
       // cross-tenant read ("does org B's sub have work?").
       if (!(await subInOrg(pool, req.params.id, req.orgId))) return notYours(res, 'Sub');
-      const inUse = await pool.query('SELECT 1 FROM job_subs WHERE sub_id = $1 LIMIT 1', [req.params.id]);
-      if (inUse.rows.length) {
-        return res.status(409).json({ error: 'Sub is assigned to one or more jobs. Unassign first or use status=closed.' });
+      const holds = await subPointerHolds(req.params.id);
+      if (holds.length) {
+        // Name WHAT is holding it. "Assigned to one or more jobs" sent someone
+        // to unassign a job that was never the reason.
+        return res.status(409).json({
+          error: 'Still in use — ' + holds.map((h) => plural(h.n, h.label)).join(', ')
+            + '. Remove those first, or set the sub to status=closed instead of deleting it.',
+          in_use: holds,
+        });
       }
       const result = await pool.query(
         'DELETE FROM subs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
