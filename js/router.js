@@ -155,6 +155,13 @@
           if (KNOWN_JOB_SUBS.indexOf(sub) !== -1) route.jobSub = sub;
         }
       }
+    } else if (top === 'projects') {
+      // /projects/:projectId — the Projects drill-in. 'projects' was already
+      // in KNOWN_TOP_TABS, so /projects/abc has always PARSED; parts[1] was
+      // simply never read, which made it a silent id-dropper rather than a
+      // 404. Stored raw and encoded on the way out, the way route.jobId is:
+      // a project id is a TEXT primary key that never contains '/'.
+      if (parts[1]) route.projectId = parts[1];
     } else if (top === 'estimates') {
       // /estimates/edit/:id  OR  /estimates/leads/:id  OR  /estimates/:sub
       // Note: clients and subs paths are handled above as pseudo-top-level
@@ -205,6 +212,13 @@
       }
       if (route.archived) return '/jobs/archived';
       return '/jobs';
+    }
+    if (route.top === 'projects') {
+      // Must come BEFORE the generic `return '/' + route.top` tail, which
+      // already produces a valid-looking '/projects' for a route that names
+      // a project — so leaving this out drops the id with no error anywhere.
+      if (route.projectId) return '/projects/' + encodeURIComponent(route.projectId);
+      return '/projects';
     }
     // Assembly Studio keeps the bookmarkable /assemblies URL.
     if (route.top === 'assembly-studio') return '/assemblies';
@@ -289,6 +303,14 @@
           route.archived = true;
         }
       }
+    } else if (top === 'projects') {
+      // Same shape as the jobs branch above: the detail VIEW's visibility is
+      // the signal, and the id comes from appState so both drill-ins read
+      // identically. openProject writes the literal 'block' (js/projects.js)
+      // and the teardown nulls currentProjectId, so this can be strict.
+      var pDetail = document.getElementById('projects-project-detail-view');
+      var pid = (window.appState && window.appState.currentProjectId) || null;
+      if (pDetail && pDetail.style.display === 'block' && pid) route.projectId = pid;
     } else if (top === 'estimates') {
       var subEl = document.querySelector('#estimates [data-estimates-subtab].active');
       var estSub = subEl ? subEl.getAttribute('data-estimates-subtab') : null;
@@ -403,12 +425,45 @@
       // Empty route — leave whatever auth.js / nav-state already did.
       return;
     }
+    // A popstate that lands on the project we are ALREADY showing must not
+    // fall through to origSwitchTab('projects') below. That call is
+    // unconditional, and switchTab('projects') runs
+    // window.p86ProjectsLeaveDetail() — which releases the detail's map,
+    // hides the view and nulls currentProjectId — before re-opening with a
+    // full refetch. This is exactly the shape a child overlay produces: the
+    // report editor and the photo annotator call pushOverlay(), which pushes
+    // a PATHLESS history entry, so backing out of one fires popstate on a
+    // state whose URL still names this project. Without this guard, pressing
+    // Back to dismiss a report editor ejected the user out of the project
+    // entirely. It was harmless while the detail was a position:fixed
+    // overlay on <body> that switchTab could not reach.
+    if (route.top === 'projects' && route.projectId &&
+        window.appState && window.appState.currentProjectId === route.projectId) {
+      var _pdv = document.getElementById('projects-project-detail-view');
+      if (_pdv && _pdv.style.display === 'block') return;
+    }
     var dataReady = !(typeof window.p86DataLoading === 'function' && window.p86DataLoading());
     replaying = true;
     try {
       if (typeof window.switchTab === 'function') {
         var origSwitchTab = window.switchTab.__p86RouterOrig || window.switchTab;
         origSwitchTab(route.top);
+      }
+
+      // Projects deep link / Back into a project. Deliberately NOT inside
+      // openEntities below: that path waits on p86DataLoading because
+      // editJob reads appData.jobs, and openProject does not — it fetches
+      // the project itself and paintDetail reads only _detailState. Making
+      // it wait would cost up to 6s of blank screen on a cold /projects/:id
+      // for nothing. The try/catch is required here: this synchronous body
+      // has only a `finally`, no catch, so a throw would escape onPostate
+      // and the boot replay. A bare /projects needs no branch — it falls
+      // past the guard above and origSwitchTab('projects') closes the
+      // detail via p86ProjectsLeaveDetail.
+      if (route.top === 'projects' && route.projectId &&
+          typeof window.openProject === 'function') {
+        try { window.openProject(route.projectId); }
+        catch (e) { console.warn('[router] project open failed:', e); }
       }
 
       if (route.top === 'estimates' && typeof window.switchEstimatesSubTab === 'function') {
