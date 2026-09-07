@@ -161,6 +161,59 @@ function normalizePhone(raw) {
   return '(' + area + ') ' + exch + '-' + d.slice(6);
 }
 
+// NANP codes that are NOT a place. A geographic area code tells you which
+// counter you are calling; none of these do.
+//
+// The assigned toll-free codes plus the ones the NANP has RESERVED for
+// toll-free expansion. The reserved ones are included deliberately: nothing is
+// lost by classifying an unassigned code as toll-free, because no branch has a
+// number in it, while missing one that gets assigned reopens exactly the hole
+// this closes.
+const TOLL_FREE_NPA = new Set([
+  '800', '833', '844', '855', '866', '877', '888',
+  '822', '880', '881', '882', '883', '884', '885', '886', '887', '889',
+]);
+// Premium rate — the caller is billed by the minute. 900 is an area code; 976
+// is the classic premium EXCHANGE, which lives inside an ordinary geographic
+// area code, so it has to be checked in the NXX position rather than the NPA.
+const PREMIUM_NPA = new Set(['900']);
+const PREMIUM_NXX = new Set(['976']);
+
+/**
+ * WHAT KIND OF LINE a number is: 'branch', 'toll_free', 'premium', or null
+ * when there is no valid number at all.
+ *
+ * THIS IS A DIFFERENT QUESTION FROM agreement(), AND THE SEPARATION IS THE
+ * WHOLE POINT. agreement() asks "did two independent reads land on the same
+ * digits" — a question about OCR. This asks "what did they agree ON" — a
+ * question about the phone system. Every rule in normalizePhone() above is a
+ * validity rule; not one of them is a store-phone rule, so a corroborated
+ * 1-800 number came out the far end looking exactly like a corroborated
+ * branch line.
+ *
+ * The two signals pull in OPPOSITE directions, which is what made this
+ * dangerous rather than merely imprecise. A chain's national number is printed
+ * on the receipt of EVERY store of that chain, so it agrees perfectly and
+ * earns corroboration SOONER AND MORE OFTEN than the branch line it is
+ * standing in front of — which differs per store and needs two receipts from
+ * the SAME counter before it agrees at all. Ranked by agreement alone, the
+ * confidence signal actively promotes the one number that cannot tell you
+ * which branch you reached.
+ *
+ * A toll-free number is not WRONG. It is NOT THIS BRANCH. Some vendors publish
+ * nothing else, so it is kept and labelled rather than discarded.
+ */
+function phoneLineType(raw) {
+  const n = normalizePhone(raw);
+  if (!n) return null;                            // a bad read stays empty
+  const d = n.replace(/[^0-9]+/g, '');
+  const area = d.slice(0, 3);
+  const exch = d.slice(3, 6);
+  if (PREMIUM_NPA.has(area) || PREMIUM_NXX.has(exch)) return 'premium';
+  if (TOLL_FREE_NPA.has(area)) return 'toll_free';
+  return 'branch';
+}
+
 // Blocks whose presence means the model returned the BUYER'S address. On an
 // ABC Supply or White Cap pickup ticket — which is what the field crew
 // actually photographs at a branch distributor, not a register tape — the most
@@ -254,6 +307,7 @@ module.exports = {
   normalizeVendorName,
   normalizeStoreNumber,
   normalizePhone,
+  phoneLineType,
   cleanStoreAddress,
   cleanStoreName,
   agreement,

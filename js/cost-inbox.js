@@ -748,9 +748,11 @@ function p86Ask(message, opts) {
   //  2. It never merges two spellings the normalizer did not group. Where a
   //     merchant has several spellings they are ALL listed, with their own
   //     counts, so a split is visible and fixable rather than silent.
-  //  3. It never makes an unverified phone number tappable. `dialable` is
-  //     computed on the server from agreement across receipts, and this file
-  //     reads that flag rather than deciding for itself.
+  //  3. It never makes an unverified phone number tappable, and never lets a
+  //     chain's national line wear the branch-agreement marker. A number is
+  //     TWO facts: `dialable` (were the digits corroborated) and `line_type`
+  //     (what kind of line was corroborated). Both are computed on the server
+  //     and this file reads them rather than deciding either for itself.
   // ══════════════════════════════════════════════════════════════════
   function agreementLine(a, noun) {
     if (!a || a.verdict === 'none') return '<span class="ci-store-miss">no ' + esc(noun) + ' captured</span>';
@@ -771,12 +773,51 @@ function p86Ask(message, opts) {
       }).join('') + '</div>';
   }
 
+  // A PHONE NUMBER IS TWO FACTS, and this screen shipped collapsing them into
+  // one. `dialable` answers "were these digits corroborated"; `line_type`
+  // answers "what kind of line did they corroborate". Both are the server's —
+  // this file still decides neither.
+  //
+  // Collapsed, the second fact was not merely missing, it was inverted. A
+  // chain's national number reads identically on every store's receipt, so it
+  // agrees perfectly and earned the branch-agreement marker FASTER AND MORE
+  // OFTEN than a real branch line, which differs per store and needs two
+  // receipts from the SAME counter before it agrees at all. The output was
+  // byte-identical either way: same element, same class, same sentence. The
+  // confidence signal was promoting the one number that cannot tell John which
+  // counter he reached.
   function phoneLine(p) {
     if (!p || p.verdict === 'none') return '<span class="ci-store-miss">no phone captured</span>';
+    var kind = p.line_type || null;
+
+    // Per-minute charge. On a builders' merchant receipt this is a misread of
+    // a geographic number, so it is never a link however many receipts agree
+    // on it — here being wrong costs a billed call, not just a wrong label.
+    if (kind === 'premium') {
+      return '<span class="ci-store-v ci-unverified">' + esc(p.value || '') + '</span>' +
+        '<span class="ci-agree ci-agree-bad">premium-rate number — not a store line</span>';
+    }
+
     // THE ONLY PLACE A PHONE BECOMES A LINK, and only on the server's say-so.
     if (p.dialable) {
       return '<a class="ci-store-v" href="tel:' + esc(String(p.value).replace(/[^0-9+]/g, '')) + '">' + esc(p.value) + '</a>' +
-        '<span class="ci-agree ci-agree-ok">read the same on ' + p.reads + ' receipts</span>';
+        (kind === 'toll_free'
+          // KEPT, because some vendors publish nothing else and throwing it
+          // away loses a real way to reach them — but it never wears the
+          // branch-agreement marker, because it is the chain's line and no
+          // number of agreeing receipts makes it this store's.
+          ? '<span class="ci-agree ci-agree-weak ci-agree-national">national line — not this branch</span>'
+          : '<span class="ci-agree ci-agree-ok">read the same on ' + p.reads + ' receipts</span>');
+    }
+
+    // Uncorroborated. A single read may have dropped a digit, so it stays
+    // unlinked exactly as before — but when it is a national line, say so.
+    // "read once — not verified" alone would send John hunting for a better
+    // photo of a number that was never going to be the branch's.
+    if (kind === 'toll_free') {
+      return '<span class="ci-store-v ci-unverified">' + esc(p.value) + '</span>' +
+        '<span class="ci-agree ci-agree-weak ci-agree-national">national line — not this branch' +
+          (p.reads === 1 ? ' · read once' : '') + '</span>';
     }
     return agreementLine(p, 'phone');
   }

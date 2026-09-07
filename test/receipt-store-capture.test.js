@@ -493,6 +493,121 @@ describe('a number nobody vouched for does not look like one somebody did', () =
   });
 });
 
+describe('corroboration says the digits agree, not that they are this branch', () => {
+  // THE HOLE THIS CLOSES. Every rule in normalizePhone() is a NANP-validity
+  // rule; none is a store-phone rule. A chain's national number passed all of
+  // them and arrived on screen wearing the same marker as the branch counter.
+  //
+  // And it is worse than a tie. A 1-800 number is printed on the receipt of
+  // EVERY store of the chain, so it agrees perfectly and earns corroboration
+  // sooner and more often than a real branch line, which differs per store and
+  // needs two receipts from the SAME counter before it agrees at all. Ranked
+  // by agreement alone the signal promotes the one number that cannot tell you
+  // which counter you reached.
+  //
+  // The repair keeps the number — some vendors publish nothing else — and adds
+  // the second fact the screen needs in order to say whose line it is.
+
+  test.each(['800', '833', '844', '855', '866', '877', '888'])(
+    'the %s code is the chain, not the branch', (npa) => {
+      expect(VN.phoneLineType(npa + '-555-0100')).toBe('toll_free');
+    });
+
+  test('900 is premium rate, and 976 is premium INSIDE an ordinary area code', () => {
+    // 900 is an area code; 976 is an exchange, so it has to be checked in the
+    // NXX position. Checking only the NPA would miss every 976 number.
+    expect(VN.phoneLineType('900-555-1212')).toBe('premium');
+    expect(VN.phoneLineType('212-976-1616')).toBe('premium');
+  });
+
+  test('a geographic number is still the branch', () => {
+    expect(VN.phoneLineType('407-282-3400')).toBe('branch');
+    expect(VN.phoneLineType('(407) 555-0119')).toBe('branch');
+  });
+
+  test('nothing is thrown away — a national number still normalizes', () => {
+    // Refusing to store it would lose a real way to reach the vendor. The
+    // repair labels the number; it does not discard it.
+    expect(VN.normalizePhone('1-800-466-3337')).toBe('(800) 466-3337');
+  });
+
+  test('an unreadable number has NO type rather than a default one', () => {
+    // A bad read must leave the field empty for John to type, never guess.
+    ['', null, undefined, 'not a phone', '40755501', '107-555-0119']
+      .forEach((bad) => expect(VN.phoneLineType(bad)).toBeNull());
+  });
+
+  test('the SERVER labels a corroborated national line, over real HTTP', async () => {
+    // Two receipts from one store, both reading the chain's national line —
+    // the exact shape that used to earn the branch-agreement marker.
+    await seedRow('receipts', {
+      id: 'rc_tf1', organization_id: ORG_A, vendor: 'HOME DEPOT #7788', amount: 10,
+      cost_code: 'materials', status: 'processed', store_number: '7788',
+      store_phone: '(800) 466-3337', purchased_at: '2026-08-04',
+    });
+    await seedRow('receipts', {
+      id: 'rc_tf2', organization_id: ORG_A, vendor: 'HOME DEPOT #7788', amount: 12,
+      cost_code: 'materials', status: 'processed', store_number: '7788',
+      store_phone: '(800) 466-3337', purchased_at: '2026-08-05',
+    });
+    try {
+      const body = (await call('GET', '/api/receipts/merchants')).body;
+      const s = body.merchants.find((m) => m.key === 'home depot')
+        .stores.find((x) => x.branch === '7788');
+      // The digits DO agree. That was never the question.
+      expect(s.phone.verdict).toBe('agreed');
+      expect(s.phone.reads).toBe(2);
+      // What they agree ON is the chain's line, and the payload now says so.
+      expect(s.phone.line_type).toBe('toll_free');
+      // Still reachable: kept and labelled, not discarded.
+      expect(s.phone.dialable).toBe(true);
+    } finally {
+      await mockEngine.pool.query("DELETE FROM receipts WHERE id IN ('rc_tf1','rc_tf2')", []);
+    }
+  });
+
+  test('the SERVER refuses a premium-rate number a link, however well it agrees', async () => {
+    // Here being wrong is a billed call rather than a wrong label, so
+    // agreement does not buy it a tap.
+    await seedRow('receipts', {
+      id: 'rc_pr1', organization_id: ORG_A, vendor: 'HOME DEPOT #9911', amount: 10,
+      cost_code: 'materials', status: 'processed', store_number: '9911',
+      store_phone: '(900) 555-1212', purchased_at: '2026-08-04',
+    });
+    await seedRow('receipts', {
+      id: 'rc_pr2', organization_id: ORG_A, vendor: 'HOME DEPOT #9911', amount: 11,
+      cost_code: 'materials', status: 'processed', store_number: '9911',
+      store_phone: '(900) 555-1212', purchased_at: '2026-08-05',
+    });
+    try {
+      const body = (await call('GET', '/api/receipts/merchants')).body;
+      const s = body.merchants.find((m) => m.key === 'home depot')
+        .stores.find((x) => x.branch === '9911');
+      expect(s.phone.verdict).toBe('agreed');
+      expect(s.phone.line_type).toBe('premium');
+      expect(s.phone.dialable).toBe(false);
+    } finally {
+      await mockEngine.pool.query("DELETE FROM receipts WHERE id IN ('rc_pr1','rc_pr2')", []);
+    }
+  });
+
+  test('every store carries a line_type, so the screen never has to guess', async () => {
+    const body = (await call('GET', '/api/receipts/merchants')).body;
+    body.merchants.forEach((m) => m.stores.forEach((s) => {
+      expect(s.phone).toHaveProperty('line_type');
+      // null exactly when there is no single agreed number to classify
+      const hasOne = s.phone.value != null;
+      expect(s.phone.line_type === null).toBe(!hasOne);
+      // and a branch line still earns its link the same way it always did
+      if (s.phone.line_type === 'branch') {
+        expect(s.phone.dialable).toBe(s.phone.verdict === 'agreed');
+      }
+      // nothing that is not a branch line is ever premium-and-dialable
+      if (s.phone.line_type === 'premium') expect(s.phone.dialable).toBe(false);
+    }));
+  });
+});
+
 describe('the tenant boundary, on two arms with two different models', () => {
   test('a foreign org sees nothing of org A', async () => {
     const r = await call('GET', '/api/receipts/merchants', undefined, { organization_id: ORG_B, id: 999 });

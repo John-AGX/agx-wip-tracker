@@ -537,6 +537,10 @@ router.get('/merchants', requireAuth, requireCapability('FINANCIALS_VIEW'), asyn
           || String(a.raw).localeCompare(String(z.raw)));
       const stores = [...b.branches.values()].map((br) => {
         const phone = VN.agreement(br.phones);
+        // WHAT the receipts agreed ON — a question about the phone system,
+        // which corroboration cannot answer. Derived from the agreed value, so
+        // it is null on a conflict, where nothing is claimed and nothing links.
+        const lineType = VN.phoneLineType(phone.value);
         return {
           branch: br.branch,
           receipts: br.receipts,
@@ -547,7 +551,18 @@ router.get('/merchants', requireAuth, requireCapability('FINANCIALS_VIEW'), asyn
           // same digits. One reading is a reading, not a confirmation — and
           // nobody has vouched for any of these, because there is nowhere yet
           // for a person's confirmation to be recorded.
-          phone: Object.assign(VN.agreement(br.phones), { dialable: phone.verdict === 'agreed' }),
+          //
+          // AGREEMENT IS NECESSARY AND NOT SUFFICIENT. A chain's national
+          // number is printed on every store's receipt, so it agrees perfectly
+          // and would earn corroboration sooner and more often than the branch
+          // line it stands in front of. `line_type` travels with the number so
+          // the screen can say whose line it is instead of implying it is this
+          // counter's. A premium-rate read is refused a link outright: there it
+          // is not a wrong label but a billed call.
+          phone: Object.assign(phone, {
+            line_type: lineType,
+            dialable: phone.verdict === 'agreed' && lineType !== 'premium',
+          }),
         };
       }).sort((a, z) => z.receipts - a.receipts
         || String(a.branch || '').localeCompare(String(z.branch || '')));
