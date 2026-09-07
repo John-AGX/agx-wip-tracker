@@ -5,7 +5,7 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "dev": "node server/index.js",
+    "dev": "node --env-file-if-exists=.env server/index.js",
     "test": "jest"
   },
   "jest": {
