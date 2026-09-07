@@ -2486,6 +2486,57 @@ async function initSchema() {
     ALTER TABLE receipts ADD COLUMN IF NOT EXISTS invoice_no TEXT;          -- vendor's invoice # (vs our internal ref)
     CREATE INDEX IF NOT EXISTS idx_receipts_tags ON receipts USING gin (tags jsonb_path_ops);
 
+    -- ── STORE IDENTITY, AS PRINTED ON THE RECEIPT ──────────────────────────
+    -- Four fields the retailer prints in the header of essentially every
+    -- register tape: the merchant name as printed, the branch number, that
+    -- branch's street address, and its phone. They exist so the vendor list
+    -- can be seeded from AGX's OWN RECEIPTS rather than from a third-party
+    -- business directory whose terms forbid keeping names and addresses.
+    --
+    -- EVERY ONE OF THESE IS MODEL OUTPUT AND NONE OF THEM IS CONFIRMED. There
+    -- is no store record in the schema yet, so there is nowhere for a human
+    -- confirmation to LIVE: confirming a phone number is a statement about a
+    -- store, not about a receipt, and per-receipt confirmation would ask the
+    -- same question again on every Home Depot receipt forever. Trust is
+    -- therefore computed, not stored — N independent reads of the same branch
+    -- agreeing is the evidence, and the read-only merchant view says so in
+    -- words. Nothing here is treated as typed.
+    --
+    -- FLAT, NOT JSONB, and the reason is not taste:
+    --   * material_purchases.store_number (db.js:2219) already made this exact
+    --     call — the branch is a code on the TRANSACTION, not a record.
+    --   * the merchant view groups and counts these values, and a JSONB
+    --     accessor (store_details ->> 'phone') inside a GROUP BY is a Postgres
+    --     idiom the test engine (test/helpers/pg-sqlite.js) does not
+    --     translate, which would leave the one query that matters unexercised
+    --     by the two-org harness.
+    --   * and NOTE FOR ANYONE EDITING THIS BLOCK: every line here lives inside
+    --     a JS template literal. A backtick in a comment ends the literal and
+    --     server/db.js stops parsing — which is a boot crash, not a test
+    --     failure, because the schema helpers PARSE this file as text and
+    --     never require() it.
+    --   * four columns is not nine. If a fifth and sixth arrive, revisit.
+    --
+    -- NO INDEX. Nothing filters on these yet; an index on a column no query
+    -- reads is a guess. The merchant view aggregates in JS over rows already
+    -- scoped by idx_receipts_org.
+    --
+    -- ADDITIVE ONLY. Existing rows keep NULL, which the client renders as
+    -- "no store details read from this receipt" — never as blank.
+    -- ROLLBACK:
+    --   ALTER TABLE receipts DROP COLUMN IF EXISTS store_number;
+    --   ALTER TABLE receipts DROP COLUMN IF EXISTS store_name;
+    --   ALTER TABLE receipts DROP COLUMN IF EXISTS store_address;
+    --   ALTER TABLE receipts DROP COLUMN IF EXISTS store_phone;
+    -- Clean precisely because nothing is backfilled and no existing read path
+    -- changed: COLS in receipt-routes.js is an explicit list, and the one
+    -- aggregate that touches receipt money (GET /api/receipts/rollup) groups
+    -- on cost_code + is_presale and sums amount. It cannot see these.
+    ALTER TABLE receipts ADD COLUMN IF NOT EXISTS store_number TEXT;   -- branch code as printed ("0242")
+    ALTER TABLE receipts ADD COLUMN IF NOT EXISTS store_name TEXT;     -- merchant name as printed on THIS receipt
+    ALTER TABLE receipts ADD COLUMN IF NOT EXISTS store_address TEXT;  -- the SELLER's street address, never bill-to/ship-to
+    ALTER TABLE receipts ADD COLUMN IF NOT EXISTS store_phone TEXT;    -- normalized (NNN) NNN-NNNN, NANP-valid or NULL
+
     -- Receipt OCR feedback — one row per captured receipt that had an OCR
     -- suggestion. Records what the model guessed vs what the user actually
     -- saved, per field, so the hit-rate is measurable (GET /api/receipts/ocr/stats)
