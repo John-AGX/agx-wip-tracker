@@ -837,8 +837,24 @@ function p86Ask(message, opts) {
     var spellings = variants.length > 1
       ? '<div class="ci-merch-variants"><div class="ci-view-k">' + variants.length + ' spellings — grouped, not merged</div>' +
           variants.map(function (v) {
+            // NOT ADDED — the one thing this screen is written not to do, and
+            // this row was quietly doing it. A receipt photographed in
+            // September lands on the QuickBooks export in October: SAME
+            // DOLLAR, TWICE. The server returns qb_amount and receipt_amount
+            // separately and computes no total; the headline block above
+            // prints them on separate lines and says out loud that they are
+            // not a sum. This row was adding them and printing one figure.
+            //
+            // The money stays rather than being dropped for the row count
+            // alone, because the money is WHY this list exists: a spelling
+            // with $40k behind it is worth consolidating and one with $12 is
+            // not, and a bare count cannot tell them apart. So both figures
+            // are printed, each next to the rows it actually came from.
+            var arms = [];
+            if (v.qb_lines) arms.push(v.qb_lines + ' QuickBooks line' + (v.qb_lines === 1 ? '' : 's') + ' ' + money(v.qb_amount));
+            if (v.receipts) arms.push(v.receipts + ' receipt' + (v.receipts === 1 ? '' : 's') + ' ' + money(v.receipt_amount));
             return '<div class="ci-merch-variant"><span>' + esc(v.raw) + '</span>' +
-              '<span class="ci-agree">' + (v.qb_lines + v.receipts) + ' rows · ' + money(v.qb_amount + v.receipt_amount) + '</span></div>';
+              (arms.length ? '<span class="ci-agree">' + arms.join(' · ') + '</span>' : '') + '</div>';
           }).join('') +
         '</div>'
       : '';
