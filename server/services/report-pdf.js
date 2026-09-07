@@ -25,6 +25,7 @@
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const sharp = require('sharp');
 
 const ROOT = path.join(__dirname, '..', '..');
 
@@ -68,6 +69,64 @@ function documentHtml(doc) {
     '</style></head><body>' + body + '</body></html>';
 }
 
+// ── Right-size the photos before Chromium sees them ─────────────────────
+// The first PDF this produced was 44.5 MB: Chromium embeds each image at its
+// SOURCE resolution, and the web variant is 1600px — perhaps 700KB — while the
+// document displays it around 2.8 inches tall. Thirty-four of those dominate
+// the file and make it too large to email, which was half the point of
+// rendering server-side.
+//
+// So each photo is fetched once, resized to roughly what the page actually
+// shows, and inlined as a data URI. Two useful side effects: Chromium performs
+// NO network requests while rendering (removing the slowest and least reliable
+// part of the render), and the PDF cannot be affected by an image that is slow
+// or briefly unavailable.
+//
+// The thumbnail is not a substitute — it is a 200px square COVER crop, so it
+// would silently change the composition of every photo in the document.
+const PDF_IMAGE_MAX_PX = 1000;   // ~3.5in at 288dpi: generous for print, small on disk
+const PDF_IMAGE_QUALITY = 72;
+const PDF_IMAGE_CONCURRENCY = 6;
+
+async function inlinePhoto(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const buf = Buffer.from(await res.arrayBuffer());
+  const out = await sharp(buf)
+    .rotate()                                   // honour EXIF, as the upload pipeline does
+    .resize({ width: PDF_IMAGE_MAX_PX, height: PDF_IMAGE_MAX_PX, fit: 'inside', withoutEnlargement: true })
+    .jpeg({ quality: PDF_IMAGE_QUALITY, mozjpeg: true })
+    .toBuffer();
+  return 'data:image/jpeg;base64,' + out.toString('base64');
+}
+
+// Mutates a COPY of the document. Failures leave the original URL in place, so
+// a photo that cannot be fetched still renders from the network rather than
+// vanishing from the report.
+async function inlineDocumentImages(doc) {
+  const copy = JSON.parse(JSON.stringify(doc || {}));
+  const jobs = [];
+  (copy.sections || []).forEach(function (s) {
+    (s.photos || []).forEach(function (p) {
+      const src = p.web_url || p.thumb_url;
+      if (src) jobs.push({ photo: p, src: src });
+    });
+  });
+
+  // A small pool rather than all at once: thirty-plus simultaneous decodes is
+  // a memory spike on a container that is already running Chromium.
+  let i = 0;
+  async function worker() {
+    while (i < jobs.length) {
+      const job = jobs[i++];
+      try { job.photo.web_url = await inlinePhoto(job.src); }
+      catch (e) { /* keep the original URL — a missing photo is worse than a big one */ }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(PDF_IMAGE_CONCURRENCY, jobs.length) }, worker));
+  return copy;
+}
+
 // Chromium is required lazily so the whole server does not fail to boot on a
 // machine that has no browser — the PDF route answers with a clear error
 // instead, and every other feature keeps working.
@@ -86,6 +145,10 @@ async function renderReportPdf(doc) {
     throw new Error('PDF rendering is not available on this server (no browser engine installed).');
   }
 
+  // Photos are inlined at display size FIRST — see inlineDocumentImages. This
+  // is also why setContent below needs no network.
+  const inlined = await inlineDocumentImages(doc);
+
   let browser = null;
   try {
     browser = await puppeteer.launch({
@@ -99,7 +162,7 @@ async function renderReportPdf(doc) {
     // Photos come from the attachment CDN, so the page genuinely needs network.
     // networkidle0 waits for them; the timeout bounds a report whose images are
     // slow rather than letting a request hang.
-    await page.setContent(documentHtml(doc), { waitUntil: 'networkidle0', timeout: 60000 });
+    await page.setContent(documentHtml(inlined), { waitUntil: 'networkidle0', timeout: 60000 });
 
     // print media, so the @media print rules in report-paper.css apply — the
     // per-page photo caps, the page-break rules, and the baked map instead of
@@ -119,4 +182,4 @@ async function renderReportPdf(doc) {
 
 // Exposed for tests: proves the HTML is produced from the shared renderer
 // without needing a browser present.
-module.exports = { renderReportPdf, documentHtml, renderer };
+module.exports = { renderReportPdf, documentHtml, renderer, inlineDocumentImages, PDF_IMAGE_MAX_PX };

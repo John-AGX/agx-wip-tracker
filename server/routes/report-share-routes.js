@@ -335,7 +335,13 @@ router.post('/reports/:entityType/:entityId/:reportId/pdf', requireAuth, async (
         return res.status(503).json({ error: (e && e.message) || 'Could not render the PDF.' });
       }
 
-      const safeTitle = String(report.title || 'Report').replace(/[^\w\s.-]/g, '').trim().slice(0, 80) || 'Report';
+      // Strip characters a filesystem dislikes, then COLLAPSE the gaps they
+      // leave. Otherwise 'Punch List / QC — Citi Lakes' files itself as
+      // 'Punch List  QC  Citi Lakes', with visible double spaces.
+      const safeTitle = String(report.title || 'Report')
+        .replace(/[^\w\s.-]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim().slice(0, 80) || 'Report';
       const stamp = new Date().toISOString().slice(0, 10);
       const filename = safeTitle + ' — ' + stamp + '.pdf';
       const attId = newId('att');
