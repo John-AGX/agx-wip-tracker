@@ -1051,7 +1051,7 @@ const JOB_TOOLS = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        phase_id:    { type: 'string', description: 'phase record id from the # Structure block.' },
+        phase_id:    { type: 'string', description: 'phase record id (e.g. "ph_..."). Your per-turn job context does NOT carry one — read it from `read_job_pct_audit` or `read_building_breakdown`, which print [id] against every phase.' },
         building_id: { type: 'string', description: 'target building record id (e.g. "b1"), or "" to unlink.' },
         rationale:   { type: 'string', description: 'One short sentence — why this phase belongs (or doesn\'t belong) under this building.' }
       },
@@ -1934,7 +1934,7 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
     if (totalMat > 0) {
       lines.push('# Materials catalog');
       lines.push(`Project 86 has ${totalMat} materials in the catalog (${recentMat} purchased in the last 90 days). Top categories: ${topCats.join(', ') || '(uncategorized)'}.`);
-      lines.push('Call `read_materials` to query this catalog before quoting any materials line item — see the # Pricing rules above.');
+      lines.push('Call `read_materials` to query this catalog before quoting any materials line item — quote the cost the catalog actually holds, never a remembered price.');
       lines.push('**Search budget: cap reads at ~3 per scope of work.** If a query returns nothing, do NOT keep narrowing forever — go ahead and quote with a reasonable estimate, mark the line `unit_cost source: estimated (catalog miss)`, and tell the user the SKU isn\'t logged yet so they can add it later. The catalog is small and many real SKUs are missing.');
       lines.push('');
     }

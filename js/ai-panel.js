@@ -5379,7 +5379,7 @@ function p86Ask(message, opts) {
           var lowerL = idOrLabel.trim().toLowerCase();
           node = nodesArrV.find(function(n) { return (n.label || '').trim().toLowerCase() === lowerL; });
         }
-        if (!node) throw new Error('Node "' + idOrLabel + '" not in graph. Use a node id from the # Node graph block (not a phase id).');
+        if (!node) throw new Error('Node "' + idOrLabel + '" not in graph. Your per-turn context carries no node graph block, so resolve the id with a read first — and it must be a node id (e.g. "n38"), not a phase id.');
 
         var allowedTypes = { labor: 1, mat: 1, gc: 1, other: 1, sub: 1, burden: 1 };
         if (!allowedTypes[node.type]) {
@@ -5428,10 +5428,10 @@ function p86Ask(message, opts) {
         if (/^QB Costs /i.test(requested)) {
           return 'STOP — do not read individual "QB Costs YYYY-MM-DD" sheets. ' +
             'Those are legacy per-import snapshots. The consolidated, deduplicated, ' +
-            'server-persisted QuickBooks data for this job is in the # QuickBooks cost data ' +
-            'block of the system prompt (with totals, by-category breakdown, top lines, and ' +
-            'most-recent-import date). Answer from that block instead. If you need a specific ' +
-            'line by id, it\'s in the Top-N samples list there.';
+            'server-persisted QuickBooks data for this job comes from `read_qb_cost_lines` — ' +
+            'your per-turn job context carries NO QuickBooks summary, so that read is the only ' +
+            'place those numbers exist. Call it for totals, by-category breakdown, vendor ' +
+            'roll-ups, and individual lines by id.';
         }
         var norm = function(s) { return String(s || '').replace(/\s+/g, ' ').trim().toLowerCase(); };
         var rNorm = norm(requested);
@@ -5452,8 +5452,8 @@ function p86Ask(message, opts) {
         // Same guard for the embedded Detailed Costs view (kind=qb-costs)
         // — its data is the qbCosts block, not cells.
         if (sheet.kind === 'qb-costs') {
-          return 'STOP — the "Detailed Costs" tab is a live view of the # QuickBooks cost data block ' +
-            'in the system prompt, not a grid sheet. Use that block to answer.';
+          return 'STOP — the "Detailed Costs" tab is a live view of the server-persisted qb_cost_lines ' +
+            'table, not a grid sheet. Call `read_qb_cost_lines` to answer.';
         }
         var cells = sheet.cells || {};
         var grid = {};
