@@ -4790,7 +4790,31 @@ function renderJobsMain() {
             // of drift.
             if (targetType === 't1' && typeof coCompletion === 'function') {
                 (appData.jobChangeOrders || []).forEach(function(c) {
-                    if (!c || (jobId && c.jobId !== jobId)) return;
+                    // job_id, NOT jobId. These rows are shaped by shapeRow
+                    // (server/routes/change-order-routes.js), which spreads the
+                    // data blob and then stamps the canonical columns — and no
+                    // create path has ever written a camelCase job key into that
+                    // blob (change-order-editor.js, doc-import.js, jobs-hub.js).
+                    // The camelCase spelling therefore compared undefined against
+                    // the job id on EVERY row, this guard skipped every change
+                    // order, and every building card on every job read
+                    // "CHANGE ORDERS (0) — No change orders allocated to this
+                    // building" from the day this branch shipped — inside the
+                    // commit whose whole purpose was to make CO income reach
+                    // these cards. Every other reader of this store already
+                    // spells it job_id (getJobCOTotals, getJobWIP, the WIP
+                    // snapshot); this was the one that did not.
+                    if (!c || (jobId && c.job_id !== jobId)) return;
+                    // A building card is a money surface, so only money that has
+                    // actually joined the contract belongs on it. This was the
+                    // ONE reader of appData.jobChangeOrders carrying no status
+                    // filter — harmless only while the guard above was rejecting
+                    // everything, and a draft-dollars-on-a-money-card bug the
+                    // moment it stopped. coCompletion is pure arithmetic with no
+                    // status awareness, so the filter has to live here. Same
+                    // predicate, verbatim, as getJobCOTotals, getJobWIP,
+                    // deriveSOV and the Site Plan's buildingRevSources.
+                    if (c.status !== 'approved' && c.status !== 'applied') return;
                     var comp;
                     try { comp = coCompletion(c, jobId); } catch (e) { return; }
                     var b = comp && comp.byBuilding && comp.byBuilding[targetDataId];
