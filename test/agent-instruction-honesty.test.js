@@ -59,11 +59,19 @@
 // written into a builder it does NOT execute (buildLeadContext,
 // buildClientDirectoryContext, deal-memory.js) would be born outside the
 // instrument — which is exactly how the poisoner guard was walked around a day
-// earlier. So a second, cheaper check censuses EVERY .js file under server/ for
-// mid-sentence "# Block" references and requires each to name a block that is
-// either live-emitted or emitted by real code behind a gate. It cannot tell a
-// gated block from a live one — that is the executing guard's job — but
+// earlier. So a second, cheaper check censuses EVERY .js file under server/ AND
+// js/ for mid-sentence "# Block" references and requires each to name a block
+// that is either live-emitted or emitted by real code behind a gate. It cannot
+// tell a gated block from a live one — that is the executing guard's job — but
 // nothing can be written that names a block which does not exist AT ALL.
+//
+// Pointing it at js/ is what found three MORE live falsehoods, in the client.
+// js/ai-panel.js returned tool results to the model naming a "# QuickBooks cost
+// data block of the system prompt" (behind the slim gate, never emitted) and a
+// "# Node graph block" (deleted 2026-08-16). Two of them said STOP and sent 86
+// to answer from that block instead — so the refusal landed and the substitute
+// it named did not exist. Client-side tool executors write prompt text too, and
+// no guard in this repo had ever read any of it.
 //
 // ── WHAT WOULD MAKE THIS FILE LIE ─────────────────────────────────────────
 // A fixture too thin to populate a block would report that block unreachable
