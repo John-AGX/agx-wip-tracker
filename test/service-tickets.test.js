@@ -552,3 +552,48 @@ describe('a ticket survives its lead becoming a job', () => {
       'the org predicate goes on the TICKET, not inferred from the lead');
   });
 });
+
+// The archived-ticket hole, found by driving the real doors after the
+// source-level tests above were already green.
+//
+// The 409 guard lets an ARCHIVED ticket through, because its own message says
+// "close or archive them first" and that has to be true. But an archived row
+// is still a row: lead_id is still set, ON DELETE SET NULL still fires, both
+// parents still end up NULL, and service_tickets_parent_chk still raises. So
+// archiving alone turned the readable 409 into a blank 500.
+describe('archiving a ticket really does release its lead', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const leadRoutes = fs.readFileSync(
+    path.join(__dirname, '..', 'server', 'routes', 'lead-routes.js'), 'utf8');
+
+  test('the delete takes archived, never-converted tickets with it', () => {
+    assert.ok(leadRoutes.indexOf('async function purgeArchivedTicketsForLeads') > -1,
+      'a purge must exist, or archiving cannot release the lead');
+    const fn = leadRoutes.slice(
+      leadRoutes.indexOf('async function purgeArchivedTicketsForLeads'),
+      leadRoutes.indexOf('// POST /api/leads/bulk-delete'));
+    assert.ok(/DELETE FROM service_tickets/.test(fn));
+    // A CONVERTED ticket must survive: job_id keeps the CHECK satisfied, and
+    // the work order still belongs to the job.
+    assert.ok(fn.indexOf('job_id IS NULL') > -1,
+      'a converted ticket must never be deleted by a lead delete');
+    // Only the archived ones — a live ticket is what the 409 is for.
+    assert.ok(fn.indexOf('archived_at IS NOT NULL') > -1,
+      'a live ticket must be refused, not silently deleted');
+    assert.ok(fn.indexOf('organization_id = $2') > -1);
+  });
+
+  test('the purge and the lead delete are ATOMIC on both doors', () => {
+    // A failed lead delete must not leave tickets already removed.
+    // `await ...`, not a bare name match — the function's own definition takes
+    // `client` as its first parameter and would otherwise count as a third.
+    const uses = (leadRoutes.match(/await purgeArchivedTicketsForLeads\(client/g) || []).length;
+    assert.strictEqual(uses, 2, 'both delete doors must purge inside a transaction');
+    // Each call site must sit between a BEGIN and a COMMIT.
+    for (const seg of leadRoutes.split('await purgeArchivedTicketsForLeads(client').slice(1)) {
+      assert.ok(seg.slice(0, 700).indexOf('COMMIT') > -1, 'must commit after the purge');
+    }
+    assert.ok((leadRoutes.match(/ROLLBACK/g) || []).length >= 2, 'both must roll back on error');
+  });
+});

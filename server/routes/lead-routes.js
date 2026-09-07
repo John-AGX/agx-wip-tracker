@@ -508,6 +508,31 @@ async function leadsBlockedByTickets(ids, orgId) {
   return rows;
 }
 
+// The guard above lets an ARCHIVED ticket through, because the refusal it
+// raises says "close or archive them first" and that has to be true. But an
+// archived row is still a row: its lead_id is still set, SET NULL still fires,
+// both parents still end up NULL, and the CHECK still raises — so archiving
+// alone turned the 409 into a 500. (Found by driving the real doors; the
+// source-level tests could not see it.)
+//
+// So the delete takes its own dead weight with it. An archived ticket that
+// never became a job has no meaning once its only parent is gone; a LIVE one
+// still blocks, and a CONVERTED one survives untouched because job_id keeps
+// the CHECK satisfied. Runs in the caller's transaction so a failed lead
+// delete cannot leave tickets already removed.
+async function purgeArchivedTicketsForLeads(client, ids, orgId) {
+  if (!ids || !ids.length) return 0;
+  const r = await client.query(
+    `DELETE FROM service_tickets
+      WHERE lead_id = ANY($1::text[])
+        AND organization_id = $2
+        AND job_id IS NULL
+        AND archived_at IS NOT NULL`,
+    [ids, orgId]
+  );
+  return r.rowCount || 0;
+}
+
 // POST /api/leads/bulk-delete — delete many leads in one shot (bulk purge from
 // the leads list). Org-scoped like the single DELETE; LEADS_EDIT-gated (a user
 // who can delete one lead can delete many). Uses id = ANY(...) so it's a single
@@ -534,10 +559,23 @@ router.post('/bulk-delete', requireAuth, requireCapability('LEADS_EDIT'), async 
         blocked_lead_ids: blocked.map(function (b) { return b.lead_id; })
       });
     }
-    const r = await pool.query(
-      'DELETE FROM leads WHERE id = ANY($1::text[]) AND (organization_id = $2 OR organization_id IS NULL)',
-      [ids, req.user.organization_id]
-    );
+    // Same atomic pairing as the single delete above.
+    const client = await pool.connect();
+    let r;
+    try {
+      await client.query('BEGIN');
+      await purgeArchivedTicketsForLeads(client, ids, req.user.organization_id);
+      r = await client.query(
+        'DELETE FROM leads WHERE id = ANY($1::text[]) AND (organization_id = $2 OR organization_id IS NULL)',
+        [ids, req.user.organization_id]
+      );
+      await client.query('COMMIT');
+    } catch (inner) {
+      try { await client.query('ROLLBACK'); } catch (_) {}
+      throw inner;
+    } finally {
+      client.release();
+    }
     res.json({ ok: true, deleted: r.rowCount });
   } catch (e) {
     console.error('POST /api/leads/bulk-delete error:', e);
@@ -598,13 +636,29 @@ router.delete('/:id', requireAuth, requireCapability('LEADS_EDIT'), async (req, 
           '. Close or archive ' + (n === 1 ? 'it' : 'them') + ' before deleting the lead.'
       });
     }
-    // Wave 1.A Phase 2 — org-scoped DELETE.
-    const r = await pool.query(
-      'DELETE FROM leads WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
-      [req.params.id, req.user.organization_id]
-    );
-    if (!r.rowCount) return res.status(404).json({ error: 'Lead not found' });
-    res.json({ ok: true });
+    // Atomic: the archived-ticket purge and the lead delete stand or fall
+    // together, so a failed delete cannot leave tickets already removed.
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await purgeArchivedTicketsForLeads(client, [req.params.id], req.user.organization_id);
+      // Wave 1.A Phase 2 — org-scoped DELETE.
+      const r = await client.query(
+        'DELETE FROM leads WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+        [req.params.id, req.user.organization_id]
+      );
+      if (!r.rowCount) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'Lead not found' });
+      }
+      await client.query('COMMIT');
+      res.json({ ok: true });
+    } catch (inner) {
+      try { await client.query('ROLLBACK'); } catch (_) {}
+      throw inner;
+    } finally {
+      client.release();
+    }
   } catch (e) {
     console.error('DELETE /api/leads/:id error:', e);
     res.status(500).json({ error: 'Server error' });
