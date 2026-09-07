@@ -408,6 +408,7 @@ function p86Ask(message, opts) {
         '<div class="ci-head">' +
           '<div><div class="ci-title">Cost Inbox</div><div class="ci-ocr-stat" id="ciOcrStat"></div></div>' +
           '<div style="display:flex;gap:8px;align-items:center;">' +
+            '<button class="ci-btn" id="ciMerchants" type="button" title="Who we buy from, out of receipts and QuickBooks">Merchants</button>' +
             '<button class="ci-btn ci-iconbtn" id="ciExport" type="button" title="Export to Excel" aria-label="Export to Excel">' + ciIcon('exports') + '</button>' +
             '<button class="ci-btn ci-btn-primary" id="ciNew">+ New Receipt</button>' +
           '</div>' +
@@ -424,6 +425,8 @@ function p86Ask(message, opts) {
       '</div>';
 
     document.getElementById('ciNew').addEventListener('click', function () { openReceiptModal(null); });
+    var merchBtn = document.getElementById('ciMerchants');
+    if (merchBtn) merchBtn.addEventListener('click', openMerchants);
     var expBtn = document.getElementById('ciExport');
     if (expBtn) expBtn.addEventListener('click', function () { exportToExcel(currentExportRows()); });
     var filterBtn = document.getElementById('ciFilterBtn');
@@ -729,6 +732,161 @@ function p86Ask(message, opts) {
     });
   }
 
+  // ══════════════════════════════════════════════════════════════════
+  // MERCHANTS — what the receipts and the ledger already know.
+  //
+  // READ-ONLY. No vendor record exists in P86 and this screen creates none:
+  // there is no "add", no "merge", no "is this the same as…". It shows the
+  // list John already has, out of rows that are already there, so he can look
+  // at it before anything is written down.
+  //
+  // THREE THINGS IT REFUSES TO DO, each of which would be easy:
+  //  1. It never adds receipt money to QuickBooks money. A Home Depot receipt
+  //     photographed in September lands on the QuickBooks export in October —
+  //     same dollar, two rows. The server returns them as separate fields and
+  //     computes no total; this screen prints them on separate lines.
+  //  2. It never merges two spellings the normalizer did not group. Where a
+  //     merchant has several spellings they are ALL listed, with their own
+  //     counts, so a split is visible and fixable rather than silent.
+  //  3. It never makes an unverified phone number tappable. `dialable` is
+  //     computed on the server from agreement across receipts, and this file
+  //     reads that flag rather than deciding for itself.
+  // ══════════════════════════════════════════════════════════════════
+  function agreementLine(a, noun) {
+    if (!a || a.verdict === 'none') return '<span class="ci-store-miss">no ' + esc(noun) + ' captured</span>';
+    if (a.verdict === 'agreed') {
+      return '<span class="ci-store-v">' + esc(a.value) + '</span>' +
+        '<span class="ci-agree ci-agree-ok">read the same on ' + a.reads + ' receipts</span>';
+    }
+    if (a.verdict === 'read_once') {
+      return '<span class="ci-store-v ci-unverified">' + esc(a.value) + '</span>' +
+        '<span class="ci-agree ci-agree-weak">read once — not verified</span>';
+    }
+    // conflict — show every variant. Picking the most common one and printing
+    // it alone is exactly the confident-and-wrong answer this screen exists to
+    // avoid.
+    return '<span class="ci-agree ci-agree-bad">read ' + a.distinct + ' different ways — not verified</span>' +
+      '<div class="ci-agree-variants">' + a.values.map(function (v) {
+        return '<div><span class="ci-store-v ci-unverified">' + esc(v.value) + '</span> <span class="ci-agree">' + v.n + '×</span></div>';
+      }).join('') + '</div>';
+  }
+
+  function phoneLine(p) {
+    if (!p || p.verdict === 'none') return '<span class="ci-store-miss">no phone captured</span>';
+    // THE ONLY PLACE A PHONE BECOMES A LINK, and only on the server's say-so.
+    if (p.dialable) {
+      return '<a class="ci-store-v" href="tel:' + esc(String(p.value).replace(/[^0-9+]/g, '')) + '">' + esc(p.value) + '</a>' +
+        '<span class="ci-agree ci-agree-ok">read the same on ' + p.reads + ' receipts</span>';
+    }
+    return agreementLine(p, 'phone');
+  }
+
+  function merchantCard(m) {
+    var stores = (m.stores || []).map(function (s) {
+      return '<div class="ci-merch-store">' +
+        '<div class="ci-merch-branch">' +
+          (s.branch ? ('Store #' + esc(s.branch)) : 'Branch not identified on these receipts') +
+          '<span class="ci-agree">' + s.receipts + ' receipt' + (s.receipts === 1 ? '' : 's') + '</span>' +
+        '</div>' +
+        '<div class="ci-store-row"><span class="ci-store-k">Address</span><span class="ci-store-v-wrap">' + agreementLine(s.address, 'address') + '</span></div>' +
+        '<div class="ci-store-row"><span class="ci-store-k">Phone</span><span class="ci-store-v-wrap">' + phoneLine(s.phone) + '</span></div>' +
+      '</div>';
+    }).join('');
+    var variants = (m.variants || []);
+    var spellings = variants.length > 1
+      ? '<div class="ci-merch-variants"><div class="ci-view-k">' + variants.length + ' spellings — grouped, not merged</div>' +
+          variants.map(function (v) {
+            return '<div class="ci-merch-variant"><span>' + esc(v.raw) + '</span>' +
+              '<span class="ci-agree">' + (v.qb_lines + v.receipts) + ' rows · ' + money(v.qb_amount + v.receipt_amount) + '</span></div>';
+          }).join('') +
+        '</div>'
+      : '';
+    return '<div class="ci-merch-card">' +
+      '<div class="ci-merch-name">' + esc(m.display) + '</div>' +
+      '<div class="ci-merch-money">' +
+        '<div><span class="ci-merch-amt">' + money(m.qb_cost.amount) + '</span><span class="ci-merch-lbl">through QuickBooks · ' + m.qb_cost.lines + ' cost lines</span></div>' +
+        (m.qb_sub.lines ? '<div><span class="ci-merch-amt">' + money(m.qb_sub.amount) + '</span><span class="ci-merch-lbl">on QuickBooks subcontractor lines (match-only — lives on the bill side)</span></div>' : '') +
+        '<div><span class="ci-merch-amt">' + money(m.receipts.amount) + '</span><span class="ci-merch-lbl">on ' + m.receipts.count + ' receipt' + (m.receipts.count === 1 ? '' : 's') + '</span></div>' +
+      '</div>' +
+      // Said once per merchant, because it is the single thing most likely to
+      // be misread off this card.
+      '<div class="ci-merch-note">These are not added together — a receipt you photograph also arrives on the QuickBooks export, so the same dollar can appear twice.'
+        + (m.qb_accrual_excluded.lines ? ' ' + m.qb_accrual_excluded.lines + ' month-end journal-entry line' + (m.qb_accrual_excluded.lines === 1 ? '' : 's') + ' excluded.' : '') + '</div>' +
+      '<div class="ci-merch-seen">' +
+        (m.first_seen ? ('First seen ' + esc(fmtDate(m.first_seen))) : 'First seen — no dated row') +
+        ' · ' + (m.last_seen ? ('last ' + esc(fmtDate(m.last_seen))) : 'no dated row') +
+      '</div>' +
+      (stores ? '<div class="ci-merch-stores">' + stores + '</div>'
+              : '<div class="ci-store-none">No store details captured for this merchant yet.</div>') +
+      spellings +
+    '</div>';
+  }
+
+  function openMerchants() {
+    var modal = document.createElement('div');
+    modal.className = 'ci-modal';
+    modal.innerHTML =
+      '<div class="ci-modal-card ci-merch-card-wrap">' +
+        '<div class="ci-modal-head">' +
+          '<span>Merchants</span>' +
+          '<div class="ci-modal-actions"><button class="ci-btn" id="ciMClose">Close</button></div>' +
+        '</div>' +
+        '<div class="ci-modal-body" id="ciMBody"><div class="ci-empty">Reading your receipts and cost lines…</div></div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    function close() { modal.remove(); }
+    modal.querySelector('#ciMClose').addEventListener('click', close);
+    modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
+
+    var body = modal.querySelector('#ciMBody');
+    if (!window.p86Api || !window.p86Api.receipts || !window.p86Api.receipts.merchants) {
+      body.innerHTML = '<div class="ci-empty">Not connected.</div>';
+      return;
+    }
+    window.p86Api.receipts.merchants().then(function (r) {
+      var list = (r && r.merchants) || [];
+      var src = (r && r.sources) || null;
+      var bf = (r && r.backfill) || null;
+      if (!list.length) {
+        // NOT a blank panel. Which of the two sources was empty is the
+        // difference between "nobody has photographed a receipt" and "the
+        // QuickBooks import has never run", and they need different actions.
+        body.innerHTML = '<div class="ci-empty">No merchant has a name on it yet.'
+          + (src ? ('<div class="ci-merch-note">' + src.receipts.rows + ' receipts and ' + src.qb_cost_lines.rows
+              + ' QuickBooks cost lines were read; ' + src.receipts.without_vendor + ' receipts and '
+              + src.qb_cost_lines.without_vendor + ' cost lines carry no vendor name.</div>') : '')
+          + '</div>';
+        return;
+      }
+      var truncated = src && (src.receipts.truncated || src.qb_cost_lines.truncated);
+      body.innerHTML =
+        '<div class="ci-merch-head">' +
+          '<strong>' + list.length + '</strong> merchant' + (list.length === 1 ? '' : 's') +
+          ' from <strong>' + (src ? src.receipts.rows : 0) + '</strong> receipts and <strong>' +
+          (src ? src.qb_cost_lines.rows : 0) + '</strong> QuickBooks cost lines.' +
+          (truncated ? '<div class="ci-chip-warn">The row cap was hit — this list is INCOMPLETE.</div>' : '') +
+          ((src && (src.receipts.without_vendor || src.qb_cost_lines.without_vendor))
+            ? '<div class="ci-merch-note">' + src.receipts.without_vendor + ' receipts and ' + src.qb_cost_lines.without_vendor
+              + ' cost lines carry no vendor name and are not on this list.</div>' : '') +
+          '<div class="ci-merch-note">Nothing on this screen is saved anywhere. There is no vendor record in P86 yet — this is what your rows already say.</div>' +
+        '</div>' +
+        list.map(merchantCard).join('') +
+        (bf ? '<div class="ci-merch-backfill">' +
+          '<strong>' + bf.candidates + '</strong> receipt' + (bf.candidates === 1 ? ' has' : 's have') +
+          ' a photo on file and no store details. Re-reading them with ' + esc(bf.model) +
+          ' would cost about <strong>' + money(bf.estimated_usd) + '</strong>. It has not been run: a backfill writes ' +
+          'model guesses across the whole history at once with nobody having looked at any of them, and the ' +
+          '"read the same on N receipts" signal above would then report agreement between four unreviewed guesses.' +
+        '</div>' : '');
+    }).catch(function (e) {
+      // A 403 here is FINANCIALS_VIEW, and saying so is more useful than "error".
+      var m = (e && e.status === 403)
+        ? 'This list includes QuickBooks spend, so it needs the Financials permission.'
+        : ('Could not load merchants: ' + ((e && e.message) || 'error'));
+      body.innerHTML = '<div class="ci-empty">' + esc(m) + '</div>';
+    });
+  }
+
   // ── Read-only viewer (with an Edit gate) ──────────────────────────
   // Clicking a receipt opens THIS (not the edit form). A robust detail card +
   // large photo; Edit re-opens the existing capture/edit form, Void/Restore work
@@ -739,6 +897,54 @@ function p86Ask(message, opts) {
     return '<div class="ci-view-row' + (opts.cls ? ' ' + opts.cls : '') + '">' +
       '<span class="ci-view-k">' + esc(label) + '</span>' +
       '<span class="ci-view-v">' + v + '</span>' +
+    '</div>';
+  }
+
+  // ── WHAT THE RECEIPT SAID ABOUT THE STORE ─────────────────────────
+  // ONE renderer, used by the capture form and by the read-only viewer, so the
+  // two cannot disagree about what "we didn't read that" looks like.
+  //
+  // NOTHING HERE IS CONFIRMED. Every value is what a vision model read off a
+  // photograph; no person has vouched for any of it, and there is nowhere in
+  // the schema for a person's confirmation to live yet (confirming a phone
+  // number is a statement about a STORE, and there is no store record). So the
+  // block says so, in words, above the values.
+  //
+  // AND IT NEVER RENDERS BLANK. A field that could not be read says it could
+  // not be read. Four empty rows look like a broken screen; one sentence looks
+  // like an answer.
+  function storeReadBlock(r, opts) {
+    opts = opts || {};
+    var num = r.store_number || null;
+    var nm = r.store_name || null;
+    var addr = r.store_address || null;
+    var ph = r.store_phone || null;
+    var any = num || nm || addr || ph;
+    var head = '<div class="ci-store-head">Store on this receipt'
+      + '<span class="ci-store-tag" title="Read by the AI from the photo. Nobody has confirmed it.">AI-read · unconfirmed</span></div>';
+    if (!any) {
+      return '<div class="ci-storeblock' + (opts.cls ? ' ' + opts.cls : '') + '">' + head +
+        '<div class="ci-store-none">No store details were read from this receipt — no branch number, address or phone.'
+        + (r.attachment_id ? '' : ' There is no photo on this receipt.') + '</div>' +
+      '</div>';
+    }
+    function line(label, value, missingWhy) {
+      return '<div class="ci-store-row"><span class="ci-store-k">' + esc(label) + '</span>' +
+        (value
+          ? '<span class="ci-store-v">' + esc(value) + '</span>'
+          : '<span class="ci-store-miss">' + esc(missingWhy) + '</span>') +
+      '</div>';
+    }
+    return '<div class="ci-storeblock' + (opts.cls ? ' ' + opts.cls : '') + '">' + head +
+      line('Name as printed', nm, 'not read') +
+      line('Store / branch', num, 'not read') +
+      line('Address', addr, 'no address captured') +
+      // NOT a tel: link, and not because of an oversight. A number one receipt
+      // read once is a number nobody has checked; the Merchants view turns it
+      // into a link only after two independent receipts agree on the digits.
+      // See services/vendor-name.js agreement().
+      line('Phone', ph, 'no phone captured') +
+      (ph ? '<div class="ci-store-note">Read from this one receipt. It becomes tappable in Merchants once a second receipt reads the same number.</div>' : '') +
     '</div>';
   }
 
@@ -791,6 +997,7 @@ function p86Ask(message, opts) {
             (r.updated_at && r.updated_at !== r.created_at ? viewRow('Last updated', fmtDateTime(r.updated_at)) : '') +
             viewRow('Receipt ID', r.ref || null) +
           '</div>' +
+          storeReadBlock(r) +
           ((r.tags && r.tags.length) ? '<div class="ci-view-notes"><div class="ci-view-k">Tags</div><div>' + r.tags.map(function (t) { return '<span class="ci-tagchip">' + esc(t) + '</span>'; }).join(' ') + '</div></div>' : '') +
           (r.notes ? '<div class="ci-view-notes"><div class="ci-view-k">Notes</div><div>' + esc(r.notes) + '</div></div>' : '') +
         '</div>' +
@@ -900,6 +1107,11 @@ function p86Ask(message, opts) {
               '<div class="ci-field"><label>Vendor</label><input type="text" id="ciVendor" class="ci-input" placeholder="Sherwin Williams…" value="' + esc(r.vendor || '') + '" /></div>' +
               '<div class="ci-field"><label>Date</label><input type="date" id="ciDate" class="ci-input" value="' + esc((r.purchased_at || '').slice(0, 10)) + '" /></div>' +
             '</div>' +
+            // The store block. READ-ONLY in this wave — there is no field to
+            // type into, because a typed value and a model-read value would be
+            // indistinguishable on the screen and there is no provenance column
+            // to tell them apart. It repaints in place when the OCR returns.
+            '<div id="ciStoreBlock">' + storeReadBlock(r) + '</div>' +
             // Notes
             '<div class="ci-field"><label>Notes</label><textarea id="ciNotes" class="ci-input" rows="2" placeholder="Optional">' + esc(r.notes || '') + '</textarea></div>' +
             // More details (Slice 3): sub link, tags, payment, reimbursable, billable, invoice
@@ -933,6 +1145,16 @@ function p86Ask(message, opts) {
       var chosenCode = r.cost_code || 'materials';
       var codeUserPicked = isEdit; // true once the user (or an existing record) owns the cost code — OCR won't override
       var ocrSuggestion = null;    // {vendor,date,cost_code,amount} from OCR — sent on save so accuracy is tracked
+      // The store identity read off THIS photo. Seeded from the record being
+      // edited so an unrelated save (attaching a photo, changing the amount)
+      // cannot blank it — the server also preserves it, and both halves are
+      // needed: the client not sending it and the server not overwriting it.
+      var storeRead = {
+        store_number: r.store_number || null,
+        store_name: r.store_name || null,
+        store_address: r.store_address || null,
+        store_phone: r.store_phone || null
+      };
 
       function fillEntityOptions(filter) {
         var type = selType.value;
@@ -1013,6 +1235,27 @@ function p86Ask(message, opts) {
             }
             // Hold the suggestion so the save can log OCR-vs-final accuracy.
             ocrSuggestion = { vendor: resp.vendor || null, date: resp.date || null, cost_code: resp.cost_code || null, amount: (resp.amount != null ? resp.amount : null) };
+            // Store identity. The server already ran every one of these through
+            // the shared validators (services/vendor-name.js), so a value that
+            // arrives here is one the server would also store — a phone that
+            // failed the NANP check arrives as null and the block says so.
+            storeRead = {
+              store_number: resp.store_number || null,
+              store_name: resp.store_name || null,
+              store_address: resp.store_address || null,
+              store_phone: resp.store_phone || null
+            };
+            var sbEl = modal.querySelector('#ciStoreBlock');
+            if (sbEl) {
+              // insertAdjacentHTML/innerHTML on THIS element only — never
+              // `parent.innerHTML +=`, which reparses every sibling and orphans
+              // the photo input's listener.
+              sbEl.innerHTML = storeReadBlock({
+                store_number: storeRead.store_number, store_name: storeRead.store_name,
+                store_address: storeRead.store_address, store_phone: storeRead.store_phone,
+                attachment_id: 'pending'
+              });
+            }
             // Scan: AI gave the receipt's corners → crop + flatten + clean it,
             // and make the cleaned image the one we store + show.
             if (resp.corners && window.p86ReceiptScanner && window.p86ReceiptScanner.scanFromCorners) {
@@ -1092,6 +1335,12 @@ function p86Ask(message, opts) {
           reimburse_to: (modal.querySelector('#ciReimbTo').value || null),
           is_billable: modal.querySelector('#ciBillable').checked,
           invoice_no: (modal.querySelector('#ciInvoice').value || null),
+          // Store identity as read off the photo. Re-validated server-side —
+          // a body is a body — so these are a suggestion, not a fact.
+          store_number: storeRead.store_number,
+          store_name: storeRead.store_name,
+          store_address: storeRead.store_address,
+          store_phone: storeRead.store_phone,
           ocr: ocrSuggestion || undefined // lets the server log OCR-vs-saved accuracy
         };
         // 1) create or update the receipt

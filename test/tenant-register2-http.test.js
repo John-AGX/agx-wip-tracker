@@ -158,15 +158,33 @@ describe('REGISTER 2 — the route population', () => {
     expect(R.mounts + R.unresolved.length).toBe(76);
   });
 
-  test('the ROUTE count is committed (569 across 75 routers)', () => {
+  test('the ROUTE count is committed (573 across 75 routers)', () => {
     // THE NUMBER THE OLD SCAFFOLD DID NOT HAVE. It drove 4 routes on 1 mount
     // and nothing moved when a route was added. This fails when one is.
-    expect(R.routes).toBe(569);
+    //
+    // 569 -> 573, and the four are read individually rather than absorbed:
+    //
+    //   +3 WAIVED, from 15ebf0f1 / 948f6520 (report-share comments), landed on
+    //      origin/main WITHOUT this ledger being moved — so main was red here
+    //      before this wave touched it. All three take a path parameter, so
+    //      the driven count is unaffected and the waiver predicate below still
+    //      holds:
+    //        GET  /report-share/:token/comments
+    //        POST /report-share/:token/comments
+    //        GET  /reports/:entityType/:entityId/:reportId/comments
+    //
+    //   +1 DRIVEN: GET /api/receipts/merchants. A param-less GET, so it joins
+    //      the driven set BY CONSTRUCTION and is exercised by both callers
+    //      below — which is the point of adding it as one. It unions receipts
+    //      (DIRECT tenancy) with qb_cost_lines (PARENT, through jobs), two
+    //      different predicates in one statement, and that is exactly the
+    //      shape a one-org production can never disprove on its own.
+    expect(R.routes).toBe(573);
     expect(R.routers).toBe(75);
   });
 
-  test('the DRIVEN / COUNTED-WAIVED split is committed (137 driven, 432 counted)', () => {
-    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 137, waived: 432 });
+  test('the DRIVEN / COUNTED-WAIVED split is committed (138 driven, 435 counted)', () => {
+    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 138, waived: 435 });
   });
 
   test('every counted-waived route is a write or needs a path parameter — nothing else is waived', () => {

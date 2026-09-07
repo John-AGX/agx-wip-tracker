@@ -192,7 +192,16 @@ the caller's org. This is covered by a named test
 
 ## 9. The `OR organization_id IS NULL` tolerance is retired — **OPEN** `[machine]` — **HIGHEST RISK ITEM ON THIS LIST**
 
-**485** occurrences of `organization_id IS NULL` across `server/`.
+**486** occurrences of `organization_id IS NULL` across `server/`.
+
+485 → 486: `GET /api/receipts/merchants` unions receipts with QuickBooks cost
+lines, and its QB arm scopes through the parent job with the same tolerance the
+route it copied uses (`GET /api/qb-costs`, `qb-cost-routes.js:466-482`). That is
+a deliberate inheritance, not a new decision — the two are the same one-line
+change on the day this item is closed, and they must be closed together.
+Deliberately NOT quoted verbatim in that route's own commentary: the counter
+above is a plain text match over `server/`, so prose that repeats the predicate
+inflates a number somebody is using to decide when org #2 can be created.
 
 Every tenant predicate in this repo is written as
 `(organization_id = $n OR organization_id IS NULL)`. With **one** organisation

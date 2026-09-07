@@ -96,24 +96,32 @@ describe('the four columns are on receipts, and they are additive', () => {
   });
 });
 
-describe('nothing reads them yet — this commit is revertable alone', () => {
-  test('the receipts COLS projection does not name them', () => {
-    // COLS is the explicit column list every receipt read and write projects
-    // through (receipt-routes.js:48). A new column is invisible to the API
-    // until it is added there, which is what makes this commit inert.
+// ── WHAT USED TO BE HERE, AND WHY IT IS NOT ──────────────────────────────
+// The migration commit (77f3fa26) carried two assertions that the columns were
+// UNREAD: COLS did not name them, and no file outside db.js mentioned them.
+// Those were claims about that commit in isolation, and they were true when it
+// was made — that is what "revertable alone" means and it was measured, not
+// asserted. The capture commit deliberately falsifies both, so keeping them
+// would leave a permanently red test that teaches the next person to delete
+// assertions instead of reading them. They are replaced below by the property
+// that outlives the wave: the columns are read through ONE set of validators,
+// in a ledger of files, and everything else still cannot see them.
+describe('the columns are read, and only where they are supposed to be', () => {
+  test('COLS names all four — they are projected deliberately', () => {
     const cols = /const COLS =\s*([\s\S]*?);\n/.exec(RECEIPT_ROUTES);
     expect(cols).not.toBeNull();
-    for (const c of NEW_COLS) expect(cols[1]).not.toContain(c);
+    for (const c of NEW_COLS) expect(cols[1]).toContain(c);
   });
 
-  test('no server or client file outside db.js mentions them', () => {
+  test('the files that touch them are an enumerated ledger, not a habit', () => {
     // Scoped to the receipt spelling: material_purchases has had its own
-    // store_number since db.js:2219 and is not what this asks about.
+    // store_number since db.js:2219 and is not what this asks about. A file
+    // joining this list is a deliberate decision somebody writes down.
     const roots = [
       path.join(__dirname, '..', 'server'),
       path.join(__dirname, '..', 'js'),
     ];
-    const hits = [];
+    const hits = new Set();
     const walk = (dir) => {
       for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
         const p = path.join(dir, e.name);
@@ -122,12 +130,34 @@ describe('nothing reads them yet — this commit is revertable alone', () => {
         if (p.endsWith(path.join('server', 'db.js'))) continue;
         const src = fs.readFileSync(p, 'utf8');
         for (const c of ['store_name', 'store_address', 'store_phone']) {
-          if (src.includes(c)) hits.push(path.relative(path.join(__dirname, '..'), p) + ' : ' + c);
+          if (src.includes(c)) hits.add(path.relative(path.join(__dirname, '..'), p).replace(/\\/g, '/'));
         }
       }
     };
     roots.forEach(walk);
-    expect(hits).toEqual([]);
+    expect([...hits].sort()).toEqual([
+      'js/cost-inbox.js',                  // the capture screen + the read-back
+      'server/routes/receipt-routes.js',   // OCR, save, and the merchant view
+      // NOT server/services/vendor-name.js: it validates these VALUES and knows
+      // nothing about the column names, which is why it is reusable by anything
+      // that later reads a merchant string out of a bill or a PO.
+    ]);
+  });
+
+  test('every store field the API accepts goes through the shared validators', () => {
+    // Not `cleanStr`. A phone that was merely trimmed to 200 characters is a
+    // phone nobody checked, and it would reach the screen looking exactly like
+    // one that had been. cleanStoreFields is the only door.
+    expect(RECEIPT_ROUTES).toContain("require('../services/vendor-name')");
+    const helper = /function cleanStoreFields\(([\s\S]*?)\n}/.exec(RECEIPT_ROUTES);
+    expect(helper).not.toBeNull();
+    expect(helper[0]).toContain('VN.normalizeStoreNumber');
+    expect(helper[0]).toContain('VN.cleanStoreName');
+    expect(helper[0]).toContain('VN.cleanStoreAddress');
+    expect(helper[0]).toContain('VN.normalizePhone');
+    // Both write paths use it. If one stopped, the two would drift, which is
+    // how `vendor` and `amount` ended up validated in two places.
+    expect((RECEIPT_ROUTES.match(/cleanStoreFields\(/g) || []).length).toBeGreaterThanOrEqual(4);
   });
 });
 
@@ -139,7 +169,13 @@ describe('no existing amount, cost code, job link or bucket can move', () => {
     // it returns — that is a fact about the statement, not a hope about it.
     const start = RECEIPT_ROUTES.indexOf("router.get('/rollup'");
     expect(start).toBeGreaterThan(0);
-    const rollup = RECEIPT_ROUTES.slice(start, RECEIPT_ROUTES.indexOf("router.get('/categories'", start));
+    // Bounded at the NEXT route declaration, whichever it is. Bounding it at
+    // '/categories' by name silently swallowed the merchant view when that
+    // landed between the two, and the test then failed for a reason that was
+    // about the slice rather than about the money.
+    const nextRoute = RECEIPT_ROUTES.indexOf('\nrouter.', start + 10);
+    expect(nextRoute).toBeGreaterThan(start);
+    const rollup = RECEIPT_ROUTES.slice(start, nextRoute);
     expect(rollup).toMatch(/SUM\(amount\)/i);
     expect(rollup).toMatch(/GROUP BY cost_code, is_presale/i);
     for (const c of NEW_COLS) expect(rollup).not.toContain(c);

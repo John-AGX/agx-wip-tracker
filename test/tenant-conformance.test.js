@@ -1156,7 +1156,19 @@ describe('R4 — classify() is checked, never consulted', () => {
   // out loud that the fixture now seeds it — three rows, org A / org B /
   // un-stamped, like every other table, with no curation step. A count that
   // never fails is a count nobody is keeping.
-  test('the fixture carries every table server/db.js creates (109) — nothing curated out', () => {
-    expect(TWO.ALL_TABLES.length).toBe(109);
+  //
+  // 109 -> 110 on 15ebf0f1, which added `report_share_comments` (comments left
+  // on a shared report by someone with no account). Same drill, and the ledger
+  // worked exactly as the paragraph above describes: the table landed from
+  // another session, `main` went red here, and the human looking at it checked
+  // the thing that actually matters before moving the number —
+  // org-table-classification.js classifies report_share_comments as DIRECT, it
+  // carries its own organization_id, and the generic seeder therefore plants
+  // org A / org B / un-stamped rows in it with no curation step. A table that
+  // arrived UNCLASSIFIED would have been dropped from a classify()-derived
+  // population, which is attack class A1, and moving this number without
+  // looking is how that goes unnoticed.
+  test('the fixture carries every table server/db.js creates (110) — nothing curated out', () => {
+    expect(TWO.ALL_TABLES.length).toBe(110);
   });
 });

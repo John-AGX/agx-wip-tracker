@@ -11938,6 +11938,59 @@ textarea.ci-input { height: auto; resize: vertical; font-family: inherit; }
 .ci-img-close { position: absolute; top: 14px; right: 18px; width: 40px; height: 40px; border: none; border-radius: 50%; background: rgba(0,0,0,.55); color: #fff; font-size: 26px; line-height: 1; cursor: pointer; }
 .ci-img-close:hover { background: rgba(0,0,0,.8); }
 
+/* ── Store identity read off a receipt, and the Merchants list ──────────────
+   Every colour here is a CSS VAR with a dark fallback, never a bare hex: an
+   iframe cannot see the vars and a hardcoded hex has no light twin, which is
+   how a dark-only panel gets shipped that nobody can read in light mode.
+
+   The three "agreement" colours are the whole point of the block and they are
+   deliberately different from each other at a glance: green = two or more
+   receipts read the same thing, amber = read once and unverified, red = the
+   readings disagree. An unverified value also carries a dashed underline, so
+   the distinction survives for anyone who cannot separate the hues. */
+.ci-storeblock { margin-top: 12px; border: 1px solid var(--border, #2a2a32); border-radius: 8px; background: var(--input-bg, #101014); overflow: hidden; }
+.ci-store-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; font-size: 12px; font-weight: 700; color: var(--text-dim, #b4b4bf); border-bottom: 1px solid var(--border, #2a2a32); }
+.ci-store-tag { font-weight: 600; font-size: 11px; padding: 2px 7px; border-radius: 10px; border: 1px solid rgba(240,160,32,.4); color: #f0a020; white-space: nowrap; }
+.ci-store-none { padding: 10px 12px; font-size: 12.5px; color: var(--text-dim, #b4b4bf); line-height: 1.5; }
+.ci-store-row { display: grid; grid-template-columns: 130px 1fr; gap: 10px; padding: 7px 12px; font-size: 13px; align-items: baseline; border-bottom: 1px solid var(--border, #2a2a32); }
+.ci-store-row:last-child { border-bottom: none; }
+.ci-store-k { color: var(--text-dim, #b4b4bf); font-weight: 600; font-size: 12px; }
+.ci-store-v { color: var(--text, #eef0f6); }
+a.ci-store-v { color: var(--accent, #4a9eff); text-decoration: none; }
+a.ci-store-v:hover { text-decoration: underline; }
+/* A value nobody has corroborated must not look like one that has been. */
+.ci-unverified { border-bottom: 1px dashed rgba(240,160,32,.7); }
+.ci-store-miss { color: var(--text-dim, #b4b4bf); font-style: italic; font-size: 12.5px; }
+.ci-store-note { padding: 8px 12px; font-size: 11.5px; color: var(--text-dim, #b4b4bf); line-height: 1.45; border-top: 1px solid var(--border, #2a2a32); }
+.ci-store-v-wrap { min-width: 0; }
+
+.ci-agree { display: inline-block; margin-left: 8px; font-size: 11px; color: var(--text-dim, #b4b4bf); }
+.ci-agree-ok { color: #35c07a; }
+.ci-agree-weak { color: #f0a020; }
+.ci-agree-bad { color: #e5484d; }
+.ci-agree-variants { margin-top: 4px; }
+.ci-agree-variants > div { font-size: 12.5px; padding: 1px 0; }
+
+.ci-merch-card-wrap { max-width: 860px; width: 100%; }
+.ci-merch-head { padding: 10px 12px; margin-bottom: 12px; border: 1px solid var(--border, #2a2a32); border-radius: 8px; background: var(--input-bg, #101014); font-size: 13px; color: var(--text, #eef0f6); }
+.ci-merch-card { border: 1px solid var(--border, #2a2a32); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; background: var(--card-bg, #16161c); }
+.ci-merch-name { font-size: 15px; font-weight: 700; color: var(--text, #eef0f6); margin-bottom: 8px; }
+.ci-merch-money > div { display: flex; align-items: baseline; gap: 10px; padding: 2px 0; flex-wrap: wrap; }
+.ci-merch-amt { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 14px; color: var(--text, #eef0f6); min-width: 120px; }
+.ci-merch-lbl { font-size: 12px; color: var(--text-dim, #b4b4bf); }
+.ci-merch-note { margin-top: 6px; font-size: 11.5px; line-height: 1.45; color: var(--text-dim, #b4b4bf); }
+.ci-merch-seen { margin-top: 6px; font-size: 12px; color: var(--text-dim, #b4b4bf); }
+.ci-merch-stores { margin-top: 10px; }
+.ci-merch-store { border: 1px solid var(--border, #2a2a32); border-radius: 8px; margin-top: 8px; overflow: hidden; }
+.ci-merch-branch { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 7px 12px; font-size: 12.5px; font-weight: 700; color: var(--text, #eef0f6); background: var(--input-bg, #101014); border-bottom: 1px solid var(--border, #2a2a32); }
+.ci-merch-variants { margin-top: 10px; border-top: 1px solid var(--border, #2a2a32); padding-top: 8px; }
+.ci-merch-variant { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; padding: 2px 0; color: var(--text, #eef0f6); }
+.ci-merch-backfill { border: 1px dashed var(--border, #2a2a32); border-radius: 8px; padding: 10px 12px; font-size: 12px; line-height: 1.5; color: var(--text-dim, #b4b4bf); }
+@media (max-width: 560px) {
+  .ci-store-row { grid-template-columns: 108px 1fr; }
+  .ci-merch-amt { min-width: 0; }
+}
+
 /* Jobs list → cards on mobile. The wide #jobs-table horizontally scrolls on a
    phone (only # + Status show). Reflow each row into a stacked card; !important
    overrides table-enhancements' column widths + frozen-column sticky. */

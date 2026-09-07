@@ -21,6 +21,14 @@ const { Anthropic } = require('@anthropic-ai/sdk');
 const { aiChatLimiter, aiChatHourlyLimiter } = require('../rate-limit');
 // Training-example flywheel — OCR-vs-saved pairs feed future fine-tunes.
 const { captureExample, TASKS } = require('../services/training-capture');
+// THE ONE normalizer for merchant strings and store identity. Do not add a
+// second one — see the header of that file for why a wrong merge has no
+// symptom while a wrong split has an obvious one.
+const VN = require('../services/vendor-name');
+// The accrual / match-only-sub exclusion, in its ONE definition. A vendor
+// rollup that quietly counts month-end journal entries overstates spend, and
+// there were four drifting copies of this rule before that file existed.
+const { classifyCostLine } = require('../services/money/cost-line-filters');
 
 const router = express.Router();
 
@@ -48,7 +56,24 @@ const LINKABLE = new Set(['job', 'lead', 'category']);
 const COLS =
   'id, ref, entity_type, entity_id, amount, vendor, cost_code, is_presale, ' +
   'notes, attachment_id, status, purchased_at, entered_by, created_at, updated_at, ' +
-  'tags, sub_id, payment_method, reimbursable, reimburse_to, is_billable, invoice_no';
+  'tags, sub_id, payment_method, reimbursable, reimburse_to, is_billable, invoice_no, ' +
+  // Store identity as printed on the paper. EVERY ONE OF THESE IS MODEL OUTPUT
+  // AND NONE IS CONFIRMED — there is no store record for a confirmation to live
+  // on yet. NULL means "not read", and the client is required to say so in
+  // words rather than render an empty cell.
+  'store_number, store_name, store_address, store_phone';
+
+// The four store fields, validated through the shared module. Used by POST and
+// by PATCH so the two paths cannot drift, which is how `vendor` and `amount`
+// should have been written and were not.
+function cleanStoreFields(b, vendorForCompare) {
+  return {
+    store_number: VN.normalizeStoreNumber(b.store_number),
+    store_name: VN.cleanStoreName(b.store_name),
+    store_address: VN.cleanStoreAddress(b.store_address, b.store_name || vendorForCompare),
+    store_phone: VN.normalizePhone(b.store_phone),
+  };
+}
 
 const PAY_METHODS = new Set(['cash', 'company_card', 'personal_card', 'check', 'ach', 'other']);
 // Normalize a tags input (array or comma string) → lowercased, trimmed, deduped,
@@ -329,6 +354,265 @@ router.get('/rollup', requireAuth, async (req, res) => {
   }
 });
 
+// ══════════════════════════════════════════════════════════════════════════
+// GET /api/receipts/merchants — WHAT THE RECEIPTS AND THE LEDGER ALREADY KNOW
+//
+// READ-ONLY. It writes nothing, creates nothing, and suggests nothing. There
+// is no vendor record in this schema and this route does not make one: it
+// answers "who do we buy from, how often, for how much, at which branches, and
+// what address and phone have we actually captured" out of rows that already
+// exist. John looks at his real list BEFORE anything is written down.
+//
+// ── TWO ARMS, TWO DIFFERENT TENANCY MODELS, AND THAT IS THE HAZARD ────────
+// `receipts` is classified DIRECT (org-table-classification.js:64): its own
+// organization_id IS the tenant, and the predicate is strict.
+//
+// `qb_cost_lines` is classified PARENT via jobs (:87). Its own
+// organization_id column is a DENORMALISED CACHE, not the anchor, so scoping
+// the QB arm on `q.organization_id` because the column is right there is a
+// cross-tenant read that a single-tenant production can never surface. The
+// predicate below is the one GET /api/qb-costs already uses
+// (qb-cost-routes.js:466-482), copied deliberately rather than re-derived:
+//
+//     LEFT JOIN jobs j ON j.id = q.job_id, filtered on the JOB's org with the
+//     un-stamped tolerance arm — see the statement itself, below.
+//
+// (Written in prose rather than quoted verbatim on purpose: the graduation
+// checklist counts occurrences of that tolerance predicate across server/ by
+// plain text match, so a comment repeating it inflates a number somebody is
+// using to decide when org #2 can be created. docs/TENANCY-GRADUATION.md
+// item 9.)
+//
+// The tolerance arm is inherited with the predicate and is worth saying out
+// loud: a QB line whose job is not org-stamped is visible to every tenant.
+// That is a no-op for AGX (one org) and it is NOT a no-op the day there are
+// two. Tightening it is the same one-line change in both routes, together.
+//
+// ── FINANCIALS_VIEW, NOT THE ROUTER'S HABIT ──────────────────────────────
+// Everything else in this file rides on requireAuth alone, because a receipt
+// is a field capture. This route folds in QuickBooks spend, which
+// qb-cost-routes.js:454 gates on FINANCIALS_VIEW — a capability that
+// deliberately excludes roles allowed to photograph receipts. Inheriting the
+// file's habit would have exposed the ledger to them.
+//
+// ── THREE MONEY FIGURES, NEVER SUMMED ────────────────────────────────────
+// A Home Depot receipt photographed in September appears on the QuickBooks
+// export in October. Same dollar, two rows. This route returns receipt money
+// and QB money as SEPARATE fields and computes no total, structurally, so a
+// client cannot render one by reading a field that does not exist.
+// Accrual journal entries are excluded by the shared classifier — and their
+// count is reported, because an exclusion nobody can see is indistinguishable
+// from a bug.
+// ══════════════════════════════════════════════════════════════════════════
+
+// Bounds. AGX had 697 QB cost lines on 2026-08-12 (js/cost-buckets.js:64), so
+// these are far above the real data — they exist so an unbounded scan cannot
+// appear later, and a hit is REPORTED rather than silently truncating the list.
+const MERCHANT_RECEIPT_CAP = 20000;
+const MERCHANT_QB_CAP = 50000;
+
+// What one OCR pass costs today, for the backfill estimate below. Priced from
+// the real config, not a guess: OCR_MODEL is claude-haiku-4-5 at $1.00/MTok in
+// and $5.00/MTok out. A receipt photo is downscaled to 1400px on its long edge
+// (js/cost-inbox.js:994) -> ~1050x1400 -> ~1,960 image tokens (w*h/750), plus
+// ~580 tokens of prompt and up to ~600 of known-vendor hint; output is the JSON
+// object at ~200 tokens with the four store fields.
+//   in  ~3,100 tok * $1/MTok  = $0.0031
+//   out ~  200 tok * $5/MTok  = $0.0010
+const OCR_COST_PER_RECEIPT_USD = 0.0041;
+
+function money(n) { return Math.round((Number(n) || 0) * 100) / 100; }
+
+// One merchant bucket, keyed by the normalizer. Nothing here decides that two
+// keys are the same merchant — see services/vendor-name.js.
+function bucketFor(map, raw) {
+  const n = VN.normalizeVendorName(raw);
+  if (!n.key) return null;
+  let b = map.get(n.key);
+  if (!b) {
+    b = {
+      key: n.key,
+      variants: new Map(),           // raw spelling -> counts
+      receipts: { count: 0, amount: 0 },
+      qb_cost: { lines: 0, amount: 0 },
+      qb_sub: { lines: 0, amount: 0 },
+      qb_accrual_excluded: { lines: 0 },
+      first_seen: null,
+      last_seen: null,
+      branches: new Map(),           // branch code (or '') -> readings
+    };
+    map.set(n.key, b);
+  }
+  let v = b.variants.get(n.raw);
+  if (!v) { v = { raw: n.raw, receipts: 0, receipt_amount: 0, qb_lines: 0, qb_amount: 0 }; b.variants.set(n.raw, v); }
+  return { bucket: b, variant: v, branch: n.branch };
+}
+
+function seen(b, date) {
+  const d = date ? String(date).slice(0, 10) : null;
+  if (!d || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return;
+  if (!b.first_seen || d < b.first_seen) b.first_seen = d;
+  if (!b.last_seen || d > b.last_seen) b.last_seen = d;
+}
+
+function branchFor(b, code) {
+  const key = code || '';
+  let br = b.branches.get(key);
+  if (!br) {
+    br = { branch: code || null, receipts: 0, names: [], addresses: [], phones: [] };
+    b.branches.set(key, br);
+  }
+  return br;
+}
+
+router.get('/merchants', requireAuth, requireCapability('FINANCIALS_VIEW'), async (req, res) => {
+  try {
+    const orgId = callerOrgId(req);
+    if (!orgId) return res.json({ merchants: [], sources: null, backfill: null });
+
+    // ARM 1 — receipts. DIRECT tenancy: the row's own organization_id.
+    const rc = await pool.query(
+      `SELECT vendor, amount, purchased_at, created_at, store_number, store_name,
+              store_address, store_phone, attachment_id
+         FROM receipts
+        WHERE organization_id = $1 AND status <> 'void'
+        ORDER BY created_at DESC
+        LIMIT ${MERCHANT_RECEIPT_CAP}`,
+      [orgId]
+    );
+
+    // ARM 2 — QuickBooks cost lines. PARENT tenancy, through the job.
+    const qb = await pool.query(
+      `SELECT q.vendor, q.amount, q.txn_date, q.txn_type, q.account, q.account_type, q.bucket
+         FROM qb_cost_lines q
+         LEFT JOIN jobs j ON j.id = q.job_id
+        WHERE (j.organization_id = $1 OR j.organization_id IS NULL)
+        ORDER BY q.txn_date DESC
+        LIMIT ${MERCHANT_QB_CAP}`,
+      [orgId]
+    );
+
+    const map = new Map();
+    let receiptsNoVendor = 0;
+    let qbNoVendor = 0;
+
+    rc.rows.forEach((r) => {
+      const hit = bucketFor(map, r.vendor);
+      if (!hit) { receiptsNoVendor++; return; }
+      const { bucket, variant, branch } = hit;
+      const amt = money(r.amount);
+      bucket.receipts.count++;
+      bucket.receipts.amount = money(bucket.receipts.amount + amt);
+      variant.receipts++;
+      variant.receipt_amount = money(variant.receipt_amount + amt);
+      seen(bucket, r.purchased_at || r.created_at);
+      // The branch the row belongs to: the captured store_number wins, and the
+      // number lifted off the merchant string is the fallback.
+      const code = VN.normalizeStoreNumber(r.store_number) || branch || null;
+      const br = branchFor(bucket, code);
+      br.receipts++;
+      if (r.store_name) br.names.push(r.store_name);
+      if (r.store_address) br.addresses.push(r.store_address);
+      if (r.store_phone) br.phones.push(r.store_phone);
+    });
+
+    qb.rows.forEach((l) => {
+      const hit = bucketFor(map, l.vendor);
+      if (!hit) { qbNoVendor++; return; }
+      const { bucket, variant } = hit;
+      const amt = money(l.amount);
+      const cls = classifyCostLine(l);
+      if (cls === 'accrual') { bucket.qb_accrual_excluded.lines++; return; }
+      const arm = cls === 'sub' ? bucket.qb_sub : bucket.qb_cost;
+      arm.lines++;
+      arm.amount = money(arm.amount + amt);
+      variant.qb_lines++;
+      variant.qb_amount = money(variant.qb_amount + amt);
+      seen(bucket, l.txn_date);
+    });
+
+    const merchants = [...map.values()].map((b) => {
+      const variants = [...b.variants.values()]
+        .sort((a, z) => (z.qb_amount + z.receipt_amount) - (a.qb_amount + a.receipt_amount)
+          || String(a.raw).localeCompare(String(z.raw)));
+      const stores = [...b.branches.values()].map((br) => {
+        const phone = VN.agreement(br.phones);
+        return {
+          branch: br.branch,
+          receipts: br.receipts,
+          name_as_printed: VN.agreement(br.names),
+          address: VN.agreement(br.addresses),
+          // DIALABLE IS COMPUTED HERE, not left to the client. A number is a
+          // tel: link only when at least two independent receipts read the
+          // same digits. One reading is a reading, not a confirmation — and
+          // nobody has vouched for any of these, because there is nowhere yet
+          // for a person's confirmation to be recorded.
+          phone: Object.assign(VN.agreement(br.phones), { dialable: phone.verdict === 'agreed' }),
+        };
+      }).sort((a, z) => z.receipts - a.receipts
+        || String(a.branch || '').localeCompare(String(z.branch || '')));
+      return {
+        key: b.key,
+        // Display comes from a spelling a HUMAN wrote, never from the
+        // normalized key — "home depot" is a grouping token, not a name.
+        display: variants[0] ? variants[0].raw : b.key,
+        variants,
+        receipts: b.receipts,
+        qb_cost: b.qb_cost,
+        qb_sub: b.qb_sub,
+        qb_accrual_excluded: b.qb_accrual_excluded,
+        first_seen: b.first_seen,
+        last_seen: b.last_seen,
+        stores,
+      };
+    }).sort((a, z) => (z.qb_cost.amount + z.qb_sub.amount + z.receipts.amount)
+      - (a.qb_cost.amount + a.qb_sub.amount + a.receipts.amount)
+      || String(a.display).localeCompare(String(z.display)));
+
+    // What a re-OCR of the photos already on file WOULD cost. Reported, never
+    // run: a backfill writes model guesses across the whole history at once
+    // with nobody having looked at any of them, and the agreement signal above
+    // would then report high confidence for a store whose address four
+    // unreviewed reads happened to agree on. The switch is off, and this is
+    // what is behind it.
+    const bf = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM receipts
+        WHERE organization_id = $1 AND status <> 'void'
+          AND attachment_id IS NOT NULL
+          AND store_number IS NULL AND store_name IS NULL
+          AND store_address IS NULL AND store_phone IS NULL`,
+      [orgId]
+    );
+    const candidates = Number(bf.rows[0] && bf.rows[0].n) || 0;
+
+    res.json({
+      merchants,
+      sources: {
+        receipts: {
+          rows: rc.rows.length,
+          truncated: rc.rows.length >= MERCHANT_RECEIPT_CAP,
+          without_vendor: receiptsNoVendor,
+        },
+        qb_cost_lines: {
+          rows: qb.rows.length,
+          truncated: qb.rows.length >= MERCHANT_QB_CAP,
+          without_vendor: qbNoVendor,
+        },
+      },
+      backfill: {
+        candidates,
+        model: OCR_MODEL,
+        usd_per_receipt: OCR_COST_PER_RECEIPT_USD,
+        estimated_usd: Math.round(candidates * OCR_COST_PER_RECEIPT_USD * 10000) / 10000,
+        enabled: false,
+      },
+    });
+  } catch (e) {
+    console.error('GET /api/receipts/merchants error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // ── Cost categories (org-defined non-job coding buckets) ───────────────────
 // These literal paths MUST sit before '/:id' or Express routes "categories"
 // into the param handler.
@@ -474,16 +758,36 @@ router.post('/ocr', requireAuth, aiChatLimiter, aiChatHourlyLimiter, async (req,
       : '';
     const prompt =
       'You are reading a photographed receipt or invoice. Return ONLY a JSON object, no prose:\n' +
-      '{"vendor": string|null, "date": "YYYY-MM-DD"|null, "cost_code": "materials"|"labor"|"sub"|"gc"|null, "amount": number|null, "corners": [[x,y],[x,y],[x,y],[x,y]]|null}\n' +
+      '{"vendor": string|null, "date": "YYYY-MM-DD"|null, "cost_code": "materials"|"labor"|"sub"|"gc"|null, "amount": number|null, "corners": [[x,y],[x,y],[x,y],[x,y]]|null, "store_name": string|null, "store_number": string|null, "store_address": string|null, "store_phone": string|null}\n' +
       '- vendor: the store / supplier / company name (usually at the top).' + vendorHint + '\n' +
       '- date: the purchase/transaction date as YYYY-MM-DD; null if not visible.\n' +
       '- cost_code: best category guess — materials (supply/hardware/lumber/paint stores), sub (a subcontractor invoice), labor (payroll/labor), gc (permits, equipment rental, fuel, dump fees); null if unsure.\n' +
       '- amount: the GRAND TOTAL / total due as a plain number (no $ or commas); null if not clearly visible.\n' +
       '- corners: the 4 outer corners of the RECEIPT/paper within the photo, as [x,y] FRACTIONS of image width and height (0=left/top, 1=right/bottom), ordered top-left, top-right, bottom-right, bottom-left. Use this to crop out the background. If the receipt fills the whole frame or you cannot tell, return null.\n' +
-      'Use null for anything you cannot read.';
+      // ── STORE IDENTITY ────────────────────────────────────────────────────
+      // Four fields, each written so that the answer to "I am not sure" is
+      // null rather than a plausible guess. Two of these are traps and the
+      // wording is aimed straight at them:
+      //   (1) the store number is often a BARE 3-5 digit field inside a run of
+      //       numbers next to the register and transaction ids, so a rule
+      //       keyed on the "#" glyph misses the common case and a rule that
+      //       grabs any 4-digit token eats the register number;
+      //   (2) a branch distributor (ABC Supply, White Cap, QXO) issues a
+      //       PICKUP TICKET, not a register tape, and the most prominent
+      //       address on it is AGX'S OWN under Bill To / Ship To. "The address
+      //       at the top" captures our address as the vendor's.
+      '- store_name: the merchant name EXACTLY as printed in the header, including any legal suffix. This may differ from "vendor" above; return what is on the paper.\n' +
+      '- store_number: the STORE / BRANCH number of the location, as printed. It may appear as "#0242", "STORE 0242", or as a labelled field. Receipts often print the store, register and transaction numbers side by side in one row of digits — if you cannot tell WHICH of them is the store number, return null. Never return the register number, the transaction number, or the cashier id.\n' +
+      '- store_address: the SELLER\'S OWN street address — the address of the store or branch that sold the goods, printed in the header above the items. If the only address on the page is under "Bill To", "Sold To", "Ship To" or "Remit To", that is the BUYER\'S address and you must return null. Never return the customer\'s address.\n' +
+      '- store_phone: the phone number OF THAT STORE, from the header. Return it only if every digit is legible; if any digit is blurred, cropped or ambiguous, return null. A wrong phone number is worse than no phone number.\n' +
+      'Use null for anything you cannot read. Guessing is worse than null on every field here.';
     const msg = await client.messages.create({
       model: OCR_MODEL,
-      max_tokens: 400,
+      // 400 -> 500 for the four extra fields. This is a CAP, not a charge —
+      // billing is on tokens actually emitted — and a truncated JSON object
+      // fails the whole parse, taking the amount and the crop corners down
+      // with it. The extra headroom removes that cliff for free.
+      max_tokens: 500,
       messages: [{
         role: 'user',
         content: [
@@ -514,7 +818,26 @@ router.post('/ocr', requireAuth, aiChatLimiter, aiChatHourlyLimiter, async (req,
         corners = c.map((p) => [Math.min(1, Math.max(0, p[0])), Math.min(1, Math.max(0, p[1]))]);
       }
     }
-    res.json({ ok: true, vendor: vendor, date: date, cost_code: cost_code, amount: amount, corners: corners });
+    // Store identity, through the SAME validators the save path uses, so the
+    // client is never shown a value the server would refuse to store.
+    const store = cleanStoreFields({
+      store_number: parsed.store_number,
+      store_name: parsed.store_name,
+      store_address: parsed.store_address,
+      store_phone: parsed.store_phone,
+    }, vendor);
+    // A branch number printed in the merchant string ("HOME DEPOT #0242") but
+    // not in the store_number field is still a branch number. Only as a
+    // fallback — the labelled field wins.
+    if (!store.store_number) {
+      const fromName = VN.normalizeVendorName(store.store_name || vendor || '');
+      if (fromName.branch) store.store_number = VN.normalizeStoreNumber(fromName.branch);
+    }
+    res.json({
+      ok: true, vendor: vendor, date: date, cost_code: cost_code, amount: amount, corners: corners,
+      store_number: store.store_number, store_name: store.store_name,
+      store_address: store.store_address, store_phone: store.store_phone,
+    });
   } catch (e) {
     console.error('POST /api/receipts/ocr error:', e && e.message);
     res.json({ ok: false });
@@ -597,17 +920,22 @@ router.post('/', requireAuth, async (req, res) => {
     const isBillable = !!b.is_billable;
     const invoiceNo = cleanStr(b.invoice_no, 80);
     const id = newId();
+    // Store identity, revalidated here rather than trusted from the client:
+    // the values arrive from POST /ocr, but a body is a body.
+    const store = cleanStoreFields(b, b.vendor);
     const { rows } = await pool.query(
       `INSERT INTO receipts
          (id, organization_id, ref, entity_type, entity_id, amount, vendor,
           cost_code, is_presale, notes, attachment_id, status, purchased_at, entered_by,
-          tags, sub_id, payment_method, reimbursable, reimburse_to, is_billable, invoice_no)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+          tags, sub_id, payment_method, reimbursable, reimburse_to, is_billable, invoice_no,
+          store_number, store_name, store_address, store_phone)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
        RETURNING ${COLS}`,
       [id, orgId, newRef(), entityType, entityId, amount, cleanStr(b.vendor, 200),
        costCode, isPresale, cleanStr(b.notes, 5000), cleanStr(b.attachment_id, 200),
        status, purchasedAt, callerUserId(req),
-       JSON.stringify(tags), subId, paymentMethod, reimbursable, reimburseTo, isBillable, invoiceNo]
+       JSON.stringify(tags), subId, paymentMethod, reimbursable, reimburseTo, isBillable, invoiceNo,
+       store.store_number, store.store_name, store.store_address, store.store_phone]
     );
     res.json({ receipt: rows[0] });
     // Record OCR-suggestion-vs-saved accuracy (fire-and-forget; after response).
@@ -669,6 +997,19 @@ router.patch('/:id', requireAuth, async (req, res) => {
     const reimburseTo = has('reimburse_to') ? cleanStr(b.reimburse_to, 120) : row.reimburse_to;
     const isBillable = has('is_billable') ? !!b.is_billable : row.is_billable;
     const invoiceNo = has('invoice_no') ? cleanStr(b.invoice_no, 80) : row.invoice_no;
+    // ── THE PRESERVE IDIOM, AND WHY THESE FOUR NEED IT MOST ─────────────────
+    // Every unrelated PATCH goes through this SET list: the photo-attach step
+    // (js/cost-inbox.js sends only attachment_id after the upload) and the
+    // void / restore buttons (only status). A column named in the SET without
+    // the `has(...) ? ... : row.<col>` fallback is NULLED by all of them —
+    // one fact, two writers, one of them silent. The store fields are the
+    // likeliest victims because the photo-attach PATCH fires moments after the
+    // POST that captured them.
+    const cleanedStore = cleanStoreFields(b, b.vendor || vendor);
+    const storeNumber = has('store_number') ? cleanedStore.store_number : row.store_number;
+    const storeName = has('store_name') ? cleanedStore.store_name : row.store_name;
+    const storeAddress = has('store_address') ? cleanedStore.store_address : row.store_address;
+    const storePhone = has('store_phone') ? cleanedStore.store_phone : row.store_phone;
 
     const { rows } = await pool.query(
       `UPDATE receipts SET
@@ -676,12 +1017,14 @@ router.patch('/:id', requireAuth, async (req, res) => {
          is_presale = $8, notes = $9, attachment_id = $10, status = $11,
          purchased_at = $12, tags = $13, sub_id = $14, payment_method = $15,
          reimbursable = $16, reimburse_to = $17, is_billable = $18, invoice_no = $19,
+         store_number = $20, store_name = $21, store_address = $22, store_phone = $23,
          updated_at = NOW()
        WHERE id = $1 AND organization_id = $2
        RETURNING ${COLS}`,
       [req.params.id, orgId, entityType, entityId, amount, vendor, costCode,
        isPresale, notes, attachmentId, status, purchasedAt,
-       JSON.stringify(tags), subId, paymentMethod, reimbursable, reimburseTo, isBillable, invoiceNo]
+       JSON.stringify(tags), subId, paymentMethod, reimbursable, reimburseTo, isBillable, invoiceNo,
+       storeNumber, storeName, storeAddress, storePhone]
     );
     res.json({ receipt: rows[0] });
   } catch (e) {

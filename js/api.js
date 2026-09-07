@@ -958,6 +958,10 @@
     },
     ocr: function(payload) { return post('/api/receipts/ocr', payload); },
     ocrStats: function() { return get('/api/receipts/ocr/stats'); },
+    // Who we actually buy from, out of receipts + QuickBooks cost lines.
+    // READ-ONLY: no vendor record exists and this creates none. Server-gated on
+    // FINANCIALS_VIEW because it folds in the ledger.
+    merchants: function() { return get('/api/receipts/merchants'); },
     // Wipe this org's OCR accuracy history (admin-gated server-side).
     resetOcrStats: function() { return del('/api/receipts/ocr/feedback/reset'); },
     create: function(payload) { return post('/api/receipts', payload); },
