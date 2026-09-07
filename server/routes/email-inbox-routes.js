@@ -45,6 +45,20 @@ const router = express.Router();
 const {
   inboundDomain, formatAddress, localPartFromAddress,
 } = require('../services/inbound-address');
+
+// Say the effective domain out loud at boot. It is DNS-backed and it decides
+// delivery: storeInboundMessage hard-rejects any recipient whose domain is not
+// equal to this string, and a rejection is a 200 with no bounce and no row — so
+// a wrong value here is invisible from inside the app and from outside it.
+// cloudflare/email-worker/README.md step 3 says to set INBOUND_EMAIL_DOMAIN to
+// the bare domain and points a catch-all there; the code default is a subdomain.
+// If they disagree, every delivery is silently discarded. One line in the deploy
+// log turns that from a thing you discover from a client into a thing you can read.
+console.log('[email-inbox] inbound domain = ' + inboundDomain() +
+  (process.env.INBOUND_EMAIL_DOMAIN
+    ? ' (from INBOUND_EMAIL_DOMAIN)'
+    : ' (DEFAULT — INBOUND_EMAIL_DOMAIN is unset; the deployment guide says to set it,'
+      + ' and mail addressed to any other domain is discarded with no bounce)'));
 // Configured when EITHER ingest path is wired: the Cloudflare Email
 // Worker (primary — just its shared secret) or the Resend webhook
 // (dormant alt — needs its signing secret + API key to fetch bodies).
