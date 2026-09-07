@@ -1342,10 +1342,10 @@
            children so the tree reads as a hierarchy rather than one
            block of text. Tune here, not at the call sites. */
         .app-sidebar {
-            --nav-fs: 12px;      /* main destinations */
-            --nav-fs-sub: 11px;  /* level-2 children  */
-            --nav-fs-sub2: 10.5px;/* level-3 children */
-            --nav-fs-group: 9.5px;/* SALES, RESOURCES */
+            --nav-fs: 11px;      /* main destinations */
+            --nav-fs-sub: 10px;  /* level-2 children  */
+            --nav-fs-sub2: 9.5px;/* level-3 children */
+            --nav-fs-group: 8.5px;/* SALES, RESOURCES */
         }
 
         .app-nav {
@@ -1369,7 +1369,7 @@
             border-radius: 8px;
             background: transparent;
             color: var(--text);
-            font-size: var(--nav-fs, 12px);
+            font-size: var(--nav-fs, 11px);
             font-weight: 500;
             letter-spacing: 0.1px;
             text-align: left;
@@ -1474,7 +1474,7 @@
         .app-nav .app-nav-child {
             padding: 4px 9px;
             gap: 8px;
-            font-size: var(--nav-fs-sub, 11px);
+            font-size: var(--nav-fs-sub, 10px);
         }
         .app-nav .app-nav-child .p86-icon {
             width: 14px;
@@ -1532,7 +1532,7 @@
         }
         .app-nav-group-label {
             padding: 3px 10px 2px;
-            font-size: var(--nav-fs-group, 9.5px);
+            font-size: var(--nav-fs-group, 8.5px);
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.4px;
@@ -12292,7 +12292,7 @@ a.ci-store-v:hover { text-decoration: underline; }
    text-only, one indent step deeper than .app-nav-child. */
 .app-nav .app-nav-child2 {
   padding-left: 22px;
-  font-size: var(--nav-fs-sub2, 10.5px);
+  font-size: var(--nav-fs-sub2, 9.5px);
 }
 
 /* ── Inline click-to-edit chips on the Site Plan building/phase cards ── */
