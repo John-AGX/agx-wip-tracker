@@ -1079,8 +1079,8 @@ function p86Ask(message, opts) {
 
     // Void / Restore inline (no need to enter edit mode).
     var voidBtn = modal.querySelector('#ciVVoid');
-    if (voidBtn) voidBtn.addEventListener('click', function () {
-      if (!window.confirm('Void this receipt?')) return;
+    if (voidBtn) voidBtn.addEventListener('click', async function () {
+      if (!(await p86Ask('Void this receipt?', { title: 'Void receipt', confirmLabel: 'Void' }))) return;
       window.p86Api.receipts.remove(r.id).then(function () { toast('Receipt voided', 'success'); close(); reload(); })
         .catch(function () { toast('Could not void', 'error'); });
     });
@@ -1357,8 +1357,8 @@ function p86Ask(message, opts) {
       modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
 
       var delBtn = modal.querySelector('#ciDel');
-      if (delBtn) delBtn.addEventListener('click', function () {
-        if (!window.confirm('Void this receipt?')) return;
+      if (delBtn) delBtn.addEventListener('click', async function () {
+        if (!(await p86Ask('Void this receipt?', { title: 'Void receipt', confirmLabel: 'Void' }))) return;
         window.p86Api.receipts.remove(r.id).then(function () { toast('Receipt voided', 'success'); close(); reload(); })
           .catch(function () { toast('Could not void', 'error'); });
       });
