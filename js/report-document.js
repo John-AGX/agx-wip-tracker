@@ -85,6 +85,47 @@
     '</div>';
   }
 
+  // ── Pin de-overlap ────────────────────────────────────────────────────
+  // Crews shoot several things standing in one spot, so photos share a
+  // coordinate constantly — a whole elevation gets shot from one position and
+  // every frame carries the same GPS fix. Stacked pins mean only the TOP one
+  // is ever clickable, so the rest of the photos are unreachable on the map
+  // even though they are all drawn.
+  //
+  // Identical points are fanned into a small ring (~5m) so each photo can be
+  // opened. The cos(lat) term keeps the ring round rather than an ellipse: a
+  // degree of longitude shortens towards the poles, so the same delta is a
+  // smaller distance east-west than north-south.
+  //
+  // Exported because THREE maps need it and they must not drift: this Leaflet
+  // map, and the two Google maps in js/projects.js (the project detail map and
+  // the report editor's map section). It is pure — no DOM, no map library — so
+  // it works in the vm sandbox the server PDF loads this file into.
+  var FAN_RADIUS_DEG = 0.000045;   // ~5m at the equator
+
+  function fanOutPins(points) {
+    var list = Array.isArray(points) ? points : [];
+    var byPoint = {};
+    list.forEach(function (p) {
+      var k = Number(p.lat).toFixed(6) + ',' + Number(p.lng).toFixed(6);
+      (byPoint[k] = byPoint[k] || []).push(p);
+    });
+    var out = [];
+    Object.keys(byPoint).forEach(function (k) {
+      var group = byPoint[k];
+      group.forEach(function (p, i) {
+        var lat = Number(p.lat), lng = Number(p.lng);
+        if (group.length > 1) {
+          var a = (2 * Math.PI * i) / group.length;
+          lat += FAN_RADIUS_DEG * Math.cos(a);
+          lng += FAN_RADIUS_DEG * Math.sin(a) / Math.cos(lat * Math.PI / 180);
+        }
+        out.push({ point: p, lat: lat, lng: lng, fanned: group.length > 1 });
+      });
+    });
+    return out;
+  }
+
   function numHTML(photo) {
     if (!photo || !photo.num) return '';
     // A span, not a button: in the editor the badge navigates to the map pin,
@@ -309,43 +350,24 @@
               attribution: 'Imagery &copy; Esri, Maxar, Earthstar Geographics' }
           ).addTo(map);
 
-          // Crews shoot several things standing in one spot, so photos share a
-          // coordinate constantly. Stacked pins mean only the top one is ever
-          // clickable — fan identical points into a small ring (~5m) so each
-          // photo can be opened.
-          var byPoint = {};
-          pins.forEach(function (p) {
-            var k = Number(p.lat).toFixed(6) + ',' + Number(p.lng).toFixed(6);
-            (byPoint[k] = byPoint[k] || []).push(p);
-          });
-
           var bounds = [];
-          Object.keys(byPoint).forEach(function (k) {
-            var group = byPoint[k];
-            group.forEach(function (p, i) {
-              var lat = Number(p.lat), lng = Number(p.lng);
-              if (group.length > 1) {
-                var a = (2 * Math.PI * i) / group.length;
-                var r = 0.000045;
-                lat += r * Math.cos(a);
-                lng += r * Math.sin(a) / Math.cos(lat * Math.PI / 180);
-              }
-              bounds.push([lat, lng]);
-              var marker = window.L.marker([lat, lng], {
-                icon: window.L.divIcon({
-                  className: '',
-                  html: '<div class="p86-report-map-pin">' + esc(String(p.num || '')) + '</div>',
-                  iconSize: [26, 26], iconAnchor: [13, 13]
-                })
-              }).addTo(map);
-              var thumb = p.thumb_url || p.web_url || '';
-              marker.bindPopup(
-                '<div class="p86-report-map-pop">' +
-                  (thumb ? '<img src="' + escAttr(thumb) + '" alt="" />' : '') +
-                  (p.num ? '<div class="p86-report-map-pop-n">Photo ' + esc(String(p.num)) + '</div>' : '') +
-                  (p.caption ? '<div class="p86-report-map-pop-cap">' + esc(p.caption) + '</div>' : '') +
-                '</div>', { minWidth: 200 });
-            });
+          fanOutPins(pins).forEach(function (fanned) {
+            var p = fanned.point, lat = fanned.lat, lng = fanned.lng;
+            bounds.push([lat, lng]);
+            var marker = window.L.marker([lat, lng], {
+              icon: window.L.divIcon({
+                className: '',
+                html: '<div class="p86-report-map-pin">' + esc(String(p.num || '')) + '</div>',
+                iconSize: [26, 26], iconAnchor: [13, 13]
+              })
+            }).addTo(map);
+            var thumb = p.thumb_url || p.web_url || '';
+            marker.bindPopup(
+              '<div class="p86-report-map-pop">' +
+                (thumb ? '<img src="' + escAttr(thumb) + '" alt="" />' : '') +
+                (p.num ? '<div class="p86-report-map-pop-n">Photo ' + esc(String(p.num)) + '</div>' : '') +
+                (p.caption ? '<div class="p86-report-map-pop-cap">' + esc(p.caption) + '</div>' : '') +
+              '</div>', { minWidth: 200 });
           });
 
           if (bounds.length > 1) map.fitBounds(bounds, { padding: [36, 36] });
@@ -377,5 +399,5 @@
     return container;
   }
 
-  window.p86ReportDocument = { render: render, wire: wire, mount: mount };
+  window.p86ReportDocument = { render: render, wire: wire, mount: mount, fanOutPins: fanOutPins };
 })();

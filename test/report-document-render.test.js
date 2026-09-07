@@ -213,3 +213,86 @@ if (!UNDER_JEST) {
   console.log(failures ? '\nreport-document-render: ' + failures + ' FAILED' : '\nreport-document-render: all passed');
   process.exit(failures ? 1 : 0);
 }
+
+// ── Pin de-overlap ────────────────────────────────────────────────────────
+// fanOutPins is exported because THREE maps use it — the Leaflet report map in
+// this file, and the two Google maps in js/projects.js. A second copy would
+// drift, so the contract is pinned here once.
+describe('fanOutPins', () => {
+  const RD = loadInSandbox().p86ReportDocument;
+
+  test('a single pin is never moved', () => {
+    const out = RD.fanOutPins([{ id: 'a', lat: 28.5, lng: -81.4 }]);
+    expect(out).toHaveLength(1);
+    expect(out[0].lat).toBe(28.5);
+    expect(out[0].lng).toBe(-81.4);
+    expect(out[0].fanned).toBe(false);
+  });
+
+  test('pins at DIFFERENT points are never moved', () => {
+    const pts = [{ id: 'a', lat: 28.5, lng: -81.4 }, { id: 'b', lat: 28.6, lng: -81.5 }];
+    const out = RD.fanOutPins(pts);
+    expect(out.map((o) => [o.lat, o.lng])).toEqual([[28.5, -81.4], [28.6, -81.5]]);
+    expect(out.every((o) => o.fanned === false)).toBe(true);
+  });
+
+  test('THE POINT: identical coordinates are separated so each is clickable', () => {
+    const pts = [
+      { id: 'a', lat: 28.5, lng: -81.4 },
+      { id: 'b', lat: 28.5, lng: -81.4 },
+      { id: 'c', lat: 28.5, lng: -81.4 },
+    ];
+    const out = RD.fanOutPins(pts);
+    expect(out).toHaveLength(3);
+    const keys = new Set(out.map((o) => o.lat.toFixed(7) + ',' + o.lng.toFixed(7)));
+    expect(keys.size).toBe(3);
+    expect(out.every((o) => o.fanned === true)).toBe(true);
+  });
+
+  test('every photo survives — fanning must never drop or duplicate one', () => {
+    const pts = Array.from({ length: 9 }, (_, i) => ({ id: 'p' + i, lat: 28.5, lng: -81.4 }));
+    const out = RD.fanOutPins(pts);
+    expect(out).toHaveLength(9);
+    expect(new Set(out.map((o) => o.point.id)).size).toBe(9);
+  });
+
+  test('the displacement is metres, not a visible relocation', () => {
+    const out = RD.fanOutPins([
+      { id: 'a', lat: 28.5, lng: -81.4 }, { id: 'b', lat: 28.5, lng: -81.4 },
+    ]);
+    for (const o of out) {
+      // ~5m ≈ 0.000045 degrees. Anything above a thousandth of a degree (~110m)
+      // would put a pin on the neighbouring building.
+      expect(Math.abs(o.lat - 28.5)).toBeLessThan(0.001);
+      expect(Math.abs(o.lng - -81.4)).toBeLessThan(0.001);
+    }
+  });
+
+  test('the ring stays round at high latitude — the cos(lat) term is real', () => {
+    // A degree of longitude shortens towards the poles. Without the cos(lat)
+    // correction the ring collapses into a north-south line up north.
+    const near = RD.fanOutPins([{ id: 'a', lat: 5, lng: 0 }, { id: 'b', lat: 5, lng: 0 }]);
+    const far = RD.fanOutPins([{ id: 'a', lat: 70, lng: 0 }, { id: 'b', lat: 70, lng: 0 }]);
+    const spread = (o) => Math.abs(o[0].lng - o[1].lng);
+    expect(spread(far)).toBeGreaterThan(spread(near) * 1.5);
+  });
+
+  test('it groups by coordinate, so one stack does not move an unrelated pin', () => {
+    const out = RD.fanOutPins([
+      { id: 'a', lat: 28.5, lng: -81.4 },
+      { id: 'b', lat: 28.5, lng: -81.4 },
+      { id: 'lonely', lat: 28.9, lng: -81.9 },
+    ]);
+    const lonely = out.find((o) => o.point.id === 'lonely');
+    expect(lonely.lat).toBe(28.9);
+    expect(lonely.lng).toBe(-81.9);
+    expect(lonely.fanned).toBe(false);
+  });
+
+  test('malformed input does not throw', () => {
+    expect(RD.fanOutPins(null)).toEqual([]);
+    expect(RD.fanOutPins(undefined)).toEqual([]);
+    expect(RD.fanOutPins('nope')).toEqual([]);
+    expect(() => RD.fanOutPins([{ id: 'x' }])).not.toThrow();
+  });
+});

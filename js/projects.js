@@ -191,6 +191,21 @@
   // router (via window.p86ProjectsOpenReportId) to build /projects/:id/reports/:rid.
   var _reportEditorId = null;
 
+  // Pin de-overlap, borrowed from THE renderer rather than reimplemented.
+  // js/report-document.js owns fanOutPins because its Leaflet map needed it
+  // first; the two Google maps here need exactly the same behaviour and a
+  // second copy would drift. If the renderer has not loaded, this degrades to
+  // the un-fanned positions — the map still draws, pins just stack, which is
+  // what it did before.
+  function fanPins(points) {
+    var list = Array.isArray(points) ? points : [];
+    var rd = window.p86ReportDocument;
+    if (rd && typeof rd.fanOutPins === 'function') return rd.fanOutPins(list);
+    return list.map(function(p) {
+      return { point: p, lat: Number(p.lat), lng: Number(p.lng), fanned: false };
+    });
+  }
+
   var _overlayStack = [];
 
   function pushOverlay(closeFn) {
@@ -3422,8 +3437,16 @@
           var sectionId = sectionWrap ? sectionWrap.getAttribute('data-sec') : null;
           var sectionRow = sectionId ? state.sections.find(function(s) { return s.id === sectionId; }) : null;
           var pinStyle = (sectionRow && sectionRow.pin_style) || DEFAULT_PIN_STYLE;
-          pickedPhotos.forEach(function(photo, pinIdx) {
-            var pos = { lat: Number(photo.lat), lng: Number(photo.lng) };
+          // Fanned so photos shot from one spot do not stack — see
+          // fanOutPins in js/report-document.js for why, and note it is that
+          // ONE implementation rather than a copy: the Leaflet report map, this
+          // map and the project detail map must not drift apart. The pin NUMBER
+          // still comes from the photo's position in pickedPhotos, so fanning
+          // cannot renumber the report.
+          fanPins(pickedPhotos).forEach(function(fanned) {
+            var photo = fanned.point;
+            var pinIdx = pickedPhotos.indexOf(photo);
+            var pos = { lat: fanned.lat, lng: fanned.lng };
             var markerSpec = buildPinMarker(maps, photo, pinIdx, pinStyle);
             var marker = new maps.Marker({
               position: pos,
@@ -6321,11 +6344,15 @@
         bounds.extend({ lat: sLat, lng: sLng });
         pinCount++;
       }
-      photos.forEach(function(a) {
+      // Same fan-out as the report map: a whole elevation shot from one spot
+      // shares a GPS fix, and stacked pins leave every photo but the top one
+      // unclickable.
+      fanPins(photos).forEach(function(fanned) {
+        var a = fanned.point;
         var icon = (window.p86TagIcons && window.p86TagIcons.forPhoto)
           ? window.p86TagIcons.forPhoto(a)
           : { bg: '#ef4444', fg: '#fff', glyph: '●' };
-        var pos = { lat: Number(a.lat), lng: Number(a.lng) };
+        var pos = { lat: fanned.lat, lng: fanned.lng };
         var marker = new maps.Marker({
           position: pos,
           map: map,
