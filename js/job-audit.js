@@ -36,9 +36,21 @@
     if (window.p86SortBuildings) buildings = window.p86SortBuildings(buildings);
     var phases = (appData.phases || []).filter(function(p) { return p.jobId === jobId; });
     var subs = (appData.subs || []).filter(function(s) { return s.jobId === jobId; });
-    var changeOrders = (appData.changeOrders || []).filter(function(c) { return c.jobId === jobId; });
-    var purchaseOrders = (appData.purchaseOrders || []).filter(function(p) { return p.jobId === jobId; });
-    var invoices = (appData.invoices || []).filter(function(i) { return i.jobId === jobId; });
+    // NO changeOrders / purchaseOrders / invoices on this context, on purpose.
+    // The tempting one-liners are `(appData.changeOrders || []).filter(...)` and
+    // its two siblings — and all three read the PRE-MIGRATION stores, which are
+    // hydrated only from records embedded in a job's payload (js/app.js ~2750)
+    // and are reset to [] on the modern load path (js/app.js ~2734-2743). They
+    // are reliably EMPTY. A rule written against them would silently never fire.
+    //
+    // The live sets are appData.jobChangeOrders / .jobPurchaseOrders /
+    // .arInvoices (fetched at boot, js/app.js ~3212-3214). Rules that want them
+    // already read them straight off window — see R11 (rider scope), R12 (CO
+    // cost vs PO) and R13 (netted-out bills). That is the pattern to copy: those
+    // rows key on `job_id` (not `jobId`) and AR rows carry `total`, not
+    // `amount`, so a ctx field pre-filtered on `jobId` would be a second trap
+    // rather than a fix. R6/R7 name POs and invoices but walk graph NODES, so
+    // they never wanted these arrays either.
     var qbLines = (appData.qbCostLines || []).filter(function(l) { return (l.job_id || l.jobId) === jobId; });
 
     var graph = { nodes: [], wires: [] };
@@ -74,9 +86,6 @@
       buildings: buildings,
       phases: phases,
       subs: subs,
-      changeOrders: changeOrders,
-      purchaseOrders: purchaseOrders,
-      invoices: invoices,
       qbLines: qbLines,
       graph: graph,
       hasIncoming: hasIncoming,
