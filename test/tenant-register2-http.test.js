@@ -155,7 +155,12 @@ describe('REGISTER 2 — the route population', () => {
     // before the number was changed. All four are POST or take a path
     // parameter, so the driven count is unmoved and both boundary ledgers below
     // are unchanged — which is itself the thing worth knowing.
-    expect(R.mounts + R.unresolved.length).toBe(76);
+    //
+    // 76 -> 77 with service-ticket-routes, mounted on its OWN prefix
+    // (/api/service-tickets) rather than the bare /api the two share routers
+    // use, because every path in it is under that prefix. The token doors
+    // arrive in a separate router later, mounted at /api like the others.
+    expect(R.mounts + R.unresolved.length).toBe(77);
   });
 
   test('the ROUTE count is committed (573 across 75 routers)', () => {
@@ -192,12 +197,30 @@ describe('REGISTER 2 — the route population', () => {
     //      is PARENT-scoped (`WHERE id = ANY($1) AND entity_type = $2 AND
     //      entity_id = $3`), not the unscoped `WHERE id = ANY($1)` that
     //      hydrateSections still uses on the internal path.
-    expect(R.routes).toBe(574);
-    expect(R.routers).toBe(75);
+    //   574 -> 581, +7, the whole authed surface of service tickets (S1). Read
+    //      individually, and the split is the interesting part — exactly ONE of
+    //      the seven is param-less, so it joins the DRIVEN set by construction
+    //      and the other six are waived because they are writes or take :id:
+    //        GET    /api/service-tickets              <- +1 DRIVEN
+    //        POST   /api/service-tickets
+    //        GET    /api/service-tickets/:id
+    //        PATCH  /api/service-tickets/:id
+    //        POST   /api/service-tickets/:id/status
+    //        DELETE /api/service-tickets/:id
+    //        GET    /api/service-tickets/:id/events
+    //      The driven one is worth having: its tenancy is a bare
+    //      `organization_id = $1` with NO `OR organization_id IS NULL`
+    //      tolerance arm — these are new NOT NULL tables — and it carries two
+    //      correlated subqueries over `tasks` for the progress bar, each with
+    //      its OWN org predicate rather than reaching a child on parent-id
+    //      membership alone. That is precisely the shape a one-org production
+    //      cannot disprove on its own, which is what this harness is for.
+    expect(R.routes).toBe(581);
+    expect(R.routers).toBe(76);
   });
 
-  test('the DRIVEN / COUNTED-WAIVED split is committed (138 driven, 436 counted)', () => {
-    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 138, waived: 436 });
+  test('the DRIVEN / COUNTED-WAIVED split is committed (139 driven, 442 counted)', () => {
+    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 139, waived: 442 });
   });
 
   test('every counted-waived route is a write or needs a path parameter — nothing else is waived', () => {

@@ -502,6 +502,45 @@
   // estimates) share the legacy job_reports table via entity_type +
   // entity_id columns. The legacy /api/jobs/:jobId/reports route
   // still owns 'job' rows with job-specific photo-source logic.
+  // Service tickets — the work-order tier above tasks, raised on a job or a
+  // lead. The ticket inherits its parent's capability, so there is no separate
+  // permission to pass here; the server resolves it from the row.
+  var serviceTickets = {
+    // filters: { job_id, lead_id, status, assignee, q, include_archived, limit }
+    list: function(filters) {
+      var qs = [];
+      var f = filters || {};
+      Object.keys(f).forEach(function(k) {
+        if (f[k] === undefined || f[k] === null || f[k] === '') return;
+        qs.push(encodeURIComponent(k) + '=' + encodeURIComponent(f[k]));
+      });
+      return get('/api/service-tickets' + (qs.length ? '?' + qs.join('&') : ''));
+    },
+    get: function(id) {
+      return get('/api/service-tickets/' + encodeURIComponent(id));
+    },
+    create: function(payload) {
+      return post('/api/service-tickets', payload || {});
+    },
+    update: function(id, payload) {
+      return patch('/api/service-tickets/' + encodeURIComponent(id), payload || {});
+    },
+    // Status has its own door so the transition lattice is enforced in one
+    // place — a refused move answers 403 with the reason, not a silent no-op.
+    setStatus: function(id, status, note) {
+      return post('/api/service-tickets/' + encodeURIComponent(id) + '/status',
+        { status: status, note: note || '' });
+    },
+    // Soft archive. Child tasks survive — they are field work.
+    archive: function(id) {
+      return del('/api/service-tickets/' + encodeURIComponent(id));
+    },
+    events: function(id, limit) {
+      return get('/api/service-tickets/' + encodeURIComponent(id) + '/events' +
+        (limit ? '?limit=' + encodeURIComponent(limit) : ''));
+    }
+  };
+
   var reports = {
     list: function(entityType, entityId) {
       return get('/api/reports/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId));
@@ -1128,7 +1167,7 @@
   window.p86Api = {
     get: get, put: put, post: post, del: del, patch: patch,
     fileFolders: fileFolders,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, assemblies: assemblies, assemblyTaxonomy: assemblyTaxonomy, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, notes: notes, reminders: reminders, map: map, calendar: calendar, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders, workflowItems: workflowItems, purchaseOrders: purchaseOrders, bills: bills, payApplications: payApplications, invoices: invoices, payments: payments, receipts: receipts, docImport: docImport, outlook: outlook, listViews: listViews,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, assemblies: assemblies, assemblyTaxonomy: assemblyTaxonomy, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, notes: notes, reminders: reminders, map: map, calendar: calendar, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders, workflowItems: workflowItems, purchaseOrders: purchaseOrders, bills: bills, payApplications: payApplications, invoices: invoices, payments: payments, receipts: receipts, docImport: docImport, outlook: outlook, listViews: listViews, serviceTickets: serviceTickets,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };

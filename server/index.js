@@ -63,6 +63,7 @@ const folderTemplatesRoutes = require('./routes/folder-templates-routes');
 const tasksRoutes = require('./routes/tasks-routes');
 const taskShareRoutes = require('./routes/task-share-routes');
 const reportShareRoutes = require('./routes/report-share-routes');
+const serviceTicketRoutes = require('./routes/service-ticket-routes');
 const notesRoutes = require('./routes/notes-routes');
 const remindersCrudRoutes = require('./routes/reminders-crud-routes');
 const receiptRoutes = require('./routes/receipt-routes');
@@ -296,6 +297,10 @@ app.use('/api/subs', subRoutes);
 app.use('/api', subPortalRoutes);
 app.use('/api', taskShareRoutes);
 app.use('/api', reportShareRoutes);
+// Service tickets — the work-order tier above tasks. Its own prefix because
+// every path is /api/service-tickets/...; the token doors arrive with S4 in a
+// separate router mounted at /api like the two share routers above.
+app.use('/api/service-tickets', serviceTicketRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/agent-jobs', require('./routes/agent-jobs-routes'));
 app.use('/api/push', require('./routes/push-routes'));
