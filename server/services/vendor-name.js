@@ -147,10 +147,61 @@ function normalizeStoreNumber(raw) {
  *   - 10 digits (or 11 with a leading country code 1)
  *   - area code and exchange may not begin with 0 or 1
  *   - the area code may not be N11 (211, 311 ... 911)
+ *
+ * AND — THE RULE THAT STOPS FABRICATION — THE TEN DIGITS MUST HAVE BEEN
+ * PRINTED AS ONE NUMBER. Counting digits is not the same as reading a number,
+ * and the difference is not academic:
+ *
+ *     "282-3400 x407"  ->  digits 2823400407  ->  "(282) 340-0407"
+ *
+ * Ten digits, NANP-valid in every position, classified 'branch', rendered as a
+ * tappable link. NOBODY EVER PRINTED THAT NUMBER. It is a 7-digit local line
+ * and its extension spliced end to end, and the area code — the part that says
+ * WHICH TOWN you are calling — is invented outright. A receipt prints a local
+ * number and its extension the same way on every visit, so the fabrication
+ * reads identically on receipt two and earns the corroboration marker.
+ *
+ * This is worse than a wrong label. A toll-free number reaches the wrong desk
+ * at the right company; a spliced extension reaches a stranger, and it does so
+ * wearing the green marker that says two receipts agreed.
+ *
+ * So the digits are no longer merely counted. An extension is split off
+ * (which also RECOVERS "(407) 282-3400 x12", previously refused for having 12
+ * digits), and what remains must match one contiguous phone-shaped run:
+ * optionally +1, then 3-3-4 separated by nothing but spaces, dots, dashes,
+ * slashes and parens. A digit run that reaches the count only by jumping a gap
+ * the numbering plan does not allow is refused, and 7-digit locals stay
+ * refused because an area code cannot be guessed from a receipt.
  */
+
+// Leading and trailing text that carries NO DIGITS cannot change the number,
+// so it is dropped rather than made a reason to refuse: "Phone: (407) 282-3400
+// (main)" is one number with a label on each end. `+` and `(` are left alone
+// at the front because they are part of the number.
+const PHONE_LEAD_NOISE = /^[^\d+(]*/;
+const PHONE_TAIL_NOISE = /[^\d]*$/;
+
+// An extension, which is not part of the number and on a receipt is printed
+// right next to one. `#` is deliberately NOT a token on its own: on a builders'
+// merchant receipt `#` means the BRANCH ("HOME DEPOT #0242"), and treating a
+// trailing `#407` as an extension would be guessing. It does not need to be —
+// the shape test below refuses it either way, because a number and a store
+// code separated by a `#` is not one contiguous number.
+const PHONE_EXTENSION = /[\s,;]*(?:extension|extn|ext|x)\.?\s*[:#]?\s*\d{1,6}\s*$/i;
+
+// ONE CONTIGUOUS NANP-SHAPED RUN. Separators are only those a printed phone
+// number actually uses. A newline is a space here on purpose: a real number
+// wrapped across two OCR lines is still that number.
+const PHONE_SHAPE = /^\+?[\s.\-/]*1?[\s.\-/]*\(?\d{3}\)?[\s.\-/]*\d{3}[\s.\-/]*\d{4}$/;
+
 function normalizePhone(raw) {
   const s = (raw == null ? '' : String(raw));
-  let d = s.replace(/\D+/g, '');
+  const core = s
+    .replace(PHONE_LEAD_NOISE, '')
+    .replace(PHONE_TAIL_NOISE, '')
+    .replace(PHONE_EXTENSION, '');
+  if (!PHONE_SHAPE.test(core)) return null;
+  let d = core.replace(/\D+/g, '');
   if (d.length === 11 && d[0] === '1') d = d.slice(1);
   if (d.length !== 10) return null;
   const area = d.slice(0, 3);
@@ -178,6 +229,26 @@ const TOLL_FREE_NPA = new Set([
 // area code, so it has to be checked in the NXX position rather than the NPA.
 const PREMIUM_NPA = new Set(['900']);
 const PREMIUM_NXX = new Set(['976']);
+
+// A FAX LINE IS A REAL NUMBER AT THAT BRANCH AND IT IS NOT THE ONE ANYONE
+// WANTS. It is constant per store, so it corroborates exactly as fast as the
+// voice line standing beside it on the same header, and it came out of a
+// digits-only classifier looking like the counter's own number.
+//
+// THE WORD IS THE ONLY EVIDENCE THERE IS. A fax number is a phone number: no
+// rule of the numbering plan separates them, no NPA is reserved for them, and
+// a fax printed WITHOUT a label is not detectable here and is not claimed to
+// be. That limit is real and is pinned as a test rather than left implied.
+//
+// Read from the RAW string, which is why this function takes the raw and not
+// the normalized value — normalizePhone() throws the word away, and after the
+// row is written the word is gone for good.
+const FAX_LABEL = /\b(?:fax|facsimile)\b/i;
+
+// How much a kind is TRUSTED AS THIS BRANCH'S VOICE LINE, ascending = trusted
+// less. Used by phoneKindFloor() so a claim arriving on a request body can
+// only ever make a number less trusted.
+const PHONE_KIND_RANK = { branch: 0, toll_free: 1, fax: 2, premium: 3 };
 
 /**
  * WHAT KIND OF LINE a number is: 'branch', 'toll_free', 'premium', or null
@@ -209,9 +280,42 @@ function phoneLineType(raw) {
   const d = n.replace(/[^0-9]+/g, '');
   const area = d.slice(0, 3);
   const exch = d.slice(3, 6);
+  // Premium first, and it outranks the fax label: "FAX 1-900-..." is a misread
+  // of a geographic number, and there the cost of being wrong is a billed call
+  // rather than a wasted one.
   if (PREMIUM_NPA.has(area) || PREMIUM_NXX.has(exch)) return 'premium';
+  // Fax before toll-free, because the two differ in what the screen is allowed
+  // to do with them: a toll-free number reaches a person and stays tappable, a
+  // fax reaches a modem and does not. When a receipt labels a toll-free number
+  // as a fax, the more cautious of the two answers is the right one.
+  if (FAX_LABEL.test(raw == null ? '' : String(raw))) return 'fax';
   if (TOLL_FREE_NPA.has(area)) return 'toll_free';
   return 'branch';
+}
+
+/**
+ * The kind to store, given what the DIGITS say and what a request body CLAIMS.
+ *
+ * THE FAX LABEL IS KNOWABLE FOR ONE INSTANT. It exists in the model's raw
+ * output at extraction time and nowhere afterwards — the value the client
+ * sends back to be saved is the normalized number, with the word already gone.
+ * So the kind has to travel from extraction to save through the client, and a
+ * body is a body.
+ *
+ * It does not have to be TRUSTED, though, only bounded: a claim is honoured
+ * only when it trusts the number LESS than the digits alone do. A client may
+ * say "this was labelled a fax" about a number the server would otherwise call
+ * a branch line; it may not say "branch" about a 1-800 number, or "fax" about
+ * a premium-rate one. THE CLAIM CAN REMOVE A LINK. IT CAN NEVER CREATE ONE —
+ * which is the only direction that could hurt anybody.
+ */
+function phoneKindFloor(derived, claimed) {
+  const base = derived || null;
+  const c = PHONE_KIND_RANK[claimed];
+  if (c == null) return base;                     // not a kind we know: ignored
+  const d = PHONE_KIND_RANK[base];
+  if (d == null) return null;                     // no number at all: no kind
+  return c > d ? claimed : base;
 }
 
 // Blocks whose presence means the model returned the BUYER'S address. On an
@@ -308,6 +412,8 @@ module.exports = {
   normalizeStoreNumber,
   normalizePhone,
   phoneLineType,
+  phoneKindFloor,
+  PHONE_KIND_RANK,
   cleanStoreAddress,
   cleanStoreName,
   agreement,

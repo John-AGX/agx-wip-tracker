@@ -61,7 +61,7 @@ const COLS =
   // AND NONE IS CONFIRMED — there is no store record for a confirmation to live
   // on yet. NULL means "not read", and the client is required to say so in
   // words rather than render an empty cell.
-  'store_number, store_name, store_address, store_phone';
+  'store_number, store_name, store_address, store_phone, store_phone_kind';
 
 // The four store fields, validated through the shared module. Used by POST and
 // by PATCH so the two paths cannot drift, which is how `vendor` and `amount`
@@ -72,6 +72,13 @@ function cleanStoreFields(b, vendorForCompare) {
     store_name: VN.cleanStoreName(b.store_name),
     store_address: VN.cleanStoreAddress(b.store_address, b.store_name || vendorForCompare),
     store_phone: VN.normalizePhone(b.store_phone),
+    // WHAT KIND OF LINE the number is, decided here and never by the caller.
+    // On the /ocr path `b.store_phone` is still the model's raw string, so a
+    // "FAX:" printed in front of it is visible and is read. On the save path
+    // it is the normalized number and the word is gone — which is why the kind
+    // makes the round trip on the body, and why phoneKindFloor() will only let
+    // that claim make a number LESS trusted, never more.
+    store_phone_kind: VN.phoneKindFloor(VN.phoneLineType(b.store_phone), b.store_phone_kind),
   };
 }
 
@@ -459,7 +466,7 @@ function branchFor(b, code) {
   const key = code || '';
   let br = b.branches.get(key);
   if (!br) {
-    br = { branch: code || null, receipts: 0, names: [], addresses: [], phones: [] };
+    br = { branch: code || null, receipts: 0, names: [], addresses: [], phones: [], phone_kinds: [] };
     b.branches.set(key, br);
   }
   return br;
@@ -513,7 +520,14 @@ router.get('/merchants', requireAuth, requireCapability('FINANCIALS_VIEW'), asyn
       br.receipts++;
       if (r.store_name) br.names.push(r.store_name);
       if (r.store_address) br.addresses.push(r.store_address);
-      if (r.store_phone) br.phones.push(r.store_phone);
+      if (r.store_phone) {
+        br.phones.push(r.store_phone);
+        // Kept beside the digits, keyed BY the digits, because agreement() is
+        // computed over the digits and the kind has to be looked up against
+        // whichever value won. NULL on every row written before the column
+        // existed, which is why nothing below assumes it is there.
+        br.phone_kinds.push({ value: r.store_phone, kind: r.store_phone_kind || null });
+      }
     });
 
     qb.rows.forEach((l) => {
@@ -540,7 +554,22 @@ router.get('/merchants', requireAuth, requireCapability('FINANCIALS_VIEW'), asyn
         // WHAT the receipts agreed ON — a question about the phone system,
         // which corroboration cannot answer. Derived from the agreed value, so
         // it is null on a conflict, where nothing is claimed and nothing links.
-        const lineType = VN.phoneLineType(phone.value);
+        let lineType = VN.phoneLineType(phone.value);
+        // A FAX AGREES AS FAST AS THE VOICE LINE BESIDE IT. It is constant per
+        // store, so two receipts from the same counter corroborate it exactly
+        // as quickly as the number John actually wants — and the digits cannot
+        // tell them apart, because nothing in the numbering plan does. The only
+        // evidence is the word on the paper, captured per receipt.
+        //
+        // ONE receipt reading it under a fax label is enough to stop claiming
+        // it is the voice line. Not a majority: the harm is asymmetric, since
+        // being wrong the other way sends John to a modem behind a marker that
+        // says two receipts agreed. Premium still outranks it — there being
+        // wrong costs money, not a wasted call.
+        if (lineType && lineType !== 'premium' && phone.value
+            && br.phone_kinds.some((k) => k.value === phone.value && k.kind === 'fax')) {
+          lineType = 'fax';
+        }
         return {
           branch: br.branch,
           receipts: br.receipts,
@@ -561,7 +590,12 @@ router.get('/merchants', requireAuth, requireCapability('FINANCIALS_VIEW'), asyn
           // is not a wrong label but a billed call.
           phone: Object.assign(phone, {
             line_type: lineType,
-            dialable: phone.verdict === 'agreed' && lineType !== 'premium',
+            // A fax joins premium in never being a link, for a different
+            // reason: premium is refused because dialling it costs money, a
+            // fax because dialling it reaches a modem. It is still RETURNED —
+            // it is a real number at that business and John may want to send
+            // to it — it just never becomes one tap from a wasted call.
+            dialable: phone.verdict === 'agreed' && lineType !== 'premium' && lineType !== 'fax',
           }),
         };
       }).sort((a, z) => z.receipts - a.receipts
@@ -794,7 +828,13 @@ router.post('/ocr', requireAuth, aiChatLimiter, aiChatHourlyLimiter, async (req,
       '- store_name: the merchant name EXACTLY as printed in the header, including any legal suffix. This may differ from "vendor" above; return what is on the paper.\n' +
       '- store_number: the STORE / BRANCH number of the location, as printed. It may appear as "#0242", "STORE 0242", or as a labelled field. Receipts often print the store, register and transaction numbers side by side in one row of digits — if you cannot tell WHICH of them is the store number, return null. Never return the register number, the transaction number, or the cashier id.\n' +
       '- store_address: the SELLER\'S OWN street address — the address of the store or branch that sold the goods, printed in the header above the items. If the only address on the page is under "Bill To", "Sold To", "Ship To" or "Remit To", that is the BUYER\'S address and you must return null. Never return the customer\'s address.\n' +
-      '- store_phone: the phone number OF THAT STORE, from the header. Return it only if every digit is legible; if any digit is blurred, cropped or ambiguous, return null. A wrong phone number is worse than no phone number.\n' +
+      // COPY THE LABEL TOO. The word "FAX" beside a number is the only thing
+      // that separates a fax line from the counter's own, and it is discarded
+      // by the validator a few lines later — so it has to arrive here or it
+      // never exists at all. Same for an extension: "x407" printed next to a
+      // 7-digit local is what stops those ten digits being spliced into an
+      // invented area code (services/vendor-name.js normalizePhone).
+      '- store_phone: the phone number OF THAT STORE, from the header. Return it only if every digit is legible; if any digit is blurred, cropped or ambiguous, return null. A wrong phone number is worse than no phone number. COPY IT AS PRINTED, including any label in front of it ("Phone:", "FAX:") and any extension after it ("x407", "ext. 12") — the server needs those words and removes them itself. Never join two numbers, and never join a number to an extension.\n' +
       'Use null for anything you cannot read. Guessing is worse than null on every field here.';
     const msg = await client.messages.create({
       model: OCR_MODEL,
@@ -852,6 +892,11 @@ router.post('/ocr', requireAuth, aiChatLimiter, aiChatHourlyLimiter, async (req,
       ok: true, vendor: vendor, date: date, cost_code: cost_code, amount: amount, corners: corners,
       store_number: store.store_number, store_name: store.store_name,
       store_address: store.store_address, store_phone: store.store_phone,
+      // THE ONLY MOMENT THE FAX LABEL EXISTS. `parsed.store_phone` still holds
+      // the model's raw string here; the value beside it does not. Sent so the
+      // client can hand it back at save time — bounded on arrival, never
+      // trusted (services/vendor-name.js phoneKindFloor).
+      store_phone_kind: store.store_phone_kind,
     });
   } catch (e) {
     console.error('POST /api/receipts/ocr error:', e && e.message);
@@ -943,14 +988,15 @@ router.post('/', requireAuth, async (req, res) => {
          (id, organization_id, ref, entity_type, entity_id, amount, vendor,
           cost_code, is_presale, notes, attachment_id, status, purchased_at, entered_by,
           tags, sub_id, payment_method, reimbursable, reimburse_to, is_billable, invoice_no,
-          store_number, store_name, store_address, store_phone)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
+          store_number, store_name, store_address, store_phone, store_phone_kind)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
        RETURNING ${COLS}`,
       [id, orgId, newRef(), entityType, entityId, amount, cleanStr(b.vendor, 200),
        costCode, isPresale, cleanStr(b.notes, 5000), cleanStr(b.attachment_id, 200),
        status, purchasedAt, callerUserId(req),
        JSON.stringify(tags), subId, paymentMethod, reimbursable, reimburseTo, isBillable, invoiceNo,
-       store.store_number, store.store_name, store.store_address, store.store_phone]
+       store.store_number, store.store_name, store.store_address, store.store_phone,
+       store.store_phone_kind]
     );
     res.json({ receipt: rows[0] });
     // Record OCR-suggestion-vs-saved accuracy (fire-and-forget; after response).
@@ -1025,6 +1071,10 @@ router.patch('/:id', requireAuth, async (req, res) => {
     const storeName = has('store_name') ? cleanedStore.store_name : row.store_name;
     const storeAddress = has('store_address') ? cleanedStore.store_address : row.store_address;
     const storePhone = has('store_phone') ? cleanedStore.store_phone : row.store_phone;
+    // The kind travels with the number and is keyed on the NUMBER's presence,
+    // not its own. A body that sent a kind and no phone would otherwise stamp a
+    // kind onto digits it never saw.
+    const storePhoneKind = has('store_phone') ? cleanedStore.store_phone_kind : row.store_phone_kind;
 
     const { rows } = await pool.query(
       `UPDATE receipts SET
@@ -1033,13 +1083,14 @@ router.patch('/:id', requireAuth, async (req, res) => {
          purchased_at = $12, tags = $13, sub_id = $14, payment_method = $15,
          reimbursable = $16, reimburse_to = $17, is_billable = $18, invoice_no = $19,
          store_number = $20, store_name = $21, store_address = $22, store_phone = $23,
+         store_phone_kind = $24,
          updated_at = NOW()
        WHERE id = $1 AND organization_id = $2
        RETURNING ${COLS}`,
       [req.params.id, orgId, entityType, entityId, amount, vendor, costCode,
        isPresale, notes, attachmentId, status, purchasedAt,
        JSON.stringify(tags), subId, paymentMethod, reimbursable, reimburseTo, isBillable, invoiceNo,
-       storeNumber, storeName, storeAddress, storePhone]
+       storeNumber, storeName, storeAddress, storePhone, storePhoneKind]
     );
     res.json({ receipt: rows[0] });
   } catch (e) {

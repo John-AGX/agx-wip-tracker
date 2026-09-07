@@ -1,8 +1,8 @@
 // THE MIGRATION, AND THE PROOF THAT IT IS INERT.
 //
-// Four columns land on `receipts` in a live pilot with real money in it:
-// store_number, store_name, store_address, store_phone. This file exists to
-// hold the two claims a schema commit is allowed to make and nothing else:
+// Five columns land on `receipts` in a live pilot with real money in it:
+// store_number, store_name, store_address, store_phone, store_phone_kind. This
+// file exists to hold the two claims a schema commit is allowed to make and nothing else:
 //
 //   1. the columns are ADDITIVE — nullable, defaultless, IF NOT EXISTS, so an
 //      existing row is not touched and a re-run is a no-op;
@@ -29,7 +29,19 @@ const lf = (p) => fs.readFileSync(p, 'utf8').replace(/\r\n?/g, '\n');
 const DB_JS = lf(path.join(__dirname, '..', 'server', 'db.js'));
 const RECEIPT_ROUTES = lf(path.join(__dirname, '..', 'server', 'routes', 'receipt-routes.js'));
 
-const NEW_COLS = ['store_number', 'store_name', 'store_address', 'store_phone'];
+// THE FIFTH ARRIVED, AND THIS IS THE REVISIT db.js ASKED FOR. store_phone_kind
+// is not a fifth IDENTITY field — it is the second half of store_phone. The
+// design these columns shipped under says a number is TWO FACTS, the digits and
+// WHAT KIND OF LINE they are, and the second fact was being re-derived from the
+// digits at read time. That works for a 1-800 number, whose kind is in its area
+// code. It cannot work for a FAX LINE, whose kind exists only in the word
+// printed beside it on the paper — a word normalizePhone() throws away and
+// nothing downstream can recover. So it is written down at capture.
+//
+// It is in this list rather than exempted from it because every claim the list
+// makes is a claim that must hold for it too: TEXT, nullable, defaultless,
+// IF NOT EXISTS, rollback written out, unreadable by the money aggregate.
+const NEW_COLS = ['store_number', 'store_name', 'store_address', 'store_phone', 'store_phone_kind'];
 
 describe('server/db.js is still JavaScript', () => {
   test('it parses, and it can be required', () => {
@@ -50,8 +62,8 @@ describe('server/db.js is still JavaScript', () => {
   });
 });
 
-describe('the four columns are on receipts, and they are additive', () => {
-  test('server/db.js declares all four on receipts', () => {
+describe('the store columns are on receipts, and they are additive', () => {
+  test('server/db.js declares every one of them on receipts', () => {
     const cols = tableColumns().tables.get('receipts');
     expect(cols).toBeDefined();
     const missing = NEW_COLS.filter((c) => !cols.has(c));
@@ -107,7 +119,7 @@ describe('the four columns are on receipts, and they are additive', () => {
 // that outlives the wave: the columns are read through ONE set of validators,
 // in a ledger of files, and everything else still cannot see them.
 describe('the columns are read, and only where they are supposed to be', () => {
-  test('COLS names all four — they are projected deliberately', () => {
+  test('COLS names every one of them — they are projected deliberately', () => {
     const cols = /const COLS =\s*([\s\S]*?);\n/.exec(RECEIPT_ROUTES);
     expect(cols).not.toBeNull();
     for (const c of NEW_COLS) expect(cols[1]).toContain(c);
@@ -201,6 +213,16 @@ describe('no existing amount, cost code, job link or bucket can move', () => {
     expect(named.length).toBeGreaterThan(10);
     const unpreserved = named.filter((c) => !new RegExp("has\\('" + c + "'\\)").test(patch));
     // is_presale is DERIVED from the entity type on every save, by design.
-    expect(unpreserved).toEqual(['is_presale']);
+    //
+    // store_phone_kind is derived too, and from a DIFFERENT KEY ON PURPOSE: it
+    // is keyed on has('store_phone'), because the kind is a fact ABOUT the
+    // number and has no meaning apart from it. Keyed on its own name, a body
+    // carrying a kind and no phone would stamp "fax" onto digits it never saw;
+    // keyed on the phone, the pair moves together or not at all. The preserve
+    // property this test exists for still holds — an unrelated PATCH that
+    // sends neither leaves both alone — it is just satisfied by the phone's
+    // guard rather than by one of its own.
+    expect(unpreserved).toEqual(['is_presale', 'store_phone_kind']);
+    expect(patch).toContain("has('store_phone') ? cleanedStore.store_phone_kind : row.store_phone_kind");
   });
 });

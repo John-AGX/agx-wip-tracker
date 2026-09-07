@@ -14,6 +14,33 @@ function p86Ask(message, opts) {
   }
   return Promise.resolve(window.confirm(message));
 }
+// Promise prompt — the same PWA defect, in the shape that HIDES ITSELF.
+//
+// Native prompt() returns undefined in the installed app, and the guard every
+// caller writes is `if (name == null) return`. `undefined == null` is TRUE, so
+// the guard fires: no dialog appeared, no name was asked for, nothing was
+// created, and NOTHING WAS REPORTED. "Save view" was a button that did nothing
+// on John's phone and said nothing about it.
+//
+// Two confirm() calls three lines above this were fixed and this one was not,
+// because a sweep for confirm( does not find prompt(. The class is now pinned
+// by test/native-dialogs-in-the-pwa.test.js instead of by anyone's grep.
+//
+// window.p86Prompt is defined unconditionally in js/dialogs.js, which
+// index.html loads before this file. The native call stays only as the
+// standalone fallback, exactly as p86Ask above.
+function p86Text(message, opts) {
+  opts = opts || {};
+  if (typeof window.p86Prompt === 'function') {
+    return window.p86Prompt({
+      title: opts.title || 'Enter a name',
+      message: message,
+      defaultValue: opts.defaultValue || '',
+      placeholder: opts.placeholder || ''
+    });
+  }
+  return Promise.resolve(window.prompt(message, opts.defaultValue || ''));
+}
 // Cost Inbox — receipt capture (photo + amount + cost code), job/lead-linked.
 // Ported from John's AppSpace "Cost Inbox", streamlined + skinned in the P86
 // dark theme. Backed by /api/receipts (server/routes/receipt-routes.js) +
@@ -388,8 +415,8 @@ function p86Ask(message, opts) {
         });
       });
       var sv = pop.querySelector('#ciSaveView');
-      if (sv) sv.addEventListener('click', function () {
-        var name = window.prompt('Name this view (saves the current columns + filters):', '');
+      if (sv) sv.addEventListener('click', async function () {
+        var name = await p86Text('Name this view (saves the current columns + filters):', { title: 'Save view' });
         if (name == null) return; name = String(name).trim(); if (!name) return;
         window.p86Api.listViews.create({ page: 'cost_inbox', name: name, config: { columns: _cols || allColKeys(), filters: _drawer || {} }, is_default: false })
           .then(function (r) { setCiActiveView((r && r.view && r.view.id) || null); return loadViews(); })
@@ -798,6 +825,24 @@ function p86Ask(message, opts) {
         '<span class="ci-agree ci-agree-bad">premium-rate number — not a store line</span>';
     }
 
+    // A FAX IS THE HARDEST OF THESE, because it is not wrong. It is a real
+    // number at that branch, it is CONSTANT per branch, and so it corroborated
+    // exactly as fast as the voice line printed beside it on the same header —
+    // and came out of a digits-only classifier byte-identical to it, green
+    // marker included. Nothing in the numbering plan separates the two; the
+    // only evidence is the word "FAX" on the paper, which is why the kind is
+    // captured at extraction and carried on the row.
+    //
+    // Kept and labelled, like a toll-free number, because throwing it away
+    // loses a real way to reach that branch. NOT tappable, unlike a toll-free
+    // number, because a toll-free number reaches a person and this reaches a
+    // modem. Never the branch marker, at any number of agreeing receipts.
+    if (kind === 'fax') {
+      return '<span class="ci-store-v ci-unverified">' + esc(p.value || '') + '</span>' +
+        '<span class="ci-agree ci-agree-weak ci-agree-national">fax line — not a voice line' +
+          (p.reads === 1 ? ' · read once' : '') + '</span>';
+    }
+
     // THE ONLY PLACE A PHONE BECOMES A LINK, and only on the server's say-so.
     if (p.dialable) {
       return '<a class="ci-store-v" href="tel:' + esc(String(p.value).replace(/[^0-9+]/g, '')) + '">' + esc(p.value) + '</a>' +
@@ -976,6 +1021,7 @@ function p86Ask(message, opts) {
     var nm = r.store_name || null;
     var addr = r.store_address || null;
     var ph = r.store_phone || null;
+    var phKind = r.store_phone_kind || null;
     var any = num || nm || addr || ph;
     var head = '<div class="ci-store-head">Store on this receipt'
       + '<span class="ci-store-tag" title="Read by the AI from the photo. Nobody has confirmed it.">AI-read · unconfirmed</span></div>';
@@ -985,10 +1031,19 @@ function p86Ask(message, opts) {
         + (r.attachment_id ? '' : ' There is no photo on this receipt.') + '</div>' +
       '</div>';
     }
-    function line(label, value, missingWhy) {
+    // `kind` is only ever passed for the phone. When it says the number is not
+    // this counter's voice line, the row SAYS SO NEXT TO THE DIGITS — printing
+    // the number bare and putting the caveat in a note underneath is how the
+    // two facts came to render identically in the first place.
+    function line(label, value, missingWhy, kind) {
+      var caveat = kind === 'fax' ? 'fax line — not a voice line'
+        : kind === 'premium' ? 'premium-rate number — not a store line'
+        : kind === 'toll_free' ? 'national line — not this branch'
+        : null;
       return '<div class="ci-store-row"><span class="ci-store-k">' + esc(label) + '</span>' +
         (value
-          ? '<span class="ci-store-v">' + esc(value) + '</span>'
+          ? '<span class="ci-store-v' + (caveat ? ' ci-unverified' : '') + '">' + esc(value) + '</span>'
+            + (caveat ? '<span class="ci-agree ci-agree-weak">' + esc(caveat) + '</span>' : '')
           : '<span class="ci-store-miss">' + esc(missingWhy) + '</span>') +
       '</div>';
     }
@@ -1000,8 +1055,21 @@ function p86Ask(message, opts) {
       // read once is a number nobody has checked; the Merchants view turns it
       // into a link only after two independent receipts agree on the digits.
       // See services/vendor-name.js agreement().
-      line('Phone', ph, 'no phone captured') +
-      (ph ? '<div class="ci-store-note">Read from this one receipt. It becomes tappable in Merchants once a second receipt reads the same number.</div>' : '') +
+      // THE SECOND SCREEN THE SAME TWO FACTS COLLAPSE ON. Merchants was fixed
+      // and this block was not, so a fax read off a photo printed here as the
+      // store's phone under a note promising it would BECOME TAPPABLE — a
+      // sentence that is false for a fax and for a premium-rate misread, and
+      // is the same promise that made the marker worth trusting elsewhere.
+      line('Phone', ph, 'no phone captured', phKind) +
+      (ph ? '<div class="ci-store-note">' + (
+        phKind === 'fax'
+          ? 'Read as a FAX number on this receipt. It is kept because it is a real number at this branch, but it is never made tappable.'
+          : phKind === 'premium'
+            ? 'This is a premium-rate number, which a store counter is not. It is shown so it can be corrected, and it is never made tappable.'
+            : phKind === 'toll_free'
+              ? 'This is a national number, not this branch. It is kept, but it can never confirm which counter this receipt came from.'
+              : 'Read from this one receipt. It becomes tappable in Merchants once a second receipt reads the same number.'
+      ) + '</div>' : '') +
     '</div>';
   }
 
@@ -1210,7 +1278,12 @@ function p86Ask(message, opts) {
         store_number: r.store_number || null,
         store_name: r.store_name || null,
         store_address: r.store_address || null,
-        store_phone: r.store_phone || null
+        store_phone: r.store_phone || null,
+        // THE KIND TRAVELS WITH THE NUMBER, at all three places the number
+        // travels. Dropped at any one of them and a fax quietly becomes a
+        // branch line again on the next save — the label is gone by then and
+        // the server has no way to notice.
+        store_phone_kind: r.store_phone_kind || null
       };
 
       function fillEntityOptions(filter) {
@@ -1300,7 +1373,8 @@ function p86Ask(message, opts) {
               store_number: resp.store_number || null,
               store_name: resp.store_name || null,
               store_address: resp.store_address || null,
-              store_phone: resp.store_phone || null
+              store_phone: resp.store_phone || null,
+              store_phone_kind: resp.store_phone_kind || null
             };
             var sbEl = modal.querySelector('#ciStoreBlock');
             if (sbEl) {
@@ -1310,6 +1384,7 @@ function p86Ask(message, opts) {
               sbEl.innerHTML = storeReadBlock({
                 store_number: storeRead.store_number, store_name: storeRead.store_name,
                 store_address: storeRead.store_address, store_phone: storeRead.store_phone,
+                store_phone_kind: storeRead.store_phone_kind,
                 attachment_id: 'pending'
               });
             }
@@ -1398,6 +1473,12 @@ function p86Ask(message, opts) {
           store_name: storeRead.store_name,
           store_address: storeRead.store_address,
           store_phone: storeRead.store_phone,
+          // A SUGGESTION THE SERVER CAN ONLY ACT ON IN ONE DIRECTION. The fax
+          // label lived in the model's raw output and is gone from the value
+          // above, so this is the only way the fact reaches the row — and
+          // phoneKindFloor() honours it only when it makes the number LESS
+          // trusted. This can remove a tel: link. It can never create one.
+          store_phone_kind: storeRead.store_phone_kind,
           ocr: ocrSuggestion || undefined // lets the server log OCR-vs-saved accuracy
         };
         // 1) create or update the receipt
