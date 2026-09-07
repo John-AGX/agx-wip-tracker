@@ -4878,6 +4878,104 @@ async function initSchema() {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS inbound_email_key TEXT UNIQUE;
 
     -- ───────────────────────────────────────────────────────────────
+    -- EVERY ADDRESS A USER HAS EVER HELD. One row per local part, for
+    -- the life of the deployment.
+    --
+    -- WHY A TABLE AND NOT A SECOND STRING ON users
+    -- An email address is a thing OTHER PEOPLE WROTE DOWN. Clients,
+    -- suppliers, Outlook redirect rules and phone contact cards hold it.
+    -- When an address stops resolving, mail is discarded with an HTTP 2xx
+    -- (storeInboundMessage returns { ignored: true }), the Cloudflare
+    -- Worker consumes the message, and NOBODY IS TOLD — no bounce reaches
+    -- the sender and no row reaches us. So changing a local part may never
+    -- retire the old one, and a single mutable column cannot express that.
+    -- This holds the history.
+    --
+    -- local_part is the WHOLE local part, normalized lowercase, and it is
+    -- the PRIMARY KEY. That one constraint is the entire never-reissue
+    -- guarantee, and it is global across every organization by
+    -- construction: there is no org in the key, so two tenants cannot both
+    -- mint the same string even by accident. Reissuing a dead address
+    -- would deliver one person's mail to somebody else.
+    --
+    -- ON DELETE SET NULL, deliberately, and NOT CASCADE. CASCADE would
+    -- delete the row when the user is deleted and thereby RELEASE the
+    -- address for reuse — the one outcome this table exists to prevent.
+    -- RESTRICT would break DELETE /api/auth/users/:id on a live pilot.
+    -- SET NULL leaves the string permanently claimed as a tombstone:
+    -- delivery predicates on user_id IS NOT NULL, so mail to a deleted
+    -- user's address is refused and the string stays burned forever.
+    -- original_user_id survives the delete so the trail stays readable.
+    --
+    -- users.inbound_email_key STAYS AUTHORITATIVE for the PRIMARY — the
+    -- one address a person hands out and the UI shows. This table holds
+    -- every address INCLUDING that one, and answers only "does this
+    -- incoming string belong to anyone?". One fact, one place: retired_at
+    -- is bookkeeping for display, never a second source of truth, and
+    -- test/inbound-address-aliases.test.js asserts the column and the
+    -- table can never disagree.
+    --
+    --   source  minted     the auto-generated <name>-<6hex> claim
+    --           assigned   an org admin set it in Admin → Users
+    --           org_rename an org slug changed under an existing address
+    --           reserved   platform-owned, user_id NULL, never assignable
+    --
+    -- ROLLBACK (additive; reverts in one statement):
+    --   DROP TABLE IF EXISTS user_email_aliases;
+    -- Nothing reads it at this commit. After the delivery cutover the
+    -- revert of that one query still works, because inbound_email_key was
+    -- never dropped. The rollback degrades to TODAY'S behaviour, not to an
+    -- outage: every current primary keeps delivering either way.
+    CREATE TABLE IF NOT EXISTS user_email_aliases (
+      local_part         TEXT PRIMARY KEY,
+      user_id            INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      original_user_id   INTEGER,
+      organization_id    INTEGER,
+      source             TEXT NOT NULL DEFAULT 'assigned',
+      created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_by_user_id INTEGER,
+      retired_at         TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_email_aliases_user
+      ON user_email_aliases (user_id) WHERE user_id IS NOT NULL;
+
+    -- Backfill: every key that exists today becomes its owner's first
+    -- alias, so no address that works right now stops working. Idempotent.
+    INSERT INTO user_email_aliases (local_part, user_id, original_user_id, organization_id, source)
+    SELECT LOWER(inbound_email_key), id, id, organization_id, 'minted'
+      FROM users WHERE inbound_email_key IS NOT NULL
+    ON CONFLICT (local_part) DO NOTHING;
+
+    -- Reserved names as TOMBSTONES: owned by nobody, unassignable because
+    -- the primary key already holds the string. postmaster and abuse are
+    -- required by RFC 2142; notifications is published as the VAPID subject
+    -- by server/push.js:46 and today the catch-all silently discards it.
+    --
+    -- Note these are all BARE (no dot), and an ASSIGNED address is always
+    -- exactly <local>.<slug> — so 'admin.agx' is a different string from
+    -- 'admin' and an org MAY hold it. That is intended, not an oversight:
+    -- the slug half names the tenant, is appended server-side from the
+    -- caller's own resolved org and cannot be forged, so admin.agx claims
+    -- to speak for AGX rather than for the platform. Refusing it would
+    -- protect nothing and would deny every affiliate an admin mailbox.
+    --
+    -- Three namespaces that cannot collide BY CONSTRUCTION, and this is
+    -- worth keeping as an invariant rather than rediscovering later:
+    --   reserved  bare, no dot and no hyphen-hex suffix   'postmaster'
+    --   minted    hyphen, never a dot                     'john-46bbee'
+    --   assigned  exactly one dot                         'john.agx'
+    INSERT INTO user_email_aliases (local_part, user_id, source) VALUES
+      ('postmaster', NULL, 'reserved'),    ('abuse', NULL, 'reserved'),
+      ('admin', NULL, 'reserved'),         ('support', NULL, 'reserved'),
+      ('noreply', NULL, 'reserved'),       ('no-reply', NULL, 'reserved'),
+      ('info', NULL, 'reserved'),          ('billing', NULL, 'reserved'),
+      ('hostmaster', NULL, 'reserved'),    ('webmaster', NULL, 'reserved'),
+      ('notifications', NULL, 'reserved'), ('security', NULL, 'reserved'),
+      ('help', NULL, 'reserved'),          ('mailer-daemon', NULL, 'reserved'),
+      ('root', NULL, 'reserved')
+    ON CONFLICT (local_part) DO NOTHING;
+
+    -- ───────────────────────────────────────────────────────────────
     -- Per-thread working state for the Email Hub. Threads are DERIVED
     -- (thread_id lives on each message), so anything the user owns about a
     -- conversation — the reply we drafted, side notes, and whether it's been
