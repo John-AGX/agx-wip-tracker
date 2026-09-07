@@ -5231,23 +5231,16 @@
   .p86-google-map { min-height: 320px; }
 }
 
-/* Detail overlay — sits BELOW the standard modal layer (z:1000) so
-   child modals (Edit Links, Pair Picker, Create Project) and the
-   markup viewer / photo lightbox can stack on top. The overlay used
-   to be z:9000 which trapped every child modal behind it. */
-.p86-proj-detail-overlay {
-  position: fixed; inset: 0; z-index: 999;
-  background: rgba(0,0,0,0.85);
-  display: none; align-items: stretch; justify-content: center;
-  padding: 0;
-}
+/* Project detail — a full-page drill-in inside the #projects tab, the same
+   shape as the Jobs detail. This was a position:fixed backdrop at z:999
+   holding a centred 1100px panel that scrolled inside itself; that is what
+   made it a "modal over the list". Now it is ordinary page content: the
+   PAGE scrolls, child modals stack over it with no z-index negotiation, and
+   the browser's own back button is the way out because the router owns the
+   URL. The .p86-proj-detail-overlay backdrop rule is gone with it. */
 .p86-proj-detail-host {
-  background: var(--bg, #0a0a14);
   width: min(1100px, 100%);
-  max-height: 100vh;
-  overflow-y: auto;
-  border-left: 1px solid var(--border, #333);
-  border-right: 1px solid var(--border, #333);
+  margin: 0 auto;
   padding: 18px 22px;
 }
 .p86-proj-detail-topbar {

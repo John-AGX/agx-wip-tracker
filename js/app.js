@@ -2037,6 +2037,24 @@
                     renderEstimatesList();
                 }
             } else if (tabName === 'projects') {
+                // Returning to Projects from another tab: force back to the
+                // list, even if a project detail was previously open. Same
+                // reset the Jobs branch does above and for the same reason —
+                // the detail is a sibling view, so left visible it stays
+                // layered over the list and steals clicks. This must run
+                // BEFORE the list renderer, which paints into the main view.
+                // The module owns the teardown because it also has to drop the
+                // detail's live Google Map + ResizeObserver; hiding the view
+                // from out here would leak both for a project nobody is on.
+                if (typeof window.p86ProjectsLeaveDetail === 'function') {
+                    window.p86ProjectsLeaveDetail();
+                } else {
+                    var projDetail = document.getElementById('projects-project-detail-view');
+                    if (projDetail) projDetail.style.display = 'none';
+                    var projMain = document.getElementById('projects-main-view');
+                    if (projMain) projMain.style.display = '';
+                    if (window.appState) window.appState.currentProjectId = null;
+                }
                 // IA-B: Projects is a true top-level page — mount the same
                 // list renderer the My Files __projects__ virtual folder used.
                 var projHost = document.getElementById('projectsPageHost');

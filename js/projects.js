@@ -1156,6 +1156,25 @@
   // Detail overlay
   // ──────────────────────────────────────────────────────────────────
   function openProject(projectId) {
+    // openProject is called from OTHER TABS: the Linked Projects panel renders
+    // inside a job (js/jobs.js), a lead (js/leads.js) and the estimate editor
+    // (js/estimate-editor.js), and the projects map calls it too. As a
+    // position:fixed overlay on <body> that worked from anywhere. A drill-in
+    // lives INSIDE the #projects pane, so without this the view swap would
+    // happen on a hidden pane and the click would look dead.
+    //
+    // NOTE window.switchTab, not switchTab — this module has its OWN local
+    // switchTab (the detail's tab strip, ~line 1666) which shadows the global.
+    var pane = document.getElementById('projects');
+    if (pane && !pane.classList.contains('active') && typeof window.switchTab === 'function') {
+      window.switchTab('projects');
+    }
+    // Project → project (a Linked Projects row inside an open detail) has to
+    // release the outgoing project's map before the incoming one mounts, or
+    // the first project's Google Map + ResizeObserver stay live forever.
+    // No-op when nothing is open, and the tab switch above may already have
+    // done it.
+    teardownDetail();
     _detailState.projectId = projectId;
     _detailState.project = null;
     _detailState.pairs = [];
@@ -1163,12 +1182,23 @@
     _detailState.photos = [];
     _detailState.reports = [];
     _detailState.reportsCount = 0;
-    var overlay = ensureDetailOverlay();
-    overlay.style.display = 'flex';
-    document.body.style.overflow = 'hidden';
-    // Register close handler so Android back / browser back closes
-    // this overlay instead of navigating away from the page.
-    pushOverlay(closeDetailImpl);
+    // Drill-in, not overlay: swap the tab's two sibling views the way
+    // editJob() does. Deliberately NOT registered with the overlay stack —
+    // pushOverlay() calls history.pushState(), and the URL for a drill-in
+    // belongs to the router. Registering both would put two entries on the
+    // history stack for one navigation, so back would need pressing twice.
+    // The lightbox and the report editor still use the stack; only the
+    // detail leaves it.
+    var view = ensureDetailView();
+    if (!view) return;
+    var main = document.getElementById('projects-main-view');
+    if (main) main.style.display = 'none';
+    view.style.display = 'block';
+    if (window.appState) window.appState.currentProjectId = projectId;
+    // Land at the top of the project, not at the list's old scroll offset.
+    try { window.scrollTo(0, 0); } catch (e) { /* defensive */ }
+    if (typeof window.p86NavSave === 'function') window.p86NavSave();
+    if (window.p86Router && typeof window.p86Router.sync === 'function') window.p86Router.sync();
     paintDetailLoading();
     if (!api()) {
       paintDetailError('API not available');
@@ -1207,57 +1237,64 @@
   }
   window.openProject = openProject;
 
-  // Public close — routed through the overlay stack so Android back +
-  // X-button + backdrop-click all flow through the same code path.
-  // Distinguish "I'm closing because the user pressed back (popstate
-  // already fired)" from "I'm closing because the user clicked X
-  // (need to fire history.back())" using _overlayStack membership.
-  function closeDetail() {
-    // If our close is the top of the overlay stack, popstate is the
-    // natural exit — calling closeTopOverlay() runs history.back()
-    // which fires popstate which removes the DOM.
-    var hasOurClose = _overlayStack.indexOf(closeDetailImpl) !== -1;
-    if (hasOurClose) {
-      closeTopOverlay();
-    } else {
-      closeDetailImpl();
-    }
-  }
-  // DOM-side close. Idempotent — running it twice is a no-op.
-  function closeDetailImpl() {
-    if (!_detailState.projectId) return;
+  // The teardown half of leaving the detail, with NO navigation side effects.
+  // Split out because switchTab() also has to leave the detail — and there it
+  // must not refetch the list (switchTab paints it itself) or touch the router
+  // (the router is mid-navigation to a different tab). Returns true if a
+  // detail was actually open.
+  function teardownDetail() {
+    if (!_detailState.projectId) return false;
     _detailState.projectId = null;
     _detailState.project = null;
-    // Closing only hides the overlay (the nodes stay in the DOM and stay
-    // "connected"), so the detail map has to be released explicitly or it
-    // keeps a live Google Map + ResizeObserver for a project nobody is
-    // looking at.
+    // The detail view is HIDDEN, not destroyed, so its nodes stay
+    // "connected" and the map's own teardown heuristics never fire. Release
+    // it explicitly or it keeps a live Google Map + ResizeObserver running
+    // for a project nobody is looking at.
     var mapHost = document.getElementById('projDetailMap');
     if (mapHost) {
       detachDetailMap(mapHost);
       mapHost.removeAttribute('data-map-fp');   // force a fresh mount next open
       mapHost.innerHTML = '';
     }
-    var overlay = document.getElementById('projDetailOverlay');
-    if (overlay) overlay.style.display = 'none';
+    var view = document.getElementById('projects-project-detail-view');
+    if (view) view.style.display = 'none';
+    var main = document.getElementById('projects-main-view');
+    if (main) main.style.display = '';
+    if (window.appState) window.appState.currentProjectId = null;
+    // Belt and braces: the detail used to lock body scroll, and a build that
+    // still had the old code could leave it locked. Clearing it here is free.
     document.body.style.overflow = '';
+    return true;
+  }
+
+  // Leaving the detail because the user switched to another TAB. Same
+  // teardown, none of the navigation — switchTab owns both from here.
+  window.p86ProjectsLeaveDetail = teardownDetail;
+
+  // Return to the projects list. Named to match backToJobsMain() — the two
+  // drill-ins should read the same. Idempotent: running it twice is a no-op.
+  function backToProjectsMain() {
+    if (!teardownDetail()) return;
     if (_listState.host) fetchAll().then(paintList);
     refreshLinkedPanels();
+    // Sync nav-state + URL back to /projects. Without the router sync the
+    // address bar keeps /projects/:id while the LIST is on screen — and on a
+    // refresh the URL wins, dragging the user back into the project they
+    // just left. backToJobsMain() carries the same pair for the same reason.
+    if (typeof window.p86NavSave === 'function') window.p86NavSave();
+    if (window.p86Router && typeof window.p86Router.sync === 'function') window.p86Router.sync();
   }
-  window.closeProjectDetail = closeDetail;
+  // Every existing caller says "close the detail"; keep that name pointing at
+  // the drill-in's back path so the ~5 inline onclick handlers keep working.
+  var closeDetail = backToProjectsMain;
+  window.closeProjectDetail = backToProjectsMain;
+  window.backToProjectsMain = backToProjectsMain;
 
-  function ensureDetailOverlay() {
-    var el = document.getElementById('projDetailOverlay');
-    if (el) return el;
-    el = document.createElement('div');
-    el.id = 'projDetailOverlay';
-    el.className = 'p86-proj-detail-overlay';
-    el.innerHTML = '<div id="projDetailHost" class="p86-proj-detail-host"></div>';
-    el.addEventListener('click', function(e) {
-      if (e.target === el) closeDetail();
-    });
-    document.body.appendChild(el);
-    return el;
+  // The detail view is static markup in index.html now (it was created on
+  // demand inside a position:fixed backdrop). Nothing to build — just hand
+  // back the container, or null if the markup is missing.
+  function ensureDetailView() {
+    return document.getElementById('projects-project-detail-view');
   }
 
   function paintDetailLoading() {

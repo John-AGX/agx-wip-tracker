@@ -1468,8 +1468,21 @@
                      mounts js/projects.js renderProjectsInto() here — the same
                      renderer the My Files __projects__ virtual folder used (that
                      folder still works for old links; the sidebar now comes here). -->
+                <!-- Projects — a full-page drill-in, the same shape as Jobs:
+                     the list and the project detail are SIBLING views inside
+                     this tab rather than a modal layered over the list.
+                     openProject() swaps to the detail, backToProjectsMain()
+                     swaps back. #projDetailHost is static here (it used to be
+                     created on demand inside a position:fixed backdrop); every
+                     painter in js/projects.js already targets it by id, so the
+                     detail's contents did not have to change. -->
                 <div id="projects" class="tab-content">
-                    <div id="projectsPageHost"></div>
+                    <div id="projects-main-view">
+                        <div id="projectsPageHost"></div>
+                    </div>
+                    <div id="projects-project-detail-view" style="display: none;">
+                        <div id="projDetailHost" class="p86-proj-detail-host"></div>
+                    </div>
                 </div>
                 <!-- Cost Inbox — receipt capture + filterable list. switchTab('cost-inbox')
                      mounts js/cost-inbox.js window.p86CostInbox.render() here. -->
@@ -3496,7 +3509,7 @@
          app.js: loadData consults p86SaveMerge.shouldVetoHydrate() on the very
          first hydrate. -->
     <script src="js/save-merge.js?v=5"></script>
-    <script src="js/app.js?v=152"></script>
+    <script src="js/app.js?v=153"></script>
     <!-- The visible signal for a write that has not reached the server.
          Loads AFTER app.js so window.p86PushStatus exists to subscribe to. -->
     <script src="js/save-banner.js?v=3"></script>
@@ -3563,7 +3576,7 @@
          renderer, which upgrades a map section only when window.L exists. -->
     <script src="js/vendor/leaflet.js?v=1"></script>
     <script src="js/report-document.js?v=4"></script>
-    <script src="js/projects.js?v=96"></script>
+    <script src="js/projects.js?v=97"></script>
     <script src="js/receipt-scanner.js?v=2"></script>
     <script src="js/receipt-cropper.js?v=1"></script>
     <script src="js/list-filter.js?v=1"></script>
