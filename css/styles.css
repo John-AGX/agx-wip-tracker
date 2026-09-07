@@ -12624,3 +12624,139 @@ body.light-mode .p86-mktpnl-warn { background: rgba(180, 120, 10, .10); border-c
   .p86-report-map-wrap.has-live-map .p86-report-map-static { display: block !important; }
   .p86-report-map-wrap.has-live-map:not(.has-static) .p86-report-map-fallback { display: grid !important; }
 }
+
+/* ── Service tickets — the job's work-order manager ─────────────────────
+   Styled from tokens throughout so it reads correctly on BOTH surfaces.
+   The recurring failure in this file is a literal hex chosen on the dark
+   app and never re-checked on the light one; every colour here comes from
+   a var() with a dark fallback, which follows the theme for free. */
+.p86-st-wrap { padding: 14px 16px; }
+.p86-st-bar {
+  display: flex; align-items: center; gap: 10px;
+  flex-wrap: wrap; margin-bottom: 14px;
+}
+.p86-st-pills { display: flex; gap: 4px; flex-wrap: wrap; flex: 1 1 auto; }
+.p86-st-pill {
+  background: transparent; color: var(--text-dim, #aaa);
+  border: 1px solid var(--border, #333); border-radius: 999px;
+  padding: 4px 11px; font-size: 12px; cursor: pointer; font-family: inherit;
+}
+.p86-st-pill:hover { background: var(--row-hover, rgba(255,255,255,0.06)); color: var(--text, #fff); }
+/* The selected filter takes its label colour from --bg, which is what makes
+   it correct in both themes with no light twin: the accent sits mid-luminance
+   and the page ground is always at one extreme. */
+.p86-st-pill.active {
+  background: var(--accent, #4f8cff); color: var(--bg, #0a0a14);
+  border-color: var(--accent, #4f8cff); font-weight: 700;
+}
+.p86-st-pill-n { opacity: 0.75; font-variant-numeric: tabular-nums; }
+
+.p86-st-list { display: flex; flex-direction: column; gap: 8px; }
+.p86-st-empty { padding: 28px 4px; color: var(--text-dim, #888); font-size: 13px; }
+.p86-st-loading { padding: 18px 4px; color: var(--text-dim, #888); font-size: 13px; }
+
+.p86-st-row {
+  border: 1px solid var(--border, #333); border-radius: 8px;
+  background: var(--card-bg, #141419); overflow: hidden;
+}
+.p86-st-row.is-open { border-color: var(--accent, #4f8cff); }
+.p86-st-row-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; cursor: pointer;
+}
+.p86-st-row-head:hover { background: var(--row-hover, rgba(255,255,255,0.04)); }
+.p86-st-prio { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; background: var(--text-dim, #888); }
+.p86-st-prio.prio-low     { background: var(--text-dim, #888); }
+.p86-st-prio.prio-normal  { background: var(--accent, #4f8cff); }
+.p86-st-prio.prio-high    { background: var(--orange, #ea580c); }
+.p86-st-prio.prio-urgent  { background: var(--red, #dc2626); }
+.p86-st-num {
+  font-family: ui-monospace, Menlo, monospace; font-size: 11.5px;
+  color: var(--text-dim, #888); flex: 0 0 auto;
+}
+.p86-st-title { flex: 1 1 auto; min-width: 0; font-size: 13.5px; font-weight: 600; color: var(--text, #fff); }
+.p86-st-when, .p86-st-tasks {
+  font-size: 11.5px; color: var(--text-dim, #888); flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+.p86-st-status {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.4px;
+  text-transform: uppercase; padding: 3px 8px; border-radius: 999px;
+  border: 1px solid var(--border, #333); color: var(--text-dim, #aaa); flex: 0 0 auto;
+}
+.p86-st-status.st-open, .p86-st-status.st-scheduled { color: var(--accent, #4f8cff); border-color: var(--accent, #4f8cff); }
+.p86-st-status.st-in_progress { color: var(--orange, #ea580c); border-color: var(--orange, #ea580c); }
+.p86-st-status.st-work_complete { color: var(--yellow, #d97706); border-color: var(--yellow, #d97706); }
+.p86-st-status.st-approved, .p86-st-status.st-closed { color: var(--green, #059669); border-color: var(--green, #059669); }
+.p86-st-status.st-cancelled { color: var(--red, #dc2626); border-color: var(--red, #dc2626); }
+
+.p86-st-detail { padding: 4px 12px 14px; border-top: 1px solid var(--border, #333); }
+.p86-st-stepper { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 14px; }
+.p86-st-step {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--text-dim, #888); padding: 3px 9px; border-radius: 999px;
+  border: 1px solid var(--border, #333);
+}
+.p86-st-step.done { color: var(--text, #fff); border-color: var(--text-dim, #888); }
+.p86-st-step.at { background: var(--accent, #4f8cff); color: var(--bg, #0a0a14); border-color: var(--accent, #4f8cff); font-weight: 700; }
+.p86-st-cancelled { color: var(--red, #dc2626); font-size: 13px; margin: 10px 0 14px; }
+
+.p86-st-detail-grid { display: grid; grid-template-columns: minmax(0,2fr) minmax(0,1fr); gap: 18px; }
+.p86-st-lbl {
+  display: block; font-size: 10.5px; text-transform: uppercase;
+  letter-spacing: 0.8px; color: var(--text-dim, #888); margin: 10px 0 5px;
+}
+.p86-st-scope, .p86-st-detail textarea, .p86-st-modal textarea, .p86-st-modal input[type="text"] {
+  width: 100%; background: var(--input-bg, #101014); color: var(--text, #fff);
+  border: 1px solid var(--border, #333); border-radius: 6px;
+  padding: 8px 10px; font-size: 13px; font-family: inherit; resize: vertical;
+}
+.p86-st-ro { font-size: 13px; color: var(--text, #fff); white-space: pre-wrap; line-height: 1.5; }
+.p86-st-guestlog {
+  background: var(--surface2, rgba(255,255,255,0.04));
+  border-left: 3px solid var(--accent, #4f8cff);
+  padding: 8px 10px; border-radius: 0 4px 4px 0;
+}
+.p86-st-meta { display: flex; gap: 8px; align-items: baseline; margin-bottom: 8px; }
+.p86-st-meta-k {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.6px;
+  color: var(--text-dim, #888); flex: 0 0 88px;
+}
+.p86-st-meta-v { flex: 1 1 auto; min-width: 0; font-size: 12.5px; color: var(--text, #fff); }
+.p86-st-meta-v select, .p86-st-meta-v input {
+  background: var(--input-bg, #101014); color: var(--text, #fff);
+  border: 1px solid var(--border, #333); border-radius: 4px;
+  padding: 4px 6px; font-size: 12px; font-family: inherit; max-width: 100%;
+}
+.p86-st-actions { display: flex; gap: 8px; margin-top: 14px; }
+
+.p86-st-timeline { margin-top: 16px; }
+.p86-st-event { font-size: 12px; color: var(--text-dim, #888); padding: 3px 0; }
+/* A guest row is visually distinguished because its name is a CLAIM, not an
+   identity — a bearer token cannot prove who is holding it. */
+.p86-st-event.is-guest { border-left: 2px solid var(--accent, #4f8cff); padding-left: 8px; }
+.p86-st-event-who { color: var(--text, #fff); font-weight: 600; }
+
+.p86-st-modal-back {
+  position: fixed; inset: 0; z-index: 1100;
+  background: rgba(0,0,0,0.6); display: flex;
+  align-items: center; justify-content: center; padding: 20px;
+}
+.p86-st-modal {
+  background: var(--panel-bg, #141419); border: 1px solid var(--border, #333);
+  border-radius: 10px; padding: 18px 20px; width: min(560px, 100%);
+  max-height: 90vh; overflow-y: auto;
+}
+.p86-st-modal-head { font-size: 16px; font-weight: 700; color: var(--text, #fff); margin-bottom: 6px; }
+.p86-st-modal-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.p86-st-modal-row select, .p86-st-modal-row input {
+  width: 100%; background: var(--input-bg, #101014); color: var(--text, #fff);
+  border: 1px solid var(--border, #333); border-radius: 6px;
+  padding: 7px 9px; font-size: 13px; font-family: inherit;
+}
+.p86-st-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+@media (max-width: 760px) {
+  .p86-st-detail-grid { grid-template-columns: 1fr; }
+  .p86-st-modal-row { grid-template-columns: 1fr; }
+}

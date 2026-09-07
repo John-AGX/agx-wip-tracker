@@ -63,7 +63,11 @@
     'job-site-map',
     // Workflow (RFIs / Submittals / Transmittals) — jobs-hub row clicks
     // navigate with jobSub:'job-workflow', so the URL must round-trip.
-    'job-workflow'
+    'job-workflow',
+    // Service Tickets — the work-order tier. Listed so
+    // /jobs/:id/job-service-tickets round-trips through parse and serialize;
+    // without it the tab opens but the URL falls back to the job's default.
+    'job-service-tickets'
   ];
   // Legacy sub-tab id → new id. Old shared links / bookmarks using
   // /jobs/:id/job-wip transparently route to job-wip-report (the new

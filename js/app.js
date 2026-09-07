@@ -2382,7 +2382,8 @@
             'job-photos':       'renderJobPhotos',
             'job-files':        'renderJobFiles',
             'job-daily-logs':   'renderJobDailyLogs',
-            'job-reports':      'renderJobReports'
+            'job-reports':      'renderJobReports',
+            'job-service-tickets': 'renderJobServiceTickets'
         };
         function switchJobSubTab(subtabName) {
             const currentJobId = appState.currentJobId;

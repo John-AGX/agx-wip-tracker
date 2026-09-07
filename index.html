@@ -251,7 +251,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&display=swap">
     <link rel="stylesheet" href="css/vendor/leaflet.css?v=1">
-    <link rel="stylesheet" href="css/styles.css?v=300">
+    <link rel="stylesheet" href="css/styles.css?v=301">
     <link rel="stylesheet" href="css/report-style-packs.css?v=5">
     <link rel="stylesheet" href="css/workspace-layout.css?v=68">
     <link rel="stylesheet" href="css/workspace.css?v=41">
@@ -1384,6 +1384,16 @@
                         <div id="job-reports" class="sub-tab-content-job">
                             <div id="job-reports-content"></div>
                         </div>
+
+                        <!-- Service Tickets — the WORK ORDER tier above tasks.
+                             Painted on tab activation by
+                             window.renderJobServiceTickets(jobId)
+                             (js/service-tickets.js). The pane id MUST equal the
+                             RIGHT_TABS id in js/workspace-layout.js — the tab
+                             strip shows/hides the pane by that id, so a
+                             mismatch is a tab that highlights and reveals
+                             nothing. -->
+                        <div id="job-service-tickets" class="sub-tab-content-job"></div>
 
 
                         <!-- Wave 3 — RFIs / Submittals / Transmittals.
@@ -3521,7 +3531,7 @@
          app.js: loadData consults p86SaveMerge.shouldVetoHydrate() on the very
          first hydrate. -->
     <script src="js/save-merge.js?v=5"></script>
-    <script src="js/app.js?v=154"></script>
+    <script src="js/app.js?v=155"></script>
     <!-- The visible signal for a write that has not reached the server.
          Loads AFTER app.js so window.p86PushStatus exists to subscribe to. -->
     <script src="js/save-banner.js?v=3"></script>
@@ -3641,6 +3651,11 @@
          Loads after api.js, attachments.js, file-explorer.js and jobs.js so
          window.p86Explorer / p86Attachments / appData are all available. -->
     <script src="js/job-media.js?v=1"></script>
+    <!-- Service Tickets tab (renderJobServiceTickets). Same placement rule as
+         job-media.js above: after api.js and jobs.js so p86Api and appData
+         exist, and BEFORE workspace-layout.js, which reads the renderer name
+         out of its dispatch maps when a tab is activated. -->
+    <script src="js/service-tickets.js?v=1"></script>
     <!-- Reusable rich-text field (window.p86RichText) — shared WYSIWYG for
          Scope / Terms / notes / proposals / reports. Load before the editors
          that mount it. -->
@@ -3683,12 +3698,12 @@
 
     <script src="js/workspace.js?v=56"></script>
     <script src="js/workspace-gc.js?v=1"></script>
-    <script src="js/workspace-layout.js?v=107"></script>
+    <script src="js/workspace-layout.js?v=108"></script>
 
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
          before the router wraps them. -->
-    <script src="js/router.js?v=32"></script>
+    <script src="js/router.js?v=33"></script>
 
     <!-- Sidebar Recents — client-side recently-opened list. Loads after
          router.js + the entity-open modules so it can wrap editJob /

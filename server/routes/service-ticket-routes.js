@@ -10,10 +10,15 @@
 // this file has no unauthenticated door at all.
 //
 // TENANCY. These are new NOT NULL tables with no legacy un-stamped rows, so
-// every statement carries a bare `organization_id = $n` predicate with NO
-// `OR organization_id IS NULL` tolerance arm — that arm exists on jobs/leads
-// only because their org column was added late, and copying it here would
-// permanently widen a boundary for nothing.
+// every statement carries a bare `organization_id = $n` predicate and NO
+// legacy tolerance arm. That arm exists on jobs/leads only because their org
+// column was added late; copying it into a table that never had un-stamped
+// rows would permanently widen a boundary for nothing.
+//
+// (Deliberately not spelling the arm out literally here: the graduation
+// ledger in test/tenancy-graduation.test.js counts occurrences of that exact
+// string across server/, and a comment explaining its ABSENCE would inflate
+// the number it uses to track how much of the codebase still needs it.)
 //
 // A foreign or missing id is always 404, never 403. A 403 is an existence
 // oracle: it answers "does this id exist in some other tenant?" without any

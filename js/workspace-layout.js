@@ -58,7 +58,11 @@
     { id: 'job-photos',        label: 'Photos',     icon: 'photos' },
     { id: 'job-files',         label: 'Files',      icon: 'folder' },
     { id: 'job-daily-logs',    label: 'Daily Logs', icon: 'daily-logs' },
-    { id: 'job-reports',       label: 'Reports',    icon: 'document-text' }
+    { id: 'job-reports',       label: 'Reports',    icon: 'document-text' },
+    // Service Tickets — the WORK ORDER tier above tasks (js/service-tickets.js).
+    // It sits with the field/document cluster because that is who a work order
+    // is FOR: the crew who gets dispatched and the client who gets shown it.
+    { id: 'job-service-tickets', label: 'Service Tickets', icon: 'daily-logs' }
   ];
 
   // Workspace toggle state. Tracked at module scope so the toggle can
@@ -1354,7 +1358,8 @@
       'job-photos': 'renderJobPhotos',
       'job-files': 'renderJobFiles',
       'job-daily-logs': 'renderJobDailyLogs',
-      'job-reports': 'renderJobReports'
+      'job-reports': 'renderJobReports',
+      'job-service-tickets': 'renderJobServiceTickets'
     };
     safeRenderTabContent(targetId, target, jobId, renderers[targetId]);
   }
@@ -1729,7 +1734,8 @@
       'job-photos': 'renderJobPhotos',
       'job-files': 'renderJobFiles',
       'job-daily-logs': 'renderJobDailyLogs',
-      'job-reports': 'renderJobReports'
+      'job-reports': 'renderJobReports',
+      'job-service-tickets': 'renderJobServiceTickets'
     };
 
     function activateTab(targetId) {
