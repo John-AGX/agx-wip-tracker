@@ -415,6 +415,20 @@
         var last = s.last_received_at
           ? 'Last email received ' + fmtAgo(s.last_received_at) + '.'
           : 'No emails received yet.';
+        // Every address this person has ever held still delivers to them. If
+        // that is not SHOWN, somebody whose address just changed has no way to
+        // know whether the one on their business cards still works — and the
+        // system cannot tell them by email, because nothing sends yet.
+        var aliases = (s.aliases || []).map(function(a) { return a.address; });
+        var aliasHtml = aliases.length
+          ? '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:8px;line-height:1.6;">' +
+              'Still delivering to you: ' +
+              aliases.map(function(a) {
+                return '<code style="background:var(--surface,#1a1a20);border:1px solid var(--border,#2a2a32);border-radius:4px;padding:1px 5px;user-select:all;">' + escapeHTML(a) + '</code>';
+              }).join(' ') +
+              '<br>Older addresses never stop working, so anything already sent to one still reaches you.' +
+            '</div>'
+          : '';
         el.innerHTML =
           '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
             '<code id="p86-acct-dbx-addr" style="font-size:12.5px;background:var(--surface,#1a1a20);border:1px solid var(--border,#2a2a32);border-radius:6px;padding:4px 8px;user-select:all;">' + escapeHTML(s.address || '') + '</code>' +
@@ -425,7 +439,7 @@
             'Forward or redirect mail here and the assistant can read it — no Outlook connection needed. ' +
             'Best setup: Outlook &rarr; Rules &rarr; new rule &rarr; &ldquo;Apply to all messages&rdquo; &rarr; <strong>Redirect to</strong> this address (redirect keeps the real sender + threading, and your inbox is untouched — copies stay unread).' +
             (s.configured ? '' : '<br><span style="color:#fbbf24;">&#9888; Server inbound receiving isn\'t configured yet — emails sent here won\'t arrive until it is.</span>') +
-          '</div>';
+          '</div>' + aliasHtml;
         var btn = document.getElementById('p86-acct-dbx-copy');
         if (btn) btn.addEventListener('click', function() {
           var addr = s.address || '';

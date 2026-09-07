@@ -71,7 +71,11 @@ function p86Ask(message, opts) {
     if (!tbody) return;
     tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-dim,#888);padding:20px;">Loading…</td></tr>';
 
-    window.p86Api.users.list().then(function(res) {
+    // The address context resolves alongside the roster so the Project 86
+    // address can be rendered whole on the first paint rather than appearing a
+    // beat later. It never rejects, so it cannot stop the table loading.
+    Promise.all([window.p86Api.users.list(), loadAddressContext()]).then(function(all) {
+      var res = all[0];
       _users = res.users || [];
       if (!_users.length) {
         tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-dim,#888);padding:20px;">No users.</td></tr>';
@@ -96,7 +100,14 @@ function p86Ask(message, opts) {
           '<div style="min-width:0;"><div style="font-weight:600;color:var(--text,#e4e6f0);">' + escapeHTML(u.name || '') + '</div>' +
           (u.title ? '<div style="font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(u.title) + '</div>' : '') +
           '</div></div>';
-        var emailCell = '<div style="font-size:12px;">' + escapeHTML(u.email || '') + '</div>' +
+        // The Project 86 address, on the row, so "what is Pat's address?" does
+        // not require opening Pat. Only the PRIMARY — a person's older
+        // addresses are theirs, and are shown only to them in My Account.
+        var p86Addr = u.inbound_email_key
+          ? '<div style="font-size:11px;color:var(--accent,#4f8cff);font-family:monospace;" title="Project 86 address">' +
+              escapeHTML(u.inbound_email_key + (_addrCtx && _addrCtx.domain ? '@' + _addrCtx.domain : '')) + '</div>'
+          : '';
+        var emailCell = '<div style="font-size:12px;">' + escapeHTML(u.email || '') + '</div>' + p86Addr +
           (u.phone_number ? '<div style="font-size:11px;color:var(--text-dim,#888);font-family:monospace;">' + escapeHTML(u.phone_number) + '</div>' : '');
         var roleCell = roleBadge(u.role) +
           (u.timezone ? '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:3px;">' + escapeHTML(u.timezone) + '</div>' : '');
@@ -182,11 +193,73 @@ function p86Ask(message, opts) {
       });
   }
 
+  // ── The Project 86 address context: the org slug and the mail domain ──────
+  // Both are read from the SERVER, never hardcoded here. The suffix this
+  // renders is a DISPLAY HINT only: the address that actually gets stored is
+  // whatever server/services/inbound-address.js composes, so a stale or
+  // unavailable hint can mislabel the preview but can never write a wrong
+  // address. Resolved once and cached; a failure degrades to a plain
+  // "your company suffix is added automatically" rather than blocking the edit.
+  var _addrCtx = null;
+  function loadAddressContext() {
+    if (_addrCtx) return Promise.resolve(_addrCtx);
+    return Promise.all([
+      window.p86Api.get('/api/admin/organizations/me').catch(function() { return null; }),
+      window.p86Api.get('/api/email-inbox/my-address').catch(function() { return null; })
+    ]).then(function(r) {
+      var slug = r[0] && r[0].organization ? r[0].organization.slug : null;
+      var at = r[1] && r[1].address ? String(r[1].address).lastIndexOf('@') : -1;
+      var domain = at > 0 ? String(r[1].address).slice(at + 1) : null;
+      _addrCtx = { slug: slug || null, domain: domain || null };
+      return _addrCtx;
+    });
+  }
+  // The stored key is either the assigned shape (<local>.<slug>) or the
+  // auto-minted hash (<name>-<6hex>, no dot). Only the first has a "local half"
+  // an admin can edit — prefilling the box with a hash would compose
+  // john-46bbee.agx on the next save, which is nobody's idea of a nicer
+  // address. So the hash prefills nothing and is shown as the current value.
+  function localHalfOf(key, slug) {
+    if (!key || !slug) return '';
+    var tail = '.' + String(slug).toLowerCase();
+    var k = String(key).toLowerCase();
+    return k.length > tail.length && k.slice(-tail.length) === tail ? k.slice(0, -tail.length) : '';
+  }
+
   function openEditUserModal(userId) {
     var u = _users.find(function(x) { return x.id === userId; });
     if (!u) {
       alert('User not found in cache. Click Refresh and try again.');
       return;
+    }
+    var localEl = document.getElementById('editUser_inboundLocal');
+    var sufEl = document.getElementById('editUser_inboundSuffix');
+    var hintEl = document.getElementById('editUser_inboundHint');
+    if (localEl) {
+      localEl.value = '';
+      localEl.dataset.original = '';
+      if (sufEl) sufEl.textContent = '…';
+      if (hintEl) hintEl.textContent = '';
+      loadAddressContext().then(function(ctx) {
+        // Guard against a slow response landing after the admin opened a
+        // DIFFERENT user: only paint if this row is still the one on screen.
+        if (String(document.getElementById('editUser_id').value) !== String(u.id)) return;
+        var suffix = (ctx.slug ? '.' + ctx.slug : '') + (ctx.domain ? '@' + ctx.domain : '');
+        if (sufEl) sufEl.textContent = suffix || '@…';
+        var half = localHalfOf(u.inbound_email_key, ctx.slug);
+        localEl.value = half;
+        localEl.dataset.original = half;
+        if (!hintEl) return;
+        if (u.inbound_email_key && !half) {
+          hintEl.innerHTML = 'Currently <code>' + escapeHTML(u.inbound_email_key + (ctx.domain ? '@' + ctx.domain : '')) +
+            '</code> — an automatic address. Type a name above to replace it. ' +
+            '<strong>The old one keeps working</strong>, so anything already sent to it still arrives.';
+        } else if (u.inbound_email_key) {
+          hintEl.innerHTML = 'Changing this keeps every previous address working — nothing that was already handed out stops arriving.';
+        } else {
+          hintEl.textContent = 'No address yet. One is created automatically the first time this person opens My Account; set a name here to choose it instead.';
+        }
+      });
     }
     document.getElementById('editUser_id').value = u.id;
     document.getElementById('editUser_email').value = u.email;
@@ -231,7 +304,17 @@ function p86Ask(message, opts) {
     // else gets normalized server-side). Caller hasn't typed = stays empty
     // but the server treats present-empty as "clear" — that's the desired
     // behavior since the phone field on the form mirrors the user record.
-    var updatePromise = window.p86Api.users.update(id, { name: name, role: role, active: active, phone_number: phone, timezone: timezone });
+    // inbound_local_part is sent ONLY when the admin actually changed it.
+    // Absent from the body means "leave the address alone" server-side, and
+    // sending an unchanged value would mint a pointless duplicate audit row —
+    // while sending an empty one would be refused outright.
+    var payload = { name: name, role: role, active: active, phone_number: phone, timezone: timezone };
+    var localEl = document.getElementById('editUser_inboundLocal');
+    if (localEl) {
+      var typed = localEl.value.trim().toLowerCase();
+      if (typed && typed !== (localEl.dataset.original || '')) payload.inbound_local_part = typed;
+    }
+    var updatePromise = window.p86Api.users.update(id, payload);
     var passwordPromise = newPassword
       ? window.p86Api.users.resetPassword(id, newPassword)
       : Promise.resolve();
