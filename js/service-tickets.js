@@ -251,8 +251,10 @@
       '</div>' +
       (canEdit ? '<div class="p86-st-actions">' +
         '<button class="ee-btn primary p86-st-save">Save</button>' +
+        '<button class="ee-btn secondary p86-st-share">&#x1F517; Share</button>' +
         '<button class="ee-btn secondary p86-st-archive">Archive</button>' +
       '</div>' : '') +
+      '<div class="p86-st-sharewrap" hidden></div>' +
       (events.length ? '<div class="p86-st-timeline">' +
         '<label class="p86-st-lbl">Progress</label>' +
         events.map(eventHTML).join('') +
@@ -418,6 +420,15 @@
       if (e.key === 'Enter') { e.preventDefault(); addTask(); }
     });
 
+    var shareBtn = d.querySelector('.p86-st-share');
+    if (shareBtn) shareBtn.addEventListener('click', function () {
+      var wrap = d.querySelector('.p86-st-sharewrap');
+      if (!wrap) return;
+      if (!wrap.hidden) { wrap.hidden = true; wrap.innerHTML = ''; return; }
+      wrap.hidden = false;
+      paintSharePanel(wrap, t);
+    });
+
     var arch = d.querySelector('.p86-st-archive');
     if (arch) arch.addEventListener('click', function () {
       // p86Confirm, never native confirm() — it no-ops inside the installed PWA.
@@ -437,6 +448,139 @@
         });
       }).catch(function (e) {
         toast(e && e.message ? e.message : 'Could not archive', 'error');
+      });
+    });
+  }
+
+  // ── Share panel ──────────────────────────────────────────────────────
+  // Send a work order to someone with no account. The panel ALWAYS shows the
+  // link, even when the email is off or the send fails, because the link IS
+  // the deliverable: the server keeps only its hash, so a link not copied
+  // here cannot be recovered later, only replaced.
+  //
+  // S4 mints VIEW ONLY. The scope selector arrives with the write doors in
+  // S5/S6 — offering a scope the server would silently narrow to 'view' would
+  // be a lie told by a dropdown.
+  function paintSharePanel(wrap, t) {
+    wrap.innerHTML = '<div class="p86-st-loading">Loading links…</div>';
+    api().shares(t.id).then(function (r) {
+      var list = (r && r.shares) || [];
+      wrap.innerHTML =
+        '<div class="p86-st-share-panel">' +
+          '<div class="p86-st-lbl-row"><span class="p86-st-lbl">Share this work order</span></div>' +
+          '<div class="p86-st-share-form">' +
+            '<input type="email" class="p86-st-share-email" placeholder="Email (optional)" />' +
+            '<input type="text" class="p86-st-share-name" placeholder="Their name (optional)" />' +
+            '<button class="ee-btn primary p86-st-share-go">Create link</button>' +
+          '</div>' +
+          '<div class="p86-st-task-note">Anyone with the link can OPEN this work order. ' +
+            'They cannot change it — read-only for now. The link expires in 30 days ' +
+            'and you can turn it off at any time.</div>' +
+          '<div class="p86-st-share-out"></div>' +
+          (list.length
+            ? '<div class="p86-st-share-list">' + list.map(shareRowHTML).join('') + '</div>'
+            : '<div class="p86-st-lead-empty">No links yet.</div>') +
+        '</div>';
+      wireSharePanel(wrap, t);
+    }).catch(function (e) {
+      wrap.innerHTML = '<div class="p86-st-loading" style="color:#f87171;">' +
+        esc(e && e.message ? e.message : 'Could not load links') + '</div>';
+    });
+  }
+
+  function shareRowHTML(s) {
+    var state = s.state || 'sent';
+    return '<div class="p86-st-share-row" data-share="' + escAttr(s.id) + '">' +
+      '<span class="p86-st-share-who">' +
+        esc(s.recipient_name || s.recipient_email || 'Anyone with the link') + '</span>' +
+      '<span class="p86-st-share-state st-' + esc(state) + '">' + esc(state) + '</span>' +
+      (s.view_count ? '<span class="p86-st-share-views">' + esc(String(s.view_count)) + ' view' +
+        (Number(s.view_count) === 1 ? '' : 's') + '</span>' : '') +
+      '<span class="p86-st-share-exp">' + esc(fmtDate(s.expires_at)) + '</span>' +
+      (state === 'revoked' || state === 'expired'
+        ? ''
+        : '<button class="p86-st-share-revoke" title="Turn this link off">Turn off</button>') +
+    '</div>';
+  }
+
+  function wireSharePanel(wrap, t) {
+    var go = wrap.querySelector('.p86-st-share-go');
+    if (go) go.addEventListener('click', function () {
+      go.disabled = true;
+      api().share(t.id, {
+        email: (wrap.querySelector('.p86-st-share-email') || {}).value || '',
+        name: (wrap.querySelector('.p86-st-share-name') || {}).value || ''
+      }).then(function (r) {
+        var out = wrap.querySelector('.p86-st-share-out');
+        // Shown whether or not the email sent — this is the only time the raw
+        // token exists.
+        if (out) {
+          out.innerHTML =
+            '<div class="p86-st-share-link">' +
+              '<input type="text" readonly value="' + escAttr(r.link || '') + '" />' +
+              '<button class="ee-btn secondary p86-st-share-copy">Copy</button>' +
+            '</div>' +
+            '<div class="p86-st-task-note">' +
+              (r.email_sent ? 'Emailed. ' : (r.email_error ? 'The email did not send — copy the link instead. ' : '')) +
+              'Copy this now: it is stored only as a hash, so it cannot be shown again.' +
+            '</div>';
+          var copy = out.querySelector('.p86-st-share-copy');
+          if (copy) copy.addEventListener('click', function () {
+            var inp = out.querySelector('input');
+            if (!inp) return;
+            inp.select();
+            try { navigator.clipboard.writeText(inp.value); toast('Link copied'); }
+            catch (e) { try { document.execCommand('copy'); toast('Link copied'); } catch (_) {} }
+          });
+        }
+        return paintSharePanelKeepingOutput(wrap, t, out && out.innerHTML);
+      }).catch(function (e) {
+        toast(e && e.message ? e.message : 'Could not create the link', 'error');
+      }).then(function () { if (go) go.disabled = false; });
+    });
+
+    wrap.querySelectorAll('.p86-st-share-revoke').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var row = b.closest('.p86-st-share-row');
+        var sid = row && row.getAttribute('data-share');
+        if (!sid) return;
+        b.disabled = true;
+        api().revokeShare(t.id, sid).then(function () {
+          toast('Link turned off');
+          return paintSharePanel(wrap, t);
+        }).catch(function (e) {
+          b.disabled = false;
+          toast(e && e.message ? e.message : 'Could not turn the link off', 'error');
+        });
+      });
+    });
+  }
+
+  // Repaint the list without losing the just-minted link, which cannot be
+  // recovered if it scrolls away.
+  function paintSharePanelKeepingOutput(wrap, t, outHTML) {
+    return api().shares(t.id).then(function (r) {
+      var list = (r && r.shares) || [];
+      var listEl = wrap.querySelector('.p86-st-share-list');
+      var html = list.length
+        ? list.map(shareRowHTML).join('')
+        : '';
+      if (listEl) listEl.innerHTML = html;
+      else {
+        var panel = wrap.querySelector('.p86-st-share-panel');
+        if (panel) panel.insertAdjacentHTML('beforeend', '<div class="p86-st-share-list">' + html + '</div>');
+      }
+      wireSharePanel(wrap, t);
+      var out = wrap.querySelector('.p86-st-share-out');
+      if (out && outHTML) out.innerHTML = outHTML;
+      // Re-wire the copy button — the innerHTML restore above dropped its
+      // listener.
+      var copy = out && out.querySelector('.p86-st-share-copy');
+      if (copy) copy.addEventListener('click', function () {
+        var inp = out.querySelector('input');
+        if (!inp) return;
+        inp.select();
+        try { navigator.clipboard.writeText(inp.value); toast('Link copied'); } catch (e) {}
       });
     });
   }

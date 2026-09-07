@@ -12800,3 +12800,38 @@ body.light-mode .p86-mktpnl-warn { background: rgba(180, 120, 10, .10); border-c
   color: var(--green, #059669); border: 1px solid var(--green, #059669);
   border-radius: 999px; padding: 1px 6px; flex: 0 0 auto;
 }
+
+/* Service-ticket share panel. */
+.p86-st-share-panel { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border, #333); }
+.p86-st-share-form { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.p86-st-share-form input {
+  flex: 1 1 160px; min-width: 0; background: var(--input-bg, #101014); color: var(--text, #fff);
+  border: 1px solid var(--border, #333); border-radius: 6px; padding: 6px 9px;
+  font-size: 12.5px; font-family: inherit;
+}
+.p86-st-share-link { display: flex; gap: 6px; margin: 10px 0 4px; }
+.p86-st-share-link input {
+  flex: 1 1 auto; min-width: 0; background: var(--surface2, rgba(255,255,255,0.06));
+  color: var(--text, #fff); border: 1px solid var(--accent, #4f8cff);
+  border-radius: 6px; padding: 6px 9px; font-size: 12px;
+  font-family: ui-monospace, Menlo, monospace;
+}
+.p86-st-share-list { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
+.p86-st-share-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.p86-st-share-who { flex: 1 1 auto; min-width: 0; color: var(--text, #fff); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p86-st-share-views, .p86-st-share-exp { color: var(--text-dim, #888); flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.p86-st-share-state {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px;
+  border-radius: 999px; padding: 1px 7px; flex: 0 0 auto;
+  border: 1px solid var(--border, #333); color: var(--text-dim, #888);
+}
+.p86-st-share-state.st-sent   { color: var(--accent, #4f8cff); border-color: var(--accent, #4f8cff); }
+.p86-st-share-state.st-opened { color: var(--green, #059669); border-color: var(--green, #059669); }
+.p86-st-share-state.st-revoked,
+.p86-st-share-state.st-expired { color: var(--red, #dc2626); border-color: var(--red, #dc2626); }
+.p86-st-share-revoke {
+  background: transparent; border: 1px solid var(--border, #333); border-radius: 4px;
+  color: var(--text-dim, #888); font-size: 11px; padding: 2px 8px;
+  cursor: pointer; font-family: inherit; flex: 0 0 auto;
+}
+.p86-st-share-revoke:hover { color: var(--red, #dc2626); border-color: var(--red, #dc2626); }

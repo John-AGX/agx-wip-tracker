@@ -148,10 +148,10 @@ self.addEventListener('fetch', function (event) {
   // prevent that: it is a fetch() option with no effect on a top-level
   // navigation, and cache.put() ignores Cache-Control entirely. The only thing
   // that actually stops it is not entering the branch. Same reasoning applies
-  // to /t/ (task shares) and /r/ (report share portal), whose tokens are in
-  // the path for the same reason.
+  // to /t/ (task shares), /r/ (report share portal) and /st/ (service-ticket
+  // work orders), whose tokens are in the path for the same reason.
   if (url.pathname.startsWith('/live/') || url.pathname.startsWith('/t/') ||
-      url.pathname.startsWith('/r/')) return;
+      url.pathname.startsWith('/r/') || url.pathname.startsWith('/st/')) return;
 
   // Cross-origin (R2 attachments, Anthropic, etc.) → bypass.
   if (url.origin !== self.location.origin) return;

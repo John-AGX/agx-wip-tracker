@@ -64,6 +64,7 @@ const tasksRoutes = require('./routes/tasks-routes');
 const taskShareRoutes = require('./routes/task-share-routes');
 const reportShareRoutes = require('./routes/report-share-routes');
 const serviceTicketRoutes = require('./routes/service-ticket-routes');
+const serviceTicketShareRoutes = require('./routes/service-ticket-share-routes');
 const notesRoutes = require('./routes/notes-routes');
 const remindersCrudRoutes = require('./routes/reminders-crud-routes');
 const receiptRoutes = require('./routes/receipt-routes');
@@ -301,6 +302,11 @@ app.use('/api', reportShareRoutes);
 // every path is /api/service-tickets/...; the token doors arrive with S4 in a
 // separate router mounted at /api like the two share routers above.
 app.use('/api/service-tickets', serviceTicketRoutes);
+// Mounted at /api rather than under the tickets prefix because it registers
+// BOTH sides of one credential: /api/service-tickets/:id/share* for the owner
+// and /api/service-ticket-share/:token for the guest — the same arrangement
+// task-share and report-share use, so a credential's two ends stay in one file.
+app.use('/api', serviceTicketShareRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/agent-jobs', require('./routes/agent-jobs-routes'));
 app.use('/api/push', require('./routes/push-routes'));
@@ -422,7 +428,16 @@ app.get('/accept-org-invite', (req, res) => {
 // Public task-share page — an outside worker lands here from the task_share
 // email (link is /t/<token>). The page reads the token from its own path and
 // talks to the token-gated /api/task-share/* endpoints. No login, no app shell.
+//
+// The three headers were MISSING here while /live/, /r/ and /st/ all set them,
+// and this URL carries a credential in its path exactly like those do. Without
+// no-referrer the token rides the Referer header to whatever the guest clicks
+// next; without no-store it can sit in a shared cache. Added when a guest-page
+// guard (test/guest-pages-no-app-code.test.js) noticed the asymmetry.
 app.get('/t/:token', (req, res) => {
+  res.set('Referrer-Policy', 'no-referrer');
+  res.set('X-Robots-Tag', 'noindex, nofollow');
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
   res.sendFile(path.join(__dirname, '..', 'task-share.html'));
 });
 
@@ -442,6 +457,18 @@ app.get('/r/:token', (req, res) => {
   res.set('X-Robots-Tag', 'noindex, nofollow');
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
   res.sendFile(path.join(__dirname, '..', 'report-share.html'));
+});
+
+// Public service-ticket (work order) page. Same three headers as /t/ and /r/
+// above and for the same stated reason: this URL carries a CREDENTIAL in its
+// PATH, so it must not be referred onward, indexed, or cached. Registered
+// BEFORE express.static and the SPA fallback so the token page wins over the
+// app shell.
+app.get('/st/:token', (req, res) => {
+  res.set('Referrer-Policy', 'no-referrer');
+  res.set('X-Robots-Tag', 'noindex, nofollow');
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.sendFile(path.join(__dirname, '..', 'service-ticket-share.html'));
 });
 
 // Public live-room viewer page — someone lands here from a forwarded link

@@ -538,6 +538,20 @@
     events: function(id, limit) {
       return get('/api/service-tickets/' + encodeURIComponent(id) + '/events' +
         (limit ? '?limit=' + encodeURIComponent(limit) : ''));
+    },
+    // ── Share links ────────────────────────────────────────────────
+    // The RAW token comes back exactly once, inside `link`. The server keeps
+    // only its hash, so a link not copied from that response cannot be
+    // recovered later — only replaced.
+    share: function(id, payload) {
+      return post('/api/service-tickets/' + encodeURIComponent(id) + '/share', payload || {});
+    },
+    shares: function(id) {
+      return get('/api/service-tickets/' + encodeURIComponent(id) + '/shares');
+    },
+    revokeShare: function(id, shareId) {
+      return post('/api/service-tickets/' + encodeURIComponent(id) +
+        '/shares/' + encodeURIComponent(shareId) + '/revoke', {});
     }
   };
 

@@ -160,7 +160,14 @@ describe('REGISTER 2 — the route population', () => {
     // (/api/service-tickets) rather than the bare /api the two share routers
     // use, because every path in it is under that prefix. The token doors
     // arrive in a separate router later, mounted at /api like the others.
-    expect(R.mounts + R.unresolved.length).toBe(77);
+    //
+    // 77 -> 78 with service-ticket-share-routes, mounted at the bare /api
+    // rather than under the tickets prefix because it registers BOTH ends of
+    // one credential — /api/service-tickets/:id/share* for the owner and
+    // /api/service-ticket-share/:token for the guest. Same arrangement
+    // task-share and report-share use, so a credential's two sides stay in one
+    // file and can be read together.
+    expect(R.mounts + R.unresolved.length).toBe(78);
   });
 
   test('the ROUTE count is committed (573 across 75 routers)', () => {
@@ -215,12 +222,28 @@ describe('REGISTER 2 — the route population', () => {
     //      its OWN org predicate rather than reaching a child on parent-id
     //      membership alone. That is precisely the shape a one-org production
     //      cannot disprove on its own, which is what this harness is for.
-    expect(R.routes).toBe(581);
-    expect(R.routers).toBe(76);
+    //   581 -> 585, +4 ALL WAIVED, the service-ticket share surface (S4).
+    //      Three owner doors and ONE public door; every one is a POST or takes
+    //      a path parameter, so the driven count does not move:
+    //        POST /api/service-tickets/:id/share
+    //        GET  /api/service-tickets/:id/shares
+    //        POST /api/service-tickets/:id/shares/:sid/revoke
+    //        GET  /api/service-ticket-share/:token        <- the public door
+    //      The public one is worth naming even though it is waived: it is the
+    //      only route in this wave with NO auth at all — the token IS the
+    //      credential — and its ticket lookup deliberately carries no org
+    //      predicate, because the share row's ticket_id was written by an
+    //      authed, org-proved mint and the token is globally unique. Adding
+    //      `organization_id = $2` there would mean reading a tenant off a
+    //      request value, which is the thing this whole register exists to
+    //      catch. It is shape-gated and IP-limited before it touches the
+    //      database, and S4 gives it no write path at all.
+    expect(R.routes).toBe(585);
+    expect(R.routers).toBe(77);
   });
 
-  test('the DRIVEN / COUNTED-WAIVED split is committed (139 driven, 442 counted)', () => {
-    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 139, waived: 442 });
+  test('the DRIVEN / COUNTED-WAIVED split is committed (139 driven, 446 counted)', () => {
+    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 139, waived: 446 });
   });
 
   test('every counted-waived route is a write or needs a path parameter — nothing else is waived', () => {

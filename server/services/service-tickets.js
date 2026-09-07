@@ -100,6 +100,14 @@ function clampTtlDays(days) {
   return Math.min(TTL_MAX_DAYS, Math.max(TTL_MIN_DAYS, Math.floor(n)));
 }
 
+// An ABSOLUTE expiry, computed once at mint. Not a sliding window: a link that
+// renews itself every time it is opened never expires, which is the opposite
+// of what an expiry is for.
+function expiryFrom(days, now) {
+  const base = now instanceof Date ? now.getTime() : (now || Date.now());
+  return new Date(base + clampTtlDays(days) * 24 * 60 * 60 * 1000);
+}
+
 // ── Lifecycle ───────────────────────────────────────────────────────────
 // draft → open → scheduled → in_progress → work_complete → approved → closed
 // with cancelled reachable from any non-terminal state.
@@ -381,6 +389,7 @@ module.exports = {
   scopeAllows,
   hidesFinancials,
   clampTtlDays,
+  expiryFrom,
   TTL_MIN_DAYS,
   TTL_MAX_DAYS,
   TTL_DEFAULT_DAYS,

@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Work Order</title>
+
+<!-- This URL carries a CREDENTIAL in its path. The server sets these as
+     headers too; they are repeated here so the page is correct even if it is
+     ever served another way. -->
+<meta name="robots" content="noindex, nofollow" />
+<meta name="referrer" content="no-referrer" />
+
+<!--
+  ══════════════════════════════════════════════════════════════════════════
+  SERVICE TICKET — the public work-order page.
+
+  THE HOUSE RULE: a guest surface COPIES the app's markup, classes and tokens
+  and NEVER links the app's code. Every real renderer in the SPA takes an id
+  and reaches for app state itself, so loading one onto a page outside the app
+  drags the whole app in behind it — along with its auth assumptions.
+
+  This file therefore links ZERO scripts and ZERO stylesheets. Everything is
+  inline. js/report-document.js is the ONE sanctioned exception in this repo
+  and it earned that by being provably pure; nothing here needs it.
+
+  SLICE S4 IS READ-ONLY. There is no write control on this page at all —
+  no checkbox, no note box, no photo button, no status button. The scopes
+  that would allow those (respond / propose) arrive with their server doors
+  in S5/S6. A page that offered a control the server would refuse is worse
+  than one that offers nothing.
+  ══════════════════════════════════════════════════════════════════════════
+-->
+
+<style>
+  :root {
+    --bg: #0e1116;
+    --card: #161b22;
+    --border: #262d38;
+    --text: #e6edf3;
+    --dim: #8b949e;
+    --accent: #4f8cff;
+    --green: #2ea043;
+    --amber: #d29922;
+    --red: #f85149;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f8fa; --card: #ffffff; --border: #d8dee4;
+      --text: #1f2328; --dim: #59636e; --accent: #0969da;
+      --green: #1a7f37; --amber: #9a6700; --red: #cf222e;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+    padding: 0 0 48px;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 0 16px; }
+  header { padding: 22px 0 14px; border-bottom: 1px solid var(--border); margin-bottom: 18px; }
+  .org { font-size: 12px; text-transform: uppercase; letter-spacing: 1.4px; color: var(--dim); font-weight: 700; }
+  h1 { font-size: 22px; line-height: 1.25; margin: 8px 0 6px; text-wrap: balance; }
+  .parent { font-size: 13.5px; color: var(--dim); }
+  .num { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--dim); }
+
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+  .lbl { font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); font-weight: 700; margin-bottom: 6px; }
+  .scope { white-space: pre-wrap; }
+  .muted { color: var(--dim); font-style: italic; }
+
+  .stepper { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 16px; }
+  .step { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--dim);
+          border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; }
+  .step.done { color: var(--text); border-color: var(--dim); }
+  .step.at { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 700; }
+
+  .meta { display: flex; gap: 10px; align-items: baseline; padding: 5px 0; border-top: 1px solid var(--border); }
+  .meta:first-of-type { border-top: 0; }
+  .meta-k { flex: 0 0 108px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--dim); }
+  .meta-v { flex: 1 1 auto; min-width: 0; }
+  a { color: var(--accent); }
+
+  .task { display: flex; gap: 9px; align-items: center; padding: 4px 0; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: 0 0 auto; }
+  .task.done .dot { background: var(--green); }
+  .task.done .t { color: var(--dim); text-decoration: line-through; }
+  .bar { height: 4px; border-radius: 999px; background: var(--border); overflow: hidden; margin-bottom: 9px; }
+  .bar > i { display: block; height: 100%; background: var(--green); }
+
+  .log { white-space: pre-wrap; border-left: 3px solid var(--accent); padding: 8px 10px;
+         background: rgba(127,127,127,0.06); border-radius: 0 5px 5px 0; }
+
+  .note { font-size: 12px; color: var(--dim); margin-top: 20px; line-height: 1.5; }
+  .fatal { padding: 60px 0; text-align: center; color: var(--dim); }
+  .fatal strong { display: block; font-size: 17px; color: var(--text); margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap" id="root">
+  <div class="fatal" id="boot">Loading…</div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // The token comes from the page's OWN PATH, never a query string: a query
+  // string is far more likely to be logged by a proxy, kept in an analytics
+  // payload, or pasted onward with the rest of a URL.
+  var token = (location.pathname.split('/').filter(Boolean).pop() || '');
+
+  var root = document.getElementById('root');
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function fatal(msg) {
+    root.innerHTML = '<div class="fatal"><strong>' + esc(msg) + '</strong>' +
+      'If you think this is a mistake, contact whoever sent you the link.</div>';
+  }
+
+  function fmtDate(v) {
+    if (!v) return '';
+    var d = new Date(v);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+
+  var STATUS_LABEL = {
+    draft: 'Draft', open: 'Open', scheduled: 'Scheduled', in_progress: 'In progress',
+    work_complete: 'Work complete', approved: 'Approved', closed: 'Closed', cancelled: 'Cancelled'
+  };
+  var LINE = ['open', 'scheduled', 'in_progress', 'work_complete', 'approved', 'closed'];
+
+  function render(d) {
+    var t = d.ticket || {};
+    var tasks = d.tasks || [];
+    var done = tasks.filter(function (x) { return x.done; }).length;
+    var at = LINE.indexOf(t.status);
+
+    var addr = [t.street_address, t.city, t.state, t.zip].filter(Boolean).join(', ');
+    var mapHref = addr ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(addr) : '';
+
+    var html = '';
+    html += '<header>' +
+      (d.org_name ? '<div class="org">' + esc(d.org_name) + '</div>' : '') +
+      '<h1>' + esc(t.title || 'Work order') + '</h1>' +
+      (t.ticket_number ? '<div class="num">' + esc(t.ticket_number) + '</div>' : '') +
+      // The forward-facing name of the parent — a lead title or a job number
+      // and title, resolved server-side. Never a raw id.
+      (d.parent_label ? '<div class="parent">' + esc(d.parent_label) + '</div>' : '') +
+    '</header>';
+
+    if (t.status === 'cancelled') {
+      html += '<div class="card" style="border-color:var(--red);color:var(--red);">This work order was cancelled.</div>';
+    } else {
+      html += '<div class="stepper">' + LINE.map(function (s, i) {
+        return '<span class="step' + (i <= at ? ' done' : '') + (i === at ? ' at' : '') + '">' +
+          esc(STATUS_LABEL[s]) + '</span>';
+      }).join('') + '</div>';
+    }
+
+    html += '<div class="card">' +
+      '<div class="lbl">Scope of work</div>' +
+      (t.scope_proposed
+        ? '<div class="scope">' + esc(t.scope_proposed) + '</div>'
+        : '<div class="muted">No scope has been written yet.</div>') +
+      // Only present when the sender chose to reveal financial detail; the
+      // server omits the field entirely otherwise, so this cannot render an
+      // empty labelled box.
+      (t.scope_approved
+        ? '<div class="lbl" style="margin-top:14px;">Approved scope</div><div class="scope">' + esc(t.scope_approved) + '</div>'
+        : '') +
+    '</div>';
+
+    var metas = '';
+    function meta(k, v) { if (v) metas += '<div class="meta"><span class="meta-k">' + esc(k) + '</span><span class="meta-v">' + v + '</span></div>'; }
+    meta('Status', esc(STATUS_LABEL[t.status] || t.status || ''));
+    meta('Scheduled', esc(fmtDate(t.scheduled_for)));
+    meta('Due', esc(fmtDate(t.due_date)));
+    meta('Site contact', esc(t.site_contact_name || ''));
+    meta('Phone', t.site_contact_phone ? '<a href="tel:' + esc(String(t.site_contact_phone).replace(/[^0-9+]/g, '')) + '">' + esc(t.site_contact_phone) + '</a>' : '');
+    meta('Address', addr ? '<a href="' + esc(mapHref) + '" target="_blank" rel="noreferrer noopener">' + esc(addr) + '</a>' : '');
+    meta('Access', esc(t.access_notes || ''));
+    if (metas) html += '<div class="card">' + metas + '</div>';
+
+    if (tasks.length) {
+      html += '<div class="card"><div class="lbl">Checklist — ' + done + ' of ' + tasks.length + ' done</div>' +
+        '<div class="bar"><i style="width:' + Math.round((done / tasks.length) * 100) + '%"></i></div>' +
+        tasks.map(function (x) {
+          return '<div class="task' + (x.done ? ' done' : '') + '"><span class="dot"></span>' +
+            '<span class="t">' + esc(x.title || '') + '</span></div>';
+        }).join('') + '</div>';
+    }
+
+    if (t.guest_log) {
+      html += '<div class="card"><div class="lbl">Field log</div><div class="log">' + esc(t.guest_log) + '</div></div>';
+    }
+
+    // Says plainly that this is a read-only view. S5 replaces this line with
+    // the write controls when the server can accept them.
+    html += '<div class="note">This is a read-only view of the work order. ' +
+      'It stays up to date — reload to see the latest.' +
+      (d.share && d.share.expires_at ? ' This link expires ' + esc(fmtDate(d.share.expires_at)) + '.' : '') +
+      '</div>';
+
+    root.innerHTML = html;
+  }
+
+  function load() {
+    fetch('/api/service-ticket-share/' + encodeURIComponent(token), {
+      headers: { 'Accept': 'application/json' },
+      cache: 'no-store'
+    }).then(function (r) {
+      return r.text().then(function (txt) {
+        var data = null;
+        try { data = txt ? JSON.parse(txt) : null; } catch (e) { data = null; }
+        if (!r.ok) {
+          // The server's failure strings ARE the guest UI. They say what
+          // happened without revealing whether a token ever existed.
+          throw new Error((data && data.error) || 'This link could not be opened.');
+        }
+        return data;
+      });
+    }).then(function (d) {
+      if (!d || !d.ticket) throw new Error('This link could not be opened.');
+      document.title = (d.ticket.title || 'Work Order');
+      render(d);
+    }).catch(function (e) {
+      fatal(e && e.message ? e.message : 'This link could not be opened.');
+    });
+  }
+
+  // Shape gate BEFORE any network call: a malformed token never costs the
+  // server a request, and the visitor gets the same answer either way.
+  if (!/^[a-f0-9]{64}$/.test(token)) fatal('This link is not valid.');
+  else load();
+})();
+</script>
+</body>
+</html>

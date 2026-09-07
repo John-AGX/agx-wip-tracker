@@ -427,7 +427,66 @@ const reportShareCommentLimiter = rateLimit({
   },
 });
 
+// ── Service-ticket share links ──────────────────────────────────────────
+// task_shares has NO dedicated limiter at all — its guest doors inherit only
+// ipGenericLimiter (200/min/IP). That is not repeated here. The trio below
+// copies the report-share shape, and IP is mounted FIRST on every route so a
+// scanner is stopped before it can consume anyone else's token bucket.
+const stShareIpLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  // Keyed on IP, not the token: every brute-force guess is a DIFFERENT token,
+  // so a per-token bucket would be empty on every attempt and stop nothing.
+  keyGenerator: function (req) { return 'stip:' + (req.ip || 'unknown'); },
+  handler: function (req, res) {
+    const retryAfter = Math.ceil(res.getHeader('Retry-After') || 60);
+    console.warn('[rate-limit] service-ticket-share IP throttle from', req.ip, '(retry in', retryAfter, 's)');
+    jsonHandler(res, retryAfter);
+  },
+});
+
+const stShareViewLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 240,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: function (req) {
+    const t = (req.params && req.params.token) || '';
+    // A PREFIX, never the whole token: rate-limit keys reach memory and log
+    // lines, and the token is a live credential. Same rule as report-share.
+    return t ? ('stv:' + t.slice(0, 16)) : ('ip:' + (req.ip || 'unknown'));
+  },
+  handler: function (req, res) {
+    const retryAfter = Math.ceil(res.getHeader('Retry-After') || 60);
+    console.warn('[rate-limit] service-ticket-share view throttle on', req.originalUrl);
+    jsonHandler(res, retryAfter);
+  },
+});
+
+// Guest WRITES (S5 onward) get a much tighter bucket than reads. A read is
+// cheap and a crew refreshing a work order must never be throttled; a write
+// creates a row a PM has to read, so the abuse shape is different. Keyed on IP
+// because the token is not the attacker's constraint — whoever holds one link
+// can post through it as fast as they like.
+const stShareWriteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 12,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: function (req) { return 'stw:' + (req.ip || 'unknown'); },
+  handler: function (req, res) {
+    const retryAfter = Math.ceil(res.getHeader('Retry-After') || 60);
+    console.warn('[rate-limit] service-ticket-share write throttle from', req.ip);
+    jsonHandler(res, retryAfter);
+  },
+});
+
 module.exports = {
+  stShareIpLimiter,
+  stShareViewLimiter,
+  stShareWriteLimiter,
   ipLoginLimiter,
   ipGenericLimiter,
   aiChatLimiter,
