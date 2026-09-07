@@ -265,6 +265,20 @@ function publicShare(share) {
 
 // ── What a token write may touch ────────────────────────────────────────
 
+// THE CLOSED SET. A guest PATCH reads exactly these four keys and no others.
+// This is a documentation constant, not a filter the handler runs: the handler
+// NAMES each key, so there is no loop over req.body for a future field to fall
+// into. Everything else — title, job_id, lead_id, organization_id,
+// assignee_user_id, scope_proposed, scheduled_for, ticket_number, created_by —
+// is unreachable by construction rather than by exclusion.
+//
+//   name      -> the SHARE's recipient_name, never the ticket. Write-once.
+//   checklist -> only `done` flips, diffed against what is stored.
+//   note      -> APPENDED to guest_log, never an overwrite, never internal_notes.
+//   status    -> checked through ticketMayTransition(..., 'share').
+const GUEST_WRITABLE_FIELDS = Object.freeze(['name', 'checklist', 'note', 'status']);
+
+
 // The checklist a guest may return. The task-share precedent lets a guest
 // REPLACE the whole array — rename items, add items, reorder, or wipe it with
 // [] — while its own justification says "a named worker TICKING a defined
@@ -409,6 +423,7 @@ module.exports = {
   normalizeGuestChecklist,
   guestNoteStamp,
   guestNameUpdate,
+  GUEST_WRITABLE_FIELDS,
   PROPOSABLE_FIELDS,
   filterProposedFields,
   ticketProgress,

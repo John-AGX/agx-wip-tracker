@@ -29,7 +29,15 @@ const { pool } = require('../db');
 const { requireAuth, requireCapability, requireOrgId } = require('../auth');
 const { callerOrgId } = require('../org-access');
 const { sendEmail, isEnabled: emailIsEnabled } = require('../email');
-const { stShareIpLimiter, stShareViewLimiter } = require('../rate-limit');
+const multer = require('multer');
+const sharp = require('sharp');
+const { sniffMimeFromBytes, sanitizeSvg, mimeFamilyMatches } = require('../util/attachment-mime');
+const { storage } = require('../storage');
+const { stShareIpLimiter, stShareViewLimiter, stShareWriteLimiter } = require('../rate-limit');
+
+// Memory storage: the buffer is sniffed and resized before anything is stored,
+// so it must never touch disk under its claimed name first.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 const { resolveEntityLabels } = require('../services/entity-labels');
 const svc = require('../services/service-tickets');
 
@@ -125,10 +133,14 @@ router.post('/service-tickets/:id/share', requireAuth, requireOrgId, async (req,
     if (!shareable.ok) return res.status(409).json({ error: shareable.reason });
 
     const body = req.body || {};
-    // S4 ships read-only: whatever the caller asks for, the stored scope is
-    // 'view'. The write scopes arrive with their doors in S5/S6, so a link
-    // minted today cannot outrun the routes that would honour it.
-    const scope = 'view';
+    // 'respond' is now a real door (S5), so the caller's choice is honoured —
+    // but through normalizeScope, so an unrecognised value NARROWS to 'view'
+    // rather than being taken at its word. 'propose' still narrows to 'view'
+    // here because normalizeScope permits it but its DOOR does not exist yet;
+    // that is deliberate — see the clamp below, which is what stops a link
+    // outrunning the routes that would honour it.
+    var scope = svc.normalizeScope(body.scope);
+    if (scope === 'propose') scope = 'respond';   // S6 lifts this clamp
     const hideFinancials = body.hide_financials !== false;
     const days = svc.clampTtlDays(body.days);
     const expires = svc.expiryFrom(days);
@@ -332,6 +344,227 @@ router.get('/service-ticket-share/:token',
     } catch (e) {
       console.error('[service-ticket-share] read failed', e);
       res.status(500).json({ error: 'Something went wrong opening this link.' });
+    }
+  });
+
+// ── T2: the guest field report ──────────────────────────────────────────
+// THE FIRST TOKEN WRITE IN THIS FEATURE. Everything about it is deliberately
+// narrow.
+//
+// It reads a CLOSED SET of four body keys and NAMES each one — there is no
+// loop over req.body, so a field added to service_tickets later cannot become
+// writable by a stranger just because it exists. See GUEST_WRITABLE_FIELDS.
+//
+// Three gates run before any of them, in this order:
+//   scope     — 'respond' or better, re-derived from the STORED row through
+//               normalizeScope, never from the request and never from the page
+//               having hidden a control.
+//   terminal  — a closed or cancelled ticket refuses every token write, the
+//               same "expires on completion" burn task-share implements.
+//   transition— checked through the SHARE lattice, which is forward-only
+//               inside the crew band.
+router.patch('/service-ticket-share/:token',
+  stShareIpLimiter, stShareWriteLimiter, loadTicketShare, async (req, res) => {
+    try {
+      const share = req.share;
+      const ticket = req.ticket;
+
+      // Re-derived from the stored row. A page that hid its controls is not a
+      // permission, and neither is anything in the body.
+      if (!svc.scopeAllows(share.scope, 'respond')) {
+        return res.status(403).json({ error: 'This link is view-only.' });
+      }
+      if (svc.isTerminal(ticket.status)) {
+        return res.status(409).json({ error: 'This work order is ' + ticket.status + ' and can no longer be updated.' });
+      }
+
+      const body = req.body || {};
+      const sets = [];
+      const params = [];
+      const changed = [];
+
+      // 1. name → the SHARE's recipient_name, NOT the ticket. Write-once,
+      //    because it labels every note already left; letting it change would
+      //    retroactively re-attribute them. Set BEFORE the note stamp is
+      //    composed so a guest's first action already carries their name.
+      const newName = svc.guestNameUpdate(share.recipient_name, body.name);
+      if (newName) {
+        await pool.query(
+          'UPDATE service_ticket_shares SET recipient_name = $1 WHERE id = $2 AND recipient_name IS NULL',
+          [newName, share.id]
+        );
+        share.recipient_name = newName;
+      }
+
+      // 2. checklist → only `done` flips land. normalizeGuestChecklist diffs
+      //    against what is STORED; additions, deletions, reorders and text
+      //    edits are dropped silently. The office owns what the list says, the
+      //    guest owns whether each line is finished.
+      if (Array.isArray(body.checklist)) {
+        const merged = svc.normalizeGuestChecklist(ticket.checklist, body.checklist);
+        params.push(JSON.stringify(merged));
+        sets.push('checklist = $' + params.length + '::jsonb');
+        changed.push('checklist');
+      }
+
+      // 3. note → APPENDED in SQL, never read-modify-write, so two guests
+      //    writing at once cannot lose one another's note. Targets guest_log,
+      //    NOT internal_notes — a guest must not be able to grow a field the
+      //    office writes into.
+      const stamp = svc.guestNoteStamp(body.note, share);
+      if (stamp) {
+        params.push(stamp);
+        sets.push("guest_log = COALESCE(guest_log, '') || $" + params.length);
+        changed.push('note');
+      }
+
+      // 4. status → the share lattice. A refusal is a 403 WITH THE REASON,
+      //    not a silent no-op: a crew member who cannot mark work complete
+      //    needs to know why.
+      let nextStatus = null;
+      if (body.status != null && String(body.status) !== '') {
+        const verdict = svc.ticketMayTransition(ticket.status, body.status, 'share');
+        if (!verdict.ok) return res.status(403).json({ error: verdict.reason });
+        nextStatus = String(body.status);
+        if (nextStatus !== ticket.status) {
+          params.push(nextStatus);
+          sets.push('status = $' + params.length);
+          changed.push('status');
+          // completed_at is only ever SET by a guest, only ever CLEARED by a
+          // PM. task-share never clears its equivalent, which leaves a
+          // reopened item still claiming a completion date.
+          if (nextStatus === 'work_complete') {
+            sets.push('completed_at = COALESCE(completed_at, NOW())');
+          }
+        }
+      }
+
+      if (!sets.length) return res.json({ ok: true, ticket: svc.publicTicket(ticket, share) });
+
+      params.push(ticket.id);
+      const { rows } = await pool.query(
+        'UPDATE service_tickets SET ' + sets.join(', ') + ', updated_at = NOW() ' +
+        'WHERE id = $' + params.length + ' RETURNING *',
+        params
+      );
+      if (!rows[0]) return res.status(404).json({ error: 'This work order is no longer available.' });
+
+      pool.query('UPDATE service_ticket_shares SET last_used_at = NOW()' +
+        (nextStatus === 'work_complete' ? ', completed_at = NOW()' : '') +
+        ' WHERE id = $1', [share.id]).catch(function () {});
+
+      // Every guest write appends an attributed event. A bearer token cannot
+      // identify a person, so the honest record is "this arrived through the
+      // link sent to <recipient>" — actor_label is a CLAIM and the UI says so.
+      const label = share.recipient_name || share.recipient_email || null;
+      if (changed.indexOf('status') >= 0) {
+        await logEvent(ticket, 'status_changed', {
+          actorKind: 'share', shareId: share.id, actorLabel: label,
+          detail: { from: ticket.status, to: nextStatus },
+        });
+      }
+      const other = changed.filter(function (c) { return c !== 'status'; });
+      if (other.length) {
+        await logEvent(ticket, other.indexOf('note') >= 0 ? 'note_added' : 'field_changed', {
+          actorKind: 'share', shareId: share.id, actorLabel: label,
+          detail: { fields: other },
+        });
+      }
+
+      res.json({
+        ok: true,
+        ticket: svc.publicTicket(rows[0], share),
+        share: svc.publicShare(Object.assign({}, share)),
+      });
+    } catch (e) {
+      console.error('[service-ticket-share] guest patch failed', e);
+      res.status(500).json({ error: 'Something went wrong saving that.' });
+    }
+  });
+
+// ── T3: a site photo ────────────────────────────────────────────────────
+// Copied from task-share-routes wholesale, including the magic-byte sniff
+// BEFORE anything is stored, because the failure it prevents (a file whose
+// contents disagree with its claimed type) is the same here.
+router.post('/service-ticket-share/:token/photo',
+  stShareIpLimiter, stShareWriteLimiter, loadTicketShare, upload.single('file'),
+  async (req, res) => {
+    try {
+      const share = req.share;
+      const ticket = req.ticket;
+      if (!svc.scopeAllows(share.scope, 'respond')) {
+        return res.status(403).json({ error: 'This link is view-only.' });
+      }
+      if (svc.isTerminal(ticket.status)) {
+        return res.status(409).json({ error: 'This work order is ' + ticket.status + ' and can no longer be updated.' });
+      }
+      if (!req.file || !req.file.buffer) return res.status(400).json({ error: 'No file' });
+
+      let buf = req.file.buffer;
+      const claimed = req.file.mimetype || 'application/octet-stream';
+      const sniffed = sniffMimeFromBytes(buf);
+      // The bytes must agree with the claim BEFORE anything is stored.
+      if (!mimeFamilyMatches(claimed, sniffed)) {
+        return res.status(400).json({ error: 'File contents do not match its type' });
+      }
+      const mime = sniffed || claimed;
+      // Images only — no PDFs or documents from an outside link.
+      if (typeof mime !== 'string' || mime.indexOf('image/') !== 0) {
+        return res.status(400).json({ error: 'Only photos can be uploaded here' });
+      }
+      if (mime === 'image/svg+xml') buf = sanitizeSvg(buf);
+      const isRaster = mime !== 'image/svg+xml';
+
+      const id = 'att_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+      const ext = (String(req.file.originalname || '').match(/\.([a-z0-9]+)$/i) || [, 'jpg'])[1].toLowerCase();
+      const baseKey = 'service_ticket/' + ticket.id + '/' + id;
+      let thumbUrl = null, webUrl = null, originalUrl, thumbKey = null, webKey = null, originalKey, width = null, height = null;
+      if (isRaster) {
+        const meta = await sharp(buf, { limitInputPixels: 50000000 }).rotate().metadata();
+        width = meta.width || null; height = meta.height || null;
+        const thumbBuf = await sharp(buf, { limitInputPixels: 50000000 }).rotate().resize(200, 200, { fit: 'cover' }).jpeg({ quality: 80 }).toBuffer();
+        const webBuf = await sharp(buf, { limitInputPixels: 50000000 }).rotate().resize(1600, 1600, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer();
+        thumbKey = baseKey + '_thumb.jpg'; webKey = baseKey + '_web.jpg'; originalKey = baseKey + '_orig.' + ext;
+        thumbUrl = await storage.put(thumbKey, thumbBuf, 'image/jpeg');
+        webUrl = await storage.put(webKey, webBuf, 'image/jpeg');
+        originalUrl = await storage.put(originalKey, buf, mime);
+      } else {
+        originalKey = baseKey + '_orig.' + ext;
+        originalUrl = await storage.put(originalKey, buf, mime);
+      }
+
+      const posR = await pool.query(
+        "SELECT COALESCE(MAX(position), -1) AS max_pos FROM attachments WHERE entity_type = 'service_ticket' AND entity_id = $1",
+        [ticket.id]
+      );
+      const position = (posR.rows[0] && posR.rows[0].max_pos != null) ? Number(posR.rows[0].max_pos) + 1 : 0;
+
+      const ins = await pool.query(
+        // uploaded_by is NULL by design — this door is a logged-out crew
+        // member, so there is no user to attribute. organization_id is stamped
+        // from the PARENT TICKET row already in hand (loadTicketShare
+        // SELECTed it), never from the request. That is the same evidence the
+        // read path uses to resolve the tenant.
+        `INSERT INTO attachments (id, entity_type, entity_id, folder, filename, mime_type, size_bytes, width, height, thumb_url, web_url, original_url, thumb_key, web_key, original_key, position, uploaded_by, organization_id)
+         VALUES ($1,'service_ticket',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+         RETURNING id, filename, thumb_url, web_url, original_url`,
+        [id, ticket.id, 'general', req.file.originalname, mime, buf.length, width, height,
+         thumbUrl, webUrl, originalUrl, thumbKey, webKey, originalKey, position, null,
+         ticket.organization_id]
+      );
+
+      pool.query('UPDATE service_ticket_shares SET last_used_at = NOW() WHERE id = $1', [share.id])
+        .catch(function () {});
+      await logEvent(ticket, 'photo_added', {
+        actorKind: 'share', shareId: share.id,
+        actorLabel: share.recipient_name || share.recipient_email || null,
+        detail: { mime: mime },
+      });
+
+      res.json({ ok: true, attachment: ins.rows[0] });
+    } catch (e) {
+      console.error('[service-ticket-share] guest photo failed', e);
+      res.status(500).json({ error: 'Something went wrong uploading that.' });
     }
   });
 

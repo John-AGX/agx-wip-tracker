@@ -117,7 +117,7 @@ describe('every credential-bearing page route sets the three headers', () => {
   });
 });
 
-describe('service-ticket-share.html is read-only in S4', () => {
+describe('service-ticket-share.html — the guest work order (S5: read + field report)', () => {
   const html = read('service-ticket-share.html');
 
   test('the token is read from the PATH, never a query string', () => {
@@ -137,19 +137,55 @@ describe('service-ticket-share.html is read-only in S4', () => {
     expect(html).toMatch(/if \(!\/\^\[a-f0-9\]\{64\}\$\/\.test\(token\)\) fatal\(/);
   });
 
-  test('it reaches exactly ONE endpoint', () => {
-    const urls = (html.match(/\/api\/[a-z0-9\-\/]+/gi) || [])
-      .map((u) => u.replace(/\/$/, ''));
-    expect([...new Set(urls)]).toEqual(['/api/service-ticket-share/']
-      .map((u) => u.replace(/\/$/, '')));
+  test('it reaches exactly the endpoints S5 defines — no others', () => {
+    const urls = [...new Set((html.match(/\/api\/[a-z0-9\-\/]+/gi) || [])
+      .map((u) => u.replace(/\/$/, '')))].sort();
+    expect(urls).toEqual([
+      '/api/service-ticket-share/',            // read + PATCH (same path)
+      '/api/service-ticket-share/',            // photo builds on the same base
+    ].map((u) => u.replace(/\/$/, '')).filter((v, i, a) => a.indexOf(v) === i).sort());
   });
 
-  test('S4 ships NO write control — not a hidden one, an absent one', () => {
-    // A page that offers a control the server would refuse is worse than one
-    // that offers nothing. The write scopes arrive with their doors in S5/S6.
-    for (const control of ['<input type="checkbox"', '<textarea', 'method: \'PATCH\'',
-                           'method: \'POST\'', 'FormData']) {
-      expect(html).not.toContain(control);
+  test('every write control is GATED on the scope the SERVER returned', () => {
+    // The page hiding a control is a courtesy, never the permission — the
+    // server re-derives scope from the stored row on every request. What is
+    // asserted here is that the page does not invent its own answer: the gate
+    // reads d.share.scope, not a query string, not a local flag.
+    expect(html).toMatch(/d\.share\.scope === 'respond'/);
+    expect(html).toMatch(/canRespond && live/);
+    // A terminal ticket gets no controls either, matching the server's 409.
+    expect(html).toMatch(/status !== 'closed'/);
+    expect(html).toMatch(/status !== 'cancelled'/);
+  });
+
+  test('the page never sends a field outside the guest-writable set', () => {
+    // The body keys it can possibly send. If a future edit adds one, this
+    // fails and the server's closed set has to be revisited deliberately.
+    const sends = [...new Set((html.match(/body\.(\w+) = |body\.(\w+)\b/g) || []))];
+    const svc = require('../server/services/service-tickets');
+    for (const key of ['title', 'scope_proposed', 'scope_approved', 'internal_notes',
+                       'organization_id', 'job_id', 'lead_id', 'assignee_user_id',
+                       'ticket_number', 'priority']) {
+      expect(html).not.toContain('body.' + key);
     }
+    // And what it DOES send is a subset of the server's closed set. The page
+    // sends name and note as body keys and status through collect({...}); the
+    // checklist is not on the S5 page at all. A subset is the right assertion
+    // here — the server's set is the authority, and a page sending fewer
+    // fields than it permits is fine, while one sending more is not.
+    expect(sends.join(' ')).toContain('body.note');
+    expect(sends.join(' ')).toContain('body.name');
+    expect(html).toContain("status: 'work_complete'");
+    for (const sent of ['note', 'name', 'status']) {
+      expect(svc.GUEST_WRITABLE_FIELDS).toContain(sent);
+    }
+  });
+
+  test('a refusal from the server is SHOWN, never swallowed', () => {
+    // A 403 here means the office changed the link or the work order moved on.
+    // Pretending it worked is the worst possible outcome for a crew member who
+    // believes their report was filed.
+    expect(html).toMatch(/if \(!r\.ok\) throw new Error\(\(data && data\.error\)/);
+    expect(html).toMatch(/msg\(e\.message, true\)/);
   });
 });

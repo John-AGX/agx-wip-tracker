@@ -238,12 +238,24 @@ describe('REGISTER 2 — the route population', () => {
     //      request value, which is the thing this whole register exists to
     //      catch. It is shape-gated and IP-limited before it touches the
     //      database, and S4 gives it no write path at all.
-    expect(R.routes).toBe(585);
+    //   585 -> 587, +2 WAIVED, the two GUEST WRITE doors (S5):
+    //        PATCH /api/service-ticket-share/:token
+    //        POST  /api/service-ticket-share/:token/photo
+    //      These are the first token WRITES in the codebase outside task-share,
+    //      and they are waived only because they take a path parameter — not
+    //      because they are low risk. Both re-derive the scope from the STORED
+    //      share row through normalizeScope on every request (never from the
+    //      body, never from the page having hidden a control), refuse a
+    //      terminal ticket, and read a CLOSED SET of four named body keys with
+    //      no loop over req.body. test/service-ticket-guest-write.test.js
+    //      drives the real handlers through every refusal and was verified to
+    //      go red when the scope gate and the checklist differ are removed.
+    expect(R.routes).toBe(587);
     expect(R.routers).toBe(77);
   });
 
-  test('the DRIVEN / COUNTED-WAIVED split is committed (139 driven, 446 counted)', () => {
-    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 139, waived: 446 });
+  test('the DRIVEN / COUNTED-WAIVED split is committed (139 driven, 448 counted)', () => {
+    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 139, waived: 448 });
   });
 
   test('every counted-waived route is a write or needs a path parameter — nothing else is waived', () => {

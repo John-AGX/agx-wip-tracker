@@ -335,14 +335,29 @@
   }
 
   function eventHTML(e) {
+    // A name on a guest row is a CLAIM, not identity — a bearer token cannot
+    // prove who is holding it — so the row says how it arrived rather than
+    // presenting the name the way an authenticated actor's is presented.
     var who = e.actor_kind === 'share'
       ? (e.actor_label ? esc(e.actor_label) + ' · via shared link' : 'via shared link')
       : (e.actor_kind === 'agent' ? '86' : 'Office');
+    var VERB = {
+      created: 'raised the ticket',
+      note_added: 'added a field note',
+      photo_added: 'added a photo',
+      shared: 'sent a link',
+      share_revoked: 'turned a link off',
+      share_opened: 'opened the link',
+      revision_proposed: 'proposed a revision',
+      revision_accepted: 'accepted a revision',
+      revision_rejected: 'rejected a revision',
+      agent_drafted: 'drafted this with 86'
+    };
     var what = e.kind === 'status_changed' && e.detail
       ? 'moved it to ' + esc(STATUS_LABEL[e.detail.to] || e.detail.to)
       : e.kind === 'field_changed' && e.detail && e.detail.fields
         ? 'edited ' + esc((e.detail.fields || []).join(', '))
-        : esc(String(e.kind || '').replace(/_/g, ' '));
+        : esc(VERB[e.kind] || String(e.kind || '').replace(/_/g, ' '));
     return '<div class="p86-st-event' + (e.actor_kind === 'share' ? ' is-guest' : '') + '">' +
       '<span class="p86-st-event-who">' + who + '</span> ' +
       '<span class="p86-st-event-what">' + what + '</span> ' +
@@ -471,11 +486,15 @@
           '<div class="p86-st-share-form">' +
             '<input type="email" class="p86-st-share-email" placeholder="Email (optional)" />' +
             '<input type="text" class="p86-st-share-name" placeholder="Their name (optional)" />' +
+            select('p86-st-share-scope', ['view', 'respond'], 'respond',
+              { view: 'View only', respond: 'Can file a report' }) +
             '<button class="ee-btn primary p86-st-share-go">Create link</button>' +
           '</div>' +
           '<div class="p86-st-task-note">Anyone with the link can OPEN this work order. ' +
-            'They cannot change it — read-only for now. The link expires in 30 days ' +
-            'and you can turn it off at any time.</div>' +
+            '<strong>Can file a report</strong> also lets them add notes and photos and mark the ' +
+            'work complete — things that are theirs to report. It never lets them change the ' +
+            'scope, the schedule or who it is assigned to. The link expires in 30 days and you ' +
+            'can turn it off at any time.</div>' +
           '<div class="p86-st-share-out"></div>' +
           (list.length
             ? '<div class="p86-st-share-list">' + list.map(shareRowHTML).join('') + '</div>'
@@ -509,7 +528,10 @@
       go.disabled = true;
       api().share(t.id, {
         email: (wrap.querySelector('.p86-st-share-email') || {}).value || '',
-        name: (wrap.querySelector('.p86-st-share-name') || {}).value || ''
+        name: (wrap.querySelector('.p86-st-share-name') || {}).value || '',
+        // The server normalizes this and narrows anything it does not
+        // recognise to 'view' — the dropdown is a convenience, not the gate.
+        scope: (wrap.querySelector('.p86-st-share-scope') || {}).value || 'view'
       }).then(function (r) {
         var out = wrap.querySelector('.p86-st-share-out');
         // Shown whether or not the email sent — this is the only time the raw

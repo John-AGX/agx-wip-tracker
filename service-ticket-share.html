@@ -24,11 +24,19 @@
   inline. js/report-document.js is the ONE sanctioned exception in this repo
   and it earned that by being provably pure; nothing here needs it.
 
-  SLICE S4 IS READ-ONLY. There is no write control on this page at all —
-  no checkbox, no note box, no photo button, no status button. The scopes
-  that would allow those (respond / propose) arrive with their server doors
-  in S5/S6. A page that offered a control the server would refuse is worse
-  than one that offers nothing.
+  WRITE CONTROLS ARE GATED ON THE SERVER'S ANSWER, NEVER ON THIS PAGE.
+  The field-report card renders only when the read returned scope 'respond'
+  (or better) and the work order is still live. That gate is a COURTESY: the
+  server re-derives the scope from the stored share row on every single
+  request, so hiding a box here changes nothing about what is permitted. A
+  view-only link renders no control at all, and a link whose scope is later
+  narrowed stops working immediately whatever this page last drew.
+
+  What a guest may write is a CLOSED SET of four keys — name, checklist,
+  note, status — and the server NAMES each one rather than looping over the
+  body, so a column added to service_tickets later cannot become writable by
+  a stranger just because it exists. 'propose' (editing the scope itself,
+  landing as a pending revision) arrives with its door in S6.
   ══════════════════════════════════════════════════════════════════════════
 -->
 
@@ -94,6 +102,30 @@
   .note { font-size: 12px; color: var(--dim); margin-top: 20px; line-height: 1.5; }
   .fatal { padding: 60px 0; text-align: center; color: var(--dim); }
   .fatal strong { display: block; font-size: 17px; color: var(--text); margin-bottom: 8px; }
+
+  /* The write half — rendered only when the SERVER says this link may respond. */
+  #report textarea, #report input[type="text"] {
+    width: 100%; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 7px;
+    padding: 9px 11px; font: inherit; font-size: 14px; margin-bottom: 9px;
+    resize: vertical;
+  }
+  #report .row { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
+  #report button {
+    background: var(--accent); color: var(--bg); border: 0; border-radius: 7px;
+    padding: 9px 16px; font: inherit; font-weight: 700; cursor: pointer;
+  }
+  #report button.big { width: 100%; margin-top: 11px; padding: 13px; background: var(--green); font-size: 15px; }
+  #report button:disabled { opacity: 0.55; cursor: default; }
+  #report .file {
+    display: inline-block; border: 1px solid var(--border); border-radius: 7px;
+    padding: 9px 14px; cursor: pointer; color: var(--dim); font-size: 14px;
+  }
+  #report .file input { display: none; }
+  #report .who { font-size: 13px; color: var(--dim); margin-bottom: 9px; }
+  #report .done-note { font-size: 13px; color: var(--green); margin-top: 11px; }
+  .msg { font-size: 13px; color: var(--dim); margin-top: 9px; min-height: 17px; }
+  .msg.bad { color: var(--red); }
 </style>
 </head>
 <body>
@@ -201,14 +233,117 @@
       html += '<div class="card"><div class="lbl">Field log</div><div class="log">' + esc(t.guest_log) + '</div></div>';
     }
 
-    // Says plainly that this is a read-only view. S5 replaces this line with
-    // the write controls when the server can accept them.
-    html += '<div class="note">This is a read-only view of the work order. ' +
-      'It stays up to date — reload to see the latest.' +
+    // The write half. Rendered ONLY when the server said this link may
+    // respond — and the server re-derives that from the stored row on every
+    // request, so hiding a control here is a courtesy, never the permission.
+    // A view-only link renders no control at all.
+    var canRespond = d.share && (d.share.scope === 'respond' || d.share.scope === 'propose');
+    var live = t.status !== 'closed' && t.status !== 'cancelled' && t.status !== 'approved';
+
+    if (canRespond && live) {
+      html += '<div class="card" id="report">' +
+        '<div class="lbl">Your field report</div>' +
+        (d.share.recipient_name
+          ? '<div class="who">Signed in as <strong>' + esc(d.share.recipient_name) + '</strong></div>'
+          : '<input type="text" id="name" placeholder="Your name" maxlength="120" />') +
+        '<textarea id="note" rows="3" placeholder="What did you find? What did you do?"></textarea>' +
+        '<div class="row">' +
+          '<label class="file"><input type="file" id="photo" accept="image/*" />Add photo</label>' +
+          '<button id="save">Save report</button>' +
+        '</div>' +
+        (t.status === 'work_complete'
+          ? '<div class="done-note">Marked work complete. The office will review it.</div>'
+          : '<button id="complete" class="big">Mark work complete</button>') +
+        '<div id="msg" class="msg"></div>' +
+      '</div>';
+    }
+
+    html += '<div class="note">' +
+      (canRespond && live
+        ? 'Notes and photos you add are recorded against this work order with your name. ' +
+          'The scope itself is set by the office.'
+        : 'This is a read-only view of the work order. It stays up to date — reload to see the latest.') +
       (d.share && d.share.expires_at ? ' This link expires ' + esc(fmtDate(d.share.expires_at)) + '.' : '') +
       '</div>';
 
     root.innerHTML = html;
+    if (canRespond && live) wireReport(d);
+  }
+
+  function msg(text, bad) {
+    var m = document.getElementById('msg');
+    if (m) { m.textContent = text; m.className = 'msg' + (bad ? ' bad' : ''); }
+  }
+
+  function send(body) {
+    return fetch('/api/service-ticket-share/' + encodeURIComponent(token), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      cache: 'no-store',
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      return r.text().then(function (txt) {
+        var data = null;
+        try { data = txt ? JSON.parse(txt) : null; } catch (e) {}
+        // The server's refusals ARE the message. A 403 here means the office
+        // changed the link or the work order moved on — say that, do not
+        // pretend it worked.
+        if (!r.ok) throw new Error((data && data.error) || 'That could not be saved.');
+        return data;
+      });
+    });
+  }
+
+  function wireReport(d) {
+    var saveBtn = document.getElementById('save');
+    var completeBtn = document.getElementById('complete');
+    var photoInput = document.getElementById('photo');
+
+    function collect(extra) {
+      var body = extra || {};
+      var noteEl = document.getElementById('note');
+      var nameEl = document.getElementById('name');
+      if (noteEl && noteEl.value.trim()) body.note = noteEl.value;
+      if (nameEl && nameEl.value.trim()) body.name = nameEl.value;
+      return body;
+    }
+
+    if (saveBtn) saveBtn.addEventListener('click', function () {
+      var body = collect();
+      if (!body.note && !body.name) { msg('Write something first.', true); return; }
+      saveBtn.disabled = true;
+      msg('Saving…');
+      send(body).then(function () { load(); })
+        .catch(function (e) { msg(e.message, true); saveBtn.disabled = false; });
+    });
+
+    if (completeBtn) completeBtn.addEventListener('click', function () {
+      completeBtn.disabled = true;
+      msg('Saving…');
+      // The note rides along so a crew member who typed one and pressed the
+      // big button does not lose it.
+      send(collect({ status: 'work_complete' })).then(function () { load(); })
+        .catch(function (e) { msg(e.message, true); completeBtn.disabled = false; });
+    });
+
+    if (photoInput) photoInput.addEventListener('change', function () {
+      var f = photoInput.files && photoInput.files[0];
+      if (!f) return;
+      msg('Uploading photo…');
+      var fd = new FormData();
+      fd.append('file', f);
+      fetch('/api/service-ticket-share/' + encodeURIComponent(token) + '/photo', {
+        method: 'POST', body: fd, cache: 'no-store'
+      }).then(function (r) {
+        return r.text().then(function (txt) {
+          var data = null;
+          try { data = txt ? JSON.parse(txt) : null; } catch (e) {}
+          if (!r.ok) throw new Error((data && data.error) || 'That photo could not be uploaded.');
+          return data;
+        });
+      }).then(function () { msg('Photo added.'); photoInput.value = ''; })
+        .catch(function (e) { msg(e.message, true); photoInput.value = ''; });
+    });
   }
 
   function load() {
