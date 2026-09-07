@@ -5175,15 +5175,24 @@
   border-color: #555;
 }
 /* Pin-style picker in the section header. Sized to match the .ee-btn
-   secondary buttons next to it so the row reads as one toolbar. */
+   secondary buttons next to it so the row reads as one toolbar.
+   The background was the literal #141414 while the text came from
+   var(--text). On the light editor surface --text resolves to
+   near-black, so this select rendered black on black — unreadable,
+   with no error to notice. It follows the surface token now.
+   It is also pinned to its content width: as a bare flex item it was
+   taking the full row, which read as a black bar rather than a
+   dropdown. */
 .p86-report-section-pinstyle {
-  background: #141414;
+  background: var(--input-bg, #141414);
   color: var(--text, #e8e0d0);
   border: 1px solid var(--border, #333);
   border-radius: 4px;
   padding: 5px 8px;
   font-size: 12px;
   cursor: pointer;
+  flex: 0 0 auto;
+  max-width: 190px;
 }
 .p86-report-section-pinstyle:focus {
   outline: 1px solid var(--accent, #4f8cff);
@@ -6216,11 +6225,19 @@
   padding: 60px 0; text-align: center;
   font-size: 14px; color: var(--text-dim, #888);
 }
+/* Editor chrome. The topbar is two stacked rows: the report's name, then
+   the actions. It also sticks to the top of the scrolling overlay, because
+   a long report used to scroll Save off the screen entirely. */
 .p86-report-topbar {
-  display: flex; gap: 10px; align-items: center;
+  display: flex; flex-direction: column; gap: 10px;
   padding: 6px 0 12px;
   border-bottom: 1px solid var(--border, #333);
-  margin-bottom: 12px;
+  margin-bottom: 16px;
+  position: sticky; top: -18px; z-index: 4;
+  background: var(--bg, #0a0a14);
+}
+.p86-report-topbar-titlerow {
+  display: flex; gap: 10px; align-items: center;
 }
 .p86-report-title-input {
   flex: 1; min-width: 0;
@@ -6232,7 +6249,23 @@
   color: var(--text, #fff);
 }
 .p86-report-title-input:focus { border-color: var(--border, #333); outline: none; }
-.p86-report-topbar-actions { display: flex; gap: 6px; align-items: center; }
+.p86-report-topbar-actions {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+}
+.p86-report-topbar-spacer { flex: 1 1 auto; }
+/* Buttons that belong to the same job read as one segmented control, so
+   the row shows three decisions instead of seven equal choices. */
+.p86-report-btn-group {
+  display: inline-flex; align-items: center;
+}
+.p86-report-btn-group .ee-btn {
+  border-radius: 0;
+  margin-left: -1px;
+}
+.p86-report-btn-group .ee-btn:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+.p86-report-btn-group .ee-btn:last-child  { border-radius: 0 6px 6px 0; }
+.p86-report-btn-group .ee-btn:only-child  { border-radius: 6px; }
+.p86-report-btn-group .ee-btn:hover { position: relative; z-index: 1; }
 .p86-report-summary {
   width: 100%;
   padding: 8px 10px;
@@ -6252,10 +6285,19 @@
   padding: 12px 14px;
   background: rgba(255,255,255,0.01);
 }
+/* The section's controls sat on the same ground as the section's content,
+   so a card read as one undifferentiated pile of inputs and photos. The
+   header is now a recessed band running edge to edge — negative margins
+   cancel the card's padding — which is what separates chrome from
+   document inside each section. */
 .p86-report-section-header {
   display: flex; gap: 10px; align-items: center;
-  margin-bottom: 10px;
   flex-wrap: wrap;
+  margin: -12px -14px 12px;
+  padding: 9px 14px;
+  background: var(--surface2, rgba(255,255,255,0.03));
+  border-bottom: 1px solid var(--border, #333);
+  border-radius: 8px 8px 0 0;
 }
 .p86-report-section-label {
   flex: 1; min-width: 0;
@@ -6270,8 +6312,8 @@
 .p86-report-section-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 /* Icon-toggle button row replaces the old layout <select>. Buttons
    are grouped into segmented bars: layout type / photo size / desc
-   side. Active button highlights with the yellow accent so the
-   current state is unambiguous. */
+   side. The active segment is a solid accent fill so the current
+   state is unambiguous on either surface — see the rule below. */
 .p86-report-section-toggles {
   display: inline-flex;
   align-items: center;
@@ -6279,7 +6321,10 @@
   padding: 2px;
   border: 1px solid var(--border, #333);
   border-radius: 6px;
-  background: rgba(255,255,255,0.02);
+  /* A 2%-white wash renders as nothing on the light editor surface, so
+     the group had no trough behind its segments. --surface2 is the
+     recessed neutral in both themes. */
+  background: var(--surface2, rgba(255,255,255,0.02));
 }
 .p86-report-section-iconbtn {
   background: transparent;
@@ -6295,11 +6340,22 @@
   gap: 4px;
   font-family: inherit;
 }
-.p86-report-section-iconbtn:hover { color: var(--text, #fff); background: rgba(255,255,255,0.04); }
+.p86-report-section-iconbtn:hover {
+  color: var(--text, #fff);
+  /* A white wash is invisible on the light editor surface. */
+  background: var(--row-hover, rgba(255,255,255,0.06));
+}
+/* The selected segment. This was amber text on a 12%-amber wash — built
+   for the dark app surface, where it glows. The report editor renders on
+   white, where it measured 1.67:1 and you could not tell which layout was
+   selected. A solid accent fill fixes it, and taking the label from
+   var(--bg) is what makes it correct in BOTH themes without branching:
+   the accent sits mid-luminance and the page ground is always at one
+   extreme, so this is 6.5:1 on white and 6.7:1 on the dark surface. */
 .p86-report-section-iconbtn.active {
-  background: rgba(251,191,36,0.12);
-  color: #fbbf24;
-  box-shadow: inset 0 0 0 1px rgba(251,191,36,0.35);
+  background: var(--accent, #4f8cff);
+  color: var(--bg, #0a0a14);
+  font-weight: 700;
 }
 .p86-report-section-iconbtn-glyph { font-size: 13px; }
 .p86-report-section-iconbtn-label { font-size: 11px; font-weight: 600; letter-spacing: 0.3px; }
@@ -7642,6 +7698,17 @@
   /* Drop the editor's topbar (Design / Preview / Save buttons + the
      "Custom Section" label area) from print — it's all UI chrome. */
   .p86-report-topbar { display: none !important; }
+  /* The section-header band is chrome too. Its negative margins exist to
+     cancel the card's padding on screen; the rule above sets that padding
+     to 0 for print, so left alone the band would hang outside the section
+     and print its fill as a grey bar. The section's NAME still prints —
+     only the band around it goes. */
+  .p86-report-section-header {
+    margin: 0 0 8px !important;
+    padding: 0 !important;
+    background: transparent !important;
+    border-bottom: 0 !important;
+  }
   /* Tighten the grid gap in print — 10px on screen becomes a lot of
      wasted page space when the page is only ~7.7" wide. */
   .p86-report-section-photos { gap: 6px; }

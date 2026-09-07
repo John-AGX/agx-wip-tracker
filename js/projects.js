@@ -2714,17 +2714,32 @@
       host.setAttribute('data-cover-enabled', state.cover.enabled ? 'true' : 'false');
 
       host.innerHTML =
+        // Two rows, not one. Seven equal-weight buttons used to share a
+        // single row with the title, which squeezed the title input until
+        // it truncated ("Punch List / C") and gave Save exactly the same
+        // weight as Design. The title now owns its row — it is the
+        // document's name — and the actions sit below, grouped by what
+        // they do, with Save as the only primary. No action was removed.
         '<div class="p86-report-topbar">' +
-          '<input id="rptTitle" class="p86-report-title-input" value="' + escapeAttr(state.report.title || '') + '" placeholder="Report title" />' +
-          '<div class="p86-report-topbar-actions">' +
-            '<button class="ee-btn secondary" id="rptDesign" title="Choose a visual style for this report">&#x1F3A8; Design</button>' +
-            '<button class="ee-btn secondary" id="rptPreview" title="See what this report will look like when printed">&#x1F441;&#xFE0F; Preview</button>' +
-            '<button class="ee-btn secondary" id="rptPrint">&#x1F5A8; Print / Save PDF</button>' +
-            '<button class="ee-btn secondary" id="rptShare" title="Send this report to a client — no account needed">&#x1F517; Share</button>' +
-            '<button class="ee-btn secondary" id="rptSavePdf" title="Render a PDF and file it into this project">&#x1F4C4; Save PDF to project</button>' +
-            '<button class="ee-btn secondary" id="rptAddSection">&#x2795; Section</button>' +
-            '<button class="ee-btn secondary" id="rptSave">Save</button>' +
+          '<div class="p86-report-topbar-titlerow">' +
+            '<input id="rptTitle" class="p86-report-title-input" value="' + escapeAttr(state.report.title || '') + '" placeholder="Report title" />' +
             '<button class="p86-modal-close" id="rptClose">&times;</button>' +
+          '</div>' +
+          '<div class="p86-report-topbar-actions">' +
+            '<div class="p86-report-btn-group">' +
+              '<button class="ee-btn secondary" id="rptDesign" title="Choose a visual style for this report">&#x1F3A8; Design</button>' +
+              '<button class="ee-btn secondary" id="rptPreview" title="See what this report will look like when printed">&#x1F441;&#xFE0F; Preview</button>' +
+              '<button class="ee-btn secondary" id="rptAddSection">&#x2795; Section</button>' +
+            '</div>' +
+            // The two PDF actions differ only in where the file lands, so
+            // they belong together rather than at opposite ends of a row.
+            '<div class="p86-report-btn-group">' +
+              '<button class="ee-btn secondary" id="rptPrint" title="Open the print dialog — print, or save a PDF to your computer">&#x1F5A8; Print / Save PDF</button>' +
+              '<button class="ee-btn secondary" id="rptSavePdf" title="Render a PDF and file it into this project">&#x1F4C4; PDF to project</button>' +
+              '<button class="ee-btn secondary" id="rptShare" title="Send this report to a client — no account needed">&#x1F517; Share</button>' +
+            '</div>' +
+            '<span class="p86-report-topbar-spacer"></span>' +
+            '<button class="ee-btn primary" id="rptSave">Save</button>' +
           '</div>' +
         '</div>' +
 
