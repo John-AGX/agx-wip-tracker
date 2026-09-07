@@ -11028,17 +11028,36 @@ body.light-mode .p86-pv-tag-modal-chip {
 .p86-mline-body { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border, #333); }
 .p86-mline-edit { font-size: 11px; color: var(--accent); background: none; border: 1px solid var(--border, #333); border-radius: 7px; padding: 4px 10px; cursor: pointer; }
 .p86-mline-edit:hover { border-color: var(--accent); }
+/* Zoom-to-building magnifier — the LAST child of .p86-mline-top, so flex puts it
+   in the tile's top-right corner without overlapping the budget hero. Sized off
+   font-size because .p86-icon is 1em x 1em; colours are theme vars, so light mode
+   needs no twin. align-self keeps it on the top edge as the hero grows. */
+.p86-mline-zoom {
+  flex: none; align-self: flex-start; display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; margin: -2px -3px 0 0; padding: 0; font-size: 12px; line-height: 0;
+  border: 1px solid var(--border, #333); border-radius: 6px; background: none;
+  color: var(--text-dim); cursor: pointer; transition: color .12s, border-color .12s;
+}
+.p86-mline-zoom:hover { color: var(--accent); border-color: var(--accent); }
+.p86-mline-zoom .p86-icon { vertical-align: 0; }
 
 /* Site Plan Buildings → compact tile grid that expands to fill the row on click
    (John). Scoped to .p86-mline-grid so the job-overview vertical list is
    byte-identical. Collapsed tile = name + budget + progress bar + "% complete";
    an open tile spans the full width and reveals the Spent/Left detail + body. */
-.p86-mline-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(122px, 1fr)); gap: 6px; align-items: start; }
+/* The tile minimum grew from 122px to 148px when the zoom magnifier was added:
+   exactly the control’s footprint (18px button + 8px of gap/margin). At 122px the
+   top row was already full — .p86-mline-id is the only flex child that shrinks, so a
+   fourth element took its 26px straight out of the BUILDING NAME and “B1” rendered as
+   nothing. Measured, not guessed: the name stops fitting below a 140px tile. Widening
+   the minimum keeps every existing element at its existing size. */
+.p86-mline-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 6px; align-items: start; }
 .p86-mline-grid .p86-mline { padding: 7px 8px; }
 .p86-mline-grid .p86-mline-name { font-size: 11px; }
 .p86-mline-grid .p86-mline-hero .hv { font-size: 13px; }
 .p86-mline-grid .p86-mline-hero .hk { font-size: 8px; }
 .p86-mline-grid .p86-mline-track { margin-top: 6px; }
+.p86-mline-grid .p86-mline-zoom { width: 18px; height: 18px; font-size: 11px; margin: -1px -2px 0 0; }
 .p86-mline-grid .p86-mline-sub { display: none; }
 .p86-mline-tilecap { display: none; }
 .p86-mline-grid .p86-mline:not(.is-open) .p86-mline-tilecap { display: block; font-size: 9px; color: var(--text-dim); margin-top: 4px; }

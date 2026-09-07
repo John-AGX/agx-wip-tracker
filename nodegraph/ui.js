@@ -4700,6 +4700,125 @@ window.p86NgSelect=function(id){
   if(E.viewMode && E.viewMode()==='siteplan') fitSiteplan();
 };
 
+// ── Zoom to a building from its CARD (John) ────────────────────────────────
+// The building tiles (js/jobs.js renderJobBuildings) paint a magnifier in the
+// top-right corner; it calls this with the appData building id. It drives the
+// focus mechanism that ALREADY EXISTS — _spFocus → applySpFocus → the engine's
+// site-plan focus set — the same path the polygon dbl-click (renderPolygons)
+// and p86NgSelect drill in through. There is no second focus system here.
+//
+// THE UNTRACED BUILDING IS THE COMMON CASE, not an edge case, and it is the
+// whole reason this is more than three lines. On the satellite site plan a
+// building with no traced footprint is not a map object at all: renderNodes
+// returns early on `!(n.polygon && n.polygon.length>=3)` and renderPolygons
+// only draws polygons. Focusing one would move the camera to a patch of empty
+// grass and report success — a control that reports success while achieving
+// nothing. So instead: no camera move, the building gets SELECTED (which is
+// exactly what Trace Building re-traces), the map's own hint banner names it
+// and the next action, and a toast says so. Returns true ONLY when the map
+// actually framed the building.
+// FUNCTION first, .show second: js/my-files.js publishes p86Toast as a callable
+// with a .show alias, and its own comment says every caller invokes it as a
+// function — an object-shaped probe is what silently killed toasts app-wide once.
+function _zoomBldgToast(msg){
+  try{
+    if(typeof window.p86Toast==='function'){ window.p86Toast(msg,'info'); return; }
+    if(window.p86Toast && typeof window.p86Toast.show==='function'){ window.p86Toast.show(msg,'info'); return; }
+  }catch(_){}
+}
+// The t1 node backing an appData building. Building ids arrive as number OR
+// string depending on the surface that minted them (the same reason every lead
+// lookup in this repo compares String(id)===String(id)), so compare stringified.
+function buildingNodeFor(bldgId){
+  if(bldgId==null) return null;
+  var want=String(bldgId), ns=E.nodes();
+  for(var i=0;i<ns.length;i++){
+    var n=ns[i];
+    if(n && n.type==='t1' && n.data && n.data.id!=null && String(n.data.id)===want) return n;
+  }
+  return null;
+}
+function buildingIsTraced(n){ return !!(n && n.polygon && n.polygon.length>=3); }
+// Frame ONE traced building. fitSiteplan() fits n.x/n.y, which for a geo-bound
+// building is its ABSTRACT graph position — not the spot the renderer draws it
+// at (geoRenderPos) — so fitting a lone building lands the camera on the wrong
+// patch of imagery. This projects the traced polygon through the SAME
+// spLatLngToGraph + origin pipeline renderPolygons uses, then mirrors
+// fitSiteplan's camera math character for character. fitSiteplan itself is
+// untouched, so all five of its existing callers keep their exact behaviour.
+// false = no viewport or no geo origin, i.e. nothing was framed.
+function frameBuildingPolygon(n){
+  if(!wrap || !buildingIsTraced(n)) return false;
+  var or=_geoOriginNow(), o=or.o, og=or.og;
+  if(!o || !og) return false;
+  var minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
+  for(var i=0;i<n.polygon.length;i++){
+    var v=n.polygon[i];
+    var g=E.spLatLngToGraph(Number(v.lat), Number(v.lng), o.lat, o.lng);
+    var px=og.x+g.x, py=og.y+g.y;
+    if(!isFinite(px)||!isFinite(py)) return false;
+    if(px<minX)minX=px; if(py<minY)minY=py; if(px>maxX)maxX=px; if(py>maxY)maxY=py;
+  }
+  var bw=Math.max(1,maxX-minX), bh=Math.max(1,maxY-minY), pad=90;
+  var vw=Math.max(1,wrap.clientWidth-pad*2), vh=Math.max(1,wrap.clientHeight-pad*2);
+  var fz=Math.max(0.2,Math.min(2,Math.min(vw/bw,vh/bh)));
+  E.zm(fz);
+  E.pan(wrap.clientWidth/2/fz-(minX+maxX)/2, wrap.clientHeight/2/fz-(minY+maxY)/2);
+  applyTx(); render();
+  return true;
+}
+function zoomBuildingOnMap(bldgId){
+  if(bldgId==null) return false;
+  var bldg=null;
+  try{
+    var pool=(typeof appData!=='undefined' && appData.buildings) || [];
+    for(var i=0;i<pool.length;i++){ if(pool[i] && String(pool[i].id)===String(bldgId)){ bldg=pool[i]; break; } }
+  }catch(_){}
+  var jid=bldg?bldg.jobId:null;
+  var label=(bldg && bldg.name) || 'This building';
+  // Open the Site Plan only when it is not already up on THIS job. The tiles
+  // render on two hosts and one of them ('insp-buildings') lives INSIDE the
+  // open Site Plan — re-running openNodeGraph there resets the right inspector
+  // out from under the card the user just pressed.
+  var tab=document.getElementById('nodeGraphTab');
+  var alreadyOpen=!!(tab && tab.classList.contains('active') && E.job()!=null && jid!=null && String(E.job())===String(jid));
+  if(!alreadyOpen && jid!=null && typeof window.openNodeGraph==='function') window.openNodeGraph(jid);
+  var n=buildingNodeFor(bldgId);
+  if(!n){
+    // No node backs this building yet — it exists in the list and nowhere on
+    // the graph. Say that; do not pretend the camera went anywhere.
+    showSatHint(true, '\u201C'+label+'\u201D is not on the site map yet \u2014 add it with Trace Building.');
+    _zoomBldgToast('\u201C'+label+'\u201D is not on the site map yet \u2014 trace it to put it on the imagery.');
+    return false;
+  }
+  selN=n.id;                                   // Trace / Place both act on the SELECTED building
+  if(!buildingIsTraced(n)){
+    if(_spFocus!==null){ _spFocus=null; applySpFocus(); }   // back out to the whole site so the miss is visible
+    render();
+    showSatHint(true, '\u201C'+label+'\u201D has no traced footprint yet \u2014 click Trace Building and click its corners on the imagery.');
+    _zoomBldgToast('\u201C'+label+'\u201D has not been traced on the map yet \u2014 use Trace Building to draw its footprint.');
+    return false;
+  }
+  if(_spFocus!==n.id){ _spFocus=n.id; applySpFocus(); }
+  fanFocusNodes(n.id);
+  if(!frameBuildingPolygon(n)){
+    // Traced, but the imagery has no origin — the job has no geocoded address,
+    // so there is no map to zoom. showSatHint's default message says exactly that.
+    showSatHint(true);
+    _zoomBldgToast('The site map has no location for this job yet \u2014 add a street address to the job.');
+    return false;
+  }
+  showSatHint(false);
+  return true;
+}
+// Called by the magnifier on every building card, on BOTH hosts
+// (job-overview 'job-buildings-content' and the Site Plan inspector's
+// 'insp-buildings'). Never throws into an inline handler.
+window.p86ZoomBuildingOnMap=function(bldgId){
+  try{ return zoomBuildingOnMap(bldgId); }
+  catch(e){ if(window.console) console.warn('zoom-to-building failed', e); return false; }
+};
+
 // ── Events ──
 // ── Inline-edit handlers (Slice 3a) ────────────────────────────────────────
 // Shared by the on-card canvas delegate AND the right-Inspector delegate. Each

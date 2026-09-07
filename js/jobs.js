@@ -4459,6 +4459,17 @@ function renderJobsMain() {
                 const spentPct = eff.amount > 0 ? (buildingCost / eff.amount * 100) : 0;
                 const paceFlag = (eff.amount > 0 && buildingCost > 0 && spentPct > compPct + 5)
                     ? ' <span class="p86-mline-pace" title="Spend is running ahead of progress">spend ' + spentPct.toFixed(0) + '%</span>' : '';
+                // Zoom-to-building (John): a magnifier in the tile's top-right corner opens
+                // this job's Site Plan and frames THIS building. Painted on EVERY card, on
+                // both hosts, deliberately — whether a building is traced is Site-Plan state
+                // (nodegraph/ui.js) and on the job-overview host that graph is not loaded, so
+                // the card cannot know the answer at PAINT time; hiding the control on a guess
+                // would hide it from traced buildings too. window.p86ZoomBuildingOnMap answers
+                // at PRESS time, when the answer is knowable: it frames the building, or it
+                // says the building has never been traced and selects it for Trace Building.
+                // It never reports success without moving the camera.
+                const zoomBtn = '<button type="button" class="p86-mline-zoom" title="Zoom to this building on the Site Plan" aria-label="Zoom to ' + escapeHTML(building.name || 'building') + ' on the Site Plan" onclick="event.stopPropagation();window.p86ZoomBuildingOnMap&&window.p86ZoomBuildingOnMap(p86Dec(\'' + p86Enc(building.id) + '\'))">' +
+                    (window.p86Icon ? window.p86Icon('magnifying-glass') : '&#x1F50D;') + '</button>';
                 const mapPin = (building.address && window.p86MapLink && window.p86MapLink.url(building.address))
                     ? ' <a href="' + window.p86MapLink.url(building.address).replace(/&/g, '&amp;') + '" target="_blank" rel="noopener" onclick="event.stopPropagation();" title="Open in Google Maps" style="text-decoration:none;margin-left:2px;">' + (window.p86Icon ? window.p86Icon('map-pin') : '') + '</a>'
                     : '';
@@ -4473,6 +4484,7 @@ function renderJobsMain() {
                                 '<div class="hv">' + formatCurrency(eff.amount) + '</div>' +
                                 '<div class="hk">budget' + (eff.derived ? '<span class="auto" title="No explicit building budget — derived from this building\'s scope revenue">auto</span>' : '') + '</div>' +
                             '</div>' +
+                            zoomBtn +
                         '</div>' +
                         '<div class="p86-mline-sub">' +
                             '<span class="p86-mline-crew" data-bldg-crew="' + escapeHTML(building.id) + '"><span class="p86-mline-inhouse"></span>In-house</span>' +
