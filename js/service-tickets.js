@@ -441,8 +441,64 @@
     });
   }
 
+  // ── Lead surface ─────────────────────────────────────────────────────
+  // A ticket raised during the pursuit. It keeps lead_id FOREVER and GAINS
+  // job_id when the lead converts (see the carry-forward in
+  // server/routes/job-routes.js), so it stays listed here AND appears in the
+  // job's manager from that moment — which is why service_tickets has two
+  // nullable parent columns instead of the polymorphic pair every other child
+  // of a lead uses. Those children get re-pointed or stranded on conversion;
+  // this one does not.
+  var _leadPanel = { host: null, leadId: null };
+
+  function mountLeadPanel(host, leadId, lead) {
+    if (!host || !leadId) return;
+    _leadPanel.host = host;
+    _leadPanel.leadId = leadId;
+    if (!api()) {
+      host.innerHTML = '<div class="p86-st-lead-empty">Service tickets module unavailable.</div>';
+      return;
+    }
+    host.innerHTML = '<div class="p86-st-lead-empty">Loading…</div>';
+    api().list({ lead_id: leadId }).then(function (r) {
+      // The panel may have been remounted onto a different lead while this
+      // was in flight.
+      if (_leadPanel.leadId !== leadId || _leadPanel.host !== host) return;
+      var list = (r && r.tickets) || [];
+      host.innerHTML = list.length
+        ? '<div class="p86-st-lead-list">' + list.map(function (t) {
+            return '<div class="p86-st-lead-row">' +
+              '<span class="p86-st-prio prio-' + esc(t.priority || 'normal') + '"></span>' +
+              '<span class="p86-st-lead-title">' + esc(t.title || 'Untitled') + '</span>' +
+              '<span class="p86-st-status st-' + esc(t.status) + '">' +
+                esc(STATUS_LABEL[t.status] || t.status) + '</span>' +
+              // Once converted, say so here — otherwise the lead panel looks
+              // like the ticket never went anywhere.
+              (t.job_id ? '<span class="p86-st-lead-onjob" title="This ticket is on the job too">on job</span>' : '') +
+            '</div>';
+          }).join('') + '</div>'
+        : '<div class="p86-st-lead-empty">No service tickets on this lead.</div>';
+    }).catch(function (e) {
+      if (_leadPanel.leadId !== leadId) return;
+      host.innerHTML = '<div class="p86-st-lead-empty" style="color:#f87171;">' +
+        esc(e && e.message ? e.message : 'Failed to load') + '</div>';
+    });
+  }
+
+  // The lead header button. Reuses the same create modal the job manager uses,
+  // pointed at a lead instead of a job.
+  function createForLead() {
+    var leadId = _leadPanel.leadId ||
+      (window.p86Leads && window.p86Leads.currentId && window.p86Leads.currentId());
+    if (!leadId) {
+      toast('Save the lead before raising a ticket', 'error');
+      return;
+    }
+    openCreate({ leadId: leadId });
+  }
+
   // ── Create ───────────────────────────────────────────────────────────
-  function openCreate() {
+  function openCreate(opts) {
     var prior = document.getElementById('p86StCreate');
     if (prior) prior.remove();
     var wrap = document.createElement('div');
@@ -478,16 +534,23 @@
       if (!title) { if (titleEl) titleEl.focus(); return; }
       var go = wrap.querySelector('#p86StCreateGo');
       go.disabled = true;
+      var leadId = opts && opts.leadId;
       api().create({
-        job_id: _state.jobId,
+        // Exactly one parent is set here. The other is filled in later by the
+        // convert carry-forward, never by the client.
+        job_id: leadId ? undefined : _state.jobId,
+        lead_id: leadId || undefined,
         title: title,
         scope_proposed: (wrap.querySelector('#p86StScope') || {}).value || '',
         priority: (wrap.querySelector('.p86-st-modal-prio') || {}).value || 'normal',
         scheduled_for: (wrap.querySelector('#p86StSched') || {}).value || null
       }).then(function (r) {
         close();
-        _state.openId = r && r.ticket && r.ticket.id;
         toast('Ticket created');
+        // A ticket raised from a lead repaints the LEAD panel; the job
+        // manager may not even be mounted.
+        if (leadId) return mountLeadPanel(_leadPanel.host, leadId);
+        _state.openId = r && r.ticket && r.ticket.id;
         return reload();
       }).catch(function (e) {
         go.disabled = false;
@@ -534,6 +597,9 @@
   // and being edited — a work order must not be repainted out from under the
   // caret. Same rule the reports tab follows.
   window.p86ServiceTickets = {
+    // The lead surfaces (js/leads.js calls both).
+    mountLeadPanel: mountLeadPanel,
+    createForLead: createForLead,
     refresh: function () {
       if (_state.busy) return;
       if (document.querySelector('#job-service-tickets .p86-st-row.is-open textarea:focus, ' +

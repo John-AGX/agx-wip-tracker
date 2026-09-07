@@ -1529,6 +1529,7 @@ function p86Ask(message, opts) {
     renderLeadEstimatesCompact(leadId);
     renderLeadProjects(leadId);
     renderLeadTasks(leadId, lead);
+    renderLeadTickets(leadId, lead);
     renderLeadAttachments(leadId);
     renderLeadWeather(addr);
     renderLeadCapturedCosts(leadId);
@@ -1568,6 +1569,22 @@ function p86Ask(message, opts) {
       window.p86Tasks.mountEntityPanel(host, 'lead', leadId, label);
     } else {
       host.innerHTML = '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:8px 0;">Tasks module not loaded.</div>';
+    }
+  }
+
+  // Service Tickets panel — defers to window.p86ServiceTickets.mountLeadPanel
+  // (from js/service-tickets.js). Same "needs a saved id" rule as tasks.
+  function renderLeadTickets(leadId, lead) {
+    var host = document.getElementById('leadEditor_ticketsHost');
+    if (!host) return;
+    if (!leadId) {
+      host.innerHTML = '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:8px 0;">Save the lead first to raise a ticket.</div>';
+      return;
+    }
+    if (window.p86ServiceTickets && typeof window.p86ServiceTickets.mountLeadPanel === 'function') {
+      window.p86ServiceTickets.mountLeadPanel(host, leadId, lead);
+    } else {
+      host.innerHTML = '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:8px 0;">Service tickets module not loaded.</div>';
     }
   }
 
@@ -1894,6 +1911,18 @@ function p86Ask(message, opts) {
         window.p86Auth.hasCapability('JOBS_EDIT_OWN')
       );
       convertBtn.style.display = (canEditJobs && !l.job_id) ? '' : 'none';
+    }
+    // Service Ticket — needs a SAVED lead, so it lives here and only here.
+    // openNewLeadModal() never calls refreshLeadDetailHeader(), so the New
+    // Lead form gets no button without a second wiring list to keep in sync
+    // — which is exactly the divergence this file documents twice already.
+    // Unlike Convert, this stays available AFTER conversion: a warranty call
+    // on a won job is still raised from either side, and the ticket carries
+    // both parents.
+    var ticketBtn = document.getElementById('ld-ticket-btn');
+    if (ticketBtn) {
+      var canEditLeads = window.p86Auth && window.p86Auth.hasCapability('LEADS_EDIT');
+      ticketBtn.style.display = (l && l.id && canEditLeads) ? '' : 'none';
     }
   }
   window.refreshLeadDetailHeader = refreshLeadDetailHeader;

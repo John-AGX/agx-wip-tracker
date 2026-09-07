@@ -251,7 +251,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&display=swap">
     <link rel="stylesheet" href="css/vendor/leaflet.css?v=1">
-    <link rel="stylesheet" href="css/styles.css?v=302">
+    <link rel="stylesheet" href="css/styles.css?v=303">
     <link rel="stylesheet" href="css/report-style-packs.css?v=5">
     <link rel="stylesheet" href="css/workspace-layout.css?v=68">
     <link rel="stylesheet" href="css/workspace.css?v=41">
@@ -1640,6 +1640,13 @@
                                          Create Job survives for the same reason Export did on the
                                          estimate: a real action with no equivalent on this page. -->
                                     <button class="ee-btn danger" id="ld-delete-btn" style="display:none;" onclick="deleteLeadFromEditor()" title="Delete this lead (cannot be undone)">&#x1F5D1; Delete</button>
+                                    <!-- Raise a work order during the pursuit — a survey, a service
+                                         call, a site visit. Hidden until the lead is SAVED (a ticket
+                                         needs a lead id), which is why its visibility is set inside
+                                         refreshLeadDetailHeader() and nowhere else: the New Lead form
+                                         never calls that function, so the button is correctly absent
+                                         there without a second divergent wiring list. -->
+                                    <button class="ee-btn secondary" id="ld-ticket-btn" style="display:none;" onclick="window.p86ServiceTickets && window.p86ServiceTickets.createForLead()" data-cap="LEADS_EDIT" title="Raise a service ticket on this lead">&#x1F527; Service Ticket</button>
                                     <button class="ee-btn success" id="ld-convert-btn" style="display:none;" onclick="convertLeadToJob()" data-cap="JOBS_EDIT_ANY JOBS_EDIT_OWN" title="Create a job from this lead">&#x1F3D7; Create Job</button>
                                     <span class="p86-ask86-mount"></span>
                                 </div>
@@ -3051,6 +3058,17 @@
               </div>
             </fieldset>
 
+            <!-- Service Tickets panel — work orders raised during the pursuit
+                 (a survey, a service call, a site visit). A ticket keeps its
+                 lead_id FOREVER and GAINS job_id when the lead converts, so
+                 these stay listed here and also appear on the job. -->
+            <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+              <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">&#x1F527; Service Tickets</legend>
+              <div id="leadEditor_ticketsHost">
+                <div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:8px 0;">Save the lead first to raise a ticket.</div>
+              </div>
+            </fieldset>
+
             <!-- Photos & Attachments panel -->
             <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
               <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">&#x1F4F7; Photos &amp; Files</legend>
@@ -3516,7 +3534,7 @@
     <script src="js/table-enhancements.js?v=15"></script>
     <script src="js/bulk-ribbon.js?v=1"></script>
     <script src="js/job-finalize.js?v=8"></script>
-    <script src="js/leads.js?v=97"></script>
+    <script src="js/leads.js?v=98"></script>
     <script src="js/job-costs-import.js?v=17"></script>
     <script src="js/qb-costs-view.js?v=24"></script>
     <script src="js/insights.js?v=14"></script>
@@ -3655,7 +3673,7 @@
          job-media.js above: after api.js and jobs.js so p86Api and appData
          exist, and BEFORE workspace-layout.js, which reads the renderer name
          out of its dispatch maps when a tab is activated. -->
-    <script src="js/service-tickets.js?v=2"></script>
+    <script src="js/service-tickets.js?v=3"></script>
     <!-- Reusable rich-text field (window.p86RichText) — shared WYSIWYG for
          Scope / Terms / notes / proposals / reports. Load before the editors
          that mount it. -->

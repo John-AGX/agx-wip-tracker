@@ -393,6 +393,22 @@ router.post('/convert', requireAuth, requireRole('admin', 'pm'), requireOrgId, a
         "UPDATE receipts SET entity_type = 'job', entity_id = $1, is_presale = CASE WHEN $2 THEN FALSE ELSE is_presale END, updated_at = NOW() WHERE entity_type = 'lead' AND entity_id = $3 AND organization_id = $4",
         [id, rollPresale, leadId, orgId]
       );
+      // Carry the lead's service tickets forward. This STAMPS job_id and KEEPS
+      // lead_id — it does not re-point the row the way receipts above does.
+      // That difference is the whole reason service_tickets has two nullable
+      // parent columns instead of the polymorphic (entity_type, entity_id)
+      // pair every other child uses: a work order raised during the pursuit is
+      // still ABOUT that lead, and it must also appear on the job the lead
+      // became. Both are true, so both columns are set. It matches what this
+      // route already does for estimates (job_id stamped, lead_id kept).
+      //
+      // `job_id IS NULL` makes it idempotent and keeps it from stealing a
+      // ticket that already belongs to a different job.
+      await client.query(
+        'UPDATE service_tickets SET job_id = $1, updated_at = NOW() ' +
+        'WHERE lead_id = $2 AND organization_id = $3 AND job_id IS NULL',
+        [id, leadId, orgId]
+      );
       // Carry the lead's Site Plan survey graph (traced footprints + saved
       // measurements + photo pins) forward into the new job's node_graph, so
       // the salesperson's field survey becomes the PM's starting site plan.
@@ -512,6 +528,20 @@ router.post('/:id/link-estimate', requireAuth, async (req, res) => {
       "UPDATE estimates SET data = jsonb_set(jsonb_set(COALESCE(data, '{}'::jsonb), '{job_id}', to_jsonb($1::text)), '{status}', to_jsonb('sold'::text)), is_locked = TRUE, updated_at = NOW() WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)",
       [req.params.id, estimateId, orgId]
     );
+    // Same service-ticket carry-forward /convert does, for the same reason:
+    // this route can newly associate a LEAD with this job (newLeadId is
+    // resolved from the job, its data, or the estimate above), and a work
+    // order raised during that lead's pursuit belongs on the job as well.
+    // job_id is stamped, lead_id kept — both facts stay true. Guarded on
+    // job_id IS NULL so it cannot steal a ticket already on another job, and
+    // skipped entirely when no lead is involved.
+    if (newLeadId) {
+      await client.query(
+        'UPDATE service_tickets SET job_id = $1, updated_at = NOW() ' +
+        'WHERE lead_id = $2 AND organization_id = $3 AND job_id IS NULL',
+        [req.params.id, newLeadId, orgId]
+      );
+    }
     await client.query('COMMIT');
     res.json({ ok: true, id: req.params.id, estimate_id: estimateId, lead_id: newLeadId });
   } catch (e) {

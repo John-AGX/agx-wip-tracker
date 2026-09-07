@@ -480,3 +480,75 @@ describe('a task under a ticket still belongs to its job', () => {
       'the two filters must be independent, not alternatives');
   });
 });
+
+// ── S3: the lead→job carry-forward ──────────────────────────────────────
+// A ticket raised during the pursuit must KEEP its lead and GAIN its job. That
+// is the entire justification for two nullable parent columns instead of the
+// polymorphic (entity_type, entity_id) pair — /api/jobs/convert re-points
+// exactly one child table (receipts) and strands the rest on the lead forever.
+// These are source-level assertions because this suite has no database.
+describe('a ticket survives its lead becoming a job', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const jobRoutes = fs.readFileSync(
+    path.join(__dirname, '..', 'server', 'routes', 'job-routes.js'), 'utf8');
+  const leadRoutes = fs.readFileSync(
+    path.join(__dirname, '..', 'server', 'routes', 'lead-routes.js'), 'utf8');
+
+  // Both convert paths — /convert (INSERTs a job) and /:id/link-estimate
+  // ("mirrors /convert but UPDATEs instead of INSERTing"). Missing the second
+  // is the classic half-fix here.
+  const carry = jobRoutes.match(/UPDATE service_tickets SET job_id = \$1/g) || [];
+
+  test('BOTH convert paths carry tickets forward, not just /convert', () => {
+    assert.strictEqual(carry.length, 2,
+      'expected the carry-forward in /convert AND in /:id/link-estimate');
+  });
+
+  test('it STAMPS job_id and never clears lead_id', () => {
+    // The whole point. `SET job_id = ..., lead_id = NULL` would reproduce the
+    // receipts behaviour and lose the provenance.
+    assert.strictEqual(jobRoutes.indexOf('SET job_id = $1, lead_id = NULL'), -1,
+      'lead_id must be KEPT — a converted ticket is still about that lead');
+    assert.ok(/UPDATE service_tickets SET job_id = \$1, updated_at = NOW\(\)/.test(jobRoutes));
+  });
+
+  test('it cannot steal a ticket that already belongs to another job', () => {
+    const stmts = jobRoutes.split('UPDATE service_tickets SET job_id = $1').slice(1);
+    assert.strictEqual(stmts.length, 2);
+    for (const s of stmts) {
+      const clause = s.slice(0, 200);
+      assert.ok(clause.indexOf('job_id IS NULL') > -1,
+        'the WHERE must be guarded on job_id IS NULL (idempotent, non-stealing)');
+      assert.ok(clause.indexOf('organization_id = $3') > -1,
+        'the WHERE must carry the org predicate');
+      assert.ok(clause.indexOf('lead_id = $2') > -1,
+        'it must select by the lead being converted');
+    }
+  });
+
+  // Deleting a lead SET NULLs service_tickets.lead_id. For a converted ticket
+  // that is fine (job_id holds the CHECK up). For one that never converted,
+  // both parents go NULL, service_tickets_parent_chk fires, and an unguarded
+  // route turns that into a blank 500.
+  test('both lead-delete paths refuse readably instead of 500ing', () => {
+    assert.ok(leadRoutes.indexOf('async function leadsBlockedByTickets') > -1,
+      'a shared guard must exist');
+    // Used by the single delete AND the bulk delete.
+    const uses = (leadRoutes.match(/leadsBlockedByTickets\(/g) || []).length;
+    assert.ok(uses >= 3, 'expected the definition plus both call sites, got ' + uses);
+    assert.ok(leadRoutes.indexOf('res.status(409)') > -1, 'must answer 409, not 500');
+  });
+
+  test('the guard only blocks on UNCONVERTED, unarchived tickets', () => {
+    const fn = leadRoutes.slice(
+      leadRoutes.indexOf('async function leadsBlockedByTickets'),
+      leadRoutes.indexOf('// POST /api/leads/bulk-delete'));
+    assert.ok(fn.indexOf('job_id IS NULL') > -1,
+      'a ticket that already carries a job survives the delete — do not block on it');
+    assert.ok(fn.indexOf('archived_at IS NULL') > -1,
+      'an archived ticket must not block a lead delete');
+    assert.ok(fn.indexOf('organization_id = $2') > -1,
+      'the org predicate goes on the TICKET, not inferred from the lead');
+  });
+});

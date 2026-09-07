@@ -481,6 +481,33 @@ router.post('/geocode-selftest', requireAuth, requireCapability('LEADS_EDIT'), a
   }
 });
 
+// Which of these leads still carry an UNCONVERTED service ticket?
+//
+// service_tickets.lead_id is ON DELETE SET NULL, so deleting a lead nulls it.
+// For a ticket that has already been converted that is harmless — job_id is
+// set, so service_tickets_parent_chk still holds. For a ticket that never
+// became a job it is fatal: both parents end up NULL, the CHECK fires, and
+// Postgres raises. Unguarded, that surfaces as a blank 500 on a delete the
+// user has no way to understand.
+//
+// So this is a READABLE refusal, not a fix for a crash — the same posture the
+// sub-delete guard takes. The org predicate is on the ticket, not inferred
+// from the lead, so this cannot be used to probe another tenant's rows.
+async function leadsBlockedByTickets(ids, orgId) {
+  if (!ids || !ids.length) return [];
+  const { rows } = await pool.query(
+    `SELECT lead_id, COUNT(*)::int AS n
+       FROM service_tickets
+      WHERE lead_id = ANY($1::text[])
+        AND organization_id = $2
+        AND job_id IS NULL
+        AND archived_at IS NULL
+      GROUP BY lead_id`,
+    [ids, orgId]
+  );
+  return rows;
+}
+
 // POST /api/leads/bulk-delete — delete many leads in one shot (bulk purge from
 // the leads list). Org-scoped like the single DELETE; LEADS_EDIT-gated (a user
 // who can delete one lead can delete many). Uses id = ANY(...) so it's a single
@@ -492,6 +519,21 @@ router.post('/bulk-delete', requireAuth, requireCapability('LEADS_EDIT'), async 
       : null;
     if (!ids || !ids.length) return res.status(400).json({ error: 'ids array is required' });
     if (ids.length > 5000) return res.status(400).json({ error: 'Too many ids (max 5000)' });
+    // Refuse the WHOLE batch rather than deleting the deletable ones: a
+    // partial success that reports "deleted" leaves the user believing leads
+    // are gone that are not.
+    const blocked = await leadsBlockedByTickets(ids, req.user.organization_id);
+    if (blocked.length) {
+      const n = blocked.reduce(function (a, b) { return a + b.n; }, 0);
+      return res.status(409).json({
+        error: blocked.length === 1
+          ? 'One of these leads has ' + n + ' open service ticket' + (n === 1 ? '' : 's') +
+            '. Close or archive them first.'
+          : blocked.length + ' of these leads have open service tickets (' + n +
+            ' in total). Close or archive them first.',
+        blocked_lead_ids: blocked.map(function (b) { return b.lead_id; })
+      });
+    }
     const r = await pool.query(
       'DELETE FROM leads WHERE id = ANY($1::text[]) AND (organization_id = $2 OR organization_id IS NULL)',
       [ids, req.user.organization_id]
@@ -545,6 +587,17 @@ router.put('/:id/graph', requireAuth, requireCapability('LEADS_EDIT'), async (re
 
 router.delete('/:id', requireAuth, requireCapability('LEADS_EDIT'), async (req, res) => {
   try {
+    // An unconverted service ticket on this lead would leave the ticket with
+    // no parent at all — see leadsBlockedByTickets. Refuse readably rather
+    // than letting the CHECK surface as a 500.
+    const blocked = await leadsBlockedByTickets([req.params.id], req.user.organization_id);
+    if (blocked.length) {
+      const n = blocked[0].n;
+      return res.status(409).json({
+        error: 'This lead has ' + n + ' open service ticket' + (n === 1 ? '' : 's') +
+          '. Close or archive ' + (n === 1 ? 'it' : 'them') + ' before deleting the lead.'
+      });
+    }
     // Wave 1.A Phase 2 — org-scoped DELETE.
     const r = await pool.query(
       'DELETE FROM leads WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',

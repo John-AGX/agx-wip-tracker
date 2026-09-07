@@ -112,6 +112,12 @@ function makeConvertDb(branding, opts) {
     }
     if (/UPDATE leads SET job_id/i.test(text)) return { rows: [], rowCount: 1 };
     if (/UPDATE receipts SET/i.test(text)) return { rows: [], rowCount: 1 };
+    // Service tickets raised during the pursuit follow the lead onto the job.
+    // Unlike receipts above this STAMPS job_id and KEEPS lead_id, so the work
+    // order gains a job without losing the lead it came from. Added here
+    // because the throw below is deliberate: a new statement inside the
+    // convert transaction must be seen by a human, not absorbed.
+    if (/UPDATE service_tickets SET job_id/i.test(text)) return { rows: [], rowCount: 0 };
     if (/INSERT INTO node_graphs/i.test(text)) return { rows: [], rowCount: 1 };
     if (/UPDATE estimates SET data/i.test(text)) return { rows: [], rowCount: 1 };
     if (/SELECT 1 FROM jobs/i.test(text)) return { rows: [{}], rowCount: 1 };
@@ -282,6 +288,37 @@ describe('the rule creates, it never rewrites', () => {
     expect(touchedJobs).toHaveLength(0);
     expect(db.log.some((q) => /INSERT INTO jobs/i.test(q.sql))).toBe(true);
     expect(db.committed).toBe(true);
+  });
+
+  // Service tickets ride along with the lead. Pinned HERE, on the driven
+  // route, rather than only as a source-level grep: this is the file that
+  // actually executes the convert transaction.
+  test('convert carries the lead\'s service tickets onto the new job', async () => {
+    const { db } = await convert({ id: 'j1', jobNumber: 'S2288', jobType: 'Service & Repair' });
+    const carry = db.log.filter((q) => /UPDATE service_tickets/i.test(q.sql));
+    expect(carry).toHaveLength(1);
+    // STAMPS the job, KEEPS the lead — the opposite of the receipts re-point
+    // two lines above it. A ticket raised during the pursuit is still about
+    // that lead, and must also appear on the job it became.
+    expect(carry[0].sql).toMatch(/SET job_id = \$1/);
+    expect(carry[0].sql).not.toMatch(/lead_id = NULL/);
+    // Idempotent and non-stealing, and org-scoped.
+    expect(carry[0].sql).toMatch(/job_id IS NULL/);
+    expect(carry[0].sql).toMatch(/organization_id = \$3/);
+    // Inside the transaction that creates the job — not after the COMMIT,
+    // where a failure would leave a converted lead with stranded tickets.
+    const idx = db.log.findIndex((q) => /UPDATE service_tickets/i.test(q.sql));
+    const commitIdx = db.log.findIndex((q) => /^COMMIT/i.test(q.sql));
+    expect(idx).toBeGreaterThan(-1);
+    expect(commitIdx).toBeGreaterThan(idx);
+    expect(db.committed).toBe(true);
+  });
+
+  test('carrying tickets forward does not touch a single job row', async () => {
+    // The statement added to this money path must not widen what convert
+    // rewrites — the rule this whole file exists to protect.
+    const { db } = await convert({ id: 'j1', jobNumber: 'S2288', jobType: '' });
+    expect(db.log.filter((q) => /UPDATE jobs/i.test(q.sql))).toHaveLength(0);
   });
 
   test('convert never reads another job in order to renumber it', async () => {
