@@ -2324,6 +2324,10 @@
               '<input type="text" readonly value="' + escapeAttr(link) + '" id="shLink" />' +
               '<button class="ee-btn secondary" id="shCopy">Copy</button>' +
             '</div>' +
+            (r.map_note
+              ? '<div class="p86-share-warn">This copy has no location map (' +
+                escapeHTML(String(r.map_note)) + '). The photos are still included.</div>'
+              : '') +
             ((r.email_error && !r.email_sent)
               ? '<div class="p86-share-warn">Email not sent (' + escapeHTML(String(r.email_error)) +
                 '). The link above still works.</div>'

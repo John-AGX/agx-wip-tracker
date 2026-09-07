@@ -114,7 +114,7 @@ router.post('/reports/:entityType/:entityId/:reportId/share', requireAuth, async
       // reach the snapshot a stranger can read — the server fetches the image
       // and stores it, and the document carries a plain image URL. A map that
       // cannot be baked is simply absent; publishing never fails over one.
-      await bakeDocumentMaps(storage, document, id);
+      const mapNote = await bakeDocumentMaps(storage, document, id);
 
       const token = shares.genToken();
       await pool.query(
@@ -167,6 +167,10 @@ router.post('/reports/:entityType/:entityId/:reportId/share', requireAuth, async
         },
         link: link,
         email_sent: !!sent.ok,
+        // Null when every map baked (or there were none). A string names WHY the
+        // shared copy has no map, so the owner learns it here rather than from
+        // the client who received a photo grid where a site map belonged.
+        map_note: mapNote,
         email_error: sent.error || sent.skipped || null
       });
     } catch (e) {

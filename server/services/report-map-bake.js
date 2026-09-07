@@ -88,26 +88,31 @@ function staticMapUrl(photos, pinStyle, key) {
  * @param {string} shareId  used only to namespace the stored object
  * @param {string} sectionId
  */
+// Returns { url, reason }. reason is null on success and a SHORT machine-ish
+// string otherwise, because a silently missing map is exactly the failure mode
+// that had a client receive a photo grid where a site map should have been.
 async function bakeSectionMap(storage, photos, pinStyle, shareId, sectionId) {
   try {
     const key = apiKey();
-    if (!key) return null;
+    if (!key) return { url: null, reason: 'no-server-maps-key' };
     const url = staticMapUrl(photos || [], pinStyle, key);
-    if (!url) return null;
+    if (!url) return { url: null, reason: 'no-located-photos' };
 
     // Node 18+ has fetch built in; guard anyway so an older runtime degrades to
     // "no map" rather than throwing inside a publish.
-    if (typeof fetch !== 'function') return null;
+    if (typeof fetch !== 'function') return { url: null, reason: 'no-fetch' };
     const res = await fetch(url);
     if (!res.ok) {
       // The usual cause is Static Maps not being enabled on the key, which
       // returns 403 with a text body. Log it once — silently shipping a report
       // with a missing map is worse than a line in the logs.
-      console.warn('[report-map-bake] static map fetch failed:', res.status);
-      return null;
+      let detail = '';
+      try { detail = (await res.text() || '').slice(0, 200); } catch (e) {}
+      console.warn('[report-map-bake] static map fetch failed:', res.status, detail);
+      return { url: null, reason: 'http-' + res.status + (detail ? ': ' + detail : '') };
     }
     const buf = Buffer.from(await res.arrayBuffer());
-    if (!buf.length) return null;
+    if (!buf.length) return { url: null, reason: 'empty-image' };
 
     // Content-addressed: the same pins produce the same object, so re-publishing
     // an unchanged report does not accumulate copies.
@@ -115,10 +120,10 @@ async function bakeSectionMap(storage, photos, pinStyle, shareId, sectionId) {
     const objectKey = 'report-shares/' + String(shareId || 'share') + '/map_' +
       String(sectionId || 'sec').replace(/[^a-zA-Z0-9_-]/g, '') + '_' + digest + '.png';
 
-    return await storage.put(objectKey, buf, 'image/png');
+    return { url: await storage.put(objectKey, buf, 'image/png'), reason: null };
   } catch (e) {
     console.warn('[report-map-bake] skipped:', e && e.message);
-    return null;
+    return { url: null, reason: 'error: ' + (e && e.message ? e.message : 'unknown') };
   }
 }
 
@@ -128,12 +133,16 @@ async function bakeSectionMap(storage, photos, pinStyle, shareId, sectionId) {
  */
 async function bakeDocumentMaps(storage, document, shareId) {
   const sections = (document && Array.isArray(document.sections)) ? document.sections : [];
+  const reasons = [];
   for (const section of sections) {
     if (section.layout !== 'photo-map') continue;
-    const url = await bakeSectionMap(storage, section.photos, section.pin_style, shareId, section.id);
-    if (url) section.map_url = url;
+    const out = await bakeSectionMap(storage, section.photos, section.pin_style, shareId, section.id);
+    if (out && out.url) section.map_url = out.url;
+    else if (out && out.reason) reasons.push(out.reason);
   }
-  return document;
+  // Reported back to the publisher so the Share panel can say the shared copy
+  // has no map, instead of the owner finding out from a client.
+  return reasons.length ? reasons[0] : null;
 }
 
 module.exports = { apiKey, staticMapUrl, bakeSectionMap, bakeDocumentMaps, indexToLetters, hasCoords };

@@ -185,12 +185,22 @@
     ['co_number', 'CO #'], ['co_amount', 'Amount'], ['requested_by', 'Requested by']
   ];
 
+  // A template-specific date SUPERSEDES the generic one. A punch list carries a
+  // walkthrough date, a survey carries a survey date, a weekly report carries a
+  // week ending — and the cover was printing both, so a walkthrough read
+  // "WALKTHROUGH DATE Aug 25 · DATE Aug 25". The generic field still exists and
+  // is still stored; it just stops being drawn when a more specific one says
+  // the same thing better.
+  var SPECIFIC_DATE_KEYS = ['walkthrough_date', 'survey_date', 'week_ending', 'signed_date'];
+
   function coverHTML(doc) {
     var c = doc.cover_page || {};
     if (!c.enabled) return '';
+    var hasSpecificDate = SPECIFIC_DATE_KEYS.some(function (k) { return !!c[k]; });
     var rows = COVER_ROWS.map(function (pair) {
       var v = c[pair[0]];
       if (!v) return '';
+      if (pair[0] === 'date' && hasSpecificDate) return '';
       return '<div><span class="k">' + esc(pair[1]) + '</span>' +
              '<span class="v">' + esc(v) + '</span></div>';
     }).filter(Boolean).join('');
