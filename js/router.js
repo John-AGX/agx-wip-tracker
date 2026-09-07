@@ -162,6 +162,10 @@
       // 404. Stored raw and encoded on the way out, the way route.jobId is:
       // a project id is a TEXT primary key that never contains '/'.
       if (parts[1]) route.projectId = parts[1];
+      // /projects/:projectId/reports/:reportId — the report editor, the third
+      // drill-in level. Literal 'reports' segment so a future
+      // /projects/:id/<something-else> cannot be mistaken for a report id.
+      if (parts[1] && parts[2] === 'reports' && parts[3]) route.projectReportId = parts[3];
     } else if (top === 'estimates') {
       // /estimates/edit/:id  OR  /estimates/leads/:id  OR  /estimates/:sub
       // Note: clients and subs paths are handled above as pseudo-top-level
@@ -217,7 +221,10 @@
       // Must come BEFORE the generic `return '/' + route.top` tail, which
       // already produces a valid-looking '/projects' for a route that names
       // a project — so leaving this out drops the id with no error anywhere.
-      if (route.projectId) return '/projects/' + encodeURIComponent(route.projectId);
+      if (route.projectId) {
+        return '/projects/' + encodeURIComponent(route.projectId) +
+          (route.projectReportId ? '/reports/' + encodeURIComponent(route.projectReportId) : '');
+      }
       return '/projects';
     }
     // Assembly Studio keeps the bookmarkable /assemblies URL.
@@ -309,8 +316,19 @@
       // identically. openProject writes the literal 'block' (js/projects.js)
       // and the teardown nulls currentProjectId, so this can be strict.
       var pDetail = document.getElementById('projects-project-detail-view');
+      var pRep = document.getElementById('projects-report-editor-view');
       var pid = (window.appState && window.appState.currentProjectId) || null;
-      if (pDetail && pDetail.style.display === 'block' && pid) route.projectId = pid;
+      // Level 3 HIDES level 2, so test the report view first — otherwise a
+      // report open would read as "no project detail visible" and the URL
+      // would fall back to the bare /projects.
+      var repOpen = pRep && pRep.style.display === 'block';
+      if (pid && (repOpen || (pDetail && pDetail.style.display === 'block'))) {
+        route.projectId = pid;
+        if (repOpen && typeof window.p86ProjectsOpenReportId === 'function') {
+          var rid = window.p86ProjectsOpenReportId();
+          if (rid) route.projectReportId = rid;
+        }
+      }
     } else if (top === 'estimates') {
       var subEl = document.querySelector('#estimates [data-estimates-subtab].active');
       var estSub = subEl ? subEl.getAttribute('data-estimates-subtab') : null;
@@ -437,10 +455,34 @@
     // Back to dismiss a report editor ejected the user out of the project
     // entirely. It was harmless while the detail was a position:fixed
     // overlay on <body> that switchTab could not reach.
+    //
+    // The same guard is also what moves between drill-in levels 2 and 3: when
+    // we are already on this project, the only thing that can differ is which
+    // report is open, so settle that here and return rather than re-entering
+    // the tab.
     if (route.top === 'projects' && route.projectId &&
         window.appState && window.appState.currentProjectId === route.projectId) {
       var _pdv = document.getElementById('projects-project-detail-view');
-      if (_pdv && _pdv.style.display === 'block') return;
+      var _prv = document.getElementById('projects-report-editor-view');
+      var onThisProject = (_prv && _prv.style.display === 'block') ||
+                          (_pdv && _pdv.style.display === 'block');
+      if (onThisProject) {
+        var wantReport = route.projectReportId || null;
+        var haveReport = (typeof window.p86ProjectsOpenReportId === 'function')
+          ? window.p86ProjectsOpenReportId() : null;
+        if (wantReport !== haveReport) {
+          if (!wantReport) {
+            // Back from the report editor to the project.
+            if (typeof window.p86ProjectsCloseReport === 'function') {
+              window.p86ProjectsCloseReport({ fromRouter: true });
+            }
+          } else if (typeof window.openProjectReport === 'function') {
+            try { window.openProjectReport(wantReport); }
+            catch (e) { console.warn('[router] report open failed:', e); }
+          }
+        }
+        return;
+      }
     }
     var dataReady = !(typeof window.p86DataLoading === 'function' && window.p86DataLoading());
     replaying = true;
@@ -462,8 +504,13 @@
       // detail via p86ProjectsLeaveDetail.
       if (route.top === 'projects' && route.projectId &&
           typeof window.openProject === 'function') {
-        try { window.openProject(route.projectId); }
-        catch (e) { console.warn('[router] project open failed:', e); }
+        // openReportId rides along rather than being a second call: the
+        // report editor bails unless _detailState.project is populated, and
+        // only openProject's own fetch callback knows when that happened.
+        try {
+          window.openProject(route.projectId,
+            route.projectReportId ? { openReportId: route.projectReportId } : undefined);
+        } catch (e) { console.warn('[router] project open failed:', e); }
       }
 
       if (route.top === 'estimates' && typeof window.switchEstimatesSubTab === 'function') {

@@ -122,6 +122,56 @@ ok('an id needing encoding survives the round trip', () => {
     'an embedded slash must be percent-encoded, not become a new path segment');
 });
 
+// ── Level 3: /projects/:id/reports/:reportId ────────────────────────────
+// The report editor used to be a position:fixed div on <body> with no URL at
+// all. As the third drill-in level it needs one, and it has to nest under the
+// project rather than becoming a separate top-level route, because the editor
+// cannot paint without the project's photos already loaded.
+
+ok('/projects/:id/reports/:rid carries both ids', () => {
+  const { router } = loadRouter('/projects/proj_abc/reports/rep_123');
+  const r = router.route();
+  assert.strictEqual(r.top, 'projects');
+  assert.strictEqual(r.projectId, 'proj_abc');
+  assert.strictEqual(r.projectReportId, 'rep_123');
+});
+
+ok('a report route serializes back to the same path', () => {
+  const { router, pushed } = loadRouter('/projects');
+  router.navigate({ top: 'projects', projectId: 'proj_abc', projectReportId: 'rep_123' });
+  assert.deepStrictEqual(pushed, ['/projects/proj_abc/reports/rep_123']);
+});
+
+ok('the literal "reports" segment is required', () => {
+  // /projects/:id/<anything-else> must NOT be read as a report id, or a future
+  // sub-tab segment would silently open a report that does not exist.
+  const { router } = loadRouter('/projects/proj_abc/photos/xyz');
+  const r = router.route();
+  assert.strictEqual(r.projectId, 'proj_abc');
+  assert.strictEqual(r.projectReportId, undefined);
+});
+
+ok('a dangling /reports with no id does not set a report', () => {
+  const { router } = loadRouter('/projects/proj_abc/reports');
+  const r = router.route();
+  assert.strictEqual(r.projectId, 'proj_abc');
+  assert.strictEqual(r.projectReportId, undefined);
+});
+
+ok('a report id cannot inject a path segment', () => {
+  const { router, pushed } = loadRouter('/projects');
+  router.navigate({ top: 'projects', projectId: 'p1', projectReportId: 'a/b' });
+  assert.strictEqual(pushed[0].split('/').length, 5,
+    '/projects/p1/reports/<encoded> — the slash inside the id must be encoded');
+});
+
+ok('projectReportId without projectId cannot produce an orphan path', () => {
+  const { router, pushed } = loadRouter('/projects');
+  router.navigate({ top: 'projects', projectReportId: 'rep_123' });
+  assert.deepStrictEqual(pushed, ['/projects'],
+    'a report with no project is not addressable — fall back to the tab');
+});
+
 ok('the projects branch does not disturb the jobs route', () => {
   const { router } = loadRouter('/jobs/j123/job-overview');
   const r = router.route();

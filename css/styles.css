@@ -6206,17 +6206,25 @@
   .p86-proj-reports-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
 }
 
-/* Report editor — full-screen overlay */
+/* .p86-report-overlay is now ONLY the print root. printReport() builds a
+   body-level #p86PrintRoot and gives it this class so the existing @media
+   print rules keep matching it — see the comment on buildPrintRoot for why
+   printing cannot happen in place. The report EDITOR no longer uses it: it
+   is the third drill-in level inside #projects, so it is page content and
+   needs no backdrop, no z-index and no scroller of its own. */
 .p86-report-overlay {
   position: fixed; inset: 0; z-index: 1050;
   background: rgba(0,0,0,0.85);
   display: flex; align-items: stretch; justify-content: center;
   overflow-y: auto;
 }
+/* The editor body. Fills its pane and lets <main> scroll, matching the
+   project detail and the Jobs drill-in. It kept min-height:100vh and a
+   centred 960px column from its overlay days, which inside the page put a
+   full viewport of empty background under every short report.
+   The print root contains the rendered document directly — mountReportDocument
+   sets root.innerHTML — so there is no .p86-report-host inside it to style. */
 .p86-report-host {
-  background: var(--bg, #0a0a14);
-  width: min(960px, 100%);
-  min-height: 100vh;
   padding: 18px 22px;
 }
 .p86-report-loading {

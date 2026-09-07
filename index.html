@@ -251,7 +251,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&display=swap">
     <link rel="stylesheet" href="css/vendor/leaflet.css?v=1">
-    <link rel="stylesheet" href="css/styles.css?v=298">
+    <link rel="stylesheet" href="css/styles.css?v=299">
     <link rel="stylesheet" href="css/report-style-packs.css?v=5">
     <link rel="stylesheet" href="css/workspace-layout.css?v=68">
     <link rel="stylesheet" href="css/workspace.css?v=41">
@@ -1482,6 +1482,18 @@
                     </div>
                     <div id="projects-project-detail-view" style="display: none;">
                         <div id="projDetailHost" class="p86-proj-detail-host"></div>
+                    </div>
+                    <!-- Third drill-in level: the report editor. It used to be
+                         a position:fixed div appended to <body> on top of the
+                         project modal — a modal over a modal. paintReportEditor
+                         finds its container with .querySelector('.p86-report-host'),
+                         so making that element static here let the editor move
+                         inline without touching how it paints. Printing is
+                         unaffected: printReport() builds its own body-level
+                         #p86PrintRoot precisely because the editor may be
+                         nested inside a clipping page. -->
+                    <div id="projects-report-editor-view" style="display: none;">
+                        <div class="p86-report-host"></div>
                     </div>
                 </div>
                 <!-- Cost Inbox — receipt capture + filterable list. switchTab('cost-inbox')
@@ -3509,7 +3521,7 @@
          app.js: loadData consults p86SaveMerge.shouldVetoHydrate() on the very
          first hydrate. -->
     <script src="js/save-merge.js?v=5"></script>
-    <script src="js/app.js?v=153"></script>
+    <script src="js/app.js?v=154"></script>
     <!-- The visible signal for a write that has not reached the server.
          Loads AFTER app.js so window.p86PushStatus exists to subscribe to. -->
     <script src="js/save-banner.js?v=3"></script>
@@ -3576,7 +3588,7 @@
          renderer, which upgrades a map section only when window.L exists. -->
     <script src="js/vendor/leaflet.js?v=1"></script>
     <script src="js/report-document.js?v=4"></script>
-    <script src="js/projects.js?v=97"></script>
+    <script src="js/projects.js?v=98"></script>
     <script src="js/receipt-scanner.js?v=2"></script>
     <script src="js/receipt-cropper.js?v=1"></script>
     <script src="js/list-filter.js?v=1"></script>
@@ -3676,7 +3688,7 @@
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
          before the router wraps them. -->
-    <script src="js/router.js?v=31"></script>
+    <script src="js/router.js?v=32"></script>
 
     <!-- Sidebar Recents — client-side recently-opened list. Loads after
          router.js + the entity-open modules so it can wrap editJob /

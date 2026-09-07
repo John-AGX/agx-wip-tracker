@@ -2192,6 +2192,22 @@
                 if (dv && dv.style.display === 'block' && appState.currentJobId) {
                     st.jobId = appState.currentJobId;
                 }
+            } else if (top === 'projects') {
+                // Three drill-in levels. Level 3 (the report editor) HIDES
+                // level 2, so test the report view first — otherwise an open
+                // report would read as "no detail visible" and a refresh
+                // would drop the user back on the list.
+                var pdv = document.getElementById('projects-project-detail-view');
+                var prv = document.getElementById('projects-report-editor-view');
+                var repOpen = prv && prv.style.display === 'block';
+                if (appState.currentProjectId &&
+                    (repOpen || (pdv && pdv.style.display === 'block'))) {
+                    st.projId = appState.currentProjectId;
+                    if (repOpen && typeof window.p86ProjectsOpenReportId === 'function') {
+                        var prid = window.p86ProjectsOpenReportId();
+                        if (prid) st.projReportId = prid;
+                    }
+                }
             } else if (top === 'admin') {
                 var adEl = document.querySelector('[data-admin-subtab].active');
                 if (adEl) st.adSub = adEl.getAttribute('data-admin-subtab');
@@ -2290,6 +2306,12 @@
                         window.editEstimate(st.estId);
                     } else if ((st.top === 'jobs' || st.top === 'wip') && st.jobId && typeof window.editJob === 'function') {
                         window.editJob(st.jobId);
+                    } else if (st.top === 'projects' && st.projId && typeof window.openProject === 'function') {
+                        // openReportId rides along because the report editor
+                        // cannot paint until the project's photos have
+                        // loaded, and only openProject knows when that is.
+                        window.openProject(st.projId,
+                            st.projReportId ? { openReportId: st.projReportId } : undefined);
                     }
                 } catch (e) { console.warn('[nav] entity restore failed:', e); }
             });

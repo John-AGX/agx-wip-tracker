@@ -187,6 +187,10 @@
   // each overlay route through closeTop() so the history stack stays
   // balanced with the visible overlays.
   // ──────────────────────────────────────────────────────────────────
+  // Which report the third-level drill-in is showing, or null. Read by the
+  // router (via window.p86ProjectsOpenReportId) to build /projects/:id/reports/:rid.
+  var _reportEditorId = null;
+
   var _overlayStack = [];
 
   function pushOverlay(closeFn) {
@@ -1155,7 +1159,7 @@
   // ──────────────────────────────────────────────────────────────────
   // Detail overlay
   // ──────────────────────────────────────────────────────────────────
-  function openProject(projectId) {
+  function openProject(projectId, opts) {
     // openProject is called from OTHER TABS: the Linked Projects panel renders
     // inside a job (js/jobs.js), a lead (js/leads.js) and the estimate editor
     // (js/estimate-editor.js), and the projects map calls it too. As a
@@ -1219,6 +1223,12 @@
       _detailState.photos = (results[1] && results[1].attachments) || [];
       _detailState.activeTab = _detailState.activeTab || 'photos';
       paintDetail();
+      // Deep link straight to a report: /projects/:id/reports/:rid. The
+      // router cannot do this itself — openReportEditor bails unless
+      // _detailState.project is populated, and only this callback knows when
+      // that happened. Photos are loaded by now too, which paintReportEditor
+      // needs to resolve section photo ids.
+      if (opts && opts.openReportId) openReportEditor(opts.openReportId);
     }).catch(function(e) {
       paintDetailError(e.message || 'Failed to load project');
     });
@@ -1236,6 +1246,10 @@
     });
   }
   window.openProject = openProject;
+  // Read by the router to build /projects/:id/reports/:rid from the DOM, and
+  // to replay that URL on a deep link or a Back press.
+  window.p86ProjectsOpenReportId = function () { return _reportEditorId; };
+  window.openProjectReport = function (reportId) { openReportEditor(reportId); };
 
   // The teardown half of leaving the detail, with NO navigation side effects.
   // Split out because switchTab() also has to leave the detail — and there it
@@ -1258,6 +1272,18 @@
     }
     var view = document.getElementById('projects-project-detail-view');
     if (view) view.style.display = 'none';
+    // Leaving the project also leaves any report open inside it. All three
+    // views are siblings, so a report editor left at display:block would sit
+    // next to the visible list rather than being covered by it — the failure
+    // mode a stacked modal could not have.
+    var rView = document.getElementById('projects-report-editor-view');
+    if (rView) {
+      rView.style.display = 'none';
+      rView._p86Closed = true;
+      var rh = rView.querySelector('.p86-report-host');
+      if (rh) rh.innerHTML = '';
+    }
+    _reportEditorId = null;
     var main = document.getElementById('projects-main-view');
     if (main) main.style.display = '';
     if (window.appState) window.appState.currentProjectId = null;
@@ -1270,6 +1296,35 @@
   // Leaving the detail because the user switched to another TAB. Same
   // teardown, none of the navigation — switchTab owns both from here.
   window.p86ProjectsLeaveDetail = teardownDetail;
+
+  // Close the report editor (level 3) and reveal the project (level 2).
+  // Module scope, not a closure inside paintReportEditor, because the router
+  // calls it when Back walks from /projects/:id/reports/:rid to
+  // /projects/:id. Idempotent — running it twice is a no-op.
+  function closeReportEditor(opts) {
+    var view = document.getElementById('projects-report-editor-view');
+    if (!view || view._p86Closed) return;
+    view._p86Closed = true;
+    _reportEditorId = null;
+    view.style.display = 'none';
+    // Emptied rather than removed: the node is static markup now, and a stale
+    // report left in the DOM would flash on the next open before its fetch
+    // resolves.
+    var rHost = view.querySelector('.p86-report-host');
+    if (rHost) rHost.innerHTML = '';
+    var detailView = document.getElementById('projects-project-detail-view');
+    if (detailView) detailView.style.display = 'block';
+    document.body.style.overflow = '';
+    paintReportsTab();
+    try { window.scrollTo(0, 0); } catch (e) { /* defensive */ }
+    // The router calls this while it is REPLAYING a URL it already owns;
+    // syncing then would push a second entry for one Back press.
+    if (!(opts && opts.fromRouter) &&
+        window.p86Router && typeof window.p86Router.sync === 'function') {
+      window.p86Router.sync();
+    }
+  }
+  window.p86ProjectsCloseReport = closeReportEditor;
 
   // Return to the projects list. Named to match backToJobsMain() — the two
   // drill-ins should read the same. Idempotent: running it twice is a no-op.
@@ -2042,18 +2097,25 @@
   function openReportEditor(reportId) {
     var p = _detailState.project;
     if (!p) return;
-    var prior = document.getElementById('projReportEditor');
-    if (prior) prior.remove();
 
-    var overlay = document.createElement('div');
-    overlay.id = 'projReportEditor';
-    overlay.className = 'p86-report-overlay';
-    overlay.innerHTML =
-      '<div class="p86-report-host">' +
-        '<div class="p86-report-loading">Loading report…</div>' +
-      '</div>';
-    document.body.appendChild(overlay);
-    document.body.style.overflow = 'hidden';
+    // Third drill-in level, not a modal over a modal. The view is static
+    // markup inside #projects; we swap to it the same way openProject swaps
+    // to the detail. Deliberately NOT on the overlay stack — pushOverlay()
+    // pushes a PATHLESS history entry, and the router owns this URL now.
+    var overlay = document.getElementById('projects-report-editor-view');
+    if (!overlay) return;
+    var detailView = document.getElementById('projects-project-detail-view');
+    if (detailView) detailView.style.display = 'none';
+    // The node is REUSED now rather than recreated per open, so the
+    // idempotent-close flag has to be cleared or the second report you open
+    // in a session would refuse to close.
+    overlay._p86Closed = false;
+    _reportEditorId = reportId;
+    overlay.querySelector('.p86-report-host').innerHTML =
+      '<div class="p86-report-loading">Loading report…</div>';
+    overlay.style.display = 'block';
+    try { window.scrollTo(0, 0); } catch (e) { /* defensive */ }
+    if (window.p86Router && typeof window.p86Router.sync === 'function') window.p86Router.sync();
 
     window.p86Api.reports.get('project', p.id, reportId).then(function(r) {
       var report = r && r.report;
@@ -2135,25 +2197,15 @@
     // Idempotent DOM-side close — safe to run from popstate OR from
     // a button click. We mark the overlay with a closed flag so the
     // second call is a no-op.
-    function closeImpl() {
-      if (overlay._p86Closed) return;
-      overlay._p86Closed = true;
-      overlay.remove();
-      document.body.style.overflow = '';
-      paintReportsTab();
-    }
-    function close() {
-      // If our close is on the overlay stack, route through Back
-      // so the history entry pops; popstate runs closeImpl. Else
-      // call closeImpl directly.
-      var hasOurClose = _overlayStack.indexOf(closeImpl) !== -1;
-      if (hasOurClose) closeTopOverlay();
-      else closeImpl();
-    }
-
-    // Register with the overlay stack so Android back closes the
-    // report editor instead of navigating away.
-    pushOverlay(closeImpl);
+    // Level three returns to level two. closeReportEditor lives at module
+    // scope so the ROUTER can call it too — a Back press from
+    // /projects/:id/reports/:rid to /projects/:id has to close this level
+    // without tearing down the project underneath it.
+    var closeImpl = closeReportEditor;
+    var close = closeReportEditor;
+    // NOT registered with the overlay stack. pushOverlay() pushes a pathless
+    // history entry; this level has a real URL, so the browser's own Back is
+    // the exit and registering both would need two presses.
 
     function save() {
       var body = {
@@ -2758,9 +2810,13 @@
         // document's name — and the actions sit below, grouped by what
         // they do, with Save as the only primary. No action was removed.
         '<div class="p86-report-topbar">' +
+          // A back control, not a dismiss, and it LEADS the row — the same
+          // "‹ Projects" affordance the detail uses to return to the list.
+          // A trailing × reads as "close the modal", which is exactly what
+          // this stopped being.
           '<div class="p86-report-topbar-titlerow">' +
+            '<button class="p86-proj-back-btn" id="rptClose" title="Back to the project">&lsaquo; Project</button>' +
             '<input id="rptTitle" class="p86-report-title-input" value="' + escapeAttr(state.report.title || '') + '" placeholder="Report title" />' +
-            '<button class="p86-modal-close" id="rptClose">&times;</button>' +
           '</div>' +
           '<div class="p86-report-topbar-actions">' +
             '<div class="p86-report-btn-group">' +
