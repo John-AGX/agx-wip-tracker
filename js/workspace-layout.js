@@ -65,6 +65,182 @@
     { id: 'job-service-tickets', label: 'Service Tickets', icon: 'daily-logs' }
   ];
 
+  // ── Layout: which of those tabs this job actually shows ───
+  // A service job is the SAME entity as any other job — same table, same
+  // money spine, same rollup. What differs is how much of it you need on
+  // screen: a single-visit call-out does not want sixteen sections.
+  //
+  // TYPE and LAYOUT are deliberately different axes:
+  //   * TYPE (S/M/RV/WO) is IDENTITY. It is derived from the job number's
+  //     prefix and is never stored — see server/services/job-types.js,
+  //     "deriving the type from the number is self-consistent and cannot
+  //     drift". Changing a type would mean RENUMBERING, and the number is
+  //     printed on POs, pay apps, signed COs and the QuickBooks project
+  //     name. job-types.js says NOTHING HERE RENUMBERS ANYTHING.
+  //   * LAYOUT is a VIEW choice. Flipping it moves no data and changes no
+  //     identity, so it is free and reversible in both directions.
+  //
+  // So layout lives in its own field, `job.layout`, and ABSENCE is the
+  // discriminator: unset means "derive from the type", which is why this
+  // needs no migration and why every job that exists today keeps rendering
+  // exactly as it does now. Same pattern as the CO cost-vs-sell field.
+  const TICKET_LAYOUT_TABS = [
+    'job-overview',
+    'job-service-tickets',
+    'job-details',
+    'job-photos',
+    'job-qb-costs',
+    'job-invoices'
+  ];
+  // Prefixes that LOOK like a ticket when the job has made no explicit
+  // choice. S = Service, WO = Work Order (server/services/job-types.js).
+  const TICKET_PREFIXES = ['S', 'WO'];
+
+  // '' when the number carries no prefix. Mirrors prefixForNumber in
+  // js/job-finalize.js / server/services/job-types.js; resolved off that
+  // module when it is loaded so the registry stays the single authority,
+  // with a local match only as the fallback.
+  function jobNumberPrefix(job) {
+    var num = job && (job.jobNumber || job.job_number);
+    if (!num) return '';
+    if (window.p86JobFinalize && typeof window.p86JobFinalize.prefixForNumber === 'function') {
+      try { return String(window.p86JobFinalize.prefixForNumber(num) || '').toUpperCase(); }
+      catch (e) { /* fall through to the local match */ }
+    }
+    var m = String(num).trim().toUpperCase().match(/^([A-Z]{1,4})\s*\d/);
+    return m ? m[1] : '';
+  }
+
+  // 'ticket' | 'full'. THE resolver — every caller asks this, nobody
+  // re-derives it, for the same reason the sub-tab selection has one writer.
+  function resolveJobLayout(job) {
+    var explicit = job && job.layout;
+    if (explicit === 'ticket' || explicit === 'full') return explicit;
+    return TICKET_PREFIXES.indexOf(jobNumberPrefix(job)) >= 0 ? 'ticket' : 'full';
+  }
+
+  // Does this section hold real records for this job?
+  //
+  // THE POINT OF THIS: the ticket layout must never HIDE money. Flipping a
+  // job that has invoices or change orders into the short layout would
+  // otherwise take live records off the screen while leaving them in the
+  // rollup — the user would think they were gone. So the layout picks a
+  // DEFAULT set and anything with rows is added back, which is what makes
+  // the flip non-destructive and self-correcting in both directions.
+  //
+  // Only client-side stores can be answered here, so this returns false for
+  // "don't know" (reports, daily logs, files are fetched per tab). That is
+  // safe: those sections hold documents, not money, and Photos/Files are in
+  // the ticket set anyway.
+  //
+  // ⚠ appData.changeOrders / .purchaseOrders / .invoices are the DEAD legacy
+  // localStorage stores. The live ones are jobChangeOrders, jobPurchaseOrders
+  // and arInvoices — see the boot fetch in js/app.js. Reading the wrong pair
+  // here would report "no data" for every job and silently hide real money.
+  function jobTabHasData(tabId, jobId) {
+    if (!jobId) return false;
+    var A = (typeof appData !== 'undefined' && appData) ? appData : (window.appData || {});
+    function mine(rows) {
+      return (rows || []).some(function (r) {
+        return r && (r.jobId === jobId || r.job_id === jobId);
+      });
+    }
+    switch (tabId) {
+      case 'job-changeorders':   return mine(A.jobChangeOrders);
+      case 'job-purchaseorders': return mine(A.jobPurchaseOrders);
+      case 'job-invoices':       return mine(A.arInvoices);
+      case 'job-estimates':      return mine(A.estimates);
+      case 'job-qb-costs':       return mine(A.qbCostLines);
+      case 'job-buildings':      return mine(A.buildings);
+      case 'job-phases':         return mine(A.phases);
+      case 'job-subs':           return mine(A.subs);
+      default:                   return false;
+    }
+  }
+
+  // The tabs to actually render for this job.
+  //
+  // Ordered by TICKET_LAYOUT_TABS, not by RIGHT_TABS: on a ticket page the
+  // visits ARE the page, so Tickets sits second. Filtering RIGHT_TABS in place
+  // would bury it last behind Costs and Billing. Sections rescued by the
+  // has-data rule are appended after the deliberate set, in RIGHT_TABS order,
+  // so they read as the exceptions they are.
+  function visibleTabsFor(job) {
+    if (resolveJobLayout(job) !== 'ticket') return RIGHT_TABS;
+    var jobId = job && job.id;
+    var byId = {};
+    RIGHT_TABS.forEach(function (t) { byId[t.id] = t; });
+    var out = TICKET_LAYOUT_TABS.map(function (id) { return byId[id]; }).filter(Boolean);
+    RIGHT_TABS.forEach(function (t) {
+      if (TICKET_LAYOUT_TABS.indexOf(t.id) >= 0) return;
+      if (jobTabHasData(t.id, jobId)) out.push(t);
+    });
+    return out;
+  }
+
+  // Is this section one the CURRENT layout deliberately hides? True only for a
+  // tab that RIGHT_TABS knows about — a pane that never had a .ws-right-tab at
+  // all (job-workflow, job-buildings, job-labor) is still legitimately
+  // reachable and keeps its long-standing behaviour of showing with no tab lit.
+  function isHiddenByLayout(tabId, job) {
+    if (!tabId) return false;
+    if (!RIGHT_TABS.some(function (t) { return t.id === tabId; })) return false;
+    return !visibleTabsFor(job).some(function (t) { return t.id === tabId; });
+  }
+
+  function currentJob() {
+    var id = (typeof appState !== 'undefined' && appState) ? appState.currentJobId : null;
+    if (!id) return null;
+    var A = (typeof appData !== 'undefined' && appData) ? appData : (window.appData || {});
+    return (A.jobs || []).find(function (j) { return j.id === id; }) || null;
+  }
+
+  // Flip the open job between the two layouts and repaint.
+  //
+  // Writes ONE field. No renumber, no data move, no row touched — which is
+  // the whole reason layout was kept off the identity axis. The strip is
+  // rebuilt rather than patched because buildLayout is what decides the tab
+  // set, and rebuilding is a path the app already exercises on every job
+  // close/open.
+  function setJobLayout(mode) {
+    if (mode !== 'ticket' && mode !== 'full') return;
+    var job = currentJob();
+    if (!job) return;
+    job.layout = mode;
+    job.updatedAt = new Date().toISOString();
+    try { if (typeof saveData === 'function') saveData(); } catch (e) {
+      if (window.console) console.warn('[job layout] save failed:', e && e.message);
+    }
+    // The section you were on may not exist in the new layout. Land on
+    // Overview rather than leaving a pane up with nothing lit above it.
+    if (_activeJobSubTab && !visibleTabsFor(job).some(function (t) { return t.id === _activeJobSubTab; })) {
+      markJobSubTab('job-overview');
+    }
+    try { cleanup(); } catch (e) { /* rebuild anyway */ }
+    layoutApplied = false;
+    applyLayout();
+    // The flip can move which section is on screen, so the URL has to follow
+    // it — otherwise a refresh deep-links back to a section this layout hides
+    // and silently lands somewhere else than the address bar promised.
+    if (window.p86Router && window.p86Router.sync) window.p86Router.sync();
+  }
+
+  // The toggle names what clicking it DOES, so it inverts the current state.
+  function paintLayoutToggle(job) {
+    var btn = document.getElementById('appJobnavLayout');
+    if (!btn) return;
+    var isTicket = resolveJobLayout(job) === 'ticket';
+    var label = btn.querySelector('.app-nav-label');
+    if (label) label.textContent = isTicket ? 'Show as full job' : 'Show as service ticket';
+    btn.title = isTicket
+      ? 'Switch to the full job page — every section. Changes the view only.'
+      : 'Switch to the short service-ticket page. Changes the view only; nothing is deleted and the job number does not change.';
+  }
+
+  window.p86JobLayout = function (job) { return resolveJobLayout(job || currentJob()); };
+  window.p86JobLayoutTabs = function (job) { return visibleTabsFor(job || currentJob()); };
+  window.p86SetJobLayout = setJobLayout;
+
   // Workspace toggle state. Tracked at module scope so the toggle can
   // remember which tab was active before workspace mode opened, and
   // restore that tab when the user clicks the Workspace button again
@@ -637,6 +813,24 @@
       });
       jobnav.appendChild(wsItem);
 
+      // Layout toggle — the short "service ticket" view vs the full job page.
+      // A VIEW switch only: it writes one field, moves no data and changes no
+      // job number, so it is reversible and safe to hit by accident. Its label
+      // names the ACTION and is refreshed on every mount by paintLayoutToggle.
+      var layoutItem = document.createElement('button');
+      layoutItem.type = 'button';
+      layoutItem.className = 'app-jobnav-ws';
+      layoutItem.id = 'appJobnavLayout';
+      layoutItem.innerHTML =
+        '<span class="app-jobnav-ws-ic"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/><path d="M9 9v11"/></svg></span>' +
+        '<span class="app-nav-label"></span>';
+      layoutItem.addEventListener('click', function () {
+        var j = currentJob();
+        if (!j) return;
+        setJobLayout(resolveJobLayout(j) === 'ticket' ? 'full' : 'ticket');
+      });
+      jobnav.appendChild(layoutItem);
+
       // Command Center attention strip — filled by refreshJobNavChips only when
       // the job needs attention (e.g. negative margin); empty + display:none otherwise.
       var attn = document.createElement('div');
@@ -792,6 +986,7 @@
     if (window.p86EntitySubnav && window.p86EntitySubnav.clearAll) window.p86EntitySubnav.clearAll();
     buildJobSubnavShell(job);
     _cardJobId = (job && job.id) || null;   // remember which job the card now shows
+    paintLayoutToggle(job);   // shell is built once; the label is per-job
     placeJobSubnav();
     var _jid = job && job.id;
     refreshJobNavChips(_jid);
@@ -837,10 +1032,15 @@
     // hardcoding index 0 threw away any selection made before this point —
     // which on a deep link is the whole point of the URL. Honor the recorded
     // sub-tab when it names one of these tabs; fall back to the first.
+    //
+    // The set itself is per-job: a service job renders the short ticket
+    // layout (visibleTabsFor). A tab outside that set but holding real rows
+    // is added back rather than hidden — see jobTabHasData.
+    var _tabs = visibleTabsFor(currentJob());
     var _wantTab = _activeJobSubTab;
-    var _haveWant = RIGHT_TABS.some(function(t) { return t.id === _wantTab; });
+    var _haveWant = _tabs.some(function(t) { return t.id === _wantTab; });
     var tabsHtml = '<div class="ws-right-tabs">';
-    RIGHT_TABS.forEach(function(tab, i) {
+    _tabs.forEach(function(tab, i) {
       var _on = _haveWant ? (tab.id === _wantTab) : (i === 0);
       tabsHtml += '<button class="ws-right-tab' + (_on ? ' active' : '') + '" data-panel="' + tab.id + '"' + (tab.icon ? ' data-p86-icon="' + tab.icon + '"' : '') + '>' + tab.label + '<span class="ws-right-tab-chip" data-jobchip="' + tab.id + '"></span></button>';
     });
@@ -1731,17 +1931,28 @@
       // through to Overview. The legacy strip stays as a fallback for a
       // pre-fix caller that only touched it.
       var activeId = null;
+      var _job = currentJob();
       var routedId = _activeJobSubTab;
       if (!routedId || !document.getElementById(routedId)) {
         var routedBtn = document.querySelector('.sub-tab-btn-job.active');
         routedId = routedBtn ? routedBtn.getAttribute('data-subtab') : null;
       }
+      // A selection carried over from another job (or surviving a layout flip)
+      // can name a section THIS job's layout does not show. Applied AFTER the
+      // legacy fallback above, not before — the legacy strip is the other place
+      // that id can come back from, so guarding only the first source let it in
+      // through the second and left a pane open with nothing lit above it.
+      if (isHiddenByLayout(routedId, _job)) routedId = null;
       if (routedId && document.getElementById(routedId)) {
         activeId = routedId;
         markJobSubTab(activeId);   // both strips land on the pane we show
       } else {
         var activeTab = document.querySelector('.ws-right-tab.active');
         activeId = activeTab ? activeTab.getAttribute('data-panel') : 'job-wip-report';
+        // Record it too. Falling back without doing so left _activeJobSubTab
+        // pointing at the section we just refused to show, so the very next
+        // read disagreed with both strips.
+        markJobSubTab(activeId);
       }
       var target = document.getElementById(activeId);
       if (target) target.style.display = 'block';

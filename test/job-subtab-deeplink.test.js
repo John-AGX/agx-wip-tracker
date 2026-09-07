@@ -23,115 +23,19 @@
 // marked BEFORE the layout is built (the router's replay runs inside editJob's
 // synchronous body; the MutationObserver that builds the layout fires after).
 
-const fs = require('fs');
-const path = require('path');
+const H = require('./helpers/job-detail-dom');
 
-const ROOT = path.join(__dirname, '..');
-
-// The nine legacy buttons that actually exist in index.html.
-const LEGACY_SUBS = [
-  'job-overview', 'job-wip-report', 'job-changeorders', 'job-purchaseorders',
-  'job-invoices', 'job-payapps', 'job-buildings', 'job-labor', 'job-workflow'
-];
-
-// Every pane id the strip can select. Superset of the legacy nine — this is
-// the drift the bug lived in.
-const PANES = LEGACY_SUBS.concat([
-  'job-details', 'job-estimates', 'job-qb-costs', 'job-subs',
-  'job-photos', 'job-files', 'job-daily-logs', 'job-reports',
-  'job-service-tickets'
-]);
-
-function buildDom() {
-  document.body.innerHTML =
-    '<div id="app-sidebar"><div class="app-nav"></div></div>' +
-    '<div id="jobs-main-view"></div>' +
-    '<div id="jobs-job-detail-view" style="display:none">' +
-      '<div class="job-detail-header"><h2 id="job-detail-title">JOB-1 &mdash; Test</h2></div>' +
-      '<div class="sub-tabs">' +
-        LEGACY_SUBS.map(function (id, i) {
-          return '<button class="sub-tab-btn-job' + (i === 0 ? ' active' : '') +
-                 '" data-subtab="' + id + '"></button>';
-        }).join('') +
-      '</div>' +
-      PANES.map(function (id, i) {
-        return '<div id="' + id + '" class="sub-tab-content-job' +
-               (i === 0 ? ' active' : '') + '"></div>';
-      }).join('') +
-    '</div>';
-}
-
-// js/workspace-layout.js is an IIFE that installs a body-wide MutationObserver
-// on load, so it is evaluated ONCE for the file. Tests isolate themselves with
-// the module's own lifecycle instead: closeJob() hides the detail view, which
-// drives its cleanup() (panels rescued back into the detail, strip destroyed,
-// layoutApplied reset) — the same close/reopen cycle the app performs.
-const _observers = [];
-function loadWorkspaceLayout() {
-  // Hand back every MutationObserver the module installs so afterAll can
-  // disconnect them. Left connected, a notification queued by the last test
-  // fires after jest has torn the jsdom window down and crashes the worker
-  // inside jsdom's own error reporter.
-  const NativeMO = window.MutationObserver;
-  window.MutationObserver = function (cb) {
-    const mo = new NativeMO(cb);
-    _observers.push(mo);
-    return mo;
-  };
-  window.appState = {
-    currentJobId: 'job_1',
-    currentJob: { id: 'job_1', jobNumber: 'JOB-1', name: 'Test', status: 'In Progress' }
-  };
-  window.appData = { jobs: [{ id: 'job_1', jobNumber: 'JOB-1', title: 'Test' }], buildings: [], invoices: [] };
-  window.getJobWIP = function () { return {}; };
-  window.eval(fs.readFileSync(path.join(ROOT, 'js', 'workspace-layout.js'), 'utf8'));
-}
-
-// What js/app.js's switchJobSubTab does to the strips.
-function markSubTab(subtab) {
-  if (typeof window.p86MarkJobSubTab === 'function') {
-    window.p86MarkJobSubTab(subtab);
-    return;
-  }
-  // Pre-fix behaviour, kept so this file still describes the bug it pins.
-  document.querySelectorAll('.sub-tab-btn-job').forEach(function (b) { b.classList.remove('active'); });
-  const btn = document.querySelector('.sub-tab-btn-job[data-subtab="' + subtab + '"]');
-  if (btn) btn.classList.add('active');
-}
-
-// The cold-boot order: the sub-tab choice is recorded while the job detail is
-// still hidden and the ws-right-tab strip does not exist yet, THEN the detail
-// becomes visible and the layout observer builds the strip + places the panes.
-function openJobAt(subtab) {
-  if (subtab) markSubTab(subtab);
-  document.getElementById('jobs-job-detail-view').style.display = 'block';
-  return settle();
-}
-
-function closeJob() {
-  document.getElementById('jobs-job-detail-view').style.display = 'none';
-  return settle();
-}
-
-// The layout observer watches {childList:true, subtree:true} on body, and
-// renderJobDetail churns the DOM constantly, so any append stands in for it.
-function settle() {
-  document.body.appendChild(document.createElement('span'));
-  return new Promise(function (r) { setTimeout(r, 0); });
-}
-
-function activePanel() {
-  const t = document.querySelector('.ws-right-tab.active');
-  return t ? t.getAttribute('data-panel') : null;
-}
-function paneShown(id) {
-  const el = document.getElementById(id);
-  return el ? el.style.display : null;
-}
+// The jsdom job-detail harness is shared with test/job-layout-ticket.test.js.
+let _observers = [];
+const markSubTab = (s) => H.markSubTab(window, s);
+const openJobAt  = (s) => H.openJobAt(window, s);
+const closeJob   = () => H.closeJob(window);
+const activePanel = () => H.activePanel(document);
+const paneShown  = (id) => H.paneShown(document, id);
 
 beforeAll(() => {
-  buildDom();
-  loadWorkspaceLayout();
+  H.buildDom(document);
+  _observers = H.loadWorkspaceLayout(window);
 });
 
 afterAll(() => { _observers.forEach((o) => o.disconnect()); });
