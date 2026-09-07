@@ -96,6 +96,13 @@ const PARENT = {
   // per-user conversation rows; users.organization_id is their tenant.
   ai_messages:              { parent: 'users', fk: 'user_id',     column: 'organization_id', orphanable: false },
   messages:                 { parent: 'users', fk: 'user_id',     column: 'organization_id', orphanable: false },
+  // ORPHANABLE ON PURPOSE. user_id is ON DELETE SET NULL, so the row
+  // OUTLIVES its user deliberately: the surviving tombstone is what stops a
+  // retired address ever being reissued to a stranger. Its own
+  // organization_id is the denormalised cache; the live anchor is the user.
+  // Reserved names (postmaster, abuse) are seeded with user_id NULL and no
+  // org at all, which is correct — they are platform-owned, not a tenant's.
+  user_email_aliases:       { parent: 'users', fk: 'user_id',     column: 'organization_id', orphanable: true },
   material_purchases:       { parent: 'materials', fk: 'material_id', column: 'organization_id', orphanable: true },
   payments:                 { parent: 'clients', fk: 'client_id', column: 'organization_id', orphanable: true },
 };

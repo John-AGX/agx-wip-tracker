@@ -95,11 +95,18 @@ test('malformed input does not throw', function () {
 test('renderReportPdf reports a missing browser clearly rather than crashing', async function () {
   // Not asserting a render here — that needs Chromium. What matters is that the
   // absence of one produces a message a user can act on.
+  //
+  // 30s, not jest's 5s default. Launching a browser — or failing to find one —
+  // is slow, and on a loaded machine it overran the default and reported as a
+  // FAILURE rather than a timeout. That is what made the whole suite look
+  // non-deterministic: three runs over identical bytes gave 5, 32 and 7
+  // failures as the 5s ceiling landed on whichever suites were unlucky. A
+  // timeout dressed as a failure is worse than a slow test.
   try {
     await svc.renderReportPdf(doc);
   } catch (e) {
     assert.ok(/browser engine|Failed to launch|Could not find/i.test(e.message),
       'unhelpful error: ' + e.message);
   }
-});
+}, 30000);
 

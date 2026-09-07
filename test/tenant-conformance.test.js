@@ -1183,7 +1183,7 @@ describe('R4 — classify() is checked, never consulted', () => {
   // service_ticket_id in the same commit. That is deliberately NOT a new
   // parent pointer — a task keeps entity_type='job' and carries the ticket id
   // alongside — so the tasks fixture is unchanged and no count moves for it.
-  test('the fixture carries every table server/db.js creates (113) — nothing curated out', () => {
-    expect(TWO.ALL_TABLES.length).toBe(113);
+  test('the fixture carries every table server/db.js creates (114) — nothing curated out', () => {
+    expect(TWO.ALL_TABLES.length).toBe(114);
   });
 });
