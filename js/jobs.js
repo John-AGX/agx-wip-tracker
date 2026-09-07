@@ -4425,6 +4425,10 @@ function renderJobsMain() {
             const buildings = appData.buildings.filter(b => b.jobId === jobId).slice().sort(_bldgNumSort);
             const _hostKey = (hostId || 'job-buildings-content').replace(/\W/g, '_');
             const container = document.getElementById(hostId || 'job-buildings-content');
+            // The magnifier is a Site-Plan control: it belongs where the map is.
+            // On the job overview it would be a navigation jump to a panel that has
+            // to load a basemap first — a different interaction John did not ask for.
+            const _onSitePlan = (hostId === 'insp-buildings');
             if (!container) return;   // host may be absent (e.g. node-graph inspector passes its own id)
             if (!buildings.length) { container.innerHTML = ''; return; }
 
@@ -4459,16 +4463,14 @@ function renderJobsMain() {
                 const spentPct = eff.amount > 0 ? (buildingCost / eff.amount * 100) : 0;
                 const paceFlag = (eff.amount > 0 && buildingCost > 0 && spentPct > compPct + 5)
                     ? ' <span class="p86-mline-pace" title="Spend is running ahead of progress">spend ' + spentPct.toFixed(0) + '%</span>' : '';
-                // Zoom-to-building (John): a magnifier in the tile's top-right corner opens
-                // this job's Site Plan and frames THIS building. Painted on EVERY card, on
-                // both hosts, deliberately — whether a building is traced is Site-Plan state
-                // (nodegraph/ui.js) and on the job-overview host that graph is not loaded, so
-                // the card cannot know the answer at PAINT time; hiding the control on a guess
-                // would hide it from traced buildings too. window.p86ZoomBuildingOnMap answers
-                // at PRESS time, when the answer is knowable: it frames the building, or it
-                // says the building has never been traced and selects it for Trace Building.
-                // It never reports success without moving the camera.
-                const zoomBtn = '<button type="button" class="p86-mline-zoom" title="Zoom to this building on the Site Plan" aria-label="Zoom to ' + escapeHTML(building.name || 'building') + ' on the Site Plan" onclick="event.stopPropagation();window.p86ZoomBuildingOnMap&&window.p86ZoomBuildingOnMap(p86Dec(\'' + p86Enc(building.id) + '\'))">' +
+                // Zoom-to-building (John): a magnifier in the tile's top-right corner frames
+                // THIS building on the Site Plan. Site Plan inspector ONLY — on the job
+                // overview the map is not on screen, so there is nothing to zoom.
+                // Whether a building is traced is Site-Plan state, and even here the card
+                // cannot know it at PAINT time; p86ZoomBuildingOnMap answers at PRESS time,
+                // framing the building or saying it has never been traced. It never reports
+                // success without moving the camera.
+                const zoomBtn = !_onSitePlan ? '' : '<button type="button" class="p86-mline-zoom" title="Zoom to this building on the Site Plan" aria-label="Zoom to ' + escapeHTML(building.name || 'building') + ' on the Site Plan" onclick="event.stopPropagation();window.p86ZoomBuildingOnMap&&window.p86ZoomBuildingOnMap(p86Dec(\'' + p86Enc(building.id) + '\'))">' +
                     (window.p86Icon ? window.p86Icon('magnifying-glass') : '&#x1F50D;') + '</button>';
                 const mapPin = (building.address && window.p86MapLink && window.p86MapLink.url(building.address))
                     ? ' <a href="' + window.p86MapLink.url(building.address).replace(/&/g, '&amp;') + '" target="_blank" rel="noopener" onclick="event.stopPropagation();" title="Open in Google Maps" style="text-decoration:none;margin-left:2px;">' + (window.p86Icon ? window.p86Icon('map-pin') : '') + '</a>'

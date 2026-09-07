@@ -255,7 +255,7 @@ let host;
 beforeEach(() => {
   document.body.innerHTML = '';
   host = document.createElement('div');
-  host.id = 'job-buildings-content';
+  host.id = 'insp-buildings';
   document.body.appendChild(host);
   window.p86Dec = DOM.dec;
   delete window.p86Icon;                 // keep painted bytes small and readable
@@ -283,30 +283,36 @@ describe('the harness executes the painted handlers', () => {
 
 describe('the control itself', () => {
   test('every building card carries exactly one magnifier', () => {
-    renderFrom(JOBS_SRC)('J1', 'job-buildings-content');
+    renderFrom(JOBS_SRC)('J1', 'insp-buildings');
     const cards = host.querySelectorAll('.p86-mline');
     expect(cards.length).toBe(3);
     cards.forEach((c) => expect(c.querySelectorAll('.p86-mline-zoom').length).toBe(1));
   });
 
   test('it is the LAST thing in the top row — the tile\'s upper-right corner', () => {
-    renderFrom(JOBS_SRC)('J1', 'job-buildings-content');
+    renderFrom(JOBS_SRC)('J1', 'insp-buildings');
     const top = host.querySelector('.p86-mline-top');
     expect(top.lastElementChild.classList.contains('p86-mline-zoom')).toBe(true);
     // and it sits AFTER the budget hero, so the money keeps its own corner
     expect(top.children[1].classList.contains('p86-mline-hero')).toBe(true);
   });
 
-  test('it renders on BOTH hosts renderJobBuildings targets', () => {
-    // job-overview
-    renderFrom(JOBS_SRC)('J1', 'job-buildings-content');
-    expect(host.querySelectorAll('.p86-mline-zoom').length).toBe(3);
-    // the Site Plan right inspector
-    const insp = document.createElement('div');
-    insp.id = 'insp-buildings';
-    document.body.appendChild(insp);
+  test('it renders on the Site Plan inspector and NOT on the job overview', () => {
+    // John: 'on the job overview we dont need the mag glass thats only for the
+    // site inspector'. The overview has no map on screen, so a zoom control there
+    // would be a navigation jump, not a zoom.
     renderFrom(JOBS_SRC)('J1', 'insp-buildings');
-    expect(insp.querySelectorAll('.p86-mline-zoom').length).toBe(3);
+    expect(host.querySelectorAll('.p86-mline-zoom').length).toBe(3);
+
+    const ov = document.createElement('div');
+    ov.id = 'job-buildings-content';
+    document.body.appendChild(ov);
+    renderFrom(JOBS_SRC)('J1', 'job-buildings-content');
+    expect(ov.querySelectorAll('.p86-mline-zoom').length).toBe(0);
+    // no dead handler and no empty slot where the icon would have been
+    expect(ov.innerHTML).not.toContain('p86ZoomBuildingOnMap');
+    expect(ov.querySelectorAll('.p86-mline').length).toBe(3);
+    ov.remove();
   });
 
   test('the corner rule and the compact-tile rule both ship in the stylesheet', () => {
@@ -332,8 +338,14 @@ describe('the control itself', () => {
      * So the tile minimum grew by the control's own footprint and no existing
      * element lost a pixel. This test ties the two numbers together: resize the
      * button without resizing the tile and it fails. */
-    const grid = CSS_SRC.match(/^\.p86-mline-grid \{[^}]*minmax\((\d+)px, 1fr\)/m);
+    // Scoped to #insp-buildings: only that host paints the magnifier, so only it
+    // buys the extra width. The job overview keeps its original density, and the
+    // base rule is asserted NOT to have quietly kept the widened value.
+    const grid = CSS_SRC.match(/^#insp-buildings \.p86-mline-grid \{[^}]*minmax\((\d+)px, 1fr\)/m);
     expect(grid).toBeTruthy();
+    const base = CSS_SRC.match(/^\.p86-mline-grid \{[^}]*minmax\((\d+)px, 1fr\)/m);
+    expect(base).toBeTruthy();
+    expect(Number(base[1])).toBeLessThan(Number(grid[1]));
     const btn = CSS_SRC.match(/^\.p86-mline-grid \.p86-mline-zoom \{([^}]*)\}/m);
     expect(btn).toBeTruthy();
     const w = Number(btn[1].match(/width:\s*(-?\d+)px/)[1]);
@@ -432,7 +444,7 @@ describe('pressing the magnifier does not expand the card', () => {
   beforeEach(() => {
     sp = makeSitePlan({ nodes: threeNodes(), origin: ORIGIN, originGraph: OG });
     window.p86ZoomBuildingOnMap = sp.api.zoom;
-    renderFrom(JOBS_SRC)('J1', 'job-buildings-content');
+    renderFrom(JOBS_SRC)('J1', 'insp-buildings');
   });
   afterEach(() => { sp.teardown(); delete window.p86ZoomBuildingOnMap; });
 
@@ -597,7 +609,7 @@ describe('every id shape reaches the map intact', () => {
     const got = [];
     window.p86ZoomBuildingOnMap = (v) => { got.push(v); return true; };
 
-    renderFrom(JOBS_SRC)('J1', 'job-buildings-content');
+    renderFrom(JOBS_SRC)('J1', 'insp-buildings');
     host.querySelector('.p86-mline-zoom')
       .dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
 
@@ -649,7 +661,7 @@ describe('every id shape reaches the map intact', () => {
     for (const [, id] of ID_SHAPES) {
       APP.appData.buildings = [{ id: String(id), jobId: 'J1', name: 'B1' }];
       APP.budgets = {}; APP.pcts = {}; APP.wired = {}; APP.cos = {};
-      renderFrom(JOBS_SRC)('J1', 'job-buildings-content');
+      renderFrom(JOBS_SRC)('J1', 'insp-buildings');
       const onclick = host.querySelector('.p86-mline-zoom').getAttribute('onclick');
       const inner = onclick.slice(onclick.indexOf("p86Dec('") + 8, onclick.lastIndexOf("')"));
       expect(inner).not.toMatch(/['\\]|[\u0000-\u001f\u007f\u2028\u2029]/);
@@ -668,7 +680,7 @@ describe('every id shape reaches the map intact', () => {
     // them the paint corpus above must widen with it.
     APP.appData.buildings = [{ id: 7, jobId: 'J1', name: 'B1' }];
     APP.budgets = {}; APP.pcts = {}; APP.wired = {}; APP.cos = {};
-    expect(() => renderFrom(JOBS_SRC)('J1', 'job-buildings-content'))
+    expect(() => renderFrom(JOBS_SRC)('J1', 'insp-buildings'))
       .toThrow(/replace is not a function/);
     expect(JOBS_SRC).toContain("building.id.replace(/\\W/g, '_')");
     // The map side, meanwhile, DOES handle it: a node minted from a server row
@@ -709,10 +721,10 @@ describe('not one figure on any card moves', () => {
   const BUTTONS = /<button type="button" class="p86-mline-zoom"[\s\S]*?<\/button>/g;
 
   test('with the button, and with it cut out, the bytes are IDENTICAL', () => {
-    const withBtn = (() => { renderFrom(JOBS_SRC)('J1', 'job-buildings-content'); return host.innerHTML; })();
+    const withBtn = (() => { renderFrom(JOBS_SRC)('J1', 'insp-buildings'); return host.innerHTML; })();
     const withoutSrc = withoutButtonSource();
     expect(withoutSrc).not.toContain('zoomBtn');            // the cut really happened
-    const without = (() => { renderFrom(withoutSrc)('J1', 'job-buildings-content'); return host.innerHTML; })();
+    const without = (() => { renderFrom(withoutSrc)('J1', 'insp-buildings'); return host.innerHTML; })();
 
     const stripped = withBtn.replace(BUTTONS, '');
     expect((withBtn.match(BUTTONS) || []).length).toBe(3);  // one per building
@@ -720,7 +732,7 @@ describe('not one figure on any card moves', () => {
   });
 
   test('...and the diff is not vacuous — the corpus really carries money', () => {
-    renderFrom(JOBS_SRC)('J1', 'job-buildings-content');
+    renderFrom(JOBS_SRC)('J1', 'insp-buildings');
     const html = host.innerHTML;
     // per-card hero budgets
     expect(html).toContain('$18,250.75');
@@ -738,9 +750,9 @@ describe('not one figure on any card moves', () => {
     // Named regions, so a failure says WHICH money moved rather than "bytes".
     const grab = (h, sel) => [...new window.DOMParser().parseFromString(h, 'text/html')
       .querySelectorAll(sel)].map((e) => e.textContent).join('␟');
-    renderFrom(JOBS_SRC)('J1', 'job-buildings-content');
+    renderFrom(JOBS_SRC)('J1', 'insp-buildings');
     const withBtn = host.innerHTML;
-    renderFrom(withoutButtonSource())('J1', 'job-buildings-content');
+    renderFrom(withoutButtonSource())('J1', 'insp-buildings');
     const without = host.innerHTML;
     for (const sel of ['.p86-mline-strip', '.p86-mline-hero', '.p86-mline-sub',
       '.p86-bldg-cost-row', '.p86-bldg-co-list', '.p86-bldg-chip-list', '.p86-mline-strip-note']) {
