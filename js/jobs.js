@@ -569,6 +569,23 @@ function renderJobsMain() {
                 ? _arForJob.reduce((s, i) => s + (_billedInvStatus[i.status] ? (Number(i.total) || 0) : 0), 0)
                 : (job.invoicedToDate || 0);
             const unbilled = revenueEarned - invoiced;
+            // The paid / still-outstanding split of that SAME AR set, so anything
+            // showing "what this job is still owed" reads one computation instead
+            // of filtering appData a second time with its own idea of which array
+            // holds AR and which statuses bill. That second idea is exactly how
+            // the job-nav AR chip came to read the pre-migration appData.invoices
+            // set and bill every status but draft/void — disagreeing with the WIP
+            // report's Invoiced figure sitting right beside it.
+            //
+            // NULL, not 0, when the job has no AR invoice rows: `invoiced` then
+            // falls back to the legacy job.invoicedToDate scalar, which carries no
+            // paid/unpaid split at all. Reporting the whole scalar as outstanding
+            // would overstate what is owed; reporting 0 would claim it is settled.
+            // Neither is known, so callers render nothing.
+            const arPaid = _arForJob.length
+                ? _arForJob.reduce((s, i) => s + (i.status === 'paid' ? (Number(i.total) || 0) : 0), 0)
+                : null;
+            const arOutstanding = (arPaid == null) ? null : Math.max(0, invoiced - arPaid);
             const backlog = (job.ngBacklog != null)
                 ? job.ngBacklog
                 : totalIncome - revenueEarned;
@@ -609,7 +626,7 @@ function renderJobsMain() {
                 pctComplete, revenueEarned, actualCosts, jtdProfit, jtdMargin,
                 displayProfit, displayMargin,
                 qbActualCosts, qbCostLineCount, qbCostsAsOf, qbSubMatch, qbAccrual,
-                invoiced, unbilled, backlog, remainingCosts,
+                invoiced, unbilled, arPaid, arOutstanding, backlog, remainingCosts,
                 accruedCosts, poAccrued, billedCost, projectedCost, projectedProfit
             };
         }

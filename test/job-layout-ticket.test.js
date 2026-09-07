@@ -43,6 +43,7 @@ beforeEach(async () => {
   // Back to the default: an S job with no explicit layout and no records.
   JOB.jobNumber = 'S0012';
   delete JOB.layout;
+  window.getJobWIP = () => ({});   // the AR-chip block swaps this out
   Object.assign(window.appData, {
     jobChangeOrders: [], jobPurchaseOrders: [], arInvoices: [],
     estimates: [], qbCostLines: [], buildings: [], phases: [], subs: []
@@ -175,6 +176,51 @@ describe('flipping the layout', () => {
     window.p86SetJobLayout('nonsense');
     expect(H.tabIds(document)).toEqual(before);
     expect(JOB.layout).toBeUndefined();
+  });
+});
+
+// The AR chip beside Invoices in the left job nav. It used to filter
+// appData.invoices — the PRE-MIGRATION set, hydrated only from invoices
+// embedded in a job's payload — so AR raised through the invoices table (all of
+// it now; js/invoices.js patches appData.arInvoices) was invisible to it, and it
+// billed a different set of statuses than the WIP report beside it. It now
+// reads getJobWIP's arOutstanding, which is the same computation as the
+// report's Invoiced figure.
+describe('the job-nav AR chip reads the WIP figure, not a set of its own', () => {
+  function chipText() {
+    const el = document.querySelector('[data-jobchip="job-invoices"]');
+    return el ? el.textContent : null;
+  }
+
+  test('it renders the outstanding AR getJobWIP reports', async () => {
+    window.getJobWIP = () => ({ arOutstanding: 12500 });
+    await H.openJobAt(window, null);
+    window.refreshJobNavChips('job_1');
+    expect(chipText()).toBe('$13k');
+  });
+
+  test('the pre-migration appData.invoices set cannot drive it', async () => {
+    // Money in the old array and none in the WIP figure must show NOTHING —
+    // that array is where the stale, superseded copies live.
+    window.getJobWIP = () => ({ arOutstanding: null });
+    window.appData.invoices = [{ id: 'i1', jobId: 'job_1', amount: 99000, status: 'sent' }];
+    await H.openJobAt(window, null);
+    window.refreshJobNavChips('job_1');
+    expect(chipText()).toBe('');
+  });
+
+  test('null (no AR rows, legacy scalar only) shows nothing rather than guessing', async () => {
+    window.getJobWIP = () => ({ arOutstanding: null, invoiced: 40000 });
+    await H.openJobAt(window, null);
+    window.refreshJobNavChips('job_1');
+    expect(chipText()).toBe('');
+  });
+
+  test('a fully paid job shows nothing, not $0', async () => {
+    window.getJobWIP = () => ({ arOutstanding: 0 });
+    await H.openJobAt(window, null);
+    window.refreshJobNavChips('job_1');
+    expect(chipText()).toBe('');
   });
 });
 

@@ -964,11 +964,24 @@
       var poAccr = 0; try { if(typeof window.getJobPOAccrued==='function'){ var pa=window.getJobPOAccrued(jobId); poAccr=(pa&&pa.total)||0; } } catch(e){}
       if (poAccr) chip('job-purchaseorders', sm(poAccr), 'o');
       else { var nPO=(A.jobPurchaseOrders||[]).filter(function(p){ return (p.jobId||p.job_id)===jobId; }).length; chip('job-purchaseorders', nPO?String(nPO):'', ''); }
-      // Invoices — AR (billed − paid)
-      var invs=(A.invoices||[]).filter(function(i){ return i.jobId===jobId; });
-      var billed=0, paid=0; invs.forEach(function(i){ var st=String(i.status||'').toLowerCase(); if(st==='void'||st==='draft') return; billed+=Number(i.amount||0)||0; if(st==='paid') paid+=Number(i.amount||0)||0; });
-      var ar=Math.max(0, billed-paid);
-      chip('job-invoices', ar ? sm(ar) : '', 'b');
+      // Invoices — AR still outstanding, straight off getJobWIP.
+      //
+      // This used to filter appData.invoices itself, and that is the WRONG SET.
+      // appData.invoices is the PRE-MIGRATION store: it is hydrated only from
+      // invoices embedded in each job's payload (js/app.js) plus its localStorage
+      // cache. Invoices raised through the invoices table — which is all of them
+      // now, and which js/invoices.js patches into appData.arInvoices — never
+      // reach it. So the chip could only ever show a stale embedded figure or
+      // nothing, on a job whose real AR sat in a different array.
+      //
+      // It also billed a different set of statuses than everything around it
+      // (anything but draft/void, vs the app's sent/partial/paid/overdue).
+      // Reading w.arOutstanding is the same computation as the WIP report's
+      // Invoiced figure, so the chip and the report cannot disagree. Null = the
+      // job has no AR rows and only the legacy invoicedToDate scalar, which
+      // carries no paid split — unknown, so show nothing rather than guess.
+      var ar = w.arOutstanding;
+      chip('job-invoices', (ar != null && ar > 0) ? sm(ar) : '', 'b');
       // Attention strip
       var attn=document.getElementById('appJobnavAttn');
       if (attn) {
