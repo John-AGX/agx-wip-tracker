@@ -1200,9 +1200,21 @@ describe('R4 — classify() is checked, never consulted', () => {
   // cache; the anchor is the USER. Two facts force it:
   //   * user_id is ON DELETE SET NULL because the row must OUTLIVE its user —
   //     the surviving tombstone is the whole mechanism that stops a retired
-  //     address being handed to a stranger. `orphanable: true` is what tells
+  //     address being handed to a stranger.
+  //
+  //     CORRECTION, and it is worth stating rather than quietly rewriting:
+  //     an earlier version of this paragraph said `orphanable: true` "tells
   //     the audit that a parentless row here is CORRECT DATA, not an orphan
-  //     to repair.
+  //     to repair." That was FALSE when it was written. The flag was declared
+  //     on all 22 PARENT entries and read by no executable line anywhere —
+  //     org-boundary-audit.js consulted spec.via, spec.parent and spec.fk and
+  //     never spec.orphanable — so every parent-scoped table emitted an
+  //     identically shaped orphan count and a reader could not tell this
+  //     table's deliberate tombstones from a genuine dangling row on, say,
+  //     sub_certificates. Asserting a protection that does not exist is worse
+  //     than asserting none, because it stops the next person looking.
+  //     The flag is now emitted in the audit output, so the sentence is true
+  //     — but it became true by changing the code, not by changing the claim.
   //   * reserved names (postmaster, abuse, notifications) are seeded with
   //     user_id NULL and no org at all. They are platform-owned, so counting
   //     their NULL organization_id as an un-stamped tenant row would be

@@ -374,3 +374,51 @@ describe('the classification is checkable, not merely written down', () => {
       .toMatch(/CHILD CANNOT CARRY A TENANT ITS PARENT DOES NOT HAVE/);
   });
 });
+
+// ── The flag that was declared and never read ───────────────────────────────
+// `orphanable` sat on every PARENT entry, was explained at length in
+// org-table-classification.js, and was consulted by NO executable line: the
+// audit read spec.via, spec.parent and spec.fk and nothing else. So an orphan
+// on `sub_certificates` (orphanable:false — a genuine dangling row someone
+// should chase) and an orphan on `user_email_aliases` (orphanable:true — where
+// a parentless row is the entire mechanism that stops a retired email address
+// being reissued) came out as the same number under the same heading, and a
+// reader could not tell a defect from a design.
+//
+// It is emitted now. These tests exist so it cannot quietly go inert again —
+// declared-but-unread metadata is worse than no metadata, because it stops the
+// next person looking.
+describe('orphanable is carried into the report, not just declared', () => {
+  const AUDIT_SRC = fs.readFileSync(
+    path.join(__dirname, '..', 'server', 'services', 'org-boundary-audit.js'), 'utf8');
+
+  test('the audit actually READS spec.orphanable', () => {
+    expect(AUDIT_SRC).toMatch(/orphanable:\s*!!spec\.orphanable/);
+  });
+
+  test('every PARENT entry declares it, so the emitted value is never undefined', () => {
+    // A missing flag would coerce to false and silently label a
+    // correct-by-design orphan as a repairable one.
+    for (const [table, spec] of Object.entries(classification.PARENT)) {
+      expect(typeof spec.orphanable).toBe('boolean');
+      expect(spec).toHaveProperty('orphanable');
+      if (!('orphanable' in spec)) throw new Error(table + ' has no orphanable flag');
+    }
+  });
+
+  test('the two populations it separates are both real, so the flag is not vacuous', () => {
+    // A flag that is true everywhere (or false everywhere) distinguishes
+    // nothing. Both sides must be populated for it to carry information.
+    const vals = Object.values(classification.PARENT).map((s) => !!s.orphanable);
+    expect(vals.filter(Boolean).length).toBeGreaterThan(0);
+    expect(vals.filter((v) => !v).length).toBeGreaterThan(0);
+  });
+
+  test('user_email_aliases is on the orphanable side — its tombstones are the point', () => {
+    // user_id is ON DELETE SET NULL so the row OUTLIVES its user; the reserved
+    // names (postmaster, abuse) never had one. Both are parentless on purpose.
+    expect(classification.PARENT.user_email_aliases.orphanable).toBe(true);
+    expect(classification.PARENT.user_email_aliases.parent).toBe('users');
+    expect(classification.PARENT.user_email_aliases.fk).toBe('user_id');
+  });
+});

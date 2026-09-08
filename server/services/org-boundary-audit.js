@@ -126,6 +126,16 @@ async function tableCounts(client, cat, out) {
 // Counted separately: parent-stamped (safe), parent-NULL (would vanish with
 // the parent's arm), and orphaned (no parent row at all — the population that
 // nothing can derive and that must therefore stay tolerant).
+//
+// `orphanable` rides along in the output. It USED TO BE INERT: every entry in
+// PARENT declares it, the classification comment explains it, and nothing read
+// it — so an orphan on `sub_certificates` (orphanable:false, a genuine dangling
+// row someone should chase) and an orphan on `user_email_aliases`
+// (orphanable:true, where a parentless row is the WHOLE POINT — the tombstone
+// that stops a retired address being reissued) came out as the same number
+// under the same heading. A reader could not tell a defect from a design.
+// Emitting the flag is what makes the distinction reachable at the point the
+// report is actually read.
 async function parentFamilies(client, cat, out) {
   const present = new Set(cat.map((c) => c.table));
   const rows = [];
@@ -141,6 +151,9 @@ async function parentFamilies(client, cat, out) {
     }
     const r = {
       table: c, parent: p, fk,
+      // Declared intent, now carried into the report: true means a row with no
+      // parent is CORRECT DATA here, not something to repair.
+      orphanable: !!spec.orphanable,
       parent_stamped: await counted(client, `parent_stamped:${c}`,
         `SELECT COUNT(*)::bigint AS n FROM ${c} ch JOIN ${p} pa ON pa.id = ch.${fk}
           WHERE pa.organization_id IS NOT NULL`, [], out),
