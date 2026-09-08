@@ -53,6 +53,15 @@ const STATUSES = new Set(['unprocessed', 'processed', 'void']);
 // so the cost_code segment is irrelevant for it (client hides it).
 const LINKABLE = new Set(['job', 'lead', 'category']);
 
+// The store block, named once. /merchants used to hand-list four of these five
+// and omit store_phone_kind — the column that says a number is a FAX. The read
+// at :phone_kinds then found undefined on every row, the fax escalation could
+// never fire, and an agreed fax rendered as the branch's voice line with a
+// green corroboration marker and a tap-to-dial link. Anything selecting part
+// of this block selects all of it.
+const STORE_COLS =
+  'store_number, store_name, store_address, store_phone, store_phone_kind';
+
 const COLS =
   'id, ref, entity_type, entity_id, amount, vendor, cost_code, is_presale, ' +
   'notes, attachment_id, status, purchased_at, entered_by, created_at, updated_at, ' +
@@ -61,7 +70,8 @@ const COLS =
   // AND NONE IS CONFIRMED — there is no store record for a confirmation to live
   // on yet. NULL means "not read", and the client is required to say so in
   // words rather than render an empty cell.
-  'store_number, store_name, store_address, store_phone, store_phone_kind';
+  STORE_COLS;
+
 
 // The four store fields, validated through the shared module. Used by POST and
 // by PATCH so the two paths cannot drift, which is how `vendor` and `amount`
@@ -479,8 +489,7 @@ router.get('/merchants', requireAuth, requireCapability('FINANCIALS_VIEW'), asyn
 
     // ARM 1 — receipts. DIRECT tenancy: the row's own organization_id.
     const rc = await pool.query(
-      `SELECT vendor, amount, purchased_at, created_at, store_number, store_name,
-              store_address, store_phone, attachment_id
+      `SELECT vendor, amount, purchased_at, created_at, attachment_id, ${STORE_COLS}
          FROM receipts
         WHERE organization_id = $1 AND status <> 'void'
         ORDER BY created_at DESC

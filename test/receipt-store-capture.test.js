@@ -206,6 +206,21 @@ async function seedWorld() {
       store_number: num, store_name: nm, store_address: addr, store_phone: ph,
     });
   }
+  // A FAX, agreed across two receipts. This is the shape that beat the feature:
+  // a fax number is constant per branch, so it corroborates as fast as the voice
+  // line and earns the same green marker. store_phone_kind is what distinguishes
+  // them, and /merchants used not to select it.
+  for (const id of ['rc_fax1', 'rc_fax2']) {
+    await seedRow('receipts', {
+      id, organization_id: ORG_A, vendor: 'SUNBELT RENTALS', amount: 300, cost_code: 'gc',
+      status: 'processed', entity_type: 'job', entity_id: 'jobs-A-0',
+      purchased_at: '2026-08-02', attachment_id: 'att_' + id, is_presale: 0,
+      store_number: '0417', store_name: 'SUNBELT RENTALS',
+      store_address: '900 S John Young Pkwy, Orlando FL 32805',
+      store_phone: '(407) 555-0401', store_phone_kind: 'fax',
+    });
+  }
+
   // A receipt with a photo and NO store details — the backfill candidate.
   await seedRow('receipts', {
     id: 'rc_a6', organization_id: ORG_A, vendor: 'LOWES', amount: 30, cost_code: 'materials',
@@ -442,7 +457,8 @@ describe('the merchant list is what the rows actually say', () => {
   });
 
   test('the sources are reported, including how many rows carry no vendor', () => {
-    expect(body.sources.receipts.rows).toBe(6);
+    // 8: six from the original world plus the two fax reads seeded below it.
+    expect(body.sources.receipts.rows).toBe(8);
     expect(body.sources.qb_cost_lines.rows).toBe(4);
     expect(body.sources.receipts.truncated).toBe(false);
     expect(body.sources.qb_cost_lines.truncated).toBe(false);
@@ -790,5 +806,46 @@ describe('the screen makes a phone a link only when the server says so', () => {
     expect(CI).toContain('ci-unverified');
     const css = fs.readFileSync(path.join(__dirname, '..', 'css', 'styles.css'), 'utf8');
     expect(css).toMatch(/\.ci-unverified\s*\{[^}]*dashed/);
+  });
+});
+
+
+describe('a fax is not the voice line, and the SERVER decides that', () => {
+  // THE DEFECT THIS PINS. /merchants wrote its own SELECT listing four of the
+  // five store columns and omitting store_phone_kind, while the aggregation read
+  // it. The read found undefined on every row, the fax escalation could never
+  // fire, and an agreed fax came back line_type "branch" with dialable true —
+  // byte-identical to a real voice line, green corroboration marker and
+  // tap-to-dial included, on the one screen that introduces the feature.
+  //
+  // The suites that existed handed the RENDERER a fax line_type directly and
+  // asserted it painted differently. They passed the whole time. This asserts
+  // the SERVER produces it, which is the half that was broken.
+  let body;
+  beforeAll(async () => { body = (await call('GET', '/api/receipts/merchants')).body; });
+
+  test('an agreed fax comes back as a fax, not as the branch line', () => {
+    const sb = body.merchants.find((m) => m.key === 'sunbelt rentals');
+    expect(sb).toBeTruthy();
+    const s0 = sb.stores.find((x) => x.branch === '0417') || sb.stores[0];
+    expect(s0.phone.verdict).toBe('agreed');
+    expect(s0.phone.value).toBe('(407) 555-0401');
+    expect(s0.phone.line_type).toBe('fax');
+  });
+
+  test('and agreeing twice does not make it dialable', () => {
+    const sb = body.merchants.find((m) => m.key === 'sunbelt rentals');
+    const s0 = sb.stores.find((x) => x.branch === '0417') || sb.stores[0];
+    // The whole harm: corroboration is exactly what a fax earns easily.
+    expect(s0.phone.line_type).not.toBe('branch');
+  });
+
+  test('the route selects the column it reads — not four of the five', () => {
+    // A regression here is silent: the aggregation reads r.store_phone_kind and
+    // finds undefined, which is indistinguishable from "no fax label recorded".
+    const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'routes', 'receipt-routes.js'), 'utf8');
+    const sel = src.match(/SELECT vendor, amount, purchased_at, created_at[\s\S]*?FROM receipts/);
+    expect(sel).toBeTruthy();
+    expect(sel[0]).toMatch(/STORE_COLS|store_phone_kind/);
   });
 });
