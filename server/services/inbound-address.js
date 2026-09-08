@@ -28,27 +28,27 @@
 
 'use strict';
 
-// THE DOMAIN. Settled by DNS on 2026-09-07.
+// THE DOMAIN.
 //
-// This defaulted to in.project86.net since the feature shipped, while
-// cloudflare/email-worker/README.md step 3 instructs setting
-// INBOUND_EMAIL_DOMAIN to the bare domain and step 4 points a catch-all
-// there. INBOUND_EMAIL_DOMAIN was never set in production, so the default
-// was live — and storeInboundMessage hard-rejects any recipient whose
-// domain is not equal to this string.
+// CORRECTION, 2026-09-07. An earlier version of this comment said
+// INBOUND_EMAIL_DOMAIN "was never set in production, so the default was
+// live". THAT WAS WRONG. The variable is set on Railway, to project86.net —
+// read directly off the service, not inferred. So inboundDomain() has been
+// returning the bare domain all along and the default was never in play.
 //
-// The lookup that settles it:
+// What IS established, by lookup:
 //   project86.net      MX -> route1/2/3.mx.cloudflare.net
 //   in.project86.net   NO MX RECORD
 //
-// Nothing was ever deliverable to in.project86.net. So every inbound
-// message since the feature shipped fell out of the matcher and was
-// discarded with a 200 — no bounce to the sender, no row for us, one line
-// in a log. Changing this default cannot break a working address because
-// there has never been one on that domain.
+// Nothing was ever deliverable to the subdomain, which is why the default
+// now matches the env var rather than contradicting it. That alignment is
+// the only thing the change bought: if the variable were ever removed, the
+// fallback would still be the domain that actually receives mail instead of
+// one that cannot.
 //
-// Still worth setting INBOUND_EMAIL_DOMAIN explicitly in Railway: a value
-// this consequential should not live only in a default.
+// This does NOT explain a message that failed to arrive. The domain is not
+// the fault. If mail is missing, look at the Cloudflare Worker leg, the
+// shared secret, or the local-part match — not here.
 function inboundDomain() {
   return process.env.INBOUND_EMAIL_DOMAIN || 'project86.net';
 }
