@@ -276,11 +276,18 @@ router.get('/:id', requireAuth, async (req, res) => {
           ORDER BY created_at DESC`,
         [ticket.id, orgId]
       ),
+      // LEFT JOINed for the same reason the dedicated inbox route is: a
+      // suggestion that arrived through a link the office has since revoked
+      // still lists, flagged, rather than disappearing. Same shape as
+      // GET /service-tickets/:id/revisions so the UI has one row to render.
       pool.query(
-        `SELECT id, author_label, fields, note, status, resolved_at, created_at
-           FROM service_ticket_revisions
-          WHERE ticket_id = $1 AND organization_id = $2
-          ORDER BY created_at DESC LIMIT 50`,
+        `SELECT r.id, r.author_label, r.fields, r.note, r.status, r.resolved_at,
+                r.created_at,
+                (s.id IS NOT NULL AND s.revoked_at IS NOT NULL) AS via_revoked_link
+           FROM service_ticket_revisions r
+           LEFT JOIN service_ticket_shares s ON s.id = r.share_id
+          WHERE r.ticket_id = $1 AND r.organization_id = $2
+          ORDER BY r.created_at DESC LIMIT 50`,
         [ticket.id, orgId]
       ),
       pool.query(

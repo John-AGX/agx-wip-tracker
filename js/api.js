@@ -552,6 +552,42 @@
     revokeShare: function(id, shareId) {
       return post('/api/service-tickets/' + encodeURIComponent(id) +
         '/shares/' + encodeURIComponent(shareId) + '/revoke', {});
+    },
+
+    // ── Suggestions from a `propose` link ──────────────────────────
+    // A guest on a propose link never edits the ticket. What they send lands
+    // here, in a quarantine table, until somebody in the office accepts it.
+    // `status` filters to 'pending' for the badge.
+    revisions: function(id, status) {
+      return get('/api/service-tickets/' + encodeURIComponent(id) + '/revisions' +
+        (status ? '?status=' + encodeURIComponent(status) : ''));
+    },
+    // fields: an array of field names to take, or null/omitted for everything
+    // the suggestion proposed. Passing a subset is how "take the new scope,
+    // ignore the date they suggested" works.
+    acceptRevision: function(id, revId, fields, note) {
+      return post('/api/service-tickets/' + encodeURIComponent(id) +
+        '/revisions/' + encodeURIComponent(revId) + '/accept',
+        { fields: Array.isArray(fields) ? fields : null, note: note || '' });
+    },
+    rejectRevision: function(id, revId, note) {
+      return post('/api/service-tickets/' + encodeURIComponent(id) +
+        '/revisions/' + encodeURIComponent(revId) + '/reject', { note: note || '' });
+    },
+
+    // ── Internal participants ──────────────────────────────────────
+    // NOT a share. No token is minted for an employee — they sign in and
+    // their write is a real authed write with their own user_id on it.
+    participants: function(id) {
+      return get('/api/service-tickets/' + encodeURIComponent(id) + '/participants');
+    },
+    addParticipant: function(id, userId, accessLevel) {
+      return post('/api/service-tickets/' + encodeURIComponent(id) + '/participants',
+        { user_id: userId, access_level: accessLevel || 'view' });
+    },
+    removeParticipant: function(id, userId) {
+      return del('/api/service-tickets/' + encodeURIComponent(id) +
+        '/participants/' + encodeURIComponent(userId));
     }
   };
 

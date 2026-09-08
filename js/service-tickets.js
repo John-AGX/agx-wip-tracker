@@ -217,6 +217,7 @@
 
     d.innerHTML =
       stepper +
+      revisionsHTML(r.revisions || [], canEdit) +
       '<div class="p86-st-detail-grid">' +
         '<div class="p86-st-detail-main">' +
           '<label class="p86-st-lbl">Proposed scope</label>' +
@@ -255,12 +256,116 @@
         '<button class="ee-btn secondary p86-st-archive">Archive</button>' +
       '</div>' : '') +
       '<div class="p86-st-sharewrap" hidden></div>' +
+      participantsHTML(r.participants || [], canEdit) +
       (events.length ? '<div class="p86-st-timeline">' +
         '<label class="p86-st-lbl">Progress</label>' +
         events.map(eventHTML).join('') +
       '</div>' : '');
 
     wireDetail(d, t);
+  }
+
+  // ── Suggestions from a `propose` link ────────────────────────────────────
+  //
+  // A guest on a propose link never edits this ticket. What they typed landed
+  // in a quarantine table and shows up here, per field, until somebody accepts
+  // it. That is the whole design: the widest scope a token can hold still
+  // cannot change the work order.
+  var PROPOSED_LABEL = {
+    scope_proposed: 'Scope', title: 'Title', priority: 'Priority',
+    scheduled_for: 'Scheduled', due_date: 'Due', site_contact_name: 'Site contact',
+    site_contact_phone: 'Site phone', access_notes: 'Access notes',
+  };
+
+  function proposedValue(k, v) {
+    if (v === null || v === undefined || v === '') return '<em>cleared</em>';
+    if (k === 'scheduled_for' || k === 'due_date') return esc(fmtDate(v) || String(v));
+    if (k === 'priority') return esc(PRIORITY_LABEL[v] || v);
+    return esc(String(v));
+  }
+
+  function revisionHTML(rev, canEdit) {
+    var fields = (rev.fields && typeof rev.fields === 'object') ? rev.fields : {};
+    var keys = Object.keys(fields).filter(function (k) { return PROPOSED_LABEL[k]; });
+    if (!keys.length) return '';
+    var pending = rev.status === 'pending';
+
+    return '<div class="p86-st-rev' + (pending ? ' pending' : '') + '" data-rev="' + escAttr(rev.id) + '">' +
+      '<div class="p86-st-rev-head">' +
+        // author_label is a CLAIM, never identity — nobody authenticated to
+        // type it. The UI says so rather than presenting it as a byline.
+        '<span class="p86-st-rev-who">' +
+          (rev.author_label ? esc(rev.author_label) : 'Someone on the link') +
+          '<span class="p86-st-rev-claim" title="Typed by the guest. Nobody signed in to prove it.">unverified</span>' +
+        '</span>' +
+        '<span class="p86-st-rev-when">' + esc(fmtDate(rev.created_at) || '') + '</span>' +
+        (rev.via_revoked_link
+          ? '<span class="p86-st-rev-revoked" title="The link this came through has since been turned off. The suggestion is kept.">link revoked</span>'
+          : '') +
+        (pending ? '' : '<span class="p86-st-rev-state">' + esc(rev.status) + '</span>') +
+      '</div>' +
+      (rev.note ? '<div class="p86-st-rev-note">' + esc(rev.note) + '</div>' : '') +
+      '<div class="p86-st-rev-fields">' + keys.map(function (k) {
+        return '<label class="p86-st-rev-field">' +
+          (pending && canEdit
+            ? '<input type="checkbox" class="p86-st-rev-pick" value="' + escAttr(k) + '" checked />'
+            : '') +
+          '<span class="p86-st-rev-fname">' + esc(PROPOSED_LABEL[k]) + '</span>' +
+          '<span class="p86-st-rev-fval">' + proposedValue(k, fields[k]) + '</span>' +
+        '</label>';
+      }).join('') + '</div>' +
+      (pending && canEdit
+        ? '<div class="p86-st-rev-actions">' +
+            '<button class="ee-btn primary p86-st-rev-accept">Accept selected</button>' +
+            '<button class="ee-btn secondary p86-st-rev-reject">Reject</button>' +
+          '</div>'
+        : '') +
+    '</div>';
+  }
+
+  function revisionsHTML(revisions, canEdit) {
+    var rows = revisions.filter(function (r) { return r && r.fields; });
+    if (!rows.length) return '';
+    var pending = rows.filter(function (r) { return r.status === 'pending'; });
+    var done = rows.filter(function (r) { return r.status !== 'pending'; });
+    var body = pending.concat(done).map(function (r) { return revisionHTML(r, canEdit); }).join('');
+    if (!body) return '';
+    return '<div class="p86-st-revs' + (pending.length ? ' has-pending' : '') + '">' +
+      '<label class="p86-st-lbl">Suggestions' +
+        (pending.length ? ' <span class="p86-st-revs-badge">' + pending.length + ' waiting</span>' : '') +
+      '</label>' +
+      body +
+    '</div>';
+  }
+
+  // ── Internal participants ────────────────────────────────────────────────
+  //
+  // NOT a share, and the panel says so. Nobody here gets a token: a token for
+  // an employee would bypass their own role, survive their deactivation, and
+  // be forwardable outside the company. They sign in like they always do.
+  function participantsHTML(participants, canEdit) {
+    var rows = participants || [];
+    if (!rows.length && !canEdit) return '';
+    return '<div class="p86-st-parts">' +
+      '<label class="p86-st-lbl">On this ticket</label>' +
+      (rows.length
+        ? rows.map(function (p) {
+            return '<div class="p86-st-part" data-user="' + escAttr(p.user_id) + '">' +
+              '<span class="p86-st-part-name">' + esc(p.user_name || ('User ' + p.user_id)) + '</span>' +
+              '<span class="p86-st-part-lvl">' + (p.access_level === 'edit' ? 'can edit' : 'can view') + '</span>' +
+              (canEdit ? '<button class="p86-st-part-rm" title="Remove">&times;</button>' : '') +
+            '</div>';
+          }).join('')
+        : '<div class="p86-st-empty">Nobody added yet.</div>') +
+      (canEdit
+        ? '<div class="p86-st-part-add">' +
+            '<select class="p86-st-part-user"><option value="">Add someone…</option></select>' +
+            '<select class="p86-st-part-lvl-sel"><option value="view">Can view</option><option value="edit">Can edit</option></select>' +
+            '<button class="ee-btn secondary p86-st-part-go">Add</button>' +
+          '</div>' +
+          '<div class="p86-st-part-note">They sign in as themselves — no link is created.</div>'
+        : '') +
+    '</div>';
   }
 
   // The ticket's child tasks — what makes this the tier ABOVE tasks.
@@ -465,6 +570,110 @@
         toast(e && e.message ? e.message : 'Could not archive', 'error');
       });
     });
+
+    wireRevisions(d, t);
+    wireParticipants(d, t);
+  }
+
+  // Accept takes the CHECKED fields only, so "take the new scope, ignore the
+  // date they suggested" is one click. Sending nothing checked is refused here
+  // rather than making the round trip to be told 400.
+  function wireRevisions(d, t) {
+    Array.prototype.forEach.call(d.querySelectorAll('.p86-st-rev'), function (row) {
+      var id = row.getAttribute('data-rev');
+      var acc = row.querySelector('.p86-st-rev-accept');
+      var rej = row.querySelector('.p86-st-rev-reject');
+
+      if (acc) acc.addEventListener('click', function () {
+        var picked = Array.prototype.map.call(
+          row.querySelectorAll('.p86-st-rev-pick:checked'), function (c) { return c.value; });
+        if (!picked.length) { toast('Tick at least one field to accept.', 'error'); return; }
+        acc.disabled = true;
+        if (rej) rej.disabled = true;
+        api().acceptRevision(t.id, id, picked).then(function () {
+          toast('Applied ' + picked.length + (picked.length === 1 ? ' field' : ' fields'));
+          _state.openId = t.id;
+          return reload();
+        }).catch(function (e) {
+          acc.disabled = false;
+          if (rej) rej.disabled = false;
+          // A second accept is a 404 by predicate — say what that means rather
+          // than showing "not found" for a row still on screen.
+          toast(e && /not found/i.test(e.message || '')
+            ? 'That suggestion was already handled — reload to see where it went.'
+            : (e && e.message) || 'Could not apply the suggestion', 'error');
+        });
+      });
+
+      if (rej) rej.addEventListener('click', function () {
+        rej.disabled = true;
+        if (acc) acc.disabled = true;
+        api().rejectRevision(t.id, id).then(function () {
+          toast('Suggestion declined');
+          _state.openId = t.id;
+          return reload();
+        }).catch(function (e) {
+          rej.disabled = false;
+          if (acc) acc.disabled = false;
+          toast(e && e.message ? e.message : 'Could not decline', 'error');
+        });
+      });
+    });
+  }
+
+  // The picker is filled from the org's own users. A body-supplied id only
+  // proves a user exists, never whose they are — the server re-proves the org
+  // regardless of what this list contains.
+  function wireParticipants(d, t) {
+    var sel = d.querySelector('.p86-st-part-user');
+    var lvl = d.querySelector('.p86-st-part-lvl-sel');
+    var go = d.querySelector('.p86-st-part-go');
+    var already = {};
+    Array.prototype.forEach.call(d.querySelectorAll('.p86-st-part'), function (p) {
+      already[String(p.getAttribute('data-user'))] = true;
+    });
+
+    if (sel && window.p86Api && window.p86Api.users && window.p86Api.users.list) {
+      Promise.resolve(window.p86Api.users.list()).then(function (r) {
+        var users = (r && (r.users || r)) || [];
+        if (!Array.isArray(users)) return;
+        users.forEach(function (u) {
+          if (!u || !u.id || already[String(u.id)]) return;
+          var o = document.createElement('option');
+          o.value = u.id;
+          o.textContent = u.name || u.email || ('User ' + u.id);
+          sel.appendChild(o);
+        });
+      }).catch(function () { /* the picker degrades to empty; nothing breaks */ });
+    }
+
+    if (go) go.addEventListener('click', function () {
+      if (!sel || !sel.value) return;
+      go.disabled = true;
+      api().addParticipant(t.id, sel.value, lvl ? lvl.value : 'view').then(function () {
+        toast('Added to the ticket');
+        _state.openId = t.id;
+        return reload();
+      }).catch(function (e) {
+        go.disabled = false;
+        toast(e && e.message ? e.message : 'Could not add them', 'error');
+      });
+    });
+
+    Array.prototype.forEach.call(d.querySelectorAll('.p86-st-part-rm'), function (btn) {
+      btn.addEventListener('click', function () {
+        var uid = btn.parentNode && btn.parentNode.getAttribute('data-user');
+        if (!uid) return;
+        btn.disabled = true;
+        api().removeParticipant(t.id, uid).then(function () {
+          _state.openId = t.id;
+          return reload();
+        }).catch(function (e) {
+          btn.disabled = false;
+          toast(e && e.message ? e.message : 'Could not remove them', 'error');
+        });
+      });
+    });
   }
 
   // ── Share panel ──────────────────────────────────────────────────────
@@ -473,9 +682,10 @@
   // the deliverable: the server keeps only its hash, so a link not copied
   // here cannot be recovered later, only replaced.
   //
-  // S4 mints VIEW ONLY. The scope selector arrives with the write doors in
-  // S5/S6 — offering a scope the server would silently narrow to 'view' would
-  // be a lie told by a dropdown.
+  // The selector offers exactly the three scopes the server will honour. It
+  // never offered one the server would silently narrow — that would be a lie
+  // told by a dropdown — so it grew as the doors landed: view only in S4,
+  // respond in S5, propose in S6. There is no 'edit': the DB CHECK refuses it.
   function paintSharePanel(wrap, t) {
     wrap.innerHTML = '<div class="p86-st-loading">Loading links…</div>';
     api().shares(t.id).then(function (r) {
@@ -486,15 +696,17 @@
           '<div class="p86-st-share-form">' +
             '<input type="email" class="p86-st-share-email" placeholder="Email (optional)" />' +
             '<input type="text" class="p86-st-share-name" placeholder="Their name (optional)" />' +
-            select('p86-st-share-scope', ['view', 'respond'], 'respond',
-              { view: 'View only', respond: 'Can file a report' }) +
+            select('p86-st-share-scope', ['view', 'respond', 'propose'], 'respond',
+              { view: 'View only', respond: 'Can file a report', propose: 'Can also suggest changes' }) +
             '<button class="ee-btn primary p86-st-share-go">Create link</button>' +
           '</div>' +
           '<div class="p86-st-task-note">Anyone with the link can OPEN this work order. ' +
             '<strong>Can file a report</strong> also lets them add notes and photos and mark the ' +
-            'work complete — things that are theirs to report. It never lets them change the ' +
-            'scope, the schedule or who it is assigned to. The link expires in 30 days and you ' +
-            'can turn it off at any time.</div>' +
+            'work complete — things that are theirs to report. ' +
+            '<strong>Can suggest changes</strong> adds a form for the scope and the dates, but what ' +
+            'they send is a SUGGESTION: it waits here for you to accept it, field by field, and ' +
+            'changes nothing until you do. Neither one can change who it is assigned to or its ' +
+            'status. The link expires in 30 days and you can turn it off at any time.</div>' +
           '<div class="p86-st-share-out"></div>' +
           (list.length
             ? '<div class="p86-st-share-list">' + list.map(shareRowHTML).join('') + '</div>'
