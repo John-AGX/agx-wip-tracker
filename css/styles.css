@@ -12879,7 +12879,15 @@ body.light-mode .p86-mktpnl-warn { background: rgba(180, 120, 10, .10); border-c
 }
 .p86-st-rev:not(.pending) .p86-st-rev-field { grid-template-columns: 96px minmax(0, 1fr); }
 .p86-st-rev-fname { color: var(--text-dim, #888); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
-.p86-st-rev-fval { color: var(--text, #fff); white-space: pre-wrap; min-width: 0; overflow-wrap: anywhere; }
+/* text-transform is set back EXPLICITLY: the field rows are <label>s and a
+   global label rule uppercases them, which shouted the guest's own sentence
+   back at the reader — the one string on this pane that must render exactly as
+   it was typed. See the light-mode/specificity note: a global rule outranks a
+   new single-class one. */
+.p86-st-rev-fval {
+  color: var(--text, #fff); white-space: pre-wrap; min-width: 0;
+  overflow-wrap: anywhere; text-transform: none; letter-spacing: normal;
+}
 .p86-st-rev-actions { display: flex; gap: 6px; margin-top: 10px; }
 
 /* ── Internal participants ─────────────────────────────────────────────────

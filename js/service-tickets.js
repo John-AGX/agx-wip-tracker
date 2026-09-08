@@ -79,7 +79,15 @@
 
   function fmtDate(v) {
     if (!v) return '';
-    var d = new Date(v);
+    // A due date is a CALENDAR date, not an instant. `new Date('2026-09-20')`
+    // parses it as UTC midnight, and every timezone west of Greenwich then
+    // renders it as the 19th — a work order showing a deadline one day early.
+    // A Postgres DATE column arrives as ...T00:00:00.000Z and means the same
+    // thing, so both spellings are read as the day they name.
+    var cal = /^(\d{4})-(\d{2})-(\d{2})(?:T00:00:00(?:\.000)?Z)?$/.exec(String(v));
+    var d = cal
+      ? new Date(Number(cal[1]), Number(cal[2]) - 1, Number(cal[3]))
+      : new Date(v);
     if (isNaN(d.getTime())) return '';
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
   }
