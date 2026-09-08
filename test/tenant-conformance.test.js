@@ -1183,6 +1183,37 @@ describe('R4 — classify() is checked, never consulted', () => {
   // service_ticket_id in the same commit. That is deliberately NOT a new
   // parent pointer — a task keeps entity_type='job' and carries the ticket id
   // alongside — so the tasks fixture is unchanged and no count moves for it.
+  // 113 -> 114 with `user_email_aliases` (bfde09cb), which maps an inbound
+  // email local-part to a user so a retired address is never reissued.
+  //
+  // THIS PARAGRAPH IS LATE, AND THAT IS THE POINT OF RECORDING IT. The table
+  // landed unregistered in org-table-classification.js, so `main` was red here
+  // and in tenancy-graduation for four commits before dc49252d classified it —
+  // and when the number finally moved it moved SILENTLY, with no paragraph.
+  // A count that is bumped without one is exactly the "a count that never
+  // fails is a count nobody is keeping" failure the note above warns about,
+  // one step later: the number goes green again and nobody ever says what
+  // arrived. So, saying it out loud:
+  //
+  // It is classified PARENT (via users, fk user_id, orphanable) — NOT direct,
+  // despite carrying its own organization_id. That column is a denormalised
+  // cache; the anchor is the USER. Two facts force it:
+  //   * user_id is ON DELETE SET NULL because the row must OUTLIVE its user —
+  //     the surviving tombstone is the whole mechanism that stops a retired
+  //     address being handed to a stranger. `orphanable: true` is what tells
+  //     the audit that a parentless row here is CORRECT DATA, not an orphan
+  //     to repair.
+  //   * reserved names (postmaster, abuse, notifications) are seeded with
+  //     user_id NULL and no org at all. They are platform-owned, so counting
+  //     their NULL organization_id as an un-stamped tenant row would be
+  //     counting the wrong population.
+  // A `direct` classification would have implied a tenant predicate on every
+  // query, and the lookup is deliberately by local_part (the PRIMARY KEY) with
+  // no org predicate — an inbound address must resolve to exactly one user
+  // platform-wide.
+  //
+  // The generic seeder plants org A / org B / un-stamped rows in it with no
+  // curation step, like every other table here.
   test('the fixture carries every table server/db.js creates (114) — nothing curated out', () => {
     expect(TWO.ALL_TABLES.length).toBe(114);
   });

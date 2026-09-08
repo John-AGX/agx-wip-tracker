@@ -204,6 +204,23 @@ async function resetOrgData(orgId) {
     await del('service_ticket_shares', 'DELETE FROM service_ticket_shares WHERE organization_id = $1');
     await del('service_tickets', 'DELETE FROM service_tickets WHERE organization_id = $1');
 
+    // NOT HERE ON PURPOSE: user_email_aliases.
+    //
+    // Written down because its ABSENCE looks like an oversight and is not, and
+    // an unexplained gap in a hand-written cascade is what gets "fixed" wrongly
+    // later. Two reasons, either sufficient:
+    //
+    //   1. This reset never deletes USERS — its anchors are estimates, leads,
+    //      projects and jobs. The people survive an org reset, so their inbound
+    //      addresses must keep working. There is nothing to cascade.
+    //   2. Even if it did, DELETING an alias row would be the wrong repair.
+    //      The row is a TOMBSTONE: it outlives its user (user_id is ON DELETE
+    //      SET NULL) precisely so a retired local_part can never be reissued to
+    //      a stranger. Removing it FREES the name for someone else to claim,
+    //      which is the exact outcome the table exists to prevent. If an org
+    //      wipe ever should release addresses, the correct verb is RETIRE
+    //      (stamp retired_at, keep the row), never DELETE.
+    //
     // ── ANCHORS (atomic — a throw rolls back everything above). FK cascade
     //    removes their remaining children. Cross-anchor refs are SET NULL.
     async function delAnchor(label, sql) {
