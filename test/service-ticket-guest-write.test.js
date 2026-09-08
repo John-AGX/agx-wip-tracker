@@ -76,6 +76,9 @@ function makeDb(opts) {
       return { rows: [Object.assign({}, ticket)], rowCount: 1 };
     }
     if (/INSERT INTO service_ticket_events/i.test(text)) return { rows: [], rowCount: 1 };
+    if (/INSERT INTO service_ticket_revisions/i.test(text)) {
+      return { rows: [{ id: 'strev_1', status: 'pending', created_at: '2026-09-08T00:00:00Z' }], rowCount: 1 };
+    }
     if (/FROM organizations/i.test(text)) return { rows: [{ name: 'AG Exteriors' }] };
     if (/FROM tasks/i.test(text)) return { rows: [] };
     if (/MAX\(position\)/i.test(text)) return { rows: [{ max_pos: -1 }] };
@@ -105,6 +108,10 @@ jest.mock('../server/rate-limit', () => ({
   stShareIpLimiter: (req, res, next) => next(),
   stShareViewLimiter: (req, res, next) => next(),
   stShareWriteLimiter: (req, res, next) => next(),
+  // Omitting one of these does not fail softly — express throws
+  // "Route.post() requires a callback function but got [object Undefined]" and
+  // the whole suite reports 0 tests, which reads like the file was skipped.
+  stSharePropose: (req, res, next) => next(),
 }));
 jest.mock('../server/services/entity-labels', () => ({
   resolveEntityLabels: async () => new Map([['job:j1', 'RV2006 Waterside 1']]),
@@ -402,5 +409,195 @@ describe('S5 — the source shape the tests above cannot see', () => {
     const handler = src.slice(src.indexOf("router.post('/service-ticket-share/:token/photo'"));
     expect(handler).toContain('ticket.organization_id');
     expect(handler).not.toMatch(/req\.body\.organization_id|req\.orgId/);
+  });
+});
+
+// ── S6: propose — the answer to "editing from the share screen" ─────────────
+// The guest really does type into the scope and press Save. What lands is a
+// PROPOSAL in a quarantine table, and service_tickets is never touched. The
+// things the spec says to verify are the describes below.
+const propose = (opts, body) => {
+  global.__stDb = db = makeDb(opts);
+  return run('post', '/service-ticket-share/:token/revision', { body });
+};
+
+describe('S6 — a guest may propose, and only propose', () => {
+  test('a RESPOND link cannot propose — propose is strictly above it', () => {
+    expect(svc.scopeAllows('respond', 'propose')).toBe(false);
+    expect(svc.scopeAllows('propose', 'respond')).toBe(true);
+  });
+
+  test('a respond link is refused at the door', async () => {
+    const res = await propose({ share: { scope: 'respond' } },
+      { fields: { scope_proposed: 'new scope' } });
+    expect(res.statusCode).toBe(403);
+    expect(db.log.some((q) => /INSERT INTO service_ticket_revisions/i.test(q.sql))).toBe(false);
+  });
+
+  test('THE POINT: a proposal never touches service_tickets', async () => {
+    const res = await propose({ share: { scope: 'propose' } },
+      { fields: { scope_proposed: 'Replace the whole gate, not just the latch.' } });
+    expect(res.statusCode).toBe(200);
+    expect(db.log.some((q) => /INSERT INTO service_ticket_revisions/i.test(q.sql))).toBe(true);
+    // The work order is untouched. That is the entire justification for the
+    // quarantine table.
+    expect(db.log.some((q) => /^UPDATE service_tickets SET/i.test(q.sql))).toBe(false);
+  });
+
+  test('status, organization_id and assignee are DROPPED', async () => {
+    // The spec's own verification: propose a revision containing all three and
+    // confirm all three are dropped.
+    const res = await propose({ share: { scope: 'propose' } }, {
+      fields: {
+        scope_proposed: 'legitimate',
+        status: 'approved', organization_id: 999, assignee_user_id: 7,
+        scope_approved: 'sneaky', internal_notes: 'sneaky', ticket_number: 'X-1',
+        job_id: 'j2', lead_id: 'l2',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const ins = db.log.find((q) => /INSERT INTO service_ticket_revisions/i.test(q.sql));
+    const stored = JSON.parse(ins.params.find((p) => typeof p === 'string' && p.charAt(0) === '{'));
+    expect(Object.keys(stored)).toEqual(['scope_proposed']);
+  });
+
+  test('a proposal of ONLY dropped keys is a 400, never a silent ok', async () => {
+    // An empty proposal that answers ok leaves the sender believing they were
+    // heard — the worst outcome for someone who took the trouble to write it.
+    const res = await propose({ share: { scope: 'propose' } },
+      { fields: { status: 'closed', organization_id: 2, assignee_user_id: 9 } });
+    expect(res.statusCode).toBe(400);
+    expect(String(res.body.error)).toMatch(/nothing here/i);
+    expect(db.log.some((q) => /INSERT INTO service_ticket_revisions/i.test(q.sql))).toBe(false);
+  });
+
+  test('a closed ticket accepts no proposal', async () => {
+    const res = await propose({ share: { scope: 'propose' }, ticket: { status: 'closed' } },
+      { fields: { scope_proposed: 'x' } });
+    expect(res.statusCode).toBe(409);
+  });
+
+  test('the event records field NAMES, never the proposed text', async () => {
+    await propose({ share: { scope: 'propose' } },
+      { fields: { scope_proposed: 'SECRET PRICING DETAIL' } });
+    const ev = db.log.find((q) => /INSERT INTO service_ticket_events/i.test(q.sql));
+    expect(ev).toBeTruthy();
+    expect(JSON.stringify(ev.params)).not.toContain('SECRET PRICING DETAIL');
+    expect(JSON.stringify(ev.params)).toContain('scope_proposed');
+  });
+});
+
+describe('S6 — the apply side re-filters, and cannot be replayed', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const ROUTES = fs.readFileSync(
+    path.join(__dirname, '..', 'server', 'routes', 'service-ticket-share-routes.js'), 'utf8');
+  // Anchored on the router.post( CALL, not the bare path — the path also
+  // appears in the file's header comment, and slicing from there produced a
+  // ~40-character window that every toContain passed against vacuously.
+  const accept = ROUTES.slice(
+    ROUTES.indexOf("router.post('/service-tickets/:id/revisions/:rid/accept'"),
+    ROUTES.indexOf("router.post('/service-tickets/:id/revisions/:rid/reject'"));
+
+  test('accept re-filters at APPLY time, never trusting what was stored', () => {
+    // Emit-time and apply-time validation must not drift. A row written by an
+    // older or compromised path cannot widen what it may set.
+    const stored = { scope_proposed: 'ok', status: 'approved', organization_id: 9 };
+    expect(Object.keys(svc.filterProposedFields(stored))).toEqual(['scope_proposed']);
+    expect(accept).toContain('filterProposedFields');
+  });
+
+  test('the PM may narrow further, but never widen', () => {
+    const stored = { scope_proposed: 'a', due_date: '2030-01-01', title: 'b' };
+    expect(Object.keys(svc.filterProposedFields(stored, ['due_date']))).toEqual(['due_date']);
+    // Asking for something outside PROPOSABLE_FIELDS gets nothing, not everything.
+    expect(svc.filterProposedFields(stored, ['status', 'organization_id'])).toEqual({});
+  });
+
+  test('a second accept is a 404 by PREDICATE, not by a flag someone checks', () => {
+    // The re-read is pinned to pending IN THE WHERE, under FOR UPDATE, so a
+    // concurrent double-accept cannot both pass a check-then-act.
+    //
+    // Asserted against the RE-READ STATEMENT, not the whole handler. A plain
+    // toContain("status = 'pending'") passed even with the predicate deleted,
+    // because the supersede query further down also contains that string —
+    // found by mutating the code and watching this test stay green.
+    const reread = accept.slice(accept.indexOf('SELECT * FROM service_ticket_revisions'),
+                                accept.indexOf('FOR UPDATE') + 'FOR UPDATE'.length);
+    expect(reread).toContain("status = 'pending'");
+    expect(reread).toContain('organization_id = $3');
+    expect(reread).toContain('ticket_id = $2');
+    expect(reread).toContain('FOR UPDATE');
+  });
+
+  test('accepting one proposal supersedes the others touching the same fields', () => {
+    // Otherwise accepting one silently makes the others wrong and nobody is told.
+    expect(accept).toContain("SET status = 'superseded'");
+    expect(accept).toContain('jsonb_object_keys');
+  });
+
+  test('a revoked link does NOT delete the proposal it carried', () => {
+    const dbSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'db.js'), 'utf8');
+    const tbl = dbSrc.slice(dbSrc.indexOf('CREATE TABLE IF NOT EXISTS service_ticket_revisions'),
+                            dbSrc.indexOf('CREATE TABLE IF NOT EXISTS service_ticket_participants'));
+    // share_id is SET NULL, not CASCADE: turning a link off must not destroy a
+    // suggestion the office has not read yet.
+    //
+    // Asserted on the share_id LINE, not the whole table. Two other columns
+    // here are also ON DELETE SET NULL, so a bare toContain would stay green
+    // with share_id itself flipped to CASCADE.
+    const shareCol = tbl.split('\n').filter((l) => /^\s*share_id\s/.test(l));
+    expect(shareCol).toHaveLength(1);
+    expect(shareCol[0]).toContain('REFERENCES service_ticket_shares(id) ON DELETE SET NULL');
+  });
+
+  test('revoking a link does not delete the AUDIT rows it produced either', () => {
+    // service_ticket_events is the ledger, and its own header says nothing in
+    // it is ever UPDATEd or DELETEd. A CASCADE on share_id would quietly make
+    // that false the moment a share row is removed, taking with it the record
+    // of what the guest did through that link.
+    const dbSrc = fs.readFileSync(path.join(__dirname, '..', 'server', 'db.js'), 'utf8');
+    const tbl = dbSrc.slice(dbSrc.indexOf('CREATE TABLE IF NOT EXISTS service_ticket_events'),
+                            dbSrc.indexOf('DO $service_ticket_events_actor_chk$'));
+    const shareCol = tbl.split('\n').filter((l) => /^\s*share_id\s/.test(l));
+    expect(shareCol).toHaveLength(1);
+    expect(shareCol[0]).toContain('REFERENCES service_ticket_shares(id) ON DELETE SET NULL');
+  });
+
+  test('the inbox still lists a proposal whose link was revoked, and flags it', () => {
+    const list = ROUTES.slice(
+      ROUTES.indexOf("router.get('/service-tickets/:id/revisions'"),
+      ROUTES.indexOf("router.post('/service-tickets/:id/revisions/:rid/accept'"));
+    // A LEFT JOIN, so revoking does not hide the row; and the flag tells the PM
+    // the link it came through is off.
+    expect(list).toContain('LEFT JOIN service_ticket_shares');
+    expect(list).toContain('via_revoked_link');
+  });
+});
+
+describe('S6 — an internal user is NEVER given a token', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const ROUTES = fs.readFileSync(
+    path.join(__dirname, '..', 'server', 'routes', 'service-ticket-share-routes.js'), 'utf8');
+  const block = ROUTES.slice(ROUTES.indexOf("router.post('/service-tickets/:id/participants'"),
+                             ROUTES.indexOf("router.delete('/service-tickets/:id/participants/:userId'"));
+
+  test('adding a participant mints nothing', () => {
+    // A token would bypass their own role, survive their deactivation, and be
+    // forwardable outside the company.
+    expect(block).not.toContain('genToken');
+    expect(block).not.toContain('hashToken');
+    expect(block).not.toContain('service_ticket_shares');
+    expect(block).toContain('INSERT INTO service_ticket_participants');
+  });
+
+  test('a body-supplied user id is PROVED in-org first', () => {
+    // The id only proves a user exists, never whose they are.
+    expect(block).toContain('SELECT 1 FROM users WHERE id = $1 AND organization_id = $2');
+  });
+
+  test('access_level cannot be widened past the two the CHECK allows', () => {
+    expect(block).toContain("=== 'edit' ? 'edit' : 'view'");
   });
 });

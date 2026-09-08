@@ -63,7 +63,8 @@ const DIRECT = [
   'payload_templates', 'payloads', 'plan_versions', 'plans', 'projects',
   'receipt_ocr_feedback', 'receipts', 'reminders', 'report_share_comments',
   'report_shares', 'reports',
-  'service_ticket_events', 'service_ticket_shares', 'service_tickets',
+  'service_ticket_events', 'service_ticket_participants',
+  'service_ticket_revisions', 'service_ticket_shares', 'service_tickets',
   'staff_agents',
   'subs', 'task_shares', 'tasks', 'usage_counters', 'user_notes', 'users',
 ];

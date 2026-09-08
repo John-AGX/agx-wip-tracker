@@ -4653,6 +4653,89 @@ async function initSchema() {
       ON tasks(service_ticket_id, updated_at DESC)
       WHERE service_ticket_id IS NOT NULL AND archived_at IS NULL;
 
+    -- A PROPOSED change to a ticket, submitted by someone who is not allowed to
+    -- change it directly. THIS IS WHAT "editing from the share screen" RESOLVES
+    -- TO for a bearer token: the guest really does type into the scope and press
+    -- Save, and what they get is a proposal with their name on it. It never
+    -- mutates service_tickets; accepting one does, in an authed transaction
+    -- attributed to the accepting PM.
+    --
+    -- A QUARANTINE TABLE is the point. A token has no identity — nothing
+    -- distinguishes the person you sent the link to from whoever they forwarded
+    -- it to — so a direct edit could not be attributed, audited or undone
+    -- against a subject. Landing it here means the blast radius of a bad or
+    -- hostile proposal is a row in an inbox, not a corrupted work order.
+    --
+    -- The "fields" column is a partial patch, restricted at write time to
+    -- PROPOSABLE_FIELDS (services/service-tickets.js) and re-filtered again at
+    -- APPLY time — emit-time and apply-time validation must not drift. It is
+    -- stored AS PROPOSED, never merged, so the PM sees a real diff and a
+    -- rejected proposal leaves no trace on the record.
+    CREATE TABLE IF NOT EXISTS service_ticket_revisions (
+      id                  TEXT PRIMARY KEY,
+      organization_id     INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      ticket_id           TEXT NOT NULL REFERENCES service_tickets(id) ON DELETE CASCADE,
+      -- SET NULL, not CASCADE: revoking a link must not delete a proposal the
+      -- office has not read yet. The revision survives and is flagged as having
+      -- come through a link that is now off.
+      share_id            TEXT REFERENCES service_ticket_shares(id) ON DELETE SET NULL,
+      proposed_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      -- What the guest typed as their name. A CLAIM, never identity.
+      author_label        TEXT,
+      fields              JSONB NOT NULL DEFAULT '{}'::jsonb,
+      note                TEXT,
+      status              TEXT NOT NULL DEFAULT 'pending',  -- pending | accepted | rejected | superseded
+      resolved_by         INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      resolved_at         TIMESTAMPTZ,
+      resolution_note     TEXT,
+      created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    DO $service_ticket_revisions_status_chk$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'service_ticket_revisions_status_chk') THEN
+        ALTER TABLE service_ticket_revisions ADD CONSTRAINT service_ticket_revisions_status_chk
+          CHECK (status IN ('pending','accepted','rejected','superseded'));
+      END IF;
+    END $service_ticket_revisions_status_chk$;
+    CREATE INDEX IF NOT EXISTS idx_service_ticket_revisions_ticket
+      ON service_ticket_revisions(ticket_id, created_at DESC);
+    -- The PM's "N waiting on you" badge.
+    CREATE INDEX IF NOT EXISTS idx_service_ticket_revisions_pending
+      ON service_ticket_revisions(organization_id, status, created_at DESC)
+      WHERE status = 'pending';
+
+    -- Internal users explicitly attached to a ticket.
+    --
+    -- THIS IS NOT A SHARE, and that distinction is the whole reason it is a
+    -- separate table rather than a row in service_ticket_shares. NO TOKEN IS
+    -- EVER MINTED for an internal user. A token would bypass their own role,
+    -- survive their deactivation, and be forwardable to someone outside the
+    -- company — three properties an employee's access must never have. A
+    -- participant authenticates normally, so their write is a real authed
+    -- write with a real user_id on the audit row.
+    --
+    -- Modelled on job_access but with its own id + organization_id: a
+    -- composite-PK, org-less table classifies as "parent", and the two-org
+    -- conformance fixture seeds an "id" column when it finds one.
+    CREATE TABLE IF NOT EXISTS service_ticket_participants (
+      id                TEXT PRIMARY KEY,
+      organization_id   INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      ticket_id         TEXT NOT NULL REFERENCES service_tickets(id) ON DELETE CASCADE,
+      user_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      access_level      TEXT NOT NULL DEFAULT 'view',  -- view | edit
+      added_by          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    DO $service_ticket_participants_level_chk$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'service_ticket_participants_level_chk') THEN
+        ALTER TABLE service_ticket_participants ADD CONSTRAINT service_ticket_participants_level_chk
+          CHECK (access_level IN ('view','edit'));
+      END IF;
+    END $service_ticket_participants_level_chk$;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_service_ticket_participants
+      ON service_ticket_participants(ticket_id, user_id);
+    CREATE INDEX IF NOT EXISTS idx_service_ticket_participants_user
+      ON service_ticket_participants(organization_id, user_id);
+
 
     -- ───────────────────────────────────────────────────────────────
     -- My Notes — a personal, PRIVATE scratchpad (Phase 1 / Deliverable

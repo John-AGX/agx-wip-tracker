@@ -483,10 +483,30 @@ const stShareWriteLimiter = rateLimit({
   },
 });
 
+// A REVISION is a human act of authorship, not a click — so its bucket is an
+// hour wide rather than a minute, and far tighter. 20/hour is well above any
+// real use and bounds a flood of pending rows a PM would have to read. Keyed on
+// IP for the same reason as the write bucket: whoever holds one link can post
+// through it as fast as they like, so the token is not the attacker's
+// constraint.
+const stSharePropose = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: function (req) { return 'stp:' + (req.ip || 'unknown'); },
+  handler: function (req, res) {
+    const retryAfter = Math.ceil(res.getHeader('Retry-After') || 3600);
+    console.warn('[rate-limit] service-ticket-share propose throttle from', req.ip);
+    jsonHandler(res, retryAfter);
+  },
+});
+
 module.exports = {
   stShareIpLimiter,
   stShareViewLimiter,
   stShareWriteLimiter,
+  stSharePropose,
   ipLoginLimiter,
   ipGenericLimiter,
   aiChatLimiter,

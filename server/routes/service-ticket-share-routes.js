@@ -3,17 +3,39 @@
 // and the public side of one credential can be read together.
 //
 //   PM-side (requireAuth + the ticket's inherited capability):
-//     POST /api/service-tickets/:id/share              mint
-//     GET  /api/service-tickets/:id/shares             list
-//     POST /api/service-tickets/:id/shares/:sid/revoke
+//     POST   /api/service-tickets/:id/share                       mint
+//     GET    /api/service-tickets/:id/shares                      list
+//     POST   /api/service-tickets/:id/shares/:sid/revoke
+//     GET    /api/service-tickets/:id/revisions                   the inbox
+//     POST   /api/service-tickets/:id/revisions/:rid/accept
+//     POST   /api/service-tickets/:id/revisions/:rid/reject
+//     GET    /api/service-tickets/:id/participants                internal users
+//     POST   /api/service-tickets/:id/participants
+//     DELETE /api/service-tickets/:id/participants/:userId
 //
 //   PUBLIC (no auth — the token IS the credential):
-//     GET  /api/service-ticket-share/:token
+//     GET    /api/service-ticket-share/:token
+//     PATCH  /api/service-ticket-share/:token                     field report
+//     POST   /api/service-ticket-share/:token/photo
+//     POST   /api/service-ticket-share/:token/revision            propose
 //
-// SLICE S4 SHIPS READ-ONLY ON PURPOSE. There is no PATCH, no photo upload and
-// no revision door here yet. The first public door is the highest-risk thing
-// in this feature, and shipping it with no write path means there is no write
-// path to get wrong while the read side is proven.
+// THE THREE SCOPES, and why there is no fourth. 'view' reads. 'respond' files a
+// FIELD REPORT — a note, a photo, a checklist tick, a forward-only status move
+// — every one of which is something the holder OWNS: their work, their
+// observation, their photograph. 'propose' submits a REVISION, which lands in
+// a quarantine table and never touches the ticket.
+//
+// There is deliberately NO 'edit'. A bearer token has no identity — nothing
+// distinguishes the person you sent the link to from whoever they forwarded it
+// to — so a direct edit could not be attributed, audited or undone against a
+// subject. "Editing potential from the share screen" is delivered by 'propose'
+// instead: the guest really does type into the scope and press Save, and what
+// they get is a proposal with their name on it. That is also what "revise"
+// means.
+//
+// INTERNAL USERS ARE NOT SHARES. The participant routes above mint no token,
+// ever. A token would bypass an employee's own role, survive their
+// deactivation, and be forwardable outside the company.
 //
 // UNLIKE report_shares THERE IS NO SNAPSHOT. A report is a finished artifact
 // and freezing it is honest; a work order is LIVE — the crew must see the scope
@@ -33,7 +55,7 @@ const multer = require('multer');
 const sharp = require('sharp');
 const { sniffMimeFromBytes, sanitizeSvg, mimeFamilyMatches } = require('../util/attachment-mime');
 const { storage } = require('../storage');
-const { stShareIpLimiter, stShareViewLimiter, stShareWriteLimiter } = require('../rate-limit');
+const { stShareIpLimiter, stShareViewLimiter, stShareWriteLimiter, stSharePropose } = require('../rate-limit');
 
 // Memory storage: the buffer is sniffed and resized before anything is stored,
 // so it must never touch disk under its claimed name first.
@@ -133,14 +155,12 @@ router.post('/service-tickets/:id/share', requireAuth, requireOrgId, async (req,
     if (!shareable.ok) return res.status(409).json({ error: shareable.reason });
 
     const body = req.body || {};
-    // 'respond' is now a real door (S5), so the caller's choice is honoured —
-    // but through normalizeScope, so an unrecognised value NARROWS to 'view'
-    // rather than being taken at its word. 'propose' still narrows to 'view'
-    // here because normalizeScope permits it but its DOOR does not exist yet;
-    // that is deliberate — see the clamp below, which is what stops a link
-    // outrunning the routes that would honour it.
-    var scope = svc.normalizeScope(body.scope);
-    if (scope === 'propose') scope = 'respond';   // S6 lifts this clamp
+    // All three scopes now have doors, so the caller's choice is honoured —
+    // through normalizeScope, so an unrecognised value NARROWS to 'view'
+    // rather than being taken at its word. The S5 clamp that held 'propose'
+    // down to 'respond' is lifted here because its door (T4) now exists; the
+    // clamp was what stopped a link outrunning the routes that would honour it.
+    const scope = svc.normalizeScope(body.scope);
     const hideFinancials = body.hide_financials !== false;
     const days = svc.clampTtlDays(body.days);
     const expires = svc.expiryFrom(days);
@@ -254,6 +274,225 @@ router.post('/service-tickets/:id/shares/:sid/revoke', requireAuth, requireOrgId
   } catch (e) {
     console.error('[service-ticket-share] revoke failed', e);
     res.status(500).json({ error: 'Failed to turn off the link' });
+  }
+});
+
+// ── A11: the revisions inbox ────────────────────────────────────────────
+router.get('/service-tickets/:id/revisions', requireAuth, async (req, res) => {
+  try {
+    const orgId = callerOrgId(req);
+    const ticket = await loadOwnedTicket(req.params.id, orgId);
+    if (!ticket) return res.status(404).json({ error: 'Service ticket not found' });
+    if (!capOk(req, res, readCapFor(ticket))) return;
+
+    const params = [ticket.id, orgId];
+    let where = 'ticket_id = $1 AND organization_id = $2';
+    if (req.query.status) { params.push(String(req.query.status)); where += ' AND status = $3'; }
+
+    // The share is LEFT JOINed so a revision that arrived through a link the
+    // office has since revoked still lists — with its link marked off. Losing
+    // the proposal because the link was turned off would be the wrong
+    // behaviour: the suggestion is still a suggestion.
+    const { rows } = await pool.query(
+      `SELECT r.id, r.share_id, r.proposed_by_user_id, r.author_label, r.fields,
+              r.note, r.status, r.resolved_by, r.resolved_at, r.resolution_note,
+              r.created_at,
+              (s.id IS NOT NULL AND s.revoked_at IS NOT NULL) AS via_revoked_link
+         FROM service_ticket_revisions r
+         LEFT JOIN service_ticket_shares s ON s.id = r.share_id
+        WHERE ${where}
+        ORDER BY r.created_at DESC LIMIT 100`,
+      params
+    );
+    res.json({ revisions: rows });
+  } catch (e) {
+    console.error('[service-ticket-share] revisions list failed', e);
+    res.status(500).json({ error: 'Failed to load the suggestions' });
+  }
+});
+
+// ── A12: accept (all or a subset) ───────────────────────────────────────
+router.post('/service-tickets/:id/revisions/:rid/accept', requireAuth, requireOrgId, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const orgId = req.orgId;
+    const ticket = await loadOwnedTicket(req.params.id, orgId);
+    if (!ticket) return res.status(404).json({ error: 'Service ticket not found' });
+    if (!capOk(req, res, writeCapFor(ticket))) return;
+
+    await client.query('BEGIN');
+    // Re-read under the transaction, pinned to pending. A second accept is a
+    // 404, not a re-apply — idempotent by the predicate rather than by a flag
+    // someone has to remember to check.
+    const rr = await client.query(
+      `SELECT * FROM service_ticket_revisions
+        WHERE id = $1 AND ticket_id = $2 AND organization_id = $3 AND status = 'pending'
+        FOR UPDATE`,
+      [req.params.rid, ticket.id, orgId]
+    );
+    if (!rr.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Suggestion not found' }); }
+    const rev = rr.rows[0];
+
+    // RE-FILTERED AT APPLY TIME, never trusting what was stored. Emit-time and
+    // apply-time validation must not drift — a row written by an older or
+    // compromised path cannot widen what it may set.
+    const stored = (rev.fields && typeof rev.fields === 'object') ? rev.fields : {};
+    // body.fields narrows FURTHER, so "take the new scope, ignore the date
+    // they suggested" is one click.
+    const accepted = svc.filterProposedFields(stored, Array.isArray(req.body && req.body.fields) ? req.body.fields : null);
+    if (!Object.keys(accepted).length) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Nothing was selected to accept.' });
+    }
+
+    const sets = [];
+    const params = [];
+    for (const k of Object.keys(accepted)) {
+      params.push(accepted[k] === '' ? null : accepted[k]);
+      sets.push(k + ' = $' + params.length);
+    }
+    params.push(ticket.id, orgId);
+    const up = await client.query(
+      `UPDATE service_tickets SET ${sets.join(', ')}, updated_at = NOW()
+        WHERE id = $${params.length - 1} AND organization_id = $${params.length}
+      RETURNING *`,
+      params
+    );
+    if (!up.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Service ticket not found' }); }
+
+    await client.query(
+      `UPDATE service_ticket_revisions
+          SET status = 'accepted', resolved_by = $1, resolved_at = NOW(), resolution_note = $2
+        WHERE id = $3 AND organization_id = $4`,
+      [(req.user && req.user.id) || null, String((req.body || {}).note || '').slice(0, 1000) || null,
+       rev.id, orgId]
+    );
+
+    // Other PENDING proposals touching the same fields are marked superseded
+    // rather than left to conflict — otherwise accepting one silently makes
+    // the others wrong and nobody is told.
+    const keys = Object.keys(accepted);
+    await client.query(
+      `UPDATE service_ticket_revisions
+          SET status = 'superseded', resolved_at = NOW()
+        WHERE ticket_id = $1 AND organization_id = $2 AND status = 'pending' AND id <> $3
+          AND EXISTS (SELECT 1 FROM jsonb_object_keys(fields) k WHERE k = ANY($4::text[]))`,
+      [ticket.id, orgId, rev.id, keys]
+    );
+    await client.query('COMMIT');
+
+    await logEvent(up.rows[0], 'revision_accepted', {
+      actorUserId: (req.user && req.user.id) || null,
+      detail: { fields: keys, from_revision: rev.id },
+    });
+    res.json({ ok: true, ticket: up.rows[0], accepted_fields: keys });
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    console.error('[service-ticket-share] accept failed', e);
+    res.status(500).json({ error: 'Failed to accept the suggestion' });
+  } finally {
+    client.release();
+  }
+});
+
+// ── A13: reject ─────────────────────────────────────────────────────────
+router.post('/service-tickets/:id/revisions/:rid/reject', requireAuth, requireOrgId, async (req, res) => {
+  try {
+    const orgId = req.orgId;
+    const ticket = await loadOwnedTicket(req.params.id, orgId);
+    if (!ticket) return res.status(404).json({ error: 'Service ticket not found' });
+    if (!capOk(req, res, writeCapFor(ticket))) return;
+
+    const { rows } = await pool.query(
+      `UPDATE service_ticket_revisions
+          SET status = 'rejected', resolved_by = $1, resolved_at = NOW(), resolution_note = $2
+        WHERE id = $3 AND ticket_id = $4 AND organization_id = $5 AND status = 'pending'
+      RETURNING id`,
+      [(req.user && req.user.id) || null, String((req.body || {}).note || '').slice(0, 1000) || null,
+       req.params.rid, ticket.id, orgId]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Suggestion not found' });
+    await logEvent(ticket, 'revision_rejected', {
+      actorUserId: (req.user && req.user.id) || null,
+      detail: { revision: req.params.rid },
+    });
+    res.json({ ok: true, id: rows[0].id });
+  } catch (e) {
+    console.error('[service-ticket-share] reject failed', e);
+    res.status(500).json({ error: 'Failed to reject the suggestion' });
+  }
+});
+
+// ── A14-A16: internal participants ──────────────────────────────────────
+// NOT A SHARE. No token is minted here, ever — see the table comment in db.js.
+router.get('/service-tickets/:id/participants', requireAuth, async (req, res) => {
+  try {
+    const orgId = callerOrgId(req);
+    const ticket = await loadOwnedTicket(req.params.id, orgId);
+    if (!ticket) return res.status(404).json({ error: 'Service ticket not found' });
+    if (!capOk(req, res, readCapFor(ticket))) return;
+    const { rows } = await pool.query(
+      `SELECT p.id, p.user_id, p.access_level, p.added_by, p.created_at,
+              u.name AS user_name, u.email AS user_email
+         FROM service_ticket_participants p
+         LEFT JOIN users u ON u.id = p.user_id AND u.organization_id = p.organization_id
+        WHERE p.ticket_id = $1 AND p.organization_id = $2
+        ORDER BY p.created_at ASC`,
+      [ticket.id, orgId]
+    );
+    res.json({ participants: rows });
+  } catch (e) {
+    console.error('[service-ticket-share] participants list failed', e);
+    res.status(500).json({ error: 'Failed to load the people on this ticket' });
+  }
+});
+
+router.post('/service-tickets/:id/participants', requireAuth, requireOrgId, async (req, res) => {
+  try {
+    const orgId = req.orgId;
+    const ticket = await loadOwnedTicket(req.params.id, orgId);
+    if (!ticket) return res.status(404).json({ error: 'Service ticket not found' });
+    if (!capOk(req, res, writeCapFor(ticket))) return;
+
+    const userId = Number((req.body || {}).user_id);
+    if (!Number.isInteger(userId)) return res.status(400).json({ error: 'A user is required' });
+    // PROVED in-org: a body-supplied user id only proves the user exists, not
+    // whose they are. Same rule as assigneeOk on tasks.
+    const u = await pool.query('SELECT 1 FROM users WHERE id = $1 AND organization_id = $2', [userId, orgId]);
+    if (!u.rows.length) return res.status(404).json({ error: 'User not found' });
+
+    const level = String((req.body || {}).access_level || 'view') === 'edit' ? 'edit' : 'view';
+    const id = svc.genId('stpart');
+    const { rows } = await pool.query(
+      `INSERT INTO service_ticket_participants (id, organization_id, ticket_id, user_id, access_level, added_by)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (ticket_id, user_id) DO UPDATE SET access_level = EXCLUDED.access_level
+       RETURNING id, user_id, access_level, created_at`,
+      [id, orgId, ticket.id, userId, level, (req.user && req.user.id) || null]
+    );
+    res.json({ ok: true, participant: rows[0] });
+  } catch (e) {
+    console.error('[service-ticket-share] add participant failed', e);
+    res.status(500).json({ error: 'Failed to add them' });
+  }
+});
+
+router.delete('/service-tickets/:id/participants/:userId', requireAuth, requireOrgId, async (req, res) => {
+  try {
+    const orgId = req.orgId;
+    const ticket = await loadOwnedTicket(req.params.id, orgId);
+    if (!ticket) return res.status(404).json({ error: 'Service ticket not found' });
+    if (!capOk(req, res, writeCapFor(ticket))) return;
+    const { rows } = await pool.query(
+      `DELETE FROM service_ticket_participants
+        WHERE ticket_id = $1 AND user_id = $2 AND organization_id = $3 RETURNING id`,
+      [ticket.id, Number(req.params.userId), orgId]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Not on this ticket' });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[service-ticket-share] remove participant failed', e);
+    res.status(500).json({ error: 'Failed to remove them' });
   }
 });
 
@@ -479,6 +718,75 @@ router.patch('/service-ticket-share/:token',
     } catch (e) {
       console.error('[service-ticket-share] guest patch failed', e);
       res.status(500).json({ error: 'Something went wrong saving that.' });
+    }
+  });
+
+// ── T4: propose a revision ──────────────────────────────────────────────
+// THE ANSWER TO "editing potential from the share screen". The guest really
+// does type into the scope and press Save. What lands is a PROPOSAL with their
+// name on it, in a quarantine table, pending a PM's acceptance — which is also
+// what the word "revise" means.
+//
+// It NEVER touches service_tickets. The blast radius of a hostile or mistaken
+// proposal is a row in an inbox, not a corrupted work order.
+router.post('/service-ticket-share/:token/revision',
+  stShareIpLimiter, stSharePropose, loadTicketShare, async (req, res) => {
+    try {
+      const share = req.share;
+      const ticket = req.ticket;
+
+      if (!svc.scopeAllows(share.scope, 'propose')) {
+        return res.status(403).json({ error: 'This link cannot suggest changes.' });
+      }
+      if (svc.isTerminal(ticket.status)) {
+        return res.status(409).json({ error: 'This work order is ' + ticket.status + ' and can no longer be changed.' });
+      }
+
+      const body = req.body || {};
+      // Filtered at EMIT time. status, assignee_user_id, scope_approved,
+      // internal_notes, ticket_number, both parent ids and organization_id are
+      // absent from PROPOSABLE_FIELDS by design: a guest proposes what the WORK
+      // is, never who does it, where it is filed, or whether it is approved.
+      const fields = svc.filterProposedFields(body.fields);
+      if (!Object.keys(fields).length) {
+        // A 400, not a silent ok. An empty proposal that answers "ok" leaves
+        // the sender believing they were heard.
+        return res.status(400).json({ error: 'There is nothing here we can pass on.' });
+      }
+
+      const newName = svc.guestNameUpdate(share.recipient_name, body.name);
+      if (newName) {
+        await pool.query(
+          'UPDATE service_ticket_shares SET recipient_name = $1 WHERE id = $2 AND recipient_name IS NULL',
+          [newName, share.id]
+        );
+        share.recipient_name = newName;
+      }
+
+      const label = share.recipient_name || share.recipient_email || null;
+      const id = svc.genId('strev');
+      const { rows } = await pool.query(
+        `INSERT INTO service_ticket_revisions
+           (id, organization_id, ticket_id, share_id, author_label, fields, note)
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7)
+         RETURNING id, status, created_at`,
+        [id, ticket.organization_id, ticket.id, share.id, label,
+         JSON.stringify(fields), String(body.note == null ? '' : body.note).slice(0, 2000) || null]
+      );
+
+      pool.query('UPDATE service_ticket_shares SET last_used_at = NOW() WHERE id = $1', [share.id])
+        .catch(function () {});
+      await logEvent(ticket, 'revision_proposed', {
+        actorKind: 'share', shareId: share.id, actorLabel: label,
+        // SHAPE, not contents — the field NAMES only. The proposed text itself
+        // is in the quarantine row, not in the audit log.
+        detail: { fields: Object.keys(fields) },
+      });
+
+      res.json({ ok: true, revision: { id: rows[0].id, status: rows[0].status, created_at: rows[0].created_at } });
+    } catch (e) {
+      console.error('[service-ticket-share] revision failed', e);
+      res.status(500).json({ error: 'Something went wrong sending that.' });
     }
   });
 

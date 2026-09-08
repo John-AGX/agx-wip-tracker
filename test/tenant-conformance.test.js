@@ -1226,7 +1226,22 @@ describe('R4 — classify() is checked, never consulted', () => {
   //
   // The generic seeder plants org A / org B / un-stamped rows in it with no
   // curation step, like every other table here.
-  test('the fixture carries every table server/db.js creates (114) — nothing curated out', () => {
-    expect(TWO.ALL_TABLES.length).toBe(114);
+  // 114 -> 116 with Service Tickets S6: `service_ticket_revisions` (the
+  // quarantine table a share-link holder's proposed scope edit lands in) and
+  // `service_ticket_participants` (internal users attached to a ticket).
+  //
+  // Both are DIRECT — each carries its own NOT NULL organization_id, so the
+  // generic seeder plants org A / org B / un-stamped rows in each with no
+  // curation step. Neither is parent-scoped: a revision's tenant is its own
+  // column and is never inferred from the share it arrived through, which
+  // matters because that share_id is ON DELETE SET NULL — revoking a link must
+  // not delete a proposal the office has not read, and a revision whose tenant
+  // depended on the share would lose its tenancy at that moment.
+  //
+  // participants is deliberately NOT modelled as a share row. No token is ever
+  // minted for an internal user: a token would bypass their own role, survive
+  // their deactivation, and be forwardable outside the company.
+  test('the fixture carries every table server/db.js creates (116) — nothing curated out', () => {
+    expect(TWO.ALL_TABLES.length).toBe(116);
   });
 });

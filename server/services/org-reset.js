@@ -200,6 +200,13 @@ async function resetOrgData(orgId) {
     //    Events and shares cascade from the ticket, but they are deleted
     //    explicitly so the reset REPORTS what it removed — a count of 0 where
     //    rows existed is how a missed table hides.
+    //    Order matters: revisions and participants reference SHARES and
+    //    TICKETS, so they go first. Revisions in particular must not be left
+    //    to the shares cascade — share_id is ON DELETE SET NULL there (a
+    //    revoked link must not delete a proposal nobody has read), so deleting
+    //    shares would orphan them rather than remove them.
+    await del('service_ticket_revisions', 'DELETE FROM service_ticket_revisions WHERE organization_id = $1');
+    await del('service_ticket_participants', 'DELETE FROM service_ticket_participants WHERE organization_id = $1');
     await del('service_ticket_events', 'DELETE FROM service_ticket_events WHERE organization_id = $1');
     await del('service_ticket_shares', 'DELETE FROM service_ticket_shares WHERE organization_id = $1');
     await del('service_tickets', 'DELETE FROM service_tickets WHERE organization_id = $1');

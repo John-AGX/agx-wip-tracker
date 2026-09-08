@@ -263,16 +263,46 @@ router.get('/:id', requireAuth, async (req, res) => {
       ),
     ]);
 
+    // Shares, revisions and participants have their own routes for the
+    // list/act flows; they ride along here so opening a ticket is ONE request
+    // rather than four. Each carries its own org predicate — a child is never
+    // reached on ticket-id membership alone.
+    const [shares, revisions, participants] = await Promise.all([
+      pool.query(
+        `SELECT id, scope, recipient_name, recipient_email, expires_at, opened_at,
+                revoked_at, view_count, created_at
+           FROM service_ticket_shares
+          WHERE ticket_id = $1 AND organization_id = $2
+          ORDER BY created_at DESC`,
+        [ticket.id, orgId]
+      ),
+      pool.query(
+        `SELECT id, author_label, fields, note, status, resolved_at, created_at
+           FROM service_ticket_revisions
+          WHERE ticket_id = $1 AND organization_id = $2
+          ORDER BY created_at DESC LIMIT 50`,
+        [ticket.id, orgId]
+      ),
+      pool.query(
+        `SELECT p.id, p.user_id, p.access_level, p.created_at, u.name AS user_name
+           FROM service_ticket_participants p
+           LEFT JOIN users u ON u.id = p.user_id AND u.organization_id = p.organization_id
+          WHERE p.ticket_id = $1 AND p.organization_id = $2
+          ORDER BY p.created_at ASC`,
+        [ticket.id, orgId]
+      ),
+    ]);
+
     res.json({
       ticket,
       tasks: tasks.rows,
       events: events.rows,
       progress: svc.ticketProgress(ticket, tasks.rows),
-      // Shares, revisions and participants arrive with S4/S6. Present as empty
-      // arrays now so the client can be written against the final shape.
-      shares: [],
-      revisions: [],
-      participants: [],
+      shares: shares.rows.map(function (r) {
+        return Object.assign({}, r, { state: svc.shareLifecycle(r) });
+      }),
+      revisions: revisions.rows,
+      participants: participants.rows,
     });
   } catch (e) {
     console.error('[service-tickets] read failed', e);
