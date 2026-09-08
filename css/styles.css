@@ -12914,3 +12914,79 @@ body.light-mode .p86-mktpnl-warn { background: rgba(180, 120, 10, .10); border-c
   font-size: 12.5px; font-family: inherit;
 }
 .p86-st-part-note { font-size: 11.5px; color: var(--text-dim, #888); margin-top: 6px; line-height: 1.45; }
+
+/* ── Estimate editor: density pass ────────────────────────────────────
+   The editor's chrome had drifted heavier than the rest of the app: the
+   widest tab padding in the codebase, the strongest drop shadow on any
+   in-page (non-modal) element, and a section heading at 13px/700/uppercase
+   with letter-spacing repeated once per section. Individually defensible;
+   stacked, the header ate ~130px before the first line item and every
+   heading read as blocky.
+
+   Most of the editor's rows are inline-styled with no class to hook, so
+   the row/section/label work is done at the source in estimate-editor.js.
+   What lands here is only what has a real selector to hang on. Everything
+   is scoped to the editor — .ws-right-tab is shared with the workspace and
+   CO surfaces, which are not part of this pass. */
+
+/* The sub-tab strip. `.ws-right-tab` is 6px/20px — the widest tab padding
+   in the app. The SAME class one level down in the sidebar was already
+   tightened to 6px/10px ("matched EXACTLY to .app-nav .tab-btn",
+   workspace-layout.css:261). This lands between the two. */
+#ee-header .ws-right-tab { padding: 6px 11px; font-size: 12px; }
+#ee-header .ws-right-tab .p86-icon { width: 14px; height: 14px; }
+
+/* Line-table head: 10px/700 was SMALLER than the house `th` (11px) yet
+   HEAVIER (700 vs 600) — which is exactly what reads as blocky. Take the
+   house weight, keep the smaller size. */
+.ee-line-tbl .ee-line-tbl-head { font-weight: 600; padding: 6px 10px; }
+
+/* Mobile docked total bar — 18px/800 monospace was the largest, heaviest
+   type anywhere in the editor. */
+.ee-mtb-total { font-size: 16px; font-weight: 700; }
+
+/* Assembly component actions are real <button>s now. They were bare spans,
+   so they took no keyboard focus and — the part that mattered — the
+   .ee-locked rules only neutralise form controls, so on a SOLD estimate
+   nothing about them looked locked. Keep the quiet inline appearance. */
+.ee-asm-act {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: #4f8cff;
+  cursor: pointer;
+}
+.ee-asm-act:hover { text-decoration: underline; }
+.ee-locked .ee-asm-act { pointer-events: none; opacity: 0.65; }
+
+/* Delete's home, at the foot of the Details tab. It stays OUT of the
+   always-visible header on purpose — destroying an estimate from pinned
+   chrome is one stray click from real loss — but the handler had no caller
+   at all, so the editor simply had no delete. */
+.ee-danger-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 22px;
+  padding: 10px 12px;
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  border-radius: 8px;
+  background: rgba(239, 68, 68, 0.04);
+}
+.ee-danger-row .ee-danger-copy {
+  font-size: 11.5px;
+  color: var(--text-dim, #8a93a6);
+  line-height: 1.45;
+  max-width: 560px;
+}
+.ee-danger-row .ee-danger-copy strong {
+  color: #f87171;
+  font-weight: 600;
+  display: block;
+  margin-bottom: 2px;
+}
+body.light-mode .ee-danger-row { background: rgba(239, 68, 68, 0.05); border-color: rgba(185, 28, 28, 0.28); }
+body.light-mode .ee-danger-row .ee-danger-copy strong { color: #b91c1c; }

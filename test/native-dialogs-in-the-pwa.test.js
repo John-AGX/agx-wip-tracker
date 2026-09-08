@@ -283,7 +283,7 @@ const INVENTORY = {
   'js/doc-import.js': { a: 2, c: 1 },
   'js/email-block-editor.js': { c: 2, p: 1 },
   'js/email-hub.js': { a: 1, c: 1, p: 5 },
-  'js/estimate-editor.js': { a: 13 },
+  'js/estimate-editor.js': { a: 12 },
   'js/estimate-preview.js': { a: 4 },
   'js/estimates.js': { a: 5, p: 2 },
   'js/field-tools.js': { a: 8 },

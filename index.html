@@ -251,7 +251,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&display=swap">
     <link rel="stylesheet" href="css/vendor/leaflet.css?v=1">
-    <link rel="stylesheet" href="css/styles.css?v=306">
+    <link rel="stylesheet" href="css/styles.css?v=307">
     <link rel="stylesheet" href="css/report-style-packs.css?v=5">
     <link rel="stylesheet" href="css/workspace-layout.css?v=68">
     <link rel="stylesheet" href="css/workspace.css?v=41">
@@ -1693,7 +1693,7 @@
                                  use the existing .header-icon-btn pattern from the top-of-page
                                  header, with data-p86-icon attributes that agx-icons.js auto-
                                  decorates into inline SVGs. -->
-                            <div id="ee-header" style="position:sticky;top:0;z-index:50;background:var(--bg,#0a0a0f);border-bottom:1px solid var(--border,#333);padding:10px 4px;margin-bottom:12px;box-shadow:0 4px 12px rgba(0,0,0,0.4);">
+                            <div id="ee-header" style="position:sticky;top:0;z-index:50;background:var(--bg,#0a0a0f);border-bottom:1px solid var(--border,#333);padding:7px 4px 0;margin-bottom:10px;box-shadow:0 2px 6px rgba(0,0,0,0.25);">
                                 <div class="ee-header-row ee-header-row-compact" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                                     <!-- Back: text-only with transparent chrome, matches the
                                          overlay-close pattern used elsewhere. -->
@@ -1752,7 +1752,7 @@
                                      estimate's chips look identical to the CO totals. -->
                                 <div id="ee-totals" class="p86-totals-strip" style="border-bottom:0;margin-top:2px;"></div>
                                 <!-- Sub-tab nav -->
-                                <div class="ws-right-tabs" style="margin-top:10px;margin-bottom:0;">
+                                <div class="ws-right-tabs" style="margin-top:7px;margin-bottom:0;position:static;">
                                     <button class="ws-right-tab active" data-ee-tab="lines" onclick="switchEstimateEditorTab('lines')">Line Items</button>
                                     <button class="ws-right-tab" data-ee-tab="details" onclick="switchEstimateEditorTab('details')">Details</button>
                                     <button class="ws-right-tab" data-ee-tab="scope" onclick="switchEstimateEditorTab('scope')">&#x1F4DD; Scope</button>
@@ -1801,7 +1801,7 @@
                                     <!-- Pricing breakdown — below the line items so they take the full
                                          width. Scope lives on its own Scope sub-tab. -->
                                     <div style="background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:10px;padding:12px 14px;max-width:520px;">
-                                        <div style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Pricing</div>
+                                        <div style="font-size:10.5px;font-weight:600;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:8px;">Pricing</div>
                                         <div id="ee-pricing-breakdown"></div>
                                     </div>
                                 </div>
@@ -1824,11 +1824,11 @@
                                  buckets) inherited from this estimate's parent lead. -->
                             <div id="ee-tab-photos" class="ee-tab-content" style="display:none;">
                                 <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:6px 10px 8px;margin:0 0 14px 0;">
-                                    <legend style="font-size:10px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.6px;padding:0 5px;">&#x1F4F8; Projects</legend>
+                                    <legend style="font-size:10.5px;font-weight:600;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.4px;padding:0 5px;">&#x1F4F8; Projects</legend>
                                     <div id="ee-projects-mount"></div>
                                 </fieldset>
                                 <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:6px 10px 8px;margin:0 0 14px 0;">
-                                    <legend style="font-size:10px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.6px;padding:0 5px;">&#x2705; Tasks</legend>
+                                    <legend style="font-size:10.5px;font-weight:600;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.4px;padding:0 5px;">&#x2705; Tasks</legend>
                                     <div id="ee-tasks-mount"></div>
                                 </fieldset>
                                 <div id="ee-photos-mount"></div>
@@ -3694,7 +3694,7 @@
     <script src="js/rich-text.js?v=1"></script>
     <script src="js/estimates.js?v=65"></script>
     <script src="js/proposal.js?v=27"></script>
-    <script src="js/estimate-editor.js?v=110"></script>
+    <script src="js/estimate-editor.js?v=111"></script>
     <!-- Change Order editor — overlay opened from the job detail's
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which

@@ -206,6 +206,15 @@
       default:         dot = '○'; label = 'No changes'; color = 'var(--text-dim,#888)'; break;
     }
     el.style.color = color;
+    // The markup ships with style="display:none" and nothing ever turned it
+    // back on, so every state this function computes — Unsaved, Saving…,
+    // Saved, Retrying, "Save failed" — has been invisible, and the editor has
+    // been autosaving with no feedback at all. The clean state stays hidden
+    // (an always-on "No changes" chip is noise); anything else is news.
+    el.style.display = (_saveState && _saveState !== 'idle') ? 'inline-flex' : 'none';
+    el.style.alignItems = 'center';
+    el.style.cursor = 'pointer';
+    el.style.fontSize = '11px';
     el.innerHTML = '<span style="font-weight:700;margin-right:5px;">' + dot + '</span>' + label;
   }
 
@@ -2182,7 +2191,7 @@
         // escape; it can never contain HTML special chars. The input
         // starts readonly; the pencil toggles it on demand.
         '<input id="ee-margin-input" type="text" inputmode="decimal" value="' + displayPct + '" placeholder="' + placeholder + '" readonly' +
-          ' style="width:54px;background:transparent;border:1px solid transparent;color:inherit;font-size:14px;font-weight:700;border-radius:4px;padding:0 4px;outline:none;text-align:right;font-family:inherit;" />' +
+          ' style="width:54px;background:transparent;border:1px solid transparent;color:inherit;font-size:13px;font-weight:700;border-radius:4px;padding:0 4px;outline:none;text-align:right;font-family:inherit;" />' +
         '<span>%</span>' +
       '</div>' +
       // Inline scoped style for the unlocked state — gives the input a
@@ -2549,9 +2558,14 @@
     });
     html +=
       '<div data-edit-gate-passthrough style="display:flex;gap:16px;padding:4px 10px 6px 52px;font-size:10px;">' +
-        '<span data-ee-act="asm-refresh" data-ee-line="' + eeKey(line.id) + '" style="color:#4f8cff;cursor:pointer;">⟳ Refresh price from recipe</span>' +
-        '<span data-ee-act="asm-explode" data-ee-line="' + eeKey(line.id) + '" style="color:#4f8cff;cursor:pointer;">⇣ Explode to editable lines</span>' +
-        '<span data-ee-act="asm-open" data-ee-asm="' + num(line.sourceAssemblyId) + '" style="color:#4f8cff;cursor:pointer;">✎ Open assembly</span>' +
+        // Real <button>s, not spans. As spans these took no keyboard focus and,
+        // more to the point, the .ee-locked rules only neutralise form controls
+        // — so on a SOLD estimate the lock styling never reached them. The
+        // handlers do refuse (eeRefuse), but a control that looks live on a
+        // locked estimate is an invitation to find that out the hard way.
+        '<button type="button" class="ee-asm-act" data-ee-act="asm-refresh" data-ee-line="' + eeKey(line.id) + '">⟳ Refresh price from recipe</button>' +
+        '<button type="button" class="ee-asm-act" data-ee-act="asm-explode" data-ee-line="' + eeKey(line.id) + '">⇣ Explode to editable lines</button>' +
+        '<button type="button" class="ee-asm-act" data-ee-act="asm-open" data-ee-asm="' + num(line.sourceAssemblyId) + '">✎ Open assembly</button>' +
       '</div>';
     return html;
   }
@@ -3427,11 +3441,11 @@
     // amber tint background instead of the old blue so it doesn't fight
     // with the per-line blue focus rings.
     return '<div data-section-id="' + idAttr + '" data-line-id="' + idAttr + '" data-ee-row="section" ' +
-        'style="display:flex;align-items:center;flex-wrap:wrap;background:rgba(251,191,36,0.05);border-top:1px solid rgba(251,191,36,0.15);border-bottom:1px solid rgba(251,191,36,0.15);padding:6px 10px;gap:8px;">' +
+        'style="display:flex;align-items:center;flex-wrap:wrap;background:rgba(251,191,36,0.05);border-top:1px solid rgba(251,191,36,0.15);border-bottom:1px solid rgba(251,191,36,0.15);padding:5px 10px;gap:8px;">' +
       dragHandleHTML(line.id) +
       '<input type="text" value="' + escapeHTML(line.description || '') + '" placeholder="Section name" ' +
         'data-ee-act="sect-name" ' +
-        'style="flex:1;min-width:140px;font-size:13px;font-weight:700;background:transparent;border:1px solid transparent;border-radius:4px;padding:4px 8px;color:#fbbf24;text-transform:uppercase;letter-spacing:0.5px;" ' +
+        'style="flex:1;min-width:140px;font-size:12.5px;font-weight:600;background:transparent;border:1px solid transparent;border-radius:4px;padding:4px 8px;color:#fbbf24;letter-spacing:0.1px;" ' +
         'onfocus="this.style.borderColor=\'var(--border,#333)\';" onblur="this.style.borderColor=\'transparent\';" />' +
       markupControlHTML +
       '<button class="ee-btn primary" data-ee-act="sect-add-line" title="Add a line under this section">&#x2795; Line Item</button>' +
@@ -3472,7 +3486,7 @@
         ' value="' + escapeHTML(value == null ? '' : String(value)) + '"' +
         (opts.placeholder ? ' placeholder="' + escapeHTML(opts.placeholder) + '"' : '') +
         ' data-ee-act="line-field" data-ee-field="' + escapeHTML(field) + '"' +
-        ' style="width:100%;padding:6px 8px;font-size:12px;background:transparent;border:1px solid var(--border,#333);border-radius:4px;color:var(--text,#fff);' +
+        ' style="width:100%;padding:5px 8px;font-size:12px;background:transparent;border:1px solid var(--border,#333);border-radius:4px;color:var(--text,#fff);' +
         (opts.align ? 'text-align:' + opts.align + ';' : '') +
         (opts.mono ? 'font-variant-numeric:tabular-nums;' : '') +
         '"';
@@ -3492,7 +3506,7 @@
         typeAttr = opts.type ? 'type="' + opts.type + '"' : 'type="text"';
       }
       return '<div data-cell="' + field + '" data-label="' + escapeHTML(opts.label || field) + '" ' +
-          'style="flex:' + (opts.flex || '1') + ';padding:4px 6px;">' +
+          'style="flex:' + (opts.flex || '1') + ';padding:3px 6px;">' +
         '<input ' + typeAttr + inputAttrs + ' />' +
       '</div>';
     };
@@ -3516,7 +3530,7 @@
       // light mode can flip the green to plain text via CSS.
       var clsAttr = cls ? ' class="' + cls + '"' : '';
       var colorStyle = cls ? '' : ('color:' + (color || 'var(--text-dim,#888)') + ';');
-      return '<div' + clsAttr + ' style="flex:' + flex + ';padding:8px 10px;font-size:12px;text-align:right;' + colorStyle + 'font-variant-numeric:tabular-nums;">' + value + '</div>';
+      return '<div' + clsAttr + ' style="flex:' + flex + ';padding:6px 10px;font-size:12px;text-align:right;' + colorStyle + 'font-variant-numeric:tabular-nums;">' + value + '</div>';
     };
 
     // align-items:flex-start so the row keeps its natural height when
@@ -3553,7 +3567,7 @@
       markupCellHTML +
       readOnly(fmtCurrency(ext), '0 0 110px', null, 'ee-line-ext') +
       readOnly(fmtCurrency(clientPrice), '0 0 120px', null, 'ee-line-amount') +
-      '<div data-cell="delete" data-edit-gate-passthrough style="flex:0 0 36px;text-align:center;padding-top:8px;">' +
+      '<div data-cell="delete" data-edit-gate-passthrough style="flex:0 0 36px;text-align:center;padding-top:5px;">' +
         '<button class="ee-btn ee-icon-btn danger" data-ee-act="line-delete" title="Delete line">&#x1F5D1;</button>' +
       '</div>' +
     '</div>';
@@ -3574,9 +3588,9 @@
   }
   function renderSectionSubtotal(rawSum, markedUp) {
     var gm = eeSectionGm(rawSum, markedUp);
-    return '<div style="display:flex;align-items:center;background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);padding:6px 10px;">' +
+    return '<div style="display:flex;align-items:center;background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);padding:5px 10px;">' +
       '<div style="flex:0 0 28px;"></div>' + // matches the drag-handle column
-      '<div style="flex:2 1 200px;font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;padding-left:8px;">Section Subtotal' +
+      '<div style="flex:2 1 200px;font-size:10.5px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.4px;font-weight:600;padding-left:8px;">Section Subtotal' +
         '<span class="ee-section-gm" title="Gross margin for this section (pre-fee/tax)" style="text-transform:none;margin-left:8px;font-size:10px;font-weight:600;letter-spacing:0.3px;border-radius:4px;padding:' + (gm.txt ? '1px 6px' : '0') + ';background:' + (gm.txt ? 'rgba(255,255,255,0.05)' : 'transparent') + ';color:' + gm.color + ';">' + gm.txt + '</span>' +
       '</div>' +
       '<div style="flex:0 0 70px;"></div>' +
@@ -3926,38 +3940,13 @@
     { name: 'General Conditions',         btCategory: 'gc',        markup: 0 },
     { name: 'Subcontractors Costs',       btCategory: 'sub',       markup: 0 }
   ];
-
-  function addStandardSectionsFromEditor() {
-    var est = getEstimate();
-    if (!est) return;
-    var altId = est.activeAlternateId;
-    var existing = (appData.estimateLines || []).filter(function(l) {
-      return l && l.estimateId === est.id && l.alternateId === altId && l.section === '__section_header__';
-    });
-    var existingCats = {};
-    existing.forEach(function(s) { if (s.btCategory) existingCats[s.btCategory] = true; });
-    var added = 0;
-    STANDARD_SECTIONS_PRESET.forEach(function(s, idx) {
-      if (existingCats[s.btCategory]) return; // already present in this alternate
-      appData.estimateLines.push({
-        id: 's' + Date.now() + '_' + idx,
-        estimateId: est.id,
-        alternateId: altId,
-        section: '__section_header__',
-        description: s.name,
-        btCategory: s.btCategory,
-        markup: s.markup
-      });
-      added++;
-    });
-    if (!added) {
-      alert('All four standard sections are already present in this group.');
-      return;
-    }
-    debouncedSave();
-    renderLineItems();
-    renderTotals();
-  }
+  // The "add all four standard sections at once" action was superseded by the
+  // "+ Section ▾" dropdown (which adds one at a time from the same preset) and
+  // its implementation, addStandardSectionsFromEditor(), sat here unexported
+  // and uncalled ever since — its only remaining behaviour was a native
+  // alert(), which is a no-op inside the installed PWA anyway.
+  // STANDARD_SECTIONS_PRESET above is still very much live: the dropdown, the
+  // per-category insert and the importer all read it.
 
   // Insert a single standard subgroup by btCategory id. Used by the new
   // "+ Section" dropdown — picks one from the preset list instead of
@@ -4209,7 +4198,7 @@
       // Pricing fieldset — tax + fees + round-up. Markup is per-section now;
       // set it on each section header inside the Line Items tab.
       '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;margin-top:18px;max-width:900px;">' +
-        '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Pricing</legend>' +
+        '<legend style="font-size:10.5px;font-weight:600;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.4px;padding:0 6px;">Pricing</legend>' +
         '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">' +
           field('Tax %', 'ee-taxPct', est.taxPct, { type: 'number', step: '0.01', placeholder: '0' }) +
           field('Flat Fee ($)', 'ee-feeFlat', est.feeFlat, { type: 'number', step: '0.01', placeholder: '0' }) +
@@ -4219,7 +4208,22 @@
         '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:8px;">' +
           'Markup is per-section — set it on each section header in <strong>Line Items</strong>. Tax applies after fees. Round-up is the last step.' +
         '</div>' +
-      '</fieldset>';
+      '</fieldset>' +
+      // Delete. The handler (window.deleteEstimateFromEditor) has existed and
+      // been fully wired to the guarded server route for a while with NOTHING
+      // calling it — the editor's only delete path was to back out to the list.
+      // It stays off the sticky header deliberately: destroying an estimate
+      // from always-visible chrome is one stray click from real loss. The foot
+      // of Details, behind the same edit gate as everything else here, is the
+      // home it was missing. The server still decides — a sold/locked estimate
+      // comes back 409, and one feeding a job detaches rather than destroying.
+      '<div class="ee-danger-row" style="max-width:900px;">' +
+        '<div class="ee-danger-copy">' +
+          '<strong>Delete this estimate</strong>' +
+          'Permanent. A sold estimate must be unlocked first; if a job is using this estimate, the job survives and shows “no estimate — costs not flowing”.' +
+        '</div>' +
+        '<button class="ee-btn danger" onclick="window.deleteEstimateFromEditor()">🗑 Delete estimate</button>' +
+      '</div>';
 
     // Title — keystroke-live so it matches the sticky header input
     // behavior, and bidirectionally synced with #ee-title so editing
