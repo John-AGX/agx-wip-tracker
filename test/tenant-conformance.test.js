@@ -492,9 +492,9 @@ describe('R1 — the published tool population', () => {
   //              hold it, and the count below is what makes that claim
   //              falsifiable.
   //   FALLTHROUGH  no executor answers. In production the chain's final `else`
-  //              writes `summary = r.applied_summary || 'User approved. Change
-  //              applied.'` — the ledgered misroute sentence — and NO SERVER
-  //              STATEMENT RUNS. These are client-applied mutations.
+  //              writes `summary = String(r.applied_summary || 'User approved.
+  //              Change applied.')` — the ledgered misroute sentence — and NO
+  //              SERVER STATEMENT RUNS. These are client-applied mutations.
   //   EXECUTORLESS  no executor at all, anywhere (navigate, web_search).
   //
   // The three counts are committed. A name moving between them is red.
@@ -514,7 +514,13 @@ describe('R1 — the published tool population', () => {
     const src = require('fs').readFileSync(
       require('path').join(__dirname, '..', 'server', 'routes', 'ai-routes.js'), 'utf8');
     const start = src.indexOf('const capDenial = (r.approved && !r.apply_error)');
-    const end = src.indexOf("summary = r.applied_summary || 'User approved. Change applied.'");
+    // Anchored on the FALLBACK EXPRESSION, not on the assignment that wraps
+    // it. The assignment gained a String(...) coercion when /86/chat/continue
+    // started building its tool_result through the shared toolResultContent
+    // (client-supplied applied_summary must never be readable as structured
+    // `blocks`), and an anchor that included `summary = ` silently became -1 —
+    // which failed loudly here only because the slice is bounds-checked.
+    const end = src.indexOf("r.applied_summary || 'User approved. Change applied.'");
     expect(start).toBeGreaterThan(0);
     expect(end).toBeGreaterThan(start);
     return src.slice(start, end);
@@ -587,7 +593,7 @@ describe('R1 — the published tool population', () => {
 
   test('the FALLTHROUGH set runs NO server statement, and is named rather than assumed', () => {
     // These reach the chain's final `else`, which writes
-    //   summary = r.applied_summary || 'User approved. Change applied.'
+    //   summary = String(r.applied_summary || 'User approved. Change applied.')
     // — the ledgered misroute sentence. They are CLIENT-applied mutations: no
     // server executor runs, so this file has nothing to say about them and
     // says so. What it must not do is count them as covered.

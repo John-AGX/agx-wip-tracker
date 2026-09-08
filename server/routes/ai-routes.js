@@ -3919,6 +3919,51 @@ function vDebug(...args) {
   }
 }
 
+// ONE forwarding shape for every dispatcher that turns a tool outcome into
+// user.custom_tool_result content.
+//
+// A tool executor may return a plain string summary, or the STRUCTURED shape
+// `{ blocks: [...] }` when the result carries content the model has to actually
+// see — today that is view_attachment_image handing back an image block plus a
+// text label. Whether those blocks reach the model was, until this function
+// existed, decided independently at each dispatcher, by hand.
+//
+// They disagreed. runV2SessionStream (live /86 chat) forwarded `decision.blocks`
+// from the day view_attachment_image shipped (50a67f0f, 2026-05-16).
+// driveSubtaskTurn — which is escalation, background tasks AND Scribe — built
+// `[{type:'text', text: summary}]` unconditionally, because it was written three
+// days EARLIER (0f7ced05) and nothing went back to teach it the new contract.
+// So an escalated visual review handed the model the tool's text half —
+// 'Image: IMG_4412.jpg (project, 2360 KB)' — a filename and a size, no picture,
+// and the model dutifully reported that it could not see the photo. That was
+// live for nearly four months and no test could see it, because every test
+// asserted on what the EXECUTOR returned and none on what the dispatcher sent.
+//
+// The instance was one line. The class is that the shape was open-coded at each
+// site, so a site could silently disagree with the contract. Hence one function,
+// called by all of them. See test/tool-result-blocks-forwarding.test.js, which
+// drives every dispatcher and requires the same bytes out of each.
+//
+//   blocksSource — whatever may carry `blocks`: the auto-tier decision object,
+//                  or an executor's raw return value.
+//   text         — the plain-text summary to send when it does not.
+//   isError      — an errored tool never forwards pixels, however structured
+//                  its result was; the model needs the error, not the image.
+function toolResultContent(blocksSource, text, isError) {
+  const blocks = (blocksSource && typeof blocksSource === 'object' && Array.isArray(blocksSource.blocks))
+    ? blocksSource.blocks
+    : null;
+  if (!isError && blocks && blocks.length) return blocks;
+  let t = typeof text === 'string' ? text : null;
+  // A structured result we are NOT forwarding (errored, or empty blocks) still
+  // has something sayable in it — prefer its own text half over 'Done.'.
+  if (!t && blocks) {
+    const tb = blocks.find(b => b && b.type === 'text' && typeof b.text === 'string');
+    if (tb) t = tb.text;
+  }
+  return [{ type: 'text', text: t || 'Done.' }];
+}
+
 async function runV2SessionStream({ anthropic, res, session, eventsToSend, persistAssistantText, onCustomToolUse, freshlyCreated }) {
   // Hoisted ABOVE send/res-handlers/session_resolved emit because all
   // three reference `sessionId` in their bodies. Pre-hoist, the `let
@@ -4707,10 +4752,10 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
                 // an image + text label) ride through as the content array
                 // verbatim. The Sessions API's user.custom_tool_result
                 // content field mirrors Messages API tool_result and
-                // accepts text + image blocks.
-                const resultContent = (!isError && Array.isArray(decision.blocks) && decision.blocks.length)
-                  ? decision.blocks
-                  : [{ type: 'text', text: summary }];
+                // accepts text + image blocks. Built by the shared
+                // toolResultContent so this dispatcher and driveSubtaskTurn
+                // cannot drift apart again — they already had, for months.
+                const resultContent = toolResultContent(decision, summary, isError);
                 pendingAutoResults.push({
                   type: 'user.custom_tool_result',
                   custom_tool_use_id: tu.id,
@@ -13997,10 +14042,15 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
             catch (e) { decision = { tier: 'auto', error: 'Tool exec threw: ' + (e.message || 'unknown') }; }
             const isError = !!(decision && decision.error);
             const summary = isError ? decision.error : (decision && decision.summary) || 'Done.';
+            // THE DEFECT THIS REPLACES: this array used to be written out
+            // inline as text-only, so a structured `{blocks:[image,text]}`
+            // result lost its image here and the model received the label
+            // alone. Every caller of driveSubtaskTurn was affected —
+            // escalation, background tasks, and the Scribe.
             pendingResults.push({
               type: 'user.custom_tool_result',
               custom_tool_use_id: tu.id,
-              content: [{ type: 'text', text: summary }],
+              content: toolResultContent(decision, summary, isError),
               is_error: isError || undefined
             });
             break;
@@ -16260,7 +16310,14 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
         try { summary = await execClientDirectoryToolWithCtx(r.name, r.input || {}, { userId: req.user.id }); }
         catch (e) { summary = 'Error: ' + (e.message || 'failed'); isError = true; }
       } else {
-        summary = r.applied_summary || 'User approved. Change applied.';
+        // CLIENT-SUPPLIED, so it is coerced to a string here and can never be
+        // read as a structured `{blocks}` result below. Without the String(),
+        // routing this site through toolResultContent would let a caller post
+        // applied_summary: {blocks:[{type:'image', source:{type:'file',
+        // file_id:'…'}}]} and have the server forward arbitrary image blocks
+        // into the model turn as though a server-side executor had produced
+        // them. Only an executor's own return value may carry blocks.
+        summary = String(r.applied_summary || 'User approved. Change applied.');
       }
       // V2 sessions expect user.custom_tool_result events with
       // custom_tool_use_id (NOT the v1 messages-API shape of
@@ -16269,10 +16326,16 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
       // tool_result is not a valid value"), which made tool approvals
       // silently fail — the user clicked Approve, the server tried to
       // POST results, Anthropic rejected, no field tool got created.
+      // Same shared constructor as the two streaming dispatchers. No
+      // approval-tier executor returns `{blocks}` today, so this cannot emit an
+      // image yet — but it is the third hand-written copy of the forwarding
+      // shape, and the first two had already drifted apart. `summary` doubles
+      // as the blocks source here because these executors return their result
+      // directly rather than wrapped in a tier decision.
       eventsToSend.push({
         type: 'user.custom_tool_result',
         custom_tool_use_id: r.tool_use_id,
-        content: [{ type: 'text', text: summary }],
+        content: toolResultContent(summary, typeof summary === 'string' ? summary : null, isError),
         is_error: isError || undefined
       });
     }
@@ -16380,6 +16443,13 @@ module.exports.internals = {
   // those returns verbatim message bodies. INSIGHTS_VIEW, which gates them,
   // is held by `pm` and `corporate` as well as admins. See
   // test/ai-read-tenant-scope.test.js.
+  // The ONE constructor for user.custom_tool_result content. Exported for the
+  // same stated reason as everything else here — the property is held by
+  // RUNNING it. /86/chat/continue is the third consumer and cannot be driven
+  // end to end today (no approval-tier tool returns `blocks`, so no input makes
+  // it emit an image), so driving the constructor directly is the strongest
+  // behavioural statement available about that site.
+  toolResultContent,
   execStaffTool,
   // The rest of the read surface, exported for the same reason execStaffTool
   // is: the tenant boundary on these is held by EXECUTING them. execAgentTool
@@ -16418,8 +16488,9 @@ module.exports.internals = {
   // These are the branches of the `else if` chain in POST /86/chat/continue.
   // Exporting them lets the harness ask, BY EXECUTION, which of the 54 names
   // any server-side executor actually serves — instead of inferring it from
-  // their spelling. The remainder fall through to `summary = r.applied_summary
-  // || 'User approved. Change applied.'`, i.e. they are applied CLIENT-side and
+  // their spelling. The remainder fall through to `summary = String(
+  // r.applied_summary || 'User approved. Change applied.')`, i.e. they are
+  // applied CLIENT-side and
   // no server statement runs for them, and that set is now enumerated rather
   // than assumed.
   execStaffApprovalTool,
