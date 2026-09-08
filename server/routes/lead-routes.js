@@ -4,7 +4,11 @@ const { pool } = require('../db');
 // req.user.organization_id straight into the INSERT with no gate, on the plain
 // HTTP path, no agent involved: an org-less caller landed a NULL-org lead that
 // every tenant could then read through the tolerance arm.
-const { requireAuth, requireCapability, requireOrgId } = require('../auth');
+const { requireAuth, requireCapability, requireOrgId, isAdminish } = require('../auth');
+// Deleting a lead can now cascade a whole job away (POs, bills, COs, pay apps,
+// cost lines, schedule, reports…). That is far too destructive to leave no
+// record of, so both delete routes write an audit row. Fire-and-forget.
+const { auditLog } = require('../audit');
 const { sendForEvent } = require('../email');
 const { geocodeAddress, geocodeViaGoogle, geocodeViaCensus } = require('../geocoder');
 // Training flywheel — PDF-extraction-vs-saved pairs (see POST / create).
@@ -533,6 +537,196 @@ async function purgeArchivedTicketsForLeads(client, ids, orgId) {
   return r.rowCount || 0;
 }
 
+// Cascade the opportunity chain when a lead is deleted. A lead is the TOP of
+// lead → estimate(s) → job, so deleting it takes its estimate(s) AND its
+// converted job with it. Runs inside the caller's transaction. Estimates link
+// to the lead ONLY via the JSONB blob (data->>'lead_id') and to the job via
+// data->>'job_id' — no FK — so they must be matched by those, then deleted.
+// The job (real column jobs.lead_id) is deleted directly; its structured
+// children (POs/COs/bills/pay-apps/subs/cost-lines/schedule/workflow items/
+// reports/service tickets/node graph/access) drop via their ON DELETE CASCADE
+// FKs, exactly as a direct job delete does. Polymorphic satellites (receipts,
+// tasks, attachments, AR invoices) keep their current behavior — not touched
+// here (receipts are deliberately preserved).
+// SQL fragment: the job(s) a set of leads converted to. The lead↔job link is
+// BIDIRECTIONAL (db.js: "lead.job_id <-> jobs.lead_id") and NOTHING keeps the
+// halves in step — POST /api/jobs and the bulk upsert never write jobs.lead_id,
+// and leads.job_id is directly writable via EDITABLE_FIELDS. Resolving from one
+// side alone left the safety apparatus blind (admin gate passed, impact showed
+// no job, the job orphaned), so every caller resolves from BOTH.
+const LEAD_JOBS_PREDICATE =
+  `(lead_id = ANY($1::text[])
+    OR id IN (SELECT job_id FROM leads
+               WHERE id = ANY($1::text[]) AND job_id IS NOT NULL))
+   AND (organization_id = $2 OR organization_id IS NULL)`;
+
+// Open (non-archived, non-terminal) service tickets that cascading these JOBS
+// would destroy. db.js states the invariant plainly: "after conversion a ticket
+// is about the JOB, and deleting the originating lead must not take the job's
+// live work order with it." leadsBlockedByTickets only sees tickets with
+// job_id IS NULL, so converted work orders need their own guard. Statuses:
+// draft|open|scheduled|in_progress|work_complete|approved|closed|cancelled.
+async function openTicketsOnJobs(q, jobIds, orgId) {
+  if (!jobIds || !jobIds.length) return 0;
+  const { rows } = await q.query(
+    `SELECT COUNT(*)::int AS n FROM service_tickets
+      WHERE job_id = ANY($1::text[])
+        AND organization_id = $2
+        AND archived_at IS NULL
+        AND status NOT IN ('closed', 'cancelled')`,
+    [jobIds, orgId]
+  );
+  return rows[0] ? rows[0].n : 0;
+}
+
+async function deleteLeadChain(client, leadIds, orgId, opts) {
+  opts = opts || {};
+  if (!leadIds || !leadIds.length) return { estimates: 0, jobs: 0, jobIds: [] };
+  // Lock the jobs FIRST — the same order every other route in this chain takes
+  // (jobs → estimates → leads), so two concurrent chain deletes can't deadlock,
+  // and /link-estimate can't attach a new estimate to a job mid-cascade.
+  const jr = await client.query(
+    `SELECT id FROM jobs WHERE ${LEAD_JOBS_PREDICATE} FOR UPDATE`,
+    [leadIds, orgId]
+  );
+  const jobIds = jr.rows.map(function (r) { return r.id; });
+
+  // Authoritative, IN-TRANSACTION gate. The pre-flight check runs on a separate
+  // pooled connection before BEGIN, so a /convert committing in between would
+  // slip a brand-new job past it. Re-decide here against the rows just locked.
+  if (jobIds.length && !opts.canDeleteJobs) {
+    const e = new Error('This lead has a converted job — an admin must delete it (or delete the job first).');
+    e.p86Code = 'ADMIN_REQUIRED';
+    throw e;
+  }
+  // A live work order on the cascaded job would be destroyed by
+  // service_tickets.job_id ON DELETE CASCADE. Refuse, matching the wording the
+  // lead-side ticket guard already uses.
+  const openTickets = await openTicketsOnJobs(client, jobIds, orgId);
+  if (openTickets) {
+    const e = new Error('The job on this lead has ' + openTickets + ' open service ticket' +
+      (openTickets === 1 ? '' : 's') + '. Close or archive ' + (openTickets === 1 ? 'it' : 'them') +
+      ' before deleting the lead.');
+    e.p86Code = 'OPEN_TICKETS';
+    throw e;
+  }
+
+  let jobsDeleted = 0;
+  if (jobIds.length) {
+    const dr = await client.query(
+      'DELETE FROM jobs WHERE id = ANY($1::text[]) AND (organization_id = $2 OR organization_id IS NULL)',
+      [jobIds, orgId]
+    );
+    jobsDeleted = dr.rowCount || 0;
+  }
+  // Estimates last. Match via the lead OR the (now-deleted) job — but NEVER take
+  // one a SURVIVING job still depends on: that estimate is another job's cost
+  // source and is_locked by the boot backfill, so deleting it here would bypass
+  // BOTH the 409 lock refusal and the blob scrub the estimate route performs,
+  // leaving that job pointing at a row that is gone. Because the cascade's jobs
+  // are already deleted above, any job still referencing an estimate IS a
+  // survivor — no id-exclusion list needed.
+  const er = await client.query(
+    `DELETE FROM estimates
+      WHERE (data->>'lead_id' = ANY($1::text[]) OR data->>'job_id' = ANY($2::text[]))
+        AND (organization_id = $3 OR organization_id IS NULL)
+        AND NOT EXISTS (
+              SELECT 1 FROM jobs j
+               WHERE j.estimate_id = estimates.id
+                  OR j.data->>'estimate_id' = estimates.id)`,
+    [leadIds, jobIds, orgId]
+  );
+  return { estimates: er.rowCount || 0, jobs: jobsDeleted, jobIds: jobIds };
+}
+
+// Which of these leads have a converted job? Deleting such a lead cascades the
+// job, and direct job deletion is admin-only — so the indirect path is gated to
+// admins too. Read-only pre-flight (the authoritative check is in-transaction,
+// inside deleteLeadChain). Resolves from BOTH halves of the lead↔job link.
+async function leadsWithJobs(ids, orgId) {
+  if (!ids || !ids.length) return [];
+  const { rows } = await pool.query(
+    `SELECT DISTINCT l.id AS lead_id
+       FROM leads l
+      WHERE l.id = ANY($1::text[])
+        AND (l.organization_id = $2 OR l.organization_id IS NULL)
+        AND (l.job_id IS NOT NULL
+             OR EXISTS (SELECT 1 FROM jobs j
+                         WHERE j.lead_id = l.id
+                           AND (j.organization_id = $2 OR j.organization_id IS NULL)))`,
+    [ids, orgId]
+  );
+  return rows.map(function (r) { return r.lead_id; });
+}
+
+// POST /api/leads/delete-impact — preview what deleting these lead(s) will take
+// with them, so the client can show an authoritative warning (not one built from
+// a possibly-stale browser cache) and decide when to demand a type-to-confirm.
+// A job is "live" when it carries real work or money: POs, vendor bills, change
+// orders, AR invoices, QB cost lines, pay applications, captured receipts, or an
+// open service ticket. Gated on LEADS_EDIT (it exists to serve a delete — a
+// read-only role has no business enumerating financial-liveness). Org-scoped.
+router.post('/delete-impact', requireAuth, requireCapability('LEADS_EDIT'), async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body && req.body.ids)
+      ? req.body.ids.filter(function (x) { return typeof x === 'string' && x; })
+      : null;
+    if (!ids || !ids.length) return res.status(400).json({ error: 'ids array is required' });
+    const orgId = req.user.organization_id;
+    // Resolve the cascaded jobs from BOTH halves of the lead↔job link — the same
+    // predicate deleteLeadChain uses, so the preview and the cascade can't drift.
+    const jobs = await pool.query(
+      `SELECT j.id,
+              COALESCE(j.data->>'jobNumber', '') AS number,
+              COALESCE(NULLIF(j.data->>'title', ''), NULLIF(j.data->>'name', ''), '') AS name,
+              (EXISTS (SELECT 1 FROM job_purchase_orders p WHERE p.job_id = j.id)
+                OR EXISTS (SELECT 1 FROM job_vendor_bills b WHERE b.job_id = j.id)
+                OR EXISTS (SELECT 1 FROM job_change_orders c WHERE c.job_id = j.id)
+                OR EXISTS (SELECT 1 FROM invoices i WHERE i.job_id = j.id)
+                OR EXISTS (SELECT 1 FROM qb_cost_lines q WHERE q.job_id = j.id)
+                OR EXISTS (SELECT 1 FROM pay_applications a WHERE a.job_id = j.id)
+                OR EXISTS (SELECT 1 FROM receipts rc WHERE rc.entity_type = 'job' AND rc.entity_id = j.id)
+                OR EXISTS (SELECT 1 FROM service_tickets t WHERE t.job_id = j.id
+                             AND t.archived_at IS NULL AND t.status NOT IN ('closed', 'cancelled'))) AS is_live
+         FROM jobs j
+        WHERE ${LEAD_JOBS_PREDICATE}`,
+      [ids, orgId]
+    );
+    const jobRows = jobs.rows.map(function (r) {
+      return { id: r.id, name: r.name || r.number || 'job', number: r.number || '', isLive: !!r.is_live };
+    });
+    const jobIds = jobRows.map(function (j) { return j.id; });
+    // Estimate count uses the SAME predicate as the cascade — both link arms,
+    // minus any a surviving job still depends on (those are deliberately kept).
+    const est = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM estimates
+        WHERE (data->>'lead_id' = ANY($1::text[]) OR data->>'job_id' = ANY($2::text[]))
+          AND (organization_id = $3 OR organization_id IS NULL)
+          AND NOT EXISTS (
+                SELECT 1 FROM jobs j
+                 WHERE (j.estimate_id = estimates.id OR j.data->>'estimate_id' = estimates.id)
+                   AND j.id <> ALL($2::text[]))`,
+      [ids, jobIds, orgId]
+    );
+    // Open work orders on the cascaded jobs BLOCK the delete (they'd be
+    // cascade-deleted with the job). Surface them so the client can say why.
+    const openTickets = await openTicketsOnJobs(pool, jobIds, orgId);
+    res.json({
+      leadCount: ids.length,
+      estimateCount: est.rows[0] ? est.rows[0].n : 0,
+      jobs: jobRows,
+      hasLiveJob: jobRows.some(function (j) { return j.isLive; }),
+      openTicketCount: openTickets,
+      // The client can refuse up front instead of spending the type-to-confirm
+      // on someone the server will 403 anyway.
+      canDelete: (jobRows.length === 0 || isAdminish(req.user)) && openTickets === 0
+    });
+  } catch (e) {
+    console.error('POST /api/leads/delete-impact error:', e);
+    res.status(500).json({ error: 'Server error: ' + e.message });
+  }
+});
+
 // POST /api/leads/bulk-delete — delete many leads in one shot (bulk purge from
 // the leads list). Org-scoped like the single DELETE; LEADS_EDIT-gated (a user
 // who can delete one lead can delete many). Uses id = ANY(...) so it's a single
@@ -559,19 +753,42 @@ router.post('/bulk-delete', requireAuth, requireCapability('LEADS_EDIT'), async 
         blocked_lead_ids: blocked.map(function (b) { return b.lead_id; })
       });
     }
+    // Deleting leads that have converted jobs cascades those jobs — admin-gated
+    // like direct job deletion (bulk is exactly where over-deletion is riskiest).
+    // Pre-flight for a fast 403; deleteLeadChain re-decides inside the tx.
+    const canDeleteJobs = isAdminish(req.user);
+    const withJobs = await leadsWithJobs(ids, req.user.organization_id);
+    if (withJobs.length && !canDeleteJobs) {
+      return res.status(403).json({
+        error: withJobs.length + ' of these leads have a converted job — an admin must delete them (or delete those jobs first).',
+        blocked_lead_ids: withJobs
+      });
+    }
     // Same atomic pairing as the single delete above.
     const client = await pool.connect();
     let r;
     try {
       await client.query('BEGIN');
       await purgeArchivedTicketsForLeads(client, ids, req.user.organization_id);
+      // Chain cascade: estimate(s) + converted job(s) for every selected lead,
+      // in the same tx, before the lead rows themselves.
+      const chain = await deleteLeadChain(client, ids, req.user.organization_id, { canDeleteJobs: canDeleteJobs });
       r = await client.query(
         'DELETE FROM leads WHERE id = ANY($1::text[]) AND (organization_id = $2 OR organization_id IS NULL)',
         [ids, req.user.organization_id]
       );
       await client.query('COMMIT');
+      auditLog(req, {
+        action: 'lead.bulk_delete_cascade',
+        targetType: 'lead',
+        targetId: String(ids.length) + ' leads',
+        organizationId: req.user.organization_id,
+        detail: { lead_ids: ids, estimates: chain.estimates, jobs: chain.jobs, job_ids: chain.jobIds }
+      });
     } catch (inner) {
       try { await client.query('ROLLBACK'); } catch (_) {}
+      if (inner && inner.p86Code === 'ADMIN_REQUIRED') return res.status(403).json({ error: inner.message });
+      if (inner && inner.p86Code === 'OPEN_TICKETS') return res.status(409).json({ error: inner.message });
       throw inner;
     } finally {
       client.release();
@@ -636,12 +853,24 @@ router.delete('/:id', requireAuth, requireCapability('LEADS_EDIT'), async (req, 
           '. Close or archive ' + (n === 1 ? 'it' : 'them') + ' before deleting the lead.'
       });
     }
-    // Atomic: the archived-ticket purge and the lead delete stand or fall
-    // together, so a failed delete cannot leave tickets already removed.
+    // Deleting a lead that has a converted job cascades that job — and direct
+    // job deletion is admin-only, so the indirect path must clear the same bar.
+    // Cheap pre-flight for a fast 403; deleteLeadChain re-decides AUTHORITATIVELY
+    // inside the transaction (a /convert can commit between the two).
+    const canDeleteJobs = isAdminish(req.user);
+    const withJobs = await leadsWithJobs([req.params.id], req.user.organization_id);
+    if (withJobs.length && !canDeleteJobs) {
+      return res.status(403).json({ error: 'This lead has a converted job — an admin must delete it (or delete the job first).' });
+    }
+    // Atomic: the chain cascade, archived-ticket purge and lead delete stand or
+    // fall together, so a failed delete cannot leave the chain half-removed.
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
       await purgeArchivedTicketsForLeads(client, [req.params.id], req.user.organization_id);
+      // Chain cascade: this lead's estimate(s) + its converted job go first,
+      // inside the same tx, before the lead row itself.
+      const chain = await deleteLeadChain(client, [req.params.id], req.user.organization_id, { canDeleteJobs: canDeleteJobs });
       // Wave 1.A Phase 2 — org-scoped DELETE.
       const r = await client.query(
         'DELETE FROM leads WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
@@ -652,9 +881,20 @@ router.delete('/:id', requireAuth, requireCapability('LEADS_EDIT'), async (req, 
         return res.status(404).json({ error: 'Lead not found' });
       }
       await client.query('COMMIT');
+      auditLog(req, {
+        action: 'lead.delete_cascade',
+        targetType: 'lead',
+        targetId: req.params.id,
+        organizationId: req.user.organization_id,
+        detail: { estimates: chain.estimates, jobs: chain.jobs, job_ids: chain.jobIds }
+      });
       res.json({ ok: true });
     } catch (inner) {
       try { await client.query('ROLLBACK'); } catch (_) {}
+      // Guards raised from inside the transaction map to real status codes
+      // rather than falling through to a bare 500.
+      if (inner && inner.p86Code === 'ADMIN_REQUIRED') return res.status(403).json({ error: inner.message });
+      if (inner && inner.p86Code === 'OPEN_TICKETS') return res.status(409).json({ error: inner.message });
       throw inner;
     } finally {
       client.release();

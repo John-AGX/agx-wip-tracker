@@ -689,16 +689,64 @@ router.put('/:id/owner', requireAuth, requireRole('admin'), requireOrgId, async 
 
 // DELETE /api/jobs/:id (admin only)
 router.delete('/:id', requireAuth, requireRole('admin'), async (req, res) => {
+  const jobId = req.params.id;
+  let client;
   try {
-    // Wave 1.A Phase 2 — org-scoped DELETE. 404 cross-org.
-    const d = await pool.query(
-      'DELETE FROM jobs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
-      [req.params.id, await callerOrgId(req)]
+    // Both awaits stay INSIDE the try: pool.connect() rejects on pool exhaustion
+    // or a DB blip, and outside the try that rejection escapes the async handler
+    // (Express 4 doesn't catch those) — no response is ever written and the
+    // request hangs on a destructive action with no way to tell what happened.
+    const orgId = await callerOrgId(req);
+    client = await pool.connect();
+    await client.query('BEGIN');
+    // Confirm the job exists in-org (lock it) and grab its estimate link before
+    // we start un-stranding the chain.
+    const jr = await client.query(
+      'SELECT estimate_id, lead_id FROM jobs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL) FOR UPDATE',
+      [jobId, orgId]
     );
-    if (d.rowCount === 0) return res.status(404).json({ error: 'Job not found' });
+    if (!jr.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Job not found' });
+    }
+    // Singular delete: the parent lead + estimate are KEPT. But un-strand them
+    // so nothing is left pointing at a job that no longer exists:
+    // (a) Unlock + detach the linked estimate. If we left it is_locked=TRUE it
+    //     would be stuck (deleting a locked estimate is now refused) and still
+    //     read as "sold" pointing at a dead job. Match via the column and the
+    //     JSONB back-pointer (data->>'job_id').
+    await client.query(
+      `UPDATE estimates SET
+         is_locked = FALSE,
+         data = jsonb_set(COALESCE(data, '{}'::jsonb) - 'job_id', '{status}', to_jsonb('accepted'::text)),
+         updated_at = NOW()
+       WHERE (id = $1 OR data->>'job_id' = $2)
+         AND (organization_id = $3 OR organization_id IS NULL)`,
+      [jr.rows[0].estimate_id, jobId, orgId]
+    );
+    // (b) Re-open the parent lead into the active pipeline (convert had flipped
+    //     it to 'sold'). Matched from BOTH halves of the lead↔job link, since
+    //     nothing keeps leads.job_id and jobs.lead_id in step. leads.job_id then
+    //     SET-NULLs on the delete below. updated_at so downstream sees the change.
+    await client.query(
+      `UPDATE leads SET status = 'in_progress', converted_at = NULL,
+              status_changed_at = NOW(), updated_at = NOW()
+        WHERE (job_id = $1 OR id = $2) AND (organization_id = $3 OR organization_id IS NULL)`,
+      [jobId, jr.rows[0].lead_id, orgId]
+    );
+    // Delete the job — its structured children cascade via ON DELETE CASCADE FKs.
+    await client.query(
+      'DELETE FROM jobs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [jobId, orgId]
+    );
+    await client.query('COMMIT');
     res.json({ ok: true });
   } catch (e) {
+    if (client) { try { await client.query('ROLLBACK'); } catch (_) {} }
+    console.error('DELETE /api/jobs/:id error:', e);
     res.status(500).json({ error: 'Server error' });
+  } finally {
+    if (client) client.release();
   }
 });
 

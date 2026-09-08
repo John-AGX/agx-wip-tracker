@@ -4574,18 +4574,18 @@
       alert('Delete not available — refresh the page.');
       return;
     }
-    // The global deleteEstimate prompts via confirm() and only removes
-    // on yes. Close the editor view AFTER the user confirms so a cancel
-    // leaves them in place.
-    var prevConfirm = window.confirm;
-    var userSaidYes = false;
-    window.confirm = function(msg) {
-      var ok = prevConfirm.call(window, msg);
-      userSaidYes = userSaidYes || ok;
-      return ok;
-    };
-    try { window.deleteEstimate(id); } finally { window.confirm = prevConfirm; }
-    if (userSaidYes) closeEstimateEditor();
+    // The global deleteEstimate is async (p86Confirm) and RETURNS a promise
+    // resolving true only when the row was actually deleted. Close the editor
+    // after a real delete; a cancel / lock-block / failure leaves the user here.
+    Promise.resolve(window.deleteEstimate(id)).then(function(deleted) {
+      if (deleted) closeEstimateEditor();
+    }).catch(function(e) {
+      // Without this a throw anywhere in the delete chain (p86Confirm, or the
+      // documented localStorage-quota throw out of saveData) leaves the editor
+      // open with no message — it reads as "Delete did nothing".
+      console.error('deleteEstimateFromEditor:', e);
+      if (window.p86Alert) window.p86Alert({ title: 'Delete failed', message: (e && e.message) || 'unknown error' });
+    });
   };
 
   // ──────────────────────────────────────────────────────────────────

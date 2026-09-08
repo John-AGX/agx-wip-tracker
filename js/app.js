@@ -1910,10 +1910,18 @@
             document.querySelectorAll('.app-nav-parent.has-active-child').forEach(p => p.classList.remove('has-active-child'));
 
             document.getElementById(tabName)?.classList.add('active');
-            // Highlight the FIRST tab-btn matching this data-tab — the
-            // virtual-tab system overwrites this when a more specific
-            // identity (Leads / Clients / Subs) was clicked.
-            document.querySelector(`[data-tab="${tabName}"]`)?.classList.add('active');
+            // Highlight the sidebar row(s) for this destination. Two things
+            // matter here, and the old `querySelector` got both wrong:
+            //   • SCOPE to .app-nav — the header Directory popover carries the
+            //     same data-tab="estimates" and sits EARLIER in the DOM, so a
+            //     document-wide querySelector lit that HIDDEN popover item and
+            //     left the visible sidebar row dark. Jobs was the only section
+            //     with no such twin, which is why it alone ever highlighted.
+            //   • querySelectorAll, not querySelector — same trap already
+            //     documented (and fixed) in markVirtualTabActive() above.
+            // For families that share one data-tab (the Estimates group),
+            // markVirtualTabActive() refines this down to the exact row.
+            document.querySelectorAll(`.app-nav [data-tab="${tabName}"]`).forEach(el => el.classList.add('active'));
 
             // Page title: defaults to the tab label. Sub-renderers (the
             // estimates-subtab switch + the job detail + the estimate
@@ -2594,6 +2602,12 @@
             var confirmText = opts.confirmText || opts.confirmLabel || 'Confirm';
             var cancelText = opts.cancelText || opts.cancelLabel || 'Cancel';
             var destructive = (opts.destructive !== undefined) ? !!opts.destructive : !!opts.danger;
+            // Optional type-to-confirm gate: when set, a text input appears and
+            // the confirm button stays disabled until its value matches (trim +
+            // case-insensitive). Used for high-blast-radius deletes (e.g. a lead
+            // whose job is live). Backward-compatible — ignored when absent.
+            var confirmPhrase = opts.confirmPhrase ? String(opts.confirmPhrase) : '';
+            var esc = (typeof window.escapeHTML === 'function') ? window.escapeHTML : function(s) { return s; };
 
             return new Promise(function(resolve) {
                 var overlay = document.createElement('div');
@@ -2612,9 +2626,13 @@
                           '</div>'
                         : ''
                     ) +
+                    (confirmPhrase
+                        ? '<div style="font-size:12px;color:var(--text-dim,#aaa);margin-bottom:6px;">Type <code style="color:var(--text,#fff);background:rgba(255,255,255,0.08);padding:1px 6px;border-radius:4px;">' + esc(confirmPhrase) + '</code> to confirm:</div>' +
+                          '<input data-confirm-phrase type="text" autocomplete="off" spellcheck="false" style="width:100%;box-sizing:border-box;background:var(--input-bg,#0f1117);color:var(--text,#fff);border:1px solid var(--border,#333);border-radius:6px;padding:8px 10px;font-size:13px;margin-bottom:16px;" placeholder="' + esc(confirmPhrase) + '">'
+                        : '') +
                     '<div style="display:flex;justify-content:flex-end;gap:8px;">' +
-                        '<button data-confirm-cancel class="secondary small" style="padding:8px 16px;">' + (typeof window.escapeHTML === 'function' ? window.escapeHTML(cancelText) : cancelText) + '</button>' +
-                        '<button data-confirm-ok class="' + (destructive ? 'danger' : 'primary') + ' small" style="padding:8px 16px;">' + (typeof window.escapeHTML === 'function' ? window.escapeHTML(confirmText) : confirmText) + '</button>' +
+                        '<button data-confirm-cancel class="secondary small" style="padding:8px 16px;">' + esc(cancelText) + '</button>' +
+                        '<button data-confirm-ok class="' + (destructive ? 'danger' : 'primary') + ' small" style="padding:8px 16px;"' + (confirmPhrase ? ' disabled' : '') + '>' + esc(confirmText) + '</button>' +
                     '</div>';
 
                 overlay.appendChild(box);
@@ -2627,19 +2645,40 @@
                 }
                 function onKey(e) {
                     if (e.key === 'Escape') cleanup(false);
-                    else if (e.key === 'Enter') cleanup(true);
+                    else if (e.key === 'Enter') { if (phraseOk()) cleanup(true); }
                 }
+                var okBtn = box.querySelector('[data-confirm-ok]');
+                var phraseInput = box.querySelector('[data-confirm-phrase]');
+                function phraseOk() {
+                    if (!confirmPhrase) return true;
+                    // EXACT comparison. The whole point of a typed gate is
+                    // deliberate transcription of an ALL-CAPS token, and the
+                    // product's other typed gate (the Danger Zone reset) compares
+                    // strictly — two confirmation mechanisms in one codebase
+                    // should not disagree about strictness.
+                    return !!phraseInput && phraseInput.value.trim() === confirmPhrase.trim();
+                }
+                function syncPhrase() {
+                    if (!confirmPhrase || !okBtn) return;
+                    var ok = phraseOk();
+                    okBtn.disabled = !ok;
+                    okBtn.style.opacity = ok ? '' : '0.5';
+                    okBtn.style.cursor = ok ? '' : 'not-allowed';
+                }
+                if (phraseInput) { phraseInput.addEventListener('input', syncPhrase); syncPhrase(); }
+
                 box.querySelector('[data-confirm-cancel]').onclick = function() { cleanup(false); };
-                box.querySelector('[data-confirm-ok]').onclick = function() { cleanup(true); };
+                okBtn.onclick = function() { if (phraseOk()) cleanup(true); };
                 overlay.addEventListener('click', function(e) {
                     if (e.target === overlay) cleanup(false);
                 });
                 document.addEventListener('keydown', onKey);
 
-                // Focus the confirm button on next tick so Enter / Escape work
+                // Focus the phrase input (or the confirm button) on next tick so
+                // Enter / Escape work.
                 setTimeout(function() {
-                    var btn = box.querySelector('[data-confirm-ok]');
-                    if (btn) btn.focus();
+                    var el = phraseInput || box.querySelector('[data-confirm-ok]');
+                    if (el) el.focus();
                 }, 0);
             });
         };

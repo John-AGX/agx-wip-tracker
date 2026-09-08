@@ -2902,8 +2902,23 @@ function renderJobsMain() {
                 ids.forEach(function(id) { delete graphs[id]; });
                 localStorage.setItem('p86-nodegraphs', JSON.stringify(graphs));
             } catch (e) {}
+            // The server unlocked + detached each deleted job's estimate. Reflect
+            // it locally so the estimates list doesn't show a locked estimate
+            // still pointing at a job that no longer exists.
+            (appData.estimates || []).forEach(function(e) {
+                if (e && idSet.has(e.job_id)) { e.is_locked = false; delete e.job_id; e.status = 'accepted'; }
+            });
             saveData();
+            // The server also re-opened each deleted job's parent lead — refresh
+            // the leads cache so it isn't left showing 'sold' with a dead job.
+            if (typeof window.reloadLeadsCache === 'function') { try { window.reloadLeadsCache(); } catch (e) {} }
         }
+        // THE teardown for a locally-removed job — it also clears buildings,
+        // phases, subs, COs, POs, invoices and the workspace/nodegraph caches.
+        // Exported so the lead-delete cascade reuses it instead of hand-rolling a
+        // partial `appData.jobs` filter that leaves every child slice orphaned in
+        // localStorage (which the quota failure class punishes).
+        window.p86PurgeJobsLocally = purgeJobsLocally;
 
         function _deleteJobConfirmed(jobId) {
             return deleteJobsOnServer([jobId]).then(function(res) {

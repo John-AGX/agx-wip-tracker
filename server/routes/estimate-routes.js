@@ -5,7 +5,7 @@ const { pool } = require('../db');
 // req.user.organization_id with no gate, so an org-less caller's estimates
 // landed NULL — and payload-dispatcher.js's own comment on the twin statement
 // says what that means: "a NULL-org estimate is visible to every tenant".
-const { requireAuth, requireRole, requireCapability, getAttributedUserId, requireOrgId } = require('../auth');
+const { requireAuth, requireRole, requireCapability, getAttributedUserId, requireOrgId, isAdminish } = require('../auth');
 const { geocodeAddress } = require('../geocoder');
 const asm = require('../services/assemblies');
 const estLines = require('../services/estimate-lines');
@@ -602,6 +602,15 @@ router.put('/:id/workbook', requireAuth, requireCapability('ESTIMATES_EDIT'), as
 router.put('/:id/lock', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
   try {
     const locked = !!(req.body && req.body.locked);
+    // UNLOCKING is the guarded direction. A locked estimate is a sold job's cost
+    // source and DELETE /:id refuses it until unlocked — if every ESTIMATES_EDIT
+    // holder (pm, field_crew) could unlock, that refusal would be a two-call
+    // speed bump, not a guard. Clearing the lock therefore requires admin,
+    // matching the admin-only job delete and the lead-with-job gate (and what
+    // this route's own comment always claimed). Locking stays ESTIMATES_EDIT.
+    if (!locked && !isAdminish(req.user)) {
+      return res.status(403).json({ error: 'Only an admin can unlock a sold estimate.' });
+    }
     const u = await pool.query(
       'UPDATE estimates SET is_locked = $1, updated_at = NOW() WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)',
       [locked, req.params.id, req.user.organization_id]
@@ -724,24 +733,69 @@ router.post('/:id/decline', requireAuth, requireCapability('ESTIMATES_EDIT'), as
 
 // DELETE /api/estimates/:id - admin or owner only
 router.delete('/:id', requireAuth, async (req, res) => {
+  let client;
   try {
-    // Wave 1.A Phase 2 — org-scoped read + delete. Cross-org 404.
-    const { rows } = await pool.query(
-      'SELECT owner_id FROM estimates WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+    // pool.connect() inside the try: a connect rejection outside it escapes the
+    // async handler, Express 4 never catches it, and the request hangs forever.
+    client = await pool.connect();
+    await client.query('BEGIN');
+    // Read + LOCK the estimate inside the transaction. Reading it outside makes
+    // the is_locked check a TOCTOU window — /convert and /link-estimate can lock
+    // and sell this estimate between the check and the delete. FOR UPDATE
+    // serialises against both (each updates this row in its own transaction).
+    // Wave 1.A Phase 2 — org-scoped. Cross-org 404.
+    const { rows } = await client.query(
+      'SELECT owner_id, is_locked FROM estimates WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL) FOR UPDATE',
       [req.params.id, req.user.organization_id]
     );
-    if (!rows.length) return res.status(404).json({ error: 'Not found' });
-    if (req.user.role !== 'admin' && rows[0].owner_id !== req.user.id) {
+    if (!rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Not found' }); }
+    // isAdminish (not role==='admin') so a system_admin isn't wrongly refused.
+    if (!isAdminish(req.user) && rows[0].owner_id !== req.user.id) {
+      await client.query('ROLLBACK');
       return res.status(403).json({ error: 'No delete access' });
     }
-    await pool.query(
+    // A locked (sold) estimate is a live job's cost source. Refuse to delete it
+    // out from under the job — the operator must unlock it first (admin, via
+    // PUT /:id/lock). Once unlocked, deleting it DETACHES the job (below).
+    if (rows[0].is_locked) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'Estimate is locked (sold). Unlock it first.' });
+    }
+    // Detach any job that reads this estimate as its cost source so it flips to
+    // "No estimate — costs not flowing". Scrub ONLY the provenance pointer: the
+    // job view reads estimate_id from the JSONB blob (GET /api/jobs never selects
+    // the column), so the blob must be cleared AND the column nulled. We do NOT
+    // touch contractAmount / estimatedCosts — those are the JOB's own
+    // hand-editable money (the As-Sold spine of WIP, editable at edit-jobContract
+    // / edit-jobEstCosts), not estimate metadata; clearing them would silently
+    // erase a contract a PM typed. The chip keys on estimate_id alone.
+    const jr = await client.query(
+      `SELECT id, data FROM jobs
+        WHERE (estimate_id = $1 OR data->>'estimate_id' = $1)
+          AND (organization_id = $2 OR organization_id IS NULL)
+        FOR UPDATE`,
+      [req.params.id, req.user.organization_id]
+    );
+    for (const j of jr.rows) {
+      const data = j.data || {};
+      delete data.estimate_id;
+      await client.query(
+        'UPDATE jobs SET data = $1, estimate_id = NULL, updated_at = NOW() WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)',
+        [JSON.stringify(data), j.id, req.user.organization_id]
+      );
+    }
+    await client.query(
       'DELETE FROM estimates WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
       [req.params.id, req.user.organization_id]
     );
+    await client.query('COMMIT');
     res.json({ ok: true });
   } catch (e) {
+    if (client) { try { await client.query('ROLLBACK'); } catch (_) {} }
     console.error('DELETE /api/estimates/:id error:', e);
     res.status(500).json({ error: 'Server error' });
+  } finally {
+    if (client) client.release();
   }
 });
 

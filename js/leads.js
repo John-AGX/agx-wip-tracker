@@ -895,25 +895,70 @@ function p86Ask(message, opts) {
     syncLeadsSelectAll();
     updateLeadsBulkBar();
   }
-  function p86LeadsDeleteSelected() {
+  async function p86LeadsDeleteSelected() {
     var ids = Array.from(_leadsSelected);
     if (!ids.length) return;
     if (!window.p86Api || !window.p86Api.leads || !window.p86Api.leads.bulkDelete) { if (typeof window.p86Toast === 'function') window.p86Toast('Bulk delete is not available (refresh the app).', 'error'); return; }
-    bulkConfirm({
-      title: 'Delete leads',
-      message: 'Delete ' + ids.length + ' lead' + (ids.length > 1 ? 's' : '') + '? This cannot be undone. Linked estimates will be orphaned; converted jobs are NOT deleted.',
-      confirmLabel: 'Delete',
-      danger: true
-    }).then(function(ok) {
-      if (!ok) return;
-      window.p86Api.leads.bulkDelete(ids).then(function (res) {
-        _leadsSelected.clear();
-        var n = (res && typeof res.deleted === 'number') ? res.deleted : ids.length;
-        if (typeof window.p86Toast === 'function') { try { window.p86Toast('Deleted ' + n + ' lead' + (n === 1 ? '' : 's') + '.'); } catch (e) {} }
-        reloadLeadsCache();
-      }).catch(function (err) {
-        if (typeof window.p86Toast === 'function') window.p86Toast('Bulk delete failed: ' + ((err && err.message) || 'unknown error'), 'error');
-      });
+
+    // Deleting leads now cascades their estimates + converted jobs server-side.
+    // Ask the server what that will take with it (authoritative) before warning.
+    var impact;
+    try { impact = await window.p86Api.leads.deleteImpact(ids); }
+    catch (err) { if (typeof window.p86Toast === 'function') window.p86Toast('Could not check impact: ' + ((err && err.message) || 'unknown'), 'error'); return; }
+
+    // Refuse up front for the cases the server will reject anyway.
+    if (impact.openTicketCount) {
+      _leadDeleteAlert('One of these leads has a job with ' + impact.openTicketCount + ' open service ticket' +
+        (impact.openTicketCount === 1 ? '' : 's') + '. Close or archive them before deleting.');
+      return;
+    }
+    if (impact.canDelete === false) {
+      _leadDeleteAlert('Some of these leads have a converted job — an admin must delete them (or delete those jobs first).');
+      return;
+    }
+
+    var liveJobs = (impact.jobs || []).filter(function (j) { return j.isLive; }).length;
+    var lines = ['Delete ' + ids.length + ' lead' + (ids.length > 1 ? 's' : '') + '? This cannot be undone.'];
+    var extras = [];
+    if (impact.estimateCount) extras.push(impact.estimateCount + ' linked estimate' + (impact.estimateCount === 1 ? '' : 's'));
+    if (impact.jobs && impact.jobs.length) extras.push(impact.jobs.length + ' converted job' + (impact.jobs.length === 1 ? '' : 's') + (liveJobs ? ' (' + liveJobs + ' LIVE — with POs/bills/invoices/costs)' : ''));
+    if (extras.length) { lines.push(''); lines.push('This also permanently deletes their ' + extras.join(' and ') + ', with all their data.'); }
+
+    var opts = { title: 'Delete leads', message: lines.join('\n'), confirmLabel: 'Delete', danger: true };
+    if (impact.hasLiveJob) opts.confirmPhrase = 'DELETE';
+    if (!(await window.p86Confirm(opts))) return;
+
+    window.p86Api.leads.bulkDelete(ids).then(function (res) {
+      _leadsSelected.clear();
+      var n = (res && typeof res.deleted === 'number') ? res.deleted : ids.length;
+      if (typeof window.p86Toast === 'function') { try { window.p86Toast('Deleted ' + n + ' lead' + (n === 1 ? '' : 's') + '.'); } catch (e) {} }
+      // Prune cascaded estimates + jobs locally (server is source of truth).
+      if (window.appData) {
+        var leadSet = {}; ids.forEach(function (x) { leadSet[x] = true; });
+        var estGone = {};
+        (window.appData.estimates || []).forEach(function (e) { if (leadSet[e.lead_id]) estGone[e.id] = true; });
+        window.appData.estimates = (window.appData.estimates || []).filter(function (e) { return !leadSet[e.lead_id]; });
+        window.appData.estimateLines = (window.appData.estimateLines || []).filter(function (line) { return !estGone[line.estimateId]; });
+        if (typeof saveData === 'function') saveData();
+        if (typeof renderEstimatesList === 'function') renderEstimatesList();
+      }
+      // Cascaded jobs go through THE job teardown (children + workspace caches).
+      var jobIds = (impact.jobs || []).map(function (j) { return j.id; });
+      if (jobIds.length && typeof window.p86PurgeJobsLocally === 'function') {
+        window.p86PurgeJobsLocally(jobIds);
+        if (window.appState && jobIds.indexOf(window.appState.currentJobId) !== -1 &&
+            typeof window.backToJobsMain === 'function') { window.backToJobsMain(); }
+      }
+      reloadLeadsCache();
+    }).catch(function (err) {
+      // Decide the MESSAGE from the status, and the CHANNEL separately — gating
+      // the 403 branch on p86Toast existing swallowed it entirely without one.
+      var st = err && err.status;
+      var msg = (st === 403 || st === 409)
+        ? ((err && err.message) || 'These leads could not be deleted.')
+        : ('Bulk delete failed: ' + ((err && err.message) || 'unknown error'));
+      if (typeof window.p86Toast === 'function') window.p86Toast(msg, 'error');
+      else _leadDeleteAlert(msg);
     });
   }
   window.p86LeadsSelect = p86LeadsSelect;
@@ -2896,52 +2941,87 @@ function p86Ask(message, opts) {
     });
   }
 
+  function _leadDeleteAlert(msg) {
+    if (window.p86Alert) return window.p86Alert(msg);
+    try { alert(msg); } catch (_) {}
+  }
+
   async function deleteLeadFromEditor() {
     var id = document.getElementById('leadEditor_id').value;
     if (!id) return;
     var l = _leads.find(function(x) { return x.id === id; });
+    var title = l ? l.title : id;
 
-    // Estimates created from this lead carry lead_id === id. They have no
-    // standalone meaning once the lead is gone, so delete them as part of
-    // the same action. Surface the count up front so the user can back out.
-    var linkedEstimates = (window.appData && window.appData.estimates || [])
-      .filter(function(e) { return e.lead_id === id; });
-
-    var msg = 'Delete lead "' + (l ? l.title : id) + '"? This cannot be undone.';
-    if (linkedEstimates.length) {
-      msg += '\n\nThis will also delete ' + linkedEstimates.length + ' linked estimate' +
-             (linkedEstimates.length === 1 ? '' : 's') + ':\n  - ' +
-             linkedEstimates.map(function(e) { return e.title || '(untitled)'; }).join('\n  - ');
+    // A lead is the TOP of the chain, so deleting it cascades its estimate(s)
+    // AND its converted job — server-side, atomically. Ask the server what that
+    // will take with it (authoritative — not built from a possibly-stale cache),
+    // then warn accordingly and demand a type-to-confirm when a job is LIVE.
+    var impact;
+    try {
+      impact = await window.p86Api.leads.deleteImpact([id]);
+    } catch (err) {
+      _leadDeleteAlert('Could not check what this delete affects: ' + ((err && err.message) || 'unknown error'));
+      return;
     }
-    if (!(await p86Ask(msg))) return;
 
-    // Delete the linked estimates in parallel first; if any fail, abort the
-    // lead delete so the cache stays consistent. 404s are treated as success
-    // since the row is already gone server-side.
-    var estimatePromises = linkedEstimates.map(function(e) {
-      return window.p86Api.estimates.remove(e.id).catch(function(err) {
-        if (err && err.status === 404) return; // already gone, fine
-        throw err;
-      });
+    // Refuse up front for the two cases the server will reject anyway, rather
+    // than spending a type-to-confirm on someone who can't proceed.
+    if (impact.openTicketCount) {
+      _leadDeleteAlert('The job on this lead has ' + impact.openTicketCount + ' open service ticket' +
+        (impact.openTicketCount === 1 ? '' : 's') + '. Close or archive ' +
+        (impact.openTicketCount === 1 ? 'it' : 'them') + ' before deleting the lead.');
+      return;
+    }
+    if (impact.canDelete === false) {
+      _leadDeleteAlert('This lead has a converted job — an admin must delete it (or delete the job first).');
+      return;
+    }
+
+    var lines = ['Delete lead "' + title + '"? This cannot be undone.'];
+    if (impact.estimateCount) {
+      lines.push('');
+      lines.push('This also permanently deletes ' + impact.estimateCount + ' linked estimate' + (impact.estimateCount === 1 ? '' : 's') + '.');
+    }
+    (impact.jobs || []).forEach(function(j) {
+      lines.push('');
+      lines.push('It deletes the ' + (j.isLive ? 'LIVE ' : '') + 'job "' + (j.name || 'job') + '"' +
+        (j.isLive ? ' — which has purchase orders, bills, invoices or logged costs — and all of its data.'
+                  : ' and all of its data.'));
     });
 
-    Promise.all(estimatePromises).then(function() {
-      // Drop from local appData so the estimates list updates without a reload
-      if (window.appData && linkedEstimates.length) {
-        var deletedIds = {};
-        linkedEstimates.forEach(function(e) { deletedIds[e.id] = true; });
-        window.appData.estimates = window.appData.estimates.filter(function(e) { return !deletedIds[e.id]; });
-        window.appData.estimateLines = (window.appData.estimateLines || []).filter(function(line) { return !deletedIds[line.estimateId]; });
+    var opts = { title: 'Delete this opportunity?', message: lines.join('\n'), confirmLabel: 'Delete', danger: true };
+    if (impact.hasLiveJob) opts.confirmPhrase = 'DELETE';
+    if (!(await window.p86Confirm(opts))) return;
+
+    window.p86Api.leads.remove(id).then(function() {
+      // The server cascaded the estimate(s) + job. Prune them locally so the
+      // lists update without a reload (server is source of truth).
+      if (window.appData) {
+        var estGone = {};
+        (window.appData.estimates || []).forEach(function(e) { if (e.lead_id === id) estGone[e.id] = true; });
+        window.appData.estimates = (window.appData.estimates || []).filter(function(e) { return e.lead_id !== id; });
+        window.appData.estimateLines = (window.appData.estimateLines || []).filter(function(line) { return !estGone[line.estimateId]; });
         if (typeof saveData === 'function') saveData();
         if (typeof renderEstimatesList === 'function') renderEstimatesList();
       }
-      return window.p86Api.leads.remove(id);
-    }).then(function() {
+      // Cascaded jobs go through THE job teardown so their buildings, phases,
+      // subs, COs, POs, invoices and workspace/nodegraph caches go with them — a
+      // bare appData.jobs filter leaves all of that orphaned in localStorage.
+      var jobIds = (impact.jobs || []).map(function(j) { return j.id; });
+      if (jobIds.length && typeof window.p86PurgeJobsLocally === 'function') {
+        window.p86PurgeJobsLocally(jobIds);
+        // Don't leave the user parked on a job the cascade just deleted.
+        if (window.appState && jobIds.indexOf(window.appState.currentJobId) !== -1 &&
+            typeof window.backToJobsMain === 'function') { window.backToJobsMain(); }
+      }
       closeLeadEditorAny();
       reloadLeadsCache();
     }).catch(function(err) {
-      alert('Delete failed: ' + (err.message || 'unknown error') +
-            (linkedEstimates.length ? '\n\nSome linked estimates may have been deleted before the failure. Refresh to check.' : ''));
+      var st = err && err.status;
+      // 403 = admin required, 409 = open work orders. Both carry a readable
+      // server sentence; show it as-is rather than a generic failure.
+      if (st === 403 || st === 409) { _leadDeleteAlert((err && err.message) || 'This lead could not be deleted.'); return; }
+      _leadDeleteAlert('Delete failed: ' + ((err && err.message) || 'unknown error'));
     });
   }
 

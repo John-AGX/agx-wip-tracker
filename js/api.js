@@ -666,6 +666,9 @@
     update: function(id, payload) { return put('/api/leads/' + encodeURIComponent(id), payload); },
     remove: function(id) { return del('/api/leads/' + encodeURIComponent(id)); },
     bulkDelete: function(ids) { return post('/api/leads/bulk-delete', { ids: ids }); },
+    // Preview what deleting these lead(s) cascades (estimates + converted jobs,
+    // flags live jobs) so the client warning is server-authoritative.
+    deleteImpact: function(ids) { return post('/api/leads/delete-impact', { ids: ids }); },
     importBatch: function(rows) { return post('/api/leads/import', { rows: rows }); }
   };
 

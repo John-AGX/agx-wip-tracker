@@ -1052,16 +1052,36 @@ function renderEstimatesList() {
     }
 
     function deleteEstimate(estId) {
+            var est = (appData.estimates || []).find(function(e) { return e.id === estId; });
+
+            // A locked (sold) estimate is a live job's cost source — the server
+            // refuses to delete it. Tell the user to unlock it first rather than
+            // letting the 409 surface as a raw error. (The server 409 is still the
+            // backstop if this cached flag is stale.)
+            if (est && est.is_locked) {
+              var lockMsg = 'This estimate is locked (sold on a job). Unlock it first (Admin) before deleting.';
+              if (typeof window.p86Alert === 'function') window.p86Alert({ title: 'Estimate is locked', message: lockMsg });
+              else alert(lockMsg);
+              return Promise.resolve(false);
+            }
+
+            // An unlocked estimate can still feed a job (e.g. it was just unlocked).
+            // Deleting it detaches the job (server scrubs its cost basis) — warn.
+            var linkedJobId = est && est.job_id;
+            var confirmMsg = linkedJobId
+              ? 'This estimate feeds a job as its cost source. Deleting it will NOT delete the job — it detaches the estimate, so the job shows "No estimate — costs not flowing" until you attach a new one.\n\nDelete this estimate?'
+              : 'Delete this estimate? This cannot be undone.';
+
             var go = (typeof window.p86Confirm === 'function')
               ? window.p86Confirm({
                   title: 'Delete estimate',
-                  message: 'Delete this estimate? This cannot be undone.',
+                  message: confirmMsg,
                   confirmLabel: 'Delete',
                   danger: true
                 })
               : Promise.resolve(window.confirm('Delete this estimate?'));
-            go.then(function(ok) {
-              if (!ok) return;
+            return go.then(function(ok) {
+              if (!ok) return false;
               // Delete on the server first — bulk-save is upsert-only, so just
               // dropping from appData and re-saving leaves the row in Postgres
               // and it reappears on the next reload. Optimistically remove from
@@ -1069,23 +1089,39 @@ function renderEstimatesList() {
               function removeLocal() {
                   appData.estimates = appData.estimates.filter(e => e.id !== estId);
                   appData.estimateLines = appData.estimateLines.filter(l => l.estimateId !== estId);
+                  // Detach — mirror the server's scrub EXACTLY. Two things matter:
+                  //   • Match the job(s) that point AT this estimate
+                  //     (job.estimate_id === estId), which is the server's
+                  //     predicate — NOT the job this estimate points at
+                  //     (est.job_id). Those two links can disagree, and this
+                  //     mutation is pushed back on the next save, so scrubbing the
+                  //     wrong job would bulk-overwrite one the server left alone.
+                  //   • Clear ONLY estimate_id. contractAmount / estimatedCosts are
+                  //     the job's own hand-editable money; the chip keys on
+                  //     estimate_id alone, so there is nothing to gain by erasing
+                  //     a contract the PM typed.
+                  (appData.jobs || []).forEach(function(j) {
+                      if (j && j.estimate_id === estId) delete j.estimate_id;
+                  });
                   saveData();
                   renderEstimatesList();
               }
               if (window.p86Api && window.p86Api.isAuthenticated()) {
-                  window.p86Api.estimates.remove(estId)
-                      .then(removeLocal)
+                  return window.p86Api.estimates.remove(estId)
+                      .then(function() { removeLocal(); return true; })
                       .catch(function(err) {
-                          if (err && err.status === 404) { removeLocal(); return; }
+                          if (err && err.status === 404) { removeLocal(); return true; }
                           var msg = (err && err.message) ? err.message : 'unknown error';
                           if (typeof window.p86Alert === 'function') {
                             window.p86Alert({ title: 'Delete failed', message: msg });
                           } else {
                             alert('Delete failed: ' + msg);
                           }
+                          return false;
                       });
               } else {
                   removeLocal();
+                  return true;
               }
             });
         }
