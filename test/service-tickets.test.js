@@ -590,9 +590,34 @@ describe('archiving a ticket really does release its lead', () => {
     // `client` as its first parameter and would otherwise count as a third.
     const uses = (leadRoutes.match(/await purgeArchivedTicketsForLeads\(client/g) || []).length;
     assert.strictEqual(uses, 2, 'both delete doors must purge inside a transaction');
-    // Each call site must sit between a BEGIN and a COMMIT.
-    for (const seg of leadRoutes.split('await purgeArchivedTicketsForLeads(client').slice(1)) {
-      assert.ok(seg.slice(0, 700).indexOf('COMMIT') > -1, 'must commit after the purge');
+    // Each call site must sit INSIDE an open transaction: a BEGIN before it
+    // with nothing that ends the transaction in between, and a COMMIT after it
+    // before the connection goes back to the pool.
+    //
+    // Asserted structurally, against the transaction boundaries themselves.
+    // This was once "a COMMIT within 700 characters", which is proximity, not
+    // atomicity — it went red the moment a correct deleteLeadChain() call was
+    // inserted between the purge and the COMMIT and pushed it to char 726.
+    const CALL = 'await purgeArchivedTicketsForLeads(client';
+    let from = 0;
+    for (let n = 0; n < uses; n++) {
+      const at = leadRoutes.indexOf(CALL, from);
+      assert.ok(at > -1, 'expected ' + uses + ' call sites');
+      from = at + CALL.length;
+
+      const before = leadRoutes.slice(0, at);
+      const begin = before.lastIndexOf("client.query('BEGIN')");
+      assert.ok(begin > -1, 'the purge must follow a BEGIN, or it is not in a transaction');
+      // Nothing may close that transaction between the BEGIN and the purge.
+      const gap = before.slice(begin + 1);
+      assert.ok(gap.indexOf('COMMIT') === -1 && gap.indexOf('ROLLBACK') === -1,
+        'the transaction the purge runs in must still be open when it runs');
+
+      // The handler ends when the connection is released.
+      const end = leadRoutes.indexOf('client.release()', at);
+      assert.ok(end > -1, 'the handler must release its client');
+      assert.ok(leadRoutes.slice(at, end).indexOf('COMMIT') > -1,
+        'must commit after the purge, before the client goes back to the pool');
     }
     assert.ok((leadRoutes.match(/ROLLBACK/g) || []).length >= 2, 'both must roll back on error');
   });

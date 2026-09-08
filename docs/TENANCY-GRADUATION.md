@@ -192,7 +192,22 @@ the caller's org. This is covered by a named test
 
 ## 9. The `OR organization_id IS NULL` tolerance is retired — **OPEN** `[machine]` — **HIGHEST RISK ITEM ON THIS LIST**
 
-**486** occurrences of `organization_id IS NULL` across `server/`.
+**497** occurrences of `organization_id IS NULL` across `server/`.
+
+486 → 497: the lead → estimate → job delete cascade (`2639e755`) added eleven
+statements across `estimate-routes.js`, `job-routes.js` and `lead-routes.js`.
+Every one is on `estimates`, `jobs` or `leads` — the three tables that carry
+this arm already, and for the original reason: their `organization_id` was
+added late and production genuinely holds un-stamped rows in them. So this is
+the count moving because the surface grew, NOT the tolerance reaching a table
+that had been clean. No new table became tolerant, and the day this item closes
+these eleven are part of the same one-line change as the rest.
+
+That distinction is the one worth watching on every future move of this number:
+**+N on an already-tolerant table is bookkeeping; +1 on a table that did not
+have the arm is a boundary decision** and belongs in a commit that says so. New
+tables must be written without it — `service_tickets` and its children have no
+tolerance arm anywhere, because they never had un-stamped rows to tolerate.
 
 485 → 486: `GET /api/receipts/merchants` unions receipts with QuickBooks cost
 lines, and its QB arm scopes through the parent job with the same tolerance the

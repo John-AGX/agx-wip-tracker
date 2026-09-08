@@ -78,9 +78,30 @@ describe('job deletes go through one helper, server first', () => {
   });
 
   test('this is the pattern estimates already use — jobs were the outlier', () => {
-    // The reference implementation, unchanged: server remove, THEN removeLocal,
-    // with 404 tolerated and anything else surfaced to the user.
-    expect(EST).toMatch(/estimates\.remove\(estId\)\s*\n\s*\.then\(removeLocal\)/);
-    expect(EST).toMatch(/err\.status === 404.*removeLocal\(\); return;/);
+    // The reference implementation: server remove, THEN removeLocal, with 404
+    // tolerated and anything else surfaced to the user.
+    //
+    // Asserted as ORDER, not as characters. This once required the literal
+    // `.then(removeLocal)` on the next line and went red when that became
+    // `.then(function() { removeLocal(); return true; })` — the same order,
+    // just returning a value to the chain. A test that fails on a benign
+    // refactor of the code it points AT teaches people to edit the test.
+    const call = EST.indexOf('estimates.remove(estId)');
+    expect(call).toBeGreaterThan(-1);
+    const chain = EST.slice(call, call + 900);
+
+    // removeLocal runs inside the .then — after the server confirmed, never before.
+    const then = chain.indexOf('.then(');
+    const local = chain.indexOf('removeLocal()');
+    expect(then).toBeGreaterThan(-1);
+    expect(local).toBeGreaterThan(then);
+
+    // 404 means the row is already gone, so the local teardown still runs.
+    const c404 = chain.indexOf('err.status === 404');
+    expect(c404).toBeGreaterThan(-1);
+    expect(chain.slice(c404, c404 + 120)).toMatch(/removeLocal\(\)/);
+
+    // Anything else is surfaced. Silently swallowing it is the bug this guards.
+    expect(chain).toMatch(/Delete failed/);
   });
 });
