@@ -601,3 +601,91 @@ describe('S6 — an internal user is NEVER given a token', () => {
     expect(block).toContain("=== 'edit' ? 'edit' : 'view'");
   });
 });
+
+// ── A JOINED QUERY'S PREDICATE MUST BE ALIAS-QUALIFIED ──────────────────────
+//
+// Found in production, not here. `GET /service-tickets/:id/revisions` answered
+// 500 for every caller: its WHERE was written as `ticket_id = $1 AND
+// organization_id = $2` for a single-table query, and when the LEFT JOIN onto
+// service_ticket_shares was added those two names became ambiguous — both
+// tables have them — so Postgres refused the whole statement.
+//
+// Every existing test passed. They asserted the join was present and the flag
+// was selected, and both were true. Nothing that reads SQL as TEXT can notice
+// that the SQL will not parse, which is the standing limitation of this whole
+// file and the reason the live pass exists.
+//
+// So this guard derives the danger set FROM THE SCHEMA — the columns the two
+// joined tables share — rather than listing names that would go stale. A
+// column added to both tables tomorrow is covered without anyone remembering.
+describe('S6 — a joined query cannot leave an ambiguous column', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const DB = fs.readFileSync(path.join(__dirname, '..', 'server', 'db.js'), 'utf8');
+
+  function columnsOf(table) {
+    const a = DB.indexOf('CREATE TABLE IF NOT EXISTS ' + table + ' (');
+    const b = DB.indexOf('\n    );', a);
+    expect(a).toBeGreaterThan(-1);
+    return DB.slice(a, b).split('\n').slice(1)
+      .map((l) => (l.match(/^\s{4,}([a-z_]+)\s+[A-Z]/) || [])[1])
+      .filter(Boolean);
+  }
+
+  const revCols = columnsOf('service_ticket_revisions');
+  const shareCols = columnsOf('service_ticket_shares');
+  const AMBIGUOUS = revCols.filter((c) => shareCols.indexOf(c) >= 0);
+
+  test('the two joined tables really do share column names', () => {
+    // If this ever went empty the guard below would pass vacuously, which is
+    // exactly the failure mode this file has already been bitten by twice.
+    expect(AMBIGUOUS).toEqual(expect.arrayContaining(['id', 'organization_id', 'ticket_id']));
+    expect(AMBIGUOUS.length).toBeGreaterThan(2);
+
+    // And it is deliberately NOT every column. `status` is on the revisions
+    // table only, so `status = $3` in that join is unambiguous and legal —
+    // un-qualifying it is a style question, not a defect, and this guard stays
+    // quiet about it on purpose. Flagging what actually breaks is what keeps
+    // the guard worth reading.
+    expect(AMBIGUOUS).not.toContain('status');
+  });
+
+  const FILES = ['service-ticket-share-routes.js', 'service-ticket-routes.js'];
+  for (const f of FILES) {
+    test(f + ': every predicate feeding a joined query names its table', () => {
+      const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'routes', f), 'utf8');
+
+      // The predicate can be inline in the SQL or assembled into a `where`
+      // variable first — the production bug was in the assembled kind, so both
+      // are collected.
+      const predicates = [];
+      const joined = src.split('LEFT JOIN service_ticket_shares').slice(1);
+      if (!joined.length) return;                       // this file has no join
+      for (const seg of joined) {
+        const w = seg.indexOf('WHERE');
+        if (w > -1) predicates.push(seg.slice(w, w + 300));
+      }
+      src.split('\n').forEach((line) => {
+        if (/\bwhere\s*(\+?=)\s*['"`]/.test(line)) predicates.push(line);
+      });
+      expect(predicates.length).toBeGreaterThan(0);
+
+      const bare = [];
+      for (const p of predicates) {
+        for (const col of AMBIGUOUS) {
+          // An occurrence NOT preceded by `alias.` is the ambiguous one. The
+          // negative lookbehind is what separates `r.ticket_id` from `ticket_id`.
+          //
+          // Written with EXPLICIT character classes and no backslash escapes.
+          // The first version used '\\w' and '\\s' inside a single-quoted
+          // string; the escaping was lost on the way to disk, the pattern
+          // became `(?<![.w])ticket_ids*=`, and the guard matched nothing at
+          // all — it passed against the very bug it was written for.
+          const re = new RegExp('(?<![.A-Za-z0-9_])' + col + '[ ]*=', 'g');
+          if (re.test(p)) bare.push(col + '  in  ' + p.trim().slice(0, 90));
+        }
+      }
+      expect(bare).toEqual([]);
+    });
+  }
+});

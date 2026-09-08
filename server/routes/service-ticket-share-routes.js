@@ -285,9 +285,17 @@ router.get('/service-tickets/:id/revisions', requireAuth, async (req, res) => {
     if (!ticket) return res.status(404).json({ error: 'Service ticket not found' });
     if (!capOk(req, res, readCapFor(ticket))) return;
 
+    // EVERY column here is qualified with its table alias. The query below
+    // LEFT JOINs service_ticket_shares, and BOTH tables have `ticket_id` and
+    // `organization_id` — unqualified, Postgres refuses the whole statement as
+    // an ambiguous column reference and this route answers 500 for every
+    // caller. It did, in production: the predicate was written for a
+    // single-table query and did not get re-qualified when the join was added.
+    // Source-level tests asserted the join and the flag were present, which
+    // they were; nothing there can notice that the SQL will not parse.
     const params = [ticket.id, orgId];
-    let where = 'ticket_id = $1 AND organization_id = $2';
-    if (req.query.status) { params.push(String(req.query.status)); where += ' AND status = $3'; }
+    let where = 'r.ticket_id = $1 AND r.organization_id = $2';
+    if (req.query.status) { params.push(String(req.query.status)); where += ' AND r.status = $3'; }
 
     // The share is LEFT JOINed so a revision that arrived through a link the
     // office has since revoked still lists — with its link marked off. Losing
