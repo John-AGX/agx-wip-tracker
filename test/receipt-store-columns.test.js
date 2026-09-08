@@ -120,9 +120,24 @@ describe('the store columns are on receipts, and they are additive', () => {
 // in a ledger of files, and everything else still cannot see them.
 describe('the columns are read, and only where they are supposed to be', () => {
   test('COLS names every one of them — they are projected deliberately', () => {
+    // Resolved through its constants rather than matched as characters. COLS
+    // was one long literal when this was written; it now composes STORE_COLS,
+    // and asserting on the raw text went red on that refactor while the
+    // columns were still projected exactly as before. What matters is the
+    // string the SELECT ends up with, so build it the way the module does.
     const cols = /const COLS =\s*([\s\S]*?);\n/.exec(RECEIPT_ROUTES);
     expect(cols).not.toBeNull();
-    for (const c of NEW_COLS) expect(cols[1]).toContain(c);
+
+    let projected = cols[1];
+    // Inline any `const NAME = '...'` the definition refers to, once each.
+    for (const ref of projected.match(/\b[A-Z][A-Z0-9_]{2,}\b/g) || []) {
+      const decl = new RegExp('const ' + ref + ' =\\s*([\\s\\S]*?);\\n').exec(RECEIPT_ROUTES);
+      if (decl) projected = projected.split(ref).join(decl[1]);
+    }
+    // Strip comments and quoting so only the column names remain.
+    projected = projected.replace(/\/\/[^\n]*/g, '').replace(/['"+\s]/g, '');
+
+    for (const c of NEW_COLS) expect(projected).toContain(c);
   });
 
   test('the files that touch them are an enumerated ledger, not a habit', () => {
