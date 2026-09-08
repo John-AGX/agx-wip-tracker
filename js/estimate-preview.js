@@ -235,6 +235,448 @@
 
   // Build the proposal HTML for in-tab render. Print stylesheet (below) hides
   // any chrome that shouldn't appear in the PDF.
+  // ──────────────────────────────────────────────────────────────────
+  // Document layout machinery
+  //
+  // A layout (js/estimate-doc-layouts.js) is an ordered list of SECTION KEYS.
+  // Everything below is either a shared data helper or one builder per key.
+  // buildProposalHTML then just walks the list — so a new layout is a data
+  // edit in the registry, not new rendering code here.
+  // ──────────────────────────────────────────────────────────────────
+
+  // Org branding logo, falling back to the AGX mark. Mirrors how the email
+  // block editor resolves it (branding.logo_url || org logo || P86 default) so
+  // a tenant that uploaded a logo stops printing AG Exteriors' one.
+  function docLogoSrc() {
+    try {
+      var b = (window.p86Org && window.p86Org.branding) || (window.appData && window.appData.orgBranding) || null;
+      var url = b && (b.logo_url || b.logoUrl || (b.logos && b.logos[0] && (b.logos[0].url || b.logos[0].logo_url)));
+      if (url) return url;
+    } catch (e) { /* fall through to the packaged mark */ }
+    return 'images/logo-color.png';
+  }
+
+  // Split one group's lines into the editor's visual sections. Section headers
+  // are themselves rows (section === '__section_header__'), so this walks in
+  // order and buckets. Same shape the takeoff already used.
+  function groupSections(estimate, altId) {
+    var lines = (window.appData && window.appData.estimateLines || []).filter(function (l) {
+      return l.estimateId === estimate.id && l.alternateId === altId;
+    });
+    var out = [];
+    var cur = null;
+    lines.forEach(function (l) {
+      if (l.section === '__section_header__') {
+        cur = { name: l.description || 'Section', items: [] };
+        out.push(cur);
+        return;
+      }
+      if (!cur) { cur = { name: '(uncategorized)', items: [] }; out.push(cur); }
+      cur.items.push(l);
+    });
+    return out;
+  }
+
+  // Per-line SELL money. Delegates the markup to the pricing pipeline rather
+  // than re-deriving it — the same rule that keeps the preview total equal to
+  // the editor's PROPOSAL TOTAL chip. Row extensions are therefore consistent
+  // with the group subtotal; fees and tax are added once at the bottom, which
+  // is exactly how a schedule of values reconciles.
+  function lineMoney(estimate, line, allLines) {
+    var qty = Number(line.qty) || 0;
+    var cost = Number(line.unitCost) || 0;
+    var mk = 0;
+    try { mk = Number(effectiveMarkup(line, allLines, estimate)) || 0; } catch (e) { mk = 0; }
+    var unitSell = (typeof line.unitSell === 'number' && !isNaN(line.unitSell))
+      ? Number(line.unitSell)
+      : cost * (1 + mk / 100);
+    return { qty: qty, unitCost: cost, unitSell: unitSell, extCost: qty * cost, extSell: qty * unitSell, markup: mk };
+  }
+
+  function moneyCell(n) { return escapeHTMLLocal(fmtProposalCurrency(n)); }
+
+  // The priced groups, in estimate order.
+  function includedAltsOf(estimate) {
+    var ids = includedGroupIds(estimate);
+    return (estimate.alternates || []).filter(function (a) { return ids.indexOf(a.id) >= 0; });
+  }
+  // The groups deliberately left OUT of the total — these are what become
+  // "alternates" on an RFP and "while we're on site" options on a service quote.
+  function excludedAltsOf(estimate) {
+    var ids = includedGroupIds(estimate);
+    return (estimate.alternates || []).filter(function (a) { return ids.indexOf(a.id) < 0; });
+  }
+
+  function scopeBodyHTML(s) {
+    s = (s || '').trim();
+    if (!s) return '';
+    if (window.p86RichText && window.p86RichText.toDisplayHTML) return window.p86RichText.toDisplayHTML(s);
+    return s.split(/\n+/).map(function (p) { return '<p>' + escapeHTMLLocal(p) + '</p>'; }).join('');
+  }
+
+  // A priced line table. `cfg.lines` decides how much money is exposed:
+  // 'none' (description + qty only), 'extended' (extension only) or
+  // 'unit+extended'. Item numbers are stable across the document so an SOV row
+  // can be billed against later.
+  function pricedTable(estimate, alts, cfg, opts) {
+    opts = opts || {};
+    var showUnit = cfg.lines === 'unit+extended';
+    var showExt = cfg.lines === 'extended' || cfg.lines === 'unit+extended';
+    var allLines = (window.appData && window.appData.estimateLines) || [];
+    var itemNo = 0;
+    var grand = 0;
+    var html = '<table class="doc-table sov-table"><thead><tr>' +
+      '<th class="c-no">Item</th>' +
+      '<th class="c-desc">Description</th>' +
+      '<th class="c-qty">Qty</th>' +
+      '<th class="c-unit">Unit</th>' +
+      (showUnit ? '<th class="c-money">Unit Price</th>' : '') +
+      (showExt ? '<th class="c-money">' + (opts.valueLabel || 'Scheduled Value') + '</th>' : '') +
+      '</tr></thead><tbody>';
+
+    if (!alts.length) {
+      html += '<tr><td colspan="6" class="doc-empty">No priced groups — toggle at least one group on in the Line Items tab.</td></tr>';
+    }
+    alts.forEach(function (alt) {
+      var secs = groupSections(estimate, alt.id);
+      var groupHasRows = secs.some(function (s) { return s.items.length; });
+      html += '<tr class="grp-row"><td colspan="' + (4 + (showUnit ? 1 : 0) + (showExt ? 1 : 0)) + '">' +
+        escapeHTMLLocal(alt.name || 'Scope') + '</td></tr>';
+      if (!groupHasRows) {
+        html += '<tr><td colspan="' + (4 + (showUnit ? 1 : 0) + (showExt ? 1 : 0)) + '" class="doc-empty">No line items entered.</td></tr>';
+      }
+      secs.forEach(function (sec) {
+        if (!sec.items.length) return;
+        html += '<tr class="sec-row"><td></td><td colspan="' + (3 + (showUnit ? 1 : 0) + (showExt ? 1 : 0)) + '">' +
+          escapeHTMLLocal(sec.name) + '</td></tr>';
+        sec.items.forEach(function (l) {
+          var m = lineMoney(estimate, l, allLines);
+          itemNo++;
+          html += '<tr>' +
+            '<td class="c-no">' + itemNo + '</td>' +
+            '<td class="c-desc">' + escapeHTMLLocal(l.description || '') + '</td>' +
+            '<td class="c-qty">' + escapeHTMLLocal(l.qty != null ? String(l.qty) : '') + '</td>' +
+            '<td class="c-unit">' + escapeHTMLLocal(l.unit || '') + '</td>' +
+            (showUnit ? '<td class="c-money">' + moneyCell(m.unitSell) + '</td>' : '') +
+            (showExt ? '<td class="c-money">' + moneyCell(m.extSell) + '</td>' : '') +
+            '</tr>';
+        });
+      });
+      if (cfg.subtotals) {
+        var sub = computeGroupTotal(estimate, alt.id);
+        if (sub != null) {
+          grand += sub;
+          html += '<tr class="sub-row"><td></td><td colspan="' + (2 + (showUnit ? 1 : 0)) + '">Subtotal — ' +
+            escapeHTMLLocal(alt.name || 'Scope') + '</td>' +
+            '<td class="c-money"' + (showExt ? '' : ' colspan="2"') + '>' + moneyCell(sub) + '</td></tr>';
+        }
+      }
+    });
+    html += '</tbody></table>';
+    return html;
+  }
+
+  // Build every section this document system knows how to draw. Returns a map
+  // of key -> function; the layout decides which are called and in what order.
+  function buildSections(estimate, template, ctx, cfg, prep) {
+    var includedAlts = prep.includedAlts;
+    var excluded = excludedAltsOf(estimate);
+    var licence = (template.license_line || template.company_header || '');
+    var validDays = 30;
+
+    function heading(t) { return '<h2 class="section-heading">' + escapeHTMLLocal(t) + '</h2>'; }
+    function para(t) { return t ? '<p class="doc-para">' + escapeHTMLLocal(t) + '</p>' : ''; }
+
+    function sigRows(withTitle) {
+      return '<div class="sig-block">' +
+        '<div class="sig-row"><span class="sig-label">Signature:</span> <span class="sig-line"></span></div>' +
+        (withTitle ? '<div class="sig-row"><span class="sig-label">Printed Name:</span> <span class="sig-line"></span></div>' +
+                     '<div class="sig-row"><span class="sig-label">Title:</span> <span class="sig-line"></span></div>'
+                   : '<div class="sig-row"><span class="sig-label">Print Name:</span> <span class="sig-line"></span></div>') +
+        '<div class="sig-row"><span class="sig-label">Date:</span> <span class="sig-line"></span></div>' +
+      '</div>';
+    }
+
+    return {
+      header: function () {
+        return '<div class="proposal-header">' +
+          '<img src="' + escapeAttrLocal(docLogoSrc()) + '" alt="' + escapeAttrLocal(template.company_header || 'Logo') + '" style="height:64px;display:block;margin:0 auto 8px;" />' +
+          '<div class="company-line">' + escapeHTMLLocal(template.company_header || '') + '</div>' +
+        '</div>';
+      },
+      compactHeader: function () {
+        return '<div class="doc-band">' +
+          '<img class="band-logo" src="' + escapeAttrLocal(docLogoSrc()) + '" alt="Logo" />' +
+          '<div class="band-meta">' +
+            '<div><span class="doc-label">Date</span> ' + escapeHTMLLocal(ctx.date) + '</div>' +
+            '<div><span class="doc-label">Valid</span> ' + validDays + ' days</div>' +
+          '</div>' +
+        '</div>';
+      },
+      bandHeader: function () {
+        return '<div class="doc-band">' +
+          '<img class="band-logo" src="' + escapeAttrLocal(docLogoSrc()) + '" alt="Logo" />' +
+          '<div class="band-meta">' +
+            '<div><span class="doc-label">Proposal</span> ' + escapeHTMLLocal(estimate.estimateNumber || estimate.number || '—') + '</div>' +
+            '<div><span class="doc-label">Date</span> ' + escapeHTMLLocal(ctx.date) + '</div>' +
+            '<div><span class="doc-label">Valid for</span> ' + validDays + ' days</div>' +
+          '</div>' +
+        '</div>' +
+        (licence ? '<div class="doc-licence">' + escapeHTMLLocal(licence) + '</div>' : '');
+      },
+      cover: function () {
+        var hero = (ctx.proposalAttachments || []).filter(function (a) {
+          return /^image\//.test(a.mime_type || '');
+        })[0];
+        var img = hero ? (hero.web_url || hero.original_url) : '';
+        return '<section class="doc-cover"' + (img ? ' style="background-image:linear-gradient(180deg,rgba(15,35,70,.55),rgba(15,35,70,.88)),url(\'' + escapeAttrLocal(img) + '\');"' : '') + '>' +
+          '<img class="cover-logo" src="' + escapeAttrLocal(docLogoSrc()) + '" alt="Logo" />' +
+          '<h1 class="cover-title">' + escapeHTMLLocal(estimate.community || estimate.title || 'Proposal') + '</h1>' +
+          '<div class="cover-sub">' + escapeHTMLLocal(estimate.title || '') + '</div>' +
+          '<div class="cover-meta">' +
+            '<span>' + escapeHTMLLocal(ctx.date) + '</span>' +
+            '<span>Valid ' + validDays + ' days</span>' +
+            (licence ? '<span>' + escapeHTMLLocal(licence) + '</span>' : '') +
+          '</div>' +
+        '</section>';
+      },
+      rfpCover: function () {
+        return '<section class="doc-rfp-cover">' +
+          '<img class="band-logo" src="' + escapeAttrLocal(docLogoSrc()) + '" alt="Logo" />' +
+          '<h1 class="proposal-title">Bid Proposal — ' + escapeHTMLLocal(estimate.title || 'Untitled') + '</h1>' +
+          '<table class="doc-kv"><tbody>' +
+            '<tr><td>Association / Owner</td><td>' + escapeHTMLLocal(estimate.community || ctx.community || '—') + '</td></tr>' +
+            '<tr><td>Project</td><td>' + escapeHTMLLocal(estimate.issue || estimate.title || '—') + '</td></tr>' +
+            '<tr><td>Submitted</td><td>' + escapeHTMLLocal(ctx.date) + '</td></tr>' +
+            '<tr><td>Bid valid for</td><td>' + validDays + ' days</td></tr>' +
+          '</tbody></table>' +
+        '</section>';
+      },
+      meta: function () {
+        return '<div class="proposal-meta">' +
+          '<div class="meta-left">' + prep.clientLineLeft + '</div>' +
+          '<div class="meta-right">' +
+            (prep.jobAddrRight ? '<div class="meta-label">Job Address:</div>' + prep.jobAddrRight : '') +
+            '<div class="meta-print-date"><span class="meta-label">Print Date:</span> ' + escapeHTMLLocal(ctx.date) + '</div>' +
+          '</div>' +
+        '</div>';
+      },
+      projectBlock: function () {
+        return '<table class="doc-kv"><tbody>' +
+          '<tr><td>Prepared for</td><td>' + escapeHTMLLocal(estimate.community || ctx.community || '—') + '</td></tr>' +
+          '<tr><td>Project</td><td>' + escapeHTMLLocal(estimate.title || '') + '</td></tr>' +
+          (estimate.propertyAddr ? '<tr><td>Property</td><td>' + escapeHTMLLocal(estimate.propertyAddr) + '</td></tr>' : '') +
+        '</tbody></table>';
+      },
+      serviceMeta: function () {
+        return '<div class="doc-servicemeta">' +
+          '<div><span class="doc-label">Client</span> ' + escapeHTMLLocal(estimate.community || ctx.community || '—') + '</div>' +
+          (estimate.propertyAddr ? '<div><span class="doc-label">Service address</span> ' + escapeHTMLLocal(estimate.propertyAddr) + '</div>' : '') +
+        '</div>';
+      },
+      title: function () {
+        return '<h1 class="proposal-title">Proposal for ' + escapeHTMLLocal(estimate.title || 'Untitled') + '</h1>';
+      },
+      intro: function () { return '<p class="intro">' + prep.introHTML + '</p>'; },
+      about: function () { return '<p class="about">' + escapeHTMLLocal(template.about_paragraph || '') + '</p>'; },
+      divider: function () { return '<hr class="divider" />'; },
+      scopeHeading: function () {
+        return '<h2 class="section-heading">Scope of Work' +
+          (estimate.issue ? ' &mdash; ' + escapeHTMLLocal(estimate.issue) : '') + '</h2>';
+      },
+      scope: function () { return prep.scopeHTML; },
+      scopeStatement: function () {
+        var first = includedAlts[0];
+        var s = (first && first.scope) || estimate.scopeOfWork || '';
+        var txt = String(s).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        if (txt.length > 420) txt = txt.slice(0, 417) + '…';
+        return heading('Scope') + (txt ? '<p class="doc-para">' + escapeHTMLLocal(txt) + '</p>' : '');
+      },
+      understanding: function () {
+        return heading('Understanding of the Work') + '<p class="intro">' + prep.introHTML + '</p>';
+      },
+      problemStatement: function () {
+        return '<p class="doc-para doc-lead">' + prep.introHTML + '</p>';
+      },
+      scopeNarrative: function () {
+        var out = heading('Scope of Work');
+        includedAlts.forEach(function (alt) {
+          out += '<h4 class="doc-subhead">' + escapeHTMLLocal(alt.name || 'Scope') + '</h4>' +
+            (scopeBodyHTML(alt.scope) || '<p class="doc-muted">Scope not entered for this group.</p>');
+        });
+        return out;
+      },
+      sovTable: function () {
+        return heading('Schedule of Values') + pricedTable(estimate, includedAlts, cfg, {}) + this.contractTotal();
+      },
+      baseBidTable: function () {
+        return heading('Base Bid') + pricedTable(estimate, includedAlts, cfg, { valueLabel: 'Amount' }) +
+          '<div class="total-block"><span class="total-label">Base Bid Total:</span> ' +
+          '<span class="total-amount">' + escapeHTMLLocal(ctx.total) + '</span></div>';
+      },
+      lineTable: function () {
+        return pricedTable(estimate, includedAlts, cfg, { valueLabel: 'Price' });
+      },
+      alternatesTable: function () {
+        if (!excluded.length) {
+          return heading('Alternates') + '<p class="doc-muted">No alternates offered with this bid.</p>';
+        }
+        var rows = '';
+        excluded.forEach(function (alt, i) {
+          var t = computeGroupTotal(estimate, alt.id);
+          rows += '<tr>' +
+            '<td class="c-no">' + String.fromCharCode(65 + i) + '</td>' +
+            '<td class="c-desc">' + escapeHTMLLocal(alt.name || 'Alternate') + '</td>' +
+            '<td class="c-unit">ADD</td>' +
+            '<td class="c-money">' + moneyCell(t || 0) + '</td>' +
+          '</tr>';
+        });
+        return heading('Alternates') +
+          '<p class="doc-muted doc-small">Priced separately and not included in the base bid. The owner may accept any, all, or none.</p>' +
+          '<table class="doc-table"><thead><tr><th class="c-no">Alt</th><th class="c-desc">Description</th>' +
+          '<th class="c-unit">Add / Deduct</th><th class="c-money">Amount</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      },
+      unitPriceTable: function () {
+        // Unit prices published for comparison. Derived from the priced lines
+        // that carry a unit — boards may deem a bid non-responsive if unit
+        // pricing can't be produced on request.
+        var allLines = (window.appData && window.appData.estimateLines) || [];
+        var seen = {};
+        var rows = '';
+        includedAlts.forEach(function (alt) {
+          groupSections(estimate, alt.id).forEach(function (sec) {
+            sec.items.forEach(function (l) {
+              var u = (l.unit || '').trim();
+              if (!u || !l.description) return;
+              var key = (l.description + '|' + u).toLowerCase();
+              if (seen[key]) return;
+              seen[key] = 1;
+              var m = lineMoney(estimate, l, allLines);
+              if (!m.unitSell) return;
+              rows += '<tr><td class="c-desc">' + escapeHTMLLocal(l.description) + '</td>' +
+                '<td class="c-unit">' + escapeHTMLLocal(u) + '</td>' +
+                '<td class="c-money">' + moneyCell(m.unitSell) + '</td></tr>';
+            });
+          });
+        });
+        if (!rows) return '';
+        return heading('Unit Prices') +
+          '<p class="doc-muted doc-small">Applied to additive or deductive work authorized in writing.</p>' +
+          '<table class="doc-table"><thead><tr><th class="c-desc">Item</th><th class="c-unit">Unit</th>' +
+          '<th class="c-money">Unit Price</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      },
+      tierCards: function () {
+        var tiers = includedAlts.concat(excluded);
+        if (!tiers.length) return '<p class="doc-muted">Add a scope group per option to build tiers.</p>';
+        var mid = tiers.length >= 3 ? 1 : (tiers.length === 2 ? 1 : 0);
+        var cards = '';
+        tiers.forEach(function (alt, i) {
+          var t = computeGroupTotal(estimate, alt.id);
+          cards += '<div class="tier' + (i === mid ? ' tier-rec' : '') + '">' +
+            (i === mid ? '<div class="tier-badge">AGX Recommends</div>' : '') +
+            '<div class="tier-name">' + escapeHTMLLocal(alt.name || ('Option ' + (i + 1))) + '</div>' +
+            '<div class="tier-price">' + moneyCell(t || 0) + '</div>' +
+            '<div class="tier-body">' + (scopeBodyHTML(alt.scope) || '<p class="doc-muted">Scope not entered.</p>') + '</div>' +
+          '</div>';
+        });
+        return '<div class="tier-grid">' + cards + '</div>';
+      },
+      includedInEvery: function () {
+        return heading('Included with every option') +
+          '<ul class="doc-list">' +
+            '<li>Full workmanship warranty</li>' +
+            '<li>Licensed and insured crews; certificate provided on request</li>' +
+            '<li>Daily cleanup and debris removal</li>' +
+            '<li>Resident notification and a single point of contact</li>' +
+          '</ul>';
+      },
+      selectionLine: function () {
+        return '<div class="doc-select"><span class="doc-label">Selected option:</span> <span class="sig-line"></span></div>';
+      },
+      investmentSummary: function () {
+        var rows = '';
+        includedAlts.forEach(function (alt) {
+          var t = computeGroupTotal(estimate, alt.id);
+          rows += '<tr><td class="c-desc">' + escapeHTMLLocal(alt.name || 'Scope') + '</td>' +
+            '<td class="c-money">' + moneyCell(t || 0) + '</td></tr>';
+        });
+        return heading('Investment Summary') +
+          '<table class="doc-table"><tbody>' + rows +
+          '<tr class="tot-row"><td class="c-desc">Contract Total</td><td class="c-money">' +
+          escapeHTMLLocal(ctx.total) + '</td></tr></tbody></table>';
+      },
+      contractTotal: function () {
+        return '<div class="total-block"><span class="total-label">Contract Total:</span> ' +
+          '<span class="total-amount">' + escapeHTMLLocal(ctx.total) + '</span></div>';
+      },
+      total: function () {
+        return '<div class="total-block"><span class="total-label">Total Price:</span> ' +
+          '<span class="total-amount">' + escapeHTMLLocal(ctx.total) + '</span></div>';
+      },
+      totalsBlock: function () {
+        return '<div class="total-block"><span class="total-label">Total:</span> ' +
+          '<span class="total-amount">' + escapeHTMLLocal(ctx.total) + '</span></div>';
+      },
+      optionalRows: function () {
+        if (!excluded.length) return '';
+        var rows = '';
+        excluded.forEach(function (alt) {
+          var t = computeGroupTotal(estimate, alt.id);
+          rows += '<tr>' +
+            '<td class="c-check"><span class="doc-box"></span></td>' +
+            '<td class="c-desc">' + escapeHTMLLocal(alt.name || 'Additional work') + '</td>' +
+            '<td class="c-money">' + moneyCell(t || 0) + '</td></tr>';
+        });
+        return heading('Optional — while we are on site') +
+          '<p class="doc-muted doc-small">Check any you would like added; the total adjusts accordingly.</p>' +
+          '<table class="doc-table"><tbody>' + rows + '</tbody></table>';
+      },
+      paymentSchedule: function () {
+        return heading('Payment Schedule') +
+          '<p class="doc-para">Progress billing against the schedule of values above, invoiced monthly on work completed to date. ' +
+          'Retainage of 10% is held on each draw and released at final acceptance.</p>';
+      },
+      warrantyCO: function () {
+        return heading('Warranty &amp; Changes') +
+          '<p class="doc-para">All workmanship is warranted for one year from substantial completion. Manufacturer warranties on ' +
+          'materials pass through to the association. Any change in scope, quantity, or conditions discovered after start will be ' +
+          'priced and authorized in writing as a change order before the work proceeds.</p>';
+      },
+      schedulePhasing: function () {
+        return heading('Schedule &amp; Access') +
+          '<p class="doc-para">Work is phased to keep buildings and walkways in service. Residents receive written notice before ' +
+          'work reaches their building, and a single AGX point of contact is available to management for the duration of the project.</p>';
+      },
+      qualifications: function () {
+        return heading('Qualifications') +
+          '<ul class="doc-list">' +
+            '<li>Licensed and insured in the State of Florida' + (licence ? ' — ' + escapeHTMLLocal(licence) : '') + '</li>' +
+            '<li>Certificate of insurance naming the association as additional insured, on request</li>' +
+            '<li>References from comparable HOA and property-management projects, on request</li>' +
+          '</ul>';
+      },
+      exclusions: function () {
+        if (!prep.exclusionsHTML) return '';
+        return '<h2 class="section-heading italic-heading">Assumptions, Clarifications and Exclusions:</h2>' +
+          '<ol class="exclusions">' + prep.exclusionsHTML + '</ol>';
+      },
+      shortTerms: function () {
+        return '<p class="doc-small doc-muted">' + escapeHTMLLocal(template.signature_text || '') + '</p>';
+      },
+      attachments: function () { return renderAttachmentsBlock(ctx.proposalAttachments); },
+      sigIntro: function () { return '<p class="sig-intro">' + escapeHTMLLocal(template.signature_text || '') + '</p>'; },
+      signature: function () { return sigRows(false); },
+      signatureSingle: function () {
+        return '<div class="sig-block"><div class="sig-row"><span class="sig-label">Approved by:</span> <span class="sig-line"></span></div></div>';
+      },
+      // Boards sign by officer TITLE — a signature line without one is a
+      // document their attorney sends back.
+      signatureTitled: function () {
+        return '<p class="sig-intro">' + escapeHTMLLocal(template.signature_text || '') + '</p>' + sigRows(true);
+      }
+    };
+  }
+
   function buildProposalHTML(estimate, template, ctx) {
     var clientLineLeft = '';
     // Client / community / address lines all render at the same
@@ -336,65 +778,45 @@
       exclusionsHTML += '<li>' + escapeHTMLLocal(item) + '</li>';
     });
 
-    var html =
-      '<div class="p86-proposal">' +
-        '<div class="proposal-header">' +
-          '<img src="images/logo-color.png" alt="AG Exteriors" style="height:64px;display:block;margin:0 auto 8px;" />' +
-          '<div class="company-line">' + escapeHTMLLocal(template.company_header || '') + '</div>' +
-        '</div>' +
+    // Everything above is PREP — the same data the original single-layout
+    // proposal computed. What follows is the layout WALK: the chosen layout
+    // names its sections in order, and each one is drawn by the matching
+    // builder. 'letterhead' lists exactly the sections the hardcoded document
+    // used to emit, in the same order, so the default output is unchanged.
+    var layout = currentProposalLayout();
+    var cfg = layout.pricing || {};
+    var prep = {
+      clientLineLeft: clientLineLeft,
+      jobAddrRight: jobAddrRight,
+      introHTML: introHTML,
+      scopeHTML: scopeHTML,
+      exclusionsHTML: exclusionsHTML,
+      includedAlts: includedAlts
+    };
+    var sections = buildSections(estimate, template, ctx, cfg, prep);
 
-        '<div class="proposal-meta">' +
-          '<div class="meta-left">' + clientLineLeft + '</div>' +
-          '<div class="meta-right">' +
-            (jobAddrRight ? '<div class="meta-label">Job Address:</div>' + jobAddrRight : '') +
-            '<div class="meta-print-date"><span class="meta-label">Print Date:</span> ' + escapeHTMLLocal(ctx.date) + '</div>' +
-          '</div>' +
-        '</div>' +
+    var body = '';
+    (layout.sections || []).forEach(function (key) {
+      var fn = sections[key];
+      // An unknown key is a REGISTRY BUG, and it must be loud. Skipping it
+      // silently is the worst available behaviour: a one-character typo in a
+      // layout's section list would drop the pricing table out of a proposal
+      // and still produce a document that reads as complete. Same treatment as
+      // a builder that throws — say so on the page and in the console.
+      if (typeof fn !== 'function') {
+        console.error('[preview] layout "' + layout.id + '" names unknown section "' + key + '"');
+        body += '<p class="doc-muted doc-small">[' + escapeHTMLLocal(key) + ' could not be rendered]</p>';
+        return;
+      }
+      try {
+        body += fn.call(sections) || '';
+      } catch (e) {
+        console.error('[preview] section "' + key + '" failed', e);
+        body += '<p class="doc-muted doc-small">[' + escapeHTMLLocal(key) + ' could not be rendered]</p>';
+      }
+    });
 
-        '<h1 class="proposal-title">Proposal for ' + escapeHTMLLocal(estimate.title || 'Untitled') + '</h1>' +
-
-        // Greeting now opens with the company line directly — no
-        // "Dear [Salutation]" prefix. Matches the new AGX proposal
-        // format the user shared (more ambiguous, no name-personalization).
-        '<p class="intro">' + introHTML + '</p>' +
-
-        '<p class="about">' + escapeHTMLLocal(template.about_paragraph || '') + '</p>' +
-
-        '<hr class="divider" />' +
-
-        // Scope heading uses an em-dash separator + title-case issue
-        // (e.g. "Scope of Work — Gutter Replacement & Installation")
-        // instead of "Scope of Work: GUTTER REPLACEMENT...". Reads
-        // cleaner on the printed proposal.
-        '<h2 class="section-heading">Scope of Work' +
-          (estimate.issue ? ' &mdash; ' + escapeHTMLLocal(estimate.issue) : '') +
-        '</h2>' +
-        scopeHTML +
-
-        '<div class="total-block">' +
-          '<span class="total-label">Total Price:</span> ' +
-          '<span class="total-amount">' + escapeHTMLLocal(ctx.total) + '</span>' +
-        '</div>' +
-
-        '<h2 class="section-heading italic-heading">Assumptions, Clarifications and Exclusions:</h2>' +
-        '<ol class="exclusions">' + exclusionsHTML + '</ol>' +
-
-        // Attached photos / documents — every attachment with
-        // include_in_proposal=true on either the estimate itself or the
-        // originating lead. Photos render as a 2-up grid; PDFs/docs
-        // appear as a small bulleted list with a download note.
-        renderAttachmentsBlock(ctx.proposalAttachments) +
-
-        '<p class="sig-intro">' + escapeHTMLLocal(template.signature_text || '') + '</p>' +
-
-        '<div class="sig-block">' +
-          '<div class="sig-row"><span class="sig-label">Signature:</span> <span class="sig-line"></span></div>' +
-          '<div class="sig-row"><span class="sig-label">Date:</span> <span class="sig-line"></span></div>' +
-          '<div class="sig-row"><span class="sig-label">Print Name:</span> <span class="sig-line"></span></div>' +
-        '</div>' +
-      '</div>';
-
-    return html;
+    return '<div class="p86-proposal layout-' + escapeAttrLocal(layout.id) + '">' + body + '</div>';
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -431,96 +853,242 @@
       }).join('');
     }
 
-    // Per included group: scope (h2) → line table grouped by section.
-    // Section headers come from line.section === '__section_header__'
-    // rows; everything between two section headers belongs to the
-    // earlier section. We rebuild that grouping here instead of
-    // assuming the editor's render order survived the data model.
-    var includedIds = includedGroupIds(estimate);
-    var includedAlts = (estimate.alternates || []).filter(function(a) { return includedIds.indexOf(a.id) >= 0; });
+    // ── Takeoff LEVEL ──────────────────────────────────────────────
+    // One estimate, several reports. The level (js/estimate-doc-layouts.js)
+    // picks the column set and the grouping; nothing below re-derives
+    // quantities, so every level is the SAME numbers at a different
+    // resolution. A level marked `partial` prints a banner naming exactly what
+    // the data model cannot supply — a takeoff that looks complete while
+    // silently omitting half a pull sheet is worse than one that says so.
+    var level = currentTakeoffLevel();
+    var lcfg = level.pricing || {};
+    var includedAlts = includedAltsOf(estimate);
+    var allLines = (window.appData && window.appData.estimateLines) || [];
 
-    var groupsHTML = '';
-    if (!includedAlts.length) {
-      groupsHTML = '<p style="color:#999;font-style:italic;">No groups included for this takeoff. Toggle at least one group on in the Line Items tab.</p>';
-    } else {
-      includedAlts.forEach(function(alt, gIdx) {
-        var altLines = (window.appData.estimateLines || []).filter(function(l) {
-          return l.estimateId === estimate.id && l.alternateId === alt.id;
-        });
-        // Group lines into { sectionName: [items] } in the order the
-        // editor showed them. A section header without follow-on
-        // lines still surfaces as an empty subsection so the field
-        // team knows the bucket exists but has nothing in it.
-        var sections = [];
-        var currentSection = null;
-        altLines.forEach(function(l) {
-          if (l.section === '__section_header__') {
-            currentSection = { name: l.description || 'Section', items: [] };
-            sections.push(currentSection);
-            return;
-          }
-          if (!currentSection) {
-            // Edge case: lines exist before any header — slot them
-            // into a synthetic "(uncategorized)" section.
-            currentSection = { name: '(uncategorized)', items: [] };
-            sections.push(currentSection);
-          }
-          currentSection.items.push(l);
-        });
+    function money(n) { return escapeHTMLLocal(fmtProposalCurrency(n)); }
+    function pct(n) { return (Math.round(n * 10) / 10) + '%'; }
 
-        // Per-group title + scope + line table
-        var scopeText = (alt.scope || '').trim();
-        groupsHTML += '<section class="takeoff-group" style="' + (gIdx === 0 ? '' : 'page-break-before:always;') + '">';
-        if (includedAlts.length > 1) {
-          groupsHTML += '<h2 class="section-heading" style="margin-top:18px;">' + escapeHTMLLocal(alt.name || ('Group ' + (gIdx + 1))) + '</h2>';
-        }
-        // Scope of work
-        groupsHTML += '<h3 class="takeoff-subheading">Scope of Work</h3>';
-        if (scopeText) {
-          groupsHTML += '<div class="scope-text">' +
-            scopeText.split(/\n+/).map(function(p) { return '<p>' + escapeHTMLLocal(p) + '</p>'; }).join('') +
-          '</div>';
-        } else {
-          groupsHTML += '<p style="color:#999;font-style:italic;">Scope not entered for this group.</p>';
-        }
+    // Column registry. Each `cell(v)` receives {line, money, groupName, sectionName}.
+    // Columns a level asks for but the model cannot fill render as WRITE-IN
+    // cells (spec, notes) rather than fabricated values.
+    var COLS = {
+      scope:       { label: 'Scope',       cls: 'c-desc',  cell: function (v) { return escapeHTMLLocal(v.groupName || ''); } },
+      section:     { label: 'Section',     cls: 'c-sec',   cell: function (v) { return escapeHTMLLocal(v.sectionName || ''); } },
+      item:        { label: 'Item',        cls: 'c-desc',  cell: function (v) { return escapeHTMLLocal(v.line.description || ''); } },
+      description: { label: 'Description', cls: 'c-desc',  cell: function (v) { return escapeHTMLLocal(v.line.description || ''); } },
+      material:    { label: 'Material',    cls: 'c-desc',  cell: function (v) { return escapeHTMLLocal(v.line.description || ''); } },
+      spec:        { label: 'Spec / Size', cls: 'c-write', cell: function () { return ''; } },
+      location:    { label: 'Location',    cls: 'c-sec',   cell: function (v) { return escapeHTMLLocal(v.groupName || ''); } },
+      qty:         { label: 'Qty',         cls: 'c-qty',   cell: function (v) { return escapeHTMLLocal(v.line.qty != null ? String(v.line.qty) : ''); } },
+      unit:        { label: 'Unit',        cls: 'c-unit',  cell: function (v) { return escapeHTMLLocal(v.line.unit || ''); } },
+      unitCost:    { label: 'Unit Cost',   cls: 'c-money', cell: function (v) { return money(v.money.unitCost); } },
+      markup:      { label: 'Markup',      cls: 'c-qty',   cell: function (v) { return escapeHTMLLocal(pct(v.money.markup)); } },
+      unitSell:    { label: 'Unit Price',  cls: 'c-money', cell: function (v) { return money(v.money.unitSell); } },
+      extCost:     { label: 'Ext. Cost',   cls: 'c-money', cell: function (v) { return money(v.money.extCost); } },
+      extSell:     { label: 'Ext. Price',  cls: 'c-money', cell: function (v) { return money(v.money.extSell); } },
+      extended:    { label: 'Extended',    cls: 'c-money', cell: function (v) { return money(v.money.extSell); } },
+      price:       { label: 'Price',       cls: 'c-money', cell: function (v) { return money(v.money.extSell); } },
+      margin:      { label: 'Margin',      cls: 'c-qty',   cell: function (v) {
+                       var s = v.money.extSell;
+                       return s ? escapeHTMLLocal(pct(((s - v.money.extCost) / s) * 100)) : '—';
+                     } },
+      notes:       { label: 'Notes',       cls: 'c-write', cell: function () { return ''; } },
+      received:    { label: '✓',           cls: 'c-check', cell: function () { return '<span class="doc-box"></span>'; } }
+    };
 
-        // Line items grouped by section. Three columns: description,
-        // qty, unit. No prices on this document — that's the whole
-        // point of the takeoff vs the proposal.
-        groupsHTML += '<h3 class="takeoff-subheading">Line Items</h3>';
-        if (!sections.length || !sections.some(function(s) { return s.items.length > 0; })) {
-          groupsHTML += '<p style="color:#999;font-style:italic;">No line items entered for this group.</p>';
-        } else {
-          sections.forEach(function(sec) {
-            if (!sec.items.length) return;
-            groupsHTML += '<div class="takeoff-section">' +
-              '<div class="takeoff-section-name">' + escapeHTMLLocal(sec.name) + '</div>' +
-              '<table class="takeoff-table">' +
-                '<thead><tr>' +
-                  '<th class="col-desc">Description</th>' +
-                  '<th class="col-qty">Qty</th>' +
-                  '<th class="col-unit">Unit</th>' +
-                '</tr></thead>' +
-                '<tbody>';
-            sec.items.forEach(function(l) {
-              var qty = l.qty != null && l.qty !== '' ? l.qty : '';
-              groupsHTML += '<tr>' +
-                '<td class="col-desc">' + escapeHTMLLocal(l.description || '') + '</td>' +
-                '<td class="col-qty">' + escapeHTMLLocal(String(qty)) + '</td>' +
-                '<td class="col-unit">' + escapeHTMLLocal(l.unit || '') + '</td>' +
-              '</tr>';
-            });
-            groupsHTML += '</tbody></table></div>';
-          });
-        }
-        groupsHTML += '</section>';
-      });
+    function colDefs(keys) {
+      return (keys || []).map(function (k) { return COLS[k] ? { key: k, def: COLS[k] } : null; }).filter(Boolean);
+    }
+    function headRow(defs) {
+      return '<thead><tr>' + defs.map(function (d) {
+        return '<th class="' + d.def.cls + '">' + escapeHTMLLocal(d.def.label) + '</th>';
+      }).join('') + '</tr></thead>';
+    }
+    function dataRow(defs, v, extraCls) {
+      return '<tr' + (extraCls ? ' class="' + extraCls + '"' : '') + '>' + defs.map(function (d) {
+        return '<td class="' + d.def.cls + '">' + d.def.cell(v) + '</td>';
+      }).join('') + '</tr>';
+    }
+    function spanRow(defs, text, cls) {
+      return '<tr class="' + cls + '"><td colspan="' + defs.length + '">' + escapeHTMLLocal(text) + '</td></tr>';
+    }
+    // Land a subtotal under the LAST money column so it never prints in a text
+    // column — the levels do not share a column count.
+    function moneyFootRow(defs, label, amount) {
+      var lastMoney = -1;
+      defs.forEach(function (d, i) { if (d.def.cls === 'c-money') lastMoney = i; });
+      if (lastMoney < 0) return '';
+      var post = defs.length - lastMoney - 1;
+      return '<tr class="sub-row">' +
+        (lastMoney ? '<td colspan="' + lastMoney + '">' + escapeHTMLLocal(label) + '</td>' : '') +
+        '<td class="c-money">' + money(amount) + '</td>' +
+        (post ? '<td colspan="' + post + '"></td>' : '') +
+      '</tr>';
     }
 
+    var defs = colDefs(level.columns);
+    if (!defs.length) defs = colDefs(['description', 'qty', 'unit']);
+
+    // ── Level bodies ───────────────────────────────────────────────
+    function bodyGroupSection() {
+      var out = '';
+      includedAlts.forEach(function (alt, gIdx) {
+        var secs = groupSections(estimate, alt.id);
+        out += '<section class="takeoff-group"' + (gIdx ? ' style="page-break-before:always;"' : '') + '>';
+        out += '<h2 class="section-heading">' + escapeHTMLLocal(alt.name || ('Group ' + (gIdx + 1))) + '</h2>';
+        var sc = (alt.scope || '').trim();
+        if (sc) out += '<h3 class="takeoff-subheading">Scope of Work</h3><div class="scope-text">' + scopeBodyHTML(sc) + '</div>';
+        out += '<h3 class="takeoff-subheading">' + (level.id === 't5' ? 'Materials' : 'Line Items') + '</h3>';
+        if (!secs.some(function (s) { return s.items.length; })) {
+          out += '<p class="doc-muted">No line items entered for this group.</p></section>';
+          return;
+        }
+        out += '<table class="doc-table takeoff-table">' + headRow(defs) + '<tbody>';
+        secs.forEach(function (sec) {
+          if (!sec.items.length) return;
+          out += spanRow(defs, sec.name, 'sec-row');
+          sec.items.forEach(function (l) {
+            out += dataRow(defs, { line: l, money: lineMoney(estimate, l, allLines), groupName: alt.name, sectionName: sec.name });
+          });
+        });
+        if (lcfg.subtotals) {
+          var sub = computeGroupTotal(estimate, alt.id);
+          if (sub != null) out += moneyFootRow(defs, 'Subtotal — ' + (alt.name || 'Scope'), sub);
+        }
+        out += '</tbody></table></section>';
+      });
+      return out;
+    }
+
+    // T1: one row per scope group. Qty deliberately collapses to "lot" — a
+    // group is not a countable thing, and summing SF + EA + LF would print a
+    // number that means nothing.
+    function bodyGroup() {
+      var out = '<table class="doc-table takeoff-table"><thead><tr>' +
+        '<th class="c-desc">Scope</th><th class="c-desc">Covers</th>' +
+        '<th class="c-qty">Lines</th><th class="c-unit">Unit</th>' +
+        (lcfg.subtotals ? '<th class="c-money">Price</th>' : '') +
+      '</tr></thead><tbody>';
+      includedAlts.forEach(function (alt) {
+        var secs = groupSections(estimate, alt.id);
+        var count = 0;
+        secs.forEach(function (s) { count += s.items.length; });
+        var sub = computeGroupTotal(estimate, alt.id);
+        var names = secs.filter(function (s) { return s.items.length; }).map(function (s) { return s.name; });
+        out += '<tr>' +
+          '<td class="c-desc">' + escapeHTMLLocal(alt.name || 'Scope') + '</td>' +
+          '<td class="c-desc">' + (names.length ? escapeHTMLLocal(names.join(' · ')) : '<span class="doc-muted">—</span>') + '</td>' +
+          '<td class="c-qty">' + count + '</td>' +
+          '<td class="c-unit">lot</td>' +
+          (lcfg.subtotals ? '<td class="c-money">' + money(sub || 0) + '</td>' : '') +
+        '</tr>';
+      });
+      out += '</tbody></table>';
+      if (lcfg.total) out += '<div class="total-block"><span class="total-label">Total:</span> <span class="total-amount">' + escapeHTMLLocal(ctx.total) + '</span></div>';
+      return out;
+    }
+
+    // T2: scope groups down the side, SECTIONS across the top. Sections are the
+    // only repeating axis an estimate actually has today — see the level's
+    // caveat banner, which prints above this table.
+    function bodyMatrix() {
+      var colNames = [];
+      includedAlts.forEach(function (alt) {
+        groupSections(estimate, alt.id).forEach(function (s) {
+          if (s.items.length && colNames.indexOf(s.name) < 0) colNames.push(s.name);
+        });
+      });
+      if (!colNames.length) return '<p class="doc-muted">Nothing to pivot — no section carries line items.</p>';
+      var out = '<table class="doc-table matrix-table"><thead><tr><th class="c-desc">Scope</th>' +
+        colNames.map(function (n) { return '<th class="c-qty">' + escapeHTMLLocal(n) + '</th>'; }).join('') +
+        '<th class="c-money">Row Total</th></tr></thead><tbody>';
+      includedAlts.forEach(function (alt) {
+        var byName = {};
+        groupSections(estimate, alt.id).forEach(function (s) {
+          var t = 0;
+          s.items.forEach(function (l) { t += lineMoney(estimate, l, allLines).extSell; });
+          byName[s.name] = (byName[s.name] || 0) + t;
+        });
+        var sub = computeGroupTotal(estimate, alt.id);
+        out += '<tr><td class="c-desc">' + escapeHTMLLocal(alt.name || 'Scope') + '</td>' +
+          colNames.map(function (n) {
+            return '<td class="c-qty">' + (byName[n] ? money(byName[n]) : '<span class="doc-muted">—</span>') + '</td>';
+          }).join('') +
+          '<td class="c-money">' + money(sub || 0) + '</td></tr>';
+      });
+      out += '</tbody></table>';
+      if (lcfg.total) out += '<div class="total-block"><span class="total-label">Total:</span> <span class="total-amount">' + escapeHTMLLocal(ctx.total) + '</span></div>';
+      return out;
+    }
+
+    // T3: rollup lines carry an assemblyBreakdown snapshot — leaf rows per ONE
+    // output unit. Component qty = line.qty x qty_per_unit, the same math the
+    // editor's breakdown strip prints, so the two documents never disagree.
+    // A line with no breakdown (already exploded, or hand-typed) renders flat.
+    function bodyAssembly() {
+      var out = '';
+      includedAlts.forEach(function (alt, gIdx) {
+        out += '<section class="takeoff-group"' + (gIdx ? ' style="page-break-before:always;"' : '') + '>';
+        out += '<h2 class="section-heading">' + escapeHTMLLocal(alt.name || ('Group ' + (gIdx + 1))) + '</h2>';
+        var secs = groupSections(estimate, alt.id);
+        if (!secs.some(function (s) { return s.items.length; })) {
+          out += '<p class="doc-muted">No line items entered for this group.</p></section>';
+          return;
+        }
+        out += '<table class="doc-table takeoff-table">' + headRow(defs) + '<tbody>';
+        secs.forEach(function (sec) {
+          if (!sec.items.length) return;
+          out += spanRow(defs, sec.name, 'sec-row');
+          sec.items.forEach(function (l) {
+            out += dataRow(defs, { line: l, money: lineMoney(estimate, l, allLines), groupName: alt.name, sectionName: sec.name }, 'asm-parent');
+            var parts = Array.isArray(l.assemblyBreakdown) ? l.assemblyBreakdown : [];
+            parts.forEach(function (b) {
+              if (!b || typeof b !== 'object') return;
+              var q = Math.round((Number(l.qty) || 0) * (Number(b.qty_per_unit) || 0) * 100) / 100;
+              var uc = Number(b.unit_cost) || 0;
+              out += dataRow(defs, {
+                line: { description: '↳ ' + (b.description || '(item)'), qty: q, unit: b.unit || '' },
+                money: { unitCost: uc, unitSell: uc, extCost: q * uc, extSell: q * uc, markup: 0 },
+                groupName: alt.name,
+                sectionName: b.cost_code || sec.name
+              }, 'asm-child');
+            });
+          });
+        });
+        if (lcfg.subtotals) {
+          var sub = computeGroupTotal(estimate, alt.id);
+          if (sub != null) out += moneyFootRow(defs, 'Subtotal — ' + (alt.name || 'Scope'), sub);
+        }
+        out += '</tbody></table></section>';
+      });
+      return out;
+    }
+
+    var groupsHTML;
+    if (!includedAlts.length) {
+      groupsHTML = '<p class="doc-muted">No groups included for this takeoff. Toggle at least one group on in the Line Items tab.</p>';
+    } else if (level.grouping === 'group') {
+      groupsHTML = bodyGroup();
+    } else if (level.grouping === 'matrix') {
+      groupsHTML = bodyMatrix();
+    } else if (level.grouping === 'assembly') {
+      groupsHTML = bodyAssembly();
+    } else {
+      groupsHTML = bodyGroupSection();
+    }
+
+    var audienceBadge = level.audience === 'internal'
+      ? '<div class="doc-flag doc-flag-internal">INTERNAL — contains cost and margin. Not for the client.</div>'
+      : (level.audience === 'field' ? '<div class="doc-flag doc-flag-field">FIELD COPY — no pricing.</div>' : '');
+
+    var caveatBanner = (level.status === 'partial' && level.caveat)
+      ? '<div class="doc-flag doc-flag-caveat"><strong>Known gap:</strong> ' + escapeHTMLLocal(level.caveat) + '</div>'
+      : '';
+
     return (
-      '<div class="p86-proposal p86-takeoff">' +
+      '<div class="p86-proposal p86-takeoff takeoff-' + escapeAttrLocal(level.id) + '">' +
         '<div class="proposal-header">' +
-          '<img src="images/logo-color.png" alt="' + escapeAttrLocal(template.company_header || '') + '" style="height:64px;display:block;margin:0 auto 8px;" />' +
+          '<img src="' + escapeAttrLocal(docLogoSrc()) + '" alt="' + escapeAttrLocal(template.company_header || '') + '" style="height:64px;display:block;margin:0 auto 8px;" />' +
           '<div class="company-line">' + escapeHTMLLocal(template.company_header || '') + '</div>' +
         '</div>' +
         '<div class="proposal-meta">' +
@@ -530,9 +1098,11 @@
             '<div class="meta-print-date"><span class="meta-label">Print Date:</span> ' + escapeHTMLLocal(ctx.date) + '</div>' +
           '</div>' +
         '</div>' +
-        '<h1 class="proposal-title">Material Takeoff &amp; Scope Report' +
+        '<h1 class="proposal-title">' + escapeHTMLLocal(String(level.label).replace(/^T\d+\s*—\s*/, '')) +
           (estimate.title ? ' &mdash; ' + escapeHTMLLocal(estimate.title) : '') +
         '</h1>' +
+        audienceBadge +
+        caveatBanner +
         '<div class="takeoff-disclaimer">' +
           '<strong>ESTIMATED QUANTITIES.</strong> The quantities listed on this report are planning estimates derived from scope review and reference photographs. Field-measured counts may vary based on actual site conditions, finish selections, waste factors, and code-driven attachment requirements. Verify each line at jobsite walkthrough before procurement.' +
         '</div>' +
@@ -621,6 +1191,90 @@
       '.p86-proposal.p86-takeoff .takeoff-table .col-qty { width: 80px; text-align: right; font-family: "SF Mono", Consolas, monospace; }' +
       '.p86-proposal.p86-takeoff .takeoff-table .col-unit { width: 80px; text-align: left; color: #555; }' +
       '.p86-proposal.p86-takeoff .takeoff-group { margin-bottom: 18px; }' +
+      // ── Layout structure ─────────────────────────────────────────────
+      // Structural CSS for the section builders. Everything here is scoped
+      // under .p86-proposal so it inherits the same Arial/11pt/letter-paper
+      // body as the original document — a layout changes the SKELETON, never
+      // the AGX look. Colors stay in the existing palette (#0f2346 navy,
+      // #4f8cff accent, #d97706 warning) so any layout prints as one family.
+      '.p86-proposal .doc-band { display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 2px solid #0f2346; padding-bottom: 10px; margin-bottom: 6px; }' +
+      '.p86-proposal .doc-band .band-logo { height: 52px; width: auto; }' +
+      '.p86-proposal .doc-band .band-meta { text-align: right; font-size: 9.5pt; line-height: 1.6; color: #333; }' +
+      '.p86-proposal .doc-label { display: inline-block; min-width: 62px; font-size: 8.5pt; text-transform: uppercase; letter-spacing: 0.6px; color: #6b7280; }' +
+      '.p86-proposal .doc-licence { font-size: 9pt; color: #6b7280; margin: 0 0 14px; }' +
+
+      // Cover page — the hero image is a background so a missing or slow
+      // attachment degrades to flat navy instead of a broken <img>.
+      '.p86-proposal .doc-cover { background: #0f2346; color: #fff; background-size: cover; background-position: center; padding: 54px 40px 44px; margin: -0.55in -0.6in 26px; text-align: center; page-break-after: avoid; }' +
+      '.p86-proposal .doc-cover .cover-logo { height: 60px; margin: 0 auto 22px; display: block; filter: brightness(0) invert(1); }' +
+      '.p86-proposal .doc-cover .cover-title { font-size: 24pt; font-weight: 700; line-height: 1.2; margin: 0 0 8px; color: #fff; border: 0; padding: 0; }' +
+      '.p86-proposal .doc-cover .cover-sub { font-size: 12pt; color: rgba(255,255,255,0.86); margin-bottom: 22px; }' +
+      '.p86-proposal .doc-cover .cover-meta { display: flex; justify-content: center; flex-wrap: wrap; gap: 18px; font-size: 9.5pt; color: rgba(255,255,255,0.75); border-top: 1px solid rgba(255,255,255,0.25); padding-top: 14px; }' +
+      '.p86-proposal .doc-rfp-cover { border-bottom: 2px solid #0f2346; padding-bottom: 14px; margin-bottom: 18px; }' +
+      '.p86-proposal .doc-rfp-cover .band-logo { height: 52px; margin-bottom: 12px; }' +
+
+      // Key/value project block — the "who and what" table every bid carries.
+      '.p86-proposal .doc-kv { width: 100%; border-collapse: collapse; margin: 0 0 18px; font-size: 10pt; }' +
+      '.p86-proposal .doc-kv td { padding: 5px 8px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }' +
+      '.p86-proposal .doc-kv td:first-child { width: 170px; color: #6b7280; text-transform: uppercase; font-size: 8.5pt; letter-spacing: 0.5px; }' +
+      '.p86-proposal .doc-servicemeta { font-size: 10pt; line-height: 1.7; margin-bottom: 14px; }' +
+
+      // Shared priced table — SOV, base bid, alternates, unit prices and every
+      // takeoff level all render through this one chassis so a client reading
+      // two AGX documents side by side sees one table, not two.
+      '.p86-proposal .doc-table { width: 100%; border-collapse: collapse; margin: 0 0 16px; font-size: 10pt; }' +
+      '.p86-proposal .doc-table th, .p86-proposal .doc-table td { padding: 5px 8px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }' +
+      '.p86-proposal .doc-table th { text-align: left; font-size: 8.5pt; text-transform: uppercase; letter-spacing: 0.5px; color: #555; background: #fafafa; border-bottom: 1px solid #d1d5db; }' +
+      '.p86-proposal .doc-table .c-no { width: 46px; color: #6b7280; font-family: "SF Mono", Consolas, monospace; }' +
+      '.p86-proposal .doc-table .c-desc { width: auto; }' +
+      '.p86-proposal .doc-table .c-sec { width: 130px; color: #555; }' +
+      '.p86-proposal .doc-table .c-qty { width: 74px; text-align: right; font-family: "SF Mono", Consolas, monospace; }' +
+      '.p86-proposal .doc-table .c-unit { width: 74px; color: #555; }' +
+      '.p86-proposal .doc-table .c-money { width: 108px; text-align: right; font-family: "SF Mono", Consolas, monospace; white-space: nowrap; }' +
+      '.p86-proposal .doc-table .c-check { width: 34px; text-align: center; }' +
+      // Write-in columns the estimate model cannot fill (spec, notes). A ruled
+      // blank cell tells the reader it is theirs to complete; an empty one just
+      // looks like missing data.
+      '.p86-proposal .doc-table .c-write { width: 118px; border-bottom: 1px solid #e5e7eb; background: repeating-linear-gradient(180deg, transparent, transparent 90%, #e5e7eb 90%, #e5e7eb 100%); }' +
+      '.p86-proposal .doc-table .grp-row td { background: #0f2346; color: #fff; font-weight: 700; font-size: 9.5pt; letter-spacing: 0.4px; padding: 6px 8px; }' +
+      '.p86-proposal .doc-table .sec-row td { background: #f3f4f6; font-weight: 700; font-size: 9pt; color: #333; border-left: 3px solid #4f8cff; }' +
+      '.p86-proposal .doc-table .sub-row td { font-weight: 700; background: #fafafa; border-top: 1px solid #d1d5db; border-bottom: 1px solid #d1d5db; }' +
+      '.p86-proposal .doc-table .tot-row td { font-weight: 700; font-size: 11pt; border-top: 2px solid #0f2346; border-bottom: none; }' +
+      '.p86-proposal .doc-table .asm-child td { color: #555; font-style: italic; background: #fcfcfd; }' +
+      '.p86-proposal .doc-table .asm-parent td { font-weight: 600; }' +
+      '.p86-proposal .doc-table .doc-empty { color: #9ca3af; font-style: italic; text-align: center; padding: 12px 8px; }' +
+      '.p86-proposal .matrix-table th { text-align: right; }' +
+      '.p86-proposal .matrix-table th:first-child { text-align: left; }' +
+      '.p86-proposal .doc-box { display: inline-block; width: 11px; height: 11px; border: 1px solid #6b7280; border-radius: 2px; vertical-align: middle; }' +
+
+      // Option tiers — three cards across, one flagged as the recommendation.
+      // Grid so 2, 3 or 4 options all lay out without a per-count rule.
+      '.p86-proposal .tier-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin: 18px 0 22px; }' +
+      '.p86-proposal .tier { border: 1px solid #d1d5db; border-radius: 8px; padding: 16px 14px; page-break-inside: avoid; position: relative; }' +
+      '.p86-proposal .tier-rec { border: 2px solid #0f2346; box-shadow: 0 2px 10px rgba(15,35,70,0.12); }' +
+      '.p86-proposal .tier-badge { position: absolute; top: -10px; left: 50%; transform: translateX(-50%); background: #0f2346; color: #fff; font-size: 7.5pt; font-weight: 700; letter-spacing: 0.7px; text-transform: uppercase; padding: 3px 10px; border-radius: 10px; white-space: nowrap; }' +
+      '.p86-proposal .tier-name { font-size: 12pt; font-weight: 700; color: #0f2346; margin-bottom: 4px; }' +
+      '.p86-proposal .tier-price { font-size: 17pt; font-weight: 700; color: #222; font-family: "SF Mono", Consolas, monospace; margin-bottom: 10px; }' +
+      '.p86-proposal .tier-body { font-size: 9.5pt; line-height: 1.5; color: #444; }' +
+      '.p86-proposal .tier-body p { margin: 0 0 6px; }' +
+      '.p86-proposal .doc-select { margin: 16px 0 10px; font-size: 10.5pt; }' +
+
+      // Shared prose bits used across layouts.
+      '.p86-proposal .doc-para { font-size: 10.5pt; line-height: 1.55; margin: 0 0 12px; }' +
+      '.p86-proposal .doc-lead { font-size: 11.5pt; line-height: 1.6; }' +
+      '.p86-proposal .doc-subhead { font-size: 11pt; font-weight: 700; color: #0f2346; margin: 14px 0 5px; }' +
+      '.p86-proposal .doc-list { padding-left: 20px; margin: 6px 0 16px; font-size: 10pt; line-height: 1.6; }' +
+      '.p86-proposal .doc-muted { color: #9ca3af; font-style: italic; }' +
+      '.p86-proposal .doc-small { font-size: 9pt; }' +
+      '.p86-proposal .sig-block .sig-row { margin: 12px 0; }' +
+
+      // Honest flags. The internal one is deliberately loud: a T4 cost sheet
+      // that reaches a client is the expensive mistake this whole document
+      // system could otherwise make easy.
+      '.p86-proposal .doc-flag { padding: 8px 12px; margin: 10px 0 14px; font-size: 9.5pt; line-height: 1.45; border-radius: 4px; }' +
+      '.p86-proposal .doc-flag-internal { background: #fee2e2; border-left: 4px solid #b91c1c; color: #7f1d1d; font-weight: 700; letter-spacing: 0.3px; }' +
+      '.p86-proposal .doc-flag-field { background: #e0f2fe; border-left: 4px solid #0369a1; color: #0c4a6e; font-weight: 700; letter-spacing: 0.3px; }' +
+      '.p86-proposal .doc-flag-caveat { background: #fff8e1; border-left: 4px solid #d97706; color: #4a3500; }' +
       ''
     );
   }
@@ -662,6 +1316,50 @@
   // showing. Survives tab toggles within a session; resets to
   // 'proposal' on hard refresh.
   var _previewMode = 'proposal'; // 'proposal' | 'takeoff'
+
+  // Which document skeleton the proposal and takeoff render as. Persisted per
+  // browser, exactly like _showGroupTotals — an estimator who works one kind of
+  // job shouldn't re-pick their layout on every estimate. Both getters resolve
+  // through the registry, which clamps an unknown id (a retired layout still in
+  // someone's localStorage) to the safe default rather than rendering nothing.
+  var _docLayoutId = (function () {
+    try { return localStorage.getItem('p86-preview-doc-layout') || 'letterhead'; }
+    catch (e) { return 'letterhead'; }
+  })();
+  var _takeoffLevelId = (function () {
+    try { return localStorage.getItem('p86-preview-takeoff-level') || 't4'; }
+    catch (e) { return 't4'; }
+  })();
+
+  function docRegistry() { return window.p86EstimateDocLayouts || null; }
+  function currentProposalLayout() {
+    var reg = docRegistry();
+    // Registry missing (script not loaded) → the letterhead skeleton inline, so
+    // the preview degrades to the pre-layout document instead of a blank pane.
+    if (!reg) {
+      return {
+        id: 'letterhead',
+        sections: ['header', 'meta', 'title', 'intro', 'about', 'divider',
+                   'scopeHeading', 'scope', 'total', 'exclusions', 'attachments',
+                   'sigIntro', 'signature'],
+        pricing: { lines: 'none', subtotals: false, total: true }
+      };
+    }
+    return reg.getProposal(_docLayoutId);
+  }
+  function currentTakeoffLevel() {
+    var reg = docRegistry();
+    if (!reg) {
+      return {
+        id: 't4', label: 'Full Line-Item Cost', audience: 'internal',
+        columns: ['section', 'item', 'qty', 'unit', 'unitCost', 'markup', 'unitSell', 'extCost', 'extSell', 'margin'],
+        grouping: 'group-section',
+        pricing: { lines: 'unit+extended', subtotals: true, total: true, cost: true },
+        status: 'ready'
+      };
+    }
+    return reg.getTakeoff(_takeoffLevelId);
+  }
 
   // Show per-group totals next to each group heading in the proposal
   // preview ("Exterior Paint ($142,500.00)"). Off by default —
@@ -744,17 +1442,52 @@
         '</label>'
       : '';
 
+    // Document picker — the layout list in proposal mode, the takeoff levels in
+    // takeoff mode. Both read the registry (js/estimate-doc-layouts.js), so a
+    // layout added or retired there shows up here with no change to this file.
+    // The <option> titles carry each layout's one-line "when to use it".
+    var reg = docRegistry();
+    var picker = '';
+    var pickerCaption = '';
+    if (reg) {
+      var opts = (mode === 'takeoff') ? reg.listTakeoffs() : reg.listProposals();
+      var cur = (mode === 'takeoff') ? currentTakeoffLevel() : currentProposalLayout();
+      var setter = (mode === 'takeoff') ? 'setEstimateTakeoffLevel' : 'setEstimateDocLayout';
+      picker =
+        '<label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-dim,#aaa);">' +
+          (mode === 'takeoff' ? 'Detail' : 'Layout') +
+          '<select onchange="window.' + setter + '(this.value)" ' +
+            'style="background:var(--bg-soft,#1a1a2e);color:var(--text,#e8e8ef);border:1px solid var(--border,#333);border-radius:6px;padding:4px 8px;font-size:12px;max-width:230px;">' +
+            opts.map(function (o) {
+              return '<option value="' + escapeAttrLocal(o.id) + '"' + (o.id === cur.id ? ' selected' : '') +
+                ' title="' + escapeAttrLocal(o.desc || '') + '">' + escapeHTMLLocal(o.label) + '</option>';
+            }).join('') +
+          '</select>' +
+        '</label>';
+      // The selected document says what it is for in plain language, and an
+      // honest one-line flag when the model can't fully back it.
+      pickerCaption =
+        '<div class="no-print" style="padding:6px 16px;font-size:11.5px;color:var(--text-dim,#8a93a6);border-bottom:1px solid var(--border,#333);background:rgba(255,255,255,0.01);">' +
+          escapeHTMLLocal(cur.desc || '') +
+          (cur.status === 'partial'
+            ? ' <span style="color:#f2a55c;">· Known gap — see the banner on the document.</span>'
+            : '') +
+        '</div>';
+    }
+
     pane.innerHTML =
       '<style>' + getProposalCSS() + '</style>' +
-      '<div class="no-print" style="display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:8px 16px;background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);position:sticky;top:0;z-index:5;">' +
+      '<div class="no-print" style="display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:8px 16px;background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);position:sticky;top:0;z-index:5;flex-wrap:wrap;">' +
         '<div style="margin-right:auto;display:flex;gap:4px;background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:6px;padding:3px;">' +
           modeBtn('proposal', '📄 Proposal') +
           modeBtn('takeoff',  '📋 Takeoff &amp; Scope') +
         '</div>' +
+        picker +
         groupTotalsToggle +
         '<button class="ghost small" onclick="window.invalidateProposalTemplateCache(); renderEstimatePreview();" title="Re-fetch the latest template from the server">&#x21BB; Refresh Template</button>' +
         printBtn +
       '</div>' +
+      pickerCaption +
       '<div id="ee-preview-render" style="padding:20px;background:#1a1a2e;min-height:600px;"><div style="text-align:center;color:#888;padding:40px;">Loading template…</div></div>';
 
     Promise.all([getTemplate(), fetchProposalAttachments(estimate)]).then(function(both) {
@@ -773,6 +1506,23 @@
   // Public toggle hook — flips the preview mode and re-renders.
   function setEstimatePreviewMode(mode) {
     _previewMode = (mode === 'takeoff') ? 'takeoff' : 'proposal';
+    renderEstimatePreview();
+  }
+
+  // Public hooks for the document pickers. Both persist so the estimator's
+  // usual document is what opens next time. The id is stored verbatim and
+  // clamped on READ (registry getters), so a retired layout id sitting in
+  // localStorage degrades to the default instead of breaking the preview.
+  function setEstimateDocLayout(id) {
+    _docLayoutId = String(id || 'letterhead');
+    try { localStorage.setItem('p86-preview-doc-layout', _docLayoutId); }
+    catch (e) { /* private mode, no-op */ }
+    renderEstimatePreview();
+  }
+  function setEstimateTakeoffLevel(id) {
+    _takeoffLevelId = String(id || 't4');
+    try { localStorage.setItem('p86-preview-takeoff-level', _takeoffLevelId); }
+    catch (e) { /* private mode, no-op */ }
     renderEstimatePreview();
   }
 
@@ -864,5 +1614,7 @@
   window.printEstimateTakeoff = printEstimateTakeoff;
   window.setEstimatePreviewMode = setEstimatePreviewMode;
   window.toggleProposalGroupTotals = toggleProposalGroupTotals;
+  window.setEstimateDocLayout = setEstimateDocLayout;
+  window.setEstimateTakeoffLevel = setEstimateTakeoffLevel;
   window.invalidateProposalTemplateCache = invalidateTemplateCache;
 })();
