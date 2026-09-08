@@ -31,6 +31,9 @@ function p86Ask(message, opts) {
     var sign = v < 0 ? '-' : '';
     return sign + '$' + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
   }
+  // Only ever handed calendar days — subs.w9_expires and insurance_expires are
+  // DATE columns, and these values round-trip straight back into them on save.
+  // Take the day as written; rendering it in local time would walk it backwards.
   function fmtDate(d) {
     if (!d) return '';
     var s = String(d);

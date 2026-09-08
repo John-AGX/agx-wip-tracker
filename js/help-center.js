@@ -66,6 +66,9 @@
     return rels.filter(function (r) { return relTime(r) > ack; }).length;
   }
 
+  // Only ever formats releases[].date — a bare 'YYYY-MM-DD' hand-written in
+  // server/feature-catalog.js, never a timestamp. Noon local is deliberate:
+  // plain new Date(iso) reads UTC midnight and prints the day before in Tampa.
   function fmtDate(iso) {
     try {
       var d = new Date(iso + 'T12:00:00');

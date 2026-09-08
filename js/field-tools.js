@@ -41,6 +41,9 @@ function p86Ask(message, opts) {
     return Math.ceil(n / 1024) + ' KB';
   }
 
+  // Everything that lands here is a real instant, not a calendar date: the only
+  // caller passes t.updated_at, a TIMESTAMPTZ the routes always stamp with NOW().
+  // Local time is the right rendering for those, so leave the date-only guard out.
   function fmtDate(s) {
     if (!s) return '';
     try { return new Date(s).toLocaleDateString(); } catch (e) { return ''; }

@@ -17,8 +17,33 @@
   function num(v) { var n = Number(v); return isFinite(n) ? n : 0; }
   function round2(n) { return Math.round(num(n) * 100) / 100; }
   function fmtC(n) { n = num(n); var neg = n < 0, a = Math.abs(n); return (neg ? '-$' : '$') + a.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+  // Calendar days only, never instants: issue_date, due_date and payment_date
+  // are DATE columns passed straight through, so slice the string as written —
+  // building a Date out of one would land it on the 19th in Tampa.
   function fmtDate(iso) { if (!iso) return '—'; var s = String(iso).slice(0, 10), p = s.split('-'); return p.length === 3 ? p[1] + '/' + p[2] + '/' + p[0] : s; }
-  function todayISO() { try { return new Date().toISOString().slice(0, 10); } catch (e) { return ''; } }
+  // The LOCAL calendar day, not the UTC one. toISOString() rolls over at 8pm
+  // Eastern, so raising an invoice on a Saturday evening used to stamp its
+  // issue_date — and a payment's date — with SUNDAY. That is wrong data
+  // written to a DATE column, not merely a wrong label: the invoice is dated
+  // in the future and the payment lands in the wrong AR aging bucket.
+  function todayISO() {
+    try {
+      var d = new Date(), p = function (n) { return (n < 10 ? '0' : '') + n; };
+      return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+    } catch (e) { return ''; }
+  }
+  // Both sides reduced to a local calendar day before comparing. Against a raw
+  // Date.now(), `new Date('2026-09-20')` is UTC midnight — 8pm on the 19th in
+  // Tampa — so an invoice due today wore a red overdue ⚠ from the previous
+  // evening, telling the office a client was late a full day before they were.
+  function isPastDue(dueDate) {
+    if (!dueDate) return false;
+    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dueDate));
+    if (!m) return false;
+    var due = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    var n = new Date();
+    return due.getTime() < new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime();
+  }
   function toast(m, err) { if (typeof window.p86Toast === 'function') return window.p86Toast(m, err ? 'error' : 'success'); if (err && window.console) console.warn('[invoices]', m); }
   function api() { return window.p86Api && window.p86Api.invoices; }
   function payApi() { return window.p86Api && window.p86Api.payments; }
@@ -128,7 +153,7 @@
     }
     var rows = _list.map(function (i) {
       var who = (i.billTo && i.billTo.name) || window.p86JobLabel(i.job_number, i.job_title, { fallback: '' }) || (window.entityDisplayName && window.entityDisplayName('client', i.client_id)) || '—';
-      var overdue = num(i.balance) > 0.005 && i.due_date && new Date(i.due_date).getTime() < Date.now() && i.status !== 'paid' && i.status !== 'void';
+      var overdue = num(i.balance) > 0.005 && isPastDue(i.due_date) && i.status !== 'paid' && i.status !== 'void';
       return '<tr class="p86inv-row" data-open="' + esc(i.id) + '">' +
         '<td style="padding:9px 12px;white-space:nowrap;"><strong style="color:var(--text,#fff);font-size:13px;">' + esc(i.invoice_number || '—') + '</strong></td>' +
         '<td style="padding:9px 12px;font-size:12.5px;color:var(--text,#fff);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(who) + '</td>' +

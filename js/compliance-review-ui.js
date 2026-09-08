@@ -46,7 +46,16 @@ function p86Ask(message, opts) {
   }
   function fmtDate(d) {
     if (!d) return '';
-    var date = new Date(d);
+    // expiration_date is a DATE column — a calendar day, not an instant.
+    // `new Date('2026-09-20')` parses as UTC midnight, so Tampa renders it as
+    // the 19th and a cert that lapses tomorrow reads as already lapsed. The
+    // Postgres DATE arrives over JSON as ...T00:00:00.000Z and names the same
+    // day, so both spellings are rebuilt at LOCAL midnight and print as
+    // written. Anything else is a real timestamp and still converts to local.
+    var cal = /^(\d{4})-(\d{2})-(\d{2})(?:T00:00:00(?:\.000)?Z)?$/.exec(String(d));
+    var date = cal
+      ? new Date(Number(cal[1]), Number(cal[2]) - 1, Number(cal[3]))
+      : new Date(d);
     if (isNaN(date.getTime())) return '';
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   }

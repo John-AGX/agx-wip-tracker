@@ -3519,12 +3519,12 @@
     <script src="js/dash-shell.js?v=2"></script>
     <script src="js/settings-registry.js?v=3"></script>
     <script src="js/admin-dashboard.js?v=3"></script>
-    <script src="js/admin.js?v=143"></script>
+    <script src="js/admin.js?v=144"></script>
     <!-- Act-as / disguise mode: persistent "Acting as NAME — Exit" banner +
          window.p86ActAs(userId). Self-contained; re-fetches /api/auth/me. -->
     <script src="js/actas.js?v=1"></script>
     <script src="js/admin-context-registry.js?v=5"></script>
-    <script src="js/field-tools.js?v=13"></script>
+    <script src="js/field-tools.js?v=14"></script>
     <div id="clientDashboardModal" class="modal">
       <div class="modal-content" style="max-width:1120px;width:96vw;max-height:92vh;display:flex;flex-direction:column;">
         <div id="clientDashboard_body" style="padding:20px 22px;overflow-y:auto;flex:1;"></div>
@@ -3537,7 +3537,7 @@
          my-files.js, which merge it with live folders for the grant
          dropdown and the My Files tree. -->
     <script src="js/folder-taxonomy.js?v=2"></script>
-    <script src="js/subs.js?v=18"></script>
+    <script src="js/subs.js?v=19"></script>
     <script src="js/assemblies.js?v=13"></script>
     <script src="js/job-audit.js?v=4h"></script>
     <script src="js/job-reports.js?v=4"></script>
@@ -3548,9 +3548,9 @@
     <script src="js/table-enhancements.js?v=15"></script>
     <script src="js/bulk-ribbon.js?v=1"></script>
     <script src="js/job-finalize.js?v=8"></script>
-    <script src="js/leads.js?v=99"></script>
+    <script src="js/leads.js?v=100"></script>
     <script src="js/job-costs-import.js?v=17"></script>
-    <script src="js/qb-costs-view.js?v=24"></script>
+    <script src="js/qb-costs-view.js?v=25"></script>
     <script src="js/insights.js?v=14"></script>
     <script src="js/schedule.js?v=52"></script>
     <script src="js/my-day.js?v=9"></script>
@@ -3573,14 +3573,14 @@
          notes, guides, feature atlas). help-center.js owns
          window.openHelpOverlay — must load after app.js. -->
     <script src="js/guide.js?v=7"></script>
-    <script src="js/help-center.js?v=2"></script>
-    <script src="js/compliance-review-ui.js?v=5"></script>
+    <script src="js/help-center.js?v=3"></script>
+    <script src="js/compliance-review-ui.js?v=6"></script>
     <script src="js/messaging.js?v=8"></script>
     <script src="js/email-hub.js?v=27"></script>
     <script src="js/agent-tasks.js?v=14"></script>
     <script src="js/crew-chip.js?v=2"></script>
-    <script src="js/file-explorer.js?v=16"></script>
-    <script src="js/my-files.js?v=27"></script>
+    <script src="js/file-explorer.js?v=17"></script>
+    <script src="js/my-files.js?v=28"></script>
     <!-- Tasks / To-Do UI. Loads after my-files.js (reuses window.p86Toast)
          and after api.js/auth.js (p86Api.tasks + p86Auth). -->
     <script src="js/tasks.js?v=28"></script>
@@ -3629,19 +3629,19 @@
     <!-- Vendored Leaflet powers the report location map. Loaded before the
          renderer, which upgrades a map section only when window.L exists. -->
     <script src="js/vendor/leaflet.js?v=1"></script>
-    <script src="js/report-document.js?v=5"></script>
-    <script src="js/projects.js?v=99"></script>
+    <script src="js/report-document.js?v=6"></script>
+    <script src="js/projects.js?v=100"></script>
     <script src="js/receipt-scanner.js?v=2"></script>
     <script src="js/receipt-cropper.js?v=1"></script>
     <script src="js/list-filter.js?v=1"></script>
-    <script src="js/cost-inbox.js?v=27"></script>
-    <script src="js/invoices.js?v=6"></script>
+    <script src="js/cost-inbox.js?v=28"></script>
+    <script src="js/invoices.js?v=7"></script>
     <script src="js/console-docs.js?v=4"></script>
     <script src="js/console.js?v=20"></script>
     <!-- Jobs Hub — cross-job index pages (Purchase Orders / Change Orders /
          RFIs / Submittals) for the Jobs sidebar dropdown. Uses p86Api +
          appData.jobs + editJob/switchJobSubTab at runtime. -->
-    <script src="js/jobs-hub.js?v=26"></script>
+    <script src="js/jobs-hub.js?v=27"></script>
     <script src="js/assembly-studio.js?v=4"></script>
     <script src="js/materials-consolidate.js?v=1"></script>
     <!-- Purchase Order editor — full-window overlay opened from the Jobs
@@ -3649,7 +3649,7 @@
     <script src="js/purchase-order-import.js?v=1"></script>
     <script src="js/sub-access-prompt.js?v=1"></script>
     <script src="js/purchase-order-editor.js?v=20"></script>
-    <script src="js/pay-applications.js?v=14"></script>
+    <script src="js/pay-applications.js?v=15"></script>
     <!-- Shared pricing pipeline — math used by estimate-editor +
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->
@@ -3678,7 +3678,7 @@
     <script src="js/progress.js?v=4"></script>
     <script src="js/jobs.js?v=244"></script>
     <script src="js/doc-import.js?v=8"></script>
-    <script src="js/job-workflow-ui.js?v=6"></script>
+    <script src="js/job-workflow-ui.js?v=7"></script>
     <!-- Job sidebar Files + Photos tabs (renderJobFiles / renderJobPhotos).
          Loads after api.js, attachments.js, file-explorer.js and jobs.js so
          window.p86Explorer / p86Attachments / appData are all available. -->
@@ -3693,15 +3693,15 @@
          that mount it. -->
     <script src="js/rich-text.js?v=1"></script>
     <script src="js/estimates.js?v=65"></script>
-    <script src="js/proposal.js?v=26"></script>
+    <script src="js/proposal.js?v=27"></script>
     <script src="js/estimate-editor.js?v=110"></script>
     <!-- Change Order editor — overlay opened from the job detail's
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which
          carries the window.p86Api.changeOrders wrapper). -->
     <script src="js/change-order-editor.js?v=35"></script>
-    <script src="js/materials-drawer.js?v=14"></script>
-    <script src="js/estimate-preview.js?v=17"></script>
+    <script src="js/materials-drawer.js?v=15"></script>
+    <script src="js/estimate-preview.js?v=18"></script>
     <script src="js/bt-export.js?v=6b"></script>
     <!-- Payload inline approval card (used by ai-panel.js). Must load
          BEFORE ai-panel.js so window.PayloadArtifact exists when the

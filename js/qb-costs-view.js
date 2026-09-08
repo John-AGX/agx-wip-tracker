@@ -34,6 +34,9 @@ function p86Ask(message, opts) {
     var sign = v < 0 ? '-' : '';
     return sign + '$' + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
+  // Only ever formats a calendar day: l.date is the txn_date DATE column — the
+  // instants on that table (imported_at, created_at) never reach here. Take the
+  // day as written; local time would render every cost a day early out here.
   function fmtDate(d) {
     if (!d) return '';
     if (d instanceof Date) return d.toISOString().slice(0, 10);

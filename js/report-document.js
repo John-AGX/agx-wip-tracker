@@ -44,6 +44,9 @@
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
   }
 
+  // The only value that reaches this is photo.shot_at — COALESCE(taken_at,
+  // uploaded_at) over attachments, both TIMESTAMPTZ — so it is an INSTANT, and
+  // shifting it to the viewer's local time is the point, not an off-by-one bug.
   function fmtDate(v) {
     if (!v) return '';
     var d = new Date(v);

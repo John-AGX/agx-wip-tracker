@@ -88,6 +88,9 @@
     return '$' + Number(n).toFixed(2);
   }
 
+  // Only ever fed calendar days — m.last_seen is a DATE column (server/db.js),
+  // never an instant like m.updated_at — so the slice takes the day AS WRITTEN.
+  // Don't "fix" this into local-time conversion; that renders Tampa a day early.
   function fmtDate(s) {
     if (!s) return 'never';
     return String(s).slice(0, 10);

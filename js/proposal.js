@@ -25,6 +25,9 @@ function groupLinesBySection(lines) {
   return grouped;
 }
 
+// Reading these as local time is correct — the only values that reach them
+// are true instants: estimate.created (an ISO toISOString() stamped by the
+// report import) and a live new Date(). No calendar date lands here.
 function formatDateShort(date) {
   if (!date) return '';
   const d = new Date(date);

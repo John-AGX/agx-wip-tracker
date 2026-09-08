@@ -45,9 +45,19 @@
   }
   function fmtPct(n) { n = num(n); return (Math.round(n * 10) / 10) + '%'; }
   function round2(n) { return Math.round(num(n) * 100) / 100; }
+  // The LOCAL calendar day, not the UTC one. This fills `period_to` on a new
+  // pay application — a DATE column on a G702 — so with toISOString() a draw
+  // raised after 8pm Eastern claimed a billing period ending TOMORROW. That is
+  // wrong data on a money document, not a display slip.
   function todayISO() {
-    try { return new Date().toISOString().slice(0, 10); } catch (e) { return ''; }
+    try {
+      var d = new Date(), p = function (n) { return (n < 10 ? '0' : '') + n; };
+      return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+    } catch (e) { return ''; }
   }
+  // Only ever fed period_to — a DATE column (server/db.js), i.e. a calendar day — so
+  // the day is taken as written and no timezone is applied. Don't "fix" that with a
+  // Date(): an instant like certified_at/created_at is what needs a local-day path.
   function fmtDate(iso) {
     if (!iso) return '—';
     var s = String(iso).slice(0, 10), p = s.split('-');

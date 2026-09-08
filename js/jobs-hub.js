@@ -67,7 +67,18 @@ function p86Ask(message, opts) {
   }
   function fmtDate(s) {
     if (!s) return '';
-    var d = new Date(s);
+    // Some of what lands here is a CALENDAR date, not an instant — an RFI or a
+    // bill due_date is a DATE column, and a day on the calendar has no time of
+    // day to convert. `new Date('2026-09-20')` parses as UTC midnight, so in
+    // Tampa it renders as the 19th and a bill due tomorrow looks already late.
+    // A Postgres DATE serializes as ...T00:00:00.000Z and means the same thing,
+    // so both spellings are rebuilt at LOCAL midnight and render as the day
+    // they name. Anything else (updated_at and friends) is a real instant and
+    // stays on new Date(), where showing it in the viewer's zone is the point.
+    var cal = /^(\d{4})-(\d{2})-(\d{2})(?:T00:00:00(?:\.000)?Z)?$/.exec(String(s));
+    var d = cal
+      ? new Date(Number(cal[1]), Number(cal[2]) - 1, Number(cal[3]))
+      : new Date(s);
     return isNaN(d.getTime()) ? '' : d.toLocaleDateString();
   }
   function jobsList() {

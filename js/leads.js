@@ -129,7 +129,19 @@ function p86Ask(message, opts) {
   }
   function fmtDate(s) {
     if (!s) return '';
-    var d = new Date(s);
+    // This helper is fed both kinds of value. projected_sale_date and
+    // next_followup_at are DATE columns — calendar dates, which carry no time
+    // and no zone. `new Date('2026-09-20')` parses one as UTC midnight, so in
+    // Tampa the list renders it as the 19th and a follow-up looks overdue a day
+    // before it is. A Postgres DATE also reaches us as '...T00:00:00.000Z' and
+    // means the same day, so both spellings are rebuilt at LOCAL midnight.
+    // Everything else — created_at, updated_at, converted_at, lost_at — is a
+    // TIMESTAMPTZ instant and stays on new Date(), where converting to the
+    // viewer's local time is the correct and intended behavior.
+    var cal = /^(\d{4})-(\d{2})-(\d{2})(?:T00:00:00(?:\.000)?Z)?$/.exec(String(s));
+    var d = cal
+      ? new Date(Number(cal[1]), Number(cal[2]) - 1, Number(cal[3]))
+      : new Date(s);
     if (isNaN(d.getTime())) return '';
     return d.toLocaleDateString();
   }

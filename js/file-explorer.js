@@ -286,6 +286,9 @@
     if (n < 1048576) return (n / 1024).toFixed(0) + ' KB';
     return (n / 1048576).toFixed(1) + ' MB';
   }
+  // The only thing this ever sees is f.uploaded_at — a TIMESTAMPTZ instant off
+  // the attachments row, never a calendar date — so shifting it into local time
+  // is the point here. Don't graft on the date-only branch other files carry.
   function fmtDate(s) {
     if (!s) return '';
     var d = new Date(s); if (isNaN(d.getTime())) return '';

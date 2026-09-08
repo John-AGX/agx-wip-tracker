@@ -50,6 +50,9 @@ function p86Ask(message, opts) {
     return (n / 1024 / 1024).toFixed(1) + ' MB';
   }
 
+  // Only ever fed real instants (attachments.uploaded_at, field_tool_runs.created_at
+  // — both TIMESTAMPTZ), so shifting them into local time is the point here, not the
+  // date-only off-by-one. Don't "fix" this into calendar-date parsing.
   function fmtDate(d) {
     if (!d) return '';
     try { return new Date(d).toLocaleDateString(); } catch (e) { return ''; }

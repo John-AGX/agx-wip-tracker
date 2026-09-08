@@ -34,6 +34,9 @@
     // never mounted (blank box). Canonical order, matching escapeHTML above.
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
   }
+  // Only ever fed genuine TIMESTAMPTZ instants — its one caller hands it
+  // photo.uploaded_at / photo.taken_at — so shifting to local time is the point
+  // here, not the off-by-one-day bug it looks like. No calendar-date guard needed.
   function fmtDate(s) {
     if (!s) return '';
     try { return new Date(s).toLocaleDateString(); } catch (e) { return ''; }

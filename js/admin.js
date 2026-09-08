@@ -27,13 +27,6 @@ function p86Ask(message, opts) {
     return window.p86Auth && window.p86Auth.isAdmin();
   }
 
-  function fmtDate(iso) {
-    if (!iso) return '';
-    var d = new Date(iso);
-    if (isNaN(d.getTime())) return '';
-    return d.toLocaleDateString();
-  }
-
   // Local escape helper — null-safe wrapper around the global escapeHTML.
   // Used for inline-string attribute interpolation (onclick handlers,
   // data-* attrs, value attrs) where a null/undefined would otherwise
@@ -111,7 +104,7 @@ function p86Ask(message, opts) {
           (u.phone_number ? '<div style="font-size:11px;color:var(--text-dim,#888);font-family:monospace;">' + escapeHTML(u.phone_number) + '</div>' : '');
         var roleCell = roleBadge(u.role) +
           (u.timezone ? '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:3px;">' + escapeHTML(u.timezone) + '</div>' : '');
-        var createdCell = '<div>' + fmtDate(u.created_at) + '</div>' +
+        var createdCell = '<div>' + fmtDay(u.created_at) + '</div>' +
           '<div style="font-size:11px;color:var(--text-dim,#888);">seen ' + escapeHTML(uSeenAgo(u.last_seen_at)) + '</div>';
         var actAsBtn = (canActAs && u.id !== myId && u.active)
           ? '<button class="ee-btn ghost" onclick="window.p86ActAs(' + p86Code(u.id) + ')" title="Act as this user (disguise)" style="margin-left:4px;">Act as</button>'
@@ -873,9 +866,28 @@ function p86Ask(message, opts) {
     if (isNaN(v)) return '—';
     return '$' + v.toFixed(2);
   }
-  function fmtDate(d) {
+  // Renders a 'YYYY-MM-DD' day. Named fmtDay, not fmtDate, because there used
+  // to be a SECOND `function fmtDate` declared as a sibling of this one higher
+  // up the same IIFE. Duplicate declarations in one body both hoist and the
+  // LAST one wins, so this slice quietly served every module-scope call —
+  // including the ones written for the other helper, and including a bug fix
+  // applied to it that could never run. One name, one function.
+  //
+  // Two shapes arrive here and they are not the same thing:
+  //   materials.last_seen is a DATE — a calendar day, taken as written.
+  //   users.created_at is a TIMESTAMPTZ — an instant, whose day depends on
+  //   where you are standing. Slicing its UTC text put a user who signed up
+  //   at 9:39pm on the 7th in Tampa on the 8th: a day LATE, the mirror of the
+  //   one-day-early bug the calendar branch exists to prevent.
+  function fmtDay(d) {
     if (!d) return '—';
-    return String(d).slice(0, 10);
+    var s = String(d);
+    var cal = /^(\d{4})-(\d{2})-(\d{2})(?:T00:00:00(?:\.000)?Z)?$/.exec(s);
+    if (cal) return cal[1] + '-' + cal[2] + '-' + cal[3];
+    var dt = new Date(s);
+    if (isNaN(dt.getTime())) return s.slice(0, 10);
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return dt.getFullYear() + '-' + p(dt.getMonth() + 1) + '-' + p(dt.getDate());
   }
 
   function renderMaterialsTable() {
@@ -936,7 +948,7 @@ function p86Ask(message, opts) {
         '<td class="num" style="font-family:\'SF Mono\',monospace;color:#34d399;">' + fmtMoney(m.last_unit_price) + '</td>' +
         '<td class="num" style="font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);">' + fmtMoney(m.avg_unit_price) + '</td>' +
         '<td class="num" style="font-family:\'SF Mono\',monospace;">' + (m.purchase_count || 0) + '</td>' +
-        '<td style="font-size:11px;color:var(--text-dim,#aaa);">' + fmtDate(m.last_seen) + '</td>' +
+        '<td style="font-size:11px;color:var(--text-dim,#aaa);">' + fmtDay(m.last_seen) + '</td>' +
         '<td style="text-align:right;white-space:nowrap;">' +
           '<button class="ee-btn ee-icon-btn secondary" onclick="openMaterialEditor(' + p86Code(m.id) + ')" title="Edit">&#x270F;&#xFE0F;</button>' +
           '<button class="ee-btn ee-icon-btn ghost" onclick="toggleMaterialHidden(' + p86Code(m.id) + ')" title="' + (m.is_hidden ? 'Unhide' : 'Hide') + '">' + (m.is_hidden ? '&#x1F441;' : '&#x1F441;&#xFE0F;') + '</button>' +
@@ -4932,8 +4944,29 @@ function p86Ask(message, opts) {
     var host = document.getElementById('admin-compliance-content');
     if (!host) return;
     var esc = function (s) { return (typeof escapeHTML === 'function') ? escapeHTML(String(s == null ? '' : s)) : String(s == null ? '' : s); };
-    function fmtDate(d) { if (!d) return '—'; var dt = new Date(d); return isNaN(dt) ? '—' : dt.toLocaleDateString(); }
-    function daysLeft(exp) { if (!exp) return null; var dt = new Date(exp); if (isNaN(dt)) return null; return Math.round((dt.getTime() - Date.now()) / 86400000); }
+    // expiration_date is a DATE column — a calendar day, not an instant. On the
+    // wire it arrives as 'YYYY-MM-DD' or as the 'T00:00:00.000Z' spelling Postgres
+    // serializes a DATE to, and new Date() puts both at UTC midnight: in Tampa
+    // that is 8pm the evening before, so every certificate rendered a day early
+    // and a cert good through today painted red as already expired. Parse the
+    // calendar shape at local midnight instead; a real timestamp (nothing here
+    // sends one today) still falls through to new Date() unchanged.
+    function calDate(v) {
+      var cal = /^(\d{4})-(\d{2})-(\d{2})(?:T00:00:00(?:\.000)?Z)?$/.exec(String(v));
+      return cal ? new Date(Number(cal[1]), Number(cal[2]) - 1, Number(cal[3])) : new Date(v);
+    }
+    function fmtDate(d) { if (!d) return '—'; var dt = calDate(d); return isNaN(dt) ? '—' : dt.toLocaleDateString(); }
+    // Whole days measured midnight-to-midnight. Differencing a calendar day against
+    // the current wall clock rounds the fraction away and flips the sign after noon,
+    // which is what made a cert expiring today read '· 1d ago' in red beside a
+    // status pill still saying active.
+    function daysLeft(exp) {
+      if (!exp) return null;
+      var dt = calDate(exp);
+      if (isNaN(dt)) return null;
+      var today = new Date(); today.setHours(0, 0, 0, 0);
+      return Math.round((dt.getTime() - today.getTime()) / 86400000);
+    }
     function expiryCell(exp) {
       if (!exp) return '<span style="color:var(--text-dim,#888);">no expiry</span>';
       var dl = daysLeft(exp);

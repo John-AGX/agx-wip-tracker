@@ -87,16 +87,33 @@ function p86Ask(message, opts) {
       .replace(/&/g, '&amp;').replace(/</g, '&lt;')
       .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
+  // A due date is a CALENDAR date, not an instant. `new Date('2026-09-20')`
+  // parses it as UTC midnight, so anywhere west of Greenwich the local getters
+  // and formatters report the 19th — an RFI reads as due a day early, and
+  // isOverdue() paints it red on the morning it is actually due. due_date is a
+  // Postgres DATE (server/db.js), which crosses the wire as ...T00:00:00.000Z
+  // and names the same day as the bare 'YYYY-MM-DD' our <input type="date">
+  // fields produce, so both spellings are rebuilt at LOCAL midnight of the day
+  // they name. Anything else is a real instant and keeps the plain new Date()
+  // path, where converting to local time is the whole point.
+  function toLocalDay(v) {
+    var cal = /^(\d{4})-(\d{2})-(\d{2})(?:T00:00:00(?:\.000)?Z)?$/.exec(String(v));
+    return cal
+      ? new Date(Number(cal[1]), Number(cal[2]) - 1, Number(cal[3]))
+      : new Date(v);
+  }
   function fmtDate(iso) {
     if (!iso) return '';
-    var d = new Date(iso);
+    var d = toLocalDay(iso);
     if (isNaN(d.getTime())) return '';
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   }
   function isOverdue(due, status) {
     if (!due) return false;
     if (status === 'closed' || status === 'approved' || status === 'received') return false;
-    return new Date(due) < new Date(new Date().toDateString());
+    // Both sides are now local midnight, so this matches the server's own
+    // `due_date < CURRENT_DATE` test instead of disagreeing with it by a day.
+    return toLocalDay(due) < new Date(new Date().toDateString());
   }
 
   function mount(jobId) {

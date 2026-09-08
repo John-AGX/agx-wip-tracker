@@ -76,6 +76,9 @@ function p86Text(message, opts) {
     var v = Number(n || 0);
     return '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
+  // Only calendar days reach this: purchased_at is a DATE column, and the merchants
+  // first_seen/last_seen are bare 'YYYY-MM-DD' strings the route builds. Don't hand it
+  // an instant like created_at — it would read the UTC day off it and render a day late.
   function fmtDate(d) {
     if (!d) return '';
     // purchased_at is a DATE (server serializes to UTC midnight) — parse the
@@ -87,6 +90,9 @@ function p86Text(message, opts) {
     return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   }
   // created_at / updated_at are full timestamps — show date + time (local).
+  // Nothing but instants reaches it: all four call sites pass r.created_at or
+  // r.updated_at (both TIMESTAMPTZ), so the local-time conversion here is the
+  // point, not the day-early bug fmtDate above has to defend against.
   function fmtDateTime(d) {
     if (!d) return '';
     var dt = new Date(String(d));

@@ -67,6 +67,9 @@
     return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(v);
   }
 
+  // Only ever handed an INSTANT — the `new Date()` behind ctx.date, printed as the
+  // proposal's "Print Date:" line — so the local accessors below are the right read.
+  // A calendar day would land a day early here; it needs service-tickets.js fmtDate.
   function fmtDateShort(d) {
     if (!d) d = new Date();
     if (typeof d === 'string') d = new Date(d);
