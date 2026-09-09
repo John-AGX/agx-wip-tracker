@@ -178,7 +178,44 @@ function makeAppData() {
 
 const GETCOS_SRC = extractFunction(JOBS_SRC, 'getCOsConnectedTo');
 
-function build(appData, src) {
+/* ── THE SECOND HALF OF THE FUNCTION, WHICH THIS FILE NEVER RAN ──────────────
+ * getCOsConnectedTo has two branches. The live one resolves a change order
+ * through its OWN allocation; the legacy one resolves it through a node-graph
+ * wire, and is entered unless `typeof NG === 'undefined'`. This harness passed
+ * NG as undefined, so 823 lines of test executed the first branch only — while
+ * asserting, in sections 2 and 3, the exact two properties the second branch
+ * violated. Both assertions were true of half a function.
+ *
+ * `typeof NG === 'undefined'` is NEVER true in the running app: nodegraph/
+ * engine.js declares `var NG` at top level and index.html loads it
+ * unconditionally (asserted in 11a, by reading those two files). So the honest
+ * default here is a real graph, and the honest default WIRING is the most
+ * adversarial the surface admits: every change order in the fixture — draft,
+ * rejected, void, another job's, and one allocated 100%% to Building 2 — wired
+ * at the graph's own default allocPct straight at Building 1.
+ *
+ * A test that wants the live branch in isolation passes NO_WIRES and says why.
+ * ────────────────────────────────────────────────────────────────────────── */
+function makeNG(wires) {
+  const nodes = BUILDINGS.map((b) => ({ id: 'n-t1-' + b.id, type: 't1', data: { id: b.id } }));
+  const links = [];
+  (wires || []).forEach((w, i) => {
+    const nid = 'n-co-' + i;
+    nodes.push({ id: nid, type: 'co', data: { id: w.co } });
+    links.push({ fromNode: nid, toNode: 'n-t1-' + w.building, allocPct: w.allocPct });
+  });
+  return {
+    nodes: () => nodes, wires: () => links,
+    findNode: (id) => nodes.find((n) => n.id === id) || null,
+  };
+}
+
+/* allocPct undefined on purpose: `w.allocPct != null ? w.allocPct : 100` is the
+ * shipped default and 100%% of a foreign $123,456 is the loudest possible leak. */
+const ALL_WIRED_TO_B1 = ALL_COS.map((c) => ({ co: c.id, building: B.one }));
+const NO_WIRES = [];
+
+function build(appData, src, wires) {
   const appState = { currentJobId: JOB };
   const coSellAmount = compile([extractFunction(JOBS_SRC, 'coSellAmount')], ['window'], [window], 'coSellAmount');
   window.coSellAmount = coSellAmount;
@@ -187,7 +224,8 @@ function build(appData, src) {
   window.coCompletion = coCompletion;
   const getCOsConnectedTo = compile([src || GETCOS_SRC],
     ['appData', 'appState', 'coCompletion', 'ensureNGLoaded', 'NG', 'window'],
-    [appData, appState, coCompletion, () => {}, undefined, window], 'getCOsConnectedTo');
+    [appData, appState, coCompletion, () => {},
+     makeNG(wires === undefined ? ALL_WIRED_TO_B1 : wires), window], 'getCOsConnectedTo');
   return { appData, coSellAmount, coCompletion, getCOsConnectedTo };
 }
 
@@ -347,9 +385,15 @@ describe('3 · a draft, rejected or void change order appears on NO card', () =>
   test('3e · MUTATION — the status filter alone is not enough; the key still matters', () => {
     // Both halves are load-bearing. With the filter present but the old key
     // restored, the card is still empty.
+    //
+    // NO_WIRES on purpose, and the reason is worth stating: this clause is a
+    // claim about the LIVE branch's two guards, and with the legacy branch now
+    // correct a wire would legitimately re-supply CO-0001 and CO-0002 from the
+    // graph and hide the very regression this mutation exists to show. 11g
+    // holds that combined behaviour separately rather than blurring it in here.
     const src = MUT_OLD_KEY();
     expect(src).toContain("c.status !== 'approved'");
-    expect(build(makeAppData(), src).getCOsConnectedTo('t1', B.one)).toEqual([]);
+    expect(build(makeAppData(), src, NO_WIRES).getCOsConnectedTo('t1', B.one)).toEqual([]);
   });
 
   test('3f · every other reader of this store uses the SAME predicate, verbatim', () => {
@@ -556,7 +600,32 @@ describe('7 · card change-order dollars reconcile to the G703, per building', (
     phases: F_CELLS, buildings: F_BUILDINGS, jobChangeOrders: [F_CO], changeOrders: [],
   });
 
-  function fairwaysCards(src) {
+  /* A REAL graph over the Fairways buildings, not `NG: undefined`. This
+   * section is the per-building RECONCILIATION — the one place that proves the
+   * card's dollars are the pay application's dollars — and it was proving it
+   * about the live branch only. The legacy branch paints the SAME card from the
+   * SAME store, so a wire that re-supplies a change order the allocation
+   * already placed would break exactly this reconciliation and this section
+   * would never have seen it. The wiring is the most adversarial the surface
+   * admits: the one $27,500 rider wired at the graph's default allocPct (100)
+   * at EVERY ONE of the ten buildings, i.e. $275,000 of card money against
+   * $27,500 of G703 if the wire is allowed to speak over the allocation. */
+  function fairwaysNG(wires) {
+    const nodes = F_BUILDINGS.map((b) => ({ id: 'n-t1-' + b.id, type: 't1', data: { id: b.id } }));
+    const links = [];
+    (wires || []).forEach((w, i) => {
+      const nid = 'n-co-' + i;
+      nodes.push({ id: nid, type: 'co', data: { id: w.co } });
+      links.push({ fromNode: nid, toNode: 'n-t1-' + w.building, allocPct: w.allocPct });
+    });
+    return {
+      nodes: () => nodes, wires: () => links,
+      findNode: (id) => nodes.find((n) => n.id === id) || null,
+    };
+  }
+  const F_WIRED_EVERYWHERE = F_BUILDINGS.map((b) => ({ co: F_CO.id, building: b.id }));
+
+  function fairwaysCards(src, wires) {
     const app = fairways();
     const coSellAmount = compile([extractFunction(JOBS_SRC, 'coSellAmount')], ['window'], [window], 'coSellAmount');
     window.coSellAmount = coSellAmount;
@@ -565,7 +634,8 @@ describe('7 · card change-order dollars reconcile to the G703, per building', (
     window.coCompletion = coCompletion;
     const getCOs = compile([src || GETCOS_SRC],
       ['appData', 'appState', 'coCompletion', 'ensureNGLoaded', 'NG', 'window'],
-      [app, { currentJobId: F_JOB }, coCompletion, () => {}, undefined, window], 'getCOsConnectedTo');
+      [app, { currentJobId: F_JOB }, coCompletion, () => {},
+       fairwaysNG(wires === undefined ? F_WIRED_EVERYWHERE : wires), window], 'getCOsConnectedTo');
     const out = {};
     F_BUILDINGS.forEach((b) => { out[b.id] = round2(dollars(getCOs('t1', b.id))); });
     return { app, out, getCOs, sell: coSellAmount(F_CO) };
@@ -623,6 +693,58 @@ describe('7 · card change-order dollars reconcile to the G703, per building', (
     F_BUILDINGS.forEach((b) => expect(getCOs('t1', b.id)).toEqual([]));
   });
 
+  /* 7e — THE RECONCILIATION ACROSS BOTH BRANCHES.
+   *
+   * 7a-7d wire the rider at every building, which reaches the legacy branch on
+   * NO card: the live branch accepts that rider everywhere and stamps seenCo,
+   * so the wire is unreachable and those clauses remain, honestly, a statement
+   * about the live branch alone. Stated rather than implied, because a wired
+   * fixture that never reaches the wire proves nothing about it.
+   *
+   * This clause reaches it. A SECOND change order, $40,000, allocated 100%% to
+   * B2 and wired at B1 — the live branch rejects it on B1 (B1 holds no share),
+   * so the wire is the only thing that can speak there. deriveSOV bills it as
+   * one $40,000 line against B2 and nothing against B1, so if the wire is
+   * allowed to answer, B1's card carries $40,000 the pay application puts on
+   * B2 and this reconciliation breaks by exactly that much. Mutation-proven:
+   * disarming the allocation clause turns this red at B1 (+40000) and nowhere
+   * else. */
+  const F_CO_ELSEWHERE = shapeRow({
+    id: 'fco2', job_id: F_JOB, owner_id: 'u1', status: 'approved', co_number: 'CO-0002',
+    data: {
+      title: 'Sitework', defaultMarkup: 0, completionMode: 'standalone',
+      buildingAllocations: [{ buildingId: 'B2', pct: 100 }],
+      lines: [{ id: 'fx1', description: 'Sitework', qty: 1, unitCost: 40000 }],
+    },
+    approved_at: null, approved_by: null, linked_node_id: null, is_locked: false,
+    created_at: null, updated_at: null,
+  });
+
+  test('7e · a change order wired to a building it is NOT allocated to keeps the reconciliation', () => {
+    const app = fairways();
+    app.jobChangeOrders = [F_CO, F_CO_ELSEWHERE];
+    const coSellAmount = compile([extractFunction(JOBS_SRC, 'coSellAmount')], ['window'], [window], 'coSellAmount');
+    window.coSellAmount = coSellAmount;
+    const coCompletion = compile([extractFunction(JOBS_SRC, 'coCompletion')],
+      ['appData', 'coSellAmount', 'window'], [app, coSellAmount, window], 'coCompletion');
+    window.coCompletion = coCompletion;
+    const getCOs = compile([GETCOS_SRC],
+      ['appData', 'appState', 'coCompletion', 'ensureNGLoaded', 'NG', 'window'],
+      [app, { currentJobId: F_JOB }, coCompletion, () => {},
+       fairwaysNG([{ co: 'fco2', building: 'B1' }]), window], 'getCOsConnectedTo');
+
+    const { byB } = fairwaysG703(app);
+    F_BUILDINGS.forEach((b) => {
+      expect([b.id, round2(dollars(getCOs('t1', b.id)))]).toEqual([b.id, round2(byB[b.id])]);
+    });
+    // and the $40,000 is on B2, where the G703 bills it — not deleted. Measured
+    // as the DIFFERENCE from the same job without this change order, so the
+    // rider's own weighted B2 share never has to be restated here.
+    const base = fairwaysCards(null, []).out;
+    expect(round2(dollars(getCOs('t1', 'B2')) - base.B2)).toBe(40000);
+    expect(round2(dollars(getCOs('t1', 'B1')) - base.B1)).toBe(0);
+  });
+
   test('7d · the PERCENTAGES may differ from the G703, and that is correct', () => {
     // The card shows the ridden scope's cell %; the G703 seeds every change-order
     // line at 0 for the biller to fill in. Pinned so a future "harmonisation"
@@ -636,10 +758,15 @@ describe('7 · card change-order dollars reconcile to the G703, per building', (
  *     is not a fix
  * ═══════════════════════════════════════════════════════════════════════════ */
 describe('8 · js/jobs.js is served at a version that carries this change', () => {
-  test('8a · index.html requests js/jobs.js at v241 or later', () => {
-    const m = INDEX_HTML.match(/js\/jobs\.js\?v=(\d+)/);
+  test('8a · index.html requests js/jobs.js at v245 or later', () => {
+    // The whole token, not a numeric PREFIX of it. `?v=(\d+)` reads "4" out
+    // of "4h" and compares 4 >= 4 quite happily, which is how a reviewer on
+    // this file once certified a bump that had not happened. Capture to the
+    // quote, prove it is digits, and only then compare.
+    const m = INDEX_HTML.match(/js\/jobs\.js\?v=([^"\s>]*)/);
     expect(m).not.toBeNull();
-    expect(Number(m[1])).toBeGreaterThanOrEqual(241);
+    expect(m[1]).toMatch(/^\d+$/);
+    expect(Number(m[1])).toBeGreaterThanOrEqual(245);
   });
 });
 
@@ -819,5 +946,403 @@ describe('10 · a deductive change order reaches the card it is allocated to', (
     const app = makeAppData();
     app.jobChangeOrders = [Object.assign({}, CREDIT, { status: 'draft' })];
     expect(build(app).getCOsConnectedTo('t1', B.one)).toEqual([]);
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 11 · THE OTHER HALF OF THE FUNCTION — a graph wire is not an allocation
+ *
+ * Everything above this line ran the LIVE branch. This section runs the LEGACY
+ * one, which the harness used to switch off by injecting NG as undefined, and
+ * which resolved a change order on `c.id === src.data.id` and nothing else —
+ * no job guard, no status filter, and at the WIRE's allocPct rather than the
+ * change order's own per-building share. Because seenCo was stamped only for
+ * change orders the live branch ACCEPTED, everything the live branch rejected
+ * was exactly what this branch was free to pick back up.
+ *
+ * Three leaks, all onto a money card, each reproduced below (11c, 11e, 11j)
+ * against the shipped legacy branch before it is closed:
+ *   • a DRAFT change order at its full $50,000;
+ *   • another JOB's approved change order at $123,456;
+ *   • one $50,000 change order allocated 100% to Building 2 rendering IN FULL
+ *     on Building 1 as well — the same fifty thousand dollars on two cards,
+ *     and $100,000 of card against $50,000 of G703.
+ *
+ * THE FIX IS NOT "TURN THE BRANCH OFF". That was the tempting one and it is
+ * wrong, because coCompletion returns byBuilding {} for FOUR live shapes — a
+ * change order with no completionMode at all (mode 'legacy', whose return
+ * literal is `byBuilding: {}`), a rider on a job-level scope, a rider whose
+ * scope has been renamed out from under it, and a standalone whose allocations
+ * all point at deleted buildings. For every one of those the wire is the ONLY
+ * thing that has ever put that money on a card. Switching the branch off
+ * silently zeroes all four. 11n proves it byte-for-byte with the money on
+ * screen, which is why it is not what shipped here.
+ *
+ * So the branch keeps its job, under the live branch's own two guards, plus one
+ * rule: WHEN THE CHANGE ORDER HAS ITS OWN ALLOCATION, THE ALLOCATION WINS. If
+ * coCompletion resolves any per-building split at all, the live branch above
+ * has already ruled on this exact building — accepting it (and stamping seenCo,
+ * so the wire is never consulted) or rejecting it because the building holds no
+ * share of it. A wire may not overrule that. Where there is no split to
+ * overrule, the wire still renders exactly what it renders today.
+ *
+ * The two halves of that are BOTH load-bearing and neither subsumes the other:
+ * the allocation rule closes an allocated draft (11d) but is blind to a
+ * change order that carries no allocation, and the guards close a statusless,
+ * modeless one (11g, 11i) that the allocation rule waves straight through.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Each mutator rewinds ONE clause of the legacy branch to its shipped-broken
+ * spelling; mutate() throws if a rename ever makes one of them a no-op.
+ * \r?\n throughout — this repo is core.autocrlf=true and the source these are
+ * applied to came off disk with CRLF, which is how a regex written against \n
+ * alone silently matches nothing. */
+const MUT_LEG_NO_JOB = (src) => mutate(
+  /\r?\n +if \(jobId && srv\.job_id !== jobId\) return;/, '', src);
+const MUT_LEG_NO_STATUS = (src) => mutate(
+  /\r?\n +if \(srv\.status !== 'approved' && srv\.status !== 'applied'\) return;/, '', src);
+/* `var lcomp = null;` on the very next line is load-bearing in this anchor:
+ * the CONDITION alone appears twice in the function — the live branch opens
+ * with the identical `targetType === 't1' && typeof coCompletion` — and a
+ * regex without it matched from there and deleted three quarters of the
+ * function, producing a mutant that failed to PARSE rather than one that
+ * demonstrated anything. A mutation that dies of a SyntaxError proves the same
+ * amount as a mutation that does not apply: nothing. */
+const MUT_LEG_NO_ALLOC = (src) => mutate(
+  /\r?\n +if \(targetType === 't1' && typeof coCompletion === 'function'\) \{\r?\n +var lcomp = null;[\s\S]*?\r?\n +\}(\r?\n +var lines =)/,
+  '$1', src);
+const MUT_LEG_NO_RELIC_JOB = (src) => mutate(
+  /\r?\n +if \(coEntry && jobId && coEntry\.jobId !== jobId\) return;/, '', src);
+
+/* All four at once = origin/main's legacy branch, which is what the three
+ * leaks are reproduced against and what "nothing moved" is measured against. */
+const MUT_LEGACY_AS_SHIPPED = () =>
+  MUT_LEG_NO_RELIC_JOB(MUT_LEG_NO_ALLOC(MUT_LEG_NO_STATUS(MUT_LEG_NO_JOB(GETCOS_SRC))));
+
+describe('11 · the node-wire branch obeys the same two guards, and the allocation', () => {
+  test('11a · the branch under test ACTUALLY EXECUTES — proven by the graph being read', () => {
+    // Not a source assertion. The injected NG counts its own calls, so this
+    // goes red the day someone reintroduces `NG: undefined` and quietly
+    // switches the other 47 tests in this file back off.
+    let reads = 0;
+    const base = makeNG(ALL_WIRED_TO_B1);
+    const spy = { nodes: () => { reads++; return base.nodes(); },
+                  wires: () => { reads++; return base.wires(); },
+                  findNode: base.findNode };
+    const app = makeAppData();
+    const coSellAmount = compile([extractFunction(JOBS_SRC, 'coSellAmount')], ['window'], [window], 'coSellAmount');
+    window.coSellAmount = coSellAmount;
+    const coCompletion = compile([extractFunction(JOBS_SRC, 'coCompletion')],
+      ['appData', 'coSellAmount', 'window'], [app, coSellAmount, window], 'coCompletion');
+    const g = compile([GETCOS_SRC],
+      ['appData', 'appState', 'coCompletion', 'ensureNGLoaded', 'NG', 'window'],
+      [app, { currentJobId: JOB }, coCompletion, () => {}, spy, window], 'getCOsConnectedTo');
+    g('t1', B.one);
+    expect(reads).toBeGreaterThan(0);
+  });
+
+  test('11b · and it is reachable in the shipped app — NG is a top-level var, loaded unconditionally', () => {
+    expect(read('nodegraph/engine.js')).toMatch(/^\s*var NG\s*=/m);
+    expect(INDEX_HTML).toMatch(/<script src="nodegraph\/engine\.js/);
+  });
+
+  /* ── LEAK 1 · a draft ───────────────────────────────────────────────────── */
+
+  test('11c · REPRODUCTION — the shipped legacy branch puts $50,000 of DRAFT money on a card', () => {
+    // CO-0003 is a $50,000 draft allocated to B2. Wire it at B1 and the branch
+    // as shipped renders it there in full, in words, on a money card.
+    const app = makeAppData();
+    const H = build(app, MUT_LEGACY_AS_SHIPPED());
+    const rows = H.getCOsConnectedTo('t1', B.one);
+    expect(coNumbers(rows)).toContain('CO-0003');
+    const draft = rows.find((r) => r.co.co_number === 'CO-0003');
+    expect(round2((draft.co.income || 0) * draft.allocPct / 100)).toBe(50000);
+    expect(paintCards(makeAppData(), build(makeAppData(), MUT_LEGACY_AS_SHIPPED()).getCOsConnectedTo))
+      .toContain('Inc: <b>$50,000.00</b> (100%)');
+  });
+
+  test('11d · and it no longer does — on any card, under either guard', () => {
+    const H = build(makeAppData());
+    BUILDINGS.forEach((b) => expect(coNumbers(H.getCOsConnectedTo('t1', b.id))).not.toContain('CO-0003'));
+    expect(round2(dollars(H.getCOsConnectedTo('t1', B.one)))).toBe(10000);
+    // Defence in depth, and both halves are proven live rather than assumed:
+    // the allocation rule alone closes it (status filter removed), and the
+    // status filter alone closes it (allocation rule removed).
+    expect(coNumbers(build(makeAppData(), MUT_LEG_NO_STATUS()).getCOsConnectedTo('t1', B.one)))
+      .not.toContain('CO-0003');
+    expect(coNumbers(build(makeAppData(), MUT_LEG_NO_ALLOC()).getCOsConnectedTo('t1', B.one)))
+      .not.toContain('CO-0003');
+  });
+
+  /* ── LEAK 2 · another job's money ───────────────────────────────────────── */
+
+  test("11e · REPRODUCTION — the shipped legacy branch puts another JOB's $123,456 on this job's card", () => {
+    const H = build(makeAppData(), MUT_LEGACY_AS_SHIPPED());
+    const rows = H.getCOsConnectedTo('t1', B.one);
+    expect(coNumbers(rows)).toContain('CO-9001');
+    const foreign = rows.find((r) => r.co.co_number === 'CO-9001');
+    expect(round2((foreign.co.income || 0) * foreign.allocPct / 100)).toBe(123456);
+    expect(paintCards(makeAppData(), build(makeAppData(), MUT_LEGACY_AS_SHIPPED()).getCOsConnectedTo))
+      .toContain('Inc: <b>$123,456.00</b> (100%)');
+  });
+
+  test('11f · and it no longer does — on any card, under either guard', () => {
+    const H = build(makeAppData());
+    BUILDINGS.forEach((b) => expect(coNumbers(H.getCOsConnectedTo('t1', b.id))).not.toContain('CO-9001'));
+    expect(coNumbers(build(makeAppData(), MUT_LEG_NO_JOB()).getCOsConnectedTo('t1', B.one)))
+      .not.toContain('CO-9001');
+    expect(coNumbers(build(makeAppData(), MUT_LEG_NO_ALLOC()).getCOsConnectedTo('t1', B.one)))
+      .not.toContain('CO-9001');
+  });
+
+  /* ── the guards are not dead code behind the allocation rule ────────────── */
+
+  /* A change order with NO completionMode resolves to mode 'legacy', whose
+   * byBuilding is {} unconditionally — so the allocation rule cannot see it and
+   * the two guards are the only thing standing between it and the card. This
+   * is not a contrived shape: nodegraph/engine.js mints exactly it, and every
+   * change order predating the completion-mode work carries it. */
+  const modeless = (over) => {
+    const c = serverCO(over);
+    delete c.completionMode; delete c.buildingAllocations;
+    return c;
+  };
+  const CO_DRAFT_NOMODE = modeless({ id: 'co-dn', status: 'draft', co_number: 'CO-0080',
+    data: { title: 'Draft, no mode', lines: line(50000) } });
+  const CO_FOREIGN_NOMODE = modeless({ id: 'co-fn', job_id: OTHER_JOB, status: 'approved',
+    co_number: 'CO-0081', data: { title: 'Another job, no mode', lines: line(123456) } });
+
+  const oneCO = (co) => {
+    const app = makeAppData();
+    app.jobChangeOrders = [co];
+    return app;
+  };
+  const wireTo = (co, b) => [{ co: co.id, building: b || B.one }];
+
+  test('11g · a DRAFT with no completion mode — invisible to the allocation rule — is still excluded', () => {
+    expect(build(oneCO(CO_DRAFT_NOMODE), null, wireTo(CO_DRAFT_NOMODE)).getCOsConnectedTo('t1', B.one))
+      .toEqual([]);
+  });
+
+  test('11h · MUTATION — remove the legacy status filter and $50,000 of draft lands', () => {
+    const rows = build(oneCO(CO_DRAFT_NOMODE), MUT_LEG_NO_STATUS(), wireTo(CO_DRAFT_NOMODE))
+      .getCOsConnectedTo('t1', B.one);
+    expect(coNumbers(rows)).toEqual(['CO-0080']);
+    expect(round2(dollars(rows))).toBe(50000);
+  });
+
+  test("11i · another job's approved change order with no completion mode is still excluded", () => {
+    expect(build(oneCO(CO_FOREIGN_NOMODE), null, wireTo(CO_FOREIGN_NOMODE)).getCOsConnectedTo('t1', B.one))
+      .toEqual([]);
+    // MUTATION — remove the legacy job guard and $123,456 of another job lands.
+    const rows = build(oneCO(CO_FOREIGN_NOMODE), MUT_LEG_NO_JOB(), wireTo(CO_FOREIGN_NOMODE))
+      .getCOsConnectedTo('t1', B.one);
+    expect(coNumbers(rows)).toEqual(['CO-0081']);
+    expect(round2(dollars(rows))).toBe(123456);
+  });
+
+  /* ── LEAK 3 · the wire overruling the allocation ────────────────────────── */
+
+  const WRONG_B = serverCO({
+    id: 'co-wrong', status: 'approved', co_number: 'CO-0050',
+    data: { title: 'All of it on B2', lines: line(50000),
+            buildingAllocations: [{ buildingId: B.two, pct: 100 }] },
+  });
+  const WIRE_WRONG_TO_B1 = [{ co: 'co-wrong', building: B.one }];
+
+  function g703COTotal(app) {
+    window.appData = app;
+    const deriveSOV = compile([
+      extractFunction(PA_SRC, 'num'), extractFunction(PA_SRC, 'round2'),
+      extractFunction(PA_SRC, 'bldgSort'), extractFunction(PA_SRC, 'deriveSOV'),
+    ], ['window'], [window], 'deriveSOV');
+    const sov = deriveSOV(JOB);
+    return round2((Array.isArray(sov) ? sov : (sov.lines || []))
+      .filter((l) => l.type === 'co').reduce((s, l) => s + l.scheduledValue, 0));
+  }
+
+  test('11j · REPRODUCTION — $50,000 allocated 100% to Building 2 renders IN FULL on Building 1 too', () => {
+    const H = build(oneCO(WRONG_B), MUT_LEGACY_AS_SHIPPED(), WIRE_WRONG_TO_B1);
+    expect(coNumbers(H.getCOsConnectedTo('t1', B.one))).toEqual(['CO-0050']);
+    expect(coNumbers(H.getCOsConnectedTo('t1', B.two))).toEqual(['CO-0050']);
+    const total = BUILDINGS.reduce((s, b) => s + dollars(H.getCOsConnectedTo('t1', b.id)), 0);
+    expect(round2(total)).toBe(100000);                       // twice the change order
+    expect(g703COTotal(oneCO(WRONG_B))).toBe(50000);          // against half of that on the G703
+  });
+
+  test('11k · and now it appears ONCE, on the building it is actually allocated to', () => {
+    const H = build(oneCO(WRONG_B), null, WIRE_WRONG_TO_B1);
+    expect(coNumbers(H.getCOsConnectedTo('t1', B.one))).toEqual([]);
+    expect(coNumbers(H.getCOsConnectedTo('t1', B.two))).toEqual(['CO-0050']);
+    const cards = BUILDINGS.reduce((s, b) => s + dollars(H.getCOsConnectedTo('t1', b.id)), 0);
+    expect(round2(cards)).toBe(50000);
+    expect(round2(cards)).toBe(g703COTotal(oneCO(WRONG_B)));   // card = pay application
+  });
+
+  test('11l · a zero-share cell is an allocation too — share 0 on B1 does not re-open the wire', () => {
+    // co-completion [S13] keys ZERO-revenue cells with share 0, and the live
+    // branch rejects them (Math.abs(share) > 0). If "has an allocation" were
+    // spelled "has a share on THIS building", a wire would refill exactly the
+    // rows the live branch just turned down.
+    const zero = serverCO({
+      id: 'co-zshare', status: 'approved', co_number: 'CO-0060',
+      data: { title: 'Nothing on B1', lines: line(50000),
+              buildingAllocations: [{ buildingId: B.one, pct: 0 }, { buildingId: B.two, pct: 100 }] },
+    });
+    const H = build(oneCO(zero), null, wireTo(zero));
+    expect(H.getCOsConnectedTo('t1', B.one)).toEqual([]);
+    expect(round2(dollars(H.getCOsConnectedTo('t1', B.two)))).toBe(50000);
+  });
+
+  /* ── THE CONSTRAINT THAT OUTRANKS EVERYTHING ───────────────────────────────
+   * No money that renders correctly today may stop rendering. Each shape below
+   * is one for which coCompletion returns byBuilding {} — so the live branch
+   * cannot see it at all and the WIRE is the only thing putting it on a card —
+   * and each is held byte-identical against origin/main's legacy branch.
+   * ────────────────────────────────────────────────────────────────────────── */
+
+  const CO_NO_MODE = modeless({ id: 'co-nomode', status: 'approved', co_number: 'CO-0070',
+    data: { title: 'Never chose a mode', lines: line(30000) } });
+  /* A rider on a JOB-LEVEL scope — cells exist, none carries a buildingId. */
+  const CO_RIDER_JOBLEVEL = serverCO({
+    id: 'co-rjl', status: 'approved', co_number: 'CO-0071',
+    data: { title: 'Rides a job-level scope', lines: line(21000),
+            completionMode: 'rider', riderScopeName: 'JobLevel', buildingAllocations: [] },
+  });
+  /* A rider whose scope was renamed away — co-completion [S7]: it earns $0 and
+   * says so, but SELL is what a card renders and the wire still shows it. */
+  const CO_RIDER_MISSING = serverCO({
+    id: 'co-rmiss', status: 'approved', co_number: 'CO-0072',
+    data: { title: 'Scope renamed out from under it', lines: line(17000),
+            completionMode: 'rider', riderScopeName: 'Gutters (old name)', buildingAllocations: [] },
+  });
+  /* Standalone, allocations pointing only at buildings no longer on the job —
+   * co-completion [S10] drops them, so byBuilding comes back {}. */
+  const CO_DEAD_ALLOCS = serverCO({
+    id: 'co-dead', status: 'approved', co_number: 'CO-0073',
+    data: { title: 'Aimed at a deleted building', lines: line(9000),
+            buildingAllocations: [{ buildingId: 'b-deleted', pct: 100 }] },
+  });
+
+  const MONEY_THAT_MUST_NOT_MOVE = [
+    [CO_NO_MODE, 'legacy', 30000],
+    [CO_RIDER_JOBLEVEL, 'rider', 21000],
+    [CO_RIDER_MISSING, 'rider', 17000],
+    [CO_DEAD_ALLOCS, 'standalone', 9000],
+  ];
+
+  /* 'JobLevel' has to exist as a scope with no buildingId, or the job-level
+   * rider would be exercising the missing-scope path instead. */
+  const withJobLevelScope = (app) => {
+    app.phases.push({ id: 'p-jl', jobId: JOB, phase: 'JobLevel', asSoldRevenue: 4000, pctComplete: 25 });
+    return app;
+  };
+
+  test('11m · the premise, executed — all four really do resolve to byBuilding {}', () => {
+    MONEY_THAT_MUST_NOT_MOVE.forEach(([co, mode]) => {
+      const H = build(withJobLevelScope(makeAppData()), null, NO_WIRES);
+      const comp = H.coCompletion(co, JOB);
+      expect([co.co_number, comp.mode]).toEqual([co.co_number, mode]);
+      expect([co.co_number, Object.keys(comp.byBuilding)]).toEqual([co.co_number, []]);
+    });
+  });
+
+  test('11n · BYTE-FOR-BYTE against the shipped legacy branch — not one of them moved', () => {
+    // The whole safety argument for this commit, and the reason the branch was
+    // not simply switched off: same fixtures, same wires, origin/main's legacy
+    // branch on one side and this one on the other, every building compared.
+    const shipped = MUT_LEGACY_AS_SHIPPED();
+    MONEY_THAT_MUST_NOT_MOVE.forEach(([co, , amount]) => {
+      const wires = wireTo(co);
+      const now = build(withJobLevelScope(oneCO(Object.assign({}, co))), null, wires);
+      const before = build(withJobLevelScope(oneCO(Object.assign({}, co))), shipped, wires);
+      BUILDINGS.forEach((b) => {
+        expect([co.co_number, b.id, JSON.stringify(now.getCOsConnectedTo('t1', b.id))])
+          .toEqual([co.co_number, b.id, JSON.stringify(before.getCOsConnectedTo('t1', b.id))]);
+      });
+      // And the money is really there — a pair of empty arrays would also be
+      // byte-identical, which is precisely how a vacuous assertion passes.
+      expect([co.co_number, round2(dollars(now.getCOsConnectedTo('t1', B.one)))])
+        .toEqual([co.co_number, amount]);
+    });
+  });
+
+  test('11o · a change order the clock THROWS on keeps the money the wire shows it', () => {
+    // The live branch catches and moves on; so does this one, deliberately, so
+    // a shape coCompletion cannot read is not also a shape that loses its money.
+    const app = oneCO(Object.assign({}, CO_NO_MODE));
+    const coSellAmount = compile([extractFunction(JOBS_SRC, 'coSellAmount')], ['window'], [window], 'coSellAmount');
+    window.coSellAmount = coSellAmount;
+    const throwing = () => { throw new Error('clock unavailable'); };
+    const g = compile([GETCOS_SRC],
+      ['appData', 'appState', 'coCompletion', 'ensureNGLoaded', 'NG', 'window'],
+      [app, { currentJobId: JOB }, throwing, () => {},
+       makeNG(wireTo(CO_NO_MODE)), window], 'getCOsConnectedTo');
+    expect(round2(dollars(g('t1', B.one)))).toBe(30000);
+  });
+
+  /* ── the pre-server relic store ─────────────────────────────────────────── */
+
+  const relic = (over) => Object.assign(
+    { id: 'relic1', jobId: JOB, coNumber: 'CO-R1', income: 12000, estimatedCosts: 7000 }, over);
+  const relicApp = (rows) => {
+    const app = makeAppData();
+    app.jobChangeOrders = [];
+    app.changeOrders = rows;
+    return app;
+  };
+
+  test('11p · a pre-server relic change order still renders, and carries no status to gate on', () => {
+    // appData.changeOrders rows are minted by nodegraph/engine.js and the
+    // legacy saveCO. Neither shape has a `status` key — asserted on the row,
+    // not grepped — so a status filter here would not gate a draft, it would
+    // zero every relic change order on every card.
+    const r = relic();
+    expect('status' in r).toBe(false);
+    const rows = build(relicApp([r]), null, [{ co: 'relic1', building: B.one }]).getCOsConnectedTo('t1', B.one);
+    expect(rows.length).toBe(1);
+    expect(round2(dollars(rows))).toBe(12000);
+  });
+
+  test("11q · but a relic belonging to another job does NOT reach this job's card", () => {
+    const r = relic({ id: 'relic2', jobId: OTHER_JOB, coNumber: 'CO-R2', income: 99000 });
+    expect(build(relicApp([r]), null, [{ co: 'relic2', building: B.one }]).getCOsConnectedTo('t1', B.one))
+      .toEqual([]);
+  });
+
+  test('11r · MUTATION — without the relic job guard, that $99,000 lands on the card', () => {
+    const r = relic({ id: 'relic2', jobId: OTHER_JOB, coNumber: 'CO-R2', income: 99000 });
+    const rows = build(relicApp([r]), MUT_LEG_NO_RELIC_JOB(), [{ co: 'relic2', building: B.one }])
+      .getCOsConnectedTo('t1', B.one);
+    expect(round2(dollars(rows))).toBe(99000);
+  });
+
+  test('11s · statusless-but-counted is how the relic store is read EVERYWHERE else', () => {
+    // getJobCOTotals' legacy fallback gates relic rows on jobId and nothing
+    // else. Executed over the shipped function, not asserted about its text.
+    const app = relicApp([relic(), relic({ id: 'r2', jobId: OTHER_JOB, coNumber: 'CO-R2', income: 99000 })]);
+    const coSellAmount = compile([extractFunction(JOBS_SRC, 'coSellAmount')], ['window'], [window], 'coSellAmount');
+    const totals = compile([extractFunction(JOBS_SRC, 'getJobCOTotals')],
+      ['appData', 'coSellAmount', 'window'], [app, coSellAmount, window], 'getJobCOTotals')(JOB);
+    expect(totals.income).toBe(12000);   // statusless, and counted
+    expect(totals.count).toBe(1);        // the other job's is not
+  });
+
+  /* ── nothing above this section moved ───────────────────────────────────── */
+
+  test('11t · the LIVE branch is untouched — with no wires at all, section 1 still holds', () => {
+    const H = build(makeAppData(), null, NO_WIRES);
+    expect(coNumbers(H.getCOsConnectedTo('t1', B.one))).toEqual(['CO-0001', 'CO-0002']);
+    expect(round2(dollars(H.getCOsConnectedTo('t1', B.one)))).toBe(10000);
+    expect(round2(dollars(H.getCOsConnectedTo('t1', B.two)))).toBe(4000);
+  });
+
+  test('11u · and adding the wires changes not one figure on the main fixture', () => {
+    const wired = build(makeAppData());
+    const bare = build(makeAppData(), null, NO_WIRES);
+    BUILDINGS.forEach((b) => {
+      expect(JSON.stringify(wired.getCOsConnectedTo('t1', b.id)))
+        .toBe(JSON.stringify(bare.getCOsConnectedTo('t1', b.id)));
+    });
   });
 });

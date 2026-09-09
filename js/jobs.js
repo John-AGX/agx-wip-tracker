@@ -4910,7 +4910,6 @@ function renderJobsMain() {
                 // Already resolved through its own allocation above — a CO that
                 // is both allocated and wired must appear once.
                 if (seenCo[src.data.id]) return;
-                seenCo[src.data.id] = 1;
                 // Server COs live in appData.jobChangeOrders — money is in c.lines
                 // via the shared pricing pipeline, NOT a flat income field. (The old
                 // code read the dead appData.changeOrders relic, so every wired CO
@@ -4922,6 +4921,46 @@ function renderJobsMain() {
                 var srv = (appData.jobChangeOrders || []).find(function(c) { return c.id === src.data.id; });
                 var coEntry;
                 if (srv) {
+                    // THE SAME TWO GUARDS THE LIVE BRANCH CARRIES, because this
+                    // branch reads the SAME store and paints the SAME card. It
+                    // resolved a change order on `c.id === src.data.id` alone, so
+                    // everything the live branch above REJECTED — a draft, another
+                    // job's money — was precisely what a graph wire was free to pick
+                    // back up, at the wire's allocPct, on a money card. Not theory:
+                    // a $50,000 draft and another job's $123,456 both render today
+                    // (11c, 11e). `typeof NG === 'undefined'` is never true in the
+                    // running app — nodegraph/engine.js:4 is a top-level `var NG =`
+                    // and index.html loads it unconditionally — so this branch is
+                    // live on every job, and the only reason nobody had seen it was
+                    // that the test injected NG as undefined.
+                    if (jobId && srv.job_id !== jobId) return;
+                    if (srv.status !== 'approved' && srv.status !== 'applied') return;
+                    // THE CO'S OWN ALLOCATION OUTRANKS THE WIRE. coCompletion is the
+                    // canonical reader (see the live branch); when it resolves ANY
+                    // per-building split for this CO, the live branch above has
+                    // already ruled on this exact building and either accepted it
+                    // (stamping seenCo, so we never reach here) or rejected it for a
+                    // reason — the building holds no share of this CO. Rendering the
+                    // wire anyway is how one $50,000 change order allocated 100% to
+                    // Building 2 also rendered IN FULL on Building 1: the same money
+                    // on two cards, and $100,000 of card total against $50,000 of
+                    // G703 (11j). Suppressed only when an allocation actually EXISTS:
+                    // byBuilding is {} for a legacy-mode CO (which has no completion
+                    // mode at all), for a job-level rider, for a rider whose scope
+                    // was renamed away, and for a standalone with no live
+                    // allocations — and for every one of those the wire is still the
+                    // only signal there is, so it still renders, byte for byte, what
+                    // it renders today (11n). Same `typeof` guard as the live
+                    // branch so the two cannot disagree about whether the clock is
+                    // even available.
+                    if (targetType === 't1' && typeof coCompletion === 'function') {
+                        var lcomp = null;
+                        // A throw leaves lcomp null and the wire in charge — exactly
+                        // what the live branch's own catch does, so a CO the clock
+                        // cannot read keeps the money it shows today.
+                        try { lcomp = coCompletion(srv, jobId); } catch (e) { lcomp = null; }
+                        if (lcomp && lcomp.byBuilding && Object.keys(lcomp.byBuilding).length) return;
+                    }
                     var lines = Array.isArray(srv.lines) ? srv.lines : [];
                     var income = 0, cost = 0;
                     if (window.p86Pricing) {
@@ -4933,8 +4972,23 @@ function renderJobsMain() {
                     coEntry = Object.assign({}, srv, { income: income, estimatedCosts: cost });
                 } else {
                     coEntry = (appData.changeOrders || []).find(function(c) { return c.id === src.data.id; });
+                    // The pre-server relic. Job guard only, and spelled jobId:
+                    // these rows are minted by nodegraph/engine.js and the legacy
+                    // saveCO, both of which stamp a camelCase jobId and NEITHER of
+                    // which has ever written a `status` at all. A status filter here
+                    // would not gate drafts — it would zero every relic change order
+                    // on every card, which is money that renders correctly today.
+                    // getJobCOTotals' own legacy fallback gates these rows on jobId
+                    // and nothing else for the same reason; this now matches it.
+                    if (coEntry && jobId && coEntry.jobId !== jobId) return;
                 }
                 if (!coEntry) return;
+                // Stamped on ACCEPTANCE, not on sight. It used to be stamped before
+                // the row was even looked up, which was harmless only because every
+                // sighting was an acceptance; with real guards above, an early stamp
+                // would let a rejected CO suppress nothing and change nothing, but
+                // it would also mean seenCo no longer means what its name says.
+                seenCo[src.data.id] = 1;
                 results.push({ co: coEntry, allocPct: w.allocPct != null ? w.allocPct : 100 });
             });
             return results;
