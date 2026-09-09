@@ -65,8 +65,34 @@ const { userInOrg } = require('./user-org-scope');
 
 // The tables a polymorphic attachment may hang on. A WHITELIST: entity_type
 // comes off the request and is NEVER interpolated into SQL, only looked up
-// here. Mirrors VALID_ENTITY_TYPES in attachment-routes.js minus the two
-// IDENTITY buckets below; every table named here carries organization_id.
+// here. Every table named here carries organization_id.
+//
+// THE INVARIANT, AND WHY IT IS NOT A COMMENT ANY MORE.
+// This map plus IDENTITY_TYPES must cover VALID_ENTITY_TYPES in
+// attachment-routes.js EXACTLY — every type the door accepts has to be a type
+// this file can resolve. That used to be asserted here as "mirrors
+// VALID_ENTITY_TYPES minus the two IDENTITY buckets", maintained by hand, with
+// nothing checking it. It stopped being true the moment 'service_ticket' was
+// added to the route's set and not to this one: twelve types accepted at the
+// door, eleven resolvable behind it.
+//
+// An accepted-but-unresolvable type breaks BOTH doors at once, in opposite
+// directions, which is why this is the failure mode to guard rather than the
+// single missing line:
+//   • entityOrgVerdict returns 'unknown', so attachmentEntityInOrg is false
+//     for the OWNING org — the list and upload doors refuse the tenant that
+//     owns the row. Crew photos went in through the guest work-order page and
+//     nothing in the product could read them back.
+//   • attachmentInOrg's rung 1, THE ANCHOR, cannot fire, so the verdict falls
+//     to the row's stamp, then the uploader, then rung 4's allow. The guest
+//     upload door writes uploaded_by = NULL by design, so an unstamped row of
+//     that type was readable by every tenant, bytes included.
+//
+// The mirror is now enforced by executing the set difference, in
+// test/attachment-entity-type-coverage.test.js. Add a type to
+// VALID_ENTITY_TYPES without resolving it here and that suite goes red. If a
+// new type has no parent table carrying organization_id, it does not belong in
+// VALID_ENTITY_TYPES either — do not invent a mapping to quiet the test.
 const ENTITY_TABLES = {
   lead:           'leads',
   estimate:       'estimates',
@@ -77,6 +103,10 @@ const ENTITY_TABLES = {
   task:           'tasks',
   purchase_order: 'job_purchase_orders',
   bill:           'job_vendor_bills',
+  // Work-order (service ticket) site photos. server/db.js creates
+  // service_tickets with organization_id, so the anchor resolves the same way
+  // a task's does.
+  service_ticket: 'service_tickets',
 };
 
 // The two entity types with no table of their own:
