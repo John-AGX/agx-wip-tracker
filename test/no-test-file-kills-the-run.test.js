@@ -360,6 +360,83 @@ function localRunnerDecls(ast) {
   return Array.from(new Set(names));
 }
 
+/* ── RULE 3'S EXEMPTION, NARROWED BY AND (nothing else) ──────────────────
+ * Rule 3 asks "is this file main-guarded?" with a regex over RAW SOURCE, so
+ * the phrase exempts a file wherever it appears — including the past-tense
+ * note a repaired file leaves behind:
+ *
+ *     // NOTE: this helper is also runnable standalone under require.main === module.
+ *     process.exit(0);                    // ← exempted. Kills the worker anyway.
+ *
+ * MEASURED, not reasoned: with exactly those two lines appended to
+ * test/helpers/db-schema.js this guard printed "1 passed", while six real
+ * suites that require() that helper printed `A jest worker process
+ * (pid=198328) crashed for an unknown reason: exitCode=0` and `Tests: 0
+ * total`. 184 assertions deleted in silence, run still green.
+ *
+ * THE SHAPE OF THE FIX MATTERS MORE THAN THE FIX. Two earlier attempts at
+ * this died by REPLACING something. One swapped the detector for an AST
+ * reachability walk and then let `const api = { init: function(){
+ * process.exit(0); } }; api.init();` through — strictly weaker than the
+ * regex it replaced. One left the detector alone but WIDENED what counts as
+ * a valid gate (`!==`, `==`, `module === require.main`, `require . main`,
+ * `require/*x*\/.main`); every added spelling was a brand-new escape hatch,
+ * and verifiers walked straight through them.
+ *
+ * So this pass only ever ANDs, and the left operand is main's predicate
+ * character for character:
+ *
+ *     mainGuardedRaw && phraseOccursAsCode(f.src)
+ *
+ * A conjunction can only make a true smaller. Therefore EVERY file this
+ * exempts was already exempted by main: the exempt set can only SHRINK and
+ * the offender set can only GROW. That is a property of the composition,
+ * provable by reading it, not a claim resting on a battery of cases. It also
+ * means no new gate spelling is recognised — deliberately. If the original
+ * regex would not have matched it, it stays unexempted.
+ *
+ * "Does the phrase occur as CODE?" is answered with @babel/parser's OWN
+ * comment and token ranges. It is NOT answered with a hand-rolled comment
+ * stripper: a regex stripper eats 74% of js/estimate-editor.js and turns
+ * negative assertions into vacuous passes, which is the exact failure mode
+ * this file exists to prevent. Where the analysis cannot be completed the
+ * answer is NO — that direction only removes an exemption, so uncertainty is
+ * spent on the safe side.
+ */
+function nonCodeSpans(src) {
+  let ast;
+  try {
+    ast = parser.parse(src, {
+      sourceType: 'unambiguous', allowReturnOutsideFunction: true, tokens: true
+    });
+  } catch (e) { return null; }        // unparsable ⇒ the caller treats it as "not code"
+  const spans = [];
+  for (const c of (ast.comments || [])) spans.push([c.start, c.end]);
+  for (const t of (ast.tokens || [])) {
+    const label = (t.type && t.type.label) || t.type;
+    /* Strings, template chunks and regex literals are all places where the
+     * phrase is TEXT rather than a gate. Regex literals are counted non-code
+     * on purpose: like every other judgement here, it can only tighten. */
+    if (label === 'string' || label === 'template' || label === 'regexp'
+      || t.type === 'CommentBlock' || t.type === 'CommentLine') spans.push([t.start, t.end]);
+  }
+  return spans;
+}
+
+function phraseOccursAsCode(src) {
+  const spans = nonCodeSpans(src);
+  if (!spans) return false;
+  const re = /require\.main\s*===\s*module/g;   // same source as the predicate, plus /g
+  let m;
+  while ((m = re.exec(src))) {
+    const s = m.index;
+    const e = s + m[0].length;
+    // Overlaps no comment, string or regex literal ⇒ this occurrence is code.
+    if (!spans.some((sp) => s < sp[1] && e > sp[0])) return true;
+  }
+  return false;
+}
+
 describe('no test file kills the run, or hides itself from it', () => {
 
   test('every .js under test/ parses (a file this guard cannot read is a hole)', () => {
@@ -444,16 +521,109 @@ describe('no test file kills the run, or hides itself from it', () => {
     }
     for (const f of FILES) {
       if (isCollectedByJest(f.rel)) continue;
-      const ast = parse(f);
-      if (!findExits(ast).length) continue;
-      const mainGuarded = /require\.main\s*===\s*module/.test(f.src);
+      /* Asked FIRST rather than last. It is the same conjunction — a file no
+       * worker can require() could never be reported — but it skips parsing
+       * and detector work for the ~350 uncollected files that are unreachable
+       * from a worker. Reordering an AND is not weakening one. */
+      if (!requiredByTests.has(f.rel)) continue;
+      /* main's predicate, character for character, ANDed with "and that phrase
+       * is real code". AND can only shrink the exempt set, so nothing main
+       * flags can stop being flagged here. No new gate spelling is accepted:
+       * `!==`, `==`, `module === require.main`, `require . main`,
+       * `require['main']` were never exempt and stay that way. */
+      const mainGuardedRaw = /require\.main\s*===\s*module/.test(f.src);
+      const mainGuarded = mainGuardedRaw && phraseOccursAsCode(f.src);
       if (mainGuarded) continue;
-      if (requiredByTests.has(f.rel)) {
-        offenders.push(f.rel + ' — force-exits on load AND is require()d from under test/.'
-          + ' Guard its entry with `require.main === module`, or spawn it as a child process.');
-      }
+      const exits = findExits(parse(f));
+      if (!exits.length) continue;
+      const hit = exits[0];
+      offenders.push(f.rel + ':' + hit.line + ' — ' + hit.name
+        + ' force-exits on load AND is require()d from under test/.'
+        + (mainGuardedRaw
+          ? ' Every `require.main === module` in it sits inside a comment, a string'
+            + ' or a regex literal, so it gates nothing.'
+          : '')
+        + ' Guard its entry with `require.main === module`, or spawn it as a child process.');
     }
     expect(offenders).toEqual([]);
+  });
+
+  /* ── RULE 3's EXEMPTION, PINNED IN BOTH DIRECTIONS ──────────────────────
+   * Two things have to hold and neither may be assumed:
+   *   (a) the comment/string phrase no longer exempts anything;
+   *   (b) NOTHING new is exempted — every spelling main's regex did not match
+   *       is still unexempted, because widening the gate vocabulary is how the
+   *       previous attempt at this defect was beaten.
+   * The battery below runs a LOCAL copy of the composition, which on its own
+   * would pin nothing about Rule 3 — measured: reverting Rule 3's loop to
+   * `mainGuarded = mainGuardedRaw` left this test 6/6 green. The tail of this
+   * test therefore reads the shipped loop out of this file and requires the
+   * conjunction to be in it, so deleting the fix goes red. */
+  test('rule 3 exempts a main gate only when the phrase is real code, and widens nothing', () => {
+    const exempts = (src) => {
+      const mainGuardedRaw = /require\.main\s*===\s*module/.test(src);
+      return mainGuardedRaw && phraseOccursAsCode(src);
+    };
+
+    // A genuine gate is still a gate. Losing this would break two live files.
+    expect(exempts('if (require.main === module) main();')).toBe(true);
+    expect(exempts('if (require.main === module) main().catch((e) => { process.exit(1); });')).toBe(true);
+    expect(exempts('if (require.main   ===\n    module) main();')).toBe(true);   // \s* as main wrote it
+
+    // THE DEFECT. Both of these exempted a lethal file on origin/main.
+    expect(exempts('// runnable standalone under require.main === module.\nprocess.exit(0);')).toBe(false);
+    expect(exempts('/* was: if (require.main === module) main(); */\nprocess.exit(0);')).toBe(false);
+    expect(exempts('const NOTE = "require.main === module";\nprocess.exit(0);')).toBe(false);
+    expect(exempts('const NOTE = `require.main === module`;\nprocess.exit(0);')).toBe(false);
+    expect(exempts('const RE = /require\\.main === module/;\nprocess.exit(0);')).toBe(false);
+    // A real gate elsewhere in the file still exempts it, comment or no comment.
+    expect(exempts('// see require.main === module below\nif (require.main === module) main();')).toBe(true);
+
+    /* NO NEW ESCAPE HATCHES. Every spelling below is one main's regex never
+     * matched, so main FLAGS these files and this guard must too. Each entry
+     * killed a jest worker in a verifier's tree against the previous attempt.
+     * Measured: the `===` spelling is pinned in TWO places (the raw predicate
+     * and phraseOccursAsCode's own scan), so widening either one alone cannot
+     * widen the result — only widening BOTH turns this battery red. */
+    const neverExempt = [
+      ['strict-inequality', 'if (require.main !== module) return;\nprocess.exit(0);'],
+      ['loose-equality', 'if (require.main == module) main();\nprocess.exit(0);'],
+      ['mirrored operands', 'if (module === require.main) main();\nprocess.exit(0);'],
+      ['spaced member', 'if (require . main === module) main();\nprocess.exit(0);'],
+      ['comment inside member', 'if (require/*x*/.main === module) main();\nprocess.exit(0);'],
+      ['newline inside member', 'if (require\n  .main === module) main();\nprocess.exit(0);'],
+      ['computed require["main"]', 'if (require["main"] === module) main();\nprocess.exit(0);'],
+      ['no gate at all', 'const api = { init: function () { process.exit(0); } };\napi.init();']
+    ];
+    for (const [why, src] of neverExempt) {
+      expect([why, exempts(src)]).toEqual([why, false]);
+    }
+
+    // Unparsable source is never exempted — uncertainty spends on the safe side.
+    expect(exempts('if (require.main === module) main(  ;;; )}{')).toBe(false);
+    // And the raw predicate on its own is exactly what it always was.
+    expect(/require\.main\s*===\s*module/.test('if (require.main === module) {}')).toBe(true);
+
+    /* ── AND NOW PIN THE CODE THAT ACTUALLY SHIPS ────────────────────────
+     * Everything above tests `exempts`, a LOCAL copy of the composition. That
+     * proves the composition is right; it proves nothing about Rule 3 using
+     * it. Measured: with Rule 3's loop reverted to `mainGuarded =
+     * mainGuardedRaw` and this test left untouched, the suite ran "6 passed,
+     * 6 total" AND a planted comment-disarmed `process.exit(0)` went
+     * unreported — the fix was gone and every assertion here still passed.
+     * So read the shipped loop out of this file and require the conjunction
+     * to be present in it. Deleting the fix now turns this red. */
+    /* Split so this literal is not itself the thing indexOf finds. */
+    const anchor = 'an uncollected file that exits' + ' is either main-guarded';
+    const selfSrc = fs.readFileSync(__filename, 'utf8');
+    expect(selfSrc.length).toBeGreaterThan(1000);           // the read really happened
+    const rule3 = selfSrc.slice(selfSrc.indexOf(anchor));
+    expect(rule3.slice(0, anchor.length)).toBe(anchor);     // anchor really found
+    const loop = rule3.slice(0, rule3.indexOf('expect(offenders).toEqual([]);'));
+    expect(loop).toContain('const mainGuardedRaw = /require\\.main\\s*===\\s*module/.test(f.src);');
+    expect(loop).toContain('const mainGuarded = mainGuardedRaw && phraseOccursAsCode(f.src);');
+    // The local copy above and the shipped line are the same composition.
+    expect(String(exempts)).toContain('mainGuardedRaw && phraseOccursAsCode(src)');
   });
 
   /* The guard is worth exactly what its detector is worth, so the detector is
