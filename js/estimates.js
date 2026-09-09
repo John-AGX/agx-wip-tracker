@@ -1017,6 +1017,332 @@ function renderEstimatesList() {
             }
         }
 
+        // ──────────────────────────────────────────────────────────────
+        // Duplicate an estimate.
+        //
+        // The point of this feature is to copy an estimate that was ALREADY
+        // SOLD — the proven price for a job you are about to bid again. So the
+        // hard part is not the copying, it is everything that must NOT come
+        // with it: an estimate carries ~22 lifecycle columns plus a JSONB blob
+        // recording that THIS one was sent, viewed, approved, declined, signed,
+        // locked and converted. A copy that arrives wearing any of that is
+        // worse than no feature at all — it would show as "Won" in the list,
+        // open read-only, and name a real person as having approved a proposal
+        // they have never seen.
+        //
+        // Deliberately a DENYLIST (copy everything, then delete). An allowlist
+        // rots: attachment-routes.js:1660 omits folder_id from its copy route's
+        // column list, so every file copied through it lands invisible to the
+        // Explorer, which groups by folder_id alone. A field added to estimates
+        // next month should ride along by default; only the keys named here are
+        // provenance, and provenance is a closed set we can enumerate.
+        var ESTIMATE_DUP_RESET = [
+            // ── identity + row bookkeeping ────────────────────────────
+            'id',
+            // updated_at is THE hard rule. rebuildBaselines / captureCacheBaselines
+            // both do `if (e.updated_at) _estimateVersion[e.id] = …`, and that
+            // version becomes the row's base on the next save. A copy carrying the
+            // SOURCE's updated_at therefore claims to be a row the server already
+            // has — so bulk/save refuses it as conflict 'deleted' instead of
+            // inserting it, and the duplicate is silently lost on the next reload.
+            // Absence of a base version is the ONLY thing that authorises an INSERT.
+            'updated_at', 'created_at', 'owner_id', 'organization_id',
+            // ── the lock ──────────────────────────────────────────────
+            // The server row is born unlocked (the INSERT never names the column),
+            // but the IN-MEMORY copy would read locked and open read-only, telling
+            // the estimator their brand-new file "was won and converted to a job".
+            'is_locked',
+            // ── approval provenance ───────────────────────────────────
+            'approval_status', 'approved_at', 'approved_by', 'approval_method',
+            'declined_at', 'decline_reason',
+            // ── send provenance ───────────────────────────────────────
+            // sent_at ALONE flips the list badge to "Sent"; sent_to leaks the
+            // original client's email onto a copy priced for someone else.
+            'sent_at', 'sent_count', 'sent_to', 'sent_method', 'viewed_at',
+            // accepted_at is re-backfilled from jobs.created_at on EVERY server
+            // boot for anything still named by jobs.estimate_id — which is the
+            // sharpest reason to clear job_id below rather than trust a one-time wipe.
+            'accepted_at',
+            // ── signing ───────────────────────────────────────────────
+            // Not in the GET projection today, so a client-side copy structurally
+            // cannot carry them. Listed anyway: a copied signature would attach a
+            // real person's e-sign consent record to a document they never saw,
+            // and sign_token is UNIQUE — a copy would either 500 on the index or
+            // hand the copy the original's public signing URL.
+            'signature', 'sign_token',
+            // ── geocode of the ORIGINAL property ──────────────────────
+            // bulk/save re-geocodes from the copy's own propertyAddr, so these
+            // would only ever be stale coordinates in the meantime.
+            'geocode_lat', 'geocode_lng', 'geocode_status', 'geocode_at', 'geocode_addr',
+            // ── conversion links ──────────────────────────────────────
+            // job_id is the headline failure and is blob-only — never shadowed by
+            // a column, so no reload ever corrects it. It alone renders "Won".
+            'job_id',
+            // status is set to 'sold' beside job_id by convert, and rewritten to
+            // 'accepted' by the job-delete detach. Clearing it reads as Draft.
+            'status',
+            // lead_id is CLEARED BY DEFAULT: keeping it puts the copy inside that
+            // lead's delete cascade (deleting the lead would take this new estimate
+            // with it) and into the job's link-estimate picker. Re-attach manually
+            // when you are re-bidding the same opportunity.
+            'lead_id',
+            // ── Buildertrend pipeline status ──────────────────────────
+            // Sales provenance living under TWO spellings, blob-only with no
+            // shadowing column — so nothing ever corrects it on reload. The
+            // agent field-update tool writes the camelCase key; the dashboard
+            // "Pending estimates" tile, the org rollup and the weekly digest
+            // read the snake_case one. Clearing `status` above is NOT enough:
+            // ai-routes reads COALESCE(btExportStatus, status, 'draft'), which
+            // consults this FIRST, so a copy would still report "accepted".
+            'bt_export_status', 'btExportStatus',
+            // ── display name ──────────────────────────────────────────
+            // `name` BEATS `title` on every estimate picker (`e.name || e.title`
+            // in the job link-estimate picker and the lead convert picker). The
+            // list renders est.title, so keeping `name` makes the copy read
+            // "X (copy)" in the list and BYTE-IDENTICAL to the sold original in
+            // exactly the two controls that choose which estimate becomes sold.
+            // Deleting it collapses every surface onto the one renamed handle.
+            'name',
+            // ── agent-writable blob keys ──────────────────────────────
+            // In the dispatcher's ESTIMATE_FIELD_KEYS and not blocked, so 86 can
+            // put these on any estimate. Inert today (no reader found), listed
+            // because a copied bid deadline or proposal expiry is a wrong date
+            // on a document the moment anything renders them.
+            'estimate_number', 'bid_due_date', 'expires_on', 'totalProposal',
+            // ── transient working state ───────────────────────────────
+            '__totals',   // stamped on every list render; the server strips it too
+            'aiPhase',    // per-estimate agent mode — source-specific
+            'created',    // legacy Excel-import date, printed as "Created Date"
+            // Defensive: the server overwrites blob.lines from the flat array and
+            // the hydrate deletes it, so src should never carry one — but if it
+            // ever did, the copy would ship a verbatim duplicate of the SOURCE's
+            // line array inside its own blob and into the localStorage cache.
+            'lines',
+            // The workbook on the in-memory record is a STALE MIRROR: the
+            // Workspace reads and writes it through its own endpoints and never
+            // touches appData, so a takeoff built this session is not in here at
+            // all. Dropped from the shallow copy and re-fetched authoritatively
+            // below — which also removes the shared-object alias.
+            'workbook'
+        ];
+
+        // Mint an id nothing on the record has taken. p86LineIdentity.mintId
+        // retries with an increasing suffix against a null-prototype `taken` map,
+        // so its guarantee comes from the map, not from entropy — which is what
+        // makes a 300-line copy safe. A bare `Date.now()` id is not: inside one
+        // millisecond the timestamp is constant, and `'e' + Date.now()` (the
+        // New Estimate path) has no uniqueness check of any kind.
+        function estDupMintId(taken, prefix) {
+            if (window.p86LineIdentity && window.p86LineIdentity.mintId) {
+                return window.p86LineIdentity.mintId(taken, prefix);
+            }
+            var base = prefix + Date.now().toString(36), id = base, n = 0;
+            while (taken[id]) { id = base + '_' + (++n); }
+            return id;
+        }
+
+        // The workbook (the takeoff) is the most expensive thing in an estimate
+        // to rebuild and the most likely reason to duplicate at all — but
+        // appData's copy of it is a MIRROR that only a full loadData() refreshes.
+        // The Workspace tab reads and writes through /api/estimates/:id/workbook
+        // and never touches appData.estimates at all, so an hour of takeoff built
+        // this session is simply not in the in-memory record. Ask the server.
+        // A failure here must not fail the duplicate: fall back to the mirror.
+        function estDupFetchWorkbook(id, fallback) {
+            try {
+                return fetch('/api/estimates/' + encodeURIComponent(id) + '/workbook', { credentials: 'include' })
+                    .then(function(r) { return r.ok ? r.json() : null; })
+                    .then(function(j) {
+                        var wb = j && j.workbook;
+                        return (wb && typeof wb === 'object') ? wb : (fallback || null);
+                    })
+                    .catch(function() { return fallback || null; });
+            } catch (e) {
+                return Promise.resolve(fallback || null);
+            }
+        }
+
+        // Guards against the double-click that the "duplicate job" bug was made
+        // of. Estimates have no job number to collide on, so nothing downstream
+        // would warn you that two copies exist.
+        var _duplicatingEstimate = false;
+
+        function duplicateEstimate(srcId) {
+            if (_duplicatingEstimate) return Promise.resolve(null);
+            var src = (appData.estimates || []).find(function(e) { return e && e.id === srcId; });
+            if (!src) {
+                if (window.p86Alert) window.p86Alert({ title: 'Estimate not found', message: 'Could not find that estimate to duplicate.' });
+                return Promise.resolve(null);
+            }
+            _duplicatingEstimate = true;
+
+            // Land any pending keystroke before we read the record. This cancels
+            // the editor's debounce timer and runs its save immediately, so an
+            // edit made two seconds ago is in appData before we copy it.
+            //
+            // It is NOT a network flush and must not be described as one:
+            // saveEstimateNow returns undefined (it does not hand back
+            // runSaveNow's result), and it returns early when no estimate is
+            // open — which is the case when this is called from anywhere but the
+            // editor. So the Promise.resolve() below settles immediately; it
+            // exists to keep one chain, not to await a push.
+            var flush;
+            try {
+                flush = (typeof window.saveEstimateNow === 'function')
+                    ? Promise.resolve(window.saveEstimateNow()).catch(function() {})
+                    : Promise.resolve();
+            } catch (e) { flush = Promise.resolve(); }
+
+            var def = (src.title || 'Untitled') + ' (copy)';
+            return flush.then(function() {
+                // Native prompt() is a silent no-op in the installed PWA — it
+                // returns undefined, so a bare prompt() makes this button inert
+                // in production while working perfectly in a desktop tab.
+                return (typeof window.p86Prompt === 'function')
+                    ? window.p86Prompt({
+                        title: 'Duplicate estimate',
+                        message: 'Line items, groups, pricing and the takeoff workspace carry over. Files and photos do not, and the copy starts as a fresh draft — no sent/approved/sold history, and not attached to any lead or job.',
+                        placeholder: 'Estimate name',
+                        defaultValue: def
+                      })
+                    : Promise.resolve(prompt('Name for the copy:', def));
+            }).then(function(name) {
+                if (name == null) return null;
+                name = String(name).trim();
+                if (!name) return null;
+
+                // RE-RESOLVE. p86Prompt is a DOM overlay, not a blocking call —
+                // an unknown amount of time passed while the estimator typed,
+                // and ANY write landing anywhere in the app can trigger a
+                // hydrate, which replaces every object in appData.estimates and
+                // reassigns appData.estimateLines wholesale. The object captured
+                // before the prompt is then a detached orphan.
+                //
+                // The asymmetry is what makes this vicious rather than merely
+                // stale: `copy` and its alternates would come from the OLD
+                // object while the cloned lines come from the FRESH array (the
+                // filter matches on src.id, a string, which survives). The
+                // result is lines whose alternateId names a group the copy's
+                // alternates[] does not contain — in no group at all, so they
+                // render nowhere and contribute nothing to the price. Silent,
+                // and exactly the invisible-orphan class this file avoids
+                // elsewhere by never re-minting group ids.
+                src = (appData.estimates || []).find(function(e) { return e && e.id === srcId; });
+                if (!src) {
+                    if (window.p86Alert) window.p86Alert({ title: 'Estimate changed', message: 'That estimate changed while you were naming the copy. Nothing was duplicated — try again.' });
+                    return null;
+                }
+                return estDupFetchWorkbook(srcId, src.workbook).then(function(wb) {
+                    return buildTheCopy(src, name, wb);
+                });
+            }).catch(function(e) {
+                console.error('duplicateEstimate:', e);
+                if (window.p86Alert) window.p86Alert({ title: 'Duplicate failed', message: (e && e.message) || 'unknown error' });
+                return null;
+            }).then(function(r) {
+                _duplicatingEstimate = false;
+                return r;
+            });
+
+            function buildTheCopy(src, name, workbook) {
+
+                // ── the copy ──────────────────────────────────────────
+                var takenEst = Object.create(null);
+                (appData.estimates || []).forEach(function(e) {
+                    if (e && e.id != null) takenEst[String(e.id)] = true;
+                });
+                var newId = estDupMintId(takenEst, 'e');
+
+                var copy = Object.assign({}, src);
+                ESTIMATE_DUP_RESET.forEach(function(k) { delete copy[k]; });
+                // Client-private state (_updatedAt, _canEdit, …) never belongs on
+                // a new row; _stripPrivate only removes these from the change
+                // SIGNATURE, not from the payload that actually ships.
+                Object.keys(copy).forEach(function(k) {
+                    if (k.charAt(0) === '_') delete copy[k];
+                });
+                copy.id = newId;
+                copy.title = name;
+                // Deep-clone the groups. Object.assign is shallow, so without this
+                // the copy and a SOLD original would share one alternates array —
+                // renaming a group on the copy would rename it on the original.
+                // (duplicateActiveAlternate has exactly this bug one level down:
+                // its Object.assign({}, l) leaves both lines sharing one
+                // assemblyBreakdown array.)
+                copy.alternates = JSON.parse(JSON.stringify(src.alternates || []));
+                // The legacy flat-alternate shape carries an estimateId. Left in
+                // place it puts the SOURCE's id inside the copy's own groups —
+                // inert today (the server's fallback branch is never taken while
+                // the inline array is non-empty) but precisely the stale
+                // cross-record pointer this whole reset list exists to prevent.
+                copy.alternates.forEach(function(a) { if (a) delete a.estimateId; });
+                // The workbook was dropped with the reset list and comes back
+                // here from the server, deep by construction (it arrived as JSON),
+                // so the copy shares no object with the original.
+                if (workbook) copy.workbook = workbook;
+                // Groups keep their ids and their excludeFromTotal flags verbatim.
+                // Do NOT force excludeFromTotal true the way duplicateActiveAlternate
+                // does — that is right for a group added ALONGSIDE its source inside
+                // one estimate (it would double the price) and wrong for a whole
+                // estimate, where it would silently drop priced groups from the total.
+                copy.duplicatedFromEstimateId = src.id;
+                copy.duplicatedAt = new Date().toISOString();
+
+                // ── the lines ─────────────────────────────────────────
+                // Source ARRAY ORDER is the only thing that records which section
+                // a line belongs to (membership is position between
+                // '__section_header__' rows, not a key), so filter preserving
+                // order and never sort or group.
+                var takenLines = Object.create(null);
+                (appData.estimateLines || []).forEach(function(l) {
+                    if (l && l.id != null) takenLines[String(l.id)] = true;
+                });
+                var copies = [];
+                (appData.estimateLines || []).forEach(function(l) {
+                    if (!l || l.estimateId !== src.id) return;
+                    var c = JSON.parse(JSON.stringify(l)); // deep — assemblyBreakdown
+                    c.estimateId = newId;                  // the partition key, both sides
+                    // alternateId stays as-is: group ids are estimate-scoped by
+                    // design (every estimate is born with 'alt_default'), and every
+                    // lookup filters on estimateId too. Re-minting would need a
+                    // remap table whose one missed line becomes an invisible orphan.
+                    c.id = estDupMintId(takenLines, (l.section === '__section_header__') ? 's' : 'l');
+                    takenLines[c.id] = true;               // accumulate: this is the proof
+                    copies.push(c);
+                });
+
+                appData.estimates.push(copy);
+                // ONE assignment, not push-per-line: the line-identity boundary
+                // installs a setter that heals the portfolio once in O(n), while
+                // push re-runs that sweep over the WHOLE portfolio per line — and
+                // push.apply is the single insert form the boundary cannot see.
+                appData.estimateLines = (appData.estimateLines || []).concat(copies);
+
+                // saveData(), NOT debouncedSave(). debouncedSave consults the lock
+                // of whatever estimate the EDITOR currently has open — the locked
+                // source at this instant — and returns with only a console.warn,
+                // so nothing would ever be scheduled: the copy would sit on screen
+                // and never reach Postgres.
+                saveData();
+
+                // Nothing is written back onto the source. A back-pointer would
+                // make a sold estimate dirty, ship it on this same push, and come
+                // back as a 'locked' conflict on a row the user never touched.
+
+                if (window.p86Toast) window.p86Toast('Duplicated — ' + copies.length + ' line' + (copies.length === 1 ? '' : 's') + ' copied.', 'success');
+
+                if (window.p86Router && typeof window.p86Router.navigate === 'function') {
+                    window.p86Router.navigate({ top: 'estimates', estId: newId });
+                } else if (typeof window.openEstimateEditor === 'function') {
+                    window.openEstimateEditor(newId);
+                } else {
+                    renderEstimatesList();
+                }
+                return newId;
+            }
+        }
+        window.duplicateEstimate = duplicateEstimate;
+
         function editEstimate(estId) {
     // Block editor open while the initial server fetch is in-flight.
     // See openNewEstimateForm comment for rationale.

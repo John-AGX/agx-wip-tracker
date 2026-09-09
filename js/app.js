@@ -3065,6 +3065,21 @@
         }
         function dirtyEstimateIds() {
             return (appData.estimates || [])
+                // A LOCKED (sold) estimate can never be legally written by this
+                // client — bulk/save refuses it as conflict 'locked' — so sending
+                // one can only produce a red toast and a forced fromConflict
+                // hydrate on a row the user never touched. dirtyJobIds() directly
+                // above has always had this filter (_canEdit !== false); the
+                // estimate side never did, and the gap is reachable rather than
+                // theoretical: ensureAlternates() mutates a legacy estimate in
+                // memory the moment you OPEN it (backfilling alternates and line
+                // alternateIds) and then deliberately does NOT persist when the
+                // record is locked — `if (changed && !eeLockReason(est))`. That
+                // leaves a sold estimate permanently dirty, so it rode along on
+                // the next unrelated save. Filtering here fixes the push AND the
+                // phantom "unsaved changes" state, since everything downstream
+                // reads this one function.
+                .filter(function(e) { return e && !e.is_locked; })
                 .filter(function(e) { return e && _estimateBaseline[e.id] !== estimateSliceSig(e.id); })
                 .map(function(e) { return e.id; });
         }

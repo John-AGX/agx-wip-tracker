@@ -4217,6 +4217,22 @@
       // of Details, behind the same edit gate as everything else here, is the
       // home it was missing. The server still decides — a sold/locked estimate
       // comes back 409, and one feeding a job detaches rather than destroying.
+      // Duplicate sits ABOVE Delete and deliberately does NOT reuse
+      // .ee-danger-row — that row's red tint reads as destructive, and copying
+      // an estimate destroys nothing. Labelled "Duplicate this estimate", never
+      // bare "Duplicate": the Line Items tab already has a ⎘ Duplicate button
+      // that copies a GROUP, and two controls a tab apart both saying
+      // "Duplicate" and meaning different things is how you lose an afternoon.
+      // Not gated behind eeRefuse: duplicating a SOLD estimate is the whole
+      // point of the feature — the lock protects the sold row from being
+      // changed, and a copy changes nothing about it.
+      '<div class="ee-action-row" style="max-width:900px;">' +
+        '<div class="ee-action-copy">' +
+          '<strong>Duplicate this estimate</strong>' +
+          'Copies the line items, groups, pricing and the takeoff workspace into a new draft. Files and photos stay behind, and the copy starts with no sent/approved/sold history and no lead or job attached. Works on a sold estimate — the original is not touched.' +
+        '</div>' +
+        '<button class="ee-btn secondary" onclick="window.duplicateEstimateFromEditor()">⎘ Duplicate estimate</button>' +
+      '</div>' +
       '<div class="ee-danger-row" style="max-width:900px;">' +
         '<div class="ee-danger-copy">' +
           '<strong>Delete this estimate</strong>' +
@@ -4571,6 +4587,21 @@
   // Delete from the editor sticky header. Closes the editor first so the
   // user lands back on the list, then runs the existing global delete
   // (which handles the server-side remove + local state cleanup).
+  // Duplicate the open estimate. The whole implementation lives in
+  // js/estimates.js next to createNewEstimate so the editor, the lead card and
+  // any future surface share ONE clone path — this repo's recurring defect is
+  // "the second copy that drifts" (duplicateActiveAlternate and applyAddGroup
+  // have already diverged on excludeFromTotal), and a duplicate that forgets
+  // one reset key ships a copy wearing someone else's approval.
+  window.duplicateEstimateFromEditor = function() {
+    if (!_currentId) return;
+    if (typeof window.duplicateEstimate !== 'function') {
+      if (window.p86Alert) window.p86Alert({ title: 'Duplicate not available', message: 'Refresh the page and try again.' });
+      return;
+    }
+    window.duplicateEstimate(_currentId);
+  };
+
   window.deleteEstimateFromEditor = function() {
     if (!_currentId) return;
     var id = _currentId;
