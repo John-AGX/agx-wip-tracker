@@ -1409,7 +1409,21 @@
       lead = leads.find(function(x) { return x.id === leadId; }) || null;
     }
     if (lead && lead.job_id) {
-      if (confirm('The lead this estimate belongs to is already linked to a job. Open that job instead?')) openJobFromEstimate(lead.job_id);
+      // Native confirm() returns undefined in the installed PWA, and this
+      // function returns either way — so on a lead that already has a job,
+      // Create Job did nothing at all: no dialog, no navigation, no message.
+      // The one state where the button most needs to explain itself was the
+      // one where it was silently inert.
+      var _jid = lead.job_id;
+      if (typeof window.p86Confirm === 'function') {
+        window.p86Confirm({
+          title: 'That lead already has a job',
+          message: 'The lead this estimate belongs to has already been converted. Open that job instead?',
+          confirmText: 'Open job', confirmLabel: 'Open job'
+        }).then(function (ok) { if (ok) openJobFromEstimate(_jid); });
+      } else if (window.confirm('The lead this estimate belongs to is already linked to a job. Open that job instead?')) {
+        openJobFromEstimate(_jid);
+      }
       return;
     }
 
@@ -4163,7 +4177,11 @@
             '<select id="ee-clientPicker" onchange="onEstimateClientPicked(\'edit\')" style="width:100%;"></select>' +
           '</div>' +
           '<input type="hidden" id="editEst_clientId" value="' + escapeHTML(est.client_id || '') + '" />' +
-          '<input type="hidden" id="editEst_leadId" value="' + escapeHTML(est.lead_id || '') + '" />' +
+          // The estimate's LEAD, next to its other directory link. #editEst_leadId
+          // used to sit here as a hidden input that NOTHING read — painted on
+          // every render and never consulted, while the only way to set a lead
+          // was to create the estimate from one. Replaced by the real control.
+          eeLeadRowHTML(est) +
           field('Client Short Name', 'ee-nickName', est.nickName, { placeholder: 'e.g. PAC, Sterling, Greystar — auto-filled from client directory' }) +
           // Registry vocabulary, not a hardcoded three. est.jobType feeds the
           // job's type at conversion, so it has to be sayable in the same
@@ -4602,6 +4620,470 @@
     window.duplicateEstimate(_currentId);
   };
 
+
+  // ──────────────────────────────────────────────────────────────────
+  // The estimate's LEAD.
+  //
+  // A lead is the top of the opportunity chain: it carries the pipeline, the
+  // map pin, the deal thread and the Projects panel, and it is the row whose
+  // delete cascades this estimate. An estimate with no lead sits outside all of
+  // that. Two ways to get there and, until now, no way back: an estimate
+  // created from the Estimates tab never gets a lead at all (the New Estimate
+  // modal reads a hidden #estLeadId that is only filled when it is launched
+  // FROM a lead), and a duplicated estimate deliberately starts detached so the
+  // copy is not swept into the source lead's delete cascade.
+  //
+  // The only existing writer was the agent tool (applyLinkToLead). This is the
+  // human door, and it is deliberately narrow: once an estimate is SOLD its
+  // lead is FIXED, because est.lead_id is an INPUT to conversion, not a label.
+  // ──────────────────────────────────────────────────────────────────
+
+  // "Sold" is job_id, not is_locked. An admin can clear is_locked, but the boot
+  // schema init re-locks every estimate a job names, so unlocked-and-sold is a
+  // state that heals itself on the next deploy — a rule built on it would hold
+  // for hours and then stop.
+  function eeIsSold(est) { return !!(est && est.job_id); }
+
+  // "Was ever sold" — deleting a job scrubs the estimate's job_id, unlocks it
+  // and sets status 'accepted' WITHOUT restoring any lead. So job_id alone is
+  // not enough to protect a detach: an estimate can arrive here having been
+  // sold, having lost its job, and still carrying the lead that sold it.
+  function eeWasSold(est) {
+    if (!est) return false;
+    if (est.job_id) return true;
+    var s = String(est.status || '').toLowerCase();
+    return s === 'sold' || s === 'accepted';
+  }
+
+  function eeCan(cap) {
+    try {
+      return !!(window.p86Auth && typeof window.p86Auth.hasCapability === 'function'
+        ? window.p86Auth.hasCapability(cap)
+        : true);
+    } catch (e) { return true; }
+  }
+
+  function eeLeadRowById(id) {
+    if (!id) return null;
+    var cached = (window.p86Leads && window.p86Leads.getCached && window.p86Leads.getCached()) || [];
+    var hit = cached.find(function (l) { return l && l.id === id; });
+    if (hit) return hit;
+    var arr = (window.appData && window.appData.leads) || [];
+    return arr.find(function (l) { return l && l.id === id; }) || null;
+  }
+
+  // The Details-tab row. Painted inside renderDetailsForm's innerHTML, so every
+  // handler is a zero-argument global — a post-render addEventListener would be
+  // destroyed on the next tab switch.
+  //
+  // Capability is checked at PAINT TIME. `data-cap` markup is inert here:
+  // applyRoleVisibility runs once at boot from setCurrentUser and is not on the
+  // exported p86Auth API, so an attribute added to freshly-painted HTML is
+  // never swept. Two dead data-cap attributes already ship in this file.
+  function eeLeadRowHTML(est) {
+    var canEditEst = eeCan('ESTIMATES_EDIT');
+    var lead = eeLeadRowById(est && est.lead_id);
+    var label = 'Lead';
+    var box = 'display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;' +
+      'padding:8px 10px;border:1px solid var(--border,#333);border-radius:6px;background:rgba(255,255,255,0.02);';
+
+    // SOLD — read-only in every direction. Re-pointing the lead of a sold
+    // estimate would let a second lead be marked Won against the same job;
+    // detaching it manufactures an estimate with no parent the moment the job
+    // is deleted. Both are chain corruption, so neither is offered.
+    if (eeIsSold(est)) {
+      var soldName = lead ? (lead.title || lead.id) : (est.lead_id ? 'Lead ' + est.lead_id : '—');
+      return '<div style="margin-bottom:12px;"><label style="display:block;">' + label + '</label>' +
+        '<div style="' + box + '">' +
+          '<div style="min-width:0;">' +
+            '<div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(soldName) + '</div>' +
+            '<div style="font-size:11px;color:var(--text-dim,#8a93a6);">Sold — the lead is fixed while this estimate is a job’s cost source.</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }
+
+    if (est && est.lead_id) {
+      var nm = lead ? (lead.title || lead.id) : ('Lead ' + est.lead_id);
+      var sub = lead && lead.property_name ? escapeHTML(lead.property_name) : 'In the opportunity chain.';
+      return '<div style="margin-bottom:12px;"><label style="display:block;">' + label + '</label>' +
+        '<div style="' + box + '">' +
+          '<div style="min-width:0;">' +
+            '<div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(nm) + '</div>' +
+            '<div style="font-size:11px;color:var(--text-dim,#8a93a6);">' + sub + '</div>' +
+          '</div>' +
+          (canEditEst
+            ? '<div style="display:flex;gap:6px;flex:0 0 auto;">' +
+                '<button class="ee-btn secondary" onclick="window.eeChangeLead()">Change…</button>' +
+                '<button class="ee-btn ghost" onclick="window.eeDetachLead()">Detach</button>' +
+              '</div>'
+            : '') +
+        '</div>' +
+      '</div>';
+    }
+
+    // UNATTACHED.
+    var canCreate = canEditEst && eeCan('LEADS_EDIT');
+    return '<div style="margin-bottom:12px;"><label style="display:block;">' + label + '</label>' +
+      '<div style="' + box + '">' +
+        '<div style="min-width:0;">' +
+          '<div style="font-weight:600;">Not attached to a lead</div>' +
+          '<div style="font-size:11px;color:var(--text-dim,#8a93a6);">This estimate sits outside the opportunity chain — no pipeline, no map pin.</div>' +
+        '</div>' +
+        (canEditEst
+          ? '<div style="display:flex;gap:6px;flex:0 0 auto;flex-wrap:wrap;">' +
+              '<button class="ee-btn secondary" onclick="window.eeAttachLead()">Attach to a lead…</button>' +
+              (canCreate ? '<button class="ee-btn ghost" onclick="window.eeCreateLeadFromEstimate()">Create a lead</button>' : '') +
+            '</div>'
+          : '') +
+      '</div>' +
+    '</div>';
+  }
+
+  // Repaint everything that reads est.lead_id. None of it self-corrects.
+  //   · renderDetailsForm  — the row above
+  //   · mountEstimateSidebarCard — the ONLY lead affordance in the editor, and
+  //     the only thing that runs p86EntitySubnav.clearAll() on a detach
+  //   · _estLeadCoords — the Estimates map's lead-coordinate table is loaded
+  //     once per session and never invalidated, so a newly attached estimate
+  //     plots nothing until a reload
+  function eeLeadRefresh() {
+    try { renderDetailsForm(); } catch (e) {}
+    try { mountEstimateSidebarCard(getEstimate()); } catch (e) {}
+    try {
+      if (typeof window._estLeadCoords !== 'undefined') window._estLeadCoords = null;
+    } catch (e) {}
+  }
+
+  // A small searchable lead picker. Reuses the .p86-link-picker-* CSS the
+  // project link picker already ships. Resolves the FULL lead row (not just an
+  // id) because the caller has to inspect lead.job_id, and resolves null on
+  // cancel/escape/supersede so the caller's in-flight latch always clears.
+  function eeOpenLeadPicker(currentId) {
+    return new Promise(function (resolve) {
+      var prior = document.getElementById('eeLeadPicker');
+      if (prior) { try { prior._cb && prior._cb(null); } catch (e) {} prior.remove(); }
+
+      var leads = ((window.p86Leads && window.p86Leads.getCached && window.p86Leads.getCached()) || []);
+      if (!leads.length) leads = (window.appData && window.appData.leads) || [];
+
+      var settled = false;
+      function done(v) {
+        if (settled) return;
+        settled = true;
+        try { document.removeEventListener('keydown', onKey, true); } catch (e) {}
+        var el = document.getElementById('eeLeadPicker');
+        if (el) el.remove();
+        resolve(v || null);
+      }
+      function onKey(e) { if (e.key === 'Escape') { e.preventDefault(); done(null); } }
+
+      var modal = document.createElement('div');
+      modal.id = 'eeLeadPicker';
+      modal.className = 'modal active';
+      modal._cb = done;
+      modal.innerHTML =
+        '<div class="modal-content" style="max-width:640px;">' +
+          '<div class="modal-header"><span>Attach to a lead</span>' +
+            '<button class="p86-modal-close" data-close>&times;</button></div>' +
+          '<div style="padding:0 16px 16px;">' +
+            '<input id="eeLeadPickerSearch" type="search" placeholder="Search leads…" class="p86-link-picker-search" />' +
+            '<div id="eeLeadPickerResults" class="p86-link-picker-results"></div>' +
+          '</div>' +
+        '</div>';
+      document.body.appendChild(modal);
+
+      var results = modal.querySelector('#eeLeadPickerResults');
+      var search = modal.querySelector('#eeLeadPickerSearch');
+
+      function render() {
+        var q = String(search.value || '').trim().toLowerCase();
+        var rows = leads.filter(function (l) {
+          if (!l || l.id === currentId) return false;
+          if (!q) return true;
+          return [l.title, l.property_name, l.city, l.status]
+            .filter(Boolean).join(' ').toLowerCase().indexOf(q) >= 0;
+        });
+        var shown = rows.slice(0, 200);
+        if (!shown.length) {
+          results.innerHTML = '<div style="padding:14px;color:var(--text-dim,#8a93a6);font-size:12px;">' +
+            (leads.length ? 'No leads match.' : 'No leads loaded — open the Leads tab once, then try again.') + '</div>';
+          return;
+        }
+        results.innerHTML = shown.map(function (l, i) {
+          var bits = [l.property_name, l.city, l.status].filter(Boolean).join(' · ');
+          return '<div class="p86-link-picker-row" data-i="' + i + '">' +
+            '<div style="font-weight:600;">' + escapeHTML(l.title || l.id) +
+              (l.job_id ? ' <span style="font-size:10px;color:#f2a55c;">· converted</span>' : '') + '</div>' +
+            (bits ? '<div style="font-size:11px;color:var(--text-dim,#8a93a6);">' + escapeHTML(bits) + '</div>' : '') +
+          '</div>';
+        }).join('') +
+        (rows.length > shown.length
+          ? '<div style="padding:8px 10px;font-size:11px;color:var(--text-dim,#8a93a6);">' +
+              (rows.length - shown.length) + ' more — keep typing to narrow.</div>'
+          : '');
+        results._shown = shown;
+      }
+
+      results.addEventListener('click', function (e) {
+        var row = e.target.closest('.p86-link-picker-row');
+        if (!row) return;
+        var i = parseInt(row.getAttribute('data-i'), 10);
+        var picked = (results._shown || [])[i];
+        if (picked) done(picked);
+      });
+      search.addEventListener('input', render);
+      modal.addEventListener('click', function (e) {
+        if (e.target === modal || e.target.hasAttribute('data-close')) done(null);
+      });
+      document.addEventListener('keydown', onKey, true);
+      render();
+      setTimeout(function () { try { search.focus(); } catch (e) {} }, 0);
+    });
+  }
+
+  // One latch for all three verbs. The Duplicate feature needed the same thing
+  // for the same reason: every dialog here is a DOM overlay that does not block
+  // JavaScript, so the button underneath stays clickable the whole time.
+  var _eeLeadBusy = false;
+
+  function eeAttachLeadImpl(isChange) {
+    if (_eeLeadBusy) return Promise.resolve(null);
+    // eeRefuse covers is_locked and renders the lock's own sentence.
+    if (eeRefuse(isChange ? 'Change the lead on this estimate.' : 'Attach this estimate to a lead.')) return Promise.resolve(null);
+    var est0 = getEstimate();
+    if (!est0) return Promise.resolve(null);
+    if (eeIsSold(est0)) {
+      eeNotice('Sold — the lead is fixed',
+        'This estimate was sold and is the cost source for a job. Re-pointing it at another lead would let that lead be marked Won against the same job. Change the lead on the job instead.');
+      return Promise.resolve(null);
+    }
+    var estId = est0.id;              // capture the ID ONLY — never the object
+    _eeLeadBusy = true;
+
+    return eeOpenLeadPicker(est0.lead_id || null).then(function (picked) {
+      if (!picked) return null;
+      // Everything from here has crossed an await. Re-resolve, and re-check the
+      // state that could have changed while the picker was open.
+      var est = getEstimate();
+      if (!est || est.id !== estId) return null;
+      if (eeIsSold(est)) {
+        eeNotice('Sold — the lead is fixed', 'This estimate was converted while the picker was open.');
+        return null;
+      }
+      // Attaching decides this estimate's delete cascade and, on a lead that is
+      // already converted, drops it into a much larger blast radius. Say so
+      // rather than discovering it at delete time.
+      var msg = 'Attaching puts this estimate in “' + (picked.title || picked.id) + '”, which means deleting that lead would delete this estimate too.';
+      if (picked.job_id) {
+        msg += '\n\nThat lead has already been converted to a job — deleting it would take that job with it as well.';
+      } else {
+        msg += '\n\nIf that lead is converted later, this estimate is what its job will be priced from.';
+      }
+      return window.p86Confirm({
+        title: isChange ? 'Change the lead?' : 'Attach to this lead?',
+        message: msg,
+        confirmText: isChange ? 'Change lead' : 'Attach',
+        confirmLabel: isChange ? 'Change lead' : 'Attach'
+      }).then(function (ok) {
+        if (!ok) return null;
+        var est2 = getEstimate();
+        if (!est2 || est2.id !== estId || eeIsSold(est2)) return null;
+        // eeMutate is synchronous and re-checks the lock against LIVE state —
+        // the only thing that may run after an await, and the one door every
+        // mutation on this record goes through.
+        var wrote = eeMutate(isChange ? 'Change the lead on this estimate.' : 'Attach this estimate to a lead.', function () {
+          est2.lead_id = picked.id;
+        });
+        if (!wrote) return null;
+        try { if (window.p86Leads && window.p86Leads.cacheLead) window.p86Leads.cacheLead(picked); } catch (e) {}
+        eeLeadRefresh();
+        if (window.p86Toast) window.p86Toast('Attached to ' + (picked.title || 'lead') + '.', 'success');
+        return picked.id;
+      });
+    }).catch(function (e) {
+      console.error('eeAttachLead:', e);
+      return null;
+    }).then(function (r) { _eeLeadBusy = false; return r; });
+  }
+
+  window.eeAttachLead = function () { return eeAttachLeadImpl(false); };
+  window.eeChangeLead = function () { return eeAttachLeadImpl(true); };
+
+  window.eeDetachLead = function () {
+    if (_eeLeadBusy) return Promise.resolve(false);
+    if (eeRefuse('Detach this estimate from its lead.')) return Promise.resolve(false);
+    var est0 = getEstimate();
+    if (!est0 || !est0.lead_id) return Promise.resolve(false);
+    // Gate on WAS EVER SOLD, not on is-currently-sold. A job delete clears
+    // job_id and sets status 'accepted' while leaving lead_id in place, so the
+    // narrower test would let a won estimate be stripped of its last parent.
+    if (eeWasSold(est0)) {
+      eeNotice('Sold — cannot detach',
+        'This estimate was sold. Detaching it now would leave it with no lead and no way back into the pipeline. Re-link or delete the job first.');
+      return Promise.resolve(false);
+    }
+    var estId = est0.id;
+    _eeLeadBusy = true;
+    return window.p86Confirm({
+      title: 'Detach from this lead?',
+      message: 'This estimate leaves the opportunity chain. Files already filed under the lead’s Proposals folder stay with the lead, and the lead’s revenue forecast keeps the number this proposal put there.',
+      confirmText: 'Detach', confirmLabel: 'Detach'
+    }).then(function (ok) {
+      if (!ok) return false;
+      var est = getEstimate();
+      if (!est || est.id !== estId || eeWasSold(est)) return false;
+      var wrote = eeMutate('Detach this estimate from its lead.', function () { delete est.lead_id; });
+      if (!wrote) return false;
+      eeLeadRefresh();
+      if (window.p86Toast) window.p86Toast('Detached from the lead.', 'success');
+      return true;
+    }).catch(function (e) {
+      console.error('eeDetachLead:', e);
+      return false;
+    }).then(function (r) { _eeLeadBusy = false; return r; });
+  };
+
+  // Create a NEW lead from this estimate.
+  //
+  // This flow crosses two persistence models: POST /api/leads commits
+  // immediately and irreversibly, while est.lead_id rides the debounced
+  // appData → bulk/save path, which can refuse. So every gate fires BEFORE the
+  // POST, and if the attach half fails afterwards the message names the lead
+  // that now exists rather than pretending nothing happened.
+  window.eeCreateLeadFromEstimate = function () {
+    if (_eeLeadBusy) return Promise.resolve(null);
+    if (eeRefuse('Create a lead from this estimate.')) return Promise.resolve(null);
+    var est0 = getEstimate();
+    if (!est0 || est0.lead_id) return Promise.resolve(null);
+    if (eeIsSold(est0)) {
+      eeNotice('Sold — already converted',
+        'This estimate was sold and converted to a job. Creating a lead for it would put a won contract back into the open pipeline.');
+      return Promise.resolve(null);
+    }
+    if (!eeCan('LEADS_EDIT')) {
+      eeNotice('Not allowed', 'You do not have permission to create leads.');
+      return Promise.resolve(null);
+    }
+    // Both halves of saveData's blocked branch, not just one. `writable` is
+    // !!_serverLoadOk and says nothing about a hydrate being in flight — the
+    // other half of the predicate that queues nothing on purpose. Creating the
+    // lead in that state leaves a real, geocoded opportunity no estimate
+    // points at, indistinguishable from a genuine one.
+    var ss = (window.p86SaveState && window.p86SaveState()) || null;
+    if (ss && (ss.writable === false || ss.loading === true)) {
+      eeNotice('Not connected yet', 'Still syncing with the server. Try again in a moment.');
+      return Promise.resolve(null);
+    }
+    var estId = est0.id;
+    _eeLeadBusy = true;
+
+    // The client cache has its own in-flight fetch; resolving client_id against
+    // a cache that has not loaded would silently drop a valid link.
+    var warm = (window.p86Clients && window.p86Clients.ensureLoaded)
+      ? window.p86Clients.ensureLoaded().catch(function () { return []; })
+      : Promise.resolve([]);
+
+    return warm.then(function () {
+      // est.title, NOT est.name || est.title. `name` is an agent-written shadow
+      // handle that beats title on the pickers and is invisible in the list —
+      // the duplicate feature deletes it outright for that reason.
+      var seed = (est0.title || est0.name || '').trim();
+      return window.p86Prompt({
+        title: 'Create a lead from this estimate',
+        message: 'A new lead is created in the pipeline and this estimate is attached to it.',
+        placeholder: 'Lead name',
+        defaultValue: seed
+      });
+    }).then(function (title) {
+      if (title == null) return null;
+      title = String(title).trim();
+      if (!title) return null;
+
+      // Re-resolve and re-gate: the prompt was an await.
+      var est = getEstimate();
+      if (!est || est.id !== estId || est.lead_id || eeIsSold(est)) return null;
+      if (eeRefuse('Create a lead from this estimate.')) return null;
+      var ss2 = (window.p86SaveState && window.p86SaveState()) || null;
+      if (ss2 && (ss2.writable === false || ss2.loading === true)) {
+        eeNotice('Not connected yet', 'Still syncing with the server. Try again in a moment.');
+        return null;
+      }
+
+      // SPARSE payload — pickEditable only copies keys that are !== undefined,
+      // so an omitted key takes the column default. Never send explicit nulls.
+      var payload = { title: title };
+
+      // leads.client_id is a real FK and a deleted client does not scrub
+      // estimate blobs, so a dangling id would come back as a 500 carrying the
+      // raw Postgres message. Only send it when it resolves.
+      if (est.client_id) {
+        var clients = (window.p86Clients && window.p86Clients.getCached && window.p86Clients.getCached()) || [];
+        if (clients.some(function (c) { return c && c.id === est.client_id; })) payload.client_id = est.client_id;
+      }
+      ['street_address', 'city', 'state', 'zip'].forEach(function (k) {
+        if (est[k]) payload[k] = est[k];
+      });
+      // Both or neither: a lone coordinate leaves half a pin AND suppresses
+      // nothing, and the server only skips its own geocode when lat is present.
+      if (est.geocode_lat != null && est.geocode_lng != null) {
+        payload.geocode_lat = est.geocode_lat;
+        payload.geocode_lng = est.geocode_lng;
+      }
+      if (est.jobType) payload.project_type = est.jobType;
+      if (est.community) payload.property_name = est.community;
+      // MARKET is a NAME on a lead — EDITABLE_FIELDS has 'market' and not
+      // 'market_id', so the FK is unreachable from this route and lands on the
+      // next boot backfill. Skip it and the lead drops out of the leads list
+      // whenever the market switcher is on a specific market.
+      try {
+        var mkt = (window.p86Markets && window.p86Markets.nameFor) ? window.p86Markets.nameFor(est) : '';
+        if (mkt) payload.market = mkt;
+      } catch (e) { /* no market is better than a name nothing can resolve */ }
+      // Seed the forecast from the proposal total. Only with the pricing
+      // pipeline actually loaded — its absence fallback returns raw COST, and a
+      // cost booked as revenue is worse than a blank.
+      try {
+        if (window.p86Pricing && window.p86Pricing.computeForLines && window.computeEstimateTotals) {
+          var t = window.computeEstimateTotals(est);
+          var cp = t && Number(t.clientPrice);
+          if (cp > 0) payload.estimated_revenue_low = cp;
+        }
+      } catch (e) { /* leave it blank */ }
+
+      return window.p86Api.leads.create(payload).then(function (res) {
+        var newId = res && res.id;
+        if (!newId) throw new Error('The lead was not created.');
+        // Fetch the row and seed the cache — cheaper and more deterministic
+        // than a list refetch, and it is what the sidebar card already does on
+        // a cold cache. Do NOT call p86Refresh('lead') first: reloadLeadsCache
+        // empties _leads synchronously and would discard this seed.
+        return window.p86Api.leads.get(newId).catch(function () { return null; }).then(function (got) {
+          var row = (got && got.lead) || { id: newId, title: title };
+          try { if (window.p86Leads && window.p86Leads.cacheLead) window.p86Leads.cacheLead(row); } catch (e) {}
+
+          var est2 = getEstimate();
+          if (!est2 || est2.id !== estId) {
+            eeNotice('Lead created', 'The lead “' + title + '” was created, but this estimate is no longer open so it was not attached. Attach it from the estimate’s Details tab.');
+            return newId;
+          }
+          var wrote = eeMutate('Attach this estimate to a lead.', function () { est2.lead_id = newId; });
+          if (!wrote) {
+            eeNotice('Lead created, not attached', 'The lead “' + title + '” was created, but this estimate could not be updated. Open it and attach the lead.');
+            return newId;
+          }
+          eeLeadRefresh();
+          try { if (window.p86Refresh) window.p86Refresh('lead'); } catch (e) {}
+          if (window.p86Toast) window.p86Toast('Lead created and attached.', 'success');
+          return newId;
+        });
+      });
+    }).catch(function (e) {
+      console.error('eeCreateLeadFromEstimate:', e);
+      if (window.p86Alert) window.p86Alert({ title: 'Could not create the lead', message: (e && e.message) || 'unknown error' });
+      return null;
+    }).then(function (r) { _eeLeadBusy = false; return r; });
+  };
   window.deleteEstimateFromEditor = function() {
     if (!_currentId) return;
     var id = _currentId;
@@ -5116,10 +5598,34 @@
     if (!est) throw new Error('No estimate open.');
     var leadId = String(input.lead_id || '').trim();
     if (!leadId) throw new Error('lead_id is required.');
+    // The agent door had neither of the two guards the human door needs.
+    //
+    // (1) THE LOCK. A locked estimate is filtered out of the push payload
+    // entirely, and debouncedSave() returns after a bare console.warn — so this
+    // reported success while the write reached nothing durable and reverted on
+    // the next hydrate. Refuse instead of lying.
+    if (eeLockReason(est)) {
+      throw new Error('This estimate is sold and locked — its lead cannot be changed.');
+    }
+    // (2) SOLD. est.lead_id is an input to conversion, not a label: re-pointing
+    // a sold estimate lets a second lead be marked Won against the same job.
+    if (est.job_id) {
+      throw new Error('This estimate was sold and is a job’s cost source — its lead is fixed.');
+    }
+    // (3) EXISTENCE. Nothing validates lead_id on any route, so an id that does
+    // not exist (or belongs to another org) is stored verbatim and then quietly
+    // participates in — or escapes — the delete cascade. Check what we can, and
+    // accept a cold cache rather than refusing a valid id.
+    var known = ((window.p86Leads && window.p86Leads.getCached && window.p86Leads.getCached()) || [])
+      .concat((window.appData && window.appData.leads) || []);
+    if (known.length && !known.some(function (l) { return l && l.id === leadId; })) {
+      throw new Error('No lead with id ' + leadId + ' is loaded for this organization.');
+    }
     est.lead_id = leadId;
     debouncedSave();
     renderDetailsForm();
     renderLineItems();
+    try { mountEstimateSidebarCard(getEstimate()); } catch (e) {}
     return 'Linked estimate to lead ' + leadId + '.';
   }
 

@@ -366,6 +366,34 @@ router.post('/convert', requireAuth, requireRole('admin', 'pm'), requireOrgId, a
       leadMarketId = lr.rows[0].market_id || null;
     }
 
+    // Guard: don't re-sell an estimate that is ALREADY sold to a different job.
+    // The lead guard directly above has always existed; the estimate had none,
+    // so the UPDATE below would overwrite data.job_id unconditionally — and the
+    // job that estimate was actually sold on keeps its estimate_id column
+    // pointing at a row whose blob now names some other job, which is exactly
+    // the "costs not flowing" state with no chip to announce it.
+    //
+    // Reachable, not theoretical: _estimatesForLead (js/leads.js) filters on
+    // lead_id ALONE with no sold/locked exclusion, and the convert flow AUTO-
+    // SELECTS when a lead has exactly one estimate — no picker, no confirm. Any
+    // path that attaches an already-sold estimate to a fresh lead therefore
+    // lands here. Refusing server-side is the only real fix; a client-side
+    // block alone is the client-only guard this codebase keeps re-learning.
+    if (estimateId) {
+      const er = await pool.query(
+        "SELECT data->>'job_id' AS job_id FROM estimates WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)",
+        [estimateId, orgId]
+      );
+      if (!er.rows.length) return res.status(404).json({ error: 'Estimate not found' });
+      const soldTo = er.rows[0].job_id;
+      if (soldTo && soldTo !== job.id) {
+        return res.status(409).json({
+          error: 'That estimate has already been sold to another job. Duplicate it and attach the copy instead.',
+          job_id: soldTo
+        });
+      }
+    }
+
     const id = job.id || 'job' + Date.now();
 
     // Market for the converted job: what the job blob names wins (the
@@ -503,11 +531,35 @@ router.post('/:id/link-estimate', requireAuth, async (req, res) => {
       [req.params.id, orgId]
     );
     if (!jr.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Job not found' }); }
+    // FOR UPDATE — the row is about to be stamped sold and locked, and the
+    // guard below decides on what it reads. Without the lock a concurrent
+    // /convert can sell this estimate between the read and the UPDATE, which is
+    // the same TOCTOU the estimate DELETE already had to close.
     const er = await client.query(
-      'SELECT data FROM estimates WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      'SELECT data FROM estimates WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL) FOR UPDATE',
       [estimateId, orgId]
     );
     if (!er.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Estimate not found' }); }
+
+    // An estimate can be sold ONCE. The UPDATE below stamps data.job_id,
+    // status 'sold' and is_locked unconditionally, so linking an estimate that
+    // another job was already sold on silently repoints it — and job #1 keeps
+    // jobs.estimate_id naming a row whose blob now names job #2. Its costs stop
+    // flowing with no chip to say so, because that chip reads the JOB's blob.
+    //
+    // /convert carries the twin of this guard. This route is the other door and
+    // is the easier one to walk through: it is the "Add estimate" picker on an
+    // existing job, which lists candidates by lead alone.
+    let _ed = er.rows[0].data || {};
+    if (typeof _ed === 'string') { try { _ed = JSON.parse(_ed); } catch (_) { _ed = {}; } }
+    const _soldTo = _ed.job_id;
+    if (_soldTo && String(_soldTo) !== String(req.params.id)) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        error: 'That estimate has already been sold to another job. Duplicate it and link the copy instead.',
+        job_id: _soldTo
+      });
+    }
 
     let data = jr.rows[0].data || {};
     if (typeof data === 'string') { try { data = JSON.parse(data); } catch (_) { data = {}; } }
