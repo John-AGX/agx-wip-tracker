@@ -3034,6 +3034,13 @@ async function dispatchSystem(dbClient, target, refTable, ctx) {
         // P0-2 — both ends must resolve to the caller's org.
         await assertTargetOrg(dbClient, 'job', jobId, ctx && ctx.organizationId);
         await assertTargetOrg(dbClient, 'client', clientId, ctx && ctx.organizationId);
+        // ...and must actually EXIST. assertTargetOrg refuses a client that
+        // belongs to another org but falls through for one that is not there
+        // at all, so a mistyped id used to be written into the blob below and
+        // reported as "~1 updated" over a dangling FK. This is the same two
+        // lines link_property_to_parent has twelve lines down.
+        const cc = await dbClient.query('SELECT id FROM clients WHERE id = $1', [clientId]);
+        if (!cc.rows.length) throw new Error(`client ${clientId} not found`);
         // Jobs store linked client_id inside the data JSONB blob.
         const jr = await dbClient.query(
           `SELECT data FROM jobs WHERE id = $1
