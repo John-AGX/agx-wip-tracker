@@ -13544,6 +13544,17 @@ async function driveScribeWrite(intent, ctx) {
 
   let captured = null;   // { payloadId, filename, title, changeset, applySummary }
   let lastError = null;
+  // EVERY tool-level error this drive raised, not just the surviving one.
+  // The retry loop below CLEARS lastError before re-prompting, so a drive the
+  // dispatcher REFUSED and that then answered in prose reached the terminal
+  // return with lastError null and looked identical to a Scribe that never
+  // emitted at all. Driven: all three channels printed "Sure - emitting the
+  // payload for that attachment description now" under the headline
+  // "couldn't complete that draft" - not merely useless but FALSE, telling
+  // the user a write was in flight when none was, while the dispatcher's
+  // exact reason ("Unknown entity_type: attachment") had been computed and
+  // then discarded.
+  let everToolError = null;
   // A dry-run failure the Scribe CANNOT fix by re-emitting (a refusal, not a
   // typo) — see the retry loop below.
   let lastErrorTerminal = false;
@@ -13610,6 +13621,10 @@ async function driveScribeWrite(intent, ctx) {
     nextEvents = [{ type: 'user.message', content: [{ type: 'text',
       text: 'Your payload was not accepted: ' + (lastError || 'unknown error') +
             '\nFix it and re-emit ONE corrected emit_payload_file payload (address the named field_path / op_index).' }] }];
+    // The only place a tool-level error is dropped on the ok:false path, so
+    // remembering it here is complete. Last one wins - the most recent
+    // machine-authored diagnosis is the one the user could act on.
+    if (lastError) everToolError = lastError;
     lastError = null;
   }
 
@@ -13622,7 +13637,19 @@ async function driveScribeWrite(intent, ctx) {
   }
   return {
     ok: false,
-    error: lastError || (result && result.error) || 'The Scribe did not produce a valid payload.',
+    // WHICH ok:false ending this is. noPayload is true ONLY when the Scribe
+    // answered in prose and never emitted a payload at all: no tool-level
+    // error (lastError, or everToolError which outlives the retry loop's
+    // clear) and no session-level error. On that ending alone `error` below
+    // is a CANNED placeholder and the whole diagnosis lives in `text` - the
+    // one-line note this agent's baseline asks it for when an id is missing.
+    // On every OTHER ok:false ending (a payload the dispatcher refused, a
+    // token-budget stop, a stream failure) `error` IS the diagnosis and
+    // `text` is whatever chatter preceded it. Preferring text unconditionally
+    // was tried and refuted: it prints the chatter over the real reason on
+    // every non-refusal failure.
+    noPayload: !lastError && !everToolError && !(result && result.error),
+    error: lastError || (result && result.error) || everToolError || 'The Scribe did not produce a valid payload.',
     text: result && result.text, usage: (result && result.usage) || null
   };
 }
@@ -13707,6 +13734,15 @@ async function execScribeWrite(tu, ctx) {
   // outcome even though the notify link consumed it.
   let lastResult = null;
   let refusalRecorded = false;
+  // ONE reading of a driveScribeWrite failure, shared by the chat + push
+  // notice below AND by the refusal row (payloads.apply_error) that the Live
+  // Writer toast and the Cowork ledger print, so the two channels cannot
+  // disagree about why a draft failed - which they did: chat carried the
+  // Scribe's real sentence while the ledger still read "The Scribe did not
+  // produce a valid payload." See driveScribeWrite's terminal return for why
+  // this is a discrimination and not simply `text || error`.
+  const failureMessage = (r) =>
+    (r && r.noPayload && r.text && String(r.text).trim()) || (r && r.error) || null;
   const recordRefusalOnce = (why) => {
     if (refusalRecorded) return Promise.resolve();
     refusalRecorded = true;
@@ -13798,9 +13834,11 @@ async function execScribeWrite(tu, ctx) {
         // dropped on the floor here, so a user whose request the Scribe
         // refused for a nameable reason got the generic "did not produce a
         // valid payload" with no subject.
-        const scribeSaid = (result && result.text && String(result.text).trim()) || '';
-        const errMsg = ((result && result.error) || 'unknown error') +
-          (scribeSaid ? ' — ' + scribeSaid.slice(0, 300) : '');
+        // Was: error + " - " + text, on every ending. That reads correctly
+        // for a pure refusal and badly for the rest - a token-budget stop
+        // printed "Subtask exceeded token budget (300000). - Sure, emitting
+        // the payload..." , model chatter stapled to a machine diagnosis.
+        const errMsg = failureMessage(result) || 'unknown error';
         try { await postAgentJobToThread(threadTarget, '⚠️ **Scribe couldn\'t complete that draft**: ' + String(errMsg).slice(0, 400) + '\n\n_Re-ask with more specifics (exact entity + fields) and I\'ll hand it back to the Scribe._'); } catch (_) {}
         try { await sendPushForEvent(uid, 'scribe_draft', { title: '⚠️ Scribe draft failed', body: String(errMsg).slice(0, 200), url: '/' }); } catch (_) {}
       }
@@ -13813,7 +13851,7 @@ async function execScribeWrite(tu, ctx) {
       // catch below, made once by the guard.
       // See services/scribe-refusal.js for why ending 3 needs a row at all.
       if (lastResult && lastResult.ok) return null;
-      return recordRefusalOnce((lastResult && lastResult.error) || null);
+      return recordRefusalOnce(failureMessage(lastResult));
     })
     .catch(function (e) {
       console.warn('[scribe-bg] detached draft failed:', e && e.message);
@@ -16619,6 +16657,16 @@ module.exports.internals = {
   // Scribe produces, instead of a test re-implementing it and proving only
   // that the re-implementation works.
   execEmitPayloadFile,
+  // WHICH sentence a failed draft shows the user is decided inside
+  // execScribeWrite out of what driveScribeWrite returned, and neither is
+  // visible in a response body — a source-reading assertion about either says
+  // nothing. (test/agent-turn-org-gate.test.js:240 asserts this file's
+  // postAgentJobToThread MENTIONS job.organization_id, and stayed green
+  // through five callers that handed it neither key.) driveScribeWrite is
+  // exported so a test can drive each of its ok:false endings and read the
+  // discriminant it now returns.
+  execScribeWrite,
+  driveScribeWrite,
   postAgentJobToThread,
   // C18 — universal read surface. read_entity + search_entities
   // dispatch through execConsolidatedRead to the existing narrow
