@@ -1368,6 +1368,27 @@ router.delete('/:id', requireAuth, async (req, res) => {
 });
 
 // PUT /api/attachments/:id — update caption (and later, position via reorder).
+// A small per-user throttle for the proofread mode below. Deliberately NOT one
+// of the exported express-rate-limit middlewares: those are mounted on a route,
+// and this mode shares a route with the ordinary caption save — mounting one
+// would throttle every save in the app at the chat rate. Invoking middleware by
+// hand means faking `res`, which breaks its contract, so this counts instead.
+const _tidyHits = new Map(); // userId -> [timestamps]
+const TIDY_PER_MINUTE = 12;
+function tidyThrottle(userId) {
+  const key = String(userId || 'anon');
+  const now = Date.now();
+  const cutoff = now - 60000;
+  const hits = (_tidyHits.get(key) || []).filter((t) => t > cutoff);
+  if (hits.length >= TIDY_PER_MINUTE) { _tidyHits.set(key, hits); return false; }
+  hits.push(now);
+  _tidyHits.set(key, hits);
+  if (_tidyHits.size > 500) {
+    for (const [k, v] of _tidyHits) if (!v.some((t) => t > cutoff)) _tidyHits.delete(k);
+  }
+  return true;
+}
+
 router.put('/:id', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM attachments WHERE id = $1', [req.params.id]);
@@ -1386,6 +1407,36 @@ router.put('/:id', requireAuth, async (req, res) => {
     } else {
       const ok = await hasCapability(req.user, cap);
       if (!ok) return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    // PROOFREAD MODE — `{ tidy_caption: "<dictated text>" }`.
+    //
+    // This WRITES NOTHING. It returns a cleaned-up version of the text and the
+    // client saves it through the ordinary caption path above, so there is one
+    // writer, not two.
+    //
+    // WHY IT LIVES INSIDE THIS ROUTE rather than on a POST of its own: it
+    // inherits, by construction, the exact predicate and the exact capability
+    // that gate the save it assists — `attachmentInOrg` then `writeCapForEntity`,
+    // both already applied above. A second surface would mean a second opinion
+    // about who may touch this row, and a drifting second opinion is the defect
+    // class this file spends most of its comments on. (It also keeps the route
+    // census in test/tenant-register2-http.test.js honest — that file goes red
+    // when the HTTP surface moves, and it is not ours to edit right now.)
+    //
+    // The AI limiters are INVOKED here rather than mounted on the route: mounting
+    // them would throttle every ordinary caption save in the app at the chat
+    // rate. If this ever earns its own POST, mount them there instead.
+    if (req.body && typeof req.body.tidy_caption === 'string') {
+      if (!tidyThrottle(req.user && req.user.id)) {
+        return res.status(429).json({
+          ok: false, reason: 'rate-limited',
+          detail: 'that is a lot of cleanups in a row — give it a minute',
+        });
+      }
+      const { tidyCaption } = require('../services/caption-tidy');
+      const result = await tidyCaption(req.body.tidy_caption);
+      return res.json(result);
     }
 
     const sets = [];

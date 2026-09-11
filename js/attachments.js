@@ -214,7 +214,15 @@
     // Optimistic local patch — caller-supplied attachment array is the
     // source of truth for what the viewer paints, so mutate it in
     // place AND fire the API. Failures bubble back via the toast.
-    function updateAtt(patch) {
+    // Returns a promise that RESOLVES TO AN OUTCOME — { ok: true } or
+    // { ok: false, error }. It used to resolve the same way whether the PATCH
+    // succeeded or failed, which meant a caller could only find out by reading
+    // an alert() that is a silent no-op inside the installed PWA. Existing
+    // callers ignore the value, so this is additive.
+    // opts.quiet suppresses that alert for callers that paint their own
+    // failure message.
+    function updateAtt(patch, opts) {
+      var quiet = !!(opts && opts.quiet);
       var a = att();
       // skip_catalog is a metadata-only flag — strip it from the local
       // mirror BEFORE applying so a doesn't accumulate the flag on its
@@ -226,12 +234,15 @@
       var prior = {};
       Object.keys(localPatch).forEach(function(k) { prior[k] = a[k]; });
       Object.keys(localPatch).forEach(function(k) { a[k] = localPatch[k]; });
-      return window.p86Api.attachments.update(a.id, sendPatch).catch(function(e) {
+      return window.p86Api.attachments.update(a.id, sendPatch).then(function() {
+        return { ok: true };
+      }).catch(function(e) {
         // Roll back the optimistic write so the panel re-renders
         // with the prior value.
         Object.keys(prior).forEach(function(k) { a[k] = prior[k]; });
-        alert('Save failed: ' + (e.message || e));
+        if (!quiet) alert('Save failed: ' + (e.message || e));
         render();
+        return { ok: false, error: (e && e.message) || String(e) };
       });
     }
 
@@ -528,12 +539,25 @@
           '</section>' +
           '<section class="p86-pv-section">' +
             '<div class="p86-pv-section-label p86-pv-desc-headrow"><span>Description</span>' +
-              (voiceOK ? '<button type="button" class="p86-pv-mic" title="Dictate (voice → text)" aria-label="Dictate description">' + (typeof window.p86Icon === 'function' ? window.p86Icon('composer-mic') : '🎤') + '</button>' : '') +
+              // Both controls live in one inline-flex span. The headrow is
+              // justify-content:space-between, so a bare third child would push
+              // the mic into the middle of the row.
+              '<span class="p86-pv-desc-acts">' +
+                (voiceOK ? '<button type="button" class="p86-pv-mic" title="Dictate (voice → text)" aria-label="Dictate description">' + (typeof window.p86Icon === 'function' ? window.p86Icon('composer-mic') : '🎤') + '</button>' : '') +
+                // NOT gated on voiceOK: a laptop with no Web Speech still has a
+                // caption worth cleaning up, dictated earlier on a phone. It
+                // carries its own class as well as .p86-pv-mic — the wiring
+                // below looks the mic up by that selector, and when voiceOK is
+                // false this button would otherwise BE the match and get
+                // display:none'd.
+                '<button type="button" class="p86-pv-mic p86-pv-tidy" title="Clean up the dictation" aria-label="Clean up the description">' + (typeof window.p86Icon === 'function' ? window.p86Icon('sparkle') : '✨') + '</button>' +
+              '</span>' +
             '</div>' +
             '<fieldset class="p86-pv-desc-fs" data-edit-gate="locked">' +
               '<legend class="p86-pv-desc-legend">&nbsp;</legend>' +
               '<textarea class="p86-pv-desc-input" placeholder="Add a description (caption)…">' + escapeHTMLLocal(caption) + '</textarea>' +
             '</fieldset>' +
+            '<div class="p86-pv-tidy-note" hidden></div>' +
           '</section>' +
           '<section class="p86-pv-section p86-pv-comments-section">' +
             '<div class="p86-pv-section-label">Comments</div>' +
@@ -869,7 +893,13 @@
       // section (so the transcript lands + persists — dictation APPENDS to
       // whatever's already there), starts/stops voice→text, and debounce-saves
       // as it goes since closing the viewer won't fire the blur handler.
-      var descMic = overlay.querySelector('.p86-pv-mic');
+      // :not(.p86-pv-tidy) matters. The sparkle shares .p86-pv-mic so it
+      // inherits the size, shape and hover for free — but when Web Speech is
+      // unsupported the mic is never rendered, this lookup would resolve to the
+      // SPARKLE, and the else-branch below would set an inline display:none on
+      // the one control that still has a job to do.
+      var descMic = overlay.querySelector('.p86-pv-mic:not(.p86-pv-tidy)');
+      var _descVoiceSaveT = null;
       if (descMic) {
         if (descInput && window.p86VoiceInput && window.p86VoiceInput.isSupported && window.p86VoiceInput.isSupported()) {
           // Registered BEFORE wire() so the unlock runs ahead of dictation
@@ -880,7 +910,6 @@
               if (pencil) pencil.click();
             }
           });
-          var _descVoiceSaveT = null;
           window.p86VoiceInput.wire(descInput, descMic, {
             silenceTimeoutMs: 7000,
             onChange: function(v) {
@@ -894,6 +923,132 @@
         } else {
           descMic.style.display = 'none';
         }
+      }
+
+      // ── Clean up the dictation ────────────────────────────────────────
+      // Sends what is in the box to a proofreader that may only fix
+      // punctuation, casing, filler, stammers and enumerated mis-hearings —
+      // anything else comes back refused and his own words stay put. The
+      // endpoint writes nothing; the save goes through updateAtt like every
+      // other caption change, so there is one writer.
+      var tidyBtn = overlay.querySelector('.p86-pv-tidy');
+      var tidyNote = overlay.querySelector('.p86-pv-tidy-note');
+      var _tidySeq = 0;
+
+      function paintNote(kind, msg, undoText) {
+        if (!tidyNote) return;
+        tidyNote.className = 'p86-pv-tidy-note is-' + kind;
+        tidyNote.textContent = '';
+        var span = document.createElement('span');
+        span.textContent = msg;
+        tidyNote.appendChild(span);
+        if (undoText != null) {
+          var u = document.createElement('button');
+          u.type = 'button';
+          u.className = 'p86-pv-tidy-undo';
+          u.textContent = 'Undo';
+          u.addEventListener('click', function() {
+            u.disabled = true;
+            var live = overlay.querySelector('.p86-pv-desc-input');
+            if (live) live.value = undoText;
+            updateAtt({ caption: undoText }, { quiet: true }).then(function(r) {
+              // Paint from the OUTCOME. Saying "put back" over a failed write
+              // is the same lie in the other direction.
+              if (r && r.ok) paintNote('ok', 'Put back what you dictated.');
+              else paintNote('err', 'Could not put it back — your original is still in the box, try saving again.', undoText);
+            });
+          });
+          tidyNote.appendChild(u);
+        }
+        tidyNote.hidden = false;
+      }
+
+      if (tidyBtn) {
+        tidyBtn.addEventListener('click', function() {
+          if (tidyBtn.disabled) return;
+          var live = overlay.querySelector('.p86-pv-desc-input');
+          if (!live) return;
+
+          // A dictation still running would keep writing into the box under
+          // the request. Stop it, and cancel its pending debounce save so it
+          // cannot land on top of the cleaned text a second later.
+          if (descMic && descMic._p86VoiceStop) { try { descMic._p86VoiceStop(); } catch (e) {} }
+          clearTimeout(_descVoiceSaveT);
+
+          var before = live.value || '';
+          var words = before.trim() ? before.trim().split(/\s+/).length : 0;
+          if (!words) { paintNote('err', 'Nothing to clean up yet — dictate or type something first.'); return; }
+          if (words < 3) { paintNote('err', 'There is not enough there to clean up.'); return; }
+
+          var seq = ++_tidySeq;
+          var attId = (att() || {}).id;
+          tidyBtn.disabled = true;
+          tidyBtn.classList.add('is-working');
+          paintNote('busy', 'Cleaning up…');
+
+          var token = (window.p86Auth && window.p86Auth.getToken && window.p86Auth.getToken()) ||
+                      localStorage.getItem('p86-auth-token');
+          var headers = { 'Content-Type': 'application/json' };
+          if (token) headers['Authorization'] = 'Bearer ' + token;
+
+          var ctl = (typeof AbortController === 'function') ? new AbortController() : null;
+          var killer = setTimeout(function() { if (ctl) ctl.abort(); }, 25000);
+
+          fetch('/api/attachments/' + encodeURIComponent(attId), {
+            method: 'PUT',
+            headers: headers,
+            credentials: 'same-origin',
+            body: JSON.stringify({ tidy_caption: before }),
+            signal: ctl ? ctl.signal : undefined
+          }).then(function(r) {
+            return r.json().catch(function() { return { ok: false, detail: 'the server sent something unreadable' }; });
+          }).then(function(out) {
+            clearTimeout(killer);
+            if (seq !== _tidySeq) return;            // a newer press won
+            var now = overlay.querySelector('.p86-pv-desc-input');
+            if (!now || !now.isConnected) return;     // viewer closed or paged away
+            if ((att() || {}).id !== attId) return;   // different photo now
+
+            tidyBtn.disabled = false;
+            tidyBtn.classList.remove('is-working');
+
+            if (!out || out.ok !== true) {
+              var why = (out && out.detail) || 'it could not be cleaned up';
+              paintNote('err', 'Left as you dictated it — ' + why + '.');
+              return;
+            }
+            // Re-read the LIVE box. If he kept talking or typing while this was
+            // in flight, the reply is a cleanup of text that no longer exists,
+            // and applying it would delete whatever he added.
+            if ((now.value || '') !== before) {
+              paintNote('err', 'You kept editing, so nothing was replaced. Press it again when you are done.');
+              return;
+            }
+            if (!out.changed) { paintNote('ok', 'Already clean — nothing to change.'); return; }
+
+            // The gate is CSS-only (pointer-events), not disabled/readonly, so
+            // the value would display while locked — but blur would never fire
+            // and nothing would save. Unlock, then save explicitly.
+            if (window.p86EditGate && window.p86EditGate.unlockSection && descFs) {
+              try { window.p86EditGate.unlockSection(descFs); } catch (e) {}
+            }
+            now.value = out.text;
+            clearTimeout(_descVoiceSaveT);
+            updateAtt({ caption: out.text }, { quiet: true }).then(function(r) {
+              if (r && r.ok) paintNote('ok', 'Cleaned up.', before);
+              else paintNote('err', 'Cleaned it up but could not save — your original is back in the box.');
+            });
+          }).catch(function(e) {
+            clearTimeout(killer);
+            if (seq !== _tidySeq) return;
+            tidyBtn.disabled = false;
+            tidyBtn.classList.remove('is-working');
+            var aborted = e && (e.name === 'AbortError');
+            paintNote('err', aborted
+              ? 'Left as you dictated it — the cleanup took too long.'
+              : 'Left as you dictated it — the cleanup could not be reached.');
+          });
+        });
       }
 
       // Comments list + composer.
