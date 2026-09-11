@@ -3079,8 +3079,12 @@ async function dispatchSystem(dbClient, target, refTable, ctx) {
         // (Upload itself still goes through the attachment routes; this
         // only relinks rows that already exist.)
         const ATTACH_ENTITY_TYPES = ['lead', 'estimate', 'client', 'job', 'sub', 'user', 'org', 'project'];
+        // No .filter(Boolean). A null / empty entry used to vanish here and
+        // the op then reported success over a SHORTER list than it was handed.
+        // Kept, it simply falls out of the completeness diff below and gets
+        // named in the refusal.
         const ids = Array.isArray(lk.attachment_ids)
-          ? lk.attachment_ids.map((x) => resolveRef(x, refTable)).filter(Boolean).map(String)
+          ? lk.attachment_ids.map((x) => resolveRef(x, refTable)).map((x) => (x == null ? '' : String(x)))
           : [];
         const et = lk.target_entity_type;
         const eid = resolveRef(lk.target_entity_id, refTable);
@@ -3140,11 +3144,33 @@ async function dispatchSystem(dbClient, target, refTable, ctx) {
         }
         const ar = afOrgId
           ? await dbClient.query(
-              `UPDATE attachments SET entity_type = $1, entity_id = $2 WHERE id = ANY($3::text[]) AND (organization_id = $4 OR organization_id IS NULL)`,
+              `UPDATE attachments SET entity_type = $1, entity_id = $2 WHERE id = ANY($3::text[]) AND (organization_id = $4 OR organization_id IS NULL) RETURNING id`,
               [et, String(eid), ids, afOrgId])
           : await dbClient.query(
-              `UPDATE attachments SET entity_type = $1, entity_id = $2 WHERE id = ANY($3::text[])`,
+              `UPDATE attachments SET entity_type = $1, entity_id = $2 WHERE id = ANY($3::text[]) RETURNING id`,
               [et, String(eid), ids]);
+        // A write that touched fewer rows than it was handed is a REFUSAL, not
+        // a success. Driven before this line existed: ghost ids returned
+        // count:0 and the summary still read "System: ~1 updated" (that string
+        // counts OPS, not rows, and is correct for every other arm because every
+        // other arm throws before pushing — this arm did not).
+        //
+        // RETURNING rather than rowCount: a count cannot say WHICH id missed,
+        // and naming them is the whole point — it is what lets the Scribe
+        // self-correct in one round instead of retrying blind.
+        //
+        // The throw sits inside applyPayload's BEGIN/COMMIT, so the ids that DID
+        // match roll back with it: all-or-nothing, the same shape a change-order
+        // line op has. That is a behaviour change — the op was best-effort — and
+        // it is deliberate.
+        const got = new Set(ar.rows.map((r) => String(r.id)));
+        const missing = ids.filter((id) => !got.has(id));
+        if (missing.length) {
+          throw new Error(
+            `attach_files: ${missing.length} of ${ids.length} attachment(s) could not be attached — ` +
+            `${missing.map((m) => (m === '' ? '(empty)' : `'${m}'`)).join(', ')}. ` +
+            `They do not exist, or are not yours. Nothing was saved.`);
+        }
         updated.push({ kind: 'attach_files', count: ar.rowCount, target_entity_type: et, target_entity_id: String(eid) });
       } else {
         throw new Error(`link_ops[].op unsupported: ${lk.op}`);
