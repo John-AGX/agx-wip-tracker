@@ -156,52 +156,10 @@ function sanitizeFolderPath(raw) {
   return segs.join('/') || 'general';
 }
 
-// Bump the org_tags catalog every time a tag string is added to an
-// attachment. Idempotent via the (organization_id, name) UNIQUE
-// constraint — INSERT ... ON CONFLICT DO UPDATE bumps use_count for
-// existing rows. Best-effort; failures are logged but don't block
-// the tag write that triggered them.
-async function upsertOrgTags(orgId, tagNames, actorUserId) {
-  if (!orgId || !Array.isArray(tagNames) || !tagNames.length) return;
-  // Dedupe + clean inside this function so callers don't have to.
-  // Preserve case but dedup case-insensitively so a user can't bloat
-  // the catalog with "trim", "Trim", "TRIM".
-  const seen = new Set();
-  const clean = [];
-  for (let i = 0; i < tagNames.length; i++) {
-    const v = tagNames[i];
-    if (typeof v !== 'string') continue;
-    const c = v.trim().slice(0, 32);
-    if (!c) continue;
-    const key = c.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    clean.push(c);
-  }
-  if (!clean.length) return;
-  // Single multi-row INSERT for efficiency. ON CONFLICT targets the
-  // case-insensitive expression index (idx_org_tags_ci_name in
-  // db.js) so "Trim Carpentry" entered when "trim carpentry" already
-  // exists bumps the existing row's use_count rather than creating a
-  // dup. The pre-existing case-sensitive UNIQUE(org_id, name) on
-  // org_tags also prevents exact dups; the expression index just
-  // adds the case-insensitive layer on top.
-  const placeholders = clean.map(function(_, i) {
-    return '($1, $' + (i + 3) + ', $2)';
-  }).join(', ');
-  const params = [orgId, actorUserId || null].concat(clean);
-  try {
-    await pool.query(
-      'INSERT INTO org_tags (organization_id, created_by, name) VALUES ' +
-      placeholders +
-      ' ON CONFLICT (organization_id, (LOWER(name))) DO UPDATE ' +
-      '   SET use_count = org_tags.use_count + 1, updated_at = NOW()',
-      params
-    );
-  } catch (e) {
-    console.warn('[attachments] org_tags upsert failed:', e.message);
-  }
-}
+// upsertOrgTags + normalizeTagsInput MOVED to services/attachment-tags.js —
+// the payload dispatcher writes attachments.tags too and must normalize and
+// bump the catalog identically. One definition, reachable from both doors.
+const { upsertOrgTags, normalizeTagsInput } = require('../services/attachment-tags');
 // Resolve the org id for an attachment by sniffing its entity. Used
 // in PATCH/POST/bulk-tag so we can route tag writes into the
 // caller's org catalog. Returns null when no org can be inferred
@@ -210,40 +168,6 @@ async function resolveAttachmentOrg(req) {
   return req.user && req.user.organization_id ? Number(req.user.organization_id) : null;
 }
 
-// Normalize a tags-input from form-data or JSON body. Accepts:
-//   - Array of strings (best — JSON body)
-//   - JSON-stringified array (form-data field)
-//   - Comma-separated string (mobile fallback)
-// Returns a deduped lowercase array, max 20 entries of 32 chars.
-function normalizeTagsInput(raw) {
-  let arr = [];
-  if (Array.isArray(raw)) arr = raw;
-  else if (typeof raw === 'string' && raw) {
-    const trimmed = raw.trim();
-    if (trimmed.startsWith('[')) {
-      try { arr = JSON.parse(trimmed); } catch (e) { arr = []; }
-    } else {
-      arr = trimmed.split(',');
-    }
-  }
-  // Preserve the user's input case ("Trim Carpentry" stays "Trim
-  // Carpentry", not "trim carpentry"). Dedup is case-INSENSITIVE so
-  // ["Foo", "foo"] still collapses to one entry — keeping whichever
-  // case showed up first.
-  const seen = new Set();
-  const out = [];
-  for (let i = 0; i < arr.length && out.length < 20; i++) {
-    const v = arr[i];
-    if (typeof v !== 'string') continue;
-    const c = v.trim().slice(0, 32);
-    if (!c) continue;
-    const key = c.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(c);
-  }
-  return out;
-}
 
 // Normalize an annotations-input. Accepts the array directly (JSON
 // body) or a JSON-stringified array (form-data). Caps at 200 strokes
@@ -469,62 +393,13 @@ const upload = multer({
 // Authorization helper. Reads aren't gated tightly — anyone who can see
 // the parent entity can see its photos. Writes require the matching
 // edit capability.
-function readCapForEntity(entityType) {
-  if (entityType === 'estimate') return 'ESTIMATES_VIEW';
-  if (entityType === 'client')   return 'ESTIMATES_VIEW';
-  // Job reads accept either the all-jobs view cap or the assigned-only
-  // cap. Returning a space-separated list is the convention used in
-  // report-routes / qb-cost-routes — see requireDynamicCapability below
-  // for the OR-match logic.
-  if (entityType === 'job')      return 'JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN';
-  if (entityType === 'sub')      return 'JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN';
-  // Personal-files bucket. Capability is universal so authenticated
-  // users can land on their own folder; the ownership check below
-  // (ensureUserAttachmentOwner) enforces "only you can see your own".
-  if (entityType === 'user')     return '__owner__';
-  // Org-wide knowledge base — every authenticated user in the org
-  // can READ the company files; per-row org_id scoping (enforced by
-  // ensureOrgAttachmentScope below) keeps tenants isolated. Writes
-  // are gated separately by writeCapForEntity.
-  if (entityType === 'org')      return '__org_member__';
-  // Projects are sales/job-lifecycle buckets — reads follow the same
-  // posture as leads (anyone on the team can see; org isolation is
-  // enforced by the project's row org_id elsewhere).
-  if (entityType === 'project')  return 'LEADS_VIEW';
-  // Task photos — any content-editor on the team can view a task's photos
-  // (tasks are a general productivity primitive: job tasks for the field, plus
-  // office to-dos). Org isolation is enforced by the task's row org_id.
-  if (entityType === 'task')     return 'JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN LEADS_VIEW LEADS_EDIT';
-  return 'LEADS_VIEW';
-}
-function writeCapForEntity(entityType) {
-  if (entityType === 'estimate') return 'ESTIMATES_EDIT';
-  if (entityType === 'client')   return 'ESTIMATES_EDIT';
-  // Job writes — JOBS_EDIT was never a real capability (only _ANY and
-  // _OWN exist), so the prior single-cap lookup 403'd for every user
-  // and broke .xlsx / .docx / generic file uploads attached to a job
-  // chat. Accept either edit-tier cap; per-job ownership is enforced
-  // upstream by the canEdit() helper in job-routes for the row itself.
-  if (entityType === 'job')      return 'JOBS_EDIT_ANY JOBS_EDIT_OWN';
-  // Sub uploads (cert PDFs) — same shape; allow OWN-tier too because
-  // PMs who own a job often handle their sub paperwork.
-  if (entityType === 'sub')      return 'JOBS_EDIT_ANY JOBS_EDIT_OWN';
-  // Same owner-only model as the read side.
-  if (entityType === 'user')     return '__owner__';
-  // Company knowledge base — admin-tier only. Plain users can READ
-  // (via the __org_member__ sentinel on the read side) but the
-  // bucket is curated by admins so it doesn\'t accumulate noise.
-  if (entityType === 'org')      return 'USERS_MANAGE ROLES_MANAGE SYSTEM_ADMIN';
-  // Project uploads — anyone with lead-edit capability can drop photos
-  // into a project. This is a sales/walk-through bucket; gating it
-  // tighter (e.g. behind a per-project ACL) was considered overkill
-  // for the v1 ship.
-  if (entityType === 'project')  return 'LEADS_EDIT';
-  // Task photo uploads — field crew (JOBS_EDIT_OWN) attach photos to job tasks;
-  // office staff (LEADS_EDIT) can attach to their to-dos. Org-scoped by row.
-  if (entityType === 'task')     return 'JOBS_EDIT_ANY JOBS_EDIT_OWN LEADS_EDIT';
-  return 'LEADS_EDIT';
-}
+//
+// MOVED to services/attachment-entity-access.js so the payload dispatcher's
+// attachment.photo_updates arm can ask the same question this file's
+// PUT /:id asks, without requiring a routes/* module (and therefore
+// JWT_SECRET) from services/. Re-exported on module.exports.entityAccess
+// below, unchanged.
+const { readCapForEntity, writeCapForEntity } = require('../services/attachment-entity-access');
 
 // Owner gate for user-type attachments. The user can only operate on
 // their own bucket; admins can operate on anyone's. Returns true if

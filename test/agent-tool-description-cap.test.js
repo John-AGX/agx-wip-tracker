@@ -113,8 +113,85 @@ describe('emit_payload_file survives registration intact', () => {
     const en = tool.input_schema.properties.targets.items.properties.entity_type.enum;
     for (const t of ['estimate', 'job', 'lead', 'client', 'schedule', 'system',
                      'report', 'calendar_event', 'task', 'todo', 'reminder',
-                     'assembly', 'deal_memory']) {
+                     'assembly', 'deal_memory', 'attachment']) {
       expect(en).toContain(t);
+    }
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * THE CENSUS — the arm that was missing, and that let a description go 62
+ * chars over this file's own cap while the write-up asserted it had been
+ * measured.
+ *
+ * Nothing here checked any tool but emit_payload_file, so the way the cap was
+ * "respected" was by measuring the one string somebody remembered to measure.
+ * read_project_photos went 863 -> 1086 in the same change and the tail cut was
+ * an existing sentence: ", or from the page context when the user is looking
+ * at a project."
+ *
+ * So: every tool is measured, and the six that are ALREADY over are listed by
+ * name with their current overage. The list can only SHRINK — a new offender
+ * fails, and fixing an old one fails too (loudly, telling you to delete its
+ * line), so the grandfather list cannot quietly become a place to hide.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('no tool description goes over the cap that was not already over it', () => {
+  // Measured on origin/main, not copied from a claim. Raising a number here,
+  // or adding a name, is a deliberate act that shows up in review.
+  const GRANDFATHERED = {
+    read_assemblies: 1659,
+    read_email_inbox: 2313,
+    scribe_write: 1123,
+    search_entities: 1374,
+    start_background_task: 1115,
+    wire_nodes: 1214,
+  };
+
+  const I = require('../server/routes/ai-routes-internals');
+  const byName = new Map();
+  for (const key of Object.keys(I)) {
+    if (typeof I[key] !== 'function' || !/Tools$/.test(key)) continue;
+    let list;
+    try { list = I[key](); } catch (e) { continue; }
+    for (const t of (list || [])) {
+      if (t && t.name && !byName.has(t.name)) byName.set(t.name, String(t.description || ''));
+    }
+  }
+
+  test('the census actually found the tool surface — not an empty list', () => {
+    // Without this the whole describe passes by measuring nothing.
+    expect(byName.size).toBeGreaterThan(50);
+    expect(byName.has('emit_payload_file')).toBe(true);
+    expect(byName.has('read_project_photos')).toBe(true);
+  });
+
+  test('every tool is inside the cap, or is a KNOWN offender that has not grown', () => {
+    const news = [];
+    const grown = [];
+    for (const [name, desc] of byName) {
+      const r = capToolDescription(name, desc);
+      if (!r.truncated) continue;
+      if (!(name in GRANDFATHERED)) { news.push(`${name}=${desc.length} (+${r.overBy})`); continue; }
+      if (desc.length > GRANDFATHERED[name]) grown.push(`${name}=${desc.length} was ${GRANDFATHERED[name]}`);
+    }
+    expect({ newlyOverCap: news, grewWhileAlreadyOver: grown })
+      .toEqual({ newlyOverCap: [], grewWhileAlreadyOver: [] });
+  });
+
+  test('a name on the grandfather list that is no longer over the cap must be REMOVED from it', () => {
+    const fixed = Object.keys(GRANDFATHERED)
+      .filter((n) => byName.has(n) && !capToolDescription(n, byName.get(n)).truncated);
+    expect(fixed).toEqual([]);
+  });
+
+  test('the three descriptions the photo-caption door edited are measured, not assumed', () => {
+    // Named individually because these are the ones a change to that door
+    // would push over, and "it was measured" is the claim that failed last time.
+    for (const name of ['emit_payload_file', 'read_project_photos', 'add_photo_comment']) {
+      const desc = byName.get(name);
+      expect(typeof desc).toBe('string');
+      expect({ name, over: capToolDescription(name, desc).truncated })
+        .toEqual({ name, over: false });
     }
   });
 });

@@ -239,8 +239,33 @@ describe('no agent-path INSERT lands NULL any more', () => {
 
   test('the background job thread post uses the job row it already loaded', () => {
     const fn = fnBody(AI, 'async function postAgentJobToThread(');
-    expect(fn).toMatch(/organization_id\)/);
+    // The anchor was `organization_id)` — organization_id being the LAST
+    // column in the list. That was never the property; it was where the column
+    // happened to sit. session_id was appended after it (see the test below)
+    // and this went red for a change that did not touch its subject. Widened
+    // to "is named in the column list", not "closes the column list".
+    expect(fn).toMatch(/organization_id[,)]/);
     expect(fn).toMatch(/job\.organization_id/);
+  });
+
+  test('...and it names the SESSION, or the message it writes can never be read back', () => {
+    // The same class as this file's subject — a write omitting the column that
+    // decides who can see the row — one axis over. session_id was unwritten,
+    // so GET /86/messages could return this row on NEITHER of its two possible
+    // arms: the user_thread arm loads strictly by session_id, and the
+    // no-session fallback filters entity_type='86' while this row is
+    // 'general'. Every background Scribe notice — failures AND "Applied" —
+    // was invisible in chat, with push the only live signal, which is what
+    // "the Scribe is failing and I see nothing" actually was.
+    // Driven end to end in test/scribe-thread-visibility.test.js.
+    const fn = fnBody(AI, 'async function postAgentJobToThread(');
+    expect(fn).toMatch(/session_id[,)]/);
+    expect(fn).toMatch(/job\.session_id/);
+    // And the callers must HAVE a session to pass. The five sites in
+    // execScribeWrite all went through `{ user_id: uid }` — a literal with
+    // neither a session nor an org in it.
+    expect(AI).not.toMatch(/postAgentJobToThread\(\{ user_id: uid \}/);
+    expect(AI).toMatch(/session_id: \(scribeCtx\.parentSession && scribeCtx\.parentSession\.id\) \|\| null/);
   });
 
   test('the background callback is handed the authoritative org, not left to re-derive', () => {

@@ -529,7 +529,14 @@ async function backfillProjectGeocodes() {
     if (rows.length) console.log('[projects] geocode backfill: processed ' + rows.length + ' project(s)');
   } catch (e) { console.error('[projects] geocode backfill error:', e && e.message); }
 }
-setTimeout(function () { backfillProjectGeocodes(); }, 9000);   // after boot settles
+// After boot settles. .unref() so this ONE pending timer cannot be the reason
+// a process stays alive: in the server the HTTP listener holds the event loop
+// open and the backfill still fires at 9s exactly as before, but a short-lived
+// process that merely REQUIRED this module — which the payload dispatcher now
+// does, lazily, to record project activity on an agent-written photo caption —
+// no longer hangs for nine seconds after its work is done waiting on a timer
+// whose callback then queries a closed database.
+setTimeout(function () { backfillProjectGeocodes(); }, 9000).unref();
 
 // Expose recordActivity for sibling route modules (pairs, future
 // reports) so they can post into the same activity feed without

@@ -19,6 +19,21 @@ const { resolveTz, localWallClockToInstant, DEFAULT_TZ } = require('../timezone'
 // Change orders / purchase orders / invoices live in their own tables; this
 // is the same write layer the REST routes use, taking our transaction client.
 const jobFin = require('./job-financials');
+// The capability map and the tag normalizer PUT /api/attachments/:id runs,
+// imported rather than restated — see dispatchAttachment for why a second
+// opinion about either is the defect class this repo keeps paying for. Both
+// of these are auth-free, so they load here at the top.
+const { writeCapForEntity } = require('./attachment-entity-access');
+const { upsertOrgTags, normalizeTagsInput } = require('./attachment-tags');
+// attachmentInOrg is the THIRD of that set and is NOT required here, because
+// services/attachment-org-scope.js -> services/user-org-scope.js -> ../auth,
+// which hard-fails at load without a 32-char JWT_SECRET. This module is
+// requirable with no auth env today and several suites depend on that, so the
+// predicate is pulled in lazily at the one call site that needs it — and a
+// failure to pull it in REFUSES rather than proceeding unscoped.
+function loadAttachmentInOrg() {
+  return require('./attachment-org-scope').attachmentInOrg;
+}
 
 // ──────────────────────────────────────────────────────────────────
 // Wave 1.C — PayloadValidationError carries the structured shape
@@ -358,6 +373,38 @@ const PAYLOAD_OPS_SCHEMAS = Object.freeze({
     //   guessing about which of many cards a handed packet belongs to).
     allowedTopKeys: new Set(['op', 'fields', 'items', 'reason', 'source_research_id']),
   },
+  attachment: {
+    // PHOTO METADATA — the description (attachments.caption) and tags on
+    // photos that are already uploaded. THE ONLY payload op that writes
+    // attachments.caption / attachments.tags.
+    //
+    // photo_updates: [{attachment_id, caption?, tags?}, ...]
+    //   One target, one op, N photos, ONE approval card. Modelled on
+    //   job.phase_updates / change_orders[].line_edits — the two per-id
+    //   batched ops this repo already has — NOT on one-target-per-photo,
+    //   which would put 42 cards in front of a user for one instruction.
+    //
+    // ADDRESSING IS BY attachment_id AND NOTHING ELSE. Not by index, not by
+    // position, not by filename. `read_project_photos` prints the id of every
+    // photo in `[att_...]` at the head of each line; that string is the
+    // address. An id this batch cannot resolve REFUSES — it is never skipped,
+    // and never counted as an applied edit — and where a sibling in the same
+    // batch has already resolved, the refusal prints that parent's file list
+    // so the model can re-address without a second read.
+    //
+    // The target carries NO entity_id. Every address lives inside
+    // photo_updates, so an entity_id at target level could only be a second,
+    // conflicting address; it is refused rather than ignored.
+    //
+    // NOT TO BE CONFUSED WITH report.ops.section_updates[].captions, which is
+    // a per-figure caption inside a report's JSONB. Different store, different
+    // surface, different op. This one writes the photo's own description.
+    //
+    // AND NOT system.link_ops.attach_files, which MOVES photos between parent
+    // entities (it rewrites entity_type/entity_id) and writes no metadata at
+    // all. A caption/tag write must never route through it.
+    allowedTopKeys: new Set(['photo_updates']),
+  },
   deal_memory: {
     // Deal-thread durable memory (slice 4). The model appends DECISIONS /
     // CONSTRAINTS as PROSE ('client waived the flashing CO'); it never touches
@@ -380,6 +427,40 @@ const REPORT_TEMPLATE_IDS = new Set([
 const REPORT_SECTION_LAYOUTS = new Set([
   'photo-grid', 'single-photo', 'before-after', 'text-block', 'attachment-list',
 ]);
+
+// ──────────────────────────────────────────────────────────────────
+// attachment.photo_updates — bounds, all three taken from a shipped
+// number rather than invented here.
+//
+// PHOTO_CAPTION_CAP mirrors the UPLOAD path's `.slice(0, 2000)`
+// (attachment-routes.js). attachments.caption is TEXT and therefore
+// unbounded, and PUT /api/attachments/:id caps at NOTHING — so the column
+// today holds whatever a human pasted. That asymmetry is not a reason to
+// leave the agent door open: a model writing an essay per photo bloats every
+// later read_project_photos result, which is the context this same agent
+// pays for on the next turn. Cap where the upload caps, and REFUSE rather
+// than truncate — a silently-shortened description is a silent success.
+//
+// PHOTO_UPDATES_CAP mirrors read_project_photos: default page 60,
+// attachment_ids maxItems 60. One page of photos read is one payload
+// written, so the read and the write agree about what "this set" means.
+// NOTE this bounds the WRITE only. It does not bound what it costs 86 to
+// LOOK at 60 photos (view_attachment_image is one call per photo, ~2.5k
+// vision tokens each, re-billed as context every later turn of the session)
+// — that is a separate change, and it is called out as unresolved rather
+// than pretended away by a number here.
+const PHOTO_CAPTION_CAP = 2000;
+const PHOTO_UPDATES_CAP = 60;
+const PHOTO_UPDATE_KEYS = new Set(['attachment_id', 'caption', 'tags']);
+// The two TAG bounds are not invented here either: they are the bounds
+// services/attachment-tags.normalizeTagsInput already enforces by silently
+// reshaping (20 entries, 32 chars each). Restated as constants so this arm can
+// REFUSE at those boundaries instead of letting the normalizer shorten in
+// silence — see the tags block in validateOps. They are not a second opinion:
+// test/attachment-photo-updates.test.js drives normalizeTagsInput itself and
+// fails if either number drifts away from what it actually does.
+const PHOTO_TAGS_CAP = 20;
+const PHOTO_TAG_CHARS_CAP = 32;
 
 // ──────────────────────────────────────────────────────────────────
 // RETIRED_JOB_OPS — the node-graph write vocabulary, refused by name.
@@ -471,6 +552,161 @@ function validateOps(entityType, ops) {
       if (!s || !s.id) {
         throw new PayloadValidationError(`deal_memory.note_supersedes[${i}].id is required`,
           { code: 'missing_field', field_path: `note_supersedes[${i}].id` });
+      }
+    });
+  }
+  if (entityType === 'attachment') {
+    if (!Array.isArray(ops.photo_updates)) {
+      throw new PayloadValidationError(
+        'attachment.ops.photo_updates must be an array of {attachment_id, caption?, tags?}. ' +
+        'One target holds the whole set — do not emit one target per photo.',
+        { code: 'wrong_type', field_path: 'attachment.ops.photo_updates',
+          expected: 'array', received: typeof ops.photo_updates }
+      );
+    }
+    if (!ops.photo_updates.length) {
+      throw new PayloadValidationError(
+        'attachment.ops.photo_updates is empty — nothing would be written. Nothing was saved.',
+        { code: 'empty_op', field_path: 'attachment.ops.photo_updates', retryable: false }
+      );
+    }
+    if (ops.photo_updates.length > PHOTO_UPDATES_CAP) {
+      throw new PayloadValidationError(
+        // "per target", not "per payload" — measured, not assumed: three
+        // attachment targets of 60 in ONE payload write 180 captions under one
+        // approval card. The number bounds THIS op; saying otherwise was a
+        // sentence the code does not keep.
+        `attachment.ops.photo_updates holds ${ops.photo_updates.length} entries — the cap is ${PHOTO_UPDATES_CAP} per target. ` +
+        'Narrow the set (read_project_photos takes missing_caption_only, tag, and date filters) and emit the rest as a second payload. Nothing was saved.',
+        { code: 'too_many', field_path: 'attachment.ops.photo_updates',
+          expected: `<= ${PHOTO_UPDATES_CAP}`, received: ops.photo_updates.length, retryable: false }
+      );
+    }
+    const seenIds = new Set();
+    ops.photo_updates.forEach((u, i) => {
+      const where = `attachment.ops.photo_updates[${i}]`;
+      if (!u || typeof u !== 'object' || Array.isArray(u)) {
+        throw new PayloadValidationError(
+          `${where} must be an object {attachment_id, caption?, tags?}. Nothing was saved.`,
+          { code: 'wrong_type', field_path: where, expected: 'object', received: typeof u });
+      }
+      // An unknown key REFUSES. Silently ignoring one is how
+      // system.link_ops.attach_files came to accept `caption:` and
+      // `captions:` beside its own keys, drop both, re-point three rows and
+      // report "~1 updated" — executed, and the reason this op exists.
+      const strayKeys = Object.keys(u).filter((k) => !PHOTO_UPDATE_KEYS.has(k));
+      if (strayKeys.length) {
+        throw new PayloadValidationError(
+          `${where} has unknown key(s): ${strayKeys.map((k) => `'${k}'`).join(', ')}. ` +
+          `A photo update takes exactly: attachment_id, caption, tags. ` +
+          `To MOVE a photo to a different parent use system.link_ops.attach_files — it does not write metadata. Nothing was saved.`,
+          { code: 'unknown_field', field_path: where, received: strayKeys,
+            expected: [...PHOTO_UPDATE_KEYS], retryable: false });
+      }
+      const id = u.attachment_id == null ? '' : String(u.attachment_id).trim();
+      if (!id) {
+        throw new PayloadValidationError(
+          `${where}.attachment_id is required — a photo is addressed by its id and by nothing else. ` +
+          `read_project_photos prints it in square brackets at the head of each line. Nothing was saved.`,
+          { code: 'missing_field', field_path: `${where}.attachment_id` });
+      }
+      if (seenIds.has(id)) {
+        throw new PayloadValidationError(
+          `${where}.attachment_id '${id}' appears more than once in this batch. ` +
+          'Each photo may be addressed once — a second entry would silently overwrite the first. Nothing was saved.',
+          { code: 'duplicate_id', field_path: `${where}.attachment_id`, received: id, retryable: false });
+      }
+      seenIds.add(id);
+      const hasCaption = Object.prototype.hasOwnProperty.call(u, 'caption');
+      const hasTags = Object.prototype.hasOwnProperty.call(u, 'tags');
+      if (!hasCaption && !hasTags) {
+        throw new PayloadValidationError(
+          `${where} names photo '${id}' but sets no field — give it a caption, tags, or both. Nothing was saved.`,
+          { code: 'empty_op', field_path: where, received: id });
+      }
+      if (hasCaption) {
+        if (typeof u.caption !== 'string') {
+          throw new PayloadValidationError(
+            `${where}.caption must be a string (got ${Array.isArray(u.caption) ? 'array' : typeof u.caption}). ` +
+            'To clear a description pass an empty string. Nothing was saved.',
+            { code: 'wrong_type', field_path: `${where}.caption`,
+              expected: 'string', received: typeof u.caption });
+        }
+        if (u.caption.length > PHOTO_CAPTION_CAP) {
+          throw new PayloadValidationError(
+            `${where}.caption is ${u.caption.length} chars — the cap is ${PHOTO_CAPTION_CAP}, the same cap the upload path applies. ` +
+            'Shorten it; it is a photo description, not a report. Nothing was saved.',
+            { code: 'too_long', field_path: `${where}.caption`,
+              expected: `<= ${PHOTO_CAPTION_CAP} chars`, received: u.caption.length, retryable: true });
+        }
+      }
+      if (hasTags) {
+        if (!Array.isArray(u.tags)) {
+          throw new PayloadValidationError(
+            `${where}.tags must be an array of strings (got ${typeof u.tags}). ` +
+            'Tags REPLACE the photo\'s existing tags — send the full list you want it to end up with. Nothing was saved.',
+            { code: 'wrong_type', field_path: `${where}.tags`,
+              expected: 'array', received: typeof u.tags });
+        }
+        // THE TAGS HALF GETS THE CAPTION HALF'S DISCIPLINE, because the
+        // caption half's own comment states the rule: REFUSE rather than
+        // truncate — a silently-shortened description is a silent success.
+        // Until this block existed the tags half did exactly what that
+        // sentence forbids. Executed, asked -> stored -> reported:
+        //   ['A'x40]                          -> ['A'x32]           -> "1 tag set updated"
+        //   25 tags                           -> the first 20       -> "1 tag set updated"
+        //   ['Framing',123,null,{a:1},'Deck'] -> ['Framing','Deck'] -> "1 tag set updated"
+        //   [1,2,3]                           -> []                 -> "1 tag set updated"  <- WIPED the row's tags
+        // normalizeTagsInput reshapes silently BY DESIGN, because it also
+        // serves a human typing into a form where a dropped blank is kindness.
+        // An agent is not a human at a form: every one of those rows is a
+        // write that stored something other than what was asked and answered
+        // "updated". So the shapes it would reshape are refused HERE, before
+        // it ever sees them, and what reaches it is already normal.
+        //
+        // TRIM IS THE ONE NORMALIZATION LEFT ALONE — ' Framing ' storing as
+        // 'Framing' loses no meaning. Everything else refuses.
+        if (u.tags.length > PHOTO_TAGS_CAP) {
+          throw new PayloadValidationError(
+            `${where}.tags holds ${u.tags.length} tags — the cap is ${PHOTO_TAGS_CAP}, ` +
+            'and over the cap the extra tags are REFUSED, not quietly dropped. ' +
+            'Send the ' + PHOTO_TAGS_CAP + ' that matter. Nothing was saved.',
+            { code: 'too_many', field_path: `${where}.tags`,
+              expected: `<= ${PHOTO_TAGS_CAP} tags`, received: u.tags.length, retryable: true });
+        }
+        const seenTags = new Set();
+        u.tags.forEach((t, ti) => {
+          const at = `${where}.tags[${ti}]`;
+          if (typeof t !== 'string') {
+            throw new PayloadValidationError(
+              `${at} is a ${t === null ? 'null' : (Array.isArray(t) ? 'array' : typeof t)}, not a string — ` +
+              'every tag must be a string. A non-string entry is REFUSED, not dropped: dropping it would ' +
+              'store a different tag list than the one asked for and still answer "tag set updated". Nothing was saved.',
+              { code: 'wrong_type', field_path: at, expected: 'string',
+                received: t === null ? 'null' : typeof t, retryable: true });
+          }
+          const c = t.trim();
+          if (!c) {
+            throw new PayloadValidationError(
+              `${at} is blank — a tag must have text. A blank entry is REFUSED, not dropped. Nothing was saved.`,
+              { code: 'empty_value', field_path: at, received: t, retryable: true });
+          }
+          if (c.length > PHOTO_TAG_CHARS_CAP) {
+            throw new PayloadValidationError(
+              `${at} is ${c.length} chars — a tag caps at ${PHOTO_TAG_CHARS_CAP} and over the cap it is ` +
+              'REFUSED, not truncated. Shorten it. Nothing was saved.',
+              { code: 'too_long', field_path: at, expected: `<= ${PHOTO_TAG_CHARS_CAP} chars`,
+                received: c.length, retryable: true });
+          }
+          const key = c.toLowerCase();
+          if (seenTags.has(key)) {
+            throw new PayloadValidationError(
+              `${at} repeats '${c}' — tags dedup case-insensitively, so a repeat would be dropped and the ` +
+              'stored list would not be the list asked for. Send each tag once. Nothing was saved.',
+              { code: 'duplicate_value', field_path: at, received: c, retryable: true });
+          }
+          seenTags.add(key);
+        });
       }
     });
   }
@@ -3863,6 +4099,330 @@ async function dispatchDealMemory(dbClient, target, refTable, ctx) {
   };
 }
 
+// ──────────────────────────────────────────────────────────────────
+// dispatchAttachment — photo descriptions + tags, batched by id.
+//
+// THE DOOR THIS IS. Until this arm existed, nothing in the payload grammar
+// could write attachments.caption. The only statement in the tree that wrote
+// it outside the upload INSERT was PUT /api/attachments/:id — a HUMAN door.
+// 86's baseline nevertheless advertised read_project_photos as the way "to
+// gather attachment ids before captioning", so the Scribe was being asked to
+// emit a payload for something the vocabulary could not express, and the
+// three shapes it could plausibly reach for failed in three different layers
+// (refused at emit / refused inside the dispatcher / APPLIED, reported
+// "~1 updated", wrote no caption and re-pointed the rows).
+//
+// THE PREDICATE AND THE CAPABILITY ARE THE PUT'S, NOT A SECOND OPINION.
+// attachment-routes.js:PUT /:id runs, in this order:
+//     attachmentInOrg(pool, att, callerOrgId(req))   -> 404
+//     writeCapForEntity(att.entity_type) + hasCapability -> 403
+// so this runs the SAME two, per row, in the SAME order, importing the SAME
+// functions. writeCapForEntity moved to services/attachment-entity-access.js
+// for that: requiring routes/attachment-routes.js from here would drag in the
+// auth module at load and break every JWT-free test that touches this file.
+//
+// RESOLVE EVERYTHING, THEN WRITE. Pass 1 resolves and authorizes every id in
+// the batch; only if all of them pass does pass 2 update anything. A throw
+// out of pass 1 leaves the transaction untouched, and applyPayload's ROLLBACK
+// makes the whole payload all-or-nothing. Do NOT catch per item — a partially
+// applied batch is a write that reports success while half of it silently
+// did not happen.
+//
+// AN UNRESOLVABLE ID REFUSES, copying change_orders[].line_edits
+// (job-financials.js resolveCoLineIndex): name the bad address, say nothing
+// was saved, name the tool whose output supplies a correct address, and — WHEN
+// THERE IS A PARENT TO INVENTORY — list what that parent holds with each row's
+// real address. It is deliberately NOT the weaker job.phase_updates form
+// ("phase_id not found on job j1: nope"), which refuses correctly but hands
+// the model nothing to correct toward.
+//
+// TWO LIMITS ON THE INVENTORY, STATED BECAUSE AN EARLIER VERSION OF THIS
+// COMMENT OVERSOLD IT:
+//   • It is anchored on a sibling in THIS batch that already resolved. If the
+//     bad id is the FIRST entry there is no parent to anchor on and the
+//     refusal falls back to "No photo with that id is visible to you." — the
+//     weaker form. Nothing in the op requires a batch to share one parent
+//     either, so a batch spanning two projects anchors on whichever resolved
+//     first. Both are named in the write-up as still open.
+//   • The line format is CLOSE to read_project_photos' but not identical (it
+//     prints `[id] file — caption: "…"`; the read prints `[id] file · date ·
+//     uploader · size · caption · tags`), and this listing is not filtered to
+//     `image/%` the way the read is, so it can offer a PDF as an address.
+// The id in square brackets — the part the model actually needs — is the same
+// string in both, which is what makes re-addressing possible without a second
+// read.
+//
+// A FOREIGN-TENANT ID READS EXACTLY LIKE AN ABSENT ONE. Same message, same
+// code. attachments.id is a guessable string and a distinguishable refusal
+// would turn this op into a cross-tenant existence oracle.
+// ──────────────────────────────────────────────────────────────────
+
+// The caller, resolved from the transaction and answered against the SAME
+// role cache every route uses. FAIL CLOSED: if the actor cannot be resolved,
+// or the auth module cannot be loaded at all, nobody is authorized.
+async function resolveWriteActor(dbClient, ctx) {
+  const uid = ctx && ctx.userId;
+  if (!uid) return null;
+  const r = await dbClient.query(
+    'SELECT id, role, organization_id FROM users WHERE id = $1', [uid]);
+  return r.rows.length ? r.rows[0] : null;
+}
+
+// Lazily required so this module stays loadable with no JWT_SECRET — the
+// property test/agent-write-org-scope.test.js and every other JWT-free
+// consumer of the dispatcher relies on. A failure to load is a REFUSAL, never
+// a pass.
+function actorHoldsCapability(actor, capKey, att) {
+  if (!actor || !capKey) return false;
+  let auth;
+  try { auth = require('../auth'); }
+  catch (e) {
+    console.warn('[payload] capability check could not load auth:', e && e.message);
+    return false;
+  }
+  if (capKey === '__owner__') {
+    // The personal My Files bucket, whose entity_id IS a users.id. The PUT
+    // answers this with ensureUserAttachmentOwner: your own bucket, or
+    // anyone's if you are adminish. Returning a bare `true` here would have
+    // been strictly WEAKER than the door being copied — every in-tenant user
+    // could caption every other user's private files — which is the exact
+    // shape of drift this whole arm exists to avoid. The tenant half is
+    // already settled by attachmentInOrg before this is reached.
+    if (!att) return false;
+    if (auth.isAdminish(actor)) return true;
+    return String(att.entity_id) === String(actor.id);
+  }
+  return auth.hasCapability(actor, capKey);
+}
+
+async function dispatchAttachment(dbClient, target, refTable, ctx) {
+  const updates = (target.ops && target.ops.photo_updates) || [];
+  const orgId = (ctx && ctx.organizationId) != null ? ctx.organizationId : null;
+  const actor = await resolveWriteActor(dbClient, ctx);
+  const actorId = actor ? actor.id : null;
+  const attachmentInOrg = loadAttachmentInOrg();
+
+  // Inventory of what the parent holds, in read_project_photos' own line
+  // format, so a refusal and a read describe the same photos the same way.
+  async function inventoryFor(entityType, entityId) {
+    if (!entityType || !entityId) return null;
+    const r = await dbClient.query(
+      `SELECT id, filename, caption FROM attachments
+        WHERE entity_type = $1 AND entity_id = $2
+        ORDER BY COALESCE(taken_at, uploaded_at) DESC`,
+      [entityType, entityId]);
+    if (!r.rows.length) return null;
+    const shown = r.rows.slice(0, 15).map((a) =>
+      `[${a.id}] ${a.filename || '(no filename)'} — caption: ` +
+      (a.caption && String(a.caption).trim() ? `"${String(a.caption).slice(0, 40)}"` : '—')
+    ).join('; ');
+    return `This ${entityType} holds ${r.rows.length} file(s): ${shown}` +
+      (r.rows.length > 15 ? '; … (first 15 shown)' : '');
+  }
+
+  // ── PASS 1 — resolve + authorize EVERY id. No write happens here. ──
+  const resolved = [];
+  for (let i = 0; i < updates.length; i++) {
+    const u = updates[i];
+    const where = `attachment.ops.photo_updates[${i}]`;
+    const id = String(u.attachment_id).trim();
+    const r = await dbClient.query('SELECT * FROM attachments WHERE id = $1', [id]);
+    const att = r.rows[0];
+
+    // Absent OR foreign — one message, one code, deliberately.
+    const inOrg = att ? await attachmentInOrg(dbClient, att, orgId) : false;
+    if (!att || !inOrg) {
+      // Anchor the inventory on a sibling in this batch that DID resolve —
+      // that is the set the model was actually working from. With nothing
+      // resolved there is no parent to inventory, and saying so is better
+      // than printing a guess.
+      const anchor = resolved.find((x) => x.att.entity_type && x.att.entity_id);
+      const inv = anchor ? await inventoryFor(anchor.att.entity_type, anchor.att.entity_id) : null;
+      // ORDER MATTERS MORE THAN LENGTH HERE. The one surface that shows this
+      // sentence to a user — execScribeWrite's failure post — cuts it at 400
+      // chars (`String(errMsg).slice(0, 400)`), and the push body at 200. With
+      // the inventory in the middle, a 42-photo refusal ended mid-word and the
+      // reader never reached "Nothing was saved." or the name of the tool to
+      // re-address with. So the load-bearing half leads: WHICH item, WHICH id,
+      // that nothing was saved, and how to re-address. The inventory — the
+      // longest and the most expendable part — goes last, where the cut can
+      // only take photos off the end of a list.
+      throw new PayloadValidationError(
+        `${where}: no such photo — attachment_id="${id}". Nothing was saved. ` +
+        'Address a photo by the attachment_id read_project_photos prints in square brackets at the head of each line. ' +
+        (inv ? inv + '.' : 'No photo with that id is visible to you.'),
+        { code: 'unresolvable_id', field_path: `${where}.attachment_id`,
+          received: id, retryable: true }
+      );
+    }
+
+    const cap = writeCapForEntity(att.entity_type);
+    if (!actorHoldsCapability(actor, cap, att)) {
+      throw new PayloadValidationError(
+        `${where}: you do not have permission to edit photos on a ${att.entity_type} ` +
+        `(requires ${cap === '__owner__' ? 'ownership of that personal file bucket' : cap.split(/\s+/).join(' or ')}). ` +
+        'Nothing was saved.',
+        { code: 'missing_capability', field_path: where, received: cap, retryable: false }
+      );
+    }
+    resolved.push({ att, u, where });
+  }
+
+  // ── PASS 2 — every id resolved and authorized; now write. ──
+  const changesetRows = [];
+  const activity = [];
+  const newTags = [];
+  let captionsWritten = 0;
+  let tagsWritten = 0;
+
+  for (const { att, u } of resolved) {
+    // `att` came back from `SELECT *` inside this transaction, which is the
+    // same full row snapshotEntity's to_jsonb(t) produces — no second read,
+    // and no dependency on a Postgres-only function for the audit trail.
+    const before = att;
+
+    const sets = [];
+    const params = [];
+    let p = 1;
+    const wroteCaption = Object.prototype.hasOwnProperty.call(u, 'caption') && u.caption !== att.caption;
+    const wroteTags = Object.prototype.hasOwnProperty.call(u, 'tags');
+    let nextTags = null;
+    if (Object.prototype.hasOwnProperty.call(u, 'caption')) {
+      sets.push('caption = $' + p++);
+      params.push(u.caption);
+    }
+    if (wroteTags) {
+      // FULL REPLACE, through the same normalizer the PUT uses: case
+      // preserved, deduped case-insensitively, 20 entries of 32 chars,
+      // non-strings dropped. The array the agent sends is the array the
+      // photo ends up with — it is not merged with what is already there.
+      nextTags = normalizeTagsInput(u.tags);
+      sets.push('tags = $' + p++ + '::jsonb');
+      params.push(JSON.stringify(nextTags));
+    }
+    if (!sets.length) continue;
+    params.push(att.id);
+    // SAFE: column names are hardcoded conditionals above (caption / tags);
+    // no user-keys loop. Same construction as attachment-routes.js PUT /:id.
+    const upd = await dbClient.query(
+      `UPDATE attachments SET ${sets.join(', ')} WHERE id = $${p}`, params);
+    // The row was SELECTed inside this transaction two statements ago, so a
+    // zero-row UPDATE is not "someone else got there first" — it is this op
+    // having written nothing while reporting that it did, which is the
+    // failure this whole arm exists to prevent.
+    if (!upd.rowCount) {
+      throw new Error(
+        `attachment ${att.id}: the update matched no row. Nothing was saved.`);
+    }
+    if (wroteCaption) captionsWritten++;
+    if (wroteTags) tagsWritten++;
+
+    const after = (await dbClient.query(
+      'SELECT * FROM attachments WHERE id = $1', [att.id])).rows[0] || null;
+    changesetRows.push({ entity_type: 'attachment', id: att.id, before, after });
+
+    // ACTIVITY — the same kinds, on the same trigger conditions, with the
+    // same detail shape PUT /:id records. A feed that says who described a
+    // photo must not depend on WHICH door described it.
+    if (att.entity_type === 'project' && wroteCaption) {
+      activity.push([att.entity_id, 'caption_edited',
+        { attachment_id: att.id, filename: att.filename }]);
+    }
+    if (att.entity_type === 'project' && wroteTags) {
+      // THE FEED IS COMPUTED FROM WHAT WAS WRITTEN, NEVER FROM WHAT WAS ASKED.
+      // This diff used to run over the RAW `u.tags`, so the feed reported tags
+      // that were not on the row. Executed: 25 tags asked, the column held
+      // Tag1..Tag20 (normalizeTagsInput's cap), and project_activity held
+      // added:[Tag1..Tag25]; a 50-char tag stored at 32 was recorded at 50.
+      // `nextTags` is the array that went into the column two statements above.
+      // The validateOps refusals now make asked and written agree for every
+      // shape that can reach here — reading the written array is what keeps
+      // them agreeing anyway if the normalizer ever changes underneath.
+      const priorTags = Array.isArray(att.tags) ? att.tags
+        : (() => { try { return JSON.parse(att.tags || '[]'); } catch (e) { return []; } })();
+      const nextRaw = (nextTags || []).slice();
+      const priorLower = priorTags.map((t) => String(t).toLowerCase());
+      const nextLower = nextRaw.map((t) => t.toLowerCase());
+      const added = nextRaw.filter((t, i) => priorLower.indexOf(nextLower[i]) === -1);
+      const removed = priorTags.filter((t) => nextLower.indexOf(String(t).toLowerCase()) === -1);
+      if (added.length || removed.length) {
+        activity.push([att.entity_id, 'photo_tags_changed',
+          { attachment_id: att.id, filename: att.filename, added, removed }]);
+      }
+      if (added.length) newTags.push(...added);
+    }
+  }
+
+  // ── SIDE EFFECTS THAT LIVE OUTSIDE THIS TRANSACTION ARE DEFERRED TO
+  //    AFTER THE COMMIT, AND ONLY A COMMIT RELEASES THEM. ────────────────
+  // recordActivity() and upsertOrgTags() both issue on the MODULE pool —
+  // pool.query() — which checks out a DIFFERENT connection from the one
+  // applyPayload was handed by pool.connect() for its BEGIN/COMMIT (server/
+  // db.js sets no `max`, so node-postgres' default of 10 applies). So the
+  // ROLLBACK on this transaction cannot take them back.
+  //
+  // Executed with a two-connection model of the pool, on a payload of
+  // [attachment target writing a1, a second target that refuses]: the caption
+  // rolled back to NULL and project_activity PERMANENTLY held
+  // caption_edited + photo_tags_changed for a caption that was never saved.
+  // A single shared connection makes that bug disappear, which is exactly why
+  // the first version of this arm shipped with only the ctx.dryRun half of it
+  // covered — a dry run is just the other way this transaction can end.
+  //
+  // So: buffer, and let applyPayload drain the buffer AFTER COMMIT returns.
+  // A dry run ROLLBACKs and never drains. A later target's refusal ROLLBACKs
+  // and never drains. There is no third way out.
+  //
+  // ctx.afterCommit is supplied by applyPayload on every path (see the ctx it
+  // builds). When it is absent — dispatchAttachment driven directly, which is
+  // how the drives in test/attachment-photo-updates.test.js reach it — the
+  // effects are simply not fired, because outside a transaction this code
+  // cannot know whether the write it is describing survived.
+  const deferred = ctx && Array.isArray(ctx.afterCommit) ? ctx.afterCommit : null;
+  if (deferred && (activity.length || (newTags.length && orgId))) {
+    deferred.push(async () => {
+      for (const [projectId, kind, detail] of activity) {
+        try {
+          const projectRoutes = require('../routes/project-routes');
+          if (projectRoutes && typeof projectRoutes.recordActivity === 'function') {
+            projectRoutes.recordActivity(projectId, actorId, kind, detail);
+          }
+        } catch (e) {
+          console.warn('[payload] project activity log failed (' + kind + '):', e.message);
+        }
+      }
+      // The org tag catalog, through the SAME function PUT /api/attachments/:id
+      // calls. NOTE, executed: that function's multi-row INSERT transposes two
+      // columns — it builds `($1, $(i+3), $2)` against
+      // `(organization_id, created_by, name)`, so created_by gets the tag string
+      // and name gets the actor id — which in Postgres raises 22P02 and is
+      // swallowed by its own try/catch. The catalog has therefore never been
+      // bumped from the human caption door either. That is a pre-existing defect
+      // in a best-effort side path and is NOT repaired here; what matters at this
+      // seam is that the agent door does not route around it with a private,
+      // differently-shaped INSERT, because then an agent's tag and a human's tag
+      // would populate the catalog differently the day it IS fixed.
+      if (newTags.length && orgId) {
+        try { await upsertOrgTags(orgId, newTags, actorId); }
+        catch (e) { console.warn('[payload] org_tags upsert failed:', e.message); }
+      }
+    });
+  }
+
+  const bits = [];
+  if (captionsWritten) bits.push(`${captionsWritten} description${captionsWritten === 1 ? '' : 's'}`);
+  if (tagsWritten) bits.push(`${tagsWritten} tag set${tagsWritten === 1 ? '' : 's'}`);
+  return {
+    entity_type: 'attachment', entity_id: null, op: 'photo_updates',
+    photos: resolved.length,
+    captions_written: captionsWritten,
+    tags_written: tagsWritten,
+    changeset_rows: changesetRows,
+    summary: `${resolved.length} photo${resolved.length === 1 ? '' : 's'}: ` +
+      (bits.length ? bits.join(', ') + ' updated' : 'no change'),
+  };
+}
+
 const DISPATCHERS = {
   client: dispatchClient,
   estimate: dispatchEstimate,
@@ -3877,6 +4437,7 @@ const DISPATCHERS = {
   reminder: dispatchReminder,
   assembly: dispatchAssembly,
   deal_memory: dispatchDealMemory,
+  attachment: dispatchAttachment,
 };
 
 async function dispatchTarget(dbClient, target, refTable, ctx) {
@@ -3965,11 +4526,57 @@ function validateTarget(target, index) {
             { code: 'missing_field', field_path: `move.${side}.entity_type` }
           );
         }
+        // AN ATTACHMENT TARGET CANNOT BE A MOVE SIDE, and this refusal has to
+        // live HERE: this branch returns before reaching the target-level
+        // second-address refusal below, so `op:"move"` was a keyword that
+        // walked straight past it. Executed before this existed:
+        //   {op:'move', source:{entity_type:'attachment', entity_id:'a1',
+        //                       ops:{photo_updates:[{attachment_id:'a2', ...}]}},
+        //    dest:{... entity_id:'a1' ...}}
+        // APPLIED. a1 was never touched, a2's caption and tags were rewritten,
+        // and the approval card printed "Moved attachment a1 → attachment a1".
+        // A card that names the wrong record is worse than no card at all.
+        //
+        // A move re-points ONE record named by entity_id; an attachment target
+        // carries no entity_id at all, so there is nothing for a move to name.
+        if (s.entity_type === 'attachment') {
+          throw new PayloadValidationError(
+            `move.${side} cannot be an attachment target. Nothing was saved. ` +
+            'op:"move" re-points the ONE record its entity_id names, and an attachment target has no ' +
+            'entity_id — every photo is addressed inside photo_updates[].attachment_id, so the card ' +
+            'would name one photo while a different one was written. ' +
+            'To write descriptions or tags emit a plain { entity_type: "attachment", ops: { photo_updates: [...] } } target; ' +
+            'to MOVE photos to another parent use system.link_ops.attach_files.',
+            { code: 'unknown_field', field_path: `move.${side}.entity_type`,
+              received: 'attachment', retryable: false,
+              suggestion: 'Emit { entity_type: "attachment", ops: { photo_updates: [{attachment_id, caption?, tags?}, ...] } } as its own target.' }
+          );
+        }
         validateOps(s.entity_type, s.ops || {});
       }
       return;
     }
     if (!target.entity_type) throw new Error('Each target requires entity_type');
+    // An attachment target addresses NOTHING at target level — every address
+    // lives in photo_updates[].attachment_id. A target-level entity_id, a
+    // bulk wrapper or a condition would each be a SECOND address for the same
+    // write, and this repo's documented failure is exactly two addresses
+    // disagreeing while the write reports success. Refuse all three by name.
+    if (target.entity_type === 'attachment') {
+      for (const [key, why] of [
+        ['entity_id', 'photos are addressed inside photo_updates[].attachment_id, one entry per photo'],
+        ['bulk', 'photo_updates already carries the whole set — one target, one op, N photos, ONE approval'],
+        ['condition', 'a photo update is not conditional; an id that does not resolve is refused, not skipped'],
+      ]) {
+        if (target[key] != null) {
+          throw new PayloadValidationError(
+            `attachment targets take no '${key}' — ${why}. Nothing was saved.`,
+            { code: 'unknown_field', field_path: key, received: key, retryable: false,
+              suggestion: 'Emit { entity_type: "attachment", ops: { photo_updates: [{attachment_id, caption?, tags?}, ...] } }.' }
+          );
+        }
+      }
+    }
     if (target.bulk) {
       if (!Array.isArray(target.bulk.items) || !target.bulk.items.length) {
         throw new PayloadValidationError(
@@ -4039,6 +4646,22 @@ async function dispatchConcrete(dbClient, target, refTable, ctx, results, change
   const after = await snapshotEntity(dbClient, target.entity_type, afterId);
   if (before !== null || after !== null) {
     changeset.push({ entity_type: target.entity_type, id: afterId || null, before, after });
+  }
+  // A dispatcher that writes N ROWS under ONE target supplies its own
+  // before/after pairs, because snapshotEntity can only ever photograph the
+  // single row target.entity_id names. attachment.photo_updates is the first:
+  // 42 photos are one target, and without this the changeset would be EMPTY,
+  // isRenderableChangeset (services/changeset-guard.js) would reject it, and
+  // persistDraftChangeset would store nothing — the documented "composing…
+  // for 45s and then the change NEVER appears on any surface" bug.
+  //
+  // Deliberately NOT solved by adding attachment to TABLE_FOR_ENTITY: an
+  // attachment target carries no entity_id (validateTarget refuses one), so
+  // that mapping could never fire. A declared-but-unread mapping is its own
+  // defect class; this is the path that actually executes, and the diff it
+  // produces is per-photo rather than one row for the whole batch.
+  if (result && Array.isArray(result.changeset_rows)) {
+    for (const row of result.changeset_rows) changeset.push(row);
   }
 }
 
@@ -4126,6 +4749,13 @@ async function applyPayload(payloadRow, opts = {}) {
   const refTable = Object.create(null);
   const affectedTargets = [];
   const changeset = [];
+  // Side effects a dispatcher cannot put inside this transaction — an
+  // activity-feed row, an org-tag catalog bump — because they issue on the
+  // MODULE pool, i.e. a different connection, which this ROLLBACK cannot
+  // reach. A dispatcher pushes a thunk; the ONLY place it is drained is
+  // immediately after a successful COMMIT below. Dry runs and refusals both
+  // leave it undrained, which is the whole point.
+  const afterCommit = [];
 
   try {
     await dbClient.query('BEGIN');
@@ -4146,6 +4776,17 @@ async function applyPayload(payloadRow, opts = {}) {
           userId: opts.userId,
           organizationId: opts.organizationId,
           sourceAgent: opts.sourceAgent,
+          // A dispatcher whose write has a side effect OUTSIDE this
+          // transaction (an activity-feed row, an org-tag catalog bump) puts a
+          // thunk in here; the drain after COMMIT below is the only thing that
+          // runs it. NOTE what is deliberately NOT passed: a `dryRun` flag.
+          // The first version of this arm carried one, and it answered only
+          // half the question — driveScribeWrite dry-runs every draft, so the
+          // flag caught previews, and the OTHER way this transaction ends (a
+          // real apply whose later target refuses) went straight through it.
+          // A flag nothing reads is its own defect class in this repo, so the
+          // flag is gone and the mechanism stands alone.
+          afterCommit,
         }, affectedTargets, changeset);
       } catch (err) {
         if (err instanceof PayloadValidationError && err.detail && err.detail.target_index == null) {
@@ -4170,6 +4811,15 @@ async function applyPayload(payloadRow, opts = {}) {
     }
 
     await dbClient.query('COMMIT');
+    // THE ONLY DRAIN. Everything in here writes on a connection this
+    // transaction does not own, so it must not run until the transaction has
+    // actually committed. Each thunk is individually best-effort: an
+    // activity-feed row that fails must not turn a committed payload into an
+    // error the caller reports as a failed apply.
+    for (const fn of afterCommit) {
+      try { await fn(); }
+      catch (e) { console.warn('[payload] post-commit side effect failed:', e && e.message); }
+    }
     return {
       ok: true,
       dry_run: false,
@@ -4257,6 +4907,12 @@ module.exports = {
     // than by reading the source for a substring.
     resolveJobTarget,
     dispatchSystem,
+    // Exported so the photo-metadata door is provable against a real SQL
+    // engine with no JWT_SECRET — every refusal it raises is driven through
+    // this, with a control mutation each time to show the door works at all.
+    dispatchAttachment,
+    PHOTO_CAPTION_CAP,
+    PHOTO_UPDATES_CAP,
     dispatchTask,
     dispatchTodo,
     dispatchReminder,

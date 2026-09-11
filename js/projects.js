@@ -6689,6 +6689,19 @@
     // codebase, so every agent-written report refreshed nothing while the
     // table claimed it was covered. No-ops when no project detail is mounted.
     refreshReports: paintReportsTab,
+    // Refetch + repaint the open project's PHOTO feed. This is the refresh
+    // registry's `attachment` surface, and it exists because the payload
+    // dispatcher can now write a photo's description
+    // (attachment.ops.photo_updates). Without it, John approves 42
+    // descriptions, they commit, and the grid in front of him still shows 42
+    // blanks until he reloads the page: this module has no setInterval, no
+    // poller and no other refresh hook, and a caption renders straight off the
+    // already-fetched row. That is the same "the change never appears on any
+    // surface" ending a correct write is supposed to stop having.
+    // It REFETCHES rather than patching the local array — the server is the
+    // truth about what the approved payload actually wrote. No-ops when no
+    // project detail is mounted.
+    refreshPhotos: refreshDetailPhotos,
     setFilter: setFilter,
     setView: setView,
     openCreate: openCreate,

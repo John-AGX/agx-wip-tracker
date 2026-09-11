@@ -7602,7 +7602,11 @@ const PROJECT_INLINE_TOOLS = [
     name: 'add_photo_comment',
     tier: 'auto',
     description:
-      'Post a comment to the thread on a photo (attachment). Auto-tier — no approval card. Use sparingly; conversational text only. Skip for structural mutations (use emit_payload_file with photo metadata ops instead).',
+      // "photo metadata ops" named ops that did not exist when this string
+      // shipped — there was no attachment vocabulary in the payload grammar
+      // at all, so a model following this pointer landed on nothing. It now
+      // names the op that exists.
+      'Post a comment to the thread on a photo (attachment). Auto-tier — no approval card. Use sparingly; conversational text only. A comment is NOT the photo\'s description: to set that (or its tags) emit_payload_file an `attachment` target with ops.photo_updates:[{attachment_id, caption?, tags?}].',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -7625,6 +7629,14 @@ const PROJECT_INLINE_TOOLS = [
     description:
       'List the photos on a PROJECT (site walkthrough / CompanyCam-style photo feed). Returns one line per photo: [attachment id] filename, when it was taken, who uploaded it, its description (caption) and tags, plus geo coords when the photo carries them. ' +
       'Use this whenever the user asks about project photos — "what did we shoot today", "which photos have no description", "what\'s untagged", "summarise the site activity" — and to collect the attachment ids you need before writing captions, suggesting tags, or drafting a report from a photo set. ' +
+      // MEASURED, NOT ASSUMED. The first version of this line was 223 chars
+      // and put the string at 1086 — 62 OVER the 1024-char managed-agent cap
+      // (services/agent-tool-description.js), which silently cuts the TAIL, so
+      // the sentence that would have vanished is the existing last line about
+      // where project_id comes from. This one is short enough to leave
+      // headroom, and the field detail lives in the Scribe baseline, which is
+      // uncapped — exactly what that file's own header instructs.
+      'To WRITE those descriptions or tags, emit an `attachment` target: ops.photo_updates:[{attachment_id, caption?, tags?}] — one target for the set. ' +
       'Filters: attachment_ids (specific photos, e.g. the ones the user selected), tag, untagged_only, missing_caption_only, start_date / end_date (YYYY-MM-DD, on the capture/upload date). Read-only — it never edits a photo. ' +
       'Get the project_id from read_projects, or from the page context when the user is looking at a project.',
     input_schema: {
@@ -8130,17 +8142,24 @@ const PAYLOAD_TOOLS = [
     description:
       'Emit ONE .p86.json payload — your only write primitive. ' +
       '{targets:[{entity_type,entity_id?,ops}], title, summary}. ' +
-      'entity_id = the real id, or $new_<name> for a create other targets reference. ' +
+      'entity_id = real id, or $new_<name> for a create other targets reference. ' +
       'entity_type → ops: ' +
       'estimate {op,scope,field_updates,sections,groups,line_adds,line_edits,line_deletes,assembly_adds} · ' +
       'job {field_updates,phase_updates,change_orders,purchase_orders,invoices,notes} · ' +
       'lead/client {op,fields,notes} · assembly {op,fields,items} · schedule {blocks} · ' +
       'report {op,template_type,parent_id} · system {skill_pack_ops,field_tool_ops,link_ops} · ' +
+      // Index form only — the op key already says "photo", and the FIELD
+      // detail (attachment_id / caption / tags, and the rule that this is the
+      // op for a photo's description) lives in the Scribe baseline, which is
+      // uncapped. Spelling it out here cost 25 chars and put the string 11
+      // over the 1024 cap, which would have silently cut whatever was
+      // appended last — this entry.
+      'attachment {photo_updates} · ' +
       'deal_memory {note_adds,note_supersedes} · ' +
       'calendar_event {title,starts_at} = appointment · reminder {title,remind_at} = personal nudge · ' +
       'task {title,due_date?,assignee_user_id?} = ORG work, assignable · todo = same, PRIVATE. ' +
       'Link those four with fields.entity_type+entity_id. ' +
-      'Target forms: condition:if_exists|if_missing|upsert · bulk:{items:[]} · {op:"move",source,dest}. ' +
+      'Forms: condition:if_exists|if_missing|upsert · bulk:{items:[]} · {op:"move",source,dest}. ' +
       'Field lists are in your system prompt. Do NOT pre-narrate.',
     tier: 'auto',
     input_schema: {
@@ -8169,7 +8188,12 @@ const PAYLOAD_TOOLS = [
                 // implemented it since the deal-threads work — the enum is
                 // what an agent reads to decide a type is legal, so an
                 // omission here is a capability the Scribe cannot reach.
-                enum: ['estimate', 'job', 'lead', 'client', 'schedule', 'system', 'report', 'calendar_event', 'task', 'todo', 'reminder', 'assembly', 'deal_memory'],
+                // 'attachment' is the photo-metadata door (ops.photo_updates —
+                // descriptions + tags on already-uploaded photos). It is listed
+                // HERE and not only in the description for the reason the
+                // deal_memory note above gives: the enum is what decides, for
+                // the model, whether a type is legal at all.
+                enum: ['estimate', 'job', 'lead', 'client', 'schedule', 'system', 'report', 'calendar_event', 'task', 'todo', 'reminder', 'assembly', 'deal_memory', 'attachment'],
               },
               entity_id: {
                 type: 'string',
@@ -13710,6 +13734,16 @@ async function execScribeWrite(tu, ctx) {
       }
       const uid = scribeCtx.userId;
       if (!uid) return;
+      // The thread these background posts belong to. Until this carried
+      // session_id + organization_id, EVERY one of them — the "Applied"
+      // notice, the "review it in Pending approvals" notice and the failure
+      // notice — was written into a row no history query could return. Push
+      // fired; the chat stayed silent. See postAgentJobToThread.
+      const threadTarget = {
+        user_id: uid,
+        organization_id: scribeCtx.orgId || null,
+        session_id: (scribeCtx.parentSession && scribeCtx.parentSession.id) || null,
+      };
       const { sendPushForEvent } = require('../notify-events');
       if (result && result.ok) {
         const title = (result.meta && result.meta.title) || result.title || 'a change';
@@ -13734,18 +13768,18 @@ async function execScribeWrite(tu, ctx) {
               const applied = gateUser ? await payloadRoutes.applyPayloadForUser(gateUser, result.payloadId) : { ok: false, error: 'no user context' };
               if (applied && applied.ok) {
                 const doneLine = applied.apply_summary ? ('\n\n' + String(applied.apply_summary).slice(0, 500)) : line;
-                try { await postAgentJobToThread({ user_id: uid }, '✅ **Applied — ' + title + '**' + doneLine); } catch (_) {}
+                try { await postAgentJobToThread(threadTarget, '✅ **Applied — ' + title + '**' + doneLine); } catch (_) {}
                 try { await sendPushForEvent(uid, 'scribe_draft', { title: '✅ Applied: ' + String(title).slice(0, 80), body: String(applied.apply_summary || 'Done').slice(0, 200), url: '/' }); } catch (_) {}
                 return;
               }
               // Apply failed → fall through to the review-card notify with the error.
               const whyNot = (applied && applied.error) ? (' (auto-apply failed: ' + String(applied.error).slice(0, 200) + ')') : '';
-              try { await postAgentJobToThread({ user_id: uid }, '✍️ **Scribe drafted — ' + title + '**' + line + '\n\n_Auto-apply didn\'t go through' + whyNot + ' — review & approve it in **Pending approvals**._'); } catch (_) {}
+              try { await postAgentJobToThread(threadTarget, '✍️ **Scribe drafted — ' + title + '**' + line + '\n\n_Auto-apply didn\'t go through' + whyNot + ' — review & approve it in **Pending approvals**._'); } catch (_) {}
               try { await sendPushForEvent(uid, 'scribe_draft', { title: '✍️ Needs your approval: ' + String(title).slice(0, 80), body: String(result.applySummary || 'Review & approve in Project 86').slice(0, 200), url: '/' }); } catch (_) {}
               return;
             }
             // High-risk → always card, even when approved in chat.
-            try { await postAgentJobToThread({ user_id: uid }, '✍️ **Scribe drafted — ' + title + '**' + line + '\n\n_This change is high-risk (delete / config), so it needs an explicit approval — review it in **Pending approvals**._'); } catch (_) {}
+            try { await postAgentJobToThread(threadTarget, '✍️ **Scribe drafted — ' + title + '**' + line + '\n\n_This change is high-risk (delete / config), so it needs an explicit approval — review it in **Pending approvals**._'); } catch (_) {}
             try { await sendPushForEvent(uid, 'scribe_draft', { title: '✍️ Needs your approval: ' + String(title).slice(0, 80), body: String(result.applySummary || 'Review & approve in Project 86').slice(0, 200), url: '/' }); } catch (_) {}
             return;
           } catch (e) {
@@ -13754,11 +13788,20 @@ async function execScribeWrite(tu, ctx) {
           }
         }
 
-        try { await postAgentJobToThread({ user_id: uid }, '✍️ **Scribe finished drafting — ' + title + '**' + line + '\n\n_Review & approve it in **Pending approvals**, just above the chat box._'); } catch (_) {}
+        try { await postAgentJobToThread(threadTarget, '✍️ **Scribe finished drafting — ' + title + '**' + line + '\n\n_Review & approve it in **Pending approvals**, just above the chat box._'); } catch (_) {}
         try { await sendPushForEvent(uid, 'scribe_draft', { title: '✍️ Scribe drafted: ' + String(title).slice(0, 80), body: String(result.applySummary || 'Review & approve in Project 86').slice(0, 200), url: '/' }); } catch (_) {}
       } else {
-        const errMsg = (result && result.error) || 'unknown error';
-        try { await postAgentJobToThread({ user_id: uid }, '⚠️ **Scribe couldn\'t complete that draft**: ' + String(errMsg).slice(0, 400) + '\n\n_Re-ask with more specifics (exact entity + fields) and I\'ll hand it back to the Scribe._'); } catch (_) {}
+        // result.text is the Scribe's OWN one-line note about what it was
+        // missing — the thing its baseline explicitly instructs it to return
+        // instead of guessing ("If the plan is ambiguous or missing an id you
+        // need, return a one-line note saying what is missing"). It was being
+        // dropped on the floor here, so a user whose request the Scribe
+        // refused for a nameable reason got the generic "did not produce a
+        // valid payload" with no subject.
+        const scribeSaid = (result && result.text && String(result.text).trim()) || '';
+        const errMsg = ((result && result.error) || 'unknown error') +
+          (scribeSaid ? ' — ' + scribeSaid.slice(0, 300) : '');
+        try { await postAgentJobToThread(threadTarget, '⚠️ **Scribe couldn\'t complete that draft**: ' + String(errMsg).slice(0, 400) + '\n\n_Re-ask with more specifics (exact entity + fields) and I\'ll hand it back to the Scribe._'); } catch (_) {}
         try { await sendPushForEvent(uid, 'scribe_draft', { title: '⚠️ Scribe draft failed', body: String(errMsg).slice(0, 200), url: '/' }); } catch (_) {}
       }
     })
@@ -14372,9 +14415,38 @@ async function postAgentJobToThread(job, text) {
       // job.organization_id is NOT NULL (server/db.js agent_jobs) and was
       // stamped at enqueue by a request that had already passed requireOrgId.
       // It was in hand here and unwritten.
-      `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, organization_id)
-       VALUES ($1, 'general', 'global', $2, 'assistant', $3, $4)`,
-      [msgId, job.user_id, String(text).slice(0, 8000), job.organization_id]
+      // session_id WAS NOT WRITTEN, AND THAT MADE EVERY ONE OF THESE POSTS
+      // UNREACHABLE. GET /86/messages' user_thread arm loads STRICTLY by
+      // session_id (deliberately — a tuple fallback collapsed every "+ New
+      // chat" into one bucket), and its no-session arm filters
+      // entity_type='86'. A row with session_id NULL and entity_type
+      // 'general' satisfies neither, so no history query could ever return
+      // it. Driven end to end: the row was written, /86/messages?session_id=N
+      // returned 0 messages, and the identical row carrying session_id
+      // returned 1.
+      //
+      // What that cost: a Scribe FAILURE notified only by push. 86 had
+      // already relayed "it's being drafted, you'll get a card" and no card
+      // and no error text ever arrived in chat — the shape of "Scribe is
+      // failing to write to the photos". The success case was partly rescued
+      // by refreshPendingApprovals() polling status='ready'; a refusal is
+      // written status='failed' and that strip filters it out by design.
+      //
+      // CORRECTION, measured against the schema rather than assumed: an
+      // earlier draft of this comment said agent_jobs has no session_id
+      // column, so the agent_jobs callers would keep writing NULL. That is
+      // FALSE — server/db.js declares agent_jobs.session_id (BIGINT
+      // REFERENCES ai_sessions(id)), and both agent_jobs call sites load the
+      // row with `SELECT * FROM agent_jobs`, so job.session_id is a real
+      // session id and IS written here. That is the behaviour we want (a
+      // background-task notice becomes readable in the thread it came from),
+      // but it is a behaviour CHANGE for those callers and is named as one.
+      // It only helps session_kind 'user_thread'/'deal_thread'; any other kind
+      // still falls to the tuple arm, which filters entity_type='86' while
+      // these rows are 'general'.
+      `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, organization_id, session_id)
+       VALUES ($1, 'general', 'global', $2, 'assistant', $3, $4, $5)`,
+      [msgId, job.user_id, String(text).slice(0, 8000), job.organization_id, job.session_id || null]
     );
   } catch (e) {
     console.warn('[agent-jobs] thread post failed:', e && e.message);
@@ -16542,6 +16614,12 @@ module.exports.internals = {
   // it returns rides the SSE tool_applied event so the file artifact
   // renders in chat. Always present.
   payloadTools: () => PAYLOAD_TOOLS.map(({ tier, ...t }) => t),
+  // The Scribe's ONE write handler. Exported so an end-to-end drive can run
+  // the real emit → validate → persist path with the exact tool-use block a
+  // Scribe produces, instead of a test re-implementing it and proving only
+  // that the re-implementation works.
+  execEmitPayloadFile,
+  postAgentJobToThread,
   // C18 — universal read surface. read_entity + search_entities
   // dispatch through execConsolidatedRead to the existing narrow
   // handlers (no behavior change, just a tighter tool surface).

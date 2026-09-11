@@ -741,3 +741,160 @@ describe('the outer net — no prompt source names a block that exists nowhere',
     expect(blockRefsIn('either no phase records point at it (see # Structure)')).toEqual(['Structure']);
   });
 });
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * THE SAME CLASS, ONE LEVEL UP: A NAMED CAPABILITY MUST BE A REACHABLE ONE.
+ *
+ * Everything above asks whether an instruction names a context block that
+ * exists. This asks the harder question the same defect kept answering wrong:
+ * does an instruction PROMISE 86 something the app can actually do?
+ *
+ * The instance. 86's baseline said read_project_photos was there "to gather
+ * attachment ids before captioning, tagging or building a report from a photo
+ * set", the tool's own description repeated it, and add_photo_comment pointed
+ * at "emit_payload_file with photo metadata ops". There were no photo metadata
+ * ops. PAYLOAD_OPS_SCHEMAS had no attachment key at all, validateOps threw a
+ * bare "Unknown entity_type: attachment", and the only statement in the tree
+ * that wrote attachments.caption outside the upload INSERT was the HUMAN
+ * PUT /api/attachments/:id. Three true-sounding sentences, one missing door,
+ * and a user watching the Scribe fail with no error text in the chat.
+ *
+ * Every test above stayed green through all of it: those sentences name no
+ * "# Block", so nothing ever looked at them.
+ *
+ * The property: every payload OPS KEY and every emit_payload_file ENTITY TYPE
+ * an instruction spells out has to exist in the shipped grammar — in
+ * PAYLOAD_OPS_SCHEMAS, in the dispatcher map, AND in the enum the model reads
+ * to decide a type is legal. Reachable in one of the three and not the others
+ * is the deal_memory bug, which shipped once already.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('an instruction may not name a payload capability the grammar lacks', () => {
+  const dispatcher = require('../server/services/payload-dispatcher');
+  const SCHEMAS = dispatcher.PAYLOAD_OPS_SCHEMAS;
+
+  // The enum on the ONE write tool. Read off the LIVE tool object, not
+  // publishedTools() (which keeps only name + description) — the enum is
+  // exactly the surface the deal_memory omission hid in.
+  function emitTool() {
+    for (const { tools } of toolGroups()) {
+      const t = tools.find((x) => x && x.name === 'emit_payload_file');
+      if (t) return t;
+    }
+    throw new Error('emit_payload_file is in no published tool group');
+  }
+  function emitEnum() {
+    return emitTool().input_schema.properties.targets.items.properties.entity_type.enum;
+  }
+
+  // An ops key as an instruction writes one: "ops.photo_updates",
+  // "attachment.ops.photo_updates", "ops: {photo_updates: ...}".
+  // Deliberately narrow — a bare word in prose is not a claim about the
+  // grammar; a word in one of those positions is.
+  // THE BRACE IS LOAD-BEARING on the colon form. emit_payload_file's
+  // description writes the INDEX as "entity_type → ops: estimate {op,...}",
+  // where the word after "ops:" is an ENTITY TYPE, not an op key — a looser
+  // pattern reported that true sentence as a lie. An ops OBJECT literal always
+  // opens a brace; the index never does.
+  const OPS_KEY_RE = /\bops(?:\.\s*|\s*:\s*\{\s*)['"`]?([a-z][a-z0-9_]{3,})/g;
+
+  function opsKeyRefsIn(text) {
+    const out = new Set();
+    let m;
+    OPS_KEY_RE.lastIndex = 0;
+    while ((m = OPS_KEY_RE.exec(String(text)))) out.add(m[1]);
+    return [...out];
+  }
+
+  // Every top-level op key any entity type actually accepts.
+  function reachableOpsKeys() {
+    const out = new Set();
+    for (const k of Object.keys(SCHEMAS)) {
+      for (const top of SCHEMAS[k].allowedTopKeys) out.add(top);
+    }
+    return out;
+  }
+
+  test('every ops.<key> a shipped instruction names is in PAYLOAD_OPS_SCHEMAS', () => {
+    const reachable = reachableOpsKeys();
+    // Retired ops are named ON PURPOSE, to tell the model to stop emitting
+    // them. Naming a thing in order to refuse it is the opposite of the
+    // defect, so they are the one exemption — read from the dispatcher's own
+    // RETIRED map rather than typed here, so retiring another op later cannot
+    // make this guard go quiet about a NEW lie.
+    const retired = new Set(Object.keys(dispatcher.internals.RETIRED_JOB_OPS));
+    const lies = [];
+    for (const surface of instructionSurfaces()) {
+      for (const key of opsKeyRefsIn(surface.text)) {
+        if (reachable.has(key) || retired.has(key)) continue;
+        lies.push(surface.name + ' names ops.' + key + ' — no entity_type accepts it');
+      }
+    }
+    expect({ lies, reachable: [...reachable].sort() })
+      .toEqual({ lies: [], reachable: [...reachable].sort() });
+  });
+
+  test('the photo-metadata promise is TRUE: attachment.photo_updates exists in all three places', () => {
+    expect(Object.keys(SCHEMAS)).toContain('attachment');
+    expect([...SCHEMAS.attachment.allowedTopKeys]).toEqual(['photo_updates']);
+    expect(emitEnum()).toContain('attachment');
+    // Reachable in the DISPATCHER, proven by driving validateTarget on a
+    // well-formed target rather than by reading a map.
+    expect(() => dispatcher.validateTarget(
+      { entity_type: 'attachment', ops: { photo_updates: [{ attachment_id: 'a1', caption: 'x' }] } }, 0
+    )).not.toThrow();
+    expect(typeof dispatcher.internals.dispatchAttachment).toBe('function');
+  });
+
+  test('the three sentences that lied now describe something that exists', () => {
+    const baselines = baselineInstructions();
+    const job = baselines.find((b) => b.name === 'baseline:job').text;
+    const scribe = baselines.find((b) => b.name === 'baseline:scribe').text;
+    const tools = publishedTools();
+    const photos = tools.find((t) => t.name === 'read_project_photos').text;
+    const comment = tools.find((t) => t.name === 'add_photo_comment').text;
+
+    // 86 is told HOW to write them, not merely that it may.
+    expect(job).toMatch(/photo_updates/);
+    // The Scribe has NO read access and sees only the instruction, so the
+    // vocabulary has to be documented there the way every other entity is.
+    expect(scribe).toMatch(/attachment_id, caption\?, tags\?/);
+    expect(photos).toMatch(/photo_updates/);
+    // add_photo_comment pointed at "photo metadata ops" that did not exist.
+    expect(comment).not.toMatch(/photo metadata ops/);
+    expect(comment).toMatch(/photo_updates/);
+  });
+
+  test('every entity_type in the grammar is in the enum, and vice versa', () => {
+    // The deal_memory shape of this bug: implemented in the dispatcher for
+    // weeks while absent from the enum, so the Scribe could not reach it.
+    const enumTypes = emitEnum();
+    const schemaTypes = Object.keys(SCHEMAS);
+    const missingFromEnum = schemaTypes.filter((t) => !enumTypes.includes(t));
+    const missingFromSchemas = enumTypes.filter((t) => !schemaTypes.includes(t));
+    expect({ missingFromEnum, missingFromSchemas })
+      .toEqual({ missingFromEnum: [], missingFromSchemas: [] });
+  });
+
+  test('the detector is not vacuous — a planted promise about a missing op is caught', () => {
+    const reachable = reachableOpsKeys();
+    const planted = 'Use ops.caption_updates to set a photo description.';
+    expect(opsKeyRefsIn(planted)).toEqual(['caption_updates']);
+    expect(reachable.has('caption_updates')).toBe(false);
+    // And it finds the ones that DO exist, so a green run means it looked.
+    expect(opsKeyRefsIn('emit ops.photo_updates for the set')).toEqual(['photo_updates']);
+    expect(reachable.has('photo_updates')).toBe(true);
+    expect(opsKeyRefsIn('a change_orders op carries ops.line_edits')).toEqual(['line_edits']);
+    expect(reachable.has('line_edits')).toBe(true);
+  });
+
+  test('the scan actually reaches the surfaces the lies were written on', () => {
+    // A guard that scanned nothing would satisfy every assertion above.
+    const names = instructionSurfaces().map((s) => s.name);
+    expect(names).toContain('baseline:job');
+    expect(names).toContain('baseline:scribe');
+    expect(names.some((n) => n.indexOf('read_project_photos') === 0)).toBe(true);
+    expect(names.some((n) => n.indexOf('emit_payload_file') === 0)).toBe(true);
+    const hits = instructionSurfaces().filter((s) => opsKeyRefsIn(s.text).length > 0);
+    expect(hits.length).toBeGreaterThan(2);
+  });
+});

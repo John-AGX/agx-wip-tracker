@@ -339,6 +339,46 @@
         var cur = window.appState && window.appState.currentJobId;
         if (cur) call('p86JobReportsRefresh', [String(cur)]);
       }
+    },
+
+    // Photo METADATA — the description (attachments.caption) and tags an agent
+    // wrote through attachment.ops.photo_updates.
+    //
+    // SURFACE ONLY, NO STORE PATCH. js/projects.js holds the open project's
+    // photos in its own module-private _detailState.photos, hydrated from
+    // /api/attachments; there is no window-level read-cache for this registry
+    // to patch, and reaching into a closure would be a second copy of the same
+    // truth. refreshPhotos REFETCHES from the server and repaints, which is
+    // also the right posture after an APPROVAL: the payload is what the server
+    // committed, not what the client guessed it would commit.
+    //
+    // This is the whole reason the entry exists. js/projects.js has no
+    // setInterval, no poller and no other refresh hook — a caption renders off
+    // the row that was fetched when the tab opened. Ship the write door
+    // without this and 42 approved descriptions land in Postgres while the
+    // grid in front of the user stays blank until a manual reload, which reads
+    // exactly like the write failing.
+    //
+    // TWO GAPS, STATED RATHER THAN EXPLAINED AWAY. An earlier version of this
+    // comment justified leaving the lightbox out by claiming "the viewer
+    // re-reads the attachment it was opened on". It does not: js/attachments.js
+    // openLightbox() takes `attachments.slice()` at open time and next()/prev()
+    // refetch COMMENTS only, never the attachment row. So a caption approved
+    // while a lightbox is open over that photo will not appear inside the
+    // lightbox until it is reopened.
+    //   (1) the lightbox / markup viewer — snapshot at open, as above.
+    //   (2) photos hanging off a JOB, LEAD, TASK, SUB, ESTIMATE or CLIENT.
+    //       The write door reaches all of those (writeCapForEntity covers
+    //       them); this entry repaints the PROJECT photo feed only, because
+    //       that is the surface with a refetch-and-repaint entry point to call.
+    // Both need a manual reload today. Neither is a claim that they are fine.
+    //
+    // Report figure captions are a different matter and genuinely do not belong
+    // here: they are a different store (job_reports.sections[].captions),
+    // reached by the `report` entry above.
+    attachment: {
+      paths: ['p86Projects.refreshPhotos'],
+      surface: function () { call('p86Projects.refreshPhotos'); }
     }
   };
 
