@@ -493,6 +493,15 @@ const RETIRED_JOB_OPS = {
 // these to return 422.
 // ──────────────────────────────────────────────────────────────────
 
+// Every key each link_ops handler READS, and nothing else. Checked at emit
+// time so a key the dispatcher would ignore is refused by name instead of
+// being applied as a no-op. See the check in validateOps.
+const LINK_OP_KEYS = {
+  link_job_to_client: new Set(['op', 'job_id', 'client_id']),
+  link_property_to_parent: new Set(['op', 'property_id', 'parent_client_id']),
+  attach_files: new Set(['op', 'attachment_ids', 'target_entity_type', 'target_entity_id']),
+};
+
 function validateOps(entityType, ops) {
   const schema = PAYLOAD_OPS_SCHEMAS[entityType];
   if (!schema) throw new Error(`Unknown entity_type: ${entityType}`);
@@ -864,6 +873,33 @@ function validateOps(entityType, ops) {
     for (const k of ['skill_pack_ops', 'field_tool_ops', 'link_ops']) {
       if (ops[k] != null && !Array.isArray(ops[k])) {
         throw new Error(`system.ops.${k} must be an array`);
+      }
+    }
+    // link_ops elements were shape-checked at the top key only, so any extra
+    // key sailed through emit-time validation and was then SILENTLY IGNORED
+    // at apply time. That is not hypothetical: a Scribe asked to write photo
+    // descriptions emitted
+    //   attach_files { attachment_ids, target_entity_type, target_entity_id,
+    //                  caption, captions }
+    // which VALIDATED, re-pointed the three rows to a different parent, wrote
+    // no caption at all, and reported "~1 updated". The Scribe baseline
+    // promises "the dispatcher rejects unknown columns and lists the valid set
+    // in its error" — true for every other entity type and false here, and
+    // that asymmetry is what let a wrong shape look like a working one.
+    //
+    // The keys below are every key the three handlers actually read; adding a
+    // handler means adding its keys here, and the failure mode of forgetting
+    // is loud (a refusal naming the key) rather than silent.
+    for (const lk of ops.link_ops || []) {
+      if (!lk || typeof lk !== 'object') continue;   // shape handled at apply time
+      const allowed = LINK_OP_KEYS[lk.op];
+      if (!allowed) continue;                        // unknown op: apply time names the valid set
+      const bad = Object.keys(lk).filter((key) => !allowed.has(key));
+      if (bad.length) {
+        throw new Error(
+          `system.ops.link_ops[].${lk.op} has unknown key(s): ${bad.map((b) => `'${b}'`).join(', ')}. ` +
+          `Valid: ${[...allowed].sort().join(', ')}.`
+        );
       }
     }
   }
