@@ -3089,11 +3089,55 @@ async function dispatchSystem(dbClient, target, refTable, ctx) {
           throw new Error(`attach_files target_entity_type must be one of: ${ATTACH_ENTITY_TYPES.join(', ')} (got '${et}')`);
         }
         if (!eid) throw new Error('attach_files requires target_entity_id');
-        // P0-2 — the target entity (for the org-scoped types) must belong
-        // to the caller's org, and only the caller's own attachment rows
-        // may be re-pointed. Tolerant OR-IS-NULL; no-op for AGX.
-        if (ORG_SCOPED_TABLE[et]) await assertTargetOrg(dbClient, et, String(eid), ctx && ctx.organizationId);
         const afOrgId = (ctx && ctx.organizationId) || null;
+        // TENANCY ON THE DESTINATION.
+        //
+        // This op rewrites entity_type/entity_id — the exact pair
+        // attachment-org-scope.js anchors tenancy on, and it anchors there
+        // BECAUSE those two are NOT NULL on every row while organization_id is
+        // nullable. That reasoning holds for a column nobody rewrites. This
+        // one rewrites it, so attach_files is not "a link": it is a tenancy
+        // transfer, and it needs the predicate the REST equivalent
+        // (attachment-routes.js moveAttachment) puts on its DESTINATION.
+        //
+        // What stood here was
+        //   if (ORG_SCOPED_TABLE[et]) await assertTargetOrg(...)
+        // ORG_SCOPED_TABLE is {client, estimate, job, lead}. ATTACH_ENTITY_TYPES
+        // also accepts sub, user, org and project, and for those four the `if`
+        // skipped the check entirely — a guard whose condition records that the
+        // author knew half the accepted types could not be answered. Driven: an
+        // org-A payload re-pointed an org-A file onto an org-B project / sub /
+        // user / org bucket, and attachmentInOrg then agreed the file had
+        // changed tenants — org B gained bytes, caption and DELETE on it; org A
+        // lost all three.
+        //
+        // ORG_SCOPED_TABLE is deliberately NOT widened. It would make
+        // assertTargetOrg answer for `project` while its OR-IS-NULL tolerance
+        // waved through any un-stamped row, would leave user/org (which have no
+        // organization_id of their own) still open while the code LOOKED
+        // complete, and would create a second entity->table map to drift against
+        // attachment-org-scope.js's. The stronger predicate that already
+        // resolves all eight types is used instead; the weaker one is not
+        // patched, it is not used here.
+        //
+        // It also refuses a target that resolves to no row at all, which kills
+        // the orphan-onto-a-phantom case for free, and refuses everything when
+        // afOrgId is null for every type that carries a stamp.
+        //
+        // NOT CLOSED HERE, and named so nobody reads this block as more than it
+        // is: the SOURCE predicate on the UPDATE below is still
+        // `organization_id = $4 OR organization_id IS NULL`, so an un-stamped
+        // attachment belonging to another org can still be pulled ACROSS by
+        // this op. Same hole, other end. See the commit message.
+        //
+        // LAZY require: at the top of this file it would pull user-org-scope ->
+        // ../auth, which throws without a >=32-char JWT_SECRET, into the 18 test
+        // suites that require this module and never set one. Same idiom as the
+        // three in-function `require('./assemblies')` calls below.
+        const { attachmentEntityInOrg } = require('./attachment-org-scope');
+        if (!(await attachmentEntityInOrg(dbClient, et, String(eid), afOrgId))) {
+          throw new Error(`attach_files: ${et} ${eid} is not available to attach to. Nothing was saved.`);
+        }
         const ar = afOrgId
           ? await dbClient.query(
               `UPDATE attachments SET entity_type = $1, entity_id = $2 WHERE id = ANY($3::text[]) AND (organization_id = $4 OR organization_id IS NULL)`,
