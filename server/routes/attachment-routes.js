@@ -433,6 +433,12 @@ const { hasCapability } = require('../auth');
 // never "is this ROW yours" — reading the first as the second is the defect
 // every guard in this file shared.
 const { attachmentEntityInOrg, attachmentInOrg } = require('../services/attachment-org-scope');
+// The Photos hub's Jobs + Leads rosters. The SQL, the tenancy anchor, the
+// viewer's own count predicate and the shared cover rule all live in the
+// service; this file only opens the door and states the capability. See the
+// ROSTER MODE block on GET /recent below for why it is a mode rather than a
+// route of its own.
+const photoRoster = require('../services/photo-roster');
 function callerOrgId(req) {
   const oid = req.user && req.user.organization_id;
   return (oid === 0 || oid) ? oid : null;
@@ -821,6 +827,107 @@ router.post('/bulk-tag', requireAuth, async (req, res) => {
   }
 });
 
+// ── GET /api/attachments/recent?roster=job|lead — THE PHOTO ROSTER ──────
+//
+// "Which JOBS have photos", "which LEADS have photos": name, true photo count,
+// cover thumbnail, most recent photo date, newest first, paged. Feeds the Jobs
+// and Leads tabs of the Photos hub beside the Projects list that was already
+// there.
+//
+// WHY A MODE AND NOT A ROUTE OF ITS OWN.
+// test/tenant-register2-http.test.js is a DERIVED route census — it walks
+// server/index.js's mounts and every router's own stack and commits the
+// numbers (`expect(R.routes).toBe(587)`, `{ driven: 139, waived: 448 }`).
+// Those numbers are the point: a surface that is neither driven nor counted is
+// the shape nothing can report on, which is the A8 class that file exists to
+// kill. A new `router.get` here moves them and reddens it — and that suite is
+// currently one of another session's uncommitted files, so it cannot be
+// updated in the same change. Shipping it red was tried once already on this
+// work and is not acceptable: a red census is a muted census.
+//
+// So the roster is a MODE of a route that already exists and is already
+// driven, the same shape the caption-tidy proofread pass settled on. With no
+// `roster` parameter this route answers byte-for-byte what it answered before,
+// which is what the census drives.
+//
+// AND IT DOES NOT INHERIT THIS ROUTE'S TENANCY. The flat body below scopes by
+// the UPLOADER's org with an OR-IS-NULL tolerance and says in its own comment
+// that this is a shortcut appropriate to a discovery widget. A roster names
+// PARENTS, so it anchors on the parent's own organization_id —
+// jobs.organization_id, leads.organization_id — per the rule in
+// services/attachment-org-scope.js. Sharing a URL is not sharing a predicate.
+//
+// Route order is not a hazard for this one and the proof is structural rather
+// than hopeful: '/recent' is a ONE-segment path and the catch-all above it is
+// the TWO-segment '/:entityType/:entityId'. Express cannot match a
+// two-segment pattern against one segment, which is why '/recent' has always
+// worked from below the catch-all while '/tags/suggest', '/:id/move' and
+// '/:id/copy' — all two segments — had to be hoisted above it. Driven in
+// test/photo-roster.test.js (describe 4) against the real router stack.
+async function rosterMode(req, res, entityType) {
+  if (!photoRoster.isRosterType(entityType)) {
+    return res.status(400).json({ error: 'Unknown roster' });
+  }
+  // The SAME capability the per-entity list door asks for this entity type,
+  // read from the SAME function — not a second opinion about who may see a
+  // job's photos.
+  const cap = readCapForEntity(entityType);
+  const caps = String(cap).split(/\s+/).filter(Boolean);
+  let ok = false;
+  for (const c of caps) {
+    if (await hasCapability(req.user, c)) { ok = true; break; }
+  }
+  if (!ok) return res.status(403).json({ error: 'Forbidden' });
+
+  // THE ASSIGNED-ONLY TIER, ENFORCED. readCapForEntity('job') admits
+  // JOBS_VIEW_ASSIGNED / JOBS_EDIT_OWN, so passing the gate above does NOT
+  // mean "may see every job". A roster is a list of job NAMES, which is
+  // precisely what that tier withholds — so a caller without an all-jobs
+  // capability gets only the jobs they own or have been granted, the two
+  // clauses canAccess() in job-routes.js already uses. This is a capability
+  // surface, not a cosmetic filter.
+  let assignedOnlyUserId = null;
+  if (entityType === 'job') {
+    let wide = false;
+    for (const c of photoRoster.WIDE_JOB_CAPS) {
+      if (await hasCapability(req.user, c)) { wide = true; break; }
+    }
+    if (!wide) {
+      // FAIL CLOSED, because the obvious spelling of this fails OPEN.
+      // `req.user.id` is undefined for a caller record that carries no id,
+      // and the service guards the narrowing with
+      // `assignedOnlyUserId != null` — in JS `undefined != null` is FALSE,
+      // so the clause would simply never be added to the WHERE and an
+      // assigned-only caller would receive the ENTIRE org's job names. "I do
+      // not know who you are" is not "do not narrow". No live token reaches
+      // here without an id (server/auth.js has one jwt.sign site and it
+      // always emits one), so this is a latent default rather than an open
+      // hole — which is exactly the kind that stops being latent later.
+      // Note 0 is a legitimate id and passes, the same way callerOrgId
+      // distinguishes 0 from null.
+      if (req.user == null || req.user.id == null) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+      assignedOnlyUserId = req.user.id;
+    }
+  }
+
+  const limit = Math.min(photoRoster.MAX_LIMIT, Math.max(1, parseInt(req.query.limit, 10) || photoRoster.DEFAULT_LIMIT));
+  const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
+  const q = String(req.query.q || '').trim().slice(0, 120);
+
+  const built = photoRoster.buildRosterQuery(entityType, {
+    orgId: callerOrgId(req),
+    assignedOnlyUserId,
+    q,
+    limit,
+    offset,
+  });
+  const { rows } = await pool.query(built.text, built.params);
+  const parents = rows.map((r) => photoRoster.shapeRosterRow(entityType, r));
+  res.json({ roster: entityType, limit, offset, parents });
+}
+
 // GET /api/attachments/recent?limit=10
 // Cross-entity recent uploads — drives the "Recent Files" summary
 // widget. Returns the most recently uploaded attachments any
@@ -830,6 +937,11 @@ router.post('/bulk-tag', requireAuth, async (req, res) => {
 // the deeper view if the user can't actually open a job/lead/etc.
 router.get('/recent', requireAuth, async (req, res) => {
   try {
+    // Roster mode. Everything below this line is the original flat widget,
+    // reached only when no roster is asked for.
+    const roster = String(req.query.roster || '').trim();
+    if (roster) return await rosterMode(req, res, roster);
+
     const limit = Math.min(24, Math.max(1, parseInt(req.query.limit, 10) || 10));
     // Wave A (A1): scope to the caller's org. Attachments are polymorphic
     // (9 entity types), so rather than a casted per-type union we scope by the

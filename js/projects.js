@@ -289,6 +289,33 @@
     return weather.days.find(function(d) { return d && d.date === iso; }) || weather.days[0];
   }
 
+  // ──────────────────────────────────────────────────────────────────
+  // THE PHOTOS HUB IS THREE ROSTERS, NOT ONE
+  //
+  // Attachments are polymorphic — one table, (entity_type, entity_id) — but
+  // every SURFACE in this app was project-shaped. Somebody asked 86 to caption
+  // the photos on a gazebo LEAD and hit exactly that: the photos existed and
+  // nothing could list them. So the hub carries a tab per parent type.
+  //
+  // Projects stays FIRST and stays the DEFAULT — the owner called it "the
+  // highlight", and it is the only one of the three that is a photo bucket by
+  // construction rather than by accident.
+  //
+  // The Projects tab is UNCHANGED: same single list 7bc0c225 collapsed the
+  // grid into, same filter chips, same map view, same server-filled cover.
+  // Jobs and Leads are read-only rosters that hand off to the SAME viewer
+  // (window.p86Attachments.mount) the lead editor and the job sidebar already
+  // use. There is no second photo grid in this file and there must not be one.
+  var _hubTab = 'project';   // 'project' | 'job' | 'lead'
+
+  // One cache per roster. `done` is set when a page came back short, which is
+  // how "Load more" knows to retire itself without an extra round-trip.
+  var _rosterState = {
+    job:  { rows: [], loading: false, error: null, offset: 0, done: false },
+    lead: { rows: [], loading: false, error: null, offset: 0, done: false }
+  };
+  var ROSTER_PAGE = 30;
+
   // Walkthrough state — sticky tags persist between photo uploads
   // until the user clears them. Module-level (not in _detailState)
   // so they survive a project detail close/reopen within the same
@@ -315,11 +342,23 @@
       if (stored === 'map' || stored === 'list') _listState.view = stored;
       else if (stored === 'grid') _listState.view = 'list';
     } catch (e) {}
+    // Which ROSTER the user was last on. Separate key from the view toggle
+    // above: the view (list/map) is a property of the Projects tab, the tab is
+    // a property of the hub. An unrecognised value lands on Projects, which is
+    // the default anyway.
+    try {
+      var storedTab = sessionStorage.getItem('p86-photos-tab');
+      if (storedTab === 'job' || storedTab === 'lead' || storedTab === 'project') _hubTab = storedTab;
+    } catch (e) {}
     paintList();
-    fetchAll().then(paintList).catch(function(e) {
-      _listState.error = e.message || 'Failed to load projects';
-      paintList();
-    });
+    if (_hubTab === 'project') {
+      fetchAll().then(paintList).catch(function(e) {
+        _listState.error = e.message || 'Failed to load projects';
+        paintList();
+      });
+    } else {
+      fetchRoster(_hubTab, { reset: true });
+    }
     // Warm leads/jobs/clients caches in the background so the
     // Create-Project / Edit-Links / Pair Picker modals have populated
     // dropdowns by the time the user clicks. No-op when the caches
@@ -377,11 +416,43 @@
             '<div class="p86-projects-subtitle">Photo + walkthrough buckets for sites. Link to a lead during sales; the job inherits once sold.</div>' +
           '</div>' +
           '<div class="p86-projects-header-actions">' +
-            '<input id="projSearch" type="search" placeholder="Search projects…" value="' + escapeAttr(_listState.q) + '" class="p86-projects-search" />' +
-            '<button class="primary p86-projects-new-btn" onclick="window.p86Projects.openCreate()">&#x2795; New Project</button>' +
+            // ONE search box, and it means the same thing on every tab: it
+            // filters THE LIST YOU ARE LOOKING AT, server-side. A box that
+            // silently kept filtering projects while a job roster was showing
+            // would be a lie, and hiding it on two tabs out of three makes the
+            // header jump. So the placeholder names the tab and the query is
+            // passed through to whichever endpoint is feeding the list.
+            '<input id="projSearch" type="search" placeholder="' + escapeAttr(searchPlaceholder()) + '" value="' + escapeAttr(_listState.q) + '" class="p86-projects-search" />' +
+            // "New Project" is PROJECT-SPECIFIC and shows only on that tab.
+            // A New Project button sitting over a Leads roster is a nonsense —
+            // it would create a project, which is not what the roster lists —
+            // and jobs and leads are not created from a photo hub at all.
+            (_hubTab === 'project'
+              ? '<button class="primary p86-projects-new-btn" onclick="window.p86Projects.openCreate()">&#x2795; New Project</button>'
+              : '') +
           '</div>' +
         '</div>' +
 
+        // THE TAB STRIP. Sits above the single list 7bc0c225 left behind
+        // rather than beside the retired grid/list pair.
+        '<div class="p86-photos-tabs" role="tablist">' +
+          [{ id: 'project', label: 'Projects' },
+           { id: 'job',     label: 'Jobs' },
+           { id: 'lead',    label: 'Leads' }].map(function(t) {
+            var on = (_hubTab === t.id);
+            return '<button role="tab" aria-selected="' + (on ? 'true' : 'false') + '"' +
+              ' class="p86-photos-tab' + (on ? ' active' : '') + '"' +
+              ' onclick="window.p86Projects.setPhotoTab(p86Dec(\'' + p86Enc(t.id) + '\'))">' +
+              escapeHTML(t.label) +
+            '</button>';
+          }).join('') +
+        '</div>' +
+
+        // The view toggle and the filter chips are properties of the PROJECTS
+        // list — the map needs projects.geocode_*, and "Linked to Lead" /
+        // "Archived" are project columns. They do not apply to a roster and
+        // are not rendered over one.
+        (_hubTab !== 'project' ? '' :
         '<div class="p86-projects-toolbar">' +
           '<div class="p86-projects-view-toggle">' +
             // Grid is gone. It and List were two renderings of one query, and
@@ -398,9 +469,11 @@
               '</button>';
             }).join('') +
           '</div>' +
-        '</div>' +
+        '</div>') +
 
-        (_listState.loading
+        (_hubTab !== 'project'
+          ? renderRoster(_hubTab)
+          : _listState.loading
           ? '<div class="p86-projects-empty">Loading…</div>'
           : _listState.error
             ? '<div class="p86-projects-error">' + escapeHTML(_listState.error) + '</div>'
@@ -428,7 +501,8 @@
 
     host.innerHTML = html;
 
-    // Search debounce.
+    // Search debounce. Routed to whichever list is showing — see the comment
+    // on the input itself.
     var s = host.querySelector('#projSearch');
     if (s) {
       var t;
@@ -437,6 +511,7 @@
         var v = e.target.value;
         t = setTimeout(function() {
           _listState.q = v;
+          if (_hubTab !== 'project') { fetchRoster(_hubTab, { reset: true }); return; }
           fetchAll().then(paintList).catch(function(err) {
             _listState.error = err.message || 'Failed to load';
             paintList();
@@ -561,6 +636,187 @@
     '</div>';
   }
 
+
+  // ──────────────────────────────────────────────────────────────────
+  // Jobs / Leads rosters
+  // ──────────────────────────────────────────────────────────────────
+  function searchPlaceholder() {
+    if (_hubTab === 'job')  return 'Search jobs…';
+    if (_hubTab === 'lead') return 'Search leads…';
+    return 'Search projects…';
+  }
+
+  function setPhotoTab(tab) {
+    if (tab !== 'project' && tab !== 'job' && tab !== 'lead') tab = 'project';
+    if (tab === _hubTab) return;
+    _hubTab = tab;
+    try { sessionStorage.setItem('p86-photos-tab', tab); } catch (e) {}
+    paintList();
+    if (tab === 'project') {
+      fetchAll().then(paintList).catch(function(e) {
+        _listState.error = e.message || 'Failed to load projects';
+        paintList();
+      });
+    } else {
+      // Always refetch on entry rather than trusting the cache: photos are
+      // uploaded from the field all day and a roster that is five minutes
+      // stale reads as "my photos did not save".
+      fetchRoster(tab, { reset: true });
+    }
+  }
+
+  function fetchRoster(type, opts) {
+    opts = opts || {};
+    var st = _rosterState[type];
+    if (!st) return;
+    var apiA = window.p86Api && window.p86Api.attachments;
+    if (!apiA || !apiA.photoRoster) {
+      st.error = 'API not available';
+      paintList();
+      return;
+    }
+    if (opts.reset) { st.rows = []; st.offset = 0; st.done = false; st.error = null; }
+    st.loading = true;
+    paintList();
+    apiA.photoRoster({ type: type, limit: ROSTER_PAGE, offset: st.offset, q: _listState.q || '' })
+      .then(function(r) {
+        var page = (r && r.parents) || [];
+        st.rows = st.rows.concat(page);
+        st.offset += page.length;
+        // A short page is the last page. Costs nothing and avoids a round-trip
+        // that returns zero rows just to learn there are none.
+        st.done = page.length < ROSTER_PAGE;
+        st.error = null;
+        st.loading = false;
+        paintList();
+      })
+      .catch(function(e) {
+        st.loading = false;
+        st.error = (e && e.message) || 'Failed to load';
+        paintList();
+      });
+  }
+
+  function renderRoster(type) {
+    var st = _rosterState[type];
+    if (!st) return '';
+    var noun = (type === 'job') ? 'job' : 'lead';
+    if (st.error) return '<div class="p86-projects-error">' + escapeHTML(st.error) + '</div>';
+    if (st.loading && !st.rows.length) return '<div class="p86-projects-empty">Loading…</div>';
+    // A tab with nothing in it SAYS SO. It does not render an empty grid that
+    // reads as broken — and it distinguishes "nothing of this kind has photos"
+    // from "your search matched nothing", because those need different actions.
+    if (!st.rows.length) {
+      return '<div class="p86-projects-empty">' +
+        (_listState.q
+          ? 'No ' + escapeHTML(noun) + 's with photos match &ldquo;' + escapeHTML(_listState.q) + '&rdquo;.'
+          : 'No ' + escapeHTML(noun) + 's have photos yet. Open a ' + escapeHTML(noun) + ' and add photos there — they show up here automatically.') +
+      '</div>';
+    }
+    return '<div class="p86-projects-list">' +
+      st.rows.map(function(r) { return rosterRowHTML(type, r); }).join('') +
+    '</div>' +
+    (st.done ? '' :
+      '<div class="p86-photos-more">' +
+        '<button class="ee-btn secondary" onclick="window.p86Projects.loadMoreRoster(p86Dec(\'' + p86Enc(type) + '\'))"' +
+          (st.loading ? ' disabled' : '') + '>' +
+          (st.loading ? 'Loading…' : 'Load more') +
+        '</button>' +
+      '</div>');
+  }
+
+  // Same row shape as projectListRowHTML so the hub reads as ONE surface
+  // across its three tabs. Deliberately NOT a copy of that function's extras:
+  // a roster row carries no status dot (a job's status is not a photo fact),
+  // no lead/job/client badges (the row IS the parent) and no weather chip.
+  function rosterRowHTML(type, r) {
+    var coverUrl = r.cover_thumb_url || r.cover_web_url || '';
+    var thumb = coverUrl
+      // cover_is_auto is always true on these two rosters: unlike a project,
+      // a job and a lead have no cover_attachment_id and no "Set as cover", so
+      // nobody chose this shot — it is the first photo taken, by the SAME rule
+      // (and the same SQL) 7bc0c225 gave projects. Said on hover for the same
+      // reason it is said there: an odd-looking cover should read as "nobody
+      // picked this" rather than "the app chose badly".
+      ? '<img src="' + escapeAttr(coverUrl) + '" alt="" class="p86-projects-list-thumb"' +
+        (r.cover_is_auto ? ' title="First photo taken on this ' + escapeAttr(type) + '"' : '') + ' />'
+      : '<div class="p86-projects-list-thumb p86-projects-list-thumb-empty">&#x1F4F7;</div>';
+    var n = Number(r.photo_count || 0);
+    return '<div class="p86-projects-list-row" ' +
+      'onclick="window.p86Projects.openParentPhotos(p86Dec(\'' + p86Enc(type) + '\'), p86Dec(\'' + p86Enc(String(r.entity_id)) + '\'))" ' +
+      'title="Open photos">' +
+      thumb +
+      '<div class="p86-projects-list-body">' +
+        '<div class="p86-projects-list-name">' + escapeHTML(r.name || '') + '</div>' +
+        '<div class="p86-projects-list-meta">' +
+          '&#x1F4F7; ' + n + ' photo' + (n === 1 ? '' : 's') +
+          (r.last_photo_at ? ' &middot; ' + escapeHTML(fmtRelative(r.last_photo_at)) : '') +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function loadMoreRoster(type) {
+    var st = _rosterState[type];
+    if (!st || st.loading || st.done) return;
+    fetchRoster(type, { reset: false });
+  }
+
+  // Hand off to THE viewer. window.p86Attachments.mount is what js/leads.js
+  // and the job sidebar's Photos tab already mount; this opens the same widget
+  // over the same (entity_type, entity_id) pair, so there is exactly one photo
+  // grid in the product and the roster cannot show a different set of photos
+  // than the place they live.
+  //
+  // READ-ONLY on purpose. The roster door asks readCapForEntity() — a VIEW
+  // capability. writeCapForEntity() was never consulted, so offering upload
+  // and delete here would be an edit affordance behind a read gate; the server
+  // would refuse it and the user would get an error for a button we drew.
+  // Editing happens on the job or the lead itself.
+  //
+  // A dismissible overlay, not a drill-in: per the app's navigation rule only
+  // the three real drill-ins get a Back button, and this is a peek at somebody
+  // else's record from a list.
+  function openParentPhotos(type, entityId) {
+    if (type !== 'job' && type !== 'lead') return;
+    var st = _rosterState[type] || { rows: [] };
+    var rec = (st.rows || []).find(function(x) { return String(x.entity_id) === String(entityId); });
+    var name = (rec && rec.name) || String(entityId);
+
+    var prior = document.getElementById('p86PhotoParentModal');
+    if (prior) prior.remove();
+
+    var modal = document.createElement('div');
+    modal.id = 'p86PhotoParentModal';
+    modal.className = 'modal active p86-photo-parent-modal';
+    modal.innerHTML =
+      '<div class="modal-content p86-photo-parent-content">' +
+        '<div class="modal-header">' +
+          // The forward-facing name — job number + title, or the lead's title —
+          // never a raw id. Composed server-side by the shared job-label
+          // formatter so this header cannot disagree with the row above it.
+          '<span>' + escapeHTML(name) + '</span>' +
+          '<button class="p86-modal-close" data-close>&times;</button>' +
+        '</div>' +
+        '<div class="p86-photo-parent-body"><div id="p86PhotoParentMount"></div></div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    modal.addEventListener('click', function(e) { if (e.target === modal) modal.remove(); });
+    modal.querySelectorAll('[data-close]').forEach(function(b) {
+      b.addEventListener('click', function() { modal.remove(); });
+    });
+
+    var mountEl = modal.querySelector('#p86PhotoParentMount');
+    if (window.p86Attachments && window.p86Attachments.mount) {
+      window.p86Attachments.mount(mountEl, {
+        entityType: type,
+        entityId: String(entityId),
+        canEdit: false
+      });
+    } else {
+      mountEl.innerHTML = '<div class="p86-projects-empty">Photo viewer not loaded.</div>';
+    }
+  }
 
   function setFilter(id) {
     _listState.filter = id;
@@ -6743,6 +6999,10 @@
     refreshPhotos: refreshDetailPhotos,
     setFilter: setFilter,
     setView: setView,
+    // The Photos hub's three rosters — Projects (default) | Jobs | Leads.
+    setPhotoTab: setPhotoTab,
+    loadMoreRoster: loadMoreRoster,
+    openParentPhotos: openParentPhotos,
     openCreate: openCreate,
     // Exposed for cross-module reuse — the new attachments.js photo
     // viewer side panel uses this to render the tag chip editor with

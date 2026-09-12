@@ -283,6 +283,21 @@
       var q = limit ? '?limit=' + encodeURIComponent(limit) : '';
       return get('/api/attachments/recent' + q);
     },
+    // THE PHOTO ROSTER — "which jobs / leads have photos on them".
+    // Feeds the Jobs and Leads tabs of the Photos hub. A MODE of
+    // /recent rather than a route of its own: test/tenant-register2-http.js
+    // is a derived route census with committed numbers, and a new route
+    // moves them. The server anchors tenancy on the PARENT (jobs /
+    // leads .organization_id), not on /recent's uploader shortcut.
+    // opts: { type:'job'|'lead', limit?, offset?, q? }
+    photoRoster: function(opts) {
+      opts = opts || {};
+      var qs = ['roster=' + encodeURIComponent(opts.type || '')];
+      if (opts.limit)  qs.push('limit=' + encodeURIComponent(opts.limit));
+      if (opts.offset) qs.push('offset=' + encodeURIComponent(opts.offset));
+      if (opts.q)      qs.push('q=' + encodeURIComponent(opts.q));
+      return get('/api/attachments/recent?' + qs.join('&'));
+    },
     // Tag suggestions scoped to one entity's attachments.
     // opts: { entity_type, entity_id, q? }
     tagsSuggest: function(opts) {

@@ -13316,3 +13316,89 @@ body.light-mode .p86-proj-linked-row-tight { background: rgba(0, 0, 0, 0.02); }
 .p86-sc-lrow-lo { color: var(--text-dim, #8a93a6); font-size: 10px; }
 .p86-sc-lrow-pop { color: #60a5fa; text-align: right; font-size: 10px; }
 body.light-mode .p86-sc-lrow-pop { color: #2563eb; }
+
+/* ── PHOTOS HUB — THE THREE ROSTERS ────────────────────────────────────
+   Attachments are polymorphic; the surfaces were not. The hub now carries
+   a tab per parent type — Projects (the default, and the only one that is a
+   photo bucket by construction) | Jobs | Leads — sitting above the single
+   list 7bc0c225 collapsed the old grid/list pair into.
+
+   The tab strip is deliberately NOT the .p86-projects-view-toggle segmented
+   control below it. That control switches HOW the projects list is drawn
+   (list vs map); this one switches WHAT is being listed. Two different
+   questions must not wear the same costume — that is how "List" spent a
+   release being a worse view of the same query.
+
+   Every colour here is either a token or has a body.light-mode twin at the
+   bottom of this block. The rows these tabs sit over
+   (.p86-projects-list-row) are hardcoded #141414/#222 with their own twin,
+   so a token-only styling would not have matched them in either theme. */
+.p86-photos-tabs {
+  display: flex;
+  gap: 2px;
+  margin: 0 0 12px;
+  border-bottom: 1px solid var(--border, #333);
+}
+.p86-photos-tab {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--text-dim, #aaa);
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  /* Pull the 2px underline down onto the strip's own border so the active
+     tab reads as connected to the list rather than floating above it. */
+  margin-bottom: -1px;
+  white-space: nowrap;
+}
+.p86-photos-tab:hover { color: var(--text, #fff); }
+.p86-photos-tab.active {
+  color: var(--accent, #4f8cff);
+  border-bottom-color: var(--accent, #4f8cff);
+  font-weight: 600;
+}
+.p86-photos-more {
+  display: flex;
+  justify-content: center;
+  padding: 14px 0 4px;
+}
+
+/* The hand-off overlay. A dismissible modal, not a drill-in: per the app's
+   navigation rule only the three real drill-ins get a Back button, and this
+   is a peek at another record's photos from a list. Wide, because what it
+   holds is the same photo grid the job sidebar and the lead editor mount. */
+.p86-photo-parent-content {
+  max-width: 1100px;
+  width: 96vw;
+}
+.p86-photo-parent-body {
+  padding: 12px 14px 16px;
+  max-height: 74vh;
+  overflow-y: auto;
+  /* The grid inside can carry wide rows (folder chip bars, document rows);
+     they scroll in here rather than pushing the page sideways. */
+  overflow-x: auto;
+}
+@media (max-width: 640px) {
+  /* Field use. Three tabs have to stay on one line on a phone, and the
+     overlay wants the whole screen rather than a 96vw card inside it. */
+  .p86-photos-tab { padding: 8px 10px; font-size: 12px; }
+  .p86-photo-parent-content { width: 100vw; max-width: 100vw; border-radius: 0; }
+  .p86-photo-parent-body { max-height: 78vh; padding: 10px; }
+}
+
+body.light-mode .p86-photos-tabs { border-bottom-color: #e4e4e7; }
+body.light-mode .p86-photos-tab { color: #52525b; }
+body.light-mode .p86-photos-tab:hover { color: #18181b; }
+/* THE ACTIVE TAB HAS TO BE RESTATED, NOT INHERITED. `body.light-mode
+   .p86-photos-tab` is (0,2,1) and `.p86-photos-tab.active` is (0,2,0), so the
+   light-mode rule above OUTRANKS the active one and painted the selected tab
+   the same #52525b as its neighbours — measured, not guessed: getComputedStyle
+   returned rgb(82,82,91) for both. The underline still went blue, because that
+   comes from --accent which light mode redefines, so the tab read as "nothing
+   is selected, but one of them has a line under it". This is the specificity
+   loss this repo keeps paying for: a new single-class rule quietly outranked
+   by an older two-class one. */
+body.light-mode .p86-photos-tab.active { color: var(--accent, #2563eb); }
