@@ -2450,6 +2450,28 @@ const LINK_CONVENTION = [
   'Do NOT use the `navigate` tool to make a point. Navigating yanks the user off what they are reading; a link lets them choose. Reserve navigate for when they explicitly asked to be taken somewhere.'
 ];
 
+// The user asked for this by name, twice, after 86 kept drifting back to
+// pipe tables. It was drifting because NOTHING held it: there was no
+// output-format instruction in any baseline - not this one, not the
+// assistant's, not the scribe's - and only two places in the whole read
+// surface emit pipes, one of which is the spreadsheet reader where a grid
+// is correct. So the table was the model default reasserting itself every
+// time he steered away from it. A preference with no rule behind it is a
+// preference you have to restate every turn.
+const READBACK_FORMAT = [
+  '# Reading records back',
+  'Default to a BLOCK per record, not a table. The record name is the header line (linked, per the convention above); its fields sit underneath, one per line, label first and values lined up:',
+  '',
+  '[CO-3 · Gazebo decking](/jobs/<jobId>)',
+  '  Status    Approved',
+  '  Contract  $4,812.00',
+  '  Building  Gazebo',
+  '  Updated   9 Sep',
+  '',
+  'Pipe tables wrap and shred on a phone, which is where most of this gets read. Use one ONLY for data that is genuinely a grid: a spreadsheet, the line items on a pay application, a column of numbers meant to be compared down the page.',
+  'Pick the fewest fields that answer the question. A block with twelve rows is not more readable than a table, it is just taller.',
+];
+
 // Live test 2026-08-09: asked to convert an estimate to a job, 86 replied
 // "one conversion queued — 'Applied' notification incoming shortly." It had
 // emitted NOTHING: zero payloads, no job, no error. There is no convert tool,
@@ -2549,6 +2571,7 @@ const AGENT_SYSTEM_BASELINE = {
     '- CURATE actively: keep output units contractor-natural (SF/LF/SQ/EA), labor rows as production rates (HR per unit), waste on materials 10-15%. When you notice stale rates, missing recipes, or estimates priced without a matching assembly, SAY SO and offer the fix. Seed-sourced assemblies carry placeholder pricing — flag them for tuning against real purchase data.',
     '',
     ...LINK_CONVENTION,
+    ...READBACK_FORMAT,
     ...WRITE_HONESTY,
     '',
     '# Tone',
@@ -2654,6 +2677,7 @@ const AGENT_SYSTEM_BASELINE = {
     "You're capable, but you are NOT the estimator/analyst — you are the front door. Your OWN tools cover the personal core: finding records, the calendar/schedule/reminders, the user's mail, memory, and quick web lookups. For BUSINESS tooling and analysis — receipts/Cost Inbox, purchase orders, projects, workflow items (RFIs/submittals), compliance, reference sheets, estimating, WIP, job-costing, margins, scope, pricing, and ANYTHING touching the ASSEMBLIES or MATERIALS databases (costed recipes, unit costs, catalog questions, \"what should X cost\") — you do NOT have those tools: hand the ask to 86 with `escalate_to_86` (frame it + the resolved entity ids + anything you already pulled), or queue it as a background task for bigger work. 86 is the owner of the assembly/materials/estimating side of the system — never guess at pricing or recipe contents yourself. Escalating is the NORMAL move, not a failure — do it early rather than improvising. 86 reasons and answers; you relay it in your own words. 86 does NOT write during an escalation, so if its answer implies a change, YOU apply it via scribe_write.",
     '',
     ...LINK_CONVENTION,
+    ...READBACK_FORMAT,
     ...WRITE_HONESTY,
   ].join('\n'),
 
