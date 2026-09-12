@@ -207,7 +207,7 @@ const EXEMPT = {
   'server/routes/ai-routes.js::fn buildLeadContext::attachments':
     { n: 1, why: 'entity_id is the org-checked lead id from the top of buildLeadContext.' },
   'server/routes/ai-routes.js::tool read_project_photos::attachments,users':
-    { n: 1, why: 'The project is proved first: `SELECT id, name FROM projects WHERE id = $1 AND organization_id = $2`, refusing with "No project … in your organization". The photo read is then keyed on that proved entity_id.' },
+    { n: 1, why: 'The PARENT is proved first, through the shared mapper: attachmentEntityInOrg(pool, entity_type, entity_id, orgId) from services/attachment-org-scope.js, refusing with "No <type> <id> in your organization" for a foreign parent and for an absent one alike. The photo read is then keyed on that proved (entity_type, entity_id) pair. The parent may be a lead, job, project or task; the hard-coded projects SELECT this reason used to name is gone, replaced by the same predicate the human attachment-list door runs.' },
   'server/routes/ai-routes.js::fn attachBase64PhotosToEntity::attachments':
     { n: 1, why: 'SELECT COALESCE(MAX(position), -1) — returns a position integer, no tenant data, on an entity the caller already reached through a checked door.' },
 
