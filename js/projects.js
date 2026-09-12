@@ -6659,20 +6659,30 @@
           newBtn;
         return;
       }
+      // NO THUMBNAIL HERE, unlike the Photos page.
+      //
+      // This panel is a nested list inside a lead or a job, in a narrow rail
+      // alongside estimates, tasks and attachments. A 44px cover per row bought
+      // nothing a caller needs at that moment — you are not browsing sites, you
+      // already know which site you are on; you are picking WHICH BUCKET of
+      // photos to open. So the count and the name carry the row and four fit
+      // where two did. The Photos page keeps its covers, where choosing between
+      // sites by eye is the whole job.
+      //
+      // The row still opens the project, which IS the lead's / job's photo
+      // structure — the bucket that holds its walkthroughs and pairs.
       host.innerHTML = rows.map(function(p) {
-        var coverUrl = p.cover_thumb_url || '';
-        var thumb = coverUrl
-          ? '<img src="' + escapeAttr(coverUrl) + '" alt="" class="p86-proj-linked-thumb" />'
-          : '<div class="p86-proj-linked-thumb p86-proj-linked-thumb-empty">&#x1F4F8;</div>';
-        return '<div class="p86-proj-linked-row" onclick="window.openProject(p86Dec(\'' + p86Enc(p.id) + '\'))">' +
-          thumb +
-          '<div class="p86-proj-linked-row-body">' +
-            '<div class="p86-proj-linked-name">' + escapeHTML(p.name) + '</div>' +
-            '<div class="p86-proj-linked-meta">' + Number(p.photo_count || 0) + ' photo' + (p.photo_count === 1 ? '' : 's') +
-              (Number(p.pair_count || 0) ? ' · ' + Number(p.pair_count) + ' pair' + (p.pair_count === 1 ? '' : 's') : '') +
-              ' · ' + escapeHTML(fmtRelative(p.updated_at)) +
-            '</div>' +
-          '</div>' +
+        var photos = Number(p.photo_count || 0);
+        var pairs = Number(p.pair_count || 0);
+        return '<div class="p86-proj-linked-row p86-proj-linked-row-tight" ' +
+            'onclick="window.openProject(p86Dec(\'' + p86Enc(p.id) + '\'))" ' +
+            'title="Open photos for ' + escapeAttr(p.name || 'this project') + '">' +
+          '<span class="p86-proj-linked-count">' + photos + '</span>' +
+          '<span class="p86-proj-linked-name">' + escapeHTML(p.name) + '</span>' +
+          '<span class="p86-proj-linked-meta">' +
+            (pairs ? pairs + ' pair' + (pairs === 1 ? '' : 's') + ' · ' : '') +
+            escapeHTML(fmtRelative(p.updated_at)) +
+          '</span>' +
         '</div>';
       }).join('') + newBtn;
     }).catch(function(e) {

@@ -13254,3 +13254,41 @@ body.light-mode .p86-sc-feels { color: #b45309; }
 body.light-mode .p86-sc-alert { background: rgba(180, 120, 10, 0.10); }
 body.light-mode .p86-sc-alert-severe { background: rgba(185, 28, 28, 0.10); border-left-color: #b91c1c; }
 body.light-mode .p86-sc-day-pop { color: #2563eb; }
+
+/* ── Linked projects, tight ────────────────────────────────────────────
+   The same panel inside a lead or a job, without the 44px cover. Nobody in
+   that rail is choosing between sites by eye — they already know the site
+   and are picking WHICH BUCKET of photos to open, so the count leads and
+   four rows fit where two did. The Photos page keeps its covers, where
+   recognising a site at a glance is the whole job. */
+.p86-proj-linked-row-tight {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 8px;
+  margin-bottom: 3px;
+}
+.p86-proj-linked-row-tight .p86-proj-linked-count {
+  font-size: 12px; font-weight: 700;
+  color: var(--accent, #4f8cff);
+  font-variant-numeric: tabular-nums;
+  min-width: 1.6em; text-align: right;
+}
+/* The count is a photo count and has to say so without spending a column. */
+.p86-proj-linked-row-tight .p86-proj-linked-count::after {
+  content: '\1F4F7';
+  font-size: 9px; margin-left: 2px; opacity: 0.7;
+}
+.p86-proj-linked-row-tight .p86-proj-linked-name {
+  font-size: 12px; font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.p86-proj-linked-row-tight .p86-proj-linked-meta {
+  font-size: 10px; white-space: nowrap;
+}
+@media (max-width: 520px) {
+  /* The date is the first thing worth losing when the rail narrows. */
+  .p86-proj-linked-row-tight .p86-proj-linked-meta { display: none; }
+}
+body.light-mode .p86-proj-linked-row-tight { background: rgba(0, 0, 0, 0.02); }
