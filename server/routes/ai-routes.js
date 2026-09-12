@@ -8872,6 +8872,17 @@ async function execConsolidatedRead(name, input, ctx) {
     // pct_complete. Default is backlog when route hits read_wip_summary.
     const sortBy = inp.sort_by || inp.sortBy || null;
 
+    // What consolidatedReadCapability decided the caller asked for. It is
+    // the SAME expression, and it is recomputed here rather than trusted
+    // from the filters actually left after trimming, because the gate cannot
+    // see the trimming: filters:[''] or ['  '] passed the gate as a FILTERED
+    // job search (JOBS_VIEW_ALL) and then, with every filter trimmed away,
+    // fell through to the WIP roll-up below (FINANCIALS_VIEW). A role holding
+    // JOBS_VIEW_ALL without FINANCIALS_VIEW read portfolio contract, cost and
+    // margin that way. The gate is left alone; the executor charges that one
+    // shape what it actually serves, so nothing new is admitted.
+    const gateSawFilter = !!(inp.filter || inp.q || (Array.isArray(inp.filters) && inp.filters.length));
+
     function dispatchOne(q) {
       switch (et) {
         case 'job':
@@ -8879,6 +8890,13 @@ async function execConsolidatedRead(name, input, ctx) {
           // answer "top X producing", "highest backlog", "worst margin"
           // without a follow-up tool. With a filter → legacy read_jobs
           // (name/number lookup, no metrics, lighter payload).
+          if (!q && gateSawFilter &&
+              aiToolCapabilityDenial('search_entities', { entity_type: 'job' }, ctx && ctx.user)) {
+            return Promise.resolve(
+              'search_entities(job): every value in filters was blank, so nothing was searched. ' +
+              'Pass a non-blank job name or number, or omit filter/filters entirely for the WIP roll-up.'
+            );
+          }
           if (!q) {
             return dispatchReadTool('read_wip_summary', {
               status: inp.status,
@@ -13431,8 +13449,47 @@ function consolidatedReadCapability(name, inp) {
     case 'estimate':      return 'ESTIMATES_VIEW';
     case 'material':      return 'ESTIMATES_VIEW';
     case 'sub':           return 'ESTIMATES_VIEW';
-    // user (assignment directory), task (org+user scoped in read_tasks),
-    // and unknown entity types need no extra capability.
+    // user -> read_users. This case was MISSING, and the comment that stood
+    // here said the directory "needs no extra capability". That stopped being
+    // true when read_users was gated ANY-of JOBS_VIEW_ALL/ESTIMATES_VIEW in
+    // AI_TOOL_CAPABILITY, and nobody told this switch: read_users refused a
+    // LEADS_VIEW-only user while search_entities{entity_type:'user'} served
+    // that same user the staff roster (names, emails, roles) through the
+    // same handler. Mirrors the narrow reader's entry exactly.
+    case 'user':          return ['JOBS_VIEW_ALL', 'ESTIMATES_VIEW'];
+    // ── Types the read consolidation folds into this door NEXT ──────────
+    // None of these route to a reader yet: execConsolidatedRead answers
+    // "unsupported entity_type" for them, with one exception noted below.
+    // They are here BEFORE the fold on purpose. `default: return null` is
+    // ungated, so the commit that teaches execConsolidatedRead a new type
+    // would otherwise turn a gated narrow reader into an ungated one the
+    // moment it lands. Each capability is copied from the narrow reader it
+    // replaces (AI_TOOL_CAPABILITY), so the fold cannot loosen anything;
+    // test/consolidated-read-capability.test.js holds that parity by
+    // executing both.
+    //   project: read_entity{project, include:['tasks']} ALREADY routes to
+    //   read_tasks today and was ungated. It now needs JOBS_VIEW_ALL, the same
+    //   tightening job+tasks has always had. search_entities{task} remains
+    //   the ungated way to reach tasks.
+    case 'purchase_order': return 'JOBS_VIEW_ALL';   // read_purchase_orders
+    case 'change_order':   return 'JOBS_VIEW_ALL';   // read_change_orders
+    case 'project':        return 'JOBS_VIEW_ALL';   // read_projects
+    case 'assembly':       return 'ESTIMATES_VIEW';  // read_assemblies, read_assembly_taxonomy
+    // WHAT STILL FALLS TO `default: return null`, AND WHY THAT IS CORRECT.
+    //   task    -> read_tasks, which has no AI_TOOL_CAPABILITY entry and
+    //              mirrors GET /api/tasks (requireAuth only). The handler
+    //              predicates every query on the caller's org AND hides other
+    //              people's personal tasks, so the boundary is in the reader.
+    //   receipt -> NOT a case, because read_receipts has no entry either and
+    //              its REST twin GET /api/receipts is requireAuth only. A
+    //              `case 'receipt': return null` would be a declared line
+    //              nothing reads. Gating receipts is a policy change and must
+    //              land on read_receipts, REST and this switch together; the
+    //              parity test fails the day read_receipts gains an entry.
+    //   anything else -> execConsolidatedRead returns "unsupported
+    //              entity_type" and reads nothing. The same test executes that
+    //              refusal, parses its Supported list, and fails if a
+    //              supported type other than task reaches here.
     default: return null;
   }
 }
