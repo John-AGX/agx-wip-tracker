@@ -3964,7 +3964,169 @@ function toolResultContent(blocksSource, text, isError) {
   return [{ type: 'text', text: t || 'Done.' }];
 }
 
-async function runV2SessionStream({ anthropic, res, session, eventsToSend, persistAssistantText, onCustomToolUse, freshlyCreated }) {
+// A session identity change invalidates every custom_tool_use_id issued by the
+// OLD session. Any user.custom_tool_result still queued for the new session is
+// therefore unanswerable by construction — sending it is a guaranteed 400
+// ("does not match any custom_tool_use event in this session"), which kills the
+// turn with the model having never seen its own tool output.
+//
+// Rewrite those results into ONE user.message so the work survives the swap.
+// Non-result events pass through untouched and in order.
+//
+// Content blocks are CARRIED, never stringified — an image result's pixels must
+// still reach the model.
+function carriedResultBlocks(results, why) {
+  const blocks = [{
+    type: 'text',
+    text: '<prior_tool_results>\nThe tools below already ran for the user\'s current request. ' +
+          why + ' Treat them as the output of those tools and answer the user\'s request ' +
+          'directly. Do NOT re-run these tools, and do not mention this to the user.'
+  }];
+  for (const ev of results) {
+    // is_error rides as a marker block: the queued event carries it as a field
+    // no user.message can express, and without it an errored tool crosses
+    // indistinguishable from a success and the model loses the retry-vs-ask
+    // signal it would have had from a real tool_result.
+    if (ev && ev.is_error) {
+      blocks.push({ type: 'text', text: 'The tool result below is an ERROR:' });
+    }
+    if (Array.isArray(ev.content)) {
+      for (const b of ev.content) if (b) blocks.push(b);
+    } else if (ev && ev.content) {
+      blocks.push({ type: 'text', text: String(ev.content) });
+    }
+  }
+  blocks.push({ type: 'text', text: '</prior_tool_results>' });
+  return blocks;
+}
+
+function carryResultsAcrossSessionSwap(events) {
+  const list = Array.isArray(events) ? events : [];
+  const dead = list.filter(e => e && e.type === 'user.custom_tool_result');
+  if (!dead.length) return list;
+  const survivors = list.filter(e => !(e && e.type === 'user.custom_tool_result'));
+  const blocks = carriedResultBlocks(dead,
+    'The session they ran in was replaced, so their results could not be returned ' +
+    'as tool results and are given here instead.');
+  console.warn('[v2-stream] session swapped mid-turn — carrying', dead.length,
+    'orphaned tool_result(s) across as one user.message (' + blocks.length + ' block(s))');
+  // The carried message goes LAST so any survivor (a stall nudge, an interrupt)
+  // still precedes nothing it refers to and the results are the most recent
+  // thing the model reads before answering.
+  return survivors.concat([{ type: 'user.message', content: blocks }]);
+}
+
+// requires_action carrying an EMPTY stop_reason.event_ids: the session is
+// telling us it is not waiting on ANY id, so there is no authoritative id to
+// answer and the captured stream ids are — by this file's own contract note —
+// not authoritative either. Posting them anyway is the third producer of the
+// dead "Used N tools but didn't produce a summary" screen, with no session
+// change at all. Deliver the work as a user.message instead, behind the same
+// user.interrupt the stall path already uses to clear requires_action when it
+// holds no ids, so the message cannot bounce off "waiting on responses to
+// events". Nothing is discarded and no unanswerable id is ever sent.
+function carryResultsWithNoAnswerableId(results) {
+  const blocks = carriedResultBlocks(results,
+    'The session reported that it is not waiting on any of these tool calls, so ' +
+    'their results could not be returned as tool results and are given here instead.');
+  console.warn('[v2-stream] requires_action with EMPTY stop_reason.event_ids — carrying',
+    results.length, 'result(s) as one user.message behind an interrupt',
+    '(' + blocks.length + ' block(s)); NOT flushing the non-authoritative captured ids');
+  return [
+    { type: 'user.interrupt' },
+    { type: 'user.message', content: blocks }
+  ];
+}
+
+// The user-facing copy for a tool_result that could not be delivered.
+//
+// One handler is reached by several paths and the sentence has to be true on
+// every one of them, so it is assembled from what this turn actually did
+// rather than fixed prose:
+//   - an approved write on /86/chat/continue has ALREADY COMMITTED server-side
+//     before its result is posted, and execProposeCreateLead has no
+//     idempotency key — telling that user to "re-send" is telling them to
+//     create the record twice. That path gets a do-not-re-send instruction.
+//   - stall recovery reaches the same handler with ZERO tools run, so
+//     "86 ran the tools for this request" is a statement about work that never
+//     happened — and with no chips on screen it is the only thing the user
+//     sees.
+//   - the /chat paths have a persisted user message and untouched attachment
+//     rows; /continue has neither, so that reassurance is not offered there.
+function staleToolResultMessage(o) {
+  const opts = o || {};
+  const applied = Number(opts.appliedChangeCount) || 0;
+  // Approvals whose executor actually RAN. An executor that threw partway can
+  // have written one row and not the next — execProposeCreateLead inserts a
+  // clients row before the leads row — so "nothing was changed" is a claim this
+  // route is not entitled to make once one has run.
+  const attempted = Math.max(Number(opts.attemptedChangeCount) || 0, applied);
+  const tools = Number(opts.toolChips) || 0;
+  const parts = [];
+  if (attempted > 0) {
+    if (applied > 0) {
+      parts.push(applied === 1
+        ? 'Your approved change was applied and is saved.'
+        : 'Your ' + applied + ' approved changes were applied and are saved.');
+    }
+    if (attempted > applied) {
+      parts.push((attempted - applied) === 1
+        ? 'One approved change reported an error while it ran.'
+        : (attempted - applied) + ' approved changes reported an error while they ran.');
+    }
+    parts.push('86 could not hand that back to the model, so it ' +
+      (opts.textStreamed ? 'stopped partway through its reply.' : 'never wrote a reply.'));
+    parts.push(attempted === applied
+      ? 'Do NOT re-send this approval — the change is already made. ' +
+        'Ask 86 to confirm the current state if you want to check it.'
+      : 'Do NOT re-send this approval blind — ask 86 to confirm the current state first.');
+  } else if (tools > 0) {
+    parts.push('86 ran ' + tools + (tools === 1 ? ' tool' : ' tools') + ' for this request.');
+    parts.push('Their results could not be delivered back to the model, so it ' +
+      (opts.textStreamed ? 'stopped partway through its answer.' : 'never wrote an answer.'));
+    if (opts.resumingApproval) {
+      parts.push('Re-sending runs those tools again.');
+    } else {
+      parts.push('Your message and any attachments are saved. ' +
+        'Re-sending runs the whole request, including those tools, again.');
+    }
+  } else {
+    parts.push('86 could not sync this turn with the model, so it ' +
+      (opts.textStreamed ? 'stopped partway through.' : 'never wrote an answer.'));
+    if (opts.resumingApproval) {
+      parts.push('Nothing was changed. Send 86 a new message to pick this back up.');
+    } else {
+      parts.push('Nothing was changed, and your message and any attachments are saved. ' +
+        'Re-send it to try again.');
+    }
+  }
+  return parts.join(' ');
+}
+
+// staleToolResultMessage covers the stale-id catch. It is NOT the only place
+// this turn can die: the stall-recovery note and the idle watchdog are
+// route-blind and reached on /86/chat/continue too, where an approved
+// executor has ALREADY COMMITTED before the turn can stall. Both of them
+// shipped "Nothing was changed. Please send it again." — false on that path,
+// and a live double-write instruction, because execProposeCreateLead has no
+// idempotency key. Returns null when this turn committed nothing, so the
+// caller keeps its existing wording byte for byte on every other path.
+function stallRetryAdvice(o) {
+  const opts = o || {};
+  const applied = Number(opts.appliedChangeCount) || 0;
+  const attempted = Math.max(Number(opts.attemptedChangeCount) || 0, applied);
+  if (attempted <= 0) return null;
+  if (applied > 0 && attempted === applied) {
+    return (applied === 1
+      ? 'Your approved change was already applied and is saved'
+      : 'Your ' + applied + ' approved changes were already applied and are saved') +
+      ' — do NOT re-send this approval. Ask 86 to confirm the current state.';
+  }
+  return 'Do NOT re-send this approval blind — an approved change already ran. ' +
+    'Ask 86 to confirm the current state first.';
+}
+
+async function runV2SessionStream({ anthropic, res, session, eventsToSend, persistAssistantText, onCustomToolUse, freshlyCreated, resumingApproval, appliedChangeCount, attemptedChangeCount }) {
   // Hoisted ABOVE send/res-handlers/session_resolved emit because all
   // three reference `sessionId` in their bodies. Pre-hoist, the `let
   // sessionId` declaration lived at the bottom of the resolver-setup
@@ -4003,8 +4165,21 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
   // (lines starting ':') are ignored by the client parser. Cleared on end.
   let _hb = null;
   function clearHeartbeat() { if (_hb) { clearInterval(_hb); _hb = null; } }
+  // What the user has ACTUALLY been shown this turn. The stale-id failure copy
+  // below is assembled from these rather than from an assumption about which
+  // path reached it: one wording claimed "86 ran the tools for this request"
+  // on stall recovery, where no tool runs at all and the client shows the
+  // error with no chips beside it to contradict the sentence. Counted inside
+  // send() because it is the single funnel every tool chip and text delta goes
+  // through, so the count cannot drift from the screen.
+  let _toolChipsThisTurn = 0;
+  let _textStreamedThisTurn = false;
   function send(payload) {
     if (_ended || res.writableEnded) return;
+    if (payload) {
+      if (payload.tool_applied || payload.tool_failed) _toolChipsThisTurn++;
+      if (payload.delta) _textStreamedThisTurn = true;
+    }
     try {
       res.write('data: ' + JSON.stringify(payload) + '\n\n');
       _consecWriteFails = 0;
@@ -4102,8 +4277,13 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
       try {
         console.warn('[v2-stream] idle watchdog fired on', sessionId,
           '— no progress for', Math.round((Date.now() - _lastProgressAt) / 1000) + 's; ending turn');
+        const idleAdvice = stallRetryAdvice({
+          appliedChangeCount: appliedChangeCount,
+          attemptedChangeCount: attemptedChangeCount
+        });
         const idleMsg = '86 stopped responding and this turn was ended after '
-          + Math.round(TURN_IDLE_MS / 60000) + ' minutes with no output. Please try again.';
+          + Math.round(TURN_IDLE_MS / 60000) + ' minutes with no output. '
+          + (idleAdvice || 'Please try again.');
         send({ error: idleMsg });
         // Fire-and-forget: we are in a sync timer callback and cannot await.
         // Deliberately NOT passing partial text — assistantText is scoped to
@@ -4395,7 +4575,19 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
   // freshlyCreated=true; if events.send to a brand-new session reports
   // "stuck", recovery would only loop archive→create→archive forever.
   // For freshly-created sessions we surface the error to the user.
-  async function openStreamAndSend(eventsForThisOpen) {
+  // fullEventsForThisOpen is the COMPLETE set of events this turn owes the
+  // model. It is NOT always what we are sending right now: an in-place
+  // recovery re-enters with only the undelivered TAIL, because the old
+  // session already took the head. That narrowing is correct for a replay on
+  // the SAME session and catastrophic for a session SWAP — the new session
+  // holds none of them, so carrying the tail silently drops every result the
+  // dead session had already accepted and the model then answers, with full
+  // green chips and nothing on screen to say so, off a partial read of the
+  // job. Carry this instead; it never narrows.
+  async function openStreamAndSend(eventsForThisOpen, fullEventsForThisOpen) {
+    const carryAll = Array.isArray(fullEventsForThisOpen)
+      ? fullEventsForThisOpen
+      : eventsForThisOpen;
     let stream;
     try {
       stream = await anthropic.beta.sessions.events.stream(sessionId);
@@ -4429,6 +4621,13 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
       // event of latency; for typical 1-5 tool_use turns that's a
       // few seconds, well below the previous 5-min hang.
       const EVENTS_PER_SEND = 1;
+      // How many events the session has ALREADY taken. The send is serial, so a
+      // throw on event N leaves 0..N-1 delivered. An in-place recovery that
+      // replays the whole array re-answers those — and one answer per id means
+      // the replay raises a STALE id error, which is not a stuck error, so the
+      // recovery block is skipped entirely and the turn dies with the carry
+      // sitting two lines below it, never called. Replay the tail instead.
+      let deliveredCount = 0;
       try {
         let totalAcked = 0;
         for (let i = 0; i < eventsForThisOpen.length; i += EVENTS_PER_SEND) {
@@ -4439,6 +4638,7 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
           // than we sent. Critical diagnostic for the "send 4, only
           // 1 lands" bug we've been chasing.
           const resp = await anthropic.beta.sessions.events.send(sessionId, { events: chunk });
+          deliveredCount = i + chunk.length;
           const ackCount = (resp && Array.isArray(resp.data)) ? resp.data.length : 0;
           totalAcked += ackCount;
           if (ackCount !== chunk.length) {
@@ -4475,22 +4675,45 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
           // stalled a few tool-turns in (e.g. an escalation that ran 3 reads
           // then idled requires_action) surfaced the raw Anthropic 400
           // ("waiting on responses to events [sevt_…]") straight to the user.
+          // A recovery on the SAME session must not re-send what the session
+          // already took: undelivered is the tail from the event that threw.
+          const undelivered = eventsForThisOpen.slice(deliveredCount);
           if (!inPlaceRecoveryAttempted) {
             const blockedIds = extractStuckEventIds(e);
+            // Only ids this send is NOT already answering are dangling. The
+            // send that just failed may itself be the answer to some or all
+            // of the blocked ids (the auto-tier flush is exactly that case);
+            // padding those with "Continue." destroys the real tool output
+            // the model is waiting on, and — where the API allows one answer
+            // per id — turns the replay into a stale-id 400. Ids answered by
+            // an ALREADY-DELIVERED event of this same send count as answered
+            // too, which is why this reads the whole array and the replay
+            // below reads only the tail.
+            const answering = new Set(
+              carryAll
+                .filter(x => x && x.type === 'user.custom_tool_result')
+                .map(x => x.custom_tool_use_id));
+            const danglingIds = blockedIds.filter(id => !answering.has(id));
             if (blockedIds.length) {
               console.warn('[v2-stream] in-place recovery on', sessionId,
-                '— resolving', blockedIds.length, 'dangling tool_use id(s):',
-                JSON.stringify(blockedIds));
+                '— blocked', blockedIds.length, 'id(s), this send answers',
+                blockedIds.length - danglingIds.length + ', padding',
+                danglingIds.length, 'dangling:', JSON.stringify(danglingIds),
+                '· replaying', undelivered.length, 'of', eventsForThisOpen.length, 'event(s)');
               try {
-                // Resolve each dangling event with a generic "Continue."
-                // tool_result. Then close this stream and reopen with
-                // the user's original events on the same session.
-                const resolveEvents = blockedIds.map(id => ({
-                  type: 'user.custom_tool_result',
-                  custom_tool_use_id: id,
-                  content: [{ type: 'text', text: 'Continue.' }]
-                }));
-                await anthropic.beta.sessions.events.send(sessionId, { events: resolveEvents });
+                // Resolve each genuinely dangling event with a generic
+                // "Continue." tool_result. Then close this stream and reopen
+                // with the user's original events on the same session. When
+                // every blocked id is already covered by the send there is
+                // nothing to pad — just replay the undelivered tail.
+                if (danglingIds.length) {
+                  const resolveEvents = danglingIds.map(id => ({
+                    type: 'user.custom_tool_result',
+                    custom_tool_use_id: id,
+                    content: [{ type: 'text', text: 'Continue.' }]
+                  }));
+                  await anthropic.beta.sessions.events.send(sessionId, { events: resolveEvents });
+                }
                 try { await stream.controller.abort(); } catch (_) {}
                 // Re-enter openStreamAndSend with the SAME sessionId
                 // and the user's ORIGINAL events. Mark
@@ -4498,7 +4721,7 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
                 // on this turn falls through to nuclear recovery
                 // instead of looping forever.
                 inPlaceRecoveryAttempted = true;
-                return openStreamAndSend(eventsForThisOpen);
+                return openStreamAndSend(undelivered, carryAll);
               } catch (eInPlace) {
                 console.error('[v2-stream] in-place recovery failed, falling through to archive+recreate:', eInPlace && eInPlace.message);
                 // Fall through to the nuclear branch below.
@@ -4520,7 +4743,7 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
               activeSession = await recoverStuckSession({ anthropic, sessionRow: activeSession });
               sessionId = activeSession.anthropic_session_id;
               try { await stream.controller.abort(); } catch (_) {}
-              return openStreamAndSend(eventsForThisOpen);
+              return openStreamAndSend(carryResultsAcrossSessionSwap(carryAll));
             } catch (e2) {
               console.error('Stuck-session recovery failed:', e2);
               const recoverMsg = 'Could not recover session: ' + (e2.message || 'unknown');
@@ -4540,8 +4763,16 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
         // the user just needs to re-prompt.
         if (isStaleToolUseIdError(e)) {
           console.warn('[v2-stream] stale tool_use_id on', sessionId,
-            '— session was recreated after the proposal card was shown.');
-          const staleMsg = 'The chat session was reset between turns, so those approval cards no longer apply. Re-send your request and I\'ll redo the proposals fresh.';
+            '— a tool_result was posted for an id this session never issued.',
+            'Compare with the preceding "recovering stuck session" (swap) or',
+            '"in-place recovery on" (same session) line to tell which path fired.');
+          const staleMsg = staleToolResultMessage({
+            appliedChangeCount: appliedChangeCount,
+            attemptedChangeCount: attemptedChangeCount,
+            resumingApproval: resumingApproval,
+            toolChips: _toolChipsThisTurn,
+            textStreamed: _textStreamedThisTurn
+          });
           send({ error: staleMsg });
           send({ stale_tool_use_id: true });
           await persistTurnError(staleMsg);
@@ -4876,6 +5107,10 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
               const capturedIds = pendingAutoResults.map(e => e.custom_tool_use_id);
               const allMatch = capturedIds.length === blockedEventIds.length &&
                                capturedIds.every(id => blockedEventIds.indexOf(id) >= 0);
+              // Set when the session named NO event_ids at all, so the pure
+              // auto-tier flush below delivers the work as a message instead of
+              // posting ids the session never asked us to answer.
+              let noAnswerableId = false;
               if (!allMatch && blockedEventIds.length) {
                 // Re-key strictly onto stop_reason.event_ids. Per the SDK
                 // contract (BetaManagedAgentsUserCustomToolResultEvent),
@@ -4911,10 +5146,16 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
                 pendingAutoResults.length = 0;
                 Array.prototype.push.apply(pendingAutoResults, rekeyed);
               } else if (!allMatch) {
-                // requires_action but the session reported no event_ids —
-                // nothing to re-key onto; flush as captured (rare).
-                console.warn('[v2-stream] tool_use_id mismatch with EMPTY blockedEventIds — flushing as captured',
+                // requires_action but the session reported NO event_ids. There
+                // is nothing to re-key onto, and the captured ids are not
+                // authoritative — flushing them was the third independent
+                // producer of the dead screen (no session change, six green
+                // chips, no answer). Keep this warn: it is the only forensic
+                // trail for the case.
+                console.warn('[v2-stream] tool_use_id mismatch with EMPTY blockedEventIds',
+                  '— captured ids are not authoritative, NOT flushing them',
                   'captured:', JSON.stringify(capturedIds));
+                noAnswerableId = true;
               }
               if (pendingToolUses.length > 0) {
                 // MIXED TURN — the model emitted both auto-tier AND
@@ -4966,7 +5207,9 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
                 vDebug('[v2-stream] flushing', pendingAutoResults.length,
                   'auto-tier tool_result(s) for', sessionId,
                   'ids_sending:', JSON.stringify(pendingAutoResults.map(e => e.custom_tool_use_id)));
-                nextEventsToSend = pendingAutoResults.slice();
+                nextEventsToSend = noAnswerableId
+                  ? carryResultsWithNoAnswerableId(pendingAutoResults)
+                  : pendingAutoResults.slice();
                 // CRITICAL: clear the queue after capturing. Without this,
                 // a subsequent batch of auto-tier tools (e.g. 86 fires 3
                 // reads, idles, flushes, then fires a 4th read on the
@@ -5072,9 +5315,13 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
               // the done-branch persist below, so the thread always shows a
               // row for this turn (previously: empty awaiting_approval, no
               // message persisted, user saw pure silence).
+              const stallAdvice = stallRetryAdvice({
+                appliedChangeCount: appliedChangeCount,
+                attemptedChangeCount: attemptedChangeCount
+              });
               const stallNote = assistantText.length
-                ? '\n\n_⚠️ I hit a snag finishing that request — the steps above ran, but I couldn\'t complete the final answer. Please send it again._'
-                : '⚠️ I hit a snag finishing that request — my tool calls stalled mid-turn and recovery didn\'t take. Nothing was changed. Please send it again.';
+                ? '\n\n_⚠️ I hit a snag finishing that request — the steps above ran, but I couldn\'t complete the final answer. ' + (stallAdvice || 'Please send it again.') + '_'
+                : '⚠️ I hit a snag finishing that request — my tool calls stalled mid-turn and recovery didn\'t take. ' + (stallAdvice || 'Nothing was changed. Please send it again.');
               send({ delta: stallNote });
               assistantText += stallNote;
             }
@@ -16351,6 +16598,13 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
     // / job entity writes echo the client-supplied applied_summary
     // (those were applied client-side by the editor's tool dispatcher).
     const eventsToSend = [];
+    // How many of these approvals actually changed something. Rejections,
+    // capability denials and client-side apply failures all change nothing;
+    // every other approved branch either ran an executor here or echoes a
+    // mutation the editor already applied.
+    let appliedChangeCount = 0;
+    // …and how many got as far as running an executor at all, applied or not.
+    let attemptedChangeCount = 0;
     for (const r of toolResults) {
       let summary;
       let isError = false;
@@ -16442,6 +16696,8 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
       // shape, and the first two had already drifted apart. `summary` doubles
       // as the blocks source here because these executors return their result
       // directly rather than wrapped in a tier decision.
+      if (r.approved && !r.apply_error && !capDenial) attemptedChangeCount++;
+      if (r.approved && !r.apply_error && !isError) appliedChangeCount++;
       eventsToSend.push({
         type: 'user.custom_tool_result',
         custom_tool_use_id: r.tool_use_id,
@@ -16485,6 +16741,13 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
       anthropic, res,
       session: session,
       eventsToSend: eventsToSend,
+      // This route EXECUTES the approved tool server-side before it posts the
+      // result, so by the time a delivery failure is surfaced the write has
+      // already committed. Tell the stream how many actually landed: the
+      // failure copy must not invite a re-send that would repeat them.
+      resumingApproval: true,
+      appliedChangeCount: appliedChangeCount,
+      attemptedChangeCount: attemptedChangeCount,
       onCustomToolUse: make86OnCustomToolUse(req.user.id, session, undefined, req.user),
       persistAssistantText: async (text, usage, meta) => {
         const hasText = !!(text && String(text).trim());
