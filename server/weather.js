@@ -81,8 +81,15 @@ function rollupByDay(periods) {
     const text = (p.shortForecast || '') + ' ' + (p.detailedForecast || '');
     const precipObj = p.probabilityOfPrecipitation || {};
     const precipPct = (precipObj.value == null ? 0 : Number(precipObj.value)) || 0;
-    const windMatch = String(p.windSpeed || '').match(/(\d+)/);
-    const windMph = windMatch ? parseInt(windMatch[1], 10) : 0;
+    // NWS writes wind as a single value ("7 mph") OR a range ("15 to 30 mph").
+    // Matching the FIRST number took the LOW bound of every range, so a day
+    // forecast at "15 to 30 mph" was carried as 15 — under classifyRisk's 25
+    // mph red line and its 15 mph yellow line both. The day that most needed
+    // flagging was scored as the calmest reading it could be given.
+    // Take the HIGH bound: the gust a crew has to work in is the number that
+    // decides, and erring toward the worse reading is the safe direction.
+    const windNums = String(p.windSpeed || '').match(/\d+/g);
+    const windMph = windNums ? Math.max.apply(null, windNums.map(Number)) : 0;
     const risk = classifyRisk(precipPct, windMph, text);
     const isDay = !!p.isDaytime;
 

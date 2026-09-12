@@ -156,7 +156,14 @@
       }
       // Pull today's day. Forecast may start with tomorrow's day if
       // it's already past sunset; in that case use the first available.
-      var todayIso = new Date().toISOString().slice(0, 10);
+      // LOCAL calendar day, not toISOString(). d.date is a local calendar day
+      // at the site; toISOString() converts to UTC first, so from about 8pm
+      // Eastern onward this matched TOMORROW's card and the header chip
+      // silently showed the wrong day's high for the rest of the evening.
+      var _n = new Date();
+      var todayIso = _n.getFullYear() + '-' +
+        String(_n.getMonth() + 1).padStart(2, '0') + '-' +
+        String(_n.getDate()).padStart(2, '0');
       var today = res.days.find(function (d) { return d.date === todayIso; }) || res.days[0];
       _state.risk = today.risk || 'green';
       _state.summary = today.summary || '';

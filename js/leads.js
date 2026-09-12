@@ -1456,13 +1456,34 @@ function p86Ask(message, opts) {
     // the NWS summary text + precipPct via _weatherEmojiFor() so the
     // glyph reads naturally without needing a custom icon font.
     var cards = w.days.slice(0, 7).map(function(d) {
-      var date = d.date ? new Date(d.date) : null;
+      // EVERY CARD IN THIS STRIP WAS LABELLED ONE DAY EARLY.
+      //
+      // d.date is a bare calendar day ("2026-09-12"). new Date() parses that as
+      // UTC MIDNIGHT, and .getDay()/.getDate() then read it back in the
+      // browser's zone — so anywhere west of Greenwich it lands on the previous
+      // evening. Replayed: America/New_York and America/Phoenix both render
+      // "Fri 9/11" for Saturday the 12th, and it is correct ONLY under TZ=UTC,
+      // which is why CI never saw it. A foreman was reading Saturday's weather
+      // under a FRI heading.
+      //
+      // A DATE IS A CALENDAR DAY, NOT AN INSTANT: construct from the parts so
+      // no offset can shift it. Same form js/schedule.js already uses.
+      var dparts = String(d.date || '').split('-');
+      var date = (dparts.length === 3)
+        ? new Date(+dparts[0], +dparts[1] - 1, +dparts[2])
+        : null;
       var dow = date ? ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][date.getDay()] : '';
       var mmdd = date ? ((date.getMonth() + 1) + '/' + date.getDate()) : '';
       var hi = (d.tempHigh != null) ? d.tempHigh + '°' : '—';
       var lo = (d.tempLow != null) ? d.tempLow + '°' : '';
       var precip = d.precipPct ? d.precipPct + '%' : '';
-      var border = d.risk === 'high' ? '#f87171' : (d.risk === 'med' ? '#fbbf24' : 'var(--border, rgba(255,255,255,0.08))');
+      // The server has always classified each day 'red' | 'yellow' | 'green'
+      // (classifyRisk, server/weather.js) and this read 'high' | 'med' — so the
+      // coloured top border has never once rendered. Every card got the default
+      // grey, and the thunder/wind classification the server computes for every
+      // day reached nobody. js/header-weather.js already speaks the right
+      // vocabulary, which is why this was invisible: one surface worked.
+      var border = d.risk === 'red' ? '#f87171' : (d.risk === 'yellow' ? '#fbbf24' : 'var(--border, rgba(255,255,255,0.08))');
       var emoji = _weatherEmojiFor(d);
       return '<div title="' + escapeAttr(d.summary || '') + '" style="flex:1 1 60px;min-width:60px;padding:8px 4px 6px;background:var(--overlay-light,rgba(255,255,255,0.02));border:1px solid var(--border,#333);border-top:2px solid ' + border + ';border-radius:6px;text-align:center;font-size:11px;">' +
         '<div style="color:var(--text-dim,#aaa);font-size:10px;text-transform:uppercase;letter-spacing:0.4px;font-weight:600;">' + escapeHTML(dow) + '</div>' +
