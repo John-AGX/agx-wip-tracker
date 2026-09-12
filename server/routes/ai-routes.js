@@ -14342,10 +14342,31 @@ async function driveEscalateTo86(intent, ctx) {
     }
   }
 
+  // WHO MAY SEE THE PACK. The job pack is the WIP snapshot (contract, cost,
+  // profit, margin, billing, backlog) plus per-building budgets; the estimate
+  // pack is line cost and markup. Both were built for ANY caller, so a sub or
+  // crew member holding no capability could ask the Assistant about a job and
+  // 86 was handed its contract and margin -- and what 86 is handed, it can
+  // repeat. The rule is NOT restated here: it is the one the 86 read gate
+  // already applies to the reads that serve these figures,
+  // read_entity{job, include:building_breakdown} (FINANCIALS_VIEW) and
+  // read_entity{estimate} (ESTIMATES_VIEW), so the pack cannot drift from what
+  // 86's own tools would refuse this caller. gateUser is the turn's resolved
+  // user; a missing one is denied (fail closed), never waved through.
+  // test/escalate-to-86-financial-gate.test.js drives it through /86/chat.
+  let packDenial = null;
+  if ((et === 'job' || et === 'estimate') && eid) {
+    packDenial = aiToolCapabilityDenial('read_entity',
+      et === 'job'
+        ? { entity_type: 'job', id: eid, include: ['building_breakdown'] }
+        : { entity_type: 'estimate', id: eid },
+      ctx.gateUser || null);
+  }
+
   let pack = '';
   let eidResolved = eid;
   try {
-    if (et === 'job' && eid) {
+    if (!packDenial && et === 'job' && eid) {
       // The Assistant often references jobs by NUMBER ("RV2000") rather than
       // the canonical row id ("j1"). Resolve either to the row id (org-scoped)
       // so the snapshot actually builds instead of silently falling back to
@@ -14367,7 +14388,7 @@ async function driveEscalateTo86(intent, ctx) {
       // dump). buildJobContext returns an OBJECT {system,…} — take .system.
       const jc = await buildJobContext(eidResolved, null, 'plan', organization, { slimForRouter: false, escalationLean: true });
       pack = (jc && typeof jc === 'object') ? (jc.system || '') : (typeof jc === 'string' ? jc : '');
-    } else if (et === 'estimate' && eid) {
+    } else if (!packDenial && et === 'estimate' && eid) {
       const ec = await buildEstimateContext(eid, false, 'plan', organization);
       pack = (ec && typeof ec === 'object') ? (ec.system || '') : (typeof ec === 'string' ? ec : '');
     }
@@ -14404,6 +14425,13 @@ async function driveEscalateTo86(intent, ctx) {
       '<entity_index>',
       pack,
       '</entity_index>'
+    );
+  }
+  if (packDenial) {
+    parts.push(
+      '',
+      'No entity index is attached: the user who asked may not see this ' + et + '\'s figures, and your read tools will refuse the same data for them. Do NOT state, estimate or infer those figures in your answer.',
+      packDenial
     );
   }
   if (briefing) {
