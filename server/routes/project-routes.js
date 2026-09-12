@@ -20,6 +20,7 @@
 
 const express = require('express');
 const { pool } = require('../db');
+const { firstPhotoSql: sharedFirstPhotoSql, viewerImageSql } = require('../services/photo-cover');
 const { requireAuth, requireCapability } = require('../auth');
 const { geocodeAddress } = require('../geocoder');
 
@@ -112,15 +113,12 @@ function recordActivity(projectId, actorUserId, kind, detail) {
 // test is a fallback whose behaviour is asserted rather than proven — which is
 // exactly how the previous "falls back client-side to the newest attachment"
 // comment survived for months describing code that did not exist.
-function firstPhotoSql(col) {
-  return '(SELECT a2.' + col + ' FROM attachments a2 ' +
-         '  WHERE a2.entity_type = \'project\' AND a2.entity_id = p.id ' +
-         '    AND a2.mime_type LIKE \'image/%\' ' +        // never a PDF
-         '    AND a2.thumb_url IS NOT NULL ' +
-         '    AND a2.markup_of IS NULL ' +                 // a markup is a derived image, not the site
-         '  ORDER BY COALESCE(a2.taken_at, a2.uploaded_at) ASC, a2.position ASC, a2.id ASC ' +
-         '  LIMIT 1)';
-}
+// The cover rule now lives in server/services/photo-cover.js, where the Jobs
+// and Leads rosters read it from too. This file carried its own copy, which
+// is how a hub ends up showing a photo on one tab and a placeholder on
+// another for the same site. Behaviour is unchanged for projects - the
+// shared one is the same query, parameterised and input-validated.
+function firstPhotoSql(col) { return sharedFirstPhotoSql(col, 'project', 'p.id'); }
 
 // Allowlist of fields the PATCH route accepts. Anything outside this
 // set is silently dropped — protects against SQL injection via the
@@ -236,8 +234,15 @@ router.get('/', requireAuth, requireCapability('LEADS_VIEW'), async (req, res) =
     // DateTimeOriginal and is null for anything that arrived without it.
     const sql =
       'SELECT p.*, ' +
+      // THE VIEWER'S COUNT, not a row count. A bare COUNT(*) here counted
+      // PDFs, markup sources and images whose thumbnail never generated -
+      // none of which the photo viewer shows - so this tab said 4 and opened
+      // to 3. viewerImageSql IS js/attachments.js's isImageAttachment() in
+      // SQL, the same expression the Jobs and Leads rosters count with, so
+      // the three tabs cannot disagree about what a photo is.
       '       (SELECT COUNT(*)::int FROM attachments a ' +
-      '          WHERE a.entity_type = \'project\' AND a.entity_id = p.id) AS photo_count, ' +
+      '          WHERE a.entity_type = \'project\' AND a.entity_id = p.id ' +
+      '            AND ' + viewerImageSql('a') + ') AS photo_count, ' +
       '       (SELECT COUNT(*)::int FROM project_pairs pp WHERE pp.project_id = p.id) AS pair_count, ' +
       '       COALESCE(cov.thumb_url, ' + firstPhotoSql('thumb_url') + ') AS cover_thumb_url, ' +
       '       COALESCE(cov.web_url,   ' + firstPhotoSql('web_url')   + ') AS cover_web_url, ' +
@@ -272,8 +277,15 @@ router.get('/:id', requireAuth, requireCapability('LEADS_VIEW'), async (req, res
     if (!orgId) return res.status(404).json({ error: 'Project not found' });
     const { rows } = await pool.query(
       'SELECT p.*, ' +
+      // THE VIEWER'S COUNT, not a row count. A bare COUNT(*) here counted
+      // PDFs, markup sources and images whose thumbnail never generated -
+      // none of which the photo viewer shows - so this tab said 4 and opened
+      // to 3. viewerImageSql IS js/attachments.js's isImageAttachment() in
+      // SQL, the same expression the Jobs and Leads rosters count with, so
+      // the three tabs cannot disagree about what a photo is.
       '       (SELECT COUNT(*)::int FROM attachments a ' +
-      '          WHERE a.entity_type = \'project\' AND a.entity_id = p.id) AS photo_count, ' +
+      '          WHERE a.entity_type = \'project\' AND a.entity_id = p.id ' +
+      '            AND ' + viewerImageSql('a') + ') AS photo_count, ' +
       '       (SELECT COUNT(*)::int FROM project_pairs pp WHERE pp.project_id = p.id) AS pair_count, ' +
       '       (SELECT COUNT(*)::int FROM project_activity pa WHERE pa.project_id = p.id) AS activity_count, ' +
       // Same cover rule as the list — the detail header must not show a

@@ -24,20 +24,17 @@ process.env.JWT_SECRET = process.env.JWT_SECRET
 const { createPgSqlite } = require('./helpers/pg-sqlite');
 const { sqliteSchema } = require('./helpers/db-schema');
 
-// The exact subquery the route emits. Imported by reading the module so the
-// test cannot drift from the shipped string: if someone edits firstPhotoSql,
-// this runs the edited one.
-const routeSrc = require('fs').readFileSync(
-  require('path').join(__dirname, '..', 'server', 'routes', 'project-routes.js'), 'utf8'
-);
+// The exact subquery the route emits. This used to scrape the function body
+// out of project-routes.js and re-evaluate it, which was the right instinct
+// — never copy the SQL — but it broke the moment the route stopped owning
+// the rule. The cover logic now lives in server/services/photo-cover.js,
+// shared with the Jobs and Leads rosters, so the test reads it from there:
+// the same function the route calls, not a fragment of it re-evaluated out
+// of scope.
+const { firstPhotoSql: sharedFirstPhotoSql } = require('../server/services/photo-cover');
 
 function firstPhotoSqlFromRoute(col) {
-  // Re-evaluate the shipped helper in isolation. Deliberately not a copy —
-  // a copied SQL string is a second implementation that drifts.
-  const m = /function firstPhotoSql\(col\) \{([\s\S]*?)\n\}/.exec(routeSrc);
-  if (!m) throw new Error('firstPhotoSql not found in project-routes.js');
-  // eslint-disable-next-line no-new-func
-  return new Function('col', m[1])(col);
+  return sharedFirstPhotoSql(col, 'project', 'p.id');
 }
 
 const SCHEMA = sqliteSchema(['projects', 'attachments'], {

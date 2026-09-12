@@ -38,36 +38,46 @@ const { sqliteSchema } = require('./helpers/db-schema');
 
 const ROOT = path.join(__dirname, '..');
 
-// The SHIPPED helper out of the route, re-evaluated in isolation. Deliberately
-// not a copy — a copied SQL string is a second implementation that drifts.
-// Same extraction test/project-cover-fallback.test.js uses, on purpose: if that
-// file's regex stops matching, both suites say so at once rather than one of
-// them quietly asserting nothing.
-function routeFirstPhotoSql(col) {
-  const src = fs.readFileSync(path.join(ROOT, 'server', 'routes', 'project-routes.js'), 'utf8');
-  const m = /function firstPhotoSql\(col\) \{([\s\S]*?)\n\}/.exec(src);
-  if (!m) throw new Error('firstPhotoSql not found in project-routes.js');
-  // eslint-disable-next-line no-new-func
-  return new Function('col', m[1])(col);
+// This file used to lift the route's OWN copy of the cover SQL out by regex
+// and assert the service reproduced it byte for byte. That was the right
+// guard while there were two implementations. There is now one: the route
+// delegates to server/services/photo-cover.js, so the drift this guarded
+// against cannot happen and the parity assertion has nothing left to compare.
+//
+// What replaces it is the property that KEEPS it that way — the route must
+// hold no independent SQL for the cover. Asserted on the source because that
+// is where a re-introduced copy would appear, and mutation-tested below so it
+// cannot pass vacuously.
+function projectRouteSrc() {
+  return fs.readFileSync(path.join(ROOT, 'server', 'routes', 'project-routes.js'), 'utf8');
 }
 
 describe('the cover rule has ONE definition', () => {
-  test('the service reproduces the project route BYTE FOR BYTE', () => {
-    for (const col of ['thumb_url', 'web_url']) {
-      const fromRoute = routeFirstPhotoSql(col);
-      const fromService = firstPhotoSql(col, 'project', 'p.id');
-      // Not .toContain, not a normalised comparison: equality on the exact
-      // string, so a changed ORDER BY, a dropped exclusion or an extra space
-      // all fail.
-      expect(fromService).toBe(fromRoute);
-    }
+  test('the project route holds no cover SQL of its own', () => {
+    const src = projectRouteSrc();
+    // The shape a re-introduced copy would take. If someone pastes the
+    // subquery back in, this is the string it contains.
+    expect(src).not.toContain('FROM attachments a2');
+    expect(src).not.toContain('a2.markup_of IS NULL');
+    // And it reaches the shared rule rather than reimplementing it.
+    expect(src).toContain("require('../services/photo-cover')");
   });
 
-  test('the extraction is not vacuously passing on two empty strings', () => {
-    const s = routeFirstPhotoSql('thumb_url');
+  test('that assertion is not vacuous - a re-introduced copy fails it', () => {
+    // Mutate the source the way a regression actually would, and require the
+    // check to catch it. Without this, the three toContain/not.toContain above
+    // would pass just as happily against a file that had been emptied.
+    const reintroduced = projectRouteSrc() +
+      String.fromCharCode(10) + "function firstPhotoSql(col) { return '(SELECT a2.' + col + " +
+      "' FROM attachments a2 WHERE a2.markup_of IS NULL LIMIT 1)'; }";
+    expect(reintroduced).toContain('FROM attachments a2');
+    expect(reintroduced).toContain('a2.markup_of IS NULL');
+  });
+
+  test('the service still carries the four clauses that ARE the decision', () => {
+    const s = firstPhotoSql('thumb_url', 'project', 'p.id');
     expect(s.length).toBeGreaterThan(200);
-    // The four clauses that ARE the decision, named individually so a silent
-    // removal of any one of them is reported as itself.
+    // Named individually so a silent removal of any one is reported as itself.
     expect(s).toContain("a2.mime_type LIKE 'image/%'");
     expect(s).toContain('a2.thumb_url IS NOT NULL');
     expect(s).toContain('a2.markup_of IS NULL');
