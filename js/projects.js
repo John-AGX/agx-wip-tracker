@@ -355,7 +355,7 @@
       '<div class="p86-projects-root">' +
         '<div class="p86-projects-header">' +
           '<div class="p86-projects-header-text">' +
-            '<h2>Projects</h2>' +
+            '<h2>Photos</h2>' +
             '<div class="p86-projects-subtitle">Photo + walkthrough buckets for sites. Link to a lead during sales; the job inherits once sold.</div>' +
           '</div>' +
           '<div class="p86-projects-header-actions">' +
