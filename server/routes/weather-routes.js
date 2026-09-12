@@ -169,6 +169,21 @@ router.get('/jobs', async function(req, res) {
           out[row.id] = { status: geo.status, address: geo.address || null };
           continue;
         }
+        // ONE job asked for = the single-site case, which is the job overview
+        // rail asking for its own forecast. That surface gets the rich payload
+        // (grid numbers, site timezone, active alerts); a board asking for
+        // thirty keeps the single cheap call, because three upstreams per site
+        // would multiply the page load by the slowest of them, thirty times.
+        if (rows.length === 1) {
+          const sc = await getSiteConditions(geo.lat, geo.lng);
+          out[row.id] = Object.assign({
+            status: 'ok',
+            lat: geo.lat,
+            lng: geo.lng,
+            address: geo.address
+          }, sc);
+          continue;
+        }
         const days = await getDailyForecast(geo.lat, geo.lng);
         out[row.id] = {
           status: 'ok',

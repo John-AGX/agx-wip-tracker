@@ -3728,6 +3728,22 @@
 
   function paintJobWeatherBody(body, w, compact) {
     if (!body) return;
+    // Site Conditions owns the side rail when the payload carries the grid
+    // numbers — /api/weather/jobs returns them when exactly one job is asked
+    // for, which is this widget. Sky and rain become two facts instead of one
+    // storm icon, and gusts, heat index, dew-point spread and any active NWS
+    // alert come with them. Falls through to the original day list when the
+    // grid did not arrive, so a degraded upstream costs detail, not the widget.
+    if (compact && window.p86SiteConditions && w && w.status === 'ok' &&
+        Array.isArray(w.days) && w.days.length && w.days[0].site) {
+      // The job address is the only ZIP available here; EPA's UV feed keys on
+      // one. No ZIP simply means no UV stat.
+      var zipMatch = /\b(\d{5})(?:-\d{4})?\b/.exec(String(w.address || ''));
+      if (window.p86SiteConditions.render(body, w, {
+        compact: true,
+        zip: zipMatch ? zipMatch[1] : null
+      })) return;
+    }
     if (!w) {
       body.innerHTML = '<div class="sch-job-wx-empty">No forecast data.</div>';
       return;

@@ -317,3 +317,57 @@ describe('the headline says BOTH halves of the day', () => {
     expect(SC.precipPhrase({ site: { precipPct: 3 } })).toBeNull();
   });
 });
+
+describe('the compact rail variant, and the negative dew spread', () => {
+  let SC;
+  beforeAll(() => {
+    global.window = { escapeHTML: (s) => String(s == null ? '' : s) };
+    global.AbortSignal = { timeout: () => null };
+    global.fetch = () => Promise.reject(new Error('no net'));
+    jest.isolateModules(() => { require('../js/site-conditions.js'); });
+    SC = global.window.p86SiteConditions;
+  });
+
+  test('a spread at or below zero says the surface WILL be wet, not may', () => {
+    // Real reading from Altamonte Springs: coldest working-hour air two degrees
+    // UNDER the highest dew point. That is dew forming, not a near miss, and
+    // "may sweat" would understate it.
+    const a = SC.advise({ dewSpreadF: -2, humidityMaxPct: 97, precipPct: 61, workTempMinF: 76 });
+    expect(a.paint.level).toBe('poor');
+    expect(a.paint.why).toMatch(/will be wet/);
+    expect(a.paint.why).toContain('-2');
+  });
+
+  test('a small positive spread still warns, in the softer wording', () => {
+    const a = SC.advise({ dewSpreadF: 2, humidityMaxPct: 70, precipPct: 0, workTempMinF: 70 });
+    expect(a.paint.level).toBe('poor');
+    expect(a.paint.why).toMatch(/may sweat/);
+  });
+
+  test('compact renders a stacked day list, wide renders the column strip', () => {
+    const days = [{
+      date: '2026-09-12', risk: 'red', tempHigh: 91, tempLow: 76, precipPct: 61, summary: 'Storms',
+      site: { skyCoverMeanPct: 40, precipPct: 61, thunderPct: 60, windMph: 5, windGustMph: 10, dewSpreadF: -2 }
+    }];
+    const w = { status: 'ok', days: days };
+
+    const tall = { innerHTML: '' };
+    SC.render(tall, w, { compact: true });
+    expect(tall.innerHTML).toContain('p86-sc-list');
+    expect(tall.innerHTML).not.toContain('p86-sc-strip');
+
+    const wide = { innerHTML: '' };
+    SC.render(wide, w, {});
+    expect(wide.innerHTML).toContain('p86-sc-strip');
+    expect(wide.innerHTML).not.toContain('p86-sc-list');
+  });
+
+  test('render refuses a payload it cannot paint, so the caller can fall back', () => {
+    // The job widget and the lead editor both keep their original renderer as
+    // the fallback path; it only runs if this returns falsy.
+    const host = { innerHTML: '' };
+    expect(SC.render(host, { status: 'failed' }, {})).toBe(false);
+    expect(SC.render(host, null, {})).toBe(false);
+    expect(SC.render(host, { status: 'ok', days: [] }, {})).toBe(false);
+  });
+});

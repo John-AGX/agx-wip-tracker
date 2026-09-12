@@ -115,6 +115,11 @@
         // The spread rule is the one that actually catches people, and it is
         // the one nobody can eyeball. NOTE it is computed from AIR temp — a
         // shaded wall at dawn is colder than the air, so this reads optimistic.
+        // A spread of zero or below is not "close to" the dew point — it is AT
+        // it, which means dew forms on the surface rather than merely risking
+        // it. Computed worst-case (coldest working-hour air against the highest
+        // dew point), which is the right way round for an advisory.
+        if (spread != null && spread <= 0) return { level: 'poor', why: 'air reaches the dew point (' + spread + '°) — surface will be wet' };
         if (spread != null && spread < 5) return { level: 'poor', why: 'dew spread ' + spread + '° — surface may sweat' };
         if (rh != null && rh > 85) return { level: 'poor', why: 'RH ' + rh + '%' };
         if (pct != null && pct >= 50) return { level: 'poor', why: pct + '% rain inside the cure window' };
@@ -260,6 +265,35 @@
     return m ? 'until ' + m[1] : String(h).replace(/\s+by\s+NWS.*$/i, '');
   }
 
+  // ── the 7-day list, vertical ─────────────────────────────────────────
+  // For a narrow side rail (the job overview is ~300px), where seven columns
+  // would be seven illegible slivers. Same facts, one row per day, and the sky
+  // word gets room to be a word rather than an abbreviation.
+  function listHTML(days) {
+    return '<div class="p86-sc-list">' + days.slice(0, 7).map(function (d) {
+      var p = String(d.date || '').split('-');
+      var dt = (p.length === 3) ? new Date(+p[0], +p[1] - 1, +p[2]) : null;
+      var dow = dt ? ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][dt.getDay()] : '';
+      var s = d.site || {};
+      var sky = skyWord(n(s.skyCoverMeanPct != null ? s.skyCoverMeanPct : s.skyCoverMaxPct));
+      var pct = n(or(s.precipPct, d.precipPct));
+      var border = d.risk === 'red' ? '#f87171' : (d.risk === 'yellow' ? '#fbbf24' : 'transparent');
+      var hasAlert = d.alerts && d.alerts.length;
+      return '<div class="p86-sc-lrow" style="border-left-color:' + border + ';" title="' +
+          esc([d.summary, sky].filter(Boolean).join(' — ')) + '">' +
+        '<span class="p86-sc-lrow-day">' + esc(dow) + ' ' +
+          (dt ? (dt.getMonth() + 1) + '/' + dt.getDate() : '') +
+          (hasAlert ? ' <span style="color:#f87171;">!</span>' : '') + '</span>' +
+        '<span class="p86-sc-lrow-sky">' + esc(sky || d.summary || '') + '</span>' +
+        '<span class="p86-sc-lrow-temp">' +
+          (d.tempHigh != null ? '<strong>' + d.tempHigh + '°</strong>' : '—') +
+          (d.tempLow != null ? ' <span class="p86-sc-lrow-lo">' + d.tempLow + '°</span>' : '') +
+        '</span>' +
+        '<span class="p86-sc-lrow-pop">' + (pct ? pct + '%' : '') + '</span>' +
+      '</div>';
+    }).join('') + '</div>';
+  }
+
   // ── the 7-day strip ──────────────────────────────────────────────────
   function stripHTML(days) {
     return '<div class="p86-sc-strip">' + days.slice(0, 7).map(function (d) {
@@ -333,12 +367,15 @@
     if (!w || w.status !== 'ok' || !Array.isArray(w.days) || !w.days.length) return false;
 
     var today = w.days[0];
+    // compact = a narrow side rail (the job overview is ~300px). Seven columns
+    // there are seven illegible slivers, so the days stack instead.
+    var compact = !!opts.compact;
     var paint = function (uv) {
       host.innerHTML =
         alertsHTML(w.alerts) +
         todayHTML(today, uv) +
         adviceHTML(today) +
-        stripHTML(w.days) +
+        (compact ? listHTML(w.days) : stripHTML(w.days)) +
         // Say when the grid did not arrive rather than quietly showing a
         // thinner panel that looks complete.
         ((w.sources && w.sources.grid && !w.sources.grid.ok)
