@@ -31,8 +31,38 @@ const fileFolders = require('../services/file-folders');
 // attachment_folder_grants keyed on a body-supplied sub_id and contained no
 // sub-org check at all — see the block comment above syncSubAccessForPO.
 const { subInOrg } = require('../services/sub-org-scope');
+const tzUtil = require('../timezone');
 
 function _norm(v) { return v == null ? '' : String(v).trim().toLowerCase(); }
+
+// The calendar day a subcontractor's acceptance is recorded under — printed on
+// the PO as the date the executed contract was accepted.
+//
+// Both fallbacks used to be new Date().toISOString().slice(0, 10). This process
+// runs in UTC, so for four hours every evening that named TOMORROW in Tampa.
+// The editor always sends a date, so the fallback was latent — but it is the
+// path any caller without a client clock takes, and it was wrong for all of
+// them. A missing or malformed date now resolves to today in the recorder's
+// zone (their override, else the org's), and nothing that is not a real
+// calendar day is persisted as one.
+async function acceptanceDay(userId, orgId, supplied) {
+  if (tzUtil.isCalendarDay(supplied)) return String(supplied).trim();
+  let userTz = null;
+  let orgTz = null;
+  try {
+    const { rows } = await pool.query(
+      `SELECT u.timezone AS user_tz, o.timezone AS org_tz
+         FROM users u LEFT JOIN organizations o ON o.id = u.organization_id
+        WHERE u.id = $1 AND u.organization_id = $2`,
+      [userId, orgId]
+    );
+    if (rows[0]) { userTz = rows[0].user_tz; orgTz = rows[0].org_tz; }
+  } catch (e) {
+    // No zone to read is not a reason to refuse a signature: fall through to
+    // the platform default zone, which is still a local day, never the UTC one.
+  }
+  return tzUtil.calendarDayOr(supplied, tzUtil.resolveTz(userTz, orgTz));
+}
 
 // ── #4: PO-driven sub access ────────────────────────────────────────
 // When a PO is ISSUED to a sub (or a sub is re-assigned on an already-
@@ -482,7 +512,7 @@ router.post('/purchase-orders/:id/status', requireAuth, requireCapability('ESTIM
       if (acc) {
         newData.acceptance = {
           name: acc.name ? String(acc.name).slice(0, 200) : '',
-          date: acc.date || new Date().toISOString().slice(0, 10),
+          date: await acceptanceDay(req.user.id, req.user.organization_id, acc.date),
           accepted: true
         };
       }
@@ -622,7 +652,9 @@ router.post('/purchase-orders/:id/addendum', requireAuth, requireCapability('EST
     }
     const billed = Number(cur.rows[0].billed) || 0;
     const acc = req.body && req.body.acceptance;
-    const acceptance = acc ? { name: acc.name ? String(acc.name).slice(0, 200) : '', date: acc.date || new Date().toISOString().slice(0, 10), accepted: true } : null;
+    const acceptance = acc
+      ? { name: acc.name ? String(acc.name).slice(0, 200) : '', date: await acceptanceDay(req.user.id, req.user.organization_id, acc.date), accepted: true }
+      : null;
     const addendums = Array.isArray(data.addendums) ? data.addendums.slice() : [];
 
     // (a) approve an existing pending addendum

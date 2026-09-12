@@ -42,6 +42,15 @@
     });
   }
   function escAttr(v) { return esc(v); }
+  // Today as a LOCAL calendar day, 'YYYY-MM-DD'. Every date this editor stamps
+  // goes into a DATE: a new bill's bill_date, and the day a subcontractor's
+  // acceptance is recorded on the executed PO and on each addendum. They were
+  // all toISOString().slice(0, 10) — the UTC day — so a PO approved or a bill
+  // started after 8pm Eastern was dated TOMORROW, on a contract document.
+  function todayISO() {
+    var d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
   function num(v) { var n = parseFloat(v); return isNaN(n) ? 0 : n; }
   function money(n) {
     n = num(n);
@@ -600,7 +609,7 @@
       addBill.disabled = true;
       window.p86Api.bills.create(_po.job_id, {
         po_id: _po.id, sub_id: _po.sub_id || null, amount: 0,
-        bill_date: new Date().toISOString().slice(0, 10),
+        bill_date: todayISO(),
         data: { description: '', lienWaiver: 'none' }
       }).then(function (r) {
         addBill.disabled = false;
@@ -918,7 +927,7 @@
           // Cancel resolves null/undefined; an empty string is a real answer
           // but is not a signature, so it is treated as a cancel too.
           if (nm == null || !String(nm).trim()) return null;
-          return { name: String(nm).trim(), date: new Date().toISOString().slice(0, 10) };
+          return { name: String(nm).trim(), date: todayISO() };
         })
       : askYesNo('Move this PO to "' + (STATUS_LABEL[step.to] || step.to) + '"?')
           .then(function (ok) { return ok ? false : null; });
@@ -1002,7 +1011,7 @@
     if (approve) {
       var nm = window.prompt('Record subcontractor acceptance of this addendum (e-sign).\n\nSubcontractor name:', _po.sub_name || '');
       if (nm === null) return;
-      acceptance = { name: nm, date: new Date().toISOString().slice(0, 10) };
+      acceptance = { name: nm, date: todayISO() };
     }
     if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
     var poId = _po.id;
@@ -1033,7 +1042,7 @@
     if (!_po || !addId) return;
     var nm = window.prompt('Record subcontractor acceptance of this addendum (e-sign).\n\nSubcontractor name:', _po.sub_name || '');
     if (nm === null) return;
-    window.p86Api.purchaseOrders.addendum(_po.id, { addendumId: addId, approve: true, acceptance: { name: nm, date: new Date().toISOString().slice(0, 10) } })
+    window.p86Api.purchaseOrders.addendum(_po.id, { addendumId: addId, approve: true, acceptance: { name: nm, date: todayISO() } })
       .then(function (r) { applyServerPO(r); render(); refreshAfterPOAction(); })
       .catch(function (e) { alert('Could not approve the addendum: ' + ((e && e.message) || 'error')); });
   }

@@ -158,7 +158,31 @@ function formatInTz(date, tz, options) {
   }
 }
 
+// True only for a real calendar date written 'YYYY-MM-DD'. The shape alone is
+// not enough: '2026-02-31' matches the pattern and is not a day.
+function isCalendarDay(v) {
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v == null ? '' : String(v).trim());
+  if (!m) return false;
+  var y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+  var probe = new Date(Date.UTC(y, mo - 1, d));
+  return probe.getUTCFullYear() === y && probe.getUTCMonth() === mo - 1 && probe.getUTCDate() === d;
+}
+
+// The supplied calendar day if it is one, otherwise TODAY as seen in `tz`.
+//
+// For values that are a DAY rather than an instant — a signature date, a bill
+// date. The tempting spelling, new Date().toISOString().slice(0, 10), is the
+// UTC day, and this server runs in UTC on Railway, so from 8pm Eastern onward
+// it names TOMORROW. A supplied value that is not a real day is not persisted
+// as one; it falls back to today in the zone rather than storing the string.
+function calendarDayOr(supplied, tz, now) {
+  if (isCalendarDay(supplied)) return String(supplied).trim();
+  return localDateInTz(tz, now || new Date());
+}
+
 module.exports = {
+  isCalendarDay,
+  calendarDayOr,
   DEFAULT_TZ,
   COMMON_ZONES,
   isValidTz,

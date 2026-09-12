@@ -24,6 +24,26 @@
 // The timezone is forced, because in UTC the bug is invisible and this suite
 // would pass everywhere while users saw the wrong day.
 //
+// ── HOW IT IS FORCED, AND THE TWO WAYS THE FIRST VERSION DID NOT ─────────
+// This file first set process.env.TZ at the top and ran the helpers in the
+// jest worker. That does NOTHING: jest hands the test a sandboxed process.env,
+// and the worker's zone is fixed when it starts. Measured under jest after the
+// assignment: resolved zone still the host's, getTimezoneOffset unchanged. It
+// only worked because the machine it ran on is in America/New_York. With the
+// jest host forced to UTC it went 18 of 33 red against CORRECT code — the
+// instant probes land on the UTC day — so on any other machine it was a broken
+// suite rather than a guard.
+//
+// The todayISO cases had a second hole on top: they compared against the real
+// "now", and the UTC day and the Eastern day only differ between 8pm and
+// midnight. A reverted todayISO went red in the first mutation run because
+// that run happened at 10pm. Re-run at 5:11pm Eastern, the same revert stayed
+// GREEN.
+//
+// So every helper now runs in a CHILD node started with TZ set, with Date
+// pinned to 9:30pm Eastern — the hour the two days disagree. A UTC control
+// child proves the zone really comes from the environment and not the host.
+//
 // ── THE LEDGER IS THE POINT ──────────────────────────────────────────────
 // The population is DERIVED from disk, never listed. Each helper carries the
 // inputs it must get right and the evidence for that claim. A new helper nobody
@@ -31,10 +51,15 @@
 // stops behaving as recorded fails. Silence is not one of the outcomes.
 'use strict';
 
-process.env.TZ = 'America/New_York';
-
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
+
+// 9:30pm on Saturday Sep 19 in New York — 01:30 UTC on Sunday Sep 20. The one
+// kind of moment where a UTC-day bug and a correct local day give different
+// answers.
+const FIXED_NOW = '2026-09-20T01:30:00.000Z';
+const FORCED_ZONE = 'America/New_York';
 
 const JS_DIR = path.join(__dirname, '..', 'js');
 const HELPER_RE = /function\s+(fmtDate\w*|fmtDay\w*|formatDate\w*|todayISO)\s*\(/g;
@@ -60,6 +85,7 @@ const LEDGER = {
   'js/pay-applications.js:todayISO': { today: true, why: 'fills period_to on a G702 pay application, a DATE column' },
   'js/my-day.js:todayISO': { today: true, why: 'delegates to isoDate, which uses local getters' },
   'js/tasks.js:todayISO': { today: true, why: 'delegates to isoDay, which uses local getters' },
+  'js/purchase-order-editor.js:todayISO': { today: true, why: 'stamps a new bill_date (DATE) and the acceptance date on an executed PO and each addendum' },
 
   // Serve BOTH kinds: they render a mix of DATE columns and timestamps.
   'js/service-tickets.js:fmtDate': { cal: true, pg: true, inst: true, why: 'the reference implementation; renders due_date/scheduled_for (DATE) beside created_at' },
@@ -146,7 +172,9 @@ function discover() {
 
 const HELPERS = discover();
 
-function compile(h) {
+// Returns a function BODY that, when run, returns the helper. It is executed in
+// the child, never here.
+function compileSource(h) {
   const got = lift(h.src, h.name, h.at);
   if (!got) throw new Error('could not lift ' + h.key + ' — the brace scanner failed, which is a test bug, not a pass');
 
@@ -168,9 +196,124 @@ function compile(h) {
     }
   }
   const deps = Array.from(picked.values()).join('\n');
-  // eslint-disable-next-line no-new-func
-  return new Function(deps + '\nreturn ' + got.src + ';')();
+  return deps + '\nreturn ' + got.src + ';';
 }
+
+// ── The child ────────────────────────────────────────────────────────────
+// Passed to `node -e` as its own source text, so nothing here is escaped by
+// hand. It reads the payload on stdin, pins Date, runs every helper and both
+// predicates, and prints one JSON object.
+function childRunner() {
+  const payload = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+  const RealDate = Date;
+  const PINNED = RealDate.parse(payload.fixedNow);
+  class PinnedDate extends RealDate {
+    constructor(...args) {
+      if (args.length === 0) super(PINNED);
+      else super(...args);
+    }
+    static now() { return PINNED; }
+  }
+  globalThis.Date = PinnedDate;
+
+  const out = {
+    zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    offsetMin: new RealDate(payload.fixedNow).getTimezoneOffset(),
+    rawDefect: new RealDate(payload.probes.CAL_BARE).getDate(),
+    results: {},
+    errors: {},
+    predicates: null,
+  };
+  const call = (fn, arg) => {
+    try { return { v: String(fn(arg)) }; } catch (e) { return { err: e.message }; }
+  };
+  for (const h of payload.helpers) {
+    let fn;
+    try {
+      // eslint-disable-next-line no-new-func
+      fn = new Function(h.source)();
+    } catch (e) {
+      out.errors[h.key] = 'compile: ' + e.message;
+      continue;
+    }
+    out.results[h.key] = h.today
+      ? { today: call(fn) }
+      : { cal: call(fn, payload.probes.CAL_BARE), pg: call(fn, payload.probes.CAL_PG), inst: call(fn, payload.probes.INSTANT) };
+  }
+  if (payload.predicates) {
+    try {
+      // eslint-disable-next-line no-new-func
+      const isPastDue = new Function(payload.predicates.isPastDue)();
+      // eslint-disable-next-line no-new-func
+      const isOverdue = new Function(payload.predicates.isOverdue)();
+      const p = (n) => (n < 10 ? '0' : '') + n;
+      const shift = (n) => {
+        const d = new Date();
+        d.setDate(d.getDate() + n);
+        return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+      };
+      out.predicates = {
+        today: shift(0),
+        pastDue: { tomorrow: isPastDue(shift(1)), today: isPastDue(shift(0)), yesterday: isPastDue(shift(-1)), none: isPastDue(null) },
+        overdue: { todayOpen: isOverdue(shift(0), 'open'), yesterdayOpen: isOverdue(shift(-1), 'open'), yesterdayClosed: isOverdue(shift(-1), 'closed') },
+      };
+    } catch (e) {
+      out.errors.__predicates = e.message;
+    }
+  }
+  process.stdout.write(JSON.stringify(out));
+}
+
+function runInZone(tz, payload) {
+  const stdout = execFileSync(process.execPath, ['-e', '(' + childRunner.toString() + ')()'], {
+    input: JSON.stringify(payload),
+    env: Object.assign({}, process.env, { TZ: tz }),
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
+    timeout: 60000,
+  });
+  return JSON.parse(stdout);
+}
+
+const PROBES = { CAL_BARE, CAL_PG, INSTANT };
+const LIFT_ERRORS = {};
+const PAYLOAD_HELPERS = [];
+for (const h of HELPERS) {
+  const spec = LEDGER[h.key];
+  if (!spec) continue;
+  try {
+    PAYLOAD_HELPERS.push({ key: h.key, today: !!spec.today, source: compileSource(h) });
+  } catch (e) {
+    LIFT_ERRORS[h.key] = e.message;
+  }
+}
+
+function predicateSource(file, deps, name) {
+  const src = fs.readFileSync(path.join(JS_DIR, file), 'utf8');
+  const pieces = deps.map((d) => {
+    const got = lift(src, d, 0);
+    if (!got) throw new Error('could not lift ' + d + ' from ' + file);
+    return got.src;
+  });
+  const main = lift(src, name, 0);
+  if (!main) throw new Error('could not lift ' + name + ' from ' + file);
+  return pieces.join('\n') + '\nreturn ' + main.src + ';';
+}
+
+// Run once for the whole file. A child that dies throws here, and the suite
+// fails loudly with its stderr rather than reporting nothing.
+const RUN = runInZone(FORCED_ZONE, {
+  fixedNow: FIXED_NOW,
+  probes: PROBES,
+  helpers: PAYLOAD_HELPERS,
+  predicates: {
+    isPastDue: predicateSource('invoices.js', [], 'isPastDue'),
+    isOverdue: predicateSource('job-workflow-ui.js', ['toLocalDay'], 'isOverdue'),
+  },
+});
+// The control: same code, UTC. If the forced zone were silently ignored and
+// the host's zone used instead, these two would agree.
+const UTC_CONTROL = runInZone('UTC', { fixedNow: FIXED_NOW, probes: PROBES, helpers: [], predicates: null });
 
 // The day a rendered string claims, whatever its format. Deliberately loose
 // about separators, month spelling and zero-padding — a format change must not
@@ -187,8 +330,23 @@ describe('calendar days and instants are not the same thing', () => {
     // Both bugs are invisible at UTC+0. A suite that silently ran there would
     // stay green while Tampa saw the wrong day, which is the exact failure this
     // file exists to prevent.
-    expect(Intl.DateTimeFormat().resolvedOptions().timeZone).toBe('America/New_York');
-    expect(new Date(CAL_BARE).getDate()).toBe(19);   // the raw defect, still true
+    expect(RUN.zone).toBe(FORCED_ZONE);
+    expect(RUN.offsetMin).toBe(240);          // EDT at the pinned instant
+    expect(RUN.rawDefect).toBe(19);           // the raw defect reproduces there
+    // ...and it is the ENVIRONMENT doing it, not whatever zone this machine is in.
+    expect(UTC_CONTROL.zone).toBe('UTC');
+    expect(UTC_CONTROL.rawDefect).toBe(20);
+  });
+
+  test('the pinned clock is an hour where the UTC day and the local day disagree', () => {
+    // Without this, every todayISO case is a coin flip on the time of day.
+    expect(FIXED_NOW.slice(0, 10)).toBe('2026-09-20');
+    expect(RUN.predicates && RUN.predicates.today).toBe('2026-09-19');
+  });
+
+  test('every classified helper was lifted and compiled in the child', () => {
+    expect(LIFT_ERRORS).toEqual({});
+    expect(RUN.errors).toEqual({});
   });
 
   test('the population is derived from disk, and it is not empty', () => {
@@ -228,49 +386,33 @@ describe('calendar days and instants are not the same thing', () => {
 
     if (spec.today) {
       test(h.key + ' returns the LOCAL calendar day (' + spec.why + ')', () => {
-        const fn = compile(h);
-        const now = new Date();
-        const p = (n) => (n < 10 ? '0' : '') + n;
-        const local = now.getFullYear() + '-' + p(now.getMonth() + 1) + '-' + p(now.getDate());
-        // toISOString() would give the UTC day, which after 8pm Eastern is
-        // TOMORROW. These values are written to DATE columns.
-        expect(fn()).toBe(local);
+        // At the pinned 9:30pm Eastern, toISOString() would say the 20th.
+        // These values are written to DATE columns.
+        const r = RUN.results[h.key];
+        expect(r && r.today).toEqual({ v: '2026-09-19' });
       });
       continue;
     }
 
     test(h.key + ' handles what it is given (' + spec.why + ')', () => {
-      const fn = compile(h);
+      const r = RUN.results[h.key];
+      expect(r).toBeTruthy();
       // Asserted as day-claims so a format change does not fail the test but a
       // day change does.
-      if (spec.cal) expect(saysDay(fn(CAL_BARE), 20)).toBe(true);
-      if (spec.pg) expect(saysDay(fn(CAL_PG), 20)).toBe(true);
-      if (spec.inst) expect(saysDay(fn(INSTANT), 7)).toBe(true);
+      if (spec.cal) expect({ out: r.cal, day20: saysDay(r.cal.v, 20) }).toEqual({ out: r.cal, day20: true });
+      if (spec.pg) expect({ out: r.pg, day20: saysDay(r.pg.v, 20) }).toEqual({ out: r.pg, day20: true });
+      if (spec.inst) expect({ out: r.inst, day7: saysDay(r.inst.v, 7) }).toEqual({ out: r.inst, day7: true });
     });
   }
 
   test('the two predicates that DRIVE styling agree with the day, not the instant', () => {
     // A wrong render is a wrong label. A wrong predicate paints a row red and
     // tells the office a client is late, so these get their own case.
-    const invSrc = fs.readFileSync(path.join(JS_DIR, 'invoices.js'), 'utf8');
-    const isPastDue = new Function('return ' + lift(invSrc, 'isPastDue', 0).src + ';')();
-
-    const p = (n) => (n < 10 ? '0' : '') + n;
-    const shift = (n) => {
-      const d = new Date();
-      d.setDate(d.getDate() + n);
-      return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
-    };
-    expect(isPastDue(shift(1))).toBe(false);    // due tomorrow
-    expect(isPastDue(shift(0))).toBe(false);    // due TODAY is not yet late
-    expect(isPastDue(shift(-1))).toBe(true);    // due yesterday
-    expect(isPastDue(null)).toBe(false);
-
-    const jwSrc = fs.readFileSync(path.join(JS_DIR, 'job-workflow-ui.js'), 'utf8');
-    const toLocalDay = lift(jwSrc, 'toLocalDay', 0).src;
-    const isOverdue = new Function(toLocalDay + '\nreturn ' + lift(jwSrc, 'isOverdue', 0).src + ';')();
-    expect(isOverdue(shift(0), 'open')).toBe(false);   // due today, not overdue
-    expect(isOverdue(shift(-1), 'open')).toBe(true);
-    expect(isOverdue(shift(-1), 'closed')).toBe(false);
+    expect(RUN.predicates).toEqual({
+      today: '2026-09-19',
+      // due tomorrow / due TODAY is not yet late / due yesterday / no due date
+      pastDue: { tomorrow: false, today: false, yesterday: true, none: false },
+      overdue: { todayOpen: false, yesterdayOpen: true, yesterdayClosed: false },
+    });
   });
 });
