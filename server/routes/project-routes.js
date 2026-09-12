@@ -93,6 +93,35 @@ function recordActivity(projectId, actorUserId, kind, detail) {
   });
 }
 
+// The first photo TAKEN on a project, as a correlated scalar subquery.
+//
+// Used to auto-fill the cover when nobody has set one. Written once and called
+// from both the list and the detail query because the two must agree: a project
+// whose row shows a photo and whose header shows a placeholder is the bug this
+// replaced, one level down.
+//
+// FIRST, not newest. The opening shot of a walkthrough identifies the site; the
+// newest photo on a repaint job is a close-up of caulk. COALESCE(taken_at,
+// uploaded_at) because taken_at is EXIF DateTimeOriginal and is null for
+// anything that arrived without it; position then id break ties so the choice
+// is stable across calls rather than whatever the planner returns first.
+//
+// A correlated subquery rather than LEFT JOIN LATERAL deliberately: LATERAL is
+// Postgres-only, and the test harness runs the REAL emitted SQL through SQLite
+// against a schema derived from db.js. A fallback that cannot be executed in a
+// test is a fallback whose behaviour is asserted rather than proven — which is
+// exactly how the previous "falls back client-side to the newest attachment"
+// comment survived for months describing code that did not exist.
+function firstPhotoSql(col) {
+  return '(SELECT a2.' + col + ' FROM attachments a2 ' +
+         '  WHERE a2.entity_type = \'project\' AND a2.entity_id = p.id ' +
+         '    AND a2.mime_type LIKE \'image/%\' ' +        // never a PDF
+         '    AND a2.thumb_url IS NOT NULL ' +
+         '    AND a2.markup_of IS NULL ' +                 // a markup is a derived image, not the site
+         '  ORDER BY COALESCE(a2.taken_at, a2.uploaded_at) ASC, a2.position ASC, a2.id ASC ' +
+         '  LIMIT 1)';
+}
+
 // Allowlist of fields the PATCH route accepts. Anything outside this
 // set is silently dropped — protects against SQL injection via the
 // dynamic-SET pattern.
@@ -191,16 +220,29 @@ router.get('/', requireAuth, requireCapability('LEADS_VIEW'), async (req, res) =
 
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 100));
 
-    // photo_count + pair_count + cover join. Cover priority:
-    //   1. The explicit cover_attachment_id if set (LEFT JOIN cov)
-    //   2. Falls back client-side to the newest attachment.
+    // photo_count + pair_count + cover. Cover priority:
+    //   1. The explicit cover_attachment_id, if someone set one (LEFT JOIN cov)
+    //   2. THE FIRST PHOTO TAKEN on the project (LEFT JOIN LATERAL firstpic)
+    //
+    // Step 2 is new. This comment used to say the fallback happened
+    // "client-side to the newest attachment" and it never did — js/projects.js
+    // read cover_thumb_url and painted a placeholder when it was null. So a
+    // project with 34 photos showed an empty camera icon, which is what the
+    // Photos grid looked like for most of the list.
+    //
+    // FIRST, not newest: the opening shot of a walkthrough is what identifies
+    // the site. The newest photo on a repaint job is a close-up of caulk.
+    // COALESCE(taken_at, uploaded_at) because taken_at is EXIF
+    // DateTimeOriginal and is null for anything that arrived without it.
     const sql =
       'SELECT p.*, ' +
       '       (SELECT COUNT(*)::int FROM attachments a ' +
       '          WHERE a.entity_type = \'project\' AND a.entity_id = p.id) AS photo_count, ' +
       '       (SELECT COUNT(*)::int FROM project_pairs pp WHERE pp.project_id = p.id) AS pair_count, ' +
-      '       cov.thumb_url AS cover_thumb_url, ' +
-      '       cov.web_url   AS cover_web_url, ' +
+      '       COALESCE(cov.thumb_url, ' + firstPhotoSql('thumb_url') + ') AS cover_thumb_url, ' +
+      '       COALESCE(cov.web_url,   ' + firstPhotoSql('web_url')   + ') AS cover_web_url, ' +
+      // Lets the UI say "auto" rather than implying someone chose this shot.
+      '       (p.cover_attachment_id IS NULL AND ' + firstPhotoSql('thumb_url') + ' IS NOT NULL) AS cover_is_auto, ' +
       '       l.title       AS lead_title, ' +
       '       c.name        AS client_name, ' +
       '       COALESCE(j.data->>\'title\', j.data->>\'name\') AS job_name ' +
@@ -234,8 +276,11 @@ router.get('/:id', requireAuth, requireCapability('LEADS_VIEW'), async (req, res
       '          WHERE a.entity_type = \'project\' AND a.entity_id = p.id) AS photo_count, ' +
       '       (SELECT COUNT(*)::int FROM project_pairs pp WHERE pp.project_id = p.id) AS pair_count, ' +
       '       (SELECT COUNT(*)::int FROM project_activity pa WHERE pa.project_id = p.id) AS activity_count, ' +
-      '       cov.thumb_url AS cover_thumb_url, ' +
-      '       cov.web_url   AS cover_web_url, ' +
+      // Same cover rule as the list — the detail header must not show a
+      // placeholder for a project whose row shows a photo.
+      '       COALESCE(cov.thumb_url, ' + firstPhotoSql('thumb_url') + ') AS cover_thumb_url, ' +
+      '       COALESCE(cov.web_url,   ' + firstPhotoSql('web_url')   + ') AS cover_web_url, ' +
+      '       (p.cover_attachment_id IS NULL AND ' + firstPhotoSql('thumb_url') + ' IS NOT NULL) AS cover_is_auto, ' +
       '       l.title       AS lead_title, ' +
       '       c.name        AS client_name, ' +
       '       COALESCE(j.data->>\'title\', j.data->>\'name\') AS job_name, ' +

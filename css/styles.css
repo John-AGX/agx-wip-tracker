@@ -13099,3 +13099,42 @@ body.light-mode .ee-danger-row .ee-danger-copy strong { color: #b91c1c; }
    read as one "things you can do to this estimate" block. */
 .ee-action-row + .ee-danger-row { margin-top: 10px; }
 body.light-mode .ee-action-row { background: rgba(0, 0, 0, 0.02); }
+
+/* ── Projects list: the merged row ─────────────────────────────────────
+   The card grid and the list were two renderings of one query, and the
+   grid's cards were mostly empty space around a cover photo — five per
+   screen where this fits fifteen carrying the same facts. The grid is
+   gone; these are the bits its cards had that the row did not.
+
+   The surrounding .p86-projects-list-* rules are hardcoded #141414 / #222,
+   so they have no light-mode twin. Adding one here rather than leaving the
+   new chips to inherit a dark-only surface. */
+.p86-projects-list-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.p86-projects-list-row .p86-proj-card-wx {
+  white-space: nowrap;
+}
+/* The cover is the row's whole visual anchor, so an empty one should read
+   as "no photos yet" rather than as a broken image. */
+.p86-projects-list-thumb-empty {
+  font-size: 20px;
+  opacity: 0.75;
+}
+@media (max-width: 640px) {
+  /* Chips are the first thing to go when the row gets tight — the name,
+     the count and the date are what you scan by. */
+  .p86-projects-list-chips { display: none; }
+}
+body.light-mode .p86-projects-list-row {
+  background: #fff;
+  border-color: #e4e4e7;
+}
+body.light-mode .p86-projects-list-row:hover {
+  background: #f7f7f8;
+  border-color: #d4d4d8;
+}
+body.light-mode .p86-projects-list-thumb { background: #f0f0f2; }

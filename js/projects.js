@@ -165,7 +165,7 @@
     // (project-level `tag` filter removed — projects don't carry
     // their own tags any more. Use the photo-tag chip strip inside
     // a project for tag-based drill-in.)
-    view: 'grid',          // 'grid' | 'map'
+    view: 'list',          // 'list' | 'map' — the card grid was merged into this list
     projects: [],
     loading: false,
     error: null,
@@ -251,9 +251,15 @@
   // Pick a small emoji + label from one of the day-forecast entries
   // the NWS route returns. Keep this conservative — NWS includes
   // generic strings like "Partly Cloudy", "Showers Likely", etc.
+  // `summary`, not `shortForecast`. This function had always read
+  // day.shortForecast — a key on the RAW NWS period, which the server's
+  // rollupByDay() has never emitted. It was therefore always '' and this
+  // always returned null, so the chip never rendered an icon. Same root cause
+  // as the "null °" temperature beside it: the whole helper was written
+  // against the upstream API shape rather than the shape our route returns.
   function weatherEmoji(day) {
     if (!day) return null;
-    var sf = String(day.shortForecast || '').toLowerCase();
+    var sf = String(day.summary || '').toLowerCase();
     if (!sf) return null;
     if (sf.indexOf('thunder') !== -1) return '⛈';
     if (sf.indexOf('snow') !== -1) return '❄️';
@@ -266,13 +272,21 @@
     return '🌡';
   }
 
-  // Find today's daytime entry. NWS returns alternating day/night
-  // periods; day.isDaytime distinguishes them. Falls back to the
-  // first period if labels are missing.
+  // Today's entry. The server already collapses the alternating NWS day/night
+  // periods into ONE object per calendar day (rollupByDay), so there is no
+  // isDaytime to filter on — this used to `.find(d => d.isDaytime)`, get
+  // undefined every time, and fall through to days[0]. That happened to be
+  // right, which is why the bug stayed: the fallback was doing all the work.
+  //
+  // Match on the local calendar date rather than trusting position, so a
+  // cached payload fetched yesterday does not label itself today.
   function todayForecast(weather) {
     if (!weather || weather.status !== 'ok' || !Array.isArray(weather.days) || !weather.days.length) return null;
-    var today = weather.days.find(function(d) { return d.isDaytime; });
-    return today || weather.days[0];
+    var now = new Date();
+    var iso = now.getFullYear() + '-' +
+      String(now.getMonth() + 1).padStart(2, '0') + '-' +
+      String(now.getDate()).padStart(2, '0');
+    return weather.days.find(function(d) { return d && d.date === iso; }) || weather.days[0];
   }
 
   // Walkthrough state — sticky tags persist between photo uploads
@@ -295,7 +309,11 @@
     // Restore last-used view from sessionStorage so refresh sticks.
     try {
       var stored = sessionStorage.getItem('p86-projects-view');
-      if (stored === 'map' || stored === 'grid') _listState.view = stored;
+      // 'grid' is retired — anyone still holding it in sessionStorage lands on
+      // the list that replaced it. (Note 'list' was never accepted here, so a
+      // user who picked List and refreshed was silently put back on Grid.)
+      if (stored === 'map' || stored === 'list') _listState.view = stored;
+      else if (stored === 'grid') _listState.view = 'list';
     } catch (e) {}
     paintList();
     fetchAll().then(paintList).catch(function(e) {
@@ -366,7 +384,9 @@
 
         '<div class="p86-projects-toolbar">' +
           '<div class="p86-projects-view-toggle">' +
-            '<button class="' + (_listState.view === 'grid' ? 'active' : '') + '" onclick="window.p86Projects.setView(\'grid\')">&#x25A6; Grid</button>' +
+            // Grid is gone. It and List were two renderings of one query, and
+            // the grid's cards were mostly empty space around a cover photo —
+            // five per screen where the list fits fifteen with the same facts.
             '<button class="' + (_listState.view === 'list' ? 'active' : '') + '" onclick="window.p86Projects.setView(\'list\')">&#x2261; List</button>' +
             '<button class="' + (_listState.view === 'map' ? 'active' : '') + '" onclick="window.p86Projects.setView(\'map\')">&#x1F5FA; Map</button>' +
           '</div>' +
@@ -403,9 +423,7 @@
                       }).join(' · ') +
                     '</div>';
                   })()
-                : _listState.view === 'list'
-                  ? renderProjectList(projects)
-                  : renderProjectGrid(projects)) +
+                : renderProjectList(projects)) +
       '</div>';
 
     host.innerHTML = html;
@@ -431,7 +449,7 @@
     // cached yet. The chip renders empty until the response lands;
     // a second paintList() fills the chips. Skipped on the map view
     // since the sidebar already shows addresses + status pins.
-    if (_listState.view === 'grid' && window.p86Api && window.p86Api.weather && window.p86Api.weather.projects) {
+    if (_listState.view === 'list' && window.p86Api && window.p86Api.weather && window.p86Api.weather.projects) {
       var needsWeather = projects
         .filter(function(p) { return p.address_text && !_weatherCache[p.id]; })
         .map(function(p) { return p.id; });
@@ -460,11 +478,10 @@
     }
   }
 
-  function renderProjectGrid(projects) {
-    return '<div class="p86-projects-grid">' +
-      projects.map(projectCardHTML).join('') +
-    '</div>';
-  }
+  // renderProjectGrid / projectCardHTML removed with the grid view. Their
+  // information now lives in projectListRowHTML — the badges, tags, pair
+  // count and weather chip were the only things the grid showed that the
+  // list did not, and all four moved across.
 
   // List view — same row style as the Map view's sidebar, lifted out
   // so users can browse by row without needing the map. Click any row
@@ -476,11 +493,22 @@
     '</div>';
   }
 
+  // ONE row type. This used to be the thin sibling of a card grid and the two
+  // drifted: the grid carried lead/job/client badges, tags and a pair count
+  // that the list simply did not show, so "List" was a worse view of the same
+  // data rather than a denser one. The grid is gone and this row carries
+  // everything the card did — same information, a third of the vertical space,
+  // and a row you can actually scan down.
   function projectListRowHTML(p) {
     var coverUrl = p.cover_thumb_url || p.cover_web_url || '';
     var thumb = coverUrl
-      ? '<img src="' + escapeAttr(coverUrl) + '" alt="" class="p86-projects-list-thumb" />'
-      : '<div class="p86-projects-list-thumb p86-projects-list-thumb-empty">📁</div>';
+      ? '<img src="' + escapeAttr(coverUrl) + '" alt="" class="p86-projects-list-thumb"' +
+        // cover_is_auto: nobody picked this shot, it is just the first photo
+        // taken. Worth saying on hover so an odd-looking cover reads as
+        // "set one" rather than "the app chose badly".
+        (p.cover_is_auto ? ' title="First photo on this project — open it to set a cover"' : '') + ' />'
+      : '<div class="p86-projects-list-thumb p86-projects-list-thumb-empty">&#x1F4F7;</div>';
+
     // Status dot mirrors the Map view's coloring rules so users can
     // scan-by-color across views (green: active <7d, yellow: stale,
     // black: archived).
@@ -490,67 +518,49 @@
       var updated = p.updated_at ? new Date(p.updated_at).getTime() : 0;
       if (((Date.now() - updated) / 86400000) > 7) dot = '🟡';
     }
+
+    var badges = [];
+    if (p.lead_title)  badges.push({ k: 'Lead',   v: p.lead_title });
+    if (p.job_name)    badges.push({ k: 'Job',    v: p.job_name });
+    if (p.client_name) badges.push({ k: 'Client', v: p.client_name });
+
+    var tags = (p.tags || []).slice(0, 3);
+    var extraTags = Math.max(0, (p.tags || []).length - tags.length);
+
+    var wx = _weatherCache[p.id];
+    var wxToday = wx ? todayForecast(wx) : null;
+    var wxChip = wxToday
+      ? '<span class="p86-proj-card-wx" title="' + escapeAttr(wxToday.summary || '') + '">' +
+          weatherEmoji(wxToday) + ' ' + escapeHTML(wxToday.tempHigh == null ? '' : String(wxToday.tempHigh) + '°') +
+        '</span>'
+      : '';
+
     return '<div class="p86-projects-list-row" onclick="window.openProject(p86Dec(\'' + p86Enc(p.id) + '\'))" title="Open project">' +
       thumb +
       '<div class="p86-projects-list-body">' +
         '<div class="p86-projects-list-name">' + dot + ' ' + escapeHTML(p.name || 'Untitled') + '</div>' +
         (p.address_text ? '<div class="p86-projects-list-addr">' + escapeHTML(p.address_text) + '</div>' : '') +
-        '<div class="p86-projects-list-meta">📷 ' + Number(p.photo_count || 0) + ' · ' + escapeHTML(fmtRelative(p.updated_at)) + '</div>' +
-      '</div>' +
-    '</div>';
-  }
-
-  function projectCardHTML(p) {
-    var coverUrl = p.cover_thumb_url || p.cover_web_url || '';
-    var visual = coverUrl
-      ? '<img src="' + escapeAttr(coverUrl) + '" alt="" class="p86-proj-card-cover" />'
-      : '<div class="p86-proj-card-cover p86-proj-card-cover-empty">&#x1F4F8;</div>';
-
-    var badges = [];
-    if (p.lead_title)   badges.push({ k: 'Lead',    v: p.lead_title });
-    if (p.job_name)     badges.push({ k: 'Job',     v: p.job_name });
-    if (p.client_name)  badges.push({ k: 'Client',  v: p.client_name });
-
-    var tags = (p.tags || []).slice(0, 3);
-    var extraTags = Math.max(0, (p.tags || []).length - tags.length);
-
-    // Optional weather chip on the card. Renders only when weather
-    // data has been fetched for this project (lazy populated by
-    // paintList after the project list lands).
-    var wx = _weatherCache[p.id];
-    var wxToday = wx ? todayForecast(wx) : null;
-    var wxChip = wxToday
-      ? '<span class="p86-proj-card-wx" title="' + escapeAttr(wxToday.shortForecast || '') + '">' + weatherEmoji(wxToday) + ' ' + escapeHTML(String(wxToday.temperature || '')) + '°</span>'
-      : '';
-
-    return '<div class="p86-proj-card" onclick="window.openProject(p86Dec(\'' + p86Enc(p.id) + '\'))">' +
-      visual +
-      '<div class="p86-proj-card-body">' +
-        '<div class="p86-proj-card-name">' + escapeHTML(p.name) + '</div>' +
-        '<div class="p86-proj-card-stats">' +
-          '<span>&#x1F4F7; ' + Number(p.photo_count || 0) + '</span>' +
-          (Number(p.pair_count || 0) ? '<span>&#x1F500; ' + Number(p.pair_count) + '</span>' : '') +
-          (wxChip ? wxChip : '') +
-          '<span class="p86-proj-card-updated">' + escapeHTML(fmtRelative(p.updated_at)) + '</span>' +
+        '<div class="p86-projects-list-meta">' +
+          '&#x1F4F7; ' + Number(p.photo_count || 0) +
+          (Number(p.pair_count || 0) ? ' · &#x1F500; ' + Number(p.pair_count) : '') +
+          (wxChip ? ' · ' + wxChip : '') +
+          ' · ' + escapeHTML(fmtRelative(p.updated_at)) +
         '</div>' +
-        (tags.length
-          ? '<div class="p86-proj-card-tags">' +
+        (badges.length || tags.length
+          ? '<div class="p86-projects-list-chips">' +
+              badges.map(function(b) {
+                return '<span class="p86-proj-card-badge"><span class="p86-proj-card-badge-k">' + escapeHTML(b.k) + ':</span> ' + escapeHTML(b.v) + '</span>';
+              }).join('') +
               tags.map(function(t) {
                 return '<span class="p86-chip-tag-mini" style="--h:' + hueFor(t) + ';">#' + escapeHTML(t) + '</span>';
               }).join('') +
               (extraTags ? '<span class="p86-chip-tag-mini p86-chip-tag-more">+' + extraTags + '</span>' : '') +
             '</div>'
           : '') +
-        (badges.length
-          ? '<div class="p86-proj-card-badges">' +
-              badges.map(function(b) {
-                return '<span class="p86-proj-card-badge"><span class="p86-proj-card-badge-k">' + escapeHTML(b.k) + ':</span> ' + escapeHTML(b.v) + '</span>';
-              }).join('') +
-            '</div>'
-          : '') +
       '</div>' +
     '</div>';
   }
+
 
   function setFilter(id) {
     _listState.filter = id;
@@ -561,8 +571,8 @@
     }
   }
   function setView(view) {
-    var allowed = ['grid', 'list', 'map'];
-    _listState.view = (allowed.indexOf(view) >= 0) ? view : 'grid';
+    var allowed = ['list', 'map'];
+    _listState.view = (allowed.indexOf(view) >= 0) ? view : 'list';
     try { sessionStorage.setItem('p86-projects-view', _listState.view); } catch (e) {}
     paintList();
   }
@@ -4666,15 +4676,34 @@
 
   function renderProjectWeatherHTML(w) {
     // Show today + the next two days in a compact 3-cell strip.
-    var days = (w && Array.isArray(w.days)) ? w.days.filter(function(d) { return d.isDaytime; }).slice(0, 3) : [];
+    //
+    // This strip has rendered NOTHING since it was written: it filtered on
+    // d.isDaytime, a raw-NWS-period key the server's rollup does not emit, so
+    // the filter always returned [] and the function always returned ''. The
+    // rollup gives one entry per calendar day already — there is nothing to
+    // filter, only to slice. Same fix for the other two keys: `summary` not
+    // shortForecast, `tempHigh` not temperature.
+    var days = (w && Array.isArray(w.days)) ? w.days.slice(0, 3) : [];
     if (!days.length) return '';
     var html = '<div class="p86-proj-detail-weather-grid">';
     days.forEach(function(d, i) {
-      var emoji = weatherEmoji(d);
-      var label = i === 0 ? 'Today' : (d.name || '');
-      html += '<div class="p86-proj-detail-weather-cell" title="' + escapeAttr(d.shortForecast || '') + '">' +
+      var emoji = weatherEmoji(d) || '🌡';
+      // The rollup has no `name`; derive the weekday from the calendar date.
+      // Parsed as LOCAL parts, never new Date('YYYY-MM-DD') — that is a UTC
+      // instant and renders the day before across the whole US.
+      var label = 'Today';
+      if (i > 0) {
+        var mdy = String(d.date || '').split('-');
+        label = (mdy.length === 3)
+          ? ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][
+              new Date(+mdy[0], +mdy[1] - 1, +mdy[2]).getDay()
+            ]
+          : '';
+      }
+      var t = (d.tempHigh == null) ? '' : String(d.tempHigh) + '°';
+      html += '<div class="p86-proj-detail-weather-cell" title="' + escapeAttr(d.summary || '') + '">' +
         '<div class="p86-proj-detail-weather-emoji">' + emoji + '</div>' +
-        '<div class="p86-proj-detail-weather-temp">' + escapeHTML(String(d.temperature || '')) + '°</div>' +
+        '<div class="p86-proj-detail-weather-temp">' + escapeHTML(t) + '</div>' +
         '<div class="p86-proj-detail-weather-label">' + escapeHTML(label) + '</div>' +
       '</div>';
     });
