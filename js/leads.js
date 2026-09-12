@@ -1435,6 +1435,15 @@ function p86Ask(message, opts) {
   }
 
   function paintLeadWeatherBody(host, w) {
+    // Site Conditions owns the happy path: sky and precipitation as two facts
+    // instead of one, plus gusts, heat index, dew-point spread, thunder
+    // probability and any active NWS alert. It returns false if it cannot
+    // render, and the original strip below stays as the fallback so a failure
+    // in the new panel degrades to the old card rather than to nothing.
+    if (window.p86SiteConditions && w && w.status === 'ok') {
+      var zip = (document.getElementById('leadEditor_zip') || {}).value || '';
+      if (window.p86SiteConditions.render(host, w, { zip: zip })) return;
+    }
     if (!w || w.status === 'no_address') {
       host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:10px 0;">Add an address to see the forecast.</div>';
       return;

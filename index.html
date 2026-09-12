@@ -251,7 +251,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&display=swap">
     <link rel="stylesheet" href="css/vendor/leaflet.css?v=1">
-    <link rel="stylesheet" href="css/styles.css?v=309">
+    <link rel="stylesheet" href="css/styles.css?v=310">
     <link rel="stylesheet" href="css/report-style-packs.css?v=5">
     <link rel="stylesheet" href="css/workspace-layout.css?v=68">
     <link rel="stylesheet" href="css/workspace.css?v=41">
@@ -3012,7 +3012,7 @@
 
             <!-- Weather panel -->
             <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
-              <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">&#x1F324; 7-day Forecast</legend>
+              <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">&#x1F327; Site Conditions</legend>
               <div id="leadEditor_weatherHost" style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:10px 0;">
                 Fill in the Project Address to see the forecast.
               </div>
@@ -3548,7 +3548,10 @@
     <script src="js/table-enhancements.js?v=15"></script>
     <script src="js/bulk-ribbon.js?v=1"></script>
     <script src="js/job-finalize.js?v=8"></script>
-    <script src="js/leads.js?v=101"></script>
+    <!-- Site Conditions panel (window.p86SiteConditions). Loads BEFORE
+         leads.js, which delegates its weather host to it. -->
+    <script src="js/site-conditions.js?v=1"></script>
+    <script src="js/leads.js?v=102"></script>
     <script src="js/job-costs-import.js?v=17"></script>
     <script src="js/qb-costs-view.js?v=25"></script>
     <script src="js/insights.js?v=14"></script>

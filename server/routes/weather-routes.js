@@ -24,7 +24,7 @@ const express = require('express');
 const { pool } = require('../db');
 const { requireAuth } = require('../auth');
 const { geocodeAddress } = require('../geocoder');
-const { getDailyForecast } = require('../weather');
+const { getDailyForecast, getSiteConditions } = require('../weather');
 
 const router = express.Router();
 
@@ -302,8 +302,12 @@ router.get('/coords', async function(req, res) {
     return res.json({ status: 'out_of_range', lat: lat, lng: lng });
   }
   try {
-    const days = await getDailyForecast(lat, lng);
-    res.json({ status: 'ok', lat: lat, lng: lng, days: days });
+    // Rich call: the 7-day strip PLUS grid numbers, the site timezone and
+    // active alerts. /jobs and /projects deliberately keep the cheap one —
+    // they loop over thirty-odd sites and three upstreams each would
+    // multiply a page load by the slowest of them, thirty times over.
+    const sc = await getSiteConditions(lat, lng);
+    res.json(Object.assign({ status: 'ok', lat: lat, lng: lng }, sc));
   } catch (e) {
     console.warn('[weather] /coords forecast failed for ' + lat + ',' + lng + ':', e.message);
     res.json({ status: 'error', error: e.message });
@@ -337,14 +341,13 @@ router.get('/by-address', async function(req, res) {
     if (geo.lat < 17 || geo.lat > 72 || geo.lng < -180 || geo.lng > -65) {
       return res.json({ status: 'out_of_range', lat: geo.lat, lng: geo.lng, address: address });
     }
-    const days = await getDailyForecast(geo.lat, geo.lng);
-    res.json({
+    const sc = await getSiteConditions(geo.lat, geo.lng);
+    res.json(Object.assign({
       status: 'ok',
       lat: geo.lat,
       lng: geo.lng,
-      address: address,
-      days: days
-    });
+      address: address
+    }, sc));
   } catch (e) {
     console.warn('[weather] /by-address failed for "' + address + '":', e.message);
     res.json({ status: 'error', address: address, error: e.message });
