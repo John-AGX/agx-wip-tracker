@@ -653,7 +653,15 @@ if (!process.env.DATABASE_URL) {
     'API routes that hit Postgres will return 500; the frontend will fall back to localStorage.');
   startServer();
 } else {
-  init().then(refreshRoleCache).then(startServer).catch(err => {
+  // Boot data step, kept OUT of db.js: archive deal threads that hang from
+  // another tenant's lineage (services/deal-thread-archive.js). Idempotent —
+  // a second boot archives 0 — and it can never block a boot: a failure logs
+  // and the server starts anyway, because an explicit load of such a thread
+  // is refused at request time regardless (ai-sessions-routes.js).
+  const archiveForeignDealThreadsOnBoot = () =>
+    require('./services/deal-thread-archive').archiveForeignDealThreads(pool)
+      .catch(e => console.warn('[deal-thread-archive] skipped this boot:', e && e.message));
+  init().then(refreshRoleCache).then(archiveForeignDealThreadsOnBoot).then(startServer).catch(err => {
     console.error('Failed to initialize database:', err.message);
     process.exit(1);
   });

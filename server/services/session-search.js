@@ -55,6 +55,16 @@ const { attachSessionTitles } = require('./session-title');
 // is what makes the untyped lineage array safe where the entity array is not.
 const LINEAGE_TYPES = ['lead', 'estimate', 'job'];
 
+// deal_memory is keyed on a bare lineage id and carries a deal's figures, so
+// every join to it takes the caller's org (legacy un-stamped rows tolerated,
+// as deal-memory.js IN_ORG does). An unresolved org joins nothing. The REST
+// search route withholds the figures from a denied caller on egress
+// (ai-sessions-routes.js withholdDealFigures); this keeps another tenant's row
+// from being joined at all.
+function dealJoinOrgArm(p) {
+  return '(' + p + '::integer IS NOT NULL AND (dm.organization_id = ' + p + ' OR dm.organization_id IS NULL))';
+}
+
 const SESSION_COLS =
   `s.id, s.label, s.summary, s.entity_type, s.entity_id, s.pinned,
    s.last_used_at, s.turn_count, s.session_kind, s.lineage_root,
@@ -280,6 +290,7 @@ async function searchSessions(opts) {
               NULL::text AS snippet
          FROM ai_sessions s
          LEFT JOIN deal_memory dm ON dm.lineage_root = s.lineage_root
+                                 AND ${dealJoinOrgArm('$4')}
         WHERE s.user_id = $1
           AND s.archived_at IS NULL
           AND (s.label ILIKE $2 OR s.summary ILIKE $2)
@@ -315,6 +326,7 @@ async function searchSessions(opts) {
             AND m.entity_type = s.entity_type
             AND COALESCE(m.estimate_id, '') = COALESCE(s.entity_id, '')
            LEFT JOIN deal_memory dm ON dm.lineage_root = s.lineage_root
+                                   AND ${dealJoinOrgArm('$5')}
           WHERE s.user_id = $1
             AND s.archived_at IS NULL
             AND m.content ILIKE $2
@@ -358,6 +370,7 @@ async function searchSessions(opts) {
                 NULL::text AS snippet
            FROM ai_sessions s
            LEFT JOIN deal_memory dm ON dm.lineage_root = s.lineage_root
+                                   AND ${dealJoinOrgArm('$6')}
           WHERE s.user_id = $1
             AND s.archived_at IS NULL
             AND (

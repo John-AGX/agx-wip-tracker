@@ -2488,7 +2488,12 @@ function p86Ask(message, opts) {
     var name = title || (stored && !looksLikeSystemId(stored) ? stored : 'Deal');
     var sm = function(v) { return (typeof formatCurrency === 'function') ? formatCurrency(v) : ('$' + Math.round(Number(v) || 0).toLocaleString()); };
     var money = '';
-    if (stage === 'job') money = sm(n.totalContract != null ? n.totalContract : n.contract) + (n.coIncome ? ' · +CO ' + sm(n.coIncome) : '') + ' · ' + (Number(n.pctComplete) || 0) + '%';
+    // The server withholds a deal's figures from a role that may not read them
+    // (ai-sessions-routes.js withholdDealFigures) — say so; an empty numbers
+    // object must never paint as "$0".
+    if (r.foreign_lineage) money = 'Archived: belongs to a record outside your organization';
+    else if (r.deal_numbers_withheld) money = 'Figures withheld for your role';
+    else if (stage === 'job') money = sm(n.totalContract != null ? n.totalContract : n.contract) + (n.coIncome ? ' · +CO ' + sm(n.coIncome) : '') + ' · ' + (Number(n.pctComplete) || 0) + '%';
     else if (stage === 'estimate') money = sm(n.proposalTotal) + (n.blendedMarkupPct ? ' · ' + n.blendedMarkupPct + '% mkup' : '');
     else money = sm(n.estRevenueLow) + (String(n.estRevenueLow) !== String(n.estRevenueHigh) ? '–' + sm(n.estRevenueHigh) : '') + (n.confidence ? ' · ' + n.confidence + '% conf' : '');
     var snippet = r.last_snippet ? '<div style="font-size:11px;color:rgba(255,255,255,0.42);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px;">' + escapeHTML(String(r.last_snippet).slice(0, 90)) + '</div>' : '';
@@ -2687,9 +2692,15 @@ function p86Ask(message, opts) {
       window.p86Api.get('/api/ai/86/messages?session_id=' + sessionId).then(function(resp) {
         _messages = (resp && resp.messages) || [];
         renderMessages();
-      }).catch(function() {
+      }).catch(function(err) {
         _messages = [];
         renderMessages();
+        // A refused load (a deal thread on a record outside the caller's org,
+        // an account with no org) says why instead of rendering an empty
+        // chat that reads as "no history".
+        var refusal = err && err.data && err.data.code && err.data.error;
+        var box = refusal && document.getElementById('ai-messages');
+        if (box) box.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;padding:20px 0;text-align:center;line-height:1.6;">' + escapeHTML(String(err.data.error)) + '</div>';
       });
     }
     // Update the panel title to reflect the selected session.

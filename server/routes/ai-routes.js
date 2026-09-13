@@ -16256,7 +16256,7 @@ router.get('/86/messages', requireAuth, async (req, res) => {
       const sid = String(sessionId);
       if (!/^\d+$/.test(sid)) return res.status(400).json({ error: 'invalid session_id' });
       const sr = await pool.query(
-        `SELECT entity_type, entity_id, session_kind FROM ai_sessions WHERE id = $1 AND user_id = $2`,
+        `SELECT entity_type, entity_id, session_kind, lineage_root FROM ai_sessions WHERE id = $1 AND user_id = $2`,
         [sid, req.user.id]
       );
       if (!sr.rows.length) return res.status(404).json({ error: 'session not found' });
@@ -16266,6 +16266,17 @@ router.get('/86/messages', requireAuth, async (req, res) => {
       // it passes only session_id (no deal-surface entity_type), so load by
       // session_id here or the cross-stage history would come back empty.
       if (s.session_kind === 'deal_thread') {
+        // A deal thread keyed on ANOTHER tenant's lineage (minted before the
+        // lineage walk was org-scoped) carries that tenant's figures in its
+        // history. The boot step archives them; this makes the archive more
+        // than cosmetic — loading one by session_id is refused, archived or not.
+        const placed = await dealMemory.lineageRootPlacement(pool, s.lineage_root, msgOrgId);
+        if (placed.placement === 'foreign') {
+          return res.status(409).json({
+            error: 'This deal thread belongs to a record outside your organization, so its history cannot be shown. It has been archived.',
+            code: 'DEAL_THREAD_FOREIGN_LINEAGE',
+          });
+        }
         const dmr = await pool.query(
           `SELECT id, role, content, output_files, created_at
              FROM ai_messages
@@ -16658,6 +16669,13 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
     // deal on LEADS_VIEW. A denied caller still gets the lineage, the deal key
     // and the prose notes, which are not money, and is told why the figures
     // are missing.
+    //
+    // The refresh still runs (and upserts) on a denied caller's turn, by
+    // decision: deal_memory.numbers is the ORG's deal record, not the caller's,
+    // and skipping the upsert would leave allowed users reading a stale figure
+    // because a crew member happened to talk on the deal last. The invariant is
+    // on EGRESS — a denied caller never receives the figures: not here (gated
+    // below) and not over REST (ai-sessions-routes.js withholdDealFigures).
     if (session.session_kind === 'deal_thread') {
       try {
         const dm = await dealMemory.refreshDealNumbers(pool, session.entity_type, sessionEntityId,
@@ -17175,6 +17193,10 @@ module.exports.internals = {
   // named in the input — a claim only an execution can settle.
   aiToolCapabilityDenial,
   aiToolRequiredCapability,
+  // The deal-figure gate, exported so the REST session routes
+  // (ai-sessions-routes.js) withhold deal_memory.numbers by the SAME rule the
+  // <deal_memory> block uses, rather than a copy of it.
+  turnContextMoneyDenial,
   // The gate's own exception list, exported so a test can assert that every
   // name on it answers to something and reads no tenant row — an exemption
   // nobody can enumerate is an exemption nobody can review.

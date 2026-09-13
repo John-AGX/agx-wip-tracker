@@ -320,4 +320,54 @@ function renderDealBlock(res, opts) {
   return L.join('\n');
 }
 
-module.exports = { resolveLineageRoot, computeNumbers, refreshDealNumbers, renderDealBlock };
+// Where does a deal thread's lineage ROOT live, relative to an organization?
+//
+// ai_sessions has no organization_id: a session's tenant is its user's. Deal
+// threads minted before resolveLineageRoot was org-scoped could be keyed on
+// ANOTHER tenant's lead / estimate / job, and their history carries that
+// tenant's figures. This is the ONE definition of "foreign lineage", shared by
+// the boot-time archive (services/deal-thread-archive.js) and the explicit
+// load refusals (ai-sessions-routes.js, GET /86/messages), so the thread the
+// archive hides and the thread a load refuses can never disagree.
+//
+// The lookup is by bare id ON PURPOSE and returns only organization ids — its
+// whole job is to find a row outside the org. The three id spaces do not
+// overlap by construction, so the root is looked up in all three.
+//   'missing'  — no lead / estimate / job carries this id (left alone)
+//   'unscoped' — the root exists but no org was supplied to compare against
+//   'in_org'   — a row with this id is in orgId, or is un-stamped (legacy)
+//   'foreign'  — every row with this id is stamped with a DIFFERENT org
+// Returns { placement, rootOrgId } (rootOrgId set only for 'foreign').
+async function lineageRootPlacement(db, lineageRoot, orgId) {
+  if (lineageRoot == null || String(lineageRoot) === '') return { placement: 'missing', rootOrgId: null };
+  const m = await lineageRootPlacements(db, [lineageRoot], orgId);
+  return m.get(String(lineageRoot));
+}
+
+// The batched form — three statements for any number of roots — for a list
+// response that has to check every deal row it returns. Same answers.
+async function lineageRootPlacements(db, lineageRoots, orgId) {
+  const roots = [...new Set((lineageRoots || []).filter(function (x) { return x != null && String(x) !== ''; }).map(String))];
+  const found = new Map();
+  if (roots.length) {
+    for (const table of ['leads', 'estimates', 'jobs']) {
+      const r = await db.query('SELECT id, organization_id FROM ' + table + ' WHERE id = ANY($1::text[])', [roots]);
+      for (const row of r.rows) {
+        const k = String(row.id);
+        if (!found.has(k)) found.set(k, []);
+        found.get(k).push(row.organization_id);
+      }
+    }
+  }
+  const out = new Map();
+  for (const root of roots) {
+    const orgs = found.get(root) || [];
+    if (!orgs.length) out.set(root, { placement: 'missing', rootOrgId: null });
+    else if (orgId == null) out.set(root, { placement: 'unscoped', rootOrgId: null });
+    else if (orgs.some(function (o) { return o == null || String(o) === String(orgId); })) out.set(root, { placement: 'in_org', rootOrgId: null });
+    else out.set(root, { placement: 'foreign', rootOrgId: orgs[0] });
+  }
+  return out;
+}
+
+module.exports = { resolveLineageRoot, computeNumbers, refreshDealNumbers, renderDealBlock, lineageRootPlacement, lineageRootPlacements };
