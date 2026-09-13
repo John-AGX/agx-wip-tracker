@@ -192,7 +192,13 @@ the caller's org. This is covered by a named test
 
 ## 9. The `OR organization_id IS NULL` tolerance is retired — **OPEN** `[machine]` — **HIGHEST RISK ITEM ON THIS LIST**
 
-**497** occurrences of `organization_id IS NULL` across `server/`.
+**512** occurrences of `organization_id IS NULL` across `server/`.
+
+497 → 512, net per commit (the count is of the literal, comments included):
+`eda0be04` +1, `4755ea44` +1, `e034406d` +2, `31d779ea` +6, `1a37e687` +4, and
+the service-ticket access rule (S7) +1 — its narrow-tier ownership lookup on
+`jobs`, a table that already carries the arm. The service_ticket tables
+themselves stay strict (`organization_id = $n`, no arm).
 
 486 → 497: the lead → estimate → job delete cascade (`2639e755`) added eleven
 statements across `estimate-routes.js`, `job-routes.js` and `lead-routes.js`.

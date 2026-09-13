@@ -30,6 +30,10 @@
 // engine that the transaction cannot reach.
 'use strict';
 
+// Every mutant re-requires the whole dispatcher; under a full parallel run the
+// default 5s hook budget timed out in afterEach (seen on the rebased tree).
+jest.setTimeout(120000);
+
 process.env.JWT_SECRET = process.env.JWT_SECRET
   || 'test-only-secret-with-at-least-32-characters-of-padding';
 
