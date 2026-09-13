@@ -80,7 +80,14 @@ function pickEditable(body) {
     if (isNaN(n)) n = 0;
     out.confidence = Math.max(0, Math.min(100, n));
   }
+  // Only normalise a number the body actually SENT. This loop used to run for
+  // all four keys unconditionally, which turned an absent key into an explicit
+  // null — and PUT writes every key pickEditable returns. The lead editor saves
+  // one field per blur and bulk edit sends one field to many leads, so every
+  // one of those saves wiped estimated revenue and the map pin. Absent means
+  // "leave it"; '' or null sent on purpose still clears.
   ['estimated_revenue_low', 'estimated_revenue_high', 'geocode_lat', 'geocode_lng'].forEach(function(k) {
+    if (!Object.prototype.hasOwnProperty.call(out, k)) return;
     if (out[k] === '' || out[k] == null) { out[k] = null; return; }
     var n = parseFloat(out[k]);
     out[k] = isNaN(n) ? null : n;
@@ -217,6 +224,15 @@ router.put('/:id', requireAuth, requireCapability('LEADS_EDIT'), async (req, res
     const oldStatus = prior.rows[0].status;
 
     const fields = pickEditable(req.body || {});
+    // An address edit without Places-picked coords still drops the old pin so
+    // the re-geocode below replaces it, rather than leaving a pin at the old
+    // address if geocoding misses. That clearing used to happen by accident on
+    // EVERY save; it is now deliberate and limited to address edits.
+    const addressSent = LEAD_ADDRESS_FIELDS.some(k => Object.prototype.hasOwnProperty.call(fields, k));
+    if (addressSent && !Object.prototype.hasOwnProperty.call(fields, 'geocode_lat')) {
+      fields.geocode_lat = null;
+      fields.geocode_lng = null;
+    }
     const sets = [];
     const params = [];
     let p = 1;
