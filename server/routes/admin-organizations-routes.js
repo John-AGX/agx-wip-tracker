@@ -450,7 +450,19 @@ router.delete('/:id', requireAuth, requireSystemAdmin, async (req, res) => {
 
 // GET /api/admin/organizations/me — the caller's own org row.
 // Read-only convenience for the admin UI on first load.
+//
+// ?view=buildertrend-preview — the READ-ONLY Buildertrend -> P86 sync preview
+// (server/services/clickr/sync-preview.js). A MODE of this route rather than a
+// route of its own, so test/tenant-register2-http.test.js's committed route
+// census does not move; without the parameter this answers exactly what it
+// answered before. It runs behind this route's own requireAuth + requireOrg +
+// ROLES_MANAGE and then adds its own gate: the caller's organisation must be
+// the one CLICKR_API_KEY belongs to. The census drives /me WITHOUT the
+// parameter, so the mode's tenancy is proved in test/clickr-sync-preview.test.js.
 router.get('/me', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), (req, res) => {
+  if (req.query && req.query.view === 'buildertrend-preview') {
+    return require('../services/clickr/sync-preview').handle(req, res, { pool });
+  }
   res.json({ organization: req.organization });
 });
 
