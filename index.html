@@ -3713,7 +3713,7 @@
     <!-- Payload inline approval card (used by ai-panel.js). Must load
          BEFORE ai-panel.js so window.PayloadArtifact exists when the
          panel mounts. -->
-    <script src="js/payload-artifact.js?v=10"></script>
+    <script src="js/payload-artifact.js?v=11"></script>
     <!-- The Live Writer DECISION layer — pure: an entry in, the complete
          honest claim out (every word, every colour), plus the per-region
          ownership primitive every async continuation is guarded by. MUST load
@@ -3727,7 +3727,7 @@
          AFTER it (live-writer is idempotent-by-existence: a re-load is a
          no-op, so registration has to go through registerSurface). -->
     <script src="js/cowork.js?v=11"></script>
-    <script src="js/ai-panel.js?v=179"></script>
+    <script src="js/ai-panel.js?v=180"></script>
     <!-- Save-from-chat bridge (Workstream ③). Owns p86SaveCodeBlock /
          p86SaveResponse / p86SaveToPicker, called by inline onclick
          handlers in ai-panel.js renderMarkdown / renderBubble. Loads

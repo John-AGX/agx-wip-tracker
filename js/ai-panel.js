@@ -1625,7 +1625,9 @@ function p86Ask(message, opts) {
     if (!_pendingApprovalsPollTimer) {
       _pendingApprovalsPollTimer = setInterval(function () {
         if (!document.hidden) { try { refreshPendingApprovals(); } catch (_) {} }
-      }, 15000);
+      // 5s, was 15s: the wait for an Approve button was mostly this poll. The
+      // list query is lean and indexed, and compact rows need no per-row fetch.
+      }, 5000);
     }
     // Prefetch the session list once per panel lifetime so auto-anchor
     // has data to work with on the first navigation. Subsequent opens
@@ -2115,6 +2117,7 @@ function p86Ask(message, opts) {
   // payload and renders the standard PayloadArtifact card (Approve /
   // Reject / Preview) pinned above the composer, on every device.
   var _pendingApprovalsBusy = false;
+  var _pendingApprovalsSig = '';
   function refreshPendingApprovals() {
     var host = document.getElementById('ai-pending-approvals');
     if (!host || _pendingApprovalsBusy) return;
@@ -2130,19 +2133,31 @@ function p86Ask(message, opts) {
       .then(function(r) { return r.ok ? r.json() : null; })
       .then(function(d) {
         var ready = ((d && d.payloads) || []).filter(function(p) { return p.status === 'ready'; });
-        if (!ready.length) { host.style.display = 'none'; host.innerHTML = ''; return; }
-        // The list endpoint is lean — hydrate each row so the card shows
-        // targets / rationale and Download works. Cap the strip at 8.
+        if (!ready.length) { _pendingApprovalsSig = ''; host.style.display = 'none'; host.innerHTML = ''; return; }
+        // Redraw only when the set changed. The poll runs every 5s now, and a
+        // blind innerHTML rebuild would wipe an open Details view or an Approve
+        // mid-flight out from under the user's thumb.
+        var sig = ready.slice(0, 8).map(function(p) { return p.id + ':' + (p.draft_summary || ''); }).join('|') + '#' + ready.length;
+        if (sig === _pendingApprovalsSig && host.children.length) return;
+        // A row with a draft_summary gets the ONE-LINE card straight from the
+        // lean list row — no per-row fetch. Only rows without one (drafted
+        // before the line existed, or a line that failed to build) are
+        // hydrated for the full card. Cap the strip at 8.
         return Promise.all(ready.slice(0, 8).map(function(p) {
+          if (p.draft_summary && window.PayloadArtifact.renderCompact) return Promise.resolve(p);
           return fetch('/api/payloads/' + encodeURIComponent(p.id), { headers: authHeaders() })
             .then(function(r) { return r.ok ? r.json() : null; })
             .then(function(dd) { return (dd && dd.payload) || p; })
             .catch(function() { return p; });
         })).then(function(rows) {
+          _pendingApprovalsSig = sig;
           host.innerHTML =
             '<div style="font-size:11.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--text-dim,#9aa3b8);margin-bottom:2px;">Pending approvals (' + ready.length + ')</div>';
           rows.forEach(function(pl) {
-            try { window.PayloadArtifact.render(pl, host); } catch (e) { console.warn('[pending-approvals] card render failed:', e); }
+            try {
+              if (pl.draft_summary && window.PayloadArtifact.renderCompact) window.PayloadArtifact.renderCompact(pl, host);
+              else window.PayloadArtifact.render(pl, host);
+            } catch (e) { console.warn('[pending-approvals] card render failed:', e); }
           });
           host.style.display = 'block';
         });

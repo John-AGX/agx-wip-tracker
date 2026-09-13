@@ -171,6 +171,7 @@ router.get('/', requireAuth, requireOrg, async (req, res) => {
 
     const r = await pool.query(
       `SELECT id, title, summary, status, apply_summary, emitting_agent_key,
+              draft_summary, draft_risk,
               created_at, applied_at, apply_error,
               (apply_changeset IS NOT NULL) AS has_diff,
               (draft_changeset IS NOT NULL) AS has_draft,
@@ -201,7 +202,7 @@ router.get('/:id', requireAuth, requireOrg, async (req, res) => {
       `SELECT id, source, emitting_agent_key, filename, file_content, targets,
               title, summary, rationale, template_id, status, applied_at,
               apply_summary, apply_changeset, apply_error, apply_error_detail,
-              draft_changeset, draft_changeset_at,
+              draft_changeset, draft_changeset_at, draft_summary, draft_risk,
               created_at, expires_at, session_id, claimed_at,
               parent_message_id, user_id
          FROM payloads

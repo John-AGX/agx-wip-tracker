@@ -3955,6 +3955,15 @@ async function initSchema() {
     ALTER TABLE payloads ADD COLUMN IF NOT EXISTS draft_changeset JSONB;
     ALTER TABLE payloads ADD COLUMN IF NOT EXISTS draft_changeset_at TIMESTAMPTZ;
 
+    -- draft_summary / draft_risk — the ONE line a person approves and whether a
+    -- spoken yes may apply it (John, 2026-09-12). Built from the ops by
+    -- services/payload-describe.js, never from the model's title: the
+    -- 2026-08-09 payload titled "Convert estimate to job" carried only
+    -- status:'sold'. draft_risk is 'low' | 'high'; NULL on rows authored before
+    -- this, which every reader treats as high (a card, never a spoken yes).
+    ALTER TABLE payloads ADD COLUMN IF NOT EXISTS draft_summary TEXT;
+    ALTER TABLE payloads ADD COLUMN IF NOT EXISTS draft_risk TEXT;
+
     CREATE INDEX IF NOT EXISTS idx_payloads_targets_gin
       ON payloads USING gin (targets jsonb_path_ops);
     CREATE INDEX IF NOT EXISTS idx_payloads_source

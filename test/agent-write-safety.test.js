@@ -1,4 +1,4 @@
-// TWO AI-WRITE GUARDS THAT LOOKED PRESENT AND DID NOTHING.
+// AI-WRITE GUARDS THAT LOOKED PRESENT AND DID NOTHING — AND THE LINE A PERSON APPROVES (3, below).
 //
 // 1. THE DUPLICATE-EMIT GUARD COULD NEVER MATCH. execEmitPayloadFile looked
 //    for a recent row with byte-identical file_content — but file_content
@@ -91,7 +91,8 @@ const pushes = globalThis.__P86_AWS_PUSHES__;
 
 globalThis.__P86_AWS_APPLIES__ = [];
 jest.mock('../server/routes/payload-routes', () => ({
-  isHighRiskPayload: () => false,
+  // The REAL gate: the line's risk must be the one approve-in-chat applies.
+  isHighRiskPayload: (p) => jest.requireActual('../server/routes/payload-routes').isHighRiskPayload(p),
   applyPayloadForUser: async (user, id) => {
     globalThis.__P86_AWS_APPLIES__.push(id);
     return { ok: true, apply_summary: 'Applied it' };
@@ -264,5 +265,66 @@ describe('a background run cannot approve its own write', () => {
     ]]);
     await driveBackground(mutant);
     expect(applies).toHaveLength(1);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// 3. THE LINE A PERSON APPROVES IS BUILT FROM THE OPS, AND STORED.
+//    The Scribe's notice used to headline the MODEL's title. 2026-08-09: a
+//    payload titled "Convert estimate to job" carried only status:'sold'.
+//    persistDraftLine now stores draft_summary (from the ops, names from the
+//    DB) and draft_risk (the same gate approve-in-chat uses), and the notice
+//    and receipt print that line.
+const SOLD = [{ entity_type: 'estimate', entity_id: 'e1', ops: { field_updates: { status: 'sold' } } }];
+const scribeTurnsTitled = (targets, title) => [
+  [{ type: 'agent.custom_tool_use', id: 'tu_t1', tool_name: 'emit_payload_file',
+    input: { title, summary: 'Convert it', targets } },
+   { type: 'session.status_idle', stop_reason: { type: 'requires_action' } }],
+  [{ type: 'agent.message', content: [{ type: 'text', text: 'Done.' }] },
+   { type: 'session.status_idle', stop_reason: { type: 'end_turn' } }],
+];
+async function driveForeground(mod, targets, title, approved) {
+  scribeTurnsTitled(targets, title).forEach((t) => sdk.turns.push(t));
+  await mod.execScribeWrite({ input: { instruction: 'do it', approved: !!approved } },
+    { userId: USER, organizationId: ORG, parentSession: { id: SESSION, organization_id: ORG } });
+  for (let i = 0; i < 6000; i++) {
+    if (pushes.length) return engine.all('SELECT content FROM ai_messages ORDER BY rowid').map((m) => m.content).join('\n');
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  throw new Error('the detached Scribe chain never notified');
+}
+const draftRow = () => engine.all('SELECT draft_summary, draft_risk, status FROM payloads')[0];
+
+describe('the draft line', () => {
+  test('a low-risk draft stores its ops line and risk, and the notice headlines that line — not the title', async () => {
+    const chat = await driveForeground(shipped, TODO, 'Something the model wrote');
+    const row = draftRow();
+    expect(row).toEqual({ draft_summary: 'New to-do — title Call the stucco supplier, due date 2026-09-14', draft_risk: 'low', status: 'ready' });
+    expect(chat).toContain(row.draft_summary);
+    expect(chat).not.toContain('Something the model wrote');
+  });
+
+  test('THE INCIDENT: titled "Convert estimate to job", the line says status → sold, and it is high risk', async () => {
+    const chat = await driveForeground(shipped, SOLD, 'Convert estimate to job');
+    const row = draftRow();
+    expect(row.draft_summary).toMatch(/status → sold/);
+    expect(row.draft_risk).toBe('high');
+    expect(chat).toMatch(/status → sold/);
+    expect(chat).not.toContain('Convert estimate to job');
+  });
+
+  test('approved in chat and low risk: the receipt is the one line', async () => {
+    const chat = await driveForeground(shipped, TODO, 'Model title', true);
+    expect(applies).toHaveLength(1);
+    expect(chat).toContain('✅ **Applied — New to-do — title Call the stucco supplier, due date 2026-09-14**');
+  });
+
+  test('MUTANT: the line never persisted — the notice falls back to the model\'s title', async () => {
+    const mutant = load([[
+      '        draftLine = await persistDraftLine(result.payloadId, result.changeset, scribeCtx.orgId);\n', '',
+    ]]);
+    const chat = await driveForeground(mutant, SOLD, 'Convert estimate to job');
+    expect(draftRow().draft_summary).toBeNull();
+    expect(chat).toContain('Convert estimate to job');
   });
 });

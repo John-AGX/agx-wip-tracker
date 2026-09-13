@@ -14738,6 +14738,35 @@ async function persistDraftChangeset(payloadId, changeset) {
   }
 }
 
+// The ONE line a person approves, and whether a spoken yes may apply it —
+// computed from the stored row's ops (services/payload-draft-line.js), never
+// from the model's title, and stored on the row so every surface (the chat
+// notice, the compact card, a later spoken yes) shows and binds to the same
+// words. Risk is the same gate approve-in-chat uses (isHighRiskPayload), so a
+// line marked low can never be one the gate would card. Guarded on
+// status='ready' like persistDraftChangeset. Returns { line, risk } or null.
+async function persistDraftLine(payloadId, changeset, orgId) {
+  if (!payloadId || orgId == null) return null;
+  try {
+    const r = await pool.query('SELECT targets FROM payloads WHERE id = $1 AND organization_id = $2', [payloadId, orgId]);
+    const row = r.rows[0];
+    if (!row) return null;
+    const { describeDraft } = require('../services/payload-draft-line');
+    // Names are read inside orgId only — see services/payload-draft-line.js.
+    const described = await describeDraft(pool, orgId, row.targets, changeset || null);
+    const risk = require('./payload-routes').isHighRiskPayload({ targets: row.targets }) ? 'high' : 'low';
+    const line = String(described.line || '').slice(0, 500);
+    await pool.query(
+      `UPDATE payloads SET draft_summary = $1, draft_risk = $2 WHERE id = $3 AND organization_id = $4 AND status = 'ready'`,
+      [line, risk, payloadId, orgId]
+    );
+    return { line, risk };
+  } catch (e) {
+    console.warn('[scribe-bg] draft line persist failed:', e && e.message);
+    return null;
+  }
+}
+
 // execScribeWrite — 86's `scribe_write` tool lands here. 86 describes the
 // change in plain words; we hand it to the Scribe (driveScribeWrite),
 // which authors + dry-runs the payload. On success we surface the SAME
@@ -14807,8 +14836,10 @@ async function execScribeWrite(tu, ctx) {
       // "composing…" card for 45s and then the change itself NEVER, on any
       // surface: the row sat at status='ready' with no diff to render and
       // the Live Writer poller only ever looked at status='applied'.
+      let draftLine = null;
       if (result && result.ok) {
         await persistDraftChangeset(result.payloadId, result.changeset);
+        draftLine = await persistDraftLine(result.payloadId, result.changeset, scribeCtx.orgId);
       }
       const uid = scribeCtx.userId;
       if (!uid) return;
@@ -14824,8 +14855,14 @@ async function execScribeWrite(tu, ctx) {
       };
       const { sendPushForEvent } = require('../notify-events');
       if (result && result.ok) {
-        const title = (result.meta && result.meta.title) || result.title || 'a change';
-        const line = result.applySummary ? ('\n\n' + String(result.applySummary).slice(0, 500)) : '';
+        // The headline is the ops-derived line (persistDraftLine), never the
+        // model's title: a title can say "convert" while the ops say "sold".
+        // With that line present the dispatcher's summary is not repeated —
+        // one line is the whole point. The model title is only a fallback for
+        // a draft whose line could not be built.
+        const title = (draftLine && draftLine.line) ||
+          (result.meta && result.meta.title) || result.title || 'a change';
+        const line = (!draftLine && result.applySummary) ? ('\n\n' + String(result.applySummary).slice(0, 500)) : '';
 
         // A draft was captured, AND the dispatcher gave a final refusal of a
         // service ticket in the same drive (driveScribeWrite's afterRefusal —
@@ -14860,7 +14897,8 @@ async function execScribeWrite(tu, ctx) {
               }
               const applied = gateUser ? await payloadRoutes.applyPayloadForUser(gateUser, result.payloadId) : { ok: false, error: 'no user context' };
               if (applied && applied.ok) {
-                const doneLine = applied.apply_summary ? ('\n\n' + String(applied.apply_summary).slice(0, 500)) : line;
+                // The receipt is the line the change was described by — one line.
+                const doneLine = draftLine ? '' : (applied.apply_summary ? ('\n\n' + String(applied.apply_summary).slice(0, 500)) : line);
                 try { await postAgentJobToThread(threadTarget, '✅ **Applied — ' + title + '**' + doneLine); } catch (_) {}
                 try { await sendPushForEvent(uid, 'scribe_draft', { title: '✅ Applied: ' + String(title).slice(0, 80), body: String(applied.apply_summary || 'Done').slice(0, 200), url: '/' }); } catch (_) {}
                 return;
@@ -14872,7 +14910,7 @@ async function execScribeWrite(tu, ctx) {
               return;
             }
             // High-risk → always card, even when approved in chat.
-            try { await postAgentJobToThread(threadTarget, '✍️ **Scribe drafted — ' + title + '**' + line + '\n\n_This change is high-risk (delete / config), so it needs an explicit approval — review it in **Pending approvals**._'); } catch (_) {}
+            try { await postAgentJobToThread(threadTarget, '✍️ **Scribe drafted — ' + title + '**' + line + '\n\n_Deletes, status changes, money and % complete are never applied from a chat yes — tap Approve in**Pending approvals**._'); } catch (_) {}
             try { await sendPushForEvent(uid, 'scribe_draft', { title: '✍️ Needs your approval: ' + String(title).slice(0, 80), body: String(result.applySummary || 'Review & approve in Project 86').slice(0, 200), url: '/' }); } catch (_) {}
             return;
           } catch (e) {

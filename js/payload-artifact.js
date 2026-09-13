@@ -383,33 +383,7 @@
 
     // Reject is wired now — POST /api/payloads/:id/reject is live.
     if ((payload.status || 'ready') === 'ready') {
-      actions.appendChild(btn('Reject', async () => {
-        // window.confirm is a SILENT NO-OP in the installed PWA — it returns
-        // undefined without ever showing a dialog, so this guard used to
-        // swallow every Reject click on John's phone. p86Confirm is the
-        // in-app dialog (app.js owns it) and returns a promise.
-        let ok = true;
-        try {
-          if (window.p86Confirm) ok = await window.p86Confirm('Reject this payload? It will be marked dismissed.');
-          else ok = window.confirm('Reject this payload? It will be marked dismissed.');
-        } catch (_) { ok = false; }
-        if (!ok) return;
-        try {
-          const r = await fetch('/api/payloads/' + encodeURIComponent(payload.id) + '/reject', {
-            method: 'POST',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-          });
-          if (!r.ok) throw new Error('Reject failed: HTTP ' + r.status);
-          updateStatus(payload.id, 'rejected');
-        } catch (err) {
-          console.error('[payload-artifact] reject:', err);
-          // Same PWA trap as confirm(): alert() never paints in a standalone
-          // display-mode window. Report on the button itself instead.
-          const b = actions.querySelector('button:last-child');
-          if (b) { b.textContent = '✗ Reject failed'; setTimeout(() => { b.textContent = 'Reject'; }, 4500); }
-        }
-      }, { title: 'Dismiss this payload' }));
+      actions.appendChild(btn('Reject', () => rejectInline(payload, actions), { title: 'Dismiss this payload' }));
     }
 
     card.appendChild(actions);
@@ -417,6 +391,100 @@
     if (container && typeof container.appendChild === 'function') {
       container.appendChild(card);
     }
+    return card;
+  }
+
+  async function rejectInline(payload, actions) {
+    // window.confirm is a SILENT NO-OP in the installed PWA — it returns
+    // undefined without ever showing a dialog, so this guard used to
+    // swallow every Reject click on John's phone. p86Confirm is the
+    // in-app dialog (app.js owns it) and returns a promise.
+    let ok = true;
+    try {
+      if (window.p86Confirm) ok = await window.p86Confirm('Reject this payload? It will be marked dismissed.');
+      else ok = window.confirm('Reject this payload? It will be marked dismissed.');
+    } catch (_) { ok = false; }
+    if (!ok) return;
+    try {
+      const r = await fetch('/api/payloads/' + encodeURIComponent(payload.id) + '/reject', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!r.ok) throw new Error('Reject failed: HTTP ' + r.status);
+      updateStatus(payload.id, 'rejected');
+      if (actions && actions.parentNode) actions.parentNode.removeChild(actions);
+    } catch (err) {
+      console.error('[payload-artifact] reject:', err);
+      // Same PWA trap as confirm(): alert() never paints in a standalone
+      // display-mode window. Report on the button itself instead.
+      const b = actions && actions.querySelector('button:last-child');
+      if (b) { b.textContent = '✗ Reject failed'; setTimeout(() => { b.textContent = 'Reject'; }, 4500); }
+    }
+  }
+
+  // renderCompact — the ONE-LINE card (John, 2026-09-12: "minimal description
+  // and an approve button"). `row` is a lean list row carrying draft_summary,
+  // the line built server-side from the OPS (services/payload-describe.js) —
+  // never the model's title, which is the whole safety point: a title can say
+  // "convert" while the ops say "sold". Without a draft_summary there is no
+  // honest one-liner, so the caller renders the full card instead.
+  // Details swaps in the full card (hydrated from GET /api/payloads/:id).
+  function renderCompact(row, container) {
+    if (!row || !row.id || !row.draft_summary) return null;
+    const card = document.createElement('div');
+    card.className = 'p86-payload-artifact p86-payload-compact';
+    card.dataset.payloadId = row.id;
+    card.dataset.status = row.status || 'ready';
+    card.style.cssText = statusCardCss(row.status) + 'padding:9px 12px;gap:7px;';
+
+    // First child mirrors the full card's iconRow (text, then badge LAST) so
+    // updateStatus can flip the badge in place on either shape.
+    const head = document.createElement('div');
+    head.style.cssText = CARD_CSS.iconRow + 'align-items:flex-start;';
+    const line = document.createElement('div');
+    line.style.cssText = 'flex:1;min-width:0;font-size:13px;line-height:1.4;color:var(--text,#e6e6e6);';
+    line.textContent = row.draft_summary;
+    head.appendChild(line);
+    head.appendChild(statusBadge(row.status || 'ready'));
+    card.appendChild(head);
+
+    const actions = document.createElement('div');
+    actions.style.cssText = CARD_CSS.actionsRow;
+    const payload = { id: row.id, title: row.draft_summary, emitting_agent_key: row.emitting_agent_key || '' };
+    if ((row.status || 'ready') === 'ready') {
+      const approve = document.createElement('button');
+      approve.type = 'button';
+      approve.textContent = '✓ Approve';
+      approve.title = 'Apply this change now';
+      approve.style.cssText = CARD_CSS.btnPrimary;
+      approve.onmouseenter = () => { approve.style.cssText = CARD_CSS.btnPrimary + CARD_CSS.btnPrimaryHover; };
+      approve.onmouseleave = () => { approve.style.cssText = CARD_CSS.btnPrimary; };
+      approve.onclick = (ev) => { ev.stopPropagation(); applyInline(payload, actions, approve); };
+      actions.appendChild(approve);
+    }
+    actions.appendChild(btn('Details', async (ev) => {
+      const b = ev && ev.currentTarget;
+      if (b) { b.disabled = true; b.textContent = '…'; }
+      try {
+        const r = await fetch('/api/payloads/' + encodeURIComponent(row.id), { credentials: 'include' });
+        const body = r.ok ? await r.json() : null;
+        const full = body && body.payload;
+        if (!full) throw new Error('HTTP ' + r.status);
+        if (full.draft_changeset && !full.changeset) full.changeset = full.draft_changeset;
+        const replacement = render(full, null);
+        if (replacement && card.parentNode) card.parentNode.replaceChild(replacement, card);
+      } catch (err) {
+        console.warn('[payload-artifact] details:', err);
+        if (b) { b.disabled = false; b.textContent = 'Details'; }
+      }
+    }, { title: 'Show the full change' }));
+    if ((row.status || 'ready') === 'ready') {
+      actions.appendChild(btn('Reject', () => rejectInline(payload, actions), { title: 'Dismiss this change' }));
+    }
+    card.appendChild(actions);
+
+    if (container && typeof container.appendChild === 'function') container.appendChild(card);
     return card;
   }
 
@@ -448,5 +516,5 @@
     });
   }
 
-  window.PayloadArtifact = { render: render, updateStatus: updateStatus, autoApply: autoApply };
+  window.PayloadArtifact = { render: render, renderCompact: renderCompact, updateStatus: updateStatus, autoApply: autoApply };
 })();
