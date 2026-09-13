@@ -4555,6 +4555,13 @@ async function initSchema() {
       ON service_tickets(organization_id, ticket_number)
       WHERE ticket_number IS NOT NULL;
 
+    -- The work order's OPTIONAL material list (John, 2026-09-13): what the crew
+    -- brings, as [{description, qty, unit}]. No price, cost or total has a key
+    -- to land in — services/service-tickets.js normalizeMaterials drops every
+    -- other key on the way in and again on the way out to a share link. NULL =
+    -- no list, and the crew link shows no Materials card at all.
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS materials JSONB;
+
     -- Share links for a service ticket. Same bearer-token shape as
     -- report_shares — token HASHED at rest, absolute expiry, soft revoke —
     -- with two deliberate differences from that table and one from task_shares.

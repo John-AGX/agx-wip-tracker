@@ -31,6 +31,7 @@ const { requireAuth, requireOrgId } = require('../auth');
 const { assertEntityInOrg, callerOrgId } = require('../org-access');
 const svc = require('../services/service-tickets');
 const access = require('../services/service-ticket-access');
+const workOrder = require('../services/service-ticket-workorder');
 
 const router = express.Router();
 
@@ -139,7 +140,7 @@ const TICKET_COLS = [
   'site_contact_phone', 'street_address', 'city', 'state', 'zip', 'lat', 'lng',
   'access_notes', 'scheduled_for', 'due_date', 'assignee_user_id',
   'completed_at', 'closed_at', 'archived_at', 'created_by', 'created_at',
-  'updated_at',
+  'updated_at', 'materials',
 ].join(', ');
 
 function newId(prefix) { return svc.genId(prefix); }
@@ -466,9 +467,26 @@ router.get('/:id', requireAuth, async (req, res) => {
       ),
     ]);
 
+    // The work-order view: where the work is, and each subtask's completion
+    // photos. Read AFTER the task list so photos are fetched only for the tasks
+    // this caller was shown (a private to-do's photos never ride along).
+    const [site, photosByTask, activity] = await Promise.all([
+      workOrder.workOrderSite(pool, ticket),
+      workOrder.taskPhotosByTask(pool, orgId, tasks.rows.map((t) => t.id)),
+      workOrder.subtaskActivity(pool, orgId, ticket.id),
+    ]);
+
     res.json({
       ticket,
-      tasks: tasks.rows,
+      site,
+      tasks: tasks.rows.map(function (t) {
+        const act = activity.get(String(t.id)) || { notes: [], completed_by: null };
+        return Object.assign({}, t, {
+          photos: photosByTask.get(String(t.id)) || [],
+          notes: act.notes,
+          completed_by: t.status === 'done' ? act.completed_by : null,
+        });
+      }),
       events: events.rows,
       progress: svc.ticketProgress(ticket, tasks.rows),
       shares: shares.rows.map(function (r) {
@@ -524,6 +542,14 @@ router.patch('/:id', requireAuth, requireOrgId, async (req, res) => {
       sets.push('checklist = $' + params.length);
       changed.push('checklist');
     }
+    // The optional material list — description and quantity only. An empty
+    // list clears it (NULL), so the crew link shows no Materials card.
+    if (Array.isArray(body.materials) || body.materials === null) {
+      const list = svc.normalizeMaterials(body.materials);
+      params.push(list.length ? JSON.stringify(list) : null);
+      sets.push('materials = $' + params.length + '::jsonb');
+      changed.push('materials');
+    }
     if (!sets.length) return res.json({ ok: true, ticket });
 
     params.push(ticket.id, orgId);
@@ -545,6 +571,56 @@ router.patch('/:id', requireAuth, requireOrgId, async (req, res) => {
   } catch (e) {
     console.error('[service-tickets] patch failed', e);
     res.status(500).json({ error: 'Failed to update service ticket' });
+  }
+});
+
+// ── Work-order subtasks (John, 2026-09-13) ─────────────────────────────
+// Completing a subtask needs a completion photo, and the ticket follows its
+// subtasks — both decided in services/service-ticket-workorder.js
+// setSubtaskDone, which the crew link calls too, so the office checkbox and the
+// crew's Mark complete cannot follow different rules. Photos themselves go
+// through the ordinary attachment door (POST /api/attachments/task/:id, tagged
+// "before" for a before photo).
+router.post('/:id/subtasks/:taskId/done', requireAuth, requireOrgId, async (req, res) => {
+  try {
+    const orgId = req.orgId;
+    const ticket = await loadOwnedTicket(req.params.id, orgId);
+    if (!ticket) return res.status(404).json({ error: TICKET_NOT_FOUND });
+    if (!(await ticketAccessOk(req, res, ticket, 'write', orgId))) return;
+    if (svc.isTerminal(ticket.status)) {
+      return res.status(409).json({ error: 'This ticket is ' + ticket.status + '. Reopen it before changing subtasks.' });
+    }
+    const result = await workOrder.setSubtaskDone(pool, {
+      ticket,
+      taskId: req.params.taskId,
+      done: !!(req.body && req.body.done),
+      actor: { kind: 'user', userId: (req.user && req.user.id) || null, label: (req.user && req.user.name) || null },
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error });
+    res.json({ ok: true, task: result.task, ticket_status: result.ticketStatus });
+  } catch (e) {
+    console.error('[service-tickets] subtask done failed', e);
+    res.status(500).json({ error: 'Failed to update the subtask' });
+  }
+});
+
+router.post('/:id/subtasks/:taskId/note', requireAuth, requireOrgId, async (req, res) => {
+  try {
+    const orgId = req.orgId;
+    const ticket = await loadOwnedTicket(req.params.id, orgId);
+    if (!ticket) return res.status(404).json({ error: TICKET_NOT_FOUND });
+    if (!(await ticketAccessOk(req, res, ticket, 'write', orgId))) return;
+    const result = await workOrder.addSubtaskNote(pool, {
+      ticket,
+      taskId: req.params.taskId,
+      note: req.body && req.body.note,
+      actor: { kind: 'user', userId: (req.user && req.user.id) || null, label: (req.user && req.user.name) || null },
+    });
+    if (!result.ok) return res.status(result.status).json({ error: result.error });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[service-tickets] subtask note failed', e);
+    res.status(500).json({ error: 'Failed to add the note' });
   }
 });
 

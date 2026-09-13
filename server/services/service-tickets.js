@@ -233,6 +233,9 @@ const PUBLIC_TICKET_KEYS = Object.freeze([
   'site_contact_name', 'site_contact_phone',
   'street_address', 'city', 'state', 'zip', 'lat', 'lng',
   'access_notes', 'scheduled_for', 'due_date', 'created_at', 'updated_at',
+  // The optional material list — description and quantity only, by
+  // construction (normalizeMaterials keeps no other key).
+  'materials',
 ]);
 
 // scope_approved is the only field gated on hide_financials: it is where a
@@ -246,6 +249,9 @@ function publicTicket(ticket, share) {
   for (const k of PUBLIC_TICKET_KEYS) {
     if (Object.prototype.hasOwnProperty.call(ticket, k)) out[k] = ticket[k];
   }
+  // Re-normalized on the way OUT as well as in: a row written by an older build
+  // or by hand still reaches a stranger as description and quantity only.
+  if (Object.prototype.hasOwnProperty.call(out, 'materials')) out.materials = normalizeMaterials(out.materials);
   if (!hidesFinancials(share)) out.scope_approved = ticket.scope_approved;
   return out;
 }
@@ -393,7 +399,81 @@ function ticketProgress(ticket, tasks) {
   };
 }
 
+// ── The work order: materials and subtasks (John, 2026-09-13) ───────────
+// A ticket is the larger task a crew is handed; the tasks under it are its
+// SUBTASKS (one per building on Latitude 28). Each subtask is proved done by a
+// completion photo, and the ticket follows its subtasks to "work complete".
+
+// The optional material list. Description and quantity ONLY — a work order
+// goes to crews and subs, so a price, cost or supplier total has no field to
+// land in: unknown keys are dropped, not carried.
+const MATERIALS_MAX_ITEMS = 100;
+
+function normalizeMaterials(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const raw of list) {
+    if (out.length >= MATERIALS_MAX_ITEMS) break;
+    const item = (raw && typeof raw === 'object') ? raw : { description: raw };
+    const description = String(item.description == null ? '' : item.description).trim().slice(0, 200);
+    if (!description) continue;
+    const qty = item.qty == null ? '' : String(item.qty).trim().slice(0, 24);
+    const unit = item.unit == null ? '' : String(item.unit).trim().slice(0, 24);
+    out.push({ description: description, qty: qty, unit: unit });
+  }
+  return out;
+}
+
+// A subtask photo is a BEFORE photo only when tagged so; anything else on the
+// task — including a photo added from the task itself — counts as completion.
+function photoKindOf(tags) {
+  let list = tags;
+  if (typeof list === 'string') {
+    try { list = JSON.parse(list); } catch (_) { list = [list]; }
+  }
+  return Array.isArray(list) && list.some(function (t) { return String(t).toLowerCase() === 'before'; })
+    ? 'before' : 'completion';
+}
+
+// John: "require a completion photo, at least one". Before photos do not count.
+function subtaskMayComplete(photos) {
+  const n = (Array.isArray(photos) ? photos : []).filter(function (p) {
+    return p && photoKindOf(p.tags != null ? p.tags : (p.kind === 'before' ? ['before'] : [])) === 'completion';
+  }).length;
+  return n > 0
+    ? { ok: true }
+    : { ok: false, reason: 'Add a completion photo before marking this complete.' };
+}
+
+// What a crew link may still do to subtasks. John: the crew can undo their own
+// work "until the office approves the work"; after that only the office can.
+function crewSubtasksWritable(status) {
+  const s = normalizeStatus(status);
+  if (isTerminal(s)) return { ok: false, reason: 'This work order is ' + s + ' and can no longer be updated.' };
+  if (s === 'approved') return { ok: false, reason: 'The office has approved this work order. Ask them to reopen it for changes.' };
+  if (s === 'draft') return { ok: false, reason: 'This work order has not been issued yet.' };
+  return { ok: true };
+}
+
+// The ticket follows its subtasks. When the LAST one is done it moves to
+// work_complete ("Awaiting approval" in the office) — the same place the crew's
+// Mark work complete button puts it. Undoing a subtask on a ticket that is
+// awaiting approval moves it back to in_progress, so the office is never asked
+// to approve work the crew has taken back. Approved, closed and cancelled are
+// the office's and never move here.
+function autoStatusForSubtasks(status, allDone) {
+  const s = normalizeStatus(status);
+  if (allDone && (s === 'open' || s === 'scheduled' || s === 'in_progress')) return 'work_complete';
+  if (!allDone && s === 'work_complete') return 'in_progress';
+  return null;
+}
+
 module.exports = {
+  normalizeMaterials,
+  photoKindOf,
+  subtaskMayComplete,
+  crewSubtasksWritable,
+  autoStatusForSubtasks,
   genId,
   genToken,
   hashToken,

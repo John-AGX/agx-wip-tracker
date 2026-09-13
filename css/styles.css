@@ -12991,6 +12991,96 @@ body.light-mode .p86-mktpnl-warn { background: rgba(180, 120, 10, .10); border-c
 }
 .p86-st-part-note { font-size: 11.5px; color: var(--text-dim, #888); margin-top: 6px; line-height: 1.45; }
 
+/* ── Work order: site header, materials, per-building subtasks ──────── */
+.p86-wo-site {
+  display: flex; flex-direction: column; gap: 4px; margin: 10px 0 4px;
+  padding: 10px 12px; border: 1px solid var(--border, #333); border-radius: 8px;
+  background: var(--surface2, rgba(255,255,255,0.03));
+}
+.p86-wo-site-name { font-size: 14px; font-weight: 600; color: var(--text, #fff); }
+.p86-wo-site-row { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; font-size: 12.5px; }
+.p86-wo-gate { color: var(--text-dim, #888); }
+.p86-wo-gate b { color: var(--text, #fff); font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
+
+.p86-wo-mats { margin: 4px 0 10px; }
+.p86-wo-mats-edit {
+  margin-left: 6px; background: none; border: 0; padding: 0; cursor: pointer;
+  color: var(--accent, #4f8cff); font-size: 11px; text-transform: none; letter-spacing: 0;
+}
+.p86-wo-mats-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.p86-wo-mats-tbl td { padding: 4px 6px; border-bottom: 1px solid var(--border, #333); color: var(--text, #fff); }
+.p86-wo-mats-tbl td.q { width: 1%; white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
+.p86-wo-mats-tbl td.u { width: 1%; white-space: nowrap; color: var(--text-dim, #888); }
+.p86-wo-mats-form { margin-top: 8px; }
+.p86-wo-mat-rows { display: flex; flex-direction: column; gap: 5px; }
+.p86-wo-mat-row { display: grid; grid-template-columns: 64px 64px 1fr 26px; gap: 5px; align-items: center; }
+.p86-wo-mat-row input, .p86-wo-note-in {
+  min-width: 0; background: var(--input-bg, #101014); color: var(--text, #fff);
+  border: 1px solid var(--border, #333); border-radius: 6px; padding: 6px 8px;
+  font-size: 12.5px; font-family: inherit;
+}
+.p86-wo-mat-actions { display: flex; gap: 6px; margin-top: 8px; }
+
+.p86-wo-subs { display: flex; flex-direction: column; gap: 6px; }
+.p86-wo-sub { border: 1px solid var(--border, #333); border-radius: 8px; background: var(--surface, transparent); }
+.p86-wo-sub.is-done { border-color: color-mix(in srgb, var(--green, #059669) 45%, var(--border, #333)); }
+.p86-wo-sub-head { display: flex; align-items: center; gap: 8px; padding: 7px 10px; }
+.p86-wo-check {
+  flex: 0 0 auto; width: 22px; height: 22px; border-radius: 6px; cursor: pointer;
+  border: 1.5px solid var(--text-dim, #888); background: transparent; color: #fff;
+  font-size: 13px; line-height: 1; display: inline-flex; align-items: center; justify-content: center;
+}
+.p86-wo-check[aria-pressed="true"] { background: var(--green, #059669); border-color: var(--green, #059669); }
+.p86-wo-check:disabled { cursor: default; opacity: 0.6; }
+.p86-wo-check:focus-visible, .p86-wo-sub-toggle:focus-visible, .p86-wo-thumb:focus-visible {
+  outline: 2px solid var(--accent, #4f8cff); outline-offset: 2px;
+}
+.p86-wo-sub-toggle {
+  flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  background: none; border: 0; padding: 0; text-align: left; cursor: pointer; color: inherit; font: inherit;
+}
+.p86-wo-sub-name { font-size: 13px; font-weight: 600; color: var(--text, #fff); }
+.p86-wo-sub.is-done .p86-wo-sub-name { color: var(--text-dim, #888); }
+.p86-wo-sub-sum { font-size: 11.5px; color: var(--text-dim, #888); }
+.p86-wo-sub-meta { flex: 0 0 auto; display: flex; gap: 5px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.p86-wo-chip, .p86-wo-doneby, .p86-wo-needs {
+  font-size: 10.5px; padding: 2px 7px; border-radius: 999px; white-space: nowrap;
+  background: var(--surface2, rgba(255,255,255,0.06)); color: var(--text-dim, #888);
+}
+.p86-wo-doneby { background: color-mix(in srgb, var(--green, #059669) 18%, transparent); color: var(--green, #059669); }
+.p86-wo-needs { background: color-mix(in srgb, #d97706 16%, transparent); color: #d97706; }
+.p86-wo-sub-body { padding: 2px 10px 10px 40px; display: flex; flex-direction: column; gap: 8px; }
+.p86-wo-sides { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 6px 14px; }
+.p86-wo-side-lbl {
+  font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-dim, #888); margin-bottom: 2px;
+}
+.p86-wo-side ul { margin: 0; padding-left: 16px; font-size: 12.5px; color: var(--text, #fff); line-height: 1.5; }
+.p86-wo-photos { display: flex; flex-wrap: wrap; gap: 6px; }
+.p86-wo-thumb {
+  position: relative; width: 72px; height: 72px; padding: 0; border: 0; border-radius: 6px;
+  overflow: hidden; cursor: zoom-in; background: var(--surface2, rgba(255,255,255,0.06));
+}
+.p86-wo-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.p86-wo-kind {
+  position: absolute; left: 3px; bottom: 3px; font-size: 9.5px; font-weight: 600;
+  padding: 1px 5px; border-radius: 4px; color: #fff; background: rgba(0,0,0,0.62);
+}
+.p86-wo-kind.k-after { background: rgba(5,150,105,0.9); }
+.p86-wo-nophotos { font-size: 12px; color: var(--text-dim, #888); font-style: italic; }
+.p86-wo-sub-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.p86-wo-up { cursor: pointer; }
+.p86-wo-up.is-busy { opacity: 0.55; pointer-events: none; }
+.p86-wo-notes { display: flex; flex-direction: column; gap: 4px; }
+.p86-wo-note { font-size: 12.5px; color: var(--text, #fff); line-height: 1.45; }
+.p86-wo-note-by { display: block; font-size: 10.5px; color: var(--text-dim, #888); }
+.p86-wo-note-add { display: flex; gap: 6px; }
+.p86-wo-note-in { flex: 1 1 auto; }
+@media (max-width: 760px) {
+  .p86-wo-sub-body { padding-left: 10px; }
+  .p86-wo-sub-head { flex-wrap: wrap; }
+}
+
 /* ── Estimate editor: density pass ────────────────────────────────────
    The editor's chrome had drifted heavier than the rest of the app: the
    widest tab padding in the codebase, the strongest drop shadow on any

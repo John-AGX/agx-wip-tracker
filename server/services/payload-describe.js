@@ -300,7 +300,7 @@ const BAGS = {
   service_ticket: bagSpec({ low: [
     'title', 'scope_proposed', 'internal_notes', 'priority', 'requested_by', 'site_contact_name',
     'site_contact_phone', 'street_address', 'city', 'state', 'zip', 'lat', 'lng', 'access_notes',
-    'scheduled_for', 'due_date',
+    'scheduled_for', 'due_date', 'materials',
   ], lowIds: ['job_id', 'lead_id', 'assignee_user_id'] }),
   ticketTask: bagSpec({ low: ['title', 'notes', 'priority', 'due_date'], lowIds: ['assignee_user_id'] }),
   // An assembly's output UNIT is what every takeoff quantity is measured in —

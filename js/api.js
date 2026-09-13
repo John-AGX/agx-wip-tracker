@@ -554,6 +554,18 @@
       return get('/api/service-tickets/' + encodeURIComponent(id) + '/events' +
         (limit ? '?limit=' + encodeURIComponent(limit) : ''));
     },
+    // ── Work-order subtasks ────────────────────────────────────────
+    // Completing needs a completion photo (409 with the reason otherwise), and
+    // the ticket follows its subtasks. Photos go through attachments.upload
+    // ('task', taskId, file, { tags: 'before' }) for a before photo.
+    setSubtaskDone: function(id, taskId, done) {
+      return post('/api/service-tickets/' + encodeURIComponent(id) + '/subtasks/' +
+        encodeURIComponent(taskId) + '/done', { done: !!done });
+    },
+    addSubtaskNote: function(id, taskId, note) {
+      return post('/api/service-tickets/' + encodeURIComponent(id) + '/subtasks/' +
+        encodeURIComponent(taskId) + '/note', { note: note });
+    },
     // ── Share links ────────────────────────────────────────────────
     // The RAW token comes back exactly once, inside `link`. The server keeps
     // only its hash, so a link not copied from that response cannot be

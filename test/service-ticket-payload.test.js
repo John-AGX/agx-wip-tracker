@@ -1677,3 +1677,54 @@ describe('dispatchServiceTicket on its own', () => {
     expect(m.stage).toBe('applied');                        // created, with the status silently ignored
   });
 });
+
+describe('materials — a takeoff 86 can draft, with no price on it', () => {
+  test('a list is stored as the normalized JSON the work order renders', async () => {
+    const t0 = eng.log.length;
+    const r = await drive(REAL_MOD(), [ticket({
+      title: 'Stair repairs', job_id: 'j1',
+      materials: [{ description: '2x12 PT stringer', qty: 6, unit: 'ea' }, { description: 'Tread screws' }],
+    })], JOHN);
+    expect(r.stage).toBe('applied');
+    const bound = boundValue(t0, 'service_tickets', 'materials');
+    expect(bound.present).toBe(true);
+    expect(JSON.parse(bound.value)).toEqual([
+      { description: '2x12 PT stringer', qty: '6', unit: 'ea' },
+      { description: 'Tread screws', qty: '', unit: '' },
+    ]);
+  });
+
+  test('a price key is refused BY NAME at emit, and nothing is written', async () => {
+    const r = await drive(REAL_MOD(), [ticket({
+      title: 'Stair repairs', job_id: 'j1',
+      materials: [{ description: '2x12 PT stringer', qty: 6, unit: 'ea', unit_cost: 41.5 }],
+    })], JOHN);
+    expect([r.stage, r.detail.code, r.detail.received]).toEqual(['emit', 'unknown_field', ['unit_cost']]);
+    expect(r.message).toMatch(/no prices or costs/);
+    expect(newTickets()).toHaveLength(0);
+  });
+
+  test('not an array, a nameless line, and an empty list that clears', async () => {
+    const notArr = await drive(REAL_MOD(), [ticket({ title: 'x', job_id: 'j1', materials: '6 stringers' })], JOHN);
+    expect([notArr.stage, notArr.detail.code]).toEqual(['emit', 'wrong_type']);
+    const nameless = await drive(REAL_MOD(), [ticket({ title: 'x', job_id: 'j1', materials: [{ qty: 2 }] })], JOHN);
+    expect([nameless.stage, nameless.detail.code]).toEqual(['emit', 'missing_field']);
+    const t0 = eng.log.length;
+    const cleared = await drive(REAL_MOD(), [update('st_open', { fields: { materials: [] } })], JOHN);
+    expect(cleared.stage).toBe('applied');
+    expect(boundValue(t0, 'service_tickets', 'materials')).toEqual({ present: true, value: null });
+  });
+
+  test('MUTANT: without the key check, unit_cost reaches apply and is silently dropped', async () => {
+    const mut = mutate(
+      '        if (!SERVICE_TICKET_MATERIAL_KEYS.has(key)) {',
+      '        if (false) {');
+    const t0 = eng.log.length;
+    const r = await drive(mut, [ticket({
+      title: 'Stair repairs', job_id: 'j1',
+      materials: [{ description: 'stringer', qty: 6, unit_cost: 41.5 }],
+    })], JOHN);
+    expect(r.stage).toBe('applied');     // "created" — while the price it was handed vanished
+    expect(JSON.parse(boundValue(t0, 'service_tickets', 'materials').value)[0]).not.toHaveProperty('unit_cost');
+  });
+});

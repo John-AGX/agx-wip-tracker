@@ -470,9 +470,14 @@ const stShareViewLimiter = rateLimit({
 // creates a row a PM has to read, so the abuse shape is different. Keyed on IP
 // because the token is not the attacker's constraint — whoever holds one link
 // can post through it as fast as they like.
+//
+// 40, not the original 12: the work-order punch list made photos per
+// building (a completion photo, often a before photo, then Mark complete), and
+// a crew on one site shares one hotspot IP. Twelve a minute throttled a real
+// crew finishing four buildings back to back.
 const stShareWriteLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 12,
+  max: 40,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   keyGenerator: function (req) { return 'stw:' + (req.ip || 'unknown'); },

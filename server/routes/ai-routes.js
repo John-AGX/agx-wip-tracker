@@ -9308,7 +9308,7 @@ async function readServiceTicketForAgent(id, depth, includes, ctx) {
     `SELECT t.id, t.ticket_number, t.title, t.job_id, t.lead_id, t.status, t.priority,
             t.scope_proposed, t.scope_approved, t.internal_notes, t.guest_log,
             t.requested_by, t.site_contact_name, t.street_address, t.city, t.state, t.zip,
-            t.access_notes, t.scheduled_for, t.due_date, t.archived_at,
+            t.access_notes, t.materials, t.scheduled_for, t.due_date, t.archived_at,
             u.name AS assignee_name
        FROM service_tickets t
        LEFT JOIN users u ON u.id = t.assignee_user_id AND u.organization_id = t.organization_id
@@ -9451,6 +9451,11 @@ async function readServiceTicketForAgent(id, depth, includes, ctx) {
     const w = wrapped(source, text, cap);
     if (w) lines.push('\n' + label + ':\n' + w);
   }
+  // Materials are typed by the office, so they ride in the same wrapper.
+  const matLines = ticketSvc.normalizeMaterials(ticket.materials).map(function (m) {
+    return '- ' + [m.qty, m.unit].filter(Boolean).join(' ') + (m.qty || m.unit ? ' ' : '') + m.description;
+  });
+  if (matLines.length) lines.push('\nMaterials:\n' + wrapUserData('service_tickets.materials', matLines.join('\n')));
   // The field log is append-only, so the newest entries are at the END; the
   // cap keeps the tail rather than the oldest notes.
   const log = String(ticket.guest_log == null ? '' : ticket.guest_log).trim();

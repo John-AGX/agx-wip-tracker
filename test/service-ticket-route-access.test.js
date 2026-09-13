@@ -61,6 +61,9 @@ const TABLES = [
   'organizations', 'users', 'roles', 'jobs', 'job_access', 'leads', 'tasks',
   'service_tickets', 'service_ticket_events', 'service_ticket_shares',
   'service_ticket_revisions', 'service_ticket_participants',
+  // The detail and the share read now carry each subtask's photos (the
+  // work-order view), so the ticket read touches attachments too.
+  'attachments',
 ];
 
 // The people. Role names are deliberately NOT 'admin' / 'system_admin', so no

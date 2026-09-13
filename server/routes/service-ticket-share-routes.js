@@ -63,6 +63,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 
 const { resolveEntityLabels } = require('../services/entity-labels');
 const svc = require('../services/service-tickets');
 const access = require('../services/service-ticket-access');
+const workOrder = require('../services/service-ticket-workorder');
 
 const router = express.Router();
 
@@ -600,25 +601,49 @@ router.get('/service-ticket-share/:token',
       // `scope = 'org'`; without it, sharing a work order sent the titles of
       // a PM's private to-dos to whoever holds the link.
       const tasks = await pool.query(
-        `SELECT title, status, due_date FROM tasks
+        `SELECT id, title, status, due_date, completed_at FROM tasks
           WHERE service_ticket_id = $1 AND organization_id = $2 AND archived_at IS NULL
             AND scope = 'org'
           ORDER BY created_at ASC`,
         [ticket.id, ticket.organization_id]
       );
 
-      const [orgName, parentLabel] = await Promise.all([
+      // The work-order view (John, 2026-09-13): where the work is, who to call
+      // (the person who SENT this link, else whoever raised the ticket), and
+      // each subtask's photos, notes and who finished it. Money-free by
+      // construction — see services/service-ticket-workorder.js.
+      const [orgName, parentLabel, site, contact, photosByTask, activity] = await Promise.all([
         orgNameFor(ticket.organization_id),
         parentLabelFor(ticket),
+        workOrder.workOrderSite(pool, ticket),
+        workOrder.workOrderContact(pool, ticket.organization_id, [share.created_by, ticket.created_by]),
+        workOrder.taskPhotosByTask(pool, ticket.organization_id, tasks.rows.map((t) => t.id)),
+        workOrder.subtaskActivity(pool, ticket.organization_id, ticket.id),
       ]);
 
       res.json({
         ticket: svc.publicTicket(ticket, share),
         share: svc.publicShare(share),
+        site: site,
+        contact: contact,
         // A whitelist here too: a task row carries an assignee, a creator and
-        // an org id, none of which is a guest's business.
+        // an org id, none of which is a guest's business. The id is here so a
+        // photo or a completion can say WHICH subtask it is for; it is only
+        // ever honoured for a task of THIS ticket (workOrder.loadSubtask).
         tasks: tasks.rows.map(function (t) {
-          return { title: t.title, done: t.status === 'done', due_date: t.due_date };
+          const act = activity.get(String(t.id)) || { notes: [], completed_by: null };
+          return {
+            id: t.id,
+            title: t.title,
+            done: t.status === 'done',
+            due_date: t.due_date,
+            completed_at: t.status === 'done' ? t.completed_at : null,
+            completed_by: t.status === 'done' ? act.completed_by : null,
+            photos: (photosByTask.get(String(t.id)) || []).map(function (p) {
+              return { id: p.id, kind: p.kind, thumb_url: p.thumb_url, web_url: p.web_url };
+            }),
+            notes: act.notes,
+          };
         }),
         org_name: orgName,
         parent_label: parentLabel,
@@ -833,6 +858,45 @@ router.post('/service-ticket-share/:token/revision',
     }
   });
 
+// The image pipeline every link photo goes through — the ticket-level site
+// photo (T3) and a subtask's before/completion photo alike. The magic-byte
+// sniff runs BEFORE anything is stored: a file whose contents disagree with its
+// claimed type never reaches storage. Images only; SVG is sanitized.
+// Returns the stored keys/urls, or { error, status } for the caller to answer.
+async function storeShareImage(file, baseKey) {
+  if (!file || !file.buffer) return { error: 'No file', status: 400 };
+  let buf = file.buffer;
+  const claimed = file.mimetype || 'application/octet-stream';
+  const sniffed = sniffMimeFromBytes(buf);
+  // The bytes must agree with the claim BEFORE anything is stored.
+  if (!mimeFamilyMatches(claimed, sniffed)) {
+    return { error: 'File contents do not match its type', status: 400 };
+  }
+  const mime = sniffed || claimed;
+  // Images only — no PDFs or documents from an outside link.
+  if (typeof mime !== 'string' || mime.indexOf('image/') !== 0) {
+    return { error: 'Only photos can be uploaded here', status: 400 };
+  }
+  if (mime === 'image/svg+xml') buf = sanitizeSvg(buf);
+  const isRaster = mime !== 'image/svg+xml';
+  const ext = (String(file.originalname || '').match(/\.([a-z0-9]+)$/i) || [, 'jpg'])[1].toLowerCase();
+  let thumbUrl = null, webUrl = null, originalUrl, thumbKey = null, webKey = null, originalKey, width = null, height = null;
+  if (isRaster) {
+    const meta = await sharp(buf, { limitInputPixels: 50000000 }).rotate().metadata();
+    width = meta.width || null; height = meta.height || null;
+    const thumbBuf = await sharp(buf, { limitInputPixels: 50000000 }).rotate().resize(200, 200, { fit: 'cover' }).jpeg({ quality: 80 }).toBuffer();
+    const webBuf = await sharp(buf, { limitInputPixels: 50000000 }).rotate().resize(1600, 1600, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer();
+    thumbKey = baseKey + '_thumb.jpg'; webKey = baseKey + '_web.jpg'; originalKey = baseKey + '_orig.' + ext;
+    thumbUrl = await storage.put(thumbKey, thumbBuf, 'image/jpeg');
+    webUrl = await storage.put(webKey, webBuf, 'image/jpeg');
+    originalUrl = await storage.put(originalKey, buf, mime);
+  } else {
+    originalKey = baseKey + '_orig.' + ext;
+    originalUrl = await storage.put(originalKey, buf, mime);
+  }
+  return { buf, mime, width, height, thumbUrl, webUrl, originalUrl, thumbKey, webKey, originalKey };
+}
+
 // ── T3: a site photo ────────────────────────────────────────────────────
 // Copied from task-share-routes wholesale, including the magic-byte sniff
 // BEFORE anything is stored, because the failure it prevents (a file whose
@@ -849,40 +913,10 @@ router.post('/service-ticket-share/:token/photo',
       if (svc.isTerminal(ticket.status)) {
         return res.status(409).json({ error: 'This work order is ' + ticket.status + ' and can no longer be updated.' });
       }
-      if (!req.file || !req.file.buffer) return res.status(400).json({ error: 'No file' });
-
-      let buf = req.file.buffer;
-      const claimed = req.file.mimetype || 'application/octet-stream';
-      const sniffed = sniffMimeFromBytes(buf);
-      // The bytes must agree with the claim BEFORE anything is stored.
-      if (!mimeFamilyMatches(claimed, sniffed)) {
-        return res.status(400).json({ error: 'File contents do not match its type' });
-      }
-      const mime = sniffed || claimed;
-      // Images only — no PDFs or documents from an outside link.
-      if (typeof mime !== 'string' || mime.indexOf('image/') !== 0) {
-        return res.status(400).json({ error: 'Only photos can be uploaded here' });
-      }
-      if (mime === 'image/svg+xml') buf = sanitizeSvg(buf);
-      const isRaster = mime !== 'image/svg+xml';
-
       const id = 'att_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-      const ext = (String(req.file.originalname || '').match(/\.([a-z0-9]+)$/i) || [, 'jpg'])[1].toLowerCase();
-      const baseKey = 'service_ticket/' + ticket.id + '/' + id;
-      let thumbUrl = null, webUrl = null, originalUrl, thumbKey = null, webKey = null, originalKey, width = null, height = null;
-      if (isRaster) {
-        const meta = await sharp(buf, { limitInputPixels: 50000000 }).rotate().metadata();
-        width = meta.width || null; height = meta.height || null;
-        const thumbBuf = await sharp(buf, { limitInputPixels: 50000000 }).rotate().resize(200, 200, { fit: 'cover' }).jpeg({ quality: 80 }).toBuffer();
-        const webBuf = await sharp(buf, { limitInputPixels: 50000000 }).rotate().resize(1600, 1600, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer();
-        thumbKey = baseKey + '_thumb.jpg'; webKey = baseKey + '_web.jpg'; originalKey = baseKey + '_orig.' + ext;
-        thumbUrl = await storage.put(thumbKey, thumbBuf, 'image/jpeg');
-        webUrl = await storage.put(webKey, webBuf, 'image/jpeg');
-        originalUrl = await storage.put(originalKey, buf, mime);
-      } else {
-        originalKey = baseKey + '_orig.' + ext;
-        originalUrl = await storage.put(originalKey, buf, mime);
-      }
+      const img = await storeShareImage(req.file, 'service_ticket/' + ticket.id + '/' + id);
+      if (img.error) return res.status(img.status).json({ error: img.error });
+      const { buf, mime, width, height, thumbUrl, webUrl, originalUrl, thumbKey, webKey, originalKey } = img;
 
       const posR = await pool.query(
         "SELECT COALESCE(MAX(position), -1) AS max_pos FROM attachments WHERE entity_type = 'service_ticket' AND entity_id = $1",
@@ -915,6 +949,143 @@ router.post('/service-ticket-share/:token/photo',
       res.json({ ok: true, attachment: ins.rows[0] });
     } catch (e) {
       console.error('[service-ticket-share] guest photo failed', e);
+      res.status(500).json({ error: 'Something went wrong uploading that.' });
+    }
+  });
+
+// ── T5: work-order subtasks from the crew link (John, 2026-09-13) ─────────
+// Each building on a punch list is a subtask; the crew adds before and
+// completion photos to it, leaves notes on it, and marks it complete.
+//
+// The same three gates as every token write, in order:
+//   scope    — 'respond' or better, from the STORED share row.
+//   ticket   — crewSubtasksWritable: not a draft, not closed or cancelled, and
+//              NOT approved — John: the crew may undo their own work "until the
+//              office approves"; after that only the office can.
+//   subtask  — the task must be a live org task OF THIS TICKET
+//              (workOrder.loadSubtask). A task id from another ticket, another
+//              org, a private to-do or an archived row answers the same 404.
+// Completing needs a completion photo, and the ticket follows its subtasks —
+// both inside workOrder.setSubtaskDone, the door the office checkbox uses too.
+function crewGate(req, res) {
+  if (!svc.scopeAllows(req.share.scope, 'respond')) {
+    res.status(403).json({ error: 'This link is view-only.' });
+    return false;
+  }
+  const verdict = svc.crewSubtasksWritable(req.ticket.status);
+  if (!verdict.ok) {
+    res.status(409).json({ error: verdict.reason });
+    return false;
+  }
+  return true;
+}
+
+function crewActor(share) {
+  return { kind: 'share', shareId: share.id, label: share.recipient_name || share.recipient_email || null };
+}
+
+async function applyCrewName(share, body) {
+  const newName = svc.guestNameUpdate(share.recipient_name, body && body.name);
+  if (newName) {
+    await pool.query(
+      'UPDATE service_ticket_shares SET recipient_name = $1 WHERE id = $2 AND recipient_name IS NULL',
+      [newName, share.id]
+    );
+    share.recipient_name = newName;
+  }
+}
+
+router.post('/service-ticket-share/:token/subtasks/:taskId/done',
+  stShareIpLimiter, stShareWriteLimiter, loadTicketShare, async (req, res) => {
+    try {
+      if (!crewGate(req, res)) return;
+      const share = req.share;
+      await applyCrewName(share, req.body);
+      const result = await workOrder.setSubtaskDone(pool, {
+        ticket: req.ticket,
+        taskId: req.params.taskId,
+        done: !!(req.body && req.body.done),
+        actor: crewActor(share),
+      });
+      if (!result.ok) return res.status(result.status).json({ error: result.error });
+      pool.query('UPDATE service_ticket_shares SET last_used_at = NOW() WHERE id = $1', [share.id])
+        .catch(function () {});
+      res.json({ ok: true, done: result.task.status === 'done', ticket_status: result.ticketStatus });
+    } catch (e) {
+      console.error('[service-ticket-share] subtask done failed', e);
+      res.status(500).json({ error: 'Something went wrong saving that.' });
+    }
+  });
+
+router.post('/service-ticket-share/:token/subtasks/:taskId/note',
+  stShareIpLimiter, stShareWriteLimiter, loadTicketShare, async (req, res) => {
+    try {
+      if (!crewGate(req, res)) return;
+      const share = req.share;
+      await applyCrewName(share, req.body);
+      const result = await workOrder.addSubtaskNote(pool, {
+        ticket: req.ticket,
+        taskId: req.params.taskId,
+        note: req.body && req.body.note,
+        actor: crewActor(share),
+      });
+      if (!result.ok) return res.status(result.status).json({ error: result.error });
+      pool.query('UPDATE service_ticket_shares SET last_used_at = NOW() WHERE id = $1', [share.id])
+        .catch(function () {});
+      res.json({ ok: true });
+    } catch (e) {
+      console.error('[service-ticket-share] subtask note failed', e);
+      res.status(500).json({ error: 'Something went wrong saving that.' });
+    }
+  });
+
+router.post('/service-ticket-share/:token/subtasks/:taskId/photo',
+  stShareIpLimiter, stShareWriteLimiter, loadTicketShare, upload.single('file'),
+  async (req, res) => {
+    try {
+      if (!crewGate(req, res)) return;
+      const share = req.share;
+      const ticket = req.ticket;
+      // The subtask is proved BEFORE a byte is stored.
+      const task = await workOrder.loadSubtask(pool, ticket, req.params.taskId);
+      if (!task) return res.status(404).json({ error: 'That subtask is not on this work order.' });
+      await applyCrewName(share, req.body);
+
+      const kind = req.body && String(req.body.kind) === 'before' ? 'before' : 'completion';
+      const id = 'att_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+      const img = await storeShareImage(req.file, 'task/' + task.id + '/' + id);
+      if (img.error) return res.status(img.status).json({ error: img.error });
+
+      const posR = await pool.query(
+        "SELECT COALESCE(MAX(position), -1) AS max_pos FROM attachments WHERE entity_type = 'task' AND entity_id = $1 AND organization_id = $2",
+        [task.id, ticket.organization_id]
+      );
+      const position = (posR.rows[0] && posR.rows[0].max_pos != null) ? Number(posR.rows[0].max_pos) + 1 : 0;
+
+      const ins = await pool.query(
+        // An ordinary TASK attachment — the same row the task modal shows — so
+        // the photo lives on the subtask it proves. uploaded_by NULL (a
+        // logged-out crew member); organization_id from the TICKET row in hand,
+        // never the request. The tag says before or completion.
+        `INSERT INTO attachments (id, entity_type, entity_id, folder, filename, mime_type, size_bytes, width, height, thumb_url, web_url, original_url, thumb_key, web_key, original_key, position, uploaded_by, organization_id, tags)
+         VALUES ($1,'task',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb)
+         RETURNING id, thumb_url, web_url`,
+        [id, task.id, 'general', req.file.originalname, img.mime, img.buf.length, img.width, img.height,
+         img.thumbUrl, img.webUrl, img.originalUrl, img.thumbKey, img.webKey, img.originalKey, position, null,
+         ticket.organization_id, JSON.stringify([kind])]
+      );
+
+      pool.query('UPDATE service_ticket_shares SET last_used_at = NOW() WHERE id = $1', [share.id])
+        .catch(function () {});
+      await logEvent(ticket, 'photo_added', {
+        actorKind: 'share', shareId: share.id,
+        actorLabel: share.recipient_name || share.recipient_email || null,
+        detail: { task_id: task.id, kind: kind },
+      });
+
+      res.json({ ok: true, photo: { id: ins.rows[0].id, kind: kind, thumb_url: ins.rows[0].thumb_url, web_url: ins.rows[0].web_url } });
+    } catch (e) {
+      console.error('[service-ticket-share] subtask photo failed', e);
       res.status(500).json({ error: 'Something went wrong uploading that.' });
     }
   });

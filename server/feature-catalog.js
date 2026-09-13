@@ -477,9 +477,25 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.24';
+const APP_VERSION = '1.25';
 
 const releases = [
+  {
+    version: '1.25',
+    date: '2026-09-13',
+    name: 'Punch List',
+    summary: 'A work order is now a punch list: one card per building, each with its own before and completion photos, notes and a complete box — and the crew link carries directions, the gate code and a button to call the project manager.',
+    changes: [
+      { type: 'new', text: 'Each task under a service ticket is now a punch-list card. Open a ticket and the tasks read as cards, one per building: the building’s name, what is on each side (a title written “Bldg 784 — Side A: rail post; tread 3 · Side D: stringer” opens into a list per side), how many photos and notes it has, and who finished it. Tap a card to open it. + Completion photo and + Before photo add photos to that building, and each photo is badged Before or Done; tap one to see it full size. Add note records a note on that building. The box at the left of the card marks the building complete — and it needs at least one completion photo first: without one the card says Needs photo and the box tells you to add one rather than ticking. Unticking a finished building reopens it.' },
+      { type: 'new', text: 'The ticket follows its buildings. When the last building is marked complete on an Open, Scheduled or In progress ticket, it moves to Awaiting approval by itself and says so in the Progress list (“every subtask done”); reopen a building and it moves back to In progress. It does not go further than that on its own — approving is still yours, with Move to… → Approved. Once a ticket is approved, the crew can no longer change a building; the office still can.' },
+      { type: 'new', text: 'The job site at the top of the ticket. An opened ticket now starts with the job number and name, the address as a map link, and the gate code. The address is the ticket’s own if it has one, otherwise the job’s; the gate code is the ticket’s access notes, otherwise the gate code on the lead the job came from.' },
+      { type: 'new', text: 'An optional material list. Under the scope, Materials → + Add list takes rows of quantity, unit and material, and Edit changes them later. There is no price column, on purpose: a work order goes to the crew. 86 can draft the list too when it drafts a ticket — from a takeoff in the job’s files or from what you tell it — and it is refused if it tries to put a price or a cost on a line. Start a new chat to pick that up.' },
+      { type: 'new', text: 'The crew link is built for the truck. It opens with the job site: the job number and name, the address, a Navigate button that opens directions in Google Maps, the gate code in large type, and Call with the name of the project manager who sent the link — the phone number on their account, or, if they have none, the number of whoever raised the ticket; with no number on either, there is no Call button. Then the material list if there is one, a box for the crew member’s name (asked once and remembered on that phone), and the punch list. On a link that can file a report, each building card has Add completion photo, Add before photo, a note box, and Mark complete — which stays greyed out until the building has a completion photo. Undo reopens a finished building, until the office approves the work. Photos upload one at a time so a weak signal does not lose a batch. A view-only link shows the same cards with no buttons.' },
+      { type: 'improved', text: 'Mark work complete on the crew link now says what it does: it tells the office the whole job is done and ready for approval, moving the ticket to Awaiting approval. Finishing every building does the same thing by itself, so the button is for work that is not broken into buildings. Neither sends anyone a notification today — the ticket shows under Awaiting approval and in its Progress list.' },
+      { type: 'fixed', text: 'The crew link showed the scheduled and due dates a day early. A date with no time was read as midnight in London, so anywhere in the Americas it displayed as the day before — a crew in Tampa saw a start date of the 14th for work scheduled on the 15th. It reads the day as written now. The office screen already did.' },
+      { type: 'improved', text: 'A crew link can save more often. Saves through one link were limited to 12 a minute from one internet connection, and a crew on one hotspot photographing building after building ran into it. The limit is 40 a minute now.' },
+    ],
+  },
   {
     version: '1.24',
     date: '2026-09-13',

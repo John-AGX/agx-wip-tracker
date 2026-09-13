@@ -233,8 +233,14 @@ const SERVICE_TICKET_FIELDS = new Set([
   'title', 'job_id', 'lead_id', 'scope_proposed', 'internal_notes',
   'priority', 'requested_by', 'site_contact_name', 'site_contact_phone',
   'street_address', 'city', 'state', 'zip', 'lat', 'lng', 'access_notes',
-  'scheduled_for', 'due_date', 'assignee_user_id',
+  'scheduled_for', 'due_date', 'assignee_user_id', 'materials',
 ]);
+// A material line is WORDS AND A COUNT. The work order goes to the crew, so a
+// price key is refused by name rather than dropped: normalizeMaterials would
+// silently strip it, and an agent told "updated" after its unit_cost vanished
+// has been told something that is not true.
+const SERVICE_TICKET_MATERIAL_KEYS = new Set(['description', 'qty', 'unit']);
+const SERVICE_TICKET_MATERIALS_CAP = 100;
 const SERVICE_TICKET_TEXT_FIELDS = new Set([
   'title', 'scope_proposed', 'internal_notes', 'requested_by',
   'site_contact_name', 'site_contact_phone', 'street_address', 'city',
@@ -287,7 +293,7 @@ const SERVICE_TICKET_SNAPSHOT_COLS =
   'id, organization_id, ticket_number, title, job_id, lead_id, status, priority, ' +
   'scope_proposed, scope_approved, internal_notes, checklist, guest_log, requested_by, ' +
   'site_contact_name, site_contact_phone, street_address, city, state, zip, lat, lng, ' +
-  'access_notes, scheduled_for, due_date, assignee_user_id, completed_at, closed_at, ' +
+  'access_notes, materials, scheduled_for, due_date, assignee_user_id, completed_at, closed_at, ' +
   'archived_at, created_by, created_at, updated_at';
 const SERVICE_TICKET_TASK_SNAPSHOT_COLS =
   'id, organization_id, title, notes, kind, status, priority, due_date, assignee_user_id, ' +
@@ -507,7 +513,8 @@ const PAYLOAD_OPS_SCHEMAS = Object.freeze({
     //   scope_proposed?, internal_notes?, priority? (null or '' is 'normal'),
     //   requested_by?, site_contact_name?, site_contact_phone?, street_address?,
     //   city?, state?, zip?, lat?, lng?, access_notes?, scheduled_for?
-    //   (YYYY-MM-DD), due_date? (YYYY-MM-DD), assignee_user_id? }
+    //   (YYYY-MM-DD), due_date? (YYYY-MM-DD), assignee_user_id?,
+    //   materials? ([{ description, qty?, unit? }] — no price keys) }
     // task_adds: [{ title, notes?, priority? ('' is the column default),
     //   due_date? ('' is no due date),
     //   assignee_user_id? }] — child tasks, filed under the ticket AND on its
@@ -1176,6 +1183,48 @@ function validateServiceTicketFieldValue(k, v, where) {
       throw new PayloadValidationError(`${where} cannot be null.`,
         { code: 'missing_field', field_path: where });
     }
+    return;
+  }
+  if (k === 'materials') {
+    if (!Array.isArray(v)) {
+      throw new PayloadValidationError(`${where} must be an array of { description, qty?, unit? } (got ${typeof v}).`,
+        { code: 'wrong_type', field_path: where, expected: 'array', received: typeof v });
+    }
+    if (v.length > SERVICE_TICKET_MATERIALS_CAP) {
+      throw new PayloadValidationError(`${where} has ${v.length} lines — the cap is ${SERVICE_TICKET_MATERIALS_CAP}.`,
+        { code: 'too_long', field_path: where, expected: `<= ${SERVICE_TICKET_MATERIALS_CAP} lines`, received: v.length });
+    }
+    v.forEach(function (m, i) {
+      const at = `${where}[${i}]`;
+      if (!m || typeof m !== 'object' || Array.isArray(m)) {
+        throw new PayloadValidationError(`${at} must be an object { description, qty?, unit? }.`,
+          { code: 'wrong_type', field_path: at, expected: 'object', received: Array.isArray(m) ? 'array' : typeof m });
+      }
+      for (const key of Object.keys(m)) {
+        if (!SERVICE_TICKET_MATERIAL_KEYS.has(key)) {
+          throw new PayloadValidationError(
+            `${at}.${key} is not a material field. A work order goes to the crew and carries no prices or costs — only description, qty and unit.`,
+            { code: 'unknown_field', field_path: at, received: [key], expected: [...SERVICE_TICKET_MATERIAL_KEYS] });
+        }
+      }
+      if (typeof m.description !== 'string' || !m.description.trim()) {
+        throw new PayloadValidationError(`${at}.description is required — name the material.`,
+          { code: 'missing_field', field_path: at + '.description' });
+      }
+      if (m.description.trim().length > 200) {
+        throw new PayloadValidationError(`${at}.description is over 200 chars — refused, not cut.`,
+          { code: 'too_long', field_path: at + '.description', expected: '<= 200 chars', received: m.description.trim().length });
+      }
+      for (const key of ['qty', 'unit']) {
+        const x = m[key];
+        if (x == null || x === '') continue;
+        const okType = typeof x === 'string' || (typeof x === 'number' && Number.isFinite(x));
+        if (!okType || String(x).trim().length > 24) {
+          throw new PayloadValidationError(`${at}.${key} must be a short string or number (24 chars at most).`,
+            { code: 'wrong_type', field_path: at + '.' + key, expected: 'string <= 24 chars', received: x });
+        }
+      }
+    });
     return;
   }
   if (SERVICE_TICKET_TEXT_FIELDS.has(k)) {
@@ -5197,6 +5246,11 @@ function ticketColumnValue(k, v) {
   // '' are 'normal', exactly as both REST doors normalize them.
   if (k === 'priority' && (v === null || v === '')) return 'normal';
   if (v === null) return null;
+  // JSONB. An empty list is no list, the same way the REST PATCH stores it.
+  if (k === 'materials') {
+    const list = ticketRules.normalizeMaterials(v);
+    return list.length ? JSON.stringify(list) : null;
+  }
   // Before the Number()/trim arms: Number('') is 0 and ''.trim() is not a day.
   if (v === '' && SERVICE_TICKET_BLANK_IS_NULL.has(k)) return null;
   if (k === 'priority') return ticketRules.normalizePriority(v);

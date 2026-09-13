@@ -80,6 +80,22 @@ function makeDb(opts) {
       return { rows: [{ id: 'strev_1', status: 'pending', created_at: '2026-09-08T00:00:00Z' }], rowCount: 1 };
     }
     if (/FROM organizations/i.test(text)) return { rows: [{ name: 'AG Exteriors' }] };
+    // ── work-order subtasks (T5) ──
+    if (/FROM tasks WHERE id = \$1 AND service_ticket_id = \$2 AND organization_id = \$3/i.test(text)) {
+      state.subtaskParams = params;
+      return { rows: o.subtask ? [Object.assign({ id: 't1', title: 'Bldg 784', status: 'open', completed_at: null }, o.subtask)] : [] };
+    }
+    if (/FROM attachments WHERE entity_type = 'task' AND entity_id = ANY/i.test(text)) {
+      return { rows: (o.photos || []).map(function (p, i) { return Object.assign({ id: 'att_p' + i, entity_id: 't1', mime_type: 'image/jpeg' }, p); }) };
+    }
+    if (/^UPDATE tasks/i.test(text)) {
+      state.taskUpdate = params;
+      return { rows: [{ id: 't1', title: 'Bldg 784', status: params[0], completed_at: params[0] === 'done' ? '2026-09-15T14:14:00Z' : null }], rowCount: 1 };
+    }
+    if (/COUNT\(\*\)::int AS total/i.test(text)) return { rows: [o.counts || { total: 2, done: 1 }] };
+    if (/FROM service_ticket_events/i.test(text)) return { rows: [] };
+    if (/FROM users WHERE id = ANY/i.test(text)) return { rows: [] };
+    if (/FROM jobs WHERE id = \$1/i.test(text) || /FROM leads WHERE id = \$1/i.test(text)) return { rows: [] };
     if (/FROM tasks/i.test(text)) return { rows: [] };
     if (/MAX\(position\)/i.test(text)) return { rows: [{ max_pos: -1 }] };
     if (/INSERT INTO attachments/i.test(text)) return { rows: [{ id: 'att_1' }] };
@@ -398,11 +414,18 @@ describe('S5 — the source shape the tests above cannot see', () => {
   });
 
   test('the photo sniffs the bytes BEFORE anything is stored', () => {
-    const handler = src.slice(src.indexOf("router.post('/service-ticket-share/:token/photo'"));
-    const sniff = handler.indexOf('mimeFamilyMatches');
-    const store = handler.indexOf('storage.put');
+    // The pipeline moved into storeShareImage so a subtask photo takes exactly
+    // the same path as the site photo; the ordering is asserted there, and every
+    // photo door is asserted to call it rather than storage directly.
+    const helper = src.slice(src.indexOf('async function storeShareImage('),
+                             src.indexOf('// ── T3: a site photo'));
+    const sniff = helper.indexOf('mimeFamilyMatches');
+    const store = helper.indexOf('storage.put');
     expect(sniff).toBeGreaterThan(-1);
     expect(store).toBeGreaterThan(sniff);
+    const handler = src.slice(src.indexOf("router.post('/service-ticket-share/:token/photo'"));
+    expect(handler).toContain('storeShareImage(');
+    expect(src.split('storage.put').length - 1).toBe(helper.split('storage.put').length - 1);
   });
 
   test("the attachment's org is stamped from the TICKET, never the request", () => {
@@ -688,4 +711,122 @@ describe('S6 — a joined query cannot leave an ambiguous column', () => {
       expect(bare).toEqual([]);
     });
   }
+});
+
+// ── T5: work-order subtasks from the crew link (John, 2026-09-13) ──────────
+// Mark complete needs a completion photo; the crew can act until the office
+// approves; a task id is honoured only for a subtask OF THIS TICKET; photos land
+// on the TASK with a before/completion tag and the ticket's org.
+describe('T5 — subtask doors on the crew link', () => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const pdf = Buffer.from('%PDF-1.4\n');
+  const TOKEN = 'a'.repeat(64);
+
+  async function drive(routePath, opts, body, file) {
+    global.__stDb = db = makeDb(opts);
+    const chain = handlerChain('post', routePath);
+    const res = fakeRes();
+    const req = { params: { token: TOKEN, taskId: 't1' }, body: body || {}, headers: {}, file: file, get: () => 'project86.net' };
+    for (const h of chain) {
+      if (String(h).indexOf('multer') >= 0) continue;
+      let advanced = false;
+      await h(req, res, () => { advanced = true; });
+      if (!advanced) return res;
+    }
+    return res;
+  }
+  const done = (opts, body) => drive('/service-ticket-share/:token/subtasks/:taskId/done', opts, body);
+  const note = (opts, body) => drive('/service-ticket-share/:token/subtasks/:taskId/note', opts, body);
+  const photo = (opts, body, file) => drive('/service-ticket-share/:token/subtasks/:taskId/photo', opts, body, file);
+  const wrote = (re) => db.log.some((q) => re.test(q.sql));
+
+  test('a VIEW link can do none of the three', async () => {
+    const view = { share: { scope: 'view' }, subtask: {} };
+    expect((await done(view, { done: true })).statusCode).toBe(403);
+    expect((await note(view, { note: 'x' })).statusCode).toBe(403);
+    expect((await photo(view, {}, { buffer: png, mimetype: 'image/png', originalname: 'a.png' })).statusCode).toBe(403);
+  });
+
+  test('once the office APPROVES, the crew can no longer undo or change a subtask', async () => {
+    const res = await done({ ticket: { status: 'approved' }, subtask: { status: 'done' } }, { done: false });
+    expect(res.statusCode).toBe(409);
+    expect(res.body.error).toMatch(/approved/i);
+    expect(wrote(/^UPDATE tasks/i)).toBe(false);
+  });
+
+  test('a draft or closed work order refuses subtask writes', async () => {
+    expect((await done({ ticket: { status: 'draft' }, subtask: {}, photos: [{}] }, { done: true })).statusCode).toBe(409);
+    expect((await done({ ticket: { status: 'closed' }, subtask: {}, photos: [{}] }, { done: true })).statusCode).toBe(409);
+  });
+
+  test('a task that is not a subtask of THIS ticket is 404 and nothing is written', async () => {
+    const res = await done({ photos: [{}] }, { done: true });
+    expect(res.statusCode).toBe(404);
+    expect(wrote(/^UPDATE tasks/i)).toBe(false);
+    // …and the lookup was pinned to this ticket and its org.
+    expect(db.subtaskParams).toEqual(['t1', 'st_1', 1]);
+  });
+
+  test('THE RULE: Mark complete with no completion photo is refused', async () => {
+    const res = await done({ subtask: {}, photos: [{ tags: ['before'] }] }, { done: true });
+    expect(res.statusCode).toBe(409);
+    expect(res.body.error).toMatch(/completion photo/);
+    expect(wrote(/^UPDATE tasks/i)).toBe(false);
+  });
+
+  test('with a completion photo the subtask is done and the event names the crew member', async () => {
+    const res = await done({ subtask: {}, photos: [{ tags: ['completion'] }], share: { recipient_name: 'Marco' } }, { done: true });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.done).toBe(true);
+    expect(db.taskUpdate[0]).toBe('done');
+    const ev = db.log.find((q) => /INSERT INTO service_ticket_events/i.test(q.sql) && q.params[3] === 'subtask_completed');
+    expect(ev && ev.params[7]).toBe('Marco');
+  });
+
+  test('the crew can undo their own completion before approval', async () => {
+    const res = await done({ subtask: { status: 'done' }, ticket: { status: 'work_complete' }, counts: { total: 2, done: 1 } }, { done: false });
+    expect(res.statusCode).toBe(200);
+    expect(db.taskUpdate[0]).toBe('open');
+  });
+
+  test('a note is an attributed event on that subtask', async () => {
+    const res = await note({ subtask: {}, share: { recipient_name: 'Marco' } }, { note: 'Post rotted at the base' });
+    expect(res.statusCode).toBe(200);
+    const ev = db.log.find((q) => /INSERT INTO service_ticket_events/i.test(q.sql));
+    expect(ev.params[3]).toBe('subtask_note');
+    expect(JSON.parse(ev.params[8])).toEqual({ task_id: 't1', note: 'Post rotted at the base' });
+  });
+
+  test('a photo for a task that is not on this ticket is refused BEFORE anything is stored', async () => {
+    const res = await photo({}, {}, { buffer: png, mimetype: 'image/png', originalname: 'a.png' });
+    expect(res.statusCode).toBe(404);
+    expect(wrote(/INSERT INTO attachments/i)).toBe(false);
+  });
+
+  test('a before photo lands on the TASK, tagged before, with the ticket’s org', async () => {
+    // A real image, made by sharp itself, so the whole pipeline runs.
+    const realPng = await require('sharp')({ create: { width: 4, height: 4, channels: 3, background: '#886644' } }).png().toBuffer();
+    const res = await photo({ subtask: {} }, { kind: 'before' }, { buffer: realPng, mimetype: 'image/png', originalname: 'before.png' });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.photo.kind).toBe('before');
+    const ins = db.log.find((q) => /INSERT INTO attachments/i.test(q.sql));
+    expect(ins.sql).toContain("VALUES ($1,'task'");
+    expect(ins.params[1]).toBe('t1');
+    expect(ins.params[16]).toBe(1);
+    expect(ins.params[17]).toBe(JSON.stringify(['before']));
+  });
+
+  test('anything but kind=before is a COMPLETION photo', async () => {
+    const realPng = await require('sharp')({ create: { width: 4, height: 4, channels: 3, background: '#886644' } }).png().toBuffer();
+    const res = await photo({ subtask: {} }, { kind: 'whatever' }, { buffer: realPng, mimetype: 'image/png', originalname: 'done.png' });
+    expect(res.statusCode).toBe(200);
+    const ins = db.log.find((q) => /INSERT INTO attachments/i.test(q.sql));
+    expect(ins.params[17]).toBe(JSON.stringify(['completion']));
+  });
+
+  test('a PDF claiming to be a photo is refused on the subtask door too', async () => {
+    const res = await photo({ subtask: {} }, {}, { buffer: pdf, mimetype: 'image/png', originalname: 'x.png' });
+    expect(res.statusCode).toBe(400);
+    expect(wrote(/INSERT INTO attachments/i)).toBe(false);
+  });
 });

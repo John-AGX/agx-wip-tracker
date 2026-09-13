@@ -140,6 +140,81 @@
   }
   #propose:disabled { opacity: 0.55; cursor: default; }
   .propose-note { margin-top: 7px; }
+
+  /* ── Work order: where, who to call, what to bring, what to finish ── */
+  .site-name { font-size: 16px; font-weight: 700; }
+  .site-addr { color: var(--dim); margin: 2px 0 10px; }
+  .actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+  .btn {
+    display: flex; align-items: center; justify-content: center; gap: 6px; text-align: center;
+    min-height: 44px; padding: 10px 14px; border-radius: 8px; font: inherit; font-weight: 700;
+    text-decoration: none; cursor: pointer; border: 1px solid var(--border);
+    background: var(--bg); color: var(--text);
+  }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  .btn.go { background: var(--green); border-color: var(--green); color: #fff; }
+  .btn:disabled { opacity: 0.5; cursor: default; }
+  .btn:focus-visible, .bld-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .gate { margin-top: 10px; font-size: 14px; }
+  .gate b { font-family: ui-monospace, Menlo, monospace; font-size: 17px; letter-spacing: 1px; }
+
+  .mats { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .mats td { padding: 6px 4px; border-top: 1px solid var(--border); vertical-align: top; }
+  .mats tr:first-child td { border-top: 0; }
+  .mats td.q { width: 1%; white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+  .mats td.u { width: 1%; white-space: nowrap; color: var(--dim); }
+
+  #crewname {
+    width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 7px; padding: 9px 11px; font: inherit; font-size: 14px;
+  }
+
+  .bld { border: 1px solid var(--border); border-radius: 9px; margin-top: 8px; overflow: hidden; }
+  .bld.done { border-color: var(--green); }
+  .bld-head {
+    width: 100%; display: flex; align-items: center; gap: 10px; padding: 11px 12px;
+    background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer;
+  }
+  .tick {
+    flex: 0 0 auto; width: 24px; height: 24px; border-radius: 50%;
+    border: 2px solid var(--dim); display: inline-flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 14px; font-weight: 700;
+  }
+  .bld.done .tick { background: var(--green); border-color: var(--green); }
+  .bld-name { flex: 1 1 auto; min-width: 0; }
+  .bld-name b { display: block; }
+  .bld-name small { color: var(--dim); font-size: 12.5px; }
+  .chip { flex: 0 0 auto; font-size: 11.5px; font-weight: 700; border-radius: 999px; padding: 3px 9px; white-space: nowrap; }
+  .chip.ok { color: var(--green); background: rgba(46,160,67,0.14); }
+  .chip.need { color: var(--amber); background: rgba(210,153,34,0.14); }
+  .chip.n { color: var(--dim); background: rgba(127,127,127,0.12); }
+  .caret { color: var(--dim); flex: 0 0 auto; transition: transform .15s; }
+  .bld.open .caret { transform: rotate(90deg); }
+  .bld-body { padding: 0 12px 12px; }
+  .side { margin-top: 6px; }
+  .side ul { margin: 2px 0 0; padding-left: 20px; }
+  .side li { margin: 2px 0; }
+  .shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; margin: 10px 0; }
+  .shot { position: relative; display: block; aspect-ratio: 1; border-radius: 6px; overflow: hidden; background: rgba(127,127,127,0.12); }
+  .shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .shot span {
+    position: absolute; left: 4px; bottom: 4px; font-size: 10.5px; font-weight: 700; color: #fff;
+    background: rgba(0,0,0,0.62); border-radius: 4px; padding: 1px 5px;
+  }
+  .shot span.k-done { background: rgba(26,127,55,0.92); }
+  .bld .file-btn input { display: none; }
+  .bnotes { margin: 10px 0 0; }
+  .bnote { font-size: 14px; padding: 6px 0; border-top: 1px solid var(--border); }
+  .bnote small { display: block; color: var(--dim); font-size: 11.5px; }
+  .note-row { display: flex; gap: 6px; margin-top: 8px; }
+  .note-row input {
+    flex: 1 1 auto; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 7px; padding: 9px 11px; font: inherit; font-size: 14px;
+  }
+  .stamp { color: var(--green); font-size: 13px; margin-top: 10px; }
+  .hint { color: var(--dim); font-size: 12.5px; margin-top: 6px; }
+  .bld .msg { margin-top: 6px; }
+  @media (prefers-reduced-motion: reduce) { .caret { transition: none; } }
 </style>
 </head>
 <body>
@@ -171,7 +246,12 @@
 
   function fmtDate(v) {
     if (!v) return '';
-    var d = new Date(v);
+    // A scheduled or due date is a CALENDAR day. A Postgres DATE arrives as
+    // ...T00:00:00.000Z, and new Date() on that renders the day BEFORE anywhere
+    // west of Greenwich — a crew in Tampa saw a start date one day early. Same
+    // reading as the office work-order panel's fmtDate (copied, never linked).
+    var cal = /^(\d{4})-(\d{2})-(\d{2})(?:T00:00:00(?:\.000)?Z)?$/.exec(String(v));
+    var d = cal ? new Date(Number(cal[1]), Number(cal[2]) - 1, Number(cal[3])) : new Date(v);
     if (isNaN(d.getTime())) return '';
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
   }
@@ -210,6 +290,39 @@
       }).join('') + '</div>';
     }
 
+    // The write half is decided up here because the punch list below uses it
+    // too. Rendered ONLY when the server said this link may respond — and the
+    // server re-derives that from the stored row on every request, so hiding a
+    // control here is a courtesy, never the permission. A view-only link
+    // renders no control at all.
+    var canRespond = d.share && (d.share.scope === 'respond' || d.share.scope === 'propose');
+    var live = t.status !== 'closed' && t.status !== 'cancelled' && t.status !== 'approved';
+    // Subtasks also refuse a draft — the office has not released it yet.
+    var canWork = canRespond && live && t.status !== 'draft';
+
+    // Where the work is, and one tap to get there or to call the PM.
+    var site = d.site || {};
+    var siteAddr = site.address || addr;
+    var hasCoord = site.lat != null && site.lng != null && isFinite(Number(site.lat)) && isFinite(Number(site.lng));
+    var navHref = hasCoord
+      ? 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(Number(site.lat) + ',' + Number(site.lng))
+      : (siteAddr ? 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(siteAddr) : '');
+    var contact = d.contact || null;
+    var phone = contact && contact.phone ? String(contact.phone).replace(/[^0-9+]/g, '') : '';
+    var siteName = [site.job_number, site.name].filter(Boolean).join(' · ');
+    if (siteName || siteAddr || site.gate_code || phone) {
+      html += '<div class="card">' +
+        '<div class="lbl">Job site</div>' +
+        (siteName ? '<div class="site-name">' + esc(siteName) + '</div>' : '') +
+        (siteAddr ? '<div class="site-addr">' + esc(siteAddr) + '</div>' : '') +
+        '<div class="actions">' +
+          (navHref ? '<a class="btn primary" href="' + esc(navHref) + '" target="_blank" rel="noreferrer noopener">Navigate</a>' : '') +
+          (phone ? '<a class="btn" href="tel:' + esc(phone) + '">Call ' + esc(contact.name || 'the project manager') + '</a>' : '') +
+        '</div>' +
+        (site.gate_code ? '<div class="gate">Gate code <b>' + esc(site.gate_code) + '</b></div>' : '') +
+      '</div>';
+    }
+
     // 'propose' is the ONLY scope that turns the scope of work into an editable
     // box — and even then the box does not change the work order. What Save
     // sends is a PROPOSAL that a person at the office accepts or rejects.
@@ -243,36 +356,49 @@
     meta('Due', esc(fmtDate(t.due_date)));
     meta('Site contact', esc(t.site_contact_name || ''));
     meta('Phone', t.site_contact_phone ? '<a href="tel:' + esc(String(t.site_contact_phone).replace(/[^0-9+]/g, '')) + '">' + esc(t.site_contact_phone) + '</a>' : '');
-    meta('Address', addr ? '<a href="' + esc(mapHref) + '" target="_blank" rel="noreferrer noopener">' + esc(addr) + '</a>' : '');
-    meta('Access', esc(t.access_notes || ''));
+    if (!siteAddr) meta('Address', addr ? '<a href="' + esc(mapHref) + '" target="_blank" rel="noreferrer noopener">' + esc(addr) + '</a>' : '');
+    // The gate code is shown big above; the access note only repeats when it
+    // says something more than the code.
+    if (t.access_notes && t.access_notes !== site.gate_code) meta('Access', esc(t.access_notes));
     if (metas) html += '<div class="card">' + metas + '</div>';
 
+    // Materials — only when the office attached a list. Quantities, never prices.
+    var mats = Array.isArray(t.materials) ? t.materials : [];
+    if (mats.length) {
+      html += '<div class="card"><div class="lbl">Materials</div><table class="mats"><tbody>' +
+        mats.map(function (m) {
+          return '<tr><td class="q">' + esc(m.qty || '') + '</td><td class="u">' + esc(m.unit || '') + '</td>' +
+            '<td>' + esc(m.description || '') + '</td></tr>';
+        }).join('') + '</tbody></table></div>';
+    }
+
+    // Who is doing the work — asked once, above everything that records a name.
+    if (canRespond && live && !d.share.recipient_name) {
+      html += '<div class="card"><div class="lbl">Your name</div>' +
+        '<input type="text" id="crewname" placeholder="So the office knows who finished what" maxlength="120" value="' + esc(crewName) + '" />' +
+      '</div>';
+    }
+
     if (tasks.length) {
-      html += '<div class="card"><div class="lbl">Checklist — ' + done + ' of ' + tasks.length + ' done</div>' +
+      html += '<div class="card"><div class="lbl">Punch list — ' + done + ' of ' + tasks.length + ' done</div>' +
         '<div class="bar"><i style="width:' + Math.round((done / tasks.length) * 100) + '%"></i></div>' +
-        tasks.map(function (x) {
-          return '<div class="task' + (x.done ? ' done' : '') + '"><span class="dot"></span>' +
-            '<span class="t">' + esc(x.title || '') + '</span></div>';
-        }).join('') + '</div>';
+        tasks.map(function (x) { return buildingHTML(x, canWork, t); }).join('') +
+        (t.status === 'approved'
+          ? '<div class="hint">The office approved this work. Ask them to reopen it for changes.</div>'
+          : '') +
+      '</div>';
     }
 
     if (t.guest_log) {
       html += '<div class="card"><div class="lbl">Field log</div><div class="log">' + esc(t.guest_log) + '</div></div>';
     }
 
-    // The write half. Rendered ONLY when the server said this link may
-    // respond — and the server re-derives that from the stored row on every
-    // request, so hiding a control here is a courtesy, never the permission.
-    // A view-only link renders no control at all.
-    var canRespond = d.share && (d.share.scope === 'respond' || d.share.scope === 'propose');
-    var live = t.status !== 'closed' && t.status !== 'cancelled' && t.status !== 'approved';
-
     if (canRespond && live) {
       html += '<div class="card" id="report">' +
         '<div class="lbl">Your field report</div>' +
         (d.share.recipient_name
           ? '<div class="who">Signed in as <strong>' + esc(d.share.recipient_name) + '</strong></div>'
-          : '<input type="text" id="name" placeholder="Your name" maxlength="120" />') +
+          : '') +
         '<textarea id="note" rows="3" placeholder="What did you find? What did you do?"></textarea>' +
         '<div class="row">' +
           '<label class="file"><input type="file" id="photo" accept="image/*" />Add photo</label>' +
@@ -280,7 +406,9 @@
         '</div>' +
         (t.status === 'work_complete'
           ? '<div class="done-note">Marked work complete. The office will review it.</div>'
-          : '<button id="complete" class="big">Mark work complete</button>') +
+          : '<button id="complete" class="big">Mark work complete</button>' +
+            '<div class="hint">Tells the office the whole job is done and ready for approval. ' +
+              'Finishing every building on the punch list does this for you.</div>') +
         '<div id="msg" class="msg"></div>' +
       '</div>';
     }
@@ -294,8 +422,190 @@
       '</div>';
 
     root.innerHTML = html;
+    var nameBox = document.getElementById('crewname');
+    if (nameBox) nameBox.addEventListener('input', function () {
+      crewName = nameBox.value;
+      try { localStorage.setItem('st-crew-name', crewName); } catch (e) {}
+    });
+    wireBuildings(tasks, canWork);
     if (canRespond && live) wireReport(d);
     if (canPropose) wirePropose(d, t);
+  }
+
+  // ── The punch list: one card per building ─────────────────────────────
+  //
+  // "Bldg 784 — Side A: rail post; tread 3 · Side D: stringer" opens into
+  // per-side lists. A title in any other shape renders whole.
+  function parseTitle(title) {
+    var s = String(title || '').trim();
+    var m = s.match(/^(.+?)\s+[—–-]\s+(.+)$/);
+    if (!m) return { head: s || 'Task', sides: [] };
+    return {
+      head: m[1].trim(),
+      sides: m[2].split(/\s+·\s+/).map(function (part) {
+        var sm = part.match(/^([^:]{1,40}):\s*(.+)$/);
+        if (!sm) return { label: '', items: [part.trim()] };
+        return { label: sm[1].trim(), items: sm[2].split(/;\s*/).map(function (x) { return x.trim(); }).filter(Boolean) };
+      })
+    };
+  }
+
+  var openCards = {};
+  var crewName = '';
+  try { crewName = localStorage.getItem('st-crew-name') || ''; } catch (e) {}
+
+  function buildingHTML(x, canWork, t) {
+    var p = parseTitle(x.title);
+    var photos = x.photos || [];
+    var completion = photos.filter(function (ph) { return ph.kind !== 'before'; }).length;
+    var notes = x.notes || [];
+    var open = !!openCards[x.id];
+    var summary = p.sides.map(function (sd) {
+      return sd.label ? sd.label + ' (' + sd.items.length + ')' : sd.items.length + ' item' + (sd.items.length === 1 ? '' : 's');
+    }).join(' · ');
+    var chip = x.done
+      ? '<span class="chip ok">Done</span>'
+      : (completion
+          ? '<span class="chip n">' + photos.length + ' photo' + (photos.length === 1 ? '' : 's') + '</span>'
+          : '<span class="chip need">Needs photo</span>');
+
+    return '<div class="bld' + (x.done ? ' done' : '') + (open ? ' open' : '') + '" data-task="' + esc(x.id) + '">' +
+      '<button type="button" class="bld-head" aria-expanded="' + (open ? 'true' : 'false') + '">' +
+        '<span class="tick">' + (x.done ? '&#x2713;' : '') + '</span>' +
+        '<span class="bld-name"><b>' + esc(p.head) + '</b>' + (summary ? '<small>' + esc(summary) + '</small>' : '') + '</span>' +
+        chip +
+        '<span class="caret">&#x203A;</span>' +
+      '</button>' +
+      '<div class="bld-body"' + (open ? '' : ' hidden') + '>' +
+        p.sides.map(function (sd) {
+          return '<div class="side">' + (sd.label ? '<div class="lbl">' + esc(sd.label) + '</div>' : '') +
+            '<ul>' + sd.items.map(function (it) { return '<li>' + esc(it) + '</li>'; }).join('') + '</ul></div>';
+        }).join('') +
+        (photos.length
+          ? '<div class="shots">' + photos.map(function (ph) {
+              return '<a class="shot" href="' + esc(ph.web_url || ph.thumb_url || '') + '" target="_blank" rel="noreferrer noopener">' +
+                '<img src="' + esc(ph.thumb_url || ph.web_url || '') + '" alt="" loading="lazy" />' +
+                '<span class="' + (ph.kind === 'before' ? 'k-before' : 'k-done') + '">' + (ph.kind === 'before' ? 'Before' : 'Done') + '</span>' +
+              '</a>';
+            }).join('') + '</div>'
+          : '') +
+        (notes.length
+          ? '<div class="bnotes">' + notes.map(function (n) {
+              return '<div class="bnote"><small>' + esc(n.by || '') + (n.at ? ' · ' + esc(fmtDate(n.at)) : '') + '</small>' + esc(n.note) + '</div>';
+            }).join('') + '</div>'
+          : '') +
+        (x.done && x.completed_by
+          ? '<div class="stamp">Finished by ' + esc(x.completed_by) + (x.completed_at ? ' · ' + esc(fmtDate(x.completed_at)) : '') + '</div>'
+          : '') +
+        (canWork
+          ? '<div class="actions" style="margin-top:10px;">' +
+              '<label class="btn file-btn">Add completion photo<input type="file" accept="image/*" multiple data-kind="completion" /></label>' +
+              '<label class="btn file-btn">Add before photo<input type="file" accept="image/*" multiple data-kind="before" /></label>' +
+            '</div>' +
+            '<div class="note-row">' +
+              '<input type="text" class="bnote-in" placeholder="Add a note for this building" maxlength="2000" />' +
+              '<button type="button" class="btn bnote-go">Add</button>' +
+            '</div>' +
+            (x.done
+              ? '<button type="button" class="btn bdone" data-done="0" style="width:100%;margin-top:10px;">Undo — not finished</button>'
+              : '<button type="button" class="btn go bdone" data-done="1" style="width:100%;margin-top:10px;"' + (completion ? '' : ' disabled') + '>Mark ' + esc(p.head) + ' complete</button>' +
+                (completion ? '' : '<div class="hint">Add at least one completion photo first.</div>')) +
+            '<div class="msg"></div>'
+          : '') +
+      '</div>' +
+    '</div>';
+  }
+
+  // Every subtask call goes through the same door and shows the server's
+  // refusal verbatim — an approved work order, a missing photo, a revoked link.
+  function taskPost(taskId, path, payload) {
+    return fetch('/api/service-ticket-share/' + encodeURIComponent(token) + '/subtasks/' +
+        encodeURIComponent(taskId) + '/' + path, payload instanceof FormData
+      ? { method: 'POST', body: payload, cache: 'no-store' }
+      : {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          cache: 'no-store',
+          body: JSON.stringify(payload)
+        }).then(function (r) {
+      return r.text().then(function (txt) {
+        var data = null;
+        try { data = txt ? JSON.parse(txt) : null; } catch (e) {}
+        if (!r.ok) throw new Error((data && data.error) || 'That could not be saved.');
+        return data;
+      });
+    });
+  }
+
+  function wireBuildings(tasks, canWork) {
+    var byId = {};
+    tasks.forEach(function (x) { byId[String(x.id)] = x; });
+    Array.prototype.forEach.call(document.querySelectorAll('.bld'), function (card) {
+      var id = card.getAttribute('data-task');
+      var head = card.querySelector('.bld-head');
+      var body = card.querySelector('.bld-body');
+      var cmsg = card.querySelector('.msg');
+      function say(text, bad) { if (cmsg) { cmsg.textContent = text; cmsg.className = 'msg' + (bad ? ' bad' : ''); } }
+
+      head.addEventListener('click', function () {
+        var open = body.hidden;
+        body.hidden = !open;
+        card.classList.toggle('open', open);
+        head.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (open) openCards[id] = true; else delete openCards[id];
+      });
+      if (!canWork || !byId[id]) return;
+
+      Array.prototype.forEach.call(card.querySelectorAll('input[type=file]'), function (inp) {
+        inp.addEventListener('change', function () {
+          var files = Array.prototype.slice.call(inp.files || []);
+          inp.value = '';
+          if (!files.length) return;
+          var kind = inp.getAttribute('data-kind') === 'before' ? 'before' : 'completion';
+          var n = 0;
+          say('Uploading 1 of ' + files.length + '…');
+          // One at a time — a phone on one bar should not lose six at once.
+          files.reduce(function (p, f) {
+            return p.then(function () {
+              say('Uploading ' + (++n) + ' of ' + files.length + '…');
+              var fd = new FormData();
+              fd.append('kind', kind);
+              if (crewName.trim()) fd.append('name', crewName.trim());
+              fd.append('file', f);
+              return taskPost(id, 'photo', fd);
+            });
+          }, Promise.resolve()).then(function () {
+            openCards[id] = true;
+            load();
+          }).catch(function (e) {
+            say(e.message, true);
+          });
+        });
+      });
+
+      var noteIn = card.querySelector('.bnote-in');
+      var noteGo = card.querySelector('.bnote-go');
+      function addNote() {
+        var text = (noteIn.value || '').trim();
+        if (!text) { say('Write something first.', true); return; }
+        noteGo.disabled = true;
+        taskPost(id, 'note', { note: text, name: crewName.trim() || undefined }).then(function () {
+          openCards[id] = true;
+          load();
+        }).catch(function (e) { noteGo.disabled = false; say(e.message, true); });
+      }
+      if (noteGo) noteGo.addEventListener('click', addNote);
+      if (noteIn) noteIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); addNote(); } });
+
+      var doneBtn = card.querySelector('.bdone');
+      if (doneBtn) doneBtn.addEventListener('click', function () {
+        doneBtn.disabled = true;
+        say('Saving…');
+        taskPost(id, 'done', { done: doneBtn.getAttribute('data-done') === '1', name: crewName.trim() || undefined })
+          .then(function () { load(); })
+          .catch(function (e) { doneBtn.disabled = false; say(e.message, true); });
+      });
+    });
   }
 
   // The revision door. Deliberately its OWN submit, separate from the field
@@ -319,7 +629,7 @@
       if (next === original) { pmsg('Change the scope first.', true); return; }
       btn.disabled = true;
       pmsg('Sending…');
-      var nameEl = document.getElementById('name');
+      var nameEl = document.getElementById('crewname');
       fetch('/api/service-ticket-share/' + encodeURIComponent(token) + '/revision', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
@@ -381,7 +691,7 @@
     function collect(extra) {
       var body = extra || {};
       var noteEl = document.getElementById('note');
-      var nameEl = document.getElementById('name');
+      var nameEl = document.getElementById('crewname');
       if (noteEl && noteEl.value.trim()) body.note = noteEl.value;
       if (nameEl && nameEl.value.trim()) body.name = nameEl.value;
       return body;

@@ -28,7 +28,7 @@
   // One open ticket at a time, keyed by job. Module-level so a repaint that
   // arrives while a ticket is expanded can restore it.
   // `stale` is the deferred-refresh latch; see refresh() at the bottom.
-  var _state = { jobId: null, filter: 'all', openId: null, tickets: [], busy: false, stale: false };
+  var _state = { jobId: null, filter: 'all', openId: null, tickets: [], busy: false, stale: false, openSubs: {}, taskTitles: {} };
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -338,6 +338,9 @@
     var t = r.ticket || {};
     var canEdit = canEditJob(_state.jobId) && t.status !== 'closed' && t.status !== 'cancelled';
     var events = r.events || [];
+    // Timeline rows name the building a photo or note landed on.
+    _state.taskTitles = {};
+    (r.tasks || []).forEach(function (k) { _state.taskTitles[String(k.id)] = k.title || ''; });
 
     // The stepper shows position on the lattice at a glance. cancelled is not
     // a step on the line — it is a branch off it — so it renders as a note
@@ -353,6 +356,7 @@
 
     d.innerHTML =
       stepper +
+      siteHTML(r.site) +
       revisionsHTML(r.revisions || [], canEdit) +
       '<div class="p86-st-detail-grid">' +
         '<div class="p86-st-detail-main">' +
@@ -367,6 +371,7 @@
           (t.guest_log
             ? '<label class="p86-st-lbl">Field log</label><div class="p86-st-ro p86-st-guestlog">' + esc(t.guest_log) + '</div>'
             : '') +
+          materialsHTML(t, canEdit) +
           tasksHTML(r.tasks || [], canEdit) +
         '</div>' +
         '<div class="p86-st-detail-side">' +
@@ -383,7 +388,9 @@
           metaRow('Site contact', canEdit
             ? '<input type="text" class="p86-st-contact" value="' + escAttr(t.site_contact_name || '') + '" placeholder="Name" />'
             : esc(t.site_contact_name || '—')) +
-          (t.street_address ? metaRow('Address', esc([t.street_address, t.city, t.state].filter(Boolean).join(', '))) : '') +
+          (t.street_address && !(r.site && r.site.address)
+            ? metaRow('Address', esc([t.street_address, t.city, t.state].filter(Boolean).join(', ')))
+            : '') +
         '</div>' +
       '</div>' +
       // Ask 86 is a READ, so it is not behind canEdit: a closed or cancelled
@@ -406,6 +413,7 @@
       '</div>' : '');
 
     wireDetail(d, t);
+    wireWorkOrder(d, t, r.tasks || [], canEdit);
   }
 
   // ── Suggestions from a `propose` link ────────────────────────────────────
@@ -519,31 +527,172 @@
   // its own column on tasks rather than claiming the polymorphic slot, and the
   // note below says so on screen because it is otherwise invisible and someone
   // will eventually "tidy it up".
+  //
+  // Each task is a work-order SUBTASK: one per building, with its own before
+  // and completion photos, crew notes, and a complete box. Completing needs at
+  // least one completion photo — the server enforces it (409), the card only
+  // says so up front so nobody finds out by clicking.
   function tasksHTML(tasks, canEdit) {
     var live = tasks.filter(function (t) { return !t.archived_at; });
     var done = live.filter(function (t) { return t.status === 'done'; }).length;
     var pct = live.length ? Math.round((done / live.length) * 100) : 0;
-    return '<label class="p86-st-lbl">Tasks' +
+    return '<label class="p86-st-lbl">Punch list' +
         (live.length ? ' <span class="p86-st-taskcount">' + done + ' of ' + live.length + ' done</span>' : '') +
       '</label>' +
       (live.length
         ? '<div class="p86-st-bar-track"><div class="p86-st-bar-fill" style="width:' + pct + '%"></div></div>' +
-          '<div class="p86-st-tasklist">' + live.map(function (t) {
-            return '<div class="p86-st-task' + (t.status === 'done' ? ' is-done' : '') + '">' +
-              '<span class="p86-st-task-dot"></span>' +
-              '<span class="p86-st-task-title">' + esc(t.title || 'Untitled') + '</span>' +
-              (t.due_date ? '<span class="p86-st-task-due">' + esc(fmtDate(t.due_date)) + '</span>' : '') +
-            '</div>';
-          }).join('') + '</div>'
-        : '<div class="p86-st-ro"><em>No tasks under this ticket yet.</em></div>') +
+          '<div class="p86-wo-subs">' + live.map(function (t) { return subtaskHTML(t, canEdit); }).join('') + '</div>'
+        : '<div class="p86-st-ro"><em>No subtasks under this work order yet.</em></div>') +
       (canEdit
         ? '<div class="p86-st-task-add">' +
-            '<input type="text" class="p86-st-task-new" placeholder="Add a task to this work order…" />' +
+            '<input type="text" class="p86-st-task-new" placeholder="Add a subtask — e.g. Bldg 790 — Side A: …" />' +
             '<button class="ee-btn secondary p86-st-task-go">Add</button>' +
           '</div>' +
-          '<div class="p86-st-task-note">Tasks added here stay on the job\'s Tasks list and in My Tasks — ' +
-            'the ticket groups them, it does not hide them.</div>'
+          '<div class="p86-st-task-note">Subtasks stay on the job\'s Tasks list and in My Tasks — ' +
+            'the work order groups them, it does not hide them.</div>'
         : '');
+  }
+
+  // "Bldg 784 — Side A: rail post; tread 3 · Side D: stringer" → a heading and
+  // per-side lists. A title that does not follow the shape renders whole.
+  function parseSubtaskTitle(title) {
+    var s = String(title || '').trim();
+    var m = s.match(/^(.+?)\s+[—–-]\s+(.+)$/);
+    if (!m) return { head: s || 'Untitled', sides: [] };
+    var sides = m[2].split(/\s+·\s+/).map(function (part) {
+      var sm = part.match(/^([^:]{1,40}):\s*(.+)$/);
+      if (!sm) return { label: '', items: [part.trim()] };
+      return {
+        label: sm[1].trim(),
+        items: sm[2].split(/;\s*/).map(function (x) { return x.trim(); }).filter(Boolean)
+      };
+    });
+    return { head: m[1].trim(), sides: sides };
+  }
+
+  function subtaskHTML(t, canEdit) {
+    var parsed = parseSubtaskTitle(t.title);
+    var photos = t.photos || [];
+    var completion = photos.filter(function (p) { return p.kind !== 'before'; }).length;
+    var before = photos.length - completion;
+    var isDone = t.status === 'done';
+    var open = !!_state.openSubs[t.id];
+    var sideSummary = parsed.sides.map(function (sd) {
+      return sd.label ? sd.label + ' (' + sd.items.length + ')' : sd.items.length + ' item' + (sd.items.length === 1 ? '' : 's');
+    }).join(' · ');
+    var notes = t.notes || [];
+
+    return '<div class="p86-wo-sub' + (isDone ? ' is-done' : '') + (open ? ' is-open' : '') + '" data-task="' + escAttr(t.id) + '">' +
+      '<div class="p86-wo-sub-head">' +
+        '<button type="button" class="p86-wo-check" aria-pressed="' + (isDone ? 'true' : 'false') + '"' +
+          (canEdit ? '' : ' disabled') +
+          ' title="' + (isDone ? 'Reopen this subtask' : (completion ? 'Mark complete' : 'Add a completion photo to mark this complete')) + '">' +
+          (isDone ? '&#x2713;' : '') +
+        '</button>' +
+        '<button type="button" class="p86-wo-sub-toggle" aria-expanded="' + (open ? 'true' : 'false') + '">' +
+          '<span class="p86-wo-sub-name">' + esc(parsed.head) + '</span>' +
+          (sideSummary ? '<span class="p86-wo-sub-sum">' + esc(sideSummary) + '</span>' : '') +
+        '</button>' +
+        '<span class="p86-wo-sub-meta">' +
+          (photos.length
+            ? '<span class="p86-wo-chip" title="' + completion + ' completion, ' + before + ' before">' + photos.length + ' photo' + (photos.length === 1 ? '' : 's') + '</span>'
+            : '') +
+          (notes.length ? '<span class="p86-wo-chip">' + notes.length + ' note' + (notes.length === 1 ? '' : 's') + '</span>' : '') +
+          (isDone
+            ? '<span class="p86-wo-doneby">Done' + (t.completed_by ? ' · ' + esc(t.completed_by) : '') + '</span>'
+            : (completion ? '' : '<span class="p86-wo-needs">Needs photo</span>')) +
+        '</span>' +
+      '</div>' +
+      '<div class="p86-wo-sub-body"' + (open ? '' : ' hidden') + '>' +
+        (parsed.sides.length
+          ? '<div class="p86-wo-sides">' + parsed.sides.map(function (sd) {
+              return '<div class="p86-wo-side">' +
+                (sd.label ? '<div class="p86-wo-side-lbl">' + esc(sd.label) + '</div>' : '') +
+                '<ul>' + sd.items.map(function (it) { return '<li>' + esc(it) + '</li>'; }).join('') + '</ul>' +
+              '</div>';
+            }).join('') + '</div>'
+          : '') +
+        '<div class="p86-wo-photos">' +
+          (photos.length
+            ? photos.map(function (p, i) {
+                return '<button type="button" class="p86-wo-thumb" data-idx="' + i + '" title="' + (p.kind === 'before' ? 'Before' : 'Completion') + ' photo">' +
+                  '<img src="' + escAttr(p.thumb_url || p.web_url || '') + '" alt="" loading="lazy" />' +
+                  '<span class="p86-wo-kind k-' + (p.kind === 'before' ? 'before' : 'after') + '">' + (p.kind === 'before' ? 'Before' : 'Done') + '</span>' +
+                '</button>';
+              }).join('')
+            : '<div class="p86-wo-nophotos">No photos yet.</div>') +
+        '</div>' +
+        (canEdit
+          ? '<div class="p86-wo-sub-actions">' +
+              '<label class="ee-btn primary p86-wo-up">+ Completion photo<input type="file" accept="image/*" multiple hidden data-kind="completion" /></label>' +
+              '<label class="ee-btn secondary p86-wo-up">+ Before photo<input type="file" accept="image/*" multiple hidden data-kind="before" /></label>' +
+            '</div>'
+          : '') +
+        (notes.length
+          ? '<div class="p86-wo-notes">' + notes.map(function (n) {
+              return '<div class="p86-wo-note"><span class="p86-wo-note-by">' + esc(n.by || '') +
+                (n.at ? ' · ' + esc(fmtDate(n.at)) : '') + '</span>' + esc(n.note) + '</div>';
+            }).join('') + '</div>'
+          : '') +
+        (canEdit
+          ? '<div class="p86-wo-note-add">' +
+              '<input type="text" class="p86-wo-note-in" placeholder="Add a note for this building…" maxlength="2000" />' +
+              '<button type="button" class="ee-btn secondary p86-wo-note-go">Add note</button>' +
+            '</div>'
+          : '') +
+      '</div>' +
+    '</div>';
+  }
+
+  // Where the work is: job number and name, tap-to-navigate address, gate code.
+  function siteHTML(site) {
+    if (!site) return '';
+    var addr = site.address || '';
+    var lat = site.lat != null ? Number(site.lat) : NaN;
+    var lng = site.lng != null ? Number(site.lng) : NaN;
+    var addrHTML = addr
+      ? ((window.p86MapLink && window.p86MapLink.linkHTML)
+          ? window.p86MapLink.linkHTML(addr, addr, { lat: lat, lng: lng })
+          : esc(addr))
+      : '';
+    var name = [site.job_number, site.name].filter(Boolean).join(' · ');
+    if (!name && !addr && !site.gate_code) return '';
+    return '<div class="p86-wo-site">' +
+      (name ? '<div class="p86-wo-site-name">' + esc(name) + '</div>' : '') +
+      '<div class="p86-wo-site-row">' +
+        (addrHTML ? '<span class="p86-wo-site-addr">' + addrHTML + '</span>' : '') +
+        (site.gate_code ? '<span class="p86-wo-gate">Gate <b>' + esc(site.gate_code) + '</b></span>' : '') +
+      '</div>' +
+    '</div>';
+  }
+
+  // Materials / takeoff — optional, and never priced. Quantities and units
+  // only; a work order goes to the crew, so money has no place on it.
+  function materialsHTML(t, canEdit) {
+    var list = Array.isArray(t.materials) ? t.materials : [];
+    if (!list.length && !canEdit) return '';
+    return '<div class="p86-wo-mats">' +
+      '<label class="p86-st-lbl">Materials' +
+        (canEdit ? ' <button type="button" class="p86-wo-mats-edit">' + (list.length ? 'Edit' : '+ Add list') + '</button>' : '') +
+      '</label>' +
+      (list.length
+        ? '<table class="p86-wo-mats-tbl"><tbody>' + list.map(function (m) {
+            return '<tr><td class="q">' + esc(m.qty || '') + '</td><td class="u">' + esc(m.unit || '') + '</td>' +
+              '<td>' + esc(m.description || '') + '</td></tr>';
+          }).join('') + '</tbody></table>'
+        : '<div class="p86-wo-nophotos">No material list. Add one if the takeoff should travel with the crew.</div>') +
+      '<div class="p86-wo-mats-form" hidden></div>' +
+    '</div>';
+  }
+
+  function materialRowHTML(m) {
+    m = m || {};
+    return '<div class="p86-wo-mat-row">' +
+      '<input type="text" class="p86-wo-mat-q" placeholder="Qty" maxlength="24" value="' + escAttr(m.qty || '') + '" />' +
+      '<input type="text" class="p86-wo-mat-u" placeholder="Unit" maxlength="24" value="' + escAttr(m.unit || '') + '" />' +
+      '<input type="text" class="p86-wo-mat-d" placeholder="Material" maxlength="200" value="' + escAttr(m.description || '') + '" />' +
+      '<button type="button" class="p86-st-part-rm p86-wo-mat-rm" title="Remove">&times;</button>' +
+    '</div>';
   }
 
   function metaRow(label, html) {
@@ -599,10 +748,28 @@
       revision_proposed: 'proposed a revision',
       revision_accepted: 'accepted a revision',
       revision_rejected: 'rejected a revision',
-      agent_drafted: 'drafted this with 86'
+      agent_drafted: 'drafted this with 86',
+      subtask_completed: 'finished a subtask',
+      subtask_reopened: 'reopened a subtask',
+      subtask_note: 'added a subtask note'
+    };
+    var detail = e.detail;
+    if (typeof detail === 'string') { try { detail = JSON.parse(detail); } catch (_) { detail = null; } }
+    e = Object.assign({}, e, { detail: detail });
+    var task = detail && detail.task_id != null ? _state.taskTitles[String(detail.task_id)] : '';
+    var head = task ? esc(parseSubtaskTitle(task).head) : '';
+    var ON_TASK = {
+      subtask_completed: 'finished ' + head,
+      subtask_reopened: 'reopened ' + head,
+      subtask_note: 'added a note on ' + head
     };
     var what = e.kind === 'status_changed' && e.detail
-      ? 'moved it to ' + esc(STATUS_LABEL[e.detail.to] || e.detail.to)
+      ? 'moved it to ' + esc(STATUS_LABEL[e.detail.to] || e.detail.to) +
+        (e.detail.reason === 'all_subtasks_done' ? ' — every subtask done' : '')
+      : e.kind === 'photo_added' && e.detail && e.detail.task_id != null
+        ? 'added a ' + (e.detail.kind === 'before' ? 'before' : 'completion') + ' photo' + (head ? ' on ' + head : '')
+      : (head && ON_TASK[e.kind])
+        ? ON_TASK[e.kind]
       : e.kind === 'field_changed' && e.detail && e.detail.fields
         ? 'edited ' + esc((e.detail.fields || []).join(', '))
         : esc(VERB[e.kind] || String(e.kind || '').replace(/_/g, ' '));
@@ -611,6 +778,166 @@
       '<span class="p86-st-event-what">' + what + '</span> ' +
       '<span class="p86-st-event-when">' + esc(fmtDate(e.created_at)) + '</span>' +
     '</div>';
+  }
+
+  // Re-read just this ticket (photos and notes do not change the list row).
+  function refreshDetail(d, id) {
+    return api().get(id).then(function (r) {
+      if (_state.openId !== id) return;
+      paintDetail(d, r);
+    });
+  }
+
+  function wireWorkOrder(d, t, tasks, canEdit) {
+    var byId = {};
+    tasks.forEach(function (k) { byId[String(k.id)] = k; });
+
+    d.querySelectorAll('.p86-wo-sub').forEach(function (card) {
+      var taskId = card.getAttribute('data-task');
+      var task = byId[taskId] || {};
+      var photos = task.photos || [];
+      var body = card.querySelector('.p86-wo-sub-body');
+      var toggle = card.querySelector('.p86-wo-sub-toggle');
+
+      function setOpen(open) {
+        if (!body) return;
+        body.hidden = !open;
+        card.classList.toggle('is-open', open);
+        if (toggle) toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (open) _state.openSubs[taskId] = true; else delete _state.openSubs[taskId];
+      }
+      if (toggle) toggle.addEventListener('click', function () { setOpen(body.hidden); });
+
+      card.querySelectorAll('.p86-wo-thumb').forEach(function (b) {
+        b.addEventListener('click', function () {
+          if (!window.p86Attachments || !window.p86Attachments.openLightbox) return;
+          window.p86Attachments.openLightbox(photos, Number(b.getAttribute('data-idx')) || 0, {
+            parentLabel: parseSubtaskTitle(task.title).head,
+            parentSubtitle: t.title || ''
+          });
+        });
+      });
+
+      if (!canEdit) return;
+
+      var check = card.querySelector('.p86-wo-check');
+      if (check) check.addEventListener('click', function () {
+        var done = task.status !== 'done';
+        var hasCompletion = photos.some(function (p) { return p.kind !== 'before'; });
+        if (done && !hasCompletion) {
+          setOpen(true);
+          toast('Add a completion photo before marking this complete.', 'error');
+          return;
+        }
+        check.disabled = true;
+        api().setSubtaskDone(t.id, taskId, done).then(function (res) {
+          if (res && res.ticketStatus === 'work_complete' && t.status !== 'work_complete') {
+            toast('Every subtask is done — the work order is awaiting approval.');
+          }
+          _state.openId = t.id;
+          return reload();
+        }).catch(function (e) {
+          check.disabled = false;
+          toast(e && e.message ? e.message : 'Could not update the subtask', 'error');
+        });
+      });
+
+      card.querySelectorAll('.p86-wo-up input[type=file]').forEach(function (inp) {
+        inp.addEventListener('change', function () {
+          var files = Array.prototype.slice.call(inp.files || []);
+          inp.value = '';
+          if (!files.length || !window.p86Api || !window.p86Api.attachments) return;
+          var kind = inp.getAttribute('data-kind') === 'before' ? 'before' : 'completion';
+          var label = inp.parentNode;
+          if (label) label.classList.add('is-busy');
+          toast('Uploading ' + files.length + ' photo' + (files.length === 1 ? '' : 's') + '…');
+          // One at a time: a crew phone on one bar of LTE should not open
+          // six parallel uploads and lose all of them.
+          files.reduce(function (p, f) {
+            return p.then(function () {
+              return window.p86Api.attachments.upload('task', taskId, f, { tags: kind });
+            });
+          }, Promise.resolve()).then(function () {
+            _state.openSubs[taskId] = true;
+            return refreshDetail(d, t.id);
+          }).catch(function (e) {
+            if (label) label.classList.remove('is-busy');
+            toast(e && e.message ? e.message : 'Could not upload the photo', 'error');
+            return refreshDetail(d, t.id);
+          });
+        });
+      });
+
+      var noteIn = card.querySelector('.p86-wo-note-in');
+      var noteGo = card.querySelector('.p86-wo-note-go');
+      function addNote() {
+        var note = (noteIn && noteIn.value || '').trim();
+        if (!note) return;
+        noteGo.disabled = true;
+        api().addSubtaskNote(t.id, taskId, note).then(function () {
+          _state.openSubs[taskId] = true;
+          return refreshDetail(d, t.id);
+        }).catch(function (e) {
+          noteGo.disabled = false;
+          toast(e && e.message ? e.message : 'Could not add the note', 'error');
+        });
+      }
+      if (noteGo) noteGo.addEventListener('click', addNote);
+      if (noteIn) noteIn.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); addNote(); }
+      });
+    });
+
+    // Materials editor: rows of qty / unit / material. No price column —
+    // the server drops any key that is not one of those three anyway.
+    var matsEdit = d.querySelector('.p86-wo-mats-edit');
+    var matsForm = d.querySelector('.p86-wo-mats-form');
+    if (matsEdit && matsForm) matsEdit.addEventListener('click', function () {
+      if (!matsForm.hidden) { matsForm.hidden = true; matsForm.innerHTML = ''; return; }
+      var list = Array.isArray(t.materials) && t.materials.length ? t.materials : [{}];
+      matsForm.hidden = false;
+      matsForm.innerHTML =
+        '<div class="p86-wo-mat-rows">' + list.map(materialRowHTML).join('') + '</div>' +
+        '<div class="p86-wo-mat-actions">' +
+          '<button type="button" class="ee-btn secondary p86-wo-mat-add">+ Row</button>' +
+          '<span style="flex:1"></span>' +
+          '<button type="button" class="ee-btn secondary p86-wo-mat-cancel">Cancel</button>' +
+          '<button type="button" class="ee-btn primary p86-wo-mat-save">Save materials</button>' +
+        '</div>';
+      var rows = matsForm.querySelector('.p86-wo-mat-rows');
+      matsForm.addEventListener('click', function (e) {
+        var rm = e.target.closest('.p86-wo-mat-rm');
+        if (rm) { var row = rm.closest('.p86-wo-mat-row'); if (row) row.remove(); return; }
+        if (e.target.closest('.p86-wo-mat-add')) {
+          rows.insertAdjacentHTML('beforeend', materialRowHTML({}));
+          var last = rows.lastElementChild;
+          if (last) { var q = last.querySelector('.p86-wo-mat-d'); if (q) q.focus(); }
+          return;
+        }
+        if (e.target.closest('.p86-wo-mat-cancel')) { matsForm.hidden = true; matsForm.innerHTML = ''; return; }
+        var sv = e.target.closest('.p86-wo-mat-save');
+        if (sv) {
+          var next = [];
+          rows.querySelectorAll('.p86-wo-mat-row').forEach(function (row) {
+            var desc = row.querySelector('.p86-wo-mat-d').value.trim();
+            if (!desc) return;
+            next.push({
+              description: desc,
+              qty: row.querySelector('.p86-wo-mat-q').value.trim(),
+              unit: row.querySelector('.p86-wo-mat-u').value.trim()
+            });
+          });
+          sv.disabled = true;
+          api().update(t.id, { materials: next.length ? next : null }).then(function () {
+            toast('Materials saved');
+            return refreshDetail(d, t.id);
+          }).catch(function (err) {
+            sv.disabled = false;
+            toast(err && err.message ? err.message : 'Could not save the materials', 'error');
+          });
+        }
+      });
+    });
   }
 
   function wireDetail(d, t) {

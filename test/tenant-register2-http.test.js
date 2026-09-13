@@ -170,7 +170,7 @@ describe('REGISTER 2 — the route population', () => {
     expect(R.mounts + R.unresolved.length).toBe(78);
   });
 
-  test('the ROUTE count is committed (596 across 77 routers)', () => {
+  test('the ROUTE count is committed (601 across 77 routers)', () => {
     // THE NUMBER THE OLD SCAFFOLD DID NOT HAVE. It drove 4 routes on 1 mount
     // and nothing moved when a route was added. This fails when one is.
     //
@@ -286,12 +286,26 @@ describe('REGISTER 2 — the route population', () => {
     //      Waived because it is a POST. It stamps draft_shown_at on the caller's
     //      OWN ready row (organization_id AND user_id in the WHERE) and always
     //      answers ok, so it says nothing about which payload ids exist.
-    expect(R.routes).toBe(596);
+    //   596 -> 601, +5 ALL WAIVED, the work-order SUBTASK doors (John, 2026-09-13).
+    //      Two owner doors and three public doors; every one is a POST with a
+    //      path parameter, so the driven count does not move:
+    //        POST /api/service-tickets/:id/subtasks/:taskId/done
+    //        POST /api/service-tickets/:id/subtasks/:taskId/note
+    //        POST /api/service-ticket-share/:token/subtasks/:taskId/done    <- public
+    //        POST /api/service-ticket-share/:token/subtasks/:taskId/note    <- public
+    //        POST /api/service-ticket-share/:token/subtasks/:taskId/photo   <- public
+    //      Every one proves the subtask through loadSubtask — id AND
+    //      service_ticket_id AND the TICKET's organization_id AND scope = 'org' —
+    //      so a task id from another ticket or another tenant is a 404 before
+    //      anything is stored. The photo door proves it BEFORE a byte reaches
+    //      storage. Completing needs a completion photo, and a crew link is
+    //      refused once the office has approved the work.
+    expect(R.routes).toBe(601);
     expect(R.routers).toBe(77);
   });
 
-  test('the DRIVEN / COUNTED-WAIVED split is committed (139 driven, 457 counted)', () => {
-    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 139, waived: 457 });
+  test('the DRIVEN / COUNTED-WAIVED split is committed (139 driven, 462 counted)', () => {
+    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 139, waived: 462 });
   });
 
   test('every counted-waived route is a write or needs a path parameter — nothing else is waived', () => {
