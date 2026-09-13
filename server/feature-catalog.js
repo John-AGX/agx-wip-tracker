@@ -426,6 +426,39 @@ const features = [
     area: 'Org',
     shipped: '2026-07-02',
   },
+  // ── Service tickets + fast approval (1.24) ─────────────────
+  {
+    id: 'service-tickets',
+    label: 'Service tickets (work orders)',
+    blurb: 'A work order on a job or a lead — scope, schedule, priority, tasks and a status line from Draft to Closed.',
+    access_path: 'Job → Service Tickets tab → + New ticket, or a lead → 🔧 Service Ticket',
+    area: 'Jobs',
+    shipped: '2026-09-13',
+  },
+  {
+    id: 'service-ticket-share',
+    label: 'Share a work order by link',
+    blurb: 'Send a crew or client a link — view only, file a report with notes and photos, or suggest a new scope. No account.',
+    access_path: 'A service ticket past Draft → Share → Create link',
+    area: 'Jobs',
+    shipped: '2026-09-13',
+  },
+  {
+    id: 'service-job-layout',
+    label: 'Short service-job page',
+    blurb: 'Show a job as a short service-ticket page or the full job — a view switch; no data moves and the number stays.',
+    access_path: 'Job → left menu → Show as service ticket / Show as full job',
+    area: 'Jobs',
+    shipped: '2026-09-13',
+  },
+  {
+    id: 'ai-one-line-approval',
+    label: 'One-line approvals — tap or say yes',
+    blurb: 'Each change 86 drafts arrives as one line with Approve; say yes to apply a low-risk one. Money, status and deletes need a tap.',
+    access_path: '86 chat → Pending approvals, just above the chat box',
+    area: 'AI',
+    shipped: '2026-09-13',
+  },
 ];
 
 // ── Releases (patch notes) ─────────────────────────────────────
@@ -444,9 +477,29 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.23';
+const APP_VERSION = '1.24';
 
 const releases = [
+  {
+    version: '1.24',
+    date: '2026-09-13',
+    name: 'Work Orders',
+    summary: 'Service tickets — a work order on a job or a lead that a crew can open from a link — plus a faster way to approve what 86 drafts: one line, then Approve, or just say yes.',
+    changes: [
+      { type: 'new', text: 'Service tickets: a work order on a job or a lead. Open a job, pick the Service Tickets tab and press + New ticket; on a saved lead, press 🔧 Service Ticket at the top, and the lead’s tickets list under Service Tickets further down. You give it a title, a proposed scope, a priority and a scheduled date. A ticket starts as a Draft and moves along a line shown across the top of it: Draft, Open, Scheduled, In progress, Awaiting approval, Approved, Closed, with Cancelled off to one side. It carries a proposed scope and, once signed off, a separate approved scope, so what was asked for and what was agreed stay side by side. Tasks added under a ticket are ordinary tasks on the job (or lead) it belongs to: they also show on that Tasks panel and in My Tasks, so a ticket groups work without taking it off the job. Every change lands in the Progress list at the bottom of the ticket. A ticket raised on a lead stays with it when the lead becomes a job — it gains the job and keeps the lead. Archive takes a ticket off the list without deleting it. Deleting is guarded: a lead carrying a ticket that never became a job cannot be deleted until that ticket is archived, and a lead whose job still has a ticket that is not closed, cancelled or archived cannot be deleted either — the refusal says how many and asks you to close or archive them first. One thing that is not here: tickets have no number. Nothing assigns one yet, so a ticket is known by its title.' },
+      { type: 'new', text: 'Share a work order with someone who has no account. On an Open ticket press Share, choose what the link allows and press Create link. View only shows the work order — its status, scope, schedule, site contact, address, access notes, checklist and field log. Can file a report adds a report card: they give their name, add a note or a photo, and can press Mark work complete. Notes are added to the ticket’s Field log under the name they gave; they never overwrite anything. Can also suggest changes adds a box to rewrite the scope — what they send arrives on the ticket as a suggestion, marked unverified because nobody signed in to prove who typed it, and changes nothing until you tick it and press Accept selected. No link can change who a ticket is assigned to, approve it, close it or cancel it. The link is shown once — it is stored scrambled, so copy it then — and if you typed an email address it is emailed as well — if that email does not go out, the box says so. Links expire after 30 days and Turn off ends one immediately; a suggestion that came through a link you later turned off is kept and flagged. A Draft cannot be shared, and once a ticket is approved, closed or cancelled its link still opens but no longer offers a report. Two limits you will run into: the photos a crew adds from the link are saved against the ticket, but no screen in the office shows them yet — you see “added a photo” in the ticket’s Progress list and nothing more. And the checklist on the link is read-only: the crew can see it but cannot tick it.' },
+      { type: 'new', text: 'People on a ticket. Under “On this ticket” you can add someone from your company and mark them Can view or Can edit — they sign in as themselves and no link is created. Read this before you rely on it: today that list is a record of who is involved, not a permission. Whether a person can open or edit a ticket is decided entirely by their access to the job or lead it is on (next entry); adding someone here, at either level, does not change what they can see or do.' },
+      { type: 'improved', text: 'Who can see and edit a ticket now follows the job or lead it is on. Anyone who can see every job sees every job ticket; anyone limited to their own jobs sees tickets only on jobs they own or have been given access to, and edits them only where that access allows editing. Tickets on a lead follow lead access. A ticket on a job you are not on answers exactly as if it did not exist, and the same rule covers its photos wherever they could surface — in reports, file lists and 86. This closed a real gap: until this week the ticket list checked no permission at all, so anyone signed in to your company, whatever their role, could list every ticket in it. One change you will notice if you are a Project Manager as the role ships: you still see every ticket, but you can now edit one only on a job you own or have been given edit access to.' },
+      { type: 'new', text: '86 can read and draft service tickets. Draft with 86 sits on a job’s Service Tickets tab and on a lead’s Service tickets section, and Ask 86 sits inside a ticket when you open it — including a closed or cancelled one, which is usually the one someone has a question about. 86 can draft a new ticket with its scope, dates and tasks, or an edit to one, and the draft comes to you for approval like any other change. What 86 cannot do: it cannot list the tickets on a job or lead — it reads a ticket only when handed that exact ticket — so it will say it cannot see the list rather than tell you there are none. It cannot change a ticket’s status, set its approved scope or move it to a different job or lead; it refuses those by name rather than finding another way round. Start a new chat to pick this up.' },
+      { type: 'new', text: 'A service job can wear a shorter page. On a job’s left-hand menu, “Show as service ticket” switches it to a short set of sections — Overview, Service Tickets, Details, Photos, Detailed and Invoices — and “Show as full job” switches it back. It changes the view and nothing else: no data moves and the job number never changes. Jobs numbered S or WO start in the short view unless someone has chosen otherwise; every other job starts full. The short view is meant to add back any section that holds records, and it does for change orders, purchase orders, estimates and subs — but not for Billing, Files, Daily Logs or Reports, which stay hidden even when they hold something, and WIP Report and Site Map are not in the short view at all. If a service job has pay applications, files or reports, press Show as full job to reach them; nothing has been removed.' },
+      { type: 'new', text: 'Approving what 86 drafts is one line and one button. A draft from 86 now arrives in Pending approvals, just above the chat box, as a single line that says what the change does — “Lead · Smith Residence — gate code → 4455” — with Approve, Details and Reject. The line is written from the change itself, never from the title 86 gave it, so a draft titled one thing that does another reads as what it actually does. Details opens the full card in place. The list checks for new drafts every 5 seconds while the chat is open, where it used to wait up to 15, and it no longer redraws a card you have open.' },
+      { type: 'new', text: 'Say yes. When that one line is on your screen, you can type or say “yes” instead of pressing Approve, and 86 applies it and answers with one line: “✅ Applied — …”. A yes counts only in the conversation that asked for the change, only after the card was actually showing — so keep the chat open — and only when exactly one draft is waiting there; with two, 86 asks you to tap the one you mean. Some changes always need a tap and a yes will not apply them: anything that deletes, a status or stage change on an estimate, job, lead, invoice, purchase order, change order, bill or pay application, anything that sets a price, cost or other money figure, a percent complete, and anything 86’s check does not recognise. Say yes to one of those and 86 tells you it needs a tap; nothing is applied. One thing that changed: saying “yes, do it” in the same breath as the request no longer applies anything by itself — the card has to exist first, because until then there is nothing specific to say yes to. Start a new chat to pick this up.' },
+      { type: 'new', text: 'Small changes skip the wait. Plain fields on one lead, client, job or service ticket, or a new to-do, task, reminder or calendar event, can now be drafted by 86 itself during its reply instead of being handed to the Scribe to write in the background, so the card is there when 86 finishes answering. Anything bigger — line items, change orders, several records at once, a new lead, client or job — still goes to the Scribe and takes as long as it did. Either way nothing is applied until you approve it.' },
+      { type: 'fixed', text: 'Three checks on AI changes that were not doing their job. A yes in chat could apply a status change without a card if 86 had tucked it inside a batch or a move — the check only looked at a plain single change. It now looks everywhere the change would actually run. A background task could apply a change with nobody approving it, because the approval block never saw the tool it used; background tasks now only ever leave a draft for you. And the guard meant to stop 86 writing the same change twice — the one written after one request produced two clients and two leads in August — could never fire, because it compared two records that always differ by their timestamp. It now compares the change itself.' },
+      { type: 'fixed', text: 'Purchase-order dates could be tomorrow’s. The date recorded when a subcontractor accepts a purchase order — the “Accepted by … on …” line that makes the PO the executed contract — and on each addendum, and the date on a new bill started from a PO, were stamped with the UTC date rather than your own. So anything done after 8pm Eastern in summer, or 7pm in winter, carried the next day’s date on a contract document. They take your local date now. Dates already recorded are not changed: if a PO or bill was accepted or started in an evening before this release, check its date.' },
+      { type: 'fixed', text: 'A photo report could be made to show a photo it should not. A report stores the photos in it by reference, and the project report looked those references up with no check at all, so a report carrying a reference to another company’s photo would have displayed it; the job report checked the company but not whether you may see a work-order photo. The app’s own photo picker never offers either, so it took a hand-built save or an AI-written report carrying the wrong reference. Both now show a photo only if it belongs to your company and, for a work-order photo, only if you may see that ticket. Saving a report never removes a photo someone else already put in it, even one you cannot see; a new photo you are not allowed to add is simply left out.' },
+    ],
+  },
   {
     version: '1.23',
     date: '2026-09-07',

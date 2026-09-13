@@ -849,7 +849,7 @@
           '<div class="p86-st-task-note">Anyone with the link can OPEN this work order. ' +
             '<strong>Can file a report</strong> also lets them add notes and photos and mark the ' +
             'work complete — things that are theirs to report. ' +
-            '<strong>Can suggest changes</strong> adds a form for the scope and the dates, but what ' +
+            '<strong>Can suggest changes</strong> adds a form to rewrite the scope, but what ' +
             'they send is a SUGGESTION: it waits here for you to accept it, field by field, and ' +
             'changes nothing until you do. Neither one can change who it is assigned to or its ' +
             'status. The link expires in 30 days and you can turn it off at any time.</div>' +
