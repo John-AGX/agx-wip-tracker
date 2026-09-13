@@ -904,46 +904,369 @@
       matsForm.hidden = false;
       matsForm.innerHTML =
         '<div class="p86-wo-mat-rows">' + list.map(materialRowHTML).join('') + '</div>' +
+        '<div class="p86-wo-mat-note" role="status" hidden></div>' +
         '<div class="p86-wo-mat-actions">' +
           '<button type="button" class="ee-btn secondary p86-wo-mat-add">+ Row</button>' +
+          // Only a ticket with a parent has files to read. The server re-proves
+          // every parent and every file; this only hides a button with nothing
+          // behind it.
+          ((t.job_id || t.lead_id)
+            ? '<button type="button" class="ee-btn secondary p86-wo-mat-fill" ' +
+                'title="Read the lines from a takeoff already in the job\'s files">Fill from a job file</button>'
+            : '') +
           '<span style="flex:1"></span>' +
           '<button type="button" class="ee-btn secondary p86-wo-mat-cancel">Cancel</button>' +
           '<button type="button" class="ee-btn primary p86-wo-mat-save">Save materials</button>' +
         '</div>';
+    });
+    // Wired ONCE per paint, not inside the Edit handler above. It used to be
+    // added on every open, so an editor closed and reopened answered each click
+    // twice — two saves racing, one of them from the detached rows of the first
+    // open, and (now) two pickers and two metered reads of the same file. The
+    // rows container is looked up per click because each open rebuilds it.
+    if (matsForm) matsForm.addEventListener('click', function (e) {
       var rows = matsForm.querySelector('.p86-wo-mat-rows');
-      matsForm.addEventListener('click', function (e) {
-        var rm = e.target.closest('.p86-wo-mat-rm');
-        if (rm) { var row = rm.closest('.p86-wo-mat-row'); if (row) row.remove(); return; }
-        if (e.target.closest('.p86-wo-mat-add')) {
-          rows.insertAdjacentHTML('beforeend', materialRowHTML({}));
-          var last = rows.lastElementChild;
-          if (last) { var q = last.querySelector('.p86-wo-mat-d'); if (q) q.focus(); }
+      if (!rows) return;
+      if (e.target.closest('.p86-wo-mat-fill')) { openTakeoffPicker(matsForm, t); return; }
+      var rm = e.target.closest('.p86-wo-mat-rm');
+      if (rm) { var row = rm.closest('.p86-wo-mat-row'); if (row) row.remove(); return; }
+      if (e.target.closest('.p86-wo-mat-add')) {
+        rows.insertAdjacentHTML('beforeend', materialRowHTML({}));
+        var last = rows.lastElementChild;
+        if (last) { var q = last.querySelector('.p86-wo-mat-d'); if (q) q.focus(); }
+        return;
+      }
+      if (e.target.closest('.p86-wo-mat-cancel')) { matsForm.hidden = true; matsForm.innerHTML = ''; return; }
+      var sv = e.target.closest('.p86-wo-mat-save');
+      if (sv) {
+        var next = [];
+        rows.querySelectorAll('.p86-wo-mat-row').forEach(function (row) {
+          var desc = row.querySelector('.p86-wo-mat-d').value.trim();
+          if (!desc) return;
+          next.push({
+            description: desc,
+            qty: row.querySelector('.p86-wo-mat-q').value.trim(),
+            unit: row.querySelector('.p86-wo-mat-u').value.trim()
+          });
+        });
+        sv.disabled = true;
+        api().update(t.id, { materials: next.length ? next : null }).then(function () {
+          toast('Materials saved');
+          return refreshDetail(d, t.id);
+        }).catch(function (err) {
+          sv.disabled = false;
+          toast(err && err.message ? err.message : 'Could not save the materials', 'error');
+        });
+      }
+    });
+  }
+
+  // ── Fill the materials editor from a job file ────────────────────────
+  // The PM picks a takeoff already attached to the ticket's job, lead or
+  // estimate; the server reads it and hands back { description, qty, unit }
+  // lines. They land in the open editor UNSAVED — the PM reviews them and
+  // presses Save materials, which is still the only write. Nothing here saves,
+  // and nothing here ever holds a file URL: the list carries names and sizes.
+  var PICK_WHERE = [
+    { where: 'job', label: 'Job files' },
+    { where: 'lead', label: 'Lead files' },
+    { where: 'estimate', label: 'Estimate files' }
+  ];
+  var PICK_KIND = { xlsx: 'XLSX', xls: 'XLS', csv: 'CSV', pdf: 'PDF', image: 'Photo' };
+  // The server's own caps (normalizeMaterials in server/services/
+  // service-tickets.js). Mirrored so a filled editor never holds more than a
+  // save would keep — the server would drop the excess without a word.
+  var MAT_MAX_LINES = 100;
+  var MAT_MAX = { description: 200, qty: 24, unit: 24 };
+
+  // The close function of the picker on screen, if any. One at a time: a
+  // second open replaces the first rather than stacking two backdrops.
+  var _takeoffPick = null;
+
+  function fmtBytes(n) {
+    n = Number(n);
+    if (!isFinite(n) || n < 0) return '';
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return Math.round(n / 1024) + ' KB';
+    return (n / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  function plural(n, one, many) {
+    return n + ' ' + (n === 1 ? one : (many || one + 's'));
+  }
+
+  function pickRowHTML(f, idx) {
+    var legacy = f.kind === 'xls';
+    var meta = [f.folder, fmtBytes(f.size_bytes), fmtDate(f.uploaded_at)].filter(Boolean).join(' · ');
+    return '<button type="button" class="p86-wo-pick-row' + (legacy ? ' is-legacy' : '') + '" data-idx="' + idx + '"' +
+        (legacy ? ' disabled' : '') + '>' +
+      '<span class="p86-wo-pick-kind k-' + esc(f.kind) + '">' + esc(PICK_KIND[f.kind] || f.kind) + '</span>' +
+      '<span class="p86-wo-pick-main">' +
+        '<span class="p86-wo-pick-name">' + esc(f.filename || 'Untitled file') + '</span>' +
+        '<span class="p86-wo-pick-meta">' +
+          (legacy ? 'Save as .xlsx to read it' : esc(meta)) +
+        '</span>' +
+      '</span>' +
+      '<span class="p86-wo-pick-state" aria-hidden="true"></span>' +
+    '</button>';
+  }
+
+  function openTakeoffPicker(matsForm, t) {
+    if (!api() || typeof api().materialSources !== 'function') {
+      toast('Reading a job file is not available on this page — refresh and try again.', 'error');
+      return;
+    }
+    if (_takeoffPick) _takeoffPick();
+
+    var wrap = document.createElement('div');
+    wrap.id = 'p86StTakeoffPick';
+    wrap.className = 'p86-st-modal-back';
+    wrap.innerHTML =
+      '<div class="p86-st-modal p86-wo-pick" role="dialog" aria-modal="true" aria-labelledby="p86StTakeoffPickHead">' +
+        '<div class="p86-st-modal-head" id="p86StTakeoffPickHead">Pick a takeoff</div>' +
+        '<div class="p86-wo-pick-note">Spreadsheets are read directly. PDFs and photos are read by AI, ' +
+          'so check every line. Prices are never copied.</div>' +
+        '<div class="p86-wo-pick-err" role="alert" hidden></div>' +
+        '<div class="p86-wo-pick-body"><div class="p86-st-loading">Looking for files…</div></div>' +
+        '<div class="p86-st-modal-actions">' +
+          '<button type="button" class="ee-btn secondary p86-wo-pick-cancel">Cancel</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(wrap);
+
+    var closed = false;
+    var busy = false;
+    var files = [];
+    var body = wrap.querySelector('.p86-wo-pick-body');
+    var errEl = wrap.querySelector('.p86-wo-pick-err');
+
+    // While the picker is up — and until the lines it read are in the editor —
+    // the editor is held against a background repaint (see detailHoldsEdits).
+    // The picker and the Replace / Add question both live outside the pane, so
+    // neither holds the caret, and an AI read can run for most of a minute.
+    matsForm.setAttribute('data-filling', '1');
+    function release() {
+      matsForm.removeAttribute('data-filling');
+      // A refresh refused while the hold was on is retried now. If lines just
+      // landed, the editor's unsaved values keep holding it.
+      setTimeout(flushStale, 0);
+    }
+
+    function onKey(e) {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      close();
+    }
+    // keepHold: the success path closes the picker but still has lines to put
+    // in the editor, so it releases the hold itself once they are in.
+    function close(keepHold) {
+      if (closed) return;
+      closed = true;
+      document.removeEventListener('keydown', onKey);
+      wrap.remove();
+      if (_takeoffPick === close) _takeoffPick = null;
+      if (keepHold !== true) release();
+    }
+    _takeoffPick = close;
+    document.addEventListener('keydown', onKey);
+    wrap.addEventListener('click', function (e) { if (e.target === wrap) close(); });
+    wrap.querySelector('.p86-wo-pick-cancel').addEventListener('click', function () { close(); });
+
+    function showErr(msg) {
+      errEl.textContent = msg;
+      errEl.hidden = !msg;
+    }
+
+    api().materialSources(t.id).then(function (r) {
+      if (closed) return;
+      files = (r && Array.isArray(r.files) ? r.files : []).filter(function (f) {
+        return f && f.id != null && PICK_KIND[f.kind];
+      });
+      var html = '';
+      PICK_WHERE.forEach(function (g) {
+        var inGroup = [];
+        files.forEach(function (f, i) { if (f.where === g.where) inGroup.push(pickRowHTML(f, i)); });
+        if (!inGroup.length) return;
+        html += '<div class="p86-wo-pick-group">' +
+          '<div class="p86-st-lbl">' + esc(g.label) + '</div>' +
+          inGroup.join('') +
+        '</div>';
+      });
+      // A file with a `where` this list does not know is not shown rather than
+      // guessed into a group, so an empty grouping is the empty state too.
+      body.innerHTML = html || '<div class="p86-wo-pick-empty">No spreadsheets, PDFs or photos on this job yet. ' +
+        'Add the takeoff to the job\'s Files, then come back.</div>';
+      var first = body.querySelector('.p86-wo-pick-row:not([disabled])');
+      if (first) first.focus();
+    }).catch(function (e) {
+      if (closed) return;
+      body.innerHTML = '';
+      showErr(e && e.message ? e.message : 'Could not list the files on this job.');
+    });
+
+    // One listener on the body, which outlives every repaint of the list.
+    body.addEventListener('click', function (e) {
+      var btn = e.target.closest('.p86-wo-pick-row');
+      if (!btn || btn.disabled || busy) return;
+      var f = files[Number(btn.getAttribute('data-idx'))];
+      if (!f || f.kind === 'xls') return;
+      busy = true;
+      showErr('');
+      var allRows = body.querySelectorAll('.p86-wo-pick-row');
+      Array.prototype.forEach.call(allRows, function (b) { b.disabled = true; });
+      btn.classList.add('is-reading');
+      btn.setAttribute('aria-busy', 'true');
+      var state = btn.querySelector('.p86-wo-pick-state');
+      if (state) state.textContent = 'Reading…';
+
+      function unlock() {
+        busy = false;
+        Array.prototype.forEach.call(allRows, function (b) {
+          var ff = files[Number(b.getAttribute('data-idx'))];
+          b.disabled = !ff || ff.kind === 'xls';
+        });
+        btn.classList.remove('is-reading');
+        btn.removeAttribute('aria-busy');
+        if (state) state.textContent = '';
+      }
+
+      api().extractMaterials(t.id, f.id).then(function (res) {
+        // Cancelled while it read: the PM said no, so nothing lands.
+        if (closed) return;
+        if (!res || res.ok === false || !usableLines(res).length) {
+          unlock();
+          showErr((res && res.error) || ('No material lines were found in ' + (f.filename || 'that file') + '.'));
           return;
         }
-        if (e.target.closest('.p86-wo-mat-cancel')) { matsForm.hidden = true; matsForm.innerHTML = ''; return; }
-        var sv = e.target.closest('.p86-wo-mat-save');
-        if (sv) {
-          var next = [];
-          rows.querySelectorAll('.p86-wo-mat-row').forEach(function (row) {
-            var desc = row.querySelector('.p86-wo-mat-d').value.trim();
-            if (!desc) return;
-            next.push({
-              description: desc,
-              qty: row.querySelector('.p86-wo-mat-q').value.trim(),
-              unit: row.querySelector('.p86-wo-mat-u').value.trim()
-            });
-          });
-          sv.disabled = true;
-          api().update(t.id, { materials: next.length ? next : null }).then(function () {
-            toast('Materials saved');
-            return refreshDetail(d, t.id);
-          }).catch(function (err) {
-            sv.disabled = false;
-            toast(err && err.message ? err.message : 'Could not save the materials', 'error');
-          });
-        }
+        close(true);
+        return Promise.resolve().then(function () {
+          return applyTakeoff(matsForm, t, f, res);
+        }).catch(function (err) {
+          try { console.error('[service-tickets] could not fill the materials editor:', err); } catch (_) {}
+          toast('The lines were read but could not be put in the list — try again.', 'error');
+        }).then(release);
+      }).catch(function (err) {
+        if (closed) return;
+        unlock();
+        showErr(err && err.status === 429
+          ? '86 is busy — try again in a minute.'
+          : (err && err.message) || 'Could not read materials from that file');
       });
     });
+  }
+
+  // The lines a save would keep: an object with a description. Anything else
+  // would be dropped by normalizeMaterials, so it is not counted as read.
+  function usableLines(res) {
+    var list = res && Array.isArray(res.materials) ? res.materials : [];
+    return list.filter(function (m) {
+      return m && typeof m === 'object' && String(m.description == null ? '' : m.description).trim();
+    });
+  }
+
+  // Put the read lines into the editor. Resolves once they are in (or the PM
+  // backed out), so the caller can release the repaint hold after.
+  function applyTakeoff(matsForm, t, f, res) {
+    var filename = (res.source && res.source.filename) || f.filename || 'the file';
+    // The ticket this editor belongs to must still be the one open, and the
+    // editor must still be on the page — the PM can collapse the row or leave
+    // the job while a file is being read.
+    function stillHere() {
+      return String(_state.openId) === String(t.id) && matsForm.isConnected && !matsForm.hidden &&
+        !!matsForm.querySelector('.p86-wo-mat-rows');
+    }
+    if (!stillHere()) {
+      toast('The ticket was closed before ' + filename + ' was read — nothing was added.');
+      return Promise.resolve();
+    }
+
+    var lines = usableLines(res);
+    var rows = matsForm.querySelector('.p86-wo-mat-rows');
+    var described = Array.prototype.filter.call(rows.querySelectorAll('.p86-wo-mat-row'), function (row) {
+      var dIn = row.querySelector('.p86-wo-mat-d');
+      return dIn && dIn.value.trim();
+    }).length;
+
+    var ask = !described
+      ? Promise.resolve('primary')
+      : (typeof window.p86ConfirmTernary === 'function'
+          ? window.p86ConfirmTernary({
+              title: 'Add to the list or replace it?',
+              message: 'The list already has ' + plural(described, 'line') + '. ' +
+                plural(lines.length, 'line') + (lines.length === 1 ? ' was' : ' were') + ' read from ' + filename + '.',
+              primaryLabel: 'Replace',
+              secondaryLabel: 'Add to it',
+              cancelLabel: 'Cancel'
+            })
+          // No dialog helper loaded: add, never replace. Appending cannot
+          // lose a line the PM typed; replacing without asking could.
+          : Promise.resolve('secondary'));
+
+    return Promise.resolve(ask).then(function (choice) {
+      if (choice !== 'primary' && choice !== 'secondary') return;
+      if (!stillHere()) {
+        toast('The ticket was closed before the lines were added — nothing was added.');
+        return;
+      }
+      rows = matsForm.querySelector('.p86-wo-mat-rows');
+      Array.prototype.forEach.call(rows.querySelectorAll('.p86-wo-mat-row'), function (row) {
+        if (choice === 'primary') { row.remove(); return; }
+        // Adding: a row with nothing in it is the editor's blank starter row,
+        // not a line — the read lines follow the real ones, not a gap.
+        var empty = Array.prototype.every.call(row.querySelectorAll('input'), function (i) { return !i.value.trim(); });
+        if (empty) row.remove();
+      });
+
+      var room = Math.max(0, MAT_MAX_LINES - rows.querySelectorAll('.p86-wo-mat-row').length);
+      var put = lines.slice(0, room);
+      put.forEach(function (m) {
+        // Built empty, then filled through .value, so every field differs from
+        // its markup default — the background-refresh guard reads that as
+        // unsaved and leaves the editor alone until the PM saves or cancels.
+        rows.insertAdjacentHTML('beforeend', materialRowHTML({}));
+        var row = rows.lastElementChild;
+        row.querySelector('.p86-wo-mat-q').value = String(m.qty == null ? '' : m.qty).trim().slice(0, MAT_MAX.qty);
+        row.querySelector('.p86-wo-mat-u').value = String(m.unit == null ? '' : m.unit).trim().slice(0, MAT_MAX.unit);
+        row.querySelector('.p86-wo-mat-d').value = String(m.description).trim().slice(0, MAT_MAX.description);
+      });
+      if (!rows.querySelector('.p86-wo-mat-row')) rows.insertAdjacentHTML('beforeend', materialRowHTML({}));
+
+      var note = matsForm.querySelector('.p86-wo-mat-note');
+      if (note) {
+        note.innerHTML = takeoffNoteHTML(res, filename, put.length, lines.length - put.length);
+        note.classList.toggle('is-ai', /^ai-/.test(String(res.method || '')));
+        note.hidden = false;
+      }
+    });
+  }
+
+  // "12 lines read from Lead Report.xlsx (Lead Report); skipped 6 labor lines…"
+  // in plain words, then every warning, then what to do next. Server text is
+  // escaped like any other — a file name is whatever the uploader typed.
+  function takeoffNoteHTML(res, filename, added, didNotFit) {
+    var c = (res && res.counts) || {};
+    var sk = c.skipped || {};
+    var sheet = res.source && res.source.sheet;
+    var skipped = [];
+    if (Number(sk.labor) > 0) skipped.push(plural(Number(sk.labor), 'labor line'));
+    if (Number(sk.totals) > 0) skipped.push(plural(Number(sk.totals), 'subtotal row'));
+    if (Number(sk.zero_qty) > 0) skipped.push(plural(Number(sk.zero_qty), 'removed line') + ' (qty 0)');
+
+    var head = plural(added, 'line') + ' read from ' + filename + (sheet ? ' (' + sheet + ')' : '') +
+      (skipped.length ? '; skipped ' + skipped.join(', ') : '') + '.';
+
+    var warnings = [];
+    function warn(s) { if (s && warnings.indexOf(s) === -1) warnings.push(String(s)); }
+    if (/^ai-/.test(String(res.method || ''))) warn('Read by AI — check every quantity before saving.');
+    (Array.isArray(res.warnings) ? res.warnings : []).forEach(warn);
+    if (Number(c.over_cap) > 0) warn('Only the first 100 lines fit — the rest were left out.');
+    if (didNotFit > 0) {
+      warn('The list holds ' + MAT_MAX_LINES + ' lines, so ' + plural(didNotFit, 'read line') + ' did not fit.');
+    }
+
+    return '<span class="p86-wo-mat-note-head">' + esc(head) + '</span>' +
+      warnings.map(function (w) { return ' <span class="p86-wo-mat-note-warn">' + esc(w) + '</span>'; }).join('') +
+      ' <span class="p86-wo-mat-note-next">Review, then Save materials.</span>';
   }
 
   function wireDetail(d, t) {
@@ -1543,6 +1866,13 @@
     // share panel) clears it and releases the refresh.
     var minted = open.querySelector('.p86-st-share-out input');
     if (minted && minted.value) return true;
+    // A job file being read into the materials editor holds it as well. The
+    // picker and the Replace / Add question sit outside the pane and take no
+    // caret here, the editor is not dirty until the lines land, and an AI read
+    // can take most of a minute — a repaint inside that window would rebuild
+    // the editor and the lines would arrive with nowhere to go. The picker
+    // clears the mark when it is done and retries the latch.
+    if (open.querySelector('.p86-wo-mats-form[data-filling]')) return true;
     var fields = open.querySelectorAll('input, textarea, select');
     for (var i = 0; i < fields.length; i++) {
       var f = fields[i];

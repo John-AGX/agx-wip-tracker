@@ -31,6 +31,7 @@ const METRICS = {
   EMAIL_SENDS: 'email_sends',
   STORAGE_BYTES: 'storage_bytes',
   CAMPAIGN_SENDS: 'campaign_sends',
+  AI_DOC_EXTRACT: 'ai_doc_extract',
 };
 
 // Current billing period as 'YYYY-MM' (UTC). Pure-ish: reads the clock

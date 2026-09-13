@@ -13019,7 +13019,83 @@ body.light-mode .p86-mktpnl-warn { background: rgba(180, 120, 10, .10); border-c
   border: 1px solid var(--border, #333); border-radius: 6px; padding: 6px 8px;
   font-size: 12.5px; font-family: inherit;
 }
-.p86-wo-mat-actions { display: flex; gap: 6px; margin-top: 8px; }
+.p86-wo-mat-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
+/* Fill from a job file — the summary under the rows, and the takeoff picker.
+   The note is the PM's only account of what the read left out (labor, subtotal
+   rows, removed lines) and of whether a model read it, so it sits right above
+   Save materials rather than in a toast that is gone before it is read. An AI
+   read gets the amber rule used for "Needs photo": check it before it goes out. */
+.p86-wo-mat-note {
+  margin-top: 8px; padding: 7px 10px; border-radius: 0 6px 6px 0;
+  font-size: 12px; line-height: 1.5; color: var(--text, #fff);
+  background: var(--surface2, rgba(255,255,255,0.04));
+  border-left: 3px solid var(--accent, #4f8cff);
+}
+.p86-wo-mat-note.is-ai { border-left-color: #d97706; }
+.p86-wo-mat-note-head { font-weight: 600; }
+.p86-wo-mat-note-warn { color: var(--text-dim, #888); }
+.p86-wo-mat-note.is-ai .p86-wo-mat-note-warn { color: #d97706; }
+.p86-wo-mat-note-next { color: var(--text, #fff); }
+
+.p86-wo-pick-note { font-size: 12px; line-height: 1.45; color: var(--text-dim, #888); margin-bottom: 8px; }
+.p86-wo-pick-err {
+  font-size: 12.5px; line-height: 1.45; margin: 4px 0 8px; padding: 7px 10px; border-radius: 6px;
+  color: var(--red, #dc2626); background: color-mix(in srgb, var(--red, #dc2626) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--red, #dc2626) 35%, transparent);
+}
+.p86-wo-pick-empty { font-size: 12.5px; line-height: 1.5; color: var(--text-dim, #888); padding: 10px 0 2px; }
+.p86-wo-pick-group .p86-st-lbl { margin: 10px 0 5px; }
+/* Each file is a <button>. The global `button` rule centres and nowraps its
+   content and its :hover (0,1,1) outranks a single class, so both are set back
+   here explicitly — including the hover background, which would otherwise be
+   the dark-theme white wash on a light panel. */
+.p86-wo-pick-row {
+  display: flex; align-items: center; justify-content: flex-start; gap: 10px;
+  width: 100%; margin: 0 0 5px; padding: 8px 10px; text-align: left; white-space: normal;
+  background: var(--surface2, rgba(255,255,255,0.03)); color: var(--text, #fff);
+  border: 1px solid var(--border, #333); border-radius: 8px; font: inherit; cursor: pointer;
+}
+.p86-wo-pick-row:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent, #4f8cff) 8%, var(--surface2, transparent));
+  border-color: var(--accent, #4f8cff);
+}
+.p86-wo-pick-row:focus-visible { outline: 2px solid var(--accent, #4f8cff); outline-offset: 2px; }
+.p86-wo-pick-row:disabled { cursor: default; opacity: 0.55; }
+/* The row being read stays at full strength while its siblings dim. */
+.p86-wo-pick-row.is-reading { opacity: 1; cursor: progress; border-color: var(--accent, #4f8cff); }
+.p86-wo-pick-kind {
+  flex: 0 0 auto; min-width: 44px; padding: 3px 6px; border-radius: 4px; text-align: center;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+  color: var(--accent, #4f8cff); background: color-mix(in srgb, var(--accent, #4f8cff) 14%, transparent);
+}
+.p86-wo-pick-kind.k-xlsx, .p86-wo-pick-kind.k-csv {
+  color: var(--green, #059669); background: color-mix(in srgb, var(--green, #059669) 14%, transparent);
+}
+.p86-wo-pick-kind.k-pdf {
+  color: var(--red, #dc2626); background: color-mix(in srgb, var(--red, #dc2626) 12%, transparent);
+}
+.p86-wo-pick-kind.k-image {
+  color: var(--purple, #7c3aed); background: color-mix(in srgb, var(--purple, #7c3aed) 14%, transparent);
+}
+.p86-wo-pick-kind.k-xls { color: var(--text-dim, #888); background: var(--surface2, rgba(255,255,255,0.06)); }
+.p86-wo-pick-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.p86-wo-pick-name {
+  font-size: 13px; font-weight: 600; color: var(--text, #fff);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.p86-wo-pick-meta { font-size: 11.5px; color: var(--text-dim, #888); }
+.p86-wo-pick-row.is-legacy .p86-wo-pick-meta { color: #d97706; }
+/* #d97706 is under 3:1 on the light panel for 11-12px text; the darker amber
+   keeps the AI warning and the "save as .xlsx" hint readable there. */
+body.light-mode .p86-wo-mat-note.is-ai .p86-wo-mat-note-warn,
+body.light-mode .p86-wo-pick-row.is-legacy .p86-wo-pick-meta { color: #b45309; }
+.p86-wo-pick-state { flex: 0 0 auto; font-size: 11.5px; font-weight: 600; color: var(--accent, #4f8cff); }
+.p86-wo-pick-row.is-reading .p86-wo-pick-state { animation: p86WoPickPulse 1.2s ease-in-out infinite; }
+@keyframes p86WoPickPulse { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) {
+  .p86-wo-pick-row.is-reading .p86-wo-pick-state { animation: none; }
+}
 
 .p86-wo-subs { display: flex; flex-direction: column; gap: 6px; }
 .p86-wo-sub { border: 1px solid var(--border, #333); border-radius: 8px; background: var(--surface, transparent); }

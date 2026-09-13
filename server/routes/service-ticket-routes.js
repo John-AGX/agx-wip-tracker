@@ -27,7 +27,8 @@
 
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireOrgId } = require('../auth');
+const { requireAuth, requireOrgId, hasCapability } = require('../auth');
+const { attachmentInOrg } = require('../services/attachment-org-scope');
 const { assertEntityInOrg, callerOrgId } = require('../org-access');
 const svc = require('../services/service-tickets');
 const access = require('../services/service-ticket-access');
@@ -631,6 +632,235 @@ router.post('/:id/subtasks/:taskId/note', requireAuth, requireOrgId, async (req,
   } catch (e) {
     console.error('[service-tickets] subtask note failed', e);
     res.status(500).json({ error: 'Failed to add the note' });
+  }
+});
+
+// ── Work-order materials: fill from a job file (John, 2026-09-13) ──────────
+// The PM already has the takeoff — an AGX Lead Report xlsx, a Buildertrend
+// export, a Home Depot CSV, a takeoff print, a photo of a pull sheet — sitting
+// in the job's Files. These two doors let the Materials editor READ one of
+// those files into rows for review. Neither writes anything: the rows land in
+// the editor unsaved, and PATCH /:id {materials} (normalizeMaterials) stays the
+// ONLY write, so a file can never put a line on the crew link that a person did
+// not look at and save. The crew link never gets the file itself either.
+//
+// WHICH FILES. Only files hanging on the ticket's OWN job, its lead and its
+// estimate — never a file id from anywhere else in the org. And each extra
+// parent is gated on what the caller could already open by the front door:
+//   job      — the ticket's job. The ticket's own write proof covers it, and
+//              every door that writes service_tickets.job_id proves the job
+//              in-org first (the list in A1 above).
+//   lead     — the ticket's lead, else the lead the job came from. Needs
+//              LEADS_VIEW, unless the ticket IS a lead ticket (its write proof
+//              was LEADS_EDIT on that very lead). A crew lead with an edit
+//              grant on one job must not read the sales lead's files through
+//              the work order.
+//   estimate — the estimate the job was sold from. Needs ESTIMATES_VIEW, for
+//              the same reason: an estimate file is priced, and the narrow
+//              tier holds no estimate capability at all.
+// Each id is proved in this org before its files are listed. The jobs read is
+// pinned to the org too, so a legacy un-stamped job contributes no lead or
+// estimate — failing closed costs a PM a picker row, never a boundary.
+async function ticketFileParents(ticket, user, orgId) {
+  const parents = [];
+  if (!ticket || orgId == null) return parents;
+  const clean = (v) => (v == null || v === '' ? null : String(v));
+  const leadOnly = access.parentOf(ticket).kind === 'lead';
+  const jobId = clean(ticket.job_id);
+  let leadId = clean(ticket.lead_id);
+  let estimateId = null;
+
+  if (jobId) {
+    parents.push({ where: 'job', entity_type: 'job', entity_id: jobId });
+    const { rows } = await pool.query(
+      'SELECT lead_id, estimate_id FROM jobs WHERE id = $1 AND organization_id = $2',
+      [jobId, orgId]
+    );
+    if (rows[0]) {
+      if (!leadId) leadId = clean(rows[0].lead_id);
+      estimateId = clean(rows[0].estimate_id);
+    }
+  }
+
+  if (leadId && (leadOnly || hasCapability(user, 'LEADS_VIEW'))) {
+    const { rows } = await pool.query(
+      'SELECT 1 FROM leads WHERE id = $1 AND organization_id = $2',
+      [leadId, orgId]
+    );
+    if (rows.length) parents.push({ where: 'lead', entity_type: 'lead', entity_id: leadId });
+  }
+
+  if (estimateId && hasCapability(user, 'ESTIMATES_VIEW')) {
+    const { rows } = await pool.query(
+      'SELECT 1 FROM estimates WHERE id = $1 AND organization_id = $2',
+      [estimateId, orgId]
+    );
+    if (rows.length) parents.push({ where: 'estimate', entity_type: 'estimate', entity_id: estimateId });
+  }
+  return parents;
+}
+
+// What the picker may offer, by extension first and then by mime. Extension
+// wins because the stored mime is unreliable in both directions: old .xlsx
+// uploads were stored as application/zip, and Windows sends a CSV as
+// application/vnd.ms-excel. The extractor sniffs the bytes again anyway — this
+// only decides which rows are worth showing. Anything else (a .docx, a zip, a
+// video) is left out rather than offered and refused.
+const TAKEOFF_KIND_BY_EXT = {
+  xlsx: 'xlsx', xlsm: 'xlsx', xls: 'xls',
+  csv: 'csv', tsv: 'csv', txt: 'csv',
+  pdf: 'pdf',
+  jpg: 'image', jpeg: 'image', png: 'image', webp: 'image', gif: 'image', heic: 'image',
+};
+const TAKEOFF_KIND_BY_MIME = {
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/vnd.ms-excel.sheet.macroenabled.12': 'xlsx',
+  'text/csv': 'csv', 'text/tab-separated-values': 'csv', 'text/plain': 'csv',
+  'application/pdf': 'pdf',
+  'image/jpeg': 'image', 'image/png': 'image', 'image/webp': 'image', 'image/gif': 'image',
+  'image/heic': 'image',
+};
+function takeoffKind(filename, mime) {
+  const m = /\.([A-Za-z0-9]{1,8})$/.exec(String(filename || '').trim());
+  const ext = m ? m[1].toLowerCase() : '';
+  if (Object.prototype.hasOwnProperty.call(TAKEOFF_KIND_BY_EXT, ext)) return TAKEOFF_KIND_BY_EXT[ext];
+  const type = String(mime || '').split(';')[0].trim().toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(TAKEOFF_KIND_BY_MIME, type)) return TAKEOFF_KIND_BY_MIME[type];
+  return null;
+}
+
+const FILE_NOT_FOUND = 'File not found';
+// An attachment id is `att_<ms>_<rand>` today. The shape check keeps anything
+// else — a path, a list, an object — from reaching the SQL at all.
+const ATTACHMENT_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+
+// GET the files a takeoff can be read from. Named columns only: never
+// extracted_text (it can carry the file's prices), never a storage key or URL
+// (the picker needs a name, not the bytes).
+router.get('/:id/materials/sources', requireAuth, requireOrgId, async (req, res) => {
+  try {
+    const orgId = req.orgId;
+    const ticket = await loadOwnedTicket(req.params.id, orgId);
+    if (!ticket) return res.status(404).json({ error: TICKET_NOT_FOUND });
+    if (!(await ticketAccessOk(req, res, ticket, 'write', orgId))) return;
+    // WRITE, not read, on a GET: the list only exists to fill the Materials
+    // editor, which a viewer cannot save — and a view grant should not be a
+    // way to browse the lead's and the estimate's files.
+    if (svc.isTerminal(ticket.status)) {
+      return res.status(409).json({ error: 'This ticket is ' + ticket.status + '. Reopen it before changing its materials.' });
+    }
+    const parents = await ticketFileParents(ticket, req.user, orgId);
+    // Keyed on (entity_type, entity_id) pairs proved above, one statement per
+    // parent — the same key the job's own Files tab lists by.
+    const lists = await Promise.all(parents.map((p) => pool.query(
+      `SELECT id, filename, mime_type, size_bytes, folder, uploaded_at
+         FROM attachments
+        WHERE entity_type = $1 AND entity_id = $2
+        ORDER BY uploaded_at DESC LIMIT 200`,
+      [p.entity_type, p.entity_id]
+    )));
+    const files = [];
+    parents.forEach((p, i) => {
+      for (const r of lists[i].rows) {
+        const kind = takeoffKind(r.filename, r.mime_type);
+        if (!kind) continue;
+        files.push({
+          id: r.id,
+          filename: r.filename,
+          kind,
+          size_bytes: r.size_bytes == null ? null : Number(r.size_bytes),
+          uploaded_at: r.uploaded_at,
+          folder: r.folder || null,
+          where: p.where,
+        });
+      }
+    });
+    res.json({ files });
+  } catch (e) {
+    console.error('[service-tickets] material sources failed', e);
+    res.status(500).json({ error: 'Failed to load the job files' });
+  }
+});
+
+// POST read material lines out of one of those files. Returns the lines for
+// the editor to show; stores NOTHING. The AI rate limiters are not route
+// middleware here because a spreadsheet is read without any model call — a PM
+// filling ten tickets from one xlsx should not spend the chat budget. The
+// extractor calls beforeAi() once, immediately before it would reach a model,
+// and only then do the limiters run; when one answers 429 it has already
+// written the response, which is why headersSent is checked after the call.
+router.post('/:id/materials/extract', requireAuth, requireOrgId, async (req, res) => {
+  try {
+    const orgId = req.orgId;
+    const ticket = await loadOwnedTicket(req.params.id, orgId);
+    if (!ticket) return res.status(404).json({ error: TICKET_NOT_FOUND });
+    if (!(await ticketAccessOk(req, res, ticket, 'write', orgId))) return;
+    if (svc.isTerminal(ticket.status)) {
+      return res.status(409).json({ error: 'This ticket is ' + ticket.status + '. Reopen it before changing its materials.' });
+    }
+    const rawId = req.body ? req.body.attachment_id : undefined;
+    const attachmentId = typeof rawId === 'string' ? rawId : '';
+    if (!ATTACHMENT_ID_RE.test(attachmentId)) {
+      return res.status(400).json({ error: 'Pick a file to read materials from' });
+    }
+
+    // THE PARENT IS IN THE WHERE. The file must hang on one of this ticket's
+    // proved parents; an in-org file on some other job is refused by the
+    // predicate, not by an `if` somebody has to keep. Absent slots bind NULL,
+    // and `entity_type = NULL` is never true. Then the row-keyed tenancy
+    // ladder, the same one every attachment id door runs. Every miss — absent,
+    // another tenant's, another job's, a lead or estimate this caller may not
+    // open — is the SAME 404, so the door cannot be used to probe file ids.
+    const parents = await ticketFileParents(ticket, req.user, orgId);
+    const slot = (i) => (parents[i] ? [parents[i].entity_type, parents[i].entity_id] : [null, null]);
+    const { rows } = await pool.query(
+      `SELECT id, entity_type, entity_id, organization_id, uploaded_by, filename,
+              mime_type, size_bytes, original_key, web_key
+         FROM attachments
+        WHERE id = $1
+          AND ((entity_type = $2 AND entity_id = $3)
+            OR (entity_type = $4 AND entity_id = $5)
+            OR (entity_type = $6 AND entity_id = $7))`,
+      [attachmentId].concat(slot(0), slot(1), slot(2))
+    );
+    const att = rows[0] || null;
+    if (!att || !(await attachmentInOrg(pool, att, orgId))) {
+      return res.status(404).json({ error: FILE_NOT_FOUND });
+    }
+
+    // Required HERE rather than at the top: the storage backend and the
+    // extractor (exceljs, pdf-parse, the Anthropic SDK) are heavy, and a throw
+    // while loading either must fail this one request, not the whole router —
+    // the route census requires every router in the server.
+    const { storage } = require('../storage');
+    const { extractMaterials } = require('../services/materials-extract');
+    const { aiChatLimiter, aiChatHourlyLimiter } = require('../rate-limit');
+    const passLimiter = async (limiter) => {
+      let passed = false;
+      await limiter(req, res, (err) => { passed = !err; });
+      return passed;
+    };
+    const beforeAi = async () => (await passLimiter(aiChatLimiter)) && (await passLimiter(aiChatHourlyLimiter));
+
+    const result = await extractMaterials({
+      att,
+      getBuffer: (key) => storage.getBuffer(key),
+      orgId,
+      beforeAi,
+    });
+    // A limiter answered 429 inside beforeAi. Writing again would throw.
+    if (res.headersSent) return;
+    if (result && result.ok === true) return res.json(result);
+    const code = (result && result.code) || 'unreadable';
+    const error = (result && result.error) || 'Could not read materials from that file';
+    // rate_limited with nothing written means a limiter failed rather than
+    // refused (a store error passed to next). Still a "try later", not a 422.
+    if (code === 'rate_limited') return res.status(429).json({ error, code });
+    return res.status(422).json({ error, code });
+  } catch (e) {
+    console.error('[service-tickets] material extract failed', e);
+    if (res.headersSent) return;
+    res.status(500).json({ error: 'Could not read materials from that file' });
   }
 });
 

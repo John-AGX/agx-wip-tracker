@@ -566,6 +566,20 @@
       return post('/api/service-tickets/' + encodeURIComponent(id) + '/subtasks/' +
         encodeURIComponent(taskId) + '/note', { note: note });
     },
+    // ── Materials from a job file ──────────────────────────────────
+    // The takeoffs already attached to the ticket's job / lead / estimate that
+    // the server can read. Names, kinds and sizes only — never a file URL.
+    materialSources: function(id) {
+      return get('/api/service-tickets/' + encodeURIComponent(id) + '/materials/sources');
+    },
+    // Reads one of those files into [{ description, qty, unit }]. Writes
+    // nothing: the lines come back for review, and PATCH { materials } is
+    // still the only save. A failed read is a 422 whose error is the sentence
+    // to show the PM.
+    extractMaterials: function(id, attachmentId) {
+      return post('/api/service-tickets/' + encodeURIComponent(id) + '/materials/extract',
+        { attachment_id: attachmentId });
+    },
     // ── Share links ────────────────────────────────────────────────
     // The RAW token comes back exactly once, inside `link`. The server keeps
     // only its hash, so a link not copied from that response cannot be
