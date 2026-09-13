@@ -1501,9 +1501,23 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
     : allLines;
 
   // Linked client surfaces the salutation + community + addresses if set
+  //
+  // ── THE BLOB IS NOT A TENANT BOUNDARY ────────────────────────────────────
+  // client_id and lead_id below come off the estimate's JSONB blob, and the
+  // blob is written by the tenant's own users (the estimate save routes store
+  // whatever the editor sends). Proving the ESTIMATE is in-org above proves
+  // nothing about the ids written inside it. Both reads were by bare id, so an
+  // org-A estimate whose blob named an org-B client or lead put that client's
+  // name, CAM and agent notes, and that lead's revenue band, gate code, notes
+  // and attachment manifest, into org A's turn — every line of it on the
+  // "linked" branch, so nothing looked out of place. Each read now carries the
+  // same tolerant arm as the estimate read itself; another tenant's client or
+  // lead is, for this caller, one that is not linked.
   let clientRow = null;
   if (blob.client_id) {
-    const cRes = await pool.query('SELECT * FROM clients WHERE id = $1', [blob.client_id]);
+    const cRes = await pool.query(
+      'SELECT * FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [blob.client_id, _orgId]);
     clientRow = cRes.rows[0] || null;
   }
 
@@ -1516,8 +1530,8 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
       `SELECT l.*, u.name AS salesperson_name
        FROM leads l
        LEFT JOIN users u ON u.id = l.salesperson_id
-       WHERE l.id = $1`,
-      [blob.lead_id]
+       WHERE l.id = $1 AND (l.organization_id = $2 OR l.organization_id IS NULL)`,
+      [blob.lead_id, _orgId]
     );
     leadRow = lRes.rows[0] || null;
   }
@@ -1538,10 +1552,13 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
   );
   allAttachments.push(...estAtts.rows.map(r => ({ ...r, source: 'estimate' })));
   if (blob.lead_id) {
+    // Same blob-borne id as the lead read above, so the same arm — on the
+    // attachment row's own stamp, which is what the upload door writes.
     const leadAtts = await pool.query(
       `SELECT * FROM attachments WHERE entity_type='lead' AND entity_id=$1
+         AND (organization_id = $2 OR organization_id IS NULL)
        ORDER BY position, uploaded_at`,
-      [blob.lead_id]
+      [blob.lead_id, _orgId]
     );
     allAttachments.push(...leadAtts.rows.map(r => ({ ...r, source: 'lead' })));
   }
@@ -2707,7 +2724,11 @@ const _entityCtxSent = new Map();
 // read tools. Photos ride as vision blocks (cap 12). Org-scoped on
 // leads.organization_id (leads carry the column directly; OR-IS-NULL keeps
 // it a no-op for single-org AGX). Returns { system:string, photoBlocks }.
-async function buildLeadContext(leadId, organization) {
+// opts.withholdRevenue — a denial string from the caller's capability gate
+// (see turnContextMoneyDenial). When set, the estimated-revenue line is not
+// built and 86 is told why. Absent, the snapshot is byte-identical to before.
+async function buildLeadContext(leadId, organization, opts) {
+  const withholdRevenue = opts && opts.withholdRevenue ? String(opts.withholdRevenue) : '';
   // Fails closed on a missing org — the else-arm here used to drop the
   // predicate and read the lead by bare id. See buildEstimateContext for the
   // full reasoning; an org-less caller gets nothing rather than everything.
@@ -2732,13 +2753,17 @@ async function buildLeadContext(leadId, organization) {
   if (lead.project_type) lines.push('- Project type: ' + lead.project_type);
   if (lead.confidence != null && lead.confidence > 0) lines.push('- Confidence: ' + lead.confidence + '%');
   if (lead.projected_sale_date) lines.push('- Projected sale date: ' + String(lead.projected_sale_date).slice(0, 10));
-  if (lead.estimated_revenue_low || lead.estimated_revenue_high) {
+  if (!withholdRevenue && (lead.estimated_revenue_low || lead.estimated_revenue_high)) {
     const lo = lead.estimated_revenue_low || lead.estimated_revenue_high;
     const hi = lead.estimated_revenue_high || lead.estimated_revenue_low;
     lines.push('- Estimated revenue: ' + fmtMoney(lo) + (String(lo) !== String(hi) ? ' – ' + fmtMoney(hi) : ''));
   }
   if (lead.market) lines.push('- Market: ' + lead.market);
   if (lead.gate_code) lines.push('- Gate code: ' + lead.gate_code);
+  if (withholdRevenue) {
+    lines.push('- Revenue figures: not attached. The user who asked may not see this lead\'s figures, and your read tools will refuse the same data for them. Do NOT state, estimate or infer those figures in your answer.');
+    lines.push('  ' + withholdRevenue);
+  }
 
   // Linked estimate(s) — the next lineage stage. estimates.data->>'lead_id'.
   // LIMIT bounds the rows materialized per turn; count(*) OVER() keeps the
@@ -2810,19 +2835,68 @@ async function buildLeadContext(leadId, organization) {
   return { system: lines.join('\n'), photoBlocks: photoBlocks };
 }
 
-async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, userId, organization }) {
+// ── WHO MAY BE HANDED A SURFACE'S MONEY ──────────────────────────────────────
+// The per-turn snapshot of a job, estimate or lead used to be built for ANY
+// caller. For an estimate that is every line's unit cost and markup, the group
+// subtotals and the tax/fee settings; for a job, the target margin; for a lead,
+// the estimated revenue band; and on a deal thread, <deal_memory> carries the
+// job's contract, the estimate's proposal total / base cost / blended markup,
+// or the lead's revenue. A sub or a crew member holding no capability could
+// open (or simply name, in current_context) any of those surfaces and 86 was
+// handed the figures, which it can then repeat.
+//
+// The rule is NOT restated here. It is the one aiToolCapabilityDenial already
+// applies to the reads that serve these same figures through 86's own tools:
+//   job       read_entity{job, include:['building_breakdown']}  FINANCIALS_VIEW
+//   estimate  read_entity{estimate}                             ESTIMATES_VIEW
+//   lead      read_entity{lead}                                 LEADS_VIEW
+// — the same pairing driveEscalateTo86 uses for its context pack — so a
+// snapshot can never carry what 86's read tools would refuse this caller.
+// `gateUser` is the request's authenticated user; a missing one is denied
+// (aiToolCapabilityDenial fails closed on a null or role-less user).
+// Returns null (allowed / not a money surface) or the denial string.
+// test/turn-context-money-gate*.test.js drives it through /86/chat.
+function turnContextMoneyDenial(entityType, entityId, gateUser) {
+  const id = entityId == null ? null : String(entityId);
+  let input = null;
+  if (entityType === 'job') input = { entity_type: 'job', id, include: ['building_breakdown'] };
+  else if (entityType === 'estimate') input = { entity_type: 'estimate', id };
+  else if (entityType === 'lead') input = { entity_type: 'lead', id };
+  if (!input) return null;
+  return aiToolCapabilityDenial('read_entity', input, gateUser || null);
+}
+
+async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, userId, organization, gateUser }) {
   let turnContextText = '';
   let photoBlocks = [];
+  // Decided BEFORE any builder reads a row, so a denied caller's turn costs no
+  // read of the figures at all, and the answer cannot depend on whether the id
+  // exists (a notice that appeared only for real ids would be an oracle).
+  const moneyDenial = entityId ? turnContextMoneyDenial(entityType, entityId, gateUser) : null;
   if (entityType === 'estimate' && entityId) {
-    const ctx = await buildEstimateContext(entityId, false, aiPhase, organization);
-    turnContextText = ctxDynamicText(ctx.system);
-    if (Array.isArray(ctx.photoBlocks)) photoBlocks = ctx.photoBlocks;
+    if (moneyDenial) {
+      // The estimate snapshot IS its money — lines, costs, markups, subtotals —
+      // and read_entity{estimate} refuses all of it for this caller, so no
+      // snapshot is built rather than a trimmed one.
+      turnContextText =
+        '# Estimate ' + String(entityId) + '\n' +
+        'No estimate snapshot is attached: the user who asked may not see this estimate\'s figures, and your read tools will refuse the same data for them. Do NOT state, estimate or infer those figures in your answer.\n' +
+        moneyDenial;
+    } else {
+      const ctx = await buildEstimateContext(entityId, false, aiPhase, organization);
+      turnContextText = ctxDynamicText(ctx.system);
+      if (Array.isArray(ctx.photoBlocks)) photoBlocks = ctx.photoBlocks;
+    }
   } else if (entityType === 'job' && entityId) {
-    const ctx = await buildJobContext(entityId, clientContext, aiPhase, organization);
+    const ctx = moneyDenial
+      ? await buildJobContext(entityId, clientContext, aiPhase, organization, { withholdFinancials: moneyDenial })
+      : await buildJobContext(entityId, clientContext, aiPhase, organization);
     turnContextText = ctxDynamicText(ctx.system);
     if (Array.isArray(ctx.photoBlocks)) photoBlocks = ctx.photoBlocks;
   } else if (entityType === 'lead' && entityId) {
-    const ctx = await buildLeadContext(entityId, organization);
+    const ctx = moneyDenial
+      ? await buildLeadContext(entityId, organization, { withholdRevenue: moneyDenial })
+      : await buildLeadContext(entityId, organization);
     turnContextText = ctxDynamicText(ctx.system);
     if (Array.isArray(ctx.photoBlocks)) photoBlocks = ctx.photoBlocks;
   } else if (entityType === 'intake') {
@@ -3352,7 +3426,12 @@ async function resolveSessionForChat({ sessionId, currentContext, userId, organi
     const dctxId   = currentContext && currentContext.entity_id;
     if (dctxType && dctxId && DEAL_SURFACES.has(dctxType)) {
       try {
-        const resolved = await dealMemory.resolveLineageRoot(pool, dctxType, String(dctxId));
+        // Scoped to the caller's org: dctxId is off the request body, and an
+        // unscoped walk minted a deal thread on another tenant's lineage (whose
+        // numbers and notes the turn below then rendered). Out-of-org resolves
+        // null and falls through to the personal thread.
+        const resolved = await dealMemory.resolveLineageRoot(pool, dctxType, String(dctxId),
+          organization && organization.id != null ? organization.id : null);
         if (resolved && resolved.lineage_root) {
           const dt = await pool.query(
             `SELECT * FROM ai_sessions
@@ -5672,6 +5751,11 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   // detail it decides it needs (selective retrieval, the true Aider/Cursor
   // pattern) instead of chewing through a full dump.
   const escalationLean = !!(opts && opts.escalationLean);
+  // withholdFinancials (a denial string from turnContextMoneyDenial): the
+  // caller may not see this job's figures. The header's target margin is not
+  // printed, the WIP/structure/CO/cost/billing sections are not built whatever
+  // slimForRouter says, and 86 is told why. Absent, output is byte-identical.
+  const withholdFinancials = opts && opts.withholdFinancials ? String(opts.withholdFinancials) : '';
   // Pull the job + the related data the bulk-save serializes alongside it.
   // Wave A (A6): scope the job to the caller's org (owner -> users.org). A
   // cross-org id yields no row -> caught upstream -> empty context. OR-IS-NULL
@@ -5814,8 +5898,13 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   if (job.propertyAddr) lines.push('- Address: ' + job.propertyAddr);
   if (job.jobType) lines.push('- Type: ' + job.jobType + (job.market ? ' (' + job.market + ')' : ''));
   if (job.status) lines.push('- Status: ' + job.status);
-  if (job.targetMarginPct != null) lines.push('- Target margin: ' + job.targetMarginPct + '%');
+  if (!withholdFinancials && job.targetMarginPct != null) lines.push('- Target margin: ' + job.targetMarginPct + '%');
   lines.push('');
+  if (withholdFinancials) {
+    lines.push('Financial figures for this job are not attached: the user who asked may not see them, and your read tools will refuse the same data for them. Do NOT state, estimate or infer those figures in your answer.');
+    lines.push(withholdFinancials);
+    lines.push('');
+  }
 
   // Phase 2 — Surface inherited attachments so 86 knows what photos
   // and docs are visible on this turn. Photo blocks are pushed into
@@ -5860,7 +5949,7 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   // attachments + notes + mode — no financials, no structure, no
   // node graph, no QB lines. The PM staff fetches all of this via
   // its own tools after handoff_to_pm.
-  if (!slimForRouter) {
+  if (!slimForRouter && !withholdFinancials) {
   lines.push('# WIP snapshot');
   lines.push('## Income');
   lines.push('- Contract (as-sold): ' + fmtMoney(wip.contractIncome));
@@ -13419,6 +13508,27 @@ const AI_TOOL_CAPABILITY = new Map([
   // here; reconciling it is its own change.)
   ['read_purchase_orders', 'JOBS_VIEW_ALL'],
   ['read_change_orders', 'JOBS_VIEW_ALL'],
+  // ── Cost Inbox, RFIs/submittals, COIs: A FLOOR, NOT A POLICY ────────────
+  // These three had no entry, on the stated ground that their REST twins
+  // (GET /api/receipts, /api/workflow-items, /api/compliance-items) are
+  // requireAuth only. Driven on 8f5b2b31: a user holding NO capability got
+  // the org's Cost Inbox dollar totals with vendor names, every RFI on a job,
+  // and the compliance list through 86 — directly, and again through
+  // escalate_to_86, whose 86 dispatches through this same gate. The builtin
+  // `sub` role (SUB_PORTAL_VIEW/UPLOAD only — an EXTERNAL user) is such a
+  // caller, and it reaches 86: resolveHostKeyForUser pins it there.
+  //
+  // What this is NOT: a decision about which internal role may see receipts.
+  // The ANY-of list is every VIEW capability a builtin internal role holds, so
+  // every one of them — system_admin, admin, corporate, pm, and field_crew
+  // (whose role description is literally "Estimates and Cost Inbox only") —
+  // passes exactly as before. It refuses only a caller holding none of them:
+  // the sub portal and a custom zero-capability role. The REST twins are NOT
+  // changed here; whether they should carry the same floor is John's call and
+  // is recorded as open. test/turn-context-money-gate-deal.test.js drives it.
+  ['read_receipts',            ['ESTIMATES_VIEW', 'JOBS_VIEW_ALL', 'JOBS_VIEW_ASSIGNED', 'FINANCIALS_VIEW', 'LEADS_VIEW']],
+  ['list_workflow_items',      ['ESTIMATES_VIEW', 'JOBS_VIEW_ALL', 'JOBS_VIEW_ASSIGNED', 'FINANCIALS_VIEW', 'LEADS_VIEW']],
+  ['list_compliance_expiring', ['ESTIMATES_VIEW', 'JOBS_VIEW_ALL', 'JOBS_VIEW_ASSIGNED', 'FINANCIALS_VIEW', 'LEADS_VIEW']],
 ]);
 
 // Effective capability for the consolidated read front door, derived
@@ -13475,17 +13585,17 @@ function consolidatedReadCapability(name, inp) {
     case 'change_order':   return 'JOBS_VIEW_ALL';   // read_change_orders
     case 'project':        return 'JOBS_VIEW_ALL';   // read_projects
     case 'assembly':       return 'ESTIMATES_VIEW';  // read_assemblies, read_assembly_taxonomy
+    case 'receipt':        return AI_TOOL_CAPABILITY.get('read_receipts');  // not restated: the narrow reader's own entry
     // WHAT STILL FALLS TO `default: return null`, AND WHY THAT IS CORRECT.
     //   task    -> read_tasks, which has no AI_TOOL_CAPABILITY entry and
     //              mirrors GET /api/tasks (requireAuth only). The handler
     //              predicates every query on the caller's org AND hides other
     //              people's personal tasks, so the boundary is in the reader.
-    //   receipt -> NOT a case, because read_receipts has no entry either and
-    //              its REST twin GET /api/receipts is requireAuth only. A
-    //              `case 'receipt': return null` would be a declared line
-    //              nothing reads. Gating receipts is a policy change and must
-    //              land on read_receipts, REST and this switch together; the
-    //              parity test fails the day read_receipts gains an entry.
+    //   receipt -> read_receipts GAINED an entry (a floor that refuses only a
+    //              caller with no internal view capability — see its comment
+    //              in AI_TOOL_CAPABILITY), so the parity test required this
+    //              switch to move with it, and it did: see the case below.
+    //              The REST twin GET /api/receipts is still requireAuth only.
     //   anything else -> execConsolidatedRead returns "unsupported
     //              entity_type" and reads nothing. The same test executes that
     //              refusal, parses its Supported list, and fails if a
@@ -16096,7 +16206,7 @@ router.get('/86/messages', requireAuth, async (req, res) => {
     const q = req.query || {};
     if (FLAG_DEAL_THREADS && q.entity_type && DEAL_SURFACES.has(q.entity_type) && q.entity_id) {
       try {
-        const resolved = await dealMemory.resolveLineageRoot(pool, q.entity_type, String(q.entity_id));
+        const resolved = await dealMemory.resolveLineageRoot(pool, q.entity_type, String(q.entity_id), msgOrgId);
         if (resolved && resolved.lineage_root) {
           const dt = await pool.query(
             `SELECT id FROM ai_sessions
@@ -16334,7 +16444,9 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
         clientContext:   cctxClientCtx,
         aiPhase:         cctxAiPhase,
         userId:          req.user.id,
-        organization:    req.organization
+        organization:    req.organization,
+        // The money gate's subject — see turnContextMoneyDenial.
+        gateUser:        req.user
       });
       turnContextText  = turnCtx.turnContextText;
       extraPhotoBlocks = turnCtx.photoBlocks;
@@ -16535,10 +16647,28 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
     // turn. Naturally dark: only deal_thread sessions exist, and only when
     // FLAG_DEAL_THREADS is on. The model READS these numbers; it must not
     // recompute them.
+    //
+    // TWO GATES, both of which this block lacked. (1) The tenant: the walk was
+    // by bare id, so a deal thread minted on another org's lineage rendered
+    // that org's contract and notes here; it is now scoped to the request's
+    // org and resolves nothing outside it. (2) The caller: the numbers follow
+    // the deal's STAGE, and each stage's figures are gated on the read 86's own
+    // tools use to serve them (turnContextMoneyDenial) — a job-stage deal on
+    // FINANCIALS_VIEW, an estimate-stage deal on ESTIMATES_VIEW, a lead-stage
+    // deal on LEADS_VIEW. A denied caller still gets the lineage, the deal key
+    // and the prose notes, which are not money, and is told why the figures
+    // are missing.
     if (session.session_kind === 'deal_thread') {
       try {
-        const dm = await dealMemory.refreshDealNumbers(pool, session.entity_type, sessionEntityId);
-        const block = dealMemory.renderDealBlock(dm);
+        const dm = await dealMemory.refreshDealNumbers(pool, session.entity_type, sessionEntityId,
+          req.organization && req.organization.id != null ? req.organization.id : null);
+        const dealStageId = dm
+          ? (dm.stage === 'job' ? dm.jobId : dm.stage === 'estimate' ? dm.estimateId : dm.leadId)
+          : null;
+        const numbersDenial = dm ? turnContextMoneyDenial(dm.stage, dealStageId, req.user) : null;
+        const block = numbersDenial
+          ? dealMemory.renderDealBlock(dm, { numbersWithheld: numbersDenial })
+          : dealMemory.renderDealBlock(dm);
         if (block) turnContextText = turnContextText ? (block + '\n\n' + turnContextText) : block;
       } catch (_) { /* deal-memory injection is best-effort — never blocks the chat */ }
     }

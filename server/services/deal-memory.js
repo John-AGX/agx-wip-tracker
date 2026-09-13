@@ -5,13 +5,14 @@
  * architecture, slice 2). One row per lead→estimate→job LINEAGE, keyed on the
  * lineage ROOT. See docs/session-memory-architecture.md.
  *
- * resolveLineageRoot(db, entityType, entityId)
+ * resolveLineageRoot(db, entityType, entityId, scopeOrgId)
  *   Walk the lead→estimate→job chain from ANY deal surface to its root (the
  *   lead when one exists anywhere in the chain, else the estimate, else the
  *   job). Returns { lineage_root, root_type, organization_id, stage, leadId,
- *   estimateId, jobId } or null for a non-deal / missing entity.
+ *   estimateId, jobId } or null for a non-deal / missing entity — and null for
+ *   an entity outside scopeOrgId, and null when scopeOrgId is missing.
  *
- * refreshDealNumbers(db, entityType, entityId)
+ * refreshDealNumbers(db, entityType, entityId, scopeOrgId)
  *   Recompute the DETERMINISTIC numbers sub-block from the money layer and
  *   upsert it. The model READS this block; it must NEVER write it — LLM prose
  *   does not own a money number.
@@ -34,6 +35,24 @@
  * geocode in job-routes.js), or inside its own SAVEPOINT. Swallowing the throw
  * alone is NOT enough. Callers still swallow the throw so a failed refresh
  * never surfaces as an error on the real write.
+ *
+ * ── THE TENANT IS AN ARGUMENT, AND IT IS REQUIRED ──────────────────────────
+ * Every read in this file used to be by bare id. The entity id arrives from
+ * the chat request's current_context, so a user in org A who named org B's
+ * job was handed org B's contract, % complete and deal notes in <deal_memory>
+ * — and the refresh upserted org B's deal_memory row on the way. Worse, the
+ * walk FOLLOWS ids stored on rows (jobs.lead_id / jobs.estimate_id /
+ * leads.job_id / estimates.data->>'lead_id'), and those are ordinary values a
+ * tenant's own users write, so an in-org entity could point the walk into
+ * another tenant even when the named entity was fine.
+ *
+ * So `scopeOrgId` is the caller's organization (never the row's), every row
+ * read carries `(organization_id = $n OR organization_id IS NULL)` — the same
+ * legacy tolerance arm the rest of the tenancy model uses — and a missing
+ * scopeOrgId resolves NOTHING rather than everything. An id-only reference to
+ * a row that belongs to ANOTHER org is dropped as if it did not exist. A
+ * reference to a row that does not exist at all is left exactly as it was
+ * before this change, so an in-org lineage resolves byte-identically.
  */
 
 const { computeEstimateTotals } = require('./money/estimate-totals');
@@ -41,29 +60,48 @@ const { computeEstimateTotals } = require('./money/estimate-totals');
 function num(v) { const n = Number(v); return isFinite(n) ? n : 0; }
 function round2(n) { return Math.round(num(n) * 100) / 100; }
 
-async function resolveLineageRoot(db, entityType, entityId) {
+// The one tenant arm. Always parameter $2 in the statements below.
+const IN_ORG = '(organization_id = $2 OR organization_id IS NULL)';
+
+// An id-only reference (jobs.estimate_id, leads.job_id) proven to name a row
+// in ANOTHER tenant. True only on that proof: a missing row is not foreign,
+// which keeps a same-org dangling reference resolving as it always did.
+async function isForeign(db, table, id, scopeOrgId) {
+  if (!id) return false;
+  const r = await db.query(
+    'SELECT 1 AS x FROM ' + table + ' WHERE id = $1 AND organization_id IS NOT NULL AND organization_id <> $2 LIMIT 1',
+    [id, scopeOrgId]
+  );
+  return r.rows.length > 0;
+}
+
+async function resolveLineageRoot(db, entityType, entityId, scopeOrgId) {
   if (!entityType || !entityId) return null;
+  // FAIL CLOSED: no tenant, no lineage. Never an unpredicated walk.
+  if (scopeOrgId == null) return null;
   let leadId = null, estimateId = null, jobId = null, orgId = null;
 
   if (entityType === 'job') {
-    const r = await db.query('SELECT id, organization_id, lead_id, estimate_id FROM jobs WHERE id = $1', [entityId]);
+    const r = await db.query('SELECT id, organization_id, lead_id, estimate_id FROM jobs WHERE id = $1 AND ' + IN_ORG, [entityId, scopeOrgId]);
     if (!r.rows.length) return null;
     jobId = r.rows[0].id;
     orgId = r.rows[0].organization_id;
     leadId = r.rows[0].lead_id || null;
     estimateId = r.rows[0].estimate_id || null;
+    if (await isForeign(db, 'estimates', estimateId, scopeOrgId)) estimateId = null;
   } else if (entityType === 'estimate') {
-    const r = await db.query("SELECT id, organization_id, data->>'lead_id' AS lead_id FROM estimates WHERE id = $1", [entityId]);
+    const r = await db.query("SELECT id, organization_id, data->>'lead_id' AS lead_id FROM estimates WHERE id = $1 AND " + IN_ORG, [entityId, scopeOrgId]);
     if (!r.rows.length) return null;
     estimateId = r.rows[0].id;
     orgId = r.rows[0].organization_id;
     leadId = r.rows[0].lead_id || null;
   } else if (entityType === 'lead') {
-    const r = await db.query('SELECT id, organization_id, job_id FROM leads WHERE id = $1', [entityId]);
+    const r = await db.query('SELECT id, organization_id, job_id FROM leads WHERE id = $1 AND ' + IN_ORG, [entityId, scopeOrgId]);
     if (!r.rows.length) return null;
     leadId = r.rows[0].id;
     orgId = r.rows[0].organization_id;
     jobId = r.rows[0].job_id || null;
+    if (await isForeign(db, 'jobs', jobId, scopeOrgId)) jobId = null;
   } else {
     return null; // not a deal surface
   }
@@ -75,15 +113,17 @@ async function resolveLineageRoot(db, entityType, entityId) {
   // on the lead → two deal_memory rows for one deal. Mirrors the cross-fill the
   // link-estimate route already does (job-routes.js).
   if (!leadId && estimateId) {
-    const el = await db.query("SELECT data->>'lead_id' AS lead_id FROM estimates WHERE id = $1", [estimateId]);
+    const el = await db.query("SELECT data->>'lead_id' AS lead_id FROM estimates WHERE id = $1 AND " + IN_ORG, [estimateId, scopeOrgId]);
     if (el.rows.length && el.rows[0].lead_id) leadId = el.rows[0].lead_id;
   }
 
   // Phantom-lead guard — data->>'lead_id' is a raw string that can outlive a
   // deleted lead. Verify it exists before trusting it as the root (else fall
   // back to estimate/job root). Also backfills org from the lead when missing.
+  // Scoped: another tenant's lead is, for this caller, a lead that does not
+  // exist — which is exactly how the guard already treats a deleted one.
   if (leadId) {
-    const lv = await db.query('SELECT id, organization_id FROM leads WHERE id = $1', [leadId]);
+    const lv = await db.query('SELECT id, organization_id FROM leads WHERE id = $1 AND ' + IN_ORG, [leadId, scopeOrgId]);
     if (!lv.rows.length) leadId = null;
     else if (orgId == null) orgId = lv.rows[0].organization_id;
   }
@@ -94,18 +134,19 @@ async function resolveLineageRoot(db, entityType, entityId) {
   // proposalTotal flipped based on the triggering estimate.
   if (leadId) {
     if (!jobId) {
-      const j = await db.query('SELECT id FROM jobs WHERE lead_id = $1 LIMIT 1', [leadId]);
+      const j = await db.query('SELECT id FROM jobs WHERE lead_id = $1 AND ' + IN_ORG + ' LIMIT 1', [leadId, scopeOrgId]);
       if (j.rows.length) jobId = j.rows[0].id;
     }
     let canonicalEst = null;
     if (jobId) {
-      const je = await db.query('SELECT estimate_id FROM jobs WHERE id = $1', [jobId]);
+      const je = await db.query('SELECT estimate_id FROM jobs WHERE id = $1 AND ' + IN_ORG, [jobId, scopeOrgId]);
       if (je.rows.length && je.rows[0].estimate_id) canonicalEst = je.rows[0].estimate_id;
+      if (await isForeign(db, 'estimates', canonicalEst, scopeOrgId)) canonicalEst = null;
     }
     if (!canonicalEst) {
       const e = await db.query(
-        "SELECT id FROM estimates WHERE data->>'lead_id' = $1 ORDER BY updated_at DESC NULLS LAST LIMIT 1",
-        [leadId]
+        "SELECT id FROM estimates WHERE data->>'lead_id' = $1 AND " + IN_ORG + " ORDER BY updated_at DESC NULLS LAST LIMIT 1",
+        [leadId, scopeOrgId]
       );
       if (e.rows.length) canonicalEst = e.rows[0].id;
     }
@@ -119,10 +160,13 @@ async function resolveLineageRoot(db, entityType, entityId) {
   return { lineage_root, root_type, organization_id: orgId, stage, leadId, estimateId, jobId };
 }
 
-async function computeNumbers(db, resolved) {
+// `scopeOrgId` is required for the same reason as above; without it there are
+// no numbers, only the stage.
+async function computeNumbers(db, resolved, scopeOrgId) {
   const out = { stage: resolved.stage };
+  if (scopeOrgId == null) return out;
   if (resolved.stage === 'job' && resolved.jobId) {
-    const r = await db.query('SELECT data FROM jobs WHERE id = $1', [resolved.jobId]);
+    const r = await db.query('SELECT data FROM jobs WHERE id = $1 AND ' + IN_ORG, [resolved.jobId, scopeOrgId]);
     const j = r.rows.length ? (r.rows[0].data || {}) : {};
     out.jobId = resolved.jobId;
     out.contract = round2(j.contractAmount);
@@ -141,7 +185,7 @@ async function computeNumbers(db, resolved) {
     } catch (_) { /* CO enrichment is best-effort */ }
     out.wipPending = true; // actual costs + margin still deferred (read tools)
   } else if (resolved.stage === 'estimate' && resolved.estimateId) {
-    const r = await db.query('SELECT data FROM estimates WHERE id = $1', [resolved.estimateId]);
+    const r = await db.query('SELECT data FROM estimates WHERE id = $1 AND ' + IN_ORG, [resolved.estimateId, scopeOrgId]);
     const blob = r.rows.length ? (r.rows[0].data || {}) : {};
     const t = computeEstimateTotals(blob);
     out.estimateId = resolved.estimateId;
@@ -150,8 +194,8 @@ async function computeNumbers(db, resolved) {
     out.blendedMarkupPct = Math.round(num(t.blendedMarkup) * 10) / 10;
   } else if (resolved.stage === 'lead' && resolved.leadId) {
     const r = await db.query(
-      'SELECT estimated_revenue_low, estimated_revenue_high, confidence, status FROM leads WHERE id = $1',
-      [resolved.leadId]
+      'SELECT estimated_revenue_low, estimated_revenue_high, confidence, status FROM leads WHERE id = $1 AND ' + IN_ORG,
+      [resolved.leadId, scopeOrgId]
     );
     const l = r.rows.length ? r.rows[0] : {};
     out.leadId = resolved.leadId;
@@ -163,10 +207,10 @@ async function computeNumbers(db, resolved) {
   return out;
 }
 
-async function refreshDealNumbers(db, entityType, entityId) {
-  const resolved = await resolveLineageRoot(db, entityType, entityId);
+async function refreshDealNumbers(db, entityType, entityId, scopeOrgId) {
+  const resolved = await resolveLineageRoot(db, entityType, entityId, scopeOrgId);
   if (!resolved) return null;
-  const numbers = await computeNumbers(db, resolved);
+  const numbers = await computeNumbers(db, resolved, scopeOrgId);
 
   // Root-stability cleanup: an estimate refreshed BEFORE its lead link existed
   // would have created an estimate-keyed row. Now that this deal roots on a
@@ -176,10 +220,13 @@ async function refreshDealNumbers(db, entityType, entityId) {
   if (resolved.root_type === 'lead') {
     const subsumed = [resolved.estimateId, resolved.jobId].filter(function (x) { return x && x !== resolved.lineage_root; });
     if (subsumed.length) {
-      await db.query('DELETE FROM deal_memory WHERE lineage_root = ANY($1::text[])', [subsumed]);
+      await db.query('DELETE FROM deal_memory WHERE lineage_root = ANY($1::text[]) AND ' + IN_ORG, [subsumed, scopeOrgId]);
     }
   }
 
+  // The conflict arm may only touch a row that is this caller's or un-stamped.
+  // The key is an in-org id by construction now, so this is belt-and-braces:
+  // it is the difference between "cannot happen" and "cannot write".
   await db.query(
     `INSERT INTO deal_memory (lineage_root, root_type, organization_id, numbers, numbers_stage, numbers_at, updated_at)
           VALUES ($1, $2, $3, $4::jsonb, $5, NOW(), NOW())
@@ -189,14 +236,15 @@ async function refreshDealNumbers(db, entityType, entityId) {
               numbers_at      = NOW(),
               root_type       = EXCLUDED.root_type,
               organization_id = COALESCE(deal_memory.organization_id, EXCLUDED.organization_id),
-              updated_at      = NOW()`,
-    [resolved.lineage_root, resolved.root_type, resolved.organization_id, JSON.stringify(numbers), resolved.stage]
+              updated_at      = NOW()
+        WHERE deal_memory.organization_id IS NULL OR deal_memory.organization_id = $6`,
+    [resolved.lineage_root, resolved.root_type, resolved.organization_id, JSON.stringify(numbers), resolved.stage, scopeOrgId]
   );
   // Read the notes back so the caller can render them in the deal block (slice
   // 4). Notes are written only by the deal_memory payload dispatcher, never here.
   let notes = [];
   try {
-    const nr = await db.query('SELECT notes FROM deal_memory WHERE lineage_root = $1', [resolved.lineage_root]);
+    const nr = await db.query('SELECT notes FROM deal_memory WHERE lineage_root = $1 AND ' + IN_ORG, [resolved.lineage_root, scopeOrgId]);
     if (nr.rows.length && Array.isArray(nr.rows[0].notes)) notes = nr.rows[0].notes;
   } catch (_) { /* notes are best-effort in the block */ }
   // Return the full resolved lineage + numbers + notes so a caller can render
@@ -219,12 +267,22 @@ function _fmtMoney(n) {
 // The model READS these numbers; it must not recompute them. `res` is the object
 // refreshDealNumbers returns ({ lineage_root, stage, leadId, estimateId, jobId,
 // numbers }). Returns '' when there's nothing to show.
-function renderDealBlock(res) {
+//
+// opts.numbersWithheld — a denial string from the caller's capability gate
+// (ai-routes.js decides it with aiToolCapabilityDenial, the rule 86's own read
+// tools apply to the same figures). When present the stage line carries NO
+// figure and says why; the lineage, deal key and prose notes still render,
+// because none of them is money. Absent, the block is byte-identical to what
+// it always was.
+function renderDealBlock(res, opts) {
   if (!res || !res.lineage_root) return '';
   const n = res.numbers || {};
+  const withheld = opts && opts.numbersWithheld ? String(opts.numbersWithheld) : '';
   const L = [];
   L.push('<deal_memory>');
-  L.push('# Deal (deterministic — read these numbers, do not recompute)');
+  L.push(withheld
+    ? '# Deal (figures withheld for this user)'
+    : '# Deal (deterministic — read these numbers, do not recompute)');
   const arc = [];
   if (res.leadId) arc.push('lead ' + res.leadId);
   if (res.estimateId) arc.push('estimate ' + res.estimateId);
@@ -233,7 +291,10 @@ function renderDealBlock(res) {
   // The durable deal key — target this as entity_id when recording a deal note
   // (emit_payload_file { entity_type:'deal_memory', entity_id: <this> }).
   L.push('- Deal key: ' + res.lineage_root);
-  if (n.stage === 'job') {
+  if (withheld) {
+    L.push('- Stage ' + String(n.stage || res.stage || '').toUpperCase() + ' · no figures attached: the user who asked may not see this deal\'s figures, and your read tools will refuse the same data for them. Do NOT state, estimate or infer those figures in your answer.');
+    L.push('- ' + withheld);
+  } else if (n.stage === 'job') {
     L.push('- Stage JOB · contract ' + _fmtMoney(n.contract)
       + (n.coIncome ? ' · +CO ' + _fmtMoney(n.coIncome) + ' → total ' + _fmtMoney(n.totalContract) : '')
       + ' · ' + (Number(n.pctComplete) || 0) + '% complete'

@@ -128,7 +128,11 @@ const ROWS = [
   [S, { entity_type: 'project' },                  [JVA],     'fold: read_projects'],
   [S, { entity_type: 'assembly' },                 [EV],      'fold: read_assemblies'],
   [S, { entity_type: 'task', filter: 'a' },        null,      'read_tasks: no entry; org + personal-owner predicate in the reader; GET /api/tasks is requireAuth'],
-  [S, { entity_type: 'receipt' },                  null,      'read_receipts: no entry; GET /api/receipts is requireAuth'],
+  // read_receipts gained a FLOOR (any internal view capability) after a
+  // zero-capability caller was driven reading the Cost Inbox's dollar totals
+  // through 86. Every builtin internal role holds one of these; GET
+  // /api/receipts is still requireAuth, and that asymmetry is recorded as open.
+  [S, { entity_type: 'receipt' },                  [EV, JVA, 'JOBS_VIEW_ASSIGNED', FIN, LV], 'read_receipts: internal-view floor'],
   [S, { entity_type: 'nonsense' },                 null,      'executor answers unsupported, reads nothing'],
   // read_entity
   [R, { entity_type: 'job', id: 'j1' },                                  [JVA],     'read_jobs'],
@@ -158,7 +162,7 @@ const ROWS = [
   [R, { entity_type: 'change_order', id: 'CO-3' },                       [JVA],     'fold: read_change_orders'],
   [R, { entity_type: 'assembly', id: 'a1' },                             [EV],      'fold: read_assemblies'],
   [R, { entity_type: 'task', id: 't1' },                                 null,      'read_tasks: see search row'],
-  [R, { entity_type: 'receipt' },                                        null,      'read_receipts: see search row'],
+  [R, { entity_type: 'receipt' },                                        [EV, JVA, 'JOBS_VIEW_ASSIGNED', FIN, LV], 'read_receipts: see search row'],
 ];
 
 // A role name per capability SET, so "vary only the capability" is literal:

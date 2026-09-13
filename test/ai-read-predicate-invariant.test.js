@@ -194,12 +194,18 @@ const EXEMPT = {
 
   // ── PARENT PROVED IN-ORG IMMEDIATELY ABOVE, and the child id comes off the
   // parent row rather than off the request.
-  'server/routes/ai-routes.js::fn buildEstimateContext::clients':
-    { n: 1, why: 'The estimate is org-checked at the top of the function (`WHERE e.id = $1 AND (e.organization_id = $2 OR …)`, throws "Estimate not found"). clientId is read out of THAT row\'s blob — a caller cannot supply it.' },
-  'server/routes/ai-routes.js::fn buildEstimateContext::leads,users':
-    { n: 1, why: 'Same org-checked estimate; the lead id comes off its blob, not off the request.' },
+  // ── TWO ENTRIES DELETED HERE, NOT REWRITTEN: buildEstimateContext::clients
+  // and ::leads,users. Both said the id "is read out of THAT row's blob — a
+  // caller cannot supply it". The blob is estimates.data, which the tenant's
+  // own users write through the estimate save routes, so a caller CAN supply
+  // it — one save away. Executed: an org-A estimate whose blob named org B's
+  // client and lead put that client's agent notes and that lead's revenue and
+  // notes into org A's 86 turn (test/turn-context-money-gate*.test.js, P2).
+  // Both statements now carry the tenant arm and need no exemption. The lead
+  // ATTACHMENT read that hung off the same blob id was the second of the two
+  // statements the entry below covered; it is predicated now, so n is 1.
   'server/routes/ai-routes.js::fn buildEstimateContext::attachments':
-    { n: 2, why: 'entity_id is the org-checked estimate id (and the lead id off its blob). See services/attachment-org-scope.js: the parent entity IS the anchor for an attachment.' },
+    { n: 1, why: 'entity_id is the org-checked estimate id. See services/attachment-org-scope.js: the parent entity IS the anchor for an attachment. (The lead-attachment read keyed on the blob\'s lead_id now carries its own tenant arm.)' },
   'server/routes/ai-routes.js::fn buildJobContext::attachments':
     { n: 3, why: 'entity_id is the org-checked job id, and the lead/estimate ids read off that job\'s own rows. Parent-anchored, per attachment-org-scope.js.' },
   'server/routes/ai-routes.js::fn buildJobContext::qb_cost_lines':
