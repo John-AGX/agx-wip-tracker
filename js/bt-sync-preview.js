@@ -57,6 +57,12 @@
   var APPLY_ENDPOINT = '/api/admin/organizations/me?action=buildertrend-apply';
   var _applying = null;          // 'jobs:safe' | 'jobs:<btId>' | ...
   var _applyNote = { jobs: null, leads: null };   // { ok, text }
+  // What a person ticked, per row: _picks['jobs:<btId>'][field] = true/false.
+  // Corrections start ticked; held-back items a person may apply start unticked.
+  var _picks = {};
+  var TABS = [['jobs', 'Jobs'], ['leads', 'Leads']];
+  var _tab = 'jobs';
+  try { var _savedTab = window.localStorage && window.localStorage.getItem('btp.tab'); if (_savedTab === 'jobs' || _savedTab === 'leads') _tab = _savedTab; } catch (e) { /* storage blocked */ }
 
   function esc(s) {
     return String(s == null ? '' : s)
@@ -138,6 +144,13 @@
       '.btp-tag{display:inline-block;font-size:10px;font-weight:700;border-radius:8px;padding:0 6px;margin-left:4px;border:1px solid var(--border);color:var(--text-dim);vertical-align:1px;}',
       '.btp-tag.is-typo{color:var(--red);border-color:var(--red);}',
       '.btp-tag.is-linked{color:var(--green);border-color:var(--green);margin-left:auto;}',
+      '.btp-tag.is-money{color:var(--purple);border-color:var(--purple);}',
+      '.btp-pick{margin:0 6px 0 0;vertical-align:-2px;cursor:pointer;}',
+      'label.btp-fix-f{cursor:pointer;display:flex;align-items:baseline;}',
+      '.btp-tabs{display:flex;gap:4px;border-bottom:1px solid var(--border);margin:0 0 12px;flex-wrap:wrap;}',
+      '.btp-tab{border:1px solid transparent;border-bottom:0;background:transparent;color:var(--text-dim);padding:7px 14px;font-size:13px;font-weight:600;cursor:pointer;border-radius:8px 8px 0 0;margin-bottom:-1px;}',
+      '.btp-tab.is-active{background:var(--card-bg);color:var(--text);border-color:var(--border);}',
+      '.btp-tab-n{display:inline-block;min-width:18px;padding:0 5px;margin-left:4px;border-radius:9px;background:var(--orange);color:#fff;font-size:11px;line-height:17px;text-align:center;}',
       '.btp-row-head .btp-apply{margin-left:auto;padding:3px 10px;}',
       '.btp-btn:disabled{opacity:.55;cursor:default;}',
       '.btp-fix-note{grid-column:2;color:var(--text-dim);font-size:11px;overflow-wrap:anywhere;}',
@@ -312,15 +325,43 @@
     return html + '</div>';
   }
 
-  function correctionsHTML(r) {
+  function canApply(r) {
+    return (r['class'] === 'matched' || r['class'] === 'conflict') && r.bt && r.bt.btId != null && r.bt.btId !== '';
+  }
+
+  function picksFor(ds, r) {
+    var k = ds.key + ':' + r.bt.btId;
+    if (!_picks[k]) {
+      var p = {};
+      (r.corrections || []).forEach(function (c) { p[c.field] = true; });
+      (r.heldBack || []).forEach(function (h) { if (h.applicable) p[h.field] = false; });
+      _picks[k] = p;
+    }
+    return _picks[k];
+  }
+
+  function pickedFields(ds, r) {
+    var p = picksFor(ds, r);
+    return Object.keys(p).filter(function (f) { return p[f]; });
+  }
+
+  function pickBox(ds, r, field, checked) {
+    if (!canApply(r)) return '';
+    return '<input type="checkbox" class="btp-pick" data-btp-pick="' + esc(field) + '" data-btp-row="' + esc(r.bt.btId) + '"' + (checked ? ' checked' : '') +
+      (_applying ? ' disabled' : '') + ' aria-label="Apply ' + esc(field) + '">';
+  }
+
+  function correctionsHTML(ds, r) {
     var list = r.corrections || [];
     if (!list.length) return '';
-    return '<div class="btp-block c-conflict"><div class="btp-block-l">Would be corrected to match Buildertrend</div>' +
+    var picks = canApply(r) ? picksFor(ds, r) : {};
+    return '<div class="btp-block c-conflict"><div class="btp-block-l">Would be corrected to match Buildertrend' + (canApply(r) ? ' — untick anything you do not want applied' : '') + '</div>' +
       list.map(function (c) {
         var tag = c.kind === 'format' ? '<span class="btp-tag">formatting only</span>' : c.kind === 'fill' ? '<span class="btp-tag">P86 blank — fill</span>' : '';
+        if (c.money) tag += '<span class="btp-tag is-money">money</span>';
         if (c.typo) tag += '<span class="btp-tag is-typo">probable BT typo</span>';
         var to = esc(c.to) + (c.toP86 ? ' <span class="btp-meta">(P86: ' + esc(c.toP86) + ')</span>' : '');
-        return '<div class="btp-fix"><div class="btp-fix-f">' + esc(c.label || c.field) + '</div>' +
+        return '<div class="btp-fix"><label class="btp-fix-f">' + pickBox(ds, r, c.field, picks[c.field] !== false) + esc(c.label || c.field) + '</label>' +
           '<div>' + (c.from ? '<span class="btp-from">' + esc(c.from) + '</span>' : '<span class="btp-none">blank</span>') +
           ' → <span class="btp-to">' + to + '</span>' + tag + '</div>' +
           (c.typo ? '<div class="btp-fix-note is-typo">' + esc(c.typo) + '</div>' : '') +
@@ -337,12 +378,14 @@
       }).join('') + '</ul></div>';
   }
 
-  function heldHTML(r) {
+  function heldHTML(ds, r) {
     var list = r.heldBack || [];
     if (!list.length) return '';
-    return '<div class="btp-block c-heldback"><div class="btp-block-l">Held back — never auto-corrected</div>' +
+    var picks = canApply(r) ? picksFor(ds, r) : {};
+    return '<div class="btp-block c-heldback"><div class="btp-block-l">Never applied automatically' + (canApply(r) && list.some(function (h) { return h.applicable; }) ? ' — tick one to apply it on purpose' : '') + '</div>' +
       list.map(function (h) {
-        return '<div class="btp-fix"><div class="btp-fix-f">' + esc(h.label || h.field) + '</div>' +
+        var box = h.applicable ? pickBox(ds, r, h.field, picks[h.field] === true) : '';
+        return '<div class="btp-fix"><label class="btp-fix-f">' + box + esc(h.label || h.field) + '</label>' +
           '<div>P86 ' + (h.p86 ? '<b>' + esc(h.p86) + '</b>' : '<span class="btp-none">blank</span>') + ' · Buildertrend <b>' + esc(h.bt) + '</b>' +
           '<span class="btp-tag">' + esc(h.reason) + '</span></div>' +
           (h.note ? '<div class="btp-fix-note">' + esc(h.note) + '</div>' : '') + '</div>';
@@ -377,22 +420,28 @@
     if (ds.key === 'jobs' && r.bt.scope !== 'open') head += '<span class="btp-rung">' + esc(r.bt.scope === 'closed' ? 'Closed in Buildertrend' : 'no Buildertrend status') + '</span>';
     var notes = (r.notes || []).length ? '<div class="btp-notes">' + r.notes.map(esc).join(' · ') + '</div>' : '';
     head += applyButtonHTML(ds, r);
-    return '<div class="btp-row"><div class="btp-row-head">' + head + '</div>' +
+    return '<div class="btp-row"' + (canApply(r) ? ' data-btp-rowid="' + esc(r.bt.btId) + '"' : '') + '><div class="btp-row-head">' + head + '</div>' +
       '<div class="btp-pair">' + btSide(ds, r) + p86Side(ds, r) + '</div>' +
-      correctionsHTML(r) + heldHTML(r) + blankHTML(r) + flagsHTML(r) + alsoHTML(ds, r) + notes + '</div>';
+      correctionsHTML(ds, r) + heldHTML(ds, r) + blankHTML(r) + flagsHTML(r) + alsoHTML(ds, r) + notes + '</div>';
   }
 
   // Only confident rows (matched / conflict) with a Buildertrend id can be
   // applied. A row already linked by id with nothing to correct shows "Linked".
-  function applyButtonHTML(ds, r) {
-    var cls = r['class'];
-    if ((cls !== 'matched' && cls !== 'conflict') || !r.bt || r.bt.btId == null || r.bt.btId === '') return '';
-    var n = (r.corrections || []).length;
+  function applyLabel(ds, r) {
     var linked = r.rung === 'Buildertrend ID';
-    if (!n && linked) return '<span class="btp-tag is-linked">Linked</span>';
-    var busy = _applying === ds.key + ':' + r.bt.btId;
-    var label = busy ? 'Applying…' : (n ? 'Apply ' + n + ' change' + (n === 1 ? '' : 's') + (linked ? '' : ' + link') : 'Link');
-    return '<button type="button" class="btp-btn btp-apply" data-btp-apply="' + esc(r.bt.btId) + '"' + (_applying ? ' disabled' : '') + '>' + label + '</button>';
+    var n = pickedFields(ds, r).length;
+    if (_applying === ds.key + ':' + r.bt.btId) return 'Applying…';
+    if (n) return 'Apply ' + n + ' selected' + (linked ? '' : ' + link');
+    return linked ? 'Nothing selected' : 'Link only';
+  }
+
+  function applyButtonHTML(ds, r) {
+    if (!canApply(r)) return '';
+    var linked = r.rung === 'Buildertrend ID';
+    var selectable = (r.corrections || []).length + (r.heldBack || []).filter(function (h) { return h.applicable; }).length;
+    if (!selectable && linked) return '<span class="btp-tag is-linked">Linked</span>';
+    var n = pickedFields(ds, r).length;
+    return '<button type="button" class="btp-btn btp-apply" data-btp-apply="' + esc(r.bt.btId) + '"' + (_applying || (!n && linked) ? ' disabled' : '') + '>' + applyLabel(ds, r) + '</button>';
   }
 
   function safeCount(ds) {
@@ -411,6 +460,8 @@
     if (c.fields) parts.push(c.fields + ' field' + (c.fields === 1 ? '' : 's') + ' changed');
     if (c.unchanged) parts.push(c.unchanged + ' already up to date');
     if (c.skipped) parts.push(c.skipped + ' skipped');
+    var stale = []; ((res && res.results) || []).forEach(function (x) { (x.stale || []).forEach(function (f) { stale.push(f); }); });
+    if (stale.length) parts.push('not applied because P86 changed since the preview or it would clash: ' + stale.slice(0, 5).join(', '));
     if (c.failed) parts.push(c.failed + ' failed');
     var reasons = ((res && res.results) || []).filter(function (x) { return x.outcome === 'skipped' || x.outcome === 'failed'; })
       .slice(0, 3).map(function (x) { return (x.label ? '“' + x.label + '”: ' : '') + x.reason; });
@@ -420,11 +471,13 @@
   function runApply(key, body) {
     if (_applying || !(window.p86Api && typeof window.p86Api.put === 'function')) return;
     _applying = key + ':' + (body.mode === 'safe' ? 'safe' : body.btIds[0]);
+    if (body.mode !== 'safe') delete _picks[key + ':' + body.btIds[0]];
     _applyNote[key] = null;
     repaint(key);
     window.p86Api.put(APPLY_ENDPOINT, Object.assign({ dataset: key }, body)).then(function (res) {
       _applying = null;
       _applyNote[key] = { ok: true, text: applyResultText(res) };
+      (res && res.results || []).forEach(function (x) { if (x.btId) delete _picks[key + ':' + x.btId]; });
       load();
     }).catch(function (e) {
       _applying = null;
@@ -587,9 +640,13 @@
       html += '<div class="btp-sub" style="margin:0 0 10px;">Project 86 side: ' + esc(p.jobs) + ' jobs and ' + esc(p.leads) + ' leads in ' + esc(_data.organization && _data.organization.name) + '.' +
         (p.unscopedJobs || p.unscopedLeads ? ' ' + esc(p.unscopedJobs) + ' jobs and ' + esc(p.unscopedLeads) + ' leads carry no organization — counted for review, never matched.' : '') + '</div>';
       if (p.error) html += '<div class="btp-sentence is-bad">' + esc(p.error) + '</div>';
-      ['jobs', 'leads'].forEach(function (k) {
-        if (_data.datasets && _data.datasets[k]) html += datasetHTML(_data.datasets[k]);
-      });
+      html += '<div class="btp-tabs" role="tablist">' + TABS.map(function (t) {
+        var d = _data.datasets && _data.datasets[t[0]];
+        var waiting = d && d.rows ? d.rows.filter(function (r) { return r['class'] === 'conflict' && canApply(r); }).length : 0;
+        return '<button type="button" role="tab" class="btp-tab' + (_tab === t[0] ? ' is-active' : '') + '" aria-selected="' + (_tab === t[0]) + '" data-btp-tab="' + t[0] + '">' +
+          t[1] + (waiting ? ' <span class="btp-tab-n">' + waiting + '</span>' : '') + '</button>';
+      }).join('') + '</div>';
+      if (_data.datasets && _data.datasets[_tab]) html += datasetHTML(_data.datasets[_tab]);
     }
     return html + '</div>';
   }
@@ -615,6 +672,13 @@
   function wire() {
     var r = _host.querySelector('[data-btp-refresh]');
     if (r) r.addEventListener('click', load);
+    Array.prototype.forEach.call(_host.querySelectorAll('[data-btp-tab]'), function (b) {
+      b.addEventListener('click', function () {
+        _tab = b.getAttribute('data-btp-tab');
+        try { if (window.localStorage) window.localStorage.setItem('btp.tab', _tab); } catch (e) { /* storage blocked */ }
+        paint();
+      });
+    });
     Array.prototype.forEach.call(_host.querySelectorAll('[data-btp-ds]'), function (sec) {
       var key = sec.getAttribute('data-btp-ds');
       var ui = _ui[key];
@@ -631,7 +695,30 @@
       var more = sec.querySelector('[data-btp-more]');
       if (more) more.addEventListener('click', function () { ui.shown += PAGE; repaint(key); });
       Array.prototype.forEach.call(sec.querySelectorAll('[data-btp-apply]'), function (b) {
-        b.addEventListener('click', function () { runApply(key, { btIds: [b.getAttribute('data-btp-apply')] }); });
+        b.addEventListener('click', function () {
+          var id = b.getAttribute('data-btp-apply');
+          var ds = _data && _data.datasets && _data.datasets[key];
+          var row = ds && (ds.rows || []).filter(function (x) { return String(x.bt.btId) === id; })[0];
+          var fields = row ? pickedFields(ds, row) : [];
+          var money = row ? (row.corrections || []).concat(row.heldBack || []).filter(function (x) { return fields.indexOf(x.field) !== -1 && (x.money || x.reason === 'money' || x.field === 'jobNumber'); }) : [];
+          var go = function () { runApply(key, { btIds: [id], fields: fields }); };
+          if (money.length) {
+            askThen('Apply ' + money.map(function (x) { return (x.label || x.field) + ' → ' + (x.to || x.bt); }).join(', ') + ' to this ' + (key === 'jobs' ? 'job' : 'lead') + '?', 'Apply', go);
+          } else {
+            go();
+          }
+        });
+      });
+      Array.prototype.forEach.call(sec.querySelectorAll('[data-btp-pick]'), function (cb) {
+        cb.addEventListener('change', function () {
+          var id = cb.getAttribute('data-btp-row');
+          var ds = _data && _data.datasets && _data.datasets[key];
+          var row = ds && (ds.rows || []).filter(function (x) { return String(x.bt.btId) === id; })[0];
+          if (!row) return;
+          picksFor(ds, row)[cb.getAttribute('data-btp-pick')] = cb.checked;
+          var btn = sec.querySelector('[data-btp-apply="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]');
+          if (btn) { btn.textContent = applyLabel(ds, row); btn.disabled = !!_applying || (!pickedFields(ds, row).length && row.rung === 'Buildertrend ID'); }
+        });
       });
       var safe = sec.querySelector('[data-btp-apply-safe]');
       if (safe) {
@@ -664,6 +751,8 @@
       errorSentence: errorSentence,
       render: function (data, err) { _data = data || null; _err = err || null; _loading = false; return pageHTML(); },
       setView: function (key, f, scope) { _ui[key].f = f || 'all'; if (scope) _ui[key].scope = scope; _ui[key].shown = PAGE; },
+      setTab: function (t) { _tab = t; },
+      resetPicks: function () { _picks = {}; },
       shapeError: shapeError
     }
   };

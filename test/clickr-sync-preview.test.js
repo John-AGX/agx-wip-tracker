@@ -271,7 +271,7 @@ describe('MATCHER — jobs', () => {
     const r = one(rows, 'S1050 Harbor Club Railings');
     expect(r).toMatchObject({ class: 'conflict', rung: 'number' });
     expect(r.p86.id).toBe('pj-s');
-    expect(fieldsOf(r)).toEqual(['city', 'state', 'status', 'street']);
+    expect(fieldsOf(r)).toEqual(['city', 'contractPrice', 'state', 'status', 'street']);
     expect(r.corrections.find((c) => c.field === 'street')).toMatchObject({ from: '1 Harbor Dr', to: '1 Harbor Drive', kind: 'format' });
     const city = r.corrections.find((c) => c.field === 'city');
     expect(city).toMatchObject({ from: 'Tampa', to: 'Tamp', kind: 'value' });
@@ -281,13 +281,14 @@ describe('MATCHER — jobs', () => {
     expect(r.btBlank).toEqual([{ field: 'zip', label: 'Zip', p86: '33602' }]);
   });
 
-  test('EXACT NUMBER: money is HELD BACK with both figures (contract vs data.contractAmount, approved COs vs P86\'s computed sum); the number is not proposed', () => {
+  test('EXACT NUMBER: Buildertrend\'s contract price is a CORRECTION (owner: BT is the source of truth); approved COs stay held back, not applicable; the number is not proposed', () => {
     const r = one(rows, 'S1050 Harbor Club Railings');
-    expect(r.heldBack.map((h) => [h.field, h.p86, h.bt, h.reason])).toEqual([
-      ['contractPrice', '$12,000.00', '$15,000.50', 'money'],
-      ['approvedCOPrice', '$1,000.00', '$2,500.00', 'money'],
+    expect(r.corrections.find((c) => c.field === 'contractPrice')).toMatchObject({
+      kind: 'value', money: true, from: '$12,000.00', to: '$15,000.50', value: 15000.5, p86Value: 12000 });
+    expect(r.heldBack.map((h) => [h.field, h.p86, h.bt, h.reason, h.applicable])).toEqual([
+      ['approvedCOPrice', '$1,000.00', '$2,500.00', 'money', false],
     ]);
-    expect(r.corrections.some((c) => /price|contract|jobNumber/i.test(c.field))).toBe(false);
+    expect(r.corrections.some((c) => /approvedCO|jobNumber/i.test(c.field))).toBe(false);
   });
 
   test('the same calendar day written as an instant is not a correction', () => {
@@ -1089,11 +1090,10 @@ describe('HTTP — the preview over real-shape Clickr pages', () => {
     expect(jobs.sentence).toMatch(/^Fetched 6 of 6 jobs/);
     const s1050 = jobs.rows.find((x) => x.bt.number === 'S1050');
     expect(s1050.class).toBe('conflict');
-    expect(s1050.corrections.map((c) => [c.field, c.to])).toEqual([['city', 'Tamp']]);
+    expect(s1050.corrections.map((c) => [c.field, c.to])).toEqual([['city', 'Tamp'], ['contractPrice', '$15,000.00']]);
     // Contract from data.contractAmount; approved COs = the $1,000 approved row only
     // (not the $9,000 draft, not org B's mis-stamped $50,000).
-    expect(s1050.heldBack.map((h) => [h.field, h.p86, h.bt])).toEqual([
-      ['contractPrice', '$12,000.00', '$15,000.00'], ['approvedCOPrice', '$1,000.00', '$2,500.00']]);
+    expect(s1050.heldBack.map((h) => [h.field, h.p86, h.bt])).toEqual([['approvedCOPrice', '$1,000.00', '$2,500.00']]);
     expect(jobs.rows.filter((x) => x.bt.number === 'WO16').every((x) => x.class === 'ambiguous')).toBe(true);
     expect(jobs.summary.counts).toMatchObject({ not_a_job: 1, change_order: 1 });
     expect(r.json.p86).toMatchObject({ jobs: 3, leads: 2, unscopedJobs: 1, unscopedLeads: 1 });

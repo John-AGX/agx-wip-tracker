@@ -51,7 +51,7 @@ function jobRec(jobName, o) {
     street: o.street === undefined ? '' : o.street, city: o.city === undefined ? 'Tampa' : o.city,
     state: 'FL', zip: '33602', projectedStart: o.projectedStart === undefined ? null : o.projectedStart, projectedCompletion: null,
     contractPrice: o.contractPrice === undefined ? { value: 0, scale: 2 } : o.contractPrice,
-    approvedCOPrice: { value: 0, scale: 2 }, projectManager: [], contacts: [], customFields: [],
+    approvedCOPrice: o.approvedCOPrice === undefined ? { value: 0, scale: 2 } : o.approvedCOPrice, projectManager: [], contacts: [], customFields: [],
     jobType: 'Handyman Services', groups: ['Service & Repair'], createdDate: '2025-01-02T15:00:00.000Z', isDeleted: false,
   };
 }
@@ -69,7 +69,7 @@ function leadRec(title, o) {
 }
 
 const BT_JOBS = [
-  jobRec('S1050 Harbor Club Railings', { jobId: 111, street: '1 Harbor Dr', projectedStart: '2026-02-25T00:00:00', contractPrice: { value: 15000, scale: 2 } }),
+  jobRec('S1050 Harbor Club Railings', { jobId: 111, street: '1 Harbor Dr', projectedStart: '2026-02-25T00:00:00', contractPrice: { value: 15000, scale: 2 }, approvedCOPrice: { value: 2500, scale: 2 } }),
   jobRec('S2000 Waterside Siding', { jobId: 222, street: '5 Bay Rd', projectedStart: '2026-03-01T00:00:00' }),
   jobRec('WO16 Service Call A', { jobId: 333 }),
   jobRec('WO16 Service Call B', { jobId: 334 }),
@@ -247,6 +247,78 @@ describe('per-record apply', () => {
   });
 });
 
+
+describe('choosing what applies — ticked fields, contract price, job number, lead revenue', () => {
+  test('a fields list applies only what is ticked; an empty list links only', async () => {
+    const r = await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['222'], fields: [] });
+    expect(r.status).toBe(200);
+    expect(jobBt('j-2')).toBe('222');
+    expect(jobData('j-2').street_address).toBe('');
+  });
+
+  test('Buildertrend contract price applies when ticked (BT is the source of truth); safe mode never touches it', async () => {
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+    expect(jobData('j-1').contractAmount).toBe(12000);
+    preview.forgetFetch(AGX);
+    const r = await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: ['contractPrice'] });
+    expect(r.status).toBe(200);
+    expect(jobData('j-1').contractAmount).toBe(15000);
+    expect(r.json.results[0].fields).toEqual([{ field: 'contractPrice', from: '$12,000.00', to: '$15,000.00' }]);
+  });
+
+  test('without a fields list, per-record apply includes the contract correction but never a held-back item', async () => {
+    const d = jobData('j-1'); d.jobNumber = ''; engine.db.prepare("UPDATE jobs SET data = ? WHERE id = 'j-1'").run(JSON.stringify(d));
+    const r = await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'] });
+    expect(r.status).toBe(200);
+    expect(jobData('j-1').contractAmount).toBe(15000);
+    expect(jobData('j-1').jobNumber).toBe('');
+  });
+
+  test('the job number applies only when ticked, and never onto a number another P86 job carries', async () => {
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+    const d = jobData('j-1'); d.jobNumber = 'X9999'; engine.db.prepare("UPDATE jobs SET data = ? WHERE id = 'j-1'").run(JSON.stringify(d));
+    preview.forgetFetch(AGX);
+    const untouched = await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: ['contractPrice'] });
+    expect(untouched.status).toBe(200);
+    expect(jobData('j-1').jobNumber).toBe('X9999');
+    preview.forgetFetch(AGX);
+    const renum = await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: ['jobNumber'] });
+    expect(renum.status).toBe(200);
+    expect(jobData('j-1').jobNumber).toBe('S1050');
+
+    // A clash: another job already carries the number Buildertrend has.
+    const d2 = jobData('j-1'); d2.jobNumber = 'X9999'; engine.db.prepare("UPDATE jobs SET data = ? WHERE id = 'j-1'").run(JSON.stringify(d2));
+    const d3 = jobData('j-3'); d3.jobNumber = 'S1050'; engine.db.prepare("UPDATE jobs SET data = ? WHERE id = 'j-3'").run(JSON.stringify(d3));
+    preview.forgetFetch(AGX);
+    const clash = await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: ['jobNumber'] });
+    expect(clash.status).toBe(200);
+    expect(jobData('j-1').jobNumber).toBe('X9999');
+    expect(clash.json.results[0].stale.join(' ')).toMatch(/another P86 job already uses S1050/);
+  });
+
+  test('lead revenue applies only when ticked; approved change orders can never be applied', async () => {
+    const r1 = await put(APPLY, ADMIN, { dataset: 'leads', btIds: ['555'], fields: ['source'] });
+    expect(r1.status).toBe(200);
+    expect(Number(leadRow('l-1').estimated_revenue_high)).toBe(12000);
+    preview.forgetFetch(AGX);
+    const r2 = await put(APPLY, ADMIN, { dataset: 'leads', btIds: ['555'], fields: ['estimatedRevenueMax', 'estimatedRevenueMin'] });
+    expect(r2.status).toBe(200);
+    expect(Number(leadRow('l-1').estimated_revenue_high)).toBe(17900);
+    expect(Number(leadRow('l-1').estimated_revenue_low)).toBe(17900);
+    const p86 = await preview.readP86(engine.pool, AGX);
+    const rows = match.matchJobs(BT_JOBS.map((x) => readRecord('jobs', x)), p86.jobs, { coTotals: p86.coTotals });
+    const s1050 = rows.find((x) => String(x.bt.btId) === '111');
+    // Not vacuous: the row really carries an approved-change-order difference.
+    expect(s1050.heldBack.map((h) => h.field)).toContain('approvedCOPrice');
+    const sa = require('../server/services/clickr/sync-apply');
+    expect(sa.pickedHeldBack('jobs', s1050, 'rows', ['approvedCOPrice'])).toEqual([]);
+    preview.forgetFetch(AGX);
+    const r3 = await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: ['approvedCOPrice'] });
+    expect(r3.status).toBe(200);
+    expect(r3.json.results[0].fields || []).toEqual([]);
+  });
+});
+
 describe('once linked, the Buildertrend id is the match', () => {
   test('a renumbered, renamed P86 job is still found by id, and a linked job is never another row\'s candidate', async () => {
     await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
@@ -323,19 +395,45 @@ describe('PAGE — Apply buttons appear only where an apply can do something', (
     },
   });
 
-  test('a corrected row offers "Apply N changes + link"; a same row offers "Link"; a linked row with nothing to do says Linked', () => {
+  test('a corrected row offers "Apply N selected + link"; a same row offers "Link only"; a linked row with nothing to do says Linked', () => {
+    T.resetPicks();
     const html = T.render(data([
       baseRow('conflict', { corrections: [{ field: 'startDate', kind: 'fill', from: '', to: '2026-02-25' }] }),
       baseRow('matched', { bt: { btId: '222', raw: 'S2000', title: 'W', scope: 'open' } }),
       baseRow('matched', { bt: { btId: '333', raw: 'S3000', title: 'X', scope: 'open' }, rung: 'Buildertrend ID' }),
     ]));
     expect(html).toContain('data-btp-apply="111"');
-    expect(html).toContain('Apply 1 change + link');
+    expect(html).toContain('Apply 1 selected + link');
+    expect(html).toContain('>Link only<');
     expect(html).toContain('data-btp-apply="222"');
     expect(html).not.toContain('data-btp-apply="333"');
     expect(html).toContain('>Linked<');
     // Safe button counts the two unlinked confident rows.
     expect(html).toMatch(/Link confident matches \+ fill blank start dates \(2\)/);
+  });
+
+
+  test('corrections start ticked, an applicable held-back item starts unticked, approved COs get no box, and only the active tab renders', () => {
+    T.resetPicks();
+    T.setTab('jobs');
+    const html = T.render(data([
+      baseRow('conflict', {
+        corrections: [{ field: 'contractPrice', label: 'Contract price', kind: 'value', money: true, from: '$12,000.00', to: '$15,000.00', value: 15000, p86Value: 12000 }],
+        heldBack: [{ field: 'jobNumber', label: 'Job number', reason: 'identity', bt: 'S1050', p86: 'X9', value: 'S1050', applicable: true },
+          { field: 'approvedCOPrice', label: 'Approved change orders', reason: 'money', bt: '$2,500.00', p86: '$1,000.00', applicable: false }],
+      }),
+    ]));
+    expect(html).toMatch(/data-btp-pick="contractPrice" data-btp-row="111" checked/);
+    expect(html).toMatch(/data-btp-pick="jobNumber" data-btp-row="111"(?! checked)/);
+    expect(html).not.toContain('data-btp-pick="approvedCOPrice"');
+    expect(html).toContain('data-btp-tab="leads"');
+    expect(html).toContain('data-btp-ds="jobs"');
+    expect(html).not.toContain('data-btp-ds="leads"');
+    T.setTab('leads');
+    const leadsHtml = T.render(data([]));
+    expect(leadsHtml).toContain('data-btp-ds="leads"');
+    expect(leadsHtml).not.toContain('data-btp-ds="jobs"');
+    T.setTab('jobs');
   });
 
   test('ambiguous, new and possible-duplicate rows get no button; a partial read disables the safe button', () => {

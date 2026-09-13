@@ -414,8 +414,19 @@ function compareMoney(acc, spec) {
     return;
   }
   if (p != null && Math.abs(p - m.value) < 0.005) return;
+  if (spec.correction) {
+    // The owner's call for this figure: Buildertrend is the source of truth, so
+    // it is a correction like any other — shown checked on the row, applied
+    // only by a person pressing Apply, never by "safe updates".
+    acc.corrections.push({ field, label, kind: (p == null || p === 0) ? 'fill' : 'value', money: true,
+      from: p == null ? '' : fmtMoney(p), to: fmtMoney(m.value), value: m.value, p86Value: p == null ? null : p,
+      note: spec.correctionNote || '' });
+    return;
+  }
   acc.heldBack.push({ field, label, reason: 'money', bt: fmtMoney(m.value), p86: p == null ? '' : fmtMoney(p),
-    note: 'Money is never auto-corrected from this data.' + (p86Note ? ' ' + p86Note : '') });
+    value: m.value, p86Value: p == null ? null : p, applicable: !!spec.applicable,
+    note: (spec.applicable ? 'Never applied automatically — tick it to apply it on purpose.' : 'Money is never auto-corrected from this data.')
+      + (p86Note ? ' ' + p86Note : '') });
 }
 
 // ── non-money fields ─────────────────────────────────────────────────────
@@ -627,19 +638,25 @@ function jobProposals(bt, p, ctx) {
       literal: () => true });
   }
 
-  // MONEY — held back with both figures.
+  // CONTRACT PRICE — Buildertrend is the source of truth (owner's decision,
+  // 2026-09-13), so a difference is a correction on data.contractAmount. A
+  // Buildertrend $0 or blank is still blank: it never erases a P86 contract.
   compareMoney(acc, { field: 'contractPrice', label: 'Contract price', bt: bt.contractPrice, p86: p.contractAmount,
-    p86Note: 'P86 figure: the job\'s contract amount (data.contractAmount).' });
+    correction: true,
+    correctionNote: 'Buildertrend\'s contract price is the source of truth. This sets the job\'s contract amount: income, backlog, profit and margin move with it; the scope allocation is not re-spread.' });
+  // APPROVED CHANGE ORDERS — P86 computes this from its change orders, so there
+  // is no single number to set. Shown, never applicable.
   const co = ctx.coTotals ? ctx.coTotals.get(p.id) : null;
   compareMoney(acc, { field: 'approvedCOPrice', label: 'Approved change orders', bt: bt.approvedCOPrice,
     p86: co && co.computable ? co.total : null,
     p86Unavailable: co && !co.computable ? co.why : (ctx.coTotals ? null : 'P86\'s change orders were not read.'),
-    p86Note: co ? 'P86 figure: ' + co.source + '.' : '' });
+    p86Note: (co ? 'P86 figure: ' + co.source + '. ' : '') + 'It is the sum of P86\'s change orders, so it cannot be set here — change the change orders.' });
 
-  // JOB NUMBER — identity, never corrected.
+  // JOB NUMBER — identity. Never applied automatically; a person may tick it.
   if (bt.number && exactNumberKey(bt.number) !== exactNumberKey(p.jobNumber)) {
     acc.heldBack.push({ field: 'jobNumber', label: 'Job number', reason: 'identity', bt: bt.number, p86: p.jobNumber,
-      note: 'The job number is P86\'s identity and the QuickBooks cost-import key; it is never auto-corrected.' });
+      value: bt.number, applicable: true,
+      note: 'The job number is P86\'s identity and the QuickBooks cost-import key. Never applied automatically — tick it to renumber this job on purpose.' });
   }
   return { acc, notes };
 }
@@ -1080,8 +1097,8 @@ function leadProposals(bt, p, directory) {
       from: p86Conf ? String(p86Conf) : '', to: String(conf) });
   }
 
-  compareMoney(acc, { field: 'estimatedRevenueMin', label: 'Est. revenue (low)', bt: bt.estimatedRevenueMin, p86: p.revenueLow });
-  compareMoney(acc, { field: 'estimatedRevenueMax', label: 'Est. revenue (high)', bt: bt.estimatedRevenueMax, p86: p.revenueHigh });
+  compareMoney(acc, { field: 'estimatedRevenueMin', label: 'Est. revenue (low)', bt: bt.estimatedRevenueMin, p86: p.revenueLow, applicable: true });
+  compareMoney(acc, { field: 'estimatedRevenueMax', label: 'Est. revenue (high)', bt: bt.estimatedRevenueMax, p86: p.revenueHigh, applicable: true });
 
   if (p.state86 === 'closed') {
     acc.flags.push({ field: 'status', label: 'Status',

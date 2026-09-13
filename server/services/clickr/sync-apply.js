@@ -16,11 +16,16 @@
 //      clients.bt_contact_id when the lead's client is the Buildertrend contact),
 //      so every later preview finds the pair by id.
 //
-// NEVER WRITTEN: money (contract, change orders, lead revenue), the job number,
-// estimates, change orders, POs, crew-side data. Nothing is created or deleted.
+// MONEY AND IDENTITY: Buildertrend's contract price is a correction (owner: BT
+// is the source of truth), applied when its box is ticked and never by safe
+// mode. The job number and lead revenue are applied ONLY when a person ticks
+// them (fields list). Approved change orders are never written (P86 sums them
+// from its change orders). Estimates, change orders, POs and crew-side data are
+// never written. Nothing is created or deleted.
 //
 // MODES
-//   rows — the given Buildertrend ids: link + every allowed correction shown.
+//   rows — the given Buildertrend ids: link + the ticked fields (every correction
+//          on the row when no fields list is sent).
 //   safe — every confident row in the dataset: link + fill a BLANK P86 start
 //          date from Buildertrend's projected start (the owner's call: that is
 //          safe to fill without review; P86's own start date is never replaced).
@@ -49,14 +54,34 @@ const str = (v) => (v == null ? '' : String(v));
 const norm = (v) => str(v).trim().replace(/\s+/g, ' ');
 const CONFIDENT = new Set(['matched', 'conflict']);
 
+// P86 may hold 0, '' or null for "no figure": compared as numbers.
+const moneyEq = (a, b) => Math.abs((Number(a) || 0) - (Number(b) || 0)) < 0.005;
+const LEAD_REVENUE_COLUMNS = { estimatedRevenueMin: 'estimated_revenue_low', estimatedRevenueMax: 'estimated_revenue_high' };
+
 function isSafeCorrection(kind, c) {
   return kind === 'jobs' && c.field === 'startDate' && c.kind === 'fill';
 }
 
-// Which corrections a row may write in this mode.
-function writable(kind, row, mode) {
-  const allowed = kind === 'jobs' ? JOB_FIELD_KEYS : Object.assign({ salesperson: 1, client: 1 }, LEAD_FIELD_COLUMNS);
-  return (row.corrections || []).filter((c) => allowed[c.field] && (mode === 'rows' || isSafeCorrection(kind, c)));
+// Which corrections a row may write in this mode. In rows mode a `fields` list
+// (the boxes a person left ticked) narrows it; without one every correction on
+// the row applies. Safe mode is the blank start date only — never money.
+function writable(kind, row, mode, fields) {
+  const allowed = kind === 'jobs'
+    ? Object.assign({ contractPrice: 1 }, JOB_FIELD_KEYS)
+    : Object.assign({ salesperson: 1, client: 1 }, LEAD_FIELD_COLUMNS);
+  const pick = fields ? new Set(fields) : null;
+  return (row.corrections || []).filter((c) => allowed[c.field]
+    && (mode === 'rows' ? (!pick || pick.has(c.field)) : isSafeCorrection(kind, c)));
+}
+
+// Held-back items a person TICKED. Only in rows mode, only when the request
+// names the field, only items the matcher marks applicable (job number, lead
+// revenue). Approved change orders and unparsed money are never applicable.
+function pickedHeldBack(kind, row, mode, fields) {
+  if (mode !== 'rows' || !fields) return [];
+  const allowed = kind === 'jobs' ? { jobNumber: 1 } : LEAD_REVENUE_COLUMNS;
+  const pick = new Set(fields);
+  return (row.heldBack || []).filter((h) => h.applicable === true && allowed[h.field] && pick.has(h.field));
 }
 
 async function readDataset(org, kind, deps) {
@@ -69,7 +94,7 @@ async function readDataset(org, kind, deps) {
 }
 
 // ── jobs ─────────────────────────────────────────────────────────────────
-async function applyJob(db, orgId, row, mode) {
+async function applyJob(db, orgId, row, mode, fields) {
   const btId = norm(row.bt.btId);
   const cur = await db.query('SELECT id, data, bt_job_id FROM jobs WHERE id = $1 AND organization_id = $2 FOR UPDATE', [row.p86.id, orgId]);
   if (!cur.rows.length) return { skipped: 'The P86 job is no longer there.' };
@@ -82,13 +107,30 @@ async function applyJob(db, orgId, row, mode) {
   const data = (job.data && typeof job.data === 'object') ? Object.assign({}, job.data) : {};
   const applied = [];
   const stale = [];
-  for (const c of writable('jobs', row, mode)) {
+  for (const c of writable('jobs', row, mode, fields)) {
+    if (c.field === 'contractPrice') {
+      if (!moneyEq(data.contractAmount, c.p86Value) || !Number.isFinite(c.value)) { stale.push(c.label || c.field); continue; }
+      data.contractAmount = c.value;
+      applied.push({ field: c.field, from: c.from, to: c.to });
+      continue;
+    }
     const key = JOB_FIELD_KEYS[c.field];
     const now = c.field === 'title' ? (data.title || data.name) : data[key];
     if (norm(now) !== norm(c.from)) { stale.push(c.label || c.field); continue; }
     const value = c.field === 'status' ? (c.toP86 || c.to) : c.to;
     data[key] = value;
     applied.push({ field: c.field, from: c.from, to: value });
+  }
+  for (const h of pickedHeldBack('jobs', row, mode, fields)) {
+    // JOB NUMBER, ticked on purpose. Still refused when P86 changed it since the
+    // preview, or when another job of this organization already carries it.
+    if (norm(data.jobNumber) !== norm(h.p86)) { stale.push(h.label || h.field); continue; }
+    const clash = await db.query(
+      "SELECT id FROM jobs WHERE organization_id = $1 AND id <> $2 AND UPPER(TRIM(data->>'jobNumber')) = UPPER(TRIM($3))",
+      [orgId, job.id, h.value]);
+    if (clash.rows.length) { stale.push((h.label || h.field) + ' — another P86 job already uses ' + h.value); continue; }
+    data.jobNumber = h.value;
+    applied.push({ field: h.field, from: h.p86, to: h.value });
   }
   if (applied.some((a) => JOB_ADDRESS.includes(a.field))) {
     // Same composition the job page uses (js/jobs.js saveJobAddress); the map
@@ -103,13 +145,14 @@ async function applyJob(db, orgId, row, mode) {
 }
 
 // ── leads ────────────────────────────────────────────────────────────────
-async function applyLead(db, orgId, row, mode) {
+async function applyLead(db, orgId, row, mode, fields) {
   const btId = norm(row.bt.btId);
   // Lock the lead row on its own: Postgres refuses FOR UPDATE across the outer
   // joins below.
   await db.query('SELECT id FROM leads WHERE id = $1 AND organization_id = $2 FOR UPDATE', [row.p86.id, orgId]);
   const cur = await db.query(
     'SELECT l.id, l.title, l.street_address, l.city, l.state, l.zip, l.source, l.confidence, l.salesperson_id, l.client_id, l.bt_lead_id, '
+    + 'l.estimated_revenue_low, l.estimated_revenue_high, '
     + 'u.name AS salesperson_name, c.name AS client_name '
     + 'FROM leads l '
     + 'LEFT JOIN users u ON u.id = l.salesperson_id AND u.organization_id = $2 '
@@ -125,7 +168,14 @@ async function applyLead(db, orgId, row, mode) {
   const sets = {};
   const applied = [];
   const stale = [];
-  for (const c of writable('leads', row, mode)) {
+  for (const h of pickedHeldBack('leads', row, mode, fields)) {
+    // LEAD REVENUE, ticked on purpose.
+    const col = LEAD_REVENUE_COLUMNS[h.field];
+    if (!moneyEq(lead[col], h.p86Value) || !Number.isFinite(h.value)) { stale.push(h.label || h.field); continue; }
+    sets[col] = h.value;
+    applied.push({ field: h.field, from: h.p86, to: h.bt });
+  }
+  for (const c of writable('leads', row, mode, fields)) {
     if (c.field === 'salesperson' || c.field === 'client') {
       const current = c.field === 'salesperson' ? lead.salesperson_name : lead.client_name;
       if (norm(current) !== norm(c.from)) { stale.push(c.label || c.field); continue; }
@@ -236,7 +286,7 @@ async function apply(org, input, deps) {
     const client = await deps.pool.connect();
     try {
       await client.query('BEGIN');
-      const r = kind === 'jobs' ? await applyJob(client, org.id, row, mode) : await applyLead(client, org.id, row, mode);
+      const r = kind === 'jobs' ? await applyJob(client, org.id, row, mode, input.fields) : await applyLead(client, org.id, row, mode, input.fields);
       await client.query('COMMIT');
       if (r.skipped) results.push(Object.assign(base, { outcome: 'skipped', reason: r.skipped }));
       else if (r.unchanged) results.push(Object.assign(base, { outcome: 'unchanged', stale: r.stale }));
@@ -271,9 +321,16 @@ function parseInput(body) {
     const ids = Array.isArray(b.btIds) ? b.btIds.filter((x) => (typeof x === 'string' || typeof x === 'number') && norm(x)) : [];
     if (!ids.length) return { error: 'btIds must list at least one Buildertrend id.' };
     if (ids.length > MAX_ROWS) return { error: 'At most ' + MAX_ROWS + ' records per apply.' };
-    return { dataset, mode, btIds: ids.map(String) };
+    let fields = null;
+    if (b.fields !== undefined) {
+      if (!Array.isArray(b.fields) || b.fields.length > 30 || b.fields.some((x) => typeof x !== 'string' || !/^[A-Za-z]{1,40}$/.test(x))) {
+        return { error: 'fields must be a list of field names.' };
+      }
+      fields = b.fields;
+    }
+    return { dataset, mode, btIds: ids.map(String), fields };
   }
-  return { dataset, mode, btIds: [] };
+  return { dataset, mode, btIds: [], fields: null };
 }
 
 let inFlight = false;
@@ -314,4 +371,4 @@ async function handle(req, res, deps) {
   }
 }
 
-module.exports = { handle, apply, parseInput, writable, ACTION_PARAM };
+module.exports = { handle, apply, parseInput, writable, pickedHeldBack, ACTION_PARAM };
