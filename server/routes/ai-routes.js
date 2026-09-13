@@ -13649,22 +13649,31 @@ async function execEmitPayloadFile(tu, ctx) {
     // protects ONE payload from applying twice; it cannot see that the
     // agent emitted the same change twice. This is that missing layer.
     //
-    // Same org + user + byte-identical file_content inside a short
-    // window is a re-emit (stream reopen, retried tool call), not a
-    // second intent. Reuse the original row instead of writing another.
+    // Same org + user + agent + identical TARGETS inside a short window is a
+    // re-emit (stream reopen, retried tool call), not a second intent. Reuse
+    // the original row instead of writing another.
     // Deliberately NOT scoped by session_id: Scribe may emit under a
     // different session than the 86 turn that asked for it, and the
     // narrower key would miss exactly the case we're fixing.
+    //
+    // This guard compared file_content until 2026-09-13, and could NEVER
+    // match: file_content carries emitted_at (a fresh timestamp) and id (a
+    // fresh payload id), so two emits of the same change were never equal.
+    // targets IS the change; title/summary are prose a re-emit rewords.
+    // Only a live prior row counts — a rejected or failed one is not "already
+    // in flight", and suppressing a retry of it would lose the write.
     try {
       const dup = await pool.query(
         `SELECT id, status FROM payloads
           WHERE organization_id = $1
             AND user_id IS NOT DISTINCT FROM $2
-            AND file_content = $3::jsonb
+            AND emitting_agent_key IS NOT DISTINCT FROM $4
+            AND targets = $3::jsonb
+            AND status IN ('ready', 'applying', 'applied')
             AND created_at > NOW() - INTERVAL '90 seconds'
           ORDER BY created_at DESC
           LIMIT 1`,
-        [orgId, ctx.userId || null, JSON.stringify(fileContent)]
+        [orgId, ctx.userId || null, JSON.stringify(targets), emittingAgentKey]
       );
       if (dup.rows.length) {
         const prior = dup.rows[0];
@@ -15440,6 +15449,13 @@ function makeBackgroundJobCallback(userId, pauseRef, orgId) {
     }
     if (tu.name === 'spawn_subtask' || tu.name === 'await_subtasks' || tu.name === 'subtask_status') {
       return { tier: 'auto', error: 'Background tasks cannot spawn subtasks (recursion guard). Do the work directly in this run.' };
+    }
+    // Nobody is in a background run to say yes. scribe_write is auto-tier, so
+    // the approval block below never saw it, and approved:true — a flag the
+    // MODEL sets — applied the draft with no card and no person. The draft
+    // still gets written; it just waits in Pending approvals like any other.
+    if (tu && tu.name === 'scribe_write' && tu.input && tu.input.approved) {
+      tu = Object.assign({}, tu, { input: Object.assign({}, tu.input, { approved: false }) });
     }
     const decision = await baseCallback(tu);
     if (decision && decision.tier === 'approval') {
@@ -17849,6 +17865,9 @@ module.exports.internals = {
   // discriminant it now returns.
   execScribeWrite,
   driveScribeWrite,
+  // Exported so "a background run cannot self-approve a write" is held by
+  // running it — test/agent-write-safety.test.js.
+  makeBackgroundJobCallback,
   postAgentJobToThread,
   // C18 — universal read surface. read_entity + search_entities
   // dispatch through execConsolidatedRead to the existing narrow

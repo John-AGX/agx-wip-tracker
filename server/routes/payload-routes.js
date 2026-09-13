@@ -26,6 +26,7 @@ const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireOrg, hasCapability } = require('../auth');
 const dispatcher = require('../services/payload-dispatcher');
+const { classifyRisk: describeRisk } = require('../services/payload-describe');
 // The one parent-inherited rule for who may write a service ticket. Only its
 // COARSE half is used here — see PAYLOAD_APPLY_CAP.service_ticket.
 const ticketAccess = require('../services/service-ticket-access');
@@ -581,7 +582,27 @@ router.post('/:id/apply', requireAuth, requireOrg, async (req, res) => {
 // Conservative string-scan over the targets JSONB: false negatives
 // auto-apply a destructive change, false positives just show a card —
 // so we err inclusive.
+//
+// TWO DETECTORS, OR'd (John, 2026-09-12 — click-only rules for a spoken yes):
+// the original string scan below is KEPT byte-for-byte, and the structured
+// walk in services/payload-describe.js is added on top. The scan only reads
+// t.ops and matches entity_type case-sensitively, so a status change inside
+// bulk.items[].ops, a move side, or entity_type 'Estimate' read as harmless
+// here. The walk covers those, plus John's wider rule: money edits, completion
+// %, and anything it does not recognise are click-only. Adding a detector can
+// only ever turn an auto-apply into a card, never the reverse.
 function isHighRiskPayload(payload) {
+  if (legacyHighRiskScan(payload)) return true;
+  try {
+    const targets = Array.isArray(payload.targets) ? payload.targets
+      : (typeof payload.targets === 'string' ? JSON.parse(payload.targets) : payload.targets);
+    return describeRisk(targets).risk !== 'low';
+  } catch (_) {
+    return true; // unparseable → card
+  }
+}
+
+function legacyHighRiskScan(payload) {
   try {
     const targets = Array.isArray(payload.targets) ? payload.targets
       : (typeof payload.targets === 'string' ? JSON.parse(payload.targets) : payload.targets);
