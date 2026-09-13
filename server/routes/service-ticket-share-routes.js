@@ -64,6 +64,7 @@ const { resolveEntityLabels } = require('../services/entity-labels');
 const svc = require('../services/service-tickets');
 const access = require('../services/service-ticket-access');
 const workOrder = require('../services/service-ticket-workorder');
+const ticketNotify = require('../services/service-ticket-notify');
 
 const router = express.Router();
 
@@ -770,6 +771,17 @@ router.patch('/service-ticket-share/:token',
           detail: { from: ticket.status, to: nextStatus },
         });
       }
+      // Mark work complete: the crew is telling the office the job is done, so
+      // the office hears it (the job's PM, the ticket's creator, the link's
+      // sender). Not awaited — the crew's save never waits on an email.
+      if (changed.indexOf('status') >= 0 && nextStatus === 'work_complete') {
+        ticketNotify.notifyAwaitingApproval(pool, {
+          ticket: rows[0],
+          actor: { kind: 'share', shareId: share.id, label: label },
+          reason: 'marked_complete',
+          sharedBy: share.created_by,
+        });
+      }
       const other = changed.filter(function (c) { return c !== 'status'; });
       if (other.length) {
         await logEvent(ticket, other.indexOf('note') >= 0 ? 'note_added' : 'field_changed', {
@@ -1010,6 +1022,14 @@ router.post('/service-ticket-share/:token/subtasks/:taskId/done',
       if (!result.ok) return res.status(result.status).json({ error: result.error });
       pool.query('UPDATE service_ticket_shares SET last_used_at = NOW() WHERE id = $1', [share.id])
         .catch(function () {});
+      if (result.movedTo === 'work_complete') {
+        ticketNotify.notifyAwaitingApproval(pool, {
+          ticket: req.ticket,
+          actor: crewActor(share),
+          reason: 'all_subtasks_done',
+          sharedBy: share.created_by,
+        });
+      }
       res.json({ ok: true, done: result.task.status === 'done', ticket_status: result.ticketStatus });
     } catch (e) {
       console.error('[service-ticket-share] subtask done failed', e);

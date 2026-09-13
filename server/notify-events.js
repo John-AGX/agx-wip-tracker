@@ -20,6 +20,7 @@ const NOTIFY_EVENTS = [
   { key: 'event_reminder',      label: 'Calendar reminders',     desc: 'Reminders before your calendar events start.',                              channels: { email: true, push: true } },
   { key: 'reminder',            label: 'Personal reminders',     desc: 'Your own "remind me" reminders when they come due.',                        channels: { email: true, push: true } },
   { key: 'schedule_assignment', label: 'Schedule assignments',   desc: 'When someone adds you to a production day on the Schedule page.',           channels: { email: true, push: false } },
+  { key: 'ticket_approval',     label: 'Work orders to approve', desc: 'When a service ticket you can approve — on a job you run, or one you raised — reaches Work complete, or the crew finishes it through a link you sent.', channels: { email: true, push: true } },
   { key: 'job_assignment',      label: 'Job assignments',        desc: 'When you’re assigned (or reassigned) as the PM on a job.',             channels: { email: true, push: false } },
   { key: 'password_reset',      label: 'Password resets',        desc: 'When an admin resets your password. Recommended to leave on.',              channels: { email: true, push: false } }
 ];

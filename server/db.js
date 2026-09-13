@@ -4561,6 +4561,11 @@ async function initSchema() {
     -- other key on the way in and again on the way out to a share link. NULL =
     -- no list, and the crew link shows no Materials card at all.
     ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS materials JSONB;
+    -- When the approvers were last told this ticket is Awaiting approval.
+    -- services/service-ticket-notify.js claims the send on it atomically, so an
+    -- undo-and-redo of the last subtask, or two requests racing to the same
+    -- arrival, announce it once rather than once per click.
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS approval_notified_at TIMESTAMPTZ;
 
     -- Share links for a service ticket. Same bearer-token shape as
     -- report_shares — token HASHED at rest, absolute expiry, soft revoke —

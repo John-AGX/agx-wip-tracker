@@ -934,3 +934,63 @@ describe('mutants: the assignee', () => {
     expect((await createTicket(mut, WIDE, { title: 'ghost', job_id: 'j1', assignee_user_id: 9999 })).statusCode).toBe(400);
   });
 });
+
+describe('the office doors announce an arrival at Awaiting approval', () => {
+  // The notice itself is pinned in service-ticket-notify.test.js. What is
+  // pinned HERE is that the office doors call it — on work_complete and on
+  // nothing else — with the ticket and the person who made the move.
+  const notify = require('../server/services/service-ticket-notify');
+  let calls;
+  let real;
+  beforeEach(() => {
+    calls = [];
+    real = notify.notifyAwaitingApproval;
+    notify.notifyAwaitingApproval = async (db, opts) => { calls.push(opts); return { sent: 0 }; };
+  });
+  afterEach(() => { notify.notifyAwaitingApproval = real; });
+
+  test('POST /:id/status: in_progress is silent, work_complete announces it once', async () => {
+    const step = (status) => drive(ticketRouter, 'post', '/:id/status', { as: WIDE, params: { id: 'st_j2' }, body: { status } });
+    expect((await step('in_progress')).statusCode).toBe(200);
+    expect(calls).toHaveLength(0);
+    expect((await step('work_complete')).statusCode).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect([calls[0].ticket.id, calls[0].reason, calls[0].actor.userId]).toEqual(['st_j2', 'office_moved', 10]);
+  });
+
+  test('the last subtask done announces it; a subtask that leaves work outstanding does not', async () => {
+    eng.db.exec(`
+      UPDATE service_tickets SET status = 'in_progress' WHERE id = 'st_j1';
+      UPDATE tasks SET status = 'open' WHERE id = 'k_org';
+      INSERT INTO tasks (id, organization_id, title, status, scope, service_ticket_id, entity_type, entity_id, created_at) VALUES
+        ('k_two', 1, 'Bldg 2', 'open', 'org', 'st_j1', 'job', 'j1', '2026-09-02 08:00:04');
+      INSERT INTO attachments (id, entity_type, entity_id, filename, mime_type, tags, organization_id, position) VALUES
+        ('ph1', 'task', 'k_org', 'a.jpg', 'image/jpeg', '["completion"]', 1, 0),
+        ('ph2', 'task', 'k_two', 'b.jpg', 'image/jpeg', '["completion"]', 1, 0);
+    `);
+    const done = (taskId) => drive(ticketRouter, 'post', '/:id/subtasks/:taskId/done',
+      { as: WIDE, params: { id: 'st_j1', taskId }, body: { done: true } });
+    expect((await done('k_org')).statusCode).toBe(200);
+    expect(calls).toHaveLength(0);
+    const last = await done('k_two');
+    expect([last.statusCode, last.body.ticket_status]).toEqual([200, 'work_complete']);
+    expect(calls).toHaveLength(1);
+    expect([calls[0].ticket.id, calls[0].reason]).toEqual(['st_j1', 'all_subtasks_done']);
+  });
+});
+
+describe('the office sending a ticket back clears the approval notice window', () => {
+  test('Work complete -> In progress clears approval_notified_at, so the next arrival is announced', async () => {
+    eng.db.exec("UPDATE service_tickets SET status = 'work_complete', approval_notified_at = datetime('now') WHERE id = 'st_j2'");
+    const r = await drive(ticketRouter, 'post', '/:id/status', { as: WIDE, params: { id: 'st_j2' }, body: { status: 'in_progress' } });
+    expect(r.statusCode).toBe(200);
+    expect([row('st_j2').status, row('st_j2').approval_notified_at]).toEqual(['in_progress', null]);
+  });
+
+  test('moving on to Approved keeps it — approval is not a send-back', async () => {
+    eng.db.exec("UPDATE service_tickets SET status = 'work_complete', approval_notified_at = datetime('now') WHERE id = 'st_j2'");
+    const r = await drive(ticketRouter, 'post', '/:id/status', { as: WIDE, params: { id: 'st_j2' }, body: { status: 'approved' } });
+    expect(r.statusCode).toBe(200);
+    expect(row('st_j2').approval_notified_at).not.toBeNull();
+  });
+});

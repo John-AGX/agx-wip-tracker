@@ -133,6 +133,12 @@ jest.mock('../server/services/entity-labels', () => ({
   resolveEntityLabels: async () => new Map([['job:j1', 'RV2006 Waterside 1']]),
 }));
 jest.mock('../server/storage', () => ({ storage: { put: async (k) => 'https://cdn/' + k } }));
+// The approval notice is pinned in service-ticket-notify.test.js; here only
+// WHETHER the crew doors call it is under test.
+global.__notifyCalls = [];
+jest.mock('../server/services/service-ticket-notify', () => ({
+  notifyAwaitingApproval: async (db, opts) => { global.__notifyCalls.push(opts); return { sent: 0 }; },
+}));
 
 const router = require('../server/routes/service-ticket-share-routes');
 
@@ -241,6 +247,17 @@ describe('S5 — the guest write door refuses everything it should', () => {
     expect(db.updateSql).toMatch(/status = \$/);
     // completed_at is stamped, and COALESCEd so a second report cannot move it.
     expect(db.updateSql).toMatch(/completed_at = COALESCE\(completed_at, NOW\(\)\)/);
+  });
+
+  test('Mark work complete tells the office; a note alone does not', async () => {
+    global.__notifyCalls = [];
+    await patch({ ticket: { status: 'in_progress' } }, { note: 'Gate latches now' });
+    expect(global.__notifyCalls).toHaveLength(0);
+    const res = await patch({ ticket: { status: 'in_progress' }, share: { created_by: 14, recipient_name: 'Marco' } }, { status: 'work_complete' });
+    expect(res.statusCode).toBe(200);
+    expect(global.__notifyCalls).toHaveLength(1);
+    const c = global.__notifyCalls[0];
+    expect([c.ticket.id, c.reason, c.sharedBy, c.actor.label]).toEqual(['st_1', 'marked_complete', 14, 'Marco']);
   });
 });
 
@@ -787,6 +804,25 @@ describe('T5 — subtask doors on the crew link', () => {
     const res = await done({ subtask: { status: 'done' }, ticket: { status: 'work_complete' }, counts: { total: 2, done: 1 } }, { done: false });
     expect(res.statusCode).toBe(200);
     expect(db.taskUpdate[0]).toBe('open');
+  });
+
+  test('the LAST subtask done announces Awaiting approval, naming the link’s sender', async () => {
+    global.__notifyCalls = [];
+    const res = await done({
+      subtask: {}, photos: [{ tags: ['completion'] }], counts: { total: 2, done: 2 },
+      ticket: { status: 'in_progress' }, share: { recipient_name: 'Marco', created_by: 14 },
+    }, { done: true });
+    expect(res.statusCode).toBe(200);
+    expect(global.__notifyCalls).toHaveLength(1);
+    const c = global.__notifyCalls[0];
+    expect([c.ticket.id, c.reason, c.sharedBy, c.actor.kind, c.actor.label]).toEqual(['st_1', 'all_subtasks_done', 14, 'share', 'Marco']);
+  });
+
+  test('a subtask that leaves work outstanding, and an undo, announce nothing', async () => {
+    global.__notifyCalls = [];
+    await done({ subtask: {}, photos: [{ tags: ['completion'] }], counts: { total: 2, done: 1 }, ticket: { status: 'in_progress' } }, { done: true });
+    await done({ subtask: { status: 'done' }, ticket: { status: 'work_complete' }, counts: { total: 2, done: 1 } }, { done: false });
+    expect(global.__notifyCalls).toHaveLength(0);
   });
 
   test('a note is an attributed event on that subtask', async () => {

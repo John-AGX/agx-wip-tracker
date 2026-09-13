@@ -286,6 +286,9 @@ async function setSubtaskDone(db, opts) {
 
   // Does the ticket move? Counted over the same live org subtasks the crew sees.
   let ticketStatus = ticket.status;
+  // Set only when THIS call's guarded UPDATE moved the ticket — the signal the
+  // routes use to announce an arrival at work_complete exactly once.
+  let movedTo = null;
   const counts = await db.query(
     `SELECT COUNT(*)::int AS total,
             COUNT(*) FILTER (WHERE status = 'done')::int AS done
@@ -308,12 +311,27 @@ async function setSubtaskDone(db, opts) {
     );
     if (r.rows[0]) {
       ticketStatus = r.rows[0].status;
+      movedTo = next;
       await insertEvent(db, ticket, 'status_changed', opts.actor,
         { from: ticket.status, to: next, reason: allDone ? 'all_subtasks_done' : 'subtask_reopened' });
     }
   }
 
-  return { ok: true, task: updated, ticketStatus: ticketStatus };
+  // The OFFICE unticking a building is a send-back for rework, so the next
+  // arrival at Work complete is news even inside the approval notice's
+  // 15-minute window (services/service-ticket-notify.js) — whether or not this
+  // untick moved the ticket (it may already be In progress from a crew undo).
+  // The crew undoing its own tick keeps the window: that undo-and-redo is what
+  // the window is for.
+  if (!done && wasDone && opts.actor && opts.actor.kind === 'user') {
+    await db.query(
+      `UPDATE service_tickets SET approval_notified_at = NULL
+        WHERE id = $1 AND organization_id = $2 AND approval_notified_at IS NOT NULL`,
+      [ticket.id, ticket.organization_id]
+    );
+  }
+
+  return { ok: true, task: updated, ticketStatus: ticketStatus, movedTo: movedTo };
 }
 
 /**

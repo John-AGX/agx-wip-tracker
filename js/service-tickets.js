@@ -29,6 +29,10 @@
   // arrives while a ticket is expanded can restore it.
   // `stale` is the deferred-refresh latch; see refresh() at the bottom.
   var _state = { jobId: null, filter: 'all', openId: null, tickets: [], busy: false, stale: false, openSubs: {}, taskTitles: {} };
+  // Read at load, before the router rewrites the URL without its query.
+  var _deepTicket = (function () {
+    try { return new URLSearchParams(location.search).get('ticket') || null; } catch (_) { return null; }
+  })();
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -737,7 +741,7 @@
     // presenting the name the way an authenticated actor's is presented.
     var who = e.actor_kind === 'share'
       ? (e.actor_label ? esc(e.actor_label) + ' · via shared link' : 'via shared link')
-      : (e.actor_kind === 'agent' ? '86' : 'Office');
+      : (e.actor_kind === 'agent' ? '86' : (e.actor_kind === 'system' ? 'Project 86' : 'Office'));
     var VERB = {
       created: 'raised the ticket',
       note_added: 'added a field note',
@@ -766,6 +770,8 @@
     var what = e.kind === 'status_changed' && e.detail
       ? 'moved it to ' + esc(STATUS_LABEL[e.detail.to] || e.detail.to) +
         (e.detail.reason === 'all_subtasks_done' ? ' — every subtask done' : '')
+      : e.kind === 'approval_notified' && e.detail && Array.isArray(e.detail.names) && e.detail.names.length
+        ? 'told ' + esc(e.detail.names.join(', ')) + ' it is ready for approval'
       : e.kind === 'photo_added' && e.detail && e.detail.task_id != null
         ? 'added a ' + (e.detail.kind === 'before' ? 'before' : 'completion') + ' photo' + (head ? ' on ' + head : '')
       : (head && ON_TASK[e.kind])
@@ -1447,6 +1453,14 @@
     _state.stale = false;
     return api().list({ job_id: _state.jobId }).then(function (r) {
       _state.tickets = (r && r.tickets) || [];
+      // The approval email and push link here as ?ticket=<id>: open that ticket
+      // once — and only if it IS one of this job's tickets, so a value from the
+      // URL never reaches a selector. Consumed either way.
+      if (_deepTicket) {
+        var want = _deepTicket;
+        _deepTicket = null;
+        if (_state.tickets.some(function (t) { return String(t.id) === want; })) _state.openId = want;
+      }
       paint();
     }).catch(function (e) {
       var host = pane();

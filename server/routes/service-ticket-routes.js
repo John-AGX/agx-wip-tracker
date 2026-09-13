@@ -32,6 +32,7 @@ const { assertEntityInOrg, callerOrgId } = require('../org-access');
 const svc = require('../services/service-tickets');
 const access = require('../services/service-ticket-access');
 const workOrder = require('../services/service-ticket-workorder');
+const ticketNotify = require('../services/service-ticket-notify');
 
 const router = express.Router();
 
@@ -597,6 +598,15 @@ router.post('/:id/subtasks/:taskId/done', requireAuth, requireOrgId, async (req,
       actor: { kind: 'user', userId: (req.user && req.user.id) || null, label: (req.user && req.user.name) || null },
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error });
+    // The last subtask just moved the ticket to Awaiting approval: tell the
+    // approvers. Not awaited — the notice never holds up the answer.
+    if (result.movedTo === 'work_complete') {
+      ticketNotify.notifyAwaitingApproval(pool, {
+        ticket,
+        actor: { kind: 'user', userId: (req.user && req.user.id) || null, label: (req.user && req.user.name) || null },
+        reason: 'all_subtasks_done',
+      });
+    }
     res.json({ ok: true, task: result.task, ticket_status: result.ticketStatus });
   } catch (e) {
     console.error('[service-tickets] subtask done failed', e);
@@ -644,7 +654,13 @@ router.post('/:id/status', requireAuth, requireOrgId, async (req, res) => {
     // equivalent, which leaves a reopened item claiming a completion date.
     const stamps = [];
     if (next === 'work_complete') stamps.push('completed_at = COALESCE(completed_at, NOW())');
-    if (next === 'in_progress' || next === 'scheduled' || next === 'open') stamps.push('completed_at = NULL');
+    if (next === 'in_progress' || next === 'scheduled' || next === 'open') {
+      stamps.push('completed_at = NULL');
+      // The office sent it back for more work: the next arrival at Work
+      // complete is news, even inside the notice's 15-minute window — that
+      // window is for the crew's own undo-and-redo, not for rework.
+      stamps.push('approval_notified_at = NULL');
+    }
     if (next === 'closed') stamps.push('closed_at = NOW()');
     if (next === 'open') stamps.push('closed_at = NULL');
 
@@ -661,6 +677,13 @@ router.post('/:id/status', requireAuth, requireOrgId, async (req, res) => {
       actorUserId: (req.user && req.user.id) || null,
       detail: { from: ticket.status, to: next },
     });
+    if (next === 'work_complete') {
+      ticketNotify.notifyAwaitingApproval(pool, {
+        ticket: rows[0],
+        actor: { kind: 'user', userId: (req.user && req.user.id) || null, label: (req.user && req.user.name) || null },
+        reason: 'office_moved',
+      });
+    }
     res.json({ ok: true, ticket: rows[0] });
   } catch (e) {
     console.error('[service-tickets] status failed', e);

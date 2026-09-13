@@ -171,9 +171,14 @@ describe('marking a subtask complete', () => {
     const W = load();
     photo('c1', 't782', []);
     photo('c2', 't784', ['completion']);
-    await W.setSubtaskDone(eng.pool, { ticket: ticket('st1'), taskId: 't782', done: true, actor: ACTOR });
+    const first = await W.setSubtaskDone(eng.pool, { ticket: ticket('st1'), taskId: 't782', done: true, actor: ACTOR });
+    expect(first.movedTo).toBeNull();                 // work still outstanding — nothing to announce
     const last = await W.setSubtaskDone(eng.pool, { ticket: ticket('st1'), taskId: 't784', done: true, actor: ACTOR });
-    expect(last.ticketStatus).toBe('work_complete');
+    expect([last.ticketStatus, last.movedTo]).toEqual(['work_complete', 'work_complete']);
+    // Done again on a ticket already awaiting approval: it did not move, so the
+    // routes have no arrival to announce.
+    const repeat = await W.setSubtaskDone(eng.pool, { ticket: ticket('st1'), taskId: 't784', done: true, actor: ACTOR });
+    expect([repeat.ticketStatus, repeat.movedTo]).toEqual(['work_complete', null]);
     expect(ticket('st1').status).toBe('work_complete');
     expect(events().slice(-1)[0].kind).toBe('status_changed');
 
@@ -181,6 +186,39 @@ describe('marking a subtask complete', () => {
     expect([undo.ok, task('t784').status, task('t784').completed_at, ticket('st1').status]).toEqual([true, 'open', null, 'in_progress']);
     const act = await W.subtaskActivity(eng.pool, 1, 'st1');
     expect(act.get('t784').completed_by).toBeNull();
+  });
+
+  test('the OFFICE unticking a building clears the approval-notice stamp; the crew undoing its own tick keeps it', async () => {
+    const W = load();
+    photo('c1', 't782', ['completion']);
+    photo('c2', 't784', ['completion']);
+    await W.setSubtaskDone(eng.pool, { ticket: ticket('st1'), taskId: 't782', done: true, actor: ACTOR });
+    await W.setSubtaskDone(eng.pool, { ticket: ticket('st1'), taskId: 't784', done: true, actor: ACTOR });
+    const stamp = () => ticket('st1').approval_notified_at;
+
+    eng.db.exec("UPDATE service_tickets SET approval_notified_at = datetime('now') WHERE id = 'st1'");
+    await W.setSubtaskDone(eng.pool, { ticket: ticket('st1'), taskId: 't784', done: false, actor: ACTOR });
+    expect([ticket('st1').status, stamp()]).toEqual(['in_progress', expect.any(String)]);
+
+    await W.setSubtaskDone(eng.pool, { ticket: ticket('st1'), taskId: 't784', done: true, actor: ACTOR });
+    eng.db.exec("UPDATE service_tickets SET approval_notified_at = datetime('now') WHERE id = 'st1'");
+    const office = { kind: 'user', userId: 10, label: 'Jason Salinas' };
+    await W.setSubtaskDone(eng.pool, { ticket: ticket('st1'), taskId: 't784', done: false, actor: office });
+    expect([ticket('st1').status, stamp()]).toEqual(['in_progress', null]);
+  });
+
+  test('an office untick clears the stamp even when the ticket is already In progress from a crew undo', async () => {
+    const W = load();
+    photo('c1', 't782', ['completion']);
+    photo('c2', 't784', ['completion']);
+    await W.setSubtaskDone(eng.pool, { ticket: ticket('st1'), taskId: 't782', done: true, actor: ACTOR });
+    await W.setSubtaskDone(eng.pool, { ticket: ticket('st1'), taskId: 't784', done: true, actor: ACTOR });
+    eng.db.exec("UPDATE service_tickets SET approval_notified_at = datetime('now') WHERE id = 'st1'");
+    await W.setSubtaskDone(eng.pool, { ticket: ticket('st1'), taskId: 't782', done: false, actor: ACTOR });  // crew undo
+    expect(ticket('st1').approval_notified_at).not.toBeNull();
+    const office = { kind: 'user', userId: 10, label: 'Jason Salinas' };
+    const r = await W.setSubtaskDone(eng.pool, { ticket: ticket('st1'), taskId: 't784', done: false, actor: office });
+    expect([r.movedTo, ticket('st1').status, ticket('st1').approval_notified_at]).toEqual([null, 'in_progress', null]);
   });
 
   test('the private to-do is not a subtask, so it does not hold the ticket open', async () => {
