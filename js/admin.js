@@ -5304,7 +5304,7 @@ function p86Ask(message, opts) {
     // Read-only Buildertrend -> P86 match preview (js/bt-sync-preview.js).
     // Served only to the organisation the server's Clickr key belongs to; any
     // other org's admin gets a sentence saying so, from the server.
-    { key: 'btpreview', label: '\u{1F50E} Buildertrend preview', desc: 'Read-only. Buildertrend is the source of truth: previews the corrections a sync would make to Project 86 jobs and leads (via Clickr), what it would create, and what P86 has that Buildertrend does not. Blanks never overwrite, money and job numbers are never auto-corrected. Nothing is written.' }
+    { key: 'btpreview', label: '\u{1F50E} Buildertrend preview', desc: 'Buildertrend is the source of truth: shows the corrections Project 86 jobs and leads would receive (via Clickr), what it would create, and what P86 has that Buildertrend does not. Nothing changes until you press Apply, which links the record by Buildertrend id and applies its non-money corrections. Blanks never overwrite; money and job numbers are never applied; nothing is created or deleted; nothing is written to Buildertrend.' }
     // Assembly Codes moved to the top-level Assembly Studio → Codes
     // (js/assembly-studio.js). renderOrgAssemblyTaxonomy is exposed on
     // window and mounts into the Studio's #admin-org-asmcodes-host.
