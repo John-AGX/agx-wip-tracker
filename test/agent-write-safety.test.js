@@ -112,6 +112,7 @@ function absolutizeRequires(src) {
   return src.replace(/require\((['"])([^'"]+)\1\)/g, (m, q, spec) => {
     if (spec.startsWith('.')) return `require(${q}${abs(path.resolve(REAL_DIR, spec))}${q})`;
     if (BUILTINS.has(spec) || spec.startsWith('node:')) return m;
+    if (path.isAbsolute(spec)) return m;   // a mutant module handed in by absolute path
     return `require(${q}${abs(path.join(REPO, 'node_modules', spec))}${q})`;
   });
 }
@@ -227,44 +228,58 @@ describe('the duplicate-emit guard', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-const scribeTurns = (targets) => [
-  [{ type: 'agent.custom_tool_use', id: 'tu_s1', tool_name: 'emit_payload_file',
-    input: { title: 'Add a to-do', summary: 'One to-do', targets } },
+// 2. NO YES BEFORE THE LINE, AND NO YES FROM A BACKGROUND RUN.
+//    scribe_write's model-set approved:true applied a draft the moment its dry
+//    run came back clean — a yes to words nobody had seen, and from a
+//    background task, a yes from nobody at all. The flag is gone: every call
+//    drafts. The yes that applies is approve_pending_write (section 4), which
+//    a background run is refused outright.
+const SOLD = [{ entity_type: 'estimate', entity_id: 'e1', ops: { field_updates: { status: 'sold' } } }];
+const scribeTurnsTitled = (targets, title) => [
+  [{ type: 'agent.custom_tool_use', id: 'tu_t1', tool_name: 'emit_payload_file',
+    input: { title, summary: 'One change', targets } },
    { type: 'session.status_idle', stop_reason: { type: 'requires_action' } }],
   [{ type: 'agent.message', content: [{ type: 'text', text: 'Done.' }] },
    { type: 'session.status_idle', stop_reason: { type: 'end_turn' } }],
 ];
-
-async function driveBackground(mod) {
-  scribeTurns(TODO).forEach((t) => sdk.turns.push(t));
-  const cb = mod.makeBackgroundJobCallback(USER, { question: null }, ORG);
-  const handoff = await cb({ name: 'scribe_write', input: { instruction: 'add a to-do to call the stucco supplier', approved: true } });
-  expect(handoff && handoff.error).toBeFalsy();
+async function waitForNotice() {
   for (let i = 0; i < 6000; i++) {
-    if (pushes.length) {
-      return { handoff, chat: engine.all('SELECT content FROM ai_messages ORDER BY rowid').map((m) => m.content) };
-    }
+    if (pushes.length) return engine.all('SELECT content FROM ai_messages ORDER BY rowid').map((m) => m.content).join('\n');
     await new Promise((r) => setTimeout(r, 5));
   }
   throw new Error('the detached Scribe chain never notified');
 }
+async function driveForeground(mod, targets, title, input) {
+  scribeTurnsTitled(targets, title || 'Model title').forEach((t) => sdk.turns.push(t));
+  const handoff = await mod.execScribeWrite({ input: Object.assign({ instruction: 'do it' }, input || {}) },
+    { userId: USER, organizationId: ORG, parentSession: { id: SESSION, organization_id: ORG } });
+  return { handoff, chat: await waitForNotice() };
+}
+const draftRow = () => engine.all('SELECT id, draft_summary, draft_risk, status FROM payloads')[0];
 
-describe('a background run cannot approve its own write', () => {
-  test('THE FINDING: approved:true from a background run leaves the draft for a person — nothing applies', async () => {
-    const { handoff, chat } = await driveBackground(shipped);
-    expect(handoff.summary).not.toMatch(/APPROVED/);
+describe('a yes before the draft exists approves nothing', () => {
+  test('THE FINDING: scribe_write with approved:true only DRAFTS — nothing applies', async () => {
+    const { handoff, chat } = await driveForeground(shipped, TODO, null, { approved: true });
     expect(applies).toHaveLength(0);
-    expect(rows()).toEqual([expect.objectContaining({ status: 'ready' })]);
-    expect(chat.join('\n')).toMatch(/Pending approvals/);
+    expect(draftRow().status).toBe('ready');
+    expect(handoff.summary).toMatch(/approve_pending_write/);
+    expect(handoff.summary).not.toMatch(/APPROVED/);
+    expect(chat).toMatch(/Ready to approve/);
   });
 
-  test('MUTANT: without the strip, the model\'s own flag applies the draft with nobody there', async () => {
-    const mutant = load([[
-      "    if (tu && tu.name === 'scribe_write' && tu.input && tu.input.approved) {\n",
-      "    if (false) {\n",
-    ]]);
-    await driveBackground(mutant);
-    expect(applies).toHaveLength(1);
+  test('a background run is refused approve_pending_write', async () => {
+    const cb = shipped.makeBackgroundJobCallback(USER, { question: null }, ORG);
+    const r = await cb({ name: 'approve_pending_write', input: {} });
+    expect(r.error).toMatch(/Background tasks cannot approve/);
+    expect(applies).toHaveLength(0);
+  });
+
+  test('MUTANT: without the background refusal, a background run reaches the approval lookup', async () => {
+    const mutant = load([["    if (tu && tu.name === 'approve_pending_write') {\n      return { tier: 'auto', error: 'Background tasks cannot approve",
+      "    if (false) {\n      return { tier: 'auto', error: 'Background tasks cannot approve"]]);
+    const cb = mutant.makeBackgroundJobCallback(USER, { question: null }, ORG);
+    const r = await cb({ name: 'approve_pending_write', input: {} });
+    expect(String(r.error || '')).not.toMatch(/Background tasks cannot approve/);
   });
 });
 
@@ -272,59 +287,179 @@ describe('a background run cannot approve its own write', () => {
 // 3. THE LINE A PERSON APPROVES IS BUILT FROM THE OPS, AND STORED.
 //    The Scribe's notice used to headline the MODEL's title. 2026-08-09: a
 //    payload titled "Convert estimate to job" carried only status:'sold'.
-//    persistDraftLine now stores draft_summary (from the ops, names from the
-//    DB) and draft_risk (the same gate approve-in-chat uses), and the notice
-//    and receipt print that line.
-const SOLD = [{ entity_type: 'estimate', entity_id: 'e1', ops: { field_updates: { status: 'sold' } } }];
-const scribeTurnsTitled = (targets, title) => [
-  [{ type: 'agent.custom_tool_use', id: 'tu_t1', tool_name: 'emit_payload_file',
-    input: { title, summary: 'Convert it', targets } },
-   { type: 'session.status_idle', stop_reason: { type: 'requires_action' } }],
-  [{ type: 'agent.message', content: [{ type: 'text', text: 'Done.' }] },
-   { type: 'session.status_idle', stop_reason: { type: 'end_turn' } }],
-];
-async function driveForeground(mod, targets, title, approved) {
-  scribeTurnsTitled(targets, title).forEach((t) => sdk.turns.push(t));
-  await mod.execScribeWrite({ input: { instruction: 'do it', approved: !!approved } },
-    { userId: USER, organizationId: ORG, parentSession: { id: SESSION, organization_id: ORG } });
-  for (let i = 0; i < 6000; i++) {
-    if (pushes.length) return engine.all('SELECT content FROM ai_messages ORDER BY rowid').map((m) => m.content).join('\n');
-    await new Promise((r) => setTimeout(r, 5));
-  }
-  throw new Error('the detached Scribe chain never notified');
-}
-const draftRow = () => engine.all('SELECT draft_summary, draft_risk, status FROM payloads')[0];
-
 describe('the draft line', () => {
-  test('a low-risk draft stores its ops line and risk, and the notice headlines that line — not the title', async () => {
-    const chat = await driveForeground(shipped, TODO, 'Something the model wrote');
+  test('a low-risk draft stores its ops line and risk; the notice headlines that line and offers a spoken yes', async () => {
+    const { chat } = await driveForeground(shipped, TODO, 'Something the model wrote');
     const row = draftRow();
-    expect(row).toEqual({ draft_summary: 'New to-do — title Call the stucco supplier, due date 2026-09-14', draft_risk: 'low', status: 'ready' });
+    expect([row.draft_summary, row.draft_risk]).toEqual(['New to-do — title Call the stucco supplier, due date 2026-09-14', 'low']);
     expect(chat).toContain(row.draft_summary);
+    expect(chat).toMatch(/Say yes, or tap \*\*Approve\*\*/);
     expect(chat).not.toContain('Something the model wrote');
   });
 
-  test('THE INCIDENT: titled "Convert estimate to job", the line says status → sold, and it is high risk', async () => {
-    const chat = await driveForeground(shipped, SOLD, 'Convert estimate to job');
+  test('THE INCIDENT: titled "Convert estimate to job", the line says status → sold, high risk, and the notice says it needs a tap', async () => {
+    const { chat } = await driveForeground(shipped, SOLD, 'Convert estimate to job');
     const row = draftRow();
     expect(row.draft_summary).toMatch(/status → sold/);
     expect(row.draft_risk).toBe('high');
     expect(chat).toMatch(/status → sold/);
+    expect(chat).not.toMatch(/Say yes/);
     expect(chat).not.toContain('Convert estimate to job');
-  });
-
-  test('approved in chat and low risk: the receipt is the one line', async () => {
-    const chat = await driveForeground(shipped, TODO, 'Model title', true);
-    expect(applies).toHaveLength(1);
-    expect(chat).toContain('✅ **Applied — New to-do — title Call the stucco supplier, due date 2026-09-14**');
   });
 
   test('MUTANT: the line never persisted — the notice falls back to the model\'s title', async () => {
     const mutant = load([[
-      '        draftLine = await persistDraftLine(result.payloadId, result.changeset, scribeCtx.orgId);\n', '',
+      '        draftLine = await persistDraftLine(result.payloadId, result.changeset, scribeCtx.orgId, !!result.afterRefusal);\n', '',
     ]]);
-    const chat = await driveForeground(mutant, SOLD, 'Convert estimate to job');
+    const { chat } = await driveForeground(mutant, SOLD, 'Convert estimate to job');
     expect(draftRow().draft_summary).toBeNull();
     expect(chat).toContain('Convert estimate to job');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// 4. approve_pending_write — THE YES IS BOUND BY THE SERVER.
+//    services/pending-write-approval.js: exactly one ready draft in THIS chat,
+//    for THIS user, whose line was on screen (draft_shown_at) BEFORE the yes
+//    (the latest user message), low risk by its stored line AND the live gate.
+const APPROVER = { id: USER, organization_id: ORG, role: 'admin' };
+const YES_CTX = { userId: USER, orgId: ORG, parentSession: { id: SESSION, organization_id: ORG }, gateUser: APPROVER };
+let seq = 0;
+function seedDraft(opts) {
+  const o = Object.assign({ targets: TODO, risk: 'low', line: 'New to-do — title Call the stucco supplier',
+    shownSecondsAgo: 30, session: SESSION }, opts || {});
+  const id = 'pl_yes_' + (++seq);
+  const shownSql = o.shownSecondsAgo == null ? 'NULL' : "datetime('now', ?)";
+  const params = [id, ORG, USER, o.session, JSON.stringify(o.targets), o.line, o.risk];
+  if (o.shownSecondsAgo != null) params.push('-' + o.shownSecondsAgo + ' seconds');
+  engine.db.prepare(
+    'INSERT INTO payloads (id, organization_id, user_id, session_id, status, targets, draft_summary, draft_risk, draft_shown_at, created_at) ' +
+    "VALUES (?, ?, ?, ?, 'ready', ?, ?, ?, " + shownSql + ", datetime('now', '-60 seconds'))"
+  ).run(...params);
+  return id;
+}
+function sayYes(secondsAgo) {
+  engine.db.prepare("INSERT INTO ai_messages (id, user_id, role, content, session_id, organization_id, created_at) VALUES (?, ?, 'user', 'yes', ?, ?, datetime('now', ?))")
+    .run('aim_yes_' + (++seq), USER, SESSION, ORG, '-' + (secondsAgo || 0) + ' seconds');
+}
+const approve = (mod) => (mod || shipped).execApprovePendingWrite({ name: 'approve_pending_write', input: {} }, YES_CTX);
+
+describe('approve_pending_write', () => {
+  test('THE FEATURE: a yes after the line was on screen applies it, and the reply is the one-line receipt', async () => {
+    const id = seedDraft();
+    sayYes();
+    const r = await approve();
+    expect(applies).toEqual([id]);
+    expect(r.summary).toContain('✅ Applied — New to-do — title Call the stucco supplier');
+  });
+
+  test('a yes BEFORE the card was on screen applies nothing', async () => {
+    seedDraft({ shownSecondsAgo: 5 });
+    sayYes(20);
+    const r = await approve();
+    expect(applies).toHaveLength(0);
+    expect(r.summary).toMatch(/not on the user's screen yet/);
+  });
+
+  test('a draft never shown applies nothing', async () => {
+    seedDraft({ shownSecondsAgo: null });
+    sayYes();
+    expect((await approve()).summary).toMatch(/not on the user's screen yet/);
+    expect(applies).toHaveLength(0);
+  });
+
+  test('two drafts on screen: a bare yes is ambiguous — nothing applies', async () => {
+    seedDraft();
+    seedDraft({ line: 'New to-do — title Order soffit vents', targets: TODO_2 });
+    sayYes();
+    expect((await approve()).summary).toMatch(/Several drafts/);
+    expect(applies).toHaveLength(0);
+  });
+
+  test('a high-risk draft needs a tap, even after a yes', async () => {
+    seedDraft({ targets: SOLD, risk: 'high', line: 'Estimate — status → sold' });
+    sayYes();
+    expect((await approve()).summary).toMatch(/needs a tap/);
+    expect(applies).toHaveLength(0);
+  });
+
+  test('a row marked low under an older, looser gate is re-checked: the live gate still refuses status → sold', async () => {
+    seedDraft({ targets: SOLD, risk: 'low', line: 'Estimate — status → sold' });
+    sayYes();
+    expect((await approve()).summary).toMatch(/needs a tap/);
+    expect(applies).toHaveLength(0);
+  });
+
+  test('another conversation\'s draft is not this yes\'s to approve', async () => {
+    seedDraft({ session: 999 });
+    sayYes();
+    expect((await approve()).summary).toMatch(/Nothing in this conversation/);
+    expect(applies).toHaveLength(0);
+  });
+
+  test('a part-refused draft (stored high by persistDraftLine) cannot be applied by a yes', async () => {
+    const id = seedDraft();
+    engine.db.prepare("UPDATE payloads SET draft_risk = 'high' WHERE id = ?").run(id);
+    sayYes();
+    expect((await approve()).summary).toMatch(/needs a tap/);
+    expect(applies).toHaveLength(0);
+  });
+
+  // ── mutants of the binding rule (services/pending-write-approval.js) ────
+  const SERVICE = path.join(REPO, 'server', 'services', 'pending-write-approval.js');
+  function withServiceMutant(find, replace) {
+    const src = fs.readFileSync(SERVICE, 'utf8');
+    const eol = src.includes('\r\n') ? '\r\n' : '\n';
+    const f = find.split('\n').join(eol);
+    if (src.split(f).length !== 2) throw new Error('SERVICE MUTATION ANCHOR not found exactly once: ' + find.slice(0, 80));
+    const out = src.replace(f, replace.split('\n').join(eol));
+    if (out === src) throw new Error('SERVICE MUTATION CHANGED NO BYTES');
+    const p = path.join(os.tmpdir(), '_p86_pwa_' + process.pid + '_' + Math.random().toString(36).slice(2, 10) + '.js');
+    fs.writeFileSync(p, out, 'utf8');
+    loadedPaths.push(p);
+    return load([["  const { findApprovableDraft, REFUSAL_TEXT } = require('../services/pending-write-approval');",
+      '  const { findApprovableDraft, REFUSAL_TEXT } = require(' + JSON.stringify(p.split(path.sep).join('/')) + ');']]);
+  }
+
+  test('MUTANT: "shown before the yes" removed — a yes typed before the card appeared applies it', async () => {
+    const m = withServiceMutant('CASE WHEN draft_shown_at IS NOT NULL AND draft_shown_at < (', 'CASE WHEN 1 = 1 OR draft_shown_at < (');
+    seedDraft({ shownSecondsAgo: 5 });
+    sayYes(20);
+    await approve(m);
+    expect(applies).toHaveLength(1);
+  });
+
+  test('MUTANT: the ambiguity check removed — a bare yes applies one of two drafts', async () => {
+    const m = withServiceMutant('  if (shown.length > 1) return { ok: false, reason: REASONS.several, count: shown.length };\n', '');
+    seedDraft();
+    seedDraft({ line: 'New to-do — title Order soffit vents', targets: TODO_2 });
+    sayYes();
+    await approve(m);
+    expect(applies).toHaveLength(1);
+  });
+
+  test('MUTANT: the stored-risk check removed — a part-refused draft applies on a yes', async () => {
+    const m = withServiceMutant("  if (row.draft_risk !== 'low') return { ok: false, reason: REASONS.click_only, row };\n", '');
+    const id = seedDraft();
+    engine.db.prepare("UPDATE payloads SET draft_risk = 'high' WHERE id = ?").run(id);
+    sayYes();
+    await approve(m);
+    expect(applies).toEqual([id]);
+  });
+
+  test('MUTANT: the session scope removed — another conversation\'s draft applies', async () => {
+    const m = withServiceMutant('      WHERE organization_id = $1 AND user_id = $2 AND session_id = $3\n', '      WHERE organization_id = $1 AND user_id = $2 AND ($3 = $3)\n');
+    seedDraft({ session: 999 });
+    sayYes();
+    await approve(m);
+    expect(applies).toHaveLength(1);
+  });
+
+  test('MUTANT: the live-gate re-check removed — a stale "low" on status → sold applies', async () => {
+    const m = load([['  if (payloadRoutes.isHighRiskPayload({ targets: found.row.targets })) {\n', '  if (false) {\n']]);
+    seedDraft({ targets: SOLD, risk: 'low', line: 'Estimate — status → sold' });
+    sayYes();
+    await approve(m);
+    expect(applies).toHaveLength(1);
   });
 });

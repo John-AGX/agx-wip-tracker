@@ -484,8 +484,26 @@
     }
     card.appendChild(actions);
 
-    if (container && typeof container.appendChild === 'function') container.appendChild(card);
+    if (container && typeof container.appendChild === 'function') {
+      container.appendChild(card);
+      reportShown(row);
+    }
     return card;
+  }
+
+  // Tell the server this line is on the user's screen. A chat "yes" applies a
+  // low-risk draft only when it came AFTER this report (the server checks —
+  // services/pending-write-approval.js). Only a card actually placed in the
+  // page reports, once per payload per page; the server keeps the first time.
+  const _shownReported = new Set();
+  function reportShown(row) {
+    if (!row || (row.status || 'ready') !== 'ready' || _shownReported.has(row.id)) return;
+    _shownReported.add(row.id);
+    try {
+      fetch('/api/payloads/' + encodeURIComponent(row.id) + '/shown', {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+      }).catch(() => { _shownReported.delete(row.id); });
+    } catch (_) { _shownReported.delete(row.id); }
   }
 
   function updateStatus(payloadId, status, applySummary) {

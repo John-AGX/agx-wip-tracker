@@ -65,10 +65,27 @@ describe('renderCompact', () => {
     const card = window.PayloadArtifact.renderCompact(ROW, host());
     card.querySelector('button').click();
     await flush(); await flush();
-    expect(calls).toEqual([{ url: '/api/payloads/pl_1/apply', method: 'POST' }]);
+    expect(calls).toEqual([
+      { url: '/api/payloads/pl_1/shown', method: 'POST' },
+      { url: '/api/payloads/pl_1/apply', method: 'POST' },
+    ]);
     expect(heard).toEqual(['pl_1']);
     expect(card.dataset.status).toBe('applied');
     expect(buttons(card)).toEqual([]);
+  });
+
+  test('a card placed on the page reports itself shown ONCE — the moment a chat yes is measured from', async () => {
+    window.PayloadArtifact.renderCompact(ROW, host());
+    window.PayloadArtifact.renderCompact(ROW, host());
+    await flush();
+    expect(calls.filter((c) => c.url === '/api/payloads/pl_1/shown')).toEqual([{ url: '/api/payloads/pl_1/shown', method: 'POST' }]);
+  });
+
+  test('a card that is never placed, or is not ready, reports nothing', async () => {
+    window.PayloadArtifact.renderCompact(ROW, null);
+    window.PayloadArtifact.renderCompact(Object.assign({}, ROW, { id: 'pl_9', status: 'applied' }), host());
+    await flush();
+    expect(calls).toEqual([]);
   });
 
   test('Details swaps in the full card, hydrated from GET /api/payloads/:id', async () => {
@@ -118,7 +135,7 @@ describe('the pending-approvals strip (js/ai-panel.js)', () => {
     const refresh = strip(['if (p.draft_summary && window.PayloadArtifact.renderCompact) return Promise.resolve(p);', '']);
     refresh();
     for (let i = 0; i < 5; i++) await flush();
-    expect(calls.map((c) => c.url)).toEqual(['/api/payloads?limit=30&status=ready', '/api/payloads/pl_1']);
+    expect(calls.map((c) => c.url)).toEqual(['/api/payloads?limit=30&status=ready', '/api/payloads/pl_1', '/api/payloads/pl_1/shown']);
   });
 
   test('the lifted strip is the real function (anchors found)', () => {
@@ -135,7 +152,7 @@ describe('the pending-approvals strip (js/ai-panel.js)', () => {
     const refresh = strip();
     refresh();
     for (let i = 0; i < 5; i++) await flush();
-    expect(calls.map((c) => c.url)).toEqual(['/api/payloads?limit=30&status=ready', '/api/payloads/pl_2']);
+    expect(calls.map((c) => c.url)).toEqual(['/api/payloads?limit=30&status=ready', '/api/payloads/pl_2', '/api/payloads/pl_1/shown']);
     const hostEl = document.getElementById('ai-pending-approvals');
     expect(hostEl.querySelectorAll('.p86-payload-compact')).toHaveLength(1);
     expect(hostEl.textContent).toContain('status → sold');

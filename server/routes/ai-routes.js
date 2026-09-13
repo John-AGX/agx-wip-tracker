@@ -8640,14 +8640,11 @@ const PAYLOAD_TOOLS = [
       'EVERY write — field updates, line-item edits, phase changes, change ' +
       'orders, lead/client creates, schedule blocks, reports, etc. You do NOT ' +
       'author the payload yourself; you describe the change in plain words and ' +
-      'the Scribe produces it and dry-runs it. APPROVALS LIVE IN THE ' +
-      'CONVERSATION: when the user has EXPLICITLY confirmed this specific ' +
-      'change in the current conversation ("yes", "do it", "go ahead" after you ' +
-      'stated exactly what will change), set approved:true — the Scribe applies ' +
-      'it directly and the user gets an "Applied" notification, no card. If they ' +
-      'have NOT clearly confirmed, leave approved off and they get a ' +
-      'review/approve card. Deletes and system/config changes ALWAYS get a card ' +
-      'regardless. CRITICAL: fully specify the change — the Scribe has NO read access ' +
+      'the Scribe produces it and dry-runs it. It drafts in the background; when ' +
+      'ready the user sees ONE line describing the change with an Approve button. ' +
+      'A yes BEFORE that line exists approves nothing — never ask "shall I?" first; ' +
+      'just call this. If the user says yes AFTER the line appears, call ' +
+      'approve_pending_write. CRITICAL: fully specify the change — the Scribe has NO read access ' +
       'and sees ONLY your `instruction`. Resolve the entity_type + entity_id with ' +
       'your reads FIRST, then include them plus every field/value to set (and any ' +
       'current values relevant to the edit). One scribe_write per change. Do NOT ' +
@@ -8667,18 +8664,22 @@ const PAYLOAD_TOOLS = [
             'reference it by its jobNumber (e.g. "RV2000") — the Scribe resolves the ' +
             'jobNumber to the canonical row id for you, so you do NOT need to dig up the ' +
             'j-style id first. For other entity types, pass the resolved id from your reads.'
-        },
-        approved: {
-          type: 'boolean',
-          description:
-            'Set true ONLY when the user explicitly confirmed THIS specific change in the ' +
-            'current conversation after you stated exactly what will change. When true and ' +
-            'the change is not high-risk, it applies immediately (no review card). Never set ' +
-            'it on your own initiative, for inferred intent, or for anything the user has ' +
-            'not plainly said yes to.'
         }
       }
     }
+  },
+  {
+    name: 'approve_pending_write',
+    description:
+      'The user said yes (typed or spoken) to a change whose one-line card is ' +
+      'already on their screen: apply it. Takes no input — the server picks the ' +
+      'one draft in this conversation that was on screen before their yes. It ' +
+      'refuses, and you relay the refusal in one line, when nothing is waiting, ' +
+      'the yes came before the card, several are waiting, or the change needs a ' +
+      'tap (deletes, status changes, money, % complete). Call it ONLY on a clear ' +
+      'yes to that change — never on your own initiative.',
+    tier: 'auto',
+    input_schema: { type: 'object', properties: {} }
   },
   {
     name: 'escalate_to_86',
@@ -14353,6 +14354,11 @@ function make86OnCustomToolUse(userId, parentSession, turnContextText, gateUser,
     if (tu.name === 'scribe_write') {
       return await execScribeWrite(tu, { userId, parentSession });
     }
+    // approve_pending_write — a chat yes to a one-line card already on screen.
+    // The server binds the yes to ONE staged draft; the model picks nothing.
+    if (tu.name === 'approve_pending_write') {
+      return await execApprovePendingWrite(tu, { userId, parentSession, orgId: ctx.orgId, gateUser: capUser });
+    }
     // escalate_to_86 — the Assistant hands a deep-reasoning question to 86
     // (Opus). 86 reads + reasons in a sub-session and returns an answer the
     // Assistant relays. 86 does NOT write during the escalation (writes stay
@@ -14745,7 +14751,9 @@ async function persistDraftChangeset(payloadId, changeset) {
 // words. Risk is the same gate approve-in-chat uses (isHighRiskPayload), so a
 // line marked low can never be one the gate would card. Guarded on
 // status='ready' like persistDraftChangeset. Returns { line, risk } or null.
-async function persistDraftLine(payloadId, changeset, orgId) {
+// afterRefusal: part of the request was refused in the same drive, so a chat
+// yes must not apply the rest — the user has to read the refusal and tap.
+async function persistDraftLine(payloadId, changeset, orgId, afterRefusal) {
   if (!payloadId || orgId == null) return null;
   try {
     const r = await pool.query('SELECT targets FROM payloads WHERE id = $1 AND organization_id = $2', [payloadId, orgId]);
@@ -14754,7 +14762,7 @@ async function persistDraftLine(payloadId, changeset, orgId) {
     const { describeDraft } = require('../services/payload-draft-line');
     // Names are read inside orgId only — see services/payload-draft-line.js.
     const described = await describeDraft(pool, orgId, row.targets, changeset || null);
-    const risk = require('./payload-routes').isHighRiskPayload({ targets: row.targets }) ? 'high' : 'low';
+    const risk = (afterRefusal || require('./payload-routes').isHighRiskPayload({ targets: row.targets })) ? 'high' : 'low';
     const line = String(described.line || '').slice(0, 500);
     await pool.query(
       `UPDATE payloads SET draft_summary = $1, draft_risk = $2 WHERE id = $3 AND organization_id = $4 AND status = 'ready'`,
@@ -14765,6 +14773,52 @@ async function persistDraftLine(payloadId, changeset, orgId) {
     console.warn('[scribe-bg] draft line persist failed:', e && e.message);
     return null;
   }
+}
+
+// execApprovePendingWrite — the user said yes to a one-line card on screen.
+// services/pending-write-approval.js decides WHICH draft (exactly one, in this
+// chat, shown before the yes, low risk); this applies it through the same door
+// the card's Approve button uses (applyPayloadForUser: org + ownership, ready /
+// expiry, the capability gate, the claim). The live gate is asked again on the
+// row's targets, so a draft_risk written under an older, looser gate cannot
+// talk its way past today's. The receipt is the line the user approved.
+async function execApprovePendingWrite(tu, ctx) {
+  const { findApprovableDraft, REFUSAL_TEXT } = require('../services/pending-write-approval');
+  const payloadRoutes = require('./payload-routes');
+  const userId = ctx && ctx.userId;
+  const orgId = ctx && ctx.orgId;
+  const sessionId = ctx && ctx.parentSession && ctx.parentSession.id;
+  let found;
+  try {
+    found = await findApprovableDraft(pool, { orgId, userId, sessionId });
+  } catch (e) {
+    console.warn('[approve_pending_write] lookup failed:', e && e.message);
+    return { tier: 'auto', error: 'Could not check for a pending change. Nothing was applied — ask the user to tap Approve.' };
+  }
+  if (!found.ok) return { tier: 'auto', summary: REFUSAL_TEXT[found.reason] || REFUSAL_TEXT.none };
+  if (payloadRoutes.isHighRiskPayload({ targets: found.row.targets })) {
+    return { tier: 'auto', summary: REFUSAL_TEXT.click_only };
+  }
+  let gateUser = ctx.gateUser || null;
+  if (!gateUser) {
+    try {
+      const u = await pool.query('SELECT * FROM users WHERE id = $1 AND organization_id = $2', [userId, orgId]);
+      gateUser = u.rows[0] || null;
+    } catch (_) { gateUser = null; }
+  }
+  if (!gateUser) return { tier: 'auto', error: 'Could not confirm who is approving. Nothing was applied — ask the user to tap Approve.' };
+  const applied = await payloadRoutes.applyPayloadForUser(gateUser, found.row.id);
+  if (!applied || !applied.ok) {
+    const why = String((applied && applied.error) || 'the apply did not go through').slice(0, 200);
+    return { tier: 'auto', summary: 'Nothing was applied: ' + why + '. Tell the user that in one short line; the card is still there to tap.' };
+  }
+  const receipt = '✅ Applied — ' + String(found.row.draft_summary || 'the change').slice(0, 300);
+  return {
+    tier: 'auto',
+    // No meta: tool meta is how a payload CARD reaches the panel, and this is
+    // not one. The Live Writer poller picks the applied row up for refreshes.
+    summary: 'Applied. Reply with exactly this one line and nothing else: ' + receipt,
+  };
 }
 
 // execScribeWrite — 86's `scribe_write` tool lands here. 86 describes the
@@ -14788,13 +14842,16 @@ async function execScribeWrite(tu, ctx) {
   }
   // ALWAYS-BACKGROUND SCRIBE (John's call, 2026-07-01): the hand-off returns
   // immediately; the Scribe drafts in a DETACHED run (it took 30-60s of dead air
-  // blocking 86's turn). APPROVE-IN-CHAT (2026-07-03): when the chat agent sets
-  // approved:true (the user explicitly confirmed the change in conversation) and
-  // the payload is NOT high-risk (no deletes / system / outbound), the draft is
-  // APPLIED server-side right after a clean dry-run — the user gets an
-  // "✓ Applied" chat message + push instead of a review card. High-risk or
-  // unapproved drafts keep today's review-card flow. Failures notify the same way.
-  const approved = !!(tu && tu.input && tu.input.approved === true);
+  // blocking 86's turn). The draft lands as ONE line + Approve (persistDraftLine).
+  //
+  // There is no approve-in-chat flag here any more. Until 2026-09-13 the chat
+  // agent could pass approved:true and the draft applied the moment its dry run
+  // came back clean — a yes given BEFORE any draft existed, to words the user
+  // never saw. John, 2026-09-12: a yes counts only AFTER the ops-derived line was
+  // shown. That yes now goes to approve_pending_write, which binds it
+  // server-side to the one draft that was on screen first
+  // (services/pending-write-approval.js). An approved:true still sent by an older
+  // agent definition is ignored — it drafts, like any other call.
   const scribeCtx = {
     userId: (ctx && ctx.userId) || null, orgId,
     parentSession: (ctx && ctx.parentSession) || null,
@@ -14839,7 +14896,7 @@ async function execScribeWrite(tu, ctx) {
       let draftLine = null;
       if (result && result.ok) {
         await persistDraftChangeset(result.payloadId, result.changeset);
-        draftLine = await persistDraftLine(result.payloadId, result.changeset, scribeCtx.orgId);
+        draftLine = await persistDraftLine(result.payloadId, result.changeset, scribeCtx.orgId, !!result.afterRefusal);
       }
       const uid = scribeCtx.userId;
       if (!uid) return;
@@ -14867,60 +14924,25 @@ async function execScribeWrite(tu, ctx) {
         // A draft was captured, AND the dispatcher gave a final refusal of a
         // service ticket in the same drive (driveScribeWrite's afterRefusal —
         // never a typo, never another entity type). What the user asked for
-        // did not all go through, so the draft is carded — never auto-applied,
-        // even when they approved in chat — and the refusal is printed beside
-        // it whether or not they approved: a card that says nothing about the
-        // refused half lets the user approve half a change believing it is the
-        // whole one. Checked BEFORE the auto-apply branch so no later edit to
-        // that branch can reopen the path.
+        // did not all go through, so the refusal is printed beside the draft:
+        // a card that says nothing about the refused half lets the user approve
+        // half a change believing it is the whole one. persistDraftLine marked
+        // it high risk, so a chat yes cannot apply it either — it needs a tap
+        // after reading this.
         if (result.payloadId && result.afterRefusal) {
           const refused = String(result.refusal || 'part of the change was refused').slice(0, 400);
-          try { await postAgentJobToThread(threadTarget, '✍️ **Scribe drafted — ' + title + '**' + line + '\n\n_Part of what you asked for was refused and NOT saved: ' + refused + '_\n\n_Only the draft above was kept' + (approved ? ', and it was NOT applied even though you approved it' : '') + ' — check it against what you asked for and approve or reject it in **Pending approvals**._'); } catch (_) {}
+          try { await postAgentJobToThread(threadTarget, '✍️ **Scribe drafted — ' + title + '**' + line + '\n\n_Part of what you asked for was refused and NOT saved: ' + refused + '_\n\n_Only the draft above was kept — check it against what you asked for and approve or reject it in **Pending approvals**._'); } catch (_) {}
           try { await sendPushForEvent(uid, 'scribe_draft', { title: '✍️ Needs your approval: ' + String(title).slice(0, 80), body: ('Part was refused: ' + refused).slice(0, 200), url: '/' }); } catch (_) {}
           return;
         }
-        // Approve-in-chat: user already said yes → apply now unless high-risk.
-        if (approved && result.payloadId) {
-          try {
-            const payloadRoutes = require('./payload-routes');
-            const rowRes = await pool.query('SELECT * FROM payloads WHERE id = $1', [result.payloadId]);
-            const row = rowRes.rows[0];
-            const highRisk = !row || payloadRoutes.isHighRiskPayload(row);
-            if (!highRisk) {
-              // Capability gate runs with the ORIGINATING user (req.user when
-              // available, else their users row) — same rails as the card's
-              // Approve button.
-              let gateUser = scribeCtx.gateUser;
-              if (!gateUser) {
-                const u = await pool.query('SELECT * FROM users WHERE id = $1', [uid]);
-                gateUser = u.rows[0] || null;
-              }
-              const applied = gateUser ? await payloadRoutes.applyPayloadForUser(gateUser, result.payloadId) : { ok: false, error: 'no user context' };
-              if (applied && applied.ok) {
-                // The receipt is the line the change was described by — one line.
-                const doneLine = draftLine ? '' : (applied.apply_summary ? ('\n\n' + String(applied.apply_summary).slice(0, 500)) : line);
-                try { await postAgentJobToThread(threadTarget, '✅ **Applied — ' + title + '**' + doneLine); } catch (_) {}
-                try { await sendPushForEvent(uid, 'scribe_draft', { title: '✅ Applied: ' + String(title).slice(0, 80), body: String(applied.apply_summary || 'Done').slice(0, 200), url: '/' }); } catch (_) {}
-                return;
-              }
-              // Apply failed → fall through to the review-card notify with the error.
-              const whyNot = (applied && applied.error) ? (' (auto-apply failed: ' + String(applied.error).slice(0, 200) + ')') : '';
-              try { await postAgentJobToThread(threadTarget, '✍️ **Scribe drafted — ' + title + '**' + line + '\n\n_Auto-apply didn\'t go through' + whyNot + ' — review & approve it in **Pending approvals**._'); } catch (_) {}
-              try { await sendPushForEvent(uid, 'scribe_draft', { title: '✍️ Needs your approval: ' + String(title).slice(0, 80), body: String(result.applySummary || 'Review & approve in Project 86').slice(0, 200), url: '/' }); } catch (_) {}
-              return;
-            }
-            // High-risk → always card, even when approved in chat.
-            try { await postAgentJobToThread(threadTarget, '✍️ **Scribe drafted — ' + title + '**' + line + '\n\n_Deletes, status changes, money and % complete are never applied from a chat yes — tap Approve in**Pending approvals**._'); } catch (_) {}
-            try { await sendPushForEvent(uid, 'scribe_draft', { title: '✍️ Needs your approval: ' + String(title).slice(0, 80), body: String(result.applySummary || 'Review & approve in Project 86').slice(0, 200), url: '/' }); } catch (_) {}
-            return;
-          } catch (e) {
-            console.warn('[scribe-bg] approve-in-chat apply failed:', e && e.message);
-            // fall through to the standard draft notify below
-          }
-        }
-
-        try { await postAgentJobToThread(threadTarget, '✍️ **Scribe finished drafting — ' + title + '**' + line + '\n\n_Review & approve it in **Pending approvals**, just above the chat box._'); } catch (_) {}
-        try { await sendPushForEvent(uid, 'scribe_draft', { title: '✍️ Scribe drafted: ' + String(title).slice(0, 80), body: String(result.applySummary || 'Review & approve in Project 86').slice(0, 200), url: '/' }); } catch (_) {}
+        // A low-risk line may be approved by a chat yes (approve_pending_write);
+        // anything else needs a tap, and the notice says which, so the user is
+        // never left saying yes to a card that will not take it.
+        const sayYes = !!(draftLine && draftLine.risk === 'low');
+        try { await postAgentJobToThread(threadTarget, '✍️ **Ready to approve — ' + title + '**' + line + (sayYes
+          ? '\n\n_Say yes, or tap **Approve** just above the chat box._'
+          : '\n\n_Tap **Approve** just above the chat box — deletes, status changes, money and % complete always need a tap._')); } catch (_) {}
+        try { await sendPushForEvent(uid, 'scribe_draft', { title: '✍️ Ready to approve: ' + String(title).slice(0, 80), body: String(result.applySummary || 'Review & approve in Project 86').slice(0, 200), url: '/' }); } catch (_) {}
       } else {
         // result.text is the Scribe's OWN one-line note about what it was
         // missing — the thing its baseline explicitly instructs it to return
@@ -14954,9 +14976,7 @@ async function execScribeWrite(tu, ctx) {
     });
   return {
     tier: 'auto',
-    summary: approved
-      ? 'The Scribe is executing that APPROVED change in the background — it normally applies automatically (no card) and the user gets an "Applied" notification, usually under a minute; if the change is high-risk or part of it was refused, a review card comes instead. Tell the user it\'s being handled — never that it is already applied; do NOT wait for it and do NOT call scribe_write again for this same change.'
-      : 'The Scribe is drafting that change in the BACKGROUND. Tell the user it\'s being drafted and they\'ll get a notification with the review card when it\'s ready (usually under a minute) — do NOT wait for it, do NOT narrate a card, and do NOT call scribe_write again for this same change.'
+    summary: 'The Scribe is drafting that change in the BACKGROUND. Tell the user in one short line that a one-line card with Approve will appear when it is ready (usually under a minute) — do NOT wait for it, do NOT narrate the card, do NOT say it is applied, and do NOT call scribe_write again for this same change. If they say yes AFTER the card appears, call approve_pending_write.'
   };
 }
 
@@ -15005,7 +15025,7 @@ async function driveEscalateTo86(intent, ctx) {
   // 86 runs with its real read/memory dispatch, but writes are refused here.
   const base = make86OnCustomToolUse(ctx.userId || null, ctx.parentSession || null, '', ctx.gateUser || null);
   const onCustomToolUse = async (tu) => {
-    if (tu && (tu.name === 'scribe_write' || tu.name === 'escalate_to_86' || tu.name === 'emit_payload_file')) {
+    if (tu && (tu.name === 'scribe_write' || tu.name === 'approve_pending_write' || tu.name === 'escalate_to_86' || tu.name === 'emit_payload_file')) {
       return { tier: 'auto', error: 'During an escalation you ANALYZE and RECOMMEND only — you do not write. State the exact change (entity_type, entity_id, the fields/values) in your answer; the Assistant applies it via the Scribe so the user gets the approval card.' };
     }
     return base(tu);
@@ -15488,12 +15508,13 @@ function makeBackgroundJobCallback(userId, pauseRef, orgId) {
     if (tu.name === 'spawn_subtask' || tu.name === 'await_subtasks' || tu.name === 'subtask_status') {
       return { tier: 'auto', error: 'Background tasks cannot spawn subtasks (recursion guard). Do the work directly in this run.' };
     }
-    // Nobody is in a background run to say yes. scribe_write is auto-tier, so
-    // the approval block below never saw it, and approved:true — a flag the
-    // MODEL sets — applied the draft with no card and no person. The draft
-    // still gets written; it just waits in Pending approvals like any other.
-    if (tu && tu.name === 'scribe_write' && tu.input && tu.input.approved) {
-      tu = Object.assign({}, tu, { input: Object.assign({}, tu.input, { approved: false }) });
+    // Nobody is in a background run to say yes. Both write tools are auto-tier,
+    // so the approval block below never sees them. scribe_write only drafts now
+    // (its old model-set approved:true, which applied with no person present,
+    // is gone), but approve_pending_write APPLIES — and the latest "user"
+    // message a background run could point at is not a yes to anything.
+    if (tu && tu.name === 'approve_pending_write') {
+      return { tier: 'auto', error: 'Background tasks cannot approve changes — there is no one here to say yes. Leave the draft for the user to approve.' };
     }
     const decision = await baseCallback(tu);
     if (decision && decision.tier === 'approval') {
@@ -17902,6 +17923,7 @@ module.exports.internals = {
   // exported so a test can drive each of its ok:false endings and read the
   // discriminant it now returns.
   execScribeWrite,
+  execApprovePendingWrite,
   driveScribeWrite,
   // Exported so "a background run cannot self-approve a write" is held by
   // running it — test/agent-write-safety.test.js.

@@ -3963,6 +3963,10 @@ async function initSchema() {
     -- this, which every reader treats as high (a card, never a spoken yes).
     ALTER TABLE payloads ADD COLUMN IF NOT EXISTS draft_summary TEXT;
     ALTER TABLE payloads ADD COLUMN IF NOT EXISTS draft_risk TEXT;
+    -- draft_shown_at — when the one-line card was first on the requester's
+    -- screen (POST /api/payloads/:id/shown). A chat "yes" applies a draft only
+    -- if it came AFTER this (services/pending-write-approval.js).
+    ALTER TABLE payloads ADD COLUMN IF NOT EXISTS draft_shown_at TIMESTAMPTZ;
 
     CREATE INDEX IF NOT EXISTS idx_payloads_targets_gin
       ON payloads USING gin (targets jsonb_path_ops);

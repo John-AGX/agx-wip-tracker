@@ -9,17 +9,18 @@
 // {error: string} — so status, scope_approved, a re-parent, an invalid op, the
 // task cap, a condition and a move side all read as typos. The loop re-prompted,
 // and a live Scribe's most available "fix" is to drop the refused field: that
-// workaround dry-runs clean, is captured, and under approved:true is APPLIED
-// with no card. The user was told one change and got another.
+// workaround dry-runs clean, is captured, and a yes to it APPLIED it. The user
+// was told one change and got another.
 //
 // Neighbours of that hole are closed with it and driven here:
 //   * the refusal is STICKY for the drive. driveSubtaskTurn hands a refusal back
 //     as a tool result and the Scribe may emit again in the SAME attempt, where
 //     the retry loop never looks; the per-call reset let that workaround through.
 //     Both halves: a refusal decided at emit time AND one the dry run throws.
-//   * a draft captured BEFORE a terminal ticket refusal in the same drive is
-//     carded, never auto-applied, and the refusal is printed beside it — the
-//     user is never handed half a change as if it were the whole one.
+//   * a draft captured BEFORE a terminal ticket refusal in the same drive gets
+//     the refusal printed beside it and is stored high risk, so a chat yes
+//     cannot apply it — the user is never handed half a change as if it were
+//     the whole one.
 //   * a second clean TICKET draft supersedes the first instead of orphaning it
 //     in Pending approvals. Only a ticket one: a second payload is not always a
 //     re-draft (the photo_updates cap asks for the rest as a second payload),
@@ -32,8 +33,13 @@
 // 'description' key); before the passthrough those flags never reached the
 // loop, they were re-prompted, and the re-prompt is how they get fixed. And a
 // RETRYABLE error — a typo, the wrong tool, a transient dry-run failure — is
-// not a refusal: a correct draft after one still auto-applies under
-// approved:true, for any entity type. Both are driven below.
+// not a refusal: a correct draft after one is still applied by a yes to its
+// line, for any entity type. Both are driven below.
+//
+// "A yes" is the fast-approval flow (2026-09-13): the draft's one-line card is
+// on screen, the user says yes, approve_pending_write applies it. The old
+// model-set approved:true on scribe_write is gone; runApproved drives the new
+// flow end to end so every guarantee below is held against it.
 //
 // ── HOW ──────────────────────────────────────────────────────────────────
 // Everything between the scripted Anthropic transport and the chat/push
@@ -373,12 +379,12 @@ describe('a non-ticket emit-time refusal is STILL re-prompted', () => {
     expect(tk.detail && tk.detail.retryable).toBe(false);
   });
 
-  test('approved:true: an estimate re-draft after that refusal is APPLIED, with no card', async () => {
+  test('a yes to an estimate re-draft after that refusal APPLIES it', async () => {
     push(attempt(ESTIMATE_LINES));
     push(attempt(ESTIMATE_GOOD));
-    const { chat } = await runApproved(shipped);
+    const { chat, yes } = await runApproved(shipped);
     expect(applies).toHaveLength(1);
-    expect(chat[0]).toContain('Applied');
+    expect(yes.summary).toContain('Applied');
     expect(chat[0]).not.toMatch(/refused/i);
   });
 
@@ -467,7 +473,7 @@ describe('a ticket refusal thrown by the DRY RUN is terminal and sticky too', ()
     expect(ticketSlot.error).toBe('refused at slot 1');
   });
 
-  test('approved:true never reaches applyPayloadForUser', async () => {
+  test('a yes after a failed drive never reaches applyPayloadForUser', async () => {
     scriptDryRunRefusal();
     const { chat, push: p } = await runApproved(shipped);
     expect(applies).toHaveLength(0);
@@ -477,65 +483,78 @@ describe('a ticket refusal thrown by the DRY RUN is terminal and sticky too', ()
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-// approve-in-chat through execScribeWrite, to the channels.
+// A draft through execScribeWrite to the channels — then, unless approved is
+// false, the user sees its one-line card and says yes: the card's shown report
+// (draft_shown_at) lands, a user message "yes" is saved after it, and
+// approve_pending_write runs exactly as 86 would call it.
 async function runApproved(mod, approved) {
-  const handoff = await mod.execScribeWrite({ input: { instruction: 'raise a ticket on j1', approved: approved !== false } }, CTX);
+  const handoff = await mod.execScribeWrite({ input: { instruction: 'raise a ticket on j1' } }, CTX);
   expect(handoff.tier).toBe('auto');
   for (let i = 0; i < 6000; i++) {
-    if (pushes.length) {
-      return { chat: engine.all('SELECT content FROM ai_messages ORDER BY rowid').map((m) => m.content), push: pushes.slice() };
-    }
+    if (pushes.length) break;
     await new Promise((r) => setTimeout(r, 5));
   }
-  throw new Error('the detached chain never notified');
+  if (!pushes.length) throw new Error('the detached chain never notified');
+  const chat = engine.all('SELECT content FROM ai_messages ORDER BY rowid').map((m) => m.content);
+  const pushed = pushes.slice();
+  let yes = null;
+  if (approved !== false) {
+    engine.db.exec("UPDATE payloads SET draft_shown_at = datetime('now', '-30 seconds') WHERE status = 'ready' AND draft_summary IS NOT NULL");
+    engine.db.prepare("INSERT INTO ai_messages (id, user_id, role, content, session_id, organization_id, created_at) VALUES (?, ?, 'user', 'yes', ?, ?, datetime('now'))")
+      .run('aim_yes_' + Math.random().toString(36).slice(2, 10), USER, SESSION, ORG);
+    yes = await mod.execApprovePendingWrite({ name: 'approve_pending_write', input: {} },
+      { userId: USER, orgId: ORG, parentSession: CTX.parentSession, gateUser: { id: USER, organization_id: ORG, role: 'admin' } });
+  }
+  return { chat, push: pushed, yes };
 }
 
-describe('approve-in-chat: a retryable error is not a refusal', () => {
-  test('the positive control: a clean first draft under approved:true IS applied with no card', async () => {
+describe('a yes to the line: a retryable error is not a refusal', () => {
+  test('the positive control: a yes to a clean first draft IS applied', async () => {
     push(attempt(GOOD_CREATE));
-    const { chat, push: p } = await runApproved(shipped);
+    const { chat, push: p, yes } = await runApproved(shipped);
     expect(applies).toHaveLength(1);
-    expect(chat[0]).toContain('Applied');
-    expect(p[0].payload.title).toMatch(/Applied/);
+    expect(yes.summary).toContain('Applied');
+    expect(chat[0]).toMatch(/Ready to approve/);
+    expect(p[0].payload.title).toMatch(/Ready to approve/);
   });
 
   test('a correct draft after a typo in an earlier ATTEMPT is applied', async () => {
     push(attempt(MISSING_TITLE));
     push(attempt(GOOD_CREATE));
-    const { chat } = await runApproved(shipped);
+    const { chat, yes } = await runApproved(shipped);
     expect(reprompted()).toBe(true);
     expect(applies).toHaveLength(1);
-    expect(chat[0]).toContain('Applied');
+    expect(yes.summary).toContain('Applied');
     expect(chat[0]).not.toMatch(/refused/i);
   });
 
   test('a correct draft after a typo in the SAME attempt is applied', async () => {
     push([[emit(MISSING_TITLE), idle('requires_action')], [emit(GOOD_CREATE, 'Fixed'), idle('requires_action')], [text('ok'), idle('end_turn')]]);
-    const { chat } = await runApproved(shipped);
+    const { yes } = await runApproved(shipped);
     expect(applies).toHaveLength(1);
-    expect(chat[0]).toContain('Applied');
+    expect(yes.summary).toContain('Applied');
   });
 
   test('...after calling the wrong tool', async () => {
     push([[toolUse('read_entity', { entity_type: 'job', id: 'j1' }), idle('requires_action')], [emit(GOOD_CREATE), idle('requires_action')], [text('ok'), idle('end_turn')]]);
-    const { chat } = await runApproved(shipped);
+    const { yes } = await runApproved(shipped);
     expect(JSON.stringify(sdk.sends)).toMatch(/may only call emit_payload_file/);
     expect(applies).toHaveLength(1);
-    expect(chat[0]).toContain('Applied');
+    expect(yes.summary).toContain('Applied');
   });
 
   test('...after a transient dry-run error (a plain Error, no retryable flag)', async () => {
     dryRunScript([async () => { throw new Error('connection reset'); }]);
     push([[emit(GOOD_CREATE), idle('requires_action')], [emit(GOOD_CREATE, 'Again'), idle('requires_action')], [text('ok'), idle('end_turn')]]);
-    const { chat } = await runApproved(shipped);
+    const { yes } = await runApproved(shipped);
     expect(JSON.stringify(sdk.sends)).toMatch(/connection reset/);
     expect(applies).toHaveLength(1);
-    expect(chat[0]).toContain('Applied');
+    expect(yes.summary).toContain('Applied');
   });
 });
 
 // A clean draft A, THEN a terminal ticket refusal of B, in one drive.
-describe('a capture followed by a terminal ticket refusal is carded, with the refusal', () => {
+describe('a capture followed by a terminal ticket refusal needs a tap, with the refusal beside it', () => {
   const script = () => push([[emit(GOOD_CREATE), idle('requires_action')], [emit(STATUS), idle('requires_action')], [text('ok'), idle('end_turn')]]);
 
   test('driveScribeWrite returns the draft AND the refusal, read at the end of the drive', async () => {
@@ -547,24 +566,24 @@ describe('a capture followed by a terminal ticket refusal is carded, with the re
     expect(payloadRows()).toBe(1);
   });
 
-  test('approved:true: NOT applied, the user hears what was refused, and the draft is kept for the card', async () => {
+  test('a yes does NOT apply it, the user hears what was refused, and the draft is kept for the card', async () => {
     script();
-    const { chat, push: p } = await runApproved(shipped);
+    const { chat, push: p, yes } = await runApproved(shipped);
     expect(applies).toHaveLength(0);
+    expect(yes.summary).toMatch(/needs a tap/);
+    expect(engine.all('SELECT draft_risk FROM payloads')).toEqual([{ draft_risk: 'high' }]);
     expect(chat[0]).toMatch(/Part of what you asked for was refused/);
     expect(chat[0]).toMatch(/fields\.status is not writable/);
-    expect(chat[0]).toMatch(/NOT applied even though you approved it/);
     expect(p[0].payload.title).toMatch(/Needs your approval/);
     expect(p[0].payload.body).toMatch(/refused/);
     expect(payloadRows()).toBe(1);
   });
 
-  test('approved:false: the review notice carries the refusal too', async () => {
+  test('with no yes at all, the review notice carries the refusal too', async () => {
     script();
     const { chat } = await runApproved(shipped, false);
     expect(applies).toHaveLength(0);
     expect(chat[0]).toMatch(/fields\.status is not writable/);
-    expect(chat[0]).not.toMatch(/even though you approved/);
   });
 });
 
@@ -775,25 +794,34 @@ describe('every guard is load-bearing', () => {
     });
   });
 
-  test('RED: without the card branch, a capture followed by a ticket refusal is applied and the refusal never heard', async () => {
+  test('RED: without the refusal notice branch, the user is offered the half-change and never hears the refusal', async () => {
     const m = load([['        if (result.payloadId && result.afterRefusal) {\n', '        if (false) {\n']]);
     push([[emit(GOOD_CREATE), idle('requires_action')], [emit(STATUS), idle('requires_action')], [text('ok'), idle('end_turn')]]);
-    const { chat } = await runApproved(m);
-    expect(applies).toHaveLength(1);
-    expect(chat[0]).toContain('Applied');
+    const { chat } = await runApproved(m, false);
+    expect(chat[0]).toMatch(/Ready to approve/);
     expect(chat[0]).not.toMatch(/refused/);
+  });
+
+  test('RED: without afterRefusal on the stored risk, a yes applies the half that went through', async () => {
+    const m = load([[
+      '        draftLine = await persistDraftLine(result.payloadId, result.changeset, scribeCtx.orgId, !!result.afterRefusal);\n',
+      '        draftLine = await persistDraftLine(result.payloadId, result.changeset, scribeCtx.orgId, false);\n',
+    ]]);
+    push([[emit(GOOD_CREATE), idle('requires_action')], [emit(STATUS), idle('requires_action')], [text('ok'), idle('end_turn')]]);
+    await runApproved(m);
+    expect(applies).toHaveLength(1);
   });
 
   test('RED: with afterRefusal read at capture time instead of at the end (false), the same drive is applied', async () => {
     const m = load([['      applySummary: captured.applySummary, afterRefusal: !!terminalRefusal,\n',
       '      applySummary: captured.applySummary, afterRefusal: false,\n']]);
     push([[emit(GOOD_CREATE), idle('requires_action')], [emit(STATUS), idle('requires_action')], [text('ok'), idle('end_turn')]]);
-    const { chat } = await runApproved(m);
+    const { yes } = await runApproved(m);
     expect(applies).toHaveLength(1);
-    expect(chat[0]).toContain('Applied');
+    expect(yes.summary).toContain('Applied');
   });
 
-  test('RED: with afterRefusal set on any tool error (the old rule), a typo stops approve-in-chat', async () => {
+  test('RED: with afterRefusal set on any tool error (the old rule), a typo stops a yes from applying', async () => {
     const m = load([['      applySummary: captured.applySummary, afterRefusal: !!terminalRefusal,\n',
       '      applySummary: captured.applySummary, afterRefusal: !!(terminalRefusal || everToolError),\n']]);
     push(attempt(MISSING_TITLE));

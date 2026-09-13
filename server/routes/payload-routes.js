@@ -13,6 +13,7 @@
 //   POST   /api/payloads/:id/apply         apply (PG txn, ref resolver)
 //   POST   /api/payloads/:id/apply?dry_run=true  ROLLBACK + diff
 //   POST   /api/payloads/:id/reject        soft dismissal
+//   POST   /api/payloads/:id/shown         the one-line card is on screen
 //
 // These back the inline approval card in the AI panel. The legacy
 // sidebar list, CSV import, recipes, and admin audit endpoints were
@@ -260,6 +261,36 @@ router.get('/:id/file', requireAuth, requireOrg, async (req, res) => {
 //   'rejected'; row stays in the audit trail. Idempotent — re-rejecting
 //   a rejected row returns 200.
 // ──────────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────────
+// POST /api/payloads/:id/shown
+//   The one-line card reports that its line is on the REQUESTER's screen. A
+//   chat "yes" may apply a draft only if it came after this moment
+//   (services/pending-write-approval.js) — a yes to a line nobody saw is not
+//   an approval. First report wins (COALESCE), so a re-render cannot push the
+//   moment later than the user actually saw it. Own rows only — never the
+//   org-wide watcher rows the list also shows — and only a ready row that has
+//   a line. Always answers ok: this is a report, not a question, and a
+//   distinguishable answer would say which payload ids exist.
+// ──────────────────────────────────────────────────────────────────
+router.post('/:id/shown', requireAuth, requireOrg, async (req, res) => {
+  try {
+    await pool.query(
+      `UPDATE payloads
+          SET draft_shown_at = COALESCE(draft_shown_at, NOW())
+        WHERE id = $1
+          AND organization_id = $2
+          AND user_id = $3
+          AND status = 'ready'
+          AND draft_summary IS NOT NULL`,
+      [req.params.id, req.user.organization_id, req.user.id]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[payloads] POST /:id/shown error:', e && e.stack || e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 router.post('/:id/reject', requireAuth, requireOrg, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
@@ -669,8 +700,8 @@ function legacyHighRiskScan(payload) {
 }
 
 // applyPayloadForUser — server-side twin of POST /:id/apply for the
-// approve-in-chat flow (the user already confirmed in conversation;
-// the Scribe's detached draft run applies it directly). SAME safety
+// chat-yes flow (approve_pending_write: the user said yes to a one-line
+// card that was on their screen). SAME safety
 // rails as the route: org+ownership row filter, ready/expiry checks,
 // denyPayloadApply capability gate, dispatcher real run, status +
 // changeset persist, training-verdict capture. `user` must carry

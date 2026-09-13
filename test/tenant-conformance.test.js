@@ -438,13 +438,15 @@ describe('R1 — the published tool population', () => {
   // test/schema-truth.test.js already enforces and the reason that ledger has
   // not rotted. A new tool lands => this fails => somebody writes a recipe or
   // states, in this file, why it is waived.
-  test('the population size is committed (112 published names)', () => {
-    expect(ALL_TOOL_NAMES.length).toBe(112);
+  // 112 -> 113: approve_pending_write (fast approval). A write: it applies a
+  // staged draft through applyPayloadForUser, auto-tier like scribe_write.
+  test('the population size is committed (113 published names)', () => {
+    expect(ALL_TOOL_NAMES.length).toBe(113);
   });
 
-  test('the DRIVEN / WAIVED split is committed (58 driven, 54 not dispatched by execAgentTool)', () => {
+  test('the DRIVEN / WAIVED split is committed (58 driven, 55 not dispatched by execAgentTool)', () => {
     expect({ driven: DISPATCHED.length, waived: NOT_DISPATCHED.length })
-      .toEqual({ driven: 58, waived: 54 });
+      .toEqual({ driven: 58, waived: 55 });
   });
 
   // ── THE WAIVER PROPERTY, WHICH FAILS BY NAME RATHER THAN BY ARITHMETIC ───
@@ -468,7 +470,7 @@ describe('R1 — the published tool population', () => {
 
   test('every waived name is write-shaped or executor-less, and is listed', () => {
     const EXECUTORLESS = ['navigate', 'web_search'];
-    const WRITE_SHAPED = /^(propose_|set_|create_|delete_|add_|merge_|rename_|split_|change_|link_|attach_|assign_|wire_|update_|emit_|scribe_|escalate_|start_|ask_|request_)/;
+    const WRITE_SHAPED = /^(propose_|set_|create_|delete_|add_|merge_|rename_|split_|change_|link_|attach_|assign_|wire_|update_|emit_|scribe_|approve_|escalate_|start_|ask_|request_)/;
     const unexplained = NOT_DISPATCHED
       .filter((n) => !WRITE_SHAPED.test(n) && EXECUTORLESS.indexOf(n) === -1);
     expect(unexplained).toEqual([]);
@@ -546,7 +548,7 @@ describe('R1 — the published tool population', () => {
 
   test('the approval-tier split is DERIVED and committed', () => {
     expect({ served: served().length, fallthrough: fallthrough().length, executorless: EXECUTORLESS.length })
-      .toEqual({ served: 17, fallthrough: 35, executorless: 2 });
+      .toEqual({ served: 17, fallthrough: 36, executorless: 2 });
     expect(served().length + fallthrough().length + EXECUTORLESS.length).toBe(NOT_DISPATCHED.length);
   });
 
@@ -597,7 +599,7 @@ describe('R1 — the published tool population', () => {
     // — the ledgered misroute sentence. They are CLIENT-applied mutations: no
     // server executor runs, so this file has nothing to say about them and
     // says so. What it must not do is count them as covered.
-    expect(fallthrough().length).toBe(35);
+    expect(fallthrough().length).toBe(36);
     expect(fallthrough().some((n) => ROUTED.has(n))).toBe(false);
   });
 

@@ -220,8 +220,6 @@ const EXEMPT = {
   // ── NO REQUEST, NO CALLER. Server-derived ids only.
   'server/routes/ai-routes.js::fn driveScribeWrite::payloads':
     { n: 1, why: 'WHERE id = $1 where $1 is `res.meta.payload_id` — the row this same turn just INSERTed. Not caller-supplied.' },
-  'server/routes/ai-routes.js::fn execScribeWrite::payloads':
-    { n: 1, why: 'WHERE id = $1 where $1 is `result.payloadId` from the write this turn just performed.' },
   'server/routes/ai-routes.js::fn execScribeWrite::users':
     { n: 1, why: 'WHERE id = $1 where $1 is the ORIGINATING user id, loaded to run the capability gate as them.' },
   'server/routes/ai-routes.js::fn runAgentJob::agent_jobs':

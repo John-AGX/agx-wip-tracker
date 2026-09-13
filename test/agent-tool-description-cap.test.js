@@ -141,7 +141,6 @@ describe('no tool description goes over the cap that was not already over it', (
   const GRANDFATHERED = {
     read_assemblies: 1659,
     read_email_inbox: 2313,
-    scribe_write: 1123,
     search_entities: 1374,
     start_background_task: 1115,
     wire_nodes: 1214,
