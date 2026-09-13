@@ -580,6 +580,15 @@
       return post('/api/service-tickets/' + encodeURIComponent(id) + '/materials/extract',
         { attachment_id: attachmentId });
     },
+    // Picks the ONE takeoff file the crew link shows, or clears it with null.
+    // Same parent files as materialSources, re-proved by the server. The file
+    // is opened through the share token, never a storage URL, and a file with
+    // price columns only shows on links sent with financial details — the
+    // server decides that per link, so nothing here gates it.
+    setCrewTakeoff: function(id, attachmentId) {
+      return put('/api/service-tickets/' + encodeURIComponent(id) + '/crew-takeoff',
+        { attachment_id: attachmentId == null ? null : attachmentId });
+    },
     // ── Share links ────────────────────────────────────────────────
     // The RAW token comes back exactly once, inside `link`. The server keeps
     // only its hash, so a link not copied from that response cannot be

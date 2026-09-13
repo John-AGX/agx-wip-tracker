@@ -25,8 +25,12 @@
 // be one refactor away from leaking a Unit Cost column into the unit field.
 //
 // This module is deliberately NOT required by service-tickets.js (which stays
-// pure and is loaded by the guest pages) nor by ai-routes.js. The route
-// requires it lazily inside its handler.
+// pure and is loaded by the guest pages) nor by ai-routes.js. The routes
+// require it lazily inside their handlers.
+//
+// It also answers the crew-link takeoff's one question — does this file carry
+// prices a crew would see by opening it (detectFilePrices) — and owns
+// takeoffKind, which both the office picker and the crew link's file door ask.
 
 // ── limits ───────────────────────────────────────────────────────────────
 
@@ -291,13 +295,34 @@ function flattenValue(v) {
   return { text: '' };
 }
 
+// A number format that shows a currency: "$"#,##0.00, [$$-409]#,##0.00, the
+// Accounting format, a euro or pound sign. A bare locale tag ([$-409], which
+// dates carry) is removed first — it names a language, not money.
+function isMoneyFormat(numFmt) {
+  if (typeof numFmt !== 'string' || !numFmt) return false;
+  const f = numFmt.replace(/\[\$-[0-9A-Fa-f]+\]/g, '');
+  return /[$£€¥]/.test(f);
+}
+
 /**
  * Visible sheets of an .xlsx as rows of display strings.
  * Returns [{ name, rows, formulaGaps, warnings }]. rows[r][c] is 0-based and
  * lines up with the sheet (row 5 is rows[4]); formulaGaps lists 'r:c' for
  * formula cells that had no saved value.
+ *
+ * `opts` is for the crew-link price check (detectFilePrices), which asks a
+ * different question of the same workbook — not "which lines should the PM
+ * see" but "what could a crew see if they opened this file". So it can ask
+ * for hidden sheets too (includeHidden), for wider bounds (maxRows, maxCols),
+ * and for two extra facts per sheet: `truncated` (a bound was hit, so part of
+ * the sheet was never looked at) and `moneyFormat` (a number cell is formatted
+ * as currency). Without opts the output is exactly what the extractor reads.
  */
-async function xlsxToSheets(buffer) {
+async function xlsxToSheets(buffer, opts) {
+  const o = opts || {};
+  const maxRows = Number.isFinite(o.maxRows) ? o.maxRows : MAX_SHEET_ROWS;
+  const maxCols = Number.isFinite(o.maxCols) ? o.maxCols : MAX_SHEET_COLS;
+  const facts = !!opts;
   const ExcelJS = require('exceljs');
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(toBuffer(buffer));
@@ -306,18 +331,27 @@ async function xlsxToSheets(buffer) {
   wb.worksheets.forEach((ws) => {
     // A hidden sheet is where a pricing table or a lookup list lives. The PM
     // cannot see it in Excel, so it must not be where the lines come from.
-    if (ws.state && ws.state !== 'visible') return;
+    // (The price check reads it anyway: anyone who opens the file can unhide
+    // it, so a price there is a price in the file.)
+    if (ws.state && ws.state !== 'visible' && !o.includeHidden) return;
     const rows = [];
     const formulaGaps = [];
+    let truncated = false;
+    let moneyFormat = false;
     ws.eachRow({ includeEmpty: false }, (row, rn) => {
-      if (rn > MAX_SHEET_ROWS) return;
+      if (rn > maxRows) { truncated = true; return; }
       const cells = [];
       row.eachCell({ includeEmpty: false }, (cell, cn) => {
-        if (cn > MAX_SHEET_COLS) return;
+        if (cn > maxCols) { truncated = true; return; }
         // A merge slave reports its master's value. Reading it would repeat a
         // merged "Demo & Removal" title into every column, and a row whose
         // cells all differ is not recognisable as a section any more.
         if (cell.type === MERGE) return;
+        if (facts && !moneyFormat && isMoneyFormat(cell.numFmt)) {
+          const v = cell.value;
+          const n = v && typeof v === 'object' && v.result !== undefined ? v.result : v;
+          if (typeof n === 'number') moneyFormat = true;
+        }
         const flat = flattenValue(cell.value);
         if (flat.gap) formulaGaps.push((rn - 1) + ':' + (cn - 1));
         cells[cn - 1] = flat.text;
@@ -330,7 +364,13 @@ async function xlsxToSheets(buffer) {
     if (formulaGaps.length) {
       warnings.push('Some cells in "' + ws.name + '" are formulas Excel never calculated, so they came in blank. Open the file in Excel, save it, and pick it again.');
     }
-    out.push({ name: ws.name, rows: rows, formulaGaps: formulaGaps, warnings: warnings });
+    const sheet = { name: ws.name, rows: rows, formulaGaps: formulaGaps, warnings: warnings };
+    if (facts) {
+      sheet.hidden = !!(ws.state && ws.state !== 'visible');
+      sheet.truncated = truncated;
+      sheet.moneyFormat = moneyFormat;
+    }
+    out.push(sheet);
   });
   return out;
 }
@@ -670,6 +710,164 @@ function mapTakeoffRows(sheets) {
   return { ok: true, lines: best.lines, counts: best.counts, sheet: best.name, warnings: warnings };
 }
 
+// ── the crew-link price check ────────────────────────────────────────────
+//
+// The office may show ONE takeoff file on the crew link (service_tickets.
+// crew_takeoff), and the crew then opens the FILE — every column of it, not
+// the scrubbed lines above. John's standing rule is no financial information
+// on a work order, and a link hides financials unless the PM minted it with
+// them shown. So when a file is picked, its header rows are checked for a
+// money column, and a file that has one is withheld from every link that
+// hides financials.
+//
+// This is the one question in this module that has to fail CLOSED rather than
+// be helpful: a false "has prices" costs a PM a file on a default link, a
+// false "no prices" puts a Unit Cost column in front of a subcontractor. So
+// the check leans wide — any header-like row, currency written into any cell,
+// currency number formats, hidden sheets, and a sheet too big to read to the
+// end all count as prices. No model is ever asked.
+
+// Currency written into a cell, whatever its column is called: "$34.97",
+// "12.50 €", "USD 40", "40 dollars".
+const RE_CURRENCY_TEXT = new RegExp(
+  CUR + '\\s*-?\\d|\\d\\s*' + CUR + '|\\b(?:USD|US\\$)\\s*\\d|\\d\\s*(?:USD|dollars?)\\b', 'i');
+
+// A money label, for a row already known to be header-like. Looser than
+// headerRole's 40-character cap: "Extended price incl. delivery and tax" is
+// still a price column, and the row test has already ruled out a data row.
+function isMoneyLabel(text) {
+  const raw = String(text == null ? '' : text).trim();
+  if (!raw || raw.length > 80 || PURE_NUMBER.test(raw)) return false;
+  return MONEY_HEADER.test(headerKey(raw));
+}
+
+// Is this row a header, or close enough to one that a money word in it names a
+// column? Three ways in:
+//   * the header test mapTakeoffRows reads by (a description beside a
+//     quantity or unit, and no bare numbers);
+//   * any cell naming a description column — "Memo/Description | Amount" is
+//     a cost report's header even with no quantity in it;
+//   * no bare numbers and at least two recognised labels — "SKU | Count |
+//     Cost" has no description column at all, and is still priced.
+function headerLikeRow(cells) {
+  if (headerMap(cells).header) return true;
+  let numeric = false;
+  let labels = 0;
+  for (const c of cells) {
+    if (!c) continue;
+    if (PURE_NUMBER.test(c)) { numeric = true; continue; }
+    const role = headerRole(c);
+    if (!role) continue;
+    if (role.role === 'desc') return true;
+    labels++;
+  }
+  return !numeric && labels >= 2;
+}
+
+/**
+ * Does any sheet carry prices a crew would see by opening the file?
+ * `sheets` is xlsxToSheets output (with opts, for truncated / moneyFormat) or a
+ * single CSV sheet. true when a header-like row has a money label, when any
+ * cell has currency written into it, when a cell is currency-formatted, or
+ * when a sheet was too big to read to the end. false otherwise.
+ */
+function detectPriceColumns(sheets) {
+  const list = Array.isArray(sheets) ? sheets : [];
+  for (const sheet of list) {
+    if (!sheet || typeof sheet !== 'object') continue;
+    // Part of the sheet was never looked at, so it cannot be called clean.
+    if (sheet.truncated === true || sheet.moneyFormat === true) return true;
+    const rows = Array.isArray(sheet.rows) ? sheet.rows : [];
+    for (const row of rows) {
+      const cells = (Array.isArray(row) ? row : []).map(cellText);
+      if (!cells.some(Boolean)) continue;
+      if (cells.some((c) => c && RE_CURRENCY_TEXT.test(c))) return true;
+      if (headerLikeRow(cells) && cells.some(isMoneyLabel)) return true;
+    }
+  }
+  return false;
+}
+
+// Bounds for the price check. Wider than the extractor's, because a price
+// column past row 5000 is still in the file; past these, the sheet is marked
+// truncated and counts as priced rather than being called clean unread.
+const PRICE_CHECK_MAX_ROWS = 200000;
+const PRICE_CHECK_MAX_COLS = 1000;
+
+/**
+ * The crew-link verdict for one attachment the route has already proved:
+ *   true  — a spreadsheet or CSV with a price in it (see detectPriceColumns)
+ *   false — a spreadsheet or CSV read to the end with none
+ *   null  — anything that cannot be checked: a PDF, a photo, an old binary
+ *           .xls, a file over 25 MB, a file that would not open, a read that
+ *           failed. The office is told null means "check it yourself".
+ * Never throws, never calls a model, never writes.
+ */
+async function detectFilePrices(opts) {
+  const o = opts || {};
+  const att = o.att || {};
+  try {
+    if (typeof o.getBuffer !== 'function') return null;
+    // Refused on the stored size before a byte is fetched, like the extractor.
+    if (Number(att.size_bytes) > MAX_FILE_BYTES) return null;
+    if (!att.original_key) return null;
+    const buf = toBuffer(await o.getBuffer(att.original_key));
+    if (!buf.length || buf.length > MAX_FILE_BYTES) return null;
+    // The bytes decide, not the name — the same sniff the extractor trusts.
+    const kind = sniffKind(buf, att.filename, att.mime_type);
+    if (kind === 'xlsx') {
+      const sheets = await xlsxToSheets(buf, {
+        includeHidden: true, maxRows: PRICE_CHECK_MAX_ROWS, maxCols: PRICE_CHECK_MAX_COLS,
+      });
+      return detectPriceColumns(sheets);
+    }
+    if (kind === 'csv') {
+      return detectPriceColumns([{ name: null, rows: parseDelimited(decodeText(buf)) }]);
+    }
+    return null;
+  } catch (e) {
+    console.warn('[materials-extract] price check failed attachment=' + att.id + ': ' + (e && e.message));
+    return null;
+  }
+}
+
+// ── which files are takeoffs ─────────────────────────────────────────────
+//
+// What the picker may offer, by extension first and then by mime. Extension
+// wins because the stored mime is unreliable in both directions: old .xlsx
+// uploads were stored as application/zip, and Windows sends a CSV as
+// application/vnd.ms-excel. The extractor sniffs the bytes again anyway — this
+// only decides which rows are worth showing. Anything else (a .docx, a zip, a
+// video) is left out rather than offered and refused.
+//
+// It lives here rather than in a route file because two routers ask it: the
+// office picker (service-ticket-routes.js) and the crew link's takeoff door
+// (service-ticket-share-routes.js), which must agree on what a file IS.
+const TAKEOFF_KIND_BY_EXT = {
+  xlsx: 'xlsx', xlsm: 'xlsx', xls: 'xls',
+  csv: 'csv', tsv: 'csv', txt: 'csv',
+  pdf: 'pdf',
+  jpg: 'image', jpeg: 'image', png: 'image', webp: 'image', gif: 'image', heic: 'image',
+};
+const TAKEOFF_KIND_BY_MIME = {
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/vnd.ms-excel.sheet.macroenabled.12': 'xlsx',
+  'text/csv': 'csv', 'text/tab-separated-values': 'csv', 'text/plain': 'csv',
+  'application/pdf': 'pdf',
+  'image/jpeg': 'image', 'image/png': 'image', 'image/webp': 'image', 'image/gif': 'image',
+  'image/heic': 'image',
+};
+
+/** 'xlsx' | 'xls' | 'csv' | 'pdf' | 'image' | null, from the name and stored mime. */
+function takeoffKind(filename, mime) {
+  const m = /\.([A-Za-z0-9]{1,8})$/.exec(String(filename || '').trim());
+  const ext = m ? m[1].toLowerCase() : '';
+  if (Object.prototype.hasOwnProperty.call(TAKEOFF_KIND_BY_EXT, ext)) return TAKEOFF_KIND_BY_EXT[ext];
+  const type = String(mime || '').split(';')[0].trim().toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(TAKEOFF_KIND_BY_MIME, type)) return TAKEOFF_KIND_BY_MIME[type];
+  return null;
+}
+
 // ── the model ────────────────────────────────────────────────────────────
 
 const SYSTEM = [
@@ -1003,6 +1201,11 @@ async function extractMaterials(opts) {
 
 module.exports = {
   extractMaterials,
+  // the crew-link takeoff (service_tickets.crew_takeoff)
+  detectFilePrices,
+  detectPriceColumns,
+  takeoffKind,
+  MAX_FILE_BYTES,
   // pure helpers, exported for the tests
   sniffKind,
   parseDelimited,

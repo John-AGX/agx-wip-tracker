@@ -13096,6 +13096,57 @@ body.light-mode .p86-wo-pick-row.is-legacy .p86-wo-pick-meta { color: #b45309; }
 @media (prefers-reduced-motion: reduce) {
   .p86-wo-pick-row.is-reading .p86-wo-pick-state { animation: none; }
 }
+/* In crew mode the file already on the link is marked, not disabled — picking
+   it again re-checks it for price columns. */
+.p86-wo-pick-row.is-current { border-color: color-mix(in srgb, var(--green, #059669) 55%, var(--border, #333)); }
+.p86-wo-pick-row.is-current .p86-wo-pick-state { color: var(--green, #059669); }
+
+/* Takeoff on the crew link — the one job file the crew link shows. The status
+   line is the PM's only statement of WHICH links show it, so it is always
+   visible, and the two cases that need a second look get the amber rule:
+   a priced sheet (hidden on default links) and a PDF or photo nobody could
+   check for prices. */
+.p86-wo-crew { margin-top: 10px; font-size: 12.5px; }
+.p86-wo-crew.is-empty { margin-top: 8px; }
+.p86-wo-crew:not(.is-empty) {
+  padding: 8px 10px; border-radius: 0 6px 6px 0;
+  background: var(--surface2, rgba(255,255,255,0.04));
+  border-left: 3px solid var(--green, #059669);
+}
+.p86-wo-crew.is-priced, .p86-wo-crew.is-unchecked { border-left-color: #d97706; }
+.p86-wo-crew-lbl {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase;
+  color: var(--text-dim, #888); margin-bottom: 5px;
+}
+.p86-wo-crew-file { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.p86-wo-crew-name {
+  flex: 1 1 160px; min-width: 0; font-weight: 600; color: var(--text, #fff);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.p86-wo-crew-acts { display: inline-flex; gap: 10px; flex: 0 0 auto; }
+.p86-wo-crew-status { margin-top: 5px; line-height: 1.45; color: var(--text-dim, #888); }
+.p86-wo-crew.is-priced .p86-wo-crew-status, .p86-wo-crew.is-unchecked .p86-wo-crew-status { color: #d97706; }
+/* Link-style buttons, like the Materials Edit button. The global `button` rule
+   and its :hover would otherwise paint a filled chip on the light panel. */
+.p86-wo-crew-pick, .p86-wo-crew-change, .p86-wo-crew-remove, .p86-wo-mat-crew {
+  background: none; border: 0; padding: 0; margin: 0; cursor: pointer; font: inherit;
+  font-size: 12px; font-weight: 600; color: var(--accent, #4f8cff); white-space: normal; text-align: left;
+}
+.p86-wo-crew-pick:hover, .p86-wo-crew-change:hover, .p86-wo-crew-remove:hover, .p86-wo-mat-crew:hover {
+  background: none; text-decoration: underline;
+}
+.p86-wo-crew-remove { color: var(--text-dim, #888); }
+.p86-wo-crew-pick:disabled, .p86-wo-crew-remove:disabled, .p86-wo-mat-crew:disabled { opacity: 0.55; cursor: default; text-decoration: none; }
+.p86-wo-crew-pick:focus-visible, .p86-wo-crew-change:focus-visible,
+.p86-wo-crew-remove:focus-visible, .p86-wo-mat-crew:focus-visible {
+  outline: 2px solid var(--accent, #4f8cff); outline-offset: 2px; border-radius: 3px;
+}
+.p86-wo-mat-crew { display: inline; margin-left: 2px; }
+/* Same darker amber as the AI warning: #d97706 is under 3:1 on the light panel. */
+body.light-mode .p86-wo-crew.is-priced .p86-wo-crew-status,
+body.light-mode .p86-wo-crew.is-unchecked .p86-wo-crew-status { color: #b45309; }
+body.light-mode .p86-wo-crew.is-priced, body.light-mode .p86-wo-crew.is-unchecked { border-left-color: #b45309; }
+body.light-mode .p86-wo-crew:not(.is-empty) { background: rgba(0,0,0,0.035); }
 
 .p86-wo-subs { display: flex; flex-direction: column; gap: 6px; }
 .p86-wo-sub { border: 1px solid var(--border, #333); border-radius: 8px; background: var(--surface, transparent); }

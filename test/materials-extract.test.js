@@ -751,6 +751,136 @@ describe('extractMaterials — the model tiers', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// The crew-link price check. The crew opens the WHOLE file, so the question is
+// not "which lines are materials" but "is there a price anywhere a crew would
+// see". A wrong false puts a Unit Cost column in front of a subcontractor; a
+// wrong true only keeps a file off a default link — so every doubt is a true.
+describe('detectPriceColumns / detectFilePrices — the crew-link price check', () => {
+  // The field pull sheet, as the spreadsheet a PM would really attach.
+  const PULL_SHEET_ROWS = PULL_SHEET_TEXT.map((l) => l.split(/\s{2,}/).filter((c) => c !== ''));
+
+  test('the Lead Report (Unit Cost, Markup %, Total) has prices', async () => {
+    expect(X.detectPriceColumns(await X.xlsxToSheets(await leadReportXlsx()))).toBe(true);
+    const getBuffer = store({ 'k-orig': await leadReportXlsx() });
+    await expect(X.detectFilePrices({ att: att({ filename: 'Lead Report.xlsx', mime_type: 'application/zip' }), getBuffer })).resolves.toBe(true);
+  });
+
+  test('the T5 pull sheet (Material, Spec / Size, Qty, Unit, Location, Notes) has none', async () => {
+    expect(X.detectPriceColumns([{ name: 'Pull sheet', rows: PULL_SHEET_ROWS }])).toBe(false);
+    const xlsx = await workbook([{ name: 'Pull sheet', rows: PULL_SHEET_ROWS }]);
+    await expect(X.detectFilePrices({ att: att({ filename: 'T5 pull sheet.xlsx' }), getBuffer: store({ 'k-orig': xlsx }) })).resolves.toBe(false);
+    const csv = PULL_SHEET_ROWS.map((r) => r.join(',')).join('\r\n');
+    await expect(X.detectFilePrices({ att: att({ filename: 'T5 pull sheet.csv' }), getBuffer: store({ 'k-orig': Buffer.from(csv) }) })).resolves.toBe(false);
+  });
+
+  test('the Home Depot CSV (Unit Price) has prices, and a Buildertrend export does too', async () => {
+    const hd = att({ filename: 'HD purchases.csv', mime_type: 'application/vnd.ms-excel' });
+    await expect(X.detectFilePrices({ att: hd, getBuffer: store({ 'k-orig': Buffer.from(HOME_DEPOT_CSV) }) })).resolves.toBe(true);
+    const bt = await workbook([{ name: 'Estimate', rows: BUILDERTREND_ROWS }]);
+    await expect(X.detectFilePrices({ att: att(), getBuffer: store({ 'k-orig': bt }) })).resolves.toBe(true);
+  });
+
+  test('a header with no description column is still a header: SKU | Count | Cost', () => {
+    expect(X.detectPriceColumns([{ name: null, rows: [['SKU', 'Count', 'Cost'], ['1000012345', '24', '3.98']] }])).toBe(true);
+    // ...and a cost report's Memo/Description beside Amount, with no quantity.
+    expect(X.detectPriceColumns([{ name: null, rows: QUICKBOOKS_ROWS.map((r) => r.map(String)) }])).toBe(true);
+  });
+
+  test('currency written into a cell is a price, whatever its column is called', () => {
+    expect(X.detectPriceColumns([{ name: null, rows: [['Description', 'Qty', 'Notes'], ['Drip edge', '20', 'was $7.25 each']] }])).toBe(true);
+    expect(X.detectPriceColumns([{ name: null, rows: [['Description', 'Qty'], ['Drip edge', '20'], ['Vent boot', '4']] }])).toBe(false);
+  });
+
+  test('a price on a HIDDEN sheet counts — anyone who opens the file can unhide it', async () => {
+    const buf = await workbook([
+      { name: 'Takeoff', rows: [['Description', 'Qty', 'Unit'], ['Drip edge', 20, 'ea']] },
+      { name: 'Pricing', hidden: true, rows: [['Description', 'Unit Cost'], ['Drip edge', 7.25]] },
+    ]);
+    await expect(X.detectFilePrices({ att: att(), getBuffer: store({ 'k-orig': buf }) })).resolves.toBe(true);
+    // The extractor's own read still never sees that sheet.
+    expect((await X.xlsxToSheets(buf)).map((s) => s.name)).toEqual(['Takeoff']);
+  });
+
+  test('a currency-formatted number is a price even under an innocent header', async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Takeoff');
+    ws.addRow(['Description', 'Qty', 'Each']);
+    ws.addRow(['Drip edge', 20, 7.25]);
+    ws.getCell('C2').numFmt = '"$"#,##0.00';
+    const buf = Buffer.from(await wb.xlsx.writeBuffer());
+    await expect(X.detectFilePrices({ att: att(), getBuffer: store({ 'k-orig': buf }) })).resolves.toBe(true);
+    // A date's locale tag is not money.
+    const wb2 = new ExcelJS.Workbook();
+    const ws2 = wb2.addWorksheet('Takeoff');
+    ws2.addRow(['Description', 'Qty', 'Delivered']);
+    ws2.addRow(['Drip edge', 20, 45000]);
+    ws2.getCell('C2').numFmt = '[$-409]mmmm d, yyyy';
+    const buf2 = Buffer.from(await wb2.xlsx.writeBuffer());
+    await expect(X.detectFilePrices({ att: att(), getBuffer: store({ 'k-orig': buf2 }) })).resolves.toBe(false);
+  });
+
+  test('a sheet too big to read to the end is not called clean', () => {
+    expect(X.detectPriceColumns([{ name: 'Big', rows: [['Description', 'Qty']], truncated: true }])).toBe(true);
+  });
+
+  test('a PDF, a photo and an old binary .xls cannot be checked: null', async () => {
+    const pdfGet = store({ 'k-orig': buildPdf(PULL_SHEET_TEXT) });
+    await expect(X.detectFilePrices({ att: att({ filename: 'takeoff.pdf', mime_type: 'application/pdf' }), getBuffer: pdfGet })).resolves.toBeNull();
+    await expect(X.detectFilePrices({ att: att({ filename: 'photo.jpg' }), getBuffer: store({ 'k-orig': JPEG }) })).resolves.toBeNull();
+    await expect(X.detectFilePrices({ att: att({ filename: 'old.xls' }), getBuffer: store({ 'k-orig': OLE_MAGIC }) })).resolves.toBeNull();
+  });
+
+  test('unreadable, missing, oversized, or no reader: null — and the model is never asked', async () => {
+    const client = fakeClient(reply({ lines: [] }));
+    X._setClientForTest(client);
+    process.env.ANTHROPIC_API_KEY = 'test-key';
+    await expect(X.detectFilePrices({ att: att({ filename: 'broken.xlsx' }), getBuffer: store({ 'k-orig': Buffer.from([0x50, 0x4B, 0x03, 0x04, 1, 2, 3]) }) })).resolves.toBeNull();
+    await expect(X.detectFilePrices({ att: att(), getBuffer: store({}) })).resolves.toBeNull();
+    await expect(X.detectFilePrices({ att: att({ original_key: null }), getBuffer: store({}) })).resolves.toBeNull();
+    await expect(X.detectFilePrices({ att: att() })).resolves.toBeNull();
+    const big = store({ 'k-orig': Buffer.from(HOME_DEPOT_CSV) });
+    await expect(X.detectFilePrices({ att: att({ filename: 'x.csv', size_bytes: 30 * 1024 * 1024 }), getBuffer: big })).resolves.toBeNull();
+    expect(big).not.toHaveBeenCalled();
+    expect(client.create).not.toHaveBeenCalled();
+    expect(usage.recordUsage).not.toHaveBeenCalled();
+  });
+
+  test('takeoffKind: extension first, then the stored mime', () => {
+    expect(X.takeoffKind('Lead Report.XLSX', 'application/zip')).toBe('xlsx');
+    expect(X.takeoffKind('old takeoff.xls', '')).toBe('xls');
+    expect(X.takeoffKind('hd.csv', 'application/vnd.ms-excel')).toBe('csv');
+    expect(X.takeoffKind('scan', 'image/jpeg')).toBe('image');
+    expect(X.takeoffKind('contract.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).toBeNull();
+    // An unknown extension falls through to the mime, as the picker always has.
+    expect(X.takeoffKind('takeoff.bin', 'application/pdf')).toBe('pdf');
+    expect(X.takeoffKind('', '')).toBeNull();
+  });
+});
+
+describe('the price check is load-bearing', () => {
+  test('without the header-row money test, a Buildertrend export reads as clean', async () => {
+    // No currency sign in any cell, so the header row is the only thing that
+    // knows Unit Cost, Builder Cost and Client Price are money.
+    const sheets = await X.xlsxToSheets(await workbook([{ name: 'Estimate', rows: BUILDERTREND_ROWS }]));
+    expect(X.detectPriceColumns(sheets)).toBe(true);
+    const M = mutant([[
+      '      if (headerLikeRow(cells) && cells.some(isMoneyLabel)) return true;',
+      '      if (false) return true;',
+    ]]);
+    expect(M.detectPriceColumns(sheets)).toBe(false);
+  });
+
+  test('without the hidden-sheet read, a Pricing tab slips past', async () => {
+    const buf = await workbook([
+      { name: 'Takeoff', rows: [['Description', 'Qty', 'Unit'], ['Drip edge', 20, 'ea']] },
+      { name: 'Pricing', hidden: true, rows: [['Description', 'Unit Cost'], ['Drip edge', 7.25]] },
+    ]);
+    const M = mutant([["        includeHidden: true, maxRows: PRICE_CHECK_MAX_ROWS,", "        includeHidden: false, maxRows: PRICE_CHECK_MAX_ROWS,"]]);
+    await expect(M.detectFilePrices({ att: att(), getBuffer: store({ 'k-orig': buf }) })).resolves.toBe(false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // MUTANTS: one rule removed from a copy of the shipped module.
 // ═══════════════════════════════════════════════════════════════════════════
 const mutantPaths = [];

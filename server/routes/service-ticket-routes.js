@@ -142,7 +142,7 @@ const TICKET_COLS = [
   'site_contact_phone', 'street_address', 'city', 'state', 'zip', 'lat', 'lng',
   'access_notes', 'scheduled_for', 'due_date', 'assignee_user_id',
   'completed_at', 'closed_at', 'archived_at', 'created_by', 'created_at',
-  'updated_at', 'materials',
+  'updated_at', 'materials', 'crew_takeoff',
 ].join(', ');
 
 function newId(prefix) { return svc.genId(prefix); }
@@ -642,7 +642,8 @@ router.post('/:id/subtasks/:taskId/note', requireAuth, requireOrgId, async (req,
 // those files into rows for review. Neither writes anything: the rows land in
 // the editor unsaved, and PATCH /:id {materials} (normalizeMaterials) stays the
 // ONLY write, so a file can never put a line on the crew link that a person did
-// not look at and save. The crew link never gets the file itself either.
+// not look at and save. Neither door puts the file itself on the crew link —
+// that is its own deliberate choice, PUT /:id/crew-takeoff below.
 //
 // WHICH FILES. Only files hanging on the ticket's OWN job, its lead and its
 // estimate — never a file id from anywhere else in the org. And each extra
@@ -700,39 +701,52 @@ async function ticketFileParents(ticket, user, orgId) {
   return parents;
 }
 
-// What the picker may offer, by extension first and then by mime. Extension
-// wins because the stored mime is unreliable in both directions: old .xlsx
-// uploads were stored as application/zip, and Windows sends a CSV as
-// application/vnd.ms-excel. The extractor sniffs the bytes again anyway — this
-// only decides which rows are worth showing. Anything else (a .docx, a zip, a
-// video) is left out rather than offered and refused.
-const TAKEOFF_KIND_BY_EXT = {
-  xlsx: 'xlsx', xlsm: 'xlsx', xls: 'xls',
-  csv: 'csv', tsv: 'csv', txt: 'csv',
-  pdf: 'pdf',
-  jpg: 'image', jpeg: 'image', png: 'image', webp: 'image', gif: 'image', heic: 'image',
-};
-const TAKEOFF_KIND_BY_MIME = {
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
-  'application/vnd.ms-excel.sheet.macroenabled.12': 'xlsx',
-  'text/csv': 'csv', 'text/tab-separated-values': 'csv', 'text/plain': 'csv',
-  'application/pdf': 'pdf',
-  'image/jpeg': 'image', 'image/png': 'image', 'image/webp': 'image', 'image/gif': 'image',
-  'image/heic': 'image',
-};
+// What the picker may offer — 'xlsx' | 'xls' | 'csv' | 'pdf' | 'image' | null.
+// The rule itself lives in services/materials-extract.js, because the crew
+// link's takeoff door asks the same question and the two must agree on what a
+// file IS. Required on call rather than at the top for the reason the extract
+// door gives below: a throw while loading that module must fail one request,
+// not the whole router.
 function takeoffKind(filename, mime) {
-  const m = /\.([A-Za-z0-9]{1,8})$/.exec(String(filename || '').trim());
-  const ext = m ? m[1].toLowerCase() : '';
-  if (Object.prototype.hasOwnProperty.call(TAKEOFF_KIND_BY_EXT, ext)) return TAKEOFF_KIND_BY_EXT[ext];
-  const type = String(mime || '').split(';')[0].trim().toLowerCase();
-  if (Object.prototype.hasOwnProperty.call(TAKEOFF_KIND_BY_MIME, type)) return TAKEOFF_KIND_BY_MIME[type];
-  return null;
+  return require('../services/materials-extract').takeoffKind(filename, mime);
 }
 
 const FILE_NOT_FOUND = 'File not found';
 // An attachment id is `att_<ms>_<rand>` today. The shape check keeps anything
 // else — a path, a list, an object — from reaching the SQL at all.
 const ATTACHMENT_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+
+// ONE file hanging on this ticket's own job, lead or estimate, or null. Every
+// door that takes a file id from the office goes through here — the extract
+// door and the crew-takeoff door — so "which files may a work order name" is
+// answered in one place.
+//
+// THE PARENT IS IN THE WHERE. The file must hang on one of this ticket's
+// proved parents (ticketFileParents, which already applied the LEADS_VIEW /
+// ESTIMATES_VIEW gates for this caller); an in-org file on some other job is
+// refused by the predicate, not by an `if` somebody has to keep. Absent slots
+// bind NULL, and `entity_type = NULL` is never true. Then the row-keyed tenancy
+// ladder, the same one every attachment id door runs. Every miss — a bad id,
+// absent, another tenant's, another job's, a lead or estimate this caller may
+// not open — is the same null, so no caller can answer it differently.
+async function loadTicketFile(ticket, user, orgId, attachmentId) {
+  if (typeof attachmentId !== 'string' || !ATTACHMENT_ID_RE.test(attachmentId)) return null;
+  const parents = await ticketFileParents(ticket, user, orgId);
+  const slot = (i) => (parents[i] ? [parents[i].entity_type, parents[i].entity_id] : [null, null]);
+  const { rows } = await pool.query(
+    `SELECT id, entity_type, entity_id, organization_id, uploaded_by, filename,
+              mime_type, size_bytes, original_key, web_key
+         FROM attachments
+        WHERE id = $1
+          AND ((entity_type = $2 AND entity_id = $3)
+            OR (entity_type = $4 AND entity_id = $5)
+            OR (entity_type = $6 AND entity_id = $7))`,
+    [attachmentId].concat(slot(0), slot(1), slot(2))
+  );
+  const att = rows[0] || null;
+  if (!att || !(await attachmentInOrg(pool, att, orgId))) return null;
+  return att;
+}
 
 // GET the files a takeoff can be read from. Named columns only: never
 // extracted_text (it can carry the file's prices), never a storage key or URL
@@ -804,29 +818,11 @@ router.post('/:id/materials/extract', requireAuth, requireOrgId, async (req, res
       return res.status(400).json({ error: 'Pick a file to read materials from' });
     }
 
-    // THE PARENT IS IN THE WHERE. The file must hang on one of this ticket's
-    // proved parents; an in-org file on some other job is refused by the
-    // predicate, not by an `if` somebody has to keep. Absent slots bind NULL,
-    // and `entity_type = NULL` is never true. Then the row-keyed tenancy
-    // ladder, the same one every attachment id door runs. Every miss — absent,
-    // another tenant's, another job's, a lead or estimate this caller may not
-    // open — is the SAME 404, so the door cannot be used to probe file ids.
-    const parents = await ticketFileParents(ticket, req.user, orgId);
-    const slot = (i) => (parents[i] ? [parents[i].entity_type, parents[i].entity_id] : [null, null]);
-    const { rows } = await pool.query(
-      `SELECT id, entity_type, entity_id, organization_id, uploaded_by, filename,
-              mime_type, size_bytes, original_key, web_key
-         FROM attachments
-        WHERE id = $1
-          AND ((entity_type = $2 AND entity_id = $3)
-            OR (entity_type = $4 AND entity_id = $5)
-            OR (entity_type = $6 AND entity_id = $7))`,
-      [attachmentId].concat(slot(0), slot(1), slot(2))
-    );
-    const att = rows[0] || null;
-    if (!att || !(await attachmentInOrg(pool, att, orgId))) {
-      return res.status(404).json({ error: FILE_NOT_FOUND });
-    }
+    // The file must hang on this ticket's own job, lead or estimate
+    // (loadTicketFile). Every miss is the SAME 404, so the door cannot be used
+    // to probe file ids.
+    const att = await loadTicketFile(ticket, req.user, orgId, attachmentId);
+    if (!att) return res.status(404).json({ error: FILE_NOT_FOUND });
 
     // Required HERE rather than at the top: the storage backend and the
     // extractor (exceljs, pdf-parse, the Anthropic SDK) are heavy, and a throw
@@ -861,6 +857,97 @@ router.post('/:id/materials/extract', requireAuth, requireOrgId, async (req, res
     console.error('[service-tickets] material extract failed', e);
     if (res.headersSent) return;
     res.status(500).json({ error: 'Could not read materials from that file' });
+  }
+});
+
+// ── Work-order takeoff on the crew link (John, 2026-09-13) ─────────────────
+// "Let the crew link show the takeoff file too." The PM picks ONE file on the
+// ticket's job, lead or estimate, and the crew link offers it through the
+// token (service-ticket-share-routes.js, GET /service-ticket-share/:token/
+// takeoff) — never through the file's public storage URL.
+//
+// NOTHING IS SHOWN UNTIL SOMEONE CHOOSES. crew_takeoff is NULL by default and
+// only this door sets it; attachment_id null clears it.
+//
+// PRICES. John's standing rule is no financial information on a work order.
+// The file is checked when it is picked (detectFilePrices — a spreadsheet's
+// header rows, no model): has_prices true keeps it off every link that hides
+// financials, which is every link unless the PM minted it otherwise. A PDF or
+// photo cannot be checked, is stored as null, and the office is warned before
+// choosing one. The verdict is stored rather than re-computed on every crew
+// open so a link read never pulls a 25 MB file out of storage to decide.
+//
+// Same gates as the Materials PATCH — WRITE access on the ticket, and not on a
+// closed or cancelled ticket — and the same file rule as the extract door:
+// loadTicketFile, so a lead or estimate file this caller could not open by the
+// front door cannot be put in front of a crew through this one.
+router.put('/:id/crew-takeoff', requireAuth, requireOrgId, async (req, res) => {
+  try {
+    const orgId = req.orgId;
+    const ticket = await loadOwnedTicket(req.params.id, orgId);
+    if (!ticket) return res.status(404).json({ error: TICKET_NOT_FOUND });
+    if (!(await ticketAccessOk(req, res, ticket, 'write', orgId))) return;
+    if (svc.isTerminal(ticket.status)) {
+      return res.status(409).json({ error: 'This ticket is ' + ticket.status + '. Reopen it before changing what the crew link shows.' });
+    }
+
+    const rawId = req.body ? req.body.attachment_id : undefined;
+    let chosen = null;
+    if (rawId !== null) {
+      // A bad id shape, an absent id, another job's file and another tenant's
+      // file are all this one 404 (loadTicketFile answers null for each).
+      const att = await loadTicketFile(ticket, req.user, orgId, rawId);
+      if (!att) return res.status(404).json({ error: FILE_NOT_FOUND });
+      const kind = takeoffKind(att.filename, att.mime_type);
+      if (!kind) {
+        return res.status(422).json({ error: 'That file type cannot be shown on the crew link.' });
+      }
+      // Required here, not at the top: exceljs and the storage backend are
+      // heavy, and a throw loading either must fail this request only.
+      const { storage } = require('../storage');
+      const { detectFilePrices } = require('../services/materials-extract');
+      // An arrow, not storage.getBuffer bare: the R2 backend's getBuffer reads
+      // this.client and loses its `this` when handed around.
+      const hasPrices = await detectFilePrices({ att, getBuffer: (key) => storage.getBuffer(key) });
+      // A SPREADSHEET that could not be read is refused, not stored as null.
+      // null means "a PDF or photo — check it yourself" and shows on every
+      // link; a priced xlsx whose read failed on a storage hiccup must not
+      // land there under that label. A PDF or photo, or an old binary .xls,
+      // really cannot be checked, and is stored as null.
+      if (hasPrices === null && (kind === 'xlsx' || kind === 'csv')) {
+        return res.status(422).json({
+          error: 'That spreadsheet could not be checked for prices, so it was not put on the crew link. Try again, or save a fresh copy to the job\'s Files and pick that.',
+        });
+      }
+      chosen = {
+        attachment_id: att.id,
+        filename: att.filename == null ? '' : String(att.filename),
+        kind: kind,
+        has_prices: hasPrices === true ? true : (hasPrices === false ? false : null),
+        set_at: new Date().toISOString(),
+        set_by: (req.user && req.user.id) || null,
+      };
+    }
+
+    const { rows } = await pool.query(
+      `UPDATE service_tickets SET crew_takeoff = $1::jsonb, updated_at = NOW()
+        WHERE id = $2 AND organization_id = $3
+      RETURNING ${TICKET_COLS}`,
+      [chosen ? JSON.stringify(chosen) : null, ticket.id, orgId]
+    );
+    if (!rows[0]) return res.status(404).json({ error: TICKET_NOT_FOUND });
+
+    // SHAPE, not contents — the field name only, as the PATCH logs it. Never
+    // the filename: a file called "Smith job - $48k bid.xlsx" is a price too.
+    await logEvent(null, rows[0], 'field_changed', {
+      actorUserId: (req.user && req.user.id) || null,
+      detail: { fields: ['crew_takeoff'] },
+    });
+    res.json({ ok: true, ticket: rows[0], crew_takeoff: chosen });
+  } catch (e) {
+    console.error('[service-tickets] crew takeoff failed', e);
+    if (res.headersSent) return;
+    res.status(500).json({ error: 'Failed to change the crew link takeoff' });
   }
 });
 

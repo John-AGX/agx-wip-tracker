@@ -15,6 +15,7 @@
 //
 //   PUBLIC (no auth — the token IS the credential):
 //     GET    /api/service-ticket-share/:token
+//     GET    /api/service-ticket-share/:token/takeoff             the takeoff file
 //     PATCH  /api/service-ticket-share/:token                     field report
 //     POST   /api/service-ticket-share/:token/photo
 //     POST   /api/service-ticket-share/:token/revision            propose
@@ -61,6 +62,7 @@ const { stShareIpLimiter, stShareViewLimiter, stShareWriteLimiter, stSharePropos
 // so it must never touch disk under its claimed name first.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 const { resolveEntityLabels } = require('../services/entity-labels');
+const { attachmentInOrg } = require('../services/attachment-org-scope');
 const svc = require('../services/service-tickets');
 const access = require('../services/service-ticket-access');
 const workOrder = require('../services/service-ticket-workorder');
@@ -571,6 +573,136 @@ async function loadTicketShare(req, res, next) {
   }
 }
 
+// ── The takeoff file on the crew link (John, 2026-09-13) ────────────────
+// The office picks ONE file on the ticket's job, lead or estimate
+// (PUT /api/service-tickets/:id/crew-takeoff) and the link offers it. This
+// helper is the whole decision of whether it still may, and T1 and the file
+// door both ask it, so the card on the page and the bytes behind it cannot
+// disagree.
+//
+// Returns { att, takeoff } or null. null when:
+//   * nothing was chosen — the default;
+//   * the file has prices (or an unrecognised verdict) and this link hides
+//     financials. Only an explicit false ("read to the end, none found") or
+//     null ("a PDF or photo, the office was warned") passes a default link;
+//     a row written by hand or by an older build narrows, it never widens;
+//   * the file can no longer be proved to hang on THIS ticket's job, its lead
+//     or its estimate. Deleted, re-parented to another job, or its parent in
+//     another tenant — it stops showing without anyone touching crew_takeoff.
+//
+// NO CAPABILITY FILTER here, deliberately. The office already chose the file
+// under its own capabilities through loadTicketFile; a token has no role to
+// ask. What is re-proved on every read is only what can CHANGE after that
+// choice: where the file hangs, and which tenant it is in. Every read carries
+// the ticket's OWN organization_id, taken from the row loadTicketShare
+// selected, never from the request.
+const TAKEOFF_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+
+async function crewTakeoffFor(ticket, share) {
+  let chosen = ticket ? ticket.crew_takeoff : null;
+  if (typeof chosen === 'string') {
+    try { chosen = JSON.parse(chosen); } catch (e) { return null; }
+  }
+  if (!chosen || typeof chosen !== 'object') return null;
+  const attachmentId = typeof chosen.attachment_id === 'string' ? chosen.attachment_id : '';
+  if (!TAKEOFF_ID_RE.test(attachmentId)) return null;
+  if (chosen.has_prices !== false && chosen.has_prices !== null && svc.hidesFinancials(share)) return null;
+
+  const orgId = ticket.organization_id;
+  if (orgId == null) return null;
+  const clean = (v) => (v == null || v === '' ? null : String(v));
+  const jobId = clean(ticket.job_id);
+  let leadId = clean(ticket.lead_id);
+  let estimateId = null;
+  if (jobId) {
+    const j = await pool.query(
+      'SELECT lead_id, estimate_id FROM jobs WHERE id = $1 AND organization_id = $2',
+      [jobId, orgId]
+    );
+    if (j.rows[0]) {
+      if (!leadId) leadId = clean(j.rows[0].lead_id);
+      estimateId = clean(j.rows[0].estimate_id);
+    }
+  }
+  if (leadId) {
+    const l = await pool.query('SELECT 1 FROM leads WHERE id = $1 AND organization_id = $2', [leadId, orgId]);
+    if (!l.rows.length) leadId = null;
+  }
+  if (estimateId) {
+    const s = await pool.query('SELECT 1 FROM estimates WHERE id = $1 AND organization_id = $2', [estimateId, orgId]);
+    if (!s.rows.length) estimateId = null;
+  }
+
+  // THE PARENTS ARE IN THE WHERE — the same shape loadTicketFile uses on the
+  // office side. A slot with no proved parent binds NULL and matches nothing.
+  const { rows } = await pool.query(
+    `SELECT id, entity_type, entity_id, organization_id, uploaded_by, filename,
+            mime_type, size_bytes, original_key
+       FROM attachments
+      WHERE id = $1
+        AND ((entity_type = 'job' AND entity_id = $2)
+          OR (entity_type = 'lead' AND entity_id = $3)
+          OR (entity_type = 'estimate' AND entity_id = $4))`,
+    [attachmentId, jobId, leadId, estimateId]
+  );
+  const att = rows[0] || null;
+  if (!att || !(await attachmentInOrg(pool, att, orgId))) return null;
+
+  // The kind is read off the file as it is NOW, not as it was when chosen: a
+  // file renamed to something that is not a takeoff stops being offered.
+  const { takeoffKind } = require('../services/materials-extract');
+  const kind = takeoffKind(att.filename, att.mime_type);
+  if (!kind) return null;
+  return {
+    att: att,
+    // A whitelist, like publicTicket: a name, a kind and a size. Never the
+    // attachment id, a storage key or a URL — the bytes come through the token.
+    takeoff: {
+      filename: att.filename == null ? '' : String(att.filename),
+      kind: kind,
+      size_bytes: att.size_bytes == null ? null : Number(att.size_bytes),
+    },
+  };
+}
+
+// What the takeoff door sends for each kind. An allowlist: nothing the
+// uploader claimed reaches Content-Type. A photo's type comes from its bytes,
+// and a PDF must start like one, so a file named takeoff.pdf holding HTML is
+// served as an opaque download rather than rendered.
+const TAKEOFF_TYPES = {
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  xls: 'application/vnd.ms-excel',
+  csv: 'text/csv; charset=utf-8',
+};
+const OPAQUE = 'application/octet-stream';
+
+function takeoffContentType(kind, buf) {
+  if (kind === 'pdf') {
+    return buf.length >= 5 && buf.subarray(0, 1024).indexOf('%PDF-') !== -1 ? 'application/pdf' : OPAQUE;
+  }
+  if (kind === 'image') {
+    const b = buf;
+    if (b.length >= 3 && b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF) return 'image/jpeg';
+    if (b.length >= 8 && b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))) return 'image/png';
+    if (b.length >= 6 && /^GIF8[79]a$/.test(b.toString('latin1', 0, 6))) return 'image/gif';
+    if (b.length >= 12 && b.toString('latin1', 0, 4) === 'RIFF' && b.toString('latin1', 8, 12) === 'WEBP') return 'image/webp';
+    return OPAQUE;
+  }
+  return TAKEOFF_TYPES[kind] || OPAQUE;
+}
+
+// Content-Disposition with a filename a header cannot be broken by: the plain
+// `filename` is printable ASCII with quotes, backslashes and every control
+// character (a CR/LF would end the header) replaced, and `filename*` carries
+// the real name RFC 5987-encoded for browsers that read it.
+function takeoffDisposition(type, filename) {
+  const name = String(filename == null ? '' : filename).replace(/[\u0000-\u001F\u007F]/g, ' ').trim() || 'takeoff';
+  const ascii = name.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_').replace(/\s+/g, ' ').slice(0, 150).trim() || 'takeoff';
+  const encoded = encodeURIComponent(name.slice(0, 150))
+    .replace(/['()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+  return type + '; filename="' + ascii + '"; filename*=UTF-8\'\'' + encoded;
+}
+
 // T1 — read the work order.
 router.get('/service-ticket-share/:token',
   stShareIpLimiter, stShareViewLimiter, loadTicketShare, async (req, res) => {
@@ -622,6 +754,17 @@ router.get('/service-ticket-share/:token',
         workOrder.subtaskActivity(pool, ticket.organization_id, ticket.id),
       ]);
 
+      // The takeoff card, when the office chose a file this link may show.
+      // Best-effort like the stats above: a failed lookup costs the crew the
+      // card, never the work order.
+      let takeoff = null;
+      try {
+        const found = await crewTakeoffFor(ticket, share);
+        if (found) takeoff = found.takeoff;
+      } catch (e) {
+        console.error('[service-ticket-share] takeoff lookup failed', e && e.message);
+      }
+
       res.json({
         ticket: svc.publicTicket(ticket, share),
         share: svc.publicShare(share),
@@ -648,10 +791,78 @@ router.get('/service-ticket-share/:token',
         }),
         org_name: orgName,
         parent_label: parentLabel,
+        // { filename, kind, size_bytes } or null — see crewTakeoffFor.
+        takeoff: takeoff,
       });
     } catch (e) {
       console.error('[service-ticket-share] read failed', e);
       res.status(500).json({ error: 'Something went wrong opening this link.' });
+    }
+  });
+
+// T1b — open the takeoff file, through the token.
+//
+// The bytes come from storage HERE rather than the page linking the file's
+// public URL: a storage URL outlives the link, cannot be revoked, and would
+// bypass every gate above. Through this door a revoked or expired link stops
+// (loadTicketShare), a priced file stays off a link that hides financials, and
+// a file taken off the job stops — each decided by crewTakeoffFor before a
+// byte is read, so a refused request never costs a storage fetch.
+//
+// Read-only, and records nothing in the event log: the crew opening the
+// takeoff is not a change to the work order.
+const TAKEOFF_MAX_BYTES = 25 * 1024 * 1024;
+
+router.get('/service-ticket-share/:token/takeoff',
+  stShareIpLimiter, stShareViewLimiter, loadTicketShare, async (req, res) => {
+    try {
+      const found = await crewTakeoffFor(req.ticket, req.share);
+      if (!found) return res.status(404).json({ error: 'There is no takeoff file on this work order.' });
+      const att = found.att;
+      // Refused on the stored size before the fetch, and again on what came
+      // back — the stored size is a claim written at upload time.
+      if (Number(att.size_bytes) > TAKEOFF_MAX_BYTES) {
+        return res.status(413).json({ error: 'That file is too large to open here — ask the office for it.' });
+      }
+      if (!att.original_key) return res.status(404).json({ error: 'There is no takeoff file on this work order.' });
+      const raw = await storage.getBuffer(att.original_key);
+      const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw || []);
+      if (buf.length > TAKEOFF_MAX_BYTES) {
+        return res.status(413).json({ error: 'That file is too large to open here — ask the office for it.' });
+      }
+
+      const type = takeoffContentType(found.takeoff.kind, buf);
+      // Only a PDF or a photo whose bytes proved it opens in the browser.
+      // Everything else — a spreadsheet, a CSV, a file that did not match its
+      // name — downloads.
+      const inline = type === 'application/pdf' || /^image\//.test(type);
+      res.status(200);
+      res.setHeader('Content-Type', type);
+      res.setHeader('Content-Length', String(buf.length));
+      res.setHeader('Content-Disposition', takeoffDisposition(inline ? 'inline' : 'attachment', found.takeoff.filename));
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Referrer-Policy', 'no-referrer');
+      res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+      // A document opened from a stranger's link runs nothing: no script, no
+      // fetch, no form. Set on downloads too, for the browser that renders one
+      // anyway.
+      //
+      // Except a PDF. Chrome's built-in viewer refuses to load under a CSP
+      // `sandbox` (or `default-src 'none'`, which denies the plugin), so the
+      // crew would open a blank page. A PDF here is served only when its BYTES
+      // are a PDF (above), with nosniff, exactly as the office's own
+      // GET /api/attachments/raw/:id already serves PDFs inline.
+      if (type !== 'application/pdf') {
+        res.setHeader('Content-Security-Policy', inline
+          ? "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox"
+          : "default-src 'none'; sandbox");
+      }
+      res.end(buf);
+    } catch (e) {
+      console.error('[service-ticket-share] takeoff open failed', e && e.message);
+      if (res.headersSent) return;
+      res.status(500).json({ error: 'Something went wrong opening that file.' });
     }
   });
 

@@ -52,9 +52,13 @@ const { sqliteSchema } = require('./helpers/db-schema');
 // rewrites this one require to that path. A virtual mock would also pass if the
 // real module vanished, so the first test below requires the real one.
 const mockExtract = jest.fn();
-jest.mock('../server/services/materials-extract', () => ({
-  extractMaterials: (...args) => mockExtract(...args),
-}), { virtual: true });
+// Only extractMaterials is replaced. takeoffKind — which files the picker may
+// offer — moved into the same module so the crew link's takeoff door shares it,
+// and it is the REAL rule the sources door must answer by.
+jest.mock('../server/services/materials-extract', () => Object.assign(
+  {}, jest.requireActual('../server/services/materials-extract.js'),
+  { extractMaterials: (...args) => mockExtract(...args) }
+), { virtual: true });
 
 const mockGetBuffer = jest.fn(async (key) => Buffer.from('bytes of ' + key));
 jest.mock('../server/storage', () => ({

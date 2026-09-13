@@ -170,7 +170,7 @@ describe('REGISTER 2 — the route population', () => {
     expect(R.mounts + R.unresolved.length).toBe(78);
   });
 
-  test('the ROUTE count is committed (603 across 77 routers)', () => {
+  test('the ROUTE count is committed (605 across 77 routers)', () => {
     // THE NUMBER THE OLD SCAFFOLD DID NOT HAVE. It drove 4 routes on 1 mount
     // and nothing moved when a route was added. This fails when one is.
     //
@@ -315,12 +315,36 @@ describe('REGISTER 2 — the route population', () => {
     //      pairs IN THE WHERE of its attachment read and then runs
     //      attachmentInOrg — absent, foreign, another job's and
     //      capability-filtered ids all answer one identical 404.
-    expect(R.routes).toBe(603);
+    //   603 -> 605, +2 ALL WAIVED, the takeoff file on the crew link (John,
+    //      2026-09-13). One owner door and ONE public door; both take a path
+    //      parameter, so the driven count does not move:
+    //        PUT /api/service-tickets/:id/crew-takeoff
+    //        GET /api/service-ticket-share/:token/takeoff     <- public door
+    //      The owner door loads the ticket through loadOwnedTicket
+    //      (`organization_id = $2`), asks for WRITE access on it, and takes the
+    //      file through loadTicketFile — the same parent pairs in the WHERE
+    //      plus attachmentInOrg that the extract door runs, so a lead or
+    //      estimate file the caller could not open by the front door is the
+    //      same 404 as an absent one. Its UPDATE is pinned to
+    //      `id = $2 AND organization_id = $3`, and its event logs the field
+    //      name, never the filename.
+    //      The public door has NO auth — the token is the credential — and its
+    //      VISIBILITY is the part worth reading: loadTicketShare refuses a
+    //      revoked or expired link first; then a file whose price check said
+    //      anything but false or null is withheld from every link that hides
+    //      financials (the default); then the attachment is RE-PROVED on every
+    //      read against the ticket's own job, the job's lead and estimate
+    //      (each `id = $1 AND organization_id = $2` on the ticket's OWN org,
+    //      taken from the row in hand, never the request), with those pairs in
+    //      the WHERE and attachmentInOrg after — so a file removed from or
+    //      moved off the job stops being served. It hands back the bytes with
+    //      nosniff, no-store and a sandbox CSP, and never the storage URL.
+    expect(R.routes).toBe(605);
     expect(R.routers).toBe(77);
   });
 
-  test('the DRIVEN / COUNTED-WAIVED split is committed (139 driven, 464 counted)', () => {
-    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 139, waived: 464 });
+  test('the DRIVEN / COUNTED-WAIVED split is committed (139 driven, 466 counted)', () => {
+    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 139, waived: 466 });
   });
 
   test('every counted-waived route is a write or needs a path parameter — nothing else is waived', () => {

@@ -674,7 +674,10 @@
   // only; a work order goes to the crew, so money has no place on it.
   function materialsHTML(t, canEdit) {
     var list = Array.isArray(t.materials) ? t.materials : [];
-    if (!list.length && !canEdit) return '';
+    // A file already on the crew link is shown to everyone who can see the
+    // ticket, so a read-only viewer learns what the crew is looking at even
+    // when the ticket carries no typed list.
+    if (!list.length && !canEdit && !crewTakeoffOf(t)) return '';
     return '<div class="p86-wo-mats">' +
       '<label class="p86-st-lbl">Materials' +
         (canEdit ? ' <button type="button" class="p86-wo-mats-edit">' + (list.length ? 'Edit' : '+ Add list') + '</button>' : '') +
@@ -684,8 +687,66 @@
             return '<tr><td class="q">' + esc(m.qty || '') + '</td><td class="u">' + esc(m.unit || '') + '</td>' +
               '<td>' + esc(m.description || '') + '</td></tr>';
           }).join('') + '</tbody></table>'
-        : '<div class="p86-wo-nophotos">No material list. Add one if the takeoff should travel with the crew.</div>') +
+        : (canEdit ? '<div class="p86-wo-nophotos">No material list. Add one if the takeoff should travel with the crew.</div>' : '')) +
       '<div class="p86-wo-mats-form" hidden></div>' +
+      // Outside the editor form on purpose: choosing the crew-link file is its
+      // own save, not part of Save materials, and it must not vanish when the
+      // editor is cancelled.
+      crewTakeoffHTML(t, canEdit) +
+    '</div>';
+  }
+
+  // ── Takeoff on the crew link ─────────────────────────────────────────
+  // The PM picks ONE file already on the job / lead / estimate for the crew
+  // link to show. What is stored is a small record — attachment id, name,
+  // kind and whether the file has price columns — never a URL: the crew opens
+  // it through the share token, and the server re-proves the file belongs to
+  // the ticket's parents every time. has_prices decides where it shows: a
+  // spreadsheet with price columns only on links sent with financial details
+  // (John's rule: no money on a work order), a clean one everywhere, and a PDF
+  // or photo — which cannot be checked — everywhere, after the office is
+  // warned.
+  function crewTakeoffOf(t) {
+    var ct = t && t.crew_takeoff;
+    // JSONB arrives parsed from pg, but a text column in a test harness (or a
+    // cached row) can hand back the string. Anything unreadable is "nothing
+    // shown", which is also what the server does with it.
+    if (typeof ct === 'string') { try { ct = JSON.parse(ct); } catch (_) { ct = null; } }
+    return ct && typeof ct === 'object' && ct.attachment_id != null ? ct : null;
+  }
+
+  var CREW_STATUS = {
+    priced: 'This file has price columns, so it only shows on crew links sent with financial details. ' +
+      'Links that hide financials (the default) don\'t show it.',
+    clean: 'The crew link shows this file.',
+    unchecked: 'The crew link shows this whole file. PDFs and photos can\'t be checked for prices — make sure it has none.'
+  };
+
+  function crewTakeoffHTML(t, canEdit) {
+    var ct = crewTakeoffOf(t);
+    // Only a ticket with a parent has files to choose from — the same gate as
+    // Fill from a job file. The server re-proves every parent regardless.
+    if (!ct) {
+      return (canEdit && (t.job_id || t.lead_id))
+        ? '<div class="p86-wo-crew is-empty">' +
+            '<button type="button" class="p86-wo-crew-pick">Show a takeoff file on the crew link</button>' +
+          '</div>'
+        : '';
+    }
+    var tone = ct.has_prices === true ? 'priced' : (ct.has_prices === false ? 'clean' : 'unchecked');
+    return '<div class="p86-wo-crew is-' + tone + '">' +
+      '<div class="p86-wo-crew-lbl">Takeoff on the crew link</div>' +
+      '<div class="p86-wo-crew-file">' +
+        '<span class="p86-wo-pick-kind k-' + esc(ct.kind || 'file') + '">' + esc(PICK_KIND[ct.kind] || 'File') + '</span>' +
+        '<span class="p86-wo-crew-name">' + esc(ct.filename || 'Untitled file') + '</span>' +
+        (canEdit
+          ? '<span class="p86-wo-crew-acts">' +
+              '<button type="button" class="p86-wo-crew-change">Change</button>' +
+              '<button type="button" class="p86-wo-crew-remove">Remove</button>' +
+            '</span>'
+          : '') +
+      '</div>' +
+      '<div class="p86-wo-crew-status" role="note">' + esc(CREW_STATUS[tone]) + '</div>' +
     '</div>';
   }
 
@@ -757,6 +818,10 @@
       subtask_reopened: 'reopened a subtask',
       subtask_note: 'added a subtask note'
     };
+    // A column name reads as jargon on the timeline; the few that do not say
+    // what they are get a plain name. The server logs names only, never the
+    // file itself, so "which file" is in the Materials section, not here.
+    var FIELD_LABEL = { crew_takeoff: 'the crew link takeoff' };
     var detail = e.detail;
     if (typeof detail === 'string') { try { detail = JSON.parse(detail); } catch (_) { detail = null; } }
     e = Object.assign({}, e, { detail: detail });
@@ -777,7 +842,7 @@
       : (head && ON_TASK[e.kind])
         ? ON_TASK[e.kind]
       : e.kind === 'field_changed' && e.detail && e.detail.fields
-        ? 'edited ' + esc((e.detail.fields || []).join(', '))
+        ? 'edited ' + esc((e.detail.fields || []).map(function (k) { return FIELD_LABEL[k] || k; }).join(', '))
         : esc(VERB[e.kind] || String(e.kind || '').replace(/_/g, ' '));
     return '<div class="p86-st-event' + (e.actor_kind === 'share' ? ' is-guest' : '') + '">' +
       '<span class="p86-st-event-who">' + who + '</span> ' +
@@ -959,6 +1024,44 @@
         });
       }
     });
+
+    // Takeoff on the crew link. Delegated from the whole Materials section,
+    // which outlives an in-place redraw of the crew row, and it catches the
+    // "Also show this file on the crew link" button inside the editor's read
+    // summary too — so the editor's own listener above stays exactly as it is
+    // (a click on that button matches none of its branches and falls through).
+    var mats = d.querySelector('.p86-wo-mats');
+    if (mats && canEdit) mats.addEventListener('click', function (e) {
+      if (e.target.closest('.p86-wo-crew-pick, .p86-wo-crew-change')) {
+        if (matsForm) openTakeoffPicker(matsForm, t, { purpose: 'crew' });
+        return;
+      }
+      var also = e.target.closest('.p86-wo-mat-crew');
+      if (also) {
+        if (also.disabled) return;
+        also.disabled = true;
+        chooseCrewTakeoff(d, t, {
+          id: also.getAttribute('data-att'),
+          kind: also.getAttribute('data-kind'),
+          filename: also.getAttribute('data-name')
+        }).then(function (saved) { if (!saved) also.disabled = false; });
+        return;
+      }
+      var rm = e.target.closest('.p86-wo-crew-remove');
+      if (rm) {
+        if (rm.disabled) return;
+        rm.disabled = true;
+        // No confirm: removing only takes the file off the crew link, the file
+        // itself stays in the job's Files, and Change puts it back in two taps.
+        api().setCrewTakeoff(t.id, null).then(function (res) {
+          toast('Takeoff removed from the crew link');
+          return afterCrewTakeoff(d, t, res);
+        }).catch(function (err) {
+          rm.disabled = false;
+          toast(err && err.message ? err.message : 'Could not remove the takeoff from the crew link', 'error');
+        });
+      }
+    });
   }
 
   // ── Fill the materials editor from a job file ────────────────────────
@@ -995,10 +1098,15 @@
     return n + ' ' + (n === 1 ? one : (many || one + 's'));
   }
 
-  function pickRowHTML(f, idx) {
-    var legacy = f.kind === 'xls';
+  // crewId: in crew mode, the attachment already on the crew link, so its row
+  // says so. An .xls cannot be READ here (the parser takes .xlsx only), but the
+  // crew can open one in whatever they have, so crew mode offers it.
+  function pickRowHTML(f, idx, crew, crewId) {
+    var legacy = f.kind === 'xls' && !crew;
+    var current = crew && crewId != null && String(crewId) === String(f.id);
     var meta = [f.folder, fmtBytes(f.size_bytes), fmtDate(f.uploaded_at)].filter(Boolean).join(' · ');
-    return '<button type="button" class="p86-wo-pick-row' + (legacy ? ' is-legacy' : '') + '" data-idx="' + idx + '"' +
+    return '<button type="button" class="p86-wo-pick-row' + (legacy ? ' is-legacy' : '') +
+        (current ? ' is-current' : '') + '" data-idx="' + idx + '"' +
         (legacy ? ' disabled' : '') + '>' +
       '<span class="p86-wo-pick-kind k-' + esc(f.kind) + '">' + esc(PICK_KIND[f.kind] || f.kind) + '</span>' +
       '<span class="p86-wo-pick-main">' +
@@ -1007,25 +1115,39 @@
           (legacy ? 'Save as .xlsx to read it' : esc(meta)) +
         '</span>' +
       '</span>' +
-      '<span class="p86-wo-pick-state" aria-hidden="true"></span>' +
+      '<span class="p86-wo-pick-state" aria-hidden="true">' + (current ? 'On the link' : '') + '</span>' +
     '</button>';
   }
 
-  function openTakeoffPicker(matsForm, t) {
-    if (!api() || typeof api().materialSources !== 'function') {
-      toast('Reading a job file is not available on this page — refresh and try again.', 'error');
+  // opts.purpose === 'crew': the same list of files, but picking one puts it
+  // on the crew link (PUT crew-takeoff) instead of reading its lines. Nothing
+  // lands in the editor in that mode; the editor's repaint hold is still taken
+  // while the picker is up so a background refresh cannot detach the ticket
+  // the pick is about to save onto.
+  function openTakeoffPicker(matsForm, t, opts) {
+    var crew = !!(opts && opts.purpose === 'crew');
+    if (!api() || typeof api().materialSources !== 'function' ||
+        (crew && typeof api().setCrewTakeoff !== 'function')) {
+      toast((crew ? 'Choosing a crew link file' : 'Reading a job file') +
+        ' is not available on this page — refresh and try again.', 'error');
       return;
     }
     if (_takeoffPick) _takeoffPick();
+    var crewNow = crew ? crewTakeoffOf(t) : null;
+    var detail = matsForm.closest('.p86-st-detail');
 
     var wrap = document.createElement('div');
     wrap.id = 'p86StTakeoffPick';
     wrap.className = 'p86-st-modal-back';
     wrap.innerHTML =
-      '<div class="p86-st-modal p86-wo-pick" role="dialog" aria-modal="true" aria-labelledby="p86StTakeoffPickHead">' +
-        '<div class="p86-st-modal-head" id="p86StTakeoffPickHead">Pick a takeoff</div>' +
-        '<div class="p86-wo-pick-note">Spreadsheets are read directly. PDFs and photos are read by AI, ' +
-          'so check every line. Prices are never copied.</div>' +
+      '<div class="p86-st-modal p86-wo-pick' + (crew ? ' is-crew' : '') + '" role="dialog" aria-modal="true" aria-labelledby="p86StTakeoffPickHead">' +
+        '<div class="p86-st-modal-head" id="p86StTakeoffPickHead">' +
+          (crew ? 'Show a takeoff on the crew link' : 'Pick a takeoff') + '</div>' +
+        (crew
+          ? '<div class="p86-wo-pick-note">The crew opens the file itself. Spreadsheets with price columns ' +
+              'only show on links sent with financial details.</div>'
+          : '<div class="p86-wo-pick-note">Spreadsheets are read directly. PDFs and photos are read by AI, ' +
+              'so check every line. Prices are never copied.</div>') +
         '<div class="p86-wo-pick-err" role="alert" hidden></div>' +
         '<div class="p86-wo-pick-body"><div class="p86-st-loading">Looking for files…</div></div>' +
         '<div class="p86-st-modal-actions">' +
@@ -1036,6 +1158,10 @@
 
     var closed = false;
     var busy = false;
+    // True while the "Show the whole file?" question is up over the picker.
+    // Escape belongs to that dialog then — it answers No, and must not also
+    // close the list the PM is still choosing from.
+    var asking = false;
     var files = [];
     var body = wrap.querySelector('.p86-wo-pick-body');
     var errEl = wrap.querySelector('.p86-wo-pick-err');
@@ -1053,7 +1179,7 @@
     }
 
     function onKey(e) {
-      if (e.key !== 'Escape') return;
+      if (e.key !== 'Escape' || asking) return;
       e.preventDefault();
       close();
     }
@@ -1085,7 +1211,9 @@
       var html = '';
       PICK_WHERE.forEach(function (g) {
         var inGroup = [];
-        files.forEach(function (f, i) { if (f.where === g.where) inGroup.push(pickRowHTML(f, i)); });
+        files.forEach(function (f, i) {
+          if (f.where === g.where) inGroup.push(pickRowHTML(f, i, crew, crewNow && crewNow.attachment_id));
+        });
         if (!inGroup.length) return;
         html += '<div class="p86-wo-pick-group">' +
           '<div class="p86-st-lbl">' + esc(g.label) + '</div>' +
@@ -1109,7 +1237,7 @@
       var btn = e.target.closest('.p86-wo-pick-row');
       if (!btn || btn.disabled || busy) return;
       var f = files[Number(btn.getAttribute('data-idx'))];
-      if (!f || f.kind === 'xls') return;
+      if (!f || (f.kind === 'xls' && !crew)) return;
       busy = true;
       showErr('');
       var allRows = body.querySelectorAll('.p86-wo-pick-row');
@@ -1117,17 +1245,46 @@
       btn.classList.add('is-reading');
       btn.setAttribute('aria-busy', 'true');
       var state = btn.querySelector('.p86-wo-pick-state');
-      if (state) state.textContent = 'Reading…';
+      var stateWas = state ? state.textContent : '';
+      if (state && !crew) state.textContent = 'Reading…';
 
       function unlock() {
         busy = false;
         Array.prototype.forEach.call(allRows, function (b) {
           var ff = files[Number(b.getAttribute('data-idx'))];
-          b.disabled = !ff || ff.kind === 'xls';
+          b.disabled = !ff || (ff.kind === 'xls' && !crew);
         });
         btn.classList.remove('is-reading');
         btn.removeAttribute('aria-busy');
-        if (state) state.textContent = '';
+        if (state) state.textContent = stateWas;
+      }
+
+      if (crew) {
+        // A PDF or photo is asked about BEFORE anything is saved: the server
+        // cannot look inside it for prices, so it would go out on every link.
+        // The row reads "Saving…" only once the PM has said yes.
+        asking = f.kind === 'pdf' || f.kind === 'image';
+        confirmWholeFile(f).then(function (yes) {
+          asking = false;
+          if (closed) return;
+          if (!yes) { unlock(); return; }
+          if (state) state.textContent = 'Saving…';
+          return api().setCrewTakeoff(t.id, f.id).then(function (res) {
+            // Saved even if the picker was dismissed while the request ran —
+            // the write happened, so the panel must show it either way.
+            close();
+            toast(crewSavedMessage(crewFromResponse(res)));
+            return afterCrewTakeoff(detail, t, res);
+          }, function (err) {
+            if (closed) {
+              toast(err && err.message ? err.message : 'Could not show that file on the crew link', 'error');
+              return;
+            }
+            unlock();
+            showErr((err && err.message) || 'Could not show that file on the crew link');
+          });
+        });
+        return;
       }
 
       api().extractMaterials(t.id, f.id).then(function (res) {
@@ -1234,6 +1391,17 @@
       var note = matsForm.querySelector('.p86-wo-mat-note');
       if (note) {
         note.innerHTML = takeoffNoteHTML(res, filename, put.length, lines.length - put.length);
+        // The file just read is usually the one the crew should see too, so
+        // offer it here rather than send the PM back through the picker. The
+        // editor only exists for someone who can edit this ticket (canEdit),
+        // and the button is left off when that file is already on the link.
+        var onLink = crewTakeoffOf(t);
+        if (f && f.id != null && PICK_KIND[f.kind] && api() && typeof api().setCrewTakeoff === 'function' &&
+            !(onLink && String(onLink.attachment_id) === String(f.id))) {
+          note.insertAdjacentHTML('beforeend',
+            ' <button type="button" class="p86-wo-mat-crew" data-att="' + escAttr(f.id) + '" data-kind="' +
+              escAttr(f.kind) + '" data-name="' + escAttr(filename) + '">Also show this file on the crew link</button>');
+        }
         note.classList.toggle('is-ai', /^ai-/.test(String(res.method || '')));
         note.hidden = false;
       }
@@ -1267,6 +1435,78 @@
     return '<span class="p86-wo-mat-note-head">' + esc(head) + '</span>' +
       warnings.map(function (w) { return ' <span class="p86-wo-mat-note-warn">' + esc(w) + '</span>'; }).join('') +
       ' <span class="p86-wo-mat-note-next">Review, then Save materials.</span>';
+  }
+
+  // The one question before a file nobody can check goes to the crew. A
+  // spreadsheet or CSV is checked by the server for price columns; a PDF or a
+  // photo cannot be, so it would show on every link, including the ones that
+  // hide financials. Resolves true to go ahead. Never rejects.
+  function confirmWholeFile(f) {
+    if (!f || (f.kind !== 'pdf' && f.kind !== 'image')) return Promise.resolve(true);
+    if (typeof window.p86Confirm !== 'function') {
+      // No dialog helper loaded: refuse rather than send an unchecked file
+      // without the warning — the warning is the whole point of this step.
+      // Never native confirm(), which no-ops inside the installed PWA.
+      toast('Could not ask before showing that file — refresh and try again.', 'error');
+      return Promise.resolve(false);
+    }
+    return Promise.resolve(window.p86Confirm({
+      title: 'Show the whole file to the crew?',
+      message: 'PDFs and photos can\'t be checked for prices. The crew will see everything in this file.',
+      confirmText: 'Show it'
+    })).then(function (yes) { return yes === true; }, function () { return false; });
+  }
+
+  // PUT crew-takeoff answers { ok, ticket, crew_takeoff }. crew_takeoff is the
+  // stored record (null when cleared); the ticket row carries the same value.
+  function crewFromResponse(res) {
+    if (res && Object.prototype.hasOwnProperty.call(res, 'crew_takeoff')) return crewTakeoffOf({ crew_takeoff: res.crew_takeoff });
+    return crewTakeoffOf(res && res.ticket);
+  }
+
+  function crewSavedMessage(ct) {
+    return ct && ct.has_prices === true
+      ? 'Saved — it shows only on links sent with financial details'
+      : 'Takeoff shown on the crew link';
+  }
+
+  // The "Also show this file on the crew link" path, outside the picker.
+  // Resolves true once the file is on the link; failures are toasted.
+  function chooseCrewTakeoff(d, t, f) {
+    return confirmWholeFile(f).then(function (yes) {
+      if (!yes) return false;
+      return api().setCrewTakeoff(t.id, f.id).then(function (res) {
+        toast(crewSavedMessage(crewFromResponse(res)));
+        return Promise.resolve(afterCrewTakeoff(d, t, res)).then(function () { return true; });
+      }, function (err) {
+        toast(err && err.message ? err.message : 'Could not show that file on the crew link', 'error');
+        return false;
+      });
+    });
+  }
+
+  // Show the new crew-link file. Normally a plain re-read of the ticket. But
+  // the "Also show" button sits right under lines just read into the editor
+  // and not yet saved, and a repaint rebuilds the editor from the server row —
+  // those lines would be gone. So when the open ticket holds edits (the same
+  // rule the background refresh obeys), only the crew row is redrawn in place.
+  function afterCrewTakeoff(d, t, res) {
+    t.crew_takeoff = crewFromResponse(res);
+    if (!d) return Promise.resolve();
+    var row = d.closest('.p86-st-row');
+    if (row && row.parentNode && detailHoldsEdits(row.parentNode)) {
+      var old = d.querySelector('.p86-wo-crew');
+      // Only an editor reaches this, so the row is drawn with its controls.
+      if (old) old.outerHTML = crewTakeoffHTML(t, true);
+      var ct = t.crew_takeoff;
+      Array.prototype.forEach.call(d.querySelectorAll('.p86-wo-mat-crew'), function (b) {
+        if (ct && String(b.getAttribute('data-att')) === String(ct.attachment_id)) b.remove();
+      });
+      return Promise.resolve();
+    }
+    return refreshDetail(d, t.id).catch(function () {
+      toast('Saved, but the ticket could not be reloaded — collapse and reopen it to see the change.', 'error');
+    });
   }
 
   function wireDetail(d, t) {

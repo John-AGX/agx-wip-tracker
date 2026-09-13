@@ -4602,6 +4602,17 @@ async function initSchema() {
     -- undo-and-redo of the last subtask, or two requests racing to the same
     -- arrival, announce it once rather than once per click.
     ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS approval_notified_at TIMESTAMPTZ;
+    -- The ONE takeoff file the office chose to show on the crew link (John,
+    -- 2026-09-13): {attachment_id, filename, kind, has_prices, set_at, set_by}.
+    -- NULL = nothing shown, which is the default — a file reaches a crew only
+    -- when a PM picks it. has_prices is what the spreadsheet's own header row
+    -- said when it was picked (true / false), or null for a PDF or photo that
+    -- cannot be checked; a true file is withheld from every link that hides
+    -- financials. The share door re-proves the attachment against the ticket's
+    -- job, lead and estimate on every read, so a file removed or moved off the
+    -- job stops showing without this column being touched. Deliberately NOT in
+    -- publicTicket's whitelist: the link gets a reduced "takeoff" object.
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS crew_takeoff JSONB;
 
     -- Share links for a service ticket. Same bearer-token shape as
     -- report_shares — token HASHED at rest, absolute expiry, soft revoke —
