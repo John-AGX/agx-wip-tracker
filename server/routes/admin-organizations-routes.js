@@ -470,7 +470,16 @@ router.get('/me', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), (r
 // identity_body / settings. Returns the updated row. The admin UI
 // is expected to re-trigger a managed-agent sync after a successful
 // update so the new identity_body lands on Anthropic.
+// ?action=buildertrend-apply — the WRITE half of the Buildertrend preview
+// (server/services/clickr/sync-apply.js): link confident matches by
+// Buildertrend id and apply the non-money corrections an admin chose. A MODE of
+// this route for the same census reason as GET /me?view=buildertrend-preview;
+// only /me is accepted, and without the parameter this route is unchanged.
 router.put('/:id', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  if (req.query && req.query.action === 'buildertrend-apply') {
+    if (req.params.id !== 'me') return res.status(400).json({ error: 'Buildertrend apply runs on /me only.' });
+    return require('../services/clickr/sync-apply').handle(req, res, { pool });
+  }
   try {
     const targetId = assertOrgScope(req, req.params.id);
     const updates = [];

@@ -1477,6 +1477,18 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_clients_market   ON clients(market_id);
     CREATE INDEX IF NOT EXISTS idx_subs_market      ON subs(market_id);
 
+    -- Buildertrend record ids (Admin -> Organization -> Buildertrend preview).
+    -- Stamped ONLY by server/services/clickr/sync-apply.js when an admin applies
+    -- a confident match, so later syncs find the counterpart by id instead of
+    -- re-matching on number, name and address. NULL = never linked. Unique per
+    -- organization: one Buildertrend record links to at most one P86 record.
+    ALTER TABLE jobs    ADD COLUMN IF NOT EXISTS bt_job_id TEXT;
+    ALTER TABLE leads   ADD COLUMN IF NOT EXISTS bt_lead_id TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS bt_contact_id TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_jobs_org_bt_job_id       ON jobs(organization_id, bt_job_id)       WHERE bt_job_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_leads_org_bt_lead_id     ON leads(organization_id, bt_lead_id)     WHERE bt_lead_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_clients_org_bt_contact_id ON clients(organization_id, bt_contact_id) WHERE bt_contact_id IS NOT NULL;
+
     -- ---------------------------------------------------------------
     -- Per-org folder templates. Folders in Project 86 are IMPLICIT --
     -- a folder only "exists" once an attachment row carries that

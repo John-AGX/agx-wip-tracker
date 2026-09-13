@@ -136,6 +136,7 @@ function readLead(rec) {
     city: scalarText(r.opportunityCity),
     state: scalarText(r.opportunityState),
     zip: scalarText(r.opportunityZip),
+    contactId: scalarText(r.contactId),
     contactName: scalarText(r.contactName),
     salesperson: scalarText(r.salesperson),
     projectType: scalarText(r.projectType),

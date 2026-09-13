@@ -571,6 +571,8 @@ function p86JobView(row) {
     startDate: str(d.startDate),
     contractAmount: d.contractAmount == null ? '' : str(d.contractAmount),
     state86: p86JobState(d.status),
+    // jobs.bt_job_id — set only by sync-apply.js when an admin applies a match.
+    btId: row.bt_job_id == null ? '' : str(row.bt_job_id).trim(),
   };
 }
 
@@ -610,9 +612,14 @@ function jobProposals(bt, p, ctx) {
     acc.corrections.push({ field: 'status', label: 'Status', kind: 'value', from: p.status, to: 'Closed', toP86: 'Completed' });
   }
 
-  // PROJECTED START -> data.startDate, as a calendar day.
+  // PROJECTED START -> data.startDate, as a calendar day, FILL ONLY. The owner's
+  // call: Buildertrend's projected start is a planning date, so it fills a P86
+  // job that has none and never replaces a start date someone set in P86 (that
+  // is usually the actual start).
   if (!isBtBlank(bt.projectedStart) && !dateKey(bt.projectedStart)) {
     notes.push('Buildertrend projected start "' + str(bt.projectedStart).slice(0, 40) + '" is not a readable date, so it was not compared.');
+  } else if (!isP86Blank(p.startDate)) {
+    // P86 already has a start date: it stands. Nothing proposed, nothing noted.
   } else {
     const btDay = dateKey(bt.projectedStart);
     compareField(acc, { field: 'startDate', label: 'Start date', bt: btDay || bt.projectedStart, p86: p.startDate,
@@ -752,6 +759,7 @@ function matchJobs(btValues, p86Rows, ctx) {
   const byStreet = indexBy(p86, (p) => streetKey(p.street));
   const near = nearIndex(p86, (p) => coreTitle(p.title, [p.jobNumber]));
   const NEAR_LABELS = { name: 'similar name', place: 'same address, typo-tolerant' };
+  const byBtId = indexBy(p86, (p) => p.btId);
 
   const parsed = btValues.map((v) => parseJobName(v.jobName));
   // A number is SHARED when more than one non-change-order row carries it. A
@@ -790,6 +798,14 @@ function matchJobs(btValues, p86Rows, ctx) {
     const titleBlank = isBtBlank(pj.title);
     const title = titleBlank ? '' : pj.title;
 
+    // RUNG 0 — THE BUILDERTREND ID. A P86 job already linked to this Buildertrend
+    // job (sync-apply.js stamps jobs.bt_job_id when an admin applies a match) IS
+    // its counterpart, whatever the number, name or address say now. A P86 job
+    // linked to a DIFFERENT Buildertrend job is never a candidate for this row.
+    const btKey = v.btId == null ? '' : String(v.btId).trim();
+    const linked = btKey ? (byBtId.get(btKey) || []) : [];
+    const free = (p) => !p.btId || p.btId === btKey;
+
     const cands = new Map();
     const add = (list, rung) => {
       for (const p of list || []) {
@@ -800,24 +816,51 @@ function matchJobs(btValues, p86Rows, ctx) {
     const exact = [];
     const loose = [];
     for (const n of pj.numbers) {
-      for (const p of byExact.get(exactNumberKey(n)) || []) exact.push(p);
-      for (const p of byLoose.get(looseNumberKey(n)) || []) if (exactNumberKey(p.jobNumber) !== exactNumberKey(n)) loose.push(p);
+      for (const p of byExact.get(exactNumberKey(n)) || []) if (free(p)) exact.push(p);
+      for (const p of byLoose.get(looseNumberKey(n)) || []) if (free(p) && exactNumberKey(p.jobNumber) !== exactNumberKey(n)) loose.push(p);
     }
     add(exact, 'number');
     add(loose, 'number written differently');
     const nk = textKey(title);
-    const nameHits = nk ? (byName.get(nk) || []) : [];
+    const nameHits = nk ? (byName.get(nk) || []).filter(free) : [];
     const sk = streetKey(v.street);
-    const placeHits = sk ? (byStreet.get(sk) || []).filter((p) => samePlace(bt, p, false)) : [];
+    const placeHits = sk ? (byStreet.get(sk) || []).filter((p) => free(p) && samePlace(bt, p, false)) : [];
     add(nameHits.filter((p) => placeHits.includes(p)), 'name + address');
     add(nameHits, 'name');
     add(placeHits, 'address');
     // The NEAR rungs are collected for EVERY numbered row (never first-rung-wins).
     // On an ambiguous row they are candidates; next to a confident match they are
     // shown as possible P86 duplicates; alone they make a possible duplicate.
-    const nearList = near(title, bt, (p) => cands.has(p.id), NEAR_LABELS).map((h) => jobCand(h.it, h.why));
+    const linkedIds = new Set(linked.map((p) => p.id));
+    const nearList = near(title, bt, (p) => cands.has(p.id) || linkedIds.has(p.id) || !free(p), NEAR_LABELS).map((h) => jobCand(h.it, h.why));
     const allCands = () => [...cands.values()].map((x) => jobCand(x.p, x.rungs)).concat(nearList);
     const amb = (note) => unpairedRow(bt, 'ambiguous', allCands(), [note]);
+
+    const confidentRow = (p, rungName, cNotes) => {
+      const { acc, notes } = jobProposals(Object.assign({}, bt, { title }, moneyIn), p, c);
+      const row = {
+        bt, class: acc.corrections.length ? 'conflict' : 'matched', rung: rungName, p86: jobCand(p, [rungName]),
+        corrections: acc.corrections, btBlank: acc.btBlank, heldBack: acc.heldBack, flags: acc.flags,
+        candidates: [], notes: cNotes.concat(notes), p86Duplicates: [],
+      };
+      if (nearList.length) {
+        // The match stands, but P86 also holds jobs that look like this one. They
+        // are not reached — they stay in "in P86, not in Buildertrend", linked
+        // back to this row.
+        row.p86Duplicates = nearList;
+        row.flags.push({ field: 'duplicate', label: 'Possible P86 duplicate',
+          text: 'P86 also holds ' + nearList.length + ' job' + (nearList.length === 1 ? '' : 's') + ' that look' + (nearList.length === 1 ? 's' : '')
+            + ' like this one: ' + nearList.map((x) => [x.jobNumber, x.title].filter(Boolean).join(' ') || x.id).join('; ')
+            + '. Nothing about ' + (nearList.length === 1 ? 'it' : 'them') + ' is proposed — review for a duplicate in P86.' });
+      }
+      return row;
+    };
+
+    if (linked.length > 1) {
+      return unpairedRow(bt, 'ambiguous', linked.map((p) => jobCand(p, ['Buildertrend ID'])),
+        [linked.length + ' P86 jobs are linked to this Buildertrend job. Nothing is proposed; unlink the extra one.']);
+    }
+    if (linked.length === 1) return confidentRow(linked[0], 'Buildertrend ID', []);
 
     if (pj.numbers.length > 1) {
       return amb('Two job numbers in one name (' + pj.numbers.join(', ') + '). Nothing is proposed; fix it in Buildertrend.');
@@ -883,25 +926,7 @@ function matchJobs(btValues, p86Rows, ctx) {
       return amb(cands.size + ' P86 jobs share this job\'s name or address. Nothing is proposed.');
     }
 
-    if (confident) {
-      const { acc, notes } = jobProposals(Object.assign({}, bt, { title }, moneyIn), confident, c);
-      const row = {
-        bt, class: acc.corrections.length ? 'conflict' : 'matched', rung, p86: jobCand(confident, [rung]),
-        corrections: acc.corrections, btBlank: acc.btBlank, heldBack: acc.heldBack, flags: acc.flags,
-        candidates: [], notes: confidenceNotes.concat(notes), p86Duplicates: [],
-      };
-      if (nearList.length) {
-        // The match stands (the exact number and nothing contradicting it), but
-        // P86 also holds jobs that look like this one. They are not reached — they
-        // stay in "in P86, not in Buildertrend", linked back to this row.
-        row.p86Duplicates = nearList;
-        row.flags.push({ field: 'duplicate', label: 'Possible P86 duplicate',
-          text: 'P86 also holds ' + nearList.length + ' job' + (nearList.length === 1 ? '' : 's') + ' that look' + (nearList.length === 1 ? 's' : '')
-            + ' like this one: ' + nearList.map((x) => [x.jobNumber, x.title].filter(Boolean).join(' ') || x.id).join('; ')
-            + '. Nothing about ' + (nearList.length === 1 ? 'it' : 'them') + ' is proposed — review for a duplicate in P86.' });
-      }
-      return row;
-    }
+    if (confident) return confidentRow(confident, rung, confidenceNotes);
 
     // Would be new. A NEAR duplicate makes it a review item instead.
     if (nearList.length) {
@@ -989,6 +1014,8 @@ function p86LeadView(row) {
     // organization — a job_id naming another tenant's job does not count.
     linkedJob: !!row.has_job,
     state86: p86LeadState(row.status),
+    // leads.bt_lead_id — set only by sync-apply.js when an admin applies a match.
+    btId: row.bt_lead_id == null ? '' : str(row.bt_lead_id).trim(),
   };
 }
 
@@ -1079,7 +1106,7 @@ function matchLeads(btValues, p86Rows, ctx) {
     const bt = {
       index: i, btId: v.btId, raw: str(v.title), title: str(v.title),
       street: str(v.street), city: str(v.city), state: str(v.state), zip: str(v.zip),
-      contactName: str(v.contactName), salesperson: str(v.salesperson), source: str(v.source),
+      contactId: str(v.contactId), contactName: str(v.contactName), salesperson: str(v.salesperson), source: str(v.source),
       confidence: v.confidence, estimatedRevenueMin: v.estimatedRevenueMin, estimatedRevenueMax: v.estimatedRevenueMax,
       projectType: str(v.projectType), createdDate: str(v.createdDate), scope: 'open',
     };
@@ -1089,10 +1116,16 @@ function matchLeads(btValues, p86Rows, ctx) {
     if (typeof bt.confidence !== 'number') bt.confidence = bt.confidence == null ? null : str(bt.confidence).slice(0, 20);
     if (isBtBlank(v.title)) return unpairedRow(bt, 'refused', [], ['This Buildertrend lead has no title, so it cannot be matched and will never be created.']);
 
+    // RUNG 0 — THE BUILDERTREND ID (see matchJobs).
+    const btKey = v.btId == null ? '' : String(v.btId).trim();
+    const linked = btKey ? (p86.filter((p) => p.btId && p.btId === btKey)) : [];
+    const linkedIds = new Set(linked.map((p) => p.id));
+    const free = (p) => !p.btId || p.btId === btKey;
+
     const tk = textKey(v.title);
-    const titleHits = byTitle.get(tk) || [];
+    const titleHits = (byTitle.get(tk) || []).filter(free);
     const sk = streetKey(v.street);
-    const placeHits = sk ? (byStreet.get(sk) || []).filter((p) => samePlace(bt, p, false)) : [];
+    const placeHits = sk ? (byStreet.get(sk) || []).filter((p) => free(p) && samePlace(bt, p, false)) : [];
     const cands = new Map();
     const add = (list, rung) => {
       for (const p of list) {
@@ -1105,10 +1138,24 @@ function matchLeads(btValues, p86Rows, ctx) {
     add(titleHits, 'title');
     add(placeHits, 'address');
     // NEAR rungs for every lead (see matchJobs).
-    const nearList = near(v.title, bt, (p) => cands.has(p.id), NEAR_LABELS).map((h) => leadCand(h.it, h.why));
+    const nearList = near(v.title, bt, (p) => cands.has(p.id) || linkedIds.has(p.id) || !free(p), NEAR_LABELS).map((h) => leadCand(h.it, h.why));
     const allCands = () => [...cands.values()].map((x) => leadCand(x.p, x.rungs)).concat(nearList);
     const confirms = (x) => x.rungs.has('title + address') || x.rungs.has('title + client');
     const amb = (note) => unpairedRow(bt, 'ambiguous', allCands(), [note]);
+
+    if (linked.length > 1) {
+      return unpairedRow(bt, 'ambiguous', linked.map((p) => leadCand(p, ['Buildertrend ID'])),
+        [linked.length + ' P86 leads are linked to this Buildertrend lead. Nothing is proposed; unlink the extra one.']);
+    }
+    if (linked.length === 1) {
+      const p = linked[0];
+      const { acc, notes } = leadProposals(view, p, directory);
+      return {
+        bt, class: acc.corrections.length ? 'conflict' : 'matched', rung: 'Buildertrend ID', p86: leadCand(p, ['Buildertrend ID']),
+        corrections: acc.corrections, btBlank: acc.btBlank, heldBack: acc.heldBack, flags: acc.flags,
+        candidates: [], notes, p86Duplicates: [], considered: [],
+      };
+    }
 
     if (titleHits.length) {
       const confirmed = [...cands.values()].filter((x) => x.rungs.has('title') && confirms(x));

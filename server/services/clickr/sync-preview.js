@@ -84,12 +84,12 @@ const JOB_KEYS = ['jobNumber', 'title', 'name', 'status', 'street_address', 'cit
 async function readP86(pool, orgId) {
   const jobsRaw = await pool.query(
     'SELECT id, ' + JOB_KEYS.map((k) => "data->>'" + k + "' AS \"" + k + '"').join(', ')
-    + ", data->'changeOrders' AS legacy_cos FROM jobs WHERE organization_id = $1", [orgId]);
-  const jobRows = jobsRaw.rows.map((r) => ({ id: r.id, legacy_cos: r.legacy_cos,
+    + ", data->'changeOrders' AS legacy_cos, bt_job_id FROM jobs WHERE organization_id = $1", [orgId]);
+  const jobRows = jobsRaw.rows.map((r) => ({ id: r.id, legacy_cos: r.legacy_cos, bt_job_id: r.bt_job_id,
     data: Object.fromEntries(JOB_KEYS.map((k) => [k, r[k] == null ? '' : r[k]])) }));
   const leads = await pool.query(
     'SELECT l.id, l.title, l.status, l.street_address, l.city, l.state, l.zip, l.source, l.confidence, '
-    + 'l.estimated_revenue_low, l.estimated_revenue_high, '
+    + 'l.estimated_revenue_low, l.estimated_revenue_high, l.bt_lead_id, '
     // Converted = the lead <-> job link on EITHER side (jobs.lead_id or
     // leads.job_id), and only through a job of THIS organization: another
     // tenant's job naming this lead, or this lead naming another tenant's job,
@@ -277,6 +277,7 @@ async function buildPreview(org, deps) {
       error: { kind: 'internal', message: 'The ' + DATASETS[k].label + ' read failed inside this server before Clickr answered.' },
     };
     datasets[k] = buildDataset(k, fr, p86, p86Error);
+    if (fr && !fr.error && fr.complete === true) rememberFetch(org.id, k, fr, (deps.now || Date.now)());
   });
 
   const body = {
@@ -335,6 +336,25 @@ async function handle(req, res, deps) {
   }
 }
 
+// The last COMPLETE Clickr read per organization and dataset, kept briefly so
+// Apply (sync-apply.js) right after a preview load does not re-read every
+// page. Records only — never P86 data, never the key. Apply always re-reads
+// P86 and re-runs the matcher; it drops this cache after any write.
+const FETCH_TTL_MS = 5 * 60 * 1000;
+const _fetches = new Map();
+function rememberFetch(orgId, kind, fr, at) {
+  _fetches.set(String(orgId) + ':' + kind, { at, fr });
+}
+function cachedFetch(orgId, kind, maxAgeMs, now) {
+  const hit = _fetches.get(String(orgId) + ':' + kind);
+  if (!hit) return null;
+  const age = (now || Date.now)() - hit.at;
+  return age >= 0 && age <= (maxAgeMs == null ? FETCH_TTL_MS : maxAgeMs) ? hit.fr : null;
+}
+function forgetFetch(orgId) {
+  for (const k of [..._fetches.keys()]) if (k.startsWith(String(orgId) + ':')) _fetches.delete(k);
+}
+
 let inFlight = false;
 
-module.exports = { handle, buildPreview, readP86, changeOrderTotals, ownerSlug, fetchedSentence, carriesKey, VIEW_PARAM };
+module.exports = { handle, buildPreview, rememberFetch, cachedFetch, forgetFetch, readP86, changeOrderTotals, ownerSlug, fetchedSentence, carriesKey, VIEW_PARAM };

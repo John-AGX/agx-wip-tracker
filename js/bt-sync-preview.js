@@ -52,6 +52,11 @@
     jobs: { f: 'all', scope: 'open', q: '', shown: PAGE },
     leads: { f: 'all', scope: 'all', q: '', shown: PAGE }
   };
+  // Apply (server/services/clickr/sync-apply.js). The server re-reads both
+  // sides and re-matches; the page only says which Buildertrend ids to act on.
+  var APPLY_ENDPOINT = '/api/admin/organizations/me?action=buildertrend-apply';
+  var _applying = null;          // 'jobs:safe' | 'jobs:<btId>' | ...
+  var _applyNote = { jobs: null, leads: null };   // { ok, text }
 
   function esc(s) {
     return String(s == null ? '' : s)
@@ -132,6 +137,9 @@
       '.btp-to{font-weight:600;overflow-wrap:anywhere;}',
       '.btp-tag{display:inline-block;font-size:10px;font-weight:700;border-radius:8px;padding:0 6px;margin-left:4px;border:1px solid var(--border);color:var(--text-dim);vertical-align:1px;}',
       '.btp-tag.is-typo{color:var(--red);border-color:var(--red);}',
+      '.btp-tag.is-linked{color:var(--green);border-color:var(--green);margin-left:auto;}',
+      '.btp-row-head .btp-apply{margin-left:auto;padding:3px 10px;}',
+      '.btp-btn:disabled{opacity:.55;cursor:default;}',
       '.btp-fix-note{grid-column:2;color:var(--text-dim);font-size:11px;overflow-wrap:anywhere;}',
       '.btp-fix-note.is-typo{color:var(--red);}',
       '.btp-list{margin:0;padding-left:16px;font-size:12px;overflow-wrap:anywhere;}',
@@ -368,9 +376,71 @@
     if (r.rung) head += '<span class="btp-rung">via ' + esc(r.rung) + '</span>';
     if (ds.key === 'jobs' && r.bt.scope !== 'open') head += '<span class="btp-rung">' + esc(r.bt.scope === 'closed' ? 'Closed in Buildertrend' : 'no Buildertrend status') + '</span>';
     var notes = (r.notes || []).length ? '<div class="btp-notes">' + r.notes.map(esc).join(' · ') + '</div>' : '';
+    head += applyButtonHTML(ds, r);
     return '<div class="btp-row"><div class="btp-row-head">' + head + '</div>' +
       '<div class="btp-pair">' + btSide(ds, r) + p86Side(ds, r) + '</div>' +
       correctionsHTML(r) + heldHTML(r) + blankHTML(r) + flagsHTML(r) + alsoHTML(ds, r) + notes + '</div>';
+  }
+
+  // Only confident rows (matched / conflict) with a Buildertrend id can be
+  // applied. A row already linked by id with nothing to correct shows "Linked".
+  function applyButtonHTML(ds, r) {
+    var cls = r['class'];
+    if ((cls !== 'matched' && cls !== 'conflict') || !r.bt || r.bt.btId == null || r.bt.btId === '') return '';
+    var n = (r.corrections || []).length;
+    var linked = r.rung === 'Buildertrend ID';
+    if (!n && linked) return '<span class="btp-tag is-linked">Linked</span>';
+    var busy = _applying === ds.key + ':' + r.bt.btId;
+    var label = busy ? 'Applying…' : (n ? 'Apply ' + n + ' change' + (n === 1 ? '' : 's') + (linked ? '' : ' + link') : 'Link');
+    return '<button type="button" class="btp-btn btp-apply" data-btp-apply="' + esc(r.bt.btId) + '"' + (_applying ? ' disabled' : '') + '>' + label + '</button>';
+  }
+
+  function safeCount(ds) {
+    return (ds.rows || []).filter(function (r) {
+      if (r['class'] !== 'matched' && r['class'] !== 'conflict') return false;
+      if (!r.bt || r.bt.btId == null || r.bt.btId === '') return false;
+      if (r.rung !== 'Buildertrend ID') return true;
+      return ds.key === 'jobs' && (r.corrections || []).some(function (c) { return c.field === 'startDate' && c.kind === 'fill'; });
+    }).length;
+  }
+
+  function applyResultText(res) {
+    var c = (res && res.counts) || {};
+    var parts = [(c.applied || 0) + ' updated'];
+    if (c.linked) parts.push(c.linked + ' newly linked');
+    if (c.fields) parts.push(c.fields + ' field' + (c.fields === 1 ? '' : 's') + ' changed');
+    if (c.unchanged) parts.push(c.unchanged + ' already up to date');
+    if (c.skipped) parts.push(c.skipped + ' skipped');
+    if (c.failed) parts.push(c.failed + ' failed');
+    var reasons = ((res && res.results) || []).filter(function (x) { return x.outcome === 'skipped' || x.outcome === 'failed'; })
+      .slice(0, 3).map(function (x) { return (x.label ? '“' + x.label + '”: ' : '') + x.reason; });
+    return parts.join(' · ') + '.' + (reasons.length ? ' ' + reasons.join(' ') : '');
+  }
+
+  function runApply(key, body) {
+    if (_applying || !(window.p86Api && typeof window.p86Api.put === 'function')) return;
+    _applying = key + ':' + (body.mode === 'safe' ? 'safe' : body.btIds[0]);
+    _applyNote[key] = null;
+    repaint(key);
+    window.p86Api.put(APPLY_ENDPOINT, Object.assign({ dataset: key }, body)).then(function (res) {
+      _applying = null;
+      _applyNote[key] = { ok: true, text: applyResultText(res) };
+      load();
+    }).catch(function (e) {
+      _applying = null;
+      var msg = e && e.data && typeof e.data.error === 'string' ? e.data.error : 'The apply request failed' + (e && e.status ? ' (HTTP ' + e.status + ')' : '') + '.';
+      _applyNote[key] = { ok: false, text: msg };
+      repaint(key);
+    });
+  }
+
+  function askThen(message, label, fn) {
+    if (typeof window.p86Confirm === 'function') {
+      Promise.resolve(window.p86Confirm({ title: 'Apply Buildertrend updates', message: message, confirmLabel: label, confirmText: label,
+        cancelLabel: 'Cancel', cancelText: 'Cancel', danger: false, destructive: false })).then(function (ok) { if (ok) fn(); });
+    } else if (window.confirm(message)) {
+      fn();
+    }
   }
 
   function notInBtRowHTML(ds, p) {
@@ -437,6 +507,13 @@
     if (ds.classified) {
       var cc = countsFor(ds, ui);
       var nib = ds.notInBuildertrend || {};
+      var sc = safeCount(ds);
+      var busySafe = _applying === ds.key + ':safe';
+      html += '<div class="btp-filters"><button type="button" class="btp-btn btp-apply" data-btp-apply-safe="1"' + (_applying || !sc || !f.complete ? ' disabled' : '') + '>' +
+        (busySafe ? 'Applying…' : (ds.key === 'jobs' ? 'Link confident matches + fill blank start dates' : 'Link confident matches') + ' (' + sc + ')') + '</button>' +
+        '<span class="btp-sub">' + (f.complete ? 'Saves the Buildertrend id on each confident match' + (ds.key === 'jobs' ? ' and fills a start date only where P86 has none' : '') + '. No other field changes.' : 'Needs a complete Buildertrend read.') + '</span></div>';
+      var note = _applyNote[ds.key];
+      if (note) html += '<div class="btp-sentence ' + (note.ok ? 'is-ok' : 'is-bad') + '">' + esc(note.text) + '</div>';
       if (ds.key === 'jobs') {
         html += '<div class="btp-filters"><div class="btp-seg" role="group" aria-label="Buildertrend job scope">' +
           [['open', 'Open + Warranty'], ['all', 'All jobs']].map(function (s) {
@@ -494,9 +571,10 @@
 
   function pageHTML() {
     var html = '<div class="btp">';
-    html += '<div class="btp-banner" role="note"><div><b>Read-only preview — nothing is written</b> to Project 86 or to Buildertrend.</div>' +
+    html += '<div class="btp-banner" role="note"><div><b>Nothing changes until you press Apply</b> — and nothing is ever written to Buildertrend.</div>' +
       '<p>Buildertrend is the source of truth, so each difference is shown as the correction Project 86 would receive. ' +
-      'A blank in Buildertrend never overwrites a P86 value. Money and job numbers are held back. Ambiguous matches propose nothing. Nothing is proposed for deletion.</p></div>';
+      'A blank in Buildertrend never overwrites a P86 value. Money and job numbers are held back and never applied. Ambiguous matches propose nothing and cannot be applied. Nothing is created or deleted. ' +
+      'Applying saves the Buildertrend id on the P86 record, so later reads find it by id.</p></div>';
     html += '<div class="btp-toolbar"><button type="button" class="btp-btn" data-btp-refresh="1"' + (_loading ? ' disabled' : '') + '>' + (_loading ? 'Loading…' : 'Refresh') + '</button>';
     if (_data && _data.generatedAt) html += '<span>Generated ' + esc(new Date(_data.generatedAt).toLocaleString()) + ' · ' + esc(_data.elapsedMs) + ' ms</span>';
     html += '</div>';
@@ -552,6 +630,20 @@
       if (q) q.addEventListener('input', function () { ui.q = q.value; ui.shown = PAGE; repaint(key); });
       var more = sec.querySelector('[data-btp-more]');
       if (more) more.addEventListener('click', function () { ui.shown += PAGE; repaint(key); });
+      Array.prototype.forEach.call(sec.querySelectorAll('[data-btp-apply]'), function (b) {
+        b.addEventListener('click', function () { runApply(key, { btIds: [b.getAttribute('data-btp-apply')] }); });
+      });
+      var safe = sec.querySelector('[data-btp-apply-safe]');
+      if (safe) {
+        safe.addEventListener('click', function () {
+          var ds = _data && _data.datasets && _data.datasets[key];
+          var n = ds ? safeCount(ds) : 0;
+          askThen('Link ' + n + ' confident ' + (key === 'jobs' ? 'job' : 'lead') + ' match' + (n === 1 ? '' : 'es') + ' to Buildertrend' +
+            (key === 'jobs' ? ' and fill start dates where P86 has none' : '') + '? No other field changes.', 'Apply', function () {
+            runApply(key, { mode: 'safe' });
+          });
+        });
+      }
     });
   }
 
