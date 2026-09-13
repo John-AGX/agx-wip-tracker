@@ -56,8 +56,16 @@ const jobLabel = require('../../js/job-label');
 // job-wip.js so the per-turn vendor rollup cannot drift from the engine.
 const { classifyCostLine } = require('../services/money/cost-line-filters');
 // Timezone helpers — render reminder remind_at instants in the acting
-// user's local zone (the time IS the point of a reminder).
-const { resolveTz, formatInTz } = require('../timezone');
+// user's local zone (the time IS the point of a reminder). isCalendarDay
+// validates a DATE column's day before read_entity{service_ticket} prints it.
+const { resolveTz, formatInTz, isCalendarDay } = require('../timezone');
+// Service tickets (work orders). The ACCESS rule is the one every ticket door
+// asks — who may read a ticket depends on its parent job or lead, and the
+// narrow job tier is narrowed to the jobs the caller owns or was granted — so
+// the agent read cannot drift from the REST read. The service module is pure
+// (share lifecycle, progress, the proposable-field whitelist).
+const ticketAccess = require('../services/service-ticket-access');
+const ticketSvc = require('../services/service-tickets');
 const { deleteSkillDeep, anthropicDisplayTitle } = require('../services/anthropic-skills');
 
 const router = express.Router();
@@ -8205,11 +8213,12 @@ const MEMORY_TOOLS = [
 // ──────────────────────────────────────────────────────────────────
 // PAYLOAD_TOOLS — Project 86 Payload DSL (v1).
 //
-// The Principal's ONLY write primitive. Every mutation 86 wants to
-// make — field update, line item edit, phase change, lead create,
-// graph topology op — gets bundled into a `.p86.json` payload file
-// via this single tool call. The user drags the file into the
-// universal dropbox to apply.
+// The SCRIBE's only write primitive — not 86's. 86 and the Assistant hold
+// `scribe_write` and describe a change in words; the Scribe is the one agent
+// whose tool list carries emit_payload_file, and it turns that description
+// into a `.p86.json` payload (field update, line item edit, phase change,
+// lead create, work order, ...). A comment that still called this 86's tool
+// is how a reader goes looking for the write door in the wrong agent.
 //
 // The handler (in make86OnCustomToolUse) validates ops against
 // payload-dispatcher's PAYLOAD_OPS_SCHEMAS, inserts a payloads row
@@ -8250,14 +8259,15 @@ const READ_TOOLS = [
       'estimate (depth: summary|full|audit; include: lines|compare), ' +
       'client (depth: summary|full), lead (depth: summary|full), ' +
       'task (full to-do detail: status, priority, due date, assignee, linked entity, checklist subtasks, photo count), ' +
-      'pipeline (id=\'leads\' for funnel rollup). ' +
+      'pipeline (id=\'leads\' for funnel rollup), ' +
+      'service_ticket (a work order on a job or lead; by its id only. summary: status, parent, dates, assignee, task progress; full adds scope, notes, field log, child tasks, pending suggestions, recent activity). ' +
       'CROSS-LINK: add include:["tasks"] on any of job|lead|estimate|client|project|sub to list the OPEN to-dos/tasks attached to that entity (answers "what tasks are open on this job").',
     tier: 'auto',
     input_schema: {
       type: 'object',
       required: ['entity_type', 'id'],
       properties: {
-        entity_type: { type: 'string', enum: ['job', 'estimate', 'client', 'lead', 'task', 'pipeline'] },
+        entity_type: { type: 'string', enum: ['job', 'estimate', 'client', 'lead', 'task', 'pipeline', 'service_ticket'] },
         id: { type: 'string' },
         depth: { type: 'string', enum: ['summary', 'full', 'audit'] },
         include: { type: 'array', items: { type: 'string' } },
@@ -8480,15 +8490,25 @@ const PAYLOAD_TOOLS = [
     //
     // So: this string is the INDEX — entity types and their op keys, nothing
     // more. The per-entity FIELD lists live in the Scribe's system baseline
-    // (admin-agents-routes.js SYSTEM_BASELINES.scribe), which is not capped.
-    // Add a new entity type here; add its fields THERE. If this ever needs to
-    // grow past the cap, move detail to the baseline — do not raise the cap,
-    // which would put the cost on every turn of every agent.
+    // (admin-agents-routes.js AGENT_SYSTEM_BASELINE.scribe), which is not
+    // capped. Add a new entity type here; add its fields THERE. If this ever
+    // needs to grow past the cap, move detail to the baseline — do not raise
+    // the cap, which would put the cost on every turn of every agent.
+    //
+    // service_ticket arrived with 14 chars of headroom and needed 39. The room
+    // was made by rewording, never by dropping a fact: "payload — your only
+    // write primitive" -> "payload, your only write tool"; "reference" ->
+    // "ref"; "four with" -> "4 via"; "personal nudge" -> "private nudge" (a
+    // reminder is on the user's own list — the same fact); the spaces inside
+    // the payload shape and around the arrow; and "Field lists are in your
+    // system prompt" -> "Field lists: system prompt". 1017 chars, measured
+    // through ai-routes-internals.payloadTools() rather than counted by eye;
+    // test/agent-tool-description-cap.test.js holds the cap.
     description:
-      'Emit ONE .p86.json payload — your only write primitive. ' +
-      '{targets:[{entity_type,entity_id?,ops}], title, summary}. ' +
-      'entity_id = real id, or $new_<name> for a create other targets reference. ' +
-      'entity_type → ops: ' +
+      'Emit ONE .p86.json payload, your only write tool. ' +
+      '{targets:[{entity_type,entity_id?,ops}],title,summary}. ' +
+      'entity_id = real id, or $new_<name> for a create other targets ref. ' +
+      'entity_type→ops: ' +
       'estimate {op,scope,field_updates,sections,groups,line_adds,line_edits,line_deletes,assembly_adds} · ' +
       'job {field_updates,phase_updates,change_orders,purchase_orders,invoices,notes} · ' +
       'lead/client {op,fields,notes} · assembly {op,fields,items} · schedule {blocks} · ' +
@@ -8500,12 +8520,16 @@ const PAYLOAD_TOOLS = [
       // over the 1024 cap, which would have silently cut whatever was
       // appended last — this entry.
       'attachment {photo_updates} · ' +
+      // A work order on a job or a lead. Index form, for the same reason as
+      // the attachment entry above: the field list, the child-task shape and
+      // the refusals live in the Scribe baseline.
+      'service_ticket {op,fields,task_adds} · ' +
       'deal_memory {note_adds,note_supersedes} · ' +
-      'calendar_event {title,starts_at} = appointment · reminder {title,remind_at} = personal nudge · ' +
+      'calendar_event {title,starts_at} = appointment · reminder {title,remind_at} = private nudge · ' +
       'task {title,due_date?,assignee_user_id?} = ORG work, assignable · todo = same, PRIVATE. ' +
-      'Link those four with fields.entity_type+entity_id. ' +
+      'Link those 4 via fields.entity_type+entity_id. ' +
       'Forms: condition:if_exists|if_missing|upsert · bulk:{items:[]} · {op:"move",source,dest}. ' +
-      'Field lists are in your system prompt. Do NOT pre-narrate.',
+      'Field lists: system prompt. Do NOT pre-narrate.',
     tier: 'auto',
     input_schema: {
       type: 'object',
@@ -8538,7 +8562,11 @@ const PAYLOAD_TOOLS = [
                 // HERE and not only in the description for the reason the
                 // deal_memory note above gives: the enum is what decides, for
                 // the model, whether a type is legal at all.
-                enum: ['estimate', 'job', 'lead', 'client', 'schedule', 'system', 'report', 'calendar_event', 'task', 'todo', 'reminder', 'assembly', 'deal_memory', 'attachment'],
+                // 'service_ticket' (a work order) moves in lockstep with the
+                // dispatcher's PAYLOAD_OPS_SCHEMAS key of the same name;
+                // test/agent-instruction-honesty.test.js fails in either
+                // direction if one lands without the other.
+                enum: ['estimate', 'job', 'lead', 'client', 'schedule', 'system', 'report', 'calendar_event', 'task', 'todo', 'reminder', 'assembly', 'deal_memory', 'attachment', 'service_ticket'],
               },
               entity_id: {
                 type: 'string',
@@ -9196,8 +9224,291 @@ async function execConsolidatedRead(name, input, ctx) {
       limit: inp.limit
     }, ctx);
   }
+  if (et === 'service_ticket') {
+    return readServiceTicketForAgent(id, depth, includes, ctx);
+  }
 
-  return 'read_entity: unsupported entity_type "' + et + '". Supported: job, wip, estimate, client, lead, task, pipeline.';
+  return 'read_entity: unsupported entity_type "' + et + '". Supported: job, wip, estimate, client, lead, task, pipeline, service_ticket.';
+}
+
+// ── read_entity{service_ticket} — a work order, as the model may see it ──────
+//
+// THE ORDER IS THE BOUNDARY, and each step names the failure it prevents.
+//
+//   1. The org comes off ctx (ctxOrgId), never off the input. No org is the
+//      not-found sentence, the same as any caller that cannot see the row.
+//   2. No acting user is refused BEFORE the row loads. A refusal decided after
+//      the load would answer differently for a real id and an invented one,
+//      and that difference is itself a read of the org's ticket list.
+//   3. The row is loaded strictly in-org — a bare predicate, because
+//      service_tickets is NOT NULL and never had un-stamped rows to tolerate —
+//      with the columns named, so a column added to the table later is not
+//      narrated by default.
+//   4. The PRECISE capability check runs on the loaded parent. The gate in
+//      consolidatedReadCapability only proved the caller holds one of the
+//      three capabilities that could ever grant a ticket read; it cannot know
+//      whether this ticket hangs off a job or a lead, or whether a narrow-tier
+//      caller was granted that job. A narrow-tier caller on a job they were
+//      never granted gets the not-found sentence (the REST door's 404): a
+//      different answer would confirm the ticket exists on a job they cannot
+//      see. A caller whose role cannot read that KIND of parent at all gets
+//      the permission sentence, in the gate's own wording.
+//   5. Every child read carries its own org predicate. Reaching a child on the
+//      ticket id alone trusts that step 3 is the only door — true today, and
+//      exactly the assumption that rots.
+//   6. Child tasks keep read_tasks' personal boundary. A to-do is PRIVATE to
+//      its owner and a personal to-do can carry service_ticket_id, so without
+//      that clause another user's private to-do titles would be narrated here
+//      and counted in the progress figure.
+//
+// Forward-facing names only: the parent is a job's number + title or a lead's
+// title, and ids ride alongside in brackets for the follow-up write. Share
+// links are a COUNT — never a token, a hash or a recipient email. Every field a
+// person or a link-holder typed is wrapped as data and capped, as the lead and
+// task readers do. DATE columns are calendar days and are printed as days: a
+// node-pg DATE is a Date at the SERVER's local midnight, so toISOString would
+// print the previous day on any server whose zone is east of UTC — and a day
+// that silently depends on where the process runs is the bug this avoids.
+async function readServiceTicketForAgent(id, depth, includes, ctx) {
+  if (!id) return 'read_entity(service_ticket) requires id';
+  const notFound = 'Service ticket not found: ' + id;
+  const orgId = ctxOrgId(ctx);
+  if (orgId == null) return notFound;
+  const user = ctx && ctx.user;
+  if (!user) {
+    return aiToolCapabilityDenial('read_entity', { entity_type: 'service_ticket' }, null);
+  }
+
+  // BY ID ONLY. This once also matched ticket_number, and the tool description
+  // invited the model to pass one — but nothing in the app mints a ticket
+  // number (a payload is refused one by name and no door assigns it), so a
+  // lookup by number could only ever come back not-found, which the model then
+  // relayed as a confident "that ticket does not exist".
+  const tr = await pool.query(
+    `SELECT t.id, t.ticket_number, t.title, t.job_id, t.lead_id, t.status, t.priority,
+            t.scope_proposed, t.scope_approved, t.internal_notes, t.guest_log,
+            t.requested_by, t.site_contact_name, t.street_address, t.city, t.state, t.zip,
+            t.access_notes, t.scheduled_for, t.due_date, t.archived_at,
+            u.name AS assignee_name
+       FROM service_tickets t
+       LEFT JOIN users u ON u.id = t.assignee_user_id AND u.organization_id = t.organization_id
+      WHERE t.id = $1 AND t.organization_id = $2`,
+    [String(id), orgId]
+  );
+  const ticket = tr.rows[0];
+  if (!ticket) return notFound;
+
+  const verdict = await ticketAccess.mayAccessTicketParent({
+    query: pool.query.bind(pool),
+    user,
+    parent: ticket,
+    mode: 'read',
+    orgId,
+  });
+  if (!verdict.ok) {
+    if (verdict.reason === 'no_capability') {
+      const kind = ticketAccess.parentOf(ticket).kind;
+      return capabilityDenialText(ticketAccess.capsForParentKind(kind, 'read'), 'read');
+    }
+    return notFound;
+  }
+
+  const dayOf = (v) => {
+    if (v == null || v === '') return '';
+    if (v instanceof Date) {
+      if (isNaN(v.getTime())) return '';
+      return v.getFullYear() + '-' + String(v.getMonth() + 1).padStart(2, '0') + '-' +
+        String(v.getDate()).padStart(2, '0');
+    }
+    const m = /^(\d{4}-\d{2}-\d{2})/.exec(String(v).trim());
+    return m && isCalendarDay(m[1]) ? m[1] : '';
+  };
+  const short = (v, n) => String(v == null ? '' : v).trim().slice(0, n);
+  const wrapped = (source, text, cap) => {
+    const s = String(text == null ? '' : text).trim();
+    return s ? wrapUserData(source, s.slice(0, cap)) : '';
+  };
+
+  // The parent, by name. Bare org predicates on jobs and leads too: a ticket
+  // whose parent id names a row the caller's org does not hold prints no name
+  // at all rather than another tenant's job or lead. The cost is deliberate
+  // and visible: a parent old enough to carry no org stamp prints "(name
+  // unavailable)" beside its id instead of its name — a degraded label, never
+  // a wider read — and adding the legacy arm here would also grow the
+  // graduation ledger this repo is trying to shrink.
+  const parent = ticketAccess.parentOf(ticket);
+  let parentLine = '';
+  if (parent.kind === 'job') {
+    const jr = await pool.query(
+      `SELECT COALESCE(data->>'jobNumber', data->>'job_number') AS job_number,
+              COALESCE(data->>'title', data->>'name') AS title
+         FROM jobs
+        WHERE id = $1 AND organization_id = $2`,
+      [parent.id, orgId]
+    );
+    const j = jr.rows[0];
+    parentLine = 'Job: ' + (j ? jobLabel(j.job_number, j.title, { fallback: '(untitled job)' }) : '(name unavailable)') +
+      '  [' + parent.id + ']';
+  } else if (parent.kind === 'lead') {
+    const lr = await pool.query(
+      `SELECT title FROM leads WHERE id = $1 AND organization_id = $2`,
+      [parent.id, orgId]
+    );
+    const l = lr.rows[0];
+    parentLine = 'Lead: ' + (l ? (short(l.title, 300) || '(untitled lead)') : '(name unavailable)') +
+      '  [' + parent.id + ']';
+  }
+
+  const callerId = Number(user.id);
+  const kr = await pool.query(
+    `SELECT k.id, k.title, k.status, k.due_date, k.completed_at, k.archived_at,
+            ku.name AS assignee_name
+       FROM tasks k
+       LEFT JOIN users ku ON ku.id = k.assignee_user_id AND ku.organization_id = k.organization_id
+      WHERE k.service_ticket_id = $1 AND k.organization_id = $2 AND k.archived_at IS NULL
+        AND (k.scope = 'org' OR (k.scope = 'personal' AND k.owner_user_id = $3))
+      ORDER BY k.created_at ASC
+      LIMIT 100`,
+    [ticket.id, orgId, Number.isFinite(callerId) ? callerId : 0]
+  );
+  const rr = await pool.query(
+    `SELECT fields, note, author_label
+       FROM service_ticket_revisions
+      WHERE ticket_id = $1 AND organization_id = $2 AND status = 'pending'
+      ORDER BY created_at DESC
+      LIMIT 50`,
+    [ticket.id, orgId]
+  );
+  const sr = await pool.query(
+    `SELECT expires_at, revoked_at, opened_at
+       FROM service_ticket_shares
+      WHERE ticket_id = $1 AND organization_id = $2`,
+    [ticket.id, orgId]
+  );
+
+  const progress = ticketSvc.ticketProgress(ticket, kr.rows);
+  const activeShares = sr.rows.filter((s) => ticketSvc.shareIsUsable(s)).length;
+  const pending = rr.rows.length;
+
+  const lines = [];
+  // A number prints only when a row really carries one. "(no number yet)"
+  // promised a number that nothing will ever assign, and handed the model a
+  // second name to look the ticket up by.
+  const ticketNo = short(ticket.ticket_number, 60);
+  lines.push('Service ticket: ' + (ticketNo ? ticketNo + ' ' : '') +
+    (short(ticket.title, 300) || '(untitled)') + '  [' + ticket.id + ']');
+  lines.push('Status: ' + ticketSvc.normalizeStatus(ticket.status) +
+    '  | Priority: ' + ticketSvc.normalizePriority(ticket.priority));
+  if (parentLine) lines.push(parentLine);
+  const sched = dayOf(ticket.scheduled_for);
+  const due = dayOf(ticket.due_date);
+  if (sched || due) {
+    lines.push([sched ? 'Scheduled: ' + sched : null, due ? 'Due: ' + due : null].filter(Boolean).join('  | '));
+  }
+  lines.push('Assignee: ' + (short(ticket.assignee_name, 120) || 'unassigned'));
+  const addr = [ticket.street_address, ticket.city, [ticket.state, ticket.zip].filter(Boolean).join(' ')]
+    .map((x) => short(x, 200)).filter(Boolean).join(', ');
+  if (addr) lines.push('Address: ' + addr);
+  if (ticket.site_contact_name) lines.push('Site contact: ' + short(ticket.site_contact_name, 120));
+  lines.push('Tasks: ' + progress.tasksDone + '/' + progress.tasksTotal + ' done');
+  lines.push('Pending suggestions: ' + pending + (pending >= 50 ? '+' : ''));
+  lines.push('Active share links: ' + activeShares);
+  if (ticket.archived_at) lines.push('Archived: yes');
+
+  const full = depth === 'full' || ['tasks', 'events', 'revisions'].some((k) => includes.indexOf(k) !== -1);
+  if (!full) return lines.join('\n');
+
+  if (ticket.requested_by) lines.push('Requested by: ' + short(ticket.requested_by, 200));
+  // PROMPT-INJECTION DEFENSE: every body below was typed by a person — the
+  // office, a client signing off, or (guest_log) whoever holds a share link.
+  const bodies = [
+    ['Scope (proposed)', 'service_tickets.scope_proposed', ticket.scope_proposed, 2000],
+    ['Scope (approved)', 'service_tickets.scope_approved', ticket.scope_approved, 2000],
+    ['Access notes', 'service_tickets.access_notes', ticket.access_notes, 1000],
+    ['Internal notes', 'service_tickets.internal_notes', ticket.internal_notes, 2000],
+  ];
+  for (const [label, source, text, cap] of bodies) {
+    const w = wrapped(source, text, cap);
+    if (w) lines.push('\n' + label + ':\n' + w);
+  }
+  // The field log is append-only, so the newest entries are at the END; the
+  // cap keeps the tail rather than the oldest notes.
+  const log = String(ticket.guest_log == null ? '' : ticket.guest_log).trim();
+  if (log) {
+    const tail = log.length > 2000 ? '[earlier entries omitted]\n' + log.slice(-2000) : log;
+    lines.push('\nField log (from share links):\n' + wrapUserData('service_tickets.guest_log', tail));
+  }
+
+  if (kr.rows.length) {
+    lines.push('\nTasks (' + kr.rows.length + '):');
+    kr.rows.forEach((k) => {
+      const done = k.status === 'done' || k.status === 'complete' || !!k.completed_at;
+      const kDue = dayOf(k.due_date);
+      lines.push('  ' + (done ? '[x] ' : '[ ] ') + (short(k.title, 200) || '(untitled)') +
+        ' — ' + (k.status || 'open') + (kDue ? ', due ' + kDue : '') +
+        (k.assignee_name ? ', ' + short(k.assignee_name, 120) : '') + '  [' + k.id + ']');
+    });
+  }
+
+  if (rr.rows.length) {
+    lines.push('\nPending suggestions (' + rr.rows.length + (pending >= 50 ? '+' : '') + '):');
+    rr.rows.slice(0, 10).forEach((r) => {
+      let f = r.fields;
+      if (typeof f === 'string') { try { f = JSON.parse(f); } catch (_) { f = {}; } }
+      // Field NAMES only, and only names a suggestion may carry — a key a
+      // link-holder smuggled into the JSON is not repeated to the model.
+      const names = Object.keys(ticketSvc.filterProposedFields(f));
+      lines.push('  • proposes: ' + (names.length ? names.join(', ') : '(a note only)'));
+      const said = [r.author_label ? 'From: ' + short(r.author_label, 120) : '', short(r.note, 500)]
+        .filter(Boolean).join('\n');
+      if (said) lines.push(wrapUserData('service_ticket_revisions.note', said));
+    });
+  }
+
+  const er = await pool.query(
+    `SELECT kind, actor_kind, detail
+       FROM service_ticket_events
+      WHERE ticket_id = $1 AND organization_id = $2
+      ORDER BY created_at DESC
+      LIMIT 15`,
+    [ticket.id, orgId]
+  );
+  if (er.rows.length) {
+    lines.push('\nRecent activity (newest first):');
+    er.rows.forEach((e) => {
+      let d = e.detail;
+      if (typeof d === 'string') { try { d = JSON.parse(d); } catch (_) { d = {}; } }
+      d = d && typeof d === 'object' ? d : {};
+      let what = '';
+      if (Array.isArray(d.fields)) {
+        what = d.fields.filter((x) => typeof x === 'string' && /^[a-z_]{1,40}$/.test(x)).slice(0, 20).join(', ');
+      } else if (e.kind === 'status_changed' && d.from && d.to) {
+        // normalizeStatus maps anything unknown to 'draft', which would print a
+        // transition that never happened; an unknown code prints as nothing.
+        const known = (s) => ticketSvc.normalizeStatus(s) === String(s).trim().toLowerCase();
+        if (known(d.from) && known(d.to)) {
+          what = ticketSvc.normalizeStatus(d.from) + ' -> ' + ticketSvc.normalizeStatus(d.to);
+        }
+      }
+      const kind = /^[a-z_]{1,40}$/.test(String(e.kind || '')) ? e.kind : 'event';
+      const via = e.actor_kind === 'share' ? ' (via share link)' : e.actor_kind === 'agent' ? ' (agent)' : '';
+      lines.push('  • ' + kind + (what ? ': ' + what : '') + via);
+    });
+  }
+
+  const pr = await pool.query(
+    `SELECT p.access_level, u.name AS user_name
+       FROM service_ticket_participants p
+       LEFT JOIN users u ON u.id = p.user_id AND u.organization_id = p.organization_id
+      WHERE p.ticket_id = $1 AND p.organization_id = $2
+      ORDER BY p.created_at ASC`,
+    [ticket.id, orgId]
+  );
+  const people = pr.rows.filter((p) => p.user_name)
+    .map((p) => short(p.user_name, 120) + (p.access_level === 'edit' ? ' (edit)' : ' (view)'));
+  if (people.length) lines.push('\nPeople on this ticket: ' + people.join(', '));
+
+  return lines.join('\n');
 }
 
 // The caller's tenant, off whichever shape of ctx the three live entry points
@@ -9673,6 +9984,9 @@ async function execStaffTool(name, input, ctx) {
       if (_atOrgId == null || !(await _atInOrg(pool, r.rows[0], _atOrgId))) {
         return 'No attachment with id ' + attachmentId + '.';
       }
+      // A work-order file also answers to the ticket's rule. See ticketPhotoRefusal.
+      const _atTicket = await ticketPhotoRefusal(r.rows[0], ctx, 'read');
+      if (_atTicket) return _atTicket.hidden ? 'No attachment with id ' + attachmentId + '.' : _atTicket.text;
       const row = r.rows[0];
       const txt = row.extracted_text || '';
       if (!txt) {
@@ -9711,6 +10025,9 @@ async function execStaffTool(name, input, ctx) {
       if (_viOrgId == null || !(await _viInOrg(pool, r.rows[0], _viOrgId))) {
         return 'No attachment with id ' + attachmentId + '.';
       }
+      // Before the byte loader, for the same reason as the org check above.
+      const _viTicket = await ticketPhotoRefusal(r.rows[0], ctx, 'read');
+      if (_viTicket) return _viTicket.hidden ? 'No attachment with id ' + attachmentId + '.' : _viTicket.text;
       const row = r.rows[0];
       if (!row.mime_type || !row.mime_type.startsWith('image/')) {
         return 'Attachment "' + (row.filename || attachmentId) + '" is not an image (mime=' +
@@ -13168,6 +13485,39 @@ function payloadIsAutoApply(targets) {
   });
 }
 
+// ── WHICH REFUSALS END A SCRIBE DRIVE ──────────────────────────────────────
+// The Scribe loop treats a refusal as FINAL (no re-prompt, sticky for the rest
+// of the drive, a card instead of an auto-apply) only when it is a refusal of
+// a SERVICE TICKET target. That scope is deliberate and narrow:
+//   * the ticket door's retryable:false refusals were written to be final — a
+//     status, scope_approved, a re-parent — and a re-prompt is exactly where a
+//     live Scribe drops the refused field and gets the rest applied;
+//   * every other entity's retryable:false flag was unreachable at emit time
+//     before this existed, so those refusals were re-prompted, and the
+//     re-prompt is how they get fixed. They keep that.
+// Decided by the target's entity_type, the same exact string the dispatcher's
+// ticket branches test. A move naming a ticket on either side counts: the
+// dispatcher refuses that move BECAUSE of the ticket side.
+function isTicketPayloadTarget(t) {
+  if (!t || typeof t !== 'object') return false;
+  if (t.op === 'move') {
+    return !!((t.source && t.source.entity_type === 'service_ticket') ||
+              (t.dest && t.dest.entity_type === 'service_ticket'));
+  }
+  return t.entity_type === 'service_ticket';
+}
+
+// A DRY-RUN refusal names its slot in detail.target_index (applyPayload stamps
+// it); that slot decides. With no usable index the payload decides as a whole:
+// one that carries a ticket target is held to the ticket's rule, because
+// re-prompting a refused ticket payload is the laundering path this guards.
+function refusalIsOfTicketTarget(targets, detail) {
+  const list = Array.isArray(targets) ? targets : [];
+  const idx = detail && Number.isInteger(detail.target_index) ? detail.target_index : -1;
+  if (idx >= 0 && idx < list.length) return isTicketPayloadTarget(list[idx]);
+  return list.some(isTicketPayloadTarget);
+}
+
 async function execEmitPayloadFile(tu, ctx) {
   try {
     const payloadDispatcher = require('../services/payload-dispatcher');
@@ -13200,10 +13550,30 @@ async function execEmitPayloadFile(tu, ctx) {
         payloadDispatcher.validateTarget(t, idx);
       } catch (err) {
         const label = t && t.entity_type ? `${t.entity_type} target` : `target #${idx}`;
-        return {
-          tier: 'auto',
-          error: `Invalid ${label}: ${err.message}`,
-        };
+        const out = { tier: 'auto', error: `Invalid ${label}: ${err.message}` };
+        // Carry the structured detail through, because retryable:false is
+        // decided HERE for most refusals (a ticket's status, scope_approved, a
+        // re-parent, a condition, a move side, the task cap) and the Scribe
+        // loop is the only reader of it. Dropping it made every one of those
+        // read as a typo: the loop prompted "Fix it and re-emit", and under
+        // approved:true the workaround that dry-ran clean was applied with no
+        // card. Only a PayloadValidationError's detail is ours to forward — a
+        // plain Error has none, and it stays retryable exactly as before.
+        //
+        // SERVICE TICKETS ONLY. Other entities carry retryable:false at this
+        // stage too (estimate field_updates.lines, job ops.wire_updates, an
+        // attachment target's entity_id, a photo_update 'description' key),
+        // and before this passthrough existed none of those flags could reach
+        // the loop — they were re-prompted, and a re-prompt is what fixes them
+        // (the suggestion names the right op). Forwarding their detail would
+        // have silently turned four working self-corrections into dead ends.
+        // The ticket door is the one whose refusals were written to be final;
+        // the rest keep the behaviour they had. See isTicketPayloadTarget.
+        if (err instanceof payloadDispatcher.PayloadValidationError && err.detail &&
+            isTicketPayloadTarget(t)) {
+          out.detail = err.detail;
+        }
+        return out;
       }
     }
 
@@ -13581,6 +13951,15 @@ function consolidatedReadCapability(name, inp) {
     // that same user the staff roster (names, emails, roles) through the
     // same handler. Mirrors the narrow reader's entry exactly.
     case 'user':          return ['JOBS_VIEW_ALL', 'ESTIMATES_VIEW'];
+    // service_ticket -> readServiceTicketForAgent. A ticket has no capability
+    // of its own; it inherits its parent's, and this gate runs before the row
+    // (and so the parent) is known. It therefore charges every capability that
+    // could grant a read on SOME ticket, and that is necessary, never
+    // sufficient: the reader asks mayAccessTicketParent once the parent is
+    // loaded. Returning null here instead would leave the door ungated for a
+    // caller holding none of the three, and test/consolidated-read-capability
+    // parses the executor's Supported list to catch exactly that.
+    case 'service_ticket': return ticketAccess.coarseCaps('read');
     // ── Types the read consolidation folds into this door NEXT ──────────
     // None of these route to a reader yet: execConsolidatedRead answers
     // "unsupported entity_type" for them, with one exception noted below.
@@ -13718,6 +14097,14 @@ function aiToolCapabilityDenial(name, input, user, verb) {
   if (!need) return null;
   const needed = Array.isArray(need) ? need : [need];
   if (user && user.role && needed.some((cap) => hasCapability(user, cap))) return null;
+  return capabilityDenialText(needed, verb);
+}
+
+// The sentence itself, for a reader that decides the capability only AFTER it
+// has loaded a row (read_entity{service_ticket}: which capability applies
+// depends on the ticket's parent). One spelling, so a denial that happens late
+// cannot read differently from one that happens at the gate.
+function capabilityDenialText(needed, verb) {
   if (verb === 'write') {
     return 'Permission denied: the current user lacks the ' + needed.join(' or ') +
            ' capability required to make this change. The change was NOT applied. Tell the user ' +
@@ -13726,6 +14113,54 @@ function aiToolCapabilityDenial(name, input, user, verb) {
   return 'Permission denied: the current user lacks the ' + needed.join(' or ') +
          ' capability required to read this. Tell the user you can\'t show this data because ' +
          'their role doesn\'t have access, and suggest they contact an admin if they need it.';
+}
+
+// ── A WORK-ORDER PHOTO ANSWERS TO THE TICKET'S RULE, NOT ONLY THE ORG'S ──────
+// read_attachment_text, view_attachment_image, read_photo_comments and
+// add_photo_comment are keyed on a bare attachment id and gated on
+// attachmentInOrg — "is this file in the caller's tenant". For every other
+// entity type that is the whole of what those four doors ever asked. A service
+// ticket is different: who may see it depends on its PARENT (a job's or a
+// lead's capability, and the narrow job tier narrowed to jobs the caller owns
+// or was granted), and the attachment REST doors already ask that through
+// ticketAttachmentAccess. Without this, an in-org user the ticket rule refuses
+// got a ticket photo's pixels, its extracted text and its comment thread from
+// the agent — and could post into that thread.
+//
+// Returns null when the row is not a ticket attachment (every other entity type
+// is untouched) or the ticket rule allows it. Otherwise:
+//   { hidden: true }            the door answers its OWN existing not-found
+//                               sentence, byte for byte — an absent ticket, one
+//                               in another org, or a job the narrow-tier caller
+//                               is not on must read exactly like an absent id;
+//   { hidden: false, text }     the permission sentence read_entity uses, for
+//                               the parent kind's capabilities (the coarse
+//                               three when the ticket has no parent kind, or
+//                               when there is no acting user at all).
+// A lookup failure THROWS (ticketAttachmentAccess does not swallow it), and each
+// caller's dispatcher turns a throw into an error — never into a served read.
+async function ticketPhotoRefusal(att, ctx, mode) {
+  const entityAccess = require('../services/attachment-entity-access');
+  if (!att || att.entity_type !== entityAccess.TICKET_ENTITY_TYPE) return null;
+  const verb = mode === 'write' ? 'write' : 'read';
+  // No acting user is refused BEFORE the ticket loads, as read_entity's ticket
+  // reader orders it. Decided after the load, a file naming a ticket that is
+  // not there would answer not-found while one naming a real ticket answered
+  // the permission sentence — two answers keyed on whether the ticket exists.
+  const user = (ctx && ctx.user) || null;
+  if (!user) return { hidden: false, text: capabilityDenialText(ticketAccess.coarseCaps(mode), verb) };
+  const verdict = await entityAccess.ticketAttachmentAccess({
+    query: pool.query.bind(pool),
+    user,
+    ticketId: att.entity_id,
+    orgId: ctxOrgId(ctx),
+    mode,
+  });
+  if (verdict && verdict.ok === true) return null;
+  if (!verdict || verdict.hidden !== false) return { hidden: true };
+  let caps = ticketAccess.capsForParentKind(verdict.kind, mode);
+  if (!caps.length) caps = ticketAccess.coarseCaps(mode);
+  return { hidden: false, text: capabilityDenialText(caps, verb) };
 }
 
 // `authoritativeOrgId` — the requireOrgId equivalent for a path that has no
@@ -14079,11 +14514,38 @@ async function driveScribeWrite(intent, ctx) {
   // exact reason ("Unknown entity_type: attachment") had been computed and
   // then discarded.
   let everToolError = null;
-  // A dry-run failure the Scribe CANNOT fix by re-emitting (a refusal, not a
-  // typo) — see the retry loop below.
+  // A failure — at emit-time validation or at the dry run — the Scribe CANNOT
+  // fix by re-emitting (a refusal, not a typo). See the retry loop below.
   let lastErrorTerminal = false;
+  // The first non-retryable refusal OF A SERVICE TICKET TARGET this drive, and
+  // it is STICKY. The retry loop is not the only way to re-emit:
+  // driveSubtaskTurn hands the refusal back as a tool result and the Scribe may
+  // emit again in the SAME attempt. With the flag cleared on every call, a
+  // status refusal followed in-attempt by a payload that dropped the refused
+  // field was captured, dry-ran clean, and (approved:true) applied with no card
+  // — the refusal laundered into a different change than the one the user was
+  // told about.
+  //
+  // Ticket-only (see isTicketPayloadTarget): every other entity keeps what it
+  // had — an emit-time refusal is re-prompted, and a dry-run retryable:false
+  // ends the retry loop but does not outlive the next emit.
+  //
+  // It is ALSO the one thing that makes a captured draft "after a refusal"
+  // (afterRefusal on the return). Only a genuine terminal ticket refusal counts:
+  // a typo, "may only call emit_payload_file", "Payload was not persisted" or a
+  // transient dry-run error is not the dispatcher saying no, and treating any
+  // of them as one stopped approve-in-chat for every entity type and had the
+  // chat call a typo a refusal.
+  let terminalRefusal = null;
 
   const onCustomToolUse = async (tu) => {
+    if (terminalRefusal) {
+      // lastError keeps the ORIGINAL refusal: that is the sentence the user
+      // must hear, not this reminder.
+      lastErrorTerminal = true;
+      return { tier: 'auto', error: 'That refusal is final and nothing was saved: ' + terminalRefusal +
+        ' Do NOT re-emit in another shape — stop and return the refusal.' };
+    }
     lastErrorTerminal = false;
     if (!tu || tu.name !== 'emit_payload_file') {
       lastError = 'The Scribe may only call emit_payload_file.';
@@ -14091,7 +14553,14 @@ async function driveScribeWrite(intent, ctx) {
     }
     // 1. Validate + persist the payload row (reuse 86's emit handler).
     const res = await execEmitPayloadFile(tu, scribeCtx);
-    if (res && res.error) { lastError = res.error; return { tier: 'auto', error: res.error }; }
+    if (res && res.error) {
+      lastError = res.error;
+      // Emit-time refusals are terminal too, not only dry-run ones — see the
+      // detail passthrough in execEmitPayloadFile.
+      lastErrorTerminal = !!(res.detail && res.detail.retryable === false);
+      if (lastErrorTerminal) terminalRefusal = res.error;
+      return { tier: 'auto', error: res.error };
+    }
     const payloadId = res && res.meta && res.meta.payload_id;
     if (!payloadId) { lastError = 'Payload was not persisted.'; return { tier: 'auto', error: lastError }; }
     // 2. Dry-run for the before/after changeset. applyPayload THROWS a
@@ -14103,14 +14572,39 @@ async function driveScribeWrite(intent, ctx) {
       const dry = await payloadDispatcher.applyPayload(payloadRow, {
         dryRun: true, userId: scribeCtx.userId, organizationId: organization.id, sourceAgent: 'scribe'
       });
+      // A SECOND clean draft in the same drive supersedes the first. The
+      // Scribe's contract is ONE payload, so a later clean emit is its re-draft
+      // of the same change, and the return below only ever carries the last
+      // one. Before this the earlier row stayed at status 'ready' with nothing
+      // pointing at it: no card, no notice, just an orphan in Pending approvals
+      // that the user could approve alongside the draft they WERE told about.
+      // Deleted rather than carded, because carding both hands the user two
+      // versions of one change to choose between with no way to tell which the
+      // Scribe meant. Guarded on status 'ready': a row somebody already approved
+      // mid-drive is theirs, not ours to remove.
+      //
+      // SERVICE TICKETS ONLY — both drafts must carry a ticket target (see
+      // isTicketPayloadTarget). A second payload is not always a re-draft: the
+      // dispatcher's own photo_updates cap tells the Scribe to "emit the rest
+      // as a second payload", and deleting the first half of that split lost
+      // it with nothing said. Every other drive keeps what it had: the earlier
+      // row stays 'ready'.
+      const ticketDraft = Array.isArray(tu.input && tu.input.targets) &&
+        tu.input.targets.some(isTicketPayloadTarget);
+      const superseded = captured && captured.payloadId !== payloadId &&
+        captured.ticketDraft && ticketDraft ? captured.payloadId : null;
       captured = {
         payloadId,
+        ticketDraft,
         filename: res.meta.filename,
         title: res.meta.title,
         meta: res.meta,
         changeset: (dry && (dry.apply_changeset || dry.affected_targets)) || [],
         applySummary: (dry && dry.apply_summary) || null
       };
+      if (superseded) {
+        try { await pool.query("DELETE FROM payloads WHERE id = $1 AND status = 'ready'", [superseded]); } catch (_) {}
+      }
       lastError = null;
       return { tier: 'auto', summary: 'Dry-run OK — changeset ready for approval.' };
     } catch (e) {
@@ -14119,6 +14613,10 @@ async function driveScribeWrite(intent, ctx) {
       try { await pool.query('DELETE FROM payloads WHERE id = $1', [payloadId]); } catch (_) {}
       lastError = (e && (e.message || (e.detail && JSON.stringify(e.detail)))) || 'Dry-run failed.';
       lastErrorTerminal = !!(e && e.detail && e.detail.retryable === false);
+      // Sticky only for a ticket target; see terminalRefusal.
+      if (lastErrorTerminal && refusalIsOfTicketTarget(tu.input && tu.input.targets, e && e.detail)) {
+        terminalRefusal = lastError;
+      }
       return { tier: 'auto', error: lastError };
     }
   };
@@ -14153,10 +14651,21 @@ async function driveScribeWrite(intent, ctx) {
   }
 
   if (captured) {
+    // afterRefusal is read at the END of the drive, not at capture time. The
+    // sticky refusal already stops anything being captured AFTER a ticket
+    // refusal, so the case left is the other order: draft A captured clean,
+    // then B refused in the same drive. Returned as a plain ok, A was
+    // auto-applied under approved:true and the user never heard B was refused.
+    // It is returned ok with the refusal attached and execScribeWrite CARDS it:
+    // A is kept for the user to approve or reject (no work is thrown away) and
+    // the refusal is printed beside it. Returning ok:false and deleting A was
+    // the alternative, and it discards a draft that dry-ran clean.
     return {
       ok: true, payloadId: captured.payloadId, filename: captured.filename,
       title: captured.title, meta: captured.meta, changeset: captured.changeset,
-      applySummary: captured.applySummary, usage: (result && result.usage) || null
+      applySummary: captured.applySummary, afterRefusal: !!terminalRefusal,
+      refusal: terminalRefusal || null,
+      usage: (result && result.usage) || null
     };
   }
   return {
@@ -14309,6 +14818,21 @@ async function execScribeWrite(tu, ctx) {
         const title = (result.meta && result.meta.title) || result.title || 'a change';
         const line = result.applySummary ? ('\n\n' + String(result.applySummary).slice(0, 500)) : '';
 
+        // A draft was captured, AND the dispatcher gave a final refusal of a
+        // service ticket in the same drive (driveScribeWrite's afterRefusal —
+        // never a typo, never another entity type). What the user asked for
+        // did not all go through, so the draft is carded — never auto-applied,
+        // even when they approved in chat — and the refusal is printed beside
+        // it whether or not they approved: a card that says nothing about the
+        // refused half lets the user approve half a change believing it is the
+        // whole one. Checked BEFORE the auto-apply branch so no later edit to
+        // that branch can reopen the path.
+        if (result.payloadId && result.afterRefusal) {
+          const refused = String(result.refusal || 'part of the change was refused').slice(0, 400);
+          try { await postAgentJobToThread(threadTarget, '✍️ **Scribe drafted — ' + title + '**' + line + '\n\n_Part of what you asked for was refused and NOT saved: ' + refused + '_\n\n_Only the draft above was kept' + (approved ? ', and it was NOT applied even though you approved it' : '') + ' — check it against what you asked for and approve or reject it in **Pending approvals**._'); } catch (_) {}
+          try { await sendPushForEvent(uid, 'scribe_draft', { title: '✍️ Needs your approval: ' + String(title).slice(0, 80), body: ('Part was refused: ' + refused).slice(0, 200), url: '/' }); } catch (_) {}
+          return;
+        }
         // Approve-in-chat: user already said yes → apply now unless high-risk.
         if (approved && result.payloadId) {
           try {
@@ -14384,7 +14908,7 @@ async function execScribeWrite(tu, ctx) {
   return {
     tier: 'auto',
     summary: approved
-      ? 'The Scribe is executing that APPROVED change in the background — it will apply automatically (no card) and the user gets an "Applied" notification, usually under a minute. Tell the user it\'s being handled; do NOT wait for it and do NOT call scribe_write again for this same change.'
+      ? 'The Scribe is executing that APPROVED change in the background — it normally applies automatically (no card) and the user gets an "Applied" notification, usually under a minute; if the change is high-risk or part of it was refused, a review card comes instead. Tell the user it\'s being handled — never that it is already applied; do NOT wait for it and do NOT call scribe_write again for this same change.'
       : 'The Scribe is drafting that change in the BACKGROUND. Tell the user it\'s being drafted and they\'ll get a notification with the review card when it\'s ready (usually under a minute) — do NOT wait for it, do NOT narrate a card, and do NOT call scribe_write again for this same change.'
   };
 }
@@ -15211,6 +15735,9 @@ async function execProjectInlineTool(name, input, ctx) {
         !(await _pcInOrg(pool, attRow.rows[0], _pcOrgId))) {
       return `Attachment ${attId} not found.`;
     }
+    // A work-order photo's thread answers to the ticket's rule. See ticketPhotoRefusal.
+    const _pcTicket = await ticketPhotoRefusal(attRow.rows[0], ctx, 'read');
+    if (_pcTicket) return _pcTicket.hidden ? `Attachment ${attId} not found.` : _pcTicket.text;
     const r = await pool.query(
       `SELECT m.id, m.user_id, u.name AS user_name, m.body, m.created_at
          FROM messages m
@@ -15248,6 +15775,15 @@ async function execProjectInlineTool(name, input, ctx) {
     if (!attChk.rows.length || _acOrgId == null ||
         !(await _acInOrg(pool, attChk.rows[0], _acOrgId))) {
       throw new Error(`Attachment ${attId} not found.`);
+    }
+    // Posting into a work-order photo's thread is an edit of that ticket, so
+    // it takes the ticket's WRITE rule. A hidden verdict throws the same
+    // not-found the org check throws; a capability refusal is the write
+    // permission sentence, and nothing is inserted.
+    const _acTicket = await ticketPhotoRefusal(attChk.rows[0], ctx, 'write');
+    if (_acTicket) {
+      if (_acTicket.hidden) throw new Error(`Attachment ${attId} not found.`);
+      return _acTicket.text;
     }
 
     const msgId = 'msg_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
@@ -15722,10 +16258,11 @@ const ALLOWED_AUTO_TIER_TOOLS = new Set([
   // Azure-free lane). Pure read.
   'read_email_inbox',
   'draft_email_reply',
-  // Project 86 Payload DSL — 86's ONE write primitive. Validates +
-  // INSERTs a payloads row inline so the file artifact appears in
-  // chat immediately. Auto-tier because the commit gate is the user
-  // dragging the file into the dropbox, not an approval card.
+  // Project 86 Payload DSL — the SCRIBE's one write primitive (86 and the
+  // Assistant hold scribe_write, which hands the change to the Scribe).
+  // Validates + INSERTs a payloads row inline so the file artifact appears
+  // in chat immediately. Auto-tier because the commit gate is the approval
+  // on the payload, not an approval card on this call.
   'emit_payload_file',
   // 86's existing read tools (already routed to execStaffTool below)
   'read_materials',

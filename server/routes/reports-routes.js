@@ -21,6 +21,8 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireCapability } = require('../auth');
+// THE REPORT PHOTO RULE — one implementation, stated in report-routes.js.
+const { reportPhotoIdsOf, readableReportPhotoRows, keepReportPhotoIds } = require('./report-routes').reportPhotoRule;
 
 const router = express.Router();
 
@@ -171,7 +173,25 @@ function normalizeSections(raw) {
 // and inline the fields the editor / print view needs. Annotations
 // (Phase 1.7) ride along so the print view can render strokes on
 // top of the image. Photos that no longer exist drop silently.
-async function hydrateSections(sections) {
+//
+// THE REPORT PHOTO RULE governs every photo id here — stated once, canonically,
+// in report-routes.js, and these are its functions, not a copy. In short:
+// a stored id hydrates when the attachment is in the REPORT's organization
+// (legacy un-stamped rows included, as always) and, only for a service_ticket attachment, the READER passes
+// ticketAttachmentAccess in read mode; photos a project report holds from a
+// linked job or lead in the same org hydrate as they always did. On write, ids
+// already stored stay untouched and a NEW id is kept only if the WRITER passes
+// the same read rule; anything else is dropped and counted as photos_dropped.
+//
+// This lookup used to be `WHERE id = ANY($1)` with no predicate of any kind, so
+// a report could hand back ANOTHER TENANT's thumb/web/original URLs. The org is
+// the report's parent project's, which ensureEntityVisible proved strictly
+// equal to the caller's before any caller reaches here — reportOrgId below.
+function reportOrgId(req) {
+  return Number(req.user && req.user.organization_id);
+}
+
+async function hydrateSections(sections, orgId, user) {
   const allIds = new Set();
   sections.forEach(function(s) {
     (s.photo_ids || []).forEach(function(pid) { allIds.add(pid); });
@@ -182,13 +202,7 @@ async function hydrateSections(sections) {
     });
   }
   const idList = Array.from(allIds);
-  const { rows } = await pool.query(
-    'SELECT id, entity_type, entity_id, filename, mime_type, ' +
-    '       size_bytes, thumb_url, web_url, original_url, ' +
-    '       folder, uploaded_at, caption, annotations ' +
-    '  FROM attachments WHERE id = ANY($1::text[])',
-    [idList]
-  );
+  const rows = await readableReportPhotoRows(idList, orgId, user);
   const byId = new Map(rows.map(function(r) { return [r.id, r]; }));
   return sections.map(function(s) {
     const captions = s.captions || {};
@@ -306,7 +320,7 @@ router.get('/:entityType/:entityId/:reportId', requireAuth, async (req, res) => 
       if (!rows.length) return res.status(404).json({ error: 'Report not found' });
       const r = rows[0];
       const sections = Array.isArray(r.sections) ? r.sections : [];
-      const hydrated = await hydrateSections(sections);
+      const hydrated = await hydrateSections(sections, reportOrgId(req), req.user);
       res.json({
         report: {
           id: r.id,
@@ -351,7 +365,9 @@ router.post('/:entityType/:entityId', requireAuth, async (req, res) => {
         ? req.body.title.slice(0, 200) : 'Untitled report';
       const summary = (req.body && typeof req.body.summary === 'string')
         ? req.body.summary.slice(0, 5000) : '';
-      const sections = normalizeSections(req.body && req.body.sections);
+      // Nothing is stored yet, so every photo id is NEW — see THE REPORT PHOTO RULE.
+      const kept = await keepReportPhotoIds(normalizeSections(req.body && req.body.sections), new Set(), reportOrgId(req), req.user);
+      const sections = kept.sections;
       const coverPage = normalizeCoverPage(req.body && req.body.cover_page);
       const templateType = normalizeTemplateType(req.body && req.body.template_type);
       const stylePack = normalizeStylePack(req.body && req.body.style_pack);
@@ -360,7 +376,9 @@ router.post('/:entityType/:entityId', requireAuth, async (req, res) => {
         'VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10)',
         [id, entityType, entityId, title, summary, JSON.stringify(sections), JSON.stringify(coverPage), templateType, stylePack, req.user.id]
       );
-      res.json({ report: { id, entity_type: entityType, entity_id: entityId, title, summary, template_type: templateType, style_pack: stylePack, sections, cover_page: coverPage } });
+      const created = { report: { id, entity_type: entityType, entity_id: entityId, title, summary, template_type: templateType, style_pack: stylePack, sections, cover_page: coverPage } };
+      if (kept.dropped) created.photos_dropped = kept.dropped;
+      res.json(created);
     } catch (e) {
       console.error('POST /api/reports/:entityType/:entityId error:', e);
       res.status(500).json({ error: 'Server error' });
@@ -439,6 +457,7 @@ router.patch('/:entityType/:entityId/:reportId', requireAuth, async (req, res) =
       const sets = [];
       const params = [];
       let p = 1;
+      let photosDropped = 0;
       if (typeof req.body.title === 'string') {
         sets.push('title = $' + (p++));
         params.push(req.body.title.slice(0, 200));
@@ -448,8 +467,23 @@ router.patch('/:entityType/:entityId/:reportId', requireAuth, async (req, res) =
         params.push(req.body.summary.slice(0, 5000));
       }
       if (Array.isArray(req.body.sections)) {
+        let nextSections = normalizeSections(req.body.sections);
+        // THE REPORT PHOTO RULE, write half: ids already on the report stay; a
+        // new id must pass the read rule for this writer. Only a save that
+        // names photos needs the stored row, read under the UPDATE's own key,
+        // so a report that is not there gets that UPDATE's own 404 body.
+        if (reportPhotoIdsOf(nextSections).size) {
+          const cur = await pool.query(
+            'SELECT sections FROM job_reports WHERE id = $1 AND entity_type = $2 AND entity_id = $3',
+            [reportId, entityType, entityId]
+          );
+          if (!cur.rows.length) return res.status(404).json({ error: 'Report not found' });
+          const kept = await keepReportPhotoIds(nextSections, reportPhotoIdsOf(cur.rows[0].sections), reportOrgId(req), req.user);
+          nextSections = kept.sections;
+          photosDropped = kept.dropped;
+        }
         sets.push('sections = $' + (p++) + '::jsonb');
-        params.push(JSON.stringify(normalizeSections(req.body.sections)));
+        params.push(JSON.stringify(nextSections));
       }
       if (req.body.cover_page && typeof req.body.cover_page === 'object') {
         sets.push('cover_page = $' + (p++) + '::jsonb');
@@ -476,7 +510,7 @@ router.patch('/:entityType/:entityId/:reportId', requireAuth, async (req, res) =
         ' WHERE id = $' + (p++) + ' AND entity_type = $' + (p++) + ' AND entity_id = $' + (p++);
       const r = await pool.query(sql, params);
       if (!r.rowCount) return res.status(404).json({ error: 'Report not found' });
-      res.json({ ok: true });
+      res.json(photosDropped ? { ok: true, photos_dropped: photosDropped } : { ok: true });
     } catch (e) {
       console.error('PATCH /api/reports/:entityType/:entityId/:reportId error:', e);
       res.status(500).json({ error: 'Server error' });

@@ -399,7 +399,7 @@ const upload = multer({
 // PUT /:id asks, without requiring a routes/* module (and therefore
 // JWT_SECRET) from services/. Re-exported on module.exports.entityAccess
 // below, unchanged.
-const { readCapForEntity, writeCapForEntity } = require('../services/attachment-entity-access');
+const { readCapForEntity, writeCapForEntity, ticketAttachmentAccess, TICKET_ENTITY_TYPE } = require('../services/attachment-entity-access');
 
 // Owner gate for user-type attachments. The user can only operate on
 // their own bucket; admins can operate on anyone's. Returns true if
@@ -449,7 +449,47 @@ function callerOrgId(req) {
 // which is the decision already shipped on the users side (guardUserTarget).
 function notFound(res) { return res.status(404).json({ error: 'Not found' }); }
 
-function requireDynamicCapability(getCap) {
+// ── WORK-ORDER PHOTOS: THE TICKET'S PARENT DECIDES ──────────────────────────
+// readCapForEntity / writeCapForEntity answer 'service_ticket' with the COARSE
+// list only (services/attachment-entity-access.js says why). Without this call
+// the doors below ran on that string alone — and before it, on the LEADS_VIEW
+// fallback, which let a leads-only user list and download the photos on a JOB
+// ticket they cannot open and never narrowed a crew lead to their own job.
+//
+// Asked on every door right AFTER the tenancy predicate and BEFORE the coarse
+// capability. The ticket rule admits strictly fewer callers than the coarse
+// list, so the order changes no allow; what it fixes is the refusal: a ticket
+// that is absent, foreign, or on a job the caller is not on answers the door's
+// not-found for EVERY caller, instead of a 403 for some roles that would
+// confirm the work order exists.
+//
+// Returns true when the door may continue. On false the response is written:
+// `notFoundBody` is the exact body the door already gives an absent id, and
+// `forbiddenBody` the 403 body the door already gives a capability miss.
+// Every other entity type returns true without a query — their behaviour is
+// deliberately untouched.
+async function ticketParentOk(req, res, entityType, entityId, mode, notFoundBody, forbiddenBody) {
+  if (entityType !== TICKET_ENTITY_TYPE) return true;
+  const verdict = await ticketAttachmentAccess({
+    // An arrow, not pool.query itself: node-pg's query is a method and loses
+    // its `this` when handed around bare.
+    query: (sql, params) => pool.query(sql, params),
+    user: req.user,
+    ticketId: entityId,
+    orgId: callerOrgId(req),
+    mode,
+  });
+  if (verdict.ok === true) return true;
+  if (verdict.hidden) res.status(404).json(notFoundBody || { error: 'Not found' });
+  else res.status(403).json(forbiddenBody || { error: 'Forbidden' });
+  return false;
+}
+
+// `mode` is 'read' | 'write' and must agree with the getCap it is paired with.
+// It exists because a capability STRING cannot say which half of the ticket
+// rule to ask. A caller that omits it is refused on a service ticket (the
+// access module answers bad_mode, a 403) rather than defaulting to either half.
+function requireDynamicCapability(getCap, mode) {
   return async function(req, res, next) {
     const cap = getCap(req);
     if (!cap) return res.status(400).json({ error: 'Bad entity type' });
@@ -459,6 +499,8 @@ function requireDynamicCapability(getCap) {
       if (!(await attachmentEntityInOrg(pool, req.params.entityType, req.params.entityId, callerOrgId(req)))) {
         return notFound(res);
       }
+      // Then the ticket's parent, for a work order. See ticketParentOk.
+      if (!(await ticketParentOk(req, res, req.params.entityType, req.params.entityId, mode))) return;
       // Owner sentinel — used by the user-type bucket. Skips the
       // role/cap check; the route body still has to do the per-row
       // owner verification via ensureUserAttachmentOwner.
@@ -529,6 +571,8 @@ router.get('/raw/:id', requireAuth, async (req, res) => {
     // PREDICATE FIRST — this door streams the BYTES back. Verified open at
     // 79b52ed: an org-A admin got 200 and org B's file contents.
     if (!(await attachmentInOrg(pool, att, callerOrgId(req)))) return notFound(res);
+    // The BYTES of a crew photo: the ticket's parent decides who reads them.
+    if (!(await ticketParentOk(req, res, att.entity_type, att.entity_id, 'read'))) return;
 
     const cap = readCapForEntity(att.entity_type);
     if (cap === '__owner__') {
@@ -621,7 +665,7 @@ router.get('/tags/suggest', requireAuth, (req, res) => suggestTags(req, res));
 // so reorder later (drag-drop) is just a column update.
 router.get('/:entityType/:entityId',
   requireAuth,
-  requireDynamicCapability(req => entityTypeOk(req.params.entityType) ? readCapForEntity(req.params.entityType) : null),
+  requireDynamicCapability(req => entityTypeOk(req.params.entityType) ? readCapForEntity(req.params.entityType) : null, 'read'),
   async (req, res) => {
     try {
       const { entityType, entityId } = req.params;
@@ -667,6 +711,8 @@ async function suggestTags(req, res) {
     if (!(await attachmentEntityInOrg(pool, entityType, entityId, callerOrgId(req)))) {
       return notFound(res);
     }
+    // A ticket's tag history is its photos' metadata — same parent rule.
+    if (!(await ticketParentOk(req, res, entityType, entityId, 'read'))) return;
     // Same capability gate as the per-entity attachments list — if
     // you can see the attachments, you can see their tags.
     const cap = readCapForEntity(entityType);
@@ -749,6 +795,10 @@ router.post('/bulk-tag', requireAuth, async (req, res) => {
         return res.status(404).json({ error: 'One or more attachments not found' });
       }
     }
+    // Every row shares firstType/firstId (enforced above), so one ticket
+    // answer covers the batch.
+    if (!(await ticketParentOk(req, res, firstType, firstId, 'write',
+      { error: 'One or more attachments not found' }))) return;
 
     const cap = writeCapForEntity(firstType);
     if (cap === '__owner__') {
@@ -935,6 +985,8 @@ async function rosterMode(req, res, entityType) {
 // We don't enforce per-entity capability filtering here because the
 // widget is a discovery surface; the entity-level read still gates
 // the deeper view if the user can't actually open a job/lead/etc.
+// EXCEPT for the two row kinds named in the body, which that reasoning does
+// not cover.
 router.get('/recent', requireAuth, async (req, res) => {
   try {
     // Roster mode. Everything below this line is the original flat widget,
@@ -949,16 +1001,43 @@ router.get('/recent', requireAuth, async (req, res) => {
     // "recent uploads" discovery widget. LEFT JOIN + OR-IS-NULL (org tolerance)
     // keeps it a no-op for AGX today (un-stamped / system uploads still show);
     // tighten by dropping the IS NULL clause once data is fully org-stamped.
+    //
+    // ── TWO ROWS THIS WIDGET MUST NEVER ADMIT ─────────────────────────────
+    // It runs no per-entity rule and hands back storage URLs, which on R2 are
+    // unsigned — listing a row here IS handing over the file. That shortcut
+    // held only while every row it could list was one the reader might open
+    // anyway, and two kinds are not:
+    //
+    //   1. WORK-ORDER PHOTOS. A service_ticket attachment is readable only
+    //      through its ticket's PARENT rule (services/attachment-entity-
+    //      access.js ticketAttachmentAccess), which a flat list cannot ask
+    //      row by row. So the widget does not list them at all, for anyone:
+    //      the photo roster and the ticket's own detail are where they
+    //      belong, and both run the rule. The type is a bound parameter, not
+    //      a literal, so the name comes from the one constant the rule uses.
+    //
+    //   2. A ROW WITH NO UPLOADER. The guest work-order and task-share doors
+    //      write uploaded_by NULL, and the column's ON DELETE SET NULL writes
+    //      it for every upload whose user is later removed. The LEFT JOIN then
+    //      finds no user, the uploader's organization_id comes back NULL, and
+    //      the tolerance arm below — written for un-stamped USERS — admitted
+    //      that row to EVERY TENANT. An upload with no uploader has no uploader org to be
+    //      tolerant about; it is anchored on the row's own organization_id,
+    //      strictly, or it is not listed.
+    //
+    // A row WITH an uploader answers exactly what it answered before.
     const orgId = req.user.organization_id;
     const { rows } = await pool.query(
       `SELECT a.id, a.entity_type, a.entity_id, a.filename, a.mime_type, a.size_bytes,
               a.thumb_url, a.web_url, a.original_url, a.folder, a.uploaded_at, a.uploaded_by
          FROM attachments a
          LEFT JOIN users u ON u.id = a.uploaded_by
-        WHERE (u.organization_id = $2 OR u.organization_id IS NULL)
+        WHERE a.entity_type <> $3
+          AND ((a.uploaded_by IS NOT NULL AND (u.organization_id = $2 OR u.organization_id IS NULL))
+               OR (a.uploaded_by IS NULL AND a.organization_id = $2))
         ORDER BY a.uploaded_at DESC
         LIMIT $1`,
-      [limit, orgId]
+      [limit, orgId, TICKET_ENTITY_TYPE]
     );
     res.json({ attachments: rows });
   } catch (e) {
@@ -1001,7 +1080,7 @@ router.post('/from-email/:emailAttId', requireAuth, (req, res) => saveEmailAttac
 // field `file`. Returns the inserted attachment row.
 router.post('/:entityType/:entityId',
   requireAuth,
-  requireDynamicCapability(req => entityTypeOk(req.params.entityType) ? writeCapForEntity(req.params.entityType) : null),
+  requireDynamicCapability(req => entityTypeOk(req.params.entityType) ? writeCapForEntity(req.params.entityType) : null, 'write'),
   upload.single('file'),
   async (req, res) => {
     try {
@@ -1316,6 +1395,9 @@ router.delete('/:id', requireAuth, async (req, res) => {
     if (!(await attachmentInOrg(pool, att, callerOrgId(req)))) {
       return res.status(404).json({ error: 'Attachment not found' });
     }
+    // Before storage.delete() destroys a crew photo's blob: the ticket's parent.
+    if (!(await ticketParentOk(req, res, att.entity_type, att.entity_id, 'write',
+      { error: 'Attachment not found' }))) return;
 
     // Capability check — same write rule as the parent entity.
     const cap = writeCapForEntity(att.entity_type);
@@ -1386,6 +1468,10 @@ router.put('/:id', requireAuth, async (req, res) => {
     if (!(await attachmentInOrg(pool, att, callerOrgId(req)))) {
       return res.status(404).json({ error: 'Attachment not found' });
     }
+    // Caption / tags / annotations on a crew photo: the ticket's parent. The
+    // proofread mode below inherits this too, by living inside this route.
+    if (!(await ticketParentOk(req, res, att.entity_type, att.entity_id, 'write',
+      { error: 'Attachment not found' }))) return;
     const cap = writeCapForEntity(att.entity_type);
     if (cap === '__owner__') {
       if (!ensureUserAttachmentOwner(req, att.entity_id)) {
@@ -1550,6 +1636,30 @@ async function moveAttachment(req, res) {
     if (!rows.length) return res.status(404).json({ error: 'Attachment not found' });
     const att = rows[0];
 
+    // PREDICATE FIRST, both keys, before either capability is consulted.
+    // The tenancy refusal and the capability refusal are deliberately DIFFERENT
+    // answers: "not yours / not there" is the 404 an absent id already gets two
+    // lines up, while "yours, but you may not" stays the 403 it always was. A
+    // 403 for a foreign key would make this an existence oracle; a 404 for a
+    // capability miss would make an in-tenant permissions problem unreadable.
+    //
+    // THE SOURCE IS PROVED BEFORE THE BODY IS READ. The absent-id 404 above
+    // answers before any body validation, so every refusal that must look like
+    // it has to answer there too. Validating the body first meant a foreign or
+    // hidden source with a bad or absent destination answered 400 or the
+    // destination's 404 while an absent id answered 'Attachment not found' —
+    // two answers, which is the oracle the 404 exists to deny.
+    const orgId = callerOrgId(req);
+    if (!(await attachmentInOrg(pool, att, orgId))) {
+      return res.status(404).json({ error: 'Attachment not found' });
+    }
+    // Moving a crew photo OFF its ticket strips it from the work order, so the
+    // source needs the ticket's write rule. (A ticket cannot be a DESTINATION:
+    // VALID below excludes it.) canWriteAttachment below only knows the coarse
+    // list, which a leads-only user passes for a job ticket.
+    if (!(await ticketParentOk(req, res, att.entity_type, att.entity_id, 'write',
+      { error: 'Attachment not found' }, { error: 'No write access on source entity' }))) return;
+
     const newType = String(req.body && req.body.entity_type || '').trim();
     const newId   = String(req.body && req.body.entity_id   || '').trim();
     if (!newType || !newId) return res.status(400).json({ error: 'entity_type and entity_id are required' });
@@ -1557,16 +1667,6 @@ async function moveAttachment(req, res) {
     if (VALID.indexOf(newType) === -1) return res.status(400).json({ error: 'invalid entity_type' });
     if (!entityIdOk(newId)) return res.status(400).json({ error: 'Invalid entity_id' }); // P1-4
 
-    // PREDICATE FIRST, both keys, before either capability is consulted.
-    // The tenancy refusal and the capability refusal are deliberately DIFFERENT
-    // answers: "not yours / not there" is the 404 an absent id already gets two
-    // lines up, while "yours, but you may not" stays the 403 it always was. A
-    // 403 for a foreign key would make this an existence oracle; a 404 for a
-    // capability miss would make an in-tenant permissions problem unreadable.
-    const orgId = callerOrgId(req);
-    if (!(await attachmentInOrg(pool, att, orgId))) {
-      return res.status(404).json({ error: 'Attachment not found' });
-    }
     if (!(await attachmentEntityInOrg(pool, newType, newId, orgId))) {
       return notFound(res);
     }
@@ -1619,6 +1719,22 @@ async function copyAttachment(req, res) {
     if (!srcR.rows.length) return res.status(404).json({ error: 'Attachment not found' });
     const src = srcR.rows[0];
 
+    // PREDICATE FIRST, both keys. This door reads the SOURCE BYTES out of
+    // storage and writes them to a caller-named destination — unscoped it was
+    // both an exfiltration path out of another tenant and an injection path
+    // into one. Same split of refusals as move: 404 for the boundary, 403 for
+    // the capability. And the same ORDER as move: the source is proved before
+    // the body is read, so a foreign or hidden source answers exactly what an
+    // absent one does whatever the body says — see the note there.
+    const orgId = callerOrgId(req);
+    if (!(await attachmentInOrg(pool, src, orgId))) {
+      return res.status(404).json({ error: 'Attachment not found' });
+    }
+    // Copying reads the source BYTES out, so a crew photo's ticket read rule
+    // applies — canReadAttachment below only knows the coarse list.
+    if (!(await ticketParentOk(req, res, src.entity_type, src.entity_id, 'read',
+      { error: 'Attachment not found' }, { error: 'No read access on source attachment' }))) return;
+
     const newType = String(req.body && req.body.entity_type || '').trim();
     const newId   = String(req.body && req.body.entity_id   || '').trim();
     if (!newType || !newId) return res.status(400).json({ error: 'entity_type and entity_id are required' });
@@ -1626,15 +1742,6 @@ async function copyAttachment(req, res) {
     if (VALID.indexOf(newType) === -1) return res.status(400).json({ error: 'invalid entity_type' });
     if (!entityIdOk(newId)) return res.status(400).json({ error: 'Invalid entity_id' }); // P1-4
 
-    // PREDICATE FIRST, both keys. This door reads the SOURCE BYTES out of
-    // storage and writes them to a caller-named destination — unscoped it was
-    // both an exfiltration path out of another tenant and an injection path
-    // into one. Same split of refusals as move: 404 for the boundary, 403 for
-    // the capability.
-    const orgId = callerOrgId(req);
-    if (!(await attachmentInOrg(pool, src, orgId))) {
-      return res.status(404).json({ error: 'Attachment not found' });
-    }
     if (!(await attachmentEntityInOrg(pool, newType, newId, orgId))) {
       return notFound(res);
     }
@@ -1879,6 +1986,14 @@ async function saveEmailAttachmentToFolder(req, res) {
 // standing where a tenancy answer belongs. Each now proves the KEY first and
 // only then asks the capability, so the capability can only ever narrow a
 // decision the boundary has already made — never widen one.
+//
+// NOT SUFFICIENT FOR A SERVICE TICKET. For 'service_ticket' the capability these
+// ask is the coarse list, which a leads-only user passes on a job's work order.
+// They stay booleans because a boolean cannot carry "answer not-found" versus
+// "answer 403", which the ticket rule needs; every caller with a ticket source
+// runs ticketParentOk first (move and copy do). Neither move, copy nor
+// from-email admits a ticket as a DESTINATION, so canWriteEntity is never asked
+// about one.
 async function canReadAttachment(req, att) {
   if (!(await attachmentInOrg(pool, att, callerOrgId(req)))) return false;
   const cap = readCapForEntity(att.entity_type);

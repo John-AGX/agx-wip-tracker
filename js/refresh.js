@@ -379,7 +379,38 @@
     attachment: {
       paths: ['p86Projects.refreshPhotos'],
       surface: function () { call('p86Projects.refreshPhotos'); }
-    }
+    },
+
+    // Service tickets — the work-order tier above tasks, drafted by an agent
+    // through a service_ticket payload target.
+    //
+    // SURFACE ONLY, NO STORE PATCH, for the same reason as `attachment`: there
+    // is no read-cache to patch. js/service-tickets.js keeps the job's list in
+    // its module-private _state.tickets and the lead panel keeps nothing at
+    // all; both are hydrated from /api/service-tickets when they mount, and
+    // nothing in appData holds a ticket. p86ServiceTickets.refresh REFETCHES
+    // and repaints whichever of the two is mounted (the job manager, the lead
+    // panel, or both), which is also the right posture after an approval: the
+    // server's committed row, not the client's guess at it.
+    //
+    // Without this entry an approved ticket lands in Postgres while the pane in
+    // front of the user keeps its pre-write list until a manual reload, which
+    // reads exactly like the draft failing to apply.
+    //
+    // DELIBERATELY NOT IN TASK_PATHS, AND TASK_PATHS NOT IN HERE. The
+    // dispatcher emits a ticket's child tasks as their own `task` rows, so one
+    // ticket bundle already runs this entry once AND the tasks bucket once.
+    // Adding the ticket path to TASK_PATHS would repaint the ticket pane twice
+    // for every such bundle. The cost of that choice, stated rather than
+    // hidden: a payload that touches ONLY a child task (no service_ticket
+    // target) moves My Day and the Tasks panel but leaves the ticket's own task
+    // list and its done/total counter stale until the ticket is reopened.
+    //
+    // The ticket pane refuses to repaint while its open detail holds the caret
+    // or unsaved edits (see refresh() in js/service-tickets.js); that guard
+    // lives in the module because only the module knows what "unsaved" means
+    // for a work order.
+    service_ticket: surfaceEntry(['p86ServiceTickets.refresh'])
   };
 
   // Tasks, to-dos, reminders and calendar events all land on the same four

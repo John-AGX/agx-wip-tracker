@@ -151,12 +151,23 @@
     calendar_event: 'appointment',
     task: 'task', reminder: 'reminder', lead: 'lead', client: 'client',
     estimate: 'estimate', job: 'job', change_order: 'change order',
-    note: 'note', report: 'report'
+    note: 'note', report: 'report', service_ticket: 'service ticket'
   };
   var CREATE_VERB = { schedule: 'added', appointment: 'added', event: 'added',
     calendar_event: 'added',
     task: 'added', reminder: 'set', lead: 'created', client: 'added',
-    estimate: 'created', note: 'saved', change_order: 'drafted', report: 'created' };
+    estimate: 'created', note: 'saved', change_order: 'drafted', report: 'created',
+    service_ticket: 'created' };
+
+  // A PARENT type whose bundle carries its children as sibling targets. A
+  // drafted service ticket arrives as [service_ticket, task, task]: one work
+  // order and the tasks under it. Read the old way (first known noun, counted
+  // over EVERY target) that was spoken as "3 tasks added" when the order put a
+  // task first, and "3 service tickets created" when it did not; both are
+  // wrong, and a crew lead hearing either goes looking for work orders that do
+  // not exist. The parent is the dominant noun regardless of target order, and
+  // the children are named as what they are.
+  var CHILD_NOUN = { service_ticket: 'task' };
 
   // Format an ISO datetime as a spoken relative-when, e.g. "today",
   // "tomorrow at 9 AM", "Thursday at 2:30 PM", "on Jun 25". Parsed in the
@@ -199,6 +210,22 @@
     return d;
   }
 
+  // Did the committed changeset find this parent already in the database? An
+  // entry of the parent's type whose `before` snapshot is non-null names a row
+  // that existed before the write, i.e. an edit. Matched by id when the target
+  // has one, so a bundle that edits one ticket and creates another cannot lend
+  // the edit to the new one; a target with no id takes any entry of its type.
+  function changesetShowsExisting(changeset, type, target) {
+    if (!Array.isArray(changeset)) return false;
+    var tid = target.entity_id != null ? target.entity_id : target.id;
+    for (var i = 0; i < changeset.length; i++) {
+      var e = changeset[i];
+      if (!e || e.entity_type !== type || e.before == null) continue;
+      if (tid == null || String(e.id) === String(tid)) return true;
+    }
+    return false;
+  }
+
   function buildConfirmation(detail) {
     detail = detail || {};
     var targets = detail.affected_targets || [];
@@ -207,6 +234,48 @@
     // Rich line for timed personal entities (Phase 3 write ops surface a
     // title + date on the target). Title is sanitized; dates/times survive
     // the financial sanitizer, so this stays numbers-safe.
+    // A parent bundle is spoken as its parent (see CHILD_NOUN). Found before
+    // the rich lines below, because a bundle whose FIRST target happens to be
+    // a child task would otherwise be read back as "Added a task: ..." and the
+    // work order it belongs to never mentioned.
+    var parentType = '';
+    for (var pi = 0; pi < targets.length; pi++) {
+      var pet = targets[pi] && targets[pi].entity_type;
+      if (pet && CHILD_NOUN[pet]) { parentType = pet; break; }
+    }
+    if (parentType) {
+      var childType = CHILD_NOUN[parentType];
+      var parents = 0, children = 0, firstParent = null;
+      for (var ci = 0; ci < targets.length; ci++) {
+        var cet = targets[ci] && targets[ci].entity_type;
+        if (cet === parentType) { parents++; if (!firstParent) firstParent = targets[ci]; }
+        else if (cet === childType) children++;
+      }
+      var pNoun = NOUNS[parentType] || parentType.replace(/_/g, ' ');
+      // The dispatcher's receipt says whether the ticket was created or edited
+      // (op / updated). Adding tasks to an existing work order is not creating
+      // one, and "service ticket created" would send someone looking for a
+      // duplicate. A target with no op falls back to the changeset below.
+      var edited = !!(firstParent && (firstParent.updated === true || firstParent.op === 'update'));
+      // The Live Writer door (a server-side apply, or approve-in-chat) has no
+      // receipt: its targets are rebuilt from the committed changeset as bare
+      // {entity_type, entity_id}, so the check above reads every edit applied
+      // there as "service ticket created" and sends a crew lead looking for a
+      // duplicate work order. That changeset still says which it was — the
+      // dispatcher photographs the row BEFORE the write, and a row that did not
+      // exist yet photographs as null.
+      if (!edited && firstParent) edited = changesetShowsExisting(detail.apply_changeset, parentType, firstParent);
+      var pVerb = edited ? 'updated' : (CREATE_VERB[parentType] || 'updated');
+      var cNoun = NOUNS[childType] || childType.replace(/_/g, ' ');
+      var pDisplay = parents === 1 ? safeDisplay(firstParent) : '';
+      var head = parents === 1
+        ? pNoun + ' ' + pVerb + (pDisplay ? ' for ' + pDisplay : '')
+        : parents + ' ' + pNoun + 's ' + pVerb;
+      var cCount = children + ' ' + cNoun + (children === 1 ? '' : 's');
+      var tail = !children ? '' : (edited ? ', ' + cCount + ' added' : ', with ' + cCount);
+      return sanitizeForSpeech('Got it — ' + head + tail + '.');
+    }
+
     var t0 = targets[0];
     if (t0 && t0.entity_type === 'calendar_event' && t0.title) {
       var when = relWhen(t0.starts_at, t0.all_day);

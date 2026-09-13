@@ -26,6 +26,9 @@ const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireOrg, hasCapability } = require('../auth');
 const dispatcher = require('../services/payload-dispatcher');
+// The one parent-inherited rule for who may write a service ticket. Only its
+// COARSE half is used here — see PAYLOAD_APPLY_CAP.service_ticket.
+const ticketAccess = require('../services/service-ticket-access');
 // Training flywheel — every approve/reject verdict on a Scribe-authored
 // payload is a labeled example (accepted true/false). Deterministic id
 // 'tex_pl_<payloadId>' + terminal statuses (applied XOR rejected) = at
@@ -332,6 +335,23 @@ const PAYLOAD_APPLY_CAP = {
   schedule: ['JOBS_VIEW_ALL'],
   system:   ['ROLES_MANAGE'],
   assembly: ['ESTIMATES_EDIT'],
+  // A ticket has no capability of its own; it inherits its parent's — job
+  // edit caps for a ticket on a job, LEADS_EDIT for one on a lead. A static
+  // list cannot say "depends on the parent", and a missing entry here is not a
+  // refusal: the loop below `continue`s past it, so without this line a
+  // service_ticket payload would reach the dispatcher with NO capability check
+  // at this door (test/service-ticket-payload.test.js deletes the entry and
+  // shows a view-only role sail through).
+  //
+  // So this is the COARSE half only: every capability that could grant a
+  // ticket write on SOME parent. Holding none of them refuses here, before a
+  // transaction opens. Holding one proves nothing on its own — a LEADS_EDIT-only
+  // approver passes this line for a ticket on a JOB — which is why
+  // dispatchServiceTicket asks service-ticket-access.mayAccessTicketParent for
+  // the real answer once the parent is loaded. It has to be the dispatcher that
+  // decides: a parent created earlier in the same payload ($new_lead) does not
+  // exist yet when this gate runs.
+  service_ticket: ticketAccess.coarseCaps('write'),
 };
 
 // Walk a payload's targets[] (regular + move source/dest + bulk) and
@@ -589,6 +609,16 @@ function isHighRiskPayload(payload) {
       //
       // Scoped to money-bearing entities so personal to-dos / reminders /
       // calendar items keep their card-free flow.
+      //
+      // service_ticket is deliberately NOT in this list, and not because a
+      // ticket's lifecycle is harmless. A ticket's status is not writable from
+      // a payload at all: validateOps refuses fields.status (and a top-level
+      // status) by name, at emit time and again at apply, so there is no
+      // status write for this rule to catch. Adding the type here would read
+      // as if the payload path were a second status door that merely shows a
+      // card; it is not a door. (Tickets also never auto-apply —
+      // service_ticket is not in AUTO_APPLY_TYPES — so every ticket write is
+      // carded anyway unless the user approved it in chat.)
       if (/^(estimate|job|invoice|lead|purchase_order|change_order|bill|pay_app|payapp)$/
             .test(String(t.entity_type || '')) &&
           /"(status|stage|state)"\s*:/.test(s)) {
@@ -712,6 +742,10 @@ module.exports.internals = {
   validateOps: dispatcher.validateOps,
   ALLOWED_ENTITY_TYPES,
   VALID_SOURCES,
+  // The apply gate both doors share, exported so its entries are driven with
+  // real role capabilities rather than read out of this file as text.
+  PAYLOAD_APPLY_CAP,
+  denyPayloadApply,
   generateFilename,
   sanitizeShortName,
   newPayloadId,

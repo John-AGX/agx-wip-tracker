@@ -33,6 +33,8 @@ const { requireAuth, requireCapability, getAttributedUserId, requireOrgId } = re
 // Its only tenant pointer is the parent job, so that is what every statement
 // here proves.
 const { jobInOrg, parentJobInOrgSql } = require('../services/job-org-scope');
+// The work-order half of the report photo rule (see THE REPORT PHOTO RULE).
+const { TICKET_ENTITY_TYPE, ticketAttachmentAccess } = require('../services/attachment-entity-access');
 
 const router = express.Router({ mergeParams: true });
 
@@ -124,7 +126,121 @@ async function jobIsReachable(jobId, orgId) {
 // another tenant's attachment ids and this function would then hand back their
 // thumb_url and web_url. The stored id is caller-supplied data, so it is
 // scoped on the way out as well as being refused on the way in.
-async function hydrateSections(sections, orgId) {
+//
+// ══ THE REPORT PHOTO RULE ═════════════════════════════════════════════════════
+// This is the CANONICAL statement. reports-routes.js calls these same functions
+// (exported below), and services/payload-dispatcher.js#dispatchReport — which
+// cannot require a routes/ file — implements the WRITE half (strict org for new
+// ids; see its comment). Change it here first, then there.
+//
+// READ (hydrate). A stored section photo id hydrates when BOTH hold:
+//   1. the attachment is in the REPORT's organization — the same org check
+//      this lookup has always made (legacy un-stamped rows still count, so an
+//      older photo never vanishes from an existing report), and never an arm
+//      that settles on who uploaded it;
+//   2. ONLY IF its entity_type is service_ticket, the READER passes
+//      ticketAttachmentAccess (services/attachment-entity-access.js) in read
+//      mode — the ticket's PARENT's rule, asked once per ticket, never restated
+//      here.
+// Nothing else is asked. In particular the photo is NOT required to hang on
+// the report's own parent: a project report legitimately holds a linked job's
+// or lead's photos, and anchoring on the parent (as round 3 of this fix did)
+// hid real photos in existing reports. Photos from other parents in the same
+// org hydrate exactly as they always did. An id that fails either clause is
+// left out of the hydrated answer the way a deleted attachment always was, so
+// absent, foreign and unreadable are one answer.
+//
+// WRITE (POST / PATCH). Ids ALREADY stored on the report — anywhere in its
+// stored sections — are kept untouched, whether or not THIS writer can read
+// them: the editor PATCHes sections_raw back verbatim, and a viewer's autosave
+// must never strip a photo another user added. A NEW id is kept only if it
+// passes the READ rule for the WRITER. Otherwise it is dropped, its caption /
+// descSide go with it, and the number of distinct ids dropped is reported as
+// `photos_dropped` — present only when non-zero, so a save that drops nothing
+// answers exactly as it always did. Absent, foreign and unreadable new ids take
+// the one path, so the count tells a guesser nothing about which ids exist.
+// ═════════════════════════════════════════════════════════════════════════════
+
+// Every photo id in a sections array, as a Set. Tolerates any stored shape.
+function reportPhotoIdsOf(sections) {
+  const ids = new Set();
+  (Array.isArray(sections) ? sections : []).forEach(function(s) {
+    const list = (s && Array.isArray(s.photo_ids)) ? s.photo_ids : [];
+    list.forEach(function(pid) { if (typeof pid === 'string') ids.add(pid); });
+  });
+  return ids;
+}
+
+// THE READ HALF. The attachment rows, out of idList, that `user` may see
+// inside a report belonging to `orgId`.
+async function readableReportPhotoRows(idList, orgId, user) {
+  if (!idList.length) return [];
+  const { rows } = await pool.query(
+    'SELECT id, entity_type, entity_id, filename, mime_type, ' +
+    '       size_bytes, thumb_url, web_url, original_url, ' +
+    '       folder, uploaded_at, caption, annotations ' +
+    '  FROM attachments WHERE id = ANY($1::text[]) ' +
+    '   AND (organization_id = $2 OR organization_id IS NULL)',
+    [idList, orgId]
+  );
+  const ticketVerdicts = new Map();
+  const readable = [];
+  for (const row of rows) {
+    if (row.entity_type === TICKET_ENTITY_TYPE) {
+      const ticketId = String(row.entity_id);
+      if (!ticketVerdicts.has(ticketId)) {
+        const verdict = await ticketAttachmentAccess({
+          // An arrow, not pool.query itself: node-pg's query is a method and
+          // loses its `this` when handed around bare.
+          query: (sql, params) => pool.query(sql, params),
+          user: user,
+          ticketId: ticketId,
+          orgId: orgId,
+          mode: 'read',
+        });
+        ticketVerdicts.set(ticketId, !!verdict && verdict.ok === true);
+      }
+      if (!ticketVerdicts.get(ticketId)) continue;
+    }
+    readable.push(row);
+  }
+  return readable;
+}
+
+// THE WRITE HALF. `storedIds` is reportPhotoIdsOf(the row's stored sections) —
+// an empty Set on create. Returns { sections, dropped }; `sections` is the
+// very array passed in when nothing is dropped.
+async function keepReportPhotoIds(sections, storedIds, orgId, user) {
+  const fresh = new Set();
+  reportPhotoIdsOf(sections).forEach(function(pid) {
+    if (!storedIds.has(pid)) fresh.add(pid);
+  });
+  if (!fresh.size) return { sections: sections, dropped: 0 };
+  const allowed = new Set((await readableReportPhotoRows(Array.from(fresh), orgId, user))
+    .map(function(r) { return String(r.id); }));
+  const refused = new Set(Array.from(fresh).filter(function(pid) { return !allowed.has(pid); }));
+  if (!refused.size) return { sections: sections, dropped: 0 };
+  const withoutRefused = function(obj) {
+    const out = {};
+    Object.keys(obj).forEach(function(k) { if (!refused.has(k)) out[k] = obj[k]; });
+    return out;
+  };
+  return {
+    sections: sections.map(function(s) {
+      const list = Array.isArray(s.photo_ids) ? s.photo_ids : [];
+      if (!list.some(function(pid) { return refused.has(pid); })) return s;
+      const next = Object.assign({}, s, {
+        photo_ids: list.filter(function(pid) { return !refused.has(pid); }),
+      });
+      if (s.captions && typeof s.captions === 'object') next.captions = withoutRefused(s.captions);
+      if (s.descSides && typeof s.descSides === 'object') next.descSides = withoutRefused(s.descSides);
+      return next;
+    }),
+    dropped: refused.size,
+  };
+}
+
+async function hydrateSections(sections, orgId, user) {
   const allIds = new Set();
   sections.forEach(function(s) {
     (s.photo_ids || []).forEach(function(pid) { allIds.add(pid); });
@@ -135,14 +251,7 @@ async function hydrateSections(sections, orgId) {
     });
   }
   const idList = Array.from(allIds);
-  const { rows } = await pool.query(
-    'SELECT id, entity_type, entity_id, filename, mime_type, ' +
-    '       size_bytes, thumb_url, web_url, original_url, ' +
-    '       folder, uploaded_at ' +
-    '  FROM attachments WHERE id = ANY($1::text[]) ' +
-    '   AND (organization_id = $2 OR organization_id IS NULL)',
-    [idList, orgId]
-  );
+  const rows = await readableReportPhotoRows(idList, orgId, user);
   const byId = new Map(rows.map(function(r) { return [r.id, r]; }));
   return sections.map(function(s) {
     const captions = s.captions || {};
@@ -231,7 +340,7 @@ router.get('/:reportId', requireAuth, requireCapability(READ_CAP), requireOrgId,
       if (!rows.length) return res.status(404).json({ error: 'Report not found' });
       const r = rows[0];
       const sections = Array.isArray(r.sections) ? r.sections : [];
-      const hydrated = await hydrateSections(sections, req.orgId);
+      const hydrated = await hydrateSections(sections, req.orgId, req.user);
       res.json({
         report: {
           id: r.id,
@@ -269,7 +378,9 @@ router.post('/', requireAuth, requireCapability(WRITE_CAP), requireOrgId,
         ? req.body.title.slice(0, 200) : 'Untitled report';
       const summary = (req.body && typeof req.body.summary === 'string')
         ? req.body.summary.slice(0, 5000) : '';
-      const sections = normalizeSections(req.body && req.body.sections);
+      // Nothing is stored yet, so every photo id is NEW — see THE REPORT PHOTO RULE.
+      const kept = await keepReportPhotoIds(normalizeSections(req.body && req.body.sections), new Set(), req.orgId, req.user);
+      const sections = kept.sections;
       const templateType = normalizeTemplateType(req.body && req.body.template_type);
       const coverPage = normalizeCoverPage(req.body && req.body.cover_page);
       // Seed default Before / During / After only when no sections passed
@@ -291,7 +402,9 @@ router.post('/', requireAuth, requireCapability(WRITE_CAP), requireOrgId,
         // display-only column, never a read filter or access guard.
         [id, jobId, title, summary, JSON.stringify(seedSections), templateType, JSON.stringify(coverPage), getAttributedUserId(req)]
       );
-      res.json({ report: { id, job_id: jobId, title, summary, template_type: templateType, cover_page: coverPage, sections: seedSections } });
+      const created = { report: { id, job_id: jobId, title, summary, template_type: templateType, cover_page: coverPage, sections: seedSections } };
+      if (kept.dropped) created.photos_dropped = kept.dropped;
+      res.json(created);
     } catch (e) {
       console.error('POST /api/jobs/:jobId/reports error:', e);
       res.status(500).json({ error: 'Server error' });
@@ -308,6 +421,7 @@ router.patch('/:reportId', requireAuth, requireCapability(WRITE_CAP), requireOrg
       const sets = [];
       const params = [];
       let p = 1;
+      let photosDropped = 0;
       if (typeof req.body.title === 'string') {
         sets.push('title = $' + (p++));
         params.push(req.body.title.slice(0, 200));
@@ -317,8 +431,26 @@ router.patch('/:reportId', requireAuth, requireCapability(WRITE_CAP), requireOrg
         params.push(req.body.summary.slice(0, 5000));
       }
       if (Array.isArray(req.body.sections)) {
+        let nextSections = normalizeSections(req.body.sections);
+        // THE REPORT PHOTO RULE, write half: ids already on the report stay; a
+        // new id must pass the read rule for this writer. Only a save that
+        // names photos needs the stored row, and it is read under the same
+        // parent-job predicate as the UPDATE below — so a report the caller
+        // cannot reach gets that UPDATE's own 404 body, before any photo is
+        // looked at.
+        if (reportPhotoIdsOf(nextSections).size) {
+          const cur = await pool.query(
+            'SELECT sections FROM job_reports WHERE id = $1 AND job_id = $2 AND ' +
+            parentJobInOrgSql('job_reports.job_id', '$3'),
+            [req.params.reportId, req.params.jobId, req.orgId]
+          );
+          if (!cur.rows.length) return res.status(404).json({ error: 'Report not found' });
+          const kept = await keepReportPhotoIds(nextSections, reportPhotoIdsOf(cur.rows[0].sections), req.orgId, req.user);
+          nextSections = kept.sections;
+          photosDropped = kept.dropped;
+        }
         sets.push('sections = $' + (p++) + '::jsonb');
-        params.push(JSON.stringify(normalizeSections(req.body.sections)));
+        params.push(JSON.stringify(nextSections));
       }
       // Cover page (Daily Log date/crew/weather/hours) + template type —
       // only written when the client sends them, so untouched reports keep
@@ -343,7 +475,7 @@ router.patch('/:reportId', requireAuth, requireCapability(WRITE_CAP), requireOrg
         ' AND ' + parentJobInOrgSql('job_reports.job_id', '$' + (p++));
       const r = await pool.query(sql, params);
       if (!r.rowCount) return res.status(404).json({ error: 'Report not found' });
-      res.json({ ok: true });
+      res.json(photosDropped ? { ok: true, photos_dropped: photosDropped } : { ok: true });
     } catch (e) {
       console.error('PATCH /api/jobs/:jobId/reports/:reportId error:', e);
       res.status(500).json({ error: 'Server error' });
@@ -370,3 +502,5 @@ router.delete('/:reportId', requireAuth, requireCapability(WRITE_CAP), requireOr
 );
 
 module.exports = router;
+// THE REPORT PHOTO RULE, for reports-routes.js — one implementation, two doors.
+module.exports.reportPhotoRule = { reportPhotoIdsOf, readableReportPhotoRows, keepReportPhotoIds };

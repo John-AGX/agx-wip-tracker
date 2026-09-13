@@ -27,22 +27,93 @@
 
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireCapability, requireOrgId } = require('../auth');
+const { requireAuth, requireOrgId } = require('../auth');
 const { assertEntityInOrg, callerOrgId } = require('../org-access');
 const svc = require('../services/service-tickets');
+const access = require('../services/service-ticket-access');
 
 const router = express.Router();
 
-// The ticket inherits its parent's capability. The space-separated list means
-// ANY of them grants access — requireCapability splits on whitespace. (That
-// split was added because passing the whole string to an exact caps.has() made
-// every route written in the documented style 403 to everyone, including a
-// capability-complete system admin.)
-function writeCapFor(ticket) {
-  return ticket && ticket.job_id ? 'JOBS_EDIT_ANY JOBS_EDIT_OWN' : 'LEADS_EDIT';
+const TICKET_NOT_FOUND = 'Service ticket not found';
+
+// WHO MAY READ OR EDIT A TICKET is decided in services/service-ticket-access.js
+// and nowhere else. This file used to carry its own writeCapFor/readCapFor,
+// which accepted JOBS_VIEW_ASSIGNED / JOBS_EDIT_OWN and then never asked whether
+// the job was actually the caller's — so a crew lead granted one job could read
+// and edit the tickets on every job in the company. The AI doors copy whatever
+// rule the REST doors use, so the rule has to be the real one here first.
+//
+// What stays local is only the HTTP translation of a refusal:
+//   not_assigned  -> 404 with the SAME body a missing ticket gets. An in-org
+//                    user must not be able to learn which tickets exist on jobs
+//                    they are not on; a 403 would answer exactly that.
+//   no_capability -> 403 naming the capabilities, as requireCapability did.
+//   anything else -> 403. bad_mode / no_user / no_parent / auth_unavailable are
+//                    all "this request cannot be authorized", never a pass.
+//
+// It is a call inside each handler rather than route middleware because the
+// answer depends on the PARENT, which is only known once the row is loaded.
+// Returns true when the caller may proceed. A false return means the response
+// has already been written: `if (!(await ticketAccessOk(...))) return;`.
+async function ticketAccessOk(req, res, parent, mode, orgId, notFoundBody) {
+  const verdict = await access.mayAccessTicketParent({
+    // An arrow rather than pool.query itself: node-pg's query is a method and
+    // loses its `this` when handed around bare.
+    query: (sql, params) => pool.query(sql, params),
+    user: req.user,
+    parent,
+    mode,
+    orgId,
+  });
+  if (verdict && verdict.ok === true) return true;
+  const reason = verdict && verdict.reason;
+  if (reason === 'not_assigned') {
+    res.status(404).json({ error: notFoundBody || TICKET_NOT_FOUND });
+    return false;
+  }
+  if (reason === 'no_capability') {
+    const caps = access.capsForParentKind(access.parentOf(parent).kind, mode);
+    res.status(403).json({ error: 'Missing capability: ' + caps.join(' ') });
+    return false;
+  }
+  res.status(403).json({ error: 'You do not have access to this service ticket' });
+  return false;
 }
-function readCapFor(ticket) {
-  return ticket && ticket.job_id ? 'JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED' : 'LEADS_VIEW';
+
+// The caller's numeric id, for the private-to-do boundary (`owner_user_id =
+// $n`). A missing or non-numeric id becomes NULL, and `owner_user_id = NULL` is
+// never true in SQL — so a caller with no usable identity sees org tasks only.
+// It fails closed by construction rather than by a check someone must keep.
+function callerUserId(req) {
+  const raw = req && req.user ? req.user.id : null;
+  if (raw == null || raw === '') return null;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) ? n : null;
+}
+
+// PROVE a body-supplied assignee belongs to this organization before it is
+// written. The foreign key only proves the user EXISTS, not whose they are, so
+// without this a ticket could be assigned to another tenant's user — a
+// cross-tenant write that also puts this org's work order on their My Day. Same
+// rule tasks-routes.js applies to a task's assignee and the participant door
+// applies to a participant.
+//
+// Returns { ok: true, value } with the value to store (null clears it, as an
+// empty string always has), or { ok: false } for anything that is not an
+// in-org user id. A non-integer is refused HERE rather than handed to Postgres,
+// where `id = 'abc'` is a 22P02 and would surface as a 500.
+const ASSIGNEE_REFUSAL = 'Assignee is not a user in this organization';
+async function proveAssignee(raw, orgId) {
+  if (raw === null || raw === '') return { ok: true, value: null };
+  let n = NaN;
+  if (typeof raw === 'number') n = raw;
+  else if (typeof raw === 'string' && /^\s*\d+\s*$/.test(raw)) n = Number(raw);
+  if (!Number.isSafeInteger(n) || n <= 0 || orgId == null) return { ok: false };
+  const { rows } = await pool.query(
+    'SELECT 1 FROM users WHERE id = $1 AND organization_id = $2',
+    [n, orgId]
+  );
+  return rows.length ? { ok: true, value: n } : { ok: false };
 }
 
 // A4's allow-list. Anything outside is silently dropped — the same shape
@@ -103,20 +174,6 @@ async function loadOwnedTicket(id, orgId) {
   return rows[0] || null;
 }
 
-// The capability check must run AFTER the row is loaded, because WHICH
-// capability applies depends on whether the ticket hangs off a job or a lead.
-// So it is a call inside the handler rather than route middleware.
-//
-// requireCapability is fully synchronous — it either calls next() or has
-// already written the 403 — so this can be a plain boolean. `if (!capOk(...))
-// return;` is the whole contract: a false return means the response is
-// already sent.
-function capOk(req, res, capList) {
-  let ok = false;
-  requireCapability(capList)(req, res, () => { ok = true; });
-  return ok;
-}
-
 // ── A1: list ────────────────────────────────────────────────────────────
 router.get('/', requireAuth, async (req, res) => {
   try {
@@ -141,20 +198,98 @@ router.get('/', requireAuth, async (req, res) => {
     if (req.query.q) add('(t.title ILIKE $$ OR t.ticket_number ILIKE $$)', '%' + String(req.query.q) + '%');
     if (!req.query.include_archived) where.push('t.archived_at IS NULL');
 
+    // WHICH TICKETS THIS CALLER MAY SEE AT ALL. This list used to check the org
+    // and nothing else, so any signed-in user — a role with no job or lead
+    // capability whatsoever — could list every ticket with its scope and
+    // internal notes. The list cannot ask mayAccessTicketParent one row at a
+    // time, so listVisibility says what the same rule allows and it is written
+    // here as SQL, in the WHERE, where a row that should not come back never
+    // leaves the database:
+    //   jobs 'all'      -> every job-parented ticket
+    //   jobs 'assigned' -> only tickets whose job the caller owns or holds a
+    //                      job_access grant on (ANY level — a view grant sees)
+    //   leads           -> lead-only tickets; a converted lead's ticket that
+    //                      also carries a job is governed by the job, exactly
+    //                      as parentOf decides it
+    // Nothing visible is an EMPTY LIST, not an error: the tickets tab of a
+    // role that cannot see any is an empty tab, and a 403 there would only
+    // teach the client to treat the list as broken.
+    //
+    // The owner / grant subqueries carry no org predicate of their own, and
+    // that is deliberate rather than an omission. They return nothing — they
+    // only NARROW a ticket row already pinned by `t.organization_id = $1` —
+    // and they match on the caller's own user id.
+    //
+    // What makes that sound is NOT that job_id is frozen after create. It is
+    // not: a lead's tickets are stamped with the job the lead becomes. It is
+    // that EVERY door that writes service_tickets.job_id first proves the job
+    // is the ticket's org's:
+    //   * REST create (A2 below) — assertEntityInOrg('job', id, req.orgId),
+    //     then the INSERT stamps that same org on the ticket.
+    //   * the Scribe's create (payload-dispatcher.js dispatchServiceTicket) —
+    //     proveTicketParentInOrg on the apply transaction, then the INSERT
+    //     stamps that same org.
+    //   * job-routes.js POST /convert — the job is INSERTed under req.orgId and
+    //     the carry-forward UPDATE is pinned to that org, in one transaction.
+    //   * job-routes.js POST /:id/link-estimate — the job is loaded FOR UPDATE
+    //     under the caller's org and the carry-forward UPDATE is pinned to that
+    //     org, in the same transaction.
+    // No edit door can move job_id at all: PATCH's EDITABLE_FIELDS, the
+    // dispatcher's update loop, a revision accept (PROPOSABLE_FIELDS) and the
+    // guest field report each leave it out by allow-list. A NEW writer of
+    // job_id must carry the same proof. Without it, a ticket could name another
+    // tenant's job, and a grant on THAT job would list this org's ticket here
+    // while the detail door — which loads the job under the caller's org —
+    // answers 404 for the same row.
+    //
+    // Every one of those proofs, like mayAccessTicketParent, still admits a
+    // legacy job whose org was never stamped. Adding `j.organization_id =
+    // t.organization_id` here would make this list DISAGREE with the detail
+    // door for exactly that job.
+    const vis = access.listVisibility(req.user);
+    const visible = [];
+    if (vis.jobs === 'all') {
+      visible.push('t.job_id IS NOT NULL');
+    } else if (vis.jobs === 'assigned' && vis.userId != null) {
+      params.push(vis.userId);
+      const me = '$' + params.length;
+      visible.push(
+        `(t.job_id IS NOT NULL AND (
+            EXISTS (SELECT 1 FROM jobs j WHERE j.id = t.job_id AND j.owner_id = ${me})
+            OR EXISTS (SELECT 1 FROM job_access a WHERE a.job_id = t.job_id AND a.user_id = ${me})))`
+      );
+    }
+    if (vis.leads) visible.push('(t.job_id IS NULL AND t.lead_id IS NOT NULL)');
+    if (!visible.length) return res.json({ tickets: [] });
+    where.push('(' + visible.join(' OR ') + ')');
+
+    // The caller's id, for the private-to-do boundary on the progress counts.
+    params.push(callerUserId(req));
+    const caller = '$' + params.length;
+
     const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 100));
 
     // Task progress is computed in SQL rather than by fetching every task:
     // the list renders a "3/8" bar per row and N+1 queries for that would be a
     // page load. The subquery carries its OWN org predicate — a child must
     // never be reached on parent-id membership alone.
+    //
+    // And its own PRIVACY predicate. A personal to-do can carry a
+    // service_ticket_id, and it belongs to its owner alone — read_tasks and
+    // GET /api/tasks both withhold another user's. Counting it here would put
+    // the existence of someone's private to-dos on every viewer's progress bar,
+    // and the bar would disagree with the detail door, which lists the same
+    // rows under the same predicate.
     const { rows } = await pool.query(
       `SELECT ${TICKET_COLS.split(', ').map((c) => 't.' + c).join(', ')},
               (SELECT COUNT(*)::int FROM tasks k
                 WHERE k.service_ticket_id = t.id AND k.organization_id = t.organization_id
-                  AND k.archived_at IS NULL) AS task_total,
+                  AND k.archived_at IS NULL
+                  AND (k.scope = 'org' OR (k.scope = 'personal' AND k.owner_user_id = ${caller}))) AS task_total,
               (SELECT COUNT(*)::int FROM tasks k
                 WHERE k.service_ticket_id = t.id AND k.organization_id = t.organization_id
-                  AND k.archived_at IS NULL AND k.status = 'done') AS task_done
+                  AND k.archived_at IS NULL AND k.status = 'done'
+                  AND (k.scope = 'org' OR (k.scope = 'personal' AND k.owner_user_id = ${caller}))) AS task_done
          FROM service_tickets t
         WHERE ${where.join(' AND ')}
         ORDER BY t.created_at DESC
@@ -182,20 +317,35 @@ router.post('/', requireAuth, requireOrgId, async (req, res) => {
       return res.status(400).json({ error: 'A ticket must be raised on a job or a lead' });
     }
 
-    // PROVE the parent is this org's before inserting. assertEntityInOrg is
-    // fail-closed and answers the same for "absent" and "another tenant's", so
-    // this cannot be used to probe ids.
-    if (jobId && !(await assertEntityInOrg('job', jobId, orgId))) {
-      return res.status(404).json({ error: 'Job not found' });
-    }
-    if (leadId && !(await assertEntityInOrg('lead', leadId, orgId))) {
-      return res.status(404).json({ error: 'Lead not found' });
+    // THE DECIDING PARENT IS SETTLED COMPLETELY BEFORE THE OTHER ONE IS LOOKED
+    // AT. The job decides when both are named, the same way parentOf decides it
+    // for a stored ticket.
+    //
+    // First PROVE it is this org's. assertEntityInOrg is fail-closed and answers
+    // the same for "absent" and "another tenant's", so this cannot be used to
+    // probe ids.
+    const parent = { job_id: jobId, lead_id: leadId };
+    const parentMissing = jobId ? 'Job not found' : 'Lead not found';
+    if (!(await assertEntityInOrg(jobId ? 'job' : 'lead', jobId || leadId, orgId))) {
+      return res.status(404).json({ error: parentMissing });
     }
 
-    // The capability depends on the parent, which is why it is checked here
-    // rather than as route middleware.
-    const capList = jobId ? 'JOBS_EDIT_ANY JOBS_EDIT_OWN' : 'LEADS_EDIT';
-    if (!capOk(req, res, capList)) return;
+    // Then WRITE access on it, AFTER the in-org proof — so a foreign or absent
+    // parent is always the 404 above and never reaches a capability answer that
+    // could tell the two apart. A narrow-tier user raising a ticket on a job they
+    // do not own and hold no edit grant on gets the same "Job not found" an
+    // absent job gets.
+    if (!(await ticketAccessOk(req, res, parent, 'write', orgId, parentMissing))) return;
+
+    // Only NOW the secondary lead. Proving it before the access answer above
+    // was an existence oracle on the job: {job not yours, bogus lead} answered
+    // "Lead not found" while {absent job, bogus lead} answered "Job not found",
+    // so a narrow-tier user could tell which job ids exist. The Scribe's create
+    // (payload-dispatcher.js dispatchServiceTicket) settles the parents in this
+    // same order.
+    if (jobId && leadId && !(await assertEntityInOrg('lead', leadId, orgId))) {
+      return res.status(404).json({ error: 'Lead not found' });
+    }
 
     const id = newId('st');
     const cols = ['id', 'organization_id', 'job_id', 'lead_id', 'title', 'created_by'];
@@ -206,8 +356,14 @@ router.post('/', requireAuth, requireOrgId, async (req, res) => {
     for (const k of Object.keys(body)) {
       if (!EDITABLE_FIELDS.has(k) || k === 'title') continue;
       if (body[k] === undefined) continue;
+      let v = body[k] === '' ? null : body[k];
+      if (k === 'assignee_user_id') {
+        const proved = await proveAssignee(body[k], orgId);
+        if (!proved.ok) return res.status(400).json({ error: ASSIGNEE_REFUSAL });
+        v = proved.value;
+      }
       cols.push(k);
-      vals.push(body[k] === '' ? null : body[k]);
+      vals.push(v);
     }
     if (body.priority !== undefined) {
       vals[cols.indexOf('priority')] = svc.normalizePriority(body.priority);
@@ -239,20 +395,30 @@ router.get('/:id', requireAuth, async (req, res) => {
   try {
     const orgId = callerOrgId(req);
     const ticket = await loadOwnedTicket(req.params.id, orgId);
-    if (!ticket) return res.status(404).json({ error: 'Service ticket not found' });
+    if (!ticket) return res.status(404).json({ error: TICKET_NOT_FOUND });
 
-    if (!capOk(req, res, readCapFor(ticket))) return;
+    if (!(await ticketAccessOk(req, res, ticket, 'read', orgId))) return;
+
+    const callerId = callerUserId(req);
 
     // Each child read carries its own org predicate. Reaching a child on the
     // ticket id alone would trust that the ticket lookup above was the only
     // door — true today, and exactly the assumption that rots.
+    //
+    // The TASK read also carries read_tasks' privacy boundary. A personal
+    // to-do may hang off a ticket (tasks-routes accepts service_ticket_id on a
+    // personal row), and without this predicate opening the ticket handed its
+    // title to every viewer — and to 86, whose ticket read copies this query.
+    // progress below is computed from these SAME rows, so the "3/8" can never
+    // count a row the list did not show.
     const [tasks, events] = await Promise.all([
       pool.query(
         `SELECT id, title, status, due_date, assignee_user_id, completed_at, archived_at
            FROM tasks
           WHERE service_ticket_id = $1 AND organization_id = $2 AND archived_at IS NULL
+            AND (scope = 'org' OR (scope = 'personal' AND owner_user_id = $3))
           ORDER BY created_at ASC`,
-        [ticket.id, orgId]
+        [ticket.id, orgId, callerId]
       ),
       pool.query(
         `SELECT id, kind, actor_kind, actor_user_id, actor_label, detail, created_at
@@ -322,9 +488,9 @@ router.patch('/:id', requireAuth, requireOrgId, async (req, res) => {
   try {
     const orgId = req.orgId;
     const ticket = await loadOwnedTicket(req.params.id, orgId);
-    if (!ticket) return res.status(404).json({ error: 'Service ticket not found' });
+    if (!ticket) return res.status(404).json({ error: TICKET_NOT_FOUND });
 
-    if (!capOk(req, res, writeCapFor(ticket))) return;
+    if (!(await ticketAccessOk(req, res, ticket, 'write', orgId))) return;
 
     if (svc.isTerminal(ticket.status)) {
       return res.status(409).json({
@@ -341,6 +507,14 @@ router.patch('/:id', requireAuth, requireOrgId, async (req, res) => {
       let v = body[k];
       if (k === 'priority') v = svc.normalizePriority(v);
       if (v === '') v = null;
+      if (k === 'assignee_user_id' && v !== undefined) {
+        // Proved before ANY statement runs, so a refused assignee leaves the
+        // other fields in the same body unwritten too — a half-applied edit
+        // answering 400 would be worse than either outcome.
+        const proved = await proveAssignee(v, orgId);
+        if (!proved.ok) return res.status(400).json({ error: ASSIGNEE_REFUSAL });
+        v = proved.value;
+      }
       params.push(v);
       sets.push(k + ' = $' + params.length);
       changed.push(k);
@@ -382,7 +556,7 @@ router.post('/:id/status', requireAuth, requireOrgId, async (req, res) => {
     const ticket = await loadOwnedTicket(req.params.id, orgId);
     if (!ticket) return res.status(404).json({ error: 'Service ticket not found' });
 
-    if (!capOk(req, res, writeCapFor(ticket))) return;
+    if (!(await ticketAccessOk(req, res, ticket, 'write', orgId))) return;
 
     const next = String((req.body || {}).status || '');
     const verdict = svc.ticketMayTransition(ticket.status, next, 'user');
@@ -427,7 +601,7 @@ router.delete('/:id', requireAuth, requireOrgId, async (req, res) => {
     const ticket = await loadOwnedTicket(req.params.id, orgId);
     if (!ticket) return res.status(404).json({ error: 'Service ticket not found' });
 
-    if (!capOk(req, res, writeCapFor(ticket))) return;
+    if (!(await ticketAccessOk(req, res, ticket, 'write', orgId))) return;
 
     // A second archive is a 404, not a re-stamp, so the record keeps the
     // moment it was actually archived.
@@ -456,7 +630,7 @@ router.get('/:id/events', requireAuth, async (req, res) => {
     const ticket = await loadOwnedTicket(req.params.id, orgId);
     if (!ticket) return res.status(404).json({ error: 'Service ticket not found' });
 
-    if (!capOk(req, res, readCapFor(ticket))) return;
+    if (!(await ticketAccessOk(req, res, ticket, 'read', orgId))) return;
 
     const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 100));
     const { rows } = await pool.query(

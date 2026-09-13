@@ -5,6 +5,12 @@
 // org scoping (module.exports.entityAccess) so folders enforce the SAME
 // access rules as the files inside them — single source of truth. The
 // tree bookkeeping itself lives in services/file-folders.js.
+//
+// Every gate names its MODE ('read' / 'write') alongside the capability it
+// pairs with. For a service ticket the capability string is only the coarse
+// half; the middleware then asks the ticket's parent in that mode, so a
+// leads-only user cannot see or rearrange the folders of a JOB's work order. A
+// gate written without the mode is refused on a ticket, never defaulted.
 
 'use strict';
 
@@ -30,7 +36,7 @@ function checkEntity(req, res) {
 // the client assembles the tree from parent_id/path).
 router.get('/:entityType/:entityId',
   requireAuth,
-  requireDynamicCapability(req => entityTypeOk(req.params.entityType) ? readCapForEntity(req.params.entityType) : null),
+  requireDynamicCapability(req => entityTypeOk(req.params.entityType) ? readCapForEntity(req.params.entityType) : null, 'read'),
   async (req, res) => {
     if (!checkEntity(req, res)) return;
     try {
@@ -67,7 +73,7 @@ router.get('/:entityType/:entityId',
 // Body: { name, parent_id? }.
 router.post('/:entityType/:entityId',
   requireAuth,
-  requireDynamicCapability(req => entityTypeOk(req.params.entityType) ? writeCapForEntity(req.params.entityType) : null),
+  requireDynamicCapability(req => entityTypeOk(req.params.entityType) ? writeCapForEntity(req.params.entityType) : null, 'write'),
   async (req, res) => {
     if (!checkEntity(req, res)) return;
     try {
@@ -92,7 +98,7 @@ router.post('/:entityType/:entityId',
 // name, or null to clear).
 router.patch('/:entityType/:entityId/:folderId',
   requireAuth,
-  requireDynamicCapability(req => entityTypeOk(req.params.entityType) ? writeCapForEntity(req.params.entityType) : null),
+  requireDynamicCapability(req => entityTypeOk(req.params.entityType) ? writeCapForEntity(req.params.entityType) : null, 'write'),
   async (req, res) => {
     if (!checkEntity(req, res)) return;
     try {
@@ -135,7 +141,7 @@ router.patch('/:entityType/:entityId/:folderId',
 // destroyed).
 router.delete('/:entityType/:entityId/:folderId',
   requireAuth,
-  requireDynamicCapability(req => entityTypeOk(req.params.entityType) ? writeCapForEntity(req.params.entityType) : null),
+  requireDynamicCapability(req => entityTypeOk(req.params.entityType) ? writeCapForEntity(req.params.entityType) : null, 'write'),
   async (req, res) => {
     if (!checkEntity(req, res)) return;
     try {
@@ -155,7 +161,7 @@ router.delete('/:entityType/:entityId/:folderId',
 // so a forged id can't touch another record's files.
 router.post('/:entityType/:entityId/move-files',
   requireAuth,
-  requireDynamicCapability(req => entityTypeOk(req.params.entityType) ? writeCapForEntity(req.params.entityType) : null),
+  requireDynamicCapability(req => entityTypeOk(req.params.entityType) ? writeCapForEntity(req.params.entityType) : null, 'write'),
   async (req, res) => {
     if (!checkEntity(req, res)) return;
     try {

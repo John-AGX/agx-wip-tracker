@@ -101,6 +101,7 @@ const JVA = 'JOBS_VIEW_ALL';
 const FIN = 'FINANCIALS_VIEW';
 const EV = 'ESTIMATES_VIEW';
 const LV = 'LEADS_VIEW';
+const JVAS = 'JOBS_VIEW_ASSIGNED';
 const S = 'search_entities';
 const R = 'read_entity';
 
@@ -127,6 +128,12 @@ const ROWS = [
   [S, { entity_type: 'change_order' },             [JVA],     'fold: read_change_orders'],
   [S, { entity_type: 'project' },                  [JVA],     'fold: read_projects'],
   [S, { entity_type: 'assembly' },                 [EV],      'fold: read_assemblies'],
+  // A ticket inherits its parent's capability, and the gate runs before the
+  // parent is known, so it charges every capability that could grant a read on
+  // SOME ticket — in service-ticket-access.coarseCaps order, which is the order
+  // the refusal sentence names them in. Search does not route tickets; gated
+  // anyway, because the switch is shared.
+  [S, { entity_type: 'service_ticket' },           [JVA, JVAS, LV], 'unsupported by search (gated anyway)'],
   [S, { entity_type: 'task', filter: 'a' },        null,      'read_tasks: no entry; org + personal-owner predicate in the reader; GET /api/tasks is requireAuth'],
   // read_receipts gained a FLOOR (any internal view capability) after a
   // zero-capability caller was driven reading the Cost Inbox's dollar totals
@@ -161,6 +168,11 @@ const ROWS = [
   [R, { entity_type: 'purchase_order', id: 'po1' },                      [JVA],     'fold: read_purchase_orders'],
   [R, { entity_type: 'change_order', id: 'CO-3' },                       [JVA],     'fold: read_change_orders'],
   [R, { entity_type: 'assembly', id: 'a1' },                             [EV],      'fold: read_assemblies'],
+  // The coarse half only. The reader then asks mayAccessTicketParent on the
+  // loaded parent; test/service-ticket-ai-read.test.js drives that half.
+  [R, { entity_type: 'service_ticket', id: 'st1' },                      [JVA, JVAS, LV], 'readServiceTicketForAgent (coarse gate; parent check in the reader)'],
+  [R, { entity_type: 'service_ticket', id: 'st1', depth: 'full' },       [JVA, JVAS, LV], 'readServiceTicketForAgent, full'],
+  [R, { entity_type: 'service_ticket', id: 'st1', include: ['tasks'] },  [JVA, JVAS, LV], 'NOT the cross-link: the ticket reads its own child tasks'],
   [R, { entity_type: 'task', id: 't1' },                                 null,      'read_tasks: see search row'],
   [R, { entity_type: 'receipt' },                                        [EV, JVA, 'JOBS_VIEW_ASSIGNED', FIN, LV], 'read_receipts: see search row'],
 ];

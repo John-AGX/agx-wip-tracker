@@ -48,7 +48,7 @@
 
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireCapability, requireOrgId } = require('../auth');
+const { requireAuth, requireOrgId } = require('../auth');
 const { callerOrgId } = require('../org-access');
 const { sendEmail, isEnabled: emailIsEnabled } = require('../email');
 const multer = require('multer');
@@ -62,19 +62,47 @@ const { stShareIpLimiter, stShareViewLimiter, stShareWriteLimiter, stSharePropos
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 const { resolveEntityLabels } = require('../services/entity-labels');
 const svc = require('../services/service-tickets');
+const access = require('../services/service-ticket-access');
 
 const router = express.Router();
 
-function writeCapFor(ticket) {
-  return ticket && ticket.job_id ? 'JOBS_EDIT_ANY JOBS_EDIT_OWN' : 'LEADS_EDIT';
-}
-function readCapFor(ticket) {
-  return ticket && ticket.job_id ? 'JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED' : 'LEADS_VIEW';
-}
-function capOk(req, res, capList) {
-  let ok = false;
-  requireCapability(capList)(req, res, () => { ok = true; });
-  return ok;
+// WHO MAY ACT ON A TICKET is decided by services/service-ticket-access.js —
+// the same call service-ticket-routes.js makes. This file used to hold its own
+// copy of the capability strings, and the copy had the same hole the original
+// did: JOBS_VIEW_ASSIGNED / JOBS_EDIT_OWN were accepted without ever asking
+// whether the job was the caller's, so a crew lead granted one job could mint a
+// share link, accept a guest's revision or add participants on every job's
+// tickets. A rule held in two files is a rule that drifts; now neither holds it.
+//
+// Only the HTTP translation of a refusal lives here:
+//   not_assigned  -> 404 'Service ticket not found', the body a missing ticket
+//                    gets, so an in-org user cannot learn which tickets exist
+//                    on jobs they are not on.
+//   no_capability -> 403 naming the capabilities.
+//   anything else -> 403 — a request that cannot be authorized is refused.
+// A false return means the response is already written.
+async function ticketAccessOk(req, res, ticket, mode, orgId) {
+  const verdict = await access.mayAccessTicketParent({
+    // An arrow, not pool.query bare: node-pg's query needs its `this`.
+    query: (sql, params) => pool.query(sql, params),
+    user: req.user,
+    parent: ticket,
+    mode,
+    orgId,
+  });
+  if (verdict && verdict.ok === true) return true;
+  const reason = verdict && verdict.reason;
+  if (reason === 'not_assigned') {
+    res.status(404).json({ error: 'Service ticket not found' });
+    return false;
+  }
+  if (reason === 'no_capability') {
+    const caps = access.capsForParentKind(access.parentOf(ticket).kind, mode);
+    res.status(403).json({ error: 'Missing capability: ' + caps.join(' ') });
+    return false;
+  }
+  res.status(403).json({ error: 'You do not have access to this service ticket' });
+  return false;
 }
 
 function escHtml(s) {
@@ -148,7 +176,7 @@ router.post('/service-tickets/:id/share', requireAuth, requireOrgId, async (req,
     const orgId = req.orgId;
     const ticket = await loadOwnedTicket(req.params.id, orgId);
     if (!ticket) return res.status(404).json({ error: 'Service ticket not found' });
-    if (!capOk(req, res, writeCapFor(ticket))) return;
+    if (!(await ticketAccessOk(req, res, ticket, 'write', orgId))) return;
 
     // A link is a promise; a draft is not one. A terminal ticket is finished.
     const shareable = svc.ticketMayBeShared(ticket);
@@ -228,7 +256,7 @@ router.get('/service-tickets/:id/shares', requireAuth, async (req, res) => {
     const orgId = callerOrgId(req);
     const ticket = await loadOwnedTicket(req.params.id, orgId);
     if (!ticket) return res.status(404).json({ error: 'Service ticket not found' });
-    if (!capOk(req, res, readCapFor(ticket))) return;
+    if (!(await ticketAccessOk(req, res, ticket, 'read', orgId))) return;
 
     const { rows } = await pool.query(
       'SELECT ' + SHARE_COLS + ' FROM service_ticket_shares ' +
@@ -254,7 +282,7 @@ router.post('/service-tickets/:id/shares/:sid/revoke', requireAuth, requireOrgId
     const orgId = req.orgId;
     const ticket = await loadOwnedTicket(req.params.id, orgId);
     if (!ticket) return res.status(404).json({ error: 'Service ticket not found' });
-    if (!capOk(req, res, writeCapFor(ticket))) return;
+    if (!(await ticketAccessOk(req, res, ticket, 'write', orgId))) return;
 
     // The org predicate is in the WHERE, never in an `if` above it. A second
     // revoke is a 404 rather than a re-stamp, so the audit keeps the moment it
@@ -283,7 +311,7 @@ router.get('/service-tickets/:id/revisions', requireAuth, async (req, res) => {
     const orgId = callerOrgId(req);
     const ticket = await loadOwnedTicket(req.params.id, orgId);
     if (!ticket) return res.status(404).json({ error: 'Service ticket not found' });
-    if (!capOk(req, res, readCapFor(ticket))) return;
+    if (!(await ticketAccessOk(req, res, ticket, 'read', orgId))) return;
 
     // EVERY column here is qualified with its table alias. The query below
     // LEFT JOINs service_ticket_shares, and BOTH tables have `ticket_id` and
@@ -326,7 +354,7 @@ router.post('/service-tickets/:id/revisions/:rid/accept', requireAuth, requireOr
     const orgId = req.orgId;
     const ticket = await loadOwnedTicket(req.params.id, orgId);
     if (!ticket) return res.status(404).json({ error: 'Service ticket not found' });
-    if (!capOk(req, res, writeCapFor(ticket))) return;
+    if (!(await ticketAccessOk(req, res, ticket, 'write', orgId))) return;
 
     await client.query('BEGIN');
     // Re-read under the transaction, pinned to pending. A second accept is a
@@ -409,7 +437,7 @@ router.post('/service-tickets/:id/revisions/:rid/reject', requireAuth, requireOr
     const orgId = req.orgId;
     const ticket = await loadOwnedTicket(req.params.id, orgId);
     if (!ticket) return res.status(404).json({ error: 'Service ticket not found' });
-    if (!capOk(req, res, writeCapFor(ticket))) return;
+    if (!(await ticketAccessOk(req, res, ticket, 'write', orgId))) return;
 
     const { rows } = await pool.query(
       `UPDATE service_ticket_revisions
@@ -438,7 +466,7 @@ router.get('/service-tickets/:id/participants', requireAuth, async (req, res) =>
     const orgId = callerOrgId(req);
     const ticket = await loadOwnedTicket(req.params.id, orgId);
     if (!ticket) return res.status(404).json({ error: 'Service ticket not found' });
-    if (!capOk(req, res, readCapFor(ticket))) return;
+    if (!(await ticketAccessOk(req, res, ticket, 'read', orgId))) return;
     const { rows } = await pool.query(
       `SELECT p.id, p.user_id, p.access_level, p.added_by, p.created_at,
               u.name AS user_name, u.email AS user_email
@@ -460,7 +488,7 @@ router.post('/service-tickets/:id/participants', requireAuth, requireOrgId, asyn
     const orgId = req.orgId;
     const ticket = await loadOwnedTicket(req.params.id, orgId);
     if (!ticket) return res.status(404).json({ error: 'Service ticket not found' });
-    if (!capOk(req, res, writeCapFor(ticket))) return;
+    if (!(await ticketAccessOk(req, res, ticket, 'write', orgId))) return;
 
     const userId = Number((req.body || {}).user_id);
     if (!Number.isInteger(userId)) return res.status(400).json({ error: 'A user is required' });
@@ -490,7 +518,7 @@ router.delete('/service-tickets/:id/participants/:userId', requireAuth, requireO
     const orgId = req.orgId;
     const ticket = await loadOwnedTicket(req.params.id, orgId);
     if (!ticket) return res.status(404).json({ error: 'Service ticket not found' });
-    if (!capOk(req, res, writeCapFor(ticket))) return;
+    if (!(await ticketAccessOk(req, res, ticket, 'write', orgId))) return;
     const { rows } = await pool.query(
       `DELETE FROM service_ticket_participants
         WHERE ticket_id = $1 AND user_id = $2 AND organization_id = $3 RETURNING id`,
@@ -565,9 +593,16 @@ router.get('/service-ticket-share/:token',
 
       // Child reads carry the ticket's OWN organization_id — taken from the
       // row already in hand, never from the request.
+      //
+      // ORG TASKS ONLY. A personal to-do can hang off a ticket, and it is its
+      // owner's alone — the authed detail door shows one only to that owner.
+      // A bearer token has no owner to match, so the only honest arm left is
+      // `scope = 'org'`; without it, sharing a work order sent the titles of
+      // a PM's private to-dos to whoever holds the link.
       const tasks = await pool.query(
         `SELECT title, status, due_date FROM tasks
           WHERE service_ticket_id = $1 AND organization_id = $2 AND archived_at IS NULL
+            AND scope = 'org'
           ORDER BY created_at ASC`,
         [ticket.id, ticket.organization_id]
       );

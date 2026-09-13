@@ -14,17 +14,21 @@
 //
 // Loaded AFTER api.js and jobs.js so p86Api and appData are available.
 //
-// NOT here yet, by slice: child tasks (S2), sharing (S4), guest responses (S5),
-// revisions (S6), the "Draft with 86" button (S7). The server answers those
-// keys as empty arrays already, so this file is written against the final
-// shape rather than a temporary one.
+// Written against the final response shape (tasks, shares, guest responses,
+// revisions, participants), so a key the server answers as an empty array
+// renders as "none yet" rather than needing a temporary branch.
+//
+// S7 adds the agent seams: "Draft with 86" on the job manager and the lead
+// panel, "Ask 86" on an open ticket, and a refresh() that repaints whichever
+// surface is mounted when an agent write lands (js/refresh.js calls it).
 // ============================================================
 (function () {
   'use strict';
 
   // One open ticket at a time, keyed by job. Module-level so a repaint that
   // arrives while a ticket is expanded can restore it.
-  var _state = { jobId: null, filter: 'all', openId: null, tickets: [], busy: false };
+  // `stale` is the deferred-refresh latch; see refresh() at the bottom.
+  var _state = { jobId: null, filter: 'all', openId: null, tickets: [], busy: false, stale: false };
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -49,6 +53,123 @@
       if (job && job._canEdit === false) return false;
     } catch (e) { /* fail open */ }
     return true;
+  }
+
+  // The lead side mirrors the lead header's own Service Ticket button
+  // (refreshLeadDetailHeader in js/leads.js): LEADS_EDIT, and hidden when the
+  // auth module is not there to ask. Two affordances on one screen that
+  // disagreed about who may raise a ticket would each be half a lie.
+  function canEditLead() {
+    try {
+      return !!(window.p86Auth && window.p86Auth.hasCapability('LEADS_EDIT'));
+    } catch (e) { return false; }
+  }
+
+  // ── 86 hand-off ──────────────────────────────────────────────────────
+  // Everything goes through the AI panel's PUBLIC seam, window.p86AI.ask
+  // (js/ai-panel.js), looked up at click time because that file loads after
+  // this one. The prompt is seeded and left UNSENT (autoSend:false): a draft
+  // is only as good as what the PM adds about the call that came in, and a
+  // prompt that fired on click would spend a turn asking for exactly that.
+  //
+  // Names are forward-facing. The model and the PM both read this text, so a
+  // job is its number and title and a lead is its title, never a raw id. The
+  // job's id still reaches 86: the panel opened against a job sends it in
+  // current_context. The one id written into a prompt is the ticket's own, on
+  // "Ask 86", because a ticket has no page context of its own and reading it
+  // back by id is the only way 86 can find that exact work order.
+  function aiAsk() {
+    var ai = window.p86AI;
+    return (ai && typeof ai.ask === 'function') ? ai : null;
+  }
+
+  function jobName(jobId) {
+    try {
+      var jobs = (window.appData && window.appData.jobs) || [];
+      var job = jobs.find(function (j) { return j && String(j.id) === String(jobId); });
+      var L = window.p86JobLabel;
+      if (!job || !L || typeof L.fromJob !== 'function') return '';
+      var label = L.fromJob(job);
+      // The formatter's fallback is a placeholder, not a name. "Draft a ticket
+      // on job Untitled job" reads as a real job called that.
+      return label === L.DEFAULT_FALLBACK ? '' : label;
+    } catch (e) { return ''; }
+  }
+
+  function leadRecord(leadId, lead) {
+    try {
+      var leads = (window.appData && window.appData.leads) || [];
+      var row = leads.find(function (l) { return l && String(l.id) === String(leadId); });
+      return row || lead || null;
+    } catch (e) { return lead || null; }
+  }
+
+  function leadName(leadId, lead) {
+    var r = leadRecord(leadId, lead);
+    return (r && String(r.title || r.property_name || '').trim()) || '';
+  }
+
+  var DRAFT_ASK =
+    'Propose a title, the scope of work, a priority, when it should be scheduled and when it is due, ' +
+    'and the child tasks the crew will need. Ask me for anything you are missing before it is written, ' +
+    'then have it drafted for my approval. What came in: ';
+
+  function draftPromptForJob(jobId) {
+    var name = jobName(jobId);
+    return 'Draft a service ticket on ' + (name ? 'job ' + name : 'this job') + '. ' + DRAFT_ASK;
+  }
+
+  function draftPromptForLead(leadId, lead) {
+    var name = leadName(leadId, lead);
+    var r = leadRecord(leadId, lead);
+    // The address disambiguates two leads with the same title ("Roof leak")
+    // without handing the model an id to repeat back to the PM.
+    var where = r ? [r.street_address, r.city].filter(function (s) { return s && String(s).trim(); }).join(', ') : '';
+    return 'Draft a service ticket on ' + (name ? 'the lead "' + name + '"' : 'this lead') +
+      (where ? ' at ' + where : '') + '. ' + DRAFT_ASK;
+  }
+
+  function askPromptForTicket(t) {
+    var label = [t.ticket_number, '"' + (t.title || 'Untitled ticket') + '"'].filter(Boolean).join(' ');
+    var parent = t.job_id
+      ? (jobName(t.job_id) ? 'job ' + jobName(t.job_id) : '')
+      : (leadName(t.lead_id) ? 'the lead "' + leadName(t.lead_id) + '"' : '');
+    return 'Read service ticket ' + label + ' (ticket id ' + t.id + ')' +
+      (parent ? ' on ' + parent : '') +
+      ' and tell me where it stands: the scope, the schedule, its status, and which of its tasks are still open.';
+  }
+
+  function noAi() {
+    toast('86 is not available on this page right now.', 'error');
+  }
+
+  // On a job: open the panel against THAT job, so current_context carries the
+  // job id and 86 does not have to guess the parent from a name.
+  function draftForJob(jobId) {
+    var ai = aiAsk();
+    if (!ai) { noAi(); return; }
+    ai.ask(draftPromptForJob(jobId), { entityType: 'job', entityId: jobId, autoSend: false });
+  }
+
+  // On a lead: open the entity-free Ask 86 surface, NOT the panel's lead mode.
+  // ai-panel.js packs current_context only for job / estimate / intake / ask86,
+  // so lead mode would carry LESS than Ask 86 does — Ask 86 at least sends the
+  // page context, the /leads/:id route among it. The prompt names the lead
+  // either way, and the Scribe's draft still goes through the approval card.
+  function draftForLead(leadId, lead) {
+    var ai = aiAsk();
+    if (!ai) { noAi(); return; }
+    ai.ask(draftPromptForLead(leadId, lead), { autoSend: false });
+  }
+
+  function askAboutTicket(t) {
+    var ai = aiAsk();
+    if (!ai) { noAi(); return; }
+    if (t.job_id && _state.jobId && String(t.job_id) === String(_state.jobId)) {
+      ai.ask(askPromptForTicket(t), { entityType: 'job', entityId: _state.jobId, autoSend: false });
+    } else {
+      ai.ask(askPromptForTicket(t), { autoSend: false });
+    }
   }
 
   var STATUSES = ['draft', 'open', 'scheduled', 'in_progress', 'work_complete', 'approved', 'closed', 'cancelled'];
@@ -120,6 +241,11 @@
       '<div class="p86-st-wrap">' +
         '<div class="p86-st-bar">' +
           '<div class="p86-st-pills">' + pills + '</div>' +
+          // Same gate as + New ticket: a draft ends in a create, so a user who
+          // cannot raise a ticket by hand is not offered one by proxy.
+          (canEdit && aiAsk()
+            ? '<button class="ee-btn secondary p86-st-draft86" title="86 drafts the ticket, scope and tasks for your approval">Draft with 86</button>'
+            : '') +
           (canEdit ? '<button class="ee-btn primary p86-st-new">+ New ticket</button>' : '') +
         '</div>' +
         (shown.length
@@ -165,13 +291,15 @@
     });
     var nb = host.querySelector('.p86-st-new');
     if (nb) nb.addEventListener('click', openCreate);
+    var d86 = host.querySelector('.p86-st-draft86');
+    if (d86) d86.addEventListener('click', function () { draftForJob(_state.jobId); });
 
     host.querySelectorAll('.p86-st-row-head').forEach(function (h) {
       h.addEventListener('click', function () {
         var row = h.closest('.p86-st-row');
         var id = row && row.getAttribute('data-ticket');
         if (!id) return;
-        if (_state.openId === id) { collapse(row); _state.openId = null; return; }
+        if (_state.openId === id) { collapse(row); _state.openId = null; flushStale(); return; }
         // Only one expanded at a time — a work order is read one at a time.
         host.querySelectorAll('.p86-st-row').forEach(collapse);
         _state.openId = id;
@@ -258,10 +386,17 @@
           (t.street_address ? metaRow('Address', esc([t.street_address, t.city, t.state].filter(Boolean).join(', '))) : '') +
         '</div>' +
       '</div>' +
-      (canEdit ? '<div class="p86-st-actions">' +
-        '<button class="ee-btn primary p86-st-save">Save</button>' +
-        '<button class="ee-btn secondary p86-st-share">&#x1F517; Share</button>' +
-        '<button class="ee-btn secondary p86-st-archive">Archive</button>' +
+      // Ask 86 is a READ, so it is not behind canEdit: a closed or cancelled
+      // ticket is exactly the one somebody asks "what happened here" about.
+      ((canEdit || aiAsk()) ? '<div class="p86-st-actions">' +
+        (canEdit
+          ? '<button class="ee-btn primary p86-st-save">Save</button>' +
+            '<button class="ee-btn secondary p86-st-share">&#x1F517; Share</button>' +
+            '<button class="ee-btn secondary p86-st-archive">Archive</button>'
+          : '') +
+        (aiAsk()
+          ? '<button class="ee-btn secondary p86-st-ask86" title="Ask 86 about this work order">Ask 86</button>'
+          : '') +
       '</div>' : '') +
       '<div class="p86-st-sharewrap" hidden></div>' +
       participantsHTML(r.participants || [], canEdit) +
@@ -579,6 +714,9 @@
       });
     });
 
+    var ask86 = d.querySelector('.p86-st-ask86');
+    if (ask86) ask86.addEventListener('click', function () { askAboutTicket(t); });
+
     wireRevisions(d, t);
     wireParticipants(d, t);
   }
@@ -835,10 +973,14 @@
   // nullable parent columns instead of the polymorphic pair every other child
   // of a lead uses. Those children get re-pointed or stranded on conversion;
   // this one does not.
-  var _leadPanel = { host: null, leadId: null };
+  var _leadPanel = { host: null, leadId: null, lead: null };
 
   function mountLeadPanel(host, leadId, lead) {
     if (!host || !leadId) return;
+    // createForLead remounts with no lead object; keep the one we were given
+    // for the same lead rather than forgetting its name.
+    if (lead) _leadPanel.lead = lead;
+    else if (String(_leadPanel.leadId) !== String(leadId)) _leadPanel.lead = null;
     _leadPanel.host = host;
     _leadPanel.leadId = leadId;
     if (!api()) {
@@ -846,12 +988,20 @@
       return;
     }
     host.innerHTML = '<div class="p86-st-lead-empty">Loading…</div>';
-    api().list({ lead_id: leadId }).then(function (r) {
+    return loadLeadPanel(host, leadId, false);
+  }
+
+  // `quiet` is the refresh path. A data-changed repaint must not blank a list
+  // the PM is already reading to "Loading…", and a failed background refetch
+  // must not replace that list with an error they did not ask for — the rows
+  // on screen stay, and the next mount or refresh tries again.
+  function loadLeadPanel(host, leadId, quiet) {
+    return api().list({ lead_id: leadId }).then(function (r) {
       // The panel may have been remounted onto a different lead while this
       // was in flight.
       if (_leadPanel.leadId !== leadId || _leadPanel.host !== host) return;
       var list = (r && r.tickets) || [];
-      host.innerHTML = list.length
+      host.innerHTML = leadBarHTML() + (list.length
         ? '<div class="p86-st-lead-list">' + list.map(function (t) {
             return '<div class="p86-st-lead-row">' +
               '<span class="p86-st-prio prio-' + esc(t.priority || 'normal') + '"></span>' +
@@ -863,12 +1013,29 @@
               (t.job_id ? '<span class="p86-st-lead-onjob" title="This ticket is on the job too">on job</span>' : '') +
             '</div>';
           }).join('') + '</div>'
-        : '<div class="p86-st-lead-empty">No service tickets on this lead.</div>';
+        : '<div class="p86-st-lead-empty">No service tickets on this lead.</div>');
+      wireLeadPanel(host, leadId);
     }).catch(function (e) {
       if (_leadPanel.leadId !== leadId) return;
+      if (quiet) {
+        try { console.warn('[service-tickets] lead panel refresh failed:', e); } catch (_) {}
+        return;
+      }
       host.innerHTML = '<div class="p86-st-lead-empty" style="color:#f87171;">' +
         esc(e && e.message ? e.message : 'Failed to load') + '</div>';
     });
+  }
+
+  function leadBarHTML() {
+    if (!canEditLead() || !aiAsk()) return '';
+    return '<div class="p86-st-lead-bar" style="display:flex;justify-content:flex-end;margin-bottom:6px;">' +
+      '<button class="ee-btn secondary p86-st-draft86" title="86 drafts the ticket, scope and tasks for your approval">Draft with 86</button>' +
+    '</div>';
+  }
+
+  function wireLeadPanel(host, leadId) {
+    var b = host.querySelector('.p86-st-draft86');
+    if (b) b.addEventListener('click', function () { draftForLead(leadId, _leadPanel.lead); });
   }
 
   // The lead header button. Reuses the same create modal the job manager uses,
@@ -948,6 +1115,9 @@
   // ── Load ─────────────────────────────────────────────────────────────
   function reload() {
     if (!api() || !_state.jobId) return Promise.resolve();
+    // Any refetch issued now is newer than the write a deferred refresh was
+    // waiting to show, so it satisfies that refresh too.
+    _state.stale = false;
     return api().list({ job_id: _state.jobId }).then(function (r) {
       _state.tickets = (r && r.tickets) || [];
       paint();
@@ -979,18 +1149,115 @@
 
   window.renderJobServiceTickets = renderJobServiceTickets;
 
-  // Refresh seam. Deliberately REFUSES to repaint while a ticket is expanded
-  // and being edited — a work order must not be repainted out from under the
-  // caret. Same rule the reports tab follows.
+  // ── Refresh seam ─────────────────────────────────────────────────────
+  // Called by js/refresh.js (the `service_ticket` entry) after an agent write
+  // lands, with no arguments: it does not know which job or lead the ticket
+  // hangs off, and does not need to. It repaints whichever surface is MOUNTED.
+  //
+  // It used to be job-only — reload() returns early without a job in view — so
+  // a ticket 86 drafted on a LEAD landed in Postgres while the lead panel kept
+  // saying "No service tickets on this lead." Both surfaces are checked
+  // independently; a lead that has converted shows the same ticket on both,
+  // and both repaint.
+  function jobPaneInView() {
+    if (!_state.jobId || !pane()) return false;
+    // _state.jobId outlives the job page: leaving a job does not clear it, so
+    // on its own it would refetch a job nobody is looking at. The job on screen
+    // is the one appState names.
+    var cur = window.appState && window.appState.currentJobId;
+    return cur != null && String(cur) === String(_state.jobId);
+  }
+
+  function leadPanelMounted() {
+    var h = _leadPanel.host;
+    return !!(h && _leadPanel.leadId && h.isConnected);
+  }
+
+  function holdsCaret(el) {
+    try {
+      var ae = document.activeElement;
+      if (!ae || !el || !el.contains(ae)) return false;
+      var tag = ae.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || !!ae.isContentEditable;
+    } catch (e) { return false; }
+  }
+
+  // An open work order holds edits in two ways, and either one must stop a
+  // repaint: the caret is in it, OR a field was changed and the PM moved on to
+  // another field without pressing Save. The second is the one a focus check
+  // misses — paintDetail rebuilds every field from the server row, so a scope
+  // typed, blurred and not yet saved would silently revert under a background
+  // refresh. The markup's own defaults ARE the server row, so "differs from its
+  // default" is exactly "unsaved".
+  function detailHoldsEdits(host) {
+    var open = host && host.querySelector('.p86-st-row.is-open');
+    if (!open) return false;
+    if (holdsCaret(open)) return true;
+    // A share link minted in this row is held too, though it is no edit: it is
+    // shown once and the server keeps only its hash. Its input is readonly, so
+    // the value scan below skips it, and the Copy button takes no caret — the
+    // focusout from that very click would flush the latch, paint() would
+    // rebuild the row, and the link the note says "cannot be shown again" would
+    // be gone before it was pasted anywhere. Collapsing the row (or closing the
+    // share panel) clears it and releases the refresh.
+    var minted = open.querySelector('.p86-st-share-out input');
+    if (minted && minted.value) return true;
+    var fields = open.querySelectorAll('input, textarea, select');
+    for (var i = 0; i < fields.length; i++) {
+      var f = fields[i];
+      if (f.readOnly || f.disabled) continue;
+      if (f.type === 'checkbox' || f.type === 'radio') {
+        if (f.checked !== f.defaultChecked) return true;
+      } else if (f.tagName === 'SELECT') {
+        // A select with no `selected` attribute defaults to its FIRST option;
+        // comparing per-option defaultSelected would call every such select
+        // (Move to…, the participant picker) dirty from the moment it renders.
+        var def = 0;
+        for (var j = 0; j < f.options.length; j++) { if (f.options[j].defaultSelected) { def = j; break; } }
+        if (f.selectedIndex !== def) return true;
+      } else if (f.value !== f.defaultValue) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // The "needs repaint" latch. A refresh refused because of the rule above is
+  // remembered, not dropped — dropping it trades one repaint for a permanently
+  // stale list (the rule js/refresh.js states for every guarded surface). It is
+  // retried when focus leaves the pane or the ticket is collapsed, and any
+  // reload() satisfies it.
+  function flushStale() {
+    if (!_state.stale || _state.busy || !jobPaneInView()) return;
+    if (detailHoldsEdits(pane())) return;
+    reload();
+  }
+
+  var _latchHost = null;
+  function wireLatch(host) {
+    if (!host || _latchHost === host) return;
+    _latchHost = host;
+    host.addEventListener('focusout', function () { setTimeout(flushStale, 0); });
+  }
+
+  function refresh() {
+    var work = [];
+    if (jobPaneInView()) {
+      var host = pane();
+      wireLatch(host);
+      if (_state.busy || detailHoldsEdits(host)) _state.stale = true;
+      else work.push(reload());
+    }
+    if (leadPanelMounted() && api()) {
+      work.push(loadLeadPanel(_leadPanel.host, _leadPanel.leadId, true));
+    }
+    return Promise.all(work);
+  }
+
   window.p86ServiceTickets = {
     // The lead surfaces (js/leads.js calls both).
     mountLeadPanel: mountLeadPanel,
     createForLead: createForLead,
-    refresh: function () {
-      if (_state.busy) return;
-      if (document.querySelector('#job-service-tickets .p86-st-row.is-open textarea:focus, ' +
-                                 '#job-service-tickets .p86-st-row.is-open input:focus')) return;
-      reload();
-    }
+    refresh: refresh
   };
 })();

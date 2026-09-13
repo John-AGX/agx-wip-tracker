@@ -15,7 +15,14 @@
 // now so adding entity types in C5 only needs new dispatchN functions.
 
 const { pool } = require('../db');
-const { resolveTz, localWallClockToInstant, DEFAULT_TZ } = require('../timezone');
+const { resolveTz, localWallClockToInstant, DEFAULT_TZ, isCalendarDay } = require('../timezone');
+// Service tickets: the pure rules (priority vocabulary, which statuses are
+// terminal, the id minter) and the ONE parent-inherited access rule every
+// ticket door asks. Both require nothing at load time — service-ticket-access
+// pulls `auth` in lazily and treats a failure to load it as a refusal — so this
+// module stays loadable with no JWT_SECRET, which several suites depend on.
+const ticketRules = require('./service-tickets');
+const ticketAccess = require('./service-ticket-access');
 // Change orders / purchase orders / invoices live in their own tables; this
 // is the same write layer the REST routes use, taking our transaction client.
 const jobFin = require('./job-financials');
@@ -23,7 +30,10 @@ const jobFin = require('./job-financials');
 // imported rather than restated — see dispatchAttachment for why a second
 // opinion about either is the defect class this repo keeps paying for. Both
 // of these are auth-free, so they load here at the top.
-const { writeCapForEntity } = require('./attachment-entity-access');
+// ticketAttachmentAccess is the per-ticket half of that map for work-order
+// photos (services/attachment-entity-access.js explains the split); auth-free
+// at load, like the rest.
+const { writeCapForEntity, ticketAttachmentAccess, TICKET_ENTITY_TYPE } = require('./attachment-entity-access');
 const { upsertOrgTags, normalizeTagsInput } = require('./attachment-tags');
 // attachmentInOrg is the THIRD of that set and is NOT required here, because
 // services/attachment-org-scope.js -> services/user-org-scope.js -> ../auth,
@@ -210,6 +220,78 @@ const SCHEDULE_LINK_ENTITY_TYPES = new Set(['client', 'job', 'lead', 'project'])
 const TASK_KINDS = new Set(['todo', 'punch', 'follow_up']);
 const TASK_STATUSES = new Set(['open', 'in_progress', 'blocked', 'done']);
 const TASK_PRIORITIES = new Set(['low', 'normal', 'high', 'urgent']);
+
+// ──────────────────────────────────────────────────────────────────
+// service_ticket — a WORK ORDER raised on a job or a lead.
+//
+// The writable set is the REST editor's allow-list (EDITABLE_FIELDS in
+// routes/service-ticket-routes.js) MINUS scope_approved, plus the two parent
+// pointers a create needs. It is restated here rather than imported because
+// that list lives in a routes file, and routes/* require ../auth at load —
+// which would make this module unloadable without a JWT_SECRET.
+const SERVICE_TICKET_FIELDS = new Set([
+  'title', 'job_id', 'lead_id', 'scope_proposed', 'internal_notes',
+  'priority', 'requested_by', 'site_contact_name', 'site_contact_phone',
+  'street_address', 'city', 'state', 'zip', 'lat', 'lng', 'access_notes',
+  'scheduled_for', 'due_date', 'assignee_user_id',
+]);
+const SERVICE_TICKET_TEXT_FIELDS = new Set([
+  'title', 'scope_proposed', 'internal_notes', 'requested_by',
+  'site_contact_name', 'site_contact_phone', 'street_address', 'city',
+  'state', 'zip', 'access_notes',
+]);
+// Keys that are REAL columns and deliberately NOT the model's to write. Each is
+// refused BY NAME with its reason, and non-retryably: an "unknown field" answer
+// reads like a typo, and the Scribe's next move on a typo is a spelling variant
+// or a workaround — a status change re-expressed as a note, an approval dropped
+// and the rest re-emitted as if nothing was lost.
+const SERVICE_TICKET_REFUSED_FIELDS = {
+  status: 'A ticket\'s status moves only through its own door (POST /api/service-tickets/:id/status), ' +
+    'where the transition lattice is checked in exactly one place. A payload is not a second status door.',
+  scope_approved: 'scope_approved is what the client or PM SIGNED OFF on. It is recorded by a person, ' +
+    'never authored by a model — draft into scope_proposed instead.',
+  organization_id: 'The organization is stamped from the approving user, never taken from a payload.',
+  created_by: 'The creator is stamped from the approving user, never taken from a payload.',
+  ticket_number: 'A ticket number is identity printed on a work order. An agent never invents one — ' +
+    'the same rule job numbers follow.',
+  checklist: 'The ticket checklist is the crew\'s tick-list and is edited on the ticket itself. ' +
+    'Assignable work items go in task_adds.',
+  guest_log: 'guest_log is the append-only field-report log written through share links. Nothing else writes it.',
+};
+// Every key a task_adds entry is READ for, and nothing else. The ticket, the
+// job/lead link, the org and the creator are stamped from the ticket and the
+// approver, so a key naming any of them is refused rather than trusted.
+const SERVICE_TICKET_TASK_KEYS = new Set(['title', 'notes', 'priority', 'due_date', 'assignee_user_id']);
+// A work order with more than this many child tasks is a project plan, not a
+// ticket — and one approval card should not hide that many writes.
+const SERVICE_TICKET_TASK_ADDS_CAP = 25;
+// The REST create door's own bound on a title (service-ticket-routes.js slices
+// at 300). Refused here rather than sliced: a shortened title is a silent edit.
+const SERVICE_TICKET_TITLE_CAP = 300;
+// The tasks REST door's bounds on a task (tasks-routes.js POST/PATCH slice a
+// trimmed title at 500 and notes at 5000). A ticket's child task is the same
+// row, so it gets the same bounds — refused over them rather than sliced, for
+// the title cap's reason: a cut-off punch item or note is an edit nobody saw.
+const TASKS_REST_TITLE_CAP = 500;
+const TASKS_REST_NOTES_CAP = 5000;
+// Ticket columns where '' means "no value", exactly as the REST create and
+// PATCH doors read it (`body[k] === '' ? null`). Without this a form-shaped
+// draft that sends '' for an unset date is refused as a malformed day, and a
+// '' assignee or coordinate becomes Number('') === 0 — user 0, or a pin at
+// 0,0 in the Gulf of Guinea.
+const SERVICE_TICKET_BLANK_IS_NULL = new Set(['scheduled_for', 'due_date', 'lat', 'lng', 'assignee_user_id']);
+// The columns a ticket snapshot carries into the before/after changeset. Named,
+// not SELECT *, for the reason TICKET_COLS gives in the routes file: a column
+// added later must not ride into a stored payload row by default.
+const SERVICE_TICKET_SNAPSHOT_COLS =
+  'id, organization_id, ticket_number, title, job_id, lead_id, status, priority, ' +
+  'scope_proposed, scope_approved, internal_notes, checklist, guest_log, requested_by, ' +
+  'site_contact_name, site_contact_phone, street_address, city, state, zip, lat, lng, ' +
+  'access_notes, scheduled_for, due_date, assignee_user_id, completed_at, closed_at, ' +
+  'archived_at, created_by, created_at, updated_at';
+const SERVICE_TICKET_TASK_SNAPSHOT_COLS =
+  'id, organization_id, title, notes, kind, status, priority, due_date, assignee_user_id, ' +
+  'created_by, entity_type, entity_id, scope, service_ticket_id, created_at, updated_at';
 
 // Deal-memory notes (slice 4) — the deterministic Critic's bounds. A note is a
 // short PROSE decision/constraint. It must never carry a money figure — a dollar
@@ -414,6 +496,29 @@ const PAYLOAD_OPS_SCHEMAS = Object.freeze({
     // path to the money column.
     allowedTopKeys: new Set(['note_adds', 'note_supersedes']),
   },
+  service_ticket: {
+    // A WORK ORDER on a job or a lead. Written by the Scribe on 86's behalf,
+    // applied only after a human approves the card.
+    //
+    // op: 'create' (default) | 'update'
+    // fields: { title, job_id | lead_id (create only; job_id is a job id or a
+    //   job NUMBER — no payload creates a job, so it is never a $ref; only
+    //   lead_id may be a $ref, to a lead created earlier in this payload),
+    //   scope_proposed?, internal_notes?, priority? (null or '' is 'normal'),
+    //   requested_by?, site_contact_name?, site_contact_phone?, street_address?,
+    //   city?, state?, zip?, lat?, lng?, access_notes?, scheduled_for?
+    //   (YYYY-MM-DD), due_date? (YYYY-MM-DD), assignee_user_id? }
+    // task_adds: [{ title, notes?, priority? ('' is the column default),
+    //   due_date? ('' is no due date),
+    //   assignee_user_id? }] — child tasks, filed under the ticket AND on its
+    //   job/lead.
+    //
+    // update: target.entity_id is the existing ticket; job_id / lead_id are
+    // refused (no re-parenting). status, scope_approved, checklist, guest_log,
+    // ticket_number and every *_at are refused by name — see
+    // SERVICE_TICKET_REFUSED_FIELDS.
+    allowedTopKeys: new Set(['op', 'fields', 'task_adds']),
+  },
 });
 
 // Mirror of the client-side template registry (js/report-templates.js)
@@ -507,6 +612,13 @@ function validateOps(entityType, ops) {
   if (!schema) throw new Error(`Unknown entity_type: ${entityType}`);
   if (!ops || typeof ops !== 'object') {
     throw new Error(`ops must be an object for entity_type=${entityType}`);
+  }
+  // Ahead of the generic top-key loop below, because that loop answers an
+  // unknown key with a plain Error — no code, no expected set — and a ticket's
+  // refusals have to be structured all the way down (see the function).
+  if (entityType === 'service_ticket') {
+    validateServiceTicketOps(ops);
+    return;
   }
   // Retired node-graph ops get a NAMED refusal, ahead of the generic
   // unknown-key message — "unknown op key 'wire_updates'" reads like a
@@ -1035,6 +1147,291 @@ function validateScheduleLink(label, fields) {
   }
   if (hasType && !SCHEDULE_LINK_ENTITY_TYPES.has(fields.entity_type)) {
     throw new Error(`${label}.fields.entity_type invalid: '${fields.entity_type}'. Linkable: ${[...SCHEDULE_LINK_ENTITY_TYPES].sort().join(', ')} (or omit for a standalone item).`);
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────
+// service_ticket — the grammar, checked before any SQL.
+//
+// Every refusal here is a PayloadValidationError, so the Scribe gets a
+// field_path and an expected set instead of prose to guess from. The ones that
+// re-emitting CANNOT fix carry retryable:false (a refused-by-name column, a
+// re-parent): the Scribe loop stops on that flag instead of prompting "fix it
+// and re-emit", which is the prompt that launders a refusal into a workaround.
+// A typo'd key, a malformed date or a missing title stays retryable — those
+// really are fixed by emitting again.
+//
+// It is also run AGAIN at the top of dispatchServiceTicket, because the
+// dispatcher is reachable directly (internals, tests) without validateTarget.
+// ──────────────────────────────────────────────────────────────────
+function ticketRefusal(message, detail) {
+  return new PayloadValidationError(message, Object.assign({ retryable: false }, detail));
+}
+
+function validateServiceTicketFieldValue(k, v, where) {
+  if (v === null) {
+    // Clearing is allowed for everything except the two things a ticket cannot
+    // exist without.
+    if (k === 'title' || k === 'job_id' || k === 'lead_id') {
+      throw new PayloadValidationError(`${where} cannot be null.`,
+        { code: 'missing_field', field_path: where });
+    }
+    return;
+  }
+  if (SERVICE_TICKET_TEXT_FIELDS.has(k)) {
+    // A string and nothing else. A zip sent as a number has already lost its
+    // leading zero, and coercing it would store a different value than asked.
+    if (typeof v !== 'string') {
+      throw new PayloadValidationError(`${where} must be a string (got ${Array.isArray(v) ? 'array' : typeof v}).`,
+        { code: 'wrong_type', field_path: where, expected: 'string', received: typeof v });
+    }
+    if (k === 'title') {
+      if (!v.trim()) {
+        throw new PayloadValidationError(`${where} is blank — a ticket needs a title.`,
+          { code: 'missing_field', field_path: where });
+      }
+      if (v.trim().length > SERVICE_TICKET_TITLE_CAP) {
+        throw new PayloadValidationError(
+          `${where} is ${v.trim().length} chars — the cap is ${SERVICE_TICKET_TITLE_CAP}, and over it the title is refused, not cut. Put the detail in scope_proposed.`,
+          { code: 'too_long', field_path: where, expected: `<= ${SERVICE_TICKET_TITLE_CAP} chars`, received: v.trim().length });
+      }
+    }
+    return;
+  }
+  if (k === 'job_id' || k === 'lead_id') {
+    // A job may be named by its NUMBER, and QuickBooks-era numbers are digits,
+    // so a number is accepted and read as the string it spells.
+    const ok = (typeof v === 'string' && v.trim()) || (typeof v === 'number' && Number.isFinite(v));
+    if (!ok) {
+      throw new PayloadValidationError(`${where} must be a ${k === 'job_id' ? 'job id or job number' : 'lead id'} (got ${typeof v}).`,
+        { code: 'wrong_type', field_path: where, expected: 'string', received: typeof v });
+    }
+    return;
+  }
+  if (k === 'priority') {
+    // BLANK IS THE DEFAULT, NOT A GUESS. null (already let through above) and
+    // '' are how a form-shaped draft says "no particular priority", and both
+    // REST doors normalize either to 'normal'. ticketColumnValue writes
+    // 'normal' for both — never an explicit NULL into a NOT NULL column.
+    if (v === '') return;
+    // THE PURE MODULE'S NORMALIZER, and a refusal when it would have had to
+    // guess. normalizePriority maps anything it does not know to 'normal' —
+    // right for a form, wrong for an agent: 'critical' stored as 'normal' is a
+    // write that answered "updated" and stored something else.
+    const normalized = ticketRules.normalizePriority(v);
+    if (typeof v !== 'string' || v.trim().toLowerCase() !== normalized) {
+      throw new PayloadValidationError(
+        `${where} invalid: ${JSON.stringify(v)}. Valid: ${ticketRules.TICKET_PRIORITIES.join(', ')}.`,
+        { code: 'invalid_enum', field_path: where, expected: [...ticketRules.TICKET_PRIORITIES], received: v });
+    }
+    return;
+  }
+  if (k === 'scheduled_for' || k === 'due_date') {
+    // CALENDAR DAYS. `new Date('2026-02-31')` rolls into March and says
+    // nothing, so the shape is checked by the helper that knows what a day is.
+    if (!isCalendarDay(v)) {
+      throw new PayloadValidationError(
+        `${where} must be a calendar day written YYYY-MM-DD (got ${JSON.stringify(v)}).`,
+        { code: 'wrong_type', field_path: where, expected: 'YYYY-MM-DD', received: v });
+    }
+    return;
+  }
+  if (k === 'assignee_user_id') {
+    const n = typeof v === 'number' ? v : (typeof v === 'string' && /^\d+$/.test(v.trim()) ? Number(v) : NaN);
+    if (!Number.isInteger(n) || n <= 0) {
+      throw new PayloadValidationError(
+        `${where} must be a numeric user id (it is proved to be in this organization at apply time).`,
+        { code: 'wrong_type', field_path: where, expected: 'positive integer', received: v });
+    }
+    return;
+  }
+  if (k === 'lat' || k === 'lng') {
+    const n = typeof v === 'number' ? v : (typeof v === 'string' && v.trim() ? Number(v) : NaN);
+    const max = k === 'lat' ? 90 : 180;
+    if (!Number.isFinite(n) || Math.abs(n) > max) {
+      throw new PayloadValidationError(
+        `${where} must be a number between -${max} and ${max} (got ${JSON.stringify(v)}).`,
+        { code: 'wrong_type', field_path: where, expected: `number in [-${max}, ${max}]`, received: v });
+    }
+  }
+}
+
+function validateServiceTicketOps(ops) {
+  const schema = PAYLOAD_OPS_SCHEMAS.service_ticket;
+  for (const k of Object.keys(ops)) {
+    if (schema.allowedTopKeys.has(k)) continue;
+    if (SERVICE_TICKET_REFUSED_FIELDS[k] || /_at$/.test(k)) {
+      throw ticketRefusal(
+        `service_ticket.ops.${k} is not writable from a payload. ` +
+        (SERVICE_TICKET_REFUSED_FIELDS[k] || `${k} is a timestamp the ticket's own lifecycle sets.`) +
+        ' Nothing was saved.',
+        { code: 'blocked_field', field_path: `service_ticket.ops.${k}`, received: k });
+    }
+    throw new PayloadValidationError(
+      `service_ticket.ops has unknown key '${k}'. Allowed top-level op keys: ${[...schema.allowedTopKeys].sort().join(', ')}. ` +
+      'Ticket columns go inside fields; child tasks go in task_adds.',
+      { code: 'unknown_field', field_path: `service_ticket.ops.${k}`, received: k, expected: [...schema.allowedTopKeys] });
+  }
+
+  const op = ops.op == null ? 'create' : ops.op;
+  if (op !== 'create' && op !== 'update') {
+    throw new PayloadValidationError(
+      `service_ticket.ops.op must be 'create' or 'update' (got ${JSON.stringify(op)}). ` +
+      'A ticket is closed, cancelled or deleted in the app, not from a payload.',
+      { code: 'invalid_enum', field_path: 'service_ticket.ops.op', expected: ['create', 'update'], received: op,
+        retryable: false });
+  }
+
+  if (ops.fields != null && (typeof ops.fields !== 'object' || Array.isArray(ops.fields))) {
+    throw new PayloadValidationError('service_ticket.ops.fields must be an object of ticket columns.',
+      { code: 'wrong_type', field_path: 'service_ticket.ops.fields', expected: 'object',
+        received: Array.isArray(ops.fields) ? 'array' : typeof ops.fields });
+  }
+  const fields = ops.fields || {};
+  for (const k of Object.keys(fields)) {
+    const where = `service_ticket.ops.fields.${k}`;
+    // Refused-by-name BEFORE the allow-list, so status gets its reason rather
+    // than an "unknown field" that invites a spelling variant.
+    if (SERVICE_TICKET_REFUSED_FIELDS[k] || /_at$/.test(k)) {
+      throw ticketRefusal(
+        `${where} is not writable from a payload. ` +
+        (SERVICE_TICKET_REFUSED_FIELDS[k] || `${k} is a timestamp the ticket's own lifecycle sets.`) +
+        ' Nothing was saved.',
+        { code: 'blocked_field', field_path: where, received: k });
+    }
+    if (!SERVICE_TICKET_FIELDS.has(k)) {
+      throw new PayloadValidationError(
+        `${where} is not a ticket field. Valid: ${[...SERVICE_TICKET_FIELDS].sort().join(', ')}. ` +
+        '(org, creator, number and status are never set from a payload.)',
+        { code: 'unknown_field', field_path: 'service_ticket.ops.fields', received: [k], expected: [...SERVICE_TICKET_FIELDS] });
+    }
+    if (op === 'update' && (k === 'job_id' || k === 'lead_id')) {
+      // NO RE-PARENTING. The parent decides who may see and edit the ticket,
+      // so moving it is a permission change wearing a field edit's clothes —
+      // and the approver's right to edit THIS ticket says nothing about the
+      // parent it would land on.
+      throw ticketRefusal(
+        `${where} cannot change on an existing ticket — a ticket is never re-parented from a payload. ` +
+        'Its job or lead decides who may see and edit it. Nothing was saved.',
+        { code: 'reparent_refused', field_path: where, received: k });
+    }
+    // THE PARENT A CREATE DOES NOT USE. `{job_id: 'j1', lead_id: null}` (or '')
+    // is how a form-shaped draft says "on the job, not a lead", and the REST
+    // create reads a falsy parent as absent. Refusing it as "lead_id cannot be
+    // null" sent the Scribe to re-emit a ticket that was already right. The
+    // one-real-parent requirement is still enforced below (hasJob/hasLead), so
+    // skipping this value cannot let a parentless ticket through.
+    if (op === 'create' && (k === 'job_id' || k === 'lead_id') && (fields[k] === null || fields[k] === '')) {
+      continue;
+    }
+    // '' IS "NO VALUE" for a date, a coordinate or the assignee — the REST
+    // doors' reading (see SERVICE_TICKET_BLANK_IS_NULL). ticketColumnValue
+    // stores it as NULL; it must not reach the day/number checks and be refused
+    // as malformed.
+    if (fields[k] === '' && SERVICE_TICKET_BLANK_IS_NULL.has(k)) continue;
+    validateServiceTicketFieldValue(k, fields[k], where);
+  }
+
+  let taskCount = 0;
+  if (ops.task_adds != null) {
+    if (!Array.isArray(ops.task_adds)) {
+      throw new PayloadValidationError('service_ticket.ops.task_adds must be an array of {title, notes?, priority?, due_date?, assignee_user_id?}.',
+        { code: 'wrong_type', field_path: 'service_ticket.ops.task_adds', expected: 'array', received: typeof ops.task_adds });
+    }
+    if (ops.task_adds.length > SERVICE_TICKET_TASK_ADDS_CAP) {
+      throw ticketRefusal(
+        `service_ticket.ops.task_adds holds ${ops.task_adds.length} tasks — the cap is ${SERVICE_TICKET_TASK_ADDS_CAP} per ticket. ` +
+        'That many is a project plan, not a work order. Nothing was saved.',
+        { code: 'too_many', field_path: 'service_ticket.ops.task_adds',
+          expected: `<= ${SERVICE_TICKET_TASK_ADDS_CAP}`, received: ops.task_adds.length });
+    }
+    ops.task_adds.forEach((t, i) => {
+      const where = `service_ticket.ops.task_adds[${i}]`;
+      if (!t || typeof t !== 'object' || Array.isArray(t)) {
+        throw new PayloadValidationError(`${where} must be an object {title, notes?, priority?, due_date?, assignee_user_id?}.`,
+          { code: 'wrong_type', field_path: where, expected: 'object', received: Array.isArray(t) ? 'array' : typeof t });
+      }
+      const stray = Object.keys(t).filter((key) => !SERVICE_TICKET_TASK_KEYS.has(key));
+      if (stray.length) {
+        throw new PayloadValidationError(
+          `${where} has unknown key(s): ${stray.map((s) => `'${s}'`).join(', ')}. ` +
+          `A ticket task takes exactly: ${[...SERVICE_TICKET_TASK_KEYS].join(', ')}. ` +
+          'Its ticket, job/lead link, org and creator are stamped from the ticket and the approver.',
+          { code: 'unknown_field', field_path: where, received: stray, expected: [...SERVICE_TICKET_TASK_KEYS] });
+      }
+      if (typeof t.title !== 'string' || !t.title.trim()) {
+        throw new PayloadValidationError(`${where}.title is required.`,
+          { code: 'missing_field', field_path: `${where}.title` });
+      }
+      // Measured TRIMMED, because that is what is stored and what the tasks
+      // REST door measures before it slices.
+      if (t.title.trim().length > TASKS_REST_TITLE_CAP) {
+        throw new PayloadValidationError(
+          `${where}.title is ${t.title.trim().length} chars — a task title's cap is ${TASKS_REST_TITLE_CAP}, and over it the title is refused, not cut. Put the detail in notes.`,
+          { code: 'too_long', field_path: `${where}.title`, expected: `<= ${TASKS_REST_TITLE_CAP} chars`, received: t.title.trim().length });
+      }
+      if (t.notes != null && typeof t.notes !== 'string') {
+        throw new PayloadValidationError(`${where}.notes must be a string.`,
+          { code: 'wrong_type', field_path: `${where}.notes`, expected: 'string', received: typeof t.notes });
+      }
+      // Measured RAW: notes are stored as sent, and the tasks REST door slices
+      // the raw string at this bound.
+      if (typeof t.notes === 'string' && t.notes.length > TASKS_REST_NOTES_CAP) {
+        throw new PayloadValidationError(
+          `${where}.notes is ${t.notes.length} chars — a task's notes cap is ${TASKS_REST_NOTES_CAP}, and over it the notes are refused, not cut.`,
+          { code: 'too_long', field_path: `${where}.notes`, expected: `<= ${TASKS_REST_NOTES_CAP} chars`, received: t.notes.length });
+      }
+      // '' IS THE COLUMN DEFAULT — the tasks REST door reads a falsy priority
+      // as absent, and the INSERT below leaves the column out for it.
+      if (t.priority != null && t.priority !== '' && !TASK_PRIORITIES.has(t.priority)) {
+        throw new PayloadValidationError(
+          `${where}.priority invalid: ${JSON.stringify(t.priority)}. Valid: ${[...TASK_PRIORITIES].join(', ')}.`,
+          { code: 'invalid_enum', field_path: `${where}.priority`, expected: [...TASK_PRIORITIES], received: t.priority });
+      }
+      // '' IS NO DUE DATE — the ticket-level reading, and the tasks REST door's,
+      // which drops a falsy due_date. It is skipped here and never written.
+      if (t.due_date != null && t.due_date !== '') validateServiceTicketFieldValue('due_date', t.due_date, `${where}.due_date`);
+      if (t.assignee_user_id != null) validateServiceTicketFieldValue('assignee_user_id', t.assignee_user_id, `${where}.assignee_user_id`);
+    });
+    taskCount = ops.task_adds.length;
+  }
+
+  if (op === 'create') {
+    if (typeof fields.title !== 'string' || !fields.title.trim()) {
+      throw new PayloadValidationError('service_ticket create requires fields.title.',
+        { code: 'missing_field', field_path: 'service_ticket.ops.fields.title' });
+    }
+    const hasJob = fields.job_id != null && String(fields.job_id).trim() !== '';
+    const hasLead = fields.lead_id != null && String(fields.lead_id).trim() !== '';
+    if (!hasJob && !hasLead) {
+      throw new PayloadValidationError(
+        'service_ticket create requires fields.job_id or fields.lead_id — a ticket is always raised on a job or a lead. ' +
+        'A job may be named by its job number; a lead created earlier in this payload by its $ref.',
+        { code: 'missing_field', field_path: 'service_ticket.ops.fields.job_id' });
+    }
+  } else if (!Object.keys(fields).length && !taskCount) {
+    throw new PayloadValidationError(
+      'service_ticket update sets nothing — give it fields, task_adds, or both. Nothing was saved.',
+      { code: 'empty_op', field_path: 'service_ticket.ops' });
+  }
+}
+
+// The address half, which validateOps cannot see because it lives on the
+// TARGET. A create with a concrete entity_id would let a payload choose a
+// primary key; an update without one names no ticket. Neither may reach SQL.
+function checkServiceTicketAddress(entityId, ops, where) {
+  const op = (ops && ops.op) == null ? 'create' : ops.op;
+  const hasId = entityId != null && String(entityId).trim() !== '';
+  if (op === 'create' && hasId && !isRef(entityId)) {
+    throw new PayloadValidationError(
+      `${where}: a service_ticket create takes no concrete entity_id — the id is minted when the ticket is written. ` +
+      'Omit it, or use a $ref such as "$new_ticket". To change an EXISTING ticket, use op:"update".',
+      { code: 'unknown_field', field_path: where, received: entityId });
+  }
+  if (op === 'update' && !hasId) {
+    throw new PayloadValidationError(
+      `${where}: a service_ticket update requires the id of the ticket to change.`,
+      { code: 'missing_field', field_path: where });
   }
 }
 
@@ -3541,6 +3938,103 @@ function normalizeReportCoverPage(raw) {
   return out;
 }
 
+// ── THE REPORT PHOTO RULE — THE WRITE HALF, FOR THE SCRIBE'S DOOR ─────────
+// normalizeReportSection keeps any string as a photo id, and a report hydrates
+// its section ids into storage URLs. So without this a Scribe-written report
+// could attach a work-order photo the approver may not read — or another
+// tenant's — and hand its URLs to whoever opens the report. The report routes
+// apply the same rule to PATCH/POST (canonical statement: report-routes.js),
+// with ONE deliberate difference: there a NEW id may also be a legacy
+// un-stamped attachment; here it may not. Stored ids are never touched by
+// either door, so no existing photo can vanish through this difference.
+//
+//   * An id ALREADY stored on the report is kept untouched, even if this
+//     writer cannot read it. A rewrite must never strip a photo another user
+//     added — the read half decides what each reader is shown.
+//   * A NEW id is kept only if the attachment is in the REPORT's organization
+//     (strictly its organization_id, no uploader or NULL arm) and — only when
+//     it is a service_ticket attachment — the WRITER (the approver, resolved
+//     on the transaction) passes ticketAttachmentAccess in READ mode. Photos
+//     from other parents in the same org stay attachable, exactly as before.
+//   * Anything else is DROPPED, not refused: absent, foreign and unreadable
+//     ids take one path, so the stored sections and the apply summary say
+//     nothing about which of them exist. The drop is counted (a number, never
+//     a filename) so the approver is told something was not attached.
+//
+// reportOrgId is a thunk and the actor is resolved lazily: a write that names
+// no new photo id runs no extra statement at all.
+function reportPhotoIdsOf(sections) {
+  const out = new Set();
+  (Array.isArray(sections) ? sections : []).forEach((s) => {
+    if (s && Array.isArray(s.photo_ids)) s.photo_ids.forEach((pid) => out.add(pid));
+  });
+  return out;
+}
+
+async function reportOrgIdOf(dbClient, entityType, entityId) {
+  // A whitelist, never interpolated from the row: the two parents a report
+  // hangs on today. Any other parent has no organization to prove, so every
+  // new id on it is dropped.
+  const table = entityType === 'project' ? 'projects' : (entityType === 'job' ? 'jobs' : null);
+  if (!table || entityId == null) return null;
+  const r = await dbClient.query(`SELECT organization_id FROM ${table} WHERE id = $1`, [entityId]);
+  const org = r.rows.length ? r.rows[0].organization_id : null;
+  return org == null ? null : org;
+}
+
+async function keepReadableNewReportPhotoIds(dbClient, sections, opts) {
+  const stored = opts.storedIds || new Set();
+  const fresh = new Set();
+  sections.forEach((s) => {
+    if (!s || !Array.isArray(s.photo_ids)) return;
+    s.photo_ids.forEach((pid) => { if (typeof pid === 'string' && !stored.has(pid)) fresh.add(pid); });
+  });
+  if (!fresh.size) return { sections, dropped: 0 };
+
+  const readable = new Set();
+  const reportOrgId = await opts.reportOrgId();
+  if (reportOrgId != null) {
+    const r = await dbClient.query(
+      'SELECT id, entity_type, entity_id FROM attachments WHERE id = ANY($1::text[]) AND organization_id = $2',
+      [[...fresh], reportOrgId]);
+    let actor = null;
+    let actorResolved = false;
+    const verdicts = new Map();
+    for (const att of r.rows) {
+      if (att.entity_type !== TICKET_ENTITY_TYPE) { readable.add(String(att.id)); continue; }
+      if (!actorResolved) { actor = await resolveWriteActor(dbClient, opts.ctx); actorResolved = true; }
+      const ticketKey = String(att.entity_id);
+      if (!verdicts.has(ticketKey)) {
+        verdicts.set(ticketKey, await ticketAttachmentAccess({
+          query: dbClient.query.bind(dbClient),
+          user: actor,
+          ticketId: att.entity_id,
+          orgId: (opts.ctx && opts.ctx.organizationId) != null ? opts.ctx.organizationId : null,
+          mode: 'read',
+        }));
+      }
+      if (verdicts.get(ticketKey).ok === true) readable.add(String(att.id));
+    }
+  }
+
+  const dropped = [...fresh].filter((pid) => !readable.has(pid)).length;
+  if (!dropped) return { sections, dropped: 0 };
+  const keep = (pid) => typeof pid !== 'string' || stored.has(pid) || readable.has(pid);
+  return {
+    dropped,
+    sections: sections.map((s) => {
+      if (!s || !Array.isArray(s.photo_ids) || s.photo_ids.every(keep)) return s;
+      const photoIds = s.photo_ids.filter(keep);
+      const capIn = (s.captions && typeof s.captions === 'object') ? s.captions : {};
+      const captions = {};
+      photoIds.forEach((pid) => {
+        if (Object.prototype.hasOwnProperty.call(capIn, pid)) captions[pid] = capIn[pid];
+      });
+      return Object.assign({}, s, { photo_ids: photoIds, captions });
+    }),
+  };
+}
+
 async function dispatchReport(dbClient, target, refTable, ctx) {
   const ops = target.ops || {};
   resolveRefsInOps(ops, refTable);
@@ -3566,9 +4060,12 @@ async function dispatchReport(dbClient, target, refTable, ctx) {
     const title = (typeof ops.title === 'string' && ops.title.trim())
       ? ops.title.slice(0, 200)
       : 'Untitled report';
-    const sections = Array.isArray(ops.sections)
+    // A new report stores nothing yet, so every photo id is NEW — see
+    // keepReadableNewReportPhotoIds. The report's org is its project's.
+    const kept = await keepReadableNewReportPhotoIds(dbClient, Array.isArray(ops.sections)
       ? ops.sections.map(normalizeReportSection).filter(Boolean).slice(0, 50)
-      : [];
+      : [], { storedIds: new Set(), reportOrgId: async () => projChk.rows[0].organization_id, ctx });
+    const sections = kept.sections;
     const coverPage = normalizeReportCoverPage(ops.cover_page);
 
     await dbClient.query(
@@ -3584,12 +4081,13 @@ async function dispatchReport(dbClient, target, refTable, ctx) {
 
     if (isRef(target.entity_id)) refTable[target.entity_id] = id;
 
-    return {
+    return Object.assign({
       entity_type: 'report',
       entity_id: id,
       op: 'create',
-      summary: `Report created (template=${ops.template_type}, ${sections.length} section(s))`,
-    };
+      summary: `Report created (template=${ops.template_type}, ${sections.length} section(s)` +
+        (kept.dropped ? `, ${kept.dropped} photo(s) not attached — not visible to the approver` : '') + ')',
+    }, kept.dropped ? { photos_dropped: kept.dropped } : {});
   }
 
   // UPDATE path
@@ -3656,6 +4154,18 @@ async function dispatchReport(dbClient, target, refTable, ctx) {
     }
     nextSections = nextSections.slice(0, 50);
   }
+  // The ids ALREADY on the report are kept whoever this writer is; only an id
+  // this write introduces is proved — see keepReadableNewReportPhotoIds.
+  let photosDropped = 0;
+  if (nextSections != null) {
+    const kept = await keepReadableNewReportPhotoIds(dbClient, nextSections, {
+      storedIds: reportPhotoIdsOf(row.sections),
+      reportOrgId: () => reportOrgIdOf(dbClient, row.entity_type, row.entity_id),
+      ctx,
+    });
+    nextSections = kept.sections;
+    photosDropped = kept.dropped;
+  }
   if (nextSections != null) {
     sets.push(`sections = $${p++}::jsonb`);
     params.push(JSON.stringify(nextSections));
@@ -3681,13 +4191,14 @@ async function dispatchReport(dbClient, target, refTable, ctx) {
   if (ops.title) summaryBits.push('title');
   if (ops.cover_page) summaryBits.push('cover');
   if (nextSections != null) summaryBits.push(`${nextSections.length} section(s)`);
+  if (photosDropped) summaryBits.push(`${photosDropped} photo(s) not attached — not visible to the approver`);
 
-  return {
+  return Object.assign({
     entity_type: 'report',
     entity_id: reportId,
     op: 'update',
     summary: `Report ${reportId} updated (${summaryBits.join(', ') || 'no-op'})`,
-  };
+  }, photosDropped ? { photos_dropped: photosDropped } : {});
 }
 
 function newCalendarEventId() {
@@ -4151,8 +4662,9 @@ async function dispatchDealMemory(dbClient, target, refTable, ctx) {
 // THE PREDICATE AND THE CAPABILITY ARE THE PUT'S, NOT A SECOND OPINION.
 // attachment-routes.js:PUT /:id runs, in this order:
 //     attachmentInOrg(pool, att, callerOrgId(req))   -> 404
+//     (service_ticket only) ticketAttachmentAccess    -> 404 hidden / 403
 //     writeCapForEntity(att.entity_type) + hasCapability -> 403
-// so this runs the SAME two, per row, in the SAME order, importing the SAME
+// so this runs the SAME checks, per row, in the SAME order, importing the SAME
 // functions. writeCapForEntity moved to services/attachment-entity-access.js
 // for that: requiring routes/attachment-routes.js from here would drag in the
 // auth module at load and break every JWT-free test that touches this file.
@@ -4265,9 +4777,10 @@ async function dispatchAttachment(dbClient, target, refTable, ctx) {
     const r = await dbClient.query('SELECT * FROM attachments WHERE id = $1', [id]);
     const att = r.rows[0];
 
-    // Absent OR foreign — one message, one code, deliberately.
-    const inOrg = att ? await attachmentInOrg(dbClient, att, orgId) : false;
-    if (!att || !inOrg) {
+    // The absent-id refusal, built in one place because TWO conditions throw it:
+    // a row that is absent or foreign, and (below) a work-order photo whose
+    // ticket the approver may not be shown. They must read identically.
+    const unresolvable = async () => {
       // Anchor the inventory on a sibling in this batch that DID resolve —
       // that is the set the model was actually working from. With nothing
       // resolved there is no parent to inventory, and saying so is better
@@ -4283,12 +4796,51 @@ async function dispatchAttachment(dbClient, target, refTable, ctx) {
       // that nothing was saved, and how to re-address. The inventory — the
       // longest and the most expendable part — goes last, where the cut can
       // only take photos off the end of a list.
-      throw new PayloadValidationError(
+      return new PayloadValidationError(
         `${where}: no such photo — attachment_id="${id}". Nothing was saved. ` +
         'Address a photo by the attachment_id read_project_photos prints in square brackets at the head of each line. ' +
         (inv ? inv + '.' : 'No photo with that id is visible to you.'),
         { code: 'unresolvable_id', field_path: `${where}.attachment_id`,
           received: id, retryable: true }
+      );
+    };
+
+    // Absent OR foreign — one message, one code, deliberately.
+    const inOrg = att ? await attachmentInOrg(dbClient, att, orgId) : false;
+    if (!att || !inOrg) {
+      throw await unresolvable();
+    }
+
+    // A WORK-ORDER PHOTO follows its ticket's parent, the rule PUT /:id asks
+    // too. writeCapForEntity('service_ticket') below is only the coarse list,
+    // which a leads-only approver passes on a JOB's ticket — so without this the
+    // Scribe could caption crew photos on a work order the approver may not
+    // even open, and a jobs-only approver would be refused their own.
+    const ticketVerdict = att.entity_type === TICKET_ENTITY_TYPE
+      ? await ticketAttachmentAccess({
+        query: dbClient.query.bind(dbClient),
+        user: actor,
+        ticketId: att.entity_id,
+        orgId,
+        mode: 'write',
+      })
+      : null;
+    // A ticket that does not load in this org, or a job the narrow-tier
+    // approver is not on, is `hidden`: the absent-id refusal, word for word, so
+    // the op cannot be used to confirm the work order exists.
+    if (ticketVerdict && !ticketVerdict.ok && ticketVerdict.hidden) {
+      throw await unresolvable();
+    }
+    // Any other ticket refusal is a capability refusal, and it names the
+    // PARENT's capabilities — "requires LEADS_EDIT" said to a leads-only
+    // approver who holds LEADS_EDIT would be no answer at all.
+    if (ticketVerdict && !ticketVerdict.ok) {
+      const parentCaps = ticketAccess.capsForParentKind(ticketVerdict.kind, 'write');
+      throw new PayloadValidationError(
+        `${where}: you do not have permission to edit photos on a ${att.entity_type} ` +
+        `(requires ${parentCaps.length ? parentCaps.join(' or ') : 'a job or lead edit capability'}). ` +
+        'Nothing was saved.',
+        { code: 'missing_capability', field_path: where, received: parentCaps.join(' '), retryable: false }
       );
     }
 
@@ -4459,6 +5011,407 @@ async function dispatchAttachment(dbClient, target, refTable, ctx) {
   };
 }
 
+// ──────────────────────────────────────────────────────────────────
+// dispatchServiceTicket — create or update a WORK ORDER, with child tasks.
+//
+// 86 never holds emit_payload_file. The chain is 86 -> scribe_write -> the
+// Scribe -> emit_payload_file -> a staged payload -> a human's Preview/Approve
+// -> applyPayload -> here. So everything below runs on the approver's
+// authority, inside the approval transaction, and every decision is made on
+// `dbClient` — never the module pool — for two reasons that each broke a
+// door in this repo before:
+//   * a parent created EARLIER IN THIS PAYLOAD ($new_lead) exists only inside
+//     this uncommitted transaction. The pool cannot see it, so a pool-side
+//     check would refuse the most natural bundle there is — lead plus ticket —
+//     with a sentence that reads like a tenant refusal.
+//   * a row written on the pool survives this transaction's ROLLBACK, and
+//     driveScribeWrite dry-runs every draft. The event log would fill with
+//     tickets nobody approved.
+//
+// THE ORDER IS THE CONTRACT. Everything that can refuse runs before anything
+// writes: the org and user context, the grammar (again — this function is
+// reachable without validateTarget), the parents, the capability, the ticket's
+// own state, every assignee. Only then the INSERT/UPDATE, the events and the
+// child tasks. A refusal therefore never leaves half a ticket behind, even on
+// a code path that does not roll back.
+//
+// NOT IN TABLE_FOR_ENTITY, AND NOT IN ORG_SCOPED_TABLE, on purpose. Both maps
+// feed helpers that were written for the four legacy tables: entityExists and
+// snapshotEntity read by id with no tenant predicate at all, and
+// assertTargetOrg carries the legacy tolerance arm. service_tickets is a NOT
+// NULL tenancy table whose every predicate is a bare organization_id match,
+// so this dispatcher loads its own row, strictly scoped, and hands back its own
+// before/after pairs as changeset_rows. (A TABLE_FOR_ENTITY entry would also
+// double every ticket in the changeset.) `condition` is refused in
+// validateTarget for the same reason.
+//
+// FOREIGN AND ABSENT ARE ONE ANSWER. A parent in another tenant, a ticket in
+// another tenant, and an id that is nothing all refuse with the same sentence
+// and code. Anything else answers "does this id exist somewhere" for free.
+// ──────────────────────────────────────────────────────────────────
+
+function ticketValuePresent(v) {
+  return v != null && String(v).trim() !== '';
+}
+
+// THE TWO NOT-FOUND ANSWERS, each built in exactly one place. Every refusal that
+// must be indistinguishable from "that id is nothing" — a foreign row, an absent
+// row, and a row the approver may not touch because it is not theirs — throws
+// one of these, so the sentence, code and field_path cannot drift apart between
+// the sites. A second hand-written copy is how an existence oracle comes back:
+// one changed word and the two answers are telling apart what they must not.
+function ticketParentNotFound(kind, rawId) {
+  const where = `service_ticket.ops.fields.${kind}_id`;
+  return ticketRefusal(
+    `${where}: no such ${kind} in this organization. Nothing was saved. ` +
+    (kind === 'job'
+      ? 'Name the job by its id or its job number, exactly as read_entity prints it.'
+      : 'Name the lead by the id read_entity prints.'),
+    { code: 'parent_not_found', field_path: where, received: String(rawId) });
+}
+function ticketNotFound(rawEntityId) {
+  return ticketRefusal('service_ticket: no such ticket in this organization. Nothing was saved.',
+    { code: 'not_found', field_path: 'entity_id', received: String(rawEntityId) });
+}
+
+// Prove a model-supplied parent is this organization's, ON THE TRANSACTION.
+// Returns the canonical row id (a job number resolves to its job).
+async function proveTicketParentInOrg(dbClient, kind, rawId, orgId) {
+  const refusal = () => ticketParentNotFound(kind, rawId);
+  let id = String(rawId).trim();
+  // A job NUMBER ("RV2000") is how 86 refers to a job, and the scribe_write
+  // description promises it resolves. Org-scoped; an ambiguous number throws
+  // its own retryable error, because naming the canonical id does fix that.
+  if (kind === 'job') id = await resolveJobTarget(dbClient, id, orgId);
+  // assertTargetOrg throws on another tenant's row and RESOLVES on an absent
+  // one — it is not an existence check (link_job_to_client learned that). So
+  // its throw is translated into this function's one sentence, and the probe
+  // below catches absence with the same sentence.
+  try {
+    await assertTargetOrg(dbClient, kind, id, orgId);
+  } catch (e) {
+    throw refusal();
+  }
+  const probe = kind === 'job'
+    ? await dbClient.query('SELECT id FROM jobs WHERE id = $1 LIMIT 1', [id])
+    : await dbClient.query('SELECT id FROM leads WHERE id = $1 LIMIT 1', [id]);
+  if (!probe.rowCount) throw refusal();
+  return id;
+}
+
+// THE CAPABILITY, precise and per parent: service-ticket-access decides, so
+// this door and the REST doors cannot drift. A ticket on a job needs
+// JOBS_EDIT_ANY, or JOBS_EDIT_OWN on a job the approver owns or holds an
+// 'edit' grant on; a ticket on a lead needs LEADS_EDIT. The apply route's
+// PAYLOAD_APPLY_CAP entry is only the coarse half — it runs before any row is
+// loaded and cannot see a $new parent — and passing it proves nothing here.
+//
+// NOT ASSIGNED IS NOT FOUND. A narrow-tier approver (JOBS_EDIT_OWN) aiming at a
+// job they neither own nor hold an edit grant on is told exactly what an absent
+// id is told — `notFound()` is the caller's own not-found builder. A distinct
+// "not one of your jobs" sentence answers "that job, or that ticket, exists"
+// for any id a crew lead cares to try, which the REST doors (404 with the
+// missing-row body) and the read door (its not-found text) both refuse to do.
+// no_capability stays a capability refusal: it is decided by the approver's
+// role and the parent KIND, the same answer the REST door's 403 gives.
+async function assertTicketParentWritable(dbClient, actor, parent, orgId, verb, notFound) {
+  const verdict = await ticketAccess.mayAccessTicketParent({
+    query: dbClient.query.bind(dbClient),
+    user: actor,
+    parent,
+    mode: 'write',
+    orgId,
+  });
+  if (verdict && verdict.ok === true) return;
+  const reason = (verdict && verdict.reason) || 'denied';
+  if (reason === 'not_assigned') throw notFound();
+  const kind = ticketAccess.parentOf(parent).kind;
+  const caps = ticketAccess.capsForParentKind(kind, 'write');
+  const why = `requires ${caps.length ? caps.join(' or ') : 'a job or lead edit capability'}`;
+  throw ticketRefusal(
+    `You do not have permission to ${verb} a service ticket on this ${kind || 'record'} (${why}). Nothing was saved.`,
+    { code: 'missing_capability', field_path: 'service_ticket', received: reason, expected: caps });
+}
+
+// The FK only proves a user EXISTS, never whose they are. The REST ticket doors
+// write assignee_user_id raw; this door does not copy that.
+async function proveTicketAssigneeInOrg(dbClient, raw, orgId, where) {
+  const n = Number(raw);
+  const r = await dbClient.query('SELECT 1 FROM users WHERE id = $1 AND organization_id = $2', [n, orgId]);
+  if (!r.rowCount) {
+    throw ticketRefusal(`${where} is not a user in this organization. Nothing was saved.`,
+      { code: 'assignee_not_in_org', field_path: where });
+  }
+  return n;
+}
+
+// CALENDAR DAYS OUT OF node-pg. A DATE column (oid 1082) is parsed into a Date
+// at LOCAL midnight of the server's zone, and JSON.stringify writes a Date as a
+// UTC instant — so due 2026-09-15 is stored in the changeset as
+// "2026-09-15T04:00:00.000Z" on an Eastern box and "2026-09-14T15:00:00.000Z"
+// on one east of Greenwich, and the diff card shows whichever day the server's
+// zone produced. The local getters read back the exact day node-pg was given,
+// in any zone; a string (another driver, a test engine) is already the day.
+// TIMESTAMPTZ columns are instants and are deliberately left alone.
+const TICKET_DATE_COLS = ['scheduled_for', 'due_date'];
+const TASK_DATE_COLS = ['due_date'];
+function calendarDaysOf(row, cols) {
+  if (!row) return row;
+  for (const c of cols) {
+    const v = row[c];
+    if (Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v.getTime())) {
+      row[c] = String(v.getFullYear()).padStart(4, '0') + '-' +
+        String(v.getMonth() + 1).padStart(2, '0') + '-' + String(v.getDate()).padStart(2, '0');
+    }
+  }
+  return row;
+}
+
+async function loadTicketSnapshot(dbClient, id, orgId, forUpdate) {
+  const r = await dbClient.query(
+    'SELECT ' + SERVICE_TICKET_SNAPSHOT_COLS + ' FROM service_tickets WHERE id = $1 AND organization_id = $2' +
+      (forUpdate ? ' FOR UPDATE' : ''),
+    [id, orgId]);
+  return calendarDaysOf(r.rows[0] || null, TICKET_DATE_COLS);
+}
+
+// The timeline row, on the TRANSACTION. Not the routes file's logEvent: that
+// one defaults to the module pool (see the header) and swallows its own
+// failure — right for a REST handler, wrong inside a transaction, where a
+// failed statement has already aborted everything after it and a swallowed
+// error would let the apply report success over a dead transaction.
+//
+// detail is SHAPE, never contents: field NAMES, a task id. A scope, a phone
+// number or an address typed into a ticket must not be copied into its log.
+async function insertTicketEvent(dbClient, orgId, ticketId, kind, actorUserId, detail) {
+  await dbClient.query(
+    `INSERT INTO service_ticket_events
+       (id, organization_id, ticket_id, kind, actor_kind, actor_user_id, detail)
+     VALUES ($1, $2, $3, $4, 'agent', $5, $6::jsonb)`,
+    [ticketRules.genId('ste'), orgId, ticketId, kind, actorUserId, JSON.stringify(detail || {})]);
+}
+
+function ticketColumnValue(k, v) {
+  // Before the null arm: priority is NOT NULL DEFAULT 'normal', and an explicit
+  // NULL bound into it is not the default — it is a failed statement. null and
+  // '' are 'normal', exactly as both REST doors normalize them.
+  if (k === 'priority' && (v === null || v === '')) return 'normal';
+  if (v === null) return null;
+  // Before the Number()/trim arms: Number('') is 0 and ''.trim() is not a day.
+  if (v === '' && SERVICE_TICKET_BLANK_IS_NULL.has(k)) return null;
+  if (k === 'priority') return ticketRules.normalizePriority(v);
+  if (k === 'assignee_user_id' || k === 'lat' || k === 'lng') return Number(v);
+  if (k === 'scheduled_for' || k === 'due_date' || k === 'title') return String(v).trim();
+  // '' clears, exactly as the REST editor treats it.
+  return v === '' ? null : v;
+}
+
+async function dispatchServiceTicket(dbClient, target, refTable, ctx) {
+  const ops = target.ops || {};
+  const orgId = (ctx && ticketValuePresent(ctx.organizationId)) ? ctx.organizationId : null;
+  const userId = (ctx && ticketValuePresent(ctx.userId)) ? ctx.userId : null;
+  // Refused rather than written NULL, and before a single statement runs.
+  if (!orgId || !userId) {
+    throw ticketRefusal(
+      'A service_ticket write needs the approving user and their organization, and this apply carries neither. Nothing was saved.',
+      { code: 'no_context', field_path: 'service_ticket' });
+  }
+
+  // $REFS ARE RESOLVED ON THE TWO PARENT POINTERS AND NOWHERE ELSE. The generic
+  // resolveRefsInOps rewrites EVERY string that starts with '$', and a ticket
+  // is mostly free text: a scope that opens "$1,500 allowance for drywall"
+  // would be refused as an undeclared ref. Only lead_id can legitimately be a
+  // $ref, to a lead created earlier in this payload. job_id is a job id or a job
+  // NUMBER — no payload creates a job — and a $ref there is resolved only so an
+  // undeclared one fails loud as an unresolved ref; a declared one names a row
+  // that is not a job and is refused as no such job.
+  const fields = (ops.fields && typeof ops.fields === 'object') ? ops.fields : {};
+  for (const k of ['job_id', 'lead_id']) {
+    if (isRef(fields[k])) fields[k] = resolveRef(fields[k], refTable);
+  }
+
+  validateServiceTicketOps(ops);
+  checkServiceTicketAddress(target.entity_id, ops, 'entity_id');
+  const op = ops.op == null ? 'create' : ops.op;
+  const taskAdds = Array.isArray(ops.task_adds) ? ops.task_adds : [];
+  const actor = await resolveWriteActor(dbClient, ctx);
+
+  // ── EVERYTHING THAT CAN REFUSE ──────────────────────────────────────────
+  let ticketId = null;
+  let before = null;
+  let parent;
+  if (op === 'create') {
+    // THE DECIDING PARENT IS SETTLED BEFORE THE OTHER ONE IS LOOKED AT. The job
+    // wins when both are named (parentOf), so the job is proved, then the
+    // approver's right to it is decided, and only then is the lead proved.
+    // Proving both first let the SECOND parent answer for the first: with a
+    // bogus lead, a job the approver may not touch got "no such lead" while a
+    // job that is nothing got "no such job" — an oracle over every job id and
+    // number, however carefully not_assigned below is folded into not-found.
+    const deciding = ticketAccess.parentOf(fields);
+    parent = { job_id: null, lead_id: null };
+    if (deciding.kind) {
+      parent[`${deciding.kind}_id`] =
+        await proveTicketParentInOrg(dbClient, deciding.kind, fields[`${deciding.kind}_id`], orgId);
+    }
+    // not_assigned answers exactly what an absent deciding parent answers: its
+    // kind, and the id the payload SENT for it — never the canonical id a job
+    // number resolved to, which would tell the two apart through `received`.
+    await assertTicketParentWritable(dbClient, actor, parent, orgId, 'create',
+      () => ticketParentNotFound(deciding.kind, fields[`${deciding.kind}_id`]));
+    if (deciding.kind === 'job' && ticketValuePresent(fields.lead_id)) {
+      parent.lead_id = await proveTicketParentInOrg(dbClient, 'lead', fields.lead_id, orgId);
+    }
+  } else {
+    ticketId = isRef(target.entity_id)
+      ? resolveRef(target.entity_id, refTable)
+      : String(target.entity_id).trim();
+    before = await loadTicketSnapshot(dbClient, ticketId, orgId, true);
+    if (!before) throw ticketNotFound(target.entity_id);
+    // The parent is the LOADED ticket's — never anything the payload says.
+    parent = { job_id: before.job_id || null, lead_id: before.lead_id || null };
+    // Capability before state, as the REST editor orders it: someone who may
+    // not edit this ticket is not told whether it is closed.
+    await assertTicketParentWritable(dbClient, actor, parent, orgId, 'edit',
+      () => ticketNotFound(target.entity_id));
+    if (ticketRules.isTerminal(before.status)) {
+      throw ticketRefusal(
+        `This service ticket is ${ticketRules.normalizeStatus(before.status)}. ` +
+        'A closed or cancelled ticket is reopened in the app before anything on it changes. Nothing was saved.',
+        { code: 'ticket_terminal', field_path: 'entity_id', received: before.status });
+    }
+  }
+  // ticketValuePresent, not `!= null`: '' clears the assignee (stored NULL),
+  // and proving it would look up user Number('') === 0 and refuse a clear.
+  if (ticketValuePresent(fields.assignee_user_id)) {
+    await proveTicketAssigneeInOrg(dbClient, fields.assignee_user_id, orgId,
+      'service_ticket.ops.fields.assignee_user_id');
+  }
+  const taskAssignees = [];
+  for (let i = 0; i < taskAdds.length; i++) {
+    taskAssignees.push(taskAdds[i].assignee_user_id != null
+      ? await proveTicketAssigneeInOrg(dbClient, taskAdds[i].assignee_user_id, orgId,
+        `service_ticket.ops.task_adds[${i}].assignee_user_id`)
+      : null);
+  }
+
+  // ── THE WRITES ──────────────────────────────────────────────────────────
+  // Column names come from SERVICE_TICKET_FIELDS, never from the payload.
+  const written = [];
+  if (op === 'create') {
+    ticketId = ticketRules.genId('st');
+    const cols = ['id', 'organization_id', 'job_id', 'lead_id', 'title', 'created_by'];
+    const vals = [ticketId, orgId, parent.job_id, parent.lead_id, ticketColumnValue('title', fields.title), userId];
+    written.push('title');
+    for (const k of Object.keys(fields)) {
+      if (!SERVICE_TICKET_FIELDS.has(k) || k === 'title' || k === 'job_id' || k === 'lead_id') continue;
+      cols.push(k);
+      vals.push(ticketColumnValue(k, fields[k]));
+      written.push(k);
+    }
+    const ph = cols.map((_, i) => '$' + (i + 1)).join(', ');
+    await dbClient.query(`INSERT INTO service_tickets (${cols.join(', ')}) VALUES (${ph})`, vals);
+    if (isRef(target.entity_id)) refTable[target.entity_id] = ticketId;
+    await insertTicketEvent(dbClient, orgId, ticketId, 'created', userId,
+      { parent: parent.job_id ? 'job' : 'lead', fields: written.slice().sort() });
+  } else {
+    const sets = [];
+    const params = [];
+    for (const k of Object.keys(fields)) {
+      if (!SERVICE_TICKET_FIELDS.has(k) || k === 'job_id' || k === 'lead_id') continue;
+      params.push(ticketColumnValue(k, fields[k]));
+      sets.push(`${k} = $${params.length}`);
+      written.push(k);
+    }
+    if (sets.length) {
+      params.push(ticketId, orgId);
+      const upd = await dbClient.query(
+        `UPDATE service_tickets SET ${sets.join(', ')}, updated_at = NOW()
+          WHERE id = $${params.length - 1} AND organization_id = $${params.length}`,
+        params);
+      // The row was loaded FOR UPDATE in this transaction a few statements ago,
+      // so zero rows is not a race — it is an update that wrote nothing while
+      // about to report that it did.
+      if (!upd.rowCount) throw new Error('service_ticket update matched no row. Nothing was saved.');
+      await insertTicketEvent(dbClient, orgId, ticketId, 'field_changed', userId,
+        { fields: written.slice().sort() });
+    }
+  }
+
+  // CHILD TASKS. Filed under the ticket (service_ticket_id) AND on the ticket's
+  // parent (entity_type/entity_id), because tasks has exactly one polymorphic
+  // parent pointer and the job overview, My Tasks and read_entity(job,
+  // include:['tasks']) all read it. entity_type 'service_ticket' would take
+  // that pointer and the task would vanish from all of them (server/db.js, the
+  // service_ticket_id column comment).
+  const parentType = parent.job_id ? 'job' : 'lead';
+  const parentId = parent.job_id || parent.lead_id;
+  const changesetRows = [];
+  const childTargets = [];
+  for (let i = 0; i < taskAdds.length; i++) {
+    const t = taskAdds[i];
+    const taskId = newTaskId();
+    const cols = ['id', 'organization_id', 'created_by', 'scope', 'title',
+      'entity_type', 'entity_id', 'service_ticket_id'];
+    const vals = [taskId, orgId, userId, 'org', t.title.trim(), parentType, parentId, ticketId];
+    const names = ['title'];
+    if (t.notes != null) { cols.push('notes'); vals.push(t.notes); names.push('notes'); }
+    // '' is no priority: not a column, so tasks.priority takes its DEFAULT
+    // ('normal'), exactly as the tasks REST door writes a blank one.
+    if (t.priority != null && t.priority !== '') { cols.push('priority'); vals.push(t.priority); names.push('priority'); }
+    // '' is no due date (see validateServiceTicketOps): not a column at all, so
+    // the task is written exactly as the tasks REST door writes a blank one.
+    if (t.due_date != null && t.due_date !== '') { cols.push('due_date'); vals.push(String(t.due_date).trim()); names.push('due_date'); }
+    // Unassigned unless named — the tasks REST door's default. The approver
+    // signed off on a work order; that does not make them its crew.
+    if (taskAssignees[i] != null) { cols.push('assignee_user_id'); vals.push(taskAssignees[i]); names.push('assignee_user_id'); }
+    const ph = cols.map((_, j) => '$' + (j + 1)).join(', ');
+    await dbClient.query(`INSERT INTO tasks (${cols.join(', ')}) VALUES (${ph})`, vals);
+    await insertTicketEvent(dbClient, orgId, ticketId, 'task_added', userId,
+      { task_id: taskId, fields: names });
+    const taskAfter = calendarDaysOf((await dbClient.query(
+      'SELECT ' + SERVICE_TICKET_TASK_SNAPSHOT_COLS + ' FROM tasks WHERE id = $1 AND organization_id = $2',
+      [taskId, orgId])).rows[0] || null, TASK_DATE_COLS);
+    changesetRows.push({ entity_type: 'task', id: taskId, before: null, after: taskAfter });
+    // ROLLED UP into the ticket's receipt. These reach affected_targets so the
+    // inline Approve door refreshes the task surfaces too — the Live Writer
+    // door already would, from the changeset rows above — but they add nothing
+    // to apply_summary: the ticket's summary already counts them.
+    childTargets.push({
+      entity_type: 'task', entity_id: taskId, op: 'create', created: true, rolled_up: true,
+      job_id: parent.job_id || null, service_ticket_id: ticketId,
+    });
+  }
+
+  const after = await loadTicketSnapshot(dbClient, ticketId, orgId, false);
+  if (!after) throw new Error('service_ticket write left no row behind. Nothing was saved.');
+  changesetRows.unshift({ entity_type: 'service_ticket', id: ticketId, before, after });
+
+  // THE SUMMARY IS TITLE AND TASK COUNT, AND NOTHING ELSE. It is joined into
+  // apply_summary, which is posted to chat threads and sent as a push
+  // notification — a lock screen. A ticket carries a scope, internal notes, a
+  // site contact's phone and an address, and none of them belongs there.
+  const title = String(after.title || '').trim();
+  const n = taskAdds.length;
+  const tasksBit = n ? `${n} task${n === 1 ? '' : 's'}` : '';
+  return {
+    entity_type: 'service_ticket',
+    entity_id: ticketId,
+    op,
+    created: op === 'create',
+    updated: op === 'update',
+    title,
+    job_id: parent.job_id || null,
+    lead_id: parent.lead_id || null,
+    tasks_added: n,
+    changeset_rows: changesetRows,
+    child_targets: childTargets,
+    summary: op === 'create'
+      ? `Created service ticket "${title}"` + (n ? ` with ${tasksBit}` : '')
+      : `Updated service ticket "${title}"` + (n ? ` and added ${tasksBit}` : ''),
+  };
+}
+
 const DISPATCHERS = {
   client: dispatchClient,
   estimate: dispatchEstimate,
@@ -4474,6 +5427,7 @@ const DISPATCHERS = {
   assembly: dispatchAssembly,
   deal_memory: dispatchDealMemory,
   attachment: dispatchAttachment,
+  service_ticket: dispatchServiceTicket,
 };
 
 async function dispatchTarget(dbClient, target, refTable, ctx) {
@@ -4588,6 +5542,15 @@ function validateTarget(target, index) {
               suggestion: 'Emit { entity_type: "attachment", ops: { photo_updates: [{attachment_id, caption?, tags?}, ...] } } as its own target.' }
           );
         }
+        // Nor a service ticket. There is nothing a move could mean for one —
+        // re-parenting is refused — and its receipt would print two raw ticket
+        // ids where the approver expects a title.
+        if (s.entity_type === 'service_ticket') {
+          throw ticketRefusal(
+            `move.${side} cannot be a service_ticket target. Nothing was saved. ` +
+            'A ticket is created or updated in place and is never re-parented from a payload.',
+            { code: 'unknown_field', field_path: `move.${side}.entity_type`, received: 'service_ticket' });
+        }
         validateOps(s.entity_type, s.ops || {});
       }
       return;
@@ -4611,6 +5574,26 @@ function validateTarget(target, index) {
               suggestion: 'Emit { entity_type: "attachment", ops: { photo_updates: [{attachment_id, caption?, tags?}, ...] } }.' }
           );
         }
+      }
+    }
+    if (target.entity_type === 'service_ticket') {
+      // NO CONDITION. entityExists and snapshotEntity read TABLE_FOR_ENTITY
+      // with no tenant predicate, which is why service_ticket is deliberately
+      // absent from that map (see dispatchServiceTicket). Without an entry,
+      // if_exists would always report "Skipped" and upsert would always turn
+      // into a create — a silent wrong answer either way. With one, if_exists
+      // on another tenant's ticket would dispatch while an absent id skipped:
+      // an existence oracle. So the keyword is refused instead of half-working.
+      if (target.condition != null) {
+        throw ticketRefusal(
+          'service_ticket targets take no condition — a create makes a new ticket and an update names an existing one. Nothing was saved.',
+          { code: 'unknown_field', field_path: 'condition', received: target.condition });
+      }
+      if (target.bulk && Array.isArray(target.bulk.items)) {
+        target.bulk.items.forEach((item, i) => checkServiceTicketAddress(
+          item && item.entity_id, (item && (item.ops || item)) || {}, `bulk.items[${i}].entity_id`));
+      } else if (!target.bulk) {
+        checkServiceTicketAddress(target.entity_id, target.ops || {}, 'entity_id');
       }
     }
     if (target.bulk) {
@@ -4698,6 +5681,16 @@ async function dispatchConcrete(dbClient, target, refTable, ctx, results, change
   // produces is per-photo rather than one row for the whole batch.
   if (result && Array.isArray(result.changeset_rows)) {
     for (const row of result.changeset_rows) changeset.push(row);
+  }
+  // A dispatcher that CREATES child rows under one target names them here, so
+  // they reach affected_targets. The two client apply doors refresh from
+  // different fields — inline Approve from affected_targets, the Live Writer
+  // poller from apply_changeset — and a child that appeared in only one of
+  // them repainted or went stale depending on WHICH door applied the payload.
+  // service_ticket.task_adds is the first. Entries are flagged rolled_up so
+  // buildApplySummary leaves them out: the parent's summary already counts them.
+  if (result && Array.isArray(result.child_targets)) {
+    for (const child of result.child_targets) results.push(child);
   }
 }
 
@@ -4874,7 +5867,12 @@ async function applyPayload(payloadRow, opts = {}) {
 
 function buildApplySummary(affectedTargets) {
   if (!affectedTargets.length) return 'No targets applied';
+  // rolled_up rows are children a parent's own summary already counts (see
+  // dispatchConcrete). Without the filter each would print through the
+  // fallback below as "task task_17… (create)" — a raw id, in a string that is
+  // posted to chat and sent as a push notification.
   return affectedTargets
+    .filter((t) => !(t && t.rolled_up))
     .map((t) => t.summary || `${t.entity_type} ${t.entity_id} (${t.op})`)
     .join('; ');
 }
@@ -4949,6 +5947,14 @@ module.exports = {
     dispatchAttachment,
     PHOTO_CAPTION_CAP,
     PHOTO_UPDATES_CAP,
+    // Exported so the work-order door is driven against a real SQL engine with
+    // real role capabilities — see test/service-ticket-payload.test.js.
+    dispatchServiceTicket,
+    SERVICE_TICKET_FIELDS,
+    SERVICE_TICKET_REFUSED_FIELDS,
+    SERVICE_TICKET_TASK_ADDS_CAP,
+    TASKS_REST_TITLE_CAP,
+    TASKS_REST_NOTES_CAP,
     dispatchTask,
     dispatchTodo,
     dispatchReminder,
