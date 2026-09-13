@@ -8636,19 +8636,18 @@ const PAYLOAD_TOOLS = [
   {
     name: 'scribe_write',
     description:
-      'Delegate a data change to the Scribe (the write worker). Use this for ' +
-      'EVERY write — field updates, line-item edits, phase changes, change ' +
-      'orders, lead/client creates, schedule blocks, reports, etc. You do NOT ' +
-      'author the payload yourself; you describe the change in plain words and ' +
-      'the Scribe produces it and dry-runs it. It drafts in the background; when ' +
-      'ready the user sees ONE line describing the change with an Approve button. ' +
-      'A yes BEFORE that line exists approves nothing — never ask "shall I?" first; ' +
-      'just call this. If the user says yes AFTER the line appears, call ' +
-      'approve_pending_write. CRITICAL: fully specify the change — the Scribe has NO read access ' +
-      'and sees ONLY your `instruction`. Resolve the entity_type + entity_id with ' +
-      'your reads FIRST, then include them plus every field/value to set (and any ' +
+      'Delegate a data change to the Scribe — line items, phase changes, change ' +
+      'orders, lead/client creates, schedule blocks, reports, anything multi-part. ' +
+      'For a SMALL change (plain fields on ONE lead/client/job/service ticket, or ONE ' +
+      'new to-do/task/reminder/calendar event) use quick_write instead. Describe the ' +
+      'change in plain words; the Scribe writes and dry-runs it in the background, ' +
+      'then the user sees ONE line with an Approve button. A yes before that line ' +
+      'exists approves nothing — never ask "shall I?" first; if they say yes AFTER ' +
+      'it appears, call approve_pending_write. CRITICAL: the Scribe has NO read ' +
+      'access and sees ONLY your `instruction` — resolve entity_type + entity_id ' +
+      'with your reads FIRST, then include them plus every field/value to set (and ' +
       'current values relevant to the edit). One scribe_write per change. Do NOT ' +
-      'pre-narrate — just call it; the card speaks for itself.',
+      'pre-narrate.',
     tier: 'auto',
     input_schema: {
       type: 'object',
@@ -8665,6 +8664,26 @@ const PAYLOAD_TOOLS = [
             'jobNumber to the canonical row id for you, so you do NOT need to dig up the ' +
             'j-style id first. For other entity types, pass the resolved id from your reads.'
         }
+      }
+    }
+  },
+  {
+    name: 'quick_write',
+    description:
+      'The FAST lane for a small change, drafted in THIS turn (no Scribe): set ' +
+      'plain fields on ONE existing lead, client, job or service ticket (give ' +
+      'entity_id — resolve it with a read first), or create ONE to-do, task, ' +
+      'reminder or calendar event (omit entity_id). The user then sees one line ' +
+      'with Approve; say nothing more about it. Anything bigger — line items, ' +
+      'change orders, several records, a new lead/client/job — use scribe_write.',
+    tier: 'auto',
+    input_schema: {
+      type: 'object',
+      required: ['entity_type', 'fields'],
+      properties: {
+        entity_type: { type: 'string', enum: ['lead', 'client', 'job', 'service_ticket', 'todo', 'task', 'reminder', 'calendar_event'] },
+        entity_id: { type: 'string', description: 'The record to update. Omit only to create a to-do, task, reminder or calendar event.' },
+        fields: { type: 'object', description: 'Field name → new value (text, number, true/false, or null to clear). Only what changes.' }
       }
     }
   },
@@ -14354,6 +14373,10 @@ function make86OnCustomToolUse(userId, parentSession, turnContextText, gateUser,
     if (tu.name === 'scribe_write') {
       return await execScribeWrite(tu, { userId, parentSession });
     }
+    // quick_write — a small change drafted in THIS turn, no Scribe round trip.
+    if (tu.name === 'quick_write') {
+      return await execQuickWrite(tu, { userId, parentSession, orgId: ctx.orgId });
+    }
     // approve_pending_write — a chat yes to a one-line card already on screen.
     // The server binds the yes to ONE staged draft; the model picks nothing.
     if (tu.name === 'approve_pending_write') {
@@ -14775,6 +14798,94 @@ async function persistDraftLine(payloadId, changeset, orgId, afterRefusal) {
   }
 }
 
+// execQuickWrite — the fast lane (John, 2026-09-12: "build the fast lane now
+// too"). A Scribe draft costs a background session and 25-70s; a small change
+// does not need an author. The server BUILDS the payload from a flat field map
+// — the model supplies field names and values, never an ops structure — in
+// exactly the shape the dispatcher runs, then takes the same road a Scribe
+// draft takes: execEmitPayloadFile (validateTarget, the duplicate guard, the
+// row), a dry run, persistDraftChangeset, persistDraftLine. So the one-line
+// card, its risk, the shown report and a spoken yes all work identically, and
+// nothing is applied here. What does not fit the fast lane is refused with a
+// pointer to scribe_write rather than squeezed in.
+const QUICK_WRITE_UPDATE = { lead: 'fields', client: 'fields', service_ticket: 'fields', job: 'field_updates' };
+const QUICK_WRITE_CREATE = new Set(['todo', 'task', 'reminder', 'calendar_event']);
+const QUICK_WRITE_MAX_FIELDS = 12;
+function buildQuickWriteTarget(input) {
+  const type = String((input && input.entity_type) || '');
+  const id = input && input.entity_id != null && String(input.entity_id).trim() !== '' ? String(input.entity_id).trim() : null;
+  const fields = input && input.fields;
+  if (!fields || typeof fields !== 'object' || Array.isArray(fields)) return { error: 'quick_write needs `fields`: an object of field name → new value.' };
+  const keys = Object.keys(fields);
+  if (!keys.length) return { error: 'quick_write needs at least one field to set.' };
+  if (keys.length > QUICK_WRITE_MAX_FIELDS) return { error: 'That is more than a quick change (' + keys.length + ' fields). Use scribe_write.' };
+  for (const k of keys) {
+    const v = fields[k];
+    const scalar = v === null || typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v)) ||
+      (typeof v === 'string' && v.length <= 4000);
+    if (!scalar) return { error: 'quick_write sets plain values only (field `' + k + '` is not text, a number, true/false or null). Use scribe_write for structured changes.' };
+  }
+  if (id) {
+    const bag = QUICK_WRITE_UPDATE[type];
+    if (!bag) return { error: 'quick_write cannot update a ' + (type || 'record of that type') + '. Use scribe_write.' };
+    const ops = bag === 'fields' ? { op: 'update', fields: Object.assign({}, fields) } : { field_updates: Object.assign({}, fields) };
+    return { target: { entity_type: type, entity_id: id, ops }, verb: 'update' };
+  }
+  if (!QUICK_WRITE_CREATE.has(type)) {
+    return { error: QUICK_WRITE_UPDATE[type]
+      ? 'quick_write needs the entity_id of the ' + type + ' to update (read it first). Creating a ' + type + ' goes through scribe_write.'
+      : 'quick_write cannot create a ' + (type || 'record of that type') + '. Use scribe_write.' };
+  }
+  return { target: { entity_type: type, ops: { op: 'create', fields: Object.assign({}, fields) } }, verb: 'create' };
+}
+
+async function execQuickWrite(tu, ctx) {
+  const built = buildQuickWriteTarget(tu && tu.input);
+  if (built.error) return { tier: 'auto', error: built.error };
+  const orgId = ctx && ctx.orgId;
+  const userId = (ctx && ctx.userId) || null;
+  if (orgId == null) return { tier: 'auto', error: 'quick_write needs an organization. Nothing was drafted.' };
+  const emitted = await execEmitPayloadFile({
+    name: 'emit_payload_file',
+    input: {
+      targets: [built.target],
+      // The model's words never reach the approval line (persistDraftLine
+      // builds it from the ops); these only name the row and its file.
+      title: 'Quick ' + built.verb + ' — ' + built.target.entity_type.replace(/_/g, ' '),
+      summary: 'quick_write',
+    },
+  }, { userId, organizationId: orgId, parentSession: (ctx && ctx.parentSession) || null });
+  if (emitted && emitted.error) {
+    return { tier: 'auto', error: emitted.error + ' Nothing was drafted — fix the field names, or use scribe_write.' };
+  }
+  const payloadId = emitted && emitted.meta && emitted.meta.payload_id;
+  if (!payloadId) return { tier: 'auto', summary: (emitted && emitted.summary) || 'Nothing was drafted.' };
+  const payloadDispatcher = require('../services/payload-dispatcher');
+  let changeset = null;
+  try {
+    const rowRes = await pool.query('SELECT * FROM payloads WHERE id = $1 AND organization_id = $2', [payloadId, orgId]);
+    if (!rowRes.rows.length) return { tier: 'auto', error: 'The draft vanished before it could be checked. Nothing was drafted.' };
+    const dry = await payloadDispatcher.applyPayload(rowRes.rows[0], { dryRun: true, userId, organizationId: orgId, sourceAgent: '86' });
+    changeset = (dry && (dry.apply_changeset || dry.affected_targets)) || null;
+  } catch (e) {
+    // The same discard a Scribe dry-run failure gets: never leave a draft that
+    // cannot apply sitting in Pending approvals.
+    try { await pool.query('DELETE FROM payloads WHERE id = $1 AND organization_id = $2', [payloadId, orgId]); } catch (_) {}
+    const why = (e && (e.message || (e.detail && JSON.stringify(e.detail)))) || 'the dry run failed';
+    return { tier: 'auto', error: 'That change would not apply: ' + String(why).slice(0, 400) + ' Nothing was drafted.' };
+  }
+  await persistDraftChangeset(payloadId, changeset);
+  const draft = await persistDraftLine(payloadId, changeset, orgId, false);
+  const line = (draft && draft.line) || 'the change';
+  return {
+    tier: 'auto',
+    summary: 'Drafted. The user now sees ONE line with an Approve button: "' + line + '". ' +
+      (draft && draft.risk === 'low'
+        ? 'Do not repeat the line or ask for confirmation. If they then say yes, call approve_pending_write.'
+        : 'It needs a tap on Approve (a chat yes will not apply it). Do not repeat the line.'),
+  };
+}
+
 // execApprovePendingWrite — the user said yes to a one-line card on screen.
 // services/pending-write-approval.js decides WHICH draft (exactly one, in this
 // chat, shown before the yes, low risk); this applies it through the same door
@@ -15025,7 +15136,7 @@ async function driveEscalateTo86(intent, ctx) {
   // 86 runs with its real read/memory dispatch, but writes are refused here.
   const base = make86OnCustomToolUse(ctx.userId || null, ctx.parentSession || null, '', ctx.gateUser || null);
   const onCustomToolUse = async (tu) => {
-    if (tu && (tu.name === 'scribe_write' || tu.name === 'approve_pending_write' || tu.name === 'escalate_to_86' || tu.name === 'emit_payload_file')) {
+    if (tu && (tu.name === 'scribe_write' || tu.name === 'quick_write' || tu.name === 'approve_pending_write' || tu.name === 'escalate_to_86' || tu.name === 'emit_payload_file')) {
       return { tier: 'auto', error: 'During an escalation you ANALYZE and RECOMMEND only — you do not write. State the exact change (entity_type, entity_id, the fields/values) in your answer; the Assistant applies it via the Scribe so the user gets the approval card.' };
     }
     return base(tu);
@@ -17924,6 +18035,8 @@ module.exports.internals = {
   // discriminant it now returns.
   execScribeWrite,
   execApprovePendingWrite,
+  execQuickWrite,
+  buildQuickWriteTarget,
   driveScribeWrite,
   // Exported so "a background run cannot self-approve a write" is held by
   // running it — test/agent-write-safety.test.js.

@@ -1,4 +1,7 @@
-// AI-WRITE GUARDS THAT LOOKED PRESENT AND DID NOTHING — AND THE LINE A PERSON APPROVES (3, below).
+// FAST APPROVAL, AND THE AI-WRITE GUARDS UNDER IT (John, 2026-09-12).
+//   1. the duplicate-emit guard      3. the one line a person approves
+//   2. no yes before the line / from  4. approve_pending_write — the bound yes
+//      a background run               5. quick_write — the fast lane
 //
 // 1. THE DUPLICATE-EMIT GUARD COULD NEVER MATCH. execEmitPayloadFile looked
 //    for a recent row with byte-identical file_content — but file_content
@@ -11,8 +14,8 @@
 // 2. A BACKGROUND RUN COULD APPROVE ITS OWN WRITE. makeBackgroundJobCallback
 //    refused approval-tier tools, but scribe_write is auto-tier, and its
 //    approved:true — a flag the MODEL sets — applied the Scribe's draft with
-//    no card and nobody present. The flag is now stripped there; the draft is
-//    still written and waits in Pending approvals.
+//    no card and nobody present. That flag is gone entirely now (section 2
+//    below), and approve_pending_write is refused to a background run.
 //
 // Everything between the scripted Anthropic transport and the chat/push
 // channels is the REAL ai-routes.js; only the dry run and the apply door are
@@ -461,5 +464,99 @@ describe('approve_pending_write', () => {
     sayYes();
     await approve(m);
     expect(applies).toHaveLength(1);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// 5. quick_write — THE FAST LANE.
+//    A small change is drafted in the SAME turn: the server builds the payload
+//    from a flat field map (the model never writes ops), then takes the Scribe
+//    draft's road — execEmitPayloadFile, a dry run, the stored line and risk.
+//    Nothing is applied here; the one-line card and a later yes do that.
+const QW_CTX = { userId: USER, orgId: ORG, parentSession: { id: SESSION, organization_id: ORG } };
+const quick = (input, mod) => (mod || shipped).execQuickWrite({ name: 'quick_write', input }, QW_CTX);
+const qRows = () => engine.all('SELECT id, status, targets, draft_summary, draft_risk FROM payloads');
+
+describe('quick_write', () => {
+  test('THE FEATURE: a lead field update is drafted in this turn — one ready row, its line stored, nothing applied', async () => {
+    const r = await quick({ entity_type: 'lead', entity_id: 'l_1', fields: { gate_code: '4455' } });
+    expect(r.error).toBeUndefined();
+    const rows = qRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe('ready');
+    expect(rows[0].targets).toEqual([{ entity_type: 'lead', entity_id: 'l_1', ops: { op: 'update', fields: { gate_code: '4455' } } }]);
+    expect(rows[0].draft_summary).toMatch(/gate code → 4455/);
+    expect(rows[0].draft_risk).toBe('low');
+    expect(r.summary).toMatch(/^Drafted\./);
+    expect(r.summary).toMatch(/approve_pending_write/);
+    expect(applies).toHaveLength(0);
+    expect(drySpy).toHaveBeenCalledTimes(1);
+  });
+
+  test('a job update uses field_updates; a to-do with no id is a create', async () => {
+    expect(shipped.buildQuickWriteTarget({ entity_type: 'job', entity_id: 'j_1', fields: { notes: 'Gate code changed' } }).target)
+      .toEqual({ entity_type: 'job', entity_id: 'j_1', ops: { field_updates: { notes: 'Gate code changed' } } });
+    await quick({ entity_type: 'todo', fields: { title: 'Call the stucco supplier', due_date: '2026-09-14' } });
+    expect(qRows()[0].targets).toEqual([{ entity_type: 'todo', ops: { op: 'create', fields: { title: 'Call the stucco supplier', due_date: '2026-09-14' } } }]);
+  });
+
+  test('the fast lane end to end: quick_write, the card is shown, the user says yes — applied', async () => {
+    await quick({ entity_type: 'todo', fields: { title: 'Call the stucco supplier' } });
+    engine.db.exec("UPDATE payloads SET draft_shown_at = datetime('now', '-10 seconds')");
+    sayYes();
+    const yes = await approve();
+    expect(applies).toEqual([qRows()[0].id]);
+    expect(yes.summary).toMatch(/✅ Applied — New to-do/);
+  });
+
+  test('a money edit on a job is drafted but needs a tap — the summary says so', async () => {
+    const r = await quick({ entity_type: 'job', entity_id: 'j_1', fields: { contractAmount: 250000 } });
+    expect(qRows()[0].draft_risk).toBe('high');
+    expect(r.summary).toMatch(/needs a tap/);
+  });
+
+  test.each([
+    ['a new lead', { entity_type: 'lead', fields: { title: 'Smith Residence' } }, /Creating a lead goes through scribe_write/],
+    ['an estimate', { entity_type: 'estimate', entity_id: 'e_1', fields: { title: 'x' } }, /cannot update a estimate|cannot update/],
+    ['a structured value', { entity_type: 'lead', entity_id: 'l_1', fields: { notes: { text: 'x' } } }, /plain values only/],
+    ['no fields', { entity_type: 'lead', entity_id: 'l_1', fields: {} }, /at least one field/],
+    ['too many fields', { entity_type: 'lead', entity_id: 'l_1', fields: Object.fromEntries(Array.from({ length: 13 }, (_, i) => ['f' + i, 'x'])) }, /more than a quick change/],
+  ])('refuses %s with no row written', async (_label, input, message) => {
+    const r = await quick(input);
+    expect(r.error).toMatch(message);
+    expect(qRows()).toHaveLength(0);
+    expect(drySpy).not.toHaveBeenCalled();
+  });
+
+  test('a field the dispatcher refuses comes back as an error, with no row', async () => {
+    const r = await quick({ entity_type: 'lead', entity_id: 'l_1', fields: { phone: '555-0100' } });
+    expect(r.error).toMatch(/non-editable column/);
+    expect(qRows()).toHaveLength(0);
+  });
+
+  test('a change whose dry run fails is discarded — nothing waits in Pending approvals', async () => {
+    drySpy.mockImplementationOnce(async () => { throw new Error('lead l_1 not found'); });
+    const r = await quick({ entity_type: 'lead', entity_id: 'l_1', fields: { gate_code: '1' } });
+    expect(r.error).toMatch(/would not apply: lead l_1 not found/);
+    expect(qRows()).toHaveLength(0);
+  });
+
+  test('MUTANT: without the discard, a draft that cannot apply sits in Pending approvals', async () => {
+    const m = load([["    try { await pool.query('DELETE FROM payloads WHERE id = $1 AND organization_id = $2', [payloadId, orgId]); } catch (_) {}\n", '']]);
+    drySpy.mockImplementationOnce(async () => { throw new Error('lead l_1 not found'); });
+    await quick({ entity_type: 'lead', entity_id: 'l_1', fields: { gate_code: '1' } }, m);
+    expect(qRows()).toHaveLength(1);
+  });
+
+  test('MUTANT: without the plain-values check, a structured value reaches the dispatcher', async () => {
+    const m = load([['    if (!scalar) return {', '    if (false) return {']]);
+    const r = await quick({ entity_type: 'lead', entity_id: 'l_1', fields: { notes: { text: 'x' } } }, m);
+    expect(String(r.error || '')).not.toMatch(/plain values only/);
+  });
+
+  test('MUTANT: without the create allowlist, quick_write would try to create a lead', async () => {
+    const m = load([['  if (!QUICK_WRITE_CREATE.has(type)) {', '  if (false) {']]);
+    expect(m.buildQuickWriteTarget({ entity_type: 'lead', fields: { title: 'x' } }).target)
+      .toEqual({ entity_type: 'lead', ops: { op: 'create', fields: { title: 'x' } } });
   });
 });
