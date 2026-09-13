@@ -7491,7 +7491,7 @@ function p86Ask(message, opts) {
         '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">' +
           '<div>' +
             '<div style="font-size:13px;font-weight:600;color:var(--text);">Live reference sheets</div>' +
-            '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:2px;">Google Sheets / Google Drive / SharePoint / OneDrive share URLs (set to &ldquo;Anyone with the link &rarr; Viewer&rdquo;). The server fetches each every 15 min and injects the parsed rows into every agent\'s system prompt.</div>' +
+            '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:2px;">Google Sheets / Google Drive / SharePoint / OneDrive share URLs (set to &ldquo;Anyone with the link &rarr; Viewer&rdquo;). The server fetches each every 15 min. 86 reads the rows on demand, and only for users whose role can see financials.</div>' +
           '</div>' +
           '<button class="ee-btn primary" onclick="openReferenceLinkEditor()">&#x2795; Add link</button>' +
         '</div>' +
@@ -7541,11 +7541,12 @@ function p86Ask(message, opts) {
           '<div><label style="font-size:11px;font-weight:600;color:var(--text-dim,#888);">Mode</label>' +
             '<select id="refLink_injectMode" style="width:100%;padding:7px 10px;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:12px;">' +
               '<option value="lookup"' + ((l.inject_mode || 'lookup') === 'lookup' ? ' selected' : '') + '>Lookup-only — 86 fetches rows on demand via search_reference_sheet (recommended)</option>' +
-              '<option value="inline"' + ((l.inject_mode || 'lookup') === 'inline' ? ' selected' : '') + '>Inline — every row baked into the system prompt (always cached, expensive on rebuilds)</option>' +
+              '<option value="inline"' + ((l.inject_mode || 'lookup') === 'inline' ? ' selected' : '') + '>Pinned — title listed in 86\'s system prompt so 86 always knows the sheet exists; rows still fetched on demand</option>' +
             '</select>' +
             '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:4px;line-height:1.4;">' +
               '<strong>Lookup-only</strong> keeps the prompt small — use for sheets with hundreds of rows. ' +
-              '<strong>Inline</strong> for tiny cheat sheets (a dozen rows) you want 86 to always see. ' +
+              '<strong>Pinned</strong> names the sheet in 86\'s prompt so it reaches for it without being told. ' +
+              'Rows are never placed in the prompt: 86 reads them only for users whose role can see financials, because sheets like the WIP report carry job money. ' +
               'Saving a mode change auto-syncs the managed agent.' +
             '</div></div>' +
           '<div style="display:flex;gap:14px;">' +

@@ -1195,7 +1195,7 @@ const JOB_TOOLS = [
   {
     name: 'search_reference_sheet',
     description:
-      'Search live reference workbooks the admin has wired up to Project 86 — typically the Job Numbers sheet, Client Short Names sheet, WIP report, master pricing, etc. These are SharePoint / Google Drive XLSX files refreshed every ~15 min. Most rows are kept out of your system prompt to save tokens; call this whenever a user mentions a job number, a community / client short name, or anything else that would map to a row in one of these sheets and you need the canonical id. ' +
+      'Search live reference workbooks the admin has wired up to Project 86 — typically the Job Numbers sheet, Client Short Names sheet, WIP report, master pricing, etc. These are SharePoint / Google Drive XLSX files refreshed every ~15 min. No sheet row is in your system prompt (pinned sheets are listed there by title only), because sheets can carry job financials; this tool is the only way to read them, and it refuses a user whose role may not see financials — tell that user their role does not have access. Call this whenever a user mentions a job number, a community / client short name, or anything else that would map to a row in one of these sheets and you need the canonical id. ' +
       'No args: returns the list of available sheets with row counts. With a query: substring-scans every enabled sheet and returns the matching rows. Auto-tier (no approval).',
     input_schema: {
       type: 'object',
@@ -3147,7 +3147,8 @@ async function composedAgentSystem(agentKey, baseline, org) {
   // still makes is:
   //   1. Append `org.identity_body` (per-tenant "who 86 works FOR" body)
   //   2. Append the org_memory rows (per-tenant always-on posture blocks)
-  //   3. Append the live reference-links block (sheets/sharepoint)
+  //   3. Append the live reference-links block — pinned sheet TITLES only;
+  //      rows never enter this shared prompt (see buildReferenceLinksBlock)
   // All are optional; missing → just the baseline ships.
   if (agentKey !== 'job') return baseline;
   try {
@@ -3257,7 +3258,7 @@ async function composedAgentSystemBreakdown(agentKey, baseline, org) {
       if (typeof adminAgents.buildReferenceLinksBlock === 'function' && org && org.id) {
         const refBlock = await adminAgents.buildReferenceLinksBlock(org.id);
         if (refBlock && refBlock.trim()) {
-          record('reference-links block (inline rows)', refBlock.trim());
+          record('reference-links block (pinned sheet titles)', refBlock.trim());
         }
       }
     } catch (e) { /* match composedAgentSystem's defensive skip */ }
@@ -7674,9 +7675,9 @@ async function buildClientDirectoryContext(organization) {
   }
 
   // Reference sheets (job numbers, client short names, WIP report)
-  // are now baked into the registered agent system prompt via
-  // composedAgentSystem — the per-turn injection that used to live
-  // here was double-billing those tokens on every directory-surface turn.
+  // are served by search_reference_sheet behind its capability gate;
+  // the registered prompt carries pinned sheets' titles only. Do not
+  // re-inject rows here — this context is not gated per role.
 
   return {
     system: [
@@ -13396,6 +13397,19 @@ const AI_TOOL_CAPABILITY = new Map([
   ['read_qb_cost_lines',      'FINANCIALS_VIEW'],
   ['read_building_breakdown', 'FINANCIALS_VIEW'],
   ['read_job_pct_audit',      'FINANCIALS_VIEW'],
+  // Live reference sheets. What admins wire up is the WIP report, the Job
+  // Numbers sheet and the like — the WIP report is the same company roll-up
+  // read_wip_summary serves, so the tool carries read_wip_summary's rule. It
+  // had NO entry, and pinned sheets were composed into the registered per-org
+  // prompt, which every role of the org shares: `sub` (an EXTERNAL user that
+  // resolveHostKeyForUser pins to 86) and zero-capability roles received the
+  // rows. The rows left the prompt (buildReferenceLinksBlock now emits titles
+  // only), so this entry is the one gate on sheet content. A sheet is not
+  // classified by what it holds, so the whole tool is gated: every builtin role
+  // that sees financials (system_admin, admin, corporate, pm) keeps full
+  // access; field_crew ("no financials"), sub and zero-capability roles are
+  // refused. test/reference-sheet-gate.test.js drives it.
+  ['search_reference_sheet',  'FINANCIALS_VIEW'],
   // Lead pipeline + records.
   ['read_leads',          'LEADS_VIEW'],
   ['read_lead_pipeline',  'LEADS_VIEW'],
@@ -15774,8 +15788,8 @@ const ALLOWED_AUTO_TIER_TOOLS = new Set([
   // forwards as content on the user.custom_tool_result event.
   'view_attachment_image',
   // Live reference workbook search — Job Numbers, Short Names, etc.
-  // Rows are kept out of the system prompt by default (inject_mode
-  // 'lookup'); this tool is how 86 hits them.
+  // No row is in the system prompt (pinned sheets are indexed by title
+  // only); this tool is how 86 hits them, gated in AI_TOOL_CAPABILITY.
   'search_reference_sheet',
   // Lazy-loaded line-item detail — compact roll-ups ship in
   // turn_context for dense estimates; 86 pulls full lines on demand.
@@ -16495,11 +16509,11 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
     // snapshot) comes first if present, then the page-context tag
     // (where the user is in the app), then the actual message text.
     // Reference sheets (SharePoint / Google Sheets — job numbers,
-    // WIP report, client short names) are now baked into the
-    // registered agent system prompt via composedAgentSystem, so
-    // Anthropic caches them and they cost zero tokens per turn.
-    // The 15-min refresh tick re-syncs the agent only when content
-    // changes (see syncAgentIfReferenceChanged).
+    // WIP report, client short names) are NOT in this message and NOT
+    // in the registered prompt: composedAgentSystem carries only the
+    // pinned sheets' titles, and rows are served by
+    // search_reference_sheet behind its AI_TOOL_CAPABILITY entry
+    // (a registered prompt is shared by every role of the org).
     const pageBlock = renderPageContextBlock(currentContext);
     // Surface files the user uploaded THIS turn, so a doc dropped mid-chat is
     // visible on the turn it arrives regardless of the deduped entity manifest.

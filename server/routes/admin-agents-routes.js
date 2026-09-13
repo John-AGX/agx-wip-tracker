@@ -4017,6 +4017,12 @@ router.get('/managed/prompt-audit', requireAuth, requireCapability('ROLES_MANAGE
       lookup_count: lookupRows.length,
       inline_total_chars: inlineTotalChars,
       inline_total_tokens_estimate: Math.round(inlineTotalChars / 4),
+      // Pinned sheets are indexed by TITLE in the composed prompt; their rows
+      // are not (see buildReferenceLinksBlock). The two figures above are the
+      // pinned sheets' data size, not a prompt cost — composed_system measures
+      // what the index actually adds.
+      note: 'Pinned (inline) sheets are listed by title only in the registered prompt; rows are served by ' +
+        'search_reference_sheet behind its capability gate. inline_total_* is sheet data size, not prompt cost.',
       by_title: refRes.rows.map(r => ({
         title: r.title,
         inject_mode: r.inject_mode,
@@ -4545,34 +4551,44 @@ router.get('/reference-links/:id/preview', requireAuth, requireCapability('ROLES
   }
 });
 
-// Helper exported for the agent prompt builder. Returns a single
-// concatenated text block of every enabled link's last_fetched_text,
-// or '' if there are none / all are stale failures. Trimmed to a
-// reasonable cap so a runaway sheet doesn't blow the model context.
-const REF_LINKS_PROMPT_CAP = 60000; // ~15k tokens of reference data (whole block)
-// Per-ROW inline safeguard: an individual sheet bigger than this is NOT baked
-// into every turn — one huge sheet would dominate the block AND balloon the
-// cached prefix every fresh session pays on turn 1. Oversized sheets stay
-// fully reachable ON DEMAND via search_reference_sheet (which reads every
-// enabled row regardless of inject_mode), so nothing is lost — the big sheet
-// just isn't pinned to every turn. Guards against accidentally inlining a huge
-// SharePoint export.
-const REF_LINK_INLINE_ROW_CAP = 8000; // ~2k tokens per inlined sheet
+// Helper exported for the agent prompt builder. Returns the TITLE INDEX of
+// the org's pinned (inject_mode='inline') sheets, or '' when none are pinned.
+//
+// ── NO SHEET ROW IS EVER COMPOSED INTO THE REGISTERED PROMPT ──────────────
+// This block used to concatenate every pinned sheet's last_fetched_text into
+// the registered per-org agent prompt (up to 60,000 chars). A registered
+// prompt is shared by EVERY user of the org — it is composed once per org at
+// sync time and has no idea who is asking — so whatever an admin pinned
+// reached every role that can open 86, the external `sub` role and custom
+// zero-capability roles included. What admins pin is the WIP report (the
+// heading below still names it): contract, cost and margin per job.
+//
+// A shared prompt cannot be gated per user, so the content left it. What
+// stays is the list of titles, so 86 still knows which sheets exist; the rows
+// are served by search_reference_sheet, whose AI_TOOL_CAPABILITY entry in
+// ai-routes.js is the gate (the same rule read_wip_summary uses). Titles
+// carry no rows. As a side effect the composed prompt no longer changes when
+// a sheet's data refreshes, so the 15-minute tick stops re-registering the
+// agent for data-only edits.
+//
+// Cap: titles are admin-typed, so the index is bounded like any other
+// admin-authored prompt text. Anything past the cap is named by count, and
+// search_reference_sheet with no arguments lists every sheet.
+const REF_LINKS_INDEX_CAP = 4000;
 //
 // Phase D made reference links org-scoped. Callers (composedAgentSystem
 // in ai-routes.js, the resync sweep below) MUST pass organizationId so
-// the inline block reflects the right tenant. Passing null returns ''
+// the index reflects the right tenant. Passing null returns ''
 // (defensive — never leak another org's sheets into a composed prompt).
 async function buildReferenceLinksBlock(organizationId) {
   if (!organizationId) return '';
   try {
-    // Only inject_mode='inline' rows ride along in the registered
-    // system prompt. 'lookup' rows are reachable via the
-    // search_reference_sheet tool. Default for new rows is 'lookup'
-    // so an empty result here just means no sheets are pinned to
-    // every turn — exactly the cost-conscious default.
+    // Only pinned (inject_mode='inline') rows are indexed here; 'lookup'
+    // rows were never named in the prompt and still are not. Titles only:
+    // last_fetched_text is deliberately NOT selected, so no future edit of
+    // the loop below can put a row back into the shared prompt by accident.
     const r = await pool.query(
-      "SELECT title, last_fetched_text, last_fetched_at, last_fetch_status " +
+      "SELECT title " +
       "FROM agent_reference_links " +
       "WHERE organization_id = $1 AND enabled = TRUE AND inject_mode = 'inline' " +
       "  AND last_fetch_status = 'ok' AND last_fetched_text IS NOT NULL " +
@@ -4581,26 +4597,20 @@ async function buildReferenceLinksBlock(organizationId) {
     );
     if (!r.rowCount) return '';
     let out = '\n\n# Live reference sheets\n\n' +
-      'These are live company data sheets, refreshed from SharePoint by the server. Use them when the user asks about job numbers, WIP, or anything else listed below.\n';
-    const demotedBig = [];
+      'The admin has pinned these live company data sheets (refreshed from SharePoint by the server). ' +
+      'Their rows are NOT in this prompt: they can carry job financials such as the WIP report, so they are ' +
+      'served only by `search_reference_sheet`, which refuses a user whose role may not see financials. ' +
+      'Call it when the user asks about job numbers, WIP, client short names, or anything else these sheets hold, ' +
+      'and never state or guess a row you have not fetched. If it refuses, tell the user their role does not have access.\n';
+    let listed = 0;
     for (const row of r.rows) {
-      const block = row.last_fetched_text || '';
-      if (!block) continue;
-      // Per-row safeguard: an oversized sheet is NOT inlined (it would balloon
-      // every turn's cached prefix). It stays reachable on demand via
-      // search_reference_sheet, so we just note it below instead of baking it in.
-      if (block.length > REF_LINK_INLINE_ROW_CAP) { demotedBig.push(row.title); continue; }
-      // No fetch timestamp in the prompt text: it changes on every 15-min
-      // refresh even when the sheet data is identical, which re-registers
-      // the whole stable system prefix and busts the agent prompt cache.
-      // Freshness lives in agent_reference_links.last_fetched_at for the UI.
-      const candidate = '\n\n[' + row.title + ']\n' + block;
-      if (out.length + candidate.length > REF_LINKS_PROMPT_CAP) break;
-      out += candidate;
+      const line = '\n- ' + String(row.title || '').replace(/\s+/g, ' ').trim();
+      if (out.length + line.length > REF_LINKS_INDEX_CAP) break;
+      out += line;
+      listed++;
     }
-    if (demotedBig.length) {
-      out += '\n\n(These sheets are too large to pin every turn — fetch rows on demand with `search_reference_sheet`: ' +
-        demotedBig.join(', ') + '.)';
+    if (listed < r.rows.length) {
+      out += '\n- (' + (r.rows.length - listed) + ' more — call `search_reference_sheet` with no arguments for the full list)';
     }
     return out;
   } catch (e) {
