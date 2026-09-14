@@ -136,6 +136,7 @@ function readJob(rec) {
     approvedCOPrice: r.approvedCOPrice === undefined ? null : r.approvedCOPrice,
     projectManager: names(r.projectManager),
     contacts: names(r.contacts),
+    contactIds: Array.isArray(r.contacts) ? r.contacts.map((x) => (isPlainObject(x) ? scalarText(x.id) : null)).filter((x) => x != null && String(x).trim() !== '') : [],
     isDeleted: r.isDeleted === true,
   };
 }

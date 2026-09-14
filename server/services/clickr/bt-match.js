@@ -796,9 +796,11 @@ function matchJobs(btValues, p86Rows, ctx) {
       street: str(v.street), city: str(v.city), state: str(v.state), zip: str(v.zip),
       projectedStart: str(v.projectedStart), contractPrice: v.contractPrice, approvedCOPrice: v.approvedCOPrice,
       coLabel: pj.coLabel,
+      contactIds: Array.isArray(v.contactIds) ? v.contactIds.map(str) : [],
     };
     const contractView = parseMoney(v.contractPrice);
     bt.contractText = contractView.kind === 'unparsed' ? 'unparsed' : moneyText(contractView);
+    bt.contractValue = contractView.kind === 'value' ? contractView.value : null;
     delete bt.contractPrice;
     delete bt.approvedCOPrice;
     const moneyIn = { contractPrice: v.contractPrice, approvedCOPrice: v.approvedCOPrice };

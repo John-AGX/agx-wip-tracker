@@ -41,6 +41,7 @@ const { fetchDataset } = require('./client');
 const match = require('./bt-match');
 const preview = require('./sync-preview');
 const { auditLog } = require('../../audit');
+const jobTypes = require('../job-types');
 
 const ACTION_PARAM = 'buildertrend-apply';
 const MAX_ROWS = 200;
@@ -282,6 +283,180 @@ async function geocodeLeadLater(pool, id) {
   } catch (e) { console.error('[clickr-apply] lead geocode failed'); }
 }
 
+// ── CREATE: bring a Buildertrend-only record into P86 ──────────────────────
+//
+// Only rows the matcher calls "new" — never ambiguous, possible duplicate, a
+// change-order row, a bucket without a number, or a refused row. The created
+// record carries its Buildertrend id, so the next read finds it by id and the
+// same Buildertrend record can never be created twice (unique index per org).
+// Owner decisions (2026-09-13): jobs are created in bulk for Open + Warranty
+// only; a Closed job is created one at a time on request. Create clients
+// first: leads and jobs link to a client only through its Buildertrend id.
+
+function genId(prefix) {
+  return prefix + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+}
+
+async function clientIdForContact(db, orgId, contactIds) {
+  for (const cid of contactIds || []) {
+    if (!norm(cid)) continue;
+    const r = await db.query('SELECT id, name FROM clients WHERE organization_id = $1 AND bt_contact_id = $2', [orgId, norm(cid)]);
+    if (r.rows.length === 1) return r.rows[0];
+  }
+  return null;
+}
+
+async function createClient(db, orgId, row) {
+  const bt = row.bt;
+  const btId = norm(bt.btId);
+  const taken = await db.query('SELECT id FROM clients WHERE organization_id = $1 AND bt_contact_id = $2', [orgId, btId]);
+  if (taken.rows.length) return { skipped: 'A P86 client is already linked to this Buildertrend contact.' };
+  const id = genId('client_');
+  const val = (v) => (match.isBtBlank(v) ? null : norm(v));
+  await db.query(
+    'INSERT INTO clients (id, organization_id, name, email, phone, cell, address, city, state, zip, bt_contact_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
+    [id, orgId, norm(bt.name), val(bt.email), val(bt.phone), val(bt.cell), val(bt.street), val(bt.city), val(bt.state), val(bt.zip), btId]);
+  return { created: id, fields: ['name'].concat(['email', 'phone', 'cell', 'street', 'city', 'state', 'zip'].filter((k) => val(bt[k]))) };
+}
+
+async function createLead(db, orgId, row, user) {
+  const bt = row.bt;
+  const btId = norm(bt.btId);
+  const taken = await db.query('SELECT id FROM leads WHERE organization_id = $1 AND bt_lead_id = $2', [orgId, btId]);
+  if (taken.rows.length) return { skipped: 'A P86 lead is already linked to this Buildertrend lead.' };
+  const notes = [];
+  let clientId = null;
+  if (norm(bt.contactId)) {
+    const c = await clientIdForContact(db, orgId, [bt.contactId]);
+    if (c) clientId = c.id;
+    else if (!match.isBtBlank(bt.contactName)) notes.push('No P86 client is linked to Buildertrend contact "' + norm(bt.contactName) + '" yet — create or link it on the Clients tab, then apply the client on this lead.');
+  }
+  let salespersonId = null;
+  if (!match.isBtBlank(bt.salesperson)) {
+    const u = await db.query('SELECT id FROM users WHERE organization_id = $1 AND active = true AND LOWER(TRIM(name)) = LOWER(TRIM($2))', [orgId, norm(bt.salesperson)]);
+    if (u.rows.length === 1) salespersonId = u.rows[0].id;
+    else notes.push('Salesperson "' + norm(bt.salesperson) + '" is not exactly one active P86 user, so it was left blank.');
+  }
+  const conf = Number(bt.confidence);
+  const val = (v) => (match.isBtBlank(v) ? null : norm(v));
+  const id = genId('lead_');
+  await db.query(
+    'INSERT INTO leads (id, created_by, organization_id, title, status, street_address, city, state, zip, source, confidence, client_id, salesperson_id, bt_lead_id) '
+    + 'VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)',
+    [id, user && user.id != null ? user.id : null, orgId, norm(bt.title), 'new', val(bt.street), val(bt.city), val(bt.state), val(bt.zip),
+      val(bt.source), Number.isFinite(conf) && conf > 0 ? Math.max(0, Math.min(100, Math.round(conf))) : null, clientId, salespersonId, btId]);
+  return { created: id, notes, regeocode: val(bt.street) || val(bt.city) ? id : null };
+}
+
+function p86JobStatus(btStatus) {
+  const s = match.btJobState(btStatus);
+  if (s === 'closed') return 'Completed';
+  return 'In Progress';
+}
+
+async function createJob(db, orgId, row, user) {
+  const bt = row.bt;
+  const btId = norm(bt.btId);
+  const taken = await db.query('SELECT id FROM jobs WHERE organization_id = $1 AND bt_job_id = $2', [orgId, btId]);
+  if (taken.rows.length) return { skipped: 'A P86 job is already linked to this Buildertrend job.' };
+  const number = norm(bt.number);
+  if (!number) return { skipped: 'This Buildertrend job has no job number, so it is not created.' };
+  const clash = await db.query("SELECT id FROM jobs WHERE organization_id = $1 AND UPPER(TRIM(data->>'jobNumber')) = UPPER($2)", [orgId, number]);
+  if (clash.rows.length) return { skipped: 'P86 already has a job numbered ' + number + '.' };
+
+  const notes = [];
+  const org = await db.query('SELECT branding FROM organizations WHERE id = $1', [orgId]);
+  const branding = (org.rows[0] && org.rows[0].branding) || {};
+  const types = jobTypes.normJobTypes(Array.isArray(branding.job_types) ? branding.job_types : []);
+  const registry = types.length ? types : jobTypes.defaultJobTypes();
+  const prefix = (number.match(/^[A-Za-z]+/) || [''])[0].toUpperCase();
+  const type = registry.find((t) => t.prefix === prefix);
+  if (!type) notes.push('Job number prefix "' + (prefix || 'none') + '" is not in P86\'s job numbering list, so the job type is blank.');
+
+  const client = await clientIdForContact(db, orgId, bt.contactIds);
+  if (!client && (bt.contactIds || []).length) notes.push('The Buildertrend client is not linked to a P86 client yet — link it on the Clients tab.');
+  const val = (v) => (match.isBtBlank(v) ? '' : norm(v));
+  const start = match.dateKey(bt.projectedStart);
+  const now = new Date().toISOString();
+  const data = {
+    jobNumber: number,
+    title: val(bt.title),
+    client: client ? client.name : '',
+    clientId: client ? client.id : null,
+    pm: '',
+    jobType: type ? type.label : '',
+    status: p86JobStatus(bt.status),
+    btStatus: val(bt.status),
+    contractAmount: Number.isFinite(bt.contractValue) ? bt.contractValue : 0,
+    estimatedCosts: 0,
+    totalProductionDays: 0,
+    startDate: start || '',
+    endDate: '',
+    street_address: val(bt.street), city: val(bt.city), state: val(bt.state), zip: val(bt.zip),
+    notes: match.btJobState(bt.status) === 'warranty' ? 'Buildertrend status: Warranty.' : '',
+    pctComplete: 0,
+    invoicedToDate: 0,
+    createdAt: now,
+    updatedAt: now,
+  };
+  data.address = [data.street_address, data.city, data.state, data.zip].filter(Boolean).join(', ');
+  const id = genId('job');
+  data.id = id;
+  await db.query('INSERT INTO jobs (id, owner_id, data, organization_id, bt_job_id, client_id) VALUES ($1, $2, $3::jsonb, $4, $5, $6)',
+    [id, user && user.id != null ? user.id : null, JSON.stringify(data), orgId, btId, client ? client.id : null]);
+  return { created: id, notes };
+}
+
+async function createRecords(org, kind, rows, input, deps) {
+  let targets;
+  if (input.btIds.length) {
+    const wanted = new Set(input.btIds.map(norm));
+    targets = rows.filter((r) => wanted.has(norm(r.bt.btId)));
+  } else {
+    // Bulk: jobs Open + Warranty only (owner's call); leads and clients all.
+    targets = rows.filter((r) => r.class === 'new' && (kind !== 'jobs' || r.bt.scope === 'open'));
+  }
+  const results = [];
+  const regeocode = [];
+  const seen = new Set(targets.map((r) => norm(r.bt.btId)));
+  for (const id of input.btIds.map(norm)) {
+    if (!seen.has(id)) results.push({ btId: id, outcome: 'skipped', reason: 'No Buildertrend record with that id in this read.' });
+  }
+  for (const row of targets) {
+    const base = { btId: norm(row.bt.btId), label: row.bt.raw || row.bt.title || '' };
+    if (row.class !== 'new') {
+      results.push(Object.assign(base, { outcome: 'skipped', reason: 'Only a record Project 86 does not have is created; this one is ' + row.class.replace(/_/g, ' ') + '.' }));
+      continue;
+    }
+    if (!norm(row.bt.btId)) {
+      results.push(Object.assign(base, { outcome: 'skipped', reason: 'Buildertrend sent this record without an id, so it is not created.' }));
+      continue;
+    }
+    const client = await deps.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const r = kind === 'jobs' ? await createJob(client, org.id, row, deps.user)
+        : kind === 'clients' ? await createClient(client, org.id, row)
+        : await createLead(client, org.id, row, deps.user);
+      await client.query('COMMIT');
+      if (r.skipped) results.push(Object.assign(base, { outcome: 'skipped', reason: r.skipped }));
+      else {
+        results.push(Object.assign(base, { outcome: 'created', p86Id: r.created, notes: r.notes || [] }));
+        if (r.regeocode) regeocode.push(r.regeocode);
+      }
+    } catch (e) {
+      try { await client.query('ROLLBACK'); } catch (_) { /* ignore */ }
+      results.push(Object.assign(base, { outcome: 'failed', reason: 'The create failed inside this server; nothing was written for this record.' }));
+    } finally {
+      client.release();
+    }
+  }
+  const counts = { created: 0, skipped: 0, failed: 0 };
+  for (const r of results) counts[r.outcome] = (counts[r.outcome] || 0) + 1;
+  if (preview.forgetFetch) preview.forgetFetch(org.id);
+  return { status: 200, body: { dataset: kind, mode: 'create', counts, results }, regeocode };
+}
+
 // ── the operation ────────────────────────────────────────────────────────
 async function apply(org, input, deps) {
   const kind = input.dataset;
@@ -298,6 +473,8 @@ async function apply(org, input, deps) {
     : kind === 'clients'
       ? match.matchClients(values, p86.clients || [])
       : match.matchLeads(values, p86.leads, { directory: p86.directory });
+
+  if (mode === 'create') return createRecords(org, kind, rows, input, deps);
 
   let targets;
   if (mode === 'safe') {
@@ -360,6 +537,11 @@ function parseInput(body) {
   const b = body || {};
   const dataset = b.dataset;
   if (dataset !== 'jobs' && dataset !== 'leads' && dataset !== 'clients') return { error: 'dataset must be "jobs", "leads" or "clients".' };
+  if (b.mode === 'create') {
+    const ids = Array.isArray(b.btIds) ? b.btIds.filter((x) => (typeof x === 'string' || typeof x === 'number') && norm(x)) : [];
+    if (ids.length > MAX_ROWS) return { error: 'At most ' + MAX_ROWS + ' records per create.' };
+    return { dataset, mode: 'create', btIds: ids.map(String), fields: null };
+  }
   const mode = b.mode === 'safe' ? 'safe' : 'rows';
   if (mode === 'rows') {
     const ids = Array.isArray(b.btIds) ? b.btIds.filter((x) => (typeof x === 'string' || typeof x === 'number') && norm(x)) : [];
@@ -393,17 +575,17 @@ async function handle(req, res, deps) {
   if (inFlight) return res.status(429).json({ error: 'A Buildertrend apply is already running on this server. Try again in a moment.', code: 'CLICKR_APPLY_BUSY' });
   inFlight = true;
   try {
-    const out = await apply(org, input, Object.assign({ env }, deps));
+    const out = await apply(org, input, Object.assign({ env, user: req.user }, deps));
     res.set('Cache-Control', 'no-store');
     res.status(out.status).json(out.body);
     if (out.status === 200) {
       auditLog(req, {
-        action: 'buildertrend.apply',
+        action: input.mode === 'create' ? 'buildertrend.create' : 'buildertrend.apply',
         targetType: input.dataset === 'jobs' ? 'job' : input.dataset === 'clients' ? 'client' : 'lead',
-        targetId: input.mode === 'safe' ? 'safe updates' : String(input.btIds.length) + ' records',
+        targetId: input.mode === 'safe' ? 'safe updates' : input.mode === 'create' && !input.btIds.length ? 'bulk create' : String(input.btIds.length) + ' records',
         organizationId: org.id,
         detail: { mode: input.mode, counts: out.body.counts,
-          applied: out.body.results.filter((r) => r.outcome === 'applied').map((r) => ({ btId: r.btId, p86Id: r.p86Id, linked: r.linked, fields: r.fields })) },
+          applied: out.body.results.filter((r) => r.outcome === 'applied' || r.outcome === 'created').map((r) => ({ btId: r.btId, p86Id: r.p86Id, linked: r.linked, fields: r.fields, created: r.outcome === 'created' })) },
       });
       for (const id of out.regeocode || []) geocodeLeadLater(deps.pool, id);
     }
@@ -415,4 +597,4 @@ async function handle(req, res, deps) {
   }
 }
 
-module.exports = { handle, apply, parseInput, writable, pickedHeldBack, ACTION_PARAM };
+module.exports = { handle, apply, parseInput, writable, pickedHeldBack, p86JobStatus, ACTION_PARAM };

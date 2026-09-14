@@ -51,7 +51,7 @@ function jobRec(jobName, o) {
     street: o.street === undefined ? '' : o.street, city: o.city === undefined ? 'Tampa' : o.city,
     state: 'FL', zip: '33602', projectedStart: o.projectedStart === undefined ? null : o.projectedStart, projectedCompletion: null,
     contractPrice: o.contractPrice === undefined ? { value: 0, scale: 2 } : o.contractPrice,
-    approvedCOPrice: o.approvedCOPrice === undefined ? { value: 0, scale: 2 } : o.approvedCOPrice, projectManager: [], contacts: [], customFields: [],
+    approvedCOPrice: o.approvedCOPrice === undefined ? { value: 0, scale: 2 } : o.approvedCOPrice, projectManager: [], contacts: o.contacts || [], customFields: [],
     jobType: 'Handyman Services', groups: ['Service & Repair'], createdDate: '2025-01-02T15:00:00.000Z', isDeleted: false,
   };
 }
@@ -73,11 +73,14 @@ const BT_JOBS = [
   jobRec('S2000 Waterside Siding', { jobId: 222, street: '5 Bay Rd', projectedStart: '2026-03-01T00:00:00' }),
   jobRec('WO16 Service Call A', { jobId: 333 }),
   jobRec('WO16 Service Call B', { jobId: 334 }),
-  jobRec('S4000 Brand New Job', { jobId: 444, street: '9 New St' }),
+  jobRec('S4000 Brand New Job', { jobId: 444, street: '9 New St', projectedStart: '2026-05-04T00:00:00', contractPrice: { value: 48250.5, scale: 2 }, contacts: [{ id: 9001, name: 'Oak Hollow HOA' }] }),
+  jobRec('RV5001 Closed History Job', { jobId: 445, jobStatus: 'Closed', street: '1 Old Rd' }),
+  jobRec('WO9001 Warranty Callback', { jobId: 446, jobStatus: 'Warranty', street: '2 Callback Ln' }),
 ];
 const BT_LEADS = [
   leadRec('Gazebo at Oak Hollow', { leadId: 555, street: '12 Oak Hollow Dr', contactId: 9001, contactName: 'Oak Hollow HOA',
     salesperson: 'Ana Ruiz', source: 'Previous Client', confidence: 50, min: 17900, max: 17900 }),
+  leadRec('Brand New Opportunity', { leadId: 556, street: '77 Fresh Way', contactId: 9001, contactName: 'Oak Hollow HOA', salesperson: 'Ana Ruiz', source: 'Referral', confidence: 40 }),
 ];
 
 function clientRec(displayName, o) {
@@ -95,6 +98,7 @@ const BT_CLIENTS = [
   clientRec('Jane Smith', { contactId: 9004 }),
   clientRec('Bay Pointe Condos', { contactId: 9005, email: 'new@baypointe.test' }),
   clientRec('Totally Different LLC', { contactId: 9006, email: 'shared@ridgewood.test' }),
+  clientRec('Seaside Towers Association', { contactId: 9007, email: 'office@seaside.test', phone: '727-555-0142', street: '400 Gulf Blvd', city: 'Clearwater', state: 'FL', zip: '33767' }),
 ];
 
 function clickrFetch(url) {
@@ -395,6 +399,97 @@ describe('clients — matched by id, name or a unique email; P86 names kept; bla
     expect(clientRow('c-a').email).toBeNull();
     expect(clientRow('c-h').bt_contact_id).toBe('9002');
     expect(clientRow('c-j').bt_contact_id).toBeNull();
+  });
+});
+
+
+describe('create — a Buildertrend-only record comes into P86 linked by its id', () => {
+  const clientRow = (id) => engine.db.prepare('SELECT * FROM clients WHERE id = ?').get(id);
+  const jobByBt = (bt) => engine.db.prepare('SELECT * FROM jobs WHERE bt_job_id = ?').get(bt);
+
+  test('bulk client create makes only the "new" contacts, with their details and ids; names are Buildertrend\'s', async () => {
+    const r = await put(APPLY, ADMIN, { dataset: 'clients', mode: 'create' });
+    expect(r.status).toBe(200);
+    const created = engine.db.prepare("SELECT * FROM clients WHERE bt_contact_id = '9007'").get();
+    expect(created).toMatchObject({ name: 'Seaside Towers Association', email: 'office@seaside.test', address: '400 Gulf Blvd', city: 'Clearwater', organization_id: 1 });
+    // Matched, ambiguous and possible-duplicate contacts are never created.
+    expect(engine.db.prepare("SELECT COUNT(*) AS n FROM clients WHERE bt_contact_id IN ('9001','9002','9003','9004','9005','9006')").get().n).toBe(0);
+    expect(r.json.counts.created).toBe(1);
+  });
+
+  test('bulk job create makes Open + Warranty jobs only: Buildertrend number, title, status, start, contract, type, client link', async () => {
+    engine.db.prepare("UPDATE clients SET bt_contact_id = '9001' WHERE id = 'c-a'").run();
+    const r = await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'create' });
+    expect(r.status).toBe(200);
+    const j = jobByBt('444');
+    const d = JSON.parse(j.data);
+    expect(d).toMatchObject({ jobNumber: 'S4000', title: 'Brand New Job', status: 'In Progress', startDate: '2026-05-04',
+      contractAmount: 48250.5, jobType: 'Service', clientId: 'c-a', client: 'Oak Hollow HOA', street_address: '9 New St' });
+    expect(j.organization_id).toBe(1);
+    expect(j.client_id).toBe('c-a');
+    const w = JSON.parse(jobByBt('446').data);
+    expect(w).toMatchObject({ jobNumber: 'WO9001', status: 'In Progress', btStatus: 'Warranty', jobType: 'Work Order' });
+    // Closed history is not created in bulk; ambiguous WO16 rows never are.
+    expect(jobByBt('445')).toBeUndefined();
+    expect(jobByBt('333')).toBeUndefined();
+    expect(engine.db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE organization_id = 2").get().n).toBe(1);
+  });
+
+  test('a closed job is created on request, as Completed; running create again creates nothing twice', async () => {
+    const r = await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'create', btIds: ['445'] });
+    expect(r.status).toBe(200);
+    expect(JSON.parse(jobByBt('445').data)).toMatchObject({ jobNumber: 'RV5001', status: 'Completed', jobType: 'Renovation' });
+    preview.forgetFetch(AGX);
+    const again = await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'create', btIds: ['445'] });
+    expect(again.json.results[0].outcome).toBe('skipped');
+    expect(engine.db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE bt_job_id = '445'").get().n).toBe(1);
+  });
+
+  test('an existing, ambiguous or duplicate record is never created on request', async () => {
+    const r = await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'create', btIds: ['111', '333'] });
+    expect(r.status).toBe(200);
+    expect(r.json.results.map((x) => x.outcome)).toEqual(['skipped', 'skipped']);
+    expect(jobByBt('111')).toBeUndefined();
+    preview.forgetFetch(AGX);
+    const c = await put(APPLY, ADMIN, { dataset: 'clients', mode: 'create', btIds: ['9003', '9002'] });
+    expect(c.json.results.map((x) => x.outcome)).toEqual(['skipped', 'skipped']);
+    expect(engine.db.prepare("SELECT COUNT(*) AS n FROM clients WHERE name = 'Jane Smith'").get().n).toBe(1);
+  });
+
+  test('lead create links the client by Buildertrend id and the salesperson by exact name; status new; revenue untouched', async () => {
+    engine.db.prepare("UPDATE clients SET bt_contact_id = '9001' WHERE id = 'c-a'").run();
+    const r = await put(APPLY, ADMIN, { dataset: 'leads', mode: 'create' });
+    expect(r.status).toBe(200);
+    const l = engine.db.prepare("SELECT * FROM leads WHERE bt_lead_id = '556'").get();
+    expect(l).toMatchObject({ title: 'Brand New Opportunity', status: 'new', client_id: 'c-a', salesperson_id: 10, source: 'Referral', organization_id: 1 });
+    expect(Number(l.confidence)).toBe(40);
+    expect(l.estimated_revenue_low).toBeNull();
+    // The matched lead 555 is not created again.
+    expect(engine.db.prepare("SELECT COUNT(*) AS n FROM leads WHERE title = 'Gazebo at Oak Hollow' AND organization_id = 1").get().n).toBe(1);
+  });
+
+  test('a number P86 already uses on a job linked elsewhere is never created again', async () => {
+    engine.db.prepare("UPDATE jobs SET bt_job_id = '999' WHERE id = 'j-1'").run();
+    const r = await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'create', btIds: ['111'] });
+    expect(r.status).toBe(200);
+    expect(r.json.results[0]).toMatchObject({ outcome: 'skipped' });
+    expect(r.json.results[0].reason).toMatch(/already has a job numbered S1050/);
+    expect(engine.db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE organization_id = 1 AND data LIKE '%S1050%'").get().n).toBe(1);
+  });
+
+  test('a new job never links another organization\'s client that carries the same Buildertrend id', async () => {
+    engine.db.prepare("UPDATE clients SET bt_contact_id = '9001' WHERE id = 'c-b'").run();
+    const r = await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'create', btIds: ['444'] });
+    expect(r.status).toBe(200);
+    const j = jobByBt('444');
+    expect(j.client_id).toBeNull();
+    expect(JSON.parse(j.data).clientId).toBeNull();
+  });
+
+  test('another organization\'s admin cannot create', async () => {
+    const r = await put(APPLY, OTHER_ADMIN, { dataset: 'clients', mode: 'create' });
+    expect(r.status).toBe(403);
+    expect(engine.db.prepare("SELECT COUNT(*) AS n FROM clients WHERE bt_contact_id = '9007'").get().n).toBe(0);
   });
 });
 

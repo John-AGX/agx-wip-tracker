@@ -446,6 +446,10 @@
   }
 
   function applyButtonHTML(ds, r) {
+    if (r['class'] === 'new' && r.bt && r.bt.btId != null && r.bt.btId !== '') {
+      var busyNew = _applying === ds.key + ':create:' + r.bt.btId;
+      return '<button type="button" class="btp-btn btp-apply" data-btp-create="' + esc(r.bt.btId) + '"' + (_applying ? ' disabled' : '') + '>' + (busyNew ? 'Creating…' : 'Create in P86') + '</button>';
+    }
     if (!canApply(r)) return '';
     var linked = r.rung === 'Buildertrend ID';
     var selectable = (r.corrections || []).length + (r.heldBack || []).filter(function (h) { return h.applicable; }).length;
@@ -463,9 +467,16 @@
     }).length;
   }
 
+  function createCount(ds) {
+    return (ds.rows || []).filter(function (r) {
+      return r['class'] === 'new' && r.bt && r.bt.btId != null && r.bt.btId !== '' && (ds.key !== 'jobs' || r.bt.scope === 'open');
+    }).length;
+  }
+
   function applyResultText(res) {
     var c = (res && res.counts) || {};
-    var parts = [(c.applied || 0) + ' updated'];
+    var parts = res && res.mode === 'create' ? [(c.created || 0) + ' created in P86'] : [(c.applied || 0) + ' updated'];
+    var createNotes = []; ((res && res.results) || []).forEach(function (x) { (x.notes || []).forEach(function (n) { if (createNotes.indexOf(n) === -1) createNotes.push(n); }); });
     if (c.linked) parts.push(c.linked + ' newly linked');
     if (c.fields) parts.push(c.fields + ' field' + (c.fields === 1 ? '' : 's') + ' changed');
     if (c.unchanged) parts.push(c.unchanged + ' already up to date');
@@ -475,13 +486,13 @@
     if (c.failed) parts.push(c.failed + ' failed');
     var reasons = ((res && res.results) || []).filter(function (x) { return x.outcome === 'skipped' || x.outcome === 'failed'; })
       .slice(0, 3).map(function (x) { return (x.label ? '“' + x.label + '”: ' : '') + x.reason; });
-    return parts.join(' · ') + '.' + (reasons.length ? ' ' + reasons.join(' ') : '');
+    return parts.join(' · ') + '.' + (reasons.length ? ' ' + reasons.join(' ') : '') + (createNotes.length ? ' ' + createNotes.slice(0, 3).join(' ') : '');
   }
 
   function runApply(key, body) {
     if (_applying || !(window.p86Api && typeof window.p86Api.put === 'function')) return;
-    _applying = key + ':' + (body.mode === 'safe' ? 'safe' : body.btIds[0]);
-    if (body.mode !== 'safe') delete _picks[key + ':' + body.btIds[0]];
+    _applying = key + ':' + (body.mode === 'safe' ? 'safe' : body.mode === 'create' ? 'create:' + ((body.btIds && body.btIds[0]) || 'bulk') : body.btIds[0]);
+    if (body.mode !== 'safe' && body.mode !== 'create') delete _picks[key + ':' + body.btIds[0]];
     _applyNote[key] = null;
     repaint(key);
     window.p86Api.put(APPLY_ENDPOINT, Object.assign({ dataset: key }, body)).then(function (res) {
@@ -577,6 +588,13 @@
       html += '<div class="btp-filters"><button type="button" class="btp-btn btp-apply" data-btp-apply-safe="1"' + (_applying || !sc || !f.complete ? ' disabled' : '') + '>' +
         (busySafe ? 'Applying…' : (ds.key === 'jobs' ? 'Link confident matches + fill blank start dates' : 'Link confident matches') + ' (' + sc + ')') + '</button>' +
         '<span class="btp-sub">' + (f.complete ? 'Saves the Buildertrend id on each confident match' + (ds.key === 'jobs' ? ' and fills a start date only where P86 has none' : '') + '. No other field changes.' : 'Needs a complete Buildertrend read.') + '</span></div>';
+      var cn = createCount(ds);
+      var busyCreate = _applying === ds.key + ':create:bulk';
+      html += '<div class="btp-filters"><button type="button" class="btp-btn btp-apply" data-btp-create-all="1"' + (_applying || !cn || !f.complete ? ' disabled' : '') + '>' +
+        (busyCreate ? 'Creating…' : 'Create ' + cn + ' Buildertrend-only ' + (ds.key === 'jobs' ? 'open + warranty job' : (NOUN[ds.key] || 'record')) + (cn === 1 ? '' : 's') + ' in P86') + '</button>' +
+        '<span class="btp-sub">' + (ds.key === 'jobs' ? 'Closed jobs are created one at a time from their row. ' : '') +
+        (ds.key === 'clients' ? 'Create clients first — leads and jobs link to a client through its Buildertrend id. ' : '') +
+        'Possible duplicates and ambiguous rows are never created.</span></div>';
       var note = _applyNote[ds.key];
       if (note) html += '<div class="btp-sentence ' + (note.ok ? 'is-ok' : 'is-bad') + '">' + esc(note.text) + '</div>';
       if (ds.key === 'jobs') {
@@ -733,6 +751,19 @@
           if (btn) { btn.textContent = applyLabel(ds, row); btn.disabled = !!_applying || (!pickedFields(ds, row).length && row.rung === 'Buildertrend ID'); }
         });
       });
+      Array.prototype.forEach.call(sec.querySelectorAll('[data-btp-create]'), function (b) {
+        b.addEventListener('click', function () { runApply(key, { mode: 'create', btIds: [b.getAttribute('data-btp-create')] }); });
+      });
+      var createAll = sec.querySelector('[data-btp-create-all]');
+      if (createAll) {
+        createAll.addEventListener('click', function () {
+          var ds = _data && _data.datasets && _data.datasets[key];
+          var n = ds ? createCount(ds) : 0;
+          askThen('Create ' + n + ' ' + (key === 'jobs' ? 'open and warranty job' : (NOUN[key] || 'record')) + (n === 1 ? '' : 's') + ' in Project 86 from Buildertrend? Each is linked by its Buildertrend id.', 'Create', function () {
+            runApply(key, { mode: 'create' });
+          });
+        });
+      }
       var safe = sec.querySelector('[data-btp-apply-safe]');
       if (safe) {
         safe.addEventListener('click', function () {
