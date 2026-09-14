@@ -38,6 +38,11 @@
 //      office, no-capture on the crew link) when the user agent says
 //      "Windows NT", and the CSS hides every camera control under that class
 //      even for a finger; an Android or iPhone user agent is not marked.
+//   6. Crew field report (canRespond && live, so a draft too): Take photo
+//      (#photoCam, capture) next to Upload photo (#photo, no capture), both
+//      role=button labels that Enter / Space open, both POSTing their file to
+//      the work order's photo door; Take photo hidden for a mouse and under
+//      no-capture, Upload photo never.
 //
 // Each guard is also shown to FIRE: the drive is re-run against a copy of the
 // shipped source with that guard broken, and the outcome has to come out
@@ -448,6 +453,9 @@ async function crewCards(script, opts) {
     anyFileInput: document.querySelectorAll('input[type=file]').length,
     bldFileInput: document.querySelectorAll('.bld input[type=file]').length,
     anyCamera: document.querySelectorAll('.th-cam, .cam-btn, [capture]').length,
+    bldCamera: document.querySelectorAll('.bld .th-cam, .bld .cam-btn, .bld [capture]').length,
+    report: !!document.getElementById('report'),
+    reportCamera: document.querySelectorAll('#report .cam-file, #report [capture]').length,
   };
 }
 
@@ -490,11 +498,41 @@ describe('crew link: every building card has a camera and a library input for ea
   test('a respond link on an approved or draft work order cannot work the punch list either', async () => {
     const approved = await crewCards(undefined, { status: 'approved' });
     expect(approved.cards).toEqual([NO_CONTROLS, NO_CONTROLS]);
-    expect(approved.anyCamera).toBe(0);
+    expect(approved.bldFileInput).toBe(0);
+    expect(approved.bldCamera).toBe(0);
     const draft = await crewCards(undefined, { status: 'draft' });
     expect(draft.cards).toEqual([NO_CONTROLS, NO_CONTROLS]);
     expect(draft.bldFileInput).toBe(0);
-    expect(draft.anyCamera).toBe(0);
+    expect(draft.bldCamera).toBe(0);
+  });
+
+  // The field report is gated on canRespond && live, and live lets a draft
+  // through (the punch list's canWork does not): a draft respond link has the
+  // report's Take photo; approved, closed, cancelled and view-only links have
+  // no report, so no camera anywhere on the page.
+  test('the field report camera: on a draft respond link, and on no approved / closed / cancelled / view-only link', async () => {
+    const draft = await crewCards(undefined, { status: 'draft' });
+    expect(draft.report).toBe(true);
+    expect(draft.reportCamera).toBe(2); // the label and its capture input
+    expect(document.querySelector('#report #photoCam').getAttribute('capture')).toBe('environment');
+    // ...and it is the only capture input on the page.
+    expect(Array.from(document.querySelectorAll('[capture]')).map((i) => i.id)).toEqual(['photoCam']);
+    expect(draft.bldCamera).toBe(0);
+    for (const status of ['approved', 'closed', 'cancelled']) {
+      const r = await crewCards(undefined, { status });
+      expect([status, r.report, r.reportCamera, r.anyCamera, r.anyFileInput]).toEqual([status, false, 0, 0, 0]);
+    }
+    const view = await crewCards(undefined, { scope: 'view', status: 'draft' });
+    expect([view.report, view.reportCamera, view.anyCamera, view.anyFileInput]).toEqual([false, 0, 0, 0]);
+  });
+
+  test('FIRES: render the field report without the live gate and an approved work order gets its camera', async () => {
+    const r = await crewCards(mutate(SHARE_SCRIPT,
+      "if (canRespond && live) {\n      html += '<div class=\"card\" id=\"report\">'",
+      "if (canRespond) {\n      html += '<div class=\"card\" id=\"report\">'"), { status: 'approved' });
+    expect(r.bldCamera).toBe(0);
+    expect(r.report).toBe(true);
+    expect(r.reportCamera).toBe(2);
   });
 
   test('FIRES: drop capture from the Take photo tile input and it opens the library', async () => {
@@ -572,6 +610,13 @@ describe('crew link: a camera shot goes to the building photo door', () => {
   });
 });
 
+// The one keydown handler every crew photo label shares (building cards and
+// the field report), anchored whole so a mutation lands on it and nowhere else.
+const OPEN_FILE_ON_KEY =
+  "function openFileOnKey(lab) {\n" +
+  "    lab.addEventListener('keydown', function (e) {\n" +
+  "      if (e.key !== 'Enter' && e.key !== ' ') return;";
+
 async function crewEnter(script, selector) {
   await crewEnv(script);
   const card = document.querySelector('.bld[data-task="tk_784"]');
@@ -609,9 +654,10 @@ describe('crew link: Enter on a camera label opens its input', () => {
   });
 
   test('FIRES: a keydown handler that only knows Space ignores Enter', async () => {
+    expect(count(SHARE_SCRIPT, OPEN_FILE_ON_KEY)).toBe(1);
     const r = await crewEnter(mutate(SHARE_SCRIPT,
-      "if (e.key !== 'Enter' && e.key !== ' ') return;",
-      "if (e.key !== ' ') return;"), 'label.th-add.th-cam');
+      OPEN_FILE_ON_KEY,
+      OPEN_FILE_ON_KEY.replace("if (e.key !== 'Enter' && e.key !== ' ') return;", "if (e.key !== ' ') return;")), 'label.th-add.th-cam');
     expect(r.clicked).toEqual([]);
   });
 });
@@ -1057,17 +1103,27 @@ const HIDE_BLOCK_CREW =
   '  @media not all and (pointer: coarse) {\n' +
   '    .th-add.th-cam, .btn.cam-btn { display: none; }\n' +
   '  }\n';
+const HIDE_BLOCK_REPORT =
+  '  @media not all and (pointer: coarse) {\n' +
+  '    #report .file.cam-file { display: none; }\n' +
+  '  }\n';
+const NO_CAPTURE_REPORT_RULE = '  .no-capture #report .file.cam-file { display: none; }\n';
 
 describe('service-ticket-share.html: the crew camera controls show only for a finger', () => {
   const SHEET = rules(styleOf(SHARE_HTML));
 
   test('the inline CSS hides .th-add.th-cam and .btn.cam-btn under the same media query', () => {
-    expect(count(SHARE_HTML, '@media not all and (pointer: coarse) {')).toBe(1);
+    // Two blocks on that query: the punch list's pair, then the field report's
+    // Take photo (its own describe below). Nothing else hides under it.
+    expect(count(SHARE_HTML, '@media not all and (pointer: coarse) {')).toBe(2);
     expect(count(SHARE_HTML, HIDE_BLOCK_CREW)).toBe(1);
+    expect(count(SHARE_HTML, HIDE_BLOCK_REPORT)).toBe(1);
     const hide = SHEET.filter((r) => r.media.length === 1 && r.media[0] === HIDE_MEDIA);
     expect(hide.map((r) => ({ selectors: r.selectors, decls: r.decls }))).toEqual([
       { selectors: ['.th-add.th-cam', '.btn.cam-btn'], decls: [{ prop: 'display', value: 'none' }] },
+      { selectors: ['#report .file.cam-file'], decls: [{ prop: 'display', value: 'none' }] },
     ]);
+    expect(SHEET.filter((r) => r.media.some((m) => /pointer/.test(m))).length).toBe(2);
   });
 
   // For each camera control: the display rules it must beat are the .th-add /
@@ -1215,5 +1271,337 @@ describe('crew link on Windows: the script marks <html> no-capture and the inlin
     expect(marked()).toBe(true);
     expect(displays(broken, el, TABLET)).toEqual(FINGER_ON);
     expect(displays(broken, el, PHONE)).toEqual(FINGER_ON);
+  });
+});
+
+// ── Crew link: the field report's Take photo ─────────────────────────────
+//
+// The field report at the bottom of the crew link (rendered when the link can
+// respond and the work order is live, a draft included) has its own pair:
+// Take photo (#photoCam, capture="environment", one shot) then Upload photo
+// (#photo, the library, no capture), both labels with role=button and
+// tabindex=0, both sending their file to the work order's photo door, and
+// Take photo hidden on the same two conditions as the punch list's camera.
+
+const REPORT_DOOR = '/api/service-ticket-share/' + TOKEN + '/photo';
+
+// The source anchors, each exactly once in the (EOL-normalized) script.
+const REPORT_CAM_LABEL = '\'<label class="file cam-file" tabindex="0" role="button">\' + CAM_ICON(16) +';
+const REPORT_CAM_INPUT = '\'Take photo<input type="file" id="photoCam" accept="image/*" capture="environment" /></label>\'';
+const REPORT_UPLOAD_LABEL = '\'<label class="file" tabindex="0" role="button"><input type="file" id="photo" accept="image/*" />Upload photo</label>\'';
+const REPORT_WIRE_INPUTS = "[document.getElementById('photoCam'), photoInput].forEach(function (inp) {";
+const REPORT_WIRE_KEYS = "Array.prototype.forEach.call(document.querySelectorAll('#report label[role=button]'), openFileOnKey);";
+const REPORT_CLEAR = "}).then(function () { msg('Photo added.'); inp.value = ''; })";
+const REPORT_FORM =
+  "        var fd = new FormData();\n" +
+  "        fd.append('file', f);\n" +
+  "        fetch('/api/service-ticket-share/' + encodeURIComponent(token) + '/photo', {";
+const CAM_ICON_ARIA = '" aria-hidden="true" focusable="false">\'';
+
+// The report's button row, child by child, as the tests read it.
+function reportRow() {
+  const row = document.querySelector('#report .row');
+  if (!row) return null;
+  return Array.from(row.children).map((el) => {
+    const inp = el.querySelector('input[type=file]');
+    const svg = el.querySelector('svg');
+    return {
+      tag: el.tagName.toLowerCase(),
+      className: el.getAttribute('class'),
+      text: labelText(el),
+      role: el.getAttribute('role'),
+      tabindex: el.getAttribute('tabindex'),
+      icon: svg ? { className: svg.getAttribute('class'), ariaHidden: svg.getAttribute('aria-hidden') } : null,
+      input: inp
+        ? { id: inp.id, accept: inp.getAttribute('accept'), capture: inp.hasAttribute('capture') ? inp.getAttribute('capture') : null, multiple: inp.hasAttribute('multiple') }
+        : null,
+    };
+  });
+}
+
+const REPORT_CAM = {
+  tag: 'label', className: 'file cam-file', text: 'Take photo', role: 'button', tabindex: '0',
+  icon: { className: 'camico', ariaHidden: 'true' },
+  input: { id: 'photoCam', accept: 'image/*', capture: 'environment', multiple: false },
+};
+const REPORT_UPLOAD = {
+  tag: 'label', className: 'file', text: 'Upload photo', role: 'button', tabindex: '0',
+  icon: null,
+  input: { id: 'photo', accept: 'image/*', capture: null, multiple: false },
+};
+const REPORT_SAVE = { tag: 'button', className: null, text: 'Save report', role: null, tabindex: null, icon: null, input: null };
+const REPORT_ROW = [REPORT_CAM, REPORT_UPLOAD, REPORT_SAVE];
+
+// A report label found by its text, so a mutated class or id is still found.
+const reportLabel = (text) => Array.from(document.querySelectorAll('#report label')).find((l) => labelText(l) === text) || null;
+
+describe('crew link field report: Take photo next to Upload photo', () => {
+  test('the source anchors are each there once', () => {
+    for (const a of [REPORT_CAM_LABEL, REPORT_CAM_INPUT, REPORT_UPLOAD_LABEL, REPORT_WIRE_INPUTS, REPORT_WIRE_KEYS, REPORT_CLEAR, REPORT_FORM, CAM_ICON_ARIA, OPEN_FILE_ON_KEY]) {
+      expect([a, count(SHARE_SCRIPT, a)]).toEqual([a, 1]);
+    }
+    expect(count(SHARE_HTML, HIDE_BLOCK_REPORT)).toBe(1);
+    expect(count(SHARE_HTML, NO_CAPTURE_REPORT_RULE)).toBe(1);
+  });
+
+  test('markup: Take photo (camera, one shot, decorative icon), then Upload photo (library, no capture), both keyboard buttons, then Save report', async () => {
+    await crewEnv();
+    expect(reportRow()).toEqual(REPORT_ROW);
+    expect(document.querySelectorAll('#photoCam').length).toBe(1);
+    expect(document.querySelectorAll('#photo').length).toBe(1);
+    // A draft respond link gets the same row.
+    await crewEnv(undefined, { status: 'draft' });
+    expect(reportRow()).toEqual(REPORT_ROW);
+  });
+
+  test('FIRES: drop capture from #photoCam and Take photo opens the library', async () => {
+    await crewEnv(mutate(SHARE_SCRIPT, REPORT_CAM_INPUT, REPORT_CAM_INPUT.replace(' capture="environment"', '')));
+    const row = reportRow();
+    expect(row[0].input).toEqual(Object.assign({}, REPORT_CAM.input, { capture: null }));
+    expect(row).not.toEqual(REPORT_ROW);
+  });
+
+  test('FIRES: a multiple camera input is caught', async () => {
+    await crewEnv(mutate(SHARE_SCRIPT, REPORT_CAM_INPUT, REPORT_CAM_INPUT.replace(' capture="environment"', ' capture="environment" multiple')));
+    expect(reportRow()[0].input).toEqual(Object.assign({}, REPORT_CAM.input, { multiple: true }));
+  });
+
+  test('FIRES: capture on #photo is caught (Android would lose the library)', async () => {
+    await crewEnv(mutate(SHARE_SCRIPT, REPORT_UPLOAD_LABEL, REPORT_UPLOAD_LABEL.replace('accept="image/*" />', 'accept="image/*" capture="environment" />')));
+    expect(reportRow()[1].input).toEqual(Object.assign({}, REPORT_UPLOAD.input, { capture: 'environment' }));
+  });
+
+  test('FIRES: the labels without role / tabindex, or Upload photo back to "Add photo", are caught', async () => {
+    await crewEnv(mutate(SHARE_SCRIPT, REPORT_CAM_LABEL, REPORT_CAM_LABEL.replace(' tabindex="0" role="button"', '')));
+    expect(reportRow()[0]).toMatchObject({ text: 'Take photo', role: null, tabindex: null });
+    await crewEnv(mutate(SHARE_SCRIPT, REPORT_UPLOAD_LABEL, REPORT_UPLOAD_LABEL.replace(' tabindex="0" role="button"', '')));
+    expect(reportRow()[1]).toMatchObject({ text: 'Upload photo', role: null, tabindex: null });
+    await crewEnv(mutate(SHARE_SCRIPT, REPORT_UPLOAD_LABEL, REPORT_UPLOAD_LABEL.replace('Upload photo', 'Add photo')));
+    expect(reportRow()[1].text).toBe('Add photo');
+  });
+
+  test('FIRES: a camera icon without aria-hidden is caught', async () => {
+    await crewEnv(mutate(SHARE_SCRIPT, CAM_ICON_ARIA, '" focusable="false">\''));
+    expect(reportRow()[0].icon).toEqual({ className: 'camico', ariaHidden: null });
+  });
+});
+
+// Pick a file on a report input found by its label's text; record what was
+// POSTed, the message, and every assignment to the input's value.
+async function reportUpload(script, text) {
+  const env = await crewEnv(script);
+  const inp = reportLabel(text).querySelector('input[type=file]');
+  const cleared = [];
+  Object.defineProperty(inp, 'value', { configurable: true, get: () => '', set: (v) => { cleared.push(v); } });
+  env.calls.length = 0;
+  pickFile(inp, 'IMG_0077.jpg');
+  await flush();
+  const m = document.getElementById('msg');
+  return {
+    posts: env.calls.filter((c) => c.init.method === 'POST').map((c) => {
+      const fd = c.init.body;
+      const isForm = fd instanceof FormData;
+      return {
+        url: c.url,
+        isForm,
+        fields: isForm ? Array.from(fd.keys()) : null,
+        file: isForm && fd.get('file') ? fd.get('file').name : null,
+      };
+    }),
+    otherCalls: env.calls.filter((c) => c.init.method !== 'POST').length,
+    msg: m ? m.textContent : null,
+    bad: !!m && m.classList.contains('bad'),
+    cleared,
+  };
+}
+
+const REPORT_POSTED = {
+  posts: [{ url: REPORT_DOOR, isForm: true, fields: ['file'], file: 'IMG_0077.jpg' }],
+  otherCalls: 0,
+  msg: 'Photo added.',
+  bad: false,
+  cleared: [''],
+};
+const REPORT_NOTHING = { posts: [], otherCalls: 0, msg: '', bad: false, cleared: [] };
+
+describe('crew link field report: both photo inputs send their file to the photo door', () => {
+  test('Take photo POSTs FormData with the file to /photo, says "Photo added." and clears the input', async () => {
+    expect(await reportUpload(undefined, 'Take photo')).toEqual(REPORT_POSTED);
+  });
+
+  test('Upload photo does the same', async () => {
+    expect(await reportUpload(undefined, 'Upload photo')).toEqual(REPORT_POSTED);
+  });
+
+  test('FIRES: wire only #photo and a Take photo shot is never sent', async () => {
+    const broken = mutate(SHARE_SCRIPT, REPORT_WIRE_INPUTS, '[photoInput].forEach(function (inp) {');
+    expect(await reportUpload(broken, 'Take photo')).toEqual(REPORT_NOTHING);
+    expect(await reportUpload(broken, 'Upload photo')).toEqual(REPORT_POSTED);
+  });
+
+  test('FIRES: wire only #photoCam and an Upload photo pick is never sent', async () => {
+    const broken = mutate(SHARE_SCRIPT, REPORT_WIRE_INPUTS, "[document.getElementById('photoCam')].forEach(function (inp) {");
+    expect(await reportUpload(broken, 'Upload photo')).toEqual(REPORT_NOTHING);
+    expect(await reportUpload(broken, 'Take photo')).toEqual(REPORT_POSTED);
+  });
+
+  test('FIRES: the file under another field name is caught', async () => {
+    const r = await reportUpload(mutate(SHARE_SCRIPT, REPORT_FORM, REPORT_FORM.replace("fd.append('file', f);", "fd.append('photo', f);")), 'Take photo');
+    expect(r.posts).toEqual([{ url: REPORT_DOOR, isForm: true, fields: ['photo'], file: null }]);
+  });
+
+  test('FIRES: without the clear after success the same shot cannot be picked again', async () => {
+    const broken = mutate(SHARE_SCRIPT, REPORT_CLEAR, "}).then(function () { msg('Photo added.'); })");
+    for (const text of ['Take photo', 'Upload photo']) {
+      const r = await reportUpload(broken, text);
+      expect(r).toEqual(Object.assign({}, REPORT_POSTED, { cleared: [] }));
+    }
+  });
+});
+
+async function reportKey(script, text, key) {
+  await crewEnv(script);
+  const lab = reportLabel(text);
+  const spy = spyInputClicks();
+  try {
+    const ev = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+    lab.dispatchEvent(ev);
+    return { clicked: spy.clicked.map((i) => ({ id: i.id, own: i.parentNode === lab })), prevented: ev.defaultPrevented };
+  } finally {
+    spy.restore();
+  }
+}
+
+const REPORT_BUTTONS = [['Take photo', 'photoCam'], ['Upload photo', 'photo']];
+const KEY_IGNORED = { clicked: [], prevented: false };
+
+describe('crew link field report: Enter and Space on each photo label open its input', () => {
+  test('Enter and Space click the label\'s own input and are prevented; another key does nothing', async () => {
+    for (const [text, id] of REPORT_BUTTONS) {
+      for (const key of ['Enter', ' ']) {
+        expect([text, key, await reportKey(undefined, text, key)]).toEqual([text, key, { clicked: [{ id, own: true }], prevented: true }]);
+      }
+      expect(await reportKey(undefined, text, 'a')).toEqual(KEY_IGNORED);
+    }
+  });
+
+  test('FIRES: without openFileOnKey on the report labels neither key opens anything (the building cards still do)', async () => {
+    const broken = mutate(SHARE_SCRIPT, REPORT_WIRE_KEYS, '');
+    for (const [text] of REPORT_BUTTONS) {
+      for (const key of ['Enter', ' ']) expect(await reportKey(broken, text, key)).toEqual(KEY_IGNORED);
+    }
+    expect((await crewEnter(broken, 'label.th-add.th-cam')).clicked).toEqual([Object.assign(CAMERA('completion'), { own: true })]);
+  });
+
+  test('FIRES: without role=button on Take photo, Enter does nothing there (Upload photo still opens)', async () => {
+    const broken = mutate(SHARE_SCRIPT, REPORT_CAM_LABEL, REPORT_CAM_LABEL.replace(' role="button"', ''));
+    expect(await reportKey(broken, 'Take photo', 'Enter')).toEqual(KEY_IGNORED);
+    expect(await reportKey(broken, 'Upload photo', 'Enter')).toEqual({ clicked: [{ id: 'photo', own: true }], prevented: true });
+  });
+
+  test('FIRES: a handler that only knows Enter ignores Space, one that only knows Space ignores Enter', async () => {
+    const enterOnly = mutate(SHARE_SCRIPT, OPEN_FILE_ON_KEY, OPEN_FILE_ON_KEY.replace("e.key !== 'Enter' && e.key !== ' '", "e.key !== 'Enter'"));
+    const spaceOnly = mutate(SHARE_SCRIPT, OPEN_FILE_ON_KEY, OPEN_FILE_ON_KEY.replace("e.key !== 'Enter' && e.key !== ' '", "e.key !== ' '"));
+    for (const [text, id] of REPORT_BUTTONS) {
+      expect(await reportKey(enterOnly, text, ' ')).toEqual(KEY_IGNORED);
+      expect(await reportKey(enterOnly, text, 'Enter')).toEqual({ clicked: [{ id, own: true }], prevented: true });
+      expect(await reportKey(spaceOnly, text, 'Enter')).toEqual(KEY_IGNORED);
+      expect(await reportKey(spaceOnly, text, ' ')).toEqual({ clicked: [{ id, own: true }], prevented: true });
+    }
+  });
+});
+
+describe('crew link field report CSS: Take photo only for a finger, never on a Windows tablet; Upload photo always', () => {
+  const SHEET = rules(styleOf(SHARE_HTML));
+  const ENVS = [PHONE, TABLET, MOUSE_NARROW, DESKTOP];
+  const marked = () => document.documentElement.classList.contains('no-capture');
+
+  async function reportElements(script, opts) {
+    await crewEnv(script, opts);
+    return { camFile: reportLabel('Take photo'), uploadFile: reportLabel('Upload photo') };
+  }
+  function displays(sheet, el, env) {
+    const out = {};
+    for (const k of ['camFile', 'uploadFile']) {
+      const { all, relevant } = displayRulesFor(sheet, el[k]);
+      if (relevant.length) throw new Error('unreadable selector names ' + k + ': ' + relevant.join(' | '));
+      out[k] = shown(displayAt(all, env));
+    }
+    return out;
+  }
+  const cascadeOf = (sheet, el) => Object.fromEntries(ENVS.map((env) => [env.label, displays(sheet, el, env)]));
+
+  const SHOWN = { camFile: 'inline-flex', uploadFile: 'inline-flex' };
+  const CAM_HIDDEN = { camFile: 'none', uploadFile: 'inline-flex' };
+  const REPORT_CASCADE = {
+    [PHONE.label]: SHOWN,
+    [TABLET.label]: SHOWN,
+    [MOUSE_NARROW.label]: CAM_HIDDEN,
+    [DESKTOP.label]: CAM_HIDDEN,
+  };
+  const WINDOWS_CASCADE = Object.fromEntries(ENVS.map((env) => [env.label, CAM_HIDDEN]));
+
+  test('unmarked: inline-flex on a touch phone and tablet, none for a mouse (narrow and desktop); Upload photo inline-flex everywhere', async () => {
+    const el = await reportElements();
+    expect(marked()).toBe(false);
+    expect(cascadeOf(SHEET, el)).toEqual(REPORT_CASCADE);
+    const win = (node, env) => displayAt(displayRulesFor(SHEET, node).all, env);
+    expect(win(el.camFile, DESKTOP)).toEqual({ value: 'none', selector: '#report .file.cam-file', media: HIDE_MEDIA });
+    expect(win(el.camFile, PHONE)).toEqual({ value: 'inline-flex', selector: '#report .file', media: '' });
+    for (const env of ENVS) expect(win(el.uploadFile, env)).toEqual({ value: 'inline-flex', selector: '#report .file', media: '' });
+  });
+
+  test('an Android or iPhone user agent is not marked and a finger keeps Take photo', async () => {
+    for (const ua of [UA.android, UA.iphone]) {
+      const el = await reportElements(undefined, { ua });
+      expect(marked()).toBe(false);
+      expect(cascadeOf(SHEET, el)).toEqual(REPORT_CASCADE);
+    }
+  });
+
+  test('a Windows tablet-sized screen is marked no-capture and Take photo is none for a finger too; Upload photo stays', async () => {
+    const el = await reportElements(undefined, { ua: UA.windows });
+    expect(marked()).toBe(true);
+    expect(cascadeOf(SHEET, el)).toEqual(WINDOWS_CASCADE);
+    expect(displayAt(displayRulesFor(SHEET, el.camFile).all, TABLET)).toEqual({ value: 'none', selector: '.no-capture #report .file.cam-file', media: '' });
+  });
+
+  test('FIRES: remove the report hide block and Take photo shows for a mouse', async () => {
+    const broken = rules(styleOf(mutate(SHARE_HTML, HIDE_BLOCK_REPORT, '')));
+    const el = await reportElements();
+    const c = cascadeOf(broken, el);
+    expect(c[DESKTOP.label]).toEqual(SHOWN);
+    expect(c[MOUSE_NARROW.label]).toEqual(SHOWN);
+    expect(c).not.toEqual(REPORT_CASCADE);
+  });
+
+  test('FIRES: a weaker hide selector (.cam-file) loses to #report .file and Take photo shows on a desktop', async () => {
+    const broken = rules(styleOf(mutate(SHARE_HTML, HIDE_BLOCK_REPORT, HIDE_BLOCK_REPORT.replace('#report .file.cam-file', '.cam-file'))));
+    const el = await reportElements();
+    expect(displays(broken, el, DESKTOP)).toEqual(SHOWN);
+  });
+
+  test('FIRES: a hide rule that names every #report .file hides Upload photo on a desktop too', async () => {
+    const broken = rules(styleOf(mutate(SHARE_HTML, HIDE_BLOCK_REPORT, HIDE_BLOCK_REPORT.replace('#report .file.cam-file', '#report .file'))));
+    const el = await reportElements();
+    expect(displays(broken, el, DESKTOP)).toEqual({ camFile: 'none', uploadFile: 'none' });
+    expect(displays(broken, el, PHONE)).toEqual(SHOWN);
+  });
+
+  test('FIRES: remove the no-capture report rule and a marked Windows tablet shows Take photo for a finger', async () => {
+    const broken = rules(styleOf(mutate(SHARE_HTML, NO_CAPTURE_REPORT_RULE, '')));
+    const el = await reportElements(undefined, { ua: UA.windows });
+    expect(marked()).toBe(true);
+    const c = cascadeOf(broken, el);
+    expect(c[TABLET.label]).toEqual(SHOWN);
+    expect(c[PHONE.label]).toEqual(SHOWN);
+    expect(c[DESKTOP.label]).toEqual(CAM_HIDDEN);
+    expect(c).not.toEqual(WINDOWS_CASCADE);
+  });
+
+  test('FIRES: a weaker no-capture selector (.no-capture .cam-file) loses to #report .file on a Windows tablet', async () => {
+    const broken = rules(styleOf(mutate(SHARE_HTML, NO_CAPTURE_REPORT_RULE, NO_CAPTURE_REPORT_RULE.replace('#report .file.cam-file', '.cam-file'))));
+    const el = await reportElements(undefined, { ua: UA.windows });
+    expect(displays(broken, el, TABLET)).toEqual(SHOWN);
   });
 });

@@ -158,6 +158,13 @@
     padding: 10px 14px; cursor: pointer; color: var(--text-2); font-size: 14px; font-weight: 600;
   }
   #report .file input { display: none; }
+  #report .file .camico { margin-right: 6px; }
+  /* Take photo and Upload photo share their row in equal halves and Save
+     report takes the row under them, so it never wraps on its own into a
+     short button. With the camera hidden, Upload photo has the row to itself. */
+  #report .row .file { flex: 1 1 0; min-width: 0; justify-content: center; text-align: center; }
+  #report .row #save { flex: 1 1 100%; }
+  #report .file:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
   #report .who { font-size: 13px; color: var(--dim); margin-bottom: 9px; }
   #report .done-note { font-size: 13px; color: var(--green-text); margin-top: 11px; }
   .msg { font-size: 13px; color: var(--dim); margin-top: 9px; min-height: 17px; }
@@ -306,6 +313,11 @@
     .th-add.th-cam, .btn.cam-btn { display: none; }
   }
   .no-capture .th-add.th-cam, .no-capture .btn.cam-btn { display: none; }
+  /* The field report's Take photo, on the same two conditions. */
+  @media not all and (pointer: coarse) {
+    #report .file.cam-file { display: none; }
+  }
+  .no-capture #report .file.cam-file { display: none; }
   .bnotes { display: grid; }
   .bnote { font-size: 14px; padding: 6px 0; border-top: 1px solid var(--border); }
   .bnote:first-child { border-top: 0; padding-top: 0; }
@@ -584,8 +596,14 @@
           ? '<div class="who">Signed in as <strong>' + esc(d.share.recipient_name) + '</strong></div>'
           : '') +
         '<textarea id="note" rows="3" placeholder="What did you find? What did you do?"></textarea>' +
+        // Take photo opens the camera (capture="environment"); Upload photo
+        // the photo library, which on Android offers no camera. Both are
+        // labels around their inputs, so they take a tabindex and a role and
+        // wireReport lets Enter or Space open them.
         '<div class="row">' +
-          '<label class="file"><input type="file" id="photo" accept="image/*" />Add photo</label>' +
+          '<label class="file cam-file" tabindex="0" role="button">' + CAM_ICON(16) +
+            'Take photo<input type="file" id="photoCam" accept="image/*" capture="environment" /></label>' +
+          '<label class="file" tabindex="0" role="button"><input type="file" id="photo" accept="image/*" />Upload photo</label>' +
           '<button id="save">Save report</button>' +
         '</div>' +
         (t.status === 'work_complete'
@@ -649,6 +667,14 @@
   var crewName = '';
   try { crewName = localStorage.getItem('st-crew-name') || ''; } catch (e) {}
 
+  // The camera outline on the Take photo controls (the building cards and the
+  // field report), drawn in currentColor.
+  function CAM_ICON(size) {
+    return '<svg class="camico" viewBox="0 0 24 24" width="' + size + '" height="' + size + '" aria-hidden="true" focusable="false">' +
+      '<path d="M4 8.5h3.2l1.6-2.5h6.4l1.6 2.5H20V19H4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>' +
+      '<circle cx="12" cy="13.2" r="3.3" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>';
+  }
+
   function buildingHTML(x, canWork, t) {
     var p = parseTitle(x.title);
     var photos = x.photos || [];
@@ -667,12 +693,6 @@
           ? '<span class="chip n">' + photos.length + ' photo' + (photos.length === 1 ? '' : 's') + '</span>'
           : '<span class="chip need">Needs photo</span>');
 
-    // The camera outline on the Take photo controls, drawn in currentColor.
-    function CAM_ICON(size) {
-      return '<svg class="camico" viewBox="0 0 24 24" width="' + size + '" height="' + size + '" aria-hidden="true" focusable="false">' +
-        '<path d="M4 8.5h3.2l1.6-2.5h6.4l1.6 2.5H20V19H4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>' +
-        '<circle cx="12" cy="13.2" r="3.3" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>';
-    }
 
     function shot(ph) {
       return '<a class="shot" href="' + esc(ph.web_url || ph.thumb_url || '') + '" target="_blank" rel="noreferrer noopener">' +
@@ -768,6 +788,17 @@
     });
   }
 
+  // A photo button that is a LABEL around its file input opens on a tap, but
+  // a keyboard cannot press a label. Enter or Space opens the same input.
+  function openFileOnKey(lab) {
+    lab.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      var inp = lab.querySelector('input[type=file]');
+      if (inp) inp.click();
+    });
+  }
+
   function wireBuildings(tasks, canWork) {
     var byId = {};
     tasks.forEach(function (x) { byId[String(x.id)] = x; });
@@ -790,14 +821,7 @@
       // The photo tiles and the before-photo buttons are LABELS around their
       // file inputs, which a tap opens but a keyboard cannot press. Enter or
       // Space opens the same input.
-      Array.prototype.forEach.call(card.querySelectorAll('label[role=button]'), function (lab) {
-        lab.addEventListener('keydown', function (e) {
-          if (e.key !== 'Enter' && e.key !== ' ') return;
-          e.preventDefault();
-          var inp = lab.querySelector('input[type=file]');
-          if (inp) inp.click();
-        });
-      });
+      Array.prototype.forEach.call(card.querySelectorAll('label[role=button]'), openFileOnKey);
 
       Array.prototype.forEach.call(card.querySelectorAll('input[type=file]'), function (inp) {
         inp.addEventListener('change', function () {
@@ -958,24 +982,32 @@
         .catch(function (e) { msg(e.message, true); completeBtn.disabled = false; });
     });
 
-    if (photoInput) photoInput.addEventListener('change', function () {
-      var f = photoInput.files && photoInput.files[0];
-      if (!f) return;
-      msg('Uploading photo…');
-      var fd = new FormData();
-      fd.append('file', f);
-      fetch('/api/service-ticket-share/' + encodeURIComponent(token) + '/photo', {
-        method: 'POST', body: fd, cache: 'no-store'
-      }).then(function (r) {
-        return r.text().then(function (txt) {
-          var data = null;
-          try { data = txt ? JSON.parse(txt) : null; } catch (e) {}
-          if (!r.ok) throw new Error((data && data.error) || 'That photo could not be uploaded.');
-          return data;
-        });
-      }).then(function () { msg('Photo added.'); photoInput.value = ''; })
-        .catch(function (e) { msg(e.message, true); photoInput.value = ''; });
+    // Take photo and Upload photo send their photo through the same door.
+    [document.getElementById('photoCam'), photoInput].forEach(function (inp) {
+      if (!inp) return;
+      inp.addEventListener('change', function () {
+        var f = inp.files && inp.files[0];
+        if (!f) return;
+        msg('Uploading photo…');
+        var fd = new FormData();
+        fd.append('file', f);
+        fetch('/api/service-ticket-share/' + encodeURIComponent(token) + '/photo', {
+          method: 'POST', body: fd, cache: 'no-store'
+        }).then(function (r) {
+          return r.text().then(function (txt) {
+            var data = null;
+            try { data = txt ? JSON.parse(txt) : null; } catch (e) {}
+            if (!r.ok) throw new Error((data && data.error) || 'That photo could not be uploaded.');
+            return data;
+          });
+        }).then(function () { msg('Photo added.'); inp.value = ''; })
+          .catch(function (e) { msg(e.message, true); inp.value = ''; });
+      });
     });
+
+    // The two photo buttons are labels around their file inputs, as on the
+    // building cards (openFileOnKey).
+    Array.prototype.forEach.call(document.querySelectorAll('#report label[role=button]'), openFileOnKey);
   }
 
   function load() {
