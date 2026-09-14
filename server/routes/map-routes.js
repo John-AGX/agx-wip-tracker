@@ -56,6 +56,7 @@ router.get('/entities', requireAuth, async (req, res) => {
               l.geocode_lat, l.geocode_lng
          FROM leads l
         WHERE (l.organization_id = $1 OR l.organization_id IS NULL)
+          AND l.bt_archived_at IS NULL
           AND l.geocode_lat IS NOT NULL AND l.geocode_lng IS NOT NULL`,
       [orgId]
     );

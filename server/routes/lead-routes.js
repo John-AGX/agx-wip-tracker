@@ -117,6 +117,8 @@ router.get('/', requireAuth, requireCapability('LEADS_VIEW'), async (req, res) =
     // Wave 1.A Phase 2 — org filter on the list. NULL allowed for
     // unbackfilled legacy rows until NOT NULL tightening.
     filters.push('(l.organization_id = $' + p + ' OR l.organization_id IS NULL)');
+    // A lead set aside by the Buildertrend reconcile (merged or archived) is reviewed in its archive, not listed.
+    filters.push('l.bt_archived_at IS NULL');
     params.push(req.user.organization_id);
     p++;
     const where = filters.length ? 'WHERE ' + filters.join(' AND ') : '';

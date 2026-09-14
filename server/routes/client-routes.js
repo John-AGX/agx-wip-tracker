@@ -60,7 +60,8 @@ router.get('/', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, re
   try {
     // Wave 1.A Phase 2 — org-scoped client directory.
     const { rows } = await pool.query(
-      'SELECT * FROM clients WHERE organization_id = $1 OR organization_id IS NULL ORDER BY name',
+      // bt_archived_at: a client set aside by the Buildertrend reconcile is reviewed in its archive, not listed.
+      'SELECT * FROM clients WHERE (organization_id = $1 OR organization_id IS NULL) AND bt_archived_at IS NULL ORDER BY name',
       [req.user.organization_id]
     );
     res.json({ clients: rows });
@@ -79,11 +80,11 @@ router.get('/heat-rollup', requireAuth, requireCapability('ESTIMATES_VIEW'), asy
   try {
     const orgId = req.user.organization_id;
     const [cq, jq, lq, qb] = await Promise.all([
-      pool.query('SELECT id, name, agent_notes FROM clients WHERE organization_id = $1 OR organization_id IS NULL', [orgId]),
+      pool.query('SELECT id, name, agent_notes FROM clients WHERE (organization_id = $1 OR organization_id IS NULL) AND bt_archived_at IS NULL', [orgId]),
       pool.query('SELECT id, client_id, data, updated_at FROM jobs WHERE organization_id = $1 OR organization_id IS NULL', [orgId]),
       pool.query(
         `SELECT client_id, status, estimated_revenue_low, estimated_revenue_high, updated_at
-           FROM leads WHERE client_id IS NOT NULL AND (organization_id = $1 OR organization_id IS NULL)`, [orgId]),
+           FROM leads WHERE client_id IS NOT NULL AND (organization_id = $1 OR organization_id IS NULL) AND bt_archived_at IS NULL`, [orgId]),
       pool.query(
         `SELECT job_id, COALESCE(SUM(amount),0)::float AS total FROM qb_cost_lines
           WHERE job_id IN (SELECT id FROM jobs WHERE organization_id = $1 OR organization_id IS NULL)

@@ -84,7 +84,7 @@ const JOB_KEYS = ['jobNumber', 'title', 'name', 'status', 'street_address', 'cit
 async function readP86(pool, orgId) {
   const jobsRaw = await pool.query(
     'SELECT id, ' + JOB_KEYS.map((k) => "data->>'" + k + "' AS \"" + k + '"').join(', ')
-    + ", data->'changeOrders' AS legacy_cos, bt_job_id FROM jobs WHERE organization_id = $1", [orgId]);
+    + ", data->'changeOrders' AS legacy_cos, bt_job_id FROM jobs WHERE organization_id = $1 AND bt_archived_at IS NULL", [orgId]);
   const jobRows = jobsRaw.rows.map((r) => ({ id: r.id, legacy_cos: r.legacy_cos, bt_job_id: r.bt_job_id,
     data: Object.fromEntries(JOB_KEYS.map((k) => [k, r[k] == null ? '' : r[k]])) }));
   const leads = await pool.query(
@@ -99,13 +99,13 @@ async function readP86(pool, orgId) {
     + 'FROM leads l '
     + 'LEFT JOIN users u ON u.id = l.salesperson_id AND u.organization_id = $1 '
     + 'LEFT JOIN clients c ON c.id = l.client_id AND c.organization_id = $1 '
-    + 'WHERE l.organization_id = $1', [orgId]);
+    + 'WHERE l.organization_id = $1 AND l.bt_archived_at IS NULL', [orgId]);
   const cos = await pool.query(
     'SELECT job_id, status, data FROM job_change_orders WHERE organization_id = $1', [orgId]);
   const users = await pool.query(
     'SELECT id, name FROM users WHERE organization_id = $1 AND active = true', [orgId]);
   const clients = await pool.query(
-    'SELECT id, name, first_name, last_name, email, phone, cell, address, city, state, zip, parent_client_id, bt_contact_id FROM clients WHERE organization_id = $1', [orgId]);
+    'SELECT id, name, first_name, last_name, email, phone, cell, address, city, state, zip, parent_client_id, bt_contact_id FROM clients WHERE organization_id = $1 AND bt_archived_at IS NULL', [orgId]);
   // Rows with no organization: all rows minus the rows that carry one. Counted,
   // never read — no id, title or value of theirs is selected.
   const orphanJobs = await pool.query('SELECT COUNT(*) - COUNT(organization_id) AS n FROM jobs');

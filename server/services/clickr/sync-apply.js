@@ -42,6 +42,7 @@ const match = require('./bt-match');
 const preview = require('./sync-preview');
 const { auditLog } = require('../../audit');
 const jobTypes = require('../job-types');
+const reconcile = require('./reconcile-merge');
 
 const ACTION_PARAM = 'buildertrend-apply';
 const MAX_ROWS = 200;
@@ -607,6 +608,72 @@ function parseInput(body) {
 
 let inFlight = false;
 
+// ── archive-bucket operations: no Clickr read, one transaction each ─────────
+const BUCKET_MODES = new Set(['merge', 'archive', 'restore', 'delete']);
+
+function parseBucketInput(b) {
+  const id = (v) => ((typeof v === 'string' || typeof v === 'number') ? String(v).trim() : '');
+  if (b.mode === 'merge') {
+    if (!id(b.survivorId) || !id(b.loserId)) return { error: 'survivorId and loserId are required to merge.' };
+    return { dataset: b.dataset, mode: 'merge', survivorId: id(b.survivorId), loserId: id(b.loserId), btIds: [] };
+  }
+  if (!id(b.p86Id)) return { error: 'p86Id is required.' };
+  return { dataset: b.dataset, mode: b.mode, p86Id: id(b.p86Id), btIds: [] };
+}
+
+async function runBucket(org, input, deps) {
+  const client = await deps.pool.connect();
+  const userId = deps.user && deps.user.id != null ? deps.user.id : null;
+  try {
+    await client.query('BEGIN');
+    let r;
+    if (input.mode === 'merge') r = await reconcile.mergeRecords(client, org.id, input.dataset, input.loserId, input.survivorId, userId);
+    else if (input.mode === 'archive') r = await reconcile.archiveRecord(client, org.id, input.dataset, input.p86Id, userId);
+    else if (input.mode === 'restore') r = await reconcile.restoreRecord(client, org.id, input.dataset, input.p86Id);
+    else r = await reconcile.deleteArchived(client, org.id, input.dataset, input.p86Id);
+    if (r.refused) {
+      await client.query('ROLLBACK');
+      return { status: 200, body: { dataset: input.dataset, mode: input.mode, counts: { skipped: 1 }, results: [{ outcome: 'skipped', reason: r.refused, attached: r.attached }] } };
+    }
+    await client.query('COMMIT');
+    const outcome = input.mode === 'merge' ? 'merged' : input.mode === 'archive' ? 'archived' : input.mode === 'restore' ? 'restored' : 'deleted';
+    const counts = {}; counts[outcome] = 1;
+    return { status: 200, body: { dataset: input.dataset, mode: input.mode, counts, results: [Object.assign({ outcome }, r)] } };
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch (_) { /* ignore */ }
+    console.error('[clickr-reconcile] ' + input.mode + ' failed');
+    return { status: 200, body: { dataset: input.dataset, mode: input.mode, counts: { failed: 1 }, results: [{ outcome: 'failed', reason: 'The ' + input.mode + ' failed inside this server; nothing was changed.' }] } };
+  } finally {
+    client.release();
+    if (preview.forgetFetch) preview.forgetFetch(org.id);
+  }
+}
+
+function ownerGate(req, res, env) {
+  const org = req.organization;
+  if (!org || org.id == null) { res.status(403).json({ error: 'Buildertrend reconcile needs an organization.' }); return null; }
+  if (String(org.slug || '') !== preview.ownerSlug(env)) {
+    res.status(403).json({ error: 'Buildertrend reconcile is not available for this organization. The Buildertrend connection on this server belongs to a different company.', code: 'CLICKR_NOT_THIS_ORG' });
+    return null;
+  }
+  return org;
+}
+
+// GET /api/admin/organizations/me?view=buildertrend-archive (after ROLES_MANAGE).
+async function handleArchiveList(req, res, deps) {
+  const env = (deps && deps.env) || process.env;
+  const org = ownerGate(req, res, env);
+  if (!org) return;
+  try {
+    const rows = await reconcile.listArchive(deps.pool, org.id);
+    res.set('Cache-Control', 'no-store');
+    res.json({ archive: rows });
+  } catch (e) {
+    console.error('[clickr-reconcile] archive list failed');
+    res.status(500).json({ error: 'The reconcile archive could not be read.' });
+  }
+}
+
 // Called from PUT /api/admin/organizations/me AFTER requireAuth, requireOrg and
 // requireCapability('ROLES_MANAGE') have passed.
 async function handle(req, res, deps) {
@@ -615,6 +682,32 @@ async function handle(req, res, deps) {
   if (!org || org.id == null) return res.status(403).json({ error: 'Buildertrend apply needs an organization.' });
   if (String(org.slug || '') !== preview.ownerSlug(env)) {
     return res.status(403).json({ error: 'Buildertrend apply is not available for this organization. The Buildertrend connection on this server belongs to a different company.', code: 'CLICKR_NOT_THIS_ORG' });
+  }
+  const body = req.body || {};
+  if (BUCKET_MODES.has(body.mode)) {
+    if (body.dataset !== 'jobs' && body.dataset !== 'leads' && body.dataset !== 'clients') return res.status(400).json({ error: 'dataset must be "jobs", "leads" or "clients".' });
+    const bi = parseBucketInput(body);
+    if (bi.error) return res.status(400).json({ error: bi.error });
+    if (inFlight) return res.status(429).json({ error: 'A Buildertrend apply is already running on this server. Try again in a moment.', code: 'CLICKR_APPLY_BUSY' });
+    inFlight = true;
+    try {
+      const out = await runBucket(org, bi, { pool: deps.pool, user: req.user });
+      res.set('Cache-Control', 'no-store');
+      res.status(out.status).json(out.body);
+      const r0 = out.body.results[0] || {};
+      if (['merged', 'archived', 'restored', 'deleted'].indexOf(r0.outcome) !== -1) {
+        auditLog(req, {
+          action: 'buildertrend.' + bi.mode,
+          targetType: bi.dataset === 'jobs' ? 'job' : bi.dataset === 'clients' ? 'client' : 'lead',
+          targetId: bi.mode === 'merge' ? bi.loserId : bi.p86Id,
+          organizationId: org.id,
+          detail: bi.mode === 'merge' ? { survivorId: bi.survivorId, loserId: bi.loserId, moved: r0.moved, kept: r0.kept } : { id: bi.p86Id },
+        });
+      }
+    } finally {
+      inFlight = false;
+    }
+    return;
   }
   const input = parseInput(req.body);
   if (input.error) return res.status(400).json({ error: input.error });
@@ -643,4 +736,4 @@ async function handle(req, res, deps) {
   }
 }
 
-module.exports = { handle, apply, parseInput, writable, pickedHeldBack, p86JobStatus, ACTION_PARAM };
+module.exports = { handle, handleArchiveList, apply, parseInput, writable, pickedHeldBack, p86JobStatus, ACTION_PARAM };

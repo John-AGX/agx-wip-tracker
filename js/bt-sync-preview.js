@@ -61,10 +61,14 @@
   // What a person ticked, per row: _picks['jobs:<btId>'][field] = true/false.
   // Corrections start ticked; held-back items a person may apply start unticked.
   var _picks = {};
-  var TABS = [['jobs', 'Jobs'], ['leads', 'Leads'], ['clients', 'Clients']];
+  var TABS = [['jobs', 'Jobs'], ['leads', 'Leads'], ['clients', 'Clients'], ['archive', 'Archive']];
+  var ARCHIVE_ENDPOINT = '/api/admin/organizations/me?view=buildertrend-archive';
+  var _archive = null;       // [{ kind, id, label, reason, mergedInto, archivedAt, attached, deletable }]
+  var _archiveErr = null;
+  var _archiveNote = null;
   var NOUN = { jobs: 'job', leads: 'lead', clients: 'client' };
   var _tab = 'jobs';
-  try { var _savedTab = window.localStorage && window.localStorage.getItem('btp.tab'); if (_savedTab === 'jobs' || _savedTab === 'leads' || _savedTab === 'clients') _tab = _savedTab; } catch (e) { /* storage blocked */ }
+  try { var _savedTab = window.localStorage && window.localStorage.getItem('btp.tab'); if (_savedTab === 'jobs' || _savedTab === 'leads' || _savedTab === 'clients' || _savedTab === 'archive') _tab = _savedTab; } catch (e) { /* storage blocked */ }
 
   function esc(s) {
     return String(s == null ? '' : s)
@@ -294,9 +298,14 @@
       var a = addr(c);
       if (a) bits.push(esc(a));
       if (c.rungs && c.rungs.length) bits.push('via ' + c.rungs.map(esc).join(', '));
-      var linkBtn = row && row.bt && row.bt.btId != null && row.bt.btId !== '' && row['class'] !== 'matched' && row['class'] !== 'conflict'
-        ? ' <button type="button" class="btp-btn btp-link" data-btp-link="' + esc(row.bt.btId) + '" data-btp-link-p86="' + esc(c.id) + '"' + (_applying ? ' disabled' : '') + '>Link to this one</button>'
-        : '';
+      var linkBtn = '';
+      if (row && row.bt && row.bt.btId != null && row.bt.btId !== '') {
+        if (row['class'] !== 'matched' && row['class'] !== 'conflict') {
+          linkBtn = ' <button type="button" class="btp-btn btp-link" data-btp-link="' + esc(row.bt.btId) + '" data-btp-link-p86="' + esc(c.id) + '"' + (_applying ? ' disabled' : '') + '>Link to this one</button>';
+        } else if (row.rung === 'Buildertrend ID' && row.p86) {
+          linkBtn = ' <button type="button" class="btp-btn btp-link" data-btp-merge="' + esc(c.id) + '" data-btp-merge-into="' + esc(row.p86.id) + '" data-btp-merge-label="' + esc(c.title || c.id) + '"' + (_applying ? ' disabled' : '') + '>Merge into this record</button>';
+        }
+      }
       return '<li>' + p86Label(c, ds.key) + (bits.length ? ' <span class="btp-meta">' + bits.join(' · ') + '</span>' : '') + linkBtn + '</li>';
     }).join('') + '</ul>';
     if (list.length > shown.length) {
@@ -418,11 +427,11 @@
   function alsoHTML(ds, r) {
     var html = '';
     if ((r.p86Duplicates || []).length) {
-      html += '<div class="btp-block c-flagged"><div class="btp-block-l">Possible duplicates in P86 — not proposed, still listed under “' + esc(LABEL.notinbt) + '”</div>' +
-        candidatesHTML(ds, r.p86Duplicates, 'all still listed under “not in Buildertrend”') + '</div>';
+      html += '<div class="btp-block c-flagged"><div class="btp-block-l">Possible duplicates in P86' + (r.rung === 'Buildertrend ID' ? ' — merge a true duplicate into this record; the emptied copy goes to the Archive tab' : ' — apply or link this row first to merge a duplicate into it') + '</div>' +
+        candidatesHTML(ds, r.p86Duplicates, 'all still listed under “not in Buildertrend”', r) + '</div>';
     }
     if ((r.considered || []).length) {
-      html += '<div class="btp-block c-flagged"><div class="btp-block-l">Also considered in P86 — not chosen</div>' + candidatesHTML(ds, r.considered) + '</div>';
+      html += '<div class="btp-block c-flagged"><div class="btp-block-l">Also considered in P86 — not chosen</div>' + candidatesHTML(ds, r.considered, null, r) + '</div>';
     }
     return html;
   }
@@ -479,6 +488,19 @@
 
   function applyResultText(res) {
     var c = (res && res.counts) || {};
+    if (res && (res.mode === 'merge' || res.mode === 'archive' || res.mode === 'restore' || res.mode === 'delete')) {
+      var r0 = (res.results || [])[0] || {};
+      if (r0.outcome === 'skipped' || r0.outcome === 'failed') return r0.reason || 'Nothing was changed.';
+      if (r0.outcome === 'merged') {
+        var mv = Object.keys(r0.moved || {}).map(function (k) { return k + ' ' + r0.moved[k]; });
+        var kp = Object.keys(r0.kept || {}).map(function (k) { return k + ' ' + r0.kept[k]; });
+        return 'Merged “' + (r0.loser && r0.loser.label) + '” into “' + (r0.survivor && r0.survivor.label) + '”. Moved: ' + (mv.length ? mv.join(', ') : 'nothing attached') + '.' +
+          (kp.length ? ' Stayed on the archived copy (the kept record already had its own): ' + kp.join(', ') + '.' : '') + ' The emptied copy is in the Archive tab.';
+      }
+      if (r0.outcome === 'archived') return 'Archived “' + (r0.record && r0.record.label) + '”. It is in the Archive tab.';
+      if (r0.outcome === 'restored') return 'Restored “' + (r0.record && r0.record.label) + '”.' + (r0.note ? ' ' + r0.note : '');
+      if (r0.outcome === 'deleted') return 'Permanently deleted “' + (r0.record && r0.record.label) + '”.';
+    }
     var parts = res && res.mode === 'create' ? [(c.created || 0) + ' created in P86'] : res && res.mode === 'link' ? [(c.linked || 0) + ' linked'] : [(c.applied || 0) + ' updated'];
     var createNotes = []; ((res && res.results) || []).forEach(function (x) { (x.notes || []).forEach(function (n) { if (createNotes.indexOf(n) === -1) createNotes.push(n); }); });
     if (c.linked) parts.push(c.linked + ' newly linked');
@@ -495,13 +517,16 @@
 
   function runApply(key, body) {
     if (_applying || !(window.p86Api && typeof window.p86Api.put === 'function')) return;
-    _applying = key + ':' + (body.mode === 'safe' ? 'safe' : body.mode === 'create' ? 'create:' + ((body.btIds && body.btIds[0]) || 'bulk') : body.btIds[0]);
-    if (body.mode !== 'safe' && body.mode !== 'create') delete _picks[key + ':' + body.btIds[0]];
+    _applying = key + ':' + (body.mode === 'safe' ? 'safe' : body.mode === 'create' ? 'create:' + ((body.btIds && body.btIds[0]) || 'bulk') : (body.btIds && body.btIds[0]) || body.mode);
+    if (body.btIds && body.btIds[0] && body.mode !== 'safe' && body.mode !== 'create') delete _picks[key + ':' + body.btIds[0]];
     _applyNote[key] = null;
     repaint(key);
     window.p86Api.put(APPLY_ENDPOINT, Object.assign({ dataset: key }, body)).then(function (res) {
       _applying = null;
-      _applyNote[key] = { ok: true, text: applyResultText(res) };
+      var okText = applyResultText(res);
+      var bad = res && res.results && res.results[0] && (res.results[0].outcome === 'skipped' || res.results[0].outcome === 'failed') && ['merge', 'archive', 'restore', 'delete'].indexOf(res.mode) !== -1;
+      _applyNote[key] = { ok: !bad, text: okText };
+      if (['merge', 'archive', 'restore', 'delete'].indexOf(body.mode) !== -1) { _archiveNote = _applyNote[key]; _archive = null; loadArchive(); }
       (res && res.results || []).forEach(function (x) { if (x.btId) delete _picks[key + ':' + x.btId]; });
       load();
     }).catch(function (e) {
@@ -521,6 +546,40 @@
     }
   }
 
+  function loadArchive() {
+    if (!(window.p86Api && typeof window.p86Api.get === 'function')) return;
+    window.p86Api.get(ARCHIVE_ENDPOINT).then(function (d) {
+      _archive = (d && Array.isArray(d.archive)) ? d.archive : [];
+      _archiveErr = null;
+      if (_tab === 'archive') paint();
+    }).catch(function (e) {
+      _archive = [];
+      _archiveErr = errorSentence(e);
+      if (_tab === 'archive') paint();
+    });
+  }
+
+  function archiveHTML() {
+    var html = '<section class="btp-ds" data-btp-ds="archive"><div class="btp-ds-head"><div class="btp-ds-title">Reconcile archive</div>' +
+      '<div class="btp-sub">Merged duplicates and P86-only records set aside for review</div></div>';
+    html += '<div class="btp-sentence is-ok">Restore puts a record back where it was (anything merged into another record stays there). Delete permanently is allowed only once nothing is attached to the record.</div>';
+    if (_archiveNote) html += '<div class="btp-sentence ' + (_archiveNote.ok ? 'is-ok' : 'is-bad') + '">' + esc(_archiveNote.text) + '</div>';
+    if (_archiveErr) html += '<div class="btp-sentence is-bad">' + esc(_archiveErr) + '</div>';
+    if (_archive == null) { loadArchive(); return html + '<div class="btp-sub" style="padding:12px 0;">Loading the archive…</div></section>'; }
+    if (!_archive.length) return html + '<div class="btp-sub" style="padding:12px 0;">Nothing is archived.</div></section>';
+    html += _archive.map(function (a) {
+      var why = a.reason === 'merged' ? 'Merged into ' + (a.mergedInto ? '“' + esc(a.mergedInto.label) + '”' : 'another record') : 'Not in Buildertrend';
+      var att = Object.keys(a.attached || {});
+      return '<div class="btp-row"><div class="btp-row-head"><span class="btp-chip c-notinbt">' + esc(NOUN[a.kind] || a.kind) + '</span>' +
+        '<span class="btp-rung">' + why + (a.archivedAt ? ' · ' + esc(new Date(a.archivedAt).toLocaleString()) : '') + '</span>' +
+        '<button type="button" class="btp-btn btp-apply" data-btp-restore="' + esc(a.id) + '" data-btp-kind="' + esc(a.kind) + '"' + (_applying ? ' disabled' : '') + '>Restore</button>' +
+        '<button type="button" class="btp-btn" style="margin-left:6px;" data-btp-delete="' + esc(a.id) + '" data-btp-kind="' + esc(a.kind) + '" data-btp-delete-label="' + esc(a.label) + '"' + (_applying || !a.deletable ? ' disabled' : '') + '>Delete permanently</button></div>' +
+        '<div class="btp-name">' + esc(a.label) + '</div>' +
+        (att.length ? '<div class="btp-notes">Still attached (blocks a permanent delete): ' + att.map(function (k) { return esc(k) + ' ' + esc(a.attached[k]); }).join(', ') + '</div>' : '') + '</div>';
+    }).join('');
+    return html + '</section>';
+  }
+
   function notInBtRowHTML(ds, p) {
     var meta = [];
     if (p.status) meta.push(esc(p.status));
@@ -529,8 +588,11 @@
     if (p.client) meta.push('Client: ' + esc(p.client));
     var a = addr(p);
     if (a) meta.push(esc(a));
+    var archiveBtn = ds.key === 'leads'
+      ? '<span class="btp-rung" style="margin-left:auto;">not archived: Buildertrend sends open leads only</span>'
+      : '<button type="button" class="btp-btn btp-apply" data-btp-archive="' + esc(p.id) + '" data-btp-archive-label="' + esc(p.title || p.id) + '"' + (_applying ? ' disabled' : '') + '>Archive</button>';
     return '<div class="btp-row"><div class="btp-row-head"><span class="btp-chip c-notinbt">' + esc(CHIP.notinbt) + '</span>' +
-      '<span class="btp-rung">review only — never proposed for deletion</span></div>' +
+      '<span class="btp-rung">review only — archiving sets it aside, restorable</span>' + archiveBtn + '</div>' +
       '<div class="btp-side-l">Project 86</div><div class="btp-name">' + p86Label(p, ds.key) + '</div>' +
       (meta.length ? '<div class="btp-meta">' + meta.join(' · ') + '</div>' : '') +
       ((p.resembles || []).length ? '<div class="btp-notes">Possible duplicate: looks like Buildertrend ' + p.resembles.map(function (x) {
@@ -680,7 +742,8 @@
         return '<button type="button" role="tab" class="btp-tab' + (_tab === t[0] ? ' is-active' : '') + '" aria-selected="' + (_tab === t[0]) + '" data-btp-tab="' + t[0] + '">' +
           t[1] + (waiting ? ' <span class="btp-tab-n">' + waiting + '</span>' : '') + '</button>';
       }).join('') + '</div>';
-      if (_data.datasets && _data.datasets[_tab]) html += datasetHTML(_data.datasets[_tab]);
+      if (_tab === 'archive') html += archiveHTML();
+      else if (_data.datasets && _data.datasets[_tab]) html += datasetHTML(_data.datasets[_tab]);
       else html += '<div class="btp-sentence is-warn">This server has not sent the ' + esc(_tab) + ' comparison yet — it may still be running the previous version. Press Refresh in a minute.</div>';
     }
     return html + '</div>';
@@ -707,6 +770,18 @@
   function wire() {
     var r = _host.querySelector('[data-btp-refresh]');
     if (r) r.addEventListener('click', load);
+    Array.prototype.forEach.call(_host.querySelectorAll('[data-btp-restore]'), function (b) {
+      b.addEventListener('click', function () {
+        runApply(b.getAttribute('data-btp-kind'), { mode: 'restore', p86Id: b.getAttribute('data-btp-restore') });
+      });
+    });
+    Array.prototype.forEach.call(_host.querySelectorAll('[data-btp-delete]'), function (b) {
+      b.addEventListener('click', function () {
+        askThen('Permanently delete “' + b.getAttribute('data-btp-delete-label') + '”? This cannot be undone.', 'Delete permanently', function () {
+          runApply(b.getAttribute('data-btp-kind'), { mode: 'delete', p86Id: b.getAttribute('data-btp-delete') });
+        });
+      });
+    });
     Array.prototype.forEach.call(_host.querySelectorAll('[data-btp-tab]'), function (b) {
       b.addEventListener('click', function () {
         _tab = b.getAttribute('data-btp-tab');
@@ -753,6 +828,22 @@
           picksFor(ds, row)[cb.getAttribute('data-btp-pick')] = cb.checked;
           var btn = sec.querySelector('[data-btp-apply="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]');
           if (btn) { btn.textContent = applyLabel(ds, row); btn.disabled = !!_applying || (!pickedFields(ds, row).length && row.rung === 'Buildertrend ID'); }
+        });
+      });
+      Array.prototype.forEach.call(sec.querySelectorAll('[data-btp-merge]'), function (b) {
+        b.addEventListener('click', function () {
+          var loser = b.getAttribute('data-btp-merge');
+          var into = b.getAttribute('data-btp-merge-into');
+          askThen('Merge “' + b.getAttribute('data-btp-merge-label') + '” into this Buildertrend-linked ' + (NOUN[key] || 'record') + '? Everything attached to it moves over, and the emptied copy goes to the Archive tab, where it can be restored or deleted.', 'Merge', function () {
+            runApply(key, { mode: 'merge', survivorId: into, loserId: loser });
+          });
+        });
+      });
+      Array.prototype.forEach.call(sec.querySelectorAll('[data-btp-archive]'), function (b) {
+        b.addEventListener('click', function () {
+          askThen('Archive “' + b.getAttribute('data-btp-archive-label') + '”? It is set aside in the Archive tab, where it can be restored or deleted.', 'Archive', function () {
+            runApply(key, { mode: 'archive', p86Id: b.getAttribute('data-btp-archive') });
+          });
         });
       });
       Array.prototype.forEach.call(sec.querySelectorAll('[data-btp-link]'), function (b) {
@@ -805,6 +896,7 @@
       render: function (data, err) { _data = data || null; _err = err || null; _loading = false; return pageHTML(); },
       setView: function (key, f, scope) { _ui[key].f = f || 'all'; if (scope) _ui[key].scope = scope; _ui[key].shown = PAGE; },
       setTab: function (t) { _tab = t; },
+      setArchive: function (a) { _archive = a; _archiveErr = null; },
       resetPicks: function () { _picks = {}; },
       shapeError: shapeError
     }

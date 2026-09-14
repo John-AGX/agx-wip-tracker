@@ -460,6 +460,9 @@ router.delete('/:id', requireAuth, requireSystemAdmin, async (req, res) => {
 // the one CLICKR_API_KEY belongs to. The census drives /me WITHOUT the
 // parameter, so the mode's tenancy is proved in test/clickr-sync-preview.test.js.
 router.get('/me', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), (req, res) => {
+  if (req.query && req.query.view === 'buildertrend-archive') {
+    return require('../services/clickr/sync-apply').handleArchiveList(req, res, { pool });
+  }
   if (req.query && req.query.view === 'buildertrend-preview') {
     return require('../services/clickr/sync-preview').handle(req, res, { pool });
   }

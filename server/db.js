@@ -1488,6 +1488,22 @@ async function initSchema() {
     CREATE UNIQUE INDEX IF NOT EXISTS uq_jobs_org_bt_job_id       ON jobs(organization_id, bt_job_id)       WHERE bt_job_id IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS uq_leads_org_bt_lead_id     ON leads(organization_id, bt_lead_id)     WHERE bt_lead_id IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS uq_clients_org_bt_contact_id ON clients(organization_id, bt_contact_id) WHERE bt_contact_id IS NOT NULL;
+    -- Buildertrend reconcile archive (services/clickr/reconcile-merge.js): a merged
+    -- duplicate or a P86-only record set aside for review. NULL = live. Archived
+    -- leads and clients are left out of their list routes and the map; an archived
+    -- job also carries status "Archived", which the job list already hides.
+    ALTER TABLE jobs    ADD COLUMN IF NOT EXISTS bt_archived_at TIMESTAMPTZ;
+    ALTER TABLE jobs    ADD COLUMN IF NOT EXISTS bt_archive_reason TEXT;
+    ALTER TABLE jobs    ADD COLUMN IF NOT EXISTS bt_merged_into TEXT;
+    ALTER TABLE jobs    ADD COLUMN IF NOT EXISTS bt_archived_by INTEGER;
+    ALTER TABLE leads   ADD COLUMN IF NOT EXISTS bt_archived_at TIMESTAMPTZ;
+    ALTER TABLE leads   ADD COLUMN IF NOT EXISTS bt_archive_reason TEXT;
+    ALTER TABLE leads   ADD COLUMN IF NOT EXISTS bt_merged_into TEXT;
+    ALTER TABLE leads   ADD COLUMN IF NOT EXISTS bt_archived_by INTEGER;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS bt_archived_at TIMESTAMPTZ;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS bt_archive_reason TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS bt_merged_into TEXT;
+    ALTER TABLE clients ADD COLUMN IF NOT EXISTS bt_archived_by INTEGER;
 
     -- ---------------------------------------------------------------
     -- Per-org folder templates. Folders in Project 86 are IMPLICIT --

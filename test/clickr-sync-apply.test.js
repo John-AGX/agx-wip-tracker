@@ -679,6 +679,44 @@ describe('PAGE — Apply buttons appear only where an apply can do something', (
     T.setTab('jobs');
   });
 
+  test('a linked row offers Merge on its possible duplicates; an unlinked one does not; P86-only jobs and clients offer Archive, leads do not', () => {
+    T.resetPicks();
+    T.setTab('jobs');
+    const d = data([
+      baseRow('matched', { rung: 'Buildertrend ID', p86Duplicates: [{ id: 'j-dup', title: 'Harbor Club Railing', rungs: ['similar name'] }] }),
+      baseRow('matched', { bt: { btId: '222', raw: 'S2000', title: 'W', scope: 'open' }, rung: 'number', p86: { id: 'j-2', title: 'W' }, p86Duplicates: [{ id: 'j-dup2', title: 'W2', rungs: ['similar name'] }] }),
+    ]);
+    d.datasets.jobs.notInBuildertrend = { rows: [{ id: 'j-only', title: 'Only in P86', status: 'On Hold' }], count: 1, reliable: true, sentence: '' };
+    T.setView('jobs', 'all', 'open');
+    const html = T.render(d);
+    expect(html).toMatch(/data-btp-merge="j-dup" data-btp-merge-into="j-1"/);
+    expect(html).not.toContain('data-btp-merge="j-dup2"');
+    T.setView('jobs', 'notinbt', 'open');
+    expect(T.render(d)).toContain('data-btp-archive="j-only"');
+    d.datasets.leads.notInBuildertrend = { rows: [{ id: 'l-only', title: 'Stale' }], count: 1, reliable: true, sentence: '' };
+    T.setTab('leads');
+    T.setView('leads', 'notinbt', 'all');
+    const leadsHtml = T.render(d);
+    expect(leadsHtml).not.toContain('data-btp-archive=');
+    expect(leadsHtml).toContain('Buildertrend sends open leads only');
+    T.setView('jobs', 'all', 'open'); T.setView('leads', 'all', 'all'); T.setTab('jobs');
+  });
+
+  test('the Archive tab lists records with Restore, and Delete permanently only when nothing is attached', () => {
+    T.setTab('archive');
+    T.setArchive([
+      { kind: 'jobs', id: 'j-dup', label: 'S1050B Harbor', reason: 'merged', mergedInto: { id: 'j-keep', label: 'S1050 Harbor' }, attached: { job_access: 1 }, deletable: false },
+      { kind: 'clients', id: 'c-only', label: 'Old Client', reason: 'not_in_buildertrend', mergedInto: null, attached: {}, deletable: true },
+    ]);
+    const html = T.render(data([]));
+    expect(html).toContain('data-btp-restore="j-dup"');
+    expect(html).toMatch(/data-btp-delete="j-dup" data-btp-kind="jobs" data-btp-delete-label="S1050B Harbor" disabled/);
+    expect(html).toMatch(/data-btp-delete="c-only" data-btp-kind="clients" data-btp-delete-label="Old Client">/);
+    expect(html).toContain('Merged into “S1050 Harbor”');
+    expect(html).toContain('job_access 1');
+    T.setTab('jobs');
+  });
+
   test('ambiguous, new and possible-duplicate rows get no button; a partial read disables the safe button', () => {
     const html = T.render(data([baseRow('ambiguous', { p86: null }), baseRow('new', { p86: null }), baseRow('possible_duplicate', { p86: null })], false));
     expect(html).not.toContain('data-btp-apply="');
