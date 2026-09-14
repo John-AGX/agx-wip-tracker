@@ -50,19 +50,21 @@
   var _loading = false;
   var _ui = {
     jobs: { f: 'all', scope: 'open', q: '', shown: PAGE },
-    leads: { f: 'all', scope: 'all', q: '', shown: PAGE }
+    leads: { f: 'all', scope: 'all', q: '', shown: PAGE },
+    clients: { f: 'all', scope: 'all', q: '', shown: PAGE }
   };
   // Apply (server/services/clickr/sync-apply.js). The server re-reads both
   // sides and re-matches; the page only says which Buildertrend ids to act on.
   var APPLY_ENDPOINT = '/api/admin/organizations/me?action=buildertrend-apply';
   var _applying = null;          // 'jobs:safe' | 'jobs:<btId>' | ...
-  var _applyNote = { jobs: null, leads: null };   // { ok, text }
+  var _applyNote = { jobs: null, leads: null, clients: null };   // { ok, text }
   // What a person ticked, per row: _picks['jobs:<btId>'][field] = true/false.
   // Corrections start ticked; held-back items a person may apply start unticked.
   var _picks = {};
-  var TABS = [['jobs', 'Jobs'], ['leads', 'Leads']];
+  var TABS = [['jobs', 'Jobs'], ['leads', 'Leads'], ['clients', 'Clients']];
+  var NOUN = { jobs: 'job', leads: 'lead', clients: 'client' };
   var _tab = 'jobs';
-  try { var _savedTab = window.localStorage && window.localStorage.getItem('btp.tab'); if (_savedTab === 'jobs' || _savedTab === 'leads') _tab = _savedTab; } catch (e) { /* storage blocked */ }
+  try { var _savedTab = window.localStorage && window.localStorage.getItem('btp.tab'); if (_savedTab === 'jobs' || _savedTab === 'leads' || _savedTab === 'clients') _tab = _savedTab; } catch (e) { /* storage blocked */ }
 
   function esc(s) {
     return String(s == null ? '' : s)
@@ -90,6 +92,7 @@
   function shapeError(d) {
     var ok = d && typeof d === 'object' && d.datasets && typeof d.datasets === 'object' &&
       d.datasets.jobs && typeof d.datasets.jobs === 'object' && d.datasets.leads && typeof d.datasets.leads === 'object';
+    // A server that predates the Clients tab answers jobs + leads only: the tab then says so instead of breaking.
     return ok ? null : 'The server answered, but not with a Buildertrend preview — it may still be running the previous version during a deploy. Press Refresh in a minute.';
   }
 
@@ -217,7 +220,7 @@
     return (ds.rows || []).filter(function (r) {
       if (!inScope(ds, ui, r) || !passesFilter(r, ui.f)) return false;
       if (!q) return true;
-      var hay = [r.bt.raw, r.bt.contactName, r.bt.street, r.bt.city, r.p86 && r.p86.title, r.p86 && r.p86.jobNumber].join(' ').toLowerCase();
+      var hay = [r.bt.raw, r.bt.contactName, r.bt.email, r.bt.street, r.bt.city, r.p86 && r.p86.title, r.p86 && r.p86.jobNumber, r.p86 && r.p86.email].join(' ').toLowerCase();
       return hay.indexOf(q) >= 0;
     });
   }
@@ -227,7 +230,7 @@
     var nib = ds.notInBuildertrend;
     return ((nib && nib.rows) || []).filter(function (p) {
       if (!q) return true;
-      return [p.jobNumber, p.title, p.client, p.street, p.city, p.status].join(' ').toLowerCase().indexOf(q) >= 0;
+      return [p.jobNumber, p.title, p.client, p.email, p.street, p.city, p.status].join(' ').toLowerCase().indexOf(q) >= 0;
     });
   }
 
@@ -258,6 +261,12 @@
       if (a) meta.push(esc(a));
       if (bt.projectedStart) meta.push('Start ' + esc(String(bt.projectedStart).slice(0, 10)));
       if (bt.contractText) meta.push('Contract ' + esc(bt.contractText));
+    } else if (ds.key === 'clients') {
+      if (bt.email) meta.push(esc(bt.email));
+      if (bt.phone || bt.cell) meta.push(esc(bt.phone || bt.cell));
+      var ca = addr(bt);
+      if (ca) meta.push(esc(ca));
+      if (bt.jobCount != null || bt.leadCount != null) meta.push(esc(bt.jobCount || 0) + ' jobs · ' + esc(bt.leadCount || 0) + ' leads in Buildertrend');
     } else {
       if (bt.contactName) meta.push('Contact: ' + esc(bt.contactName));
       if (bt.salesperson) meta.push('Sales: ' + esc(bt.salesperson));
@@ -302,6 +311,7 @@
       var a = addr(p);
       if (a) meta.push(esc(a));
       if (ds.key === 'leads' && p.client) meta.push('Client: ' + esc(p.client));
+      if (ds.key === 'clients' && p.email) meta.push(esc(p.email));
       html += '<div class="btp-name">' + p86Label(p, ds.key) + '</div>' + (meta.length ? '<div class="btp-meta">' + meta.join(' · ') + '</div>' : '');
     } else if (cls === 'change_order') {
       var par = r.parent;
@@ -499,6 +509,8 @@
   function notInBtRowHTML(ds, p) {
     var meta = [];
     if (p.status) meta.push(esc(p.status));
+    if (ds.key === 'clients' && p.state86 === 'property') meta.push('property under a parent client in P86');
+    if (p.email) meta.push(esc(p.email));
     if (p.client) meta.push('Client: ' + esc(p.client));
     var a = addr(p);
     if (a) meta.push(esc(a));
@@ -637,7 +649,7 @@
     else if (shapeErr) html += '<div class="btp-sentence is-bad">' + esc(shapeErr) + '</div>';
     if (_data && !shapeErr) {
       var p = _data.p86 || {};
-      html += '<div class="btp-sub" style="margin:0 0 10px;">Project 86 side: ' + esc(p.jobs) + ' jobs and ' + esc(p.leads) + ' leads in ' + esc(_data.organization && _data.organization.name) + '.' +
+      html += '<div class="btp-sub" style="margin:0 0 10px;">Project 86 side: ' + esc(p.jobs) + ' jobs, ' + esc(p.leads) + ' leads' + (p.clients != null ? ' and ' + esc(p.clients) + ' clients' : '') + ' in ' + esc(_data.organization && _data.organization.name) + '.' +
         (p.unscopedJobs || p.unscopedLeads ? ' ' + esc(p.unscopedJobs) + ' jobs and ' + esc(p.unscopedLeads) + ' leads carry no organization — counted for review, never matched.' : '') + '</div>';
       if (p.error) html += '<div class="btp-sentence is-bad">' + esc(p.error) + '</div>';
       html += '<div class="btp-tabs" role="tablist">' + TABS.map(function (t) {
@@ -647,6 +659,7 @@
           t[1] + (waiting ? ' <span class="btp-tab-n">' + waiting + '</span>' : '') + '</button>';
       }).join('') + '</div>';
       if (_data.datasets && _data.datasets[_tab]) html += datasetHTML(_data.datasets[_tab]);
+      else html += '<div class="btp-sentence is-warn">This server has not sent the ' + esc(_tab) + ' comparison yet — it may still be running the previous version. Press Refresh in a minute.</div>';
     }
     return html + '</div>';
   }
@@ -703,7 +716,7 @@
           var money = row ? (row.corrections || []).concat(row.heldBack || []).filter(function (x) { return fields.indexOf(x.field) !== -1 && (x.money || x.reason === 'money' || x.field === 'jobNumber'); }) : [];
           var go = function () { runApply(key, { btIds: [id], fields: fields }); };
           if (money.length) {
-            askThen('Apply ' + money.map(function (x) { return (x.label || x.field) + ' → ' + (x.to || x.bt); }).join(', ') + ' to this ' + (key === 'jobs' ? 'job' : 'lead') + '?', 'Apply', go);
+            askThen('Apply ' + money.map(function (x) { return (x.label || x.field) + ' → ' + (x.to || x.bt); }).join(', ') + ' to this ' + (NOUN[key] || 'record') + '?', 'Apply', go);
           } else {
             go();
           }
@@ -725,7 +738,7 @@
         safe.addEventListener('click', function () {
           var ds = _data && _data.datasets && _data.datasets[key];
           var n = ds ? safeCount(ds) : 0;
-          askThen('Link ' + n + ' confident ' + (key === 'jobs' ? 'job' : 'lead') + ' match' + (n === 1 ? '' : 'es') + ' to Buildertrend' +
+          askThen('Link ' + n + ' confident ' + (NOUN[key] || 'record') + ' match' + (n === 1 ? '' : 'es') + ' to Buildertrend' +
             (key === 'jobs' ? ' and fill start dates where P86 has none' : '') + '? No other field changes.', 'Apply', function () {
             runApply(key, { mode: 'safe' });
           });

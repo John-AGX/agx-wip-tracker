@@ -53,6 +53,19 @@ const DATASETS = {
       'nextActivityDate', 'nextActivityTitle', 'nextActivityAssignee',
     ],
   },
+  clients: {
+    key: 'clients',
+    label: 'Clients',
+    noun: 'client',
+    datasetId: '6aa5ca9384f8135cf0cc5dbd',
+    requiredKey: 'displayName',
+    idKey: 'contactId',
+    keys: [
+      'contactId', 'displayName', 'displayNameNormalized', 'firstName', 'lastName',
+      'email', 'primaryEmail', 'emails', 'phone', 'cell', 'street', 'city', 'state', 'zip',
+      'jobCount', 'jobTotalCount', 'leadCount', 'leadTotalCount', 'activationStatus', 'activationConfirmed', 'customFields',
+    ],
+  },
 };
 
 function isPlainObject(v) {
@@ -148,8 +161,30 @@ function readLead(rec) {
   };
 }
 
+function readClient(rec) {
+  const r = isPlainObject(rec) ? rec : {};
+  const firstEmail = Array.isArray(r.emails) ? r.emails.map(scalarText).filter((x) => x && x.trim())[0] : null;
+  return {
+    btId: scalarText(r.contactId),
+    displayName: scalarText(r.displayName),
+    firstName: scalarText(r.firstName),
+    lastName: scalarText(r.lastName),
+    email: scalarText(r.primaryEmail) || scalarText(r.email) || firstEmail || null,
+    phone: scalarText(r.phone),
+    cell: scalarText(r.cell),
+    street: scalarText(r.street),
+    city: scalarText(r.city),
+    state: scalarText(r.state),
+    zip: scalarText(r.zip),
+    jobCount: typeof r.jobCount === 'number' ? r.jobCount : null,
+    leadCount: typeof r.leadCount === 'number' ? r.leadCount : null,
+  };
+}
+
 function readRecord(kind, rec) {
-  return kind === 'jobs' ? readJob(rec) : readLead(rec);
+  if (kind === 'jobs') return readJob(rec);
+  if (kind === 'clients') return readClient(rec);
+  return readLead(rec);
 }
 
 // THE DIAGNOSTIC. Key names and counts only — never a value, so nothing a

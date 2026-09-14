@@ -57,6 +57,8 @@ const CONFIDENT = new Set(['matched', 'conflict']);
 // P86 may hold 0, '' or null for "no figure": compared as numbers.
 const moneyEq = (a, b) => Math.abs((Number(a) || 0) - (Number(b) || 0)) < 0.005;
 const LEAD_REVENUE_COLUMNS = { estimatedRevenueMin: 'estimated_revenue_low', estimatedRevenueMax: 'estimated_revenue_high' };
+// Client contact details: correction/held-back field -> clients column. The name is never written.
+const CLIENT_COLUMNS = { email: 'email', phone: 'phone', cell: 'cell', street: 'address', city: 'city', state: 'state', zip: 'zip' };
 
 function isSafeCorrection(kind, c) {
   return kind === 'jobs' && c.field === 'startDate' && c.kind === 'fill';
@@ -68,6 +70,7 @@ function isSafeCorrection(kind, c) {
 function writable(kind, row, mode, fields) {
   const allowed = kind === 'jobs'
     ? Object.assign({ contractPrice: 1 }, JOB_FIELD_KEYS)
+    : kind === 'clients' ? CLIENT_COLUMNS
     : Object.assign({ salesperson: 1, client: 1 }, LEAD_FIELD_COLUMNS);
   const pick = fields ? new Set(fields) : null;
   return (row.corrections || []).filter((c) => allowed[c.field]
@@ -79,7 +82,7 @@ function writable(kind, row, mode, fields) {
 // revenue). Approved change orders and unparsed money are never applicable.
 function pickedHeldBack(kind, row, mode, fields) {
   if (mode !== 'rows' || !fields) return [];
-  const allowed = kind === 'jobs' ? { jobNumber: 1 } : LEAD_REVENUE_COLUMNS;
+  const allowed = kind === 'jobs' ? { jobNumber: 1 } : kind === 'clients' ? CLIENT_COLUMNS : LEAD_REVENUE_COLUMNS;
   const pick = new Set(fields);
   return (row.heldBack || []).filter((h) => h.applicable === true && allowed[h.field] && pick.has(h.field));
 }
@@ -226,6 +229,43 @@ async function applyLead(db, orgId, row, mode, fields) {
   return { applied, linked: !wasLinked, stale, contactLinked, regeocode: addressChanged ? lead.id : null };
 }
 
+// ── clients ──────────────────────────────────────────────────────────────
+async function applyClient(db, orgId, row, mode, fields) {
+  const btId = norm(row.bt.btId);
+  const cur = await db.query('SELECT id, name, email, phone, cell, address, city, state, zip, bt_contact_id FROM clients WHERE id = $1 AND organization_id = $2 FOR UPDATE', [row.p86.id, orgId]);
+  if (!cur.rows.length) return { skipped: 'The P86 client is no longer there.' };
+  const client = cur.rows[0];
+  const linkedTo = norm(client.bt_contact_id);
+  if (linkedTo && linkedTo !== btId) return { skipped: 'This P86 client is already linked to a different Buildertrend contact.' };
+  const taken = await db.query('SELECT id FROM clients WHERE organization_id = $1 AND bt_contact_id = $2 AND id <> $3', [orgId, btId, client.id]);
+  if (taken.rows.length) return { skipped: 'Another P86 client is already linked to this Buildertrend contact.' };
+
+  const sets = {};
+  const applied = [];
+  const stale = [];
+  for (const c of writable('clients', row, mode, fields)) {
+    const col = CLIENT_COLUMNS[c.field];
+    if (norm(client[col]) !== norm(c.from)) { stale.push(c.label || c.field); continue; }
+    sets[col] = c.to;
+    applied.push({ field: c.field, from: c.from, to: c.to });
+  }
+  for (const h of pickedHeldBack('clients', row, mode, fields)) {
+    const col = CLIENT_COLUMNS[h.field];
+    if (norm(client[col]) !== norm(h.p86)) { stale.push(h.label || h.field); continue; }
+    sets[col] = h.value;
+    applied.push({ field: h.field, from: h.p86, to: h.value });
+  }
+  const wasLinked = linkedTo === btId;
+  if (!applied.length && wasLinked) return { unchanged: true, stale };
+  const cols = Object.keys(sets);
+  const params = cols.map((k) => sets[k]);
+  params.push(btId, client.id, orgId);
+  const n = params.length;
+  await db.query('UPDATE clients SET ' + cols.map((k, i) => k + ' = $' + (i + 1)).concat(['bt_contact_id = $' + (n - 2), 'updated_at = NOW()']).join(', ')
+    + ' WHERE id = $' + (n - 1) + ' AND organization_id = $' + n, params);
+  return { applied, linked: !wasLinked, stale };
+}
+
 async function geocodeLeadLater(pool, id) {
   try {
     const r = await pool.query('SELECT street_address, city, state, zip FROM leads WHERE id = $1', [id]);
@@ -255,7 +295,9 @@ async function apply(org, input, deps) {
   const values = fr.records.map((r) => readRecord(kind, r));
   const rows = kind === 'jobs'
     ? match.matchJobs(values, p86.jobs, { coTotals: p86.coTotals })
-    : match.matchLeads(values, p86.leads, { directory: p86.directory });
+    : kind === 'clients'
+      ? match.matchClients(values, p86.clients || [])
+      : match.matchLeads(values, p86.leads, { directory: p86.directory });
 
   let targets;
   if (mode === 'safe') {
@@ -286,7 +328,9 @@ async function apply(org, input, deps) {
     const client = await deps.pool.connect();
     try {
       await client.query('BEGIN');
-      const r = kind === 'jobs' ? await applyJob(client, org.id, row, mode, input.fields) : await applyLead(client, org.id, row, mode, input.fields);
+      const r = kind === 'jobs' ? await applyJob(client, org.id, row, mode, input.fields)
+        : kind === 'clients' ? await applyClient(client, org.id, row, mode, input.fields)
+        : await applyLead(client, org.id, row, mode, input.fields);
       await client.query('COMMIT');
       if (r.skipped) results.push(Object.assign(base, { outcome: 'skipped', reason: r.skipped }));
       else if (r.unchanged) results.push(Object.assign(base, { outcome: 'unchanged', stale: r.stale }));
@@ -315,7 +359,7 @@ async function apply(org, input, deps) {
 function parseInput(body) {
   const b = body || {};
   const dataset = b.dataset;
-  if (dataset !== 'jobs' && dataset !== 'leads') return { error: 'dataset must be "jobs" or "leads".' };
+  if (dataset !== 'jobs' && dataset !== 'leads' && dataset !== 'clients') return { error: 'dataset must be "jobs", "leads" or "clients".' };
   const mode = b.mode === 'safe' ? 'safe' : 'rows';
   if (mode === 'rows') {
     const ids = Array.isArray(b.btIds) ? b.btIds.filter((x) => (typeof x === 'string' || typeof x === 'number') && norm(x)) : [];
@@ -355,7 +399,7 @@ async function handle(req, res, deps) {
     if (out.status === 200) {
       auditLog(req, {
         action: 'buildertrend.apply',
-        targetType: input.dataset === 'jobs' ? 'job' : 'lead',
+        targetType: input.dataset === 'jobs' ? 'job' : input.dataset === 'clients' ? 'client' : 'lead',
         targetId: input.mode === 'safe' ? 'safe updates' : String(input.btIds.length) + ' records',
         organizationId: org.id,
         detail: { mode: input.mode, counts: out.body.counts,

@@ -105,7 +105,7 @@ async function readP86(pool, orgId) {
   const users = await pool.query(
     'SELECT id, name FROM users WHERE organization_id = $1 AND active = true', [orgId]);
   const clients = await pool.query(
-    'SELECT id, name FROM clients WHERE organization_id = $1', [orgId]);
+    'SELECT id, name, first_name, last_name, email, phone, cell, address, city, state, zip, parent_client_id, bt_contact_id FROM clients WHERE organization_id = $1', [orgId]);
   // Rows with no organization: all rows minus the rows that carry one. Counted,
   // never read — no id, title or value of theirs is selected.
   const orphanJobs = await pool.query('SELECT COUNT(*) - COUNT(organization_id) AS n FROM jobs');
@@ -115,6 +115,7 @@ async function readP86(pool, orgId) {
     leads: leads.rows,
     coTotals: changeOrderTotals(jobRows, cos.rows),
     directory: { users: users.rows.map((r) => ({ id: r.id, name: r.name })), clients: clients.rows.map((r) => ({ id: r.id, name: r.name })) },
+    clients: clients.rows,
     unscopedJobs: Number((orphanJobs.rows[0] && orphanJobs.rows[0].n) || 0),
     unscopedLeads: Number((orphanLeads.rows[0] && orphanLeads.rows[0].n) || 0),
   };
@@ -135,6 +136,8 @@ function notInBtSentence(ds, reliable, fr, p86Error, n, notListed) {
   const noun = ds.label.toLowerCase();
   const extra = ds.key === 'jobs'
     ? ' Only active P86 jobs are listed; ' + notListed + ' Completed or Archived P86 jobs no Buildertrend row reached are not.'
+    : ds.key === 'clients'
+    ? ' Buildertrend\'s client contacts are its whole directory, so every such P86 client and property is listed.'
     : ' Only open P86 leads are listed; ' + notListed + ' sold, lost or no-opportunity leads are expected to be absent (Buildertrend\'s Leads dataset holds open leads only).';
   const base = n + ' Project 86 ' + noun + ' were not reached by any Buildertrend record. Review only — nothing is proposed for deletion.' + extra;
   if (reliable) return base;
@@ -170,8 +173,10 @@ function buildDataset(kind, fr, p86, p86Error) {
   const values = fr.records.map((r) => readRecord(kind, r));
   const rows = kind === 'jobs'
     ? match.matchJobs(values, p86.jobs, { coTotals: p86.coTotals })
-    : match.matchLeads(values, p86.leads, { directory: p86.directory });
-  const nib = match.notInBuildertrend(rows, kind === 'jobs' ? p86.jobs : p86.leads, kind);
+    : kind === 'clients'
+      ? match.matchClients(values, p86.clients || [])
+      : match.matchLeads(values, p86.leads, { directory: p86.directory });
+  const nib = match.notInBuildertrend(rows, kind === 'jobs' ? p86.jobs : kind === 'clients' ? (p86.clients || []) : p86.leads, kind);
   const reliable = fr.complete === true && !p86Error;
   out.classified = true;
   out.rows = rows;
@@ -262,15 +267,15 @@ async function buildPreview(org, deps) {
   try {
     p86 = await readP86(deps.pool, org.id);
   } catch (e) {
-    p86 = { jobs: [], leads: [], coTotals: new Map(), directory: { users: [], clients: [] }, unscopedJobs: 0, unscopedLeads: 0 };
+    p86 = { jobs: [], leads: [], clients: [], coTotals: new Map(), directory: { users: [], clients: [] }, unscopedJobs: 0, unscopedLeads: 0 };
     p86Error = 'Could not read Project 86\'s own jobs and leads, so nothing was classified.';
   }
 
   const common = { apiKey, transport: deps.transport, limits: deps.limits, now: deps.now, baseUrl: deps.baseUrl };
-  const settled = await Promise.allSettled(['jobs', 'leads'].map((k) =>
+  const settled = await Promise.allSettled(['jobs', 'leads', 'clients'].map((k) =>
     fetchDataset(Object.assign({ datasetId: DATASETS[k].datasetId, label: DATASETS[k].label }, common))));
   const datasets = {};
-  ['jobs', 'leads'].forEach((k, i) => {
+  ['jobs', 'leads', 'clients'].forEach((k, i) => {
     const s = settled[i];
     const fr = s.status === 'fulfilled' ? s.value : {
       records: [], fetched: 0, pages: 0, reportedCount: null, mode: null, complete: false, reason: null, elapsedMs: 0,
@@ -287,7 +292,7 @@ async function buildPreview(org, deps) {
     generatedAt: new Date().toISOString(),
     organization: { id: org.id, slug: org.slug, name: org.name },
     keyConfigured: !!apiKey,
-    p86: { jobs: p86.jobs.length, leads: p86.leads.length, unscopedJobs: p86.unscopedJobs, unscopedLeads: p86.unscopedLeads, error: p86Error },
+    p86: { jobs: p86.jobs.length, leads: p86.leads.length, clients: (p86.clients || []).length, unscopedJobs: p86.unscopedJobs, unscopedLeads: p86.unscopedLeads, error: p86Error },
     datasets,
     elapsedMs: (deps.now || Date.now)() - started,
   };

@@ -80,12 +80,30 @@ const BT_LEADS = [
     salesperson: 'Ana Ruiz', source: 'Previous Client', confidence: 50, min: 17900, max: 17900 }),
 ];
 
+function clientRec(displayName, o) {
+  o = o || {};
+  seq++;
+  return { _id: 'clickr' + seq, contactId: o.contactId != null ? o.contactId : 70000000 + seq, displayName,
+    firstName: null, lastName: null, primaryEmail: o.email || '', email: o.email || '', emails: o.email ? [o.email] : [],
+    phone: o.phone || '', cell: '', street: o.street || '', city: o.city || '', state: o.state || '', zip: o.zip || '',
+    jobCount: 1, leadCount: 1, activationStatus: 0, customFields: [] };
+}
+const BT_CLIENTS = [
+  clientRec('Oak Hollow HOA', { contactId: 9001, email: 'board@oakhollow.test', phone: '(813) 555-0100', street: '12 Oak Hollow Dr', city: 'Tampa', state: 'FL', zip: '33602' }),
+  clientRec('Harbor Club Board', { contactId: 9002, email: 'mgr@harbor.test' }),
+  clientRec('Jane Smith', { contactId: 9003 }),
+  clientRec('Jane Smith', { contactId: 9004 }),
+  clientRec('Bay Pointe Condos', { contactId: 9005, email: 'new@baypointe.test' }),
+  clientRec('Totally Different LLC', { contactId: 9006, email: 'shared@ridgewood.test' }),
+];
+
 function clickrFetch(url) {
   const u = new URL(url);
   if (u.origin !== BASE) throw new Error('test: fetch reached a non-Clickr host');
   const skip = Number(u.searchParams.get('skip') || 0);
   const limit = Number(u.searchParams.get('limit') || 200);
-  const list = u.pathname.includes(DATASETS.jobs.datasetId) ? BT_JOBS : u.pathname.includes(DATASETS.leads.datasetId) ? BT_LEADS : null;
+  const list = u.pathname.includes(DATASETS.jobs.datasetId) ? BT_JOBS : u.pathname.includes(DATASETS.leads.datasetId) ? BT_LEADS
+    : u.pathname.includes(DATASETS.clients.datasetId) ? BT_CLIENTS : null;
   if (!list) return Promise.resolve({ status: 404, text: async () => '{"error":"Route not found"}' });
   const body = { recordType: 'x', columns: [], records: list.slice(skip, skip + limit), count: list.length, sort: {} };
   return Promise.resolve({ status: 200, text: async () => JSON.stringify(body) });
@@ -104,6 +122,11 @@ function seed() {
       (11, 'pm@agx.test', 'x', 'Pat PM', 'pm', 1, 1),
       (20, 'admin@other.test', 'x', 'Oscar Other', 'admin', 2, 1);
     INSERT INTO clients (id, name, organization_id) VALUES ('c-a', 'Oak Hollow HOA', 1), ('c-b', 'Oak Hollow HOA', 2);
+    INSERT INTO clients (id, name, email, organization_id) VALUES
+      ('c-h', 'Harbor Club Board of Directors', 'mgr@harbor.test', 1),
+      ('c-j', 'Jane Smith', NULL, 1),
+      ('c-bp', 'Bay Pointe Condos', 'old@baypointe.test', 1),
+      ('c-r', 'Ridgewood Estates', 'shared@ridgewood.test', 1);
   `);
   const job = engine.db.prepare('INSERT INTO jobs (id, owner_id, organization_id, data) VALUES (?,?,?,?)');
   job.run('j-1', 10, AGX, JSON.stringify({ jobNumber: 'S1050', title: 'Harbor Club Railings', status: 'In Progress', street_address: '1 Harbor Dr', city: 'Tampa', state: 'FL', zip: '33602', contractAmount: 12000 }));
@@ -316,6 +339,62 @@ describe('choosing what applies — ticked fields, contract price, job number, l
     const r3 = await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: ['approvedCOPrice'] });
     expect(r3.status).toBe(200);
     expect(r3.json.results[0].fields || []).toEqual([]);
+  });
+});
+
+
+describe('clients — matched by id, name or a unique email; P86 names kept; blanks filled; a different value only when ticked', () => {
+  const clientRow = (id) => engine.db.prepare('SELECT * FROM clients WHERE id = ?').get(id);
+
+  test('the matcher: exact name, email + agreeing name, shared BT name ambiguous, a different email held back', async () => {
+    const p86 = await preview.readP86(engine.pool, AGX);
+    const rows = match.matchClients(BT_CLIENTS.map((x) => readRecord('clients', x)), p86.clients);
+    const by = (id) => rows.find((r) => String(r.bt.btId) === id);
+    expect(by('9001')).toMatchObject({ class: 'conflict', rung: 'name' });
+    expect(by('9001').p86.id).toBe('c-a');
+    expect(by('9001').corrections.map((c) => c.field).sort()).toEqual(['city', 'email', 'phone', 'state', 'street', 'zip']);
+    expect(by('9002')).toMatchObject({ class: 'matched', rung: 'email + similar name' });
+    expect(by('9002').notes.join(' ')).toMatch(/P86 keeps its own client name/);
+    expect(by('9003').class).toBe('ambiguous');
+    expect(by('9004').class).toBe('ambiguous');
+    // Only the email matches and the names share nothing: never confident.
+    expect(by('9006').class).toBe('ambiguous');
+    expect(by('9006').candidates.map((c) => c.id)).toContain('c-r');
+    expect(by('9005').heldBack).toEqual([expect.objectContaining({ field: 'email', p86: 'old@baypointe.test', bt: 'new@baypointe.test', applicable: true })]);
+    // The other tenant's same-named client is never a candidate.
+    expect(JSON.stringify(rows)).not.toContain('c-b"');
+  });
+
+  test('apply fills blanks and links; the name is never written; the other tenant is untouched', async () => {
+    const r = await put(APPLY, ADMIN, { dataset: 'clients', btIds: ['9001'] });
+    expect(r.status).toBe(200);
+    const c = clientRow('c-a');
+    expect(c.email).toBe('board@oakhollow.test');
+    expect(c.address).toBe('12 Oak Hollow Dr');
+    expect(c.bt_contact_id).toBe('9001');
+    expect(c.name).toBe('Oak Hollow HOA');
+    expect(clientRow('c-b').email).toBeNull();
+    expect(clientRow('c-b').bt_contact_id).toBeNull();
+  });
+
+  test('a different P86 email changes only when ticked', async () => {
+    const r1 = await put(APPLY, ADMIN, { dataset: 'clients', btIds: ['9005'], fields: [] });
+    expect(r1.status).toBe(200);
+    expect(clientRow('c-bp').email).toBe('old@baypointe.test');
+    expect(clientRow('c-bp').bt_contact_id).toBe('9005');
+    preview.forgetFetch(AGX);
+    const r2 = await put(APPLY, ADMIN, { dataset: 'clients', btIds: ['9005'], fields: ['email'] });
+    expect(r2.status).toBe(200);
+    expect(clientRow('c-bp').email).toBe('new@baypointe.test');
+  });
+
+  test('safe mode links confident clients only and writes no field', async () => {
+    const r = await put(APPLY, ADMIN, { dataset: 'clients', mode: 'safe' });
+    expect(r.status).toBe(200);
+    expect(clientRow('c-a').bt_contact_id).toBe('9001');
+    expect(clientRow('c-a').email).toBeNull();
+    expect(clientRow('c-h').bt_contact_id).toBe('9002');
+    expect(clientRow('c-j').bt_contact_id).toBeNull();
   });
 });
 

@@ -1303,6 +1303,14 @@ function notInBuildertrend(rows, p86Rows, kind) {
       listed.push(link({ id: p.id, jobNumber: p.jobNumber, title: p.title, status: p.status, state86: p.state86 || 'unknown',
         street: p.street, city: p.city, state: p.state, zip: p.zip }));
     }
+  } else if (kind === 'clients') {
+    // Buildertrend's client-contacts dataset is the whole directory, so every P86
+    // client no Buildertrend contact reached is listed.
+    for (const p of p86Rows.map(p86ClientView)) {
+      if (reached.has(p.id)) continue;
+      listed.push(link({ id: p.id, title: p.name, email: p.email, street: p.street, city: p.city, state: p.state, zip: p.zip,
+        state86: p.parentId ? 'property' : 'client' }));
+    }
   } else {
     for (const p of p86Rows.map(p86LeadView)) {
       if (reached.has(p.id)) continue;
@@ -1352,8 +1360,180 @@ function summarise(rows, filter) {
   };
 }
 
+// ── clients (Buildertrend client contacts) ───────────────────────────────
+//
+// P86 keeps its own client names (management-company / property splits were
+// made in P86 on purpose), so a name is a MATCH KEY, never a correction. Contact
+// details follow the owner's rules: a blank P86 email / phone / cell / mailing
+// address is filled from Buildertrend; a DIFFERENT value is held back with a box
+// a person may tick. Rungs: the Buildertrend id once linked, then the exact name
+// (unique on both sides), then a unique email whose names also agree.
+
+function p86ClientView(row) {
+  return {
+    id: row.id,
+    name: str(row.name).trim(),
+    title: str(row.name).trim(),
+    email: str(row.email).trim(),
+    phone: str(row.phone).trim(),
+    cell: str(row.cell).trim(),
+    street: str(row.address),
+    city: str(row.city),
+    state: str(row.state),
+    zip: str(row.zip),
+    parentId: row.parent_client_id == null ? '' : str(row.parent_client_id),
+    btId: row.bt_contact_id == null ? '' : str(row.bt_contact_id).trim(),
+  };
+}
+
+function clientCand(p, rungs) {
+  return { id: p.id, title: p.name, email: p.email, street: p.street, city: p.city, state: p.state, zip: p.zip, rungs: [...rungs] };
+}
+
+function emailKey(v) {
+  const s = str(v).trim().toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s) ? s : '';
+}
+
+function phoneKey(v) {
+  const d = str(v).replace(/\D/g, '');
+  const t = d.length === 11 && d[0] === '1' ? d.slice(1) : d;
+  return t.length >= 7 ? t : '';
+}
+
+// Blank P86 -> fill (a correction). Same after normalising -> nothing (contact
+// details carry no formatting-only noise). Different -> held back, tickable.
+function contactField(acc, spec) {
+  const { field, label, bt, p86 } = spec;
+  if (isBtBlank(bt)) {
+    if (!isP86Blank(p86)) acc.btBlank.push({ field, label, p86: str(p86) });
+    return;
+  }
+  const to = str(bt).trim().replace(/\s+/g, ' ');
+  if (isP86Blank(p86)) {
+    acc.corrections.push({ field, label, kind: 'fill', from: '', to });
+    return;
+  }
+  if (spec.same(bt, p86)) return;
+  acc.heldBack.push({ field, label, reason: 'differs', bt: to, p86: str(p86).trim(), value: to, applicable: true,
+    note: 'P86 already has a different value. Never applied automatically — tick it to replace P86\'s value with Buildertrend\'s.' });
+}
+
+function clientProposals(bt, p) {
+  const acc = newAcc();
+  const notes = [];
+  if (!isBtBlank(bt.name) && textKey(bt.name) !== textKey(p.name)) {
+    notes.push('Buildertrend names this contact "' + str(bt.name).trim() + '"; P86 keeps its own client name.');
+  }
+  contactField(acc, { field: 'email', label: 'Email', bt: bt.email, p86: p.email, same: (a, b) => emailKey(a) !== '' && emailKey(a) === emailKey(b) });
+  contactField(acc, { field: 'phone', label: 'Phone', bt: bt.phone, p86: p.phone, same: (a, b) => phoneKey(a) !== '' && phoneKey(a) === phoneKey(b) });
+  contactField(acc, { field: 'cell', label: 'Cell', bt: bt.cell, p86: p.cell, same: (a, b) => phoneKey(a) !== '' && phoneKey(a) === phoneKey(b) });
+  contactField(acc, { field: 'street', label: 'Mailing street', bt: bt.street, p86: p.street, same: (a, b) => streetKey(a) === streetKey(b) });
+  contactField(acc, { field: 'city', label: 'City', bt: bt.city, p86: p.city, same: (a, b) => cityKey(a) === cityKey(b) });
+  contactField(acc, { field: 'state', label: 'State', bt: bt.state, p86: p.state, same: (a, b) => stateKey(a) === stateKey(b) });
+  contactField(acc, { field: 'zip', label: 'Zip', bt: bt.zip, p86: p.zip, same: (a, b) => zipKey(a) === zipKey(b) });
+  return { acc, notes };
+}
+
+function matchClients(btValues, p86Rows) {
+  const p86 = p86Rows.map(p86ClientView);
+  const byBtId = indexBy(p86, (p) => p.btId);
+  const byName = indexBy(p86, (p) => textKey(p.name));
+  const byEmail = indexBy(p86, (p) => emailKey(p.email));
+  const near = nearIndex(p86, (p) => p.name);
+  const NEAR_LABELS = { name: 'similar name', place: 'same mailing address, typo-tolerant' };
+  const btNameCount = new Map();
+  const btEmailCount = new Map();
+  for (const v of btValues) {
+    const nk = textKey(v.displayName);
+    if (nk) btNameCount.set(nk, (btNameCount.get(nk) || 0) + 1);
+    const ek = emailKey(v.email);
+    if (ek) btEmailCount.set(ek, (btEmailCount.get(ek) || 0) + 1);
+  }
+
+  const rows = btValues.map((v, i) => {
+    const bt = {
+      index: i, btId: v.btId, raw: str(v.displayName), title: str(v.displayName), name: str(v.displayName),
+      email: str(v.email), phone: str(v.phone), cell: str(v.cell),
+      street: str(v.street), city: str(v.city), state: str(v.state), zip: str(v.zip),
+      jobCount: v.jobCount, leadCount: v.leadCount, scope: 'all',
+    };
+    if (isBtBlank(v.displayName)) return unpairedRow(bt, 'refused', [], ['This Buildertrend contact has no name, so it cannot be matched and will never be created.']);
+
+    const btKey = v.btId == null ? '' : String(v.btId).trim();
+    const linked = btKey ? (byBtId.get(btKey) || []) : [];
+    const linkedIds = new Set(linked.map((p) => p.id));
+    const free = (p) => !p.btId || p.btId === btKey;
+    const nk = textKey(v.displayName);
+    const ek = emailKey(v.email);
+    const nameHits = nk ? (byName.get(nk) || []).filter(free) : [];
+    const emailHits = ek ? (byEmail.get(ek) || []).filter(free) : [];
+    const cands = new Map();
+    const add = (list, rung) => {
+      for (const p of list) {
+        if (!cands.has(p.id)) cands.set(p.id, { p, rungs: new Set() });
+        cands.get(p.id).rungs.add(rung);
+      }
+    };
+    add(nameHits, 'name');
+    add(emailHits, 'email');
+    const nearList = near(v.displayName, bt, (p) => cands.has(p.id) || linkedIds.has(p.id) || !free(p), NEAR_LABELS).map((h) => clientCand(h.it, h.why));
+    const allCands = () => [...cands.values()].map((x) => clientCand(x.p, x.rungs)).concat(nearList);
+    const amb = (note) => unpairedRow(bt, 'ambiguous', allCands(), [note]);
+    const confidentRow = (p, rung, extraNotes) => {
+      const { acc, notes } = clientProposals(bt, p);
+      const row = {
+        bt, class: acc.corrections.length ? 'conflict' : 'matched', rung, p86: clientCand(p, [rung]),
+        corrections: acc.corrections, btBlank: acc.btBlank, heldBack: acc.heldBack, flags: acc.flags,
+        candidates: [], notes: (extraNotes || []).concat(notes), p86Duplicates: [],
+      };
+      if (nearList.length) {
+        row.p86Duplicates = nearList;
+        row.flags.push({ field: 'duplicate', label: 'Possible P86 duplicate',
+          text: 'P86 also holds ' + nearList.length + ' client' + (nearList.length === 1 ? '' : 's') + ' that look' + (nearList.length === 1 ? 's' : '')
+            + ' like this one: ' + nearList.map((x) => '"' + x.title + '"').join('; ') + '. Nothing about ' + (nearList.length === 1 ? 'it' : 'them') + ' is proposed — review for a duplicate in P86.' });
+      }
+      return row;
+    };
+
+    if (linked.length > 1) {
+      return unpairedRow(bt, 'ambiguous', linked.map((p) => clientCand(p, ['Buildertrend ID'])),
+        [linked.length + ' P86 clients are linked to this Buildertrend contact. Nothing is proposed; unlink the extra one.']);
+    }
+    if (linked.length === 1) return confidentRow(linked[0], 'Buildertrend ID');
+    if ((btNameCount.get(nk) || 0) > 1) {
+      return amb(btNameCount.get(nk) + ' Buildertrend contacts share this name. Nothing is proposed.');
+    }
+    if (nameHits.length > 1) return amb(nameHits.length + ' P86 clients share this name. Nothing is proposed.');
+    if (nameHits.length === 1) {
+      const p = nameHits[0];
+      const otherByEmail = emailHits.filter((x) => x.id !== p.id);
+      if (otherByEmail.length) {
+        return amb('The name matches one P86 client, but the email belongs to ' + (otherByEmail.length === 1 ? 'another' : otherByEmail.length + ' others') + '. Nothing is proposed.');
+      }
+      return confidentRow(p, emailHits.length ? 'name + email' : 'name');
+    }
+    if (emailHits.length > 1) return amb(emailHits.length + ' P86 clients share this email. Nothing is proposed.');
+    if (emailHits.length === 1) {
+      const p = emailHits[0];
+      if ((btEmailCount.get(ek) || 0) > 1) {
+        return amb('The email matches one P86 client, but ' + btEmailCount.get(ek) + ' Buildertrend contacts share that email (often a management company). Nothing is proposed.');
+      }
+      if (nameEvidence(v.displayName, p.name) === 'agree') return confidentRow(p, 'email + similar name');
+      return amb('Only the email matches, and the names do not agree ("' + str(v.displayName).trim() + '" vs "' + p.name + '"). Nothing is proposed.');
+    }
+    if (nearList.length) {
+      return unpairedRow(bt, 'possible_duplicate', nearList,
+        ['No P86 client matches exactly, but ' + nearList.length + ' look' + (nearList.length === 1 ? 's' : '') + ' like this one. Review before anything is created.']);
+    }
+    return unpairedRow(bt, 'new', [], []);
+  });
+  demoteCollisions(rows, 'client');
+  return rows;
+}
+
 module.exports = {
-  matchJobs, matchLeads, notInBuildertrend, summarise, RATE_CLASSES,
+  matchJobs, matchLeads, matchClients, p86ClientView, emailKey, phoneKey, notInBuildertrend, summarise, RATE_CLASSES,
   parseJobName, exactNumberKey, looseNumberKey, namesAgree, nameEvidence, placeEvidence, streetsMatchStrict, streetsAgree, samePlace,
   nearIndex, bigrams, GENERIC,
   isBtBlank, isP86Blank, textKey, streetKey, cityKey, stateKey, zipKey, dateKey, fuzzyEq, osa, charSimilarity,
