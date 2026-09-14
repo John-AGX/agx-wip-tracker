@@ -21,7 +21,9 @@ const { isBtBlank } = require('./bt-match');
 
 const REQUIRED_SHARE = 0.95;
 // Carried by every record and deliberately never read (see the header).
-const IGNORED_KEYS = ['raw', '_id', 'accountId', 'integrationId', 'builderId'];
+// createdAt / updatedAt / __v are Clickr's own record bookkeeping: the app's
+// tRPC read carries them, the REST read this server uses does not.
+const IGNORED_KEYS = ['raw', '_id', 'accountId', 'integrationId', 'builderId', 'createdAt', 'updatedAt', '__v'];
 
 const DATASETS = {
   jobs: {
@@ -82,7 +84,7 @@ const DATASETS = {
       'builderCost', 'subtotal', 'totalMarkup', 'totalPrice', 'statusChangedDate', 'statusChangedBy',
       'dateAdded', 'createdBy', 'createdById', 'ownerName', 'ownerLastViewed', 'deadline', 'isDeleted', 'isInvoiceable',
       'purchaseOrderCost', 'poBuilderVariance', 'poCustomerVariance', 'relatedPurchaseOrderIds',
-      'attachedFileCount', 'commentCount', 'rfiCount', 'createdAt', 'updatedAt', '__v',
+      'attachedFileCount', 'commentCount', 'rfiCount',
     ],
   },
 };
