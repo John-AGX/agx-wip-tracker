@@ -31,6 +31,7 @@ const { DATASETS, readRecord, describeMapping } = require('./field-map');
 const { fetchDataset, MIN_KEY_LENGTH } = require('./client');
 const match = require('./bt-match');
 const coMatch = require('./co-match');
+const poMatch = require('./po-match');
 const coMoney = require('../money/change-order-totals');
 
 const VIEW_PARAM = 'buildertrend-preview';
@@ -85,8 +86,8 @@ const JOB_KEYS = ['jobNumber', 'title', 'name', 'status', 'street_address', 'cit
 async function readP86(pool, orgId) {
   const jobsRaw = await pool.query(
     'SELECT id, ' + JOB_KEYS.map((k) => "data->>'" + k + "' AS \"" + k + '"').join(', ')
-    + ", data->'changeOrders' AS legacy_cos, bt_job_id FROM jobs WHERE organization_id = $1 AND bt_archived_at IS NULL", [orgId]);
-  const jobRows = jobsRaw.rows.map((r) => ({ id: r.id, legacy_cos: r.legacy_cos, bt_job_id: r.bt_job_id,
+    + ", data->'changeOrders' AS legacy_cos, data->'purchaseOrders' AS legacy_pos, bt_job_id FROM jobs WHERE organization_id = $1 AND bt_archived_at IS NULL", [orgId]);
+  const jobRows = jobsRaw.rows.map((r) => ({ id: r.id, legacy_cos: r.legacy_cos, legacy_pos: r.legacy_pos, bt_job_id: r.bt_job_id,
     data: Object.fromEntries(JOB_KEYS.map((k) => [k, r[k] == null ? '' : r[k]])) }));
   const leads = await pool.query(
     'SELECT l.id, l.title, l.status, l.street_address, l.city, l.state, l.zip, l.source, l.confidence, '
@@ -109,6 +110,15 @@ async function readP86(pool, orgId) {
     'SELECT co.id, co.job_id, co.status, co.co_number, co.data, co.is_locked, co.linked_node_id, co.bt_co_id '
     + 'FROM job_change_orders co JOIN jobs j ON j.id = co.job_id '
     + 'WHERE j.organization_id = $1 AND j.bt_archived_at IS NULL AND (co.organization_id = $1 OR co.organization_id IS NULL)', [orgId]);
+  // Purchase orders on the same terms as change orders, with what is already
+  // billed against each (a Buildertrend cost is never set below it) and the
+  // sub's name only when the sub is this organization's.
+  const pos = await pool.query(
+    'SELECT po.id, po.job_id, po.status, po.po_number, po.data, po.is_locked, po.sub_id, po.bt_po_id, s.name AS sub_name, '
+    + "(SELECT COALESCE(SUM(b.amount), 0) FROM job_vendor_bills b WHERE b.po_id = po.id AND b.status <> 'void') AS billed "
+    + 'FROM job_purchase_orders po JOIN jobs j ON j.id = po.job_id LEFT JOIN subs s ON s.id = po.sub_id AND s.organization_id = $1 '
+    + 'WHERE j.organization_id = $1 AND j.bt_archived_at IS NULL AND (po.organization_id = $1 OR po.organization_id IS NULL)', [orgId]);
+  const subs = await pool.query("SELECT id, name FROM subs WHERE organization_id = $1 AND COALESCE(status, 'active') <> 'closed'", [orgId]);
   const users = await pool.query(
     'SELECT id, name FROM users WHERE organization_id = $1 AND active = true', [orgId]);
   const clients = await pool.query(
@@ -122,6 +132,8 @@ async function readP86(pool, orgId) {
     leads: leads.rows,
     coTotals: changeOrderTotals(jobRows, cos.rows),
     coRows: cos.rows,
+    poRows: pos.rows,
+    subs: subs.rows,
     directory: { users: users.rows.map((r) => ({ id: r.id, name: r.name })), clients: clients.rows.map((r) => ({ id: r.id, name: r.name })) },
     clients: clients.rows,
     unscopedJobs: Number((orphanJobs.rows[0] && orphanJobs.rows[0].n) || 0),
@@ -148,6 +160,8 @@ function notInBtSentence(ds, reliable, fr, p86Error, n, notListed) {
     ? ' Buildertrend\'s client contacts are its whole directory, so every such P86 client and property is listed.'
     : ds.key === 'changeOrders'
     ? ' Only change orders on P86 jobs whose Buildertrend job sent change orders in this read are listed; ' + notListed + ' on other jobs are not (Clickr\'s change-order dataset covers open jobs only).'
+    : ds.key === 'purchaseOrders'
+    ? ' Only purchase orders on P86 jobs whose Buildertrend job sent purchase orders in this read are listed; ' + notListed + ' on other jobs are not (Clickr\'s purchase-order dataset covers open jobs only).'
     : ' Only open P86 leads are listed; ' + notListed + ' sold, lost or no-opportunity leads are expected to be absent (Buildertrend\'s Leads dataset holds open leads only).';
   const base = n + ' Project 86 ' + noun + ' were not reached by any Buildertrend record. Review only — nothing is proposed for deletion.' + extra;
   if (reliable) return base;
@@ -161,10 +175,11 @@ function matchRows(kind, values, p86) {
   if (kind === 'jobs') return match.matchJobs(values, p86.jobs, { coTotals: p86.coTotals });
   if (kind === 'clients') return match.matchClients(values, p86.clients || []);
   if (kind === 'changeOrders') return coMatch.matchChangeOrders(values, { jobs: p86.jobs, coRows: p86.coRows || [] });
+  if (kind === 'purchaseOrders') return poMatch.matchPurchaseOrders(values, { jobs: p86.jobs, poRows: p86.poRows || [], subs: p86.subs || [] });
   return match.matchLeads(values, p86.leads, { directory: p86.directory });
 }
 
-const PREVIEW_KINDS = ['jobs', 'leads', 'clients', 'changeOrders'];
+const PREVIEW_KINDS = ['jobs', 'leads', 'clients', 'changeOrders', 'purchaseOrders'];
 
 function buildDataset(kind, fr, p86, p86Error) {
   const ds = DATASETS[kind];
@@ -194,6 +209,8 @@ function buildDataset(kind, fr, p86, p86Error) {
   const rows = matchRows(kind, values, p86);
   const nib = kind === 'changeOrders'
     ? coMatch.notInBuildertrend(rows, values, p86)
+    : kind === 'purchaseOrders'
+    ? poMatch.notInBuildertrend(rows, values, p86)
     : match.notInBuildertrend(rows, kind === 'jobs' ? p86.jobs : kind === 'clients' ? (p86.clients || []) : p86.leads, kind);
   const reliable = fr.complete === true && !p86Error;
   out.classified = true;
@@ -285,7 +302,7 @@ async function buildPreview(org, deps) {
   try {
     p86 = await readP86(deps.pool, org.id);
   } catch (e) {
-    p86 = { jobs: [], leads: [], clients: [], coRows: [], coTotals: new Map(), directory: { users: [], clients: [] }, unscopedJobs: 0, unscopedLeads: 0 };
+    p86 = { jobs: [], leads: [], clients: [], coRows: [], poRows: [], subs: [], coTotals: new Map(), directory: { users: [], clients: [] }, unscopedJobs: 0, unscopedLeads: 0 };
     p86Error = 'Could not read Project 86\'s own jobs and leads, so nothing was classified.';
   }
 

@@ -1493,6 +1493,9 @@ async function initSchema() {
     -- one is unique outright, and every sync read reaches the row through its job.
     ALTER TABLE job_change_orders ADD COLUMN IF NOT EXISTS bt_co_id TEXT;
     CREATE UNIQUE INDEX IF NOT EXISTS uq_job_change_orders_bt_co_id ON job_change_orders(bt_co_id) WHERE bt_co_id IS NOT NULL;
+    -- A purchase order's Buildertrend id, on the same terms.
+    ALTER TABLE job_purchase_orders ADD COLUMN IF NOT EXISTS bt_po_id TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_job_purchase_orders_bt_po_id ON job_purchase_orders(bt_po_id) WHERE bt_po_id IS NOT NULL;
     -- Buildertrend reconcile archive (services/clickr/reconcile-merge.js): a merged
     -- duplicate or a P86-only record set aside for review. NULL = live. Archived
     -- leads and clients are left out of their list routes and the map; an archived

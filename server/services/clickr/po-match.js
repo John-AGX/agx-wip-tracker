@@ -1,0 +1,357 @@
+'use strict';
+// ── BUILDERTREND PURCHASE ORDERS → PROJECT 86 PURCHASE ORDERS ─────────────
+//
+// Step 4 of the reconcile: P86 mirrors Buildertrend's purchase orders. Same
+// shape as co-match.js — a Buildertrend PO is matched only inside its own job,
+// once that job is linked to a P86 job by id:
+//   0. job_purchase_orders.bt_po_id — the saved link;
+//   1. the PO number with zeros and any "PO-" ignored (0003 = PO-3) AND titles
+//      that do not disagree — confident; the same number under another title is
+//      only a candidate;
+//   2. an agreeing title under another number — a candidate.
+//
+// What a confident row proposes:
+//   status — Buildertrend's approval (and work) status, FORWARD only:
+//            Draft → draft, Sent to Sub/Vendor → issued, any Approved → approved,
+//            Approved + work Complete → work_complete. Leaving draft locks the PO
+//            and freezes its price, as P86's own status route does. A sync never
+//            moves a PO backwards and never closes one.
+//   cost   — Buildertrend's cost against P86's committed total. An unlocked
+//            draft with one line (or none) takes it on the line; a locked PO
+//            takes the difference as an APPROVED ADDENDUM — P86's own way a
+//            committed price changes — ticked on purpose, never by default, and
+//            never below what is already billed against it.
+//   title, cost code, estimated completion — fills and corrections on an
+//            unlocked PO; a locked PO's contract fields change in P86.
+//   sub    — a blank P86 sub on an unlocked PO is filled when Buildertrend's
+//            sub/vendor name is exactly one P86 sub of this organization. A
+//            different sub is shown, never applied.
+// Buildertrend's paid amounts are shown only: P86 never creates bills from
+// Buildertrend (QuickBooks is the cost record, and a bill would count it twice).
+// A sync never grants a sub portal access.
+
+const match = require('./bt-match');
+const coMoney = require('../money/change-order-totals');
+const { normalizeVendorName } = require('../vendor-name');
+
+const { isBtBlank, isP86Blank, textKey, parseMoney, fmtMoney, compareField, nameEvidence } = match;
+
+const EPS = 0.005;
+const str = (v) => (v == null ? '' : String(v));
+const norm = (v) => str(v).trim().replace(/\s+/g, ' ');
+
+const RANK = { draft: 0, issued: 1, approved: 2, work_complete: 3, closed: 4 };
+const STATUS_LABEL = { draft: 'Draft', issued: 'Issued', approved: 'Approved', work_complete: 'Work complete', closed: 'Closed' };
+
+function parseJsonish(v) {
+  if (v == null) return null;
+  if (typeof v === 'string') { try { return JSON.parse(v); } catch (e) { return null; } }
+  return v;
+}
+
+function poNumberKey(v) {
+  const m = /^\s*(?:po[-\s_#]*)?0*(\d+)\s*$/i.exec(str(v));
+  return m ? m[1] : norm(v).toUpperCase();
+}
+
+function btPoState(approvalText, workText) {
+  const a = textKey(approvalText);
+  let s = null;
+  if (a === 'draft') s = 'draft';
+  else if (a.startsWith('sent to sub')) s = 'issued';
+  else if (a === 'sub vendor approved' || a === 'internally approved' || a.startsWith('approved')) s = 'approved';
+  if (s === 'approved' && textKey(workText) === 'complete') s = 'work_complete';
+  return s;
+}
+
+function contentLines(data) {
+  return (Array.isArray(data && data.lines) ? data.lines : []).filter((l) => l && typeof l === 'object' && l.section !== '__section_header__');
+}
+
+function rawLinesTotal(data) {
+  return contentLines(data).reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unitCost) || 0), 0);
+}
+
+function approvedAddSum(data) {
+  return (Array.isArray(data && data.addendums) ? data.addendums : [])
+    .reduce((s, a) => s + (a && a.status === 'approved' ? (Number(a.delta) || 0) : 0), 0);
+}
+
+// The committed total P86 counts (baseline + approved addendums when locked).
+function poTotal(data) {
+  return coMoney.purchaseOrderMoney(data || {});
+}
+
+// An unlocked PO with one line (or none) with its cost set to `cost`, or null.
+function withLineCost(data, cost, description) {
+  if (!Number.isFinite(cost)) return null;
+  const d = Object.assign({}, data || {});
+  const lines = Array.isArray(d.lines) ? d.lines.slice() : [];
+  const idx = [];
+  lines.forEach((l, i) => { if (l && typeof l === 'object' && l.section !== '__section_header__') idx.push(i); });
+  if (idx.length > 1) return null;
+  if (idx.length === 0) {
+    lines.push({ description: description || 'Buildertrend purchase order', qty: 1, unitCost: cost });
+  } else {
+    const l = Object.assign({}, lines[idx[0]]);
+    if (l.amount != null && l.amount !== '') return null;
+    const q = Number(l.qty);
+    if (!(q > 0)) return null;
+    l.unitCost = cost / q;
+    lines[idx[0]] = l;
+  }
+  d.lines = lines;
+  return Math.abs(poTotal(d) - cost) < EPS ? d : null;
+}
+
+// A locked PO with the difference to `cost` recorded as an approved addendum, or
+// null when there is no committed baseline to measure against.
+function withAddendum(data, cost, when) {
+  if (!Number.isFinite(cost)) return null;
+  const d = Object.assign({}, data || {});
+  if (d.baselineTotal == null) d.baselineTotal = rawLinesTotal(d);
+  const delta = Math.round((cost - ((Number(d.baselineTotal) || 0) + approvedAddSum(d))) * 100) / 100;
+  if (Math.abs(delta) < EPS) return null;
+  const addendums = Array.isArray(d.addendums) ? d.addendums.slice() : [];
+  addendums.push({ id: 'add_bt_' + Date.now().toString(36) + '_' + addendums.length, seq: addendums.length + 1, delta,
+    reason: 'Buildertrend cost', status: 'approved', source: 'buildertrend', createdAt: when || new Date().toISOString(),
+    createdBy: null, approvedAt: when || new Date().toISOString(), acceptance: null });
+  d.addendums = addendums;
+  return Math.abs(poTotal(d) - cost) < EPS ? d : null;
+}
+
+function subKey(name) {
+  return normalizeVendorName(name).key;
+}
+
+function p86PoView(r) {
+  const data = parseJsonish(r.data) || {};
+  return {
+    id: r.id, jobId: r.job_id, poNumber: str(r.po_number), title: str(data.title), status: str(r.status),
+    locked: r.is_locked === true || r.is_locked === 1, subId: r.sub_id || null, subName: str(r.sub_name),
+    btId: norm(r.bt_po_id), data, total: poTotal(data), billed: Number(r.billed) || 0,
+    costCode: str(data.costCode), scheduledCompletion: str(data.scheduledCompletion),
+  };
+}
+
+function poCand(v, rungs) {
+  return { id: v.id, poNumber: v.poNumber, title: v.title, status: v.status + (v.locked ? ', locked' : ''), rungs: rungs.slice() };
+}
+
+function titlesDisagree(a, b) {
+  if (isBtBlank(a) || isP86Blank(b)) return false;
+  if (textKey(a) === textKey(b)) return false;
+  return nameEvidence(a, b) === 'disagree';
+}
+
+// subs: [{ id, name }] of this organization. One exact normalized name, or null.
+function resolveSub(subs, btName) {
+  if (isBtBlank(btName)) return { sub: null, why: null };
+  const k = subKey(btName);
+  const hits = (subs || []).filter((s) => subKey(s.name) === k);
+  if (hits.length === 1) return { sub: hits[0], why: null };
+  return { sub: null, why: hits.length ? 'Buildertrend sub/vendor "' + norm(btName) + '" matches ' + hits.length + ' P86 subs, so none is set.'
+    : 'Buildertrend sub/vendor "' + norm(btName) + '" is not a P86 sub yet, so none is set.' };
+}
+
+function poProposals(bt, v, subs) {
+  const acc = { corrections: [], btBlank: [], heldBack: [], flags: [] };
+  const notes = [];
+  const closed = v.status === 'closed';
+  const editable = !v.locked && !closed;
+  const lockedWhy = closed ? 'A closed purchase order cannot be edited in P86.' : 'Locked in P86 (it has left draft): contract fields change there, through unlock and an addendum.';
+
+  // STATUS — forward only.
+  const bs = btPoState(bt.statusText, bt.workStatusText);
+  if (!bs) {
+    if (!isBtBlank(bt.statusText)) notes.push('Buildertrend status "' + norm(bt.statusText) + '" is not one P86 maps, so status was not compared.');
+  } else if (RANK[v.status] == null) {
+    notes.push('P86 status "' + v.status + '" is not a purchase-order status, so status was not compared.');
+  } else if (RANK[bs] > RANK[v.status]) {
+    acc.corrections.push({ field: 'status', label: 'Status', kind: 'value', money: true, from: STATUS_LABEL[v.status], to: STATUS_LABEL[bs], value: bs, p86Value: v.status,
+      note: (v.status === 'draft' ? 'Leaving draft commits the PO: its cost starts to accrue and its price is locked. ' : '') + 'A sync does not grant the sub portal access.' });
+  } else if (RANK[bs] < RANK[v.status]) {
+    acc.heldBack.push({ field: 'status', label: 'Status', reason: 'money', bt: STATUS_LABEL[bs], p86: STATUS_LABEL[v.status], applicable: false,
+      note: 'A sync never moves a purchase order backwards. If Buildertrend is right, change it in P86.' });
+  }
+
+  // TITLE
+  if (editable) compareField(acc, { field: 'title', label: 'Title', bt: bt.title, p86: v.title, same: (a, b) => textKey(a) === textKey(b) });
+  else if (!isBtBlank(bt.title) && norm(bt.title) !== norm(v.title)) {
+    acc.heldBack.push({ field: 'title', label: 'Title', reason: 'locked', bt: norm(bt.title), p86: v.title, applicable: false, note: lockedWhy });
+  }
+
+  // COST CODE and ESTIMATED COMPLETION — fill a blank on an unlocked PO.
+  const btCode = Array.isArray(bt.costCodes) && bt.costCodes.length === 1 ? norm(bt.costCodes[0]) : '';
+  if (btCode && editable) compareField(acc, { field: 'costCode', label: 'Cost code', bt: btCode, p86: v.costCode, same: (a, b) => textKey(a) === textKey(b) });
+  const btDay = match.dateKey(bt.estCompleteDate);
+  if (btDay && editable) compareField(acc, { field: 'scheduledCompletion', label: 'Estimated completion', bt: btDay, p86: v.scheduledCompletion, same: (a, b) => match.dateKey(a) === match.dateKey(b), literal: () => true });
+
+  // SUB
+  const rs = resolveSub(subs, bt.subName);
+  if (rs.why && !(v.subId && subKey(v.subName) === subKey(bt.subName))) notes.push(rs.why);
+  if (rs.sub) {
+    if (!v.subId) {
+      if (editable) acc.corrections.push({ field: 'sub', label: 'Sub/vendor', kind: 'fill', from: '', to: rs.sub.name, value: rs.sub.id, p86Value: null });
+      else acc.heldBack.push({ field: 'sub', label: 'Sub/vendor', reason: 'locked', bt: rs.sub.name, p86: '', applicable: false, note: lockedWhy });
+    } else if (String(v.subId) !== String(rs.sub.id)) {
+      acc.heldBack.push({ field: 'sub', label: 'Sub/vendor', reason: 'review', bt: rs.sub.name, p86: v.subName || String(v.subId), applicable: false,
+        note: 'A different sub is never set by a sync: a PO\'s sub decides portal access and sub cost. Change it in P86 if Buildertrend is right.' });
+    }
+  }
+
+  // COST
+  const m = parseMoney(bt.cost);
+  if (m.kind === 'blank') {
+    if (Math.abs(v.total) >= EPS) acc.btBlank.push({ field: 'cost', label: 'Cost', p86: fmtMoney(v.total), zero: !!m.zero, money: true });
+  } else if (m.kind !== 'value') {
+    acc.heldBack.push({ field: 'cost', label: 'Cost', reason: 'unparsed', bt: '(not readable money)', p86: fmtMoney(v.total), applicable: false,
+      note: 'Buildertrend sent a cost that is not readable money, so it was not compared.' });
+  } else if (Math.abs(m.value - v.total) >= EPS) {
+    const base = { field: 'cost', label: 'Cost', from: fmtMoney(v.total), to: fmtMoney(m.value), value: m.value, p86Value: v.total, money: true };
+    if (closed) {
+      acc.heldBack.push({ field: 'cost', label: 'Cost', reason: 'money', bt: base.to, p86: base.from, applicable: false, note: lockedWhy });
+    } else if (!v.locked) {
+      if (withLineCost(v.data, m.value, bt.title) != null) acc.corrections.push(Object.assign({ kind: Math.abs(v.total) < EPS ? 'fill' : 'value', note: 'Sets the line\'s cost.' }, base));
+      else acc.heldBack.push({ field: 'cost', label: 'Cost', reason: 'money', bt: base.to, p86: base.from, applicable: false, note: 'This P86 purchase order has several lines; enter the cost per line in P86.' });
+    } else if (m.value < v.billed - EPS) {
+      acc.heldBack.push({ field: 'cost', label: 'Cost', reason: 'money', bt: base.to, p86: base.from, applicable: false,
+        note: 'Buildertrend\'s cost is below the ' + fmtMoney(v.billed) + ' already billed against this PO in P86.' });
+    } else if (withAddendum(v.data, m.value) != null) {
+      acc.heldBack.push({ field: 'cost', label: 'Cost', reason: 'money', bt: base.to, p86: base.from, value: m.value, p86Value: v.total, applicable: true,
+        note: 'Locked in P86. Tick it to record the ' + fmtMoney(Math.round((m.value - v.total) * 100) / 100) + ' difference as an approved addendum — P86\'s own way a committed price changes.' });
+    }
+  }
+
+  // PAID — shown only.
+  const paid = parseMoney(bt.amountPaid);
+  if (paid.kind === 'value') {
+    notes.push('Buildertrend: ' + (norm(bt.paidStatusText) || 'paid') + ', ' + fmtMoney(paid.value) + ' paid. P86 does not create bills from Buildertrend — QuickBooks is the cost record.');
+  }
+  return { acc, notes };
+}
+
+function row(bt, cls, extra) {
+  return Object.assign({ bt, class: cls, rung: null, p86: null, corrections: [], btBlank: [], heldBack: [], flags: [], candidates: [], notes: [] }, extra || {});
+}
+
+function jobLabel(j) {
+  return [j.jobNumber, j.title].filter((x) => !isP86Blank(x)).join(' ') || j.id;
+}
+
+function p86Out(v) {
+  return { id: v.id, poNumber: v.poNumber, title: v.title, status: v.status + (v.locked ? ', locked' : ''), totalText: fmtMoney(v.total), subName: v.subName };
+}
+
+// btValues: readPurchaseOrder() records. p86: { jobs, poRows, subs }.
+function matchPurchaseOrders(btValues, p86) {
+  const jobByBt = new Map();
+  for (const j of p86.jobs || []) {
+    const k = norm(j.bt_job_id);
+    if (k) jobByBt.set(k, { id: j.id, jobNumber: str(j.data && j.data.jobNumber), title: str(j.data && (j.data.title || j.data.name)), legacy: parseJsonish(j.legacy_pos) });
+  }
+  const views = (p86.poRows || []).map(p86PoView);
+  const byJob = new Map();
+  const byBtId = new Map();
+  for (const v of views) {
+    if (!byJob.has(v.jobId)) byJob.set(v.jobId, []);
+    byJob.get(v.jobId).push(v);
+    if (v.btId) byBtId.set(v.btId, v);
+  }
+
+  const rows = btValues.map((b, index) => {
+    const cost = parseMoney(b.cost);
+    const bt = Object.assign({ index, scope: 'open', raw: [b.poNumber, b.title].filter((x) => !isBtBlank(x)).map(norm).join(' '),
+      costText: cost.kind === 'value' ? fmtMoney(cost.value) : '$0.00', state86: btPoState(b.statusText, b.workStatusText) }, b);
+    const btId = norm(b.btId);
+    if (!btId) return row(bt, 'refused', { notes: ['Buildertrend sent this purchase order without an id.'] });
+    if (b.isDeleted || b.isRecalled) return row(bt, 'refused', { notes: [b.isDeleted ? 'Deleted in Buildertrend.' : 'Recalled in Buildertrend.'] });
+    const job = jobByBt.get(norm(b.jobId));
+    if (!job) {
+      return row(bt, 'refused', { waitingOnJob: true,
+        notes: ['Its Buildertrend job' + (isBtBlank(b.jobName) ? '' : ' "' + norm(b.jobName) + '"') + ' is not linked to a P86 job yet. Link or create the job on the Jobs tab, then refresh.'] });
+    }
+    const jobInfo = { id: job.id, label: jobLabel(job) };
+    const onJob = byJob.get(job.id) || [];
+
+    const linked = byBtId.get(btId);
+    if (linked) {
+      if (linked.jobId !== job.id) {
+        return row(bt, 'refused', { job: jobInfo,
+          notes: ['The P86 purchase order linked to this one (' + (linked.poNumber || linked.id) + ') is on a different P86 job than Buildertrend\'s job, so nothing is proposed.'] });
+      }
+      const { acc, notes } = poProposals(b, linked, p86.subs);
+      return row(bt, acc.corrections.length ? 'conflict' : 'matched', Object.assign({ rung: 'Buildertrend ID', job: jobInfo, notes, p86: p86Out(linked) }, acc));
+    }
+    const open = onJob.filter((v) => !v.btId);
+    const numKey = isBtBlank(b.poNumber) ? '' : poNumberKey(b.poNumber);
+    const byNumber = numKey ? open.filter((v) => poNumberKey(v.poNumber) === numKey) : [];
+    if (byNumber.length === 1 && !titlesDisagree(b.title, byNumber[0].title)) {
+      const { acc, notes } = poProposals(b, byNumber[0], p86.subs);
+      return row(bt, acc.corrections.length ? 'conflict' : 'matched', Object.assign({ rung: 'PO number', job: jobInfo, notes, p86: p86Out(byNumber[0]) }, acc));
+    }
+    if (byNumber.length) {
+      return row(bt, 'ambiguous', { job: jobInfo, candidates: byNumber.map((v) => poCand(v, ['PO number'])),
+        notes: [byNumber.length > 1 ? 'Several P86 purchase orders on this job carry this number.' : 'Same number, different title — link it only if it is the same purchase order.'] });
+    }
+    const byTitle = isBtBlank(b.title) ? [] : open.filter((v) => !isP86Blank(v.title) && !titlesDisagree(b.title, v.title));
+    if (byTitle.length) {
+      return row(bt, 'ambiguous', { job: jobInfo, candidates: byTitle.map((v) => poCand(v, ['title'])),
+        notes: ['A P86 purchase order on this job has a similar title under a different number. Link it only if it is the same purchase order.'] });
+    }
+    const out = row(bt, 'new', { job: jobInfo });
+    const legacy = Array.isArray(job.legacy) ? job.legacy.length : 0;
+    if (legacy && !onJob.length) {
+      out.createBlocked = 'This job\'s ' + legacy + ' purchase order' + (legacy === 1 ? '' : 's') + ' still live in its old per-job list. Creating the first purchase order in the table would hide ' + (legacy === 1 ? 'it' : 'them') + ', so nothing is created until they are moved.';
+      out.notes.push(out.createBlocked);
+    }
+    const rs = resolveSub(p86.subs, b.subName);
+    if (rs.why) out.notes.push(rs.why);
+    return out;
+  });
+
+  const claims = new Map();
+  for (const r of rows) {
+    if ((r.class === 'matched' || r.class === 'conflict') && r.p86) {
+      if (!claims.has(r.p86.id)) claims.set(r.p86.id, []);
+      claims.get(r.p86.id).push(r);
+    }
+  }
+  for (const group of claims.values()) {
+    if (group.length < 2) continue;
+    for (const r of group) {
+      r.candidates = [poCand(views.find((v) => v.id === r.p86.id), [r.rung])];
+      r.notes.push(group.length + ' Buildertrend purchase orders land on this same P86 purchase order, so none is matched and nothing is proposed.');
+      r.class = 'ambiguous';
+      r.rung = null;
+      r.p86 = null;
+      r.corrections = []; r.btBlank = []; r.heldBack = []; r.flags = [];
+    }
+  }
+  return rows;
+}
+
+function notInBuildertrend(rows, btValues, p86) {
+  const reached = new Set();
+  for (const r of rows) {
+    if (r.p86) reached.add(r.p86.id);
+    for (const c of r.candidates || []) reached.add(c.id);
+  }
+  const btJobs = new Set(btValues.map((b) => norm(b.jobId)).filter(Boolean));
+  const jobs = new Map();
+  for (const j of p86.jobs || []) {
+    if (norm(j.bt_job_id) && btJobs.has(norm(j.bt_job_id))) jobs.set(j.id, jobLabel({ id: j.id, jobNumber: str(j.data && j.data.jobNumber), title: str(j.data && (j.data.title || j.data.name)) }));
+  }
+  const btIds = new Set(btValues.map((b) => norm(b.btId)).filter(Boolean));
+  const listed = [];
+  let notListed = 0;
+  for (const v of (p86.poRows || []).map(p86PoView)) {
+    if (reached.has(v.id)) continue;
+    if (!jobs.has(v.jobId)) { notListed++; continue; }
+    listed.push({ id: v.id, poNumber: v.poNumber, title: v.title, status: v.status + (v.locked ? ', locked' : ''), jobLabel: jobs.get(v.jobId),
+      linkedGone: v.btId && !btIds.has(v.btId) ? true : undefined });
+  }
+  return { rows: listed, notListed };
+}
+
+module.exports = { matchPurchaseOrders, notInBuildertrend, btPoState, poNumberKey, withLineCost, withAddendum, resolveSub, poTotal, RANK };

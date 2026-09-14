@@ -87,6 +87,24 @@ const DATASETS = {
       'attachedFileCount', 'commentCount', 'rfiCount',
     ],
   },
+  // Keys confirmed against every record on 2026-09-13 (91 purchase orders over
+  // 21 open jobs). poNumber is per JOB ("0001"); cost is the PO total and there
+  // are no line items; costCodes holds one cost-code name.
+  purchaseOrders: {
+    key: 'purchaseOrders',
+    label: 'Purchase orders',
+    noun: 'purchase order',
+    datasetId: '6aa5d6f984f8135cf0cc6141',
+    requiredKey: 'poNumber',
+    idKey: 'purchaseOrderId',
+    keys: [
+      'purchaseOrderId', 'poNumber', 'title', 'jobId', 'jobName', 'approvalStatus', 'approvalStatusText', 'approvalUser', 'approvalNote',
+      'workStatus', 'workStatusText', 'paidStatus', 'paidStatusText', 'cost', 'amountPaid', 'amountRemaining',
+      'performingUserId', 'performingUserName', 'costCodes', 'estCompleteDate', 'externalId', 'dateAdded', 'createdBy', 'createdById',
+      'fromEstimate', 'hasAmendment', 'isBill', 'isDeleted', 'isOriginatedFromAccounting', 'isRecalled', 'paymentRequested',
+      'builderVarianceCodes', 'ownerVarianceCodes', 'attachedFileCount', 'commentCount', 'rfiCount',
+    ],
+  },
 };
 
 function isPlainObject(v) {
@@ -221,10 +239,33 @@ function readChangeOrder(rec) {
   };
 }
 
+function readPurchaseOrder(rec) {
+  const r = isPlainObject(rec) ? rec : {};
+  return {
+    btId: scalarText(r.purchaseOrderId),
+    poNumber: scalarText(r.poNumber),
+    title: scalarText(r.title),
+    jobId: scalarText(r.jobId),
+    jobName: scalarText(r.jobName),
+    statusText: scalarText(r.approvalStatusText),
+    workStatusText: scalarText(r.workStatusText),
+    paidStatusText: scalarText(r.paidStatusText),
+    approvalUser: scalarText(r.approvalUser),
+    cost: r.cost === undefined ? null : r.cost,
+    amountPaid: r.amountPaid === undefined ? null : r.amountPaid,
+    subName: scalarText(r.performingUserName),
+    costCodes: Array.isArray(r.costCodes) ? r.costCodes.map(scalarText).filter((x) => x != null && x.trim() !== '') : [],
+    estCompleteDate: scalarText(r.estCompleteDate),
+    isDeleted: r.isDeleted === true,
+    isRecalled: r.isRecalled === true,
+  };
+}
+
 function readRecord(kind, rec) {
   if (kind === 'jobs') return readJob(rec);
   if (kind === 'clients') return readClient(rec);
   if (kind === 'changeOrders') return readChangeOrder(rec);
+  if (kind === 'purchaseOrders') return readPurchaseOrder(rec);
   return readLead(rec);
 }
 
@@ -278,4 +319,4 @@ function describeMapping(kind, records) {
   };
 }
 
-module.exports = { DATASETS, REQUIRED_SHARE, readRecord, readJob, readLead, readChangeOrder, describeMapping, customField, isPlainObject };
+module.exports = { DATASETS, REQUIRED_SHARE, readRecord, readJob, readLead, readChangeOrder, readPurchaseOrder, describeMapping, customField, isPlainObject };
