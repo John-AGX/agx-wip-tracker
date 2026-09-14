@@ -932,16 +932,24 @@ async function render(eventKey, params, opts) {
   // Branding kit (Wave 6). When we have an orgId, fetch the org's
   // branding JSONB and stash it on enriched.__branding so renderBlocks
   // can fall back to it for missing block fields.
+  //
+  // The same PK read also returns the org's name, surfaced as
+  // rendered.orgName so sendForEvent can brand the From header
+  // ("<Org> via Project 86") without a second organizations query. The
+  // name is raw here; email-sender.cleanOrgName sanitises it at send time.
+  var orgName = null;
   if (orgId != null && !enriched.__branding) {
     try {
-      var b = await pool.query('SELECT branding FROM organizations WHERE id = $1', [orgId]);
+      var b = await pool.query('SELECT name, branding FROM organizations WHERE id = $1', [orgId]);
       if (b.rows.length && b.rows[0].branding) enriched.__branding = b.rows[0].branding;
+      if (b.rows.length && typeof b.rows[0].name === 'string') orgName = b.rows[0].name;
     } catch (e) { /* branding lookup is best-effort */ }
   }
   var override = await getOverride(eventKey, orgId);
 
   if (!override || (!override.subject && !override.html_body)) {
-    return renderDefault(eventKey, params);
+    var def = renderDefault(eventKey, params);
+    return orgName ? Object.assign({}, def, { orgName: orgName }) : def;
   }
 
   var defSrc = TEMPLATE_SOURCES[eventKey];
@@ -959,11 +967,13 @@ async function render(eventKey, params, opts) {
   } else {
     html = interpolate(bodySrc, enriched);
   }
-  return {
+  var out = {
     subject: subject || '(no subject)',
     html: html,
     text: htmlToText(html)
   };
+  if (orgName) out.orgName = orgName;
+  return out;
 }
 
 // Returns the SOURCE (with {{var}} placeholders) for an event. The
@@ -1037,12 +1047,15 @@ function sampleParams(eventKey) {
   }
 }
 
-async function renderSample(eventKey, overrides) {
+async function renderSample(eventKey, overrides, opts) {
   // overrides let the test-send route swap sample placeholders for real
   // values (e.g. the caller's own name as the inviter) so a test email
   // reads like the real thing instead of "Sample Admin invited you".
+  // opts.orgId (the CALLER's own org, never a body value) makes the sample
+  // render with that org's override + branding kit and return its orgName,
+  // so a "Send test" previews what the org's real mail looks like.
   var params = Object.assign({}, sampleParams(eventKey), overrides || {});
-  return render(eventKey, params);
+  return render(eventKey, params, opts);
 }
 
 function renderSampleDefault(eventKey) {

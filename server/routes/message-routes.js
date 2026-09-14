@@ -31,6 +31,9 @@ const crypto = require('crypto');
 const { pool } = require('../db');
 const { requireAuth, isAdminish, getAttributedUserId } = require('../auth');
 const { sendEmail } = require('../email');
+// Sender identity helpers — a separate, never-mocked module, so the suites that
+// jest.mock('../server/email') with a partial export list keep working.
+const emailSender = require('../email-sender');
 const jobLabel = require('../../js/job-label');
 
 const router = express.Router();
@@ -166,6 +169,15 @@ function escHtml(s) {
 // sendEmail. Never throws. No-op for non-DM threads (entity threads are
 // org-shared comment streams — emailing the whole org on every comment is
 // out of scope for M1).
+//
+// THE RECIPIENT MUST BE IN THE SENDER'S ORG. The thread-key guards only prove
+// the SENDER is a participant, and a dm: key is caller-typed — so posting to
+// dm:<me>:<anyUserId> used to email any active user on the platform, another
+// tenant's included. The sender's own users row is read first and names the
+// org; the recipient read is predicated on it. A sender with no org, or a
+// recipient elsewhere, gets no email (the message row itself is unchanged).
+// That same org names the company in the From line, and the sender's in-org
+// address is the Reply-To, so a reply reaches the teammate who wrote.
 async function notifyMessageDM(key, senderId, body) {
   try {
     const parts = dmParticipants(key);
@@ -173,22 +185,27 @@ async function notifyMessageDM(key, senderId, body) {
     const recipientId = parts.find((p) => p !== Number(senderId));
     if (!recipientId) return; // self-DM or malformed — nobody to notify
 
+    // Sender first: their org is the boundary for everything below.
+    let senderName = 'A teammate';
+    let senderOrgId = null;
+    try {
+      const s = await pool.query('SELECT name, email, organization_id FROM users WHERE id = $1', [Number(senderId)]);
+      if (s.rows.length) {
+        senderName = s.rows[0].name || s.rows[0].email || senderName;
+        senderOrgId = s.rows[0].organization_id;
+      }
+    } catch (_) { /* no sender row: no org, so nobody is emailed below */ }
+    if (senderOrgId == null) return;
+
     const { rows } = await pool.query(
-      'SELECT email, name, notification_prefs FROM users WHERE id = $1 AND active = TRUE',
-      [recipientId]
+      'SELECT email, name, notification_prefs FROM users WHERE id = $1 AND organization_id = $2 AND active = TRUE',
+      [recipientId, senderOrgId]
     );
     if (!rows.length) return;
     const u = rows[0];
     const prefs = u.notification_prefs || {};
     if (prefs.messages === false) return; // user opted out
     if (!u.email) return;
-
-    // Sender's display name for the subject/body.
-    let senderName = 'A teammate';
-    try {
-      const s = await pool.query('SELECT name, email FROM users WHERE id = $1', [Number(senderId)]);
-      if (s.rows.length) senderName = s.rows[0].name || s.rows[0].email || senderName;
-    } catch (_) { /* fall back to generic sender name */ }
 
     const base = appUrl();
     const hostLabel = base.replace(/^https?:\/\//, '');
@@ -218,12 +235,16 @@ async function notifyMessageDM(key, senderId, body) {
       'Open Messages: ' + base + '\n\n' +
       'Toggle notifications in My Account → Notifications.';
 
+    const replyTo = await emailSender.replyToForUser(pool, Number(senderId), senderOrgId);
     sendEmail({
       to: u.email,
       subject: subject,
       html: html,
       text: text,
-      tag: 'message'
+      tag: 'message',
+      organizationId: senderOrgId,
+      senderOrg: { id: senderOrgId },
+      replyTo: replyTo || false
     }).catch((e) => console.warn('[messages] notify email failed:', e && e.message));
 
     // Phone/desktop push (catalog key 'messages' — same key the email gate uses,

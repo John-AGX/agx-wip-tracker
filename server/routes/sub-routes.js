@@ -30,6 +30,8 @@ const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireCapability, requireOrgId } = require('../auth');
 const { sendForEvent } = require('../email');
+// Sender identity helpers — a separate, never-mocked module (see its header).
+const emailSender = require('../email-sender');
 const fileFolders = require('../services/file-folders');
 const { defaultFoldersForEntity, sanitizeFolderPath } = require('../folder-taxonomy');
 // Two caller-supplied keys reach this file — job_id on the assignment doors,
@@ -58,10 +60,20 @@ console.log('[sub-routes] mounted at /api/subs (Phase A — sub directory + job_
 // orgId is REQUIRED: this puts the job's number and title into an email to an
 // outside subcontractor. Unscoped, an assignment against a foreign job id
 // mailed that job's identity off-platform.
-async function notifySubAssigned({ subId, jobId, contractAmt, assignedByName, orgId }) {
+//
+// __orgId rides in params so sendForEvent brands the sender with the company
+// (sub_assigned is an org-scope event), applies this org's template override,
+// and meters the send; without it the sub got the platform default from a
+// platform sender. The template tells the sub to reply to this email, so the
+// Reply-To is the assigner's fresh users row in this org — none under act-as.
+// assignedByName falls back to the org's own name, then 'The office': the old
+// literal 'AGX' was one tenant's name printed into every tenant's mail.
+async function notifySubAssigned({ subId, jobId, contractAmt, assignedByName, orgId, assignedByUserId }) {
+  // The sub is proved at the door (subInOrg); the recipient read repeats the
+  // proof in its own statement so this email is never the one read that forgot.
   var subRow = await pool.query(
-    'SELECT id, name, email, primary_contact_first FROM subs WHERE id = $1',
-    [subId]
+    'SELECT id, name, email, primary_contact_first FROM subs WHERE id = $1 AND ' + parentSubInOrgSql('subs.id', '$2'),
+    [subId, orgId]
   );
   if (!subRow.rows.length || !subRow.rows[0].email) return; // no recipient
   var sub = subRow.rows[0];
@@ -72,12 +84,15 @@ async function notifySubAssigned({ subId, jobId, contractAmt, assignedByName, or
       [jobId, orgId]);
     if (j.rows.length) jobData = j.rows[0].data || {};
   }
+  var byName = assignedByName || (await emailSender.orgNameFor(pool, orgId)) || 'The office';
+  var replyTo = await emailSender.replyToForUser(pool, assignedByUserId, orgId);
   return sendForEvent('sub_assigned', {
     sub: { name: sub.name, primaryContactFirst: sub.primary_contact_first || '' },
     job: { title: jobData.title || '', jobNumber: jobData.jobNumber || '' },
     contractAmt: contractAmt,
-    assignedBy: { name: assignedByName }
-  }, { to: sub.email, tag: 'sub_assigned' });
+    assignedBy: { name: byName },
+    __orgId: orgId
+  }, { to: sub.email, tag: 'sub_assigned', replyTo: replyTo || false });
 }
 
 function genId(prefix) {
@@ -651,7 +666,10 @@ router.post('/jobs/:jobId',
         subId: subId,
         jobId: req.params.jobId,
         contractAmt: Number(b.contract_amt || b.contractAmt || 0),
-        assignedByName: (req.user && req.user.name) || (req.user && req.user.email) || 'AGX',
+        // No hard-coded tenant name: an empty name falls back to the org's own
+        // name inside notifySubAssigned.
+        assignedByName: (req.user && req.user.name) || (req.user && req.user.email) || null,
+        assignedByUserId: req.user && req.user.id,
         // req.orgId, not the raw claim: a243b76 scoped this lookup so a foreign
         // job id could not mail that job's identity off-platform, and a legacy
         // token with no claim passed NULL into that predicate.

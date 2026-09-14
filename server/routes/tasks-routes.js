@@ -38,6 +38,8 @@ const { requireAuth, getAttributedUserId } = require('../auth');
 // (notification_prefs.task_assignment) is honored, matching the
 // job-assignment / schedule-assignment notification posture.
 const { sendEmail } = require('../email');
+// Sender identity helpers — a separate, never-mocked module (see its header).
+const emailSender = require('../email-sender');
 // The one job-label formatter, shared with the browser (window.p86JobLabel).
 const jobLabel = require('../../js/job-label');
 
@@ -152,14 +154,23 @@ function fmtDueLabel(due) {
 // posture to maybeNotifyJobAssigned (job-routes) and notifyScheduleCrew
 // (schedule-routes). Body is built inline (no email-templates dependency);
 // the send is recorded in email_log by sendEmail. Never throws.
+//
+// Everything is read in the TASK'S org. The assignee was proved in-org at the
+// door (assigneeOk), and the recipient read repeats it so the mail is never the
+// one statement that forgot. The actor read is org-predicated too: it supplies
+// both the name in the copy and the Reply-To, and under act-as req.user is
+// platform staff from another tenant — no match, so the copy says "A teammate"
+// and the mail carries no Reply-To rather than a stranger's name and address.
 async function notifyTaskAssigned(task, actorUserId, opts) {
   opts = opts || {};
   try {
     if (!task || !task.assignee_user_id) return;
+    const orgId = task.organization_id;
+    if (orgId == null) return;
 
     const { rows } = await pool.query(
-      'SELECT email, name, notification_prefs FROM users WHERE id = $1 AND active = TRUE',
-      [Number(task.assignee_user_id)]
+      'SELECT email, name, notification_prefs FROM users WHERE id = $1 AND organization_id = $2 AND active = TRUE',
+      [Number(task.assignee_user_id), orgId]
     );
     if (!rows.length) return;
     const u = rows[0];
@@ -169,10 +180,14 @@ async function notifyTaskAssigned(task, actorUserId, opts) {
 
     // Who performed the assignment?
     let actorName = 'A teammate';
+    let actorEmail = null;
     if (actorUserId != null) {
       try {
-        const a = await pool.query('SELECT name FROM users WHERE id = $1', [Number(actorUserId)]);
+        const a = await pool.query(
+          'SELECT name, email FROM users WHERE id = $1 AND organization_id = $2 AND active = TRUE',
+          [Number(actorUserId), orgId]);
         if (a.rows.length && a.rows[0].name) actorName = a.rows[0].name;
+        if (a.rows.length) actorEmail = emailSender.cleanReplyTo(a.rows[0].email, [u.email]);
       } catch (_) { /* fall back to generic actor name */ }
     }
 
@@ -230,7 +245,10 @@ async function notifyTaskAssigned(task, actorUserId, opts) {
       subject: subject,
       html: html,
       text: text,
-      tag: 'task_assignment'
+      tag: 'task_assignment',
+      organizationId: orgId,
+      senderOrg: { id: orgId },
+      replyTo: actorEmail || false
     }).catch((e) => console.warn('[tasks] notify email failed:', e && e.message));
   } catch (e) {
     console.warn('[tasks] notify lookup failed:', e && e.message);

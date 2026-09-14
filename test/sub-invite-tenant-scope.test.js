@@ -73,6 +73,14 @@ function mockRunQuery(sql, params) {
     const hit = rowsOf('subs').find((s) => String(s.id) === String(p[0]));
     return { rows: hit ? [hit] : [] };
   }
+  // The Reply-To lookup (server/email-sender.js replyToForUser), answered from
+  // real rows with the org term the helper bound — so an act-as caller whose own
+  // row lives in another org measurably gets nothing.
+  if (text.includes('SELECT email FROM users WHERE id = $1 AND organization_id = $2 AND active = TRUE')) {
+    const hit = rowsOf('users').find((u) => String(u.id) === String(p[0])
+      && String(u.organization_id) === String(p[1]) && u.active);
+    return { rows: hit ? [{ email: hit.email }] : [] };
+  }
   if (text.startsWith('INSERT INTO sub_invites')) {
     tables.sub_invites.push({ id: p[0], sub_id: p[1], email: p[2], token: p[3] });
     return { rows: [], rowCount: 1 };
@@ -100,6 +108,10 @@ const ORG_A_ADMIN = { id: 10, email: 'admin-a@a.test', role: 'admin', name: 'A',
 function freshTables() {
   return {
     roles: [{ name: 'admin', capabilities: ['JOBS_EDIT_ANY', 'JOBS_VIEW_ALL', 'USERS_MANAGE', 'ROLES_MANAGE'] }],
+    users: [
+      { id: 10, email: 'pm-fresh@a.test', organization_id: 1, active: true },
+      { id: 90, email: 'staff@platform.test', organization_id: 2, active: true }
+    ],
     subs: [
       { id: 'sub_A', name: 'Alpha Drywall', email: 'alpha@a.test', primary_contact_first: 'Al', organization_id: 1 },
       { id: 'sub_B', name: 'Beta Drywall', email: 'beta@b.test', primary_contact_first: 'Bea', organization_id: 2 },
@@ -180,6 +192,27 @@ describe('the PM keeps their own invite lifecycle', () => {
     expect(r.body.link).toContain('/api/sub-portal/accept?token=');
     expect(sentEmails.length).toBe(1);
     expect(sentEmails[0].to).toBe('alpha@a.test');
+  });
+
+  test('the invite comes from the company, and a reply reaches the inviting PM’s own in-org row', async () => {
+    const r = await call('POST', '/api/subs/sub_A/invite', ORG_A_ADMIN, {});
+    expect(r.status).toBe(200);
+    expect(sentEmails.length).toBe(1);
+    expect(sentEmails[0].senderOrg).toEqual({ id: 1 });
+    expect(sentEmails[0].organizationId).toBe(1);
+    // The FRESH row, not the JWT claim (admin-a@a.test).
+    expect(sentEmails[0].replyTo).toBe('pm-fresh@a.test');
+    const lookup = queries.find((q) => q.sql.includes('SELECT email FROM users WHERE id = $1 AND organization_id = $2'));
+    expect(lookup.params).toEqual([10, 1]);
+  });
+
+  test('a caller whose own row is in another org (act-as) puts no address on the invite', async () => {
+    const STAFF_AS_A = { id: 90, email: 'staff@platform.test', role: 'admin', name: 'Staff', organization_id: 1 };
+    const r = await call('POST', '/api/subs/sub_A/invite', STAFF_AS_A, {});
+    expect(r.status).toBe(200);
+    expect(sentEmails.length).toBe(1);
+    expect(sentEmails[0].replyTo).toBe(false);
+    expect(JSON.stringify(sentEmails[0])).not.toContain('staff@platform.test');
   });
 
   test('a legacy NULL-org sub is still reachable — the tolerance arm survives', async () => {

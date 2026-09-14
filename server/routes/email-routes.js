@@ -268,12 +268,20 @@ router.post('/test',
       const text = (req.body && req.body.text) ||
         'Project 86 notifications are working.\n\nSent by: ' + (req.user.name || req.user.email) +
         '\nServer time: ' + new Date().toISOString();
+      // Branded with the CALLER's org, so the diagnostic shows the sender real
+      // org mail now carries ("<Org> via Project 86"). An org-less admin gets
+      // the plain platform sender, which is also what they would see for real.
+      // The org is the token's, never the body's; the name is resolved inside
+      // sendEmail. No reply-to: this almost always goes to the admin's own
+      // inbox, and branded mail never inherits the platform EMAIL_REPLY_TO.
+      const callerOrgId = (req.user && req.user.organization_id) || null;
       const result = await sendEmail({
         to: to,
         subject: subject,
         html: html,
         text: text,
-        tag: 'admin_test'
+        tag: 'admin_test',
+        senderOrg: callerOrgId != null ? { id: callerOrgId } : undefined
       });
       // Surface the configuration state so the admin can see at a
       // glance whether the env is set up correctly.
@@ -570,11 +578,23 @@ router.post('/templates/:key/test',
   async (req, res) => {
     try {
       const eventKey = req.params.key;
-      if (!EVENTS.find(e => e.key === eventKey)) {
+      const event = EVENTS.find(e => e.key === eventKey);
+      if (!event) {
         return res.status(404).json({ error: 'Unknown event' });
       }
       const to = (req.body && req.body.to) || (req.user && req.user.email);
       if (!to) return res.status(400).json({ error: 'to required' });
+
+      // Mirror production per event, so the sample is truthful. An org-scope
+      // event (job_assigned, lead_status_*, cert_expiring, the digests...) is
+      // rendered with the caller's org — their saved override and branding
+      // kit — and sent as "<Org> via Project 86", exactly as sendForEvent
+      // sends the real one. A system-scope event (org_invite, user_invite,
+      // password_reset) is neither: production renders those with no org and
+      // sends them from the plain platform sender, so the sample does too.
+      // The org is the token's, never the body's.
+      const callerOrgId = (req.user && req.user.organization_id) || null;
+      const orgScoped = (event.scope || 'org') === 'org' && callerOrgId != null;
 
       let rendered;
       try {
@@ -584,9 +604,14 @@ router.post('/templates/:key/test',
         // string-typed actor params (system emails); assignedBy is an
         // object on some org samples, so it keeps its canned value.
         const actor = req.user && req.user.name;
+        const sampleOverrides = actor ? { invitedBy: actor, resetBy: actor } : {};
+        // renderSample merges these into the sample params, and render()
+        // reads params.__orgId for both the override lookup and the branding
+        // kit — the same key sendForEvent's real callers pass.
+        if (orgScoped) sampleOverrides.__orgId = callerOrgId;
         rendered = await emailTemplates.renderSample(
           eventKey,
-          actor ? { invitedBy: actor, resetBy: actor } : undefined
+          Object.keys(sampleOverrides).length ? sampleOverrides : undefined
         );
       } catch (e) {
         return res.status(400).json({ error: 'Cannot render: ' + e.message });
@@ -602,7 +627,10 @@ router.post('/templates/:key/test',
         subject: (asTest ? '[TEST] ' : '') + rendered.subject,
         html: rendered.html,
         text: rendered.text,
-        tag: (asTest ? 'admin_test_' : 'admin_send_') + eventKey
+        tag: (asTest ? 'admin_test_' : 'admin_send_') + eventKey,
+        senderOrg: orgScoped
+          ? (rendered.orgName ? { id: callerOrgId, name: rendered.orgName } : { id: callerOrgId })
+          : undefined
       });
       res.json({
         ok: result.ok,

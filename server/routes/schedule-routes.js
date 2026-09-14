@@ -21,6 +21,8 @@ const { requireAuth, requireCapability, getAttributedUserId, requireOrgId } = re
 const { jobInOrg } = require('../services/job-org-scope');
 const { assertEntityInOrg } = require('../org-access');
 const { sendEmail } = require('../email');
+// Sender identity helpers — a separate, never-mocked module (see its header).
+const emailSender = require('../email-sender');
 const { scheduleAssigned } = require('../email-templates');
 
 const router = express.Router();
@@ -34,12 +36,21 @@ console.log('[schedule-routes] mounted at /api/schedule (Phase 2 — production-
 // data blob and hands it to scheduleAssigned(), which posts it off-platform by
 // email. Unscoped, an org-A caller creating an entry against an org-B job id
 // mailed that job's contents to org-A recipients — not a title leak, the blob.
-async function notifyScheduleCrew({ entry, addedUserIds, jobId, fromUserName, orgId }) {
+//
+// The RECIPIENTS are held to the same org. Crew ids arrive in the body, and
+// this read had no tenant predicate: an org-A scheduler could list org-B user
+// ids as crew and mail them org-A's job. readEntry now drops foreign ids
+// before they are saved, and this read refuses them again — the PATCH path
+// computes "newly added" from the stored row, which may predate that check.
+// The same org names the company in the From line; Reply-To is the scheduler's
+// fresh in-org users row (none under act-as, where req.user is platform staff).
+async function notifyScheduleCrew({ entry, addedUserIds, jobId, fromUserName, orgId, fromUserId }) {
   if (!addedUserIds || !addedUserIds.length) return;
+  if (orgId == null) return;
   try {
     const { rows: users } = await pool.query(
-      'SELECT id, email, name, notification_prefs FROM users WHERE id = ANY($1::int[]) AND active = TRUE',
-      [addedUserIds]
+      'SELECT id, email, name, notification_prefs FROM users WHERE id = ANY($1::int[]) AND organization_id = $2 AND active = TRUE',
+      [addedUserIds, orgId]
     );
     let job = null;
     if (jobId && orgId != null) {
@@ -49,6 +60,7 @@ async function notifyScheduleCrew({ entry, addedUserIds, jobId, fromUserName, or
         [jobId, orgId]);
       if (j.rows.length) job = Object.assign({ id: j.rows[0].id }, j.rows[0].data || {});
     }
+    const replyTo = users.length ? await emailSender.replyToForUser(pool, fromUserId, orgId) : null;
     users.forEach((u) => {
       const prefs = u.notification_prefs || {};
       if (prefs.schedule_assignment === false) return; // user opted out
@@ -64,7 +76,10 @@ async function notifyScheduleCrew({ entry, addedUserIds, jobId, fromUserName, or
         subject: tpl.subject,
         html: tpl.html,
         text: tpl.text,
-        tag: 'schedule_assignment'
+        tag: 'schedule_assignment',
+        organizationId: orgId,
+        senderOrg: { id: orgId },
+        replyTo: replyTo || false
       }).catch((e) => console.warn('[schedule] notify email failed:', e && e.message));
     });
   } catch (e) {
@@ -79,7 +94,11 @@ function genId() {
 // Sanitize / coerce inputs from the JSON body. Returns { ok, value, error }.
 // Async because crew ids are validated against the users table — we
 // don't want stale/garbage user ids festering in the JSONB column.
-async function readEntry(body, isUpdate) {
+// orgId is the caller's resolved tenant (req.orgId): a crew id is only valid
+// when it names an active user IN THAT ORG. Another tenant's user id is
+// dropped exactly like a garbage id — reported in _droppedCrew, never saved,
+// never emailed.
+async function readEntry(body, isUpdate, orgId) {
   if (!body || typeof body !== 'object') return { ok: false, error: 'Body required' };
   const out = {};
   if (!isUpdate || body.jobId !== undefined) {
@@ -113,9 +132,9 @@ async function readEntry(body, isUpdate) {
         }
       });
       if (candidates.length) {
-        const { rows: validRows } = await pool.query(
-          'SELECT id FROM users WHERE id = ANY($1::int[]) AND active = TRUE',
-          [candidates]
+        const { rows: validRows } = orgId == null ? { rows: [] } : await pool.query(
+          'SELECT id FROM users WHERE id = ANY($1::int[]) AND organization_id = $2 AND active = TRUE',
+          [candidates, orgId]
         );
         const validSet = new Set(validRows.map((r) => Number(r.id)));
         out.crew = candidates.filter((n) => validSet.has(n));
@@ -266,7 +285,7 @@ router.post('/',
   requireAuth, requireCapability('JOBS_VIEW_ALL'), requireOrgId,
   async (req, res) => {
     try {
-      const parsed = await readEntry(req.body, false);
+      const parsed = await readEntry(req.body, false, req.orgId);
       if (!parsed.ok) return res.status(400).json({ error: parsed.error });
       const v = parsed.value;
       // Confirm the job exists so we don't leave orphan rows. ON DELETE
@@ -317,7 +336,8 @@ router.post('/',
           addedUserIds: v.crew,
           jobId: v.jobId,
           fromUserName: req.user && req.user.name,
-          orgId: req.orgId
+          orgId: req.orgId,
+          fromUserId: req.user && req.user.id
         });
       }
 
@@ -338,18 +358,22 @@ router.post('/',
 // current row so the client can refresh and let the user re-apply.
 // Skipped (= last-write-wins) only when the client doesn't send the
 // token, since the field is opt-in for backwards compat.
+// requireOrgId: crew validation and the crew notice both need the caller's
+// tenant, and the raw JWT claim is NULL on a legacy token — which would have
+// validated no crew at all and mailed nobody, silently. req.orgId is the same
+// source POST uses.
 router.patch('/:id',
-  requireAuth, requireCapability('JOBS_VIEW_ALL'),
+  requireAuth, requireCapability('JOBS_VIEW_ALL'), requireOrgId,
   async (req, res) => {
     try {
-      const parsed = await readEntry(req.body, true);
+      const parsed = await readEntry(req.body, true, req.orgId);
       if (!parsed.ok) return res.status(400).json({ error: parsed.error });
       const v = parsed.value;
       const expectedUpdatedAt = v._expectedUpdatedAt;
       delete v._expectedUpdatedAt;
 
       // Wave A (A5): the entry must belong to the caller's org before any edit.
-      const inOrg = await assertEntityInOrg('schedule_entry', req.params.id, req.user.organization_id);
+      const inOrg = await assertEntityInOrg('schedule_entry', req.params.id, req.orgId);
       if (!inOrg) return res.status(404).json({ error: 'not found' });
 
       // Optimistic-locking pre-check. Skipped silently when the
@@ -425,7 +449,8 @@ router.patch('/:id',
             addedUserIds: added,
             jobId: entry.jobId,
             fromUserName: req.user && req.user.name,
-            orgId: req.user.organization_id
+            orgId: req.orgId,
+            fromUserId: req.user && req.user.id
           });
         }
       }

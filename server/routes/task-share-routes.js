@@ -27,6 +27,11 @@ const sharp = require('sharp');
 const { pool } = require('../db');
 const { requireAuth } = require('../auth');
 const { sendEmail, isEnabled: emailIsEnabled } = require('../email');
+// Sender identity helpers — a separate, never-mocked module (see its header).
+const emailSender = require('../email-sender');
+// The one tenancy rule for a caller-supplied sub id (tolerant of legacy
+// un-stamped rows), written once in the service rather than again here.
+const { parentSubInOrgSql } = require('../services/sub-org-scope');
 const { storage } = require('../storage');
 const { sniffMimeFromBytes, sanitizeSvg, mimeFamilyMatches } = require('../util/attachment-mime');
 // Job labels go through js/job-label.js inside this resolver, so the outside
@@ -114,10 +119,20 @@ router.post('/tasks/:id/share', requireAuth, async (req, res) => {
     let email = String(body.email || '').trim().toLowerCase();
     let name = String(body.name || '').trim() || null;
     if (subId) {
-      const sR = await pool.query('SELECT id, name, email, primary_contact_first FROM subs WHERE id = $1', [subId]);
+      // The sub must be this tenant's (or a legacy un-stamped row). Unscoped, a
+      // foreign sub_id filled in ANOTHER tenant's sub email and contact name as
+      // the recipient — this org's task, link and name mailed to a vendor it
+      // has never met. A foreign id now answers exactly like an absent one: no
+      // fill-in, no foreign id stamped onto the share row, and without a typed
+      // email the request is refused below.
+      const sR = await pool.query(
+        'SELECT id, name, email, primary_contact_first FROM subs WHERE id = $1 AND ' + parentSubInOrgSql('subs.id', '$2'),
+        [subId, task.organization_id]);
       if (sR.rows.length) {
         if (!email) email = String(sR.rows[0].email || '').trim().toLowerCase();
         if (!name) name = sR.rows[0].primary_contact_first || sR.rows[0].name || null;
+      } else {
+        subId = null;
       }
     }
     if (!email || email.indexOf('@') < 0) return res.status(400).json({ error: 'A valid email is required (pick a sub with an email on file, or enter one).' });
@@ -132,8 +147,12 @@ router.post('/tasks/:id/share', requireAuth, async (req, res) => {
       [id, task.organization_id, task.id, token, subId, email, name, expires, (req.user && req.user.id) || null]
     );
 
-    let orgName = 'Project 86';
-    try { const oR = await pool.query('SELECT name FROM organizations WHERE id = $1', [task.organization_id]); if (oR.rows.length && oR.rows[0].name) orgName = oR.rows[0].name; } catch (e) {}
+    // realOrgName stays null on a miss: the body and subject need words and fall
+    // back to 'Project 86', but the From line must not, or it would read
+    // "Project 86 via Project 86".
+    let realOrgName = null;
+    try { const oR = await pool.query('SELECT name FROM organizations WHERE id = $1', [task.organization_id]); if (oR.rows.length && oR.rows[0].name) realOrgName = oR.rows[0].name; } catch (e) {}
+    const orgName = realOrgName || 'Project 86';
 
     const link = baseUrl(req) + '/t/' + encodeURIComponent(token);
     const greet = name || 'there';
@@ -149,7 +168,16 @@ router.post('/tasks/:id/share', requireAuth, async (req, res) => {
 
     let sent = { ok: false, skipped: 'email-not-configured' };
     if (emailIsEnabled()) {
-      sent = await sendEmail({ to: email, subject: orgName + ' sent you a task: ' + task.title, html: html, text: text, tag: 'task_share' });
+      // Company-branded From, and a reply reaches the office user who shared
+      // it: their fresh users row in the task's org (none under act-as). Never
+      // the typed recipient.
+      const replyTo = await emailSender.replyToForUser(pool, req.user && req.user.id, task.organization_id);
+      sent = await sendEmail({
+        to: email, subject: orgName + ' sent you a task: ' + task.title, html: html, text: text, tag: 'task_share',
+        organizationId: task.organization_id,
+        senderOrg: realOrgName ? { id: task.organization_id, name: realOrgName } : { id: task.organization_id },
+        replyTo: replyTo || false
+      });
     }
     res.json({ ok: true, share: { id: id, recipient_email: email, recipient_name: name, expires_at: expires }, link: link, email_sent: !!sent.ok, email_error: sent.error || null });
   } catch (e) {

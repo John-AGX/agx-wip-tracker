@@ -9,6 +9,9 @@ const { requireAuth, requireRole, requireCapability, getAttributedUserId, requir
 const { geocodeAddress } = require('../geocoder');
 const asm = require('../services/assemblies');
 const estLines = require('../services/estimate-lines');
+// Sender identity for the proposal email (POST /:id/send). Its own module,
+// not ../email, so a suite mocking ../email cannot hand this file undefined.
+const { orgNameFor, replyToForUser, cleanOrgName } = require('../email-sender');
 
 const router = express.Router();
 
@@ -646,6 +649,35 @@ router.post('/:id/sent', requireAuth, requireCapability('ESTIMATES_EDIT'), async
   }
 });
 
+// ── Outbound proposal mail: a per-user cap ────────────────────────────────
+// POST /:id/send with method 'email' mails caller-supplied HTML and subject
+// to any address the caller types, from the platform's verified domain — and
+// now under the company's own name. Any ESTIMATES_EDIT holder can reach it.
+// server/rate-limit.js has no limiter for outbound mail (its per-user bucket,
+// aiChatLimiter, is sized for chat turns), so this door carries its own small
+// in-process sliding window: 20 proposal emails per user per hour, far above
+// a real estimator's day and a hard bound on the door being used as a relay.
+// In-process is correct for the one Railway replica, the same stated premise
+// as rate-limit.js. Only an actual email counts; print/link/outlook records
+// are not mail from this server and are never throttled.
+const PROPOSAL_MAIL_WINDOW_MS = 60 * 60 * 1000;
+const PROPOSAL_MAIL_MAX = 20;
+const _proposalMailSends = new Map();   // user id -> send timestamps in window
+
+function proposalMailAllowed(userId) {
+  const key = String(userId == null ? '' : userId);
+  const now = Date.now();
+  const recent = (_proposalMailSends.get(key) || []).filter((t) => now - t < PROPOSAL_MAIL_WINDOW_MS);
+  if (recent.length >= PROPOSAL_MAIL_MAX) {
+    _proposalMailSends.set(key, recent);
+    console.warn('[estimates] proposal email cap hit for user', key);
+    return false;
+  }
+  recent.push(now);
+  _proposalMailSends.set(key, recent);
+  return true;
+}
+
 // POST /api/estimates/:id/send — record that the proposal was sent to a SPECIFIC
 // recipient (any address, not just the client on file) by print or email; when
 // method='email' and proposal html is supplied, actually email it (best-effort).
@@ -658,6 +690,16 @@ router.post('/:id/send', requireAuth, requireCapability('ESTIMATES_EDIT'), async
     // Microsoft 365 mailbox (Graph Mail.Send); we only RECORD it here and must
     // NOT also fire the Resend fallback below. 'print'/'link' record only too.
     const method = (b.method === 'print' || b.method === 'link' || b.method === 'outlook') ? b.method : 'email';
+    const willEmail = method === 'email' && !!to && !!b.html;
+    // Refused BEFORE the stamp, so a throttled send is not recorded as sent.
+    // See proposalMailAllowed for why this door has a cap of its own.
+    if (willEmail && !proposalMailAllowed(req.user && req.user.id)) {
+      res.set('Retry-After', String(Math.ceil(PROPOSAL_MAIL_WINDOW_MS / 1000)));
+      return res.status(429).json({
+        error: 'Too many proposal emails from your account in the last hour — please wait and try again.',
+        retryAfter: Math.ceil(PROPOSAL_MAIL_WINDOW_MS / 1000)
+      });
+    }
     const u = await pool.query(
       `UPDATE estimates
           SET sent_to = $3, sent_method = $4,
@@ -670,12 +712,39 @@ router.post('/:id/send', requireAuth, requireCapability('ESTIMATES_EDIT'), async
     );
     if (u.rowCount === 0) return res.status(404).json({ error: 'Estimate not found' });
     let emailed = false, emailError = null;
-    if (method === 'email' && to && b.html) {
+    if (willEmail) {
       try {
         const mailer = require('../email');
         const send = mailer.sendEmail || mailer.send;
         if (typeof send === 'function') {
-          await send({ to: to, subject: (b.subject || '').toString().trim() || 'Your proposal from AGX', html: String(b.html), tag: 'proposal_sent' });
+          // The company sending its own proposal to its own customer — the
+          // clearest case for "<Org> via Project 86". The org is the caller's:
+          // the UPDATE above matched only this org's estimate or a legacy
+          // un-stamped one, so the caller's org is the estimate's org in every
+          // row it can have touched. organizationId meters the send, which it
+          // never was before.
+          //
+          // REPLY-TO is the estimator who sent it, read FRESH and predicated on
+          // that org — a customer's "approved" reply should reach them, not a
+          // platform mailbox. Never body.to (that is the customer) and never
+          // the JWT email claim. A miss sends replyTo:false, so the customer's
+          // reply cannot fall through to the platform EMAIL_REPLY_TO.
+          const orgId = (req.user && req.user.organization_id) || null;
+          const orgName = cleanOrgName(await orgNameFor(pool, orgId));
+          const replyTo = await replyToForUser(pool, req.user && req.user.id, orgId);
+          // The default subject used to be 'Your proposal from AGX' for every
+          // tenant. It names the sending org now, or no one.
+          const subject = (b.subject || '').toString().trim() ||
+            (orgName ? 'Your proposal from ' + orgName : 'Your proposal');
+          await send({
+            to: to,
+            subject: subject,
+            html: String(b.html),
+            tag: 'proposal_sent',
+            organizationId: orgId,
+            senderOrg: orgId != null ? { id: orgId } : undefined,
+            replyTo: replyTo || false
+          });
           emailed = true;
         } else { emailError = 'mailer unavailable'; }
       } catch (e) { emailError = (e && e.message) || 'send failed'; console.error('proposal /send email error:', e); }

@@ -21,6 +21,7 @@
 const { pool } = require('./db');
 const { sendEmail } = require('./email');
 const emailTemplates = require('./email-templates');
+const emailSender = require('./email-sender');
 
 const TICK_MS = 60 * 1000;
 const MAX_PER_TICK = 50;   // recipients drained per tick per campaign
@@ -196,6 +197,20 @@ async function drainCampaign(campaign) {
     " ORDER BY id ASC LIMIT $2",
     [campaign.id, MAX_PER_TICK]
   );
+  // Sender identity, resolved once per drain rather than per recipient.
+  // A campaign is the org talking to its own subs and clients, so it goes
+  // out as "<Org> via Project 86". Replies reach the admin who created it —
+  // re-read fresh and predicated on the CAMPAIGN's org, so a creator who has
+  // since been deactivated, deleted (created_by SET NULL) or moved org gets
+  // no Reply-To (false: never the platform's EMAIL_REPLY_TO either).
+  const orgId = campaign.organization_id;
+  let senderOrg;
+  let replyTo = false;
+  if (recR.rows.length && orgId != null) {
+    senderOrg = { id: orgId };
+    const creatorEmail = await emailSender.replyToForUser(pool, campaign.created_by, orgId);
+    if (creatorEmail) replyTo = creatorEmail;
+  }
   let drained = 0;
   for (const rec of recR.rows) {
     const params = Object.assign(
@@ -221,7 +236,11 @@ async function drainCampaign(campaign) {
       to: rec.email,
       subject: subject,
       html: html,
-      tag: 'campaign:' + campaign.id
+      tag: 'campaign:' + campaign.id,
+      senderOrg: senderOrg,
+      replyTo: replyTo,
+      // Metering only (email_sends per org) — branding is senderOrg above.
+      organizationId: orgId != null ? orgId : null
     });
     if (result.ok) {
       await pool.query(

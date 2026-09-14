@@ -19,6 +19,8 @@ const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireCapability } = require('../auth');
 const { sendEmail, isEnabled: emailIsEnabled } = require('../email');
+// Sender identity helpers — a separate, never-mocked module (see its header).
+const emailSender = require('../email-sender');
 const { reportShareIpLimiter, reportShareViewLimiter, reportShareCommentLimiter } = require('../rate-limit');
 const shares = require('../services/report-shares');
 const { loadReportDocument } = require('../services/report-document');
@@ -64,11 +66,14 @@ async function loadOwnedProject(entityId, req) {
   return { project: rows[0], orgId: orgId };
 }
 
+// The org's real name, or null. Callers that need words for a document or a
+// subject supply their own 'Project 86' fallback; the sender line must NOT get
+// one, or a missing name would brand the mail "Project 86 via Project 86".
 async function orgNameFor(orgId) {
   try {
     const r = await pool.query('SELECT name FROM organizations WHERE id = $1', [orgId]);
-    return (r.rows[0] && r.rows[0].name) || 'Project 86';
-  } catch (e) { return 'Project 86'; }
+    return (r.rows[0] && r.rows[0].name) || null;
+  } catch (e) { return null; }
 }
 
 // ── Mint ────────────────────────────────────────────────────────────────
@@ -99,7 +104,8 @@ router.post('/reports/:entityType/:entityId/:reportId/share', requireAuth, async
       const email = String(body.email || '').trim().slice(0, 200);
       const name = String(body.name || '').trim().slice(0, 120);
 
-      const orgName = await orgNameFor(owned.orgId);
+      const realOrgName = await orgNameFor(owned.orgId);
+      const orgName = realOrgName || 'Project 86';
       const document = await loadReportDocument(pool, {
         report: report,
         entityType: entityType,
@@ -149,10 +155,18 @@ router.post('/reports/:entityType/:entityId/:reportId/share', requireAuth, async
           '</div>';
         const text = 'Hi ' + greet + ',\n\n' + orgName + ' has shared a report with you: ' + title +
           '.\n\nOpen it (no login needed):\n' + link + '\n\nThis link expires in ' + days + ' days.';
+        // The company sends its own report: its name on the From line, and a
+        // reply reaches the office user who shared it — their fresh users row
+        // in THIS org, so an act-as session (platform staff) sends no Reply-To.
+        // Never the typed recipient address.
+        const replyTo = await emailSender.replyToForUser(pool, req.user && req.user.id, owned.orgId);
         sent = await sendEmail({
           to: email,
           subject: orgName + ' shared a report: ' + title,
-          html: html, text: text, tag: 'report_share'
+          html: html, text: text, tag: 'report_share',
+          organizationId: owned.orgId,
+          senderOrg: realOrgName ? { id: owned.orgId, name: realOrgName } : { id: owned.orgId },
+          replyTo: replyTo || false
         });
       }
 
@@ -315,7 +329,7 @@ router.post('/reports/:entityType/:entityId/:reportId/pdf', requireAuth, async (
       // The INTERNAL document: financials kept, because this file is being
       // filed into the project rather than sent to a client. Anything meant for
       // a client goes out through a share link, which redacts.
-      const orgName = await orgNameFor(owned.orgId);
+      const orgName = (await orgNameFor(owned.orgId)) || 'Project 86';
       const document = await loadReportDocument(pool, {
         report: report, entityType: entityType, entityId: entityId,
         project: owned.project, orgName: orgName, hideFinancials: false

@@ -2708,6 +2708,13 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_email_log_status ON email_log(status);
     CREATE INDEX IF NOT EXISTS idx_email_log_tag ON email_log(tag);
     CREATE INDEX IF NOT EXISTS idx_email_log_to ON email_log(to_address);
+    -- The sender identity a send actually carried: the From header (platform
+    -- EMAIL_FROM, or "<Org> via Project 86" <addr> for org-branded mail) and
+    -- the Reply-To, if any. Written by logSend so branded vs platform mail can
+    -- be audited, including dry-run sends on staging. Deliberately no tenant
+    -- column here — that is its own migration (tenancy-graduation item 15).
+    ALTER TABLE email_log ADD COLUMN IF NOT EXISTS from_header TEXT;
+    ALTER TABLE email_log ADD COLUMN IF NOT EXISTS reply_to TEXT;
 
     -- Project 86 Command Center — append-only audit trail of privileged
     -- actions (role changes, org create/archive, skill/MCP edits, native

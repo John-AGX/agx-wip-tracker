@@ -26,7 +26,7 @@ const { sqliteSchema } = require('./helpers/db-schema');
 const SERVICES = path.join(__dirname, '..', 'server', 'services');
 const REAL = path.join(SERVICES, 'service-ticket-notify.js');
 const TABLES = ['organizations', 'users', 'jobs', 'leads', 'tasks', 'attachments', 'job_access',
-  'service_tickets', 'service_ticket_events'];
+  'service_tickets', 'service_ticket_events', 'service_ticket_shares'];
 
 // The access rule's own role check, stubbed to a fixed role → capability map so
 // the suite does not need auth's role cache. 'crew' sees only jobs it owns or
@@ -59,6 +59,7 @@ function seed() {
   eng.db.exec(`
     DELETE FROM organizations; DELETE FROM users; DELETE FROM jobs; DELETE FROM leads; DELETE FROM tasks;
     DELETE FROM attachments; DELETE FROM service_tickets; DELETE FROM service_ticket_events; DELETE FROM job_access;
+    DELETE FROM service_ticket_shares;
     INSERT INTO organizations (id, name) VALUES (1, 'AGX'), (2, 'Rival');
     INSERT INTO users (id, name, email, role, organization_id, active, notification_prefs) VALUES
       (10, 'Paula PM',      'pm@agx.test',      'pm', 1, 1, '{}'),
@@ -87,6 +88,10 @@ function seed() {
       ('a1', 'task', 't782', 'b.jpg', 'image/jpeg', 'https://cdn/t', 'https://cdn/w', '["before"]', 1, 0),
       ('a2', 'task', 't782', 'c.jpg', 'image/jpeg', 'https://cdn/t', 'https://cdn/w', '["completion"]', 1, 1),
       ('a3', 'task', 't784', 'c.jpg', 'image/jpeg', 'https://cdn/t', 'https://cdn/w', '["completion"]', 1, 0);
+    INSERT INTO service_ticket_shares (id, organization_id, ticket_id, token_hash, recipient_email, recipient_name, expires_at, created_by) VALUES
+      ('sh1',     1, 'st1', 'h1', 'marco@crew.test', NULL, '2099-01-01', 14),
+      ('sh_none', 1, 'st1', 'h2', NULL,              NULL, '2099-01-01', 14),
+      ('sh_rival', 2, 'st1', 'h3', 'spy@rival.test', NULL, '2099-01-01', 50);
   `);
 }
 beforeEach(seed);
@@ -125,7 +130,11 @@ function mutant(find, replace) {
   const out = src.replace(f, replace.split('\n').join(eol))
     .replace("require('./service-tickets')", 'require(' + abs('service-tickets.js') + ')')
     .replace("require('./service-ticket-workorder')", 'require(' + abs('service-ticket-workorder.js') + ')')
-    .replace("require('./service-ticket-access')", 'require(' + abs('service-ticket-access.js') + ')');
+    .replace("require('./service-ticket-access')", 'require(' + abs('service-ticket-access.js') + ')')
+    // The sender identity helpers sit one directory up; required lazily, but on
+    // every notice, so a mutant copy must resolve them too.
+    .replace("require('../email-sender')",
+      'require(' + JSON.stringify(path.join(SERVICES, '..', 'email-sender.js').split(path.sep).join('/')) + ')');
   if (out === src) throw new Error('MUTATION CHANGED NO BYTES');
   const p = path.join(os.tmpdir(), '_p86_stn_' + process.pid + '_' + Math.random().toString(36).slice(2, 9) + '.js');
   fs.writeFileSync(p, out, 'utf8');
@@ -312,6 +321,66 @@ describe('what they hear', () => {
     expect(Array.from(out)).toHaveLength(60);
     expect(out.endsWith('\u{20000}')).toBe(true);
     expect(/[\uD800-\uDBFF]$/.test(out)).toBe(false);
+  });
+
+  test('the email names the company and is metered to the ticket’s org', async () => {
+    const s = senders();
+    await load().notifyAwaitingApproval(eng.pool, { ticket: ticket('st1'), actor: CREW, reason: 'marked_complete' }, s.deps);
+    expect(s.emails.length).toBeGreaterThan(0);
+    for (const m of s.emails) {
+      expect(m.senderOrg).toEqual({ id: 1, name: 'AGX' });
+      expect(m.organizationId).toBe(1);
+    }
+  });
+
+  test('a reply to a crew-link notice reaches the address the office sent that link to', async () => {
+    const s = senders();
+    await load().notifyAwaitingApproval(eng.pool, { ticket: ticket('st1'), actor: CREW, reason: 'marked_complete' }, s.deps);
+    expect(s.emails.map((m) => m.replyTo)).toEqual(['marco@crew.test', 'marco@crew.test']);
+  });
+
+  test('a reply to an office move reaches the person who moved it — their own row, in this org', async () => {
+    const s = senders();
+    await load().notifyAwaitingApproval(eng.pool,
+      { ticket: ticket('st1'), actor: { kind: 'user', userId: 14, label: 'Sam Sender' }, reason: 'office_moved' }, s.deps);
+    expect(s.emails.map((m) => m.to)).toEqual(['pm@agx.test', 'creator@agx.test']);
+    expect(s.emails.map((m) => m.replyTo)).toEqual(['sender@agx.test', 'sender@agx.test']);
+  });
+
+  test('another tenant’s user as the actor (act-as) puts no address on this org’s mail', async () => {
+    const s = senders();
+    await load().notifyAwaitingApproval(eng.pool,
+      { ticket: ticket('st1'), actor: { kind: 'user', userId: 50, label: 'Rival Ray' }, reason: 'office_moved' }, s.deps);
+    expect(s.emails.length).toBeGreaterThan(0);
+    expect(s.emails.map((m) => m.replyTo)).toEqual(s.emails.map(() => false));
+    expect(JSON.stringify(s.emails)).not.toContain('ray@rival.test');
+  });
+
+  test('no reply-to from a link with no address, from another org’s share id, or from anything the crew typed', async () => {
+    const cases = [
+      { kind: 'share', shareId: 'sh_none', label: 'Marco' },
+      { kind: 'share', shareId: 'sh_rival', label: 'Marco' },
+      { kind: 'share', label: 'me@evil.test' },
+      { kind: 'share', shareId: 'sh_missing', label: 'marco@crew.test' },
+    ];
+    for (const actor of cases) {
+      seed();
+      const s = senders();
+      await load().notifyAwaitingApproval(eng.pool, { ticket: ticket('st1'), actor: actor, reason: 'marked_complete' }, s.deps);
+      expect(s.emails.length).toBeGreaterThan(0);
+      expect(s.emails.map((m) => m.replyTo)).toEqual(s.emails.map(() => false));
+      expect(JSON.stringify(s.emails)).not.toMatch(/spy@rival\.test|evil\.test/);
+    }
+  });
+
+  test('the approver who IS the reply-to address gets none; everyone else still does', async () => {
+    eng.db.exec("UPDATE service_ticket_shares SET recipient_email = 'Creator@agx.test' WHERE id = 'sh1'");
+    const s = senders();
+    await load().notifyAwaitingApproval(eng.pool, { ticket: ticket('st1'), actor: CREW, reason: 'marked_complete' }, s.deps);
+    expect(s.emails.map((m) => [m.to, m.replyTo])).toEqual([
+      ['pm@agx.test', 'Creator@agx.test'],
+      ['creator@agx.test', false],
+    ]);
   });
 
   test('the email opt-out holds; push is still offered, with the user’s prefs for its own gate', async () => {

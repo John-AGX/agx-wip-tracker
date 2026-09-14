@@ -22,6 +22,7 @@ const { toFile } = require('@anthropic-ai/sdk');
 const { pool, listOrganizations, getOrgById } = require('../db');
 const { requireAuth, requireCapability, requireOrg, requireSystemAdmin, signToken } = require('../auth');
 const { sendForEvent } = require('../email');
+const { PLATFORM_NAME } = require('../email-sender');
 const { auditLog, auditCritical, auditActorCritical, actorFromRequest } = require('../audit');
 const { deleteSkillDeep, anthropicDisplayTitle } = require('../services/anthropic-skills');
 // NOTE: dropPackByName is deliberately NOT imported any more. It was the only
@@ -101,6 +102,43 @@ async function uploadPackAsNewVersion(anthropic, skillId, pack) {
   });
 }
 
+// Refuse an organization name that cannot safely become a sender name.
+//
+// Org mail now goes out as "<Org> via Project 86", so organizations.name is
+// tenant-controlled text that lands in a From header. server/email-sender.js
+// already sanitises it at send time and falls back to the plain platform
+// sender, so a bad name can never inject a header or spoof one. Refusing it
+// HERE is the second half: an admin who types one hears about it at save
+// instead of their company's mail silently going out unbranded forever.
+//
+//   - control characters (CR/LF/TAB, C1) and line separators: header
+//     injection, and nothing a company name needs;
+//   - bidi overrides/isolates, zero-width and other invisible format
+//     characters: display spoofing (U+202E flips the rest of the name);
+//   - the platform's own name: a tenant called "Project 86 Security" would
+//     mail every sub and client as the platform.
+//
+// Returns an error message, or null when the name is acceptable. Length and
+// emptiness stay the callers' existing checks.
+function orgNameProblem(name) {
+  const s = String(name == null ? '' : name);
+  if (/[\p{Cc}\p{Zl}\p{Zp}]/u.test(s)) {
+    return 'name cannot contain line breaks, tabs or control characters';
+  }
+  if (/[\p{Cf}]/u.test(s)) {
+    return 'name cannot contain invisible formatting characters (bidi overrides, zero-width characters)';
+  }
+  let folded = s;
+  try { folded = s.normalize('NFKC'); } catch (_) { /* malformed input: test as is */ }
+  const squash = (v) => String(v || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+  const key = squash(folded);
+  const platformKey = squash(PLATFORM_NAME);
+  if (key.indexOf('project86') !== -1 || (platformKey && key.indexOf(platformKey) !== -1)) {
+    return 'name cannot include "' + PLATFORM_NAME + '" — organization mail is sent as "<your organization> via ' + PLATFORM_NAME + '"';
+  }
+  return null;
+}
+
 // Helper: confirm the caller is allowed to act on the requested
 // organization id. Today: must match their own org (no cross-org
 // access yet — when platform-admin role lands, that role can pass
@@ -142,6 +180,9 @@ router.post('/', requireAuth, requireSystemAdmin, async (req, res) => {
     const name = String(b.name || '').trim();
     if (!slug) return res.status(400).json({ error: 'slug is required (lowercase letters, digits, _ or -)' });
     if (!name) return res.status(400).json({ error: 'name is required' });
+    if (name.length > 200) return res.status(400).json({ error: 'name max 200 chars' });
+    const nameProblem = orgNameProblem(name);
+    if (nameProblem) return res.status(400).json({ error: nameProblem });
     try {
       const r = await pool.query(
         `INSERT INTO organizations (slug, name, description, identity_body)
@@ -188,6 +229,12 @@ router.post('/invites', requireAuth, requireSystemAdmin, async (req, res) => {
       return res.status(400).json({ error: 'Valid email required' });
     }
     if (!orgName) return res.status(400).json({ error: 'org_name is required' });
+    // org_name becomes organizations.name verbatim at accept, so it is held to
+    // the same rule as a create or rename. Refused here, while the system
+    // admin is still at the form, rather than at accept where the invitee
+    // could do nothing about it.
+    const orgNameErr = orgNameProblem(orgName);
+    if (orgNameErr) return res.status(400).json({ error: orgNameErr.replace(/^name /, 'org_name ') });
     const token = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
     const ins = await pool.query(
@@ -219,6 +266,12 @@ router.post('/invites', requireAuth, requireSystemAdmin, async (req, res) => {
         const inv = await pool.query('SELECT name FROM users WHERE id = $1', [req.user.id]);
         if (inv.rows[0] && inv.rows[0].name) inviterName = inv.rows[0].name;
       } catch (_) { /* JWT-claim fallback */ }
+      // SENDER: the platform, and no reply-to override. org_invite is scope
+      // 'system', so sendForEvent never brands it: the organization named in
+      // org_name does not exist yet and has agreed to nothing, and the
+      // inviter's own org is not who is inviting. No __orgId and no
+      // organizationId either — there is no tenant to meter or to brand. The
+      // reply goes wherever unbranded platform mail replies go (EMAIL_REPLY_TO).
       await sendForEvent('org_invite', {
         platform_name: process.env.PLATFORM_NAME || 'Project 86',
         org_name: orgName,
@@ -492,6 +545,8 @@ router.put('/:id', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), a
       const trimmed = req.body.name.trim();
       if (!trimmed) return res.status(400).json({ error: 'name cannot be empty' });
       if (trimmed.length > 200) return res.status(400).json({ error: 'name max 200 chars' });
+      const nameProblem = orgNameProblem(trimmed);
+      if (nameProblem) return res.status(400).json({ error: nameProblem });
       updates.push('name = $' + p++);
       params.push(trimmed);
     }

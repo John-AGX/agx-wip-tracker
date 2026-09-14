@@ -10,6 +10,9 @@ const { requireAuth, requireCapability, requireOrgId, isAdminish } = require('..
 // record of, so both delete routes write an audit row. Fire-and-forget.
 const { auditLog } = require('../audit');
 const { sendForEvent } = require('../email');
+// Reply-To lookup for the lead-status notice. Its own module, not ../email, so
+// a suite mocking ../email with a partial export list cannot break it.
+const { replyToForUser } = require('../email-sender');
 const { geocodeAddress, geocodeViaGoogle, geocodeViaCensus } = require('../geocoder');
 // Training flywheel — PDF-extraction-vs-saved pairs (see POST / create).
 const { captureExample, TASKS } = require('../services/training-capture');
@@ -296,19 +299,31 @@ router.put('/:id', requireAuth, requireCapability('LEADS_EDIT'), async (req, res
 // user who made the change if no salesperson is set (so the event isn't
 // silently swallowed when assignments haven't been filled in yet).
 async function notifyLeadStatusChange(leadId, newStatus, changedByUser, body) {
+  var callerOrgId = (changedByUser && changedByUser.organization_id) || null;
+  // THE SALESPERSON JOIN IS ORG-PREDICATED. It was `u.id = l.salesperson_id`
+  // alone, and salesperson_id is body-editable (EDITABLE_FIELDS) with no
+  // tenant validation, so a lead could name ANOTHER tenant's user and this
+  // notification — the lead's title, client and revenue, now sent under the
+  // company's own name — went to them. The salesperson must be a member of
+  // the lead's org; a legacy un-stamped lead is held to the org of the caller
+  // who just changed it (the PUT only reaches a lead in that org or an
+  // un-stamped one). A foreign salesperson is simply not found, and the
+  // notice falls back to the person who made the change, as it always did
+  // for a lead with no salesperson.
   var sql =
-    'SELECT l.id, l.title, l.estimated_revenue_high, l.notes, ' +
+    'SELECT l.id, l.title, l.estimated_revenue_high, l.notes, l.organization_id, ' +
     '       c.company_name AS client_company, ' +
     '       u.email AS salesperson_email, u.name AS salesperson_name ' +
     'FROM leads l ' +
     'LEFT JOIN clients c ON c.id = l.client_id ' +
-    'LEFT JOIN users u ON u.id = l.salesperson_id ' +
+    'LEFT JOIN users u ON u.id = l.salesperson_id AND u.organization_id = COALESCE(l.organization_id, $2) ' +
     'WHERE l.id = $1';
-  var r = await pool.query(sql, [leadId]);
+  var r = await pool.query(sql, [leadId, callerOrgId]);
   if (!r.rows.length) return;
   var row = r.rows[0];
   var to = row.salesperson_email || (changedByUser && changedByUser.email);
   if (!to) return;
+  var orgId = row.organization_id != null ? row.organization_id : callerOrgId;
 
   var eventKey = newStatus === 'sold' ? 'lead_status_sold' : 'lead_status_lost';
   var params = {
@@ -326,7 +341,18 @@ async function notifyLeadStatusChange(leadId, newStatus, changedByUser, body) {
     // template to use any other lead field.
     params.reason = (body && body.notes) || row.notes || '';
   }
-  return sendForEvent(eventKey, params, { to: to, tag: eventKey });
+  // __orgId was never passed, so this event got no org template override, no
+  // branding kit and no metering. It is the org's own event (scope 'org'), so
+  // with the org id present sendForEvent also sends it as "<Org> via Project
+  // 86".
+  if (orgId != null) params.__orgId = orgId;
+  // REPLY-TO: the person who moved the lead, read FRESH and predicated on the
+  // lead's org — never the JWT email claim. When they are also the recipient
+  // (no salesperson, or a salesperson closing their own lead) sendEmail drops
+  // it as a reply-to-self. A miss sends false: the salesperson's reply must not
+  // fall through to a platform mailbox.
+  var replyTo = await replyToForUser(pool, changedByUser && changedByUser.id, orgId);
+  return sendForEvent(eventKey, params, { to: to, tag: eventKey, replyTo: replyTo || false });
 }
 
 // POST /api/leads/import — bulk insert leads from a Buildertrend Leads

@@ -29,6 +29,8 @@ const sharp = require('sharp');
 const { pool } = require('../db');
 const { requireAuth, requireCapability, signToken } = require('../auth');
 const { sendEmail, isEnabled: emailIsEnabled } = require('../email');
+// Sender identity helpers — a separate, never-mocked module (see its header).
+const emailSender = require('../email-sender');
 const { storage } = require('../storage');
 // P0-4 — same byte sniffing + SVG sanitization the PM upload path uses.
 const { sniffMimeFromBytes, sanitizeSvg, mimeFamilyMatches } = require('../util/attachment-mime');
@@ -162,14 +164,25 @@ router.post('/subs/:subId/invite',
         'Click this link to sign in (no password needed):\n' + link + '\n\n' +
         'The link is good for ' + INVITE_TTL_DAYS + ' days and can only be used once.';
 
+      // The TENANT invites its own vendor, so the From line names the company
+      // the sub actually knows ("AG Exteriors via Project 86") — a bare platform
+      // name on a magic link reads as phishing. The address stays EMAIL_FROM's.
+      // Reply-To is the inviting PM's fresh users row in the caller's org; an
+      // act-as session (platform staff) or a legacy claim-less token misses the
+      // predicate and sends none, never a stranger's address.
       let emailResult = { ok: false, skipped: 'email-not-configured' };
       if (emailIsEnabled()) {
+        const orgId = callerOrgId(req);
+        const replyTo = await emailSender.replyToForUser(pool, req.user && req.user.id, orgId);
         emailResult = await sendEmail({
           to: email,
           subject: 'Your Project 86 sub portal invite',
           html: html,
           text: text,
-          tag: 'sub_invite'
+          tag: 'sub_invite',
+          organizationId: orgId,
+          senderOrg: orgId == null ? undefined : { id: orgId },
+          replyTo: replyTo || false
         });
       }
 

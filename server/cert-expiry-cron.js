@@ -17,6 +17,7 @@
 
 const { pool } = require('./db');
 const { sendForEvent } = require('./email');
+const emailSender = require('./email-sender');
 const { certTypeLabel } = require('./email-templates');
 const tz = require('./timezone');
 
@@ -94,6 +95,17 @@ async function scanOrg(orgId, localDate, fires) {
     "         AND sc.expiration_date >= CURRENT_DATE - sc.reminder_days * INTERVAL '1 day'))"
   ].join(' ');
   var r = await pool.query(sql, [orgId]);
+  // Sender + Reply-To, resolved once per org and only when there is
+  // something to send. __orgId below makes sendForEvent send the reminder
+  // as "<Org> via Project 86" (and applies the org's template override and
+  // metering). The copy asks the sub to "reply to this email" with an
+  // updated certificate, and no human wrote it — so replies go to the org's
+  // earliest-created active admin. With no such admin: no Reply-To at all
+  // (false), never the platform's EMAIL_REPLY_TO, never the sub.
+  var replyTo = false;
+  if (r.rows.length) {
+    replyTo = (await emailSender.replyToForOrgAdmin(pool, orgId)) || false;
+  }
   for (var i = 0; i < r.rows.length; i++) {
     var row = r.rows[i];
     var expIso = row.expiration_date instanceof Date ?
@@ -108,8 +120,9 @@ async function scanOrg(orgId, localDate, fires) {
           type: certTypeLabel(row.cert_type),
           expirationDate: expIso,
           daysUntilExpiry: Number(row.days_until)
-        }
-      }, { to: row.sub_email, tag: 'cert_expiring' });
+        },
+        __orgId: orgId
+      }, { to: row.sub_email, tag: 'cert_expiring', replyTo: replyTo });
       if (result && result.skipped) {
         skipped++;
       } else {

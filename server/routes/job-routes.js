@@ -2,6 +2,10 @@ const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireRole, requireOrgId, resolveOrgId, isAdminish } = require('../auth');
 const { sendEmail } = require('../email');
+// Sender identity helpers live outside ../email on purpose: suites that
+// jest.mock('../server/email') with a partial export list would hand this file
+// undefined for any new export. Nothing mocks email-sender.
+const emailSender = require('../email-sender');
 const { jobAssigned } = require('../email-templates');
 const markets = require('../services/markets');
 // Job numbering is a per-org REGISTRY (type → prefix → counter), not a fixed
@@ -29,11 +33,20 @@ async function marketIdForJob(job, orgId, client) {
 
 // Fire a job-assigned email to the new owner. Fire-and-forget; respects
 // the user's notification_prefs.job_assignment opt-out.
-async function maybeNotifyJobAssigned({ ownerId, job, action, fromUserName }) {
+//
+// orgId is the caller's resolved tenant (req.orgId at all three doors). It
+// scopes the recipient read — every door already proved the owner is in the
+// org, and this keeps the mail itself from being the one place that forgot —
+// and it names the company in the From line ("AG Exteriors via Project 86").
+// Reply-To is the assigner's FRESH users row in that same org: under act-as
+// req.user is platform staff from another tenant, the predicate misses, and
+// the mail carries no Reply-To rather than a stranger's address.
+async function maybeNotifyJobAssigned({ ownerId, job, action, fromUserName, fromUserId, orgId }) {
   try {
+    if (orgId == null) return;
     const { rows } = await pool.query(
-      'SELECT email, name, notification_prefs FROM users WHERE id = $1 AND active = TRUE',
-      [ownerId]
+      'SELECT email, name, notification_prefs FROM users WHERE id = $1 AND organization_id = $2 AND active = TRUE',
+      [ownerId, orgId]
     );
     if (!rows.length) return;
     const u = rows[0];
@@ -46,12 +59,16 @@ async function maybeNotifyJobAssigned({ ownerId, job, action, fromUserName }) {
       assignedBy: fromUserName || 'An admin',
       action: action || 'assigned'
     });
+    const replyTo = await emailSender.replyToForUser(pool, fromUserId, orgId);
     sendEmail({
       to: u.email,
       subject: tpl.subject,
       html: tpl.html,
       text: tpl.text,
-      tag: 'job_assignment'
+      tag: 'job_assignment',
+      organizationId: orgId,
+      senderOrg: { id: orgId },
+      replyTo: replyTo || false
     }).catch((e) => console.warn('[jobs] notify email failed:', e && e.message));
   } catch (e) {
     console.warn('[jobs] notify lookup failed:', e && e.message);
@@ -243,7 +260,9 @@ router.post('/', requireAuth, requireRole('admin', 'pm'), requireOrgId, async (r
         ownerId: ownerId,
         job: Object.assign({ id: id }, req.body),
         action: 'assigned',
-        fromUserName: req.user && req.user.name
+        fromUserName: req.user && req.user.name,
+        fromUserId: req.user && req.user.id,
+        orgId: req.orgId
       });
     }
 
@@ -728,7 +747,9 @@ router.put('/:id/owner', requireAuth, requireRole('admin'), requireOrgId, async 
         ownerId: ownerId,
         job: Object.assign({ id: req.params.id }, jobData),
         action: 'reassigned',
-        fromUserName: req.user && req.user.name
+        fromUserName: req.user && req.user.name,
+        fromUserId: req.user && req.user.id,
+        orgId: req.orgId
       });
     }
 
@@ -1199,14 +1220,18 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), requireOrgId, 
               ownerId: ownerId,
               job: jobBlob,
               action: 'assigned',
-              fromUserName: req.user && req.user.name
+              fromUserName: req.user && req.user.name,
+              fromUserId: req.user && req.user.id,
+              orgId: orgId
             });
           } else if (Number(priorOwnerId) !== Number(ownerId)) {
             maybeNotifyJobAssigned({
               ownerId: ownerId,
               job: jobBlob,
               action: 'reassigned',
-              fromUserName: req.user && req.user.name
+              fromUserName: req.user && req.user.name,
+              fromUserId: req.user && req.user.id,
+              orgId: orgId
             });
           }
         }

@@ -38,6 +38,14 @@
 //
 // Tenancy: every statement carries `organization_id = $n` from the ticket row
 // the caller already proved (office) or the token already resolved (link).
+//
+// SENDER AND REPLY-TO. The email names the company ("AG Exteriors via Project
+// 86") from the ticket's org, and a reply reaches the person who finished the
+// work: an office actor's fresh users row in the ticket's org (none under
+// act-as, where the actor is platform staff), or, for the crew link, the
+// address the office typed when it minted that link — re-read by share id in
+// the ticket's org, never a value passed through and never the crew-typed
+// name. A link with no address on file sends no Reply-To.
 
 const svc = require('./service-tickets');
 const workOrder = require('./service-ticket-workorder');
@@ -193,6 +201,33 @@ async function releaseClaim(db, ticket) {
   }
 }
 
+// Who a reply to the notice should reach — the person who finished the work —
+// or null. Resolved once per notice, before the per-recipient loop. Never
+// throws: a lookup that fails costs the Reply-To, not the notice.
+//   office actor -> that user's email, active and in the ticket's org
+//   crew link    -> service_ticket_shares.recipient_email, written once by the
+//                   office at mint and never by a guest route; loaded by the
+//                   share id in the ticket's org, not taken from the caller
+async function replyToForActor(db, ticket, actor, sender) {
+  try {
+    const orgId = ticket.organization_id;
+    if (actor && actor.kind === 'share') {
+      if (!actor.shareId) return null;
+      const r = await db.query(
+        'SELECT recipient_email FROM service_ticket_shares WHERE id = $1 AND organization_id = $2',
+        [actor.shareId, orgId]
+      );
+      return (r.rows[0] && sender.cleanReplyTo(r.rows[0].recipient_email, [])) || null;
+    }
+    if (actor && actor.userId != null) {
+      return (await sender.replyToForUser(db, actor.userId, orgId)) || null;
+    }
+  } catch (e) {
+    console.warn('[service-ticket-notify] reply-to lookup failed:', e && e.message);
+  }
+  return null;
+}
+
 /**
  * notifyAwaitingApproval(db, { ticket, actor, reason, sharedBy }, deps?)
  *   -> { sent: number, recipients: number, skipped?: string }
@@ -211,6 +246,8 @@ async function notifyAwaitingApproval(db, opts, deps) {
     const actor = opts.actor || {};
     const sendEmail = (deps && deps.sendEmail) || require('../email').sendEmail;
     const sendPush = (deps && deps.sendPush) || require('../notify-events').sendPushForEvent;
+    // Never mocked, holds no state beyond a name cache; lazy like the senders.
+    const sender = require('../email-sender');
 
     const candidates = await approvalRecipients(db, ticket, {
       actorUserId: actor.userId, sharedBy: opts.sharedBy, hasCapability: deps && deps.hasCapability,
@@ -238,14 +275,17 @@ async function notifyAwaitingApproval(db, opts, deps) {
 
     // The facts the message states — read after the claim, so a notice that
     // is not sent costs nothing.
-    const [site, counts] = await Promise.all([
+    const [site, counts, orgName, actorReplyTo] = await Promise.all([
       workOrder.workOrderSite(db, ticket),
       db.query(
         `SELECT id, status FROM tasks
           WHERE service_ticket_id = $1 AND organization_id = $2 AND archived_at IS NULL AND scope = 'org'`,
         [ticket.id, ticket.organization_id]
       ),
+      sender.orgNameFor(db, ticket.organization_id),
+      replyToForActor(db, ticket, actor, sender),
     ]);
+    const senderOrg = orgName ? { id: ticket.organization_id, name: orgName } : { id: ticket.organization_id };
     const tasks = counts.rows;
     const doneCount = tasks.filter(function (t) { return t.status === 'done'; }).length;
     const photos = await workOrder.taskPhotosByTask(db, ticket.organization_id, tasks.map(function (t) { return t.id; }));
@@ -301,7 +341,14 @@ async function notifyAwaitingApproval(db, opts, deps) {
           '\n\nReview and approve: ' + link + '\n\n' +
           'Toggle notifications in My Account → Notifications.';
         try {
-          const r = await sendEmail({ to: u.email, subject: subject, html: html, text: text, tag: EVENT_KEY });
+          const r = await sendEmail({
+            to: u.email, subject: subject, html: html, text: text, tag: EVENT_KEY,
+            organizationId: ticket.organization_id,
+            senderOrg: senderOrg,
+            // Dropped for the one approver who IS that address (a PM who sent
+            // the link to themselves): a reply to yourself is noise.
+            replyTo: sender.cleanReplyTo(actorReplyTo, [u.email]) || false,
+          });
           if (r && r.ok) reached = true;
         } catch (e) {
           console.warn('[service-ticket-notify] email failed:', e && e.message);

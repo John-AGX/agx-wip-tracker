@@ -114,7 +114,7 @@ function pruneFireLog(log) {
 async function gatherTaskDigests() {
   var sql = [
     'SELECT t.assignee_user_id AS uid, u.email, u.name, u.notification_prefs,',
-    '       u.timezone AS user_tz, o.timezone AS org_tz,',
+    '       u.timezone AS user_tz, o.timezone AS org_tz, o.id AS org_id, o.name AS org_name,',
     "       t.id, t.title, t.priority, t.entity_type,",
     "       to_char(t.due_date, 'YYYY-MM-DD') AS due_iso",
     'FROM tasks t',
@@ -134,6 +134,7 @@ async function gatherTaskDigests() {
         uid: row.uid, email: row.email, name: row.name,
         prefs: row.notification_prefs || {},
         zone: tz.resolveTz(row.user_tz, row.org_tz),
+        orgId: row.org_id, orgName: row.org_name,
         tasks: []
       };
     }
@@ -201,7 +202,7 @@ async function gatherEventReminders() {
   var sql = [
     'SELECT ce.id, ce.title, ce.starts_at, ce.location, ce.reminder_minutes, ce.all_day,',
     '       u.id AS uid, u.email, u.name, u.notification_prefs,',
-    '       u.timezone AS user_tz, o.timezone AS org_tz',
+    '       u.timezone AS user_tz, o.timezone AS org_tz, o.id AS org_id, o.name AS org_name',
     'FROM calendar_events ce',
     'JOIN users u ON u.id = ce.user_id',
     'LEFT JOIN organizations o ON o.id = u.organization_id',
@@ -262,7 +263,7 @@ async function gatherDueReminders() {
   var sql = [
     'SELECT r.id, r.title, r.notes, r.remind_at, r.entity_type, r.entity_id,',
     '       u.id AS uid, u.email, u.name, u.notification_prefs,',
-    '       u.timezone AS user_tz, o.timezone AS org_tz',
+    '       u.timezone AS user_tz, o.timezone AS org_tz, o.id AS org_id, o.name AS org_name',
     'FROM reminders r',
     'JOIN users u ON u.id = r.user_id',
     'LEFT JOIN organizations o ON o.id = u.organization_id',
@@ -313,6 +314,20 @@ function buildReminderEmail(rem, zone) {
   return { subject: subject, html: html, text: text };
 }
 
+// ── Sender identity ──────────────────────────────────────────────────
+// Reminder mail goes to the company's own staff, so it carries the
+// recipient's org as "<Org> via Project 86" (the org row is already
+// LEFT JOINed for the timezone, so no extra query). An org-less user gets
+// the plain platform sender. No Reply-To in either case (false also
+// suppresses the platform EMAIL_REPLY_TO): nobody wrote these, so a reply
+// has nowhere useful to land. organizationId meters the send per org.
+function orgSender(orgId, orgName) {
+  if (orgId == null) return { replyTo: false };
+  var senderOrg = { id: orgId };
+  if (typeof orgName === 'string' && orgName) senderOrg.name = orgName;
+  return { senderOrg: senderOrg, replyTo: false, organizationId: orgId };
+}
+
 // ── Orchestration ────────────────────────────────────────────────────
 // opts.dry = true → report candidates, send nothing, record nothing.
 async function runOnce(opts) {
@@ -353,7 +368,8 @@ async function runOnce(opts) {
         var overdue = relevant.filter(function (t) { return t.due_iso < localToday; });
         var dueToday = relevant.filter(function (t) { return t.due_iso === localToday; });
         var de = buildTaskDigestEmail(u, overdue, dueToday);
-        await sendEmail({ to: u.email, subject: de.subject, html: de.html, text: de.text, tag: 'task_due' });
+        await sendEmail(Object.assign({ to: u.email, subject: de.subject, html: de.html, text: de.text, tag: 'task_due' },
+          orgSender(u.orgId, u.orgName)));
         try {
           var pushBody = (overdue.length ? overdue.length + ' overdue' : '') +
             (overdue.length && dueToday.length ? ' · ' : '') +
@@ -383,7 +399,8 @@ async function runOnce(opts) {
       try {
         var zone = tz.resolveTz(ev.user_tz, ev.org_tz);
         var ee = buildEventReminderEmail(ev, zone);
-        await sendEmail({ to: ev.email, subject: ee.subject, html: ee.html, text: ee.text, tag: 'event_reminder' });
+        await sendEmail(Object.assign({ to: ev.email, subject: ee.subject, html: ee.html, text: ee.text, tag: 'event_reminder' },
+          orgSender(ev.org_id, ev.org_name)));
         try {
           require('./notify-events').sendPushForEvent(ev.uid, 'event_reminder',
             { title: '📅 ' + (ev.title || 'Upcoming event'), body: ee.subject, url: '/' }, ev.notification_prefs || {}).catch(function () {});
@@ -416,7 +433,8 @@ async function runOnce(opts) {
       try {
         var rzone = tz.resolveTz(rem.user_tz, rem.org_tz);
         var re = buildReminderEmail(rem, rzone);
-        await sendEmail({ to: rem.email, subject: re.subject, html: re.html, text: re.text, tag: 'reminder' });
+        await sendEmail(Object.assign({ to: rem.email, subject: re.subject, html: re.html, text: re.text, tag: 'reminder' },
+          orgSender(rem.org_id, rem.org_name)));
         try {
           require('./notify-events').sendPushForEvent(rem.uid, 'reminder',
             { title: '⏰ ' + (rem.title || 'Reminder'), body: (rem.notes || re.subject).slice(0, 200), url: '/' }, rem.notification_prefs || {}).catch(function () {});

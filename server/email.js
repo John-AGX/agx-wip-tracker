@@ -1,14 +1,20 @@
 // Project 86 email service — Phase 1 (Resend transport).
 //
-// One public function: sendEmail({ to, subject, html, text, replyTo, tag }).
+// One public function: sendEmail({ to, subject, html, text, replyTo, tag,
+// senderOrg }).
 // Wraps the Resend SDK so the rest of the app never imports the provider
 // directly — swapping providers later means rewriting only this file.
 //
 // Configuration (env vars):
 //   RESEND_API_KEY   — required, get from resend.com dashboard
-//   EMAIL_FROM       — required, e.g. "AGX <notifications@agxco.com>"
-//                      (must be a verified domain in Resend)
-//   EMAIL_REPLY_TO   — optional, where replies go. Default: omit header.
+//   EMAIL_FROM       — required, e.g. "Project 86 <notifications@project86.net>"
+//                      (must be a verified domain in Resend). Org-branded
+//                      mail keeps this ADDRESS and swaps only the display
+//                      name — see server/email-sender.js.
+//   EMAIL_REPLY_TO   — optional, where replies to PLATFORM mail go. Never
+//                      applied to org-branded mail. Default: omit header.
+//   EMAIL_PLATFORM_NAME — optional, the "via <name>" suffix on branded
+//                      mail. Default "Project 86".
 //   EMAIL_DRY_RUN    — optional, when "true" don't actually send,
 //                      just log + write to email_log. Useful for staging.
 //
@@ -18,6 +24,7 @@
 // callers (or a future cron) handle that.
 
 const { pool } = require('./db');
+const emailSender = require('./email-sender');
 
 // Lazy-load the SDK only when sendEmail is first called. Lets the
 // server boot when RESEND_API_KEY isn't set yet (development before
@@ -94,8 +101,8 @@ async function logSend(row) {
     const id = row.id || genId();
     await pool.query(
       `INSERT INTO email_log
-         (id, to_address, subject, tag, status, provider_id, error, dry_run, sent_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
+         (id, to_address, subject, tag, status, provider_id, error, dry_run, from_header, reply_to, sent_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())`,
       [
         id,
         Array.isArray(row.to) ? row.to.join(', ') : (row.to || ''),
@@ -104,7 +111,11 @@ async function logSend(row) {
         row.status || 'unknown',
         row.providerId || null,
         row.error ? String(row.error).slice(0, 1000) : null,
-        !!row.dryRun
+        !!row.dryRun,
+        // The From / Reply-To actually used, so a branded vs platform send
+        // can be audited afterwards (and staging can verify in dry-run).
+        row.from ? String(row.from).slice(0, 500) : null,
+        row.replyTo ? String(row.replyTo).slice(0, 254) : null
       ]
     );
     return id;
@@ -122,7 +133,18 @@ async function logSend(row) {
  * @param {string} opts.subject           — subject line
  * @param {string} [opts.html]            — HTML body (preferred)
  * @param {string} [opts.text]            — plain-text fallback
- * @param {string} [opts.replyTo]         — Reply-To header
+ * @param {string|false} [opts.replyTo]   — Reply-To address. A string is
+ *                                          validated (one plain addr-spec, not
+ *                                          a recipient) and dropped if it
+ *                                          fails. false = no Reply-To at all.
+ *                                          Omitted = EMAIL_REPLY_TO, but only
+ *                                          for platform (unbranded) mail.
+ * @param {{id, name?}} [opts.senderOrg]  — EXPLICIT opt-in to org branding:
+ *                                          From becomes "<Org> via Project 86"
+ *                                          <EMAIL_FROM address>. The name is
+ *                                          looked up by id when not given.
+ *                                          opts.organizationId never implies
+ *                                          this — it is metering only.
  * @param {string} [opts.tag]             — short tag for log/filter
  *                                          ("password_reset", "schedule_entry"...)
  * @returns {Promise<{ ok: boolean, id: string|null, providerId: string|null,
@@ -135,7 +157,6 @@ async function sendEmail(opts) {
   const subject = opts.subject;
   const html = opts.html;
   const text = opts.text;
-  const replyTo = opts.replyTo || process.env.EMAIL_REPLY_TO || null;
   const tag = opts.tag || '';
 
   if (!to || !subject) {
@@ -149,39 +170,49 @@ async function sendEmail(opts) {
     return { ok: false, id: null, providerId: null, error: err, dryRun: false };
   }
 
+  // Sender identity is resolved BEFORE the unconfigured / dry-run exits so
+  // every log row records the From and Reply-To the mail would have
+  // carried — staging can verify branding without sending anything.
+  const identity = await resolveSenderIdentity(opts, to);
+  const from = identity.from;
+  const replyTo = identity.replyTo;
+
   // Hard-stop when the env isn't configured — prevents silently
   // dropping notifications during early setup. Callers can check
   // isEnabled() if they want to gate their own logic.
   if (!isEnabled()) {
     const err = 'Email service not configured (missing RESEND_API_KEY or EMAIL_FROM)';
-    const id = await logSend({ to, subject, tag, status: 'unconfigured', error: err });
+    const id = await logSend({ to, subject, tag, status: 'unconfigured', error: err, from, replyTo });
     return { ok: false, id, providerId: null, error: err, dryRun: false };
   }
 
   const dryRun = isDryRun();
   if (dryRun) {
-    console.log('[email][dry-run]', { to, subject, tag });
-    const id = await logSend({ to, subject, tag, status: 'dry-run', dryRun: true });
+    console.log('[email][dry-run]', { to, subject, tag, from, replyTo });
+    const id = await logSend({ to, subject, tag, status: 'dry-run', dryRun: true, from, replyTo });
     return { ok: true, id, providerId: null, error: null, dryRun: true };
   }
 
   const client = getResendClient();
   if (!client) {
     const err = 'Resend SDK could not be initialized';
-    const id = await logSend({ to, subject, tag, status: 'failed', error: err });
+    const id = await logSend({ to, subject, tag, status: 'failed', error: err, from, replyTo });
     return { ok: false, id, providerId: null, error: err, dryRun: false };
   }
 
+  // Pre-allocate the log id so we can inject it into the open
+  // pixel + click-tracking links BEFORE the email is sent. The
+  // INSERT happens AFTER the send so we have the provider id;
+  // ON CONFLICT keeps us idempotent if the same id were ever re-used.
+  // Declared outside the try so the catch path logs under the same id the
+  // tracking pixel already points at.
+  const logId = genId();
+  let sentFrom = from;
   try {
-    // Pre-allocate the log id so we can inject it into the open
-    // pixel + click-tracking links BEFORE the email is sent. The
-    // INSERT happens AFTER the send so we have the provider id;
-    // ON CONFLICT keeps us idempotent if the same id were ever re-used.
-    const logId = genId();
     const trackedHtml = injectTracking(html, logId);
 
     const payload = {
-      from: process.env.EMAIL_FROM,
+      from: from,
       to: Array.isArray(to) ? to : [to],
       subject: subject,
       html: trackedHtml,
@@ -190,19 +221,33 @@ async function sendEmail(opts) {
     if (bcc && (Array.isArray(bcc) ? bcc.length : true)) {
       payload.bcc = Array.isArray(bcc) ? bcc : [bcc];
     }
-    if (replyTo) payload.reply_to = replyTo;
+    // camelCase: resend@4 maps payload.replyTo onto the API's reply_to and
+    // silently ignores a snake_case reply_to key. This line used to set
+    // payload.reply_to, so no Reply-To ever left the app.
+    if (replyTo) payload.replyTo = replyTo;
     if (tag) payload.tags = [{ name: 'p86-tag', value: tag.slice(0, 100) }];
 
-    const res = await client.emails.send(payload);
+    let res = await client.emails.send(payload);
+    let retryNote = null;
+    // A branded display name the provider refuses must never cost the
+    // recipient their notification: retry ONCE on the plain platform From.
+    if (res && res.error && identity.branded && isValidationError(res.error)) {
+      const firstErr = res.error.message || JSON.stringify(res.error);
+      console.warn('[email] branded From rejected (' + firstErr + '); retrying with EMAIL_FROM. tag=' + tag);
+      retryNote = 'branded From rejected by provider (' + firstErr + '); resent with platform From';
+      sentFrom = process.env.EMAIL_FROM;
+      res = await client.emails.send(Object.assign({}, payload, { from: sentFrom }));
+    }
     // Resend returns { data: { id }, error: null } on success and
     // { data: null, error: {...} } on failure — handle both shapes.
     if (res && res.error) {
-      const err = res.error.message || JSON.stringify(res.error);
-      const id = await logSend({ id: logId, to, subject, tag, status: 'failed', error: err });
+      let err = res.error.message || JSON.stringify(res.error);
+      if (retryNote) err = retryNote + '; retry failed: ' + err;
+      const id = await logSend({ id: logId, to, subject, tag, status: 'failed', error: err, from: sentFrom, replyTo });
       return { ok: false, id, providerId: null, error: err, dryRun: false };
     }
     const providerId = (res && res.data && res.data.id) || null;
-    const id = await logSend({ id: logId, to, subject, tag, status: 'sent', providerId });
+    const id = await logSend({ id: logId, to, subject, tag, status: 'sent', providerId, error: retryNote, from: sentFrom, replyTo });
     // Usage metering (SaaS scaffold) — the one live example of the meter
     // accumulating. Counts billable sends per org per month. Fire-and-
     // forget: recordUsage never throws and a null org is a silent no-op,
@@ -215,9 +260,56 @@ async function sendEmail(opts) {
     return { ok: true, id, providerId, error: null, dryRun: false };
   } catch (e) {
     const err = e && e.message ? e.message : String(e);
-    const id = await logSend({ to, subject, tag, status: 'failed', error: err });
+    const id = await logSend({ id: logId, to, subject, tag, status: 'failed', error: err, from: sentFrom, replyTo });
     return { ok: false, id, providerId: null, error: err, dryRun: false };
   }
+}
+
+// Resend's refusal of a malformed request (a display name it will not
+// accept lands here) — as opposed to auth, rate-limit or outage errors,
+// where resending on another From would change nothing.
+function isValidationError(error) {
+  if (!error) return false;
+  if (Number(error.statusCode) === 422) return true;
+  return error.name === 'validation_error' || error.name === 'invalid_from_address';
+}
+
+// Resolve the From and Reply-To one send will carry.
+//
+//   From      EMAIL_FROM verbatim, unless the caller opted in with
+//             opts.senderOrg and the org's name survives
+//             email-sender.cleanOrgName — then "<Org> via Project 86"
+//             <EMAIL_FROM's address>.
+//   Reply-To  a string opts.replyTo, validated; false = none; omitted =
+//             EMAIL_REPLY_TO for platform mail only. "Org mail" means the
+//             caller passed senderOrg, even when the name itself was refused
+//             and the From fell back — a tenant's sub replying to a notice
+//             must never land in the platform's support inbox.
+async function resolveSenderIdentity(opts, to) {
+  const envFrom = process.env.EMAIL_FROM || '';
+  const so = opts.senderOrg;
+  const givenName = so && typeof so === 'object' && typeof so.name === 'string' && so.name.trim() ? so.name : null;
+  const givenId = so && typeof so === 'object' && so.id != null && so.id !== '' ? so.id : null;
+  const orgMail = !!(givenName || givenId != null);
+
+  let from = envFrom;
+  let branded = false;
+  if (orgMail && envFrom) {
+    const name = givenName || await emailSender.orgNameFor(pool, givenId);
+    const built = emailSender.fromHeader(envFrom, name);
+    if (built && built !== envFrom) { from = built; branded = true; }
+  }
+
+  let replyTo = null;
+  if (typeof opts.replyTo === 'string') {
+    replyTo = emailSender.cleanReplyTo(opts.replyTo, to);
+  } else if (opts.replyTo == null) {
+    if (!orgMail && process.env.EMAIL_REPLY_TO) {
+      replyTo = emailSender.cleanReplyTo(process.env.EMAIL_REPLY_TO, to);
+    }
+  }
+  // false (or any other non-string value) = no Reply-To header.
+  return { from: from || null, branded, orgMail, replyTo };
 }
 
 // ── Email settings (admin-configurable per-event toggles + globals) ──
@@ -225,7 +317,7 @@ async function sendEmail(opts) {
 // server/email-events.js as the source of truth for shape; persisted
 // values get merged on top so an event added to the catalog later
 // shows up with its default state without breaking saved configs.
-const { DEFAULT_SETTINGS, EVENTS } = require('./email-events');
+const { DEFAULT_SETTINGS, EVENTS, getEvent } = require('./email-events');
 
 async function getEmailSettings() {
   try {
@@ -277,8 +369,12 @@ async function isEventEnabled(eventKey) {
 //
 //   sendForEvent('sub_assigned', { sub: {...}, job: {...}, ... }, {
 //     to: 'mike@summit.com',          // single addr or array
-//     tag: 'sub_assigned'             // optional, defaults to eventKey
+//     tag: 'sub_assigned',            // optional, defaults to eventKey
+//     replyTo: pmEmail                // optional; false = no Reply-To
 //   });
+//
+// Org-scope events carrying params.__orgId go out as "<Org> via Project 86";
+// system-scope events always use the platform sender.
 //
 // Returns the same shape as sendEmail. Skipped sends (event disabled, no
 // recipients) resolve to { ok: false, skipped: true, reason }.
@@ -310,6 +406,7 @@ async function sendForEvent(eventKey, params, opts) {
     var emailTemplates = require('./email-templates');
     var rendered = await emailTemplates.render(eventKey, params || {});
 
+    var orgId = (params && params.__orgId) || opts.organizationId || null;
     var payload = {
       to: to,
       subject: rendered.subject,
@@ -319,10 +416,25 @@ async function sendForEvent(eventKey, params, opts) {
       // Thread the org scope through so sendEmail can meter the send
       // against the right tenant (SaaS scaffold). params.__orgId is the
       // branding-cascade key the digest/notification callers already set.
-      organizationId: (params && params.__orgId) || opts.organizationId || null
+      organizationId: orgId
     };
+    // Sender branding follows the event catalog, not the presence of an org
+    // id: callers pass __orgId on system events too (admin samples, invites),
+    // and credential / onboarding mail (scope 'system': org_invite,
+    // user_invite, password_reset) stays on the one recognisable platform
+    // sender. render() already read the org row for branding, so the name
+    // rides along with no extra query.
+    var ev = getEvent(eventKey);
+    if (ev && ev.scope === 'org' && orgId) {
+      payload.senderOrg = { id: orgId };
+      if (rendered && typeof rendered.orgName === 'string' && rendered.orgName) {
+        payload.senderOrg.name = rendered.orgName;
+      }
+    }
     if (bcc.length) payload.bcc = bcc;
-    if (opts.replyTo) payload.replyTo = opts.replyTo;
+    // Passed through as given — a string, or false to suppress. sendEmail
+    // validates it and applies the platform fallback rules.
+    if (opts.replyTo !== undefined) payload.replyTo = opts.replyTo;
 
     return await sendEmail(payload);
   } catch (e) {

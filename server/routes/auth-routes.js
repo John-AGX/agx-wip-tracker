@@ -12,6 +12,10 @@ const { guardUserTarget } = require('../services/user-org-scope');
 // delivery-side extraction — so this door and the delivery matcher cannot
 // disagree about what a legal address is.
 const { validateAssignedLocalPart, normalizeLocalPart, TAKEN_MESSAGE } = require('../services/inbound-address');
+// Reply-To lookups for the credential mails below. A separate module from
+// ../email on purpose: suites that jest.mock('../server/email') with a partial
+// export list would hand this file undefined for any new email.js export.
+const { replyToForUser } = require('../email-sender');
 
 // Record a SYSTEM_ADMIN deliberately reaching into another tenant through one
 // of the by-id user doors. Nothing else may reach one — see guardUserTarget —
@@ -372,12 +376,26 @@ router.post('/register', requireAuth, requireRole('admin'), requireOrgId, async 
         password: password,
         invitedBy: inviterName || 'An admin'
       });
+      // SENDER: the plain platform sender, deliberately NOT "<Org> via
+      // Project 86". This mail carries a plaintext starting password, and
+      // credential mail keeps one stable, recognisable sender so people learn
+      // that passwords only ever arrive from the platform — a tenant-chosen
+      // display name on credential mail is the classic phishing shape. The
+      // event is catalogued scope 'system' for the same reason.
+      //
+      // REPLY-TO: the inviting admin, read FRESH and predicated on the org the
+      // new user was just stamped into (req.orgId). The JWT email claim is
+      // stale after an email change, and a platform admin whose own row is not
+      // in this org gets null here — false then suppresses the platform
+      // EMAIL_REPLY_TO fallback, so a reply never lands in platform support.
+      const replyTo = await replyToForUser(pool, req.user && req.user.id, req.orgId);
       sendEmail({
         to: email.toLowerCase().trim(),
         subject: tpl.subject,
         html: tpl.html,
         text: tpl.text,
-        tag: 'new_user_invite'
+        tag: 'new_user_invite',
+        replyTo: replyTo || false
       }).catch((e) => console.warn('[auth] invite email failed:', e && e.message));
     } catch (e) {
       console.warn('[auth] invite email setup failed:', e && e.message);
@@ -983,12 +1001,27 @@ router.put('/users/:id/password', requireAuth, requireRole('admin'), async (req,
         password: newPassword,
         resetBy: resetterName || 'An admin'
       });
+      // SENDER: platform, never branded — credential mail (see the invite in
+      // POST /register). It would also misattribute a SYSTEM_ADMIN's
+      // cross-tenant reset to a company the resetter is not part of.
+      //
+      // REPLY-TO: the resetting admin ONLY when they reset a user of their own
+      // org. A cross-tenant reset (scope.crossTenant) is platform staff
+      // reaching into a tenant: their address must not go out on that
+      // tenant's mail. An un-stamped target names no org to predicate on.
+      // Both arms, and a miss, send replyTo:false so the platform
+      // EMAIL_REPLY_TO fallback does not stand in for the admin either.
+      let replyTo = null;
+      if (!scope.crossTenant && targetUser.organization_id != null) {
+        replyTo = await replyToForUser(pool, req.user && req.user.id, targetUser.organization_id);
+      }
       sendEmail({
         to: targetUser.email,
         subject: tpl.subject,
         html: tpl.html,
         text: tpl.text,
-        tag: 'password_reset'
+        tag: 'password_reset',
+        replyTo: replyTo || false
       }).catch((e) => console.warn('[auth] password reset email failed:', e && e.message));
     } catch (e) {
       console.warn('[auth] password reset email setup failed:', e && e.message);

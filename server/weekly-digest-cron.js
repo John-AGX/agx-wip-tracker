@@ -230,6 +230,10 @@ async function recipientsForRole(orgId, role) {
 
 // Assemble + send all three role digests for one org. Returns the number
 // of emails sent.
+//
+// Sender: the digests are org-scope events and carry __orgId, so sendForEvent
+// sends them as "<Org> via Project 86". replyTo: false — an automated rollup
+// has no author to reply to.
 async function sendOrgDigests(org, weekStart, label) {
   let sent = 0;
   try {
@@ -237,7 +241,7 @@ async function sendOrgDigests(org, weekStart, label) {
     if (pmData) {
       const pms = await recipientsForRole(org.id, 'pm');
       for (const u of pms) {
-        await sendForEvent('weekly_digest_pm', Object.assign({ recipientName: u.name || 'there', week_label: label, __orgId: org.id }, pmData), { to: u.email });
+        await sendForEvent('weekly_digest_pm', Object.assign({ recipientName: u.name || 'there', week_label: label, __orgId: org.id }, pmData), { to: u.email, replyTo: false });
         sent++;
       }
     }
@@ -247,7 +251,7 @@ async function sendOrgDigests(org, weekStart, label) {
     if (salesData) {
       const ppl = await recipientsForRole(org.id, 'sales');
       for (const u of ppl) {
-        await sendForEvent('weekly_digest_sales', Object.assign({ recipientName: u.name || 'there', week_label: label, __orgId: org.id }, salesData), { to: u.email });
+        await sendForEvent('weekly_digest_sales', Object.assign({ recipientName: u.name || 'there', week_label: label, __orgId: org.id }, salesData), { to: u.email, replyTo: false });
         sent++;
       }
     }
@@ -257,7 +261,7 @@ async function sendOrgDigests(org, weekStart, label) {
     if (opsData) {
       const admins = await recipientsForRole(org.id, 'admin');
       for (const u of admins) {
-        await sendForEvent('weekly_digest_ops', Object.assign({ recipientName: u.name || 'there', week_label: label, __orgId: org.id }, opsData), { to: u.email });
+        await sendForEvent('weekly_digest_ops', Object.assign({ recipientName: u.name || 'there', week_label: label, __orgId: org.id }, opsData), { to: u.email, replyTo: false });
         sent++;
       }
     }

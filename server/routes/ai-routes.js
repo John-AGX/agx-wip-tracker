@@ -15776,7 +15776,14 @@ async function notifyAgentJobNeedsInput(job, question) {
       '<p style="margin-top:16px"><a href="' + esc(appUrl) + '" style="background:#4f8cff;color:#fff;text-decoration:none;padding:9px 16px;border-radius:8px;display:inline-block">Answer in Project 86</a></p>' +
       '<p style="color:#8b90a5;font-size:12px;margin-top:12px">Answer it in your Background Tasks panel and it\'ll pick up right where it left off.</p></div>';
     const { sendEmail } = require('../email');
-    await sendEmail({ to: user.email, subject: '❓ ' + title + ' needs your answer', html: html, text: String(question).slice(0, 1000), tag: 'agent_task', organizationId: job.organization_id });
+    // senderOrg brands the From as "<Org> via Project 86" — an EXPLICIT opt-in,
+    // because organizationId alone is metering and never implies branding.
+    // job.organization_id is NOT NULL and the name is resolved inside
+    // sendEmail (one cached organizations PK read), so no users or
+    // organizations statement is added to this function. replyTo:false: no
+    // human wrote this mail and the answer belongs in the Background Tasks
+    // panel, so a reply must not fall through to any default mailbox.
+    await sendEmail({ to: user.email, subject: '❓ ' + title + ' needs your answer', html: html, text: String(question).slice(0, 1000), tag: 'agent_task', organizationId: job.organization_id, senderOrg: { id: job.organization_id }, replyTo: false });
     // Phone/desktop push — gated on the user's notification prefs (agent_task).
     try {
       const { sendPushForEvent } = require('../notify-events');
@@ -15813,7 +15820,9 @@ async function notifyAgentJobDone(job, result) {
       '<div style="background:#f4f6fb;border:1px solid #e3e8f3;border-radius:8px;padding:12px 14px;white-space:pre-wrap">' + esc(bodyText.slice(0, 4000)) + '</div>' +
       '<p style="margin-top:16px"><a href="' + esc(appUrl) + '" style="background:#4f8cff;color:#fff;text-decoration:none;padding:9px 16px;border-radius:8px;display:inline-block">Open Project 86</a></p></div>';
     const { sendEmail } = require('../email');
-    await sendEmail({ to: user.email, subject: subject, html: html, text: bodyText.slice(0, 2000), tag: 'agent_task', organizationId: job.organization_id });
+    // Branded and reply-suppressed for the same reasons as
+    // notifyAgentJobNeedsInput above.
+    await sendEmail({ to: user.email, subject: subject, html: html, text: bodyText.slice(0, 2000), tag: 'agent_task', organizationId: job.organization_id, senderOrg: { id: job.organization_id }, replyTo: false });
     // Phone/desktop push — gated on the user's notification prefs (agent_task).
     try {
       const { sendPushForEvent } = require('../notify-events');
@@ -18047,6 +18056,11 @@ module.exports.internals = {
   // running it — test/agent-write-safety.test.js.
   makeBackgroundJobCallback,
   postAgentJobToThread,
+  // The two background-task emails, exported so the sender they ask for
+  // (branded with the job's org, no reply-to) is held by running them —
+  // test/email-sender-routes-a.test.js.
+  notifyAgentJobNeedsInput,
+  notifyAgentJobDone,
   // C18 — universal read surface. read_entity + search_entities
   // dispatch through execConsolidatedRead to the existing narrow
   // handlers (no behavior change, just a tighter tool surface).

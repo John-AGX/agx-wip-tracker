@@ -22,6 +22,12 @@
 //     and customer-facing emails that orgs should brand to their
 //     business voice.
 // The admin UI splits templates into System / Org tabs by this field.
+//
+// scope also decides the SENDER in sendForEvent (server/email.js): an 'org'
+// event with an org id goes out as "<Org> via Project 86"; a 'system' event
+// always uses the plain platform EMAIL_FROM — credential and onboarding mail
+// keeps one recognisable sender. Moving an event between scopes changes its
+// From header.
 
 const EVENTS = [
   {

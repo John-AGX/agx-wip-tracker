@@ -222,7 +222,15 @@ router.post('/service-tickets/:id/share', requireAuth, requireOrgId, async (req,
     if (email && emailIsEnabled && emailIsEnabled()) {
       const label = await parentLabelFor(ticket);
       try {
-        await sendEmail({
+        // Sent as the company ("AG Exteriors via Project 86"), and a reply from
+        // the crew reaches the office user who sent the link — their FRESH users
+        // row in this org, never the JWT's email and never anything typed on the
+        // form. Required here, not at the top: the link is the deliverable, and a
+        // sender helper that fails to load must not fail the mint.
+        const emailSender = require('../email-sender');
+        const replyTo = await emailSender.replyToForUser(pool, (req.user && req.user.id) || null, orgId);
+        const expiresLabel = new Date(expires).toDateString();
+        const result = await sendEmail({
           to: email,
           subject: 'Work order: ' + (ticket.title || 'Service ticket'),
           html:
@@ -231,9 +239,22 @@ router.post('/service-tickets/:id/share', requireAuth, requireOrgId, async (req,
             (label ? ' for <strong>' + escHtml(label) + '</strong>' : '') + '.</p>' +
             '<p><a href="' + escHtml(link) + '">Open the work order</a></p>' +
             '<p style="color:#666;font-size:12px;">This link expires ' +
-            escHtml(new Date(expires).toDateString()) + '. Anyone with the link can open it.</p>',
+            escHtml(expiresLabel) + '. Anyone with the link can open it.</p>',
+          text:
+            (name || 'Hello') + ',\n\n' +
+            'A work order has been shared with you' + (label ? ' for ' + label : '') + '.\n\n' +
+            'Open the work order: ' + link + '\n\n' +
+            'This link expires ' + expiresLabel + '. Anyone with the link can open it.',
+          tag: 'service_ticket_share',
+          senderOrg: { id: orgId },
+          organizationId: orgId,
+          replyTo: replyTo || false,
         });
-        emailSent = true;
+        // sendEmail reports a failed send in its result rather than throwing,
+        // so "sent" is read from the answer — the office was told a link went
+        // out when the provider had refused it.
+        emailSent = !!(result && result.ok);
+        if (!emailSent) emailError = (result && result.error) || 'Email failed';
       } catch (e) {
         // The link is the deliverable; a failed send must not fail the mint.
         emailError = e && e.message ? e.message : 'Email failed';
