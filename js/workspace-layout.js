@@ -294,6 +294,26 @@
     document.querySelectorAll('.sub-tab-btn-job').forEach(function (b) {
       b.classList.toggle('active', b.getAttribute('data-subtab') === targetId);
     });
+    revealActiveJobTab(true);
+  }
+
+  // On a phone the strip is ONE row that scrolls sideways (see the touch
+  // block at the end of css/workspace-layout.css), so the lit tab can be off
+  // screen — a deep link to Service Tickets used to land with the strip
+  // showing Overview..Details. This only moves the strip's scrollLeft: it
+  // writes no .active and no _activeJobSubTab (markJobSubTab stays the one
+  // writer), and it never calls scrollIntoView, which would also scroll
+  // <main> and jump the page on every tab change. A strip that is hidden
+  // (cold deep link, detail not shown yet) or that fits reports 0 / no
+  // overflow and is left alone; placeJobSubnav calls this again once the
+  // strip is mounted.
+  function revealActiveJobTab(smooth) {
+    var s = document.querySelector('#ws-two-col .ws-right-tabs');
+    var a = s && s.querySelector('.ws-right-tab[data-panel].active');
+    if (!a || !s.clientWidth || s.scrollWidth <= s.clientWidth) return;
+    var left = Math.max(0, a.offsetLeft - (s.clientWidth - a.offsetWidth) / 2);
+    if (typeof s.scrollTo === 'function') s.scrollTo({ left: left, behavior: smooth ? 'smooth' : 'auto' });
+    else s.scrollLeft = left;
   }
   // js/app.js's switchJobSubTab is the other activation path and lives in
   // a different file, so the writer has to be reachable from window.
@@ -624,8 +644,69 @@
           '<button type="button" onclick="if(window.archiveCurrentJob)window.archiveCurrentJob()" title="Archive job" style="' + btnBase + '">Archive</button>' +
           '<button type="button" onclick="if(window.deleteCurrentJob)window.deleteCurrentJob()" title="Delete job permanently" style="' + btnBase + 'color:#ff6b6b;border-color:rgba(255,107,107,.45);">Delete</button>';
         strip.parentNode.insertBefore(jobActions, strip.nextSibling);
+
+        // Phones: ONE "More" button at the right end of the strip instead of
+        // a pinned row of three 29px buttons with Delete touching Archive —
+        // a thumb's mis-tap away from the destructive one, and 36px of screen
+        // that never scrolls. The buttons stay exactly where they are in the
+        // DOM (refreshHeaderMetrics adds Open Estimate to this same bar);
+        // under the touch breakpoint css/workspace-layout.css hides the row
+        // and shows it as a menu while .is-open. Above the breakpoint this
+        // button is display:none and the row is what it always was.
+        var moreBtn = document.createElement('button');
+        moreBtn.type = 'button';
+        moreBtn.className = 'jh-job-more';
+        moreBtn.title = 'More';
+        moreBtn.setAttribute('aria-label', 'More job actions');
+        moreBtn.setAttribute('aria-haspopup', 'menu');
+        moreBtn.setAttribute('aria-expanded', 'false');
+        moreBtn.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>';
+        moreBtn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          setJobActionsOpen(!jobActions.classList.contains('is-open'));
+        });
+        strip.appendChild(moreBtn);
+        // A pick from the menu closes it; the button's own onclick still runs.
+        jobActions.addEventListener('click', function (e) {
+          if (jobActions.classList.contains('is-open') && e.target.closest('button')) setJobActionsOpen(false);
+        });
+        wireJobActionsDismiss();
       }
     } catch (e) { /* actions bar is best-effort */ }
+  }
+
+  // Open/close the phone job-actions menu. Only a touch phone ever opens it
+  // (jobSubnavIsMobile, the same test that keeps the section strip in the
+  // page); the panel is fixed-position and drops from the strip's bottom
+  // edge, measured at open time because the strip's height follows the
+  // phone's text size.
+  function setJobActionsOpen(open) {
+    var bar = document.querySelector('.jh-job-actions');
+    var more = document.querySelector('.jh-job-more');
+    if (!bar) return;
+    if (open && !jobSubnavIsMobile()) open = false;
+    if (open) {
+      var strip = document.getElementById('jh-strip-detached');
+      var r = strip ? strip.getBoundingClientRect() : null;
+      bar.style.top = (r ? Math.round(r.bottom + 4) : 60) + 'px';
+    }
+    bar.classList.toggle('is-open', !!open);
+    if (more) more.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+
+  // Tap outside or Escape closes the menu. Wired once for the page: the bar
+  // itself is rebuilt on every job open, so these read it fresh each time.
+  var _jobActionsDismissWired = false;
+  function wireJobActionsDismiss() {
+    if (_jobActionsDismissWired) return;
+    _jobActionsDismissWired = true;
+    document.addEventListener('click', function (e) {
+      var bar = document.querySelector('.jh-job-actions.is-open');
+      if (bar && !bar.contains(e.target)) setJobActionsOpen(false);
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && document.querySelector('.jh-job-actions.is-open')) setJobActionsOpen(false);
+    });
   }
 
   /** Paint the compact Pulse card (ring + contract/profit) in the sidebar jobnav.
@@ -918,6 +999,7 @@
       if (home && tabs.parentNode !== home) home.insertBefore(tabs, home.firstChild);
       if (appNav) appNav.style.display = '';
       if (jobnav) jobnav.style.display = 'none';
+      revealActiveJobTab(false);
       return;
     }
     // Desktop: relocate tabs into the sidebar jobnav; hide main nav.
@@ -1007,7 +1089,7 @@
     // Follow the tabs across the breakpoint as the viewport resizes.
     if (window.matchMedia && !_jobSubnavMql) {
       _jobSubnavMql = window.matchMedia('(max-width: 768px)');
-      _jobSubnavMqlHandler = function () { placeJobSubnav(); };
+      _jobSubnavMqlHandler = function () { setJobActionsOpen(false); placeJobSubnav(); };
       if (_jobSubnavMql.addEventListener) _jobSubnavMql.addEventListener('change', _jobSubnavMqlHandler);
       else if (_jobSubnavMql.addListener) _jobSubnavMql.addListener(_jobSubnavMqlHandler);
     }

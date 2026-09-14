@@ -3568,8 +3568,21 @@
             .app-sidebar-edge-toggle { display: none !important; }
             .p86-ask86-badge.floating { display: none !important; }
             .p86-ask86-badge.in-header { display: none !important; }
+            /* The reservation has to shorten the SHELL, not just pad body:
+               .container is height:100vh with overflow:hidden and <main> is
+               the only scroller inside it, so body padding alone made a
+               second 64px document scroll while the last ~60px of <main>
+               (the end of every section) stayed under the fixed nav. Now
+               the shell ends at the nav's top edge and the document has
+               nothing left to scroll. One variable, so the More sheet and
+               the update toast clear the same height. */
+            :root { --p86-mobile-nav-h: calc(64px + env(safe-area-inset-bottom, 0px)); }
             body {
-                padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+                padding-bottom: var(--p86-mobile-nav-h);
+            }
+            .container {
+                height: calc(100vh - var(--p86-mobile-nav-h));
+                height: calc(100dvh - var(--p86-mobile-nav-h));
             }
         }
 
@@ -3712,7 +3725,7 @@
         .p86-mobile-more-panel {
             position: absolute;
             left: 0; right: 0;
-            bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+            bottom: var(--p86-mobile-nav-h, calc(64px + env(safe-area-inset-bottom, 0px)));
             max-height: calc(100vh - 92px);
             overflow-y: auto;
             -webkit-overflow-scrolling: touch;
@@ -11355,7 +11368,7 @@ body.light-mode .p86-pv-tag-modal-chip {
 .p86-update-toast {
   position: fixed;
   left: 50%;
-  bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(var(--p86-mobile-nav-h, calc(64px + env(safe-area-inset-bottom, 0px))) + 8px);
   transform: translate(-50%, 24px);
   opacity: 0;
   z-index: 9000;
@@ -13062,6 +13075,17 @@ body.light-mode .p86-mktpnl-warn { background: rgba(180, 120, 10, .10); border-c
 }
 .p86-wo-pick-row:focus-visible { outline: 2px solid var(--accent, #4f8cff); outline-offset: 2px; }
 .p86-wo-pick-row:disabled { cursor: default; opacity: 0.55; }
+/* The hover override above skips disabled rows (a legacy .xls, and every row
+   while a file is being read — with the pointer still resting on the one that
+   was clicked), so on those the global button:hover (0,1,1) won and painted
+   the dark-theme white wash: on the light modal the row's fill and border
+   vanished. Pinned back to the resting look; the row being read keeps its
+   accent border. */
+.p86-wo-pick-row:disabled:hover {
+  background: var(--surface2, rgba(255,255,255,0.03));
+  border-color: var(--border, #333);
+}
+.p86-wo-pick-row.is-reading:disabled:hover { border-color: var(--accent, #4f8cff); }
 /* The row being read stays at full strength while its siblings dim. */
 .p86-wo-pick-row.is-reading { opacity: 1; cursor: progress; border-color: var(--accent, #4f8cff); }
 .p86-wo-pick-kind {
@@ -13206,6 +13230,319 @@ body.light-mode .p86-wo-crew:not(.is-empty) { background: rgba(0,0,0,0.035); }
 @media (max-width: 760px) {
   .p86-wo-sub-body { padding-left: 10px; }
   .p86-wo-sub-head { flex-wrap: wrap; }
+}
+
+/* Phone-only pieces of the work order (Navigate, the dashed Add photo tile).
+   Rendered on every width so there is one markup, shown only by the block
+   below — a desktop ticket is exactly what it was. */
+.p86-wo-nav, .p86-wo-addtile, .p86-wo-site-num, .p86-wo-site-title { display: none; }
+
+/* ── The open work order on a phone: a stack of cards ───────────────────
+   The approved crew-link mock, which service-ticket-share.html already
+   builds for the crew: cards on the page ground, a small uppercase line over
+   a bold title, ONE stepper row that scrolls, a site card with the job number
+   in monospace and a full-width Navigate, Scope, Details, Materials with the
+   quantity boxed on the right, then one card per building.
+
+   What it replaces: the ticket sat four boxes deep at 412px — the section
+   frame (#wsRightContent, 1px + 12px), the list padding (16px), the open
+   row's blue border and the detail padding (12px) — about 44px in from each
+   screen edge, so the title wrapped one word per line and the punch-list
+   bodies got ~276px. Now the frame drops while this pane shows and every
+   card runs the full .main-inner width.
+
+   Layout only: no markup is moved. .p86-st-detail becomes a flex column and
+   the grid + its main column become display:contents, so their children are
+   cards in that column and `order` puts Details (and Save) right under the
+   Scope they edit, ahead of Materials and the punch list. Keyboard order is
+   still DOM order.
+
+   Scoped to #job-service-tickets (the only renderer of this markup is the
+   job pane) and to 760px, where the detail grid was already one column.
+   Colours are tokens, so light mode follows without twins; the only literal
+   is white on the accent fill, which reads on both accents. */
+@media (max-width: 760px) {
+  /* The cards are the boxes now. #wsRightContent's display is set inline by
+     workspace-layout.js; a browser without :has() keeps the frame. */
+  #wsRightContent:has(> #job-service-tickets[style*="block"]) { padding: 0; border: 0; background: transparent; }
+  #job-service-tickets .p86-st-wrap { padding: 2px 0 24px; }
+
+  /* Filter pills: one sideways row edge to edge, the create buttons under it. */
+  #job-service-tickets .p86-st-bar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; margin-bottom: 12px; }
+  #job-service-tickets .p86-st-pills {
+    grid-column: 1 / -1; flex-wrap: nowrap; gap: 6px; overflow-x: auto; overflow-y: hidden;
+    overscroll-behavior-x: contain; scrollbar-width: none; margin: 0 -15px; padding: 0 15px;
+  }
+  #job-service-tickets .p86-st-pills::-webkit-scrollbar { display: none; }
+  #job-service-tickets .p86-st-pill { flex: 0 0 auto; min-height: 40px; padding: 0 14px; font-size: 13px; }
+  #job-service-tickets .p86-st-bar > .ee-btn { min-height: 44px; font-size: 14px; justify-content: center; }
+  #job-service-tickets .p86-st-bar > .ee-btn:last-child:nth-child(2) { grid-column: 1 / -1; }
+
+  /* A closed ticket is a card: number, status and dates on one line, the
+     title on its own line under them (it used to share a no-wrap row). */
+  #job-service-tickets .p86-st-list { gap: 10px; }
+  #job-service-tickets .p86-st-row { background: var(--surface, #17171c); border-radius: 12px; }
+  #job-service-tickets .p86-st-row-head { flex-wrap: wrap; gap: 4px 8px; padding: 11px 13px; min-height: 44px; }
+  #job-service-tickets .p86-st-row-head > .p86-st-title { order: 10; flex: 1 1 100%; font-size: 15px; font-weight: 700; line-height: 1.3; }
+  #job-service-tickets .p86-st-row-head > .p86-st-when { margin-left: auto; }
+
+  /* The open ticket: no box of its own and no blue side lines. Its head reads
+     as the mock's header — a small uppercase line, then the title. */
+  #job-service-tickets .p86-st-row.is-open { background: transparent; border: 0; border-radius: 0; overflow: visible; }
+  #job-service-tickets .p86-st-row.is-open > .p86-st-row-head { padding: 6px 0 0; }
+  #job-service-tickets .p86-st-row.is-open > .p86-st-row-head:hover { background: none; }
+  #job-service-tickets .p86-st-row.is-open .p86-st-num {
+    font-family: inherit; font-size: 11px; font-weight: 700; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--text-dim, #888);
+  }
+  #job-service-tickets .p86-st-row.is-open .p86-st-title { font-size: 20px; line-height: 1.2; margin-top: 2px; }
+  #job-service-tickets .p86-st-row.is-open > .p86-st-detail:not([hidden]) {
+    display: flex; flex-direction: column; gap: 11px; padding: 0 0 6px; border-top: 0;
+  }
+  #job-service-tickets .p86-st-detail-grid,
+  #job-service-tickets .p86-st-detail-main { display: contents; }
+  #job-service-tickets .p86-st-detail-side,
+  #job-service-tickets .p86-st-actions,
+  #job-service-tickets .p86-st-sharewrap { order: 1; }
+  #job-service-tickets .p86-st-detail-main > :not(.p86-st-scopecard),
+  #job-service-tickets .p86-st-parts,
+  #job-service-tickets .p86-st-timeline { order: 2; }
+
+  /* Stepper: one row that scrolls sideways, edge to edge; paintDetail centres
+     the current step. */
+  #job-service-tickets .p86-st-stepper {
+    flex-wrap: nowrap; gap: 5px; margin: 10px -15px 0; padding: 1px 15px;
+    overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: none;
+  }
+  #job-service-tickets .p86-st-stepper::-webkit-scrollbar { display: none; }
+  #job-service-tickets .p86-st-step { flex: 0 0 auto; white-space: nowrap; font-size: 10px; line-height: 1.5; letter-spacing: 0.05em; padding: 3px 9px; }
+  #job-service-tickets .p86-st-step.at { color: #fff; }
+  #job-service-tickets .p86-st-cancelled { margin: 10px 0 0; }
+
+  /* The cards. */
+  #job-service-tickets .p86-wo-site,
+  #job-service-tickets .p86-st-scopecard,
+  #job-service-tickets .p86-st-detail-side,
+  #job-service-tickets .p86-wo-mats,
+  #job-service-tickets .p86-wo-punch-head,
+  #job-service-tickets .p86-st-parts,
+  #job-service-tickets .p86-st-timeline {
+    margin: 0; padding: 12px 13px;
+    background: var(--surface, #17171c);
+    border: 1px solid var(--border, #333); border-radius: 12px;
+  }
+  #job-service-tickets .p86-st-revs { margin: 0; }
+  #job-service-tickets .p86-st-detail .p86-st-lbl { font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; margin: 0 0 7px; }
+  #job-service-tickets .p86-st-scopecard > .p86-st-lbl ~ .p86-st-lbl { margin-top: 14px; }
+
+  /* Site: number in monospace on its own line, the name held to two lines
+     (the job header already shows it whole), the address, then Navigate —
+     the same maps URL as the address link — and the gate code last. */
+  #job-service-tickets .p86-wo-site { display: grid; gap: 7px; }
+  #job-service-tickets .p86-wo-site-name { display: none; }
+  #job-service-tickets .p86-wo-site-num {
+    display: block;
+    font: 600 12px/1.2 ui-monospace, 'SF Mono', Menlo, Consolas, monospace; letter-spacing: 0.02em;
+    color: color-mix(in srgb, var(--accent, #4f8cff) 65%, var(--text, #fff));
+  }
+  #job-service-tickets .p86-wo-site-title {
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+    font-size: 14.5px; font-weight: 600; line-height: 1.35; color: var(--text, #fff);
+  }
+  #job-service-tickets .p86-wo-site-row { display: contents; }
+  #job-service-tickets .p86-wo-site-addr { order: 1; font-size: 14px; line-height: 1.45; }
+  /* The link is inline-styled blue by p86MapLink; here Navigate is the link,
+     so the address reads as the plain line the mock shows. */
+  #job-service-tickets .p86-wo-site-addr a { color: var(--text, #fff) !important; }
+  #job-service-tickets .p86-wo-site-addr .p86-map-pin { display: none; }
+  #job-service-tickets .p86-wo-nav {
+    order: 2; display: flex; align-items: center; justify-content: center; gap: 8px;
+    min-height: 44px; margin-top: 2px; border-radius: 10px;
+    background: var(--accent, #4f8cff); color: #fff;
+    font-size: 15px; font-weight: 600; text-decoration: none;
+  }
+  #job-service-tickets .p86-wo-nav:focus-visible { outline: 2px solid var(--accent, #4f8cff); outline-offset: 2px; }
+  /* A drop with a hole in the button's colour, as on the crew link. */
+  #job-service-tickets .p86-wo-nav-pin {
+    position: relative; flex: 0 0 auto; width: 13px; height: 13px; margin-top: -3px;
+    border-radius: 50% 50% 50% 0; transform: rotate(-45deg); background: currentColor;
+  }
+  #job-service-tickets .p86-wo-nav-pin::after {
+    content: ""; position: absolute; left: 4px; top: 4px; width: 5px; height: 5px;
+    border-radius: 50%; background: var(--accent, #4f8cff);
+  }
+  #job-service-tickets .p86-wo-gate { order: 3; font-size: 14px; }
+  #job-service-tickets .p86-wo-gate b { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 16px; letter-spacing: 1px; }
+
+  /* Scope: the box grows with the text (field-sizing; paintDetail sizes it
+     where that is missing), capped so a long scope still scrolls inside it. */
+  #job-service-tickets .p86-st-detail textarea.p86-st-scope {
+    field-sizing: content; min-height: 88px; max-height: 50vh; resize: none;
+    font-size: 15px; line-height: 1.5; padding: 10px 12px; border-radius: 10px;
+  }
+  #job-service-tickets .p86-st-scopecard .p86-st-ro { font-size: 14px; line-height: 1.55; }
+
+  /* Details: a two-column grid — Status across the top, then Scheduled |
+     Due, Priority | Site contact — with 40px+ controls. */
+  #job-service-tickets .p86-st-detail-side { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px 10px; }
+  #job-service-tickets .p86-st-detail-side::before {
+    content: "Details"; grid-column: 1 / -1; margin-bottom: -5px;
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-dim, #888);
+  }
+  #job-service-tickets .p86-st-meta { flex-direction: column; align-items: stretch; gap: 4px; margin: 0; min-width: 0; }
+  #job-service-tickets .p86-st-meta-k { flex: none; }
+  #job-service-tickets .p86-st-meta:nth-child(1) { order: 1; grid-column: 1 / -1; }
+  #job-service-tickets .p86-st-meta:nth-child(3) { order: 2; }
+  #job-service-tickets .p86-st-meta:nth-child(4) { order: 3; }
+  #job-service-tickets .p86-st-meta:nth-child(2) { order: 4; }
+  #job-service-tickets .p86-st-meta:nth-child(5) { order: 5; }
+  #job-service-tickets .p86-st-meta:nth-child(6) { order: 6; grid-column: 1 / -1; }
+  #job-service-tickets .p86-st-meta-v { font-size: 14px; }
+  #job-service-tickets .p86-st-meta:nth-child(1) .p86-st-meta-v { display: flex; align-items: center; gap: 8px; }
+  #job-service-tickets .p86-st-meta-v select,
+  #job-service-tickets .p86-st-meta-v input {
+    width: 100%; min-width: 0; min-height: 40px; padding: 6px 10px; font-size: 15px; border-radius: 8px;
+  }
+  #job-service-tickets .p86-st-meta:nth-child(1) .p86-st-meta-v select { flex: 1 1 auto; width: auto; }
+
+  /* Save / Share / Archive / Ask 86 sit right under the Details they save. */
+  #job-service-tickets .p86-st-actions { flex-wrap: wrap; gap: 8px; margin: 0; }
+  #job-service-tickets .p86-st-actions .ee-btn { flex: 1 1 0; min-width: 0; min-height: 44px; font-size: 14px; justify-content: center; }
+  #job-service-tickets .p86-st-actions .p86-st-save { flex-basis: 100%; }
+  #job-service-tickets .p86-st-share-panel { margin-top: 0; }
+  #job-service-tickets .p86-st-share-form input,
+  #job-service-tickets .p86-st-share-link input { min-height: 40px; font-size: 15px; }
+
+  /* Materials: what to bring on the left, how many in a small box on the
+     right. The table's cells become a flex row; qty and unit share one box. */
+  #job-service-tickets .p86-wo-mats > .p86-st-lbl { display: flex; align-items: center; justify-content: space-between; }
+  #job-service-tickets .p86-wo-mats-edit { min-height: 40px; margin: -12px -6px -12px 0; padding: 0 6px; font-size: 13px; font-weight: 600; }
+  #job-service-tickets .p86-wo-mats-edit:hover { background: none; }
+  #job-service-tickets .p86-wo-mats-tbl,
+  #job-service-tickets .p86-wo-mats-tbl tbody { display: block; }
+  #job-service-tickets .p86-wo-mats-tbl tr {
+    display: flex; align-items: center; padding: 7px 0;
+    border-top: 1px solid var(--border, #333); font-size: 14px;
+  }
+  #job-service-tickets .p86-wo-mats-tbl tr:first-child { border-top: 0; padding-top: 1px; }
+  #job-service-tickets .p86-wo-mats-tbl tr:last-child { padding-bottom: 1px; }
+  #job-service-tickets .p86-wo-mats-tbl td { padding: 0; border: 0; }
+  #job-service-tickets .p86-wo-mats-tbl td:not(.q):not(.u) { flex: 1 1 auto; min-width: 0; padding-right: 10px; line-height: 1.4; overflow-wrap: anywhere; }
+  #job-service-tickets .p86-wo-mats-tbl td.q,
+  #job-service-tickets .p86-wo-mats-tbl td.u {
+    order: 1; flex: 0 0 auto; width: auto;
+    font: 600 12.5px/1.3 ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-variant-numeric: tabular-nums;
+    border: 1px solid var(--cell-border, #34343e);
+  }
+  #job-service-tickets .p86-wo-mats-tbl td.q { color: var(--text, #fff); border-right: 0; border-radius: 6px 0 0 6px; padding: 3px 0 3px 8px; }
+  #job-service-tickets .p86-wo-mats-tbl td.u { order: 2; font-weight: 500; color: var(--text-dim, #888); border-left: 0; border-radius: 0 6px 6px 0; padding: 3px 8px 3px 5px; }
+  #job-service-tickets .p86-wo-mats-tbl td.q:empty { padding-left: 3px; }
+  #job-service-tickets .p86-wo-mats-tbl td.u:empty { padding-left: 5px; }
+  /* The editor: qty | unit | remove on one line, the material under them. */
+  #job-service-tickets .p86-wo-mat-rows { gap: 8px; }
+  #job-service-tickets .p86-wo-mat-row {
+    grid-template-columns: 76px minmax(0, 1fr) 40px; grid-template-areas: "q u rm" "d d d"; gap: 6px;
+    padding-bottom: 8px; border-bottom: 1px solid var(--border, #333);
+  }
+  #job-service-tickets .p86-wo-mat-q { grid-area: q; }
+  #job-service-tickets .p86-wo-mat-u { grid-area: u; }
+  #job-service-tickets .p86-wo-mat-d { grid-area: d; }
+  #job-service-tickets .p86-wo-mat-rm { grid-area: rm; min-height: 40px; }
+  #job-service-tickets .p86-wo-mat-row input { min-height: 40px; font-size: 15px; }
+  #job-service-tickets .p86-wo-mat-actions .ee-btn { min-height: 40px; font-size: 14px; }
+  #job-service-tickets .p86-wo-crew-pick,
+  #job-service-tickets .p86-wo-crew-change,
+  #job-service-tickets .p86-wo-crew-remove { min-height: 40px; font-size: 13.5px; }
+
+  /* Punch list: a header card (label + progress), then one card per
+     building straight on the page, full width, like the crew link. */
+  #job-service-tickets .p86-wo-punch-head .p86-st-bar-track { height: 5px; margin: 2px 0 0; }
+  #job-service-tickets .p86-wo-punch-head .p86-st-ro { font-size: 13px; }
+  #job-service-tickets .p86-wo-subs { gap: 8px; }
+  #job-service-tickets .p86-wo-sub { border-radius: 12px; background: var(--surface, #17171c); overflow: hidden; }
+  /* Head: check | building + one-line summary | badges. */
+  #job-service-tickets .p86-wo-sub-head {
+    display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: center;
+    gap: 4px 8px; padding: 6px 12px 6px 4px;
+  }
+  #job-service-tickets .p86-wo-check { position: relative; justify-self: center; width: 26px; height: 26px; padding: 0; border-radius: 7px; font-size: 15px; }
+  /* 26px to look at, 40px to hit. */
+  #job-service-tickets .p86-wo-check::after { content: ""; position: absolute; inset: -7px; }
+  #job-service-tickets .p86-wo-sub-toggle {
+    flex-direction: column; align-items: flex-start; justify-content: center; gap: 1px;
+    width: 100%; min-height: 44px; padding: 4px 0; white-space: normal;
+  }
+  #job-service-tickets .p86-wo-sub-toggle:hover { background: none; }
+  #job-service-tickets .p86-wo-sub-name { font-size: 15px; font-weight: 700; line-height: 1.3; }
+  #job-service-tickets .p86-wo-sub.is-done .p86-wo-sub-name { color: var(--text, #fff); }
+  #job-service-tickets .p86-wo-sub-sum { display: block; max-width: 100%; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #job-service-tickets .p86-wo-sub-meta { flex-direction: column; align-items: flex-end; flex-wrap: nowrap; gap: 4px; }
+  #job-service-tickets .p86-wo-chip,
+  #job-service-tickets .p86-wo-doneby,
+  #job-service-tickets .p86-wo-needs {
+    font-size: 11px; line-height: 1.5; padding: 2px 9px; background: transparent;
+    border: 1px solid var(--cell-border, #34343e);
+  }
+  /* One badge per building, as in the mock: the notes count is dropped from
+     the head here (the notes themselves are in the card body). */
+  #job-service-tickets .p86-wo-chip:not([title]) { display: none; }
+  #job-service-tickets .p86-wo-doneby,
+  #job-service-tickets .p86-wo-needs { order: -1; }
+  #job-service-tickets .p86-wo-doneby {
+    color: var(--green, #059669);
+    background: color-mix(in srgb, var(--green, #059669) 16%, transparent);
+    border-color: color-mix(in srgb, var(--green, #059669) 50%, transparent);
+  }
+  #job-service-tickets .p86-wo-doneby::before { content: "\2713\00a0"; }
+  #job-service-tickets .p86-wo-needs { border-color: color-mix(in srgb, #d97706 45%, transparent); }
+  /* Body: Side A / Side D lists, photo tiles three to a row ending in the
+     dashed Add photo tile, the upload buttons, notes. The [hidden] rule is
+     the fix for cards that never collapsed: display:flex above beat the
+     attribute the toggle sets. */
+  #job-service-tickets .p86-wo-sub-body { padding: 2px 12px 12px; gap: 10px; }
+  #job-service-tickets .p86-wo-sub-body[hidden] { display: none; }
+  #job-service-tickets .p86-wo-sides { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  #job-service-tickets .p86-wo-side-lbl {
+    font-size: 12px; font-weight: 700; text-transform: none; letter-spacing: 0; margin-bottom: 3px;
+    color: color-mix(in srgb, var(--accent, #4f8cff) 65%, var(--text, #fff));
+  }
+  #job-service-tickets .p86-wo-side ul { padding-left: 18px; font-size: 13.5px; line-height: 1.5; }
+  #job-service-tickets .p86-wo-photos { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  #job-service-tickets .p86-wo-thumb {
+    width: auto; height: auto; aspect-ratio: 1 / 1; border-radius: 8px;
+    border: 1px solid var(--cell-border, #34343e);
+  }
+  #job-service-tickets .p86-wo-kind { left: 4px; bottom: 4px; font-size: 10.5px; }
+  #job-service-tickets .p86-wo-addtile {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+    aspect-ratio: 1 / 1; padding: 6px; border: 1.5px dashed var(--cell-border, #34343e); border-radius: 8px;
+    background: transparent; color: var(--accent, #4f8cff);
+    font-size: 12.5px; font-weight: 600; line-height: 1.2; white-space: normal;
+  }
+  #job-service-tickets .p86-wo-addtile::before { content: "+"; font-size: 24px; font-weight: 400; line-height: 1; }
+  #job-service-tickets .p86-wo-addtile:hover { background: transparent; border-color: var(--accent, #4f8cff); }
+  #job-service-tickets .p86-wo-photos > .p86-wo-nophotos:has(+ .p86-wo-addtile) { display: none; }
+  #job-service-tickets .p86-wo-sub-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+  /* <label>s: the global label rule uppercases, letter-spaces and blocks them. */
+  #job-service-tickets .p86-wo-sub-actions .p86-wo-up {
+    display: flex; align-items: center; justify-content: center; min-height: 44px; margin: 0; padding: 0 8px;
+    font-size: 13.5px; line-height: 1.2; text-align: center; text-transform: none; letter-spacing: 0; white-space: normal;
+  }
+  #job-service-tickets .p86-wo-note { font-size: 14px; }
+  #job-service-tickets .p86-wo-note-in,
+  #job-service-tickets .p86-st-task-new { min-height: 44px; font-size: 16px; }
+  #job-service-tickets .p86-wo-note-go,
+  #job-service-tickets .p86-st-task-go { min-height: 44px; font-size: 14px; }
+  #job-service-tickets .p86-st-task-add { margin-top: 0; gap: 8px; }
+  #job-service-tickets .p86-st-task-note { margin-top: -5px; }
+
+  /* On this ticket, Progress, Suggestions: cards with 44px controls. */
+  #job-service-tickets .p86-st-part { min-height: 40px; font-size: 14px; }
+  #job-service-tickets .p86-st-part-rm { min-width: 40px; min-height: 40px; }
+  #job-service-tickets .p86-st-part-add select { min-height: 44px; font-size: 15px; }
+  #job-service-tickets .p86-st-part-go { min-height: 44px; font-size: 14px; }
+  #job-service-tickets .p86-st-event { font-size: 13px; padding: 4px 0; }
+  #job-service-tickets .p86-st-rev-actions .ee-btn { min-height: 44px; font-size: 14px; }
 }
 
 /* ── Estimate editor: density pass ────────────────────────────────────

@@ -431,6 +431,64 @@ describe('which files: the ticket\'s own job, lead and estimate — one 404 for 
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════
+ * ONE READ PER USER — the price check pulls the file out of storage and parses
+ * it, so it shares the extract door's one-read-per-user slot, taken before
+ * the fetch and given back as soon as the check answers.
+ * ══════════════════════════════════════════════════════════════════════════*/
+const BUSY = [429, { error: 'Still reading your last file — try again in a moment.' }];
+
+function gate() {
+  let open;
+  const shut = new Promise((resolve) => { open = resolve; });
+  return { shut, open };
+}
+
+async function until(cond) {
+  for (let i = 0; i < 5000 && !cond(); i++) await new Promise((r) => setImmediate(r));
+  if (!cond()) throw new Error('the first request never reached the price check');
+}
+
+describe('one file read per user at a time', () => {
+  test('a second choice by the same user while a check is in flight is a 429, and nothing is written', async () => {
+    const g = gate();
+    let calls = 0;
+    mockDetect.mockImplementation(async () => { calls += 1; if (calls === 1) await g.shut; return false; });
+    const first = choose(ticketRouter, WIDE, 'st_j2', 'a_j2_c');
+    await until(() => mockDetect.mock.calls.length === 1);
+
+    const before = eng.log.length;
+    expect(answer(await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_x'))).toEqual(BUSY);
+    // The extract door is the same slot.
+    expect(answer(await drive(ticketRouter, 'post', '/:id/materials/extract',
+      { as: WIDE, params: { id: 'st_j2' }, body: { attachment_id: 'a_j2_x' } }))).toEqual(BUSY);
+    expect(writesSince(before)).toEqual([]);
+    expect(mockDetect).toHaveBeenCalledTimes(1);
+    expect(mockGetBuffer).not.toHaveBeenCalled();
+
+    // Clearing the choice reads no file, so it takes no slot.
+    expect((await choose(ticketRouter, WIDE, 'st_j2', null)).statusCode).toBe(200);
+    // Another user is not held up.
+    expect((await choose(ticketRouter, CREW, 'st_j2', 'a_j2_c')).statusCode).toBe(200);
+
+    g.open();
+    expect((await first).statusCode).toBe(200);
+    expect((await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_x')).statusCode).toBe(200);
+    expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_j2_x' });
+  });
+
+  test('a check that throws still gives the slot back', async () => {
+    mockDetect.mockImplementationOnce(async () => { throw new Error('storage fell over'); });
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect((await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_c')).statusCode).toBe(500);
+    } finally {
+      spy.mockRestore();
+    }
+    expect((await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_c')).statusCode).toBe(200);
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
  * GUARDS, REMOVED
  * ══════════════════════════════════════════════════════════════════════════*/
 describe('mutants', () => {
@@ -450,6 +508,21 @@ describe('mutants', () => {
     ]]);
     expect((await choose(mut, CREW, 'st_j1', 'a_j1_c')).statusCode).toBe(200);
     expect(stored('st_j1')).toMatchObject({ attachment_id: 'a_j1_c' });
+  });
+
+  test('never give the read slot back and the user\'s next choice is refused as busy', async () => {
+    const mut = mutant(TICKET_ROUTES, [[
+      '        hasPrices = await detectFilePrices({ att, getBuffer: (key) => storage.getBuffer(key) });\n'
+        + '      } finally {\n'
+        + '        release();\n'
+        + '      }',
+      '        hasPrices = await detectFilePrices({ att, getBuffer: (key) => storage.getBuffer(key) });\n'
+        + '      } finally {\n'
+        + '      }',
+    ]]);
+    expect((await choose(mut, WIDE, 'st_j2', 'a_j2_c')).statusCode).toBe(200);
+    expect(answer(await choose(mut, WIDE, 'st_j2', 'a_j2_c'))).toEqual(BUSY);
+    expect(mockDetect).toHaveBeenCalledTimes(1);
   });
 
   test('refuse nothing on an unreadable spreadsheet and a priced xlsx lands on every link as "cannot be checked"', async () => {

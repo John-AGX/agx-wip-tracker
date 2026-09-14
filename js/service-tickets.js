@@ -364,6 +364,10 @@
       revisionsHTML(r.revisions || [], canEdit) +
       '<div class="p86-st-detail-grid">' +
         '<div class="p86-st-detail-main">' +
+          // A plain block on a desktop (no rule of its own there); on a phone
+          // it is the Scope card — the one wrapper the card layout needs,
+          // since label and box are otherwise loose siblings.
+          '<div class="p86-st-scopecard">' +
           '<label class="p86-st-lbl">Proposed scope</label>' +
           (canEdit
             ? '<textarea class="p86-st-scope" rows="5" placeholder="What needs doing, and where.">' +
@@ -375,6 +379,7 @@
           (t.guest_log
             ? '<label class="p86-st-lbl">Field log</label><div class="p86-st-ro p86-st-guestlog">' + esc(t.guest_log) + '</div>'
             : '') +
+          '</div>' +
           materialsHTML(t, canEdit) +
           tasksHTML(r.tasks || [], canEdit) +
         '</div>' +
@@ -415,6 +420,29 @@
         '<label class="p86-st-lbl">Progress</label>' +
         events.map(eventHTML).join('') +
       '</div>' : '');
+
+    // On a phone the stepper is one row that scrolls sideways (styles.css,
+    // the 760px work-order block), so "Approved" or "Closed" can start off
+    // screen. Centre the current step by moving the ROW's scrollLeft only —
+    // scrollIntoView would also scroll the page, and this repaints after
+    // every photo and note. A desktop stepper wraps and never overflows, so
+    // there this does nothing.
+    var stepRow = d.querySelector('.p86-st-stepper');
+    var atStep = stepRow && stepRow.querySelector('.p86-st-step.at');
+    if (atStep && stepRow.scrollWidth > stepRow.clientWidth) {
+      var sr = stepRow.getBoundingClientRect();
+      var ar = atStep.getBoundingClientRect();
+      stepRow.scrollLeft += (ar.left + ar.width / 2) - (sr.left + sr.width / 2);
+    }
+    // The phone scope box grows with its text through CSS field-sizing. A
+    // browser without it (older iOS Safari) gets the same from its height.
+    var scopeBox = d.querySelector('textarea.p86-st-scope');
+    if (scopeBox && !(window.CSS && CSS.supports && CSS.supports('field-sizing', 'content')) &&
+        window.matchMedia && window.matchMedia('(max-width: 760px)').matches) {
+      var fitScope = function () { scopeBox.style.height = 'auto'; scopeBox.style.height = scopeBox.scrollHeight + 2 + 'px'; };
+      scopeBox.addEventListener('input', fitScope);
+      fitScope();
+    }
 
     wireDetail(d, t);
     wireWorkOrder(d, t, r.tasks || [], canEdit);
@@ -540,13 +568,20 @@
     var live = tasks.filter(function (t) { return !t.archived_at; });
     var done = live.filter(function (t) { return t.status === 'done'; }).length;
     var pct = live.length ? Math.round((done / live.length) * 100) : 0;
-    return '<label class="p86-st-lbl">Punch list' +
+    // .p86-wo-punch-head groups the label and the progress bar: nothing on a
+    // desktop, the Punch list header card on a phone, with the building cards
+    // straight under it at full width (the crew link does the same).
+    return '<div class="p86-wo-punch-head">' +
+      '<label class="p86-st-lbl">Punch list' +
         (live.length ? ' <span class="p86-st-taskcount">' + done + ' of ' + live.length + ' done</span>' : '') +
       '</label>' +
       (live.length
-        ? '<div class="p86-st-bar-track"><div class="p86-st-bar-fill" style="width:' + pct + '%"></div></div>' +
-          '<div class="p86-wo-subs">' + live.map(function (t) { return subtaskHTML(t, canEdit); }).join('') + '</div>'
+        ? '<div class="p86-st-bar-track"><div class="p86-st-bar-fill" style="width:' + pct + '%"></div></div>'
         : '<div class="p86-st-ro"><em>No subtasks under this work order yet.</em></div>') +
+      '</div>' +
+      (live.length
+        ? '<div class="p86-wo-subs">' + live.map(function (t) { return subtaskHTML(t, canEdit); }).join('') + '</div>'
+        : '') +
       (canEdit
         ? '<div class="p86-st-task-add">' +
             '<input type="text" class="p86-st-task-new" placeholder="Add a subtask — e.g. Bldg 790 — Side A: …" />' +
@@ -625,6 +660,11 @@
                 '</button>';
               }).join('')
             : '<div class="p86-wo-nophotos">No photos yet.</div>') +
+          // The dashed "Add photo" tile at the end of the row, as on the crew
+          // link. display:none on a desktop; on a phone it opens the same
+          // + Completion photo input below (wired in wireWorkOrder), so an
+          // upload from either goes down one path.
+          (canEdit ? '<button type="button" class="p86-wo-addtile" title="Add a completion photo">Add photo</button>' : '') +
         '</div>' +
         (canEdit
           ? '<div class="p86-wo-sub-actions">' +
@@ -661,12 +701,27 @@
       : '';
     var name = [site.job_number, site.name].filter(Boolean).join(' · ');
     if (!name && !addr && !site.gate_code) return '';
+    // Navigate: the SAME maps URL the address link above is built from
+    // (coords first, then the address). display:none on a desktop, where
+    // the address link is the way in; a full-width button on a phone.
+    var navHref = (addr && window.p86MapLink && window.p86MapLink.url)
+      ? window.p86MapLink.url({ lat: lat, lng: lng, address: addr })
+      : '';
     return '<div class="p86-wo-site">' +
       (name ? '<div class="p86-wo-site-name">' + esc(name) + '</div>' : '') +
+      // The phone card sets the number in monospace on its own line over the
+      // name. Separate nodes, display:none on a desktop, so the desktop line
+      // above stays one run of text (splitting it into spans re-kerned it).
+      (site.job_number ? '<div class="p86-wo-site-num">' + esc(site.job_number) + '</div>' : '') +
+      (site.name ? '<div class="p86-wo-site-title">' + esc(site.name) + '</div>' : '') +
       '<div class="p86-wo-site-row">' +
         (addrHTML ? '<span class="p86-wo-site-addr">' + addrHTML + '</span>' : '') +
         (site.gate_code ? '<span class="p86-wo-gate">Gate <b>' + esc(site.gate_code) + '</b></span>' : '') +
       '</div>' +
+      (navHref
+        ? '<a class="p86-wo-nav" href="' + escAttr(navHref) + '" target="_blank" rel="noopener noreferrer">' +
+            '<span class="p86-wo-nav-pin" aria-hidden="true"></span>Navigate</a>'
+        : '') +
     '</div>';
   }
 
@@ -912,6 +967,10 @@
           toast(e && e.message ? e.message : 'Could not update the subtask', 'error');
         });
       });
+
+      var addTile = card.querySelector('.p86-wo-addtile');
+      var completionIn = card.querySelector('.p86-wo-up input[data-kind="completion"]');
+      if (addTile && completionIn) addTile.addEventListener('click', function () { completionIn.click(); });
 
       card.querySelectorAll('.p86-wo-up input[type=file]').forEach(function (inp) {
         inp.addEventListener('change', function () {
@@ -1390,7 +1449,7 @@
 
       var note = matsForm.querySelector('.p86-wo-mat-note');
       if (note) {
-        note.innerHTML = takeoffNoteHTML(res, filename, put.length, lines.length - put.length);
+        note.innerHTML = takeoffNoteHTML(res, filename, lines.length, put.length, lines.length - put.length);
         // The file just read is usually the one the crew should see too, so
         // offer it here rather than send the PM back through the picker. The
         // editor only exists for someone who can edit this ticket (canEdit),
@@ -1411,7 +1470,12 @@
   // "12 lines read from Lead Report.xlsx (Lead Report); skipped 6 labor lines…"
   // in plain words, then every warning, then what to do next. Server text is
   // escaped like any other — a file name is whatever the uploader typed.
-  function takeoffNoteHTML(res, filename, added, didNotFit) {
+  //
+  // READ and ADDED are two numbers and the note says both when they differ.
+  // It used to print the added count as "N lines read", so "Add to it" on a
+  // nearly full list said "5 lines read … so 25 read lines did not fit" right
+  // after the Replace / Add question had said 30 were read.
+  function takeoffNoteHTML(res, filename, read, added, didNotFit) {
     var c = (res && res.counts) || {};
     var sk = c.skipped || {};
     var sheet = res.source && res.source.sheet;
@@ -1420,8 +1484,9 @@
     if (Number(sk.totals) > 0) skipped.push(plural(Number(sk.totals), 'subtotal row'));
     if (Number(sk.zero_qty) > 0) skipped.push(plural(Number(sk.zero_qty), 'removed line') + ' (qty 0)');
 
-    var head = plural(added, 'line') + ' read from ' + filename + (sheet ? ' (' + sheet + ')' : '') +
-      (skipped.length ? '; skipped ' + skipped.join(', ') : '') + '.';
+    var head = plural(read, 'line') + ' read from ' + filename + (sheet ? ' (' + sheet + ')' : '') +
+      (skipped.length ? '; skipped ' + skipped.join(', ') : '') + '.' +
+      (added !== read ? ' ' + plural(added, 'line') + ' added.' : '');
 
     var warnings = [];
     function warn(s) { if (s && warnings.indexOf(s) === -1) warnings.push(String(s)); }

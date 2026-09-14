@@ -587,6 +587,86 @@ describe('what the route does with the extractor\'s answer', () => {
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════
+ * ONE READ PER USER — a file read pulls up to 25 MB and parses it on the one
+ * thread every tenant shares, so a user gets one in flight at a time, across
+ * this door and the crew-takeoff door, taken before the storage fetch.
+ * ══════════════════════════════════════════════════════════════════════════*/
+const BUSY = [429, { error: 'Still reading your last file — try again in a moment.' }];
+
+function gate() {
+  let open;
+  const shut = new Promise((resolve) => { open = resolve; });
+  return { shut, open };
+}
+
+async function until(cond) {
+  for (let i = 0; i < 5000 && !cond(); i++) await new Promise((r) => setImmediate(r));
+  if (!cond()) throw new Error('the first request never reached the extractor');
+}
+
+// The first extractor call waits at the gate; every later one answers at once.
+function holdFirstRead(g) {
+  let calls = 0;
+  mockExtract.mockImplementation(async (opts) => {
+    calls += 1;
+    if (calls === 1) await g.shut;
+    return canned(opts.att);
+  });
+}
+
+describe('one file read per user at a time', () => {
+  test('a second read by the same user while the first is in flight is a 429, and never reaches the extractor', async () => {
+    const g = gate();
+    holdFirstRead(g);
+    const first = extract(ticketRouter, WIDE, 'st_j2', 'a_j2_x');
+    await until(() => mockExtract.mock.calls.length === 1);
+
+    expect(answer(await extract(ticketRouter, WIDE, 'st_j2', 'a_j2_p'))).toEqual(BUSY);
+    // The same user on the crew-takeoff door shares the slot.
+    expect(answer(await drive(ticketRouter, 'put', '/:id/crew-takeoff',
+      { as: WIDE, params: { id: 'st_j2' }, body: { attachment_id: 'a_j2_x' } }))).toEqual(BUSY);
+    expect(mockExtract).toHaveBeenCalledTimes(1);
+    expect(mockGetBuffer).not.toHaveBeenCalled();
+
+    // Another user is not held up by it.
+    expect((await extract(ticketRouter, JOBS, 'st_j2', 'a_j2_x')).statusCode).toBe(200);
+
+    g.open();
+    expect((await first).statusCode).toBe(200);
+    // ...and the slot is given back once the first read answers.
+    expect((await extract(ticketRouter, WIDE, 'st_j2', 'a_j2_p')).statusCode).toBe(200);
+    expect(mockExtract).toHaveBeenCalledTimes(3);
+  });
+
+  test('a refusal, a 404 and a throw all give the slot back', async () => {
+    mockExtract.mockImplementationOnce(async () => ({ ok: false, code: 'not_a_takeoff', error: 'nope' }));
+    expect((await extract(ticketRouter, WIDE, 'st_j2', 'a_j2_x')).statusCode).toBe(422);
+    expect((await extract(ticketRouter, WIDE, 'st_j2', 'att_does_not_exist')).statusCode).toBe(404);
+
+    mockExtract.mockImplementationOnce(async () => { throw new Error('storage fell over'); });
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect((await extract(ticketRouter, WIDE, 'st_j2', 'a_j2_x')).statusCode).toBe(500);
+    } finally {
+      spy.mockRestore();
+    }
+    expect((await extract(ticketRouter, WIDE, 'st_j2', 'a_j2_x')).statusCode).toBe(200);
+  });
+
+  test('a caller refused before the file is known does not take the slot at all', async () => {
+    const g = gate();
+    holdFirstRead(g);
+    // A view grant's 404 and a bad id's 400 answer as always, even mid-read.
+    const first = extract(ticketRouter, CREW, 'st_j2', 'a_j2_x');
+    await until(() => mockExtract.mock.calls.length === 1);
+    expect(answer(await extract(ticketRouter, CREW, 'st_j1', 'a_j1_c'))).toEqual(TICKET_404);
+    expect((await extract(ticketRouter, CREW, 'st_j2', '../x')).statusCode).toBe(400);
+    g.open();
+    expect((await first).statusCode).toBe(200);
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
  * EVERY GUARD, REMOVED — the identical drive, and the defect it restores
  * ══════════════════════════════════════════════════════════════════════════*/
 describe('mutants', () => {
@@ -632,6 +712,58 @@ describe('mutants', () => {
     // point of running both: the predicate is what keeps the file on THIS job.
     expect(answer(await extract(mut, WIDE, 'st_j2', 'a_j9'))).toEqual(FILE_404);
     expect(mockExtract.mock.calls.map((c) => c[0].att.id)).toEqual(['a_j1_c', 'a_l1']);
+  });
+
+  test('never give the read slot back and the user\'s next read is refused as busy forever', async () => {
+    const mut = mutant(TICKET_ROUTES, [[
+      '    } finally {\n'
+        + '      release();\n'
+        + '    }\n'
+        + '  } catch (e) {\n'
+        + "    console.error('[service-tickets] material extract failed', e);",
+      '    } finally {\n'
+        + '    }\n'
+        + '  } catch (e) {\n'
+        + "    console.error('[service-tickets] material extract failed', e);",
+    ]]);
+    expect((await extract(mut, WIDE, 'st_j2', 'a_j2_x')).statusCode).toBe(200);
+    expect(answer(await extract(mut, WIDE, 'st_j2', 'a_j2_x'))).toEqual(BUSY);
+    expect(mockExtract).toHaveBeenCalledTimes(1);
+  });
+
+  test('take no slot and twenty parallel reads by one user all reach the extractor', async () => {
+    const g = gate();
+    mockExtract.mockImplementation(async (opts) => { await g.shut; return canned(opts.att); });
+    const mut = mutant(TICKET_ROUTES, [[
+      '    const release = takeFileReadSlot(req, orgId);\n'
+        + '    if (!release) return res.status(429).json({ error: FILE_READ_BUSY });\n'
+        + '    try {\n'
+        + "      // Required HERE rather than at the top",
+      '    const release = () => {};\n'
+        + '    try {\n'
+        + "      // Required HERE rather than at the top",
+    ]]);
+    const all = [];
+    for (let i = 0; i < 20; i++) all.push(extract(mut, WIDE, 'st_j2', 'a_j2_x'));
+    await until(() => mockExtract.mock.calls.length === 20);
+    g.open();
+    expect((await Promise.all(all)).map((r) => r.statusCode)).toEqual(new Array(20).fill(200));
+
+    // The shipped door: one reaches the extractor, nineteen are told to wait.
+    const g2 = gate();
+    mockExtract.mockReset();
+    mockExtract.mockImplementation(async (opts) => { await g2.shut; return canned(opts.att); });
+    const shipped = [];
+    let answered = 0;
+    for (let i = 0; i < 20; i++) {
+      shipped.push(extract(ticketRouter, WIDE, 'st_j2', 'a_j2_x').then((r) => { answered += 1; return r; }));
+    }
+    // Every one but the reader has answered before the reader is let go.
+    await until(() => mockExtract.mock.calls.length === 1 && answered === 19);
+    g2.open();
+    const codes = (await Promise.all(shipped)).map((r) => r.statusCode).sort();
+    expect(codes).toEqual([200].concat(new Array(19).fill(429)));
+    expect(mockExtract).toHaveBeenCalledTimes(1);
   });
 
   test('drop the LEADS_VIEW check and a crew lead lists and reads the sales lead\'s files', async () => {

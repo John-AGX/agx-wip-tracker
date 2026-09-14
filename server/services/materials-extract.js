@@ -60,6 +60,17 @@ const MAX_SHEET_COLS = 60;
 // A real header label is short. Capping the length stops a long value cell
 // ("Replace rotted fascia, total cost to be confirmed") being taken for one.
 const HEADER_CELL_MAX = 40;
+// Every cell is cut to this many characters the moment it is read — in
+// parseDelimited, in xlsxToSheets and again in cellText — BEFORE any pattern
+// runs over it. A description is kept to 200 anyway; a 32,767-character cell
+// (the xlsx limit) or a one-megabyte CSV field is an attack or an accident, and
+// either way it must not reach a regex whole, because one synchronous regex
+// stalls every tenant on this single process.
+const MAX_CELL_CHARS = 500;
+// How far the delimiter sniff looks: this many non-empty lines, or this many
+// characters, whichever comes first.
+const SNIFF_LINES = 20;
+const SNIFF_CHARS = 256 * 1024;
 
 const DEFAULT_MODEL = 'claude-haiku-4-5';
 const MODEL_TIMEOUT_MS = 60000;
@@ -185,6 +196,25 @@ function sniffKind(buffer, filename, mime) {
   return 'unknown';
 }
 
+// Windows-1252 bytes 0x80-0x9F, which latin1 would read as C1 controls. The
+// five bytes cp1252 leaves undefined become U+FFFD, which the scrub removes.
+const CP1252_HIGH = [
+  0x20AC, 0xFFFD, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0xFFFD, 0x017D, 0xFFFD,
+  0xFFFD, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0xFFFD, 0x017E, 0x0178,
+].map((cp) => String.fromCharCode(cp));
+const RE_C1 = new RegExp('[' + String.fromCharCode(0x80) + '-' + String.fromCharCode(0x9F) + ']', 'g');
+
+function isUtf8(buf) {
+  const b = require('buffer');
+  if (typeof b.isUtf8 === 'function') return b.isUtf8(buf);
+  try {
+    new (require('util').TextDecoder)('utf-8', { fatal: true }).decode(buf);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 function decodeText(buf) {
   if (bytesAre(buf, 0, [0xFF, 0xFE])) return buf.subarray(2).toString('utf16le');
   if (bytesAre(buf, 0, [0xFE, 0xFF])) {
@@ -192,68 +222,168 @@ function decodeText(buf) {
     const body = Buffer.from(buf.subarray(2, 2 + ((buf.length - 2) & ~1)));
     return body.swap16().toString('utf16le');
   }
-  return buf.toString('utf8');
+  if (isUtf8(buf)) return buf.toString('utf8');
+  // Not UTF-8, so it is Excel's "CSV (Comma delimited)" save on Windows, which
+  // writes the ANSI code page. Read as UTF-8, its 3/4 and its curly inch mark
+  // would each become U+FFFD and be scrubbed away — and the crew would lose
+  // the plywood thickness.
+  return buf.toString('latin1').replace(RE_C1, (ch) => CP1252_HIGH[ch.charCodeAt(0) - 0x80]);
 }
 
 // ── delimited text ───────────────────────────────────────────────────────
 
-function sniffDelimiter(text) {
-  const lines = text.split(/\r\n|\n|\r/);
-  const first = lines.find((l) => l.trim() !== '') || '';
-  // Tab first on a tie: a tab almost never appears by accident, a comma does.
+// Which delimiter the file uses, judged by CONSISTENCY over its first twenty
+// non-empty lines rather than by the first line alone: a TSV whose first line
+// is a title ("Materials for 12 Palm Way, Orlando") would otherwise be split
+// on that one comma and every real row left whole in one cell. The winner is
+// the candidate that gives the same field count, above one, on the most lines.
+// Tab first on a tie: a tab almost never appears by accident, a comma does.
+// The walk stops after SNIFF_LINES lines or SNIFF_CHARS characters, so a 25 MB
+// file is never split into lines just to look at the top of it.
+function sniffDelimiter(text, from) {
   const candidates = ['\t', ',', ';'];
-  let best = ',', bestCount = 0;
-  for (const d of candidates) {
-    let n = 0, quoted = false;
-    for (const ch of first) {
-      if (ch === '"') quoted = !quoted;
-      else if (ch === d && !quoted) n++;
+  const tallies = candidates.map(() => new Map());
+  const perLine = [0, 0, 0];
+  const end = Math.min(text.length, from + SNIFF_CHARS);
+  let quoted = false, nonBlank = false, lines = 0;
+  const closeLine = () => {
+    if (nonBlank) {
+      lines++;
+      for (let k = 0; k < candidates.length; k++) {
+        const n = perLine[k] + 1;
+        tallies[k].set(n, (tallies[k].get(n) || 0) + 1);
+      }
     }
-    if (n > bestCount) { best = d; bestCount = n; }
+    perLine[0] = perLine[1] = perLine[2] = 0;
+    nonBlank = false;
+  };
+  for (let i = from; i < end && lines < SNIFF_LINES; i++) {
+    const ch = text[i];
+    if (ch === '"') { quoted = !quoted; nonBlank = true; continue; }
+    if (!quoted && (ch === '\n' || ch === '\r')) { closeLine(); continue; }
+    if (!quoted) {
+      const k = candidates.indexOf(ch);
+      if (k !== -1) perLine[k]++;
+    }
+    if (ch.charCodeAt(0) > 32) nonBlank = true;
   }
+  if (lines < SNIFF_LINES) closeLine();
+  let best = ',', bestLines = 0;
+  candidates.forEach((d, k) => {
+    let most = 0;
+    tallies[k].forEach((count, fields) => { if (fields > 1 && count > most) most = count; });
+    if (most > bestLines) { best = d; bestLines = most; }
+  });
   return best;
 }
 
 /**
  * RFC-4180 rows from CSV / TSV / semicolon text. BOM stripped, delimiter
- * sniffed from the first non-empty line, quoted fields may hold the
- * delimiter, doubled quotes and line breaks. Blank lines are dropped.
+ * sniffed from the first lines, quoted fields may hold the delimiter, doubled
+ * quotes and line breaks. Blank lines are dropped.
+ *
+ * BOUNDED AS IT READS, the way xlsxToSheets is. A field stops growing at
+ * MAX_CELL_CHARS (the rest of it is skipped over, not stored), a row keeps at
+ * most maxCols fields, and the walk STOPS once maxRows non-blank rows are in —
+ * a 24 MB CSV of "a\n" is never turned into twelve million rows only for all
+ * but 5000 of them to be thrown away.
+ *
+ * Returns { rows, truncated, stopped }. `truncated` says a bound cut something
+ * off: a row past maxRows, a non-blank field past maxCols, or — for the price
+ * check (opts.facts) — a field cut at MAX_CELL_CHARS whose unread part mentions
+ * money. `opts.onRow(row)` is the price check's way in: rows are handed over
+ * one at a time and never kept, and a true answer stops the walk (`stopped`).
  */
-function parseDelimited(text) {
-  let s = String(text == null ? '' : text);
-  if (s.charCodeAt(0) === 0xFEFF) s = s.slice(1);
-  const delim = sniffDelimiter(s);
+function readDelimited(text, opts) {
+  const o = opts || {};
+  const maxRows = Number.isFinite(o.maxRows) ? o.maxRows : MAX_SHEET_ROWS;
+  const maxCols = Number.isFinite(o.maxCols) ? o.maxCols : MAX_SHEET_COLS;
+  const onRow = typeof o.onRow === 'function' ? o.onRow : null;
+  const facts = !!o.facts;
+  const s = String(text == null ? '' : text);
+  const from = s.charCodeAt(0) === 0xFEFF ? 1 : 0;
+  const delim = sniffDelimiter(s, from);
   const rows = [];
+  let kept = 0, truncated = false, stopped = false, done = false;
   let row = [], field = '', inQuotes = false, atStart = true;
-  const endField = () => { row.push(field); field = ''; atStart = true; };
-  const endRow = () => {
-    endField();
-    if (row.some((c) => c.trim() !== '')) rows.push(row);
-    row = [];
+  // Where the current field passed MAX_CELL_CHARS, or -1.
+  let cutAt = -1;
+  // The start of the run of characters not yet copied into `field`, or -1.
+  // A field is copied a run at a time with slice, never a character at a
+  // time: 60,000 fields built with `field += ch` are 60,000 chains of 500
+  // one-character strings, which was most of a gigabyte.
+  let run = -1;
+  const flush = (end) => {
+    if (run === -1) return;
+    const room = MAX_CELL_CHARS - field.length;
+    if (end - run <= room) {
+      field += s.slice(run, end);
+    } else {
+      if (room > 0) field += s.slice(run, run + room);
+      if (cutAt === -1) cutAt = run + Math.max(room, 0);
+    }
+    run = -1;
   };
-  for (let i = 0; i < s.length; i++) {
-    const ch = s[i];
+  const endField = (at) => {
+    flush(at);
+    if (cutAt !== -1) {
+      // The price check fails closed: a cut-off tail that mentions money makes
+      // the file "priced", since that part of the cell was never looked at.
+      if (facts && !truncated && RE_MONEY_TAIL.test(s.slice(cutAt - MONEY_TAIL_OVERLAP, at))) truncated = true;
+      field = dropCutTail(field);
+      cutAt = -1;
+    }
+    if (row.length < maxCols) row.push(field);
+    else if (field.trim() !== '') truncated = true;
+    field = '';
+    atStart = true;
+  };
+  const endRow = (at) => {
+    endField(at);
+    const r = row;
+    row = [];
+    if (!r.some((c) => c.trim() !== '')) return;
+    if (kept >= maxRows) { truncated = true; done = true; return; }
+    kept++;
+    if (!onRow) { rows.push(r); return; }
+    if (onRow(r)) { stopped = true; done = true; }
+  };
+  const QUOTE = 34, CR = 13, LF = 10;
+  const DELIM = delim.charCodeAt(0);
+  for (let i = from; i < s.length && !done; i++) {
+    const c = s.charCodeAt(i);
     if (inQuotes) {
-      if (ch === '"') {
-        if (s[i + 1] === '"') { field += '"'; i++; }
-        else inQuotes = false;
+      if (c !== QUOTE) { if (run === -1) run = i; continue; }
+      if (s.charCodeAt(i + 1) === QUOTE) {
+        // A doubled quote: keep the first, skip the second.
+        if (run === -1) run = i;
+        flush(i + 1);
+        i++;
       } else {
-        field += ch;
+        flush(i);
+        inQuotes = false;
       }
       continue;
     }
-    if (ch === '"' && atStart) { inQuotes = true; atStart = false; continue; }
-    if (ch === delim) { endField(); continue; }
-    if (ch === '\r' || ch === '\n') {
-      if (ch === '\r' && s[i + 1] === '\n') i++;
-      endRow();
+    if (c === QUOTE && atStart) { inQuotes = true; atStart = false; continue; }
+    if (c === DELIM) { endField(i); continue; }
+    if (c === CR || c === LF) {
+      const at = i;
+      if (c === CR && s.charCodeAt(i + 1) === LF) i++;
+      endRow(at);
       continue;
     }
-    field += ch;
+    if (run === -1) run = i;
     atStart = false;
   }
-  if (field !== '' || row.length) endRow();
-  return rows;
+  flush(s.length);
+  if (!done && (field !== '' || row.length)) endRow(s.length);
+  return { rows: rows, truncated: truncated, stopped: stopped };
+}
+
+/** The rows of readDelimited, with the extractor's bounds. */
+function parseDelimited(text) {
+  return readDelimited(text).rows;
 }
 
 // ── workbooks ────────────────────────────────────────────────────────────
@@ -317,18 +447,28 @@ function isMoneyFormat(numFmt) {
  * and for two extra facts per sheet: `truncated` (a bound was hit, so part of
  * the sheet was never looked at) and `moneyFormat` (a number cell is formatted
  * as currency). Without opts the output is exactly what the extractor reads.
+ *
+ * Every cell's text is cut to MAX_CELL_CHARS here, before anything else reads
+ * it: a sheet of 5000 x 60 cells all pointing at one 32,767-character shared
+ * string must cost what 300,000 short cells cost. With `opts.onRow(cells)` the
+ * rows are handed over one at a time and never kept (sheet.rows stays empty),
+ * so the price check's 200,000-row bound does not become 200,000 arrays in
+ * memory; once onRow answers true, the rest of the workbook is skipped.
  */
 async function xlsxToSheets(buffer, opts) {
   const o = opts || {};
   const maxRows = Number.isFinite(o.maxRows) ? o.maxRows : MAX_SHEET_ROWS;
   const maxCols = Number.isFinite(o.maxCols) ? o.maxCols : MAX_SHEET_COLS;
+  const onRow = typeof o.onRow === 'function' ? o.onRow : null;
   const facts = !!opts;
+  let found = false;
   const ExcelJS = require('exceljs');
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(toBuffer(buffer));
   const MERGE = ExcelJS.ValueType.Merge;
   const out = [];
   wb.worksheets.forEach((ws) => {
+    if (found) return;
     // A hidden sheet is where a pricing table or a lookup list lives. The PM
     // cannot see it in Excel, so it must not be where the lines come from.
     // (The price check reads it anyway: anyone who opens the file can unhide
@@ -339,6 +479,7 @@ async function xlsxToSheets(buffer, opts) {
     let truncated = false;
     let moneyFormat = false;
     ws.eachRow({ includeEmpty: false }, (row, rn) => {
+      if (found) return;
       if (rn > maxRows) { truncated = true; return; }
       const cells = [];
       row.eachCell({ includeEmpty: false }, (cell, cn) => {
@@ -354,9 +495,16 @@ async function xlsxToSheets(buffer, opts) {
         }
         const flat = flattenValue(cell.value);
         if (flat.gap) formulaGaps.push((rn - 1) + ':' + (cn - 1));
-        cells[cn - 1] = flat.text;
+        let text = flat.text;
+        if (text.length > MAX_CELL_CHARS) {
+          // The price check fails closed on the part it did not read.
+          if (facts && !truncated && RE_MONEY_TAIL.test(text.slice(MAX_CELL_CHARS - MONEY_TAIL_OVERLAP))) truncated = true;
+          text = dropCutTail(text.slice(0, MAX_CELL_CHARS));
+        }
+        cells[cn - 1] = text;
       });
       for (let c = 0; c < cells.length; c++) if (cells[c] === undefined) cells[c] = '';
+      if (onRow) { if (onRow(cells)) found = true; return; }
       rows[rn - 1] = cells;
     });
     for (let r = 0; r < rows.length; r++) if (!rows[r]) rows[r] = [];
@@ -379,48 +527,92 @@ async function xlsxToSheets(buffer, opts) {
 
 // A header containing any of these is a money column and is never read — not
 // as a description, not as a quantity, not as a unit. Checked before every
-// other role, so "Unit Cost" can never become the unit column.
+// other role but the quantity, so "Unit Cost" can never become the unit column.
 const MONEY_HEADER = /price|cost|total|amount|\bext\b|extended|subtotal|markup|margin|profit|tax|value|rate|\$/;
 
 const DESC_EXACT = new Set(['description', 'material', 'materials', 'sku description', 'item description', 'product', 'product description']);
+// The name of the line when there is no description, or the description is
+// blank: Buildertrend's Title, a price book's Item Name.
+const TITLE_EXACT = new Set(['title', 'name', 'item name', 'item title', 'line item title', 'line item name', 'product name']);
+// A description of the GROUP a line sits in, not of the line. Buildertrend puts
+// "Parent Group Description" and "Subgroup Description" left of Title, and a
+// scope sentence ("Tear off and replace roof over clubhouse") must never stand
+// in for every material name under it — so these are not description columns.
+const GROUP_WORDS = /\b(?:group|subgroup|parent|category|section|phase|scope|division|assembly)\b/;
 // Identifiers. "Item #" sits right next to "Description" on the Lead Report
 // and holds 1.1, 2.3 — it must never outrank the description.
 const ID_HEADERS = new Set(['item #', 'item#', 'item no', 'item no.', 'item number', 'sku', 'sku #', 'sku number', 'internet sku', '#', 'no', 'no.', 'line', 'line #', 'id', 'item id', 'model #', 'model number', 'upc']);
 const QTY_EXACT = new Set(['qty', 'quantity', 'qty.', 'qnty', 'order qty', 'order quantity', 'ordered', 'count', 'pcs']);
+// Any header naming a quantity: "Total Qty", "Est. Qty", "Takeoff Qty".
+const QTY_WORD = /\b(?:qty|qnty|quantity|quantities)\b/;
+// Words that say a quantity was summed, not priced. Taken out before the money
+// test, so "Total Qty" and "Ext. Qty" are the quantity while "Qty x Price" is
+// still money.
+const QTY_SUMMED = /\b(?:total|ext|extended)\b/g;
 // Look like quantities, are not the quantity to order.
 const QTY_NEVER = new Set(['lines', 'qty per unit', 'waste %', 'waste', 'waste%']);
-const UNIT_EXACT = new Set(['unit', 'units', 'uom', 'u/m', 'um', 'unit of measure', 'units of measure']);
+const UNIT_EXACT = new Set(['unit', 'uom', 'u/m', 'um', 'unit of measure', 'units of measure']);
 const SPEC_EXACT = new Set(['spec/size', 'size/spec', 'spec', 'specs', 'size']);
+// Buildertrend's Cost Type (Labor, Material, Subcontractor...). A category,
+// not money, so it is read — only to leave a Labor line off the list.
+const KIND_HEADERS = new Set(['cost type', 'cost category']);
+const LABOR_KIND = /^(?:labou?r|subcontractors?|subcontract)$/i;
 
+// Lower-cased, one space, "Spec / Size" as "spec/size", no trailing ':' or '*'.
+// Split and loops rather than patterns: `\s*\/\s*` and `[:*]+$` both backtrack
+// quadratically on a long run that never finishes the match.
 function headerKey(text) {
-  return String(text == null ? '' : text)
-    .toLowerCase()
-    .replace(/\s*\/\s*/g, '/')
-    .replace(/\s+/g, ' ')
-    .replace(/[:*]+$/, '')
-    .trim();
+  let s = String(text == null ? '' : text).toLowerCase();
+  if (s.indexOf('/') !== -1) s = s.split('/').map((part) => part.trim()).join('/');
+  s = s.replace(/\s+/g, ' ');
+  let end = s.length;
+  while (end > 0 && (s[end - 1] === ':' || s[end - 1] === '*' || s[end - 1] === ' ')) end--;
+  return s.slice(0, end).trim();
 }
 
-// null | { role: 'money'|'id'|'qty'|'unit'|'spec' } | { role: 'desc', rank }
-// Lower rank wins when a row has several description-like columns.
+// Every role below needs one of these fragments somewhere in the cell (a '/'
+// sends "U / M" the long way). A cell with none of them is no header label,
+// and is answered without building its key — the price check asks this of up
+// to a thousand cells a row.
+const ROLE_HINT = /price|cost|total|amount|ext|markup|margin|profit|tax|value|rate|\$|#|no|line|id|sku|upc|model|item|qty|qnty|quantit|order|count|pcs|unit|uom|um|\/|spec|size|desc|material|product|title|name/i;
+
+function isQtyHeader(h) {
+  if (!QTY_WORD.test(h) || /\bper\b/.test(h) || /^waste\b/.test(h)) return false;
+  return !MONEY_HEADER.test(h.replace(QTY_SUMMED, ' '));
+}
+
+// null | { role: 'money'|'id'|'qty'|'spec'|'kind' } | { role: 'unit', rank }
+// | { role: 'desc', rank }. Lower rank wins when a row has several description-
+// like (or unit-like) columns.
 function headerRole(text) {
   const raw = String(text == null ? '' : text).trim();
-  if (!raw || raw.length > HEADER_CELL_MAX) return null;
+  if (!raw || raw.length > HEADER_CELL_MAX || !ROLE_HINT.test(raw)) return null;
   const h = headerKey(raw);
+  if (QTY_NEVER.has(h)) return null;
+  if (isQtyHeader(h)) return { role: 'qty' };
+  if (KIND_HEADERS.has(h)) return { role: 'kind' };
   if (MONEY_HEADER.test(h)) return { role: 'money' };
   if (ID_HEADERS.has(h)) return { role: 'id' };
-  if (QTY_NEVER.has(h)) return null;
-  if (QTY_EXACT.has(h) || (/^(qty|quantity)\b/.test(h) && !/\bper\b/.test(h))) return { role: 'qty' };
-  if (UNIT_EXACT.has(h) || /^(unit|uom)\b/.test(h)) return { role: 'unit' };
+  if (QTY_EXACT.has(h)) return { role: 'qty' };
+  if (UNIT_EXACT.has(h) || /^(unit|uom)\b/.test(h)) return { role: 'unit', rank: 0 };
+  // A plural "Units" is as often the count as the unit. It is the unit column
+  // only when nothing better names one (headerMap).
+  if (h === 'units') return { role: 'unit', rank: 1 };
   if (SPEC_EXACT.has(h)) return { role: 'spec' };
   if (DESC_EXACT.has(h)) return { role: 'desc', rank: 0 };
-  if (/\b(description|desc|material|materials)\b/.test(h)) return { role: 'desc', rank: 1 };
+  const descWord = /\b(description|desc|material|materials)\b/.test(h);
+  if (descWord && GROUP_WORDS.test(h)) return null;
+  if (descWord) return { role: 'desc', rank: 1 };
   if (h === 'item' || h === 'items') return { role: 'desc', rank: 2 };
-  if (h === 'title' || h === 'name' || h === 'item name') return { role: 'desc', rank: 3 };
+  if (TITLE_EXACT.has(h)) return { role: 'desc', rank: 3 };
   return null;
 }
 
-const PURE_NUMBER = /^-?[\d,]*\.?\d+%?$/;
+// A bare number: "12", "-6", "1,200.50", ".5", "15%". Written so no two parts
+// can match the same digits — the old `[\d,]*\.?\d+` let `[\d,]*` and `\d+`
+// share a digit run, and a 32,767-digit cell followed by a letter took
+// half a second to fail.
+const PURE_NUMBER = /^-?(?:\d[\d,]*(?:\.\d+)?|\.\d+)%?$/;
 
 // Is this row a header? A header is a description column plus a quantity or a
 // unit column, and no bare numbers (a data row has them, a header does not).
@@ -429,7 +621,8 @@ const PURE_NUMBER = /^-?[\d,]*\.?\d+%?$/;
 // list, which is refused rather than guessed at.
 function headerMap(cells) {
   const desc = [];
-  let qty = null, unit = null, spec = null, money = false, numeric = false;
+  const units = [];
+  let qty = null, spec = null, kind = null, id = null, money = false, numeric = false;
   cells.forEach((c, i) => {
     if (!c) return;
     if (PURE_NUMBER.test(c)) { numeric = true; return; }
@@ -438,15 +631,24 @@ function headerMap(cells) {
     if (role.role === 'money') money = true;
     else if (role.role === 'desc') desc.push({ i: i, rank: role.rank });
     else if (role.role === 'qty' && qty == null) qty = i;
-    else if (role.role === 'unit' && unit == null) unit = i;
+    else if (role.role === 'unit') units.push({ i: i, rank: role.rank });
     else if (role.role === 'spec' && spec == null) spec = i;
+    else if (role.role === 'kind' && kind == null) kind = i;
+    else if (role.role === 'id' && id == null) id = i;
   });
+  units.sort((a, b) => a.rank - b.rank || a.i - b.i);
+  const unit = units.length ? units[0].i : null;
+  // "Description | Units | UOM": UOM is the unit, so the plural is the count.
+  if (qty == null && units.length > 1 && units[0].rank === 0) {
+    const plural = units.find((u) => u.rank === 1);
+    if (plural) qty = plural.i;
+  }
   const header = !numeric && desc.length > 0 && (qty != null || unit != null);
   desc.sort((a, b) => a.rank - b.rank || a.i - b.i);
   return {
     header: header,
     priced: !numeric && !header && desc.length > 0 && money,
-    map: header ? { desc: desc.map((d) => d.i), qty: qty, unit: unit, spec: spec } : null,
+    map: header ? { desc: desc.map((d) => d.i), qty: qty, unit: unit, spec: spec, kind: kind, id: id } : null,
   };
 }
 
@@ -458,7 +660,7 @@ const TOTALS_RE = [
   /\bsub-?\s?totals?\b/i,
   /\bgrand\s+totals?\b/i,
   /^totals?\s*(?::.*)?$/i,
-  /\btotals?\s*:?\s*$/i,
+  /\btotals?\s*(?::\s*)?$/i,
   /\b(?:base|client)(?:\s+(?:cost|price))?\s*:\s*$/i,
   /\bproject\s+summary\b/i,
 ];
@@ -468,11 +670,25 @@ function isTotalsText(s) {
 }
 
 const LABOR_UNITS = new Set(['hr', 'hrs', 'hour', 'hours', 'mh', 'mhr', 'mhrs', 'man hours', 'man-hours', 'manhours', 'day', 'days']);
-const LABOR_SECTION = /labou?r/i;
+// A section is labor only when its WHOLE title says so: "Labor", "Labour:",
+// "Install labor", "Labor & install", "Scope 3: Labor". Unanchored, a
+// "Laboratory grade sealant" row and a "ROOF - MATERIALS & LABOR" scope title
+// were labor sections too, and every real material under them was dropped.
+const LABOR_SECTION = /^(?:scope\s*\d+\s*[:.-]\s*)?(?:(?:crew|field|install|installation)\s+)?labou?r(?:\s*(?:&|and|\/)\s*install(?:ation)?|\s+(?:only|items?|costs?))?\s*:?$/i;
 
 function qtyIsZero(q) {
   const s = String(q == null ? '' : q).replace(/,/g, '').trim();
-  return s !== '' && /0/.test(s) && /^0*\.?0*$/.test(s);
+  return s !== '' && /0/.test(s) && /^0*(?:\.0*)?$/.test(s);
+}
+
+// A return on a purchase history (Home Depot writes it as Quantity -6). It is
+// not a material to pull, and a scrubbed -6 would come back as a blank
+// quantity beside the same item bought earlier.
+const RE_NEGATIVE_QTY = new RegExp('^\\s*[-' + String.fromCharCode(0x2212) + ']\\s*\\.?\\d');
+
+function isNegativeQty(q) {
+  if (typeof q === 'number') return Number.isFinite(q) && q < 0;
+  return typeof q === 'string' && RE_NEGATIVE_QTY.test(q);
 }
 
 // Why a scrubbed line is not a material, or null when it is. Shared by the
@@ -492,25 +708,56 @@ const LEADING_MARKS = /^(?:[\u21B3\u2022\u00B7\u2219\u25AA\u25AB\u25CF\u25E6\u20
 // A leading "2.5" followed by one of these is a size, not an item number.
 const SIZE_AFTER = /^(?:in\b|in\.|inch|"|ft\b|ft\.|feet|foot|'|mm\b|cm\b|m\b|lb|oz|gal|ga\b|gauge|mil\b|yd|x\b|x\d|%)/i;
 
-function cleanDescription(text) {
+// "1.1 Tear off" at the start of a description: an outline number, or a size?
+const OUTLINE_DECIMAL = /^(\d{1,3})\.(\d{1,3}) /;
+
+// `outline` is true only when mapSheet has seen that the table has no Item #
+// column and EVERY description in it starts with an N.N number that counts
+// like an outline (1.1, 1.2, 2.1 — isOutlineTable) — then a bare "1.1" is an
+// item number. Anywhere else "1.25 Deck screws" and "8.25 HardiePlank lap
+// siding" keep the size the crew has to buy.
+function cleanDescription(text, outline) {
   let s = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
   s = s.replace(LEADING_MARKS, '');
-  // "1.1 Tear off", "3) Drip edge", "12. Nails" lose the item number. A bare
-  // "12 ga wire" keeps its 12, and "2.5 in. screws" keeps its size.
+  // "3) Drip edge", "12. Nails" and "1.2.3 Flashing" lose the item number
+  // always; "1.1 Tear off" only in an outline table. A bare "12 ga wire" keeps
+  // its 12, and "2.5 in. screws" keeps its size.
   const m = /^(\d+(?:\.\d+)*[.)]?)\s+(.+)$/.exec(s);
-  if (m && /[.)]$|\.\d/.test(m[1]) && !SIZE_AFTER.test(m[2])) s = m[2];
+  if (m && !SIZE_AFTER.test(m[2])) {
+    const token = m[1];
+    if (/[.)]$/.test(token) || /\.\d+\./.test(token) || (outline && /\.\d/.test(token))) s = m[2];
+  }
   return s.trim();
 }
 
 const CUR = '[$\\u00A3\\u20AC]';
 const AMOUNT = '\\d[\\d,]*(?:\\.\\d+)?';
 const PER = '(?:\\s*(?:\\/\\s*[a-z]+\\.?|each\\b|ea\\b|per\\s+[a-z]+))?';
-const RE_LABELLED = new RegExp('\\b(?:unit\\s+)?(?:price|cost|total|amount|ext(?:ended)?|extension|subtotal)\\s*[:=]\\s*' + CUR + '?\\s*-?' + AMOUNT + PER, 'gi');
-const RE_AT_PRICE = new RegExp('@\\s*(?:USD\\s*)?' + CUR + '\\s*' + AMOUNT + PER + '|@\\s*USD\\s*' + AMOUNT + PER, 'gi');
+// A required per-unit tail: "/bundle", " each", " per sheet".
+const PER_REQUIRED = '\\s*(?:\\/\\s*[a-z]+\\.?|each\\b|ea\\b|per\\s+[a-z]+)';
+// Every pattern below that runs over description text is written so that no
+// two quantifiers can take the same characters (`\s*[:=]?\s*` would), and a
+// pattern that STARTS with a number only starts at the first digit of one (the
+// lookbehind) — otherwise a long digit run with no currency after it is
+// retried from every digit, which is quadratic.
+const RE_LABELLED = new RegExp('\\b(?:unit\\s+)?(?:price|cost|total|amount|ext(?:ended)?|extension|subtotal)\\s*[:=]\\s*(?:' + CUR + '\\s*)?-?' + AMOUNT + PER, 'gi');
+// The same labels with no colon: "unit price 7.25", "Plywood 4x8 cost 38.97",
+// "(price 45.00)". A price or cost label is money whatever word follows it —
+// only a dimension ("Low cost 2x4 studs") is not an amount.
+const RE_PRICE_BARE = new RegExp('\\b(?:unit\\s+)?(?:price|cost)\\s+(?:' + CUR + '\\s*)?-?' + AMOUNT + PER + '(?!\\d|[,.]\\d|\\s?x\\s?\\d)', 'gi');
+// "Tape total 120". Total, amount and ext can also count things ("total 30
+// bundles", "ext 2x4"), so these go only when no word or digit follows.
+const RE_TOTAL_BARE = new RegExp('\\b(?:total|amount|ext(?:ended)?|extension|subtotal)\\s+(?:' + CUR + '\\s*)?-?' + AMOUNT + PER + '(?!\\d|[,.]\\d|\\s?[a-z])', 'gi');
+// "@ $4/ea", "@ USD 4", and "@ 42.50/bundle" — a bare number after @ only with
+// a per-unit tail, because "@ 16 in. o.c." is a spacing, not a price.
+const RE_AT_PRICE = new RegExp('@\\s*(?:USD\\s*)?' + CUR + '\\s*' + AMOUNT + PER + '|@\\s*USD\\s*' + AMOUNT + PER + '|@\\s*' + AMOUNT + PER_REQUIRED, 'gi');
 const RE_CUR_AMOUNT = new RegExp('-?' + CUR + '\\s*-?' + AMOUNT + PER, 'gi');
-const RE_AMOUNT_CUR = new RegExp(AMOUNT + '\\s*' + CUR, 'g');
+const RE_AMOUNT_CUR = new RegExp('(?<![\\d,])' + AMOUNT + '\\s*' + CUR, 'g');
 const RE_USD_AMOUNT = new RegExp('\\b(?:USD|US\\$)\\s*' + AMOUNT, 'gi');
-const RE_AMOUNT_USD = new RegExp(AMOUNT + '\\s*(?:USD|dollars?|bucks)\\b', 'gi');
+const RE_AMOUNT_USD = new RegExp('(?<![\\d,])' + AMOUNT + '\\s*(?:USD|dollars?|bucks)\\b', 'gi');
+// Characters trimmed off both ends of a scrubbed description: whitespace,
+// hyphen, en and em dash, and the separators a removed price leaves behind.
+const EDGE_CHARS = new Set([' ', '-', String.fromCharCode(0x2013), String.fromCharCode(0x2014), '@', ',', ':', ';', '/', '|']);
 const RE_CURRENCY_SIGN = new RegExp(CUR, 'g');
 // C0 controls except tab/LF/CR, DEL, and the U+FFFD a bad decode leaves.
 const RE_CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\uFFFD]/g;
@@ -526,20 +773,31 @@ const RE_INSTRUCTION = [
 function scrubDescription(text) {
   let s = String(text == null ? '' : text).replace(RE_CONTROL, ' ').replace(/\s+/g, ' ');
   s = s.replace(RE_LABELLED, ' ');
+  s = s.replace(RE_PRICE_BARE, ' ');
+  s = s.replace(RE_TOTAL_BARE, ' ');
   s = s.replace(RE_AT_PRICE, ' ');
   s = s.replace(RE_CUR_AMOUNT, ' ');
   s = s.replace(RE_AMOUNT_CUR, ' ');
   s = s.replace(RE_USD_AMOUNT, ' ');
   s = s.replace(RE_AMOUNT_USD, ' ');
   s = s.replace(RE_CURRENCY_SIGN, ' ');
-  // What the removals leave behind: "Nails ( )", "Tape — ", "@".
-  s = s.replace(/\(\s*[-\/@,:;]*\s*\)|\[\s*[-\/@,:;]*\s*\]/g, ' ');
-  s = s.replace(/\s+/g, ' ').trim();
-  s = s.replace(/^[\s\-\u2013\u2014@,:;\/|]+|[\s\-\u2013\u2014@,:;\/|]+$/g, '').trim();
-  return s.slice(0, MAX_DESC).trim();
+  // What the removals leave behind: "Nails ( )", "Tape — ", "@". One class
+  // inside the brackets, not `\s*[...]*\s*`, and the ends trimmed by a loop:
+  // an unanchored `[...]+$` retried from every position of a 40,000-character
+  // run of '@' is quadratic.
+  s = s.replace(/\s+/g, ' ');
+  s = s.replace(/\([-\/@,:; ]*\)|\[[-\/@,:; ]*\]/g, ' ');
+  s = s.replace(/\s+/g, ' ');
+  let from = 0, to = s.length;
+  while (from < to && EDGE_CHARS.has(s[from])) from++;
+  while (to > from && EDGE_CHARS.has(s[to - 1])) to--;
+  return s.slice(from, to).slice(0, MAX_DESC).trim();
 }
 
 const QTY_FORM = /^(?:\d+(?:\.\d+)?|\.\d+|\d+\/\d+|\d+ \d+\/\d+|\d+-\d+\/\d+)$/;
+// A quantity with its unit written after it. The number alternatives are the
+// QTY_FORM grammar plus thousands commas, longest forms first.
+const RE_QTY_WITH_UNIT = /^\s*(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+ \d+\/\d+|\d+-\d+\/\d+|\d+\/\d+|\d+(?:\.\d+)?|\.\d+)\s*([a-z][a-z.\/ ]{0,20})\s*$/i;
 
 function scrubQty(q) {
   if (typeof q === 'number') return Number.isFinite(q) && q >= 0 ? formatNumber(q).slice(0, MAX_QTY) : '';
@@ -571,11 +829,15 @@ function scrubLine(line) {
   if (RE_INSTRUCTION.some((re) => re.test(description))) return null;
   let qtyRaw = src.qty;
   let unitRaw = src.unit;
-  // "12 ea" in the quantity with nothing in the unit: split it rather than
-  // throw the quantity away.
-  if (typeof qtyRaw === 'string' && !String(unitRaw == null ? '' : unitRaw).trim()) {
-    const m = /^\s*(\d+(?:\.\d+)?|\d+ \d+\/\d+|\d+\/\d+)\s*([a-z][a-z.\/ ]{0,20})\s*$/i.exec(qtyRaw);
-    if (m && !new RegExp(CUR).test(qtyRaw)) { qtyRaw = m[1]; unitRaw = m[2]; }
+  // "12 ea", "1,200 sf", "2-1/2 bdl" in the quantity: split it rather than
+  // throw the quantity away. The number is any form scrubQty accepts on its
+  // own; a unit column that already says something keeps its word.
+  if (typeof qtyRaw === 'string') {
+    const m = RE_QTY_WITH_UNIT.exec(qtyRaw.slice(0, MAX_CELL_CHARS));
+    if (m && !new RegExp(CUR).test(qtyRaw) && !/^(?:usd|dollars?|bucks)\b/i.test(m[2])) {
+      qtyRaw = m[1];
+      if (!String(unitRaw == null ? '' : unitRaw).trim()) unitRaw = m[2];
+    }
   }
   return { description: description, qty: scrubQty(qtyRaw), unit: scrubUnit(unitRaw) };
 }
@@ -583,13 +845,15 @@ function scrubLine(line) {
 // ── spreadsheet mapping ──────────────────────────────────────────────────
 
 function emptyCounts() {
-  return { found: 0, kept: 0, skipped: { labor: 0, zero_qty: 0, totals: 0, sections: 0, no_description: 0 }, over_cap: 0 };
+  return { found: 0, kept: 0, skipped: { labor: 0, zero_qty: 0, totals: 0, sections: 0, no_description: 0, returned: 0 }, over_cap: 0 };
 }
 
 // Scrub, judge, cap — the one admission path for every line from every tier.
 function admitLine(raw, section, acc) {
   const line = scrubLine(raw);
   if (!line) { acc.counts.skipped.no_description++; return false; }
+  // Judged on the RAW quantity: the scrub has already turned -6 into ''.
+  if (isNegativeQty(raw && raw.qty)) { acc.counts.skipped.returned++; return false; }
   const verdict = judgeLine(line, section);
   if (verdict) { acc.counts.skipped[verdict]++; return false; }
   if (acc.lines.length >= MAX_LINES) { acc.counts.over_cap++; return false; }
@@ -598,31 +862,126 @@ function admitLine(raw, section, acc) {
   return true;
 }
 
+function returnedWarning(counts) {
+  const n = counts && counts.skipped ? counts.skipped.returned : 0;
+  if (!n) return null;
+  return n === 1
+    ? '1 returned line (a negative quantity) was left out — check the quantities above are still what the job needs.'
+    : n + ' returned lines (negative quantities) were left out — check the quantities above are still what the job needs.';
+}
+
+// A cell cut at MAX_CELL_CHARS loses the word the cut went through and then
+// any words at its end that carry a digit. "Primer 40 dol|lars" must not
+// become a bare "Primer 40" whose currency was on the far side of the cut.
+function dropCutTail(head) {
+  let end = head.length;
+  while (end > 0 && head.charCodeAt(end - 1) > 32) end--;
+  for (;;) {
+    let wordEnd = end;
+    while (wordEnd > 0 && head.charCodeAt(wordEnd - 1) <= 32) wordEnd--;
+    let wordStart = wordEnd;
+    let digit = false;
+    while (wordStart > 0 && head.charCodeAt(wordStart - 1) > 32) {
+      const c = head.charCodeAt(wordStart - 1);
+      if (c >= 48 && c <= 57) digit = true;
+      wordStart--;
+    }
+    if (!digit || wordStart === wordEnd) { end = wordEnd; break; }
+    end = wordStart;
+  }
+  return head.slice(0, end);
+}
+
+// One cell as the rules read it: at most MAX_CELL_CHARS, one space between
+// words. The cut comes FIRST — nothing, not even the whitespace collapse, runs
+// over the whole of a long cell.
 function cellText(v) {
-  return String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
+  let s = String(v == null ? '' : v);
+  if (s.length > MAX_CELL_CHARS) s = dropCutTail(s.slice(0, MAX_CELL_CHARS));
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+// A merged "Demo & Removal" or "SCOPE 2: SIDING" row: one value, or the same
+// value repeated, and nothing else.
+function isSectionRow(filled) {
+  const first = filled[0].toLowerCase();
+  return /[a-z]/i.test(first) && filled.every((c) => c.toLowerCase() === first);
+}
+
+function firstDesc(cells, map) {
+  for (const c of map.desc) { if (cells[c]) return cells[c]; }
+  return '';
+}
+
+// Is the table under the header at row `at` an outline — no Item # column, and
+// every description in it (at least two) starting with an N.N number that
+// COUNTS: the same N with the second part a step or three up (1.1, 1.2, 1.4),
+// or a new N starting again at .0 or .1 (1.3, 2.1). Only then is "1.1 Tear
+// off" an item number rather than a size (cleanDescription). "1.25 Deck
+// screws" over "8.25 HardiePlank" does not count, and keeps both sizes.
+function isOutlineTable(prepared, at, map) {
+  if (map.id != null) return false;
+  let seen = 0;
+  let major = -1, minor = -1;
+  for (let r = at + 1; r < prepared.length; r++) {
+    const p = prepared[r];
+    if (!p.filled.length) continue;
+    if (p.h.header) break;
+    const totals = p.filled.find(isTotalsText);
+    if (totals) {
+      if (/\bproject\s+summary\b/i.test(totals)) break;
+      continue;
+    }
+    if (isSectionRow(p.filled)) continue;
+    const desc = firstDesc(p.cells, map).replace(LEADING_MARKS, '');
+    if (!desc) continue;
+    const m = OUTLINE_DECIMAL.exec(desc);
+    if (!m) return false;
+    const a = Number(m[1]), b = Number(m[2]);
+    if (seen > 0) {
+      const counts = (a === major && b - minor >= 1 && b - minor <= 3) || (a > major && b <= 1);
+      if (!counts) return false;
+    }
+    major = a;
+    minor = b;
+    seen++;
+  }
+  return seen >= 2;
 }
 
 function mapSheet(sheet) {
   const name = sheet && sheet.name != null ? String(sheet.name) : null;
-  const rows = sheet && Array.isArray(sheet.rows) ? sheet.rows : [];
+  const rows = sheet && Array.isArray(sheet.rows) ? sheet.rows.slice(0, MAX_SHEET_ROWS) : [];
   const gaps = new Set(sheet && Array.isArray(sheet.formulaGaps) ? sheet.formulaGaps : []);
   const acc = { lines: [], counts: emptyCounts() };
   let map = null;
+  let outline = false;
   let section = null;
   let header = false;
   let priced = false;
   let gapLines = 0;
 
-  for (let r = 0; r < rows.length; r++) {
-    const cells = (Array.isArray(rows[r]) ? rows[r] : []).map(cellText);
+  // Every row is tested as a header, not just the first: the Lead Report
+  // repeats "Item # | Description | Qty | Unit ..." under each SCOPE, and a
+  // workbook can change its columns between tables. Done once up front, so the
+  // outline test can look down a table without testing its rows twice.
+  const prepared = rows.map((row) => {
+    const cells = (Array.isArray(row) ? row : []).slice(0, MAX_SHEET_COLS).map(cellText);
     const filled = cells.filter(Boolean);
+    return { cells: cells, filled: filled, h: filled.length ? headerMap(cells) : null };
+  });
+
+  for (let r = 0; r < prepared.length; r++) {
+    const { cells, filled, h } = prepared[r];
     if (!filled.length) continue;
 
-    // Every row is tested as a header, not just the first: the Lead Report
-    // repeats "Item # | Description | Qty | Unit ..." under each SCOPE, and a
-    // workbook can change its columns between tables.
-    const h = headerMap(cells);
-    if (h.header) { map = h.map; section = null; header = true; continue; }
+    if (h.header) {
+      map = h.map;
+      outline = isOutlineTable(prepared, r, map);
+      section = null;
+      header = true;
+      continue;
+    }
     if (!map) { if (h.priced) priced = true; continue; }
 
     acc.counts.found++;
@@ -630,32 +989,38 @@ function mapSheet(sheet) {
     const totals = filled.find(isTotalsText);
     if (totals) {
       acc.counts.skipped.totals++;
+      // A subtotal closes the section above it: "Labor Subtotal:" ends the
+      // Labor lines, and a material after it is not labor.
+      section = null;
       // The PROJECT SUMMARY table under it is scope names beside prices, not
       // lines. Stop reading until a real header turns up again.
       if (/\bproject\s+summary\b/i.test(totals)) map = null;
       continue;
     }
 
-    // A merged "Demo & Removal" or "SCOPE 2: SIDING" row: one value, or the
-    // same value repeated, and nothing else. It names the section the next
-    // lines belong to, which is how the Labor section's lines are known.
+    // A section row names the section the next lines belong to, which is how
+    // the Labor section's lines are known.
     // The price of the rule: a sheet row with a description and no quantity
     // or unit at all reads as a section too. A spreadsheet takeoff always
     // carries one or the other; a bare list of descriptions is a field PDF,
     // and that goes through the model, which keeps them.
-    const first = filled[0].toLowerCase();
-    if (/[a-z]/i.test(first) && filled.every((c) => c.toLowerCase() === first)) {
+    if (isSectionRow(filled)) {
       section = filled[0];
       acc.counts.skipped.sections++;
       continue;
     }
 
-    let desc = '';
-    for (const c of map.desc) { if (cells[c]) { desc = cells[c]; break; } }
-    desc = cleanDescription(desc);
+    let desc = cleanDescription(firstDesc(cells, map), outline);
     if (!desc) { acc.counts.skipped.no_description++; continue; }
-    const spec = map.spec != null ? cleanDescription(cells[map.spec] || '') : '';
+    const spec = map.spec != null ? cleanDescription(cells[map.spec] || '', false) : '';
     if (spec && spec.toLowerCase() !== desc.toLowerCase()) desc = desc + ' — ' + spec;
+
+    // Buildertrend's Cost Type says Labor (or Subcontractor) outright, even
+    // when the unit is "Lump Sum" and no Labor section heads the line.
+    if (map.kind != null && LABOR_KIND.test(cells[map.kind] || '')) {
+      acc.counts.skipped.labor++;
+      continue;
+    }
 
     const raw = {
       description: desc,
@@ -707,6 +1072,8 @@ function mapTakeoffRows(sheets) {
       + (others.length === 1 ? ' also lists materials and was' : ' also list materials and were') + ' left out.');
   }
   if (best.counts.over_cap) warnings.push(OVER_CAP_WARNING);
+  const returned = returnedWarning(best.counts);
+  if (returned) warnings.push(returned);
   return { ok: true, lines: best.lines, counts: best.counts, sheet: best.name, warnings: warnings };
 }
 
@@ -731,6 +1098,14 @@ function mapTakeoffRows(sheets) {
 // "12.50 €", "USD 40", "40 dollars".
 const RE_CURRENCY_TEXT = new RegExp(
   CUR + '\\s*-?\\d|\\d\\s*' + CUR + '|\\b(?:USD|US\\$)\\s*\\d|\\d\\s*(?:USD|dollars?)\\b', 'i');
+// Money mentioned at all, for the part of a cell past MAX_CELL_CHARS that the
+// read skipped (readDelimited, xlsxToSheets). Wider than RE_CURRENCY_TEXT on
+// purpose — a currency sign with its digits on the near side of the cut still
+// counts — and linear: one class or a literal word, nothing that repeats.
+const RE_MONEY_TAIL = new RegExp(CUR + '|\\b(?:usd|dollars?)\\b', 'i');
+// How far before the cut that skipped part is looked at from, so a "US|D 40"
+// split by the cut is still seen whole.
+const MONEY_TAIL_OVERLAP = 32;
 
 // A money label, for a row already known to be header-like. Looser than
 // headerRole's 40-character cap: "Extended price incl. delivery and tax" is
@@ -738,30 +1113,33 @@ const RE_CURRENCY_TEXT = new RegExp(
 function isMoneyLabel(text) {
   const raw = String(text == null ? '' : text).trim();
   if (!raw || raw.length > 80 || PURE_NUMBER.test(raw)) return false;
+  // No money word anywhere in it is the common answer, and the cheap one.
+  if (!MONEY_HEADER.test(raw.toLowerCase())) return false;
   return MONEY_HEADER.test(headerKey(raw));
 }
 
 // Is this row a header, or close enough to one that a money word in it names a
 // column? Three ways in:
 //   * the header test mapTakeoffRows reads by (a description beside a
-//     quantity or unit, and no bare numbers);
+//     quantity or unit, and no bare numbers) — which needs a description
+//     column, so the second way already answers it;
 //   * any cell naming a description column — "Memo/Description | Amount" is
 //     a cost report's header even with no quantity in it;
 //   * no bare numbers and at least two recognised labels — "SKU | Count |
 //     Cost" has no description column at all, and is still priced.
+// One pass, one headerRole per cell: a 1000-column row is read once, not twice.
 function headerLikeRow(cells) {
-  if (headerMap(cells).header) return true;
-  let numeric = false;
+  const numeric = cells.some((c) => c && PURE_NUMBER.test(c));
   let labels = 0;
   for (const c of cells) {
-    if (!c) continue;
-    if (PURE_NUMBER.test(c)) { numeric = true; continue; }
+    if (!c || PURE_NUMBER.test(c)) continue;
     const role = headerRole(c);
     if (!role) continue;
     if (role.role === 'desc') return true;
     labels++;
+    if (!numeric && labels >= 2) return true;
   }
-  return !numeric && labels >= 2;
+  return false;
 }
 
 /**
@@ -779,13 +1157,23 @@ function detectPriceColumns(sheets) {
     if (sheet.truncated === true || sheet.moneyFormat === true) return true;
     const rows = Array.isArray(sheet.rows) ? sheet.rows : [];
     for (const row of rows) {
-      const cells = (Array.isArray(row) ? row : []).map(cellText);
-      if (!cells.some(Boolean)) continue;
-      if (cells.some((c) => c && RE_CURRENCY_TEXT.test(c))) return true;
-      if (headerLikeRow(cells) && cells.some(isMoneyLabel)) return true;
+      if (priceInRow(row)) return true;
     }
   }
   return false;
+}
+
+// One row of the price check: currency written into any cell, or a money
+// label in a header-like row. Each cell is cut by cellText before either test.
+// The currency test runs once over the row joined with '|', which no part of
+// RE_CURRENCY_TEXT can match across, rather than once per cell; and the header
+// test only runs on a row that has a money word in some cell at all.
+function priceInRow(row) {
+  const cells = (Array.isArray(row) ? row : []).map(cellText);
+  if (!cells.some(Boolean)) return false;
+  if (RE_CURRENCY_TEXT.test(cells.join('|'))) return true;
+  if (!cells.some(isMoneyLabel)) return false;
+  return headerLikeRow(cells);
 }
 
 // Bounds for the price check. Wider than the extractor's, because a price
@@ -793,6 +1181,7 @@ function detectPriceColumns(sheets) {
 // truncated and counts as priced rather than being called clean unread.
 const PRICE_CHECK_MAX_ROWS = 200000;
 const PRICE_CHECK_MAX_COLS = 1000;
+const PRICE_CHECK_MAX_CELLS = 1000000;
 
 /**
  * The crew-link verdict for one attachment the route has already proved:
@@ -815,14 +1204,31 @@ async function detectFilePrices(opts) {
     if (!buf.length || buf.length > MAX_FILE_BYTES) return null;
     // The bytes decide, not the name — the same sniff the extractor trusts.
     const kind = sniffKind(buf, att.filename, att.mime_type);
+    // Rows are checked as they are read and never kept (onRow), so the wide
+    // bounds below cost one row of memory, not 200,000 of them; the first
+    // priced row ends the read.
+    let found = false;
+    let cells = 0;
+    const onRow = (row) => {
+      // Past PRICE_CHECK_MAX_CELLS the file is called priced, like a sheet
+      // past the row bound — so a 25 MB CSV of short cells costs a bounded
+      // amount of checking, not twelve million header tests.
+      cells += row.length;
+      if (!found && (cells > PRICE_CHECK_MAX_CELLS || priceInRow(row))) found = true;
+      return found;
+    };
     if (kind === 'xlsx') {
       const sheets = await xlsxToSheets(buf, {
         includeHidden: true, maxRows: PRICE_CHECK_MAX_ROWS, maxCols: PRICE_CHECK_MAX_COLS,
+        onRow: onRow,
       });
-      return detectPriceColumns(sheets);
+      return found || detectPriceColumns(sheets);
     }
     if (kind === 'csv') {
-      return detectPriceColumns([{ name: null, rows: parseDelimited(decodeText(buf)) }]);
+      const read = readDelimited(decodeText(buf), {
+        maxRows: PRICE_CHECK_MAX_ROWS, maxCols: PRICE_CHECK_MAX_COLS, facts: true, onRow: onRow,
+      });
+      return found || read.truncated;
     }
     return null;
   } catch (e) {
@@ -927,14 +1333,26 @@ function fileTextBlock(filename, body, truncated) {
 
 // Sheets as TSV for the model, capped. Tabs and line breaks inside a cell
 // become spaces so a cell cannot forge a column or a row.
+// Built a line at a time and stopped as soon as AI_TEXT_CAP is passed: the
+// model is only ever shown the first 50,000 characters, so a sheet is never
+// joined whole just to be cut.
 function sheetsToTsv(sheets) {
   const parts = [];
+  let length = 0;
+  let over = false;
+  const add = (line) => {
+    parts.push(line);
+    length += line.length + (parts.length > 1 ? 1 : 0);
+    if (length > AI_TEXT_CAP) over = true;
+  };
   for (const sh of sheets) {
-    if (sh.name != null) parts.push('## Sheet: ' + String(sh.name).replace(/\s+/g, ' '));
+    if (over) break;
+    if (sh.name != null) add('## Sheet: ' + String(sh.name).slice(0, MAX_CELL_CHARS).replace(/\s+/g, ' '));
     for (const row of sh.rows || []) {
-      const cells = (row || []).map((c) => String(c == null ? '' : c).replace(RE_CONTROL, ' ').replace(/\s+/g, ' ').trim());
+      if (over) break;
+      const cells = (row || []).slice(0, MAX_SHEET_COLS).map((c) => cellText(c).replace(RE_CONTROL, ' ').replace(/\s+/g, ' ').trim());
       while (cells.length && !cells[cells.length - 1]) cells.pop();
-      if (cells.length) parts.push(cells.join('\t'));
+      if (cells.length) add(cells.join('\t'));
     }
   }
   return capText(parts.join('\n'));
@@ -950,7 +1368,11 @@ function capText(text) {
 // valid JSON; every complete {...} line before the cut is still kept.
 function parseModelJson(text, cut) {
   const s = String(text == null ? '' : text);
-  const m = s.match(/\{[\s\S]*\}/);
+  // The first '{' to the last '}' — what /\{[\s\S]*\}/ matched, without
+  // retrying that pattern from every '{' of a reply that never closes one.
+  const open = s.indexOf('{');
+  const close = s.lastIndexOf('}');
+  const m = open !== -1 && close > open ? [s.slice(open, close + 1)] : null;
   if (m) {
     try {
       const j = JSON.parse(m[0]);
@@ -1053,6 +1475,7 @@ async function askModel(ctx, block, method, extra) {
   if (cut) warnings.push('The answer ran long and stopped early, so lines near the end of the file may be missing.');
   if (x.inputTruncated) warnings.push('The file is long, so only its first part was read — check nothing is missing.');
   if (acc.counts.over_cap) warnings.push(OVER_CAP_WARNING);
+  warnings.push(returnedWarning(acc.counts));
   return success(ctx, method, acc, x.sheet == null ? null : x.sheet, warnings, cut || !!x.inputTruncated);
 }
 
@@ -1208,7 +1631,10 @@ module.exports = {
   MAX_FILE_BYTES,
   // pure helpers, exported for the tests
   sniffKind,
+  decodeText,
   parseDelimited,
+  readDelimited,
+  MAX_CELL_CHARS,
   xlsxToSheets,
   mapTakeoffRows,
   scrubLine,

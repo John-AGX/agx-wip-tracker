@@ -41,89 +41,118 @@
 -->
 
 <style>
+  /* The crew's phone first: a 390px screen in a truck, often in sun, one
+     thumb. Tokens follow the approved work-order mock (dark is the default,
+     light re-derives the same roles). */
   :root {
     --bg: #0e1116;
     --card: #161b22;
+    --sub: #131820;
     --border: #262d38;
+    --line: #30363d;
     --text: #e6edf3;
+    --text-2: #c9d1d9;
     --dim: #8b949e;
-    --accent: #4f8cff;
+    --accent: #2f81f7;
+    --accent-2: #9cc0ff;
+    --link: #79b8ff;
     --green: #2ea043;
+    --green-text: #7ee2a5;
     --amber: #d29922;
+    --amber-text: #f2cc60;
     --red: #f85149;
+    --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   }
   @media (prefers-color-scheme: light) {
     :root {
-      --bg: #f6f8fa; --card: #ffffff; --border: #d8dee4;
-      --text: #1f2328; --dim: #59636e; --accent: #0969da;
-      --green: #1a7f37; --amber: #9a6700; --red: #cf222e;
+      --bg: #f6f8fa; --card: #ffffff; --sub: #f6f8fa; --border: #d8dee4; --line: #d0d7de;
+      --text: #1f2328; --text-2: #32383f; --dim: #59636e; --accent: #0969da;
+      --accent-2: #0550ae; --link: #0969da; --green: #1a7f37; --green-text: #1a7f37;
+      --amber: #9a6700; --amber-text: #9a6700; --red: #cf222e;
     }
   }
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--bg); color: var(--text);
     font: 15px/1.55 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
-    padding: 0 0 48px;
+    padding: 0 0 calc(40px + env(safe-area-inset-bottom));
+    -webkit-text-size-adjust: 100%;
   }
-  .wrap { max-width: 720px; margin: 0 auto; padding: 0 16px; }
-  header { padding: 22px 0 14px; border-bottom: 1px solid var(--border); margin-bottom: 18px; }
-  .org { font-size: 12px; text-transform: uppercase; letter-spacing: 1.4px; color: var(--dim); font-weight: 700; }
-  h1 { font-size: 22px; line-height: 1.25; margin: 8px 0 6px; text-wrap: balance; }
-  .parent { font-size: 13.5px; color: var(--dim); }
-  .num { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--dim); }
+  .wrap {
+    max-width: 720px; margin: 0 auto;
+    padding: 0 max(14px, env(safe-area-inset-right)) 0 max(14px, env(safe-area-inset-left));
+  }
+  header { padding: 16px 0 0; }
+  .org { font-size: 11px; text-transform: uppercase; letter-spacing: 0.14em; color: var(--dim); font-weight: 700; }
+  h1 { font-size: 20px; font-weight: 700; line-height: 1.2; margin: 4px 0 2px; text-wrap: balance; }
+  .hmeta { font-size: 12.5px; line-height: 1.45; color: var(--dim); }
+  .num { font-family: var(--mono); font-size: 12px; }
 
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
-  .lbl { font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); font-weight: 700; margin-bottom: 6px; }
-  .scope { white-space: pre-wrap; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px 13px; margin-top: 11px; }
+  .lbl { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--dim); font-weight: 700; margin-bottom: 7px; }
+  .scope { white-space: pre-wrap; font-size: 14px; line-height: 1.55; color: var(--text-2); }
   .muted { color: var(--dim); font-style: italic; }
 
-  .stepper { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 16px; }
-  .step { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--dim);
-          border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; }
-  .step.done { color: var(--text); border-color: var(--dim); }
-  .step.at { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 700; }
+  /* ONE row that scrolls sideways. A wrapped stepper pushed the job site
+     below the fold on a phone; render() scrolls the current step into view
+     by moving this row's scrollLeft only, never the page. */
+  .stepper {
+    position: relative; display: flex; flex-wrap: nowrap; gap: 5px; margin: 12px 0 0; padding: 1px 0;
+    overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain;
+    scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  }
+  .stepper::-webkit-scrollbar { display: none; }
+  .step {
+    flex: 0 0 auto; white-space: nowrap; font-size: 10px; line-height: 1.5; text-transform: uppercase;
+    letter-spacing: 0.05em; color: var(--dim); border: 1px solid var(--border); border-radius: 999px; padding: 3px 9px;
+  }
+  .step.done { color: var(--text-2); border-color: var(--line); }
+  .step.at { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
 
-  .meta { display: flex; gap: 10px; align-items: baseline; padding: 5px 0; border-top: 1px solid var(--border); }
-  .meta:first-of-type { border-top: 0; }
-  .meta-k { flex: 0 0 108px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--dim); }
-  .meta-v { flex: 1 1 auto; min-width: 0; }
-  a { color: var(--accent); }
+  .meta { display: flex; gap: 10px; align-items: baseline; padding: 6px 0; border-top: 1px solid var(--border); font-size: 14px; }
+  .meta:first-of-type { border-top: 0; padding-top: 0; }
+  .meta:last-of-type { padding-bottom: 0; }
+  .meta-k { flex: 0 0 96px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--dim); }
+  .meta-v { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  a { color: var(--link); }
 
   .task { display: flex; gap: 9px; align-items: center; padding: 4px 0; }
   .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: 0 0 auto; }
   .task.done .dot { background: var(--green); }
   .task.done .t { color: var(--dim); text-decoration: line-through; }
-  .bar { height: 4px; border-radius: 999px; background: var(--border); overflow: hidden; margin-bottom: 9px; }
+  .bar { height: 5px; border-radius: 999px; background: var(--border); overflow: hidden; margin: 2px 0 6px; }
   .bar > i { display: block; height: 100%; background: var(--green); }
+  .tap { font-size: 13px; color: var(--dim); }
 
-  .log { white-space: pre-wrap; border-left: 3px solid var(--accent); padding: 8px 10px;
+  .log { white-space: pre-wrap; border-left: 3px solid var(--accent); padding: 8px 10px; font-size: 14px;
          background: rgba(127,127,127,0.06); border-radius: 0 5px 5px 0; }
 
-  .note { font-size: 12px; color: var(--dim); margin-top: 20px; line-height: 1.5; }
+  .note { font-size: 12px; color: var(--dim); margin-top: 14px; line-height: 1.5; }
   .fatal { padding: 60px 0; text-align: center; color: var(--dim); }
   .fatal strong { display: block; font-size: 17px; color: var(--text); margin-bottom: 8px; }
 
-  /* The write half — rendered only when the SERVER says this link may respond. */
+  /* The write half — rendered only when the SERVER says this link may respond.
+     Every text box is 16px: iOS zooms the whole page into anything smaller. */
   #report textarea, #report input[type="text"] {
     width: 100%; background: var(--bg); color: var(--text);
-    border: 1px solid var(--border); border-radius: 7px;
-    padding: 9px 11px; font: inherit; font-size: 14px; margin-bottom: 9px;
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 12px; font: inherit; font-size: 16px; margin-bottom: 9px;
     resize: vertical;
   }
-  #report .row { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
+  #report .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   #report button {
-    background: var(--accent); color: var(--bg); border: 0; border-radius: 7px;
-    padding: 9px 16px; font: inherit; font-weight: 700; cursor: pointer;
+    min-height: 44px; background: var(--accent); color: #fff; border: 0; border-radius: 10px;
+    padding: 10px 16px; font: inherit; font-weight: 600; cursor: pointer;
   }
-  #report button.big { width: 100%; margin-top: 11px; padding: 13px; background: var(--green); font-size: 15px; }
-  #report button:disabled { opacity: 0.55; cursor: default; }
+  #report button.big { width: 100%; margin-top: 11px; padding: 12px; background: var(--green); font-size: 15px; }
+  #report button:disabled { opacity: 0.5; cursor: default; }
   #report .file {
-    display: inline-block; border: 1px solid var(--border); border-radius: 7px;
-    padding: 9px 14px; cursor: pointer; color: var(--dim); font-size: 14px;
+    display: inline-flex; align-items: center; min-height: 44px; border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 14px; cursor: pointer; color: var(--text-2); font-size: 14px; font-weight: 600;
   }
   #report .file input { display: none; }
   #report .who { font-size: 13px; color: var(--dim); margin-bottom: 9px; }
-  #report .done-note { font-size: 13px; color: var(--green); margin-top: 11px; }
+  #report .done-note { font-size: 13px; color: var(--green-text); margin-top: 11px; }
   .msg { font-size: 13px; color: var(--dim); margin-top: 9px; min-height: 17px; }
   .msg.bad { color: var(--red); }
 
@@ -131,100 +160,143 @@
      scope a view/respond link sees. */
   #scope {
     width: 100%; background: var(--bg); color: var(--text);
-    border: 1px solid var(--accent); border-radius: 7px;
-    padding: 9px 11px; font: inherit; font-size: 14px; resize: vertical;
+    border: 1px solid var(--accent); border-radius: 10px;
+    padding: 10px 12px; font: inherit; font-size: 16px; resize: vertical;
   }
   #propose {
-    background: var(--accent); color: var(--bg); border: 0; border-radius: 7px;
-    padding: 9px 16px; font: inherit; font-weight: 700; cursor: pointer; margin-top: 9px;
+    min-height: 44px; background: var(--accent); color: #fff; border: 0; border-radius: 10px;
+    padding: 10px 16px; font: inherit; font-weight: 600; cursor: pointer; margin-top: 9px;
   }
-  #propose:disabled { opacity: 0.55; cursor: default; }
+  #propose:disabled { opacity: 0.5; cursor: default; }
   .propose-note { margin-top: 7px; }
 
   /* ── Work order: where, who to call, what to bring, what to finish ── */
-  .site-name { font-size: 16px; font-weight: 700; }
-  .site-addr { color: var(--dim); margin: 2px 0 10px; }
-  .actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+  .site { display: grid; gap: 7px; }
+  .site-num { font: 600 12px/1.2 var(--mono); color: var(--accent-2); letter-spacing: 0.02em; }
+  .site-name { font-size: 14.5px; font-weight: 600; line-height: 1.35; }
+  .site-addr { font-size: 14px; line-height: 1.45; }
+  .actions { display: grid; gap: 7px; }
   .btn {
-    display: flex; align-items: center; justify-content: center; gap: 6px; text-align: center;
-    min-height: 44px; padding: 10px 14px; border-radius: 8px; font: inherit; font-weight: 700;
-    text-decoration: none; cursor: pointer; border: 1px solid var(--border);
-    background: var(--bg); color: var(--text);
+    display: flex; align-items: center; justify-content: center; gap: 8px; text-align: center;
+    min-height: 44px; padding: 10px 14px; border-radius: 10px; font: inherit; font-size: 14.5px;
+    font-weight: 600; line-height: 1.25; text-decoration: none; cursor: pointer;
+    border: 1px solid var(--line); background: transparent; color: var(--text);
   }
-  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   .btn.go { background: var(--green); border-color: var(--green); color: #fff; }
-  .btn:disabled { opacity: 0.5; cursor: default; }
-  .btn:focus-visible, .bld-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .gate { margin-top: 10px; font-size: 14px; }
-  .gate b { font-family: ui-monospace, Menlo, monospace; font-size: 17px; letter-spacing: 1px; }
+  .btn.quiet { color: var(--dim); }
+  .btn.big { width: 100%; font-size: 15px; padding: 12px; }
+  .btn.small { min-height: 40px; padding: 8px 14px; font-size: 13.5px; color: var(--text-2); justify-self: start; }
+  .btn:disabled { opacity: 0.45; cursor: default; }
+  .btn:focus-visible, .bld-head:focus-visible, .th-add:focus-visible, .shot:focus-visible {
+    outline: 2px solid var(--link); outline-offset: 2px;
+  }
+  /* The map pin on Navigate: a rotated drop with a hole punched in the
+     button's own colour, so it needs no image and follows the theme. */
+  .pin {
+    position: relative; flex: 0 0 auto; width: 13px; height: 13px; margin-top: -3px;
+    border-radius: 50% 50% 50% 0; transform: rotate(-45deg); background: currentColor;
+  }
+  .pin::after {
+    content: ""; position: absolute; left: 4px; top: 4px; width: 5px; height: 5px;
+    border-radius: 50%; background: var(--accent);
+  }
+  .gate { font-size: 14px; color: var(--text-2); }
+  .gate b { font-family: var(--mono); font-size: 17px; letter-spacing: 1px; color: var(--text); }
 
-  .mats { width: 100%; border-collapse: collapse; font-size: 14px; }
-  .mats td { padding: 6px 4px; border-top: 1px solid var(--border); vertical-align: top; }
-  .mats tr:first-child td { border-top: 0; }
-  .mats td.q { width: 1%; white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
-  .mats td.u { width: 1%; white-space: nowrap; color: var(--dim); }
+  /* Materials: what to bring on the left, how many in a small box on the
+     right. Quantities, never prices — the server keeps no other key. */
+  .mats { list-style: none; margin: 0; padding: 0; }
+  .mat { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-top: 1px solid var(--border); font-size: 14px; line-height: 1.4; }
+  .mat:first-child { border-top: 0; padding-top: 1px; }
+  .mat:last-child { padding-bottom: 1px; }
+  .mat-d { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  .mat-q {
+    flex: 0 0 auto; max-width: 45%; text-align: right; overflow-wrap: anywhere;
+    font: 600 12.5px/1.3 var(--mono); font-variant-numeric: tabular-nums; color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px;
+  }
+  .mat-u { font-weight: 500; color: var(--dim); }
 
   /* The takeoff file the office chose for this link. The server decides
      whether this link may see it (a sheet with price columns only on links
      sent with financial details) and serves the bytes through the token. */
   .takeoff { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
   .takeoff-kind {
-    flex: 0 0 auto; font-size: 10.5px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase;
-    color: var(--accent); background: rgba(127,127,127,0.12); border-radius: 4px; padding: 3px 7px;
+    flex: 0 0 auto; font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+    color: var(--accent-2); border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px;
   }
-  .takeoff-name { flex: 1 1 auto; min-width: 0; font-weight: 700; overflow-wrap: anywhere; }
+  .takeoff-name { flex: 1 1 auto; min-width: 0; font-size: 14.5px; font-weight: 600; overflow-wrap: anywhere; }
   .takeoff-size { flex: 0 0 auto; color: var(--dim); font-size: 12.5px; }
 
   #crewname {
     width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border);
-    border-radius: 7px; padding: 9px 11px; font: inherit; font-size: 14px;
+    border-radius: 10px; padding: 10px 12px; font: inherit; font-size: 16px;
   }
 
-  .bld { border: 1px solid var(--border); border-radius: 9px; margin-top: 8px; overflow: hidden; }
-  .bld.done { border-color: var(--green); }
+  /* One card per building, straight on the page rather than nested in the
+     punch-list card, so the lists and photo tiles get the full width. */
+  .bld { border: 1px solid var(--border); border-radius: 12px; margin-top: 8px; background: var(--sub); overflow: hidden; }
+  .bld.done { border-color: rgba(46,160,67,0.4); }
   .bld-head {
-    width: 100%; display: flex; align-items: center; gap: 10px; padding: 11px 12px;
+    width: 100%; min-height: 44px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center; gap: 8px; padding: 11px 12px;
     background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer;
   }
-  .tick {
-    flex: 0 0 auto; width: 24px; height: 24px; border-radius: 50%;
-    border: 2px solid var(--dim); display: inline-flex; align-items: center; justify-content: center;
-    color: #fff; font-size: 14px; font-weight: 700;
+  .bld-name b { display: block; font-size: 15px; font-weight: 700; line-height: 1.3; }
+  .bld-name small {
+    display: block; margin-top: 1px; font-size: 12px; color: var(--dim);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
-  .bld.done .tick { background: var(--green); border-color: var(--green); }
-  .bld-name { flex: 1 1 auto; min-width: 0; }
-  .bld-name b { display: block; }
-  .bld-name small { color: var(--dim); font-size: 12.5px; }
-  .chip { flex: 0 0 auto; font-size: 11.5px; font-weight: 700; border-radius: 999px; padding: 3px 9px; white-space: nowrap; }
-  .chip.ok { color: var(--green); background: rgba(46,160,67,0.14); }
-  .chip.need { color: var(--amber); background: rgba(210,153,34,0.14); }
-  .chip.n { color: var(--dim); background: rgba(127,127,127,0.12); }
-  .caret { color: var(--dim); flex: 0 0 auto; transition: transform .15s; }
+  .chip {
+    font-size: 11px; font-weight: 500; line-height: 1.5; border-radius: 999px; padding: 2px 9px; white-space: nowrap;
+    border: 1px solid var(--line); color: var(--dim);
+  }
+  .chip.ok { color: var(--green-text); background: rgba(46,160,67,0.18); border-color: rgba(46,160,67,0.5); }
+  .chip.need { color: var(--amber-text); border-color: rgba(210,153,34,0.45); }
+  .caret { color: var(--dim); font-size: 18px; line-height: 1; transition: transform .15s; }
   .bld.open .caret { transform: rotate(90deg); }
-  .bld-body { padding: 0 12px 12px; }
-  .side { margin-top: 6px; }
-  .side ul { margin: 2px 0 0; padding-left: 20px; }
-  .side li { margin: 2px 0; }
-  .shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; margin: 10px 0; }
-  .shot { position: relative; display: block; aspect-ratio: 1; border-radius: 6px; overflow: hidden; background: rgba(127,127,127,0.12); }
+  .bld-body { display: grid; gap: 10px; padding: 0 12px 12px; }
+  .bld-body[hidden] { display: none; }
+  .side-l { font-size: 12px; font-weight: 700; color: var(--accent-2); margin-bottom: 3px; }
+  .side ul { margin: 0; padding-left: 18px; font-size: 13.5px; line-height: 1.5; color: var(--text-2); }
+  .bld-body > .lbl, .photos .lbl { margin-bottom: 6px; }
+  /* Square tiles, three to a row. The dashed tile at the end IS the
+     completion-photo file input (a label around it), so a tap opens the
+     camera roll with no extra button. */
+  .shots { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .shot {
+    position: relative; display: block; aspect-ratio: 1 / 1; border-radius: 8px; overflow: hidden;
+    border: 1px solid var(--line); background: rgba(127,127,127,0.12);
+  }
   .shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .shot span {
     position: absolute; left: 4px; bottom: 4px; font-size: 10.5px; font-weight: 700; color: #fff;
     background: rgba(0,0,0,0.62); border-radius: 4px; padding: 1px 5px;
   }
-  .shot span.k-done { background: rgba(26,127,55,0.92); }
-  .bld .file-btn input { display: none; }
-  .bnotes { margin: 10px 0 0; }
+  .th-add {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+    aspect-ratio: 1 / 1; border: 1.5px dashed var(--line); border-radius: 8px; padding: 6px;
+    color: var(--link); font-size: 12.5px; font-weight: 600; line-height: 1.2; text-align: center; cursor: pointer;
+  }
+  .th-add .plus { font-size: 24px; font-weight: 400; line-height: 1; }
+  .th-add input, .file-btn input { display: none; }
+  .bnotes { display: grid; }
   .bnote { font-size: 14px; padding: 6px 0; border-top: 1px solid var(--border); }
+  .bnote:first-child { border-top: 0; padding-top: 0; }
   .bnote small { display: block; color: var(--dim); font-size: 11.5px; }
-  .note-row { display: flex; gap: 6px; margin-top: 8px; }
+  .note-row { display: flex; gap: 6px; }
   .note-row input {
     flex: 1 1 auto; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--border);
-    border-radius: 7px; padding: 9px 11px; font: inherit; font-size: 14px;
+    border-radius: 10px; padding: 9px 12px; font: inherit; font-size: 16px;
   }
-  .stamp { color: var(--green); font-size: 13px; margin-top: 10px; }
+  .note-row .btn { flex: 0 0 auto; }
+  .stamp { color: var(--green-text); font-size: 12.5px; }
+  .need-hint { color: var(--amber-text); font-size: 12.5px; }
   .hint { color: var(--dim); font-size: 12.5px; margin-top: 6px; }
-  .bld .msg { margin-top: 6px; }
+  #report .msg:empty { min-height: 0; margin-top: 0; }
+  .bld .msg { margin-top: 0; min-height: 0; }
+  .bld .msg:empty { display: none; }
   @media (prefers-reduced-motion: reduce) { .caret { transition: none; } }
 </style>
 </head>
@@ -312,14 +384,19 @@
     html += '<header>' +
       (d.org_name ? '<div class="org">' + esc(d.org_name) + '</div>' : '') +
       '<h1>' + esc(t.title || 'Work order') + '</h1>' +
-      (t.ticket_number ? '<div class="num">' + esc(t.ticket_number) + '</div>' : '') +
-      // The forward-facing name of the parent — a lead title or a job number
-      // and title, resolved server-side. Never a raw id.
-      (d.parent_label ? '<div class="parent">' + esc(d.parent_label) + '</div>' : '') +
+      ((t.ticket_number || d.parent_label)
+        ? '<div class="hmeta">' +
+            (t.ticket_number ? '<span class="num">' + esc(t.ticket_number) + '</span>' : '') +
+            (t.ticket_number && d.parent_label ? ' · ' : '') +
+            // The forward-facing name of the parent — a lead title or a job
+            // number and title, resolved server-side. Never a raw id.
+            (d.parent_label ? '<span class="parent">' + esc(d.parent_label) + '</span>' : '') +
+          '</div>'
+        : '') +
     '</header>';
 
     if (t.status === 'cancelled') {
-      html += '<div class="card" style="border-color:var(--red);color:var(--red);">This work order was cancelled.</div>';
+      html += '<div class="card" style="border-color:var(--red);color:var(--red);margin-top:12px;">This work order was cancelled.</div>';
     } else {
       html += '<div class="stepper">' + LINE.map(function (s, i) {
         return '<span class="step' + (i <= at ? ' done' : '') + (i === at ? ' at' : '') + '">' +
@@ -346,16 +423,24 @@
       : (siteAddr ? 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(siteAddr) : '');
     var contact = d.contact || null;
     var phone = contact && contact.phone ? String(contact.phone).replace(/[^0-9+]/g, '') : '';
-    var siteName = [site.job_number, site.name].filter(Boolean).join(' · ');
-    if (siteName || siteAddr || site.gate_code || phone) {
-      html += '<div class="card">' +
-        '<div class="lbl">Job site</div>' +
-        (siteName ? '<div class="site-name">' + esc(siteName) + '</div>' : '') +
-        (siteAddr ? '<div class="site-addr">' + esc(siteAddr) + '</div>' : '') +
-        '<div class="actions">' +
-          (navHref ? '<a class="btn primary" href="' + esc(navHref) + '" target="_blank" rel="noreferrer noopener">Navigate</a>' : '') +
-          (phone ? '<a class="btn" href="tel:' + esc(phone) + '">Call ' + esc(contact.name || 'the project manager') + '</a>' : '') +
-        '</div>' +
+    if (site.job_number || site.name || siteAddr || site.gate_code || phone) {
+      // The mock's site card: job number, job name, the address on two lines
+      // (street, then city) and one full-width Navigate under it.
+      var comma = siteAddr ? siteAddr.indexOf(', ') : -1;
+      html += '<div class="card site">' +
+        (site.job_number ? '<div class="site-num">' + esc(site.job_number) + '</div>' : '') +
+        (site.name ? '<div class="site-name">' + esc(site.name) + '</div>' : '') +
+        (siteAddr
+          ? '<div class="site-addr">' + (comma > 0
+              ? esc(siteAddr.slice(0, comma)) + '<br>' + esc(siteAddr.slice(comma + 2))
+              : esc(siteAddr)) + '</div>'
+          : '') +
+        (navHref || phone
+          ? '<div class="actions">' +
+              (navHref ? '<a class="btn primary" href="' + esc(navHref) + '" target="_blank" rel="noreferrer noopener"><span class="pin" aria-hidden="true"></span>Navigate</a>' : '') +
+              (phone ? '<a class="btn" href="tel:' + esc(phone) + '">Call ' + esc(contact.name || 'the project manager') + '</a>' : '') +
+            '</div>'
+          : '') +
         (site.gate_code ? '<div class="gate">Gate code <b>' + esc(site.gate_code) + '</b></div>' : '') +
       '</div>';
     }
@@ -402,11 +487,15 @@
     // Materials — only when the office attached a list. Quantities, never prices.
     var mats = Array.isArray(t.materials) ? t.materials : [];
     if (mats.length) {
-      html += '<div class="card"><div class="lbl">Materials</div><table class="mats"><tbody>' +
+      // What to bring on the left; how many (and of what unit) in a small box
+      // on the right, the way the mock reads. A line with neither gets no box.
+      html += '<div class="card"><div class="lbl">Materials</div><ul class="mats">' +
         mats.map(function (m) {
-          return '<tr><td class="q">' + esc(m.qty || '') + '</td><td class="u">' + esc(m.unit || '') + '</td>' +
-            '<td>' + esc(m.description || '') + '</td></tr>';
-        }).join('') + '</tbody></table></div>';
+          var q = m.qty ? esc(m.qty) : '';
+          var u = m.unit ? '<span class="mat-u">' + esc(m.unit) + '</span>' : '';
+          return '<li class="mat"><span class="mat-d">' + esc(m.description || '') + '</span>' +
+            (q || u ? '<span class="mat-q">' + q + (q && u ? ' ' : '') + u + '</span>' : '') + '</li>';
+        }).join('') + '</ul></div>';
     }
 
     // The takeoff file — present only when the office chose one AND the server
@@ -426,13 +515,14 @@
     }
 
     if (tasks.length) {
-      html += '<div class="card"><div class="lbl">Punch list — ' + done + ' of ' + tasks.length + ' done</div>' +
+      html += '<div class="card"><div class="lbl">Punch list · ' + done + ' of ' + tasks.length + ' done</div>' +
         '<div class="bar"><i style="width:' + Math.round((done / tasks.length) * 100) + '%"></i></div>' +
-        tasks.map(function (x) { return buildingHTML(x, canWork, t); }).join('') +
-        (t.status === 'approved'
-          ? '<div class="hint">The office approved this work. Ask them to reopen it for changes.</div>'
-          : '') +
-      '</div>';
+        '<div class="tap">Tap a building to open it.</div>' +
+      '</div>' +
+      tasks.map(function (x) { return buildingHTML(x, canWork, t); }).join('') +
+      (t.status === 'approved'
+        ? '<div class="hint">The office approved this work. Ask them to reopen it for changes.</div>'
+        : '');
     }
 
     if (t.guest_log) {
@@ -468,6 +558,17 @@
       '</div>';
 
     root.innerHTML = html;
+
+    // Bring the current step into view inside the one-row stepper. Only the
+    // ROW's scrollLeft moves: scrollIntoView would also scroll the page, and
+    // render() runs again after every photo and note, so a crew member halfway
+    // down the punch list would be thrown back to the top each time.
+    var stepRow = root.querySelector('.stepper');
+    var atStep = stepRow && stepRow.querySelector('.step.at');
+    if (atStep && stepRow.scrollWidth > stepRow.clientWidth) {
+      stepRow.scrollLeft = Math.max(0, atStep.offsetLeft - (stepRow.clientWidth - atStep.offsetWidth) / 2);
+    }
+
     var nameBox = document.getElementById('crewname');
     if (nameBox) nameBox.addEventListener('input', function () {
       crewName = nameBox.value;
@@ -503,37 +604,59 @@
   function buildingHTML(x, canWork, t) {
     var p = parseTitle(x.title);
     var photos = x.photos || [];
-    var completion = photos.filter(function (ph) { return ph.kind !== 'before'; }).length;
+    var after = photos.filter(function (ph) { return ph.kind !== 'before'; });
+    var before = photos.filter(function (ph) { return ph.kind === 'before'; });
+    var completion = after.length;
     var notes = x.notes || [];
     var open = !!openCards[x.id];
-    var summary = p.sides.map(function (sd) {
-      return sd.label ? sd.label + ' (' + sd.items.length + ')' : sd.items.length + ' item' + (sd.items.length === 1 ? '' : 's');
-    }).join(' · ');
+    // The line under the building name is the repairs themselves, cut off by
+    // CSS at the card's edge — what a crew scans 21 cards for is "which one
+    // had the stringer", which a count per side never said.
+    var summary = p.sides.map(function (sd) { return sd.items.join(' · '); }).join(' · ');
     var chip = x.done
-      ? '<span class="chip ok">Done</span>'
+      ? '<span class="chip ok">&#x2713; Done</span>'
       : (completion
           ? '<span class="chip n">' + photos.length + ' photo' + (photos.length === 1 ? '' : 's') + '</span>'
           : '<span class="chip need">Needs photo</span>');
 
+    function shot(ph) {
+      return '<a class="shot" href="' + esc(ph.web_url || ph.thumb_url || '') + '" target="_blank" rel="noreferrer noopener">' +
+        '<img src="' + esc(ph.thumb_url || ph.web_url || '') + '" alt="" loading="lazy" />' +
+        (ph.kind === 'before' ? '<span>Before</span>' : '') +
+      '</a>';
+    }
+
     return '<div class="bld' + (x.done ? ' done' : '') + (open ? ' open' : '') + '" data-task="' + esc(x.id) + '">' +
       '<button type="button" class="bld-head" aria-expanded="' + (open ? 'true' : 'false') + '">' +
-        '<span class="tick">' + (x.done ? '&#x2713;' : '') + '</span>' +
         '<span class="bld-name"><b>' + esc(p.head) + '</b>' + (summary ? '<small>' + esc(summary) + '</small>' : '') + '</span>' +
         chip +
-        '<span class="caret">&#x203A;</span>' +
+        '<span class="caret" aria-hidden="true">&#x203A;</span>' +
       '</button>' +
       '<div class="bld-body"' + (open ? '' : ' hidden') + '>' +
         p.sides.map(function (sd) {
-          return '<div class="side">' + (sd.label ? '<div class="lbl">' + esc(sd.label) + '</div>' : '') +
+          return '<div class="side">' + (sd.label ? '<div class="side-l">' + esc(sd.label) + '</div>' : '') +
             '<ul>' + sd.items.map(function (it) { return '<li>' + esc(it) + '</li>'; }).join('') + '</ul></div>';
         }).join('') +
-        (photos.length
-          ? '<div class="shots">' + photos.map(function (ph) {
-              return '<a class="shot" href="' + esc(ph.web_url || ph.thumb_url || '') + '" target="_blank" rel="noreferrer noopener">' +
-                '<img src="' + esc(ph.thumb_url || ph.web_url || '') + '" alt="" loading="lazy" />' +
-                '<span class="' + (ph.kind === 'before' ? 'k-before' : 'k-done') + '">' + (ph.kind === 'before' ? 'Before' : 'Done') + '</span>' +
-              '</a>';
-            }).join('') + '</div>'
+        // Completion photos as square tiles. When this link can work, the
+        // dashed tile at the end is a label around the completion-photo file
+        // input, so tapping it opens the camera roll directly.
+        (completion || canWork
+          ? '<div class="photos"><div class="lbl">Completion photos · ' + completion + '</div>' +
+              '<div class="shots">' + after.map(shot).join('') +
+                (canWork
+                  ? '<label class="th-add" tabindex="0" role="button">' +
+                      '<span class="plus" aria-hidden="true">+</span>Add photo' +
+                      '<input type="file" accept="image/*" multiple data-kind="completion" />' +
+                    '</label>'
+                  : '') +
+              '</div></div>'
+          : '') +
+        (before.length
+          ? '<div class="photos"><div class="lbl">Before photos · ' + before.length + '</div>' +
+              '<div class="shots">' + before.map(shot).join('') + '</div></div>'
+          : '') +
+        (canWork
+          ? '<label class="btn small file-btn" tabindex="0" role="button">Add before photo<input type="file" accept="image/*" multiple data-kind="before" /></label>'
           : '') +
         (notes.length
           ? '<div class="bnotes">' + notes.map(function (n) {
@@ -541,21 +664,17 @@
             }).join('') + '</div>'
           : '') +
         (x.done && x.completed_by
-          ? '<div class="stamp">Finished by ' + esc(x.completed_by) + (x.completed_at ? ' · ' + esc(fmtDate(x.completed_at)) : '') + '</div>'
+          ? '<div class="stamp">Completed by ' + esc(x.completed_by) + (x.completed_at ? ' · ' + esc(fmtDate(x.completed_at)) : '') + '</div>'
           : '') +
         (canWork
-          ? '<div class="actions" style="margin-top:10px;">' +
-              '<label class="btn file-btn">Add completion photo<input type="file" accept="image/*" multiple data-kind="completion" /></label>' +
-              '<label class="btn file-btn">Add before photo<input type="file" accept="image/*" multiple data-kind="before" /></label>' +
-            '</div>' +
-            '<div class="note-row">' +
+          ? '<div class="note-row">' +
               '<input type="text" class="bnote-in" placeholder="Add a note for this building" maxlength="2000" />' +
               '<button type="button" class="btn bnote-go">Add</button>' +
             '</div>' +
             (x.done
-              ? '<button type="button" class="btn bdone" data-done="0" style="width:100%;margin-top:10px;">Undo — not finished</button>'
-              : '<button type="button" class="btn go bdone" data-done="1" style="width:100%;margin-top:10px;"' + (completion ? '' : ' disabled') + '>Mark ' + esc(p.head) + ' complete</button>' +
-                (completion ? '' : '<div class="hint">Add at least one completion photo first.</div>')) +
+              ? '<button type="button" class="btn quiet big bdone" data-done="0">Undo — not finished</button>'
+              : (completion ? '' : '<div class="need-hint">Add at least one completion photo first.</div>') +
+                '<button type="button" class="btn go big bdone" data-done="1"' + (completion ? '' : ' disabled') + '>Mark ' + esc(p.head) + ' complete</button>') +
             '<div class="msg"></div>'
           : '') +
       '</div>' +
@@ -601,6 +720,18 @@
         if (open) openCards[id] = true; else delete openCards[id];
       });
       if (!canWork || !byId[id]) return;
+
+      // The photo tile and the before-photo button are LABELS around their
+      // file inputs, which a tap opens but a keyboard cannot press. Enter or
+      // Space opens the same input.
+      Array.prototype.forEach.call(card.querySelectorAll('label[role=button]'), function (lab) {
+        lab.addEventListener('keydown', function (e) {
+          if (e.key !== 'Enter' && e.key !== ' ') return;
+          e.preventDefault();
+          var inp = lab.querySelector('input[type=file]');
+          if (inp) inp.click();
+        });
+      });
 
       Array.prototype.forEach.call(card.querySelectorAll('input[type=file]'), function (inp) {
         inp.addEventListener('change', function () {

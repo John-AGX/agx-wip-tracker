@@ -59,7 +59,12 @@
     var tabRect = active.getBoundingClientRect();
     slider.style.opacity = '1';
     slider.style.width = tabRect.width + 'px';
-    slider.style.transform = 'translateX(' + (tabRect.left - barRect.left) + 'px)';
+    // + scrollLeft: the slider is absolutely positioned INSIDE the bar, so it
+    // scrolls with the tabs, but getBoundingClientRect is viewport-relative.
+    // On a bar that scrolls sideways (the phone job strip) the bare difference
+    // put the underline scrollLeft px left of the tab. 0 on every bar that
+    // does not scroll, so those are unchanged.
+    slider.style.transform = 'translateX(' + (tabRect.left - barRect.left + bar.scrollLeft) + 'px)';
   }
 
   function wireBar(bar) {

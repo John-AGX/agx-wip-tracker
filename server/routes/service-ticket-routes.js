@@ -716,6 +716,32 @@ const FILE_NOT_FOUND = 'File not found';
 // else — a path, a list, an object — from reaching the SQL at all.
 const ATTACHMENT_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
 
+// ONE FILE READ PER USER AT A TIME. Reading a takeoff (the extract door) and
+// checking one for prices (the crew-takeoff door) both pull up to 25 MB out of
+// storage and parse it on this process's one thread. The parse is bounded, but
+// a caller who fires twenty reads in parallel would still hold twenty copies of
+// the file and queue twenty parses in front of every other tenant — and the
+// spreadsheet tier deliberately spends no AI rate-limit budget. So each user
+// gets one read in flight, across both doors, taken BEFORE the storage fetch
+// and given back in a `finally`. In-process on purpose: there is one replica
+// (rate-limit.js), and a slot that outlived a crash would lock a PM out.
+const FILE_READ_BUSY = 'Still reading your last file — try again in a moment.';
+const fileReadsInFlight = new Set();
+
+// A release function, or null when this user already has a read in flight.
+function takeFileReadSlot(req, orgId) {
+  const uid = req.user && req.user.id != null ? String(req.user.id) : null;
+  const key = uid ? 'user:' + uid : 'org:' + String(orgId);
+  if (fileReadsInFlight.has(key)) return null;
+  fileReadsInFlight.add(key);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    fileReadsInFlight.delete(key);
+  };
+}
+
 // ONE file hanging on this ticket's own job, lead or estimate, or null. Every
 // door that takes a file id from the office goes through here — the extract
 // door and the crew-takeoff door — so "which files may a work order name" is
@@ -824,35 +850,42 @@ router.post('/:id/materials/extract', requireAuth, requireOrgId, async (req, res
     const att = await loadTicketFile(ticket, req.user, orgId, attachmentId);
     if (!att) return res.status(404).json({ error: FILE_NOT_FOUND });
 
-    // Required HERE rather than at the top: the storage backend and the
-    // extractor (exceljs, pdf-parse, the Anthropic SDK) are heavy, and a throw
-    // while loading either must fail this one request, not the whole router —
-    // the route census requires every router in the server.
-    const { storage } = require('../storage');
-    const { extractMaterials } = require('../services/materials-extract');
-    const { aiChatLimiter, aiChatHourlyLimiter } = require('../rate-limit');
-    const passLimiter = async (limiter) => {
-      let passed = false;
-      await limiter(req, res, (err) => { passed = !err; });
-      return passed;
-    };
-    const beforeAi = async () => (await passLimiter(aiChatLimiter)) && (await passLimiter(aiChatHourlyLimiter));
+    // One read per user at a time (takeFileReadSlot), before a byte is fetched.
+    const release = takeFileReadSlot(req, orgId);
+    if (!release) return res.status(429).json({ error: FILE_READ_BUSY });
+    try {
+      // Required HERE rather than at the top: the storage backend and the
+      // extractor (exceljs, pdf-parse, the Anthropic SDK) are heavy, and a throw
+      // while loading either must fail this one request, not the whole router —
+      // the route census requires every router in the server.
+      const { storage } = require('../storage');
+      const { extractMaterials } = require('../services/materials-extract');
+      const { aiChatLimiter, aiChatHourlyLimiter } = require('../rate-limit');
+      const passLimiter = async (limiter) => {
+        let passed = false;
+        await limiter(req, res, (err) => { passed = !err; });
+        return passed;
+      };
+      const beforeAi = async () => (await passLimiter(aiChatLimiter)) && (await passLimiter(aiChatHourlyLimiter));
 
-    const result = await extractMaterials({
-      att,
-      getBuffer: (key) => storage.getBuffer(key),
-      orgId,
-      beforeAi,
-    });
-    // A limiter answered 429 inside beforeAi. Writing again would throw.
-    if (res.headersSent) return;
-    if (result && result.ok === true) return res.json(result);
-    const code = (result && result.code) || 'unreadable';
-    const error = (result && result.error) || 'Could not read materials from that file';
-    // rate_limited with nothing written means a limiter failed rather than
-    // refused (a store error passed to next). Still a "try later", not a 422.
-    if (code === 'rate_limited') return res.status(429).json({ error, code });
-    return res.status(422).json({ error, code });
+      const result = await extractMaterials({
+        att,
+        getBuffer: (key) => storage.getBuffer(key),
+        orgId,
+        beforeAi,
+      });
+      // A limiter answered 429 inside beforeAi. Writing again would throw.
+      if (res.headersSent) return;
+      if (result && result.ok === true) return res.json(result);
+      const code = (result && result.code) || 'unreadable';
+      const error = (result && result.error) || 'Could not read materials from that file';
+      // rate_limited with nothing written means a limiter failed rather than
+      // refused (a store error passed to next). Still a "try later", not a 422.
+      if (code === 'rate_limited') return res.status(429).json({ error, code });
+      return res.status(422).json({ error, code });
+    } finally {
+      release();
+    }
   } catch (e) {
     console.error('[service-tickets] material extract failed', e);
     if (res.headersSent) return;
@@ -902,13 +935,22 @@ router.put('/:id/crew-takeoff', requireAuth, requireOrgId, async (req, res) => {
       if (!kind) {
         return res.status(422).json({ error: 'That file type cannot be shown on the crew link.' });
       }
-      // Required here, not at the top: exceljs and the storage backend are
-      // heavy, and a throw loading either must fail this request only.
-      const { storage } = require('../storage');
-      const { detectFilePrices } = require('../services/materials-extract');
-      // An arrow, not storage.getBuffer bare: the R2 backend's getBuffer reads
-      // this.client and loses its `this` when handed around.
-      const hasPrices = await detectFilePrices({ att, getBuffer: (key) => storage.getBuffer(key) });
+      // One read per user at a time, shared with the extract door and taken
+      // before the storage fetch; given back as soon as the check is done.
+      const release = takeFileReadSlot(req, orgId);
+      if (!release) return res.status(429).json({ error: FILE_READ_BUSY });
+      let hasPrices;
+      try {
+        // Required here, not at the top: exceljs and the storage backend are
+        // heavy, and a throw loading either must fail this request only.
+        const { storage } = require('../storage');
+        const { detectFilePrices } = require('../services/materials-extract');
+        // An arrow, not storage.getBuffer bare: the R2 backend's getBuffer reads
+        // this.client and loses its `this` when handed around.
+        hasPrices = await detectFilePrices({ att, getBuffer: (key) => storage.getBuffer(key) });
+      } finally {
+        release();
+      }
       // A SPREADSHEET that could not be read is refused, not stored as null.
       // null means "a PDF or photo — check it yourself" and shows on every
       // link; a priced xlsx whose read failed on a storage hiccup must not
