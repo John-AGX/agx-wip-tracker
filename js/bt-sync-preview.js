@@ -155,6 +155,7 @@
       '.btp-tab.is-active{background:var(--card-bg);color:var(--text);border-color:var(--border);}',
       '.btp-tab-n{display:inline-block;min-width:18px;padding:0 5px;margin-left:4px;border-radius:9px;background:var(--orange);color:#fff;font-size:11px;line-height:17px;text-align:center;}',
       '.btp-row-head .btp-apply{margin-left:auto;padding:3px 10px;}',
+      '.btp-link{padding:1px 8px;font-size:11px;margin-left:6px;}',
       '.btp-btn:disabled{opacity:.55;cursor:default;}',
       '.btp-fix-note{grid-column:2;color:var(--text-dim);font-size:11px;overflow-wrap:anywhere;}',
       '.btp-fix-note.is-typo{color:var(--red);}',
@@ -284,7 +285,7 @@
     return esc(p.title || p.id);
   }
 
-  function candidatesHTML(ds, list, overflowNote) {
+  function candidatesHTML(ds, list, overflowNote, row) {
     list = list || [];
     var shown = list.slice(0, CAND_SHOWN);
     var html = '<ul class="btp-list">' + shown.map(function (c) {
@@ -293,7 +294,10 @@
       var a = addr(c);
       if (a) bits.push(esc(a));
       if (c.rungs && c.rungs.length) bits.push('via ' + c.rungs.map(esc).join(', '));
-      return '<li>' + p86Label(c, ds.key) + (bits.length ? ' <span class="btp-meta">' + bits.join(' · ') + '</span>' : '') + '</li>';
+      var linkBtn = row && row.bt && row.bt.btId != null && row.bt.btId !== '' && row['class'] !== 'matched' && row['class'] !== 'conflict'
+        ? ' <button type="button" class="btp-btn btp-link" data-btp-link="' + esc(row.bt.btId) + '" data-btp-link-p86="' + esc(c.id) + '"' + (_applying ? ' disabled' : '') + '>Link to this one</button>'
+        : '';
+      return '<li>' + p86Label(c, ds.key) + (bits.length ? ' <span class="btp-meta">' + bits.join(' · ') + '</span>' : '') + linkBtn + '</li>';
     }).join('') + '</ul>';
     if (list.length > shown.length) {
       html += '<div class="btp-meta">and ' + (list.length - shown.length) + ' more (' + (overflowNote || 'all excluded from “not in Buildertrend”') + ')</div>';
@@ -326,7 +330,7 @@
           : '<div class="btp-none">The parent has no confident P86 job (' + esc(LABEL[par['class']] || par['class']) + ')</div>';
       }
     } else if (cls === 'ambiguous' || cls === 'possible_duplicate') {
-      html += '<div class="btp-meta">' + (cls === 'ambiguous' ? 'Candidates — nothing is proposed:' : 'Looks like — review before anything is created:') + '</div>' + candidatesHTML(ds, r.candidates);
+      html += '<div class="btp-meta">' + (cls === 'ambiguous' ? 'Candidates — nothing is proposed:' : 'Looks like — review before anything is created:') + '</div>' + candidatesHTML(ds, r.candidates, null, r);
     } else if (cls === 'new') {
       html += '<div class="btp-none">Not in P86 — a sync would create it</div>';
     } else {
@@ -475,7 +479,7 @@
 
   function applyResultText(res) {
     var c = (res && res.counts) || {};
-    var parts = res && res.mode === 'create' ? [(c.created || 0) + ' created in P86'] : [(c.applied || 0) + ' updated'];
+    var parts = res && res.mode === 'create' ? [(c.created || 0) + ' created in P86'] : res && res.mode === 'link' ? [(c.linked || 0) + ' linked'] : [(c.applied || 0) + ' updated'];
     var createNotes = []; ((res && res.results) || []).forEach(function (x) { (x.notes || []).forEach(function (n) { if (createNotes.indexOf(n) === -1) createNotes.push(n); }); });
     if (c.linked) parts.push(c.linked + ' newly linked');
     if (c.fields) parts.push(c.fields + ' field' + (c.fields === 1 ? '' : 's') + ' changed');
@@ -749,6 +753,11 @@
           picksFor(ds, row)[cb.getAttribute('data-btp-pick')] = cb.checked;
           var btn = sec.querySelector('[data-btp-apply="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]');
           if (btn) { btn.textContent = applyLabel(ds, row); btn.disabled = !!_applying || (!pickedFields(ds, row).length && row.rung === 'Buildertrend ID'); }
+        });
+      });
+      Array.prototype.forEach.call(sec.querySelectorAll('[data-btp-link]'), function (b) {
+        b.addEventListener('click', function () {
+          runApply(key, { mode: 'link', btId: b.getAttribute('data-btp-link'), p86Id: b.getAttribute('data-btp-link-p86'), btIds: [b.getAttribute('data-btp-link')] });
         });
       });
       Array.prototype.forEach.call(sec.querySelectorAll('[data-btp-create]'), function (b) {

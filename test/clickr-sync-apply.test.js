@@ -136,6 +136,7 @@ function seed() {
   job.run('j-1', 10, AGX, JSON.stringify({ jobNumber: 'S1050', title: 'Harbor Club Railings', status: 'In Progress', street_address: '1 Harbor Dr', city: 'Tampa', state: 'FL', zip: '33602', contractAmount: 12000 }));
   job.run('j-2', 10, AGX, JSON.stringify({ jobNumber: 'S2000', title: 'Waterside Siding', status: 'In Progress', street_address: '', city: 'Tampa', state: 'FL', zip: '33602', startDate: '2026-01-10' }));
   job.run('j-3', 10, AGX, JSON.stringify({ jobNumber: 'WO16', title: 'Service Call A', status: 'In Progress' }));
+  job.run('j-near', 10, AGX, JSON.stringify({ jobNumber: 'S1051', title: 'Harbor Club Railing', status: 'In Progress', street_address: '', city: 'Tampa', state: 'FL', zip: '33602' }));
   job.run('j-b', 20, OTHER, JSON.stringify({ jobNumber: 'S1050', title: 'Harbor Club Railings', status: 'In Progress', street_address: '1 Harbor Dr', city: 'Tampa', state: 'FL', zip: '33602' }));
   const lead = engine.db.prepare('INSERT INTO leads (id, title, status, client_id, salesperson_id, organization_id, street_address, city, state, zip, estimated_revenue_low, estimated_revenue_high, source, confidence) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
   lead.run('l-1', 'Gazebo at Oak Hollow', 'sent', 'c-a', 10, AGX, '12 Oak Hollow Dr', 'Tampa', 'FL', '33602', 10000, 12000, null, null);
@@ -469,6 +470,7 @@ describe('create — a Buildertrend-only record comes into P86 linked by its id'
   });
 
   test('a number P86 already uses on a job linked elsewhere is never created again', async () => {
+    engine.db.prepare("DELETE FROM jobs WHERE id = 'j-near'").run();
     engine.db.prepare("UPDATE jobs SET bt_job_id = '999' WHERE id = 'j-1'").run();
     const r = await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'create', btIds: ['111'] });
     expect(r.status).toBe(200);
@@ -490,6 +492,73 @@ describe('create — a Buildertrend-only record comes into P86 linked by its id'
     const r = await put(APPLY, OTHER_ADMIN, { dataset: 'clients', mode: 'create' });
     expect(r.status).toBe(403);
     expect(engine.db.prepare("SELECT COUNT(*) AS n FROM clients WHERE bt_contact_id = '9007'").get().n).toBe(0);
+  });
+});
+
+
+describe('client duplicates are judged on the property part; an exact unique name wins', () => {
+  test('a shared management-company prefix is not a duplicate, a near property name is', () => {
+    const view = (id, name, email) => ({ id, name, email: email || null, organization_id: 1 });
+    const p86 = [view('p1', 'Associa Gulf Coast - Westwinds'), view('p2', 'Greystar - Solara Apartments'), view('p3', 'Leland - Hidden Creek', 'mgr@leland.test')];
+    const bt = (id, displayName, email) => readRecord('clients', { contactId: id, displayName, primaryEmail: email || '' });
+    const rows = match.matchClients([bt(1, 'Associa Gulf Coast - Madeira Shores'), bt(2, 'Greystar - Solara Apartment'), bt(3, 'Leland - Hidden Creek', 'mgr@leland.test')], p86);
+    expect(rows[0].class).toBe('new');
+    expect(rows[1].class).toBe('possible_duplicate');
+    expect(rows[1].candidates.map((c) => c.id)).toEqual(['p2']);
+    expect(rows[2]).toMatchObject({ class: 'matched', rung: 'name + email' });
+  });
+
+  test('numbered and generic-word look-alikes are different properties, never flagged as duplicates', () => {
+    const p86 = [{ id: 'p1', name: 'CMG Management - Caravel 1' }, { id: 'p2', name: 'Westwinds Condominiums' }, { id: 'p3', name: 'Bay Pointe Condominiums' }];
+    const bt = (id, displayName) => readRecord('clients', { contactId: id, displayName });
+    const rows = match.matchClients([bt(1, 'CMG Management - Caravel 2'), bt(2, 'Eastwinds Condominiums'), bt(3, 'Bay Point Condominium')], p86);
+    expect(rows[0].class).toBe('new');
+    expect(rows[1].class).toBe('new');
+    expect(rows[2].class).toBe('possible_duplicate');
+    expect(rows[2].candidates.map((c) => c.id)).toEqual(['p3']);
+  });
+
+  test('the exact name wins even when the email is on another client, and the note says so', () => {
+    const p86 = [{ id: 'p1', name: 'CMG Management - Caravel 1', email: 'office@cmg.test' }, { id: 'p2', name: 'CMG Management - Twin Oaks', email: 'office@cmg.test' }];
+    const rows = match.matchClients([readRecord('clients', { contactId: 5, displayName: 'CMG Management - Caravel 1', primaryEmail: 'office@cmg.test' })], p86);
+    expect(rows[0]).toMatchObject({ class: 'matched', rung: 'name + email' });
+    expect(rows[0].p86.id).toBe('p1');
+    expect(rows[0].notes.join(' ')).toMatch(/also on "CMG Management - Twin Oaks"/);
+  });
+});
+
+describe('link — a person picks the P86 record for an ambiguous row', () => {
+  test('linking a listed candidate stamps the id; the pair then matches by id and the other row can no longer reach it', async () => {
+    const r = await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'link', btId: '333', p86Id: 'j-3' });
+    expect(r.status).toBe(200);
+    expect(r.json.results[0].outcome).toBe('linked');
+    expect(jobBt('j-3')).toBe('333');
+    const p86 = await preview.readP86(engine.pool, AGX);
+    const rows = match.matchJobs(BT_JOBS.map((x) => readRecord('jobs', x)), p86.jobs, { coTotals: p86.coTotals });
+    const a = rows.find((x) => String(x.bt.btId) === '333');
+    const b = rows.find((x) => String(x.bt.btId) === '334');
+    expect(a.rung).toBe('Buildertrend ID');
+    expect(a.p86.id).toBe('j-3');
+    expect([].concat(b.candidates || []).map((c) => c.id)).not.toContain('j-3');
+  });
+
+  test('a record that is not a listed candidate, another tenant\'s record, or a confident row is never linked', async () => {
+    const notListed = await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'link', btId: '333', p86Id: 'j-2' });
+    expect(notListed.json.results[0].outcome).toBe('skipped');
+    expect(jobBt('j-2')).toBeNull();
+    preview.forgetFetch(AGX);
+    const p86 = await preview.readP86(engine.pool, AGX);
+    const row111 = match.matchJobs(BT_JOBS.map((x) => readRecord('jobs', x)), p86.jobs, { coTotals: p86.coTotals }).find((x) => String(x.bt.btId) === '111');
+    // Not vacuous: the confident row really lists j-near as a possible duplicate.
+    expect(['matched', 'conflict']).toContain(row111.class);
+    expect(row111.p86Duplicates.map((d) => d.id)).toContain('j-near');
+    const confident = await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'link', btId: '111', p86Id: 'j-near' });
+    expect(confident.json.results[0].outcome).toBe('skipped');
+    expect(jobBt('j-near')).toBeNull();
+    preview.forgetFetch(AGX);
+    const foreign = await put(APPLY, OTHER_ADMIN, { dataset: 'jobs', mode: 'link', btId: '333', p86Id: 'j-3' });
+    expect(foreign.status).toBe(403);
+    expect(jobBt('j-3')).toBeNull();
   });
 });
 

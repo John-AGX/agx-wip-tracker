@@ -457,6 +457,45 @@ async function createRecords(org, kind, rows, input, deps) {
   return { status: 200, body: { dataset: kind, mode: 'create', counts, results }, regeocode };
 }
 
+// ── LINK: a person picks the P86 record for an ambiguous row ─────────────────
+//
+// The matcher could not choose between candidates; the admin can. The chosen
+// P86 record must be one the matcher listed for THIS Buildertrend row (a
+// candidate, a possible duplicate, or a record it considered), must belong to
+// this organization, and neither side may already be linked elsewhere. Only the
+// Buildertrend id is written; the next read matches the pair by id and shows its
+// corrections like any other linked row.
+const LINK_TABLE = { jobs: ['jobs', 'bt_job_id'], leads: ['leads', 'bt_lead_id'], clients: ['clients', 'bt_contact_id'] };
+
+async function linkRecord(org, kind, rows, input, deps) {
+  const row = rows.find((r) => norm(r.bt.btId) === norm(input.btIds[0]));
+  if (!row) return { status: 200, body: { dataset: kind, mode: 'link', counts: { linked: 0, skipped: 1 }, results: [{ btId: input.btIds[0], outcome: 'skipped', reason: 'No Buildertrend record with that id in this read.' }] } };
+  const base = { btId: norm(row.bt.btId), label: row.bt.raw || row.bt.title || '', p86Id: input.p86Id };
+  const listed = [].concat(row.candidates || [], row.p86Duplicates || [], row.considered || []).map((c) => String(c.id));
+  const skip = (reason) => ({ status: 200, body: { dataset: kind, mode: 'link', counts: { linked: 0, skipped: 1 }, results: [Object.assign(base, { outcome: 'skipped', reason })] } });
+  if (row.class === 'matched' || row.class === 'conflict') return skip('This Buildertrend record already has a confident P86 match.');
+  if (listed.indexOf(String(input.p86Id)) === -1) return skip('That P86 record is not one of the candidates listed for this Buildertrend record.');
+  const [table, col] = LINK_TABLE[kind];
+  const client = await deps.pool.connect();
+  try {
+    await client.query('BEGIN');
+    const cur = await client.query('SELECT id, ' + col + ' AS bt FROM ' + table + ' WHERE id = $1 AND organization_id = $2 FOR UPDATE', [input.p86Id, org.id]);
+    if (!cur.rows.length) { await client.query('ROLLBACK'); return skip('That P86 record is not in this organization.'); }
+    if (norm(cur.rows[0].bt) && norm(cur.rows[0].bt) !== base.btId) { await client.query('ROLLBACK'); return skip('That P86 record is already linked to a different Buildertrend record.'); }
+    const taken = await client.query('SELECT id FROM ' + table + ' WHERE organization_id = $1 AND ' + col + ' = $2 AND id <> $3', [org.id, base.btId, input.p86Id]);
+    if (taken.rows.length) { await client.query('ROLLBACK'); return skip('Another P86 record is already linked to this Buildertrend record.'); }
+    await client.query('UPDATE ' + table + ' SET ' + col + ' = $1 WHERE id = $2 AND organization_id = $3', [base.btId, input.p86Id, org.id]);
+    await client.query('COMMIT');
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch (_) { /* ignore */ }
+    return { status: 200, body: { dataset: kind, mode: 'link', counts: { linked: 0, failed: 1 }, results: [Object.assign(base, { outcome: 'failed', reason: 'The link failed inside this server; nothing was written.' })] } };
+  } finally {
+    client.release();
+  }
+  if (preview.forgetFetch) preview.forgetFetch(org.id);
+  return { status: 200, body: { dataset: kind, mode: 'link', counts: { linked: 1 }, results: [Object.assign(base, { outcome: 'linked', linked: true })] } };
+}
+
 // ── the operation ────────────────────────────────────────────────────────
 async function apply(org, input, deps) {
   const kind = input.dataset;
@@ -475,6 +514,7 @@ async function apply(org, input, deps) {
       : match.matchLeads(values, p86.leads, { directory: p86.directory });
 
   if (mode === 'create') return createRecords(org, kind, rows, input, deps);
+  if (mode === 'link') return linkRecord(org, kind, rows, input, deps);
 
   let targets;
   if (mode === 'safe') {
@@ -537,6 +577,12 @@ function parseInput(body) {
   const b = body || {};
   const dataset = b.dataset;
   if (dataset !== 'jobs' && dataset !== 'leads' && dataset !== 'clients') return { error: 'dataset must be "jobs", "leads" or "clients".' };
+  if (b.mode === 'link') {
+    const btId = (typeof b.btId === 'string' || typeof b.btId === 'number') ? String(b.btId).trim() : '';
+    const p86Id = (typeof b.p86Id === 'string' || typeof b.p86Id === 'number') ? String(b.p86Id).trim() : '';
+    if (!btId || !p86Id) return { error: 'btId and p86Id are required to link.' };
+    return { dataset, mode: 'link', btIds: [btId], p86Id, fields: null };
+  }
   if (b.mode === 'create') {
     const ids = Array.isArray(b.btIds) ? b.btIds.filter((x) => (typeof x === 'string' || typeof x === 'number') && norm(x)) : [];
     if (ids.length > MAX_ROWS) return { error: 'At most ' + MAX_ROWS + ' records per create.' };
@@ -580,12 +626,12 @@ async function handle(req, res, deps) {
     res.status(out.status).json(out.body);
     if (out.status === 200) {
       auditLog(req, {
-        action: input.mode === 'create' ? 'buildertrend.create' : 'buildertrend.apply',
+        action: input.mode === 'create' ? 'buildertrend.create' : input.mode === 'link' ? 'buildertrend.link' : 'buildertrend.apply',
         targetType: input.dataset === 'jobs' ? 'job' : input.dataset === 'clients' ? 'client' : 'lead',
         targetId: input.mode === 'safe' ? 'safe updates' : input.mode === 'create' && !input.btIds.length ? 'bulk create' : String(input.btIds.length) + ' records',
         organizationId: org.id,
         detail: { mode: input.mode, counts: out.body.counts,
-          applied: out.body.results.filter((r) => r.outcome === 'applied' || r.outcome === 'created').map((r) => ({ btId: r.btId, p86Id: r.p86Id, linked: r.linked, fields: r.fields, created: r.outcome === 'created' })) },
+          applied: out.body.results.filter((r) => r.outcome === 'applied' || r.outcome === 'created' || r.outcome === 'linked').map((r) => ({ btId: r.btId, p86Id: r.p86Id, linked: r.linked, fields: r.fields, created: r.outcome === 'created' })) },
       });
       for (const id of out.regeocode || []) geocodeLeadLater(deps.pool, id);
     }

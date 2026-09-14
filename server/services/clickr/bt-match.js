@@ -1388,6 +1388,34 @@ function p86ClientView(row) {
   };
 }
 
+// "CMG Management - Caravel 1": the company is shared by every property it
+// manages, so similarity is judged on the property part only.
+function clientCore(name) {
+  const parts = str(name).split(/\s+[-\u2013\u2014]\s+/).map((x) => x.trim()).filter(Boolean);
+  return parts.length > 1 ? parts[parts.length - 1] : str(name).trim();
+}
+
+// Words every community name uses. Two names that share only these (and look
+// alike letter by letter) are different properties: "Westwinds Condominiums"
+// is not "Eastwinds Condominiums".
+const CLIENT_GENERIC = new Set(('condo condos condominium condominiums apartment apartments apts association assoc hoa coa poa '
+  + 'towers tower villas villa village villages estates estate homes townhomes townhouses '
+  + 'management mgmt property properties community communities inc llc corp').split(' '));
+
+// Does a near-looking client name really look like the same property? The
+// property parts must share a word that is neither generic nor a number, and
+// any numbers they carry must be the same ("Caravel 1" is not "Caravel 2").
+function sameClientProperty(a, b) {
+  const words = (s) => tokens(s);
+  // textKey keeps the single digits tokens() drops ("Caravel 1").
+  const nums = (s) => textKey(s).split(' ').filter((w) => /^\d+$/.test(w)).sort().join(' ');
+  if (nums(a) !== nums(b)) return false;
+  const special = (s) => [...words(s)].filter((w) => !/^\d+$/.test(w) && !GENERIC.has(w) && !CLIENT_GENERIC.has(w));
+  const A = special(a);
+  const B = special(b);
+  return A.some((w) => B.includes(w) || B.some((v) => fuzzyEq(w, v)));
+}
+
 function clientCand(p, rungs) {
   return { id: p.id, title: p.name, email: p.email, street: p.street, city: p.city, state: p.state, zip: p.zip, rungs: [...rungs] };
 }
@@ -1442,7 +1470,7 @@ function matchClients(btValues, p86Rows) {
   const byBtId = indexBy(p86, (p) => p.btId);
   const byName = indexBy(p86, (p) => textKey(p.name));
   const byEmail = indexBy(p86, (p) => emailKey(p.email));
-  const near = nearIndex(p86, (p) => p.name);
+  const near = nearIndex(p86, (p) => clientCore(p.name));
   const NEAR_LABELS = { name: 'similar name', place: 'same mailing address, typo-tolerant' };
   const btNameCount = new Map();
   const btEmailCount = new Map();
@@ -1479,7 +1507,13 @@ function matchClients(btValues, p86Rows) {
     };
     add(nameHits, 'name');
     add(emailHits, 'email');
-    const nearList = near(v.displayName, bt, (p) => cands.has(p.id) || linkedIds.has(p.id) || !free(p), NEAR_LABELS).map((h) => clientCand(h.it, h.why));
+    // A shared mailing address is not evidence for clients (a management company
+    // shares one across its properties), so no place is passed; a similar name
+    // must also agree on a distinctive word of the property part.
+    const core = clientCore(v.displayName);
+    const nearList = near(core, {}, (p) => cands.has(p.id) || linkedIds.has(p.id) || !free(p), NEAR_LABELS)
+      .filter((h) => sameClientProperty(core, clientCore(h.it.name)))
+      .map((h) => clientCand(h.it, h.why));
     const allCands = () => [...cands.values()].map((x) => clientCand(x.p, x.rungs)).concat(nearList);
     const amb = (note) => unpairedRow(bt, 'ambiguous', allCands(), [note]);
     const confidentRow = (p, rung, extraNotes) => {
@@ -1509,11 +1543,11 @@ function matchClients(btValues, p86Rows) {
     if (nameHits.length > 1) return amb(nameHits.length + ' P86 clients share this name. Nothing is proposed.');
     if (nameHits.length === 1) {
       const p = nameHits[0];
+      // An exact, unique name wins. The same email on other clients is normal for
+      // a management company's properties, so it is noted, not a reason to refuse.
       const otherByEmail = emailHits.filter((x) => x.id !== p.id);
-      if (otherByEmail.length) {
-        return amb('The name matches one P86 client, but the email belongs to ' + (otherByEmail.length === 1 ? 'another' : otherByEmail.length + ' others') + '. Nothing is proposed.');
-      }
-      return confidentRow(p, emailHits.length ? 'name + email' : 'name');
+      return confidentRow(p, emailHits.some((x) => x.id === p.id) ? 'name + email' : 'name',
+        otherByEmail.length ? ['The Buildertrend email is also on ' + otherByEmail.map((x) => '"' + x.name + '"').join(', ') + ' in P86 (often a management company).'] : []);
     }
     if (emailHits.length > 1) return amb(emailHits.length + ' P86 clients share this email. Nothing is proposed.');
     if (emailHits.length === 1) {
@@ -1535,7 +1569,7 @@ function matchClients(btValues, p86Rows) {
 }
 
 module.exports = {
-  matchJobs, matchLeads, matchClients, p86ClientView, emailKey, phoneKey, notInBuildertrend, summarise, RATE_CLASSES,
+  matchJobs, matchLeads, matchClients, p86ClientView, clientCore, sameClientProperty, emailKey, phoneKey, notInBuildertrend, summarise, RATE_CLASSES,
   parseJobName, exactNumberKey, looseNumberKey, namesAgree, nameEvidence, placeEvidence, streetsMatchStrict, streetsAgree, samePlace,
   nearIndex, bigrams, GENERIC,
   isBtBlank, isP86Blank, textKey, streetKey, cityKey, stateKey, zipKey, dateKey, fuzzyEq, osa, charSimilarity,
