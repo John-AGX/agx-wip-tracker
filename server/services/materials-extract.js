@@ -523,12 +523,26 @@ const XLSX_MAX_XML_BYTES = 12 * 1024 * 1024;
 // Pictures in the workbook (xl/media) are held as bytes, never parsed, and do
 // not compress; they are capped at the file cap rather than the XML one.
 const XLSX_MAX_MEDIA_BYTES = MAX_FILE_BYTES;
+// Which parts are those pictures. exceljs buffers ANY part whose name contains
+// xl/media/, and then still matches the same name against its own unanchored
+// worksheet, drawing, comment and table patterns — so a 24 MB sheet stored as
+// xl/media/xl/worksheets/sheet2.xml was measured against the 25 MB picture cap
+// and then parsed as a worksheet, past a gigabyte of memory. A part is a
+// picture only when its name is a picture file directly under xl/media/ and no
+// pattern exceljs parses by (PARSED_PART, case and all) can match it; every
+// other part counts against XLSX_MAX_XML_BYTES and is scanned like one.
+const MEDIA_PART = /^xl\/media\/[A-Za-z0-9._-]+\.(?:png|jpe?g|gif|bmp|tiff?|emf|wmf|svg|webp)$/i;
+const PARSED_PART = /xl\/(?:worksheets|theme|drawings|tables)\/|_rels\/|comments|vmlDrawing|styles|sharedStrings|workbook/;
 // A takeoff workbook has tens of parts. Every one is an object in the loader.
 const XLSX_MAX_ENTRIES = 5000;
-// Excel's built-in currency (5-8) and accounting (37-44) formats. A file may
-// use one by id alone, with no <numFmt> saying what it looks like, and then
-// exceljs reports no number format at all — so isMoneyFormat never sees it.
-const MONEY_NUMFMT_IDS = new Set([5, 6, 7, 8, 37, 38, 39, 40, 41, 42, 43, 44]);
+// Excel's built-in formats that show a currency sign: Currency (5-8) and
+// Accounting (42, 44). A file may use one by id alone, with no <numFmt> saying
+// what it looks like, and then exceljs reports no number format at all — so
+// isMoneyFormat never sees it. The ids between (37-41, 43) are the Comma and
+// "#,##0 ;(#,##0)" formats, with no currency in them: Excel's Comma Style
+// button writes 43, and a quantity of 1,200.00 is not a price. An id the file
+// DOES define in <numFmts> is decided by that definition (moneyStyleIds).
+const MONEY_NUMFMT_IDS = new Set([5, 6, 7, 8, 42, 44]);
 
 function xlsxError(code, message) {
   const e = new Error(message);
@@ -681,17 +695,65 @@ function tagAttr(xml, tag, attr) {
   return m ? m[1] : null;
 }
 
-// Which cell styles (the s="n" on a cell) carry a built-in money format.
-function moneyStyleIds(styles) {
-  const ids = new Set();
-  let index = 0, inside = false;
-  for (let tag = nextTag(styles, 0); tag; tag = nextTag(styles, tag.end + 1)) {
-    if (tag.name === 'cellXfs') { inside = styles[tag.end - 1] !== 0x2F; continue; }
-    if (tag.name === '/cellXfs') break;
-    if (!inside || tag.name !== 'xf') continue;
-    if (MONEY_NUMFMT_IDS.has(Number(tagAttr(styles, tag, 'numFmtId') || 0))) ids.add(index);
-    index++;
+// XML character references and the five named entities, read the way the XML
+// parser reads them — so "&#36;34.97" in a note is "$34.97", and a format
+// code written &quot;$&quot;#,##0.00 is "$"#,##0.00. The named ones are
+// plain replaces (&amp; last, so "&amp;lt;" stays the text "&lt;"); only a
+// numeric reference costs a callback, and text with no '&' costs nothing.
+const RE_XML_NUMERIC = /&#(?:(\d{1,7})|[xX]([0-9A-Fa-f]{1,6}));/g;
+
+function xmlDecode(s) {
+  if (s.indexOf('&') === -1) return s;
+  let out = s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'");
+  if (out.indexOf('&#') !== -1) {
+    out = out.replace(RE_XML_NUMERIC, (m, dec, hex) => {
+      const code = dec ? Number(dec) : parseInt(hex, 16);
+      return code > 0 && code <= 0x10FFFF ? String.fromCodePoint(code) : ' ';
+    });
   }
+  return out.replace(/&amp;/g, '&');
+}
+
+// An attribute's value as text: read as UTF-8 (a euro sign is three bytes),
+// in either kind of quote, with its references decoded.
+const TAG_TEXT_RE = new Map();
+
+function tagAttrText(xml, tag, attr) {
+  let re = TAG_TEXT_RE.get(attr);
+  if (!re) {
+    re = new RegExp('\\s' + attr + '\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\')');
+    TAG_TEXT_RE.set(attr, re);
+  }
+  const m = re.exec(xml.toString('utf8', tag.start, tag.end));
+  return m ? xmlDecode(m[1] !== undefined ? m[1] : m[2]) : null;
+}
+
+// Which cell styles (the s="n" on a cell) show a number as money. A style names
+// its format by id. An id the file defines in <numFmts> is decided by that
+// definition's formatCode, as exceljs and Excel read it — a file may redefine
+// a built-in id, and a Comma format at id 44 is no more money than one at 164.
+// An id it does not define is decided by Excel's own table (MONEY_NUMFMT_IDS).
+// The walk goes to the end of the part: nothing makes <numFmts> come first.
+function moneyStyleIds(styles) {
+  const defined = new Map();
+  const xfFormats = [];
+  let inXfs = false, inFmts = false;
+  for (let tag = nextTag(styles, 0); tag; tag = nextTag(styles, tag.end + 1)) {
+    const open = styles[tag.end - 1] !== 0x2F;
+    if (tag.name === 'numFmts') { inFmts = open; continue; }
+    if (tag.name === '/numFmts') { inFmts = false; continue; }
+    if (tag.name === 'cellXfs') { inXfs = open; continue; }
+    if (tag.name === '/cellXfs') { inXfs = false; continue; }
+    if (inFmts && tag.name === 'numFmt') {
+      defined.set(Number(tagAttr(styles, tag, 'numFmtId')), tagAttrText(styles, tag, 'formatCode') || '');
+    } else if (inXfs && tag.name === 'xf') {
+      xfFormats.push(Number(tagAttr(styles, tag, 'numFmtId') || 0));
+    }
+  }
+  const ids = new Set();
+  xfFormats.forEach((id, index) => {
+    if (defined.has(id) ? isMoneyFormat(defined.get(id)) : MONEY_NUMFMT_IDS.has(id)) ids.add(index);
+  });
   return ids;
 }
 
@@ -721,22 +783,115 @@ function sheetRelCount(rels) {
   return n;
 }
 
+// ── money outside the cells ──────────────────────────────────────────────
+//
+// exceljs hands the price check cell values and nothing else, and a price is
+// just as visible to whoever opens the file in a note ("Quoted $34.97/bundle"
+// on hover), a printed footer ("Total $12,400"), a text box, or a pivot
+// table's cached copy of its source rows — which stays in the file after the
+// source sheet is deleted. So with `facts` the zip scan reads those parts too:
+// comments (xl/commentsN.xml, and threaded comments), drawings (DrawingML
+// shapes and text boxes, and the legacy VML ones), pivot caches, and every
+// <headerFooter> in a sheet part. Each part is one the inflate loop has already
+// measured against XLSX_MAX_XML_BYTES, so the scan costs what the caps allow.
+const TEXT_PART = /^xl\/(?:comments[^/]*\.xml|threadedComments\/[^/]+\.xml|drawings\/[^/]+\.(?:xml|vml)|pivotCache\/[^/]+\.xml)$/i;
+// A pivot cache's field names ARE column headers (<cacheField name="Net">), so
+// a money word that needs a header to be money counts there. Its items are the
+// source rows' values, and a unit column's "each" is not a price.
+const PIVOT_PART = /^xl\/pivotCache\//i;
+
+// Markup that looks like money and is not: a locale tag ([$-409], which a date
+// format carries) and a cell reference with a $ in it — a form control's
+// $A$1 link, Sheet1!B$2 — whose "$1" would otherwise read as a dollar amount.
+// US$ is left alone: that one is money.
+const RE_NOT_MONEY = /\[\$-[0-9A-Fa-f]+\]|\$[A-Za-z]{1,3}\$\d+|(?<![A-Za-z$])(?!US\$)[A-Z]{1,3}\$\d+/g;
+// The runs of an XML part a person reads: a text node (between '>' and '<'),
+// a name="..." attribute, and any other attribute value — never a tag's own
+// name, which "</ext>" would otherwise turn into the words "per ext". Every
+// alternative stops at the next '<' or '>' (or its closing quote), so a part of
+// nothing but '>' is one short attempt per character, not a scan to the end
+// from each.
+const RE_XML_RUN = />([^<>]+)<|\sname\s*=\s*"([^"<>]*)"|=\s*"([^"<>]*)"|=\s*'([^'<>]*)'/g;
+// A header or footer section, once its tags and codes are separators.
+const RE_PLAIN_RUN = /[^|]+/g;
+
+// Money in the text of a part a crew can see: currency written anywhere in it
+// (RE_CURRENCY_TEXT over the whole decoded part at once — attributes, CDATA and
+// text are all covered, and markup cannot make a $34.97 out of nothing), or a
+// run that is a whole money label (moneyLabel) — a label money anywhere, or,
+// where the run is a column header (a pivot cache's field name), any label.
+// `xml` false: the text is already plain, its runs '|' apart (headerFooterText).
+function moneyInText(text, xml, pivot) {
+  const plain = xml ? xmlDecode(text) : text;
+  if (RE_CURRENCY_TEXT.test(plain.replace(RE_NOT_MONEY, ' '))) return true;
+  if (!MONEY_HINT.test(plain)) return false;
+  const re = xml ? RE_XML_RUN : RE_PLAIN_RUN;
+  re.lastIndex = 0;
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    const header = pivot && m[2] !== undefined;
+    let run = xml ? (m[1] !== undefined ? m[1] : m[2] !== undefined ? m[2] : m[3] !== undefined ? m[3] : m[4]) : m[0];
+    if (run.length > MONEY_LABEL_MAX * 4 || !MONEY_HINT.test(run)) continue;
+    if (xml) run = xmlDecode(run);
+    const label = moneyLabel(run);
+    if (label === MONEY_ANYWHERE || (header && label)) return true;
+  }
+  return false;
+}
+
+// The <headerFooter> elements of a sheet part as plain text, every section,
+// tag and code a '|' apart, or ''. Found with indexOf, so a 12 MB sheet costs
+// one native scan and a step per occurrence of the name: an occurrence counts
+// only as an opening tag (<headerFooter> or <x:headerFooter>), never as the
+// word in a cell, and runs to the next occurrence (its closing tag) or the end
+// of the part. Excel's codes — &L &C &R, &P, &"Arial,Bold", &12 — become
+// separators, so "&12Total" is the word Total with no font size beside it.
+const HEADER_FOOTER = Buffer.from('headerFooter');
+const RE_TAG = /<[^<>]*>/g;
+const RE_HF_CODE = /&(?:"[^"&|<>]{0,64}"|\d+|[A-Za-z&])/g;
+
+function isXmlNameByte(b) {
+  return (b >= 0x61 && b <= 0x7A) || (b >= 0x41 && b <= 0x5A) || (b >= 0x30 && b <= 0x39) || b === 0x5F || b === 0x2D || b === 0x2E;
+}
+
+function headerFooterText(xml) {
+  const parts = [];
+  for (let at = xml.indexOf(HEADER_FOOTER); at !== -1;) {
+    const next = xml.indexOf(HEADER_FOOTER, at + HEADER_FOOTER.length);
+    let p = at - 1;
+    if (p >= 0 && xml[p] === 0x3A) {
+      p--;
+      while (p >= 0 && isXmlNameByte(xml[p])) p--;
+    }
+    if (p >= 0 && xml[p] === 0x3C) {
+      const open = xml.indexOf(0x3E, at);
+      const end = next === -1 ? xml.length : next;
+      if (open !== -1 && open < end && xml[open - 1] !== 0x2F) {
+        parts.push(xmlDecode(xml.toString('utf8', open + 1, end).replace(RE_TAG, '|')).replace(RE_HF_CODE, '|'));
+      }
+    }
+    at = next;
+  }
+  return parts.join('|');
+}
+
 /**
  * Check a workbook's zip before exceljs loads it. Throws an Error whose code
  * is 'too_large' (a part, or all of them, unpacks past its cap — measured by
  * inflating, not by trusting the directory) or 'unreadable' (not a zip at all:
  * a password-protected .xlsx is an OLE file). With `facts`, also answers
  * whether any sheet holds a number in a built-in money format, which exceljs
- * cannot say, and stops at the first one; and counts the sheets the package's
- * relationships declare (sheetRels), which Excel opens whatever their parts
- * are called. Returns { moneyStyled, sheetRels }.
+ * cannot say (moneyStyled), and whether a note, a text box, a pivot cache or a
+ * header/footer shows money (moneyText), stopping at the first either way; and
+ * counts the sheets the package's relationships declare (sheetRels), which
+ * Excel opens whatever their parts are called.
+ * Returns { moneyStyled, moneyText, sheetRels }.
  */
 async function inspectWorkbookZip(buffer, facts) {
   const buf = toBuffer(buffer);
   const entries = zipDirectory(buf);
   if (!entries) throw xlsxError('unreadable', 'not a zip');
   if (entries.tooMany) throw xlsxError('too_large', 'too many workbook parts');
-  const isMedia = (e) => e.name.indexOf('xl/media/') === 0;
+  const isMedia = (e) => MEDIA_PART.test(e.name) && !PARSED_PART.test(e.name);
   const files = entries.filter((e) => !/\/$/.test(e.name));
   // What the directory says, first: most oversized workbooks are refused here
   // without inflating anything.
@@ -758,13 +913,21 @@ async function inspectWorkbookZip(buffer, facts) {
     if (!facts) continue;
     if (e.name === 'xl/styles.xml') styleIds = moneyStyleIds(out);
     else if (/[.]rels$/i.test(e.name)) sheetRels += sheetRelCount(out);
-    // The same (unanchored) name test exceljs loads a worksheet by.
-    else if (styleIds && styleIds.size && /xl\/worksheets\/sheet\d+[.]xml/.test(e.name) && hasMoneyStyledNumber(out, styleIds)) {
+    else if (TEXT_PART.test(e.name)) {
       // Answered: the caller does not load a workbook it already knows is priced.
-      return { moneyStyled: true, sheetRels: sheetRels };
+      if (moneyInText(out.toString('utf8'), true, PIVOT_PART.test(e.name))) return { moneyStyled: false, moneyText: true, sheetRels: sheetRels };
+    } else {
+      // Any other part may be a sheet, whatever it is called: its printed
+      // header and footer are read wherever a <headerFooter> is.
+      const printed = headerFooterText(out);
+      if (printed && moneyInText(printed, false, false)) return { moneyStyled: false, moneyText: true, sheetRels: sheetRels };
+      // The same (unanchored) name test exceljs loads a worksheet by.
+      if (styleIds && styleIds.size && /xl\/worksheets\/sheet\d+[.]xml/.test(e.name) && hasMoneyStyledNumber(out, styleIds)) {
+        return { moneyStyled: true, moneyText: false, sheetRels: sheetRels };
+      }
     }
   }
-  return { moneyStyled: false, sheetRels: sheetRels };
+  return { moneyStyled: false, moneyText: false, sheetRels: sheetRels };
 }
 
 /**
@@ -794,8 +957,10 @@ async function inspectWorkbookZip(buffer, facts) {
  * asked to open it. With opts, a workbook with a number in a built-in currency
  * or accounting format is not loaded at all — it comes back as one sheet with
  * no rows and moneyFormat true, which is the whole answer the check needs —
- * and a workbook with a sheet exceljs could not load gets one more sheet with
- * no rows and truncated true.
+ * nor is one with money in a note, a text box, a pivot cache or a printed
+ * header or footer (one sheet with no rows and moneyText true); and a workbook
+ * with a sheet exceljs could not load gets one more sheet with no rows and
+ * truncated true. onRow is called as onRow(cells, sheetNo).
  */
 async function xlsxToSheets(buffer, opts) {
   const o = opts || {};
@@ -809,12 +974,15 @@ async function xlsxToSheets(buffer, opts) {
   if (facts && zip.moneyStyled) {
     return [{ name: null, rows: [], formulaGaps: [], warnings: [], hidden: false, truncated: false, moneyFormat: true }];
   }
+  if (facts && zip.moneyText) {
+    return [{ name: null, rows: [], formulaGaps: [], warnings: [], hidden: false, truncated: false, moneyFormat: false, moneyText: true }];
+  }
   const ExcelJS = require('exceljs');
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buf);
   const MERGE = ExcelJS.ValueType.Merge;
   const out = [];
-  wb.worksheets.forEach((ws) => {
+  wb.worksheets.forEach((ws, sheetNo) => {
     if (found) return;
     // A hidden sheet is where a pricing table or a lookup list lives. The PM
     // cannot see it in Excel, so it must not be where the lines come from.
@@ -854,7 +1022,9 @@ async function xlsxToSheets(buffer, opts) {
         cells[cn - 1] = text;
       });
       for (let c = 0; c < cells.length; c++) if (cells[c] === undefined) cells[c] = '';
-      if (onRow) { if (onRow(cells)) found = true; return; }
+      // The sheet's place goes with the row: a question one row leaves open
+      // (rowPriceCheck) is answered by the next row of the SAME sheet.
+      if (onRow) { if (onRow(cells, sheetNo)) found = true; return; }
       rows[rn - 1] = cells;
     });
     for (let r = 0; r < rows.length; r++) if (!rows[r]) rows[r] = [];
@@ -1463,10 +1633,17 @@ function mapTakeoffRows(sheets) {
 // This is the one question in this module that has to fail CLOSED rather than
 // be helpful: a false "has prices" costs a PM a file on a default link, a
 // false "no prices" puts a Unit Cost column in front of a subcontractor. So
-// the check leans wide — any header-like row, a money word alone in a row with
-// no numbers, currency written into any cell, currency number formats (Excel's
-// built-in ones too), hidden sheets, and a sheet too big to read to the end
-// all count as prices. No model is ever asked.
+// the check leans wide — a money label heading a column (a supplier's "Net",
+// "List" or "Dealer" too), currency written into any cell, currency number
+// formats (Excel's built-in ones too), money in a note, a text box, a pivot
+// cache or a printed header or footer, hidden sheets, and a sheet too big to
+// read to the end all count as prices. No model is ever asked.
+//
+// But it must not lean so wide that an ordinary pull sheet never reaches a
+// default link: "EXT. TRIM", "Deliver trusses separate", "match existing
+// R-value" and "Charge controller" are materials and notes, not money columns.
+// So a money word counts only as a WHOLE cell that is a money label, and only
+// where that cell heads a column — see moneyLabel and headerLikeRow.
 
 // Currency written into a cell, whatever its column is called: "$34.97",
 // "12.50 €", "USD 40", "40 dollars".
@@ -1481,46 +1658,152 @@ const RE_MONEY_TAIL = new RegExp(CUR + '|\\b(?:usd|dollars?)\\b', 'i');
 // split by the cut is still seen whole.
 const MONEY_TAIL_OVERLAP = 32;
 
-// The price check's own money words, on top of MONEY_HEADER. A supplier quote
-// or a price list names its money column in words the extractor never has to
-// know about — Sell, Bid, Charge, Fee, MSRP, Retail — and the check, unlike
-// the extractor, must not miss one.
-const PRICE_WORDS = /\b(?:sell|selling|sale|sales|bids?|charges?|fees?|msrp|retail|budget|invoiced?|billed|dollars?|usd|extensions?|discounts?)\b/;
-// MONEY_HEADER's words where they are words: at the start or the end of one
-// ("UnitPrice", "PriceEach", "LineTotal", "Rates"), not buried in the middle of
-// a longer one. A row with no numbers is called priced on one of these alone
-// (headerLikeRow), and "Perforated soffit", "Saturated felt", "Hydrated lime",
-// "Fire-rated drywall" and "Exterior primer" are materials, not a money column.
-const MONEY_WORD = /(?<![a-z])(?:price|pricing|cost|total|amount|subtotal|extended|markup|margin|profit)|(?:price|cost|total|amount|markup|margin|profit|tax|value|rate)(?:e?s)?(?![a-z])|(?<![a-z])(?:ext|amt)(?![a-z])|\$/;
-// A per-unit price column named by the unit alone: "Each", "Ea.", "Per",
-// "Per Sheet", "Unit Each", "/ea". The same words are the VALUES of a unit
-// column ("Vent boot | 12 ea | each"), so one of these names money only beside
-// a label that is not itself a money word (headerLikeRow).
-const PER_UNIT_LABEL = /^(?:unit[ /])?(?:each|ea\.?)$|^\/(?:each|ea\.?)$|^per(?:[ /][a-z.]+)?$/;
+// ── money labels ─────────────────────────────────────────────────────────
+//
+// A money label is a WHOLE cell: a money word, alone or with only the words a
+// money column's name is made of around it — "Price", "Unit Cost", "Net",
+// "Contractor Price", "Cost ea", "Each $", "Your price", "Ext. Price",
+// "Extended price incl. delivery and tax", "Price / SF". A money word inside a
+// longer phrase names a material or makes a note, not a column: "EXT. TRIM",
+// "Downspout extension", "Dumpster fee by owner", "Deliver trusses separate",
+// "match existing R-value", "Charge controller", "Contractor bags". Matching
+// words anywhere in a cell called every one of those a price column and kept
+// ordinary pull sheets off default crew links.
+//
+// Words are compared whole: a run of letters, a run of digits, or one of $ % #
+// and "/" (which reads as "per"); any other character only separates them.
+const RE_LABEL_WORD = /us\$|[a-z]+|\d+|[$%#/]/g;
 
-function isPerUnitLabel(text) {
-  const raw = String(text == null ? '' : text).trim();
-  return !!raw && raw.length <= HEADER_CELL_MAX && PER_UNIT_LABEL.test(headerKey(raw));
+// A label longer than this is a sentence, and more words than this is too.
+const MONEY_LABEL_MAX = 60;
+const MONEY_LABEL_WORDS = 6;
+// What moneyLabel answers. MONEY_ANYWHERE: money wherever it is written — a
+// note that says "Unit price" means money. MONEY_IN_HEADER: money only as the
+// name of a column, because the same word is an ordinary one anywhere else —
+// "Net", "List", "Dealer", "Contractor", "Wholesale", "Value", "Tax". And
+// MONEY_PER_UNIT: "Each", "Ea.", "Per", "Per Sheet", "/ea" — a per-unit price
+// column named by its unit alone, and also the VALUES of a unit column
+// ("Vent boot | 12 ea | each"), so it needs the most from the row around it.
+const MONEY_PER_UNIT = 1;
+const MONEY_IN_HEADER = 2;
+const MONEY_ANYWHERE = 3;
+
+const MONEY_WORDS_ANYWHERE = new Set([
+  'price', 'prices', 'pricing', 'priced', 'cost', 'costs', 'costing', 'total', 'totals', 'subtotal', 'subtotals',
+  'amount', 'amounts', 'amt', 'extended', 'extension', 'extensions', 'markup', 'markups', 'margin', 'margins',
+  'profit', 'profits', 'sell', 'selling', 'msrp', 'bid', 'bids', 'charge', 'charges', 'fee', 'fees', 'invoiced',
+  'billed', 'budget', 'dollar', 'dollars', 'usd', '$',
+]);
+// The supplier words: a price sheet's one money column is as often headed Net,
+// List, Dealer, Contractor or Wholesale as Price.
+const MONEY_WORDS_IN_HEADER = new Set([
+  'net', 'list', 'dealer', 'contractor', 'wholesale', 'retail', 'sale', 'sales', 'value', 'values', 'rate', 'rates',
+  'tax', 'taxes', 'discount', 'discounts', 'ext', 'extd', 'quote', 'quoted', 'paid', 'deposit', 'allowance',
+  'allowances', 'freight',
+]);
+const MONEY_WORDS_PER_UNIT = new Set(['each', 'ea', 'per']);
+// Words that may stand beside a money word in its label, and never make one.
+// "per" takes the unit after it with it: "price per bundle".
+const MONEY_LABEL_FILLER = new Set([
+  'unit', 'your', 'our', 'my', 'client', 'customer', 'cust', 'builder', 'base', 'line', 'item', 'items', 'invoice',
+  'special', 'trade', 'contract', 'sub', 'avg', 'average', 'est', 'estimated', 'gross', 'grand', 'sum', 'min', 'max',
+  'supplier', 'vendor', 'pro', 'job', 'suggested', 'sugg', 'adjusted', 'final', 'current', 'regular', 'reg',
+  'standard', 'std', 'level', 'tier', 'promo', 'discounted', 'installed', 'material', 'materials', 'labor', 'labour',
+  'equipment', 'delivery', 'delivered', 'shipping', 'handling', 'incl', 'including', 'excl', 'excluding', 'less',
+  'w', 'with', 'without', 'and', 'or', 'of', 'to', 'due', 'before', 'after', 'in', 's', 'qty', 'quantity', 'x', 'times',
+  '%',
+]);
+// Some money word as a substring, before a cell is split into words at all: the
+// answer for almost every cell, and one native scan. A prefilter only — "rate"
+// is in "separate", which the word test then turns away. The per-unit words are
+// too common inside other words ("great", "sealant", "super") to be looked for
+// anywhere but on their own.
+const MONEY_GLUE_HINT = /pric|cost|total|amount|amt|ext|markup|margin|profit|sell|bid|charg|fee|msrp|invoic|billed|budget|dollar|usd|net|list|dealer|contract|sale|retail|value|rate|tax|discount|quot|paid|deposit|allowance|freight/i;
+const MONEY_HINT = new RegExp(MONEY_GLUE_HINT.source + '|\\$|(?<![a-z])(?:ea|each|per)(?![a-z])', 'i');
+
+// How strong one word is as money: a MONEY_* value; 0 for a word that may
+// stand beside one (MONEY_LABEL_FILLER); -1 for any other word, which makes
+// the cell no label at all.
+function moneyWordStrength(w) {
+  if (MONEY_WORDS_ANYWHERE.has(w)) return MONEY_ANYWHERE;
+  if (MONEY_WORDS_IN_HEADER.has(w)) return MONEY_IN_HEADER;
+  if (MONEY_WORDS_PER_UNIT.has(w)) return MONEY_PER_UNIT;
+  if (MONEY_LABEL_FILLER.has(w)) return 0;
+  return gluedStrength(w);
 }
 
-// A money label, for a row already known to be header-like. Looser than
-// headerRole's 40-character cap: "Extended price incl. delivery and tax" is
-// still a price column, and the row test has already ruled out a data row.
-function isMoneyLabel(text) {
-  const raw = String(text == null ? '' : text).trim();
-  if (!raw || raw.length > 80 || PURE_NUMBER.test(raw)) return false;
-  const low = raw.toLowerCase();
-  // No money word anywhere in it is the common answer, and the cheap one.
-  if (MONEY_HEADER.test(low) || PRICE_WORDS.test(low)) return true;
-  return isPerUnitLabel(raw);
+// A label written as one word — "UNITPRICE", "netprice", "extcost" — read as
+// the words it is made of, when it is made of nothing else. Every part is one
+// of the words above and three letters or more (or "ea"): no "s", "w" or "x"
+// to glue on, and no "per", or "proper" would be "pro per". Walked with a
+// table rather than matched with a repeated alternation, so a 60-letter word
+// is at most 60 x 12 set lookups and nothing can backtrack.
+const GLUED_PART_MAX = 12;
+const GLUED_BEST = new Int8Array(MONEY_LABEL_MAX + 1);
+
+function gluedStrength(w) {
+  if (!/^[a-z]{4,60}$/.test(w) || !MONEY_GLUE_HINT.test(w)) return -1;
+  const best = GLUED_BEST.fill(-1, 0, w.length + 1);
+  best[0] = 0;
+  for (let end = 1; end <= w.length; end++) {
+    for (let start = Math.max(0, end - GLUED_PART_MAX); start < end; start++) {
+      if (best[start] < 0) continue;
+      const part = w.slice(start, end);
+      if ((part.length < 3 && part !== 'ea') || part === 'per') continue;
+      const s = MONEY_WORDS_ANYWHERE.has(part) ? MONEY_ANYWHERE
+        : MONEY_WORDS_IN_HEADER.has(part) ? MONEY_IN_HEADER
+          : part === 'each' || part === 'ea' ? MONEY_PER_UNIT
+            : MONEY_LABEL_FILLER.has(part) ? 0 : -1;
+      if (s >= 0) best[end] = Math.max(best[end], best[start], s);
+    }
+  }
+  return best[w.length];
 }
 
-// A money word that is enough on its own, in a row with no bare numbers.
-function isLoneMoneyLabel(text) {
+// A sheet repeats its cells — every line's "ea", a 1000-column row of the same
+// word — so each distinct text is worked out once. Bounded: past the cap the
+// cache starts again rather than growing with a hostile file.
+const MONEY_LABEL_CACHE = new Map();
+const MONEY_LABEL_CACHE_MAX = 4096;
+
+/**
+ * Is this cell, whole, a money label? 0 when not; otherwise MONEY_PER_UNIT,
+ * MONEY_IN_HEADER or MONEY_ANYWHERE, the strongest money word in it deciding.
+ * A number may follow a money word ("Price 2", "Tier 2 Price") but never lead
+ * the cell: "12 ea" and "24 total" are quantities. A cell headerRole reads as
+ * some other column is not a money label whatever words it has: "Total Qty"
+ * is the quantity, "Material List" the description, "Cost Type" a category.
+ * (A unit role does not count against it — "Unit Each" is a price.)
+ */
+function moneyLabel(text) {
   const raw = String(text == null ? '' : text).trim();
-  if (!raw || raw.length > 80) return false;
-  const low = raw.toLowerCase();
-  return MONEY_WORD.test(low) || PRICE_WORDS.test(low);
+  if (!raw || raw.length > MONEY_LABEL_MAX || !MONEY_HINT.test(raw)) return 0;
+  const known = MONEY_LABEL_CACHE.get(raw);
+  if (known !== undefined) return known;
+  if (MONEY_LABEL_CACHE.size >= MONEY_LABEL_CACHE_MAX) MONEY_LABEL_CACHE.clear();
+  const answer = moneyLabelOf(raw);
+  MONEY_LABEL_CACHE.set(raw, answer);
+  return answer;
+}
+
+function moneyLabelOf(raw) {
+  // "UnitPrice" is two words, "US$" is USD, and "/" is "per".
+  const words = raw.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().match(RE_LABEL_WORD);
+  if (!words || words.length > MONEY_LABEL_WORDS || /^\d/.test(words[0])) return 0;
+  let best = 0;
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i] === '/' ? 'per' : words[i] === 'us$' ? 'usd' : words[i];
+    const strength = /^\d{1,2}$/.test(w) ? 0 : moneyWordStrength(w);
+    if (strength < 0) return 0;
+    best = Math.max(best, strength);
+    // "per" takes its unit with it: "price per bundle", "$/lf".
+    if (w === 'per' && i + 1 < words.length && /^[a-z]{1,12}$/.test(words[i + 1])) i++;
+  }
+  if (!best) return 0;
+  // The words are the cheap test, so the header read's ladder only runs on a
+  // cell that passed them.
+  const role = headerRole(raw);
+  return role && role.role !== 'money' && role.role !== 'unit' ? 0 : best;
 }
 
 // What a price list is keyed by, where headerRole has no role for it: "Part
@@ -1533,71 +1816,103 @@ function isKeyLabel(text) {
   return !!raw && raw.length <= HEADER_CELL_MAX && !/\d/.test(raw) && KEY_LABEL.test(raw.toLowerCase());
 }
 
-// Is this row a header, or close enough to one that a money word in it names a
-// column? Four ways in:
-//   * the header test mapTakeoffRows reads by (a description beside a
-//     quantity or unit, and no bare numbers) — which needs a description
-//     column, so the second way already answers it;
-//   * any cell naming a description column — "Memo/Description | Amount" is
-//     a cost report's header even with no quantity in it;
-//   * no bare numbers and a money word, even as the ONLY label — "Part
-//     Number | Price", "Code | Cost", a lone "Unit Price" over a column of
-//     34.97. Most of a price list's other headers are no label headerRole
-//     knows, and a false "no prices" is the one answer this check cannot give;
-//   * no bare numbers and at least two recognised labels — "SKU | Count |
-//     Cost" — or a per-unit word beside a label that is not money, or beside
-//     what a price list is keyed by: "Part # | Qty | Each", "Part # | Each",
-//     "Code | Ea". (Beside a line's own words it is no header: "Perforated
-//     soffit | 10 pcs | each" is a line, and "rate" is only inside a word there.)
-// One pass, one headerRole per cell: a 1000-column row is read once, not twice.
-// (The money-word tests are literal words, not headerRole's whole ladder.)
+// Does a money label in this row head a column? Only in a row with no bare
+// numbers (a data row has them, a header does not), and then one of two ways:
+//   * another cell names a column the header read knows — a description, a
+//     quantity, a unit, an Item # — or what a price list is keyed by (Part #,
+//     Code): "Item # | Description | UOM | Net", "Description | Qty |
+//     Contractor", "Item | Wholesale", "SKU | Count | Cost", "Part # | Each".
+//     A per-unit word needs that other cell to be an exact label, not a
+//     description word inside a longer name: a line whose unit column says
+//     "each" can have "Misc. materials" beside it;
+//   * or nothing else in the row does, and the row below decides. Then the
+//     answer is the columns of the money labels, and rowPriceCheck looks under
+//     them in the next non-blank row for an amount: a lone "Unit Price" over
+//     34.97, "Style | Color | Net" over a column of numbers.
+// true | false | [column indexes]. The labels come first, and the rest of the
+// row is only read when there is one: a 1000-column row of materials costs one
+// word test a cell, not the header read's whole ladder.
 function headerLikeRow(cells) {
-  const numeric = cells.some((c) => c && PURE_NUMBER.test(c));
-  let labels = 0, plain = 0, perUnit = false, key = false;
-  for (const c of cells) {
-    if (!c || PURE_NUMBER.test(c)) continue;
-    if (!numeric && isLoneMoneyLabel(c)) return true;
-    const role = headerRole(c);
-    if (!role) {
-      if (!numeric && isPerUnitLabel(c)) perUnit = true;
-      else if (!numeric && isKeyLabel(c)) key = true;
-    } else {
-      if (role.role === 'desc') return true;
-      labels++;
-      if (role.role !== 'money') plain++;
-      if (!numeric && labels >= 2) return true;
-    }
-    if (!numeric && perUnit && (plain > 0 || key)) return true;
+  if (cells.some((c) => c && PURE_NUMBER.test(c))) return false;
+  const money = [];
+  const isMoney = new Uint8Array(cells.length);
+  let best = 0;
+  for (let i = 0; i < cells.length; i++) {
+    const label = cells[i] ? moneyLabel(cells[i]) : 0;
+    if (!label) continue;
+    money.push(i);
+    isMoney[i] = 1;
+    best = Math.max(best, label);
   }
-  return false;
+  if (!money.length) return false;
+  let loose = false;
+  for (let i = 0; i < cells.length; i++) {
+    const c = cells[i];
+    if (!c || isMoney[i]) continue;
+    const role = headerRole(c);
+    if (role && role.role !== 'money') {
+      if (role.role !== 'desc' || role.rank !== 1) return true;
+      loose = true;
+    } else if (isKeyLabel(c)) {
+      return true;
+    }
+  }
+  return loose && best > MONEY_PER_UNIT ? true : money;
 }
+
+// An amount under a money label: a bare number, or one with its unit after a
+// slash or "per" ("34.97/bdl", "7.25 per sheet"). Cells are cut to
+// MAX_CELL_CHARS first, and no two parts can take the same characters.
+const AMOUNT_UNDER = /^-?(?:\d[\d,]*(?:\.\d+)?|\.\d+)(?:%|\s*(?:\/\s*|per\s+)[a-z]{1,12}\.?)?$/i;
 
 /**
  * Does any sheet carry prices a crew would see by opening the file?
- * `sheets` is xlsxToSheets output (with opts, for truncated / moneyFormat) or a
- * single CSV sheet. true when a header-like row has a money label, when any
- * cell has currency written into it, when a cell is currency-formatted, or
- * when a sheet was too big to read to the end. false otherwise.
+ * `sheets` is xlsxToSheets output (with opts, for truncated / moneyFormat /
+ * moneyText) or a single CSV sheet. true when a money label heads a column,
+ * when any cell has currency written into it, when a cell is currency-
+ * formatted, when a note, text box, pivot cache or printed header or footer
+ * shows money, or when a sheet was too big to read to the end. false otherwise.
  */
 function detectPriceColumns(sheets) {
   const list = Array.isArray(sheets) ? sheets : [];
   for (const sheet of list) {
     if (!sheet || typeof sheet !== 'object') continue;
     // Part of the sheet was never looked at, so it cannot be called clean.
-    if (sheet.truncated === true || sheet.moneyFormat === true) return true;
+    if (sheet.truncated === true || sheet.moneyFormat === true || sheet.moneyText === true) return true;
     const rows = Array.isArray(sheet.rows) ? sheet.rows : [];
+    const check = rowPriceCheck();
     for (const row of rows) {
-      if (priceInRow(row)) return true;
+      if (check(row)) return true;
     }
   }
   return false;
 }
 
-// One row of the price check: currency written into any cell, or a money
-// label in a header-like row. Each cell is cut by cellText before either test.
-// The currency test runs once over the row joined with '|', which no part of
-// RE_CURRENCY_TEXT can match across, rather than once per cell; and the header
-// test only runs on a row that has a money word in some cell at all.
+// The price check over one sheet's rows, in order: a function that takes the
+// next row and answers true once the sheet has shown a price. priceInRow
+// answers what one row can; the one thing it cannot is whether a money label
+// with nothing else beside it heads a column of amounts, and the next non-blank
+// row answers that — then the question is closed either way.
+function rowPriceCheck() {
+  let under = null;
+  return (row) => {
+    const verdict = priceInRow(row);
+    if (verdict === true) return true;
+    // A blank row neither answers the question nor closes it.
+    if (verdict === null) return false;
+    const cols = under;
+    under = Array.isArray(verdict) ? verdict : null;
+    return !!cols && cols.some((i) => AMOUNT_UNDER.test(cellText(Array.isArray(row) ? row[i] : '')));
+  };
+}
+
+// One row of the price check: true for currency written into any cell or a
+// money label that heads a column by the row alone; the label columns when the
+// next row must decide (headerLikeRow); null for a blank row; false otherwise.
+// Each cell is cut by cellText before any test. The currency test runs once
+// over the row joined with '|', which no part of RE_CURRENCY_TEXT can match
+// across, rather than once per cell; and the header test only runs on a row
+// that has a money word in some cell at all.
 function priceInRow(row) {
   const raw = Array.isArray(row) ? row : [];
   // A cell longer than cellText keeps fails closed on what the cut drops, the
@@ -1609,9 +1924,9 @@ function priceInRow(row) {
     if (RE_MONEY_TAIL.test(v.slice(Math.max(0, kept.length - MONEY_TAIL_OVERLAP)))) return true;
   }
   const cells = raw.map(cellText);
-  if (!cells.some(Boolean)) return false;
+  if (!cells.some(Boolean)) return null;
   if (RE_CURRENCY_TEXT.test(cells.join('|'))) return true;
-  if (!cells.some(isMoneyLabel)) return false;
+  if (!cells.some((c) => c && c.length <= MONEY_LABEL_MAX && MONEY_HINT.test(c))) return false;
   return headerLikeRow(cells);
 }
 
@@ -1656,12 +1971,16 @@ async function detectFilePrices(opts) {
     // how much of a loaded workbook is checked.
     let found = false;
     let cells = 0;
-    const onRow = (row) => {
+    // One rowPriceCheck per sheet (a CSV is one): a money label at the foot of
+    // one sheet is not answered by the top row of the next.
+    let check = null, checking;
+    const onRow = (row, sheetNo) => {
       // Past PRICE_CHECK_MAX_CELLS the file is called priced, like a sheet
       // past the row bound — so a 25 MB CSV of short cells costs a bounded
       // amount of checking, not twelve million header tests.
       cells += row.length;
-      if (!found && (cells > PRICE_CHECK_MAX_CELLS || priceInRow(row))) found = true;
+      if (!check || sheetNo !== checking) { check = rowPriceCheck(); checking = sheetNo; }
+      if (!found && (cells > PRICE_CHECK_MAX_CELLS || check(row))) found = true;
       return found;
     };
     if (kind === 'xlsx') {

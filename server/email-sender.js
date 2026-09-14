@@ -66,18 +66,228 @@ function parseFromEnv(envFrom) {
   return out;
 }
 
-// Lowercase letters + digits only, so "Project 86", "project86",
-// "PROJECT-86" and "P.r.o.j.e.c.t 8 6" all collapse to the same key.
-function squash(s) {
-  return String(s || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+// ── org names that may stand in a From header ────────────────────────
+//
+// A tenant must not be able to pass as the platform. Comparing the typed text
+// against "Project 86" is not enough, because a reader compares GLYPHS, and
+// the first version of this check (a lowercase letters-and-digits squash)
+// let all of these through as branded mail:
+//   - "Pr<Cyrillic o>ject 86 Security", "Pr0ject 86 Support", "P<small-cap
+//     R>oject 86": look-alike letters and digits read as the platform name.
+//   - "Project <Arabic-Indic 8><Arabic-Indic 6>": 86 in another script's
+//     decimal digits.
+//   - U+3164 HANGUL FILLER and U+2800 BRAILLE PATTERN BLANK are a letter and a
+//     symbol, not format characters, so a Cf strip keeps them. One between
+//     two letters of "Project" hid the match; a name made only of them was a
+//     blank company; "ACME" plus 55 of them pushed " via Project 86" out of
+//     sight in an inbox list.
+//
+// So the platform-name comparison runs on a SKELETON of the name (the idea
+// of Unicode TR39's skeleton, cut down to what a display name needs): hidden
+// characters dropped, NFKC, accents dropped, each look-alike folded to the
+// Latin letter or ASCII digit it passes for, every decimal digit of any script
+// read as its ASCII value, the digits 0 1 3 4 5 7 read as the letters o l e a s
+// t, and everything but letters and digits squashed out. The disguised names
+// above all come out as "project86...".
+//
+// orgNameProblem is THE rule. The save-time routes (create, rename, invite)
+// call it on what the admin typed; cleanOrgName calls it on the sanitised
+// name at send time. One function, so the two checks cannot drift apart.
+//
+// KNOWN LIMITS, stated rather than hidden: multi-character look-alikes ("rn"
+// for "m", "vv" for "w") and plain respellings ("P86 Security", "Project
+// Eighty-Six") are not caught, and no table covers every script. What always
+// holds is the address: every From is the platform's own verified address
+// and ends "via Project 86".
+
+// Parse a space-separated list of hex code points into an array of numbers.
+// The tables below are spelled in hex, never in the characters themselves: a
+// table of homoglyphs written in homoglyphs cannot be reviewed.
+function hexList(s) {
+  return String(s).trim().split(/\s+/).map((h) => parseInt(h, 16));
+}
+
+// Look-alikes, keyed by the Latin letter (or ASCII digit) each one passes for.
+// Upper- and lower-case forms are both listed where both deceive; a
+// character's own entry wins, then its lowercase, then its uppercase (so
+// Cherokee's lowercase letters find their uppercase entries). "i" and "l"
+// are one class — "I" and "l" share a glyph in most sans-serif faces — so
+// both skeletonise to "l".
+const LOOKALIKE_SOURCES = {
+  // Cyrillic, Greek, IPA / small capitals, Cherokee, Lisu, Coptic, Armenian.
+  a: '0430 0410 03B1 0391 0251 237A 1D00 13AA A4EE',
+  b: '042C 044C 0412 0432 0392 03B2 0299 13F4 A4D0 0184 0185',
+  c: '0441 0421 03F2 03F9 1D04 13DF A4DA 2CA5 2CA4',
+  d: '0501 13A0 A4D3 1D05',
+  e: '0435 0415 03B5 0395 04BD 0454 0404 1D07 13AC A4F0 212E',
+  f: '03DC A4DD',
+  g: '0261 0262 0581 050D 13C0 A4D6',
+  h: '04BB 041D 043D 0397 0570 13BB A4E7 029C',
+  j: '0458 0408 03F3 037F 0237 1D0A 13AB A4D9',
+  k: '041A 043A 039A 03BA 1D0B 13E6 A4D7',
+  l: '0069 0456 0406 03B9 0399 0131 026A 04CF 04C0 01C0 A4F2 029F 13DE A4E1',
+  m: '041C 043C 039C 1D0D 13B7 A4DF',
+  n: '039D 03B7 0578 0274 A4E0 043F',
+  // 0665 is ARABIC-INDIC DIGIT FIVE, a small circle: its glyph, not its
+  // value, is what a reader sees.
+  o: '043E 041E 03BF 039F 03C3 0585 0555 1D0F 2C9F 2C9E A4F3 04E9 04E8 00F8 00D8 0665',
+  p: '0440 0420 03C1 03A1 1D18 13E2 A4D1 2CA3 2CA2',
+  q: '051B 051A',
+  r: '0433 0280 1D26 13A1 A4E3 2C85',
+  s: '0455 0405 A731 13DA A4E2',
+  t: '0422 0442 03A4 03C4 1D1B 13A2 A4D4',
+  u: '03C5 057D 1D1C A4F4',
+  v: '03BD 0475 0474 1D20 13D9 A4E6',
+  w: '051D 051C 1D21 13B3 A4EA 03C9',
+  x: '0445 0425 03C7 03A7 A4EB 2CAD 2CAC',
+  y: '0443 0423 04AE 04AF 03B3 03A5 028F 13A9 A4EC',
+  z: '0396 1D22 13C3 A4DC',
+  // Glyphs that pass for the digits in "86". Bengali and Gurmukhi FOUR look
+  // like an 8, so their glyph beats their value here too.
+  8: '0222 0223 09EA 0A6A',
+  6: '0431 13EE 2CD3'
+};
+const LOOKALIKES = new Map();
+Object.keys(LOOKALIKE_SOURCES).forEach((target) => {
+  hexList(LOOKALIKE_SOURCES[target]).forEach((cp) => LOOKALIKES.set(String.fromCodePoint(cp), target));
+});
+
+// The digits a reader takes for letters ("Pr0ject", "Proj3ct").
+const DIGIT_LETTERS = { 0: 'o', 1: 'l', 3: 'e', 4: 'a', 5: 's', 7: 't' };
+
+// Characters that draw nothing, or only blank space, yet are not format
+// characters, so a \p{Cf} strip keeps them:
+//   - every Default_Ignorable_Code_Point: the Hangul fillers U+115F U+1160
+//     U+3164 U+FFA0, the Khmer inherent vowels U+17B4 U+17B5, U+034F, U+180E,
+//     the tag block — EXCEPT variation selectors, which only restyle the
+//     character before them (the emoji form of a pasted coffee cup), cannot
+//     draw a blank on their own, and are harmless in a header;
+//   - blank symbols that are ordinary So / Lo characters: U+2800 BRAILLE
+//     PATTERN BLANK, U+1D159 MUSICAL SYMBOL NULL NOTEHEAD, U+13441 and U+13442
+//     EGYPTIAN HIEROGLYPH FULL BLANK and HALF BLANK.
+const BLANK_SYMBOLS = new Set(hexList('2800 1D159 13441 13442'));
+const DEFAULT_IGNORABLE_RE = /\p{Default_Ignorable_Code_Point}/u;
+const VARIATION_SELECTOR_RE = /\p{Variation_Selector}/u;
+
+// Returns 'blank' for a blank symbol, 'hidden' for a zero-width filler, or
+// null for anything else.
+function hiddenKind(ch) {
+  if (BLANK_SYMBOLS.has(ch.codePointAt(0))) return 'blank';
+  if (DEFAULT_IGNORABLE_RE.test(ch) && !VARIATION_SELECTOR_RE.test(ch)) return 'hidden';
+  return null;
+}
+
+// Blank symbols become `blankWith` (they take up a space's width); hidden
+// fillers are removed.
+function replaceHidden(s, blankWith) {
+  let out = '';
+  for (const ch of s) {
+    const kind = hiddenKind(ch);
+    out += kind === 'blank' ? blankWith : (kind === 'hidden' ? '' : ch);
+  }
+  return out;
+}
+
+function hasHidden(s) {
+  for (const ch of s) {
+    if (hiddenKind(ch)) return true;
+  }
+  return false;
+}
+
+// A decimal digit of any script, as its ASCII value. Unicode assigns every
+// Nd digit in contiguous runs of ten, 0 through 9, so the value is the
+// distance from the start of the run, mod 10 (mod, because a few runs sit
+// back to back, e.g. the mathematical digit sets).
+const DECIMAL_DIGIT_RE = /\p{Nd}/u;
+function asciiDigit(ch) {
+  const cp = ch.codePointAt(0);
+  let start = cp;
+  while (start > 0 && DECIMAL_DIGIT_RE.test(String.fromCodePoint(start - 1))) start--;
+  return String((cp - start) % 10);
+}
+
+// Controls, format characters, lone surrogates and hidden fillers, all gone.
+function stripInvisible(s) {
+  return replaceHidden(s.replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/gu, ''), '');
+}
+
+// Accents off (NFD, then every combining mark dropped), then each character
+// to its look-alike's target, or to its own lowercase.
+function foldLookalikes(s) {
+  try { s = s.normalize('NFD'); } catch (_) { /* malformed input: fold as is */ }
+  s = s.replace(/\p{M}+/gu, '');
+  let out = '';
+  for (const ch of s) {
+    let m = LOOKALIKES.get(ch);
+    if (m === undefined) {
+      const lower = ch.toLowerCase();
+      m = LOOKALIKES.get(lower);
+      if (m === undefined) m = LOOKALIKES.get(ch.toUpperCase());
+      if (m === undefined) m = lower;
+    }
+    out += m;
+  }
+  return out;
+}
+
+// The comparison key for a name: see the block comment above. Not a display
+// value — it is lowercase, accent-free and deliberately lossy.
+//
+// The look-alike fold runs on either side of NFKC. Before it, because NFKC
+// rewrites some look-alikes into characters that no longer look like the
+// letter they passed for (Greek lunate sigma, which reads as a "c", becomes a
+// final sigma). After it, because NFKC is what turns fullwidth and
+// mathematical letters (U+FF30, U+1D40F, both a "P") into characters the table knows.
+function skeleton(name) {
+  let s = foldLookalikes(stripInvisible(String(name == null ? '' : name)));
+  try { s = s.normalize('NFKC'); } catch (_) { /* malformed input: fold as is */ }
+  s = foldLookalikes(stripInvisible(s));
+  return s
+    .replace(/[^\p{L}\p{N}]+/gu, '')
+    .replace(/\p{Nd}/gu, asciiDigit)
+    .replace(/[013457]/g, (d) => DIGIT_LETTERS[d]);
+}
+
+const PLATFORM_KEYS = ['project86', skeleton(PLATFORM_NAME)].filter(Boolean);
+
+// Refuse an organization name that cannot safely become a sender name.
+// Returns the reason (a message that starts "name "), or null when the name
+// is acceptable. Length and emptiness stay the callers' own checks.
+//
+//   - control characters (CR/LF/TAB, C1) and line separators: header
+//     injection, and nothing a company name needs;
+//   - bidi overrides/isolates, zero-width and other format characters:
+//     display spoofing (U+202E flips the rest of the name);
+//   - hidden fillers and blank symbols (above): a blank or padded name;
+//   - no letter at all: nothing that names a company;
+//   - the platform's own name, compared by skeleton.
+function orgNameProblem(name) {
+  const s = String(name == null ? '' : name);
+  if (/[\p{Cc}\p{Zl}\p{Zp}]/u.test(s)) {
+    return 'name cannot contain line breaks, tabs or control characters';
+  }
+  if (/[\p{Cf}]/u.test(s)) {
+    return 'name cannot contain invisible formatting characters (bidi overrides, zero-width characters)';
+  }
+  let folded = s;
+  try { folded = s.normalize('NFKC'); } catch (_) { /* malformed input: test as is */ }
+  if (hasHidden(s) || hasHidden(folded)) {
+    return 'name cannot contain invisible or blank filler characters (Hangul fillers, blank Braille patterns)';
+  }
+  if (!/\p{L}/u.test(folded)) {
+    return 'name must contain at least one letter';
+  }
+  const key = skeleton(s);
+  if (PLATFORM_KEYS.some((k) => key.indexOf(k) !== -1)) {
+    return 'name cannot include "' + PLATFORM_NAME + '" — organization mail is sent as "<your organization> via ' + PLATFORM_NAME + '"';
+  }
+  return null;
 }
 
 // Sanitise a tenant-controlled org name for use as a display name.
 // Returns the cleaned name, or null when it must not be used.
-function cleanOrgName(name) {
-  if (name == null) return null;
-  let s = String(name);
-  try { s = s.normalize('NFKC'); } catch (_) { /* malformed input: keep as is */ }
+function stripUnsafe(s) {
   s = s
     // C0 / DEL / C1 controls (CR, LF, TAB included) and line/paragraph
     // separators: header-injection defence. Become a space so "AG\nExteriors"
@@ -87,23 +297,40 @@ function cleanOrgName(name) {
     // U+2066-2069), zero-width space/joiners, BOM, soft hyphen. Removed
     // outright — they are invisible and exist here only to spoof. Lone
     // surrogates go too so the header always encodes.
-    .replace(/[\p{Cf}\p{Cs}]/gu, '')
+    .replace(/[\p{Cf}\p{Cs}]/gu, '');
+  // Hidden fillers go the same way; a blank symbol becomes a space, so a
+  // padding run collapses to nothing.
+  return replaceHidden(s, ' ');
+}
+
+function cleanOrgName(name) {
+  if (name == null) return null;
+  const typed = stripUnsafe(String(name));
+  let s = typed;
+  try { s = s.normalize('NFKC'); } catch (_) { /* malformed input: keep as is */ }
+  s = stripUnsafe(s)
     // Quoted-string breakers and address lookalikes. NFKC above has already
     // folded fullwidth forms into these ASCII characters.
     .replace(/[<>"\\@]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   if (!s) return null;
-  if (!/\p{L}/u.test(s)) return null;
-  const key = squash(s);
-  if (key.indexOf('project86') !== -1) return null;
-  const platformKey = squash(PLATFORM_NAME);
-  if (platformKey && key.indexOf(platformKey) !== -1) return null;
+  // The same rule the save-time routes apply. Everything it refuses outright
+  // at save (controls, format characters, fillers) is already stripped here,
+  // so what can still fail is a name with no letter or one that spells the
+  // platform. It runs on the name as it will be displayed AND on the name as
+  // typed: NFKC can rewrite a look-alike into something the table no longer
+  // knows (a lunate sigma "c" becomes a final sigma), and save time judged
+  // the typed form.
+  if (orgNameProblem(s) || orgNameProblem(typed)) return null;
   // Cap by code point, never by UTF-16 unit, so a cut never splits a
-  // surrogate pair.
+  // surrogate pair. A cut can drop the only letters, so check again.
   const cps = Array.from(s);
-  if (cps.length > 60) s = cps.slice(0, 60).join('').trim();
-  return s || null;
+  if (cps.length > 60) {
+    s = cps.slice(0, 60).join('').trim();
+    if (!s || orgNameProblem(s)) return null;
+  }
+  return s;
 }
 
 function quoteDisplayName(s) {
@@ -228,6 +455,8 @@ async function replyToForOrgAdmin(db, orgId) {
 module.exports = {
   PLATFORM_NAME,
   parseFromEnv,
+  skeleton,
+  orgNameProblem,
   cleanOrgName,
   fromHeader,
   cleanReplyTo,

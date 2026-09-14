@@ -1441,14 +1441,20 @@ describe('the price check calls a price list priced, whatever its other headers 
     await expect(csvPrices(csv)).resolves.toBe(false);
   });
 
-  test('without the lone-money-word rule, "Part Number | Price" reads as clean', () => {
-    const rows = [['Part Number', 'Price'], ['ABC-1', '34.97']];
+  // (Round three: a lone money word in a row with no numbers no longer counts on
+  // its own — "EXT. TRIM" and "Deliver trusses separate" were called price
+  // columns. A lone money LABEL counts when the row below has an amount under it.)
+  test('without the amount-under-it rule, a lone "Unit Price" over 34.97 reads as clean', async () => {
+    const rows = [['Unit Price'], ['34.97']];
     expect(X.detectPriceColumns([{ name: null, rows }])).toBe(true);
-    const M = mutant([['    if (!numeric && isLoneMoneyLabel(c)) return true;', '']]);
+    await expect(csvPrices('Unit Price\n34.97\n')).resolves.toBe(true);
+    const M = mutant([["    return !!cols && cols.some((i) => AMOUNT_UNDER.test(cellText(Array.isArray(row) ? row[i] : '')));", '    return false;']]);
     expect(M.detectPriceColumns([{ name: null, rows }])).toBe(false);
+    // "Part Number | Price" needs no row below: Part Number names the column beside it.
+    expect(M.detectPriceColumns([{ name: null, rows: [['Part Number', 'Price']] }])).toBe(true);
   });
 
-  // A number styled with Excel's built-in currency (5-8) or accounting (37-44)
+  // A number styled with Excel's built-in Currency (5-8) or Accounting (42, 44)
   // format, by id alone. Headers that name nothing, so only the format can tell.
   async function builtInFormat(id) {
     const wb = new ExcelJS.Workbook();
@@ -1463,8 +1469,14 @@ describe('the price check calls a price list priced, whatever its other headers 
     return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
   }
 
-  test.each([5, 6, 7, 8, 37, 38, 39, 40, 41, 42, 43, 44])('a number in built-in format %i has prices', async (id) => {
+  test.each([5, 6, 7, 8, 42, 44])('a number in built-in format %i has prices', async (id) => {
     await expect(xlsxPrices(await builtInFormat(id))).resolves.toBe(true);
+  });
+
+  // Round three: 37-41 and 43 are the Comma and "#,##0 ;(#,##0)" formats. No
+  // currency sign in any of them (see the Comma Style block below).
+  test.each([37, 38, 39, 40, 41, 43])('a number in built-in format %i has none', async (id) => {
+    await expect(xlsxPrices(await builtInFormat(id))).resolves.toBe(false);
   });
 
   test('...which exceljs cannot see, while a plain number format and a date format stay clean', async () => {
@@ -1863,4 +1875,390 @@ describe('a Labor section is any title with the word labor in it, unless it name
     expect(m.lines.map((l) => l.description)).toEqual(['Shingles', 'Roofing crew', 'Project maintenance']);
     expect(m.counts.skipped.labor).toBe(0);
   });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// REVIEW FINDINGS, ROUND THREE — the price check both ways: closed on a real
+// price list, and never closed on an ordinary takeoff.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// The T5 field pull sheet, as a PM would attach it.
+const T5_ROWS = PULL_SHEET_TEXT.map((l) => l.split(/\s{2,}/).filter((c) => c !== ''));
+
+function csvOf(rows) {
+  return rows.map((r) => r.map((c) => {
+    const s = String(c);
+    return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }).join(',')).join('\r\n') + '\r\n';
+}
+
+// The same rows three ways: straight to detectPriceColumns, as a CSV, and as an
+// xlsx (numbers stored as numbers) — both of those through detectFilePrices.
+async function pricesAllWays(rows) {
+  const strings = rows.map((r) => r.map(String));
+  const typed = rows.map((r) => r.map((c) => (typeof c === 'string' && /^-?\d+(?:\.\d+)?$/.test(c) ? Number(c) : c)));
+  return {
+    rows: X.detectPriceColumns([{ name: null, rows: strings }]),
+    csv: await csvPrices(csvOf(rows)),
+    xlsx: await xlsxPrices(await workbook([{ name: 'Takeoff', rows: typed }])),
+  };
+}
+
+const NONE = { rows: false, csv: false, xlsx: false };
+const PRICED = { rows: true, csv: true, xlsx: true };
+
+describe('a money word inside a material or a note is not a price column', () => {
+  // Each of these returned true on the committed check (a lone money word in a
+  // row with no numbers was enough), and false before it. The PUT stored
+  // has_prices true, and the pull sheet left every default crew link.
+  test.each([
+    ['a section row "EXT. TRIM"', ['EXT. TRIM']],
+    ['a section row "GUTTERS & DOWNSPOUT EXTENSIONS"', ['GUTTERS & DOWNSPOUT EXTENSIONS']],
+    ['a note row "Dumpster fee by owner"', ['Dumpster fee by owner']],
+    ['a note row "Deliver trusses separate"', ['Deliver trusses separate']],
+    ['a to-be-determined line, qty blank, noting "match existing R-value"', ['Fiberglass batt insulation', 'R-30', '', 'bag', 'Attic', 'match existing R-value']],
+  ])('the T5 pull sheet with %s has none', async (_label, extra) => {
+    expect(await pricesAllWays(T5_ROWS)).toEqual(NONE);
+    // Under the header, where a section title sits, and at the foot, where a note does.
+    expect(await pricesAllWays([T5_ROWS[0], T5_ROWS[1], extra, ...T5_ROWS.slice(2)])).toEqual(NONE);
+    expect(await pricesAllWays([...T5_ROWS, extra])).toEqual(NONE);
+  });
+
+  test.each(['Floor drain grate', 'Substrate board', 'Shipping crate', 'Ext. corner trim', 'Charge controller', 'Contractor bags'])(
+    'a descriptions-only list with %j on it has none', async (line) => {
+      expect(await pricesAllWays([['Drip edge'], ['Synthetic underlayment'], [line], ['Ridge vent']])).toEqual(NONE);
+    });
+
+  test('a takeoff whose quantities carry their unit ("12 sheets", "4 pcs") has none, with an extension, a grate or a charge controller on it', async () => {
+    const LIST = [
+      'Description,Qty,Unit',
+      'Vent boot,12 ea,each',
+      'Perforated soffit,10 pcs,each',
+      'Fire-rated drywall,8 sheets,ea',
+      'Exterior primer,2 gal,ea',
+      'Saturated felt,1 roll,ea',
+      'Hydrated lime,3 bags,ea',
+      'Ridge vent #2,,each',
+      'Soffit vent,,ea',
+    ];
+    const ADDED = ['Downspout extension,4 pcs,ea', 'Floor drain grate,2 pcs,ea', 'Ext. corner trim,10 pcs,ea', 'Substrate board,6 sheets,ea', 'Solar charge controller,1 pc,ea'];
+    await expect(csvPrices(LIST.join('\r\n'))).resolves.toBe(false);
+    for (const line of ADDED) {
+      await expect(csvPrices([...LIST, line].join('\r\n')).then((v) => [line, v])).resolves.toEqual([line, false]);
+    }
+    await expect(csvPrices([...LIST, ...ADDED].join('\r\n'))).resolves.toBe(false);
+    await expect(csvPrices('Description,Qty,Unit\r\nCDX plywood,12 sheets,sheet\r\nDownspout extension,4 pcs,ea\r\n')).resolves.toBe(false);
+    // A unit column's "each" beside a line whose name has a description word in it.
+    await expect(csvPrices('Description,Qty,Unit\r\nMisc. materials,,each\r\nRoofing materials,,ea\r\n')).resolves.toBe(false);
+  });
+
+  test('a quantity written with its unit is no money label, even over a bare quantity on the next line', async () => {
+    // "12 ea" and "24 total" lead with the number: quantities, not "Price 2".
+    expect(await pricesAllWays([['Description', 'Qty', 'Unit'], ['Vent boot', '12 ea', 'each'], ['Soffit vent', '10', 'ea']])).toEqual(NONE);
+    expect(await pricesAllWays([['Description', 'Qty', 'Unit'], ['Drip edge', '24 total', 'ea'], ['Ridge vent', '8', 'ea']])).toEqual(NONE);
+    // An invoice number column is keyed, not priced.
+    expect(await pricesAllWays([['Description', 'Qty', 'Invoice #'], ['Drip edge', '20', '10234']])).toEqual(NONE);
+  });
+
+  test('the Lead Report is still priced, and the rows below a header still are not read as one', async () => {
+    await expect(xlsxPrices(await leadReportXlsx())).resolves.toBe(true);
+    // A money label alone in a row with a material under it: no amount there.
+    expect(await pricesAllWays([['Unit Price'], ['Drip edge'], ['Vent boot']])).toEqual(NONE);
+  });
+});
+
+describe('a supplier price list is priced whatever one word heads its money column', () => {
+  // Each of these was stored has_prices false on the committed check, and the
+  // file — its net and dealer prices with it — went out on default crew links.
+  test.each([
+    'Item #,Description,UOM,Net\n10234,GAF Timberline HDZ Charcoal,BD,38.25\n',
+    'Description,UOM,List,Net\nGAF Timberline HDZ Charcoal,BD,45.00,38.25\n',
+    'Description,Qty,Unit,Dealer\nDrip edge,20,ea,7.25\n',
+    'Description,Qty,Contractor\nDrip edge,20,7.25\n',
+    'Item,Wholesale\nShingle,34.97\n',
+    'Description,Qty,Cost ea\nDrip edge,20,7.25\n',
+    'Description,Qty,Each $\nDrip edge,20,7.25\n',
+    'Description,Qty,Your price\nDrip edge,20,7.25\n',
+    'Description,Qty,Contractor Price\nDrip edge,20,7.25\n',
+    'Description,Qty,Ext. Price\nDrip edge,20,145.00\n',
+    // Export headers with the words run together, which a whole-word read must still split.
+    'Description,Qty,UnitPrice\nDrip edge,20,7.25\n',
+    'DESCRIPTION,QTY,UNITPRICE\nDrip edge,20,7.25\n',
+    'Description,Qty,Price/UOM\nDrip edge,20,7.25\n',
+    'Description,Qty,Amount Due\nDrip edge,20,145.00\n',
+    'Description,Qty,Sum of Price\nDrip edge,20,145.00\n',
+    // No label beside it the header read knows: the amounts under it decide.
+    'Style,Color,Net\nArchitectural,Charcoal,38.25\n',
+    'Net\n38.25\n',
+  ])('%j has prices', async (csv) => {
+    const rows = X.parseDelimited(csv);
+    expect(await pricesAllWays(rows)).toEqual(PRICED);
+  });
+
+  test('without the supplier words, "Item # | Description | UOM | Net" reads as clean', () => {
+    const rows = X.parseDelimited('Item #,Description,UOM,Net\n10234,GAF Timberline HDZ Charcoal,BD,38.25\n');
+    expect(X.detectPriceColumns([{ name: null, rows }])).toBe(true);
+    const M = mutant([[
+      "  'net', 'list', 'dealer', 'contractor', 'wholesale', 'retail', 'sale', 'sales', 'value', 'values', 'rate', 'rates',",
+      "  'retail', 'sale', 'sales', 'value', 'values', 'rate', 'rates',",
+    ]]);
+    expect(M.detectPriceColumns([{ name: null, rows }])).toBe(false);
+  });
+
+  test('without the whole-cell rule, "EXT. TRIM" over a quantity column is a price column again', () => {
+    // The shape that needs it: a section title that lands in a column of
+    // numbers. "ext" alone would be a label; "ext trim" is not one.
+    const rows = [['Material', 'Qty', 'Unit'], ['', 'EXT. TRIM', ''], ['Trim coil', '2', 'roll']];
+    expect(X.detectPriceColumns([{ name: null, rows }])).toBe(false);
+    const M = mutant([['    if (strength < 0) return 0;', '    if (strength < 0) continue;']]);
+    expect(M.detectPriceColumns([{ name: null, rows }])).toBe(true);
+  });
+});
+
+describe('a Comma Style quantity is not a price, and a format the file defines is read by its definition', () => {
+  const COMMA = '_(* #,##0.00_);_(* \\(#,##0.00\\);_(* "-"??_);_(@_)';
+  const ACCOUNTING = '_("$"* #,##0.00_);_("$"* \\(#,##0.00\\);_("$"* "-"??_);_(@_)';
+  const EURO = '#,##0.00 [$' + String.fromCharCode(0x20AC) + '-407]';
+  const attr = (s) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  // The pull sheet the review built: Description | Qty | Unit, its Qty cells in
+  // format `id` — by id alone when `formatCode` is undefined, or with a
+  // <numFmt numFmtId=id formatCode=...> that defines it.
+  async function pullSheet(id, formatCode) {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Pull sheet');
+    ws.addRow(['Description', 'Qty', 'Unit']);
+    ws.addRow(['1/2 in. CDX plywood 4x8', 1200, 'ea']);
+    ws.addRow(['Ridge vent', 45, 'lf']);
+    ws.getCell('B2').numFmt = '0.000';
+    ws.getCell('B3').numFmt = '0.000';
+    const zip = await JSZip.loadAsync(await wb.xlsx.writeBuffer());
+    let styles = await zip.file('xl/styles.xml').async('string');
+    expect(styles.split('formatCode=').length - 1).toBe(1);
+    expect(styles).toContain('<numFmt numFmtId="164" formatCode="0.000"/>');
+    if (formatCode === undefined) styles = styles.replace(/<numFmts[\s\S]*?<\/numFmts>/, '');
+    else styles = styles.split('formatCode="0.000"').join('formatCode="' + attr(formatCode) + '"');
+    zip.file('xl/styles.xml', styles.split('numFmtId="164"').join('numFmtId="' + id + '"'));
+    return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  }
+
+  test.each([37, 38, 39, 40, 41, 43])('Qty cells in built-in format %i: the pull sheet has none', async (id) => {
+    await expect(xlsxPrices(await pullSheet(id))).resolves.toBe(false);
+  });
+
+  test.each([5, 6, 7, 8, 42, 44])('...while the same cells in built-in currency format %i have prices', async (id) => {
+    await expect(xlsxPrices(await pullSheet(id))).resolves.toBe(true);
+  });
+
+  test('a defined format decides its id: Comma at 43, 44 or 164 is none; Accounting or a euro at 43 is priced', async () => {
+    await expect(xlsxPrices(await pullSheet(43, COMMA))).resolves.toBe(false);
+    await expect(xlsxPrices(await pullSheet(164, COMMA))).resolves.toBe(false);
+    await expect(xlsxPrices(await pullSheet(44, COMMA))).resolves.toBe(false);
+    await expect(xlsxPrices(await pullSheet(43, ACCOUNTING))).resolves.toBe(true);
+    await expect(xlsxPrices(await pullSheet(43, EURO))).resolves.toBe(true);
+  });
+
+  test('with the old id set, a Comma Style quantity is a price again', async () => {
+    const M = mutant([['const MONEY_NUMFMT_IDS = new Set([5, 6, 7, 8, 42, 44]);', 'const MONEY_NUMFMT_IDS = new Set([5, 6, 7, 8, 37, 38, 39, 40, 41, 42, 43, 44]);']]);
+    const buf = await pullSheet(43);
+    await expect(M.detectFilePrices({ att: att({ size_bytes: buf.length }), getBuffer: store({ 'k-orig': buf }) })).resolves.toBe(true);
+  });
+
+  test('going by the id alone, a Comma format defined at 44 is a price again', async () => {
+    const M = mutant([[
+      '    if (defined.has(id) ? isMoneyFormat(defined.get(id)) : MONEY_NUMFMT_IDS.has(id)) ids.add(index);',
+      '    if (MONEY_NUMFMT_IDS.has(id)) ids.add(index);',
+    ]]);
+    const buf = await pullSheet(44, COMMA);
+    await expect(M.detectFilePrices({ att: att({ size_bytes: buf.length }), getBuffer: store({ 'k-orig': buf }) })).resolves.toBe(true);
+  });
+});
+
+describe('a sheet stored under xl/media/ is measured as the XML it is', () => {
+  // exceljs buffers any part whose name contains xl/media/ and then matches the
+  // same name against its unanchored worksheet pattern. The committed check
+  // measured such a part against the 25 MB picture cap, and exceljs parsed
+  // 24 MB of sheet XML: out of memory on a 700 MB heap.
+  function sheetXml(bytes) {
+    const cells = [];
+    for (let c = 0; c < 20; c++) cells.push('<c t="n"><v>1234.5</v></c>');
+    const row = cells.join('');
+    const out = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'];
+    let size = out[0].length;
+    for (let r = 1; size < bytes; r++) {
+      const line = '<row r="' + r + '">' + row + '</row>';
+      out.push(line);
+      size += line.length;
+    }
+    out.push('</sheetData></worksheet>');
+    return out.join('');
+  }
+
+  async function withPart(name, content, rel) {
+    const zip = await JSZip.loadAsync(await workbook([{ name: 'Takeoff', rows: [['Description', 'Qty', 'Unit'], ['Drip edge', 20, 'ea']] }]));
+    zip.file(name, content);
+    if (rel) {
+      const rels = await zip.file('xl/_rels/workbook.xml.rels').async('string');
+      zip.file('xl/_rels/workbook.xml.rels', rels.replace('</Relationships>',
+        '<Relationship Id="rId99" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="' + rel + '"/></Relationships>'));
+    }
+    return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  }
+
+  test('a 24 MB sheet as xl/media/xl/worksheets/sheet2.xml is refused before exceljs opens it', async () => {
+    const xml = sheetXml(24 * MiB);
+    expect(xml.length).toBeGreaterThan(24 * MiB);
+    const buf = await withPart('xl/media/xl/worksheets/sheet2.xml', xml, 'media/xl/worksheets/sheet2.xml');
+    expect(buf.length).toBeLessThan(X.MAX_FILE_BYTES);
+    // The loader is stubbed throughout: a file that gets past the cap reaches
+    // it and fails these assertions, rather than spending the gigabyte the
+    // review's run did and taking the test process down with it.
+    const load = jest.spyOn(XLSX_LOADER.prototype, 'load').mockImplementation(async () => { throw new Error('loaded'); });
+    const a = att({ size_bytes: buf.length });
+    await expect(X.detectFilePrices({ att: a, getBuffer: store({ 'k-orig': buf }) })).resolves.toBeNull();
+    expect((await X.extractMaterials({ att: a, getBuffer: store({ 'k-orig': buf }) })).code).toBe('too_large');
+    await expect(X.xlsxToSheets(buf)).rejects.toMatchObject({ code: 'too_large' });
+    expect(load).not.toHaveBeenCalled();
+
+    // With a part counted as a picture by where its name starts, the file gets
+    // past the cap and into the loader.
+    const M = mutant([[
+      '  const isMedia = (e) => MEDIA_PART.test(e.name) && !PARSED_PART.test(e.name);',
+      "  const isMedia = (e) => e.name.indexOf('xl/media/') === 0;",
+    ]]);
+    await expect(M.detectFilePrices({ att: a, getBuffer: store({ 'k-orig': buf }) })).resolves.toBeNull();
+    expect(load).toHaveBeenCalled();
+  }, 120000);
+
+  test('...while a real picture past the XML cap is still a picture, and the workbook reads', async () => {
+    const picture = Buffer.alloc(13 * MiB, 7);
+    const buf = await withPart('xl/media/image1.png', picture);
+    await expect(xlsxPrices(buf)).resolves.toBe(false);
+    expect((await X.extractMaterials({ att: att({ size_bytes: buf.length }), getBuffer: store({ 'k-orig': buf }) })).materials)
+      .toEqual([{ description: 'Drip edge', qty: '20', unit: 'ea' }]);
+    // The same bytes under any name exceljs parses by, or that is no picture
+    // file directly under xl/media/, are XML to the cap: refused unloaded.
+    const load = jest.spyOn(XLSX_LOADER.prototype, 'load').mockImplementation(async () => { throw new Error('loaded'); });
+    for (const name of ['xl/media/sheet1.png/xl/worksheets/sheet3.xml', 'xl/media/comments1.png', 'xl/media/image1.xml']) {
+      const odd = await withPart(name, picture);
+      await expect(X.xlsxToSheets(odd, {}).catch((e) => e.code)).resolves.toBe('too_large');
+    }
+    expect(load).not.toHaveBeenCalled();
+  }, 120000);
+});
+
+describe('a price in a note, a text box, a pivot cache or a printed header or footer is a price', () => {
+  const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+
+  // The review's workbook: Material | Qty over Shingles | 30, and whatever `dress` adds.
+  async function shingles(dress) {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Takeoff');
+    ws.addRow(['Material', 'Qty']);
+    ws.addRow(['Shingles', 30]);
+    if (dress) dress(ws, wb);
+    return Buffer.from(await wb.xlsx.writeBuffer());
+  }
+
+  async function edited(buf, edit) {
+    const zip = await JSZip.loadAsync(buf);
+    await edit(zip);
+    return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  }
+
+  const withPicture = (ws, wb) => { ws.addImage(wb.addImage({ buffer: PNG, extension: 'png' }), 'C1:D3'); };
+
+  test('the note "Quoted $34.97/bundle" and the footer "Total $12,400": priced; the plain sheet: none', async () => {
+    await expect(xlsxPrices(await shingles())).resolves.toBe(false);
+    const noted = await shingles((ws) => { ws.getCell('A2').note = 'Quoted $34.97/bundle'; });
+    expect(await (await JSZip.loadAsync(noted)).file('xl/comments1.xml').async('string')).toContain('$34.97/bundle');
+    await expect(xlsxPrices(noted)).resolves.toBe(true);
+    await expect(xlsxPrices(await shingles((ws) => { ws.headerFooter.oddFooter = 'Total $12,400'; }))).resolves.toBe(true);
+    // A money label as a whole header section is one too; a title and page numbers are not.
+    await expect(xlsxPrices(await shingles((ws) => { ws.headerFooter.oddHeader = '&CPrice List'; }))).resolves.toBe(true);
+    await expect(xlsxPrices(await shingles((ws) => { ws.headerFooter.oddHeader = '&L&"Arial,Bold"&14Materials takeoff&RPage &P of &N'; }))).resolves.toBe(false);
+    // A note with no money in it, and a picture, leave the sheet clean.
+    await expect(xlsxPrices(await shingles((ws, wb) => { ws.getCell('A2').note = 'Stack under the tarp'; withPicture(ws, wb); }))).resolves.toBe(false);
+  });
+
+  test('a text box, a threaded comment and a pivot cache', async () => {
+    const TEXT_BOX = '<xdr:twoCellAnchor><xdr:from><xdr:col>5</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>'
+      + '<xdr:to><xdr:col>8</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>4</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>'
+      + '<xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="2" name="TextBox 1"/><xdr:cNvSpPr txBox="1"/></xdr:nvSpPr><xdr:spPr/>'
+      + '<xdr:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>TEXT</a:t></a:r></a:p></xdr:txBody></xdr:sp><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>';
+    const box = async (text) => edited(await shingles(withPicture), async (zip) => {
+      const d = await zip.file('xl/drawings/drawing1.xml').async('string');
+      zip.file('xl/drawings/drawing1.xml', d.replace('</xdr:wsDr>', TEXT_BOX.replace('TEXT', text)));
+    });
+    // The dollar sign written as a character reference.
+    await expect(xlsxPrices(await box('Dealer quoted &#36;38.25/bundle'))).resolves.toBe(true);
+    await expect(xlsxPrices(await box('Unit price'))).resolves.toBe(true);
+    await expect(xlsxPrices(await box('Stack bundles on the north side'))).resolves.toBe(false);
+
+    const threaded = async (text) => edited(await shingles(), async (zip) => {
+      zip.file('xl/threadedComments/threadedComment1.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        + '<ThreadedComments xmlns="http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments">'
+        + '<threadedComment ref="A2" dT="2026-09-01T12:00:00.00" personId="{11111111-2222-3333-4444-555555555555}" id="{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}">'
+        + '<text>' + text + '</text></threadedComment></ThreadedComments>');
+    });
+    await expect(xlsxPrices(await threaded('Supplier says 38.25 USD a bundle'))).resolves.toBe(true);
+    await expect(xlsxPrices(await threaded('Confirm the color with the owner'))).resolves.toBe(false);
+
+    const pivot = async (fields, items) => edited(await shingles(), async (zip) => {
+      zip.file('xl/pivotCache/pivotCacheDefinition1.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        + '<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" refreshedBy="PM" recordCount="2">'
+        + '<cacheSource type="worksheet"><worksheetSource ref="A1:C3" sheet="Source"/></cacheSource><cacheFields count="' + fields.length + '">'
+        + fields.map((f) => '<cacheField name="' + f + '" numFmtId="0"><sharedItems>' + items.map((i) => '<s v="' + i + '"/>').join('') + '</sharedItems></cacheField>').join('')
+        + '</cacheFields><extLst><ext uri="{725AE2AE-9491-48be-B2B4-4EB974FC3084}"/></extLst></pivotCacheDefinition>');
+    });
+    // The pivot's source sheet is gone; its cache still names the Net column.
+    await expect(xlsxPrices(await pivot(['Description', 'Net'], ['Shingles', 'Drip edge']))).resolves.toBe(true);
+    await expect(xlsxPrices(await pivot(['Description', 'Qty', 'Unit'], ['Shingles', 'each', 'ea']))).resolves.toBe(false);
+  });
+
+  test('a form control linked to $A$1 in a legacy drawing is not a dollar amount', async () => {
+    const buf = await edited(await shingles((ws) => { ws.getCell('A2').note = 'Stack under the tarp'; }), async (zip) => {
+      const v = await zip.file('xl/drawings/vmlDrawing1.vml').async('string');
+      zip.file('xl/drawings/vmlDrawing1.vml', v.replace('<x:Row>', '<x:FmlaLink>$A$1</x:FmlaLink><x:FmlaRange>Takeoff!$B$2:$B$9</x:FmlaRange><x:Row>'));
+    });
+    await expect(xlsxPrices(buf)).resolves.toBe(false);
+  });
+
+  test('without the part scan, the note reads as clean; without the header/footer scan, the footer does', async () => {
+    const noted = await shingles((ws) => { ws.getCell('A2').note = 'Quoted $34.97/bundle'; });
+    const footed = await shingles((ws) => { ws.headerFooter.oddFooter = 'Total $12,400'; });
+    const noParts = mutant([['    else if (TEXT_PART.test(e.name)) {', '    else if (false) {']]);
+    await expect(noParts.detectFilePrices({ att: att({ size_bytes: noted.length }), getBuffer: store({ 'k-orig': noted }) })).resolves.toBe(false);
+    const noFooter = mutant([['      if (printed && moneyInText(printed, false, false)) return', '      if (false) return']]);
+    await expect(noFooter.detectFilePrices({ att: att({ size_bytes: footed.length }), getBuffer: store({ 'k-orig': footed }) })).resolves.toBe(false);
+  });
+
+  test('a drawing, a comment part and a footer the size of the XML cap are scanned in bounded time', async () => {
+    const timedPrices = async (buf) => {
+      const t = process.hrtime.bigint();
+      const value = await xlsxPrices(buf);
+      return { value, ms: msSince(t) };
+    };
+    const big = 11 * MiB;
+    // Runs that pass the substring prefilter and are no label: the scan's worst case.
+    const drawing = await edited(await shingles(withPicture), async (zip) => {
+      const d = await zip.file('xl/drawings/drawing1.xml').async('string');
+      zip.file('xl/drawings/drawing1.xml', d.replace('</xdr:wsDr>', '<a:t>great each x</a:t><x a="net wrap"/>'.repeat(Math.floor(big / 40)) + '</xdr:wsDr>'));
+    });
+    const comments = await edited(await shingles((ws) => { ws.getCell('A2').note = 'Stack under the tarp'; }), async (zip) => {
+      const c = await zip.file('xl/comments1.xml').async('string');
+      zip.file('xl/comments1.xml', c.replace('Stack under the tarp', '&#51;&gt;&gt;&lt;'.repeat(Math.floor(big / 17))));
+    });
+    const footer = await edited(await shingles((ws) => { ws.headerFooter.oddFooter = 'x'; }), async (zip) => {
+      const s = await zip.file('xl/worksheets/sheet1.xml').async('string');
+      zip.file('xl/worksheets/sheet1.xml', s.replace('<oddFooter>x</oddFooter>', '<oddFooter>' + '&amp;"&amp;12 per '.repeat(Math.floor(big / 18)) + '</oddFooter>'));
+    });
+    for (const buf of [drawing, comments, footer]) {
+      const read = await timedPrices(buf);
+      // About a second each on a quiet machine, exceljs's own load of the
+      // part included; the bound is several times that.
+      expect(read.ms).toBeLessThan(8000);
+      expect(read.value === false || read.value === null).toBe(true);
+    }
+  }, 120000);
 });

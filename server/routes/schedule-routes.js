@@ -18,7 +18,7 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireCapability, getAttributedUserId, requireOrgId } = require('../auth');
-const { jobInOrg } = require('../services/job-org-scope');
+const { jobInOrg, parentJobInOrgSql } = require('../services/job-org-scope');
 const { assertEntityInOrg } = require('../org-access');
 const { sendEmail } = require('../email');
 // Sender identity helpers — a separate, never-mocked module (see its header).
@@ -376,6 +376,19 @@ router.patch('/:id',
       const inOrg = await assertEntityInOrg('schedule_entry', req.params.id, req.orgId);
       if (!inOrg) return res.status(404).json({ error: 'not found' });
 
+      // And a MOVE proves the job it moves onto, exactly as the create does.
+      // The gate above looks at the entry's CURRENT job only, and job_id is a
+      // plain foreign key that any tenant's job satisfies — so an org-A
+      // scheduler could PATCH jobId to an org-B job id and the entry, with
+      // org-A's notes and crew, left org A's calendar for org B's, where org B
+      // could read, edit and delete it. It was also an existence oracle: a
+      // made-up id failed the foreign key as a 500, a real org-B id answered
+      // 200. A job in another tenant is "job not found", like one that does
+      // not exist, and nothing is written.
+      if (v.jobId !== undefined && !(await jobInOrg(pool, v.jobId, req.orgId))) {
+        return res.status(404).json({ error: 'job not found' });
+      }
+
       // Optimistic-locking pre-check. Skipped silently when the
       // client hasn't sent a token (older callers / scripts).
       if (expectedUpdatedAt) {
@@ -401,7 +414,8 @@ router.patch('/:id',
       const sets = [];
       const params = [];
       const push = (col, val) => { params.push(val); sets.push(col + ' = $' + params.length); };
-      if (v.jobId !== undefined) push('job_id', v.jobId);
+      let jobParam = null;
+      if (v.jobId !== undefined) { push('job_id', v.jobId); jobParam = '$' + params.length; }
       if (v.startDate !== undefined) push('start_date', v.startDate);
       if (v.days !== undefined) push('days', v.days);
       if (v.crew !== undefined) {
@@ -428,10 +442,20 @@ router.patch('/:id',
         }
       }
 
+      // The write carries the tenant too, so a job that changes tenant between
+      // the checks above and this statement reopens neither door. WHERE is
+      // evaluated against the row as it stood: the first predicate holds the
+      // entry's CURRENT job to the caller's org, the second (a move only) holds
+      // the job it moves onto. Either failing writes nothing and answers the
+      // 404 below. The id stays the last parameter.
+      params.push(req.orgId);
+      const orgParam = '$' + params.length;
       params.push(req.params.id);
       const sql =
         'UPDATE schedule_entries SET ' + sets.join(', ') +
         ' WHERE id = $' + params.length +
+        ' AND ' + parentJobInOrgSql('schedule_entries.job_id', orgParam) +
+        (jobParam ? ' AND ' + parentJobInOrgSql(jobParam, orgParam) : '') +
         " RETURNING *, to_char(start_date, 'YYYY-MM-DD') AS start_date_iso";
       const { rows } = await pool.query(sql, params);
       if (!rows.length) return res.status(404).json({ error: 'not found' });

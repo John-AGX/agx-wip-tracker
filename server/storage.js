@@ -18,6 +18,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { finished } = require('stream');
 
 class StorageAdapter {
   /**
@@ -62,13 +63,45 @@ class LocalDiskStorage extends StorageAdapter {
     try {
       const st = await handle.stat();
       // autoClose (the default) gives the descriptor back when the stream ends
-      // or is destroyed.
+      // or is destroyed — including a stream destroyed before it was ever read,
+      // which is what the crew link's size-mismatch refusal does
+      // (test/storage-get-stream.test.js holds each way it can stop).
       return { stream: handle.createReadStream(), size: st.size };
     } catch (e) {
       await handle.close().catch(() => {});
       throw e;
     }
   }
+}
+
+// A body the SDK has wrapped around the HTTP response, tied back to it.
+//
+// clientConfig keeps GetObject from being wrapped at all. This is the second
+// half, for a wrapper that arrives anyway — a caller that sets ChecksumMode, an
+// SDK whose default moves, another middleware built the same way. The SDK's
+// wrappers keep the response they read as `.source` and pipe it in, and a pipe
+// carries neither teardown nor failure across:
+//   * the wrapper destroyed (a reader gone, a refusal, a for-await that threw)
+//     -> the response is destroyed with it, which closes its socket. A
+//     response already read to its end is left to the agent: destroying a
+//     complete IncomingMessage does not touch the socket, so a finished read
+//     still gives its keep-alive connection back.
+//   * the response failing, or closing before its end -> the wrapper is
+//     destroyed with that error, so whoever reads it sees the failure instead
+//     of waiting on an end that is never coming.
+// A plain body (no `.source`) is handed back untouched.
+function tieToResponse(body) {
+  const inner = body && body.source;
+  if (!inner || inner === body || typeof inner.destroy !== 'function' || typeof inner.on !== 'function') {
+    return body;
+  }
+  const letGo = () => { if (!inner.destroyed) inner.destroy(); };
+  if (body.destroyed) letGo();
+  else body.once('close', letGo);
+  finished(inner, (err) => {
+    if (err && !body.destroyed) body.destroy(err);
+  });
+  return body;
 }
 
 // Cloudflare R2 backend. R2 speaks the S3 API, so we use @aws-sdk/client-s3
@@ -106,14 +139,45 @@ class R2Storage extends StorageAdapter {
     var pb = opts.publicBase.replace(/\/$/, '');
     if (!/^https?:\/\//i.test(pb)) pb = 'https://' + pb;
     this.publicBase = pb;
-    this.client = new this._S3Client({
+    this.client = new this._S3Client(R2Storage.clientConfig(opts));
+  }
+
+  // The S3Client options. A static so a test can build the SAME client against
+  // a local endpoint (test/storage-get-stream.test.js) — only the endpoint and
+  // the transport are swapped there, never the checksum mode.
+  //
+  // responseChecksumValidation: 'WHEN_REQUIRED'. The SDK default
+  // (WHEN_SUPPORTED) asks for checksum mode on every GetObject, and when R2
+  // answers with an x-amz-checksum-crc32 header the body handed back is not the
+  // HTTP response but @smithy/util-stream's ChecksumStream, a Duplex the
+  // response is piped into. That wrapper has no _destroy: destroying it only
+  // unpipes, and the IncomingMessage underneath — never read to its end, never
+  // destroyed — keeps its keep-alive socket out of the pool, paused, forever.
+  // The agent allows 50 sockets. So fifty downloads cancelled on the crew link
+  // (a closed tab, a size refusal) held all fifty, and every R2 call in the
+  // process after that — uploads, getBuffer, other tenants' downloads — waited
+  // on a socket that was never coming back. The same wrapper also never
+  // forwards an error from the response, so a reset mid-read left its reader
+  // waiting on an end that never came.
+  //
+  // WHEN_REQUIRED means GetObject is not asked for checksum mode, so the body
+  // is the IncomingMessage itself, whose destroy closes its socket. What that
+  // gives up is a CRC over bytes that already arrived over TLS, and the
+  // streaming read gains little from that CRC anyway: it is checked only once
+  // the last byte has been read, when the file has already gone out to the
+  // crew. Uploads are unchanged — this names the
+  // RESPONSE check, and requestChecksumCalculation (the CRC32 sent with
+  // PutObject) keeps its default. DeleteObject carries no checksum either way.
+  static clientConfig(opts) {
+    return {
       region: 'auto', // R2 ignores region but the SDK demands one
       endpoint: 'https://' + opts.accountId + '.r2.cloudflarestorage.com',
       credentials: {
         accessKeyId: opts.accessKeyId,
         secretAccessKey: opts.secretAccessKey
-      }
-    });
+      },
+      responseChecksumValidation: 'WHEN_REQUIRED'
+    };
   }
 
   async put(key, buffer, contentType) {
@@ -151,7 +215,7 @@ class R2Storage extends StorageAdapter {
       Bucket: this.bucket,
       Key: key
     }));
-    const body = res.Body;
+    const body = tieToResponse(res.Body);
     if (!body) throw new Error('R2 getBuffer: empty body for key ' + key);
     const chunks = [];
     for await (const chunk of body) {
@@ -162,13 +226,14 @@ class R2Storage extends StorageAdapter {
 
   // The streaming read (see LocalDiskStorage.getStream): the S3 body is
   // already a Node stream, handed on uncollected, with the length R2 reports
-  // for the object — null when it reports none.
+  // for the object — null when it reports none. Destroying it lets the R2
+  // connection go (see clientConfig and tieToResponse).
   async getStream(key) {
     const res = await this.client.send(new this._GetObjectCommand({
       Bucket: this.bucket,
       Key: key
     }));
-    const body = res.Body;
+    const body = tieToResponse(res.Body);
     if (!body) throw new Error('R2 getStream: empty body');
     const size = res.ContentLength == null ? null : Number(res.ContentLength);
     return { stream: body, size: Number.isFinite(size) ? size : null };

@@ -208,6 +208,7 @@ async function sendEmail(opts) {
   // tracking pixel already points at.
   const logId = genId();
   let sentFrom = from;
+  let sentReplyTo = replyTo;
   try {
     const trackedHtml = injectTracking(html, logId);
 
@@ -229,25 +230,43 @@ async function sendEmail(opts) {
 
     let res = await client.emails.send(payload);
     let retryNote = null;
-    // A branded display name the provider refuses must never cost the
-    // recipient their notification: retry ONCE on the plain platform From.
-    if (res && res.error && identity.branded && isValidationError(res.error)) {
+    // At most ONE resend, and only when the refusal names the header that
+    // this code can take back:
+    //   - the From: a branded display name the provider will not accept must
+    //     never cost the recipient their notification, so resend on the plain
+    //     platform From (Reply-To kept).
+    //   - the Reply-To: the address came from a users row checked only for
+    //     shape, so resend WITHOUT it and keep the branded From.
+    // Anything else (a bad recipient, an unverified domain, bad tags, rate
+    // limits) is logged exactly as the provider returned it. Resending would
+    // fail the same way, spend rate budget during a bulk send, and a
+    // "branded From rejected" note would blame an org name that was fine.
+    const refused = res && res.error ? refusedHeader(res.error) : null;
+    if (refused === 'from' && identity.branded) {
       const firstErr = res.error.message || JSON.stringify(res.error);
       console.warn('[email] branded From rejected (' + firstErr + '); retrying with EMAIL_FROM. tag=' + tag);
       retryNote = 'branded From rejected by provider (' + firstErr + '); resent with platform From';
       sentFrom = process.env.EMAIL_FROM;
       res = await client.emails.send(Object.assign({}, payload, { from: sentFrom }));
+    } else if (refused === 'reply_to' && payload.replyTo) {
+      const firstErr = res.error.message || JSON.stringify(res.error);
+      console.warn('[email] Reply-To rejected (' + firstErr + '); retrying without it. tag=' + tag);
+      retryNote = 'Reply-To ' + payload.replyTo + ' rejected by provider (' + firstErr + '); resent without Reply-To';
+      sentReplyTo = null;
+      const withoutReplyTo = Object.assign({}, payload);
+      delete withoutReplyTo.replyTo;
+      res = await client.emails.send(withoutReplyTo);
     }
     // Resend returns { data: { id }, error: null } on success and
     // { data: null, error: {...} } on failure — handle both shapes.
     if (res && res.error) {
       let err = res.error.message || JSON.stringify(res.error);
       if (retryNote) err = retryNote + '; retry failed: ' + err;
-      const id = await logSend({ id: logId, to, subject, tag, status: 'failed', error: err, from: sentFrom, replyTo });
+      const id = await logSend({ id: logId, to, subject, tag, status: 'failed', error: err, from: sentFrom, replyTo: sentReplyTo });
       return { ok: false, id, providerId: null, error: err, dryRun: false };
     }
     const providerId = (res && res.data && res.data.id) || null;
-    const id = await logSend({ id: logId, to, subject, tag, status: 'sent', providerId, error: retryNote, from: sentFrom, replyTo });
+    const id = await logSend({ id: logId, to, subject, tag, status: 'sent', providerId, error: retryNote, from: sentFrom, replyTo: sentReplyTo });
     // Usage metering (SaaS scaffold) — the one live example of the meter
     // accumulating. Counts billable sends per org per month. Fire-and-
     // forget: recordUsage never throws and a null org is a silent no-op,
@@ -260,18 +279,37 @@ async function sendEmail(opts) {
     return { ok: true, id, providerId, error: null, dryRun: false };
   } catch (e) {
     const err = e && e.message ? e.message : String(e);
-    const id = await logSend({ id: logId, to, subject, tag, status: 'failed', error: err, from: sentFrom, replyTo });
+    const id = await logSend({ id: logId, to, subject, tag, status: 'failed', error: err, from: sentFrom, replyTo: sentReplyTo });
     return { ok: false, id, providerId: null, error: err, dryRun: false };
   }
 }
 
-// Resend's refusal of a malformed request (a display name it will not
-// accept lands here) — as opposed to auth, rate-limit or outage errors,
-// where resending on another From would change nothing.
-function isValidationError(error) {
-  if (!error) return false;
-  if (Number(error.statusCode) === 422) return true;
-  return error.name === 'validation_error' || error.name === 'invalid_from_address';
+// Which header a provider refusal is about: 'from', 'reply_to', or null.
+//
+// Resend files many different refusals under one name, validation_error (a
+// bad recipient, an invalid reply_to, tags with invalid characters, and even
+// a 403 for an unverified domain), so the name or a 422 alone says nothing
+// about WHICH field was refused. Its message does: "Invalid `from` field. ..."
+// or "Invalid `reply_to` field. ...". So:
+//   'from'      the error is named invalid_from_address, or it is a
+//               validation refusal whose message names the from FIELD (or
+//               header);
+//   'reply_to'  a validation refusal whose message names the reply_to field.
+// "from" alone is not enough: the testing-mode 403 (validation_error) says
+// "...change the `from` address to an email using this domain", and resending
+// that on the platform From fails identically. Auth, rate-limit and outage
+// errors are never validation refusals and always come back null.
+const FROM_FIELD_RE = /(?:^|[^a-z_])[`"']?from[`"']?\s+(?:field|header)\b/i;
+const REPLY_TO_FIELD_RE = /[`"']reply_?to[`"']|\breply[_\s-]?to\s+(?:field|header|address)\b/i;
+function refusedHeader(error) {
+  if (!error || typeof error !== 'object') return null;
+  if (error.name === 'invalid_from_address') return 'from';
+  const validation = Number(error.statusCode) === 422 || error.name === 'validation_error';
+  if (!validation) return null;
+  const message = typeof error.message === 'string' ? error.message : '';
+  if (FROM_FIELD_RE.test(message)) return 'from';
+  if (REPLY_TO_FIELD_RE.test(message)) return 'reply_to';
+  return null;
 }
 
 // Resolve the From and Reply-To one send will carry.

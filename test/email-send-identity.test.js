@@ -15,8 +15,10 @@
 //   - Org mail never inherits the platform EMAIL_REPLY_TO (a sub's reply to
 //     their GC must not land in platform support); replyTo:false suppresses it
 //     on platform mail too.
-//   - A provider validation error on a branded From retries ONCE on the plain
-//     From, so an odd company name can never cost a notification.
+//   - A provider refusal OF THE BRANDED FROM retries ONCE on the plain From,
+//     so an odd company name can never cost a notification. A refusal of the
+//     Reply-To resends once without it, keeping the branded From. Any other
+//     refusal is logged exactly as returned: one call, no From note.
 //   - Dry-run and every other exit log the From / Reply-To they would carry.
 //   - sendForEvent brands only org-scope events: org_invite / user_invite /
 //     password_reset stay on the platform sender even with an org id, and the
@@ -230,12 +232,133 @@ describe('provider validation error on a branded From', () => {
 
   test('a retry that also fails reports both', async () => {
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
-    mockSendImpl = () => ({ data: null, error: { statusCode: 422, name: 'validation_error', message: 'nope' } });
+    // Before the classification fix this used a bare 'nope' message, which the
+    // old any-validation-error rule retried; a From retry now needs a refusal
+    // that names the from field.
+    mockSendImpl = () => ({ data: null, error: { statusCode: 422, name: 'validation_error', message: 'Invalid `from` field.' } });
     const r = await email.sendEmail(Object.assign({}, BASE, { senderOrg: { id: 7 } }));
     warn.mockRestore();
     expect(r.ok).toBe(false);
     expect(mockSends).toHaveLength(2);
     expect(logRows()[0].error).toMatch(/retry failed/);
+  });
+});
+
+// ── which refusal earns a resend ────────────────────────────────────────
+//
+// WHAT WAS WRONG
+// The retry fired on ANY 422 or any error named validation_error, and Resend
+// files a bad reply_to, a bad recipient, bad tags and even the 403s for an
+// unverified domain or testing mode under that one name. A refused Reply-To
+// (pm@agx.com. passes the shape check) was resent with the same Reply-To on
+// the platform From, failed again, and email_log blamed the org name:
+// "branded From rejected by provider (...); retry failed". Every other
+// refusal on branded mail cost a second API call and the same false note.
+//
+// WHAT IS NOW HELD, per branch: the number of calls Resend sees, what each
+// call carried, and the email_log row.
+const BRANDED = '"AG Exteriors via Project 86" <notifications@project86.net>';
+// The shapes resend@4 hands back: the provider's JSON error body as-is.
+const RESEND_ERRORS = {
+  from: { statusCode: 422, name: 'validation_error', message: 'Invalid `from` field. The email address needs to follow the `email@example.com` or `Name <email@example.com>` format.' },
+  fromNamed: { statusCode: 403, name: 'invalid_from_address', message: 'Invalid address.' },
+  replyTo: { statusCode: 422, name: 'validation_error', message: 'Invalid `reply_to` field. The email address needs to follow the `email@example.com` or `Name <email@example.com>` format.' },
+  to: { statusCode: 422, name: 'validation_error', message: 'Invalid `to` field. The email address needs to follow the `email@example.com` or `Name <email@example.com>` format.' },
+  tags: { statusCode: 422, name: 'validation_error', message: 'Tags should only contain ASCII letters, numbers, underscores, or dashes.' },
+  domain: { statusCode: 403, name: 'validation_error', message: 'The agx.com domain is not verified. Please, add and verify your domain on https://resend.com/domains' },
+  testingMode: { statusCode: 403, name: 'validation_error', message: 'You can only send testing emails to your own email address (owner@agx.com). To send emails to other recipients, please verify a domain at resend.com/domains, and change the `from` address to an email using this domain.' },
+  bare422: { statusCode: 422, name: 'validation_error', message: 'nope' },
+};
+const refuseFirst = (error) => (payload, n) => (n === 1 ? { data: null, error } : { data: { id: 'prov_retry' }, error: null });
+
+describe('provider refusals — only the refused header is taken back', () => {
+  let warn;
+  beforeEach(() => { warn = jest.spyOn(console, 'warn').mockImplementation(() => {}); });
+  afterEach(() => warn.mockRestore());
+
+  test.each(['from', 'fromNamed'])('a %s refusal on a branded send resends once on the platform From, Reply-To kept', async (key) => {
+    mockSendImpl = refuseFirst(RESEND_ERRORS[key]);
+    const r = await email.sendEmail(Object.assign({}, BASE, { senderOrg: { id: 7 }, replyTo: 'pm@agx.com' }));
+    expect(r.ok).toBe(true);
+    expect(mockSends).toHaveLength(2);
+    expect(mockSends.map((p) => p.from)).toEqual([BRANDED, PLAIN_FROM]);
+    expect(mockSends.map((p) => p.replyTo)).toEqual(['pm@agx.com', 'pm@agx.com']);
+    const rows = logRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ status: 'sent', from: PLAIN_FROM, replyTo: 'pm@agx.com' });
+    expect(rows[0].error).toBe('branded From rejected by provider (' + RESEND_ERRORS[key].message + '); resent with platform From');
+  });
+
+  test('a reply_to refusal resends once WITHOUT the Reply-To and keeps the branded From', async () => {
+    mockSendImpl = refuseFirst(RESEND_ERRORS.replyTo);
+    const r = await email.sendEmail(Object.assign({}, BASE, { senderOrg: { id: 7 }, replyTo: 'pm@agx.com.' }));
+    expect(r.ok).toBe(true);
+    expect(r.providerId).toBe('prov_retry');
+    expect(mockSends).toHaveLength(2);
+    expect(mockSends.map((p) => p.from)).toEqual([BRANDED, BRANDED]);
+    expect(mockSends[0].replyTo).toBe('pm@agx.com.');
+    expect(mockSends[1]).not.toHaveProperty('replyTo');
+    expect(mockSends[1]).not.toHaveProperty('reply_to');
+    // Nothing else about the mail changed on the resend.
+    expect(Object.assign({}, mockSends[1], { replyTo: 'pm@agx.com.' })).toEqual(mockSends[0]);
+    const rows = logRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ status: 'sent', from: BRANDED, replyTo: null });
+    expect(rows[0].error).toBe('Reply-To pm@agx.com. rejected by provider (' + RESEND_ERRORS.replyTo.message + '); resent without Reply-To');
+    expect(rows[0].error).not.toMatch(/branded From/);
+  });
+
+  test('a reply_to refusal on platform mail also resends without the Reply-To', async () => {
+    mockSendImpl = refuseFirst(RESEND_ERRORS.replyTo);
+    const r = await email.sendEmail(Object.assign({}, BASE, { replyTo: 'pm@agx.com.' }));
+    expect(r.ok).toBe(true);
+    expect(mockSends.map((p) => p.from)).toEqual([PLAIN_FROM, PLAIN_FROM]);
+    expect(mockSends[1]).not.toHaveProperty('replyTo');
+    expect(logRows()[0]).toMatchObject({ status: 'sent', from: PLAIN_FROM, replyTo: null });
+  });
+
+  test('a reply_to resend that fails too is logged once, naming both, with no From note', async () => {
+    mockSendImpl = (payload, n) => (n === 1
+      ? { data: null, error: RESEND_ERRORS.replyTo }
+      : { data: null, error: RESEND_ERRORS.domain });
+    const r = await email.sendEmail(Object.assign({}, BASE, { senderOrg: { id: 7 }, replyTo: 'pm@agx.com.' }));
+    expect(r.ok).toBe(false);
+    expect(mockSends).toHaveLength(2);
+    const rows = logRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ status: 'failed', from: BRANDED, replyTo: null });
+    expect(rows[0].error).toBe('Reply-To pm@agx.com. rejected by provider (' + RESEND_ERRORS.replyTo.message +
+      '); resent without Reply-To; retry failed: ' + RESEND_ERRORS.domain.message);
+  });
+
+  test('a reply_to refusal on a send that carried no Reply-To is not resent', async () => {
+    mockSendImpl = refuseFirst(RESEND_ERRORS.replyTo);
+    const r = await email.sendEmail(Object.assign({}, BASE, { senderOrg: { id: 7 } }));
+    expect(r.ok).toBe(false);
+    expect(mockSends).toHaveLength(1);
+    expect(logRows()[0].error).toBe(RESEND_ERRORS.replyTo.message);
+  });
+
+  test.each(['to', 'tags', 'domain', 'testingMode', 'bare422'])(
+    'a %s refusal on a branded send: one call, logged exactly as returned', async (key) => {
+      mockSendImpl = () => ({ data: null, error: RESEND_ERRORS[key] });
+      const r = await email.sendEmail(Object.assign({}, BASE, { senderOrg: { id: 7 }, replyTo: 'pm@agx.com' }));
+      expect(r.ok).toBe(false);
+      expect(r.error).toBe(RESEND_ERRORS[key].message);
+      expect(mockSends).toHaveLength(1);
+      expect(mockSends[0].from).toBe(BRANDED);
+      const rows = logRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ status: 'failed', from: BRANDED, replyTo: 'pm@agx.com', error: RESEND_ERRORS[key].message });
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+  test('a from refusal on an UNbranded send is not resent (there is no plainer From)', async () => {
+    mockSendImpl = refuseFirst(RESEND_ERRORS.from);
+    const r = await email.sendEmail(Object.assign({}, BASE, { replyTo: 'pm@agx.com' }));
+    expect(r.ok).toBe(false);
+    expect(mockSends).toHaveLength(1);
+    expect(logRows()[0].error).toBe(RESEND_ERRORS.from.message);
   });
 });
 

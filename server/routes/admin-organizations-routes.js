@@ -22,7 +22,7 @@ const { toFile } = require('@anthropic-ai/sdk');
 const { pool, listOrganizations, getOrgById } = require('../db');
 const { requireAuth, requireCapability, requireOrg, requireSystemAdmin, signToken } = require('../auth');
 const { sendForEvent } = require('../email');
-const { PLATFORM_NAME } = require('../email-sender');
+const { orgNameProblem } = require('../email-sender');
 const { auditLog, auditCritical, auditActorCritical, actorFromRequest } = require('../audit');
 const { deleteSkillDeep, anthropicDisplayTitle } = require('../services/anthropic-skills');
 // NOTE: dropPackByName is deliberately NOT imported any more. It was the only
@@ -102,42 +102,22 @@ async function uploadPackAsNewVersion(anthropic, skillId, pack) {
   });
 }
 
-// Refuse an organization name that cannot safely become a sender name.
+// Refusing an organization name that cannot safely become a sender name.
 //
-// Org mail now goes out as "<Org> via Project 86", so organizations.name is
+// Org mail goes out as "<Org> via Project 86", so organizations.name is
 // tenant-controlled text that lands in a From header. server/email-sender.js
-// already sanitises it at send time and falls back to the plain platform
-// sender, so a bad name can never inject a header or spoof one. Refusing it
-// HERE is the second half: an admin who types one hears about it at save
-// instead of their company's mail silently going out unbranded forever.
+// sanitises it at send time and falls back to the plain platform sender, so a
+// bad name can never inject a header or spoof one. Refusing it HERE is the
+// second half: an admin who types one hears about it at save instead of their
+// company's mail silently going out unbranded forever.
 //
-//   - control characters (CR/LF/TAB, C1) and line separators: header
-//     injection, and nothing a company name needs;
-//   - bidi overrides/isolates, zero-width and other invisible format
-//     characters: display spoofing (U+202E flips the rest of the name);
-//   - the platform's own name: a tenant called "Project 86 Security" would
-//     mail every sub and client as the platform.
-//
-// Returns an error message, or null when the name is acceptable. Length and
-// emptiness stay the callers' existing checks.
-function orgNameProblem(name) {
-  const s = String(name == null ? '' : name);
-  if (/[\p{Cc}\p{Zl}\p{Zp}]/u.test(s)) {
-    return 'name cannot contain line breaks, tabs or control characters';
-  }
-  if (/[\p{Cf}]/u.test(s)) {
-    return 'name cannot contain invisible formatting characters (bidi overrides, zero-width characters)';
-  }
-  let folded = s;
-  try { folded = s.normalize('NFKC'); } catch (_) { /* malformed input: test as is */ }
-  const squash = (v) => String(v || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
-  const key = squash(folded);
-  const platformKey = squash(PLATFORM_NAME);
-  if (key.indexOf('project86') !== -1 || (platformKey && key.indexOf(platformKey) !== -1)) {
-    return 'name cannot include "' + PLATFORM_NAME + '" — organization mail is sent as "<your organization> via ' + PLATFORM_NAME + '"';
-  }
-  return null;
-}
+// The rule itself is email-sender.orgNameProblem, the same function the
+// send-time cleanOrgName runs, so what saves and what brands cannot drift
+// apart. It refuses control characters, invisible format characters, hidden
+// filler letters and blank symbols, a name with no letter, and any spelling
+// of the platform's own name, look-alike letters and other scripts' digits
+// included. It returns a message starting "name ", or null.
+
 
 // Helper: confirm the caller is allowed to act on the requested
 // organization id. Today: must match their own org (no cross-org
@@ -545,8 +525,19 @@ router.put('/:id', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), a
       const trimmed = req.body.name.trim();
       if (!trimmed) return res.status(400).json({ error: 'name cannot be empty' });
       if (trimmed.length > 200) return res.status(400).json({ error: 'name max 200 chars' });
-      const nameProblem = orgNameProblem(trimmed);
-      if (nameProblem) return res.status(400).json({ error: nameProblem });
+      // The identity panel PUTs the name on EVERY save, changed or not. An
+      // org whose stored name predates the sender-name rule (or came in
+      // through an invitation made before it) would otherwise be locked out
+      // of saving its description, timezone and agent identity until it
+      // renamed. So the rule judges a name being CHANGED, not the one the org
+      // already has; send time still refuses to brand mail with it.
+      // targetId is the caller's own org (assertOrgScope above).
+      const cur = await pool.query('SELECT name FROM organizations WHERE id = $1', [targetId]);
+      const currentName = cur.rows.length ? String(cur.rows[0].name == null ? '' : cur.rows[0].name).trim() : null;
+      if (trimmed !== currentName) {
+        const nameProblem = orgNameProblem(trimmed);
+        if (nameProblem) return res.status(400).json({ error: nameProblem });
+      }
       updates.push('name = $' + p++);
       params.push(trimmed);
     }

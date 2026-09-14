@@ -67,6 +67,20 @@ const orgRoutes = require('../server/routes/admin-organizations-routes');
 
 const mail = () => globalThis.__P86_SENDER_AUTH_MAIL__;
 
+// Look-alike and invisible characters are built from code points, never typed.
+const cp = (...codes) => String.fromCodePoint(...codes);
+
+// Names that passed the first version of the rule (a letters-and-digits
+// squash compared with "project86") and branded mail as the platform.
+const DISGUISED = [
+  ['the platform name with a Cyrillic o', 'Pr' + cp(0x043E) + 'ject 86 Security'],
+  ['the platform name with a zero for the o', 'Pr0ject 86 Support'],
+  ['86 in Arabic-Indic digits', 'Project ' + cp(0x0668, 0x0666)],
+  ['a Hangul filler inside the platform name', 'P' + cp(0x3164) + 'roject 86'],
+  ['nothing but a Hangul filler', cp(0x3164)],
+  ['ACME padded with 55 blank Braille patterns', 'ACME' + cp(0x2800).repeat(55)],
+];
+
 const ADMIN_A = { id: 10, email: 'admin@agx.test', name: 'Ada Admin', role: 'admin', organization_id: 1 };
 const ADMIN_B = { id: 20, email: 'admin@other.test', name: 'Bo Admin', role: 'admin', organization_id: 2 };
 const SYS = { id: 1, email: 'john@platform.test', name: 'John Sys', role: 'system_admin', organization_id: 1 };
@@ -247,6 +261,7 @@ describe('POST /api/admin/organizations/invites — platform onboarding', () => 
     ['the platform name', 'Project 86 Security'],
     ['the platform name, respelled', 'PROJECT-86 billing'],
     ['a bidi override', 'AG Ext\u202Eeriors'],
+    ...DISGUISED,
   ])('org_name with %s is refused with a 400 and nothing is written or sent', async (_label, orgName) => {
     const r = await call('POST', '/api/admin/organizations/invites', SYS,
       { email: 'founder@newco.test', org_name: orgName });
@@ -270,6 +285,7 @@ describe('an organization name must be usable as a sender name', () => {
     ['the platform name', 'Project 86 Security'],
     ['the platform name without the space', 'project86 support'],
     ['the platform name in fullwidth forms', '\uFF30roject 86'],
+    ...DISGUISED,
   ];
 
   test.each(BAD)('rename refuses %s with a 400 and leaves the name alone', async (_label, name) => {
@@ -290,6 +306,12 @@ describe('an organization name must be usable as a sender name', () => {
     "O'Brien & Sons, Inc.",
     'Caf\u00E9 \u00D1and\u00FA Construcci\u00F3n',
     '86 Roofing Co',          // a number is not the platform name
+    // Real company names in other scripts: the look-alike fold must not
+    // refuse them.
+    cp(0x0141) + cp(0x00F3) + 'd' + cp(0x017A) + ' Roofing',
+    cp(0x039A, 0x03AC, 0x03C4, 0x03B9) + ' Construction',
+    cp(0x682A, 0x5F0F, 0x4F1A, 0x793E) + ' ' + cp(0x5C71, 0x7530, 0x5EFA, 0x8A2D),
+    'Jos' + cp(0x00E9) + "'s Painting",
   ])('an ordinary name saves: %s', async (name) => {
     const r = await call('PUT', '/api/admin/organizations/1', ADMIN_A, { name: '  ' + name + '  ' });
     expect(r.status).toBe(200);
@@ -308,5 +330,81 @@ describe('an organization name must be usable as a sender name', () => {
     const r = await call('POST', '/api/admin/organizations', SYS, { slug: 'newco', name: 'NewCo Painting' });
     expect(r.status).toBe(200);
     expect(r.body.organization.name).toBe('NewCo Painting');
+  });
+
+  test('the route runs the one shared rule, not a private copy that can drift', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'routes', 'admin-organizations-routes.js'), 'utf8');
+    expect(src).not.toMatch(/function\s+orgNameProblem\b/);
+    expect(src).toMatch(/const \{ orgNameProblem \} = require\('\.\.\/email-sender'\);/);
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 5. An org whose stored name the rule now refuses can still save.
+ *
+ * WHAT WAS WRONG
+ * The Organization identity panel (window.saveOrgIdentity) PUTs the name on
+ * every Save, changed or not, and the route ran the name rule on whatever it
+ * received. An org named before the rule existed ("Project 86 Demo", or an
+ * invitation's org_name accepted later) got a 400 on every Save, so its
+ * description, timezone and agent identity could not change until it renamed.
+ *
+ * WHAT IS NOW HELD
+ * The rule judges a name being CHANGED. The unchanged stored name rides along
+ * with the other fields; a rename to another refused name is still a 400.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('PUT /api/admin/organizations/:id — an unchanged stored name never blocks a save', () => {
+  const row = () => engine.all('SELECT name, description, identity_body, timezone FROM organizations WHERE id = 1')[0];
+
+  beforeEach(() => {
+    engine.db.exec("UPDATE organizations SET name = 'Project 86 Demo', description = 'old', identity_body = 'old body' WHERE id = 1");
+  });
+
+  test('the identity panel save (unchanged name + description, identity, timezone) succeeds', async () => {
+    const r = await call('PUT', '/api/admin/organizations/1', ADMIN_A, {
+      name: 'Project 86 Demo', description: 'Roofing in Tampa', identity_body: 'We roof.', timezone: 'America/Chicago',
+    });
+    expect(r.status).toBe(200);
+    expect(row()).toEqual({
+      name: 'Project 86 Demo', description: 'Roofing in Tampa', identity_body: 'We roof.', timezone: 'America/Chicago',
+    });
+  });
+
+  test('the unchanged name still counts as unchanged when the panel pads it with spaces', async () => {
+    const r = await call('PUT', '/api/admin/organizations/1', ADMIN_A, { name: '  Project 86 Demo ', description: 'd2' });
+    expect(r.status).toBe(200);
+    expect(row().description).toBe('d2');
+  });
+
+  test('a stored name with a tab (refused as a new name) does not block a save either', async () => {
+    engine.db.exec("UPDATE organizations SET name = 'Acme' || char(9) || 'Painting' WHERE id = 1");
+    const r = await call('PUT', '/api/admin/organizations/1', ADMIN_A, { name: 'Acme\tPainting', timezone: 'America/Denver' });
+    expect(r.status).toBe(200);
+    expect(row().timezone).toBe('America/Denver');
+  });
+
+  test.each([
+    ['another spelling of the platform name', 'Project 86 Demo Two'],
+    ['the platform name with a zero', 'Pr0ject 86 Support'],
+    ['the platform name with a Cyrillic o', 'Pr' + cp(0x043E) + 'ject 86 Security'],
+  ])('renaming to %s is still refused, and nothing else in the request is written', async (_label, name) => {
+    const r = await call('PUT', '/api/admin/organizations/1', ADMIN_A, { name, description: 'should not land' });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatch(/^name /);
+    expect(row()).toMatchObject({ name: 'Project 86 Demo', description: 'old' });
+  });
+
+  test('renaming away to an ordinary name works', async () => {
+    const r = await call('PUT', '/api/admin/organizations/1', ADMIN_A, { name: 'AG Exteriors Demo' });
+    expect(r.status).toBe(200);
+    expect(row().name).toBe('AG Exteriors Demo');
+  });
+
+  test('another org\'s admin cannot use the unchanged-name path on this org', async () => {
+    const r = await call('PUT', '/api/admin/organizations/1', ADMIN_B, { name: 'Project 86 Demo', description: 'hijack' });
+    expect(r.status).toBe(403);
+    expect(row().description).toBe('old');
   });
 });
