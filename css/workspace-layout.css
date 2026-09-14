@@ -1293,29 +1293,32 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
 
    The money strip. `.jh-metrics-strip .p86-totals-chip` (above) shares the
    width equally across all seven chips with min-width:0, which at 412px
-   left 13px of text per chip — "T.." over "$.". On a phone the strip is a
-   single row that SWIPES instead: every chip sizes to its full label and
-   value. Every selector carries the #jh-strip-detached id (1,1,0) so it
-   beats that (0,2,0) rule regardless of order — the two 900px blocks near
-   the top of this file lose on source order and never applied. No 2- or
-   3-column grid: the strip sits outside the scrolling <main>, so every row
-   of chips is pinned height taken from the page. The captions are hidden
-   because they wrapped one word per line and stretched the whole row. */
+   left 13px of text per chip — "T.." over "$.". Here every chip sizes to
+   its full label and value instead. Every selector carries the
+   #jh-strip-detached id (1,1,0) so it beats that (0,2,0) rule regardless of
+   order — the two 900px blocks near the top of this file lose on source
+   order and never applied. The captions are hidden because they wrapped one
+   word per line and stretched the whole row.
+
+   In this width-only block the chips WRAP. That is what a narrow mouse
+   window gets (a high-DPI Windows PWA under 768px): no swipe, and a wheel
+   that only scrolls down, so a nowrap row with a hidden scrollbar put %
+   Complete, Revenue Earned, Gross Profit and Margin % out of reach. Each
+   chip grows to fill its row, and every chip is on screen. A touch phone
+   gets one row that SWIPES (the pointer: coarse block below). No 2- or
+   3-column grid there: the strip sits outside the scrolling <main>, so on a
+   short phone screen every row of chips is pinned height taken from the
+   page. */
 .jh-job-more { display: none; }
 @media (max-width: 768px) {
   #jh-strip-detached.jh-metrics-strip {
     padding: 8px 12px;
     gap: 6px;
-    scroll-snap-type: x proximity;
-    -webkit-overflow-scrolling: touch;
-    overscroll-behavior-x: contain;
-    scrollbar-width: none;
+    flex-wrap: wrap;
   }
-  #jh-strip-detached.jh-metrics-strip::-webkit-scrollbar { display: none; }
   #jh-strip-detached .p86-totals-chip {
-    flex: 0 0 auto;
+    flex: 1 1 auto;
     padding: 6px 10px;
-    scroll-snap-align: start;
   }
   #jh-strip-detached .p86-totals-chip-label {
     font-size: 9.5px;
@@ -1334,8 +1337,23 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
 
 /* Touch phones only — the same test as jobSubnavIsMobile() and the bottom
    nav in styles.css. A narrow MOUSE window keeps the sidebar, so its section
-   strip is not in the page and its action row stays a row. */
+   strip is not in the page, its action row stays a row and its money strip
+   wraps. */
 @media (max-width: 768px) and (pointer: coarse) {
+  /* The money strip: one row that swipes, snapping chip by chip. */
+  #jh-strip-detached.jh-metrics-strip {
+    flex-wrap: nowrap;
+    scroll-snap-type: x proximity;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  #jh-strip-detached.jh-metrics-strip::-webkit-scrollbar { display: none; }
+  #jh-strip-detached .p86-totals-chip {
+    flex: 0 0 auto;
+    scroll-snap-align: start;
+  }
+
   /* Edit / Archive / Delete fold behind one More button pinned to the
      strip's right edge (sticky inside the swipe row, so chips pass under
      it; the shadow in the page colour fades them out before they reach it).

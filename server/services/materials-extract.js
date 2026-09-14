@@ -201,8 +201,59 @@ function sniffKind(buffer, filename, mime) {
 const CP1252_HIGH = [
   0x20AC, 0xFFFD, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0xFFFD, 0x017D, 0xFFFD,
   0xFFFD, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0xFFFD, 0x017E, 0x0178,
-].map((cp) => String.fromCharCode(cp));
-const RE_C1 = new RegExp('[' + String.fromCharCode(0x80) + '-' + String.fromCharCode(0x9F) + ']', 'g');
+];
+const CP1252_UNDEFINED = [0x81, 0x8D, 0x8F, 0x90, 0x9D];
+
+// The platform's own cp1252 decoder, when this build of Node has one (a build
+// with ICU does). Proved on two bytes cp1252 and latin1 disagree about, since a
+// build without it may accept the label and decode latin1 instead.
+const CP1252_DECODER = (() => {
+  try {
+    const TD = typeof TextDecoder === 'function' ? TextDecoder : require('util').TextDecoder;
+    const d = new TD('windows-1252');
+    return d.decode(Buffer.from([0x80, 0x96])) === String.fromCharCode(0x20AC, 0x2013) ? d : null;
+  } catch (_) {
+    return null;
+  }
+})();
+
+// cp1252 bytes as text, in time and memory proportional to the file. NOT
+// `toString('latin1').replace(C1, fn)`: that is one callback and one part per
+// matched byte, and a 25 MB file of 0x96 took 900 ms and 700 MB of heap — past
+// the heap this one process runs with. The native decoder answers it in about
+// 40 ms; the table below it is for a build with no decoder, and for a file
+// holding one of the five undefined bytes, which the decoder would turn into a
+// C1 control rather than the U+FFFD the scrub removes.
+function decodeCp1252(buf) {
+  if (CP1252_DECODER && !CP1252_UNDEFINED.some((b) => buf.indexOf(b) !== -1)) return CP1252_DECODER.decode(buf);
+  const out = Buffer.allocUnsafe(buf.length * 2);
+  for (let i = 0; i < buf.length; i++) {
+    const b = buf[i];
+    const cp = b >= 0x80 && b <= 0x9F ? CP1252_HIGH[b - 0x80] : b;
+    out[2 * i] = cp & 0xFF;
+    out[2 * i + 1] = cp >> 8;
+  }
+  return out.toString('utf16le');
+}
+
+// How much of a buffer that is not strictly UTF-8 still reads as UTF-8: the
+// multi-byte sequences that are well formed, and the bytes that start none.
+// One walk, a byte or a sequence at a time.
+function utf8Tally(buf) {
+  let valid = 0, invalid = 0;
+  for (let i = 0; i < buf.length;) {
+    const b = buf[i];
+    if (b < 0x80) { i++; continue; }
+    let len = 0, lo = 0x80, hi = 0xBF;
+    if (b >= 0xC2 && b <= 0xDF) len = 2;
+    else if (b >= 0xE0 && b <= 0xEF) { len = 3; if (b === 0xE0) lo = 0xA0; if (b === 0xED) hi = 0x9F; }
+    else if (b >= 0xF0 && b <= 0xF4) { len = 4; if (b === 0xF0) lo = 0x90; if (b === 0xF4) hi = 0x8F; }
+    let ok = len > 0 && i + len <= buf.length && buf[i + 1] >= lo && buf[i + 1] <= hi;
+    for (let k = 2; ok && k < len; k++) ok = buf[i + k] >= 0x80 && buf[i + k] <= 0xBF;
+    if (ok) { valid++; i += len; } else { invalid++; i++; }
+  }
+  return { valid: valid, invalid: invalid };
+}
 
 function isUtf8(buf) {
   const b = require('buffer');
@@ -222,12 +273,22 @@ function decodeText(buf) {
     const body = Buffer.from(buf.subarray(2, 2 + ((buf.length - 2) & ~1)));
     return body.swap16().toString('utf16le');
   }
+  // A UTF-8 BOM says UTF-8 outright. A bad byte after it is a bad byte (U+FFFD,
+  // which the scrub removes), never a reason to read the whole file as cp1252 —
+  // that turned the BOM into three letters stuck to the first header.
+  if (bytesAre(buf, 0, [0xEF, 0xBB, 0xBF])) return buf.toString('utf8');
   if (isUtf8(buf)) return buf.toString('utf8');
-  // Not UTF-8, so it is Excel's "CSV (Comma delimited)" save on Windows, which
-  // writes the ANSI code page. Read as UTF-8, its 3/4 and its curly inch mark
-  // would each become U+FFFD and be scrubbed away — and the crew would lose
-  // the plywood thickness.
-  return buf.toString('latin1').replace(RE_C1, (ch) => CP1252_HIGH[ch.charCodeAt(0) - 0x80]);
+  // Not UTF-8, so it is most likely Excel's "CSV (Comma delimited)" save on
+  // Windows, which writes the ANSI code page. Read as UTF-8, its 3/4 and its
+  // curly inch mark would each become U+FFFD and be scrubbed away — and the
+  // crew would lose the plywood thickness. But a UTF-8 file with one line
+  // pasted in from an ANSI editor is still a UTF-8 file: read as cp1252, every
+  // other 3/4 and em dash in it would be garbled to lose one stray byte. So
+  // cp1252 only when there is no well-formed multi-byte UTF-8 in the file at
+  // all, or when bad bytes outnumber it more than two to one.
+  const tally = utf8Tally(buf);
+  if (tally.valid === 0 || tally.invalid > 2 * tally.valid) return decodeCp1252(buf);
+  return buf.toString('utf8');
 }
 
 // ── delimited text ───────────────────────────────────────────────────────
@@ -282,7 +343,9 @@ function sniffDelimiter(text, from) {
  * sniffed from the first lines, quoted fields may hold the delimiter, doubled
  * quotes and line breaks. Blank lines are dropped.
  *
- * BOUNDED AS IT READS, the way xlsxToSheets is. A field stops growing at
+ * BOUNDED AS IT READS, which a workbook cannot be (exceljs builds every cell
+ * before one is looked at, so xlsxToSheets bounds the unpacked size of the zip
+ * instead, before the load). A field stops growing at
  * MAX_CELL_CHARS (the rest of it is skipped over, not stored), a row keeps at
  * most maxCols fields, and the walk STOPS once maxRows non-blank rows are in —
  * a 24 MB CSV of "a\n" is never turned into twelve million rows only for all
@@ -290,8 +353,8 @@ function sniffDelimiter(text, from) {
  *
  * Returns { rows, truncated, stopped }. `truncated` says a bound cut something
  * off: a row past maxRows, a non-blank field past maxCols, or — for the price
- * check (opts.facts) — a field cut at MAX_CELL_CHARS whose unread part mentions
- * money. `opts.onRow(row)` is the price check's way in: rows are handed over
+ * check (opts.facts) — a field cut at MAX_CELL_CHARS whose unread or dropped
+ * part mentions money. `opts.onRow(row)` is the price check's way in: rows are handed over
  * one at a time and never kept, and a true answer stops the walk (`stopped`).
  */
 function readDelimited(text, opts) {
@@ -327,10 +390,16 @@ function readDelimited(text, opts) {
   const endField = (at) => {
     flush(at);
     if (cutAt !== -1) {
-      // The price check fails closed: a cut-off tail that mentions money makes
-      // the file "priced", since that part of the cell was never looked at.
-      if (facts && !truncated && RE_MONEY_TAIL.test(s.slice(cutAt - MONEY_TAIL_OVERLAP, at))) truncated = true;
-      field = dropCutTail(field);
+      const kept = dropCutTail(field);
+      // The price check fails closed: money in any part of the cell it will
+      // not look at makes the file "priced". That is the tail past the cut,
+      // AND the words dropCutTail takes off the end of what was read, which
+      // can reach back any distance — "unit $34.97 10000 10001 ..." loses its
+      // price along with the numbers after it. (The field is measured in its
+      // own characters, not the file's: a doubled quote is one of each.)
+      if (facts && !truncated && (RE_MONEY_TAIL.test(s.slice(cutAt - MONEY_TAIL_OVERLAP, at))
+        || RE_MONEY_TAIL.test(field.slice(Math.max(0, kept.length - MONEY_TAIL_OVERLAP))))) truncated = true;
+      field = kept;
       cutAt = -1;
     }
     if (row.length < maxCols) row.push(field);
@@ -434,6 +503,270 @@ function isMoneyFormat(numFmt) {
   return /[$£€¥]/.test(f);
 }
 
+// ── the workbook's zip, before exceljs opens it ──────────────────────────
+//
+// wb.xlsx.load inflates EVERY part of the zip and builds every cell of every
+// sheet before a single row reaches a bound. MAX_FILE_BYTES is the COMPRESSED
+// size, and sheet XML compresses ten to a hundred times: a 5.5 MB workbook of
+// 100,000 x 20 numbers was 60 MB of XML, 5 to 15 s on the event loop and more
+// than a gigabyte of memory — past what the one process has, so one request
+// took the server down for every tenant. The row, column and cell bounds never
+// got a say, because they only run once the load is over.
+//
+// So the zip's own directory is read first, and a workbook whose parts unpack
+// past these caps is refused before exceljs sees a byte of it. Measured, the
+// load costs about thirty times the sheet XML at its peak: 11.8 MB of XML
+// (20,000 x 20 numbers) was 1 s and 370 MB, 15 MB was 430 MB. Twelve MB keeps
+// one read to a third of the droplet and is still about the extractor's own
+// 5000 x 60 bound; a real takeoff is well under one.
+const XLSX_MAX_XML_BYTES = 12 * 1024 * 1024;
+// Pictures in the workbook (xl/media) are held as bytes, never parsed, and do
+// not compress; they are capped at the file cap rather than the XML one.
+const XLSX_MAX_MEDIA_BYTES = MAX_FILE_BYTES;
+// A takeoff workbook has tens of parts. Every one is an object in the loader.
+const XLSX_MAX_ENTRIES = 5000;
+// Excel's built-in currency (5-8) and accounting (37-44) formats. A file may
+// use one by id alone, with no <numFmt> saying what it looks like, and then
+// exceljs reports no number format at all — so isMoneyFormat never sees it.
+const MONEY_NUMFMT_IDS = new Set([5, 6, 7, 8, 37, 38, 39, 40, 41, 42, 43, 44]);
+
+function xlsxError(code, message) {
+  const e = new Error(message);
+  e.code = code;
+  return e;
+}
+
+const SIG_END = Buffer.from([0x50, 0x4B, 0x05, 0x06]);
+const SIG_ZIP64_LOCATOR = Buffer.from([0x50, 0x4B, 0x06, 0x07]);
+const SIG_ZIP64_END = Buffer.from([0x50, 0x4B, 0x06, 0x06]);
+
+// The central directory of a zip: [{ name, method, flags, csize, usize, local }],
+// or null when the bytes are not a zip this reader can walk.
+//
+// Read the way exceljs's own unzipper (JSZip) reads it, because a bound on the
+// entries the loader does NOT see is no bound. So: the LAST end record in the
+// file; the ZIP64 record wherever the last locator says; every offset moved by
+// any bytes in front of the zip (JSZip's "extra bytes"); and every directory
+// header that follows the one before it — JSZip does not stop at the count the
+// end record gives, and a reader that did would measure one small entry of a
+// zip whose count was edited to 1 while exceljs unpacked all the others.
+// The end record is only accepted in the last 22 + 65,535 bytes, where a zip
+// writer puts it; one anywhere else is refused rather than trusted.
+function zipDirectory(buf) {
+  try {
+    const at = buf.lastIndexOf(SIG_END);
+    if (at === -1 || at + 22 > buf.length || at < buf.length - 22 - 0xFFFF) return null;
+    let count = buf.readUInt16LE(at + 10);
+    let size = buf.readUInt32LE(at + 12);
+    let offset = buf.readUInt32LE(at + 16);
+    let expectedEnd = offset + size;
+    if (buf.readUInt16LE(at + 4) === 0xFFFF || buf.readUInt16LE(at + 6) === 0xFFFF || buf.readUInt16LE(at + 8) === 0xFFFF
+      || count === 0xFFFF || size === 0xFFFFFFFF || offset === 0xFFFFFFFF) {
+      const loc = buf.lastIndexOf(SIG_ZIP64_LOCATOR);
+      if (loc === -1) return null;
+      let rec = Number(buf.readBigUInt64LE(loc + 8));
+      if (!(rec + 4 <= buf.length)) return null;
+      if (buf.readUInt32LE(rec) !== 0x06064B50) rec = buf.lastIndexOf(SIG_ZIP64_END);
+      if (rec === -1) return null;
+      count = Number(buf.readBigUInt64LE(rec + 32));
+      size = Number(buf.readBigUInt64LE(rec + 40));
+      offset = Number(buf.readBigUInt64LE(rec + 48));
+      expectedEnd = offset + size + 20 + 12 + Number(buf.readBigUInt64LE(rec + 4));
+    }
+    // Bytes in front of the zip: every offset in it is that much further on.
+    const zero = at - expectedEnd;
+    if (!(zero >= 0)) return null;
+    // Past the entry cap the list is not worth building; the caller refuses it.
+    if (count > XLSX_MAX_ENTRIES) return { tooMany: true };
+    const entries = [];
+    for (let p = zero + offset; p + 4 <= buf.length && buf.readUInt32LE(p) === 0x02014B50;) {
+      if (entries.length >= XLSX_MAX_ENTRIES) return { tooMany: true };
+      const nameLen = buf.readUInt16LE(p + 28);
+      const extraLen = buf.readUInt16LE(p + 30);
+      const commentLen = buf.readUInt16LE(p + 32);
+      const e = {
+        name: buf.toString('utf8', p + 46, p + 46 + nameLen).replace(/^\/+/, ''),
+        flags: buf.readUInt16LE(p + 8),
+        method: buf.readUInt16LE(p + 10),
+        csize: buf.readUInt32LE(p + 20),
+        usize: buf.readUInt32LE(p + 24),
+        local: buf.readUInt32LE(p + 42),
+      };
+      let zip64 = -1;
+      for (let x = p + 46 + nameLen, end = x + extraLen; x + 4 <= end;) {
+        const id = buf.readUInt16LE(x);
+        // An Info-ZIP Unicode Path field renames the entry for JSZip, so the
+        // name read here would not be the part exceljs loads under it. No
+        // workbook writer uses one; the file is refused, not guessed at.
+        if (id === 0x7075 && !(e.flags & 0x0800)) return null;
+        if (id === 0x0001) zip64 = x + 4;
+        x += 4 + buf.readUInt16LE(x + 2);
+      }
+      if (zip64 !== -1) {
+        // The ZIP64 extra field holds, in order, whichever of the three were
+        // too big for their 32-bit slot.
+        let q = zip64;
+        if (e.usize === 0xFFFFFFFF) { e.usize = Number(buf.readBigUInt64LE(q)); q += 8; }
+        if (e.csize === 0xFFFFFFFF) { e.csize = Number(buf.readBigUInt64LE(q)); q += 8; }
+        if (e.local === 0xFFFFFFFF) { e.local = Number(buf.readBigUInt64LE(q)); q += 8; }
+      }
+      e.local += zero;
+      entries.push(e);
+      p += 46 + nameLen + extraLen + commentLen;
+    }
+    // A directory the end record promises and nothing is found at: JSZip
+    // refuses that file too.
+    if (count > 0 && !entries.length) return null;
+    return entries;
+  } catch (_) {
+    // A read past the end of the buffer: not a zip this reader can walk.
+    return null;
+  }
+}
+
+// One entry's bytes as the loader will see them, inflated, or null when this
+// reader cannot say (an encrypted or unknown-method entry, a damaged stream) —
+// the loader then refuses the file itself. More than `limit` bytes is an
+// error with code too_large: Node stops inflating at the limit, so a zip that
+// understates an entry's size in its directory costs `limit`, not what the
+// entry really unpacks to.
+function inflateEntry(buf, e, limit) {
+  return new Promise((resolve, reject) => {
+    try {
+      if (e.flags & 1 || buf.readUInt32LE(e.local) !== 0x04034B50) return resolve(null);
+      const start = e.local + 30 + buf.readUInt16LE(e.local + 26) + buf.readUInt16LE(e.local + 28);
+      if (start + e.csize > buf.length) return resolve(null);
+      const data = buf.subarray(start, start + e.csize);
+      if (e.method === 0) {
+        return data.length > limit ? reject(xlsxError('too_large', 'workbook part too large')) : resolve(data);
+      }
+      if (e.method !== 8) return resolve(null);
+      if (limit < 1) return data.length ? reject(xlsxError('too_large', 'workbook part too large')) : resolve(Buffer.alloc(0));
+      require('zlib').inflateRaw(data, { maxOutputLength: limit }, (err, out) => {
+        if (err && (err.code === 'ERR_BUFFER_TOO_LARGE' || err instanceof RangeError)) return reject(xlsxError('too_large', 'workbook part too large'));
+        return resolve(err ? null : out);
+      });
+    } catch (_) {
+      resolve(null);
+    }
+  });
+}
+
+// The next tag in XML bytes at or after `from`: { name (no prefix), start, end }
+// with `end` the index of its '>', or null. indexOf does the walking, so a long
+// run with no tag in it is one native scan, not a pattern retried per byte.
+function nextTag(xml, from) {
+  const start = xml.indexOf(0x3C, from);
+  if (start === -1) return null;
+  const end = xml.indexOf(0x3E, start + 1);
+  if (end === -1) return null;
+  let n = start + 1;
+  while (n < end && xml[n] > 0x20 && xml[n] !== 0x2F && xml[n] !== 0x3E) n++;
+  const qname = xml.toString('latin1', start + 1, n);
+  const colon = qname.indexOf(':');
+  return { name: colon === -1 ? qname : qname.slice(colon + 1), start: start, end: end };
+}
+
+// One pattern per attribute name, built once: a sheet scan asks for s= on every
+// cell of up to 12 MB of XML.
+const TAG_ATTR_RE = new Map();
+
+function tagAttr(xml, tag, attr) {
+  let re = TAG_ATTR_RE.get(attr);
+  if (!re) {
+    re = new RegExp('\\s' + attr + '\\s*=\\s*["\']([^"\']*)["\']');
+    TAG_ATTR_RE.set(attr, re);
+  }
+  const m = re.exec(xml.toString('latin1', tag.start, tag.end));
+  return m ? m[1] : null;
+}
+
+// Which cell styles (the s="n" on a cell) carry a built-in money format.
+function moneyStyleIds(styles) {
+  const ids = new Set();
+  let index = 0, inside = false;
+  for (let tag = nextTag(styles, 0); tag; tag = nextTag(styles, tag.end + 1)) {
+    if (tag.name === 'cellXfs') { inside = styles[tag.end - 1] !== 0x2F; continue; }
+    if (tag.name === '/cellXfs') break;
+    if (!inside || tag.name !== 'xf') continue;
+    if (MONEY_NUMFMT_IDS.has(Number(tagAttr(styles, tag, 'numFmtId') || 0))) ids.add(index);
+    index++;
+  }
+  return ids;
+}
+
+// Does a sheet hold a number in one of those styles? A cell with no t, or
+// t="n", that is not an empty <c/> — a formula with no saved result counts,
+// since Excel shows it the moment the file is opened.
+function hasMoneyStyledNumber(sheet, styleIds) {
+  for (let tag = nextTag(sheet, 0); tag; tag = nextTag(sheet, tag.end + 1)) {
+    if (tag.name !== 'c' || sheet[tag.end - 1] === 0x2F) continue;
+    if (!styleIds.has(Number(tagAttr(sheet, tag, 's') || 0))) continue;
+    const t = tagAttr(sheet, tag, 't');
+    if (t === null || t === 'n') return true;
+  }
+  return false;
+}
+
+// A relationship to a part that holds cells: a worksheet, or an Excel 4 macro
+// sheet (exceljs reads neither of the latter).
+const SHEET_REL_TYPE = /\/(?:worksheet|xlMacrosheet|xlIntlMacrosheet)$/i;
+
+// How many sheet relationships a .rels part declares.
+function sheetRelCount(rels) {
+  let n = 0;
+  for (let tag = nextTag(rels, 0); tag; tag = nextTag(rels, tag.end + 1)) {
+    if (tag.name === 'Relationship' && SHEET_REL_TYPE.test(tagAttr(rels, tag, 'Type') || '')) n++;
+  }
+  return n;
+}
+
+/**
+ * Check a workbook's zip before exceljs loads it. Throws an Error whose code
+ * is 'too_large' (a part, or all of them, unpacks past its cap — measured by
+ * inflating, not by trusting the directory) or 'unreadable' (not a zip at all:
+ * a password-protected .xlsx is an OLE file). With `facts`, also answers
+ * whether any sheet holds a number in a built-in money format, which exceljs
+ * cannot say, and stops at the first one; and counts the sheets the package's
+ * relationships declare (sheetRels), which Excel opens whatever their parts
+ * are called. Returns { moneyStyled, sheetRels }.
+ */
+async function inspectWorkbookZip(buffer, facts) {
+  const buf = toBuffer(buffer);
+  const entries = zipDirectory(buf);
+  if (!entries) throw xlsxError('unreadable', 'not a zip');
+  if (entries.tooMany) throw xlsxError('too_large', 'too many workbook parts');
+  const isMedia = (e) => e.name.indexOf('xl/media/') === 0;
+  const files = entries.filter((e) => !/\/$/.test(e.name));
+  // What the directory says, first: most oversized workbooks are refused here
+  // without inflating anything.
+  let xml = 0, media = 0;
+  for (const e of files) { if (isMedia(e)) media += e.usize; else xml += e.usize; }
+  if (xml > XLSX_MAX_XML_BYTES || media > XLSX_MAX_MEDIA_BYTES) throw xlsxError('too_large', 'workbook unpacks too large');
+  // Then what the parts really unpack to, one at a time, each against what is
+  // left of its cap — styles first, so the sheets can be checked as they come.
+  files.sort((a, b) => (b.name === 'xl/styles.xml') - (a.name === 'xl/styles.xml'));
+  let styleIds = null;
+  let sheetRels = 0;
+  xml = 0;
+  media = 0;
+  for (const e of files) {
+    const out = await inflateEntry(buf, e, isMedia(e) ? XLSX_MAX_MEDIA_BYTES - media : XLSX_MAX_XML_BYTES - xml);
+    if (!out) continue;
+    if (isMedia(e)) { media += out.length; continue; }
+    xml += out.length;
+    if (!facts) continue;
+    if (e.name === 'xl/styles.xml') styleIds = moneyStyleIds(out);
+    else if (/[.]rels$/i.test(e.name)) sheetRels += sheetRelCount(out);
+    // The same (unanchored) name test exceljs loads a worksheet by.
+    else if (styleIds && styleIds.size && /xl\/worksheets\/sheet\d+[.]xml/.test(e.name) && hasMoneyStyledNumber(out, styleIds)) {
+      // Answered: the caller does not load a workbook it already knows is priced.
+      return { moneyStyled: true, sheetRels: sheetRels };
+    }
+  }
+  return { moneyStyled: false, sheetRels: sheetRels };
+}
+
 /**
  * Visible sheets of an .xlsx as rows of display strings.
  * Returns [{ name, rows, formulaGaps, warnings }]. rows[r][c] is 0-based and
@@ -452,8 +785,17 @@ function isMoneyFormat(numFmt) {
  * it: a sheet of 5000 x 60 cells all pointing at one 32,767-character shared
  * string must cost what 300,000 short cells cost. With `opts.onRow(cells)` the
  * rows are handed over one at a time and never kept (sheet.rows stays empty),
- * so the price check's 200,000-row bound does not become 200,000 arrays in
- * memory; once onRow answers true, the rest of the workbook is skipped.
+ * so the price check's 200,000-row bound does not become 200,000 more arrays;
+ * once onRow answers true, the rest of the workbook is skipped.
+ *
+ * None of that bounds the LOAD, which builds every cell before the first row
+ * is looked at. inspectWorkbookZip does, first: a workbook that unpacks past
+ * XLSX_MAX_XML_BYTES throws an Error with code 'too_large' before exceljs is
+ * asked to open it. With opts, a workbook with a number in a built-in currency
+ * or accounting format is not loaded at all — it comes back as one sheet with
+ * no rows and moneyFormat true, which is the whole answer the check needs —
+ * and a workbook with a sheet exceljs could not load gets one more sheet with
+ * no rows and truncated true.
  */
 async function xlsxToSheets(buffer, opts) {
   const o = opts || {};
@@ -462,9 +804,14 @@ async function xlsxToSheets(buffer, opts) {
   const onRow = typeof o.onRow === 'function' ? o.onRow : null;
   const facts = !!opts;
   let found = false;
+  const buf = toBuffer(buffer);
+  const zip = await inspectWorkbookZip(buf, facts);
+  if (facts && zip.moneyStyled) {
+    return [{ name: null, rows: [], formulaGaps: [], warnings: [], hidden: false, truncated: false, moneyFormat: true }];
+  }
   const ExcelJS = require('exceljs');
   const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(toBuffer(buffer));
+  await wb.xlsx.load(buf);
   const MERGE = ExcelJS.ValueType.Merge;
   const out = [];
   wb.worksheets.forEach((ws) => {
@@ -497,9 +844,12 @@ async function xlsxToSheets(buffer, opts) {
         if (flat.gap) formulaGaps.push((rn - 1) + ':' + (cn - 1));
         let text = flat.text;
         if (text.length > MAX_CELL_CHARS) {
-          // The price check fails closed on the part it did not read.
-          if (facts && !truncated && RE_MONEY_TAIL.test(text.slice(MAX_CELL_CHARS - MONEY_TAIL_OVERLAP))) truncated = true;
-          text = dropCutTail(text.slice(0, MAX_CELL_CHARS));
+          const kept = dropCutTail(text.slice(0, MAX_CELL_CHARS));
+          // The price check fails closed on the part it did not read and on
+          // the words dropCutTail took off what it did — one slice, from a
+          // little before the first character dropped to the end of the cell.
+          if (facts && !truncated && RE_MONEY_TAIL.test(text.slice(Math.max(0, kept.length - MONEY_TAIL_OVERLAP)))) truncated = true;
+          text = kept;
         }
         cells[cn - 1] = text;
       });
@@ -520,6 +870,14 @@ async function xlsxToSheets(buffer, opts) {
     }
     out.push(sheet);
   });
+  // exceljs loads a sheet only from a part named xl/worksheets/sheetN.xml that
+  // a relationship names the way it expects, and drops any other without a
+  // word; Excel opens it by the relationship alone. For the price check a sheet
+  // exceljs could not read is a sheet never looked at, so it counts as
+  // truncated — never as "no prices".
+  if (facts && !found && wb.worksheets.length < zip.sheetRels) {
+    out.push({ name: null, rows: [], formulaGaps: [], warnings: [], hidden: false, truncated: true, moneyFormat: false });
+  }
   return out;
 }
 
@@ -670,11 +1028,15 @@ function isTotalsText(s) {
 }
 
 const LABOR_UNITS = new Set(['hr', 'hrs', 'hour', 'hours', 'mh', 'mhr', 'mhrs', 'man hours', 'man-hours', 'manhours', 'day', 'days']);
-// A section is labor only when its WHOLE title says so: "Labor", "Labour:",
-// "Install labor", "Labor & install", "Scope 3: Labor". Unanchored, a
-// "Laboratory grade sealant" row and a "ROOF - MATERIALS & LABOR" scope title
-// were labor sections too, and every real material under them was dropped.
-const LABOR_SECTION = /^(?:scope\s*\d+\s*[:.-]\s*)?(?:(?:crew|field|install|installation)\s+)?labou?r(?:\s*(?:&|and|\/)\s*install(?:ation)?|\s+(?:only|items?|costs?))?\s*:?$/i;
+// A section is labor when its title has the WORD labor or labour in it —
+// "Labor", "Direct Labor" (P86's own name for it), "Roofing Labor", "Labor &
+// Equipment", "Labor - Roofing", "Labor/Subs" — and does not also name the
+// materials. As a bare substring, a "Laboratory grade sealant" row and a
+// "ROOF - MATERIALS & LABOR" scope title were labor sections too, and every
+// real material under them was dropped; anchored to a whole title, "Direct
+// Labor" was not one, and its crew lines landed on the work order.
+// Anchored at the start, so each half runs once over the (500-character) title.
+const LABOR_SECTION = /^(?![\s\S]*\b(?:materials?|supplies)\b)[\s\S]*\blabou?r\b/i;
 
 function qtyIsZero(q) {
   const s = String(q == null ? '' : q).replace(/,/g, '').trim();
@@ -752,9 +1114,20 @@ const RE_TOTAL_BARE = new RegExp('\\b(?:total|amount|ext(?:ended)?|extension|sub
 // a per-unit tail, because "@ 16 in. o.c." is a spacing, not a price.
 const RE_AT_PRICE = new RegExp('@\\s*(?:USD\\s*)?' + CUR + '\\s*' + AMOUNT + PER + '|@\\s*USD\\s*' + AMOUNT + PER + '|@\\s*' + AMOUNT + PER_REQUIRED, 'gi');
 const RE_CUR_AMOUNT = new RegExp('-?' + CUR + '\\s*-?' + AMOUNT + PER, 'gi');
-const RE_AMOUNT_CUR = new RegExp('(?<![\\d,])' + AMOUNT + '\\s*' + CUR, 'g');
+// The two below start with a number, so a start is tried only at the FIRST
+// character of a run of digits, commas and points, and the whole run goes with
+// the currency after it: "Sealant,8.99$" loses ",8.99$", "Primer 1.5,,38.97
+// USD" loses "1.5,,38.97 USD". Refusing a start after any comma let the match
+// begin at the cents instead and left "Sealant,8." on the work order. Refusing
+// one only inside a number (after a digit, or a digit and its separator) still
+// let "9,,9,,9,,..." start at every 9 and run to the end of the string from
+// each — 1.3 s for 40,000 characters. One start a run, one walk of it (the
+// leading separators and the first digit cannot trade characters with the
+// rest). A run may end in its separator, as AMOUNT may: "Nails 12,$".
+const AMOUNT_RUN = '[,.]*\\d[\\d,.]*';
+const RE_AMOUNT_CUR = new RegExp('(?<![\\d,.])' + AMOUNT_RUN + '\\s*' + CUR + PER, 'gi');
 const RE_USD_AMOUNT = new RegExp('\\b(?:USD|US\\$)\\s*' + AMOUNT, 'gi');
-const RE_AMOUNT_USD = new RegExp('(?<![\\d,])' + AMOUNT + '\\s*(?:USD|dollars?|bucks)\\b', 'gi');
+const RE_AMOUNT_USD = new RegExp('(?<![\\d,.])' + AMOUNT_RUN + '\\s*(?:USD|dollars?|bucks)\\b' + PER, 'gi');
 // Characters trimmed off both ends of a scrubbed description: whitespace,
 // hyphen, en and em dash, and the separators a removed price leaves behind.
 const EDGE_CHARS = new Set([' ', '-', String.fromCharCode(0x2013), String.fromCharCode(0x2014), '@', ',', ':', ';', '/', '|']);
@@ -1090,9 +1463,10 @@ function mapTakeoffRows(sheets) {
 // This is the one question in this module that has to fail CLOSED rather than
 // be helpful: a false "has prices" costs a PM a file on a default link, a
 // false "no prices" puts a Unit Cost column in front of a subcontractor. So
-// the check leans wide — any header-like row, currency written into any cell,
-// currency number formats, hidden sheets, and a sheet too big to read to the
-// end all count as prices. No model is ever asked.
+// the check leans wide — any header-like row, a money word alone in a row with
+// no numbers, currency written into any cell, currency number formats (Excel's
+// built-in ones too), hidden sheets, and a sheet too big to read to the end
+// all count as prices. No model is ever asked.
 
 // Currency written into a cell, whatever its column is called: "$34.97",
 // "12.50 €", "USD 40", "40 dollars".
@@ -1107,37 +1481,93 @@ const RE_MONEY_TAIL = new RegExp(CUR + '|\\b(?:usd|dollars?)\\b', 'i');
 // split by the cut is still seen whole.
 const MONEY_TAIL_OVERLAP = 32;
 
+// The price check's own money words, on top of MONEY_HEADER. A supplier quote
+// or a price list names its money column in words the extractor never has to
+// know about — Sell, Bid, Charge, Fee, MSRP, Retail — and the check, unlike
+// the extractor, must not miss one.
+const PRICE_WORDS = /\b(?:sell|selling|sale|sales|bids?|charges?|fees?|msrp|retail|budget|invoiced?|billed|dollars?|usd|extensions?|discounts?)\b/;
+// MONEY_HEADER's words where they are words: at the start or the end of one
+// ("UnitPrice", "PriceEach", "LineTotal", "Rates"), not buried in the middle of
+// a longer one. A row with no numbers is called priced on one of these alone
+// (headerLikeRow), and "Perforated soffit", "Saturated felt", "Hydrated lime",
+// "Fire-rated drywall" and "Exterior primer" are materials, not a money column.
+const MONEY_WORD = /(?<![a-z])(?:price|pricing|cost|total|amount|subtotal|extended|markup|margin|profit)|(?:price|cost|total|amount|markup|margin|profit|tax|value|rate)(?:e?s)?(?![a-z])|(?<![a-z])(?:ext|amt)(?![a-z])|\$/;
+// A per-unit price column named by the unit alone: "Each", "Ea.", "Per",
+// "Per Sheet", "Unit Each", "/ea". The same words are the VALUES of a unit
+// column ("Vent boot | 12 ea | each"), so one of these names money only beside
+// a label that is not itself a money word (headerLikeRow).
+const PER_UNIT_LABEL = /^(?:unit[ /])?(?:each|ea\.?)$|^\/(?:each|ea\.?)$|^per(?:[ /][a-z.]+)?$/;
+
+function isPerUnitLabel(text) {
+  const raw = String(text == null ? '' : text).trim();
+  return !!raw && raw.length <= HEADER_CELL_MAX && PER_UNIT_LABEL.test(headerKey(raw));
+}
+
 // A money label, for a row already known to be header-like. Looser than
 // headerRole's 40-character cap: "Extended price incl. delivery and tax" is
 // still a price column, and the row test has already ruled out a data row.
 function isMoneyLabel(text) {
   const raw = String(text == null ? '' : text).trim();
   if (!raw || raw.length > 80 || PURE_NUMBER.test(raw)) return false;
+  const low = raw.toLowerCase();
   // No money word anywhere in it is the common answer, and the cheap one.
-  if (!MONEY_HEADER.test(raw.toLowerCase())) return false;
-  return MONEY_HEADER.test(headerKey(raw));
+  if (MONEY_HEADER.test(low) || PRICE_WORDS.test(low)) return true;
+  return isPerUnitLabel(raw);
+}
+
+// A money word that is enough on its own, in a row with no bare numbers.
+function isLoneMoneyLabel(text) {
+  const raw = String(text == null ? '' : text).trim();
+  if (!raw || raw.length > 80) return false;
+  const low = raw.toLowerCase();
+  return MONEY_WORD.test(low) || PRICE_WORDS.test(low);
+}
+
+// What a price list is keyed by, where headerRole has no role for it: "Part
+// #", "Part Number", "Code", "Catalog No.". Never with a digit in it, so a
+// line ("Vent boot #2") is not one.
+const KEY_LABEL = /#|\b(?:part|code|catalog|model|style|sku|number|no)\b/;
+
+function isKeyLabel(text) {
+  const raw = String(text == null ? '' : text).trim();
+  return !!raw && raw.length <= HEADER_CELL_MAX && !/\d/.test(raw) && KEY_LABEL.test(raw.toLowerCase());
 }
 
 // Is this row a header, or close enough to one that a money word in it names a
-// column? Three ways in:
+// column? Four ways in:
 //   * the header test mapTakeoffRows reads by (a description beside a
 //     quantity or unit, and no bare numbers) — which needs a description
 //     column, so the second way already answers it;
 //   * any cell naming a description column — "Memo/Description | Amount" is
 //     a cost report's header even with no quantity in it;
+//   * no bare numbers and a money word, even as the ONLY label — "Part
+//     Number | Price", "Code | Cost", a lone "Unit Price" over a column of
+//     34.97. Most of a price list's other headers are no label headerRole
+//     knows, and a false "no prices" is the one answer this check cannot give;
 //   * no bare numbers and at least two recognised labels — "SKU | Count |
-//     Cost" has no description column at all, and is still priced.
+//     Cost" — or a per-unit word beside a label that is not money, or beside
+//     what a price list is keyed by: "Part # | Qty | Each", "Part # | Each",
+//     "Code | Ea". (Beside a line's own words it is no header: "Perforated
+//     soffit | 10 pcs | each" is a line, and "rate" is only inside a word there.)
 // One pass, one headerRole per cell: a 1000-column row is read once, not twice.
+// (The money-word tests are literal words, not headerRole's whole ladder.)
 function headerLikeRow(cells) {
   const numeric = cells.some((c) => c && PURE_NUMBER.test(c));
-  let labels = 0;
+  let labels = 0, plain = 0, perUnit = false, key = false;
   for (const c of cells) {
     if (!c || PURE_NUMBER.test(c)) continue;
+    if (!numeric && isLoneMoneyLabel(c)) return true;
     const role = headerRole(c);
-    if (!role) continue;
-    if (role.role === 'desc') return true;
-    labels++;
-    if (!numeric && labels >= 2) return true;
+    if (!role) {
+      if (!numeric && isPerUnitLabel(c)) perUnit = true;
+      else if (!numeric && isKeyLabel(c)) key = true;
+    } else {
+      if (role.role === 'desc') return true;
+      labels++;
+      if (role.role !== 'money') plain++;
+      if (!numeric && labels >= 2) return true;
+    }
+    if (!numeric && perUnit && (plain > 0 || key)) return true;
   }
   return false;
 }
@@ -1169,7 +1599,16 @@ function detectPriceColumns(sheets) {
 // RE_CURRENCY_TEXT can match across, rather than once per cell; and the header
 // test only runs on a row that has a money word in some cell at all.
 function priceInRow(row) {
-  const cells = (Array.isArray(row) ? row : []).map(cellText);
+  const raw = Array.isArray(row) ? row : [];
+  // A cell longer than cellText keeps fails closed on what the cut drops, the
+  // way the two readers do (they have already cut every cell they hand over,
+  // so for them this is one length test a cell).
+  for (const v of raw) {
+    if (typeof v !== 'string' || v.length <= MAX_CELL_CHARS) continue;
+    const kept = dropCutTail(v.slice(0, MAX_CELL_CHARS));
+    if (RE_MONEY_TAIL.test(v.slice(Math.max(0, kept.length - MONEY_TAIL_OVERLAP)))) return true;
+  }
+  const cells = raw.map(cellText);
   if (!cells.some(Boolean)) return false;
   if (RE_CURRENCY_TEXT.test(cells.join('|'))) return true;
   if (!cells.some(isMoneyLabel)) return false;
@@ -1178,7 +1617,9 @@ function priceInRow(row) {
 
 // Bounds for the price check. Wider than the extractor's, because a price
 // column past row 5000 is still in the file; past these, the sheet is marked
-// truncated and counts as priced rather than being called clean unread.
+// truncated and counts as priced rather than being called clean unread. (They
+// bound the CHECKING. A workbook's memory is bounded before it is loaded, by
+// XLSX_MAX_XML_BYTES.)
 const PRICE_CHECK_MAX_ROWS = 200000;
 const PRICE_CHECK_MAX_COLS = 1000;
 const PRICE_CHECK_MAX_CELLS = 1000000;
@@ -1188,8 +1629,10 @@ const PRICE_CHECK_MAX_CELLS = 1000000;
  *   true  — a spreadsheet or CSV with a price in it (see detectPriceColumns)
  *   false — a spreadsheet or CSV read to the end with none
  *   null  — anything that cannot be checked: a PDF, a photo, an old binary
- *           .xls, a file over 25 MB, a file that would not open, a read that
- *           failed. The office is told null means "check it yourself".
+ *           .xls, a file over 25 MB, a workbook that unpacks past
+ *           XLSX_MAX_XML_BYTES, a file that would not open, a read that
+ *           failed. The office is told null means "check it yourself", and
+ *           the crew-takeoff door refuses a SPREADSHEET that comes back null.
  * Never throws, never calls a model, never writes.
  */
 async function detectFilePrices(opts) {
@@ -1204,9 +1647,13 @@ async function detectFilePrices(opts) {
     if (!buf.length || buf.length > MAX_FILE_BYTES) return null;
     // The bytes decide, not the name — the same sniff the extractor trusts.
     const kind = sniffKind(buf, att.filename, att.mime_type);
-    // Rows are checked as they are read and never kept (onRow), so the wide
-    // bounds below cost one row of memory, not 200,000 of them; the first
-    // priced row ends the read.
+    // Rows are checked as they are read and never kept (onRow), and the first
+    // priced row ends the read. For a CSV that makes the wide bounds below
+    // cost one row of memory, not 200,000 of them. A workbook is different:
+    // exceljs has built every cell before the first row arrives, so what
+    // bounds its memory is xlsxToSheets refusing, before the load, a workbook
+    // that unpacks past XLSX_MAX_XML_BYTES; the row and cell bounds only decide
+    // how much of a loaded workbook is checked.
     let found = false;
     let cells = 0;
     const onRow = (row) => {
@@ -1522,6 +1969,10 @@ async function fromWorkbook(ctx, buf) {
     sheets = await xlsxToSheets(buf);
   } catch (e) {
     console.warn('[materials-extract] xlsx load failed attachment=' + ctx.att.id + ': ' + (e && e.message));
+    if (e && e.code === 'too_large') {
+      return fail('too_large', ctx.filename, nameOf(ctx.filename) + ' holds more spreadsheet data than can be read here (over '
+        + Math.round(XLSX_MAX_XML_BYTES / (1024 * 1024)) + ' MB once unpacked). Save just the takeoff sheet as a new file and pick that.');
+    }
     return fail('unreadable', ctx.filename);
   }
   return fromRows(ctx, sheets, 'sheet');

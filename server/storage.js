@@ -52,6 +52,23 @@ class LocalDiskStorage extends StorageAdapter {
   async getBuffer(key) {
     return fs.promises.readFile(this._full(key));
   }
+  // Open a stored file to send on without holding it: { stream, size }. Used by
+  // the crew link's takeoff door, which needs no login — reading a 25 MB file
+  // whole there would hold one copy per download in flight. The size comes
+  // from the SAME open descriptor the stream reads, so a file replaced between
+  // the stat and the read cannot report one length and send another.
+  async getStream(key) {
+    const handle = await fs.promises.open(this._full(key), 'r');
+    try {
+      const st = await handle.stat();
+      // autoClose (the default) gives the descriptor back when the stream ends
+      // or is destroyed.
+      return { stream: handle.createReadStream(), size: st.size };
+    } catch (e) {
+      await handle.close().catch(() => {});
+      throw e;
+    }
+  }
 }
 
 // Cloudflare R2 backend. R2 speaks the S3 API, so we use @aws-sdk/client-s3
@@ -141,6 +158,20 @@ class R2Storage extends StorageAdapter {
       chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
     }
     return Buffer.concat(chunks);
+  }
+
+  // The streaming read (see LocalDiskStorage.getStream): the S3 body is
+  // already a Node stream, handed on uncollected, with the length R2 reports
+  // for the object — null when it reports none.
+  async getStream(key) {
+    const res = await this.client.send(new this._GetObjectCommand({
+      Bucket: this.bucket,
+      Key: key
+    }));
+    const body = res.Body;
+    if (!body) throw new Error('R2 getStream: empty body');
+    const size = res.ContentLength == null ? null : Number(res.ContentLength);
+    return { stream: body, size: Number.isFinite(size) ? size : null };
   }
 }
 

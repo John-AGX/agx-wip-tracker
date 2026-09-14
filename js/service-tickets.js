@@ -421,12 +421,13 @@
         events.map(eventHTML).join('') +
       '</div>' : '');
 
-    // On a phone the stepper is one row that scrolls sideways (styles.css,
-    // the 760px work-order block), so "Approved" or "Closed" can start off
-    // screen. Centre the current step by moving the ROW's scrollLeft only —
-    // scrollIntoView would also scroll the page, and this repaints after
-    // every photo and note. A desktop stepper wraps and never overflows, so
-    // there this does nothing.
+    // On a touch phone the stepper is one row that scrolls sideways
+    // (styles.css, the 760px pointer: coarse block), so "Approved" or
+    // "Closed" can start off screen. Centre the current step by moving the
+    // ROW's scrollLeft only — scrollIntoView would also scroll the page, and
+    // this repaints after every photo and note. A desktop stepper, and a
+    // narrow mouse window's, wraps and never overflows, so there this does
+    // nothing.
     var stepRow = d.querySelector('.p86-st-stepper');
     var atStep = stepRow && stepRow.querySelector('.p86-st-step.at');
     if (atStep && stepRow.scrollWidth > stepRow.clientWidth) {
@@ -760,7 +761,10 @@
   // spreadsheet with price columns only on links sent with financial details
   // (John's rule: no money on a work order), a clean one everywhere, and a PDF
   // or photo — which cannot be checked — everywhere, after the office is
-  // warned.
+  // warned. An old .xls cannot be checked either, but it is a spreadsheet and
+  // may well carry a Unit Cost column, so it is not offered at all: the office
+  // saves it as .xlsx first. A spreadsheet stored with no verdict (a row from
+  // before that rule) shows only on links sent with financial details.
   function crewTakeoffOf(t) {
     var ct = t && t.crew_takeoff;
     // JSONB arrives parsed from pg, but a text column in a test harness (or a
@@ -774,8 +778,30 @@
     priced: 'This file has price columns, so it only shows on crew links sent with financial details. ' +
       'Links that hide financials (the default) don\'t show it.',
     clean: 'The crew link shows this file.',
+    unreadable: 'This file could not be checked for prices, so links that hide financials (the default) don\'t show it.',
     unchecked: 'The crew link shows this whole file. PDFs and photos can\'t be checked for prices — make sure it has none.'
   };
+  // What the office does about an unreadable file, by kind.
+  var CREW_UNREADABLE_NEXT = {
+    xls: ' Save it as .xlsx to the job\'s Files and pick that one.',
+    xlsx: ' Pick it again to check it.',
+    csv: ' Pick it again to check it.'
+  };
+  // The kinds the server reads cells from. A missing verdict on one of these
+  // never means "a PDF or photo": the server keeps such a row off every link
+  // that hides financials (crewTakeoffFor), so the copy must not say it shows.
+  var CREW_SHEET_KINDS = { xlsx: 1, xls: 1, csv: 1 };
+
+  // Which status a stored record reads as. Only an explicit false is clean,
+  // and "shows everywhere, unchecked" is only ever a PDF or photo; anything
+  // else without a true/false verdict (an .xls, a failed read stored by an
+  // older build, a hand-written row) is the narrower "could not be checked".
+  function crewTone(ct) {
+    if (ct.has_prices === true) return 'priced';
+    if (ct.has_prices === false) return 'clean';
+    if (ct.has_prices === null && !CREW_SHEET_KINDS[ct.kind]) return 'unchecked';
+    return 'unreadable';
+  }
 
   function crewTakeoffHTML(t, canEdit) {
     var ct = crewTakeoffOf(t);
@@ -788,7 +814,8 @@
           '</div>'
         : '';
     }
-    var tone = ct.has_prices === true ? 'priced' : (ct.has_prices === false ? 'clean' : 'unchecked');
+    var tone = crewTone(ct);
+    var status = CREW_STATUS[tone] + (tone === 'unreadable' && canEdit ? (CREW_UNREADABLE_NEXT[ct.kind] || '') : '');
     return '<div class="p86-wo-crew is-' + tone + '">' +
       '<div class="p86-wo-crew-lbl">Takeoff on the crew link</div>' +
       '<div class="p86-wo-crew-file">' +
@@ -801,7 +828,7 @@
             '</span>'
           : '') +
       '</div>' +
-      '<div class="p86-wo-crew-status" role="note">' + esc(CREW_STATUS[tone]) + '</div>' +
+      '<div class="p86-wo-crew-status" role="note">' + esc(status) + '</div>' +
     '</div>';
   }
 
@@ -1157,11 +1184,19 @@
     return n + ' ' + (n === 1 ? one : (many || one + 's'));
   }
 
+  // An old .xls is never pickable, in either mode. The reader takes .xlsx
+  // only, so it cannot fill the editor; and the price check cannot read one
+  // either, so on the crew link it would be a spreadsheet nobody checked for a
+  // Unit Cost column (the server refuses it too). Saving it as .xlsx fixes
+  // both, and the row says so.
+  function pickable(f) {
+    return !!f && f.kind !== 'xls';
+  }
+
   // crewId: in crew mode, the attachment already on the crew link, so its row
-  // says so. An .xls cannot be READ here (the parser takes .xlsx only), but the
-  // crew can open one in whatever they have, so crew mode offers it.
+  // says so.
   function pickRowHTML(f, idx, crew, crewId) {
-    var legacy = f.kind === 'xls' && !crew;
+    var legacy = !pickable(f);
     var current = crew && crewId != null && String(crewId) === String(f.id);
     var meta = [f.folder, fmtBytes(f.size_bytes), fmtDate(f.uploaded_at)].filter(Boolean).join(' · ');
     return '<button type="button" class="p86-wo-pick-row' + (legacy ? ' is-legacy' : '') +
@@ -1171,7 +1206,7 @@
       '<span class="p86-wo-pick-main">' +
         '<span class="p86-wo-pick-name">' + esc(f.filename || 'Untitled file') + '</span>' +
         '<span class="p86-wo-pick-meta">' +
-          (legacy ? 'Save as .xlsx to read it' : esc(meta)) +
+          (legacy ? (crew ? 'Save as .xlsx to put it on the crew link' : 'Save as .xlsx to read it') : esc(meta)) +
         '</span>' +
       '</span>' +
       '<span class="p86-wo-pick-state" aria-hidden="true">' + (current ? 'On the link' : '') + '</span>' +
@@ -1296,7 +1331,7 @@
       var btn = e.target.closest('.p86-wo-pick-row');
       if (!btn || btn.disabled || busy) return;
       var f = files[Number(btn.getAttribute('data-idx'))];
-      if (!f || (f.kind === 'xls' && !crew)) return;
+      if (!pickable(f)) return;
       busy = true;
       showErr('');
       var allRows = body.querySelectorAll('.p86-wo-pick-row');
@@ -1311,7 +1346,7 @@
         busy = false;
         Array.prototype.forEach.call(allRows, function (b) {
           var ff = files[Number(b.getAttribute('data-idx'))];
-          b.disabled = !ff || (ff.kind === 'xls' && !crew);
+          b.disabled = !pickable(ff);
         });
         btn.classList.remove('is-reading');
         btn.removeAttribute('aria-busy');
@@ -1506,7 +1541,16 @@
   // spreadsheet or CSV is checked by the server for price columns; a PDF or a
   // photo cannot be, so it would show on every link, including the ones that
   // hide financials. Resolves true to go ahead. Never rejects.
+  //
+  // An .xls resolves false with no question: it cannot be checked, and it is
+  // a spreadsheet, so no answer the PM gives makes it safe for a link that
+  // hides financials. The picker never offers one; this covers any other path
+  // that hands one in.
   function confirmWholeFile(f) {
+    if (f && !pickable(f)) {
+      toast('Save ' + (f.filename || 'that file') + ' as .xlsx to put it on the crew link.', 'error');
+      return Promise.resolve(false);
+    }
     if (!f || (f.kind !== 'pdf' && f.kind !== 'image')) return Promise.resolve(true);
     if (typeof window.p86Confirm !== 'function') {
       // No dialog helper loaded: refuse rather than send an unchecked file
@@ -1529,10 +1573,13 @@
     return crewTakeoffOf(res && res.ticket);
   }
 
+  // Says "shown" only for a verdict that shows it on a default link; anything
+  // narrower says where it shows instead.
   function crewSavedMessage(ct) {
-    return ct && ct.has_prices === true
-      ? 'Saved — it shows only on links sent with financial details'
-      : 'Takeoff shown on the crew link';
+    var tone = ct ? crewTone(ct) : null;
+    if (tone === 'priced') return 'Saved — it shows only on links sent with financial details';
+    if (tone === 'unreadable') return 'Saved — it could not be checked for prices, so it shows only on links sent with financial details';
+    return 'Takeoff shown on the crew link';
   }
 
   // The "Also show this file on the crew link" path, outside the picker.

@@ -20,6 +20,13 @@
 //                                                 against the ticket's job,
 //                                                 lead and estimate on EVERY
 //                                                 read
+//   * a spreadsheet that was never checked        has_prices null on an .xls,
+//                                                 .xlsx or CSV is withheld
+//                                                 from a default link
+//   * a file the door cannot send is not offered  over MAX_FILE_BYTES, no card
+//   * the door holds no file in memory            piped from storage.getStream,
+//                                                 one download per link and
+//                                                 per address
 //
 // Harness: the guest-write style. A fake Postgres answers the statements the
 // route emits and records every one, so "the file was never fetched" and "the
@@ -32,9 +39,13 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { Readable, Writable } = require('stream');
 const svc = require('../server/services/service-tickets');
+const { MAX_FILE_BYTES } = jest.requireActual('../server/services/materials-extract.js');
 
 const TOKEN = 'a'.repeat(64);
+// A second link, on the same ticket, for the per-address slot.
+const TOKEN_2 = 'b'.repeat(64);
 const SHARE_ROUTES = path.join(__dirname, '..', 'server', 'routes', 'service-ticket-share-routes.js');
 
 // ── A fake Postgres ─────────────────────────────────────────────────────
@@ -77,6 +88,10 @@ function makeWorld(opts) {
       att('a_docx', 'job', 'j1', 'contract.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
       att('a_big', 'job', 'j1', 'huge scan.pdf', 'application/pdf', 1, 30 * 1024 * 1024),
       att('a_weird', 'job', 'j1', 'Bid "final"\r\nSet-Cookie: x=1 \u2014 Caf\u00e9.pdf', 'application/pdf'),
+      // The findings' files: an old estimating export with a Unit Cost column,
+      // and a plan set between the crew cap and the 50 MB upload cap.
+      att('a_xls', 'job', 'j1', 'Estimate.xls', 'application/vnd.ms-excel'),
+      att('a_plans', 'job', 'j1', 'Plan set.pdf', 'application/pdf', 1, 38 * 1024 * 1024),
     ].concat(o.attachments || []),
     users: [{ id: 10, organization_id: 1 }, { id: 50, organization_id: 2 }],
   };
@@ -91,7 +106,7 @@ function makeWorld(opts) {
     if (o.throwOn && o.throwOn.test(text)) throw new Error('fake pg: planted failure');
 
     if (/FROM service_ticket_shares WHERE token_hash/i.test(text)) {
-      return { rows: p[0] === world.share.token_hash ? [world.share] : [] };
+      return { rows: [world.share].concat(world.otherShares || []).filter((s) => p[0] === s.token_hash) };
     }
     if (/FROM service_tickets WHERE id = \$1 AND archived_at IS NULL/i.test(text)) {
       return { rows: p[0] === world.ticket.id ? [world.ticket] : [] };
@@ -141,16 +156,27 @@ function att(id, entityType, entityId, filename, mime, org, size) {
   };
 }
 
-// The bytes storage hands back, by key.
-const PDF = Buffer.from('%PDF-1.4\n1 0 obj\n<< >>\nendobj\n%%EOF\n');
-const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), Buffer.from('pngbody')]);
-const XLSX = Buffer.concat([Buffer.from([0x50, 0x4B, 0x03, 0x04]), Buffer.from('xl/workbook.xml')]);
+// The bytes storage hands back, by key. Each is padded to the 4096 bytes the
+// attachment rows record: the door sends the STORED size as Content-Length and
+// refuses a file whose bytes disagree with it.
+const pad = (b) => Buffer.concat([b, Buffer.alloc(4096 - b.length, 0x20)]);
+const PDF = pad(Buffer.from('%PDF-1.4\n1 0 obj\n<< >>\nendobj\n%%EOF\n'));
+const PNG = pad(Buffer.concat([Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), Buffer.from('pngbody')]));
+const XLSX = pad(Buffer.concat([Buffer.from([0x50, 0x4B, 0x03, 0x04]), Buffer.from('xl/workbook.xml')]));
+const XLS = pad(Buffer.from([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]));
 const BYTES = {
-  'orig/a_pdf': PDF, 'orig/a_xlsx': XLSX, 'orig/a_csv': Buffer.from('Description,Qty\r\nDrip edge,20\r\n'),
-  'orig/a_png': PNG, 'orig/a_fakejpg': Buffer.from('<html><script>alert(1)</script></html>'),
-  'orig/a_fakepdf': Buffer.from('<svg onload="alert(1)"></svg>'), 'orig/a_lead': XLSX, 'orig/a_est': PDF,
-  'orig/a_other_job': PDF, 'orig/a_weird': PDF, 'orig/a_big': PDF,
+  'orig/a_pdf': PDF, 'orig/a_xlsx': XLSX, 'orig/a_csv': pad(Buffer.from('Description,Qty\r\nDrip edge,20\r\n')),
+  'orig/a_png': PNG, 'orig/a_fakejpg': pad(Buffer.from('<html><script>alert(1)</script></html>')),
+  'orig/a_fakepdf': pad(Buffer.from('<svg onload="alert(1)"></svg>')), 'orig/a_lead': XLSX, 'orig/a_est': PDF,
+  'orig/a_other_job': PDF, 'orig/a_weird': PDF, 'orig/a_big': PDF, 'orig/a_xls': XLS, 'orig/a_plans': PDF,
 };
+
+// A storage stream the test feeds by hand: `push` a chunk, `end` it. Its
+// destroy is immediate, like an fs or R2 body stream.
+function handFed() {
+  const stream = new Readable({ read() {} });
+  return { stream, push: (b) => stream.push(b), end: () => stream.push(null) };
+}
 
 global.__takeoffWorld = null;
 jest.mock('../server/db', () => ({
@@ -180,11 +206,15 @@ jest.mock('../server/rate-limit', () => {
 jest.mock('../server/services/entity-labels', () => ({
   resolveEntityLabels: async () => new Map([['job:j1', 'RV2006 Waterside 1']]),
 }));
+// getBuffer stays on the mock so a door that went back to reading the whole
+// file would be CAUGHT calling it, not fail on a missing method.
 const mockGetBuffer = jest.fn();
+const mockGetStream = jest.fn();
 jest.mock('../server/storage', () => ({
   storage: {
     put: async (k) => 'https://cdn/' + k,
     getBuffer: (...args) => mockGetBuffer(...args),
+    getStream: (...args) => mockGetStream(...args),
   },
 }));
 jest.mock('../server/services/service-ticket-notify', () => ({
@@ -199,7 +229,14 @@ beforeEach(() => {
     if (!Object.prototype.hasOwnProperty.call(BYTES, key)) throw new Error('no such key ' + key);
     return BYTES[key];
   });
+  mockGetStream.mockReset();
+  mockGetStream.mockImplementation(async (key) => {
+    if (!Object.prototype.hasOwnProperty.call(BYTES, key)) throw new Error('no such key ' + key);
+    return { stream: Readable.from([BYTES[key]]), size: BYTES[key].length };
+  });
 });
+// What storage was asked for, by either read.
+const fetched = () => mockGetStream.mock.calls.length + mockGetBuffer.mock.calls.length;
 
 const mutantPaths = [];
 afterAll(() => {
@@ -207,13 +244,29 @@ afterAll(() => {
 });
 
 // ── the drive ─────────────────────────────────────────────────────────────
+// A REAL Writable, because the door pipes into the response: backpressure,
+// a reader going away (destroy) and a body that never finishes all behave as
+// they do on an http.ServerResponse. `ended` is the body, once it FINISHED;
+// a response that was dropped part way keeps `ended` null.
 function fakeRes() {
-  const res = { statusCode: 200, body: null, headersSent: false, headers: {}, ended: null, writes: 0 };
+  const chunks = [];
+  const res = new Writable({
+    write(chunk, enc, cb) {
+      res.headersSent = true;
+      chunks.push(Buffer.from(chunk));
+      cb();
+    },
+  });
+  Object.assign(res, { statusCode: 200, body: null, headersSent: false, headers: {}, ended: null, timeout: null });
+  res.on('error', () => { /* a dropped response; the door's pipeline saw it */ });
+  res.on('finish', () => { if (res.body === null) res.ended = Buffer.concat(chunks); });
+  res.received = () => Buffer.concat(chunks);
   res.status = (c) => { res.statusCode = c; return res; };
   res.json = (p) => {
-    res.writes += 1;
     if (res.headersSent) throw new Error('response written twice');
-    res.body = p; res.headersSent = true; return res;
+    res.body = p; res.headersSent = true;
+    Writable.prototype.end.call(res);
+    return res;
   };
   res.set = () => res;
   res.setHeader = (k, v) => {
@@ -225,26 +278,31 @@ function fakeRes() {
     return res;
   };
   res.getHeader = (k) => res.headers[k.toLowerCase()];
-  res.end = (buf) => {
-    res.writes += 1;
-    if (res.headersSent) throw new Error('response written twice');
-    res.ended = buf; res.headersSent = true; return res;
-  };
+  res.setTimeout = (ms, cb) => { res.timeout = { ms, cb }; return res; };
   return res;
 }
 
-async function run(r, routePath, world, token) {
+// Starts one request and hands back the response while it is still in flight.
+function start(r, routePath, world, opts) {
+  const o = opts || {};
   global.__takeoffWorld = world;
   const layer = r.stack.find((l) => l.route && l.route.path === routePath && l.route.methods.get);
   if (!layer) throw new Error('GET ' + routePath + ' not found');
   const res = fakeRes();
-  const req = { params: { token: token || TOKEN }, body: {}, headers: {}, get: () => 'project86.test' };
-  for (const h of layer.route.stack.map((s) => s.handle)) {
-    let advanced = false;
-    await h(req, res, () => { advanced = true; });
-    if (!advanced) break;
-  }
-  return res;
+  const req = { params: { token: o.token || TOKEN }, body: {}, headers: {}, ip: o.ip, get: () => 'project86.test' };
+  const done = (async () => {
+    for (const h of layer.route.stack.map((s) => s.handle)) {
+      let advanced = false;
+      await h(req, res, () => { advanced = true; });
+      if (!advanced) break;
+    }
+    return res;
+  })();
+  return { res, done };
+}
+
+async function run(r, routePath, world, token) {
+  return start(r, routePath, world, { token }).done;
 }
 
 const chosen = (attachmentId, hasPrices, extra) => Object.assign({
@@ -377,8 +435,9 @@ describe('the takeoff door serves the chosen file through the token', () => {
   test('a PDF opens inline with every no-store / no-sniff header, and NO CSP (a sandbox blanks Chrome\'s viewer)', async () => {
     const res = await open(router, { ticket: { crew_takeoff: chosen('a_pdf', null) } });
     expect(res.statusCode).toBe(200);
-    expect(res.ended).toBe(PDF);
-    expect(mockGetBuffer.mock.calls).toEqual([['orig/a_pdf']]);
+    expect(res.ended).toEqual(PDF);
+    expect(mockGetStream.mock.calls).toEqual([['orig/a_pdf']]);
+    expect(mockGetBuffer).not.toHaveBeenCalled();
     expect(res.headers).toMatchObject(Object.assign({
       'content-type': 'application/pdf',
       'content-length': String(PDF.length),
@@ -436,7 +495,7 @@ describe('the takeoff door serves the chosen file through the token', () => {
   test('a priced file on a default link is the no-takeoff 404, and storage is never touched', async () => {
     const res = await open(router, { ticket: { crew_takeoff: chosen('a_xlsx', true) }, share: DEFAULT_LINK });
     expect([res.statusCode, res.body]).toEqual(NO_TAKEOFF);
-    expect(mockGetBuffer).not.toHaveBeenCalled();
+    expect(fetched()).toBe(0);
     expect(touchedAttachments(res.world)).toBe(false);
     // The same file on a financial link opens.
     const fin = await open(router, { ticket: { crew_takeoff: chosen('a_xlsx', true) }, share: FINANCIAL_LINK });
@@ -448,18 +507,23 @@ describe('the takeoff door serves the chosen file through the token', () => {
       const res = await open(router, { ticket: { crew_takeoff: ct } });
       expect([res.statusCode, res.body]).toEqual(NO_TAKEOFF);
     }
-    expect(mockGetBuffer).not.toHaveBeenCalled();
+    expect(fetched()).toBe(0);
   });
 
-  test('over 25 MB is 413 before the fetch; a fetch that comes back over is 413 too', async () => {
+  test('over 25 MB is the no-takeoff 404 before the fetch; storage holding more than the cap is 413', async () => {
+    // crewTakeoffFor refuses a file the door would refuse, so the page never
+    // offers it and the door answers as if nothing was chosen.
     const big = await open(router, { ticket: { crew_takeoff: chosen('a_big', null) } });
-    expect([big.statusCode, big.body]).toEqual([413, { error: 'That file is too large to open here — ask the office for it.' }]);
-    expect(mockGetBuffer).not.toHaveBeenCalled();
+    expect([big.statusCode, big.body]).toEqual(NO_TAKEOFF);
+    expect(fetched()).toBe(0);
 
-    mockGetBuffer.mockImplementation(async () => Buffer.alloc(25 * 1024 * 1024 + 1));
+    // The stored size is a claim written at upload time; storage saying the
+    // object is bigger than the cap is refused before a header goes out.
+    mockGetStream.mockImplementation(async () => ({ stream: Readable.from([PDF]), size: MAX_FILE_BYTES + 1 }));
     const lied = await open(router, { ticket: { crew_takeoff: chosen('a_pdf', null) } });
-    expect(lied.statusCode).toBe(413);
+    expect([lied.statusCode, lied.body]).toEqual([413, { error: 'That file is too large to open here — ask the office for it.' }]);
     expect(lied.ended).toBeNull();
+    expect(lied.headers['content-length']).toBeUndefined();
   });
 
   test('a revoked or expired link is 410 before the ticket is read; a malformed token costs no query', async () => {
@@ -472,11 +536,11 @@ describe('the takeoff door serves the chosen file through the token', () => {
     const bad = await run(router, '/service-ticket-share/:token/takeoff', world, 'nope');
     expect(bad.statusCode).toBe(404);
     expect(world.log).toHaveLength(0);
-    expect(mockGetBuffer).not.toHaveBeenCalled();
+    expect(fetched()).toBe(0);
   });
 
   test('a storage failure is a plain 500, never the error text', async () => {
-    mockGetBuffer.mockImplementation(async () => { throw new Error('R2 NoSuchKey orig/a_pdf bucket=secret'); });
+    mockGetStream.mockImplementation(async () => { throw new Error('R2 NoSuchKey orig/a_pdf bucket=secret'); });
     const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const res = await open(router, { ticket: { crew_takeoff: chosen('a_pdf', null) } });
@@ -490,6 +554,363 @@ describe('the takeoff door serves the chosen file through the token', () => {
     const res = await open(router, { ticket: { crew_takeoff: chosen('a_pdf', null) } });
     expect(res.statusCode).toBe(200);
     expect(res.world.log.filter((q) => /^(INSERT|UPDATE|DELETE)\b/i.test(q.sql))).toEqual([]);
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * AN UNCHECKED SPREADSHEET — a row stored before the PUT refused one. The PUT
+ * used to store has_prices null for an old .xls ("Estimate.xls" from an older
+ * estimating export, Unit Cost column and all), and null passed every default
+ * link as if it were a PDF the office had been warned about.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('a spreadsheet with a null verdict stays off a link that hides financials', () => {
+  test('the finding\'s row — Estimate.xls, has_prices null — is no card and the no-takeoff 404, with no lookup and no fetch', async () => {
+    const opts = { ticket: { crew_takeoff: chosen('a_xls', null, { kind: 'xls' }) }, share: DEFAULT_LINK };
+    const world = makeWorld(opts);
+    const card = await run(router, '/service-ticket-share/:token', world);
+    expect(card.statusCode).toBe(200);
+    expect(card.body.takeoff).toBeNull();
+    // Decided on the stored kind, before the attachments table is read.
+    expect(touchedAttachments(world)).toBe(false);
+    const door = await open(router, opts);
+    expect([door.statusCode, door.body]).toEqual(NO_TAKEOFF);
+    expect(fetched()).toBe(0);
+  });
+
+  test('the same for an .xlsx or a CSV stored with a null verdict', async () => {
+    for (const [id, kind] of [['a_xlsx', 'xlsx'], ['a_csv', 'csv'], ['a_lead', 'xlsx']]) {
+      const opts = { ticket: { crew_takeoff: chosen(id, null, { kind }) }, share: DEFAULT_LINK };
+      expect({ id, takeoff: (await read(router, opts)).body.takeoff }).toEqual({ id, takeoff: null });
+      expect({ id, status: (await open(router, opts)).statusCode }).toEqual({ id, status: 404 });
+    }
+    expect(fetched()).toBe(0);
+  });
+
+  test('decided again on the kind the file has NOW: a null row stored as a PDF, or with no kind, whose file is an .xls', async () => {
+    const asPdf = chosen('a_xls', null, { kind: 'pdf' });
+    const noKind = chosen('a_xls', null);
+    delete noKind.kind;
+    for (const ct of [asPdf, noKind]) {
+      const opts = { ticket: { crew_takeoff: ct }, share: DEFAULT_LINK };
+      expect((await read(router, opts)).body.takeoff).toBeNull();
+      expect([(await open(router, opts)).statusCode, fetched()]).toEqual([404, 0]);
+    }
+    // A PDF chosen as a PDF is untouched by this rule.
+    expect((await read(router, { ticket: { crew_takeoff: chosen('a_pdf', null, { kind: 'pdf' }) }, share: DEFAULT_LINK })).body.takeoff)
+      .toEqual({ filename: 'Field takeoff.pdf', kind: 'pdf', size_bytes: 4096 });
+  });
+
+  test('a link minted WITH financial details still shows and serves it', async () => {
+    const opts = { ticket: { crew_takeoff: chosen('a_xls', null, { kind: 'xls' }) }, share: FINANCIAL_LINK };
+    expect((await read(router, opts)).body.takeoff).toEqual({ filename: 'Estimate.xls', kind: 'xls', size_bytes: 4096 });
+    const res = await open(router, opts);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('application/vnd.ms-excel');
+    expect(res.headers['content-disposition']).toMatch(/^attachment; filename="Estimate\.xls"/);
+    expect(res.ended).toEqual(XLS);
+  });
+
+  test('an .xls the check read to the end with no prices (false) shows on a default link', async () => {
+    const res = await read(router, { ticket: { crew_takeoff: chosen('a_xls', false, { kind: 'xls' }) }, share: DEFAULT_LINK });
+    expect(res.body.takeoff).toMatchObject({ filename: 'Estimate.xls', kind: 'xls' });
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * THE SIZE CAP — a file the door cannot send is never offered. Uploads allow
+ * 50 MB; a 38 MB plan set stored before the PUT refused one showed the crew
+ * "Open the takeoff" and a 413 behind it on every attempt.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('a file over the crew link\'s cap is not offered', () => {
+  test('the finding\'s 38 MB plan-set PDF (has_prices null): no card, the no-takeoff 404, no fetch', async () => {
+    for (const share of [DEFAULT_LINK, FINANCIAL_LINK]) {
+      const opts = { ticket: { crew_takeoff: chosen('a_plans', null) }, share };
+      const card = await read(router, opts);
+      expect(card.statusCode).toBe(200);
+      expect(card.body.takeoff).toBeNull();
+      const door = await open(router, opts);
+      expect([door.statusCode, door.body]).toEqual(NO_TAKEOFF);
+    }
+    expect(fetched()).toBe(0);
+  });
+
+  test('the cap is materials-extract\'s MAX_FILE_BYTES: exactly at it is offered, one byte over is not', async () => {
+    expect(MAX_FILE_BYTES).toBe(25 * 1024 * 1024);
+    const at = (size) => read(router, {
+      ticket: { crew_takeoff: chosen('a_pdf', null) },
+      mutateWorld: (w) => { w.attachments.find((a) => a.id === 'a_pdf').size_bytes = size; },
+    });
+    expect((await at(MAX_FILE_BYTES)).body.takeoff).toEqual({ filename: 'Field takeoff.pdf', kind: 'pdf', size_bytes: MAX_FILE_BYTES });
+    expect((await at(MAX_FILE_BYTES + 1)).body.takeoff).toBeNull();
+    // A pg BIGINT arrives as a string, and is read the same way.
+    expect((await at(String(MAX_FILE_BYTES + 1))).body.takeoff).toBeNull();
+    expect((await at('4096')).body.takeoff).toMatchObject({ size_bytes: 4096 });
+  });
+
+  test('a row with no usable size is not offered: the door could not name a length for it', async () => {
+    for (const size of [null, undefined, 'abc', -1, 1.5, Infinity]) {
+      const res = await read(router, {
+        ticket: { crew_takeoff: chosen('a_pdf', null) },
+        mutateWorld: (w) => { w.attachments.find((a) => a.id === 'a_pdf').size_bytes = size; },
+      });
+      expect({ size, takeoff: res.body.takeoff }).toEqual({ size, takeoff: null });
+    }
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * NO FILE HELD IN MEMORY — the door pipes the stored object, one download per
+ * link and per address. The finding: every GET read up to 25 MB whole
+ * (getBuffer; twice that on R2), with no in-flight limit, so sixty downloads
+ * started at once from one address — inside the 60-a-minute IP limiter — held
+ * about 1.5 GB on the one replica.
+ * ══════════════════════════════════════════════════════════════════════════*/
+function gate() {
+  let open;
+  const shut = new Promise((resolve) => { open = resolve; });
+  return { shut, open };
+}
+
+async function until(cond, what) {
+  for (let i = 0; i < 5000 && !cond(); i++) await new Promise((r) => setImmediate(r));
+  if (!cond()) throw new Error('never happened: ' + (what || 'condition'));
+}
+
+const BUSY = [429, { error: 'This file is already downloading — try again in a moment.' }];
+const DOOR = '/service-ticket-share/:token/takeoff';
+const answer = (r) => [r.statusCode, r.body];
+
+describe('the takeoff door streams, and holds one download per link and per address', () => {
+  test('the bytes go on as storage yields them: headers and the first chunk leave before storage has finished', async () => {
+    const feed = handFed();
+    mockGetStream.mockImplementation(async () => ({ stream: feed.stream, size: PDF.length }));
+    const world = makeWorld({ ticket: { crew_takeoff: chosen('a_pdf', null) } });
+    const req = start(router, DOOR, world, { ip: '203.0.113.7' });
+    await until(() => mockGetStream.mock.calls.length === 1, 'storage opened');
+
+    feed.push(PDF.subarray(0, 2048));
+    await until(() => req.res.received().length === 2048, 'first chunk sent');
+    // In flight: the response has the headers and half the file, and storage
+    // has not been asked for the rest — nothing waited for the whole file.
+    expect(req.res.headers['content-type']).toBe('application/pdf');
+    expect(req.res.headers['content-length']).toBe('4096');
+    expect(req.res.ended).toBeNull();
+
+    feed.push(PDF.subarray(2048));
+    feed.end();
+    const res = await req.done;
+    expect(res.statusCode).toBe(200);
+    expect(res.ended).toEqual(PDF);
+    expect(mockGetBuffer).not.toHaveBeenCalled();
+  });
+
+  test('the finding: sixty downloads started at once from one address open storage ONCE; fifty-nine are the busy 429', async () => {
+    const feed = handFed();
+    mockGetStream.mockImplementationOnce(async () => ({ stream: feed.stream, size: PDF.length }));
+    const world = makeWorld({ ticket: { crew_takeoff: chosen('a_pdf', null) } });
+    const reqs = [];
+    for (let i = 0; i < 60; i++) reqs.push(start(router, DOOR, world, { ip: '198.51.100.20' }));
+    await until(() => mockGetStream.mock.calls.length === 1 && reqs.filter((r) => r.res.body).length === 59, 'fifty-nine refusals');
+
+    const refused = reqs.filter((r) => r.res.body);
+    expect(refused.map((r) => [r.res.statusCode, r.res.body])).toEqual(Array(59).fill(BUSY));
+    // Refused before the storage fetch, and no header of the file's.
+    expect(refused.every((r) => r.res.headers['content-length'] === undefined)).toBe(true);
+    expect(mockGetStream).toHaveBeenCalledTimes(1);
+
+    feed.push(PDF);
+    feed.end();
+    const results = await Promise.all(reqs.map((r) => r.done));
+    expect(results.filter((r) => r.statusCode === 200 && r.ended && r.ended.equals(PDF))).toHaveLength(1);
+
+    // The slot is back once that download finished.
+    const next = await start(router, DOOR, world, { ip: '198.51.100.20' }).done;
+    expect([next.statusCode, next.ended && next.ended.equals(PDF)]).toEqual([200, true]);
+  });
+
+  test('one per LINK across addresses, and one per ADDRESS across links', async () => {
+    const feed = handFed();
+    mockGetStream.mockImplementationOnce(async () => ({ stream: feed.stream, size: PDF.length }));
+    const world = makeWorld({
+      ticket: { crew_takeoff: chosen('a_pdf', null) },
+      mutateWorld: (w) => {
+        w.otherShares = [Object.assign({}, w.share, { id: 'stshare_2', token_hash: svc.hashToken(TOKEN_2) })];
+      },
+    });
+    const first = start(router, DOOR, world, { ip: '192.0.2.1' });
+    await until(() => mockGetStream.mock.calls.length === 1, 'first download open');
+
+    // The same link from another address.
+    expect(answer(await start(router, DOOR, world, { ip: '192.0.2.99' }).done)).toEqual(BUSY);
+    // Another link from the same address.
+    expect(answer(await start(router, DOOR, world, { ip: '192.0.2.1', token: TOKEN_2 }).done)).toEqual(BUSY);
+    expect(mockGetStream).toHaveBeenCalledTimes(1);
+    // Another link from another address is not held up.
+    const other = await start(router, DOOR, world, { ip: '192.0.2.99', token: TOKEN_2 }).done;
+    expect(other.statusCode).toBe(200);
+    expect(other.ended).toEqual(PDF);
+
+    feed.push(PDF);
+    feed.end();
+    expect((await first.done).statusCode).toBe(200);
+  });
+
+  test('a reader who goes away mid-download gives the slot back, and storage is let go', async () => {
+    const feed = handFed();
+    mockGetStream.mockImplementationOnce(async () => ({ stream: feed.stream, size: PDF.length }));
+    const world = makeWorld({ ticket: { crew_takeoff: chosen('a_pdf', null) } });
+    const req = start(router, DOOR, world, { ip: '192.0.2.5' });
+    await until(() => mockGetStream.mock.calls.length === 1, 'download open');
+    feed.push(PDF.subarray(0, 2048));
+    await until(() => req.res.received().length === 2048, 'first chunk sent');
+
+    req.res.destroy();
+    const res = await req.done;
+    expect(res.ended).toBeNull();
+    expect(feed.stream.destroyed).toBe(true);
+    const again = await start(router, DOOR, world, { ip: '192.0.2.5' }).done;
+    expect([again.statusCode, again.ended && again.ended.equals(PDF)]).toEqual([200, true]);
+  });
+
+  test('a reader who stops reading is cut off once the socket sits idle, and the slot comes back', async () => {
+    const feed = handFed();
+    mockGetStream.mockImplementationOnce(async () => ({ stream: feed.stream, size: PDF.length }));
+    const world = makeWorld({ ticket: { crew_takeoff: chosen('a_pdf', null) } });
+    const req = start(router, DOOR, world, { ip: '192.0.2.6' });
+    await until(() => mockGetStream.mock.calls.length === 1, 'download open');
+    // Generous: a phone on one bar still moves a chunk well inside it.
+    expect(req.res.timeout.ms).toBeGreaterThanOrEqual(30 * 1000);
+
+    req.res.timeout.cb();                       // the socket's idle timer fires
+    const res = await req.done;
+    expect(res.destroyed).toBe(true);
+    expect(res.ended).toBeNull();
+    expect((await start(router, DOOR, world, { ip: '192.0.2.6' }).done).statusCode).toBe(200);
+  });
+
+  test('a storage failure gives the slot back', async () => {
+    mockGetStream.mockImplementationOnce(async () => { throw new Error('R2 fell over'); });
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const world = makeWorld({ ticket: { crew_takeoff: chosen('a_pdf', null) } });
+    try {
+      expect(answer(await start(router, DOOR, world, { ip: '192.0.2.8' }).done))
+        .toEqual([500, { error: 'Something went wrong opening that file.' }]);
+    } finally {
+      spy.mockRestore();
+    }
+    expect((await start(router, DOOR, world, { ip: '192.0.2.8' }).done).statusCode).toBe(200);
+  });
+
+  test('storage and the stored size disagree: refused before a header, and the stream is let go', async () => {
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const feed = handFed();
+      mockGetStream.mockImplementationOnce(async () => ({ stream: feed.stream, size: 5000 }));
+      const res = await open(router, { ticket: { crew_takeoff: chosen('a_pdf', null) } });
+      expect(answer(res)).toEqual([500, { error: 'Something went wrong opening that file.' }]);
+      expect(res.headers['content-length']).toBeUndefined();
+      expect(feed.stream.destroyed).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+    // ...and the slot is back.
+    expect((await open(router, { ticket: { crew_takeoff: chosen('a_pdf', null) } })).statusCode).toBe(200);
+  });
+
+  test('a stream that runs PAST the stored size, or ends SHORT of it, drops the response instead of finishing it', async () => {
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      // Storage reports no length (R2 without ContentLength), so only the count catches it.
+      for (const body of [Buffer.concat([PDF, Buffer.from('extra')]), PDF.subarray(0, 4000)]) {
+        mockGetStream.mockImplementationOnce(async () => ({ stream: Readable.from([body.subarray(0, 2048), body.subarray(2048)]), size: null }));
+        const res = await open(router, { ticket: { crew_takeoff: chosen('a_pdf', null) } });
+        expect({ n: body.length, ended: res.ended, destroyed: res.destroyed }).toEqual({ n: body.length, ended: null, destroyed: true });
+        // Never more on the wire than the Content-Length it named.
+        expect(res.received().length).toBeLessThanOrEqual(4096);
+      }
+    } finally {
+      spy.mockRestore();
+    }
+    expect((await open(router, { ticket: { crew_takeoff: chosen('a_pdf', null) } })).statusCode).toBe(200);
+  });
+
+  test('the type is still decided from the first bytes when storage yields them a few at a time', async () => {
+    const trickle = (buf, n) => {
+      const parts = [];
+      for (let i = 0; i < buf.length; i += n) parts.push(buf.subarray(i, i + n));
+      return Readable.from(parts);
+    };
+    mockGetStream.mockImplementationOnce(async () => ({ stream: trickle(PDF, 3), size: PDF.length }));
+    const pdf = await open(router, { ticket: { crew_takeoff: chosen('a_pdf', null) } });
+    expect([pdf.headers['content-type'], pdf.ended && pdf.ended.equals(PDF)]).toEqual(['application/pdf', true]);
+    mockGetStream.mockImplementationOnce(async () => ({ stream: trickle(PNG, 5), size: PNG.length }));
+    const png = await open(router, { ticket: { crew_takeoff: chosen('a_png', null) } });
+    expect([png.headers['content-type'], png.ended && png.ended.equals(PNG)]).toEqual(['image/png', true]);
+  });
+
+  test('a file smaller than the sniff window is typed from all of it and sent whole', async () => {
+    const tiny = Buffer.from('%PDF-1.4\n%%EOF\n');
+    mockGetStream.mockImplementationOnce(async () => ({ stream: Readable.from([tiny]), size: tiny.length }));
+    const res = await open(router, {
+      ticket: { crew_takeoff: chosen('a_pdf', null) },
+      mutateWorld: (w) => { w.attachments.find((a) => a.id === 'a_pdf').size_bytes = tiny.length; },
+    });
+    expect([res.statusCode, res.headers['content-type'], res.headers['content-length']]).toEqual([200, 'application/pdf', String(tiny.length)]);
+    expect(res.ended).toEqual(tiny);
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * THE STORAGE BACKENDS' STREAMING READ — the real methods, not the mock.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('storage.getStream on both backends', () => {
+  let real;
+  let dir;
+  beforeAll(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), '_p86_sto_disk_'));
+    const prev = process.env.UPLOAD_DIR;
+    process.env.UPLOAD_DIR = dir;                 // never the repo's own uploads/
+    try {
+      real = jest.requireActual('../server/storage');
+    } finally {
+      if (prev === undefined) delete process.env.UPLOAD_DIR; else process.env.UPLOAD_DIR = prev;
+    }
+  });
+  afterAll(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) { /* already gone */ } });
+
+  const drain = async (stream) => {
+    const parts = [];
+    for await (const c of stream) parts.push(c);
+    return Buffer.concat(parts);
+  };
+
+  test('local disk: the bytes and their size, from one open file; a missing key rejects', async () => {
+    const disk = new real.LocalDiskStorage(dir, '/uploads');
+    await disk.put(path.join('orig', 'a_pdf'), PDF);
+    const got = await disk.getStream(path.join('orig', 'a_pdf'));
+    expect(got.size).toBe(PDF.length);
+    expect(await drain(got.stream)).toEqual(PDF);
+    await expect(disk.getStream(path.join('orig', 'nope'))).rejects.toThrow();
+  });
+
+  test('R2: the S3 body handed on uncollected, with ContentLength (or null without one)', async () => {
+    const body = Readable.from([Buffer.from('r2 bytes')]);
+    const sent = [];
+    const r2 = Object.create(real.R2Storage.prototype);
+    r2.bucket = 'bucket';
+    r2._GetObjectCommand = function GetObjectCommand(input) { this.input = input; };
+    let reply = { Body: body, ContentLength: 8 };
+    r2.client = { send: async (cmd) => { sent.push(cmd.input); return reply; } };
+
+    const got = await r2.getStream('orig/a_pdf');
+    expect(sent).toEqual([{ Bucket: 'bucket', Key: 'orig/a_pdf' }]);
+    expect(got.stream).toBe(body);
+    expect(got.size).toBe(8);
+
+    reply = { Body: Readable.from([]) };
+    expect((await r2.getStream('k')).size).toBeNull();
+    reply = { Body: null };
+    await expect(r2.getStream('k')).rejects.toThrow(/empty body/);
   });
 });
 
@@ -535,7 +956,7 @@ describe('mutants', () => {
     ]]);
     const res = await open(mut, opts);
     expect(res.statusCode).toBe(200);
-    expect(res.ended).toBe(XLSX);
+    expect(res.ended).toEqual(XLSX);
     expect((await read(mut, opts)).body.takeoff).toMatchObject({ filename: 'Lead Report.xlsx' });
   });
 
@@ -553,10 +974,93 @@ describe('mutants', () => {
     ]]);
     const res = await open(mut, opts);
     expect(res.statusCode).toBe(200);
-    expect(res.ended).toBe(PDF);
+    expect(res.ended).toEqual(PDF);
     // attachmentInOrg alone still holds the TENANT line — which is why both
     // run: the predicate is what keeps the file on THIS ticket's job.
     const rival = await open(mut, { ticket: { crew_takeoff: chosen('a_rival_lead', false) } });
     expect(rival.statusCode).toBe(404);
+  });
+
+  test('drop the unchecked-spreadsheet gate and the finding\'s Estimate.xls (null) is served on a default link', async () => {
+    const opts = { ticket: { crew_takeoff: chosen('a_xls', null, { kind: 'xls' }) }, share: DEFAULT_LINK };
+    expect((await open(router, opts)).statusCode).toBe(404);
+    const mut = mutant([
+      ['  if (uncheckedSheet(chosen.kind)) return null;', '  // MUTANT: stored kind not checked'],
+      ['  if (uncheckedSheet(kind)) return null;', '  // MUTANT: current kind not checked'],
+    ]);
+    expect((await read(mut, opts)).body.takeoff).toMatchObject({ filename: 'Estimate.xls', kind: 'xls' });
+    const res = await open(mut, opts);
+    expect(res.statusCode).toBe(200);
+    expect(res.ended).toEqual(XLS);
+  });
+
+  test('check only the STORED kind and a null row stored as a PDF whose file is now an .xls is served', async () => {
+    const opts = { ticket: { crew_takeoff: chosen('a_xls', null, { kind: 'pdf' }) }, share: DEFAULT_LINK };
+    expect((await read(router, opts)).body.takeoff).toBeNull();
+    const mut = mutant([['  if (uncheckedSheet(kind)) return null;', '  // MUTANT: current kind not checked']]);
+    expect((await read(mut, opts)).body.takeoff).toMatchObject({ filename: 'Estimate.xls' });
+  });
+
+  test('drop the size cap and the 38 MB plan set is offered — a card whose door the crew can never open', async () => {
+    const opts = { ticket: { crew_takeoff: chosen('a_plans', null) } };
+    expect((await read(router, opts)).body.takeoff).toBeNull();
+    const mut = mutant([[
+      '  if (!Number.isSafeInteger(size) || size < 0 || size > MAX_FILE_BYTES) return null;',
+      '  // MUTANT: no size cap',
+    ]]);
+    expect((await read(mut, opts)).body.takeoff).toEqual({ filename: 'Plan set.pdf', kind: 'pdf', size_bytes: 38 * 1024 * 1024 });
+  });
+
+  test('never take the download slot and sixty requests from one address open storage sixty times', async () => {
+    const mut = mutant([[
+      '      release = takeTakeoffSlot(req);\n      if (!release) return res.status(429).json({ error: TAKEOFF_BUSY });',
+      '      release = () => {};',
+    ]]);
+    const feed = handFed();
+    mockGetStream.mockImplementation(async () => ({ stream: feed.stream, size: PDF.length }));
+    const world = makeWorld({ ticket: { crew_takeoff: chosen('a_pdf', null) } });
+    const reqs = [];
+    for (let i = 0; i < 60; i++) reqs.push(start(mut, DOOR, world, { ip: '198.51.100.30' }));
+    await until(() => mockGetStream.mock.calls.length === 60, 'sixty storage opens');
+    expect(reqs.filter((r) => r.res.body)).toEqual([]);
+    for (const r of reqs) r.res.destroy();
+    feed.stream.destroy();
+    await Promise.all(reqs.map((r) => r.done));
+  });
+
+  test('drop the close listener and a reader who leaves while storage stalls holds the link\'s slot', async () => {
+    const mut = mutant([[
+      "      res.on('close', () => { if (!res.writableFinished && !stream.destroyed) stream.destroy(); });",
+      '      // MUTANT: the storage stream is not let go',
+    ]]);
+    const feed = handFed();
+    mockGetStream.mockImplementationOnce(async () => ({ stream: feed.stream, size: PDF.length }));
+    const world = makeWorld({ ticket: { crew_takeoff: chosen('a_pdf', null) } });
+    const req = start(mut, DOOR, world, { ip: '198.51.100.50' });
+    await until(() => mockGetStream.mock.calls.length === 1, 'download open');
+    feed.push(PDF.subarray(0, 2048));
+    await until(() => req.res.received().length === 2048, 'first chunk sent');
+    req.res.destroy();
+    for (let i = 0; i < 200; i++) await new Promise((r) => setImmediate(r));
+    expect(feed.stream.destroyed).toBe(false);
+    expect(answer(await start(mut, DOOR, world, { ip: '198.51.100.51' }).done)).toEqual(BUSY);
+    // Let the stalled download end so nothing outlives the test.
+    feed.stream.destroy();
+    await req.done;
+  });
+
+  test('never give the download slot back and the link\'s next download is refused as busy', async () => {
+    const mut = mutant([[
+      '    } finally {\n'
+        + '      if (source && !source.destroyed && typeof source.destroy === \'function\') source.destroy();\n'
+        + '      if (release) release();\n'
+        + '    }',
+      '    } finally {\n'
+        + '      if (source && !source.destroyed && typeof source.destroy === \'function\') source.destroy();\n'
+        + '    }',
+    ]]);
+    const world = makeWorld({ ticket: { crew_takeoff: chosen('a_pdf', null) } });
+    expect((await start(mut, DOOR, world, { ip: '198.51.100.40' }).done).statusCode).toBe(200);
+    expect(answer(await start(mut, DOOR, world, { ip: '198.51.100.41' }).done)).toEqual(BUSY);
   });
 });

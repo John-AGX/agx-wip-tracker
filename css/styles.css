@@ -13128,7 +13128,8 @@ body.light-mode .p86-wo-pick-row.is-legacy .p86-wo-pick-meta { color: #b45309; }
 /* Takeoff on the crew link — the one job file the crew link shows. The status
    line is the PM's only statement of WHICH links show it, so it is always
    visible, and the two cases that need a second look get the amber rule:
-   a priced sheet (hidden on default links) and a PDF or photo nobody could
+   a priced sheet (hidden on default links), a spreadsheet the check could
+   not read (hidden on default links too), and a PDF or photo nobody could
    check for prices. */
 .p86-wo-crew { margin-top: 10px; font-size: 12.5px; }
 .p86-wo-crew.is-empty { margin-top: 8px; }
@@ -13137,7 +13138,7 @@ body.light-mode .p86-wo-pick-row.is-legacy .p86-wo-pick-meta { color: #b45309; }
   background: var(--surface2, rgba(255,255,255,0.04));
   border-left: 3px solid var(--green, #059669);
 }
-.p86-wo-crew.is-priced, .p86-wo-crew.is-unchecked { border-left-color: #d97706; }
+.p86-wo-crew.is-priced, .p86-wo-crew.is-unreadable, .p86-wo-crew.is-unchecked { border-left-color: #d97706; }
 .p86-wo-crew-lbl {
   font-size: 10.5px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase;
   color: var(--text-dim, #888); margin-bottom: 5px;
@@ -13149,7 +13150,8 @@ body.light-mode .p86-wo-pick-row.is-legacy .p86-wo-pick-meta { color: #b45309; }
 }
 .p86-wo-crew-acts { display: inline-flex; gap: 10px; flex: 0 0 auto; }
 .p86-wo-crew-status { margin-top: 5px; line-height: 1.45; color: var(--text-dim, #888); }
-.p86-wo-crew.is-priced .p86-wo-crew-status, .p86-wo-crew.is-unchecked .p86-wo-crew-status { color: #d97706; }
+.p86-wo-crew.is-priced .p86-wo-crew-status, .p86-wo-crew.is-unreadable .p86-wo-crew-status,
+.p86-wo-crew.is-unchecked .p86-wo-crew-status { color: #d97706; }
 /* Link-style buttons, like the Materials Edit button. The global `button` rule
    and its :hover would otherwise paint a filled chip on the light panel. */
 .p86-wo-crew-pick, .p86-wo-crew-change, .p86-wo-crew-remove, .p86-wo-mat-crew {
@@ -13168,8 +13170,10 @@ body.light-mode .p86-wo-pick-row.is-legacy .p86-wo-pick-meta { color: #b45309; }
 .p86-wo-mat-crew { display: inline; margin-left: 2px; }
 /* Same darker amber as the AI warning: #d97706 is under 3:1 on the light panel. */
 body.light-mode .p86-wo-crew.is-priced .p86-wo-crew-status,
+body.light-mode .p86-wo-crew.is-unreadable .p86-wo-crew-status,
 body.light-mode .p86-wo-crew.is-unchecked .p86-wo-crew-status { color: #b45309; }
-body.light-mode .p86-wo-crew.is-priced, body.light-mode .p86-wo-crew.is-unchecked { border-left-color: #b45309; }
+body.light-mode .p86-wo-crew.is-priced, body.light-mode .p86-wo-crew.is-unreadable,
+body.light-mode .p86-wo-crew.is-unchecked { border-left-color: #b45309; }
 body.light-mode .p86-wo-crew:not(.is-empty) { background: rgba(0,0,0,0.035); }
 
 .p86-wo-subs { display: flex; flex-direction: column; gap: 6px; }
@@ -13259,21 +13263,22 @@ body.light-mode .p86-wo-crew:not(.is-empty) { background: rgba(0,0,0,0.035); }
 
    Scoped to #job-service-tickets (the only renderer of this markup is the
    job pane) and to 760px, where the detail grid was already one column.
-   Colours are tokens, so light mode follows without twins; the only literal
-   is white on the accent fill, which reads on both accents. */
+   The rows that swipe sideways (filter pills, stepper) are the touch-only
+   block after this one. Colours are tokens, so light mode follows without
+   twins. Text on the accent fill is var(--bg), as the desktop step and pill
+   already do: the page ground is the dark end in dark mode and white in
+   light, 5.90:1 on #4f8cff and 5.17:1 on #2563eb. White read 3.22:1 on the
+   dark accent. */
 @media (max-width: 760px) {
   /* The cards are the boxes now. #wsRightContent's display is set inline by
      workspace-layout.js; a browser without :has() keeps the frame. */
   #wsRightContent:has(> #job-service-tickets[style*="block"]) { padding: 0; border: 0; background: transparent; }
   #job-service-tickets .p86-st-wrap { padding: 2px 0 24px; }
 
-  /* Filter pills: one sideways row edge to edge, the create buttons under it. */
+  /* Filter pills: a row of their own, the create buttons under it. They wrap
+     here; on a touch phone they are one sideways row (the block below). */
   #job-service-tickets .p86-st-bar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; margin-bottom: 12px; }
-  #job-service-tickets .p86-st-pills {
-    grid-column: 1 / -1; flex-wrap: nowrap; gap: 6px; overflow-x: auto; overflow-y: hidden;
-    overscroll-behavior-x: contain; scrollbar-width: none; margin: 0 -15px; padding: 0 15px;
-  }
-  #job-service-tickets .p86-st-pills::-webkit-scrollbar { display: none; }
+  #job-service-tickets .p86-st-pills { grid-column: 1 / -1; gap: 6px; }
   #job-service-tickets .p86-st-pill { flex: 0 0 auto; min-height: 40px; padding: 0 14px; font-size: 13px; }
   #job-service-tickets .p86-st-bar > .ee-btn { min-height: 44px; font-size: 14px; justify-content: center; }
   #job-service-tickets .p86-st-bar > .ee-btn:last-child:nth-child(2) { grid-column: 1 / -1; }
@@ -13308,15 +13313,11 @@ body.light-mode .p86-wo-crew:not(.is-empty) { background: rgba(0,0,0,0.035); }
   #job-service-tickets .p86-st-parts,
   #job-service-tickets .p86-st-timeline { order: 2; }
 
-  /* Stepper: one row that scrolls sideways, edge to edge; paintDetail centres
-     the current step. */
-  #job-service-tickets .p86-st-stepper {
-    flex-wrap: nowrap; gap: 5px; margin: 10px -15px 0; padding: 1px 15px;
-    overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: none;
-  }
-  #job-service-tickets .p86-st-stepper::-webkit-scrollbar { display: none; }
+  /* Stepper: small pills that keep their words whole. It wraps here; on a
+     touch phone it is one sideways row and paintDetail centres the current
+     step (the block below). */
+  #job-service-tickets .p86-st-stepper { gap: 5px; margin: 10px 0 0; padding: 1px 0; }
   #job-service-tickets .p86-st-step { flex: 0 0 auto; white-space: nowrap; font-size: 10px; line-height: 1.5; letter-spacing: 0.05em; padding: 3px 9px; }
-  #job-service-tickets .p86-st-step.at { color: #fff; }
   #job-service-tickets .p86-st-cancelled { margin: 10px 0 0; }
 
   /* The cards. */
@@ -13358,7 +13359,7 @@ body.light-mode .p86-wo-crew:not(.is-empty) { background: rgba(0,0,0,0.035); }
   #job-service-tickets .p86-wo-nav {
     order: 2; display: flex; align-items: center; justify-content: center; gap: 8px;
     min-height: 44px; margin-top: 2px; border-radius: 10px;
-    background: var(--accent, #4f8cff); color: #fff;
+    background: var(--accent, #4f8cff); color: var(--bg, #0a0a14);
     font-size: 15px; font-weight: 600; text-decoration: none;
   }
   #job-service-tickets .p86-wo-nav:focus-visible { outline: 2px solid var(--accent, #4f8cff); outline-offset: 2px; }
@@ -13543,6 +13544,37 @@ body.light-mode .p86-wo-crew:not(.is-empty) { background: rgba(0,0,0,0.035); }
   #job-service-tickets .p86-st-part-go { min-height: 44px; font-size: 14px; }
   #job-service-tickets .p86-st-event { font-size: 13px; padding: 4px 0; }
   #job-service-tickets .p86-st-rev-actions .ee-btn { min-height: 44px; font-size: 14px; }
+}
+
+/* The work order's sideways rows: touch phones only. The filter pills and
+   the stepper become one row each that swipes, edge to edge. Gated like the
+   section strip and the More menu (workspace-layout.css), for the reason
+   the phone-chrome takeover block gives: a narrow MOUSE window, such as a
+   high-DPI Windows PWA under 760px, has no swipe and a wheel that only
+   scrolls down.
+   A nowrap row with its scrollbar hidden left In progress, Awaiting approval
+   and Closed off the edge there with no way to click them, so a mouse keeps
+   the wrapping rows above.
+
+   Edge to edge without a sideways scroll. The rows bleed 15px past
+   .main-inner's phone padding, and they used to bleed out of #wsRightContent,
+   the pane's own overflow:auto scroller. That gave it 15px to scroll: a
+   slightly diagonal swipe slid the whole work order left and every card
+   lost its first letters. Now the pane itself runs the full width and
+   carries the 15px as padding, so the bleed stays inside its padding box and
+   scrollWidth equals clientWidth. The pane and the bleed share the frame
+   drop's :has(), so a browser without :has() gets neither. */
+@media (max-width: 760px) and (pointer: coarse) {
+  #wsRightContent:has(> #job-service-tickets[style*="block"]) { margin-left: -15px; margin-right: -15px; padding: 0 15px; }
+  #job-service-tickets .p86-st-pills,
+  #job-service-tickets .p86-st-stepper {
+    flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden;
+    overscroll-behavior-x: contain; scrollbar-width: none;
+  }
+  #job-service-tickets .p86-st-pills::-webkit-scrollbar,
+  #job-service-tickets .p86-st-stepper::-webkit-scrollbar { display: none; }
+  #wsRightContent:has(> #job-service-tickets[style*="block"]) .p86-st-pills { margin: 0 -15px; padding: 0 15px; }
+  #wsRightContent:has(> #job-service-tickets[style*="block"]) .p86-st-stepper { margin-left: -15px; margin-right: -15px; padding: 1px 15px; }
 }
 
 /* ── Estimate editor: density pass ────────────────────────────────────

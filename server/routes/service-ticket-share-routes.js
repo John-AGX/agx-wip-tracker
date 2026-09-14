@@ -48,6 +48,7 @@
 'use strict';
 
 const express = require('express');
+const { pipeline } = require('stream/promises');
 const { pool } = require('../db');
 const { requireAuth, requireOrgId } = require('../auth');
 const { callerOrgId } = require('../org-access');
@@ -586,6 +587,14 @@ async function loadTicketShare(req, res, next) {
 //     financials. Only an explicit false ("read to the end, none found") or
 //     null ("a PDF or photo, the office was warned") passes a default link;
 //     a row written by hand or by an older build narrows, it never widens;
+//   * the verdict is null on a SPREADSHEET — an .xlsx, an .xls or a CSV, by
+//     the kind stored or the kind the file has now — and this link hides
+//     financials. null is only ever "a PDF or photo" on a spreadsheet the PUT
+//     refuses it (an .xls cannot be checked; an .xlsx or CSV whose check
+//     failed is not "checked"), so such a row was stored before that rule and
+//     is kept off a default link rather than trusted;
+//   * the file is over the crew link's size cap, or has no size to check —
+//     the door would refuse it, so the card is never offered for it;
 //   * the file can no longer be proved to hang on THIS ticket's job, its lead
 //     or its estimate. Deleted, re-parented to another job, or its parent in
 //     another tenant — it stops showing without anyone touching crew_takeoff.
@@ -597,6 +606,9 @@ async function loadTicketShare(req, res, next) {
 // the ticket's OWN organization_id, taken from the row loadTicketShare
 // selected, never from the request.
 const TAKEOFF_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+// The kinds detectFilePrices reads cells from. A null verdict on one of these
+// never means "a PDF or photo" (see crewTakeoffFor).
+const SPREADSHEET_KINDS = new Set(['xlsx', 'xls', 'csv']);
 
 async function crewTakeoffFor(ticket, share) {
   let chosen = ticket ? ticket.crew_takeoff : null;
@@ -607,6 +619,11 @@ async function crewTakeoffFor(ticket, share) {
   const attachmentId = typeof chosen.attachment_id === 'string' ? chosen.attachment_id : '';
   if (!TAKEOFF_ID_RE.test(attachmentId)) return null;
   if (chosen.has_prices !== false && chosen.has_prices !== null && svc.hidesFinancials(share)) return null;
+  // An unchecked spreadsheet stays off a default link, decided on the kind
+  // STORED before any lookup — and again below on the kind the file has now,
+  // so a PDF renamed to .xls after it was chosen narrows too.
+  const uncheckedSheet = (kind) => chosen.has_prices === null && SPREADSHEET_KINDS.has(kind) && svc.hidesFinancials(share);
+  if (uncheckedSheet(chosen.kind)) return null;
 
   const orgId = ticket.organization_id;
   if (orgId == null) return null;
@@ -650,9 +667,16 @@ async function crewTakeoffFor(ticket, share) {
 
   // The kind is read off the file as it is NOW, not as it was when chosen: a
   // file renamed to something that is not a takeoff stops being offered.
-  const { takeoffKind } = require('../services/materials-extract');
+  const { takeoffKind, MAX_FILE_BYTES } = require('../services/materials-extract');
   const kind = takeoffKind(att.filename, att.mime_type);
   if (!kind) return null;
+  if (uncheckedSheet(kind)) return null;
+  // THE SIZE CAP IS THE PRICE CHECK'S. MAX_FILE_BYTES is the one number the
+  // office's PUT refuses a file over and this door will send, so the office is
+  // never told a file is on the link that the crew can never open. The stored
+  // size is NOT NULL on attachments; a row without a usable one is not offered.
+  const size = att.size_bytes == null ? NaN : Number(att.size_bytes);
+  if (!Number.isSafeInteger(size) || size < 0 || size > MAX_FILE_BYTES) return null;
   return {
     att: att,
     // A whitelist, like publicTicket: a name, a kind and a size. Never the
@@ -660,7 +684,7 @@ async function crewTakeoffFor(ticket, share) {
     takeoff: {
       filename: att.filename == null ? '' : String(att.filename),
       kind: kind,
-      size_bytes: att.size_bytes == null ? null : Number(att.size_bytes),
+      size_bytes: size,
     },
   };
 }
@@ -811,58 +835,158 @@ router.get('/service-ticket-share/:token',
 //
 // Read-only, and records nothing in the event log: the crew opening the
 // takeoff is not a change to the work order.
-const TAKEOFF_MAX_BYTES = 25 * 1024 * 1024;
+//
+// STREAMED, NEVER HELD. This door needs no login and is built to be
+// forwarded, and a file here can be 25 MB. Reading it whole (getBuffer) held
+// one copy per request — twice that on R2, which collects and concatenates —
+// so sixty downloads started at once from one address, inside the IP limiter,
+// held well over a gigabyte on the one replica. The file is piped from
+// storage.getStream instead: what is held per download is a stream buffer,
+// not the file.
+//
+// ONE DOWNLOAD PER LINK AND PER ADDRESS. Streaming bounds the memory; the
+// slots bound the storage connections a stranger can hold open. A second
+// download on the same link, or from the same address, while one is in flight
+// is a 429 before storage is touched. In-process like the office's
+// takeFileReadSlot (one replica), keyed on the share ROW's id — never the
+// token, a live credential — and given back in a `finally` whether the
+// download finished, failed, or the reader went away. A reader that stops
+// reading holds its slot only until the socket has been idle for
+// TAKEOFF_IDLE_MS.
+//
+// THE STORED SIZE IS WHAT IS SENT. Content-Length comes from the attachment
+// row, which crewTakeoffFor has already held to the cap. Storage must agree
+// with it before a header goes out (an object over the cap is the too-large
+// 413, any other mismatch a 500), and the bytes are counted on the way through: a
+// stream that runs past the stored size, or ends short of it, drops the
+// connection rather than sending a file that is not the one the length names.
+const TAKEOFF_BUSY = 'This file is already downloading — try again in a moment.';
+const TAKEOFF_TOO_LARGE = 'That file is too large to open here — ask the office for it.';
+const TAKEOFF_FAILED = 'Something went wrong opening that file.';
+// takeoffContentType looks no further than the first 1024 bytes.
+const TAKEOFF_SNIFF_BYTES = 1024;
+const TAKEOFF_IDLE_MS = 60 * 1000;
+const takeoffDownloads = new Set();
+
+// A release function, or null when this link or this address already has a
+// download in flight. Both slots are taken together or neither is.
+function takeTakeoffSlot(req) {
+  const keys = ['share:' + String(req.share.id), 'ip:' + String(req.ip || 'unknown')];
+  if (keys.some((k) => takeoffDownloads.has(k))) return null;
+  keys.forEach((k) => takeoffDownloads.add(k));
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    keys.forEach((k) => takeoffDownloads.delete(k));
+  };
+}
 
 router.get('/service-ticket-share/:token/takeoff',
   stShareIpLimiter, stShareViewLimiter, loadTicketShare, async (req, res) => {
+    let release = null;
+    let source = null;
     try {
       const found = await crewTakeoffFor(req.ticket, req.share);
       if (!found) return res.status(404).json({ error: 'There is no takeoff file on this work order.' });
       const att = found.att;
-      // Refused on the stored size before the fetch, and again on what came
-      // back — the stored size is a claim written at upload time.
-      if (Number(att.size_bytes) > TAKEOFF_MAX_BYTES) {
-        return res.status(413).json({ error: 'That file is too large to open here — ask the office for it.' });
-      }
       if (!att.original_key) return res.status(404).json({ error: 'There is no takeoff file on this work order.' });
-      const raw = await storage.getBuffer(att.original_key);
-      const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw || []);
-      if (buf.length > TAKEOFF_MAX_BYTES) {
-        return res.status(413).json({ error: 'That file is too large to open here — ask the office for it.' });
+      // A safe integer within the cap — crewTakeoffFor offers nothing else.
+      const size = found.takeoff.size_bytes;
+
+      release = takeTakeoffSlot(req);
+      if (!release) return res.status(429).json({ error: TAKEOFF_BUSY });
+      // A reader that stops reading stalls the writes, and an idle socket is
+      // closed, which ends the pipeline below and gives the slots back.
+      if (typeof res.setTimeout === 'function') res.setTimeout(TAKEOFF_IDLE_MS, () => res.destroy());
+
+      const opened = await storage.getStream(att.original_key);
+      source = opened && opened.stream;
+      if (!source) throw new Error('storage returned no stream');
+      const actual = opened.size == null ? null : Number(opened.size);
+      if (actual !== null && actual !== size) {
+        if (!(actual <= require('../services/materials-extract').MAX_FILE_BYTES)) {
+          return res.status(413).json({ error: TAKEOFF_TOO_LARGE });
+        }
+        console.error('[service-ticket-share] takeoff size does not match storage');
+        return res.status(500).json({ error: TAKEOFF_FAILED });
       }
 
-      const type = takeoffContentType(found.takeoff.kind, buf);
-      // Only a PDF or a photo whose bytes proved it opens in the browser.
-      // Everything else — a spreadsheet, a CSV, a file that did not match its
-      // name — downloads.
-      const inline = type === 'application/pdf' || /^image\//.test(type);
-      res.status(200);
-      res.setHeader('Content-Type', type);
-      res.setHeader('Content-Length', String(buf.length));
-      res.setHeader('Content-Disposition', takeoffDisposition(inline ? 'inline' : 'attachment', found.takeoff.filename));
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-      res.setHeader('Cache-Control', 'no-store');
-      res.setHeader('Referrer-Policy', 'no-referrer');
-      res.setHeader('X-Robots-Tag', 'noindex, nofollow');
-      // A document opened from a stranger's link runs nothing: no script, no
-      // fetch, no form. Set on downloads too, for the browser that renders one
-      // anyway.
-      //
-      // Except a PDF. Chrome's built-in viewer refuses to load under a CSP
-      // `sandbox` (or `default-src 'none'`, which denies the plugin), so the
-      // crew would open a blank page. A PDF here is served only when its BYTES
-      // are a PDF (above), with nosniff, exactly as the office's own
-      // GET /api/attachments/raw/:id already serves PDFs inline.
-      if (type !== 'application/pdf') {
-        res.setHeader('Content-Security-Policy', inline
-          ? "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox"
-          : "default-src 'none'; sandbox");
-      }
-      res.end(buf);
+      const sendHeaders = (head) => {
+        const type = takeoffContentType(found.takeoff.kind, head);
+        // Only a PDF or a photo whose bytes proved it opens in the browser.
+        // Everything else — a spreadsheet, a CSV, a file that did not match its
+        // name — downloads.
+        const inline = type === 'application/pdf' || /^image\//.test(type);
+        res.status(200);
+        res.setHeader('Content-Type', type);
+        res.setHeader('Content-Length', String(size));
+        res.setHeader('Content-Disposition', takeoffDisposition(inline ? 'inline' : 'attachment', found.takeoff.filename));
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Cache-Control', 'no-store');
+        res.setHeader('Referrer-Policy', 'no-referrer');
+        res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+        // A document opened from a stranger's link runs nothing: no script, no
+        // fetch, no form. Set on downloads too, for the browser that renders one
+        // anyway.
+        //
+        // Except a PDF. Chrome's built-in viewer refuses to load under a CSP
+        // `sandbox` (or `default-src 'none'`, which denies the plugin), so the
+        // crew would open a blank page. A PDF here is served only when its BYTES
+        // are a PDF (above), with nosniff, exactly as the office's own
+        // GET /api/attachments/raw/:id already serves PDFs inline.
+        if (type !== 'application/pdf') {
+          res.setHeader('Content-Security-Policy', inline
+            ? "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox"
+            : "default-src 'none'; sandbox");
+        }
+      };
+
+      // The pipeline notices a reader who went away only at its next write, and
+      // a storage stream that has stalled never makes one — the download, and
+      // its slots, would hang. So a response closed before it finished lets
+      // the storage stream go at once, which ends the pipeline.
+      const stream = source;
+      res.on('close', () => { if (!res.writableFinished && !stream.destroyed) stream.destroy(); });
+
+      // The first TAKEOFF_SNIFF_BYTES are held back only until the type can be
+      // decided from them; after that each chunk goes straight on, at the pace
+      // the reader takes it.
+      await pipeline(source, async function* countAndSniff(chunks) {
+        let head = [];
+        let headLength = 0;
+        let seen = 0;
+        for await (const chunk of chunks) {
+          const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          seen += b.length;
+          if (seen > size) throw new Error('storage sent more than the stored size');
+          if (!head) { yield b; continue; }
+          head.push(b);
+          headLength += b.length;
+          if (headLength >= TAKEOFF_SNIFF_BYTES) {
+            const first = Buffer.concat(head);
+            head = null;
+            sendHeaders(first);
+            yield first;
+          }
+        }
+        if (seen !== size) throw new Error('storage sent less than the stored size');
+        if (head) {
+          const whole = Buffer.concat(head);
+          sendHeaders(whole);
+          yield whole;
+        }
+      }, res);
     } catch (e) {
-      console.error('[service-ticket-share] takeoff open failed', e && e.message);
-      if (res.headersSent) return;
-      res.status(500).json({ error: 'Something went wrong opening that file.' });
+      // The reader closing the tab mid-download is not a server fault.
+      if (!(e && e.code === 'ERR_STREAM_PREMATURE_CLOSE')) {
+        console.error('[service-ticket-share] takeoff open failed', e && e.message);
+      }
+      if (res.headersSent || res.destroyed) return;
+      res.status(500).json({ error: TAKEOFF_FAILED });
+    } finally {
+      if (source && !source.destroyed && typeof source.destroy === 'function') source.destroy();
+      if (release) release();
     }
   });
 

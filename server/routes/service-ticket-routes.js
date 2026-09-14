@@ -907,8 +907,10 @@ router.post('/:id/materials/extract', requireAuth, requireOrgId, async (req, res
 // header rows, no model): has_prices true keeps it off every link that hides
 // financials, which is every link unless the PM minted it otherwise. A PDF or
 // photo cannot be checked, is stored as null, and the office is warned before
-// choosing one. The verdict is stored rather than re-computed on every crew
-// open so a link read never pulls a 25 MB file out of storage to decide.
+// choosing one. A spreadsheet the check could not read — an old .xls always —
+// is refused rather than stored as null. The verdict is stored rather than
+// re-computed on every crew open so a link read never pulls a 25 MB file out
+// of storage to decide. A file over the crew door's size cap is refused too.
 //
 // Same gates as the Materials PATCH — WRITE access on the ticket, and not on a
 // closed or cancelled ticket — and the same file rule as the extract door:
@@ -935,6 +937,19 @@ router.put('/:id/crew-takeoff', requireAuth, requireOrgId, async (req, res) => {
       if (!kind) {
         return res.status(422).json({ error: 'That file type cannot be shown on the crew link.' });
       }
+      // THE CREW DOOR'S SIZE CAP, on the stored size and before a byte is
+      // fetched. Uploads allow 50 MB; the crew link sends no more than
+      // MAX_FILE_BYTES (the price check's own cap, which the share side reads
+      // too), so a 38 MB plan set stored here would show the crew a card whose
+      // file never opens while the office was told it is on the link.
+      const { MAX_FILE_BYTES } = require('../services/materials-extract');
+      const size = att.size_bytes == null ? NaN : Number(att.size_bytes);
+      if (!Number.isSafeInteger(size) || size < 0 || size > MAX_FILE_BYTES) {
+        return res.status(422).json({
+          error: 'That file is too large for the crew link (over ' + Math.round(MAX_FILE_BYTES / (1024 * 1024))
+            + ' MB) — ask the office to send it another way.',
+        });
+      }
       // One read per user at a time, shared with the extract door and taken
       // before the storage fetch; given back as soon as the check is done.
       const release = takeFileReadSlot(req, orgId);
@@ -954,8 +969,18 @@ router.put('/:id/crew-takeoff', requireAuth, requireOrgId, async (req, res) => {
       // A SPREADSHEET that could not be read is refused, not stored as null.
       // null means "a PDF or photo — check it yourself" and shows on every
       // link; a priced xlsx whose read failed on a storage hiccup must not
-      // land there under that label. A PDF or photo, or an old binary .xls,
-      // really cannot be checked, and is stored as null.
+      // land there under that label. Only a PDF or photo is stored as null.
+      //
+      // An old .xls is a spreadsheet too. The check cannot read one (a binary
+      // workbook, or an "Export to Excel" HTML or XML file named .xls), and
+      // the office is asked nothing before picking a spreadsheet — so storing
+      // null put a Unit Cost column on every default crew link, unwarned. It
+      // is refused with the one thing that fixes it.
+      if (hasPrices === null && kind === 'xls') {
+        return res.status(422).json({
+          error: 'An old Excel .xls file cannot be checked for prices, so it was not put on the crew link. Open it in Excel, save it as .xlsx to the job\'s Files, and pick that.',
+        });
+      }
       if (hasPrices === null && (kind === 'xlsx' || kind === 'csv')) {
         return res.status(422).json({
           error: 'That spreadsheet could not be checked for prices, so it was not put on the crew link. Try again, or save a fresh copy to the job\'s Files and pick that.',

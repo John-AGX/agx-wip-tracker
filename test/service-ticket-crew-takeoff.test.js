@@ -14,9 +14,12 @@
 //      another tenant's, capability-filtered and malformed ids all answer ONE
 //      identical 404, and nothing is written for any of them.
 //   3. has_prices is whatever the price check said, stored as-is; a
-//      spreadsheet the check could not read is refused rather than stored as
-//      "cannot be checked"; null clears the choice.
-//   4. The event says a field changed — never which file.
+//      spreadsheet the check could not read — an old .xls included — is
+//      refused rather than stored as "cannot be checked"; null clears the
+//      choice.
+//   4. A file over the crew door's size cap (materials-extract MAX_FILE_BYTES)
+//      is refused before the check or any storage fetch.
+//   5. The event says a field changed — never which file.
 //
 // ── HOW ───────────────────────────────────────────────────────────────────
 // The harness of test/service-ticket-materials-extract.test.js: the REAL
@@ -44,6 +47,22 @@ jest.mock('../server/services/materials-extract', () => Object.assign(
   {}, jest.requireActual('../server/services/materials-extract.js'),
   { detectFilePrices: (...args) => mockDetect(...args) }
 ));
+// The real module, for the tests that run the finding's files through the
+// REAL price check, and for the size cap the door and the share side share.
+const realExtract = jest.requireActual('../server/services/materials-extract.js');
+const MB = 1024 * 1024;
+
+// The finding's three .xls files, as an older estimating export writes them:
+// a binary (OLE) workbook, an "Export to Excel" HTML table, and SpreadsheetML.
+// Each carries a Unit Cost column.
+const XLS_FILES = {
+  'orig/a_j2_ole': Buffer.concat([Buffer.from([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]), Buffer.alloc(2048)]),
+  'orig/a_j2_html': Buffer.from('<html><body><table><tr><td>Description</td><td>Qty</td><td>Unit Cost</td></tr>'
+    + '<tr><td>Drip edge</td><td>20</td><td>$45.00</td></tr></table></body></html>'),
+  'orig/a_j2_xml': Buffer.from('<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet">'
+    + '<Worksheet><Table><Row><Cell><Data ss:Type="String">Description</Data></Cell><Cell><Data ss:Type="String">Unit Cost</Data></Cell></Row>'
+    + '<Row><Cell><Data ss:Type="String">Drip edge</Data></Cell><Cell><Data ss:Type="Number">45</Data></Cell></Row></Table></Worksheet></Workbook>'),
+};
 
 const mockGetBuffer = jest.fn(async (key) => Buffer.from('bytes of ' + key));
 jest.mock('../server/storage', () => ({
@@ -136,7 +155,11 @@ function seed() {
       ('a_j1_c',   'job', 'j1', 'j1.csv',                    'text/csv',          1200, '2026-09-10 10:00:00', 1, 10, 'orig/a_j1_c'),
       ('a_j9',     'job', 'j9', 'rival.xlsx',                'application/zip',   1200, '2026-09-10 10:00:00', 2, 50, 'orig/a_j9'),
       ('a_l1',     'lead', 'l1', 'lead-takeoff.xlsx',        'application/zip',   3000, '2026-09-05 10:00:00', 1, 10, 'orig/a_l1'),
-      ('a_e1',     'estimate', 'e1', 'priced estimate.pdf',  'application/pdf',   3000, '2026-09-04 10:00:00', 1, 10, 'orig/a_e1');
+      ('a_e1',     'estimate', 'e1', 'priced estimate.pdf',  'application/pdf',   3000, '2026-09-04 10:00:00', 1, 10, 'orig/a_e1'),
+      ('a_j2_ole',   'job', 'j2', 'Estimate.xls',  'application/vnd.ms-excel', ${XLS_FILES['orig/a_j2_ole'].length},  '2026-09-08 10:00:00', 1, 10, 'orig/a_j2_ole'),
+      ('a_j2_html',  'job', 'j2', 'Export.xls',    'application/vnd.ms-excel', ${XLS_FILES['orig/a_j2_html'].length}, '2026-09-08 10:00:00', 1, 10, 'orig/a_j2_html'),
+      ('a_j2_xml',   'job', 'j2', 'Sheet.xls',     'application/vnd.ms-excel', ${XLS_FILES['orig/a_j2_xml'].length},  '2026-09-08 10:00:00', 1, 10, 'orig/a_j2_xml'),
+      ('a_j2_plans', 'job', 'j2', 'Plan set.pdf',  'application/pdf',          ${38 * MB}, '2026-09-08 10:00:00', 1, 10, 'orig/a_j2_plans');
   `);
 }
 
@@ -176,7 +199,8 @@ beforeEach(() => {
   seed();
   mockDetect.mockReset();
   mockDetect.mockImplementation(async () => false);
-  mockGetBuffer.mockClear();
+  mockGetBuffer.mockReset();
+  mockGetBuffer.mockImplementation(async (key) => Buffer.from('bytes of ' + key));
 });
 
 // ── the drive ─────────────────────────────────────────────────────────────
@@ -237,6 +261,8 @@ const stored = (id) => {
 const writesSince = (n) => eng.log.slice(n).filter((e) => /^\s*(INSERT|UPDATE|DELETE)\b/i.test(e.sql));
 const TICKET_404 = [404, { error: 'Service ticket not found' }];
 const FILE_404 = [404, { error: 'File not found' }];
+const XLS_422 = [422, { error: 'An old Excel .xls file cannot be checked for prices, so it was not put on the crew link. Open it in Excel, save it as .xlsx to the job\'s Files, and pick that.' }];
+const TOO_LARGE_422 = [422, { error: 'That file is too large for the crew link (over 25 MB) — ask the office to send it another way.' }];
 const NO_WRITE_CAP = [403, { error: 'Missing capability: JOBS_EDIT_ANY JOBS_EDIT_OWN' }];
 
 function mutant(file, pairs) {
@@ -312,10 +338,12 @@ describe('choosing the file: what is stored, and what the price check decided', 
     expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_j2_p', kind: 'pdf', has_prices: null });
   });
 
-  test('an old binary .xls is shown as it is, and null too', async () => {
+  test('an old .xls the check answers null for is REFUSED, not stored as "cannot be checked"', async () => {
     mockDetect.mockImplementation(async () => null);
-    expect((await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_old')).statusCode).toBe(200);
-    expect(stored('st_j2')).toMatchObject({ kind: 'xls', has_prices: null });
+    const before = eng.log.length;
+    expect(answer(await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_old'))).toEqual(XLS_422);
+    expect(writesSince(before)).toEqual([]);
+    expect(stored('st_j2')).toBeNull();
   });
 
   test('a SPREADSHEET the check could not read is refused, not stored as "cannot be checked"', async () => {
@@ -358,6 +386,97 @@ describe('choosing the file: what is stored, and what the price check decided', 
     ]);
     const eventWrites = writesSince(before).filter((e) => /service_ticket_events/.test(e.sql));
     expect(JSON.stringify(eventWrites)).not.toMatch(/48k|Smith|\.pdf|a_j2_p/);
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * AN OLD .XLS — the finding. A PM picks "Estimate.xls" from an older
+ * estimating export with a Unit Cost column. No dialog is shown for a
+ * spreadsheet, the price check cannot read an .xls, and the PUT stored
+ * has_prices null — which every default crew link showed.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('an old .xls is refused unless the check actually read it', () => {
+  test('the finding\'s binary Estimate.xls, through the REAL price check: 422 telling the PM to save it as .xlsx, nothing written', async () => {
+    mockDetect.mockImplementation((o) => realExtract.detectFilePrices(o));
+    mockGetBuffer.mockImplementation(async (key) => XLS_FILES[key]);
+    const before = eng.log.length;
+    expect(answer(await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_ole'))).toEqual(XLS_422);
+    // The check really ran on the stored bytes, and really could not read them.
+    expect(mockGetBuffer.mock.calls).toEqual([['orig/a_j2_ole']]);
+    expect(await mockDetect.mock.results[0].value).toBeNull();
+    expect(writesSince(before)).toEqual([]);
+    expect(stored('st_j2')).toBeNull();
+  });
+
+  test('the "Export to Excel" HTML table and the SpreadsheetML file named .xls never land on the link unchecked', async () => {
+    mockDetect.mockImplementation((o) => realExtract.detectFilePrices(o));
+    mockGetBuffer.mockImplementation(async (key) => XLS_FILES[key]);
+    for (const id of ['a_j2_html', 'a_j2_xml']) {
+      const r = await choose(ticketRouter, WIDE, 'st_j2', id);
+      const verdict = await mockDetect.mock.results[mockDetect.mock.results.length - 1].value;
+      // Today the check cannot read either (null) and the door refuses it. If
+      // the check ever learns to read one, its Unit Cost column must come back
+      // PRICED — never stored as null, and never as clean.
+      if (verdict === null) {
+        expect({ id, a: answer(r) }).toEqual({ id, a: XLS_422 });
+        expect(stored('st_j2')).toBeNull();
+      } else {
+        expect({ id, verdict, status: r.statusCode }).toEqual({ id, verdict: true, status: 200 });
+        expect(stored('st_j2')).toMatchObject({ attachment_id: id, has_prices: true });
+      }
+    }
+  });
+
+  test('an .xls whose bytes the check DID read keeps its verdict — the refusal is for null only', async () => {
+    for (const verdict of [false, true]) {
+      mockDetect.mockImplementation(async () => verdict);
+      expect((await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_old')).statusCode).toBe(200);
+      expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_j2_old', kind: 'xls', has_prices: verdict });
+    }
+  });
+
+  test('a PDF or photo is still the only kind stored as null', async () => {
+    mockDetect.mockImplementation(async () => null);
+    for (const [id, status] of [['a_j2_p', 200], ['a_j2_old', 422], ['a_j2_x', 422], ['a_j2_c', 422]]) {
+      expect({ id, status: (await choose(ticketRouter, WIDE, 'st_j2', id)).statusCode }).toEqual({ id, status });
+    }
+    expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_j2_p', kind: 'pdf', has_prices: null });
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * THE CREW DOOR'S SIZE CAP — the finding. Uploads allow 50 MB; the crew door
+ * sends no more than 25 MB. A 38 MB plan-set PDF was stored, the office was
+ * told "Takeoff shown on the crew link", and the crew got a 413 every time.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('a file over the crew link\'s size cap is refused before it is checked', () => {
+  test('the finding\'s 38 MB plan-set PDF: 422, no price check, no storage fetch, nothing written', async () => {
+    mockDetect.mockImplementation(async () => null);
+    const before = eng.log.length;
+    expect(answer(await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_plans'))).toEqual(TOO_LARGE_422);
+    expect(mockDetect).not.toHaveBeenCalled();
+    expect(mockGetBuffer).not.toHaveBeenCalled();
+    expect(writesSince(before)).toEqual([]);
+    expect(stored('st_j2')).toBeNull();
+  });
+
+  test('the cap is materials-extract\'s MAX_FILE_BYTES, the number the share side reads: at it passes, one byte over is refused', async () => {
+    expect(realExtract.MAX_FILE_BYTES).toBe(25 * MB);
+    mockDetect.mockImplementation(async () => null);
+    eng.db.exec(`UPDATE attachments SET size_bytes = ${realExtract.MAX_FILE_BYTES} WHERE id = 'a_j2_plans'`);
+    expect((await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_plans')).statusCode).toBe(200);
+    expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_j2_plans', kind: 'pdf', has_prices: null });
+
+    eng.db.exec(`UPDATE attachments SET size_bytes = ${realExtract.MAX_FILE_BYTES + 1} WHERE id = 'a_j2_plans'`);
+    expect(answer(await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_plans'))).toEqual(TOO_LARGE_422);
+    // A refusal leaves the earlier choice as it was.
+    expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_j2_plans' });
+  });
+
+  test('an oversized SPREADSHEET is the same size refusal, before the slot or the check', async () => {
+    eng.db.exec(`UPDATE attachments SET size_bytes = ${30 * MB} WHERE id = 'a_j2_x'`);
+    expect(answer(await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_x'))).toEqual(TOO_LARGE_422);
+    expect(mockDetect).not.toHaveBeenCalled();
   });
 });
 
@@ -533,5 +652,27 @@ describe('mutants', () => {
     ]]);
     expect((await choose(mut, WIDE, 'st_j2', 'a_j2_x')).statusCode).toBe(200);
     expect(stored('st_j2')).toMatchObject({ kind: 'xlsx', has_prices: null });
+  });
+
+  test('refuse nothing on an .xls and the finding\'s Estimate.xls lands on every default link as "cannot be checked"', async () => {
+    mockDetect.mockImplementation((o) => realExtract.detectFilePrices(o));
+    mockGetBuffer.mockImplementation(async (key) => XLS_FILES[key]);
+    expect(answer(await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_ole'))).toEqual(XLS_422);
+    const mut = mutant(TICKET_ROUTES, [[
+      "      if (hasPrices === null && kind === 'xls') {",
+      '      if (false) {',
+    ]]);
+    expect((await choose(mut, WIDE, 'st_j2', 'a_j2_ole')).statusCode).toBe(200);
+    expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_j2_ole', kind: 'xls', has_prices: null });
+  });
+
+  test('drop the size cap and the 38 MB plan set is stored for a door that will never send it', async () => {
+    mockDetect.mockImplementation(async () => null);
+    const mut = mutant(TICKET_ROUTES, [[
+      '      if (!Number.isSafeInteger(size) || size < 0 || size > MAX_FILE_BYTES) {',
+      '      if (false) {',
+    ]]);
+    expect((await choose(mut, WIDE, 'st_j2', 'a_j2_plans')).statusCode).toBe(200);
+    expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_j2_plans', kind: 'pdf', has_prices: null });
   });
 });
