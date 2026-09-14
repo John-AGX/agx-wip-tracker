@@ -46,7 +46,8 @@ function poRec(id, jobId, poNumber, title, status, cost, o) {
   seq++;
   o = o || {};
   return Object.assign({
-    _id: 'clickr' + seq, accountId: 'a', integrationId: 'i', builderId: 'b', purchaseOrderId: String(id), __v: 0,
+    // Clickr's REST records carry no _id: identity is purchaseOrderId, and several share a jobId.
+    accountId: 'a', integrationId: 'i', builderId: 'b', purchaseOrderId: String(id),
     amountPaid: 0, amountRemaining: cost, approvalStatus: 2, approvalStatusText: status, approvalUser: 'Catica Office', approvalNote: null,
     attachedFileCount: 0, builderVarianceCodes: [], commentCount: 0, cost, costCodes: o.codes || ['Subcontractors Costs'],
     createdAt: '2026-03-01T10:00:00.000Z', createdBy: 'Lisa Dryden', createdById: '77', dateAdded: '2026-03-01T10:00:00.00',
@@ -194,6 +195,8 @@ describe('PREVIEW — purchase orders matched inside their own linked job', () =
   test('classes, rungs and proposals', async () => {
     const ds = await poRows();
     expect(ds.classified).toBe(true);
+    // Several records share a jobId: the read is still whole.
+    expect([ds.fetch.complete, ds.fetch.reason]).toEqual([true, null]);
     expect(ds.mapping.missingKeys).toEqual([]);
     expect(ds.mapping.unexpectedKeys).toEqual([]);
 

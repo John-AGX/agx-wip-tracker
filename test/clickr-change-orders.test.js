@@ -46,7 +46,8 @@ let seq = 0;
 function coRec(id, jobId, coNumber, title, status, price, cost, o) {
   seq++;
   return Object.assign({
-    _id: 'clickr' + seq, accountId: 'a', integrationId: 'i', builderId: 'b', changeOrderId: String(id), __v: 0,
+    // Clickr's REST records carry no _id: identity is changeOrderId, and several share a jobId.
+    accountId: 'a', integrationId: 'i', builderId: 'b', changeOrderId: String(id),
     approvalStatus: status === 'Approved' ? 4 : status === 'Pending' ? 1 : 0, approvalStatusText: status,
     attachedFileCount: 0, builderCost: cost, coNumber, commentCount: 0, createdAt: '2026-03-01T10:00:00.000Z', createdBy: 'Lisa Dryden', createdById: '77',
     dateAdded: '2026-03-01T10:00:00.00', isDeleted: false, isInvoiceable: false, jobId: String(jobId), jobName: 'Job ' + jobId, ownerName: 'Board',
@@ -187,6 +188,8 @@ describe('PREVIEW — every Buildertrend change order matched inside its own lin
   test('classes, rungs and proposals', async () => {
     const ds = await coRows();
     expect(ds.classified).toBe(true);
+    // Several records share a jobId: the read is still whole.
+    expect([ds.fetch.complete, ds.fetch.reason]).toEqual([true, null]);
     expect(ds.mapping.missingKeys).toEqual([]);
     expect(ds.mapping.unexpectedKeys).toEqual([]);
 

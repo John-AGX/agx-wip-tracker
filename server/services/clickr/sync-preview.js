@@ -308,7 +308,7 @@ async function buildPreview(org, deps) {
 
   const common = { apiKey, transport: deps.transport, limits: deps.limits, now: deps.now, baseUrl: deps.baseUrl };
   const settled = await Promise.allSettled(PREVIEW_KINDS.map((k) =>
-    fetchDataset(Object.assign({ datasetId: DATASETS[k].datasetId, label: DATASETS[k].label }, common))));
+    fetchDataset(Object.assign({ datasetId: DATASETS[k].datasetId, label: DATASETS[k].label, idKey: DATASETS[k].idKey }, common))));
   const datasets = {};
   PREVIEW_KINDS.forEach((k, i) => {
     const s = settled[i];

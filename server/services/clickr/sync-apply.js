@@ -111,7 +111,7 @@ async function readDataset(org, kind, deps) {
   if (cached) return cached;
   const env = deps.env || process.env;
   const apiKey = env.CLICKR_API_KEY ? String(env.CLICKR_API_KEY).trim() : '';
-  return fetchDataset({ datasetId: DATASETS[kind].datasetId, label: DATASETS[kind].label, apiKey,
+  return fetchDataset({ datasetId: DATASETS[kind].datasetId, label: DATASETS[kind].label, idKey: DATASETS[kind].idKey, apiKey,
     transport: deps.transport, limits: deps.limits, now: deps.now, baseUrl: deps.baseUrl });
 }
 

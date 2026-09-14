@@ -105,21 +105,22 @@ async function fetchTransport(url, opts) {
   }
 }
 
-// Clickr's own record id first: it is unique in every dataset. A Buildertrend
-// key is not — every change order (and PO, estimate line, task) carries its
-// JOB's jobId, so keying on jobId read a job's second change order as the same
-// record arriving twice and marked the whole read partial.
-function recordId(r) {
+// A record's identity for the duplicate check: the DATASET'S OWN id key when the
+// caller names it (field-map.js idKey). Guessing from a list was wrong twice —
+// every change order and purchase order also carries its JOB's jobId, and
+// Clickr's REST records carry no _id at all, so a job's second PO read as the
+// first arriving again and the whole read was marked partial.
+function recordId(r, idKey) {
   if (!isPlainObject(r)) return null;
-  for (const k of ['_id', 'changeOrderId', 'jobId', 'leadId', 'id']) {
+  for (const k of idKey ? [idKey] : ['_id', 'jobId', 'leadId', 'id']) {
     if (r[k] != null && (typeof r[k] === 'string' || typeof r[k] === 'number')) return k + ':' + r[k];
   }
   return null;
 }
 
-function pageSignature(records) {
+function pageSignature(records, idKey) {
   if (!records.length) return null;
-  const ids = records.map(recordId);
+  const ids = records.map((r) => recordId(r, idKey));
   if (ids.every(Boolean)) return records.length + '|' + ids[0] + '|' + ids[ids.length - 1];
   try {
     return records.length + '|' + JSON.stringify(records[0]) + '|' + JSON.stringify(records[records.length - 1]);
@@ -219,7 +220,7 @@ async function fetchDataset(opts) {
       break;
     }
 
-    const sig = pageSignature(records);
+    const sig = pageSignature(records, opts.idKey);
     if (sig && seenPages.has(sig)) {
       partial('page ' + pageNo + ' repeated a page already received, so paging was not advancing (Clickr may ignore the paging parameter sent)');
       break;
@@ -227,7 +228,7 @@ async function fetchDataset(opts) {
     if (sig) seenPages.add(sig);
     result.pages = pageNo;
     for (const r of records) {
-      const id = recordId(r);
+      const id = recordId(r, opts.idKey);
       if (id) {
         if (seenIds.has(id)) duplicateIds++;
         seenIds.add(id);
