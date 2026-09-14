@@ -105,9 +105,13 @@ async function fetchTransport(url, opts) {
   }
 }
 
+// Clickr's own record id first: it is unique in every dataset. A Buildertrend
+// key is not — every change order (and PO, estimate line, task) carries its
+// JOB's jobId, so keying on jobId read a job's second change order as the same
+// record arriving twice and marked the whole read partial.
 function recordId(r) {
   if (!isPlainObject(r)) return null;
-  for (const k of ['jobId', 'leadId', '_id', 'id']) {
+  for (const k of ['_id', 'changeOrderId', 'jobId', 'leadId', 'id']) {
     if (r[k] != null && (typeof r[k] === 'string' || typeof r[k] === 'number')) return k + ':' + r[k];
   }
   return null;

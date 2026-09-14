@@ -66,6 +66,25 @@ const DATASETS = {
       'jobCount', 'jobTotalCount', 'leadCount', 'leadTotalCount', 'activationStatus', 'activationConfirmed', 'customFields',
     ],
   },
+  // Keys confirmed against every record of the dataset on 2026-09-13 (53 change
+  // orders). totalPrice equals subtotal on all of them: Buildertrend change
+  // orders carry no tax. approvalStatus 3 and 4 both read "Approved", so the
+  // text is what is compared.
+  changeOrders: {
+    key: 'changeOrders',
+    label: 'Change orders',
+    noun: 'change order',
+    datasetId: '6aa5cc6c84f8135cf0cc5f0b',
+    requiredKey: 'coNumber',
+    idKey: 'changeOrderId',
+    keys: [
+      'changeOrderId', 'coNumber', 'title', 'jobId', 'jobName', 'approvalStatus', 'approvalStatusText',
+      'builderCost', 'subtotal', 'totalMarkup', 'totalPrice', 'statusChangedDate', 'statusChangedBy',
+      'dateAdded', 'createdBy', 'createdById', 'ownerName', 'ownerLastViewed', 'deadline', 'isDeleted', 'isInvoiceable',
+      'purchaseOrderCost', 'poBuilderVariance', 'poCustomerVariance', 'relatedPurchaseOrderIds',
+      'attachedFileCount', 'commentCount', 'rfiCount', 'createdAt', 'updatedAt', '__v',
+    ],
+  },
 };
 
 function isPlainObject(v) {
@@ -182,9 +201,28 @@ function readClient(rec) {
   };
 }
 
+function readChangeOrder(rec) {
+  const r = isPlainObject(rec) ? rec : {};
+  return {
+    btId: scalarText(r.changeOrderId),
+    coNumber: scalarText(r.coNumber),
+    title: scalarText(r.title),
+    jobId: scalarText(r.jobId),
+    jobName: scalarText(r.jobName),
+    statusText: scalarText(r.approvalStatusText),
+    // Plain numbers in dollars today; bt-match's parseMoney also reads {value, scale}.
+    builderCost: r.builderCost === undefined ? null : r.builderCost,
+    totalPrice: r.totalPrice === undefined ? null : r.totalPrice,
+    statusChangedDate: scalarText(r.statusChangedDate),
+    statusChangedBy: scalarText(r.statusChangedBy),
+    isDeleted: r.isDeleted === true,
+  };
+}
+
 function readRecord(kind, rec) {
   if (kind === 'jobs') return readJob(rec);
   if (kind === 'clients') return readClient(rec);
+  if (kind === 'changeOrders') return readChangeOrder(rec);
   return readLead(rec);
 }
 
@@ -238,4 +276,4 @@ function describeMapping(kind, records) {
   };
 }
 
-module.exports = { DATASETS, REQUIRED_SHARE, readRecord, readJob, readLead, describeMapping, customField, isPlainObject };
+module.exports = { DATASETS, REQUIRED_SHARE, readRecord, readJob, readLead, readChangeOrder, describeMapping, customField, isPlainObject };

@@ -51,24 +51,31 @@
   var _ui = {
     jobs: { f: 'all', scope: 'open', q: '', shown: PAGE },
     leads: { f: 'all', scope: 'all', q: '', shown: PAGE },
-    clients: { f: 'all', scope: 'all', q: '', shown: PAGE }
+    clients: { f: 'all', scope: 'all', q: '', shown: PAGE },
+    changeOrders: { f: 'all', scope: 'all', q: '', shown: PAGE }
   };
   // Apply (server/services/clickr/sync-apply.js). The server re-reads both
   // sides and re-matches; the page only says which Buildertrend ids to act on.
   var APPLY_ENDPOINT = '/api/admin/organizations/me?action=buildertrend-apply';
   var _applying = null;          // 'jobs:safe' | 'jobs:<btId>' | ...
-  var _applyNote = { jobs: null, leads: null, clients: null };   // { ok, text }
+  var _applyNote = { jobs: null, leads: null, clients: null, changeOrders: null };   // { ok, text }
   // What a person ticked, per row: _picks['jobs:<btId>'][field] = true/false.
   // Corrections start ticked; held-back items a person may apply start unticked.
   var _picks = {};
-  var TABS = [['jobs', 'Jobs'], ['leads', 'Leads'], ['clients', 'Clients'], ['archive', 'Archive']];
+  var TABS = [['jobs', 'Jobs'], ['leads', 'Leads'], ['clients', 'Clients'], ['changeOrders', 'Change orders'], ['archive', 'Archive']];
   var ARCHIVE_ENDPOINT = '/api/admin/organizations/me?view=buildertrend-archive';
   var _archive = null;       // [{ kind, id, label, reason, mergedInto, archivedAt, attached, deletable }]
   var _archiveErr = null;
   var _archiveNote = null;
-  var NOUN = { jobs: 'job', leads: 'lead', clients: 'client' };
+  var NOUN = { jobs: 'job', leads: 'lead', clients: 'client', changeOrders: 'change order' };
   var _tab = 'jobs';
-  try { var _savedTab = window.localStorage && window.localStorage.getItem('btp.tab'); if (_savedTab === 'jobs' || _savedTab === 'leads' || _savedTab === 'clients' || _savedTab === 'archive') _tab = _savedTab; } catch (e) { /* storage blocked */ }
+  try { var _savedTab = window.localStorage && window.localStorage.getItem('btp.tab'); if (_savedTab === 'jobs' || _savedTab === 'leads' || _savedTab === 'clients' || _savedTab === 'changeOrders' || _savedTab === 'archive') _tab = _savedTab; } catch (e) { /* storage blocked */ }
+
+  // A change order is "refused" mostly because its job is not linked yet.
+  function labelFor(ds, k) {
+    if (ds && ds.key === 'changeOrders' && k === 'refused') return 'Waiting on its job';
+    return LABEL[k];
+  }
 
   function esc(s) {
     return String(s == null ? '' : s)
@@ -225,7 +232,7 @@
     return (ds.rows || []).filter(function (r) {
       if (!inScope(ds, ui, r) || !passesFilter(r, ui.f)) return false;
       if (!q) return true;
-      var hay = [r.bt.raw, r.bt.contactName, r.bt.email, r.bt.street, r.bt.city, r.p86 && r.p86.title, r.p86 && r.p86.jobNumber, r.p86 && r.p86.email].join(' ').toLowerCase();
+      var hay = [r.bt.raw, r.bt.contactName, r.bt.email, r.bt.street, r.bt.city, r.bt.jobName, r.job && r.job.label, r.p86 && r.p86.title, r.p86 && r.p86.jobNumber, r.p86 && r.p86.coNumber, r.p86 && r.p86.email].join(' ').toLowerCase();
       return hay.indexOf(q) >= 0;
     });
   }
@@ -235,7 +242,7 @@
     var nib = ds.notInBuildertrend;
     return ((nib && nib.rows) || []).filter(function (p) {
       if (!q) return true;
-      return [p.jobNumber, p.title, p.client, p.email, p.street, p.city, p.status].join(' ').toLowerCase().indexOf(q) >= 0;
+      return [p.jobNumber, p.coNumber, p.jobLabel, p.title, p.client, p.email, p.street, p.city, p.status].join(' ').toLowerCase().indexOf(q) >= 0;
     });
   }
 
@@ -266,6 +273,10 @@
       if (a) meta.push(esc(a));
       if (bt.projectedStart) meta.push('Start ' + esc(String(bt.projectedStart).slice(0, 10)));
       if (bt.contractText) meta.push('Contract ' + esc(bt.contractText));
+    } else if (ds.key === 'changeOrders') {
+      if (bt.jobName) meta.push('Job: ' + esc(bt.jobName));
+      meta.push('Status: ' + (bt.statusText ? esc(bt.statusText) : '<i>blank</i>'));
+      meta.push('Price ' + esc(bt.priceText) + ' · cost ' + esc(bt.costText));
     } else if (ds.key === 'clients') {
       if (bt.email) meta.push(esc(bt.email));
       if (bt.phone || bt.cell) meta.push(esc(bt.phone || bt.cell));
@@ -286,6 +297,7 @@
   function p86Label(p, kind) {
     if (!p) return '';
     if (kind === 'jobs') return esc([p.jobNumber, p.title].filter(Boolean).join(' ') || p.id);
+    if (kind === 'changeOrders') return esc([p.coNumber, p.title].filter(Boolean).join(' ') || p.id);
     return esc(p.title || p.id);
   }
 
@@ -325,6 +337,10 @@
       if (a) meta.push(esc(a));
       if (ds.key === 'leads' && p.client) meta.push('Client: ' + esc(p.client));
       if (ds.key === 'clients' && p.email) meta.push(esc(p.email));
+      if (ds.key === 'changeOrders') {
+        if (r.job) meta.push('on ' + esc(r.job.label));
+        meta.push('Price ' + esc(p.incomeText || '?') + ' · cost ' + esc(p.costsText || '?'));
+      }
       html += '<div class="btp-name">' + p86Label(p, ds.key) + '</div>' + (meta.length ? '<div class="btp-meta">' + meta.join(' · ') + '</div>' : '');
     } else if (cls === 'change_order') {
       var par = r.parent;
@@ -341,7 +357,8 @@
     } else if (cls === 'ambiguous' || cls === 'possible_duplicate') {
       html += '<div class="btp-meta">' + (cls === 'ambiguous' ? 'Candidates — nothing is proposed:' : 'Looks like — review before anything is created:') + '</div>' + candidatesHTML(ds, r.candidates, null, r);
     } else if (cls === 'new') {
-      html += '<div class="btp-none">Not in P86 — a sync would create it</div>';
+      html += r.createBlocked ? '<div class="btp-none">Not in P86 — not created, see the note below</div>'
+        : '<div class="btp-none">Not in P86 — a sync would create it' + (r.job ? ' on ' + esc(r.job.label) : '') + '</div>';
     } else {
       html += '<div class="btp-none">Not compared</div>';
     }
@@ -459,7 +476,7 @@
   }
 
   function applyButtonHTML(ds, r) {
-    if (r['class'] === 'new' && r.bt && r.bt.btId != null && r.bt.btId !== '') {
+    if (r['class'] === 'new' && !r.createBlocked && r.bt && r.bt.btId != null && r.bt.btId !== '') {
       var busyNew = _applying === ds.key + ':create:' + r.bt.btId;
       return '<button type="button" class="btp-btn btp-apply" data-btp-create="' + esc(r.bt.btId) + '"' + (_applying ? ' disabled' : '') + '>' + (busyNew ? 'Creating…' : 'Create in P86') + '</button>';
     }
@@ -482,7 +499,7 @@
 
   function createCount(ds) {
     return (ds.rows || []).filter(function (r) {
-      return r['class'] === 'new' && r.bt && r.bt.btId != null && r.bt.btId !== '' && (ds.key !== 'jobs' || r.bt.scope === 'open');
+      return r['class'] === 'new' && !r.createBlocked && r.bt && r.bt.btId != null && r.bt.btId !== '' && (ds.key !== 'jobs' || r.bt.scope === 'open');
     }).length;
   }
 
@@ -586,13 +603,16 @@
     if (ds.key === 'clients' && p.state86 === 'property') meta.push('property under a parent client in P86');
     if (p.email) meta.push(esc(p.email));
     if (p.client) meta.push('Client: ' + esc(p.client));
+    if (p.jobLabel) meta.push('on ' + esc(p.jobLabel));
+    if (p.linkedGone) meta.push('linked to a Buildertrend change order that is no longer in Buildertrend');
     var a = addr(p);
     if (a) meta.push(esc(a));
-    var archiveBtn = ds.key === 'leads'
+    var archiveBtn = ds.key === 'changeOrders' ? ''
+      : ds.key === 'leads'
       ? '<span class="btp-rung" style="margin-left:auto;">not archived: Buildertrend sends open leads only</span>'
       : '<button type="button" class="btp-btn btp-apply" data-btp-archive="' + esc(p.id) + '" data-btp-archive-label="' + esc(p.title || p.id) + '"' + (_applying ? ' disabled' : '') + '>Archive</button>';
     return '<div class="btp-row"><div class="btp-row-head"><span class="btp-chip c-notinbt">' + esc(CHIP.notinbt) + '</span>' +
-      '<span class="btp-rung">review only — archiving sets it aside, restorable</span>' + archiveBtn + '</div>' +
+      '<span class="btp-rung">' + (ds.key === 'changeOrders' ? 'review only — change it in P86 if Buildertrend is right' : 'review only — archiving sets it aside, restorable') + '</span>' + archiveBtn + '</div>' +
       '<div class="btp-side-l">Project 86</div><div class="btp-name">' + p86Label(p, ds.key) + '</div>' +
       (meta.length ? '<div class="btp-meta">' + meta.join(' · ') + '</div>' : '') +
       ((p.resembles || []).length ? '<div class="btp-notes">Possible duplicate: looks like Buildertrend ' + p.resembles.map(function (x) {
@@ -660,6 +680,7 @@
         (busyCreate ? 'Creating…' : 'Create ' + cn + ' Buildertrend-only ' + (ds.key === 'jobs' ? 'open + warranty job' : (NOUN[ds.key] || 'record')) + (cn === 1 ? '' : 's') + ' in P86') + '</button>' +
         '<span class="btp-sub">' + (ds.key === 'jobs' ? 'Closed jobs are created one at a time from their row. ' : '') +
         (ds.key === 'clients' ? 'Create clients first — leads and jobs link to a client through its Buildertrend id. ' : '') +
+        (ds.key === 'changeOrders' ? 'Each is created on its linked P86 job with Buildertrend’s price and cost as one line, and approved and locked when Buildertrend approved it. A change order whose job is not linked yet waits. ' : '') +
         'Possible duplicates and ambiguous rows are never created.</span></div>';
       var note = _applyNote[ds.key];
       if (note) html += '<div class="btp-sentence ' + (note.ok ? 'is-ok' : 'is-bad') + '">' + esc(note.text) + '</div>';
@@ -683,7 +704,7 @@
         html += tile('change_order', cc.counts.change_order, esc(LABEL.change_order), 'map to P86 change orders', ui.f === 'change_order');
         html += tile('not_a_job', cc.counts.not_a_job, esc(LABEL.not_a_job), 'not in the match rate', ui.f === 'not_a_job');
       }
-      if (cc.counts.refused) html += tile('refused', cc.counts.refused, esc(LABEL.refused), 'never created', ui.f === 'refused');
+      if (cc.counts.refused) html += tile('refused', cc.counts.refused, esc(labelFor(ds, 'refused')), ds.key === 'changeOrders' ? 'link its job first' : 'never created', ui.f === 'refused');
       if (cc.counts.typo) html += tile('typo', cc.counts.typo, 'Probable BT typos', 'fix in Buildertrend', ui.f === 'typo');
       html += tile('rate', cc.rate == null ? '—' : Math.round(cc.rate * 100) + '%', 'Match rate', 'of ' + esc(cc.base), false, true);
       html += '</div>';
@@ -692,7 +713,7 @@
         .concat(['refused', 'heldback', 'btblank', 'flagged', 'notinbt']);
       html += '<div class="btp-filters"><select class="btp-search" style="flex:0 1 auto;" data-btp-fselect="1" aria-label="Show">' +
         opts.map(function (k) {
-          return '<option value="' + k + '"' + (ui.f === k ? ' selected' : '') + '>' + (k === 'all' ? 'All Buildertrend records' : esc(LABEL[k])) + '</option>';
+          return '<option value="' + k + '"' + (ui.f === k ? ' selected' : '') + '>' + (k === 'all' ? 'All Buildertrend records' : esc(labelFor(ds, k))) + '</option>';
         }).join('') + (ui.f === 'typo' ? '<option value="typo" selected>Probable BT typos</option>' : '') + '</select>' +
         '<input type="search" class="btp-search" data-btp-q="1" placeholder="Search name, address, P86 number" value="' + esc(ui.q) + '">';
 
@@ -722,7 +743,7 @@
     var html = '<div class="btp">';
     html += '<div class="btp-banner" role="note"><div><b>Nothing changes until you press Apply</b> — and nothing is ever written to Buildertrend.</div>' +
       '<p>Buildertrend is the source of truth, so each difference is shown as the correction Project 86 would receive. ' +
-      'A blank in Buildertrend never overwrites a P86 value. Money and job numbers are held back and never applied. Ambiguous matches propose nothing and cannot be applied. Nothing is created or deleted. ' +
+      'A blank in Buildertrend never overwrites a P86 value. Money and job numbers change only when their box is ticked and you confirm. Ambiguous matches propose nothing and cannot be applied. A sync never deletes anything. ' +
       'Applying saves the Buildertrend id on the P86 record, so later reads find it by id.</p></div>';
     html += '<div class="btp-toolbar"><button type="button" class="btp-btn" data-btp-refresh="1"' + (_loading ? ' disabled' : '') + '>' + (_loading ? 'Loading…' : 'Refresh') + '</button>';
     if (_data && _data.generatedAt) html += '<span>Generated ' + esc(new Date(_data.generatedAt).toLocaleString()) + ' · ' + esc(_data.elapsedMs) + ' ms</span>';
@@ -859,7 +880,12 @@
         createAll.addEventListener('click', function () {
           var ds = _data && _data.datasets && _data.datasets[key];
           var n = ds ? createCount(ds) : 0;
-          askThen('Create ' + n + ' ' + (key === 'jobs' ? 'open and warranty job' : (NOUN[key] || 'record')) + (n === 1 ? '' : 's') + ' in Project 86 from Buildertrend? Each is linked by its Buildertrend id.', 'Create', function () {
+          var extra = '';
+          if (key === 'changeOrders' && ds) {
+            var approvedN = (ds.rows || []).filter(function (x) { return x['class'] === 'new' && !x.createBlocked && /^\s*approved\s*$/i.test(x.bt.statusText || ''); }).length;
+            extra = ' ' + approvedN + ' of them are approved in Buildertrend and will join their job’s contract.';
+          }
+          askThen('Create ' + n + ' ' + (key === 'jobs' ? 'open and warranty job' : (NOUN[key] || 'record')) + (n === 1 ? '' : 's') + ' in Project 86 from Buildertrend? Each is linked by its Buildertrend id.' + extra, 'Create', function () {
             runApply(key, { mode: 'create' });
           });
         });

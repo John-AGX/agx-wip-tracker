@@ -1488,6 +1488,11 @@ async function initSchema() {
     CREATE UNIQUE INDEX IF NOT EXISTS uq_jobs_org_bt_job_id       ON jobs(organization_id, bt_job_id)       WHERE bt_job_id IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS uq_leads_org_bt_lead_id     ON leads(organization_id, bt_lead_id)     WHERE bt_lead_id IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS uq_clients_org_bt_contact_id ON clients(organization_id, bt_contact_id) WHERE bt_contact_id IS NOT NULL;
+    -- A change order's Buildertrend id. A change-order row can still carry a NULL
+    -- organization_id (see the insert in routes/change-order-routes.js), so this
+    -- one is unique outright, and every sync read reaches the row through its job.
+    ALTER TABLE job_change_orders ADD COLUMN IF NOT EXISTS bt_co_id TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_job_change_orders_bt_co_id ON job_change_orders(bt_co_id) WHERE bt_co_id IS NOT NULL;
     -- Buildertrend reconcile archive (services/clickr/reconcile-merge.js): a merged
     -- duplicate or a P86-only record set aside for review. NULL = live. Archived
     -- leads and clients are left out of their list routes and the map; an archived

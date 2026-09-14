@@ -192,13 +192,18 @@ the caller's org. This is covered by a named test
 
 ## 9. The `OR organization_id IS NULL` tolerance is retired — **OPEN** `[machine]` — **HIGHEST RISK ITEM ON THIS LIST**
 
-**512** occurrences of `organization_id IS NULL` across `server/`.
+**514** occurrences of `organization_id IS NULL` across `server/`.
 
-497 → 512, net per commit (the count is of the literal, comments included):
-`eda0be04` +1, `4755ea44` +1, `e034406d` +2, `31d779ea` +6, `1a37e687` +4, and
+497 → 514, net per commit (the count is of the literal, comments included):
+`eda0be04` +1, `4755ea44` +1, `e034406d` +2, `31d779ea` +6, `1a37e687` +4,
 the service-ticket access rule (S7) +1 — its narrow-tier ownership lookup on
-`jobs`, a table that already carries the arm. The service_ticket tables
-themselves stay strict (`organization_id = $n`, no arm).
+`jobs`, a table that already carries the arm — and the Buildertrend change-order
+sync +2 (`services/clickr/sync-preview.js` readP86 and `sync-apply.js`
+lockedChangeOrder). Both reach `job_change_orders` through `jobs.organization_id = $n`
+(strict); the arm is on the change order's OWN column, whose older rows can be
+NULL — skipping them would create a Buildertrend duplicate of a change order P86
+already has. A row stamped with another organization stays excluded. The
+service_ticket tables themselves stay strict (`organization_id = $n`, no arm).
 
 486 → 497: the lead → estimate → job delete cascade (`2639e755`) added eleven
 statements across `estimate-routes.js`, `job-routes.js` and `lead-routes.js`.
