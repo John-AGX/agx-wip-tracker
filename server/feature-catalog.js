@@ -477,9 +477,18 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.27';
+const APP_VERSION = '1.28';
 
 const releases = [
+  {
+    version: '1.28',
+    date: '2026-09-14',
+    name: 'Take a Photo',
+    summary: 'On a phone or tablet, a punch-list building can take its before and completion photos with the camera, not only pick them from the photo library.',
+    changes: [
+      { type: 'new', text: 'Take photo on the punch list. On a phone or tablet, each building can take its before and completion photos with the camera, on the crew link and on the work order in the app. Take photo opens the camera straight away and saves the shot to that building, one photo a tap; Upload still opens the photo library and takes many at once. On Android the library has no camera in it, so until now a crew could only add photos they had already taken. On the crew link, completion photos end in a Take photo tile and an Upload photo tile (until now Add photo), and Take before photo sits next to Upload before photo (until now Add before photo). In the app on a phone it is usually the same, and the completion buttons under the photos are gone because the tiles do their job. On a wider screen, such as most tablets or a phone turned sideways, the app shows Take completion photo, Upload completion photo, Take before photo and Upload before photo (until now + Completion photo and + Before photo). On a computer, including a Windows tablet, there is no Take photo, because the browser there opens the file picker instead of the camera; Upload works as before.' },
+    ],
+  },
   {
     version: '1.27',
     date: '2026-09-13',

@@ -271,9 +271,9 @@
   .side-l { font-size: 12px; font-weight: 700; color: var(--accent-2); margin-bottom: 3px; }
   .side ul { margin: 0; padding-left: 18px; font-size: 13.5px; line-height: 1.5; color: var(--text-2); }
   .bld-body > .lbl, .photos .lbl { margin-bottom: 6px; }
-  /* Square tiles, three to a row. The dashed tile at the end IS the
-     completion-photo file input (a label around it), so a tap opens the
-     camera roll with no extra button. */
+  /* Square tiles, three to a row. The two dashed tiles at the end ARE the
+     completion-photo file inputs (labels around them): Take photo opens the
+     camera, Upload photo the photo library. */
   .shots { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
   .shot {
     position: relative; display: block; aspect-ratio: 1 / 1; border-radius: 8px; overflow: hidden;
@@ -291,6 +291,21 @@
   }
   .th-add .plus { font-size: 24px; font-weight: 400; line-height: 1; }
   .th-add input, .file-btn input { display: none; }
+  .camico { flex: 0 0 auto; }
+  /* Take before photo and Upload before photo share one row in equal halves,
+     their text wrapping inside rather than the pair breaking over two rows.
+     With the camera hidden, Upload before photo has the row to itself. */
+  .before-add { display: flex; gap: 6px; }
+  .before-add .btn { flex: 1 1 0; min-width: 0; padding-left: 8px; padding-right: 8px; }
+  /* Take photo needs a camera to open: capture="environment" is ignored on a
+     computer, where it would only open the file dialog Upload photo already
+     opens. Shown only where the main pointer is a finger, and never on
+     Windows, whose 2-in-1s report a finger in tablet mode but have no camera
+     behind a file input (the script marks the page no-capture). */
+  @media not all and (pointer: coarse) {
+    .th-add.th-cam, .btn.cam-btn { display: none; }
+  }
+  .no-capture .th-add.th-cam, .no-capture .btn.cam-btn { display: none; }
   .bnotes { display: grid; }
   .bnote { font-size: 14px; padding: 6px 0; border-top: 1px solid var(--border); }
   .bnote:first-child { border-top: 0; padding-top: 0; }
@@ -323,6 +338,13 @@
   // string is far more likely to be logged by a proxy, kept in an analytics
   // payload, or pasted onward with the rest of a URL.
   var token = (location.pathname.split('/').filter(Boolean).pop() || '');
+
+  // See the .no-capture rule: Windows ignores capture="environment". Only a
+  // tablet-sized screen counts, because a phone browser asked for the desktop
+  // site can send a Windows user agent, and a phone must keep its camera.
+  try {
+    if (/Windows NT/.test(navigator.userAgent) && Math.min(screen.width || 0, screen.height || 0) >= 600) document.documentElement.classList.add('no-capture');
+  } catch (e) { /* no navigator: nothing to mark */ }
 
   var root = document.getElementById('root');
 
@@ -645,6 +667,13 @@
           ? '<span class="chip n">' + photos.length + ' photo' + (photos.length === 1 ? '' : 's') + '</span>'
           : '<span class="chip need">Needs photo</span>');
 
+    // The camera outline on the Take photo controls, drawn in currentColor.
+    function CAM_ICON(size) {
+      return '<svg class="camico" viewBox="0 0 24 24" width="' + size + '" height="' + size + '" aria-hidden="true" focusable="false">' +
+        '<path d="M4 8.5h3.2l1.6-2.5h6.4l1.6 2.5H20V19H4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>' +
+        '<circle cx="12" cy="13.2" r="3.3" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>';
+    }
+
     function shot(ph) {
       return '<a class="shot" href="' + esc(ph.web_url || ph.thumb_url || '') + '" target="_blank" rel="noreferrer noopener">' +
         '<img src="' + esc(ph.thumb_url || ph.web_url || '') + '" alt="" loading="lazy" />' +
@@ -664,14 +693,21 @@
             '<ul>' + sd.items.map(function (it) { return '<li>' + esc(it) + '</li>'; }).join('') + '</ul></div>';
         }).join('') +
         // Completion photos as square tiles. When this link can work, the
-        // dashed tile at the end is a label around the completion-photo file
-        // input, so tapping it opens the camera roll directly.
+        // two dashed tiles at the end are labels around the completion-photo
+        // file inputs: Take photo carries capture="environment", so a tap
+        // opens the back camera (one photo a tap); Upload photo has no capture,
+        // so it opens the photo library and takes many at once. Android's
+        // library picker offers no camera, which is why both exist.
         (completion || canWork
           ? '<div class="photos"><div class="lbl">Completion photos · ' + completion + '</div>' +
               '<div class="shots">' + after.map(shot).join('') +
                 (canWork
-                  ? '<label class="th-add" tabindex="0" role="button">' +
-                      '<span class="plus" aria-hidden="true">+</span>Add photo' +
+                  ? '<label class="th-add th-cam" tabindex="0" role="button">' +
+                      CAM_ICON(24) + 'Take photo' +
+                      '<input type="file" accept="image/*" capture="environment" data-kind="completion" />' +
+                    '</label>' +
+                    '<label class="th-add" tabindex="0" role="button">' +
+                      '<span class="plus" aria-hidden="true">+</span>Upload photo' +
                       '<input type="file" accept="image/*" multiple data-kind="completion" />' +
                     '</label>'
                   : '') +
@@ -682,7 +718,11 @@
               '<div class="shots">' + before.map(shot).join('') + '</div></div>'
           : '') +
         (canWork
-          ? '<label class="btn small file-btn" tabindex="0" role="button">Add before photo<input type="file" accept="image/*" multiple data-kind="before" /></label>'
+          ? '<div class="before-add">' +
+              '<label class="btn small file-btn cam-btn" tabindex="0" role="button">' + CAM_ICON(16) +
+                'Take before photo<input type="file" accept="image/*" capture="environment" data-kind="before" /></label>' +
+              '<label class="btn small file-btn" tabindex="0" role="button">Upload before photo<input type="file" accept="image/*" multiple data-kind="before" /></label>' +
+            '</div>'
           : '') +
         (notes.length
           ? '<div class="bnotes">' + notes.map(function (n) {
@@ -747,7 +787,7 @@
       });
       if (!canWork || !byId[id]) return;
 
-      // The photo tile and the before-photo button are LABELS around their
+      // The photo tiles and the before-photo buttons are LABELS around their
       // file inputs, which a tap opens but a keyboard cannot press. Enter or
       // Space opens the same input.
       Array.prototype.forEach.call(card.querySelectorAll('label[role=button]'), function (lab) {

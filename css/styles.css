@@ -13231,6 +13231,10 @@ body.light-mode .p86-wo-crew:not(.is-empty) { background: rgba(0,0,0,0.035); }
 .p86-wo-nophotos { font-size: 12px; color: var(--text-dim, #888); font-style: italic; }
 .p86-wo-sub-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .p86-wo-up { cursor: pointer; }
+/* Icon and text centred on one line, so a Take button with its camera and
+   an Upload button without one keep their text level side by side. */
+.p86-wo-sub-actions .p86-wo-up { display: inline-flex; align-items: center; }
+.p86-wo-up .p86-wo-camico { flex: 0 0 auto; margin-right: 5px; }
 .p86-wo-up.is-busy { opacity: 0.55; pointer-events: none; }
 .p86-wo-notes { display: flex; flex-direction: column; gap: 4px; }
 .p86-wo-note { font-size: 12.5px; color: var(--text, #fff); line-height: 1.45; }
@@ -13242,7 +13246,8 @@ body.light-mode .p86-wo-crew:not(.is-empty) { background: rgba(0,0,0,0.035); }
   .p86-wo-sub-head { flex-wrap: wrap; }
 }
 
-/* Phone-only pieces of the work order (Navigate, the dashed Add photo tile).
+/* Phone-only pieces of the work order (Navigate, the dashed Take photo and
+   Upload photo tiles).
    Rendered on every width so there is one markup, shown only by the block
    below — a desktop ticket is exactly what it was. */
 .p86-wo-nav, .p86-wo-addtile, .p86-wo-site-num, .p86-wo-site-title { display: none; }
@@ -13503,7 +13508,8 @@ body.light-mode .p86-wo-crew:not(.is-empty) { background: rgba(0,0,0,0.035); }
   #job-service-tickets .p86-wo-doneby::before { content: "\2713\00a0"; }
   #job-service-tickets .p86-wo-needs { border-color: color-mix(in srgb, #d97706 45%, transparent); }
   /* Body: Side A / Side D lists, photo tiles three to a row ending in the
-     dashed Add photo tile, the upload buttons, notes. The [hidden] rule is
+     dashed Take photo and Upload photo tiles, the before-photo buttons,
+     notes. The [hidden] rule is
      the fix for cards that never collapsed: display:flex above beat the
      attribute the toggle sets. */
   #job-service-tickets .p86-wo-sub-body { padding: 2px 12px 12px; gap: 10px; }
@@ -13527,14 +13533,23 @@ body.light-mode .p86-wo-crew:not(.is-empty) { background: rgba(0,0,0,0.035); }
     font-size: 12.5px; font-weight: 600; line-height: 1.2; white-space: normal;
   }
   #job-service-tickets .p86-wo-addtile::before { content: "+"; font-size: 24px; font-weight: 400; line-height: 1; }
+  /* Take photo draws a camera where Upload photo has its "+". */
+  #job-service-tickets .p86-wo-addtile.p86-wo-camtile::before { content: none; }
   #job-service-tickets .p86-wo-addtile:hover { background: transparent; border-color: var(--accent, #4f8cff); }
   #job-service-tickets .p86-wo-photos > .p86-wo-nophotos:has(+ .p86-wo-addtile) { display: none; }
-  #job-service-tickets .p86-wo-sub-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+  /* The visible buttons share one row in equal parts, so where the camera is
+     hidden (a mouse, Windows) Upload before photo takes the row to itself
+     instead of half of it. */
+  #job-service-tickets .p86-wo-sub-actions { display: flex; flex-wrap: nowrap; gap: 8px; }
   /* <label>s: the global label rule uppercases, letter-spaces and blocks them. */
   #job-service-tickets .p86-wo-sub-actions .p86-wo-up {
-    display: flex; align-items: center; justify-content: center; min-height: 44px; margin: 0; padding: 0 8px;
+    display: flex; flex: 1 1 0; min-width: 0; align-items: center; justify-content: center; min-height: 44px; margin: 0; padding: 0 8px;
     font-size: 13.5px; line-height: 1.2; text-align: center; text-transform: none; letter-spacing: 0; white-space: normal;
   }
+  #job-service-tickets .p86-wo-sub-actions .p86-wo-up .p86-wo-camico { margin-right: 6px; }
+  /* The tiles above are the completion buttons here, as on the crew link;
+     the sub-actions keep only the before-photo pair. */
+  #job-service-tickets .p86-wo-sub-actions .p86-wo-up.is-completion { display: none; }
   #job-service-tickets .p86-wo-note { font-size: 14px; }
   #job-service-tickets .p86-wo-note-in,
   #job-service-tickets .p86-st-task-new { min-height: 44px; font-size: 16px; }
@@ -13551,6 +13566,25 @@ body.light-mode .p86-wo-crew:not(.is-empty) { background: rgba(0,0,0,0.035); }
   #job-service-tickets .p86-st-event { font-size: 13px; padding: 4px 0; }
   #job-service-tickets .p86-st-rev-actions .ee-btn { min-height: 44px; font-size: 14px; }
 }
+
+/* Take photo needs a camera to open. capture="environment" is ignored on a
+   computer, where the button would only open the file dialog the Upload
+   button next to it already opens, so every camera control is hidden unless
+   the main pointer is a finger (phones and tablets, at any width). Listed
+   with and without the #job-service-tickets prefix so it beats the phone
+   block's display rules there and the button rules everywhere else. */
+@media not all and (pointer: coarse) {
+  .p86-wo-up.p86-wo-cam,
+  .p86-wo-addtile.p86-wo-camtile,
+  #job-service-tickets .p86-wo-sub-actions .p86-wo-up.p86-wo-cam,
+  #job-service-tickets .p86-wo-photos .p86-wo-addtile.p86-wo-camtile { display: none; }
+}
+/* A Windows 2-in-1 folded into a tablet reports a finger, but Windows has no
+   camera behind a file input either; service-tickets.js marks the page. */
+.p86-no-capture .p86-wo-up.p86-wo-cam,
+.p86-no-capture .p86-wo-addtile.p86-wo-camtile,
+.p86-no-capture #job-service-tickets .p86-wo-sub-actions .p86-wo-up.p86-wo-cam,
+.p86-no-capture #job-service-tickets .p86-wo-photos .p86-wo-addtile.p86-wo-camtile { display: none; }
 
 /* The work order's sideways rows: touch phones only. The filter pills and
    the stepper become one row each that swipes, edge to edge. Gated like the

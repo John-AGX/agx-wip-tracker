@@ -25,6 +25,16 @@
 (function () {
   'use strict';
 
+  // Windows has no camera behind a file input: capture="environment" is
+  // ignored there. A 2-in-1 folded into a tablet reports a finger as its
+  // pointer, which would show Take photo buttons that only open the file
+  // dialog, so the page is marked and styles.css hides them. Only a
+  // tablet-sized screen counts: a phone browser asked for the desktop site
+  // can send a Windows user agent, and a phone must keep its camera.
+  try {
+    if (/Windows NT/.test(navigator.userAgent) && Math.min(screen.width || 0, screen.height || 0) >= 600) document.documentElement.classList.add('p86-no-capture');
+  } catch (e) { /* no navigator: nothing to mark */ }
+
   // One open ticket at a time, keyed by job. Module-level so a repaint that
   // arrives while a ticket is expanded can restore it.
   // `stale` is the deferred-refresh latch; see refresh() at the bottom.
@@ -610,6 +620,13 @@
     return { head: m[1].trim(), sides: sides };
   }
 
+  // The camera outline on Take photo controls, drawn in currentColor.
+  var CAM_ICON_PATH =
+    '<path d="M4 8.5h3.2l1.6-2.5h6.4l1.6 2.5H20V19H4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>' +
+    '<circle cx="12" cy="13.2" r="3.3" fill="none" stroke="currentColor" stroke-width="1.8"/>';
+  var CAM_ICON_TILE = '<svg class="p86-wo-camico" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false">' + CAM_ICON_PATH + '</svg>';
+  var CAM_ICON_BTN = '<svg class="p86-wo-camico" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">' + CAM_ICON_PATH + '</svg>';
+
   function subtaskHTML(t, canEdit) {
     var parsed = parseSubtaskTitle(t.title);
     var photos = t.photos || [];
@@ -661,16 +678,31 @@
                 '</button>';
               }).join('')
             : '<div class="p86-wo-nophotos">No photos yet.</div>') +
-          // The dashed "Add photo" tile at the end of the row, as on the crew
-          // link. display:none on a desktop; on a phone it opens the same
-          // + Completion photo input below (wired in wireWorkOrder), so an
-          // upload from either goes down one path.
-          (canEdit ? '<button type="button" class="p86-wo-addtile" title="Add a completion photo">Add photo</button>' : '') +
+          // The dashed tiles at the end of the row, as on the crew link:
+          // Take photo and Upload photo. display:none on a desktop; on a
+          // phone each opens the matching completion-photo input below (wired
+          // in wireWorkOrder), so an upload from a tile or a button goes down
+          // one path. On a phone the tiles ARE the completion buttons: the
+          // two completion labels below are hidden there (styles.css).
+          (canEdit
+            ? '<button type="button" class="p86-wo-addtile p86-wo-camtile" title="Take a completion photo with the camera">' + CAM_ICON_TILE + 'Take photo</button>' +
+              '<button type="button" class="p86-wo-addtile" title="Upload completion photos from the photo library">Upload photo</button>'
+            : '') +
         '</div>' +
+        // Each kind of photo has two inputs. The camera one carries
+        // capture="environment", so a phone opens the back camera straight
+        // away (one photo a tap; capture ignores multiple). The upload one has
+        // no capture, so it opens the photo library and takes many at once —
+        // on Android that picker offers no camera, which is why both exist.
+        // The camera controls are hidden where the pointer is not a finger,
+        // and on Windows (styles.css): there capture is ignored and "Take
+        // photo" would only open the file dialog.
         (canEdit
           ? '<div class="p86-wo-sub-actions">' +
-              '<label class="ee-btn primary p86-wo-up">+ Completion photo<input type="file" accept="image/*" multiple hidden data-kind="completion" /></label>' +
-              '<label class="ee-btn secondary p86-wo-up">+ Before photo<input type="file" accept="image/*" multiple hidden data-kind="before" /></label>' +
+              '<label class="ee-btn primary p86-wo-up p86-wo-cam is-completion">' + CAM_ICON_BTN + 'Take completion photo<input type="file" accept="image/*" capture="environment" hidden data-kind="completion" /></label>' +
+              '<label class="ee-btn primary p86-wo-up is-completion">Upload completion photo<input type="file" accept="image/*" multiple hidden data-kind="completion" /></label>' +
+              '<label class="ee-btn secondary p86-wo-up p86-wo-cam">' + CAM_ICON_BTN + 'Take before photo<input type="file" accept="image/*" capture="environment" hidden data-kind="before" /></label>' +
+              '<label class="ee-btn secondary p86-wo-up">Upload before photo<input type="file" accept="image/*" multiple hidden data-kind="before" /></label>' +
             '</div>'
           : '') +
         (notes.length
@@ -1032,8 +1064,13 @@
         });
       });
 
-      var addTile = card.querySelector('.p86-wo-addtile');
-      var completionIn = card.querySelector('.p86-wo-up input[data-kind="completion"]');
+      // Each tile opens its own completion input: Take photo the camera one,
+      // Upload photo the library one.
+      var camTile = card.querySelector('.p86-wo-camtile');
+      var addTile = card.querySelector('.p86-wo-addtile:not(.p86-wo-camtile)');
+      var completionCam = card.querySelector('.p86-wo-up.p86-wo-cam input[data-kind="completion"]');
+      var completionIn = card.querySelector('.p86-wo-up:not(.p86-wo-cam) input[data-kind="completion"]');
+      if (camTile && completionCam) camTile.addEventListener('click', function () { completionCam.click(); });
       if (addTile && completionIn) addTile.addEventListener('click', function () { completionIn.click(); });
 
       card.querySelectorAll('.p86-wo-up input[type=file]').forEach(function (inp) {
