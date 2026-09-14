@@ -48,7 +48,7 @@
 'use strict';
 
 const express = require('express');
-const { pipeline } = require('stream/promises');
+const { pipeline, finished } = require('stream/promises');
 const { pool } = require('../db');
 const { requireAuth, requireOrgId } = require('../auth');
 const { callerOrgId } = require('../org-access');
@@ -602,23 +602,35 @@ async function loadTicketShare(req, res, next) {
 // door both ask it, so the card on the page and the bytes behind it cannot
 // disagree.
 //
-// Returns { att, takeoff } or null. null when:
+// THE PRICE-FREE COPY (John, 2026-09-14). A spreadsheet is never served as
+// the original file on a link that hides financials (the default). No check
+// of a sheet's columns can promise a priced sheet is caught, so there is no
+// check: such a link gets a GENERATED xlsx holding only material, quantity and
+// unit, built from the lines the office's PUT read out of the file with the
+// extractor that fills the Materials list (crew_takeoff.copy.lines). The
+// original goes only to a link sent with financial details. A PDF or photo is
+// served as itself on every link, as before — the office confirms it.
+//
+// Returns { att, takeoff, copyLines } or null. copyLines is null when the
+// ORIGINAL is served, else the lines the copy is built from; takeoff is the
+// card's whitelist, with filename left null on the copy path (the builder
+// names the copy — see crewTakeoffCard). null when:
 //   * nothing was chosen — the default;
-//   * the file has prices (or an unrecognised verdict) and this link hides
-//     financials. Only an explicit false ("read to the end, none found") or
-//     null ("a PDF or photo, the office was warned") passes a default link;
-//     a row written by hand or by an older build narrows, it never widens;
-//   * the verdict is null on a SPREADSHEET — an .xlsx, an .xls or a CSV, by
-//     the kind stored or the kind the file has now — and this link hides
-//     financials. null is only ever "a PDF or photo" on a spreadsheet the PUT
-//     refuses it (an .xls cannot be checked; an .xlsx or CSV whose check
-//     failed is not "checked"), so such a row was stored before that rule and
-//     is kept off a default link rather than trusted;
-//   * the file is over the crew link's size cap, or has no size to check —
-//     the door would refuse it, so the card is never offered for it;
+//   * this link hides financials and the file is a SPREADSHEET by the kind
+//     stored OR the kind the file has now (anything but exactly 'pdf' or
+//     'image' on both counts is a spreadsheet here, so a hand-written row or
+//     a PDF renamed to .xlsx narrows) and there are no copy lines: a copy the
+//     PUT could not make (copy null) or a row stored before copies existed
+//     (has_prices and no copy). Fail closed until the office picks it again.
+//     Decided on the stored row BEFORE any lookup, and again on the file;
+//   * the ORIGINAL would be served and the file is over the crew link's size
+//     cap, or has no size to check — the door would refuse it, so the card is
+//     never offered for it (the copy is not the file, and has no such cap);
 //   * the file can no longer be proved to hang on THIS ticket's job, its lead
 //     or its estimate. Deleted, re-parented to another job, or its parent in
 //     another tenant — it stops showing without anyone touching crew_takeoff.
+//     The COPY path proves this too, though it reads no byte of the file: a
+//     copy of a file taken off the job is not the job's any more.
 //
 // NO CAPABILITY FILTER here, deliberately. The office already chose the file
 // under its own capabilities through loadTicketFile; a token has no role to
@@ -627,9 +639,19 @@ async function loadTicketShare(req, res, next) {
 // the ticket's OWN organization_id, taken from the row loadTicketShare
 // selected, never from the request.
 const TAKEOFF_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
-// The kinds detectFilePrices reads cells from. A null verdict on one of these
-// never means "a PDF or photo" (see crewTakeoffFor).
-const SPREADSHEET_KINDS = new Set(['xlsx', 'xls', 'csv']);
+// The only kinds a link that hides financials may be handed as the original
+// file. An allowlist: every other kind — xlsx, xls, csv, a missing kind, a
+// value no build ever wrote — gets the copy or nothing.
+const ORIGINAL_ON_EVERY_LINK = new Set(['pdf', 'image']);
+
+// The stored copy's lines, re-shaped through normalizeMaterials (three
+// strings a line, at most 100) so a row written by hand or by a later build
+// narrows to what the builder expects. [] when there is no usable copy.
+function copyLinesOf(chosen) {
+  const copy = chosen && chosen.copy;
+  if (!copy || typeof copy !== 'object' || !Array.isArray(copy.lines)) return [];
+  return svc.normalizeMaterials(copy.lines);
+}
 
 async function crewTakeoffFor(ticket, share) {
   let chosen = ticket ? ticket.crew_takeoff : null;
@@ -639,12 +661,16 @@ async function crewTakeoffFor(ticket, share) {
   if (!chosen || typeof chosen !== 'object') return null;
   const attachmentId = typeof chosen.attachment_id === 'string' ? chosen.attachment_id : '';
   if (!TAKEOFF_ID_RE.test(attachmentId)) return null;
-  if (chosen.has_prices !== false && chosen.has_prices !== null && svc.hidesFinancials(share)) return null;
-  // An unchecked spreadsheet stays off a default link, decided on the kind
-  // STORED before any lookup — and again below on the kind the file has now,
-  // so a PDF renamed to .xls after it was chosen narrows too.
-  const uncheckedSheet = (kind) => chosen.has_prices === null && SPREADSHEET_KINDS.has(kind) && svc.hidesFinancials(share);
-  if (uncheckedSheet(chosen.kind)) return null;
+  const hides = svc.hidesFinancials(share);
+  // Only a link that hides financials ever gets the copy; a financial link
+  // gets the original, so its lines are never looked at.
+  const copyLines = hides ? copyLinesOf(chosen) : [];
+  // The original may reach this link when the link shows financials, or the
+  // file is a PDF or photo — by the kind STORED here, and by the kind the file
+  // has now below, so a PDF renamed to .xlsx after it was chosen narrows too.
+  const originalMayShow = (kind) => !hides || ORIGINAL_ON_EVERY_LINK.has(kind);
+  // A spreadsheet with no copy on a default link: decided before any lookup.
+  if (!originalMayShow(chosen.kind) && !copyLines.length) return null;
 
   const orgId = ticket.organization_id;
   if (orgId == null) return null;
@@ -691,23 +717,70 @@ async function crewTakeoffFor(ticket, share) {
   const { takeoffKind, MAX_FILE_BYTES } = require('../services/materials-extract');
   const kind = takeoffKind(att.filename, att.mime_type);
   if (!kind) return null;
-  if (uncheckedSheet(kind)) return null;
-  // THE SIZE CAP IS THE PRICE CHECK'S. MAX_FILE_BYTES is the one number the
-  // office's PUT refuses a file over and this door will send, so the office is
-  // never told a file is on the link that the crew can never open. The stored
-  // size is NOT NULL on attachments; a row without a usable one is not offered.
+
+  if (!(originalMayShow(chosen.kind) && originalMayShow(kind))) {
+    // THE COPY. Nothing about the original's bytes or size is needed: the
+    // xlsx is built from the stored lines on the request that sends it.
+    if (!copyLines.length) return null;
+    return {
+      att: att,
+      copyLines: copyLines,
+      // A whitelist, like publicTicket. The copy is always an xlsx; it has no
+      // stored size (it is built per request), and `lines` is how many
+      // material lines it holds. filename is the builder's — crewTakeoffCard.
+      takeoff: { filename: null, kind: 'xlsx', size_bytes: null, copy: true, lines: copyLines.length },
+    };
+  }
+
+  // THE ORIGINAL. THE SIZE CAP IS THE EXTRACTOR'S. MAX_FILE_BYTES is the one
+  // number the office's PUT refuses a file over and this door will send, so
+  // the office is never told a file is on the link that the crew can never
+  // open. The stored size is NOT NULL on attachments; a row without a usable
+  // one is not offered.
   const size = att.size_bytes == null ? NaN : Number(att.size_bytes);
   if (!Number.isSafeInteger(size) || size < 0 || size > MAX_FILE_BYTES) return null;
   return {
     att: att,
+    copyLines: null,
     // A whitelist, like publicTicket: a name, a kind and a size. Never the
     // attachment id, a storage key or a URL — the bytes come through the token.
     takeoff: {
       filename: att.filename == null ? '' : String(att.filename),
       kind: kind,
       size_bytes: size,
+      copy: false,
+      lines: null,
     },
   };
+}
+
+// Build the price-free copy for a crewTakeoffFor answer on the copy path:
+// { buffer, filename }. Required on call — exceljs is heavy, and the extractor
+// module failing to load must cost one request, not this router. The source
+// name is the file's name as it is NOW, the same name the original path shows.
+// A builder that hands back no bytes is a failure, never an empty download.
+async function buildCrewCopy(found) {
+  const { buildMaterialsCopy } = require('../services/materials-extract');
+  const built = await buildMaterialsCopy({
+    lines: found.copyLines,
+    sourceName: found.att.filename == null ? '' : String(found.att.filename),
+  });
+  const raw = built ? built.buffer : null;
+  const buffer = Buffer.isBuffer(raw) ? raw
+    : (raw instanceof Uint8Array || raw instanceof ArrayBuffer ? Buffer.from(raw) : null);
+  if (!buffer || !buffer.length) throw new Error('the materials copy came back empty');
+  const filename = built && typeof built.filename === 'string' && built.filename.trim()
+    ? built.filename : 'Materials.xlsx';
+  return { buffer, filename };
+}
+
+// The card T1 shows for a crewTakeoffFor answer. On the copy path the name is
+// the one the door's download will carry, so it comes from the same builder.
+async function crewTakeoffCard(found) {
+  if (!found) return null;
+  if (!found.copyLines) return found.takeoff;
+  const built = await buildCrewCopy(found);
+  return Object.assign({}, found.takeoff, { filename: built.filename });
 }
 
 // What the takeoff door sends for each kind. An allowlist: nothing the
@@ -800,12 +873,11 @@ router.get('/service-ticket-share/:token',
       ]);
 
       // The takeoff card, when the office chose a file this link may show.
-      // Best-effort like the stats above: a failed lookup costs the crew the
-      // card, never the work order.
+      // Best-effort like the stats above: a failed lookup, or a copy that
+      // would not build, costs the crew the card, never the work order.
       let takeoff = null;
       try {
-        const found = await crewTakeoffFor(ticket, share);
-        if (found) takeoff = found.takeoff;
+        takeoff = await crewTakeoffCard(await crewTakeoffFor(ticket, share));
       } catch (e) {
         console.error('[service-ticket-share] takeoff lookup failed', e && e.message);
       }
@@ -836,7 +908,8 @@ router.get('/service-ticket-share/:token',
         }),
         org_name: orgName,
         parent_label: parentLabel,
-        // { filename, kind, size_bytes } or null — see crewTakeoffFor.
+        // { filename, kind, size_bytes, copy, lines } or null — see
+        // crewTakeoffFor. copy true: the price-free xlsx, size_bytes null.
         takeoff: takeoff,
       });
     } catch (e) {
@@ -850,12 +923,19 @@ router.get('/service-ticket-share/:token',
 // The bytes come from storage HERE rather than the page linking the file's
 // public URL: a storage URL outlives the link, cannot be revoked, and would
 // bypass every gate above. Through this door a revoked or expired link stops
-// (loadTicketShare), a priced file stays off a link that hides financials, and
-// a file taken off the job stops — each decided by crewTakeoffFor before a
-// byte is read, so a refused request never costs a storage fetch.
+// (loadTicketShare), a spreadsheet reaches a link that hides financials only
+// as its price-free copy, and a file taken off the job stops — each decided by
+// crewTakeoffFor before a byte is read, so a refused request never costs a
+// storage fetch.
 //
 // Read-only, and records nothing in the event log: the crew opening the
 // takeoff is not a change to the work order.
+//
+// THE COPY is built here from the stored lines (at most 100, a few KB of
+// xlsx) and sent whole: it never touches storage, so none of the streaming
+// below applies to it. It still takes the download slot, which bounds how many
+// builds one link or one address can run at once, and it is always an
+// attachment under the sandbox CSP.
 //
 // STREAMED, NEVER HELD. This door needs no login and is built to be
 // forwarded, and a file here can be 25 MB. Reading it whole (getBuffer) held
@@ -903,6 +983,15 @@ function takeTakeoffSlot(req) {
   };
 }
 
+// Headers on every file this door sends, copy or original: never sniffed,
+// never cached, never a referrer, never indexed.
+function takeoffGuardHeaders(res) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+}
+
 router.get('/service-ticket-share/:token/takeoff',
   stShareIpLimiter, stShareViewLimiter, loadTicketShare, async (req, res) => {
     let release = null;
@@ -910,6 +999,29 @@ router.get('/service-ticket-share/:token/takeoff',
     try {
       const found = await crewTakeoffFor(req.ticket, req.share);
       if (!found) return res.status(404).json({ error: 'There is no takeoff file on this work order.' });
+
+      if (found.copyLines) {
+        // THE PRICE-FREE COPY. The original is never opened on this path —
+        // no storage read of any kind.
+        release = takeTakeoffSlot(req);
+        if (!release) return res.status(429).json({ error: TAKEOFF_BUSY });
+        const built = await buildCrewCopy(found);
+        res.status(200);
+        res.setHeader('Content-Type', TAKEOFF_TYPES.xlsx);
+        res.setHeader('Content-Length', String(built.buffer.length));
+        res.setHeader('Content-Disposition', takeoffDisposition('attachment', built.filename));
+        takeoffGuardHeaders(res);
+        res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+        // The slot is held until the copy has left, like a streamed download's,
+        // and a reader that stops reading is cut off on the same idle timer —
+        // `finished` then rejects as a premature close and the slot comes back.
+        if (typeof res.setTimeout === 'function') res.setTimeout(TAKEOFF_IDLE_MS, () => res.destroy());
+        const sent = finished(res);
+        res.end(built.buffer);
+        await sent;
+        return;
+      }
+
       const att = found.att;
       if (!att.original_key) return res.status(404).json({ error: 'There is no takeoff file on this work order.' });
       // A safe integer within the cap — crewTakeoffFor offers nothing else.
@@ -943,10 +1055,7 @@ router.get('/service-ticket-share/:token/takeoff',
         res.setHeader('Content-Type', type);
         res.setHeader('Content-Length', String(size));
         res.setHeader('Content-Disposition', takeoffDisposition(inline ? 'inline' : 'attachment', found.takeoff.filename));
-        res.setHeader('X-Content-Type-Options', 'nosniff');
-        res.setHeader('Cache-Control', 'no-store');
-        res.setHeader('Referrer-Policy', 'no-referrer');
-        res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+        takeoffGuardHeaders(res);
         // A document opened from a stranger's link runs nothing: no script, no
         // fetch, no form. Set on downloads too, for the browser that renders one
         // anyway.

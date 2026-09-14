@@ -3,8 +3,10 @@
 // ── WHAT THIS FILE PINS ───────────────────────────────────────────────────
 // PUT /api/service-tickets/:id/crew-takeoff { attachment_id } on
 // server/routes/service-ticket-routes.js — the one door that decides which
-// file, if any, a crew link offers. The crew side (what a link shows, and the
-// bytes behind it) is pinned in test/service-ticket-share-takeoff.test.js.
+// file, if any, a crew link offers, and makes the PRICE-FREE COPY a link that
+// hides financials gets instead of a spreadsheet. The crew side (what a link
+// shows, and the bytes behind it) is pinned in
+// test/service-ticket-share-takeoff.test.js.
 //
 //   1. WRITE access on the ticket, the same proof the Materials PATCH asks:
 //      a view grant is the missing-ticket 404, no capability the 403 naming
@@ -13,21 +15,28 @@
 //      (LEADS_VIEW) and its estimate (ESTIMATES_VIEW). Absent, another job's,
 //      another tenant's, capability-filtered and malformed ids all answer ONE
 //      identical 404, and nothing is written for any of them.
-//   3. has_prices is whatever the price check said, stored as-is; a
-//      spreadsheet the check could not read — an old .xls included — is
-//      refused rather than stored as "cannot be checked"; null clears the
-//      choice.
-//   4. A file over the crew door's size cap (materials-extract MAX_FILE_BYTES)
-//      is refused before the check or any storage fetch.
-//   5. The event says a field changed — never which file.
+//   3. A spreadsheet (xlsx, csv) is read by extractMaterials — the extractor
+//      that fills the Materials list — and its lines are stored as
+//      crew_takeoff.copy, through normalizeMaterials. A read that yields no
+//      lines is still stored, with copy null and copy_problem in words. An old
+//      .xls is never read: copy null and the one fix. A PDF or photo is never
+//      read: copy null, copy_problem null. There is no price check any more,
+//      and no has_prices.
+//   4. The read runs under the extract door's one-read-per-user slot and its
+//      LAZY AI gate: the limiters run only when the extractor asks, and a
+//      limiter's 429 stands with nothing stored.
+//   5. A file over the crew door's size cap (materials-extract MAX_FILE_BYTES)
+//      is refused before any read.
+//   6. The event says a field changed — never which file.
 //
 // ── HOW ───────────────────────────────────────────────────────────────────
 // The harness of test/service-ticket-materials-extract.test.js: the REAL
 // handlers, real requireAuth over a signed JWT, real requireOrgId, the role
 // cache loaded from a `roles` table, node:sqlite through the pg shim. Only the
-// price check and the storage backend are mocked — the check's own rules are
-// pinned in test/materials-extract.test.js; here only WHETHER and WITH WHAT
-// the route calls it is under test.
+// extractor, the storage backend and the rate limiters are mocked — the
+// extractor's own rules are pinned in test/materials-extract.test.js; here
+// only WHETHER and WITH WHAT the route calls it, and what it stores from the
+// answer, is under test.
 'use strict';
 
 process.env.JWT_SECRET = process.env.JWT_SECRET
@@ -40,29 +49,16 @@ const { createPgSqlite } = require('./helpers/pg-sqlite');
 const { sqliteSchema } = require('./helpers/db-schema');
 
 // ── the mocks ─────────────────────────────────────────────────────────────
-// Only detectFilePrices is replaced; takeoffKind stays the real rule, because
-// which file types may be shown at all is part of what this door decides.
-const mockDetect = jest.fn();
+// Only extractMaterials is replaced; takeoffKind and MAX_FILE_BYTES stay the
+// real rule, because which file types may be shown at all, and how big, is
+// part of what this door decides.
+const mockExtract = jest.fn();
 jest.mock('../server/services/materials-extract', () => Object.assign(
   {}, jest.requireActual('../server/services/materials-extract.js'),
-  { detectFilePrices: (...args) => mockDetect(...args) }
+  { extractMaterials: (...args) => mockExtract(...args) }
 ));
-// The real module, for the tests that run the finding's files through the
-// REAL price check, and for the size cap the door and the share side share.
 const realExtract = jest.requireActual('../server/services/materials-extract.js');
 const MB = 1024 * 1024;
-
-// The finding's three .xls files, as an older estimating export writes them:
-// a binary (OLE) workbook, an "Export to Excel" HTML table, and SpreadsheetML.
-// Each carries a Unit Cost column.
-const XLS_FILES = {
-  'orig/a_j2_ole': Buffer.concat([Buffer.from([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]), Buffer.alloc(2048)]),
-  'orig/a_j2_html': Buffer.from('<html><body><table><tr><td>Description</td><td>Qty</td><td>Unit Cost</td></tr>'
-    + '<tr><td>Drip edge</td><td>20</td><td>$45.00</td></tr></table></body></html>'),
-  'orig/a_j2_xml': Buffer.from('<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet">'
-    + '<Worksheet><Table><Row><Cell><Data ss:Type="String">Description</Data></Cell><Cell><Data ss:Type="String">Unit Cost</Data></Cell></Row>'
-    + '<Row><Cell><Data ss:Type="String">Drip edge</Data></Cell><Cell><Data ss:Type="Number">45</Data></Cell></Row></Table></Worksheet></Workbook>'),
-};
 
 const mockGetBuffer = jest.fn(async (key) => Buffer.from('bytes of ' + key));
 jest.mock('../server/storage', () => ({
@@ -70,12 +66,24 @@ jest.mock('../server/storage', () => ({
 }));
 
 // Every limiter server/rate-limit.js exports, pass-through, so a router that
-// destructures one at load time never gets undefined.
+// destructures one at load time never gets undefined. The two AI limiters
+// record that they ran and can be told to answer 429 themselves, the way
+// express-rate-limit does.
+const mockLimiter = { ai: false, hourly: false, calls: [] };
 jest.mock('../server/rate-limit', () => {
   const pass = (req, res, next) => next();
+  const answering = (name) => (req, res, next) => {
+    mockLimiter.calls.push(name);
+    if (mockLimiter[name]) {
+      res.status(429).json({ error: 'Too many requests — please wait a moment and try again.' });
+      return;
+    }
+    next();
+  };
   return {
     stShareIpLimiter: pass, stShareViewLimiter: pass, stShareWriteLimiter: pass, stSharePropose: pass,
-    ipLoginLimiter: pass, ipGenericLimiter: pass, aiChatLimiter: pass, aiChatHourlyLimiter: pass,
+    ipLoginLimiter: pass, ipGenericLimiter: pass,
+    aiChatLimiter: answering('ai'), aiChatHourlyLimiter: answering('hourly'),
     ingestLimiter: pass, liveJoinLimiter: pass, liveStreamLimiter: pass, liveViewLimiter: pass,
     liveRoomViewLimiter: pass, liveMirrorLimiter: pass, liveSnapLimiter: pass, liveRoomSnapLimiter: pass,
     reportShareIpLimiter: pass, reportShareViewLimiter: pass, reportShareCommentLimiter: pass,
@@ -149,16 +157,14 @@ function seed() {
                              organization_id, uploaded_by, original_key) VALUES
       ('a_j2_x',   'job', 'j2', 'Lead Report.xlsx',          'application/zip',  20480, '2026-09-10 10:00:00', 1, 10, 'orig/a_j2_x'),
       ('a_j2_p',   'job', 'j2', 'Smith job - 48k bid.pdf',   'application/pdf',   4096, '2026-09-11 10:00:00', 1, 10, 'orig/a_j2_p'),
+      ('a_j2_img', 'job', 'j2', 'pull sheet photo.jpg',      'image/jpeg',        4096, '2026-09-11 10:00:00', 1, 10, 'orig/a_j2_img'),
       ('a_j2_c',   'job', 'j2', 'pull sheet.csv',            'text/csv',          1200, '2026-09-11 10:00:00', 1, 10, 'orig/a_j2_c'),
-      ('a_j2_old', 'job', 'j2', 'old takeoff.xls',           'application/vnd.ms-excel', 9000, '2026-09-09 10:00:00', 1, 10, 'orig/a_j2_old'),
+      ('a_j2_old', 'job', 'j2', 'Estimate.xls',              'application/vnd.ms-excel', 9000, '2026-09-09 10:00:00', 1, 10, 'orig/a_j2_old'),
       ('a_j2_doc', 'job', 'j2', 'contract.docx',             'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 5000, '2026-09-07 10:00:00', 1, 10, 'orig/a_j2_doc'),
       ('a_j1_c',   'job', 'j1', 'j1.csv',                    'text/csv',          1200, '2026-09-10 10:00:00', 1, 10, 'orig/a_j1_c'),
       ('a_j9',     'job', 'j9', 'rival.xlsx',                'application/zip',   1200, '2026-09-10 10:00:00', 2, 50, 'orig/a_j9'),
       ('a_l1',     'lead', 'l1', 'lead-takeoff.xlsx',        'application/zip',   3000, '2026-09-05 10:00:00', 1, 10, 'orig/a_l1'),
       ('a_e1',     'estimate', 'e1', 'priced estimate.pdf',  'application/pdf',   3000, '2026-09-04 10:00:00', 1, 10, 'orig/a_e1'),
-      ('a_j2_ole',   'job', 'j2', 'Estimate.xls',  'application/vnd.ms-excel', ${XLS_FILES['orig/a_j2_ole'].length},  '2026-09-08 10:00:00', 1, 10, 'orig/a_j2_ole'),
-      ('a_j2_html',  'job', 'j2', 'Export.xls',    'application/vnd.ms-excel', ${XLS_FILES['orig/a_j2_html'].length}, '2026-09-08 10:00:00', 1, 10, 'orig/a_j2_html'),
-      ('a_j2_xml',   'job', 'j2', 'Sheet.xls',     'application/vnd.ms-excel', ${XLS_FILES['orig/a_j2_xml'].length},  '2026-09-08 10:00:00', 1, 10, 'orig/a_j2_xml'),
       ('a_j2_plans', 'job', 'j2', 'Plan set.pdf',  'application/pdf',          ${38 * MB}, '2026-09-08 10:00:00', 1, 10, 'orig/a_j2_plans');
   `);
 }
@@ -195,12 +201,34 @@ afterAll(async () => {
   if (eng) eng.close();
 });
 
+// What the extractor reads out of a takeoff: two lines, the way admitLine
+// leaves them. A CSV has no sheet name.
+const LINES = [
+  { description: 'Drip edge 10 ft', qty: '20', unit: 'pc' },
+  { description: 'Synthetic underlayment', qty: '6', unit: 'roll' },
+];
+function readOk(att, extra) {
+  const csv = /\.csv$/i.test(String(att && att.filename));
+  return Object.assign({
+    ok: true,
+    materials: LINES.map((l) => Object.assign({}, l)),
+    method: csv ? 'csv' : 'sheet',
+    source: { attachment_id: att.id, filename: att.filename, sheet: csv ? null : 'Takeoff' },
+    counts: { found: 2, kept: 2, skipped: {}, over_cap: 0 },
+    truncated: false,
+    warnings: [],
+  }, extra || {});
+}
+
 beforeEach(() => {
   seed();
-  mockDetect.mockReset();
-  mockDetect.mockImplementation(async () => false);
+  mockExtract.mockReset();
+  mockExtract.mockImplementation(async (opts) => readOk(opts.att));
   mockGetBuffer.mockReset();
   mockGetBuffer.mockImplementation(async (key) => Buffer.from('bytes of ' + key));
+  mockLimiter.ai = false;
+  mockLimiter.hourly = false;
+  mockLimiter.calls = [];
 });
 
 // ── the drive ─────────────────────────────────────────────────────────────
@@ -261,9 +289,11 @@ const stored = (id) => {
 const writesSince = (n) => eng.log.slice(n).filter((e) => /^\s*(INSERT|UPDATE|DELETE)\b/i.test(e.sql));
 const TICKET_404 = [404, { error: 'Service ticket not found' }];
 const FILE_404 = [404, { error: 'File not found' }];
-const XLS_422 = [422, { error: 'An old Excel .xls file cannot be checked for prices, so it was not put on the crew link. Open it in Excel, save it as .xlsx to the job\'s Files, and pick that.' }];
+const XLS_PROBLEM = 'Old .xls files can\'t be read — save it as .xlsx for a price-free copy.';
+const NO_LINES_PROBLEM = 'No material lines could be read from that file, so links that hide financial details will not show it.';
 const TOO_LARGE_422 = [422, { error: 'That file is too large for the crew link (over 25 MB) — ask the office to send it another way.' }];
 const NO_WRITE_CAP = [403, { error: 'Missing capability: JOBS_EDIT_ANY JOBS_EDIT_OWN' }];
+const LIMITER_429 = [429, { error: 'Too many requests — please wait a moment and try again.' }];
 
 function mutant(file, pairs) {
   const SOURCE = fs.readFileSync(file, 'utf8');
@@ -291,9 +321,9 @@ function mutant(file, pairs) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * CHOOSING A FILE
+ * CHOOSING A FILE — and the price-free copy made from a spreadsheet
  * ══════════════════════════════════════════════════════════════════════════*/
-describe('choosing the file: what is stored, and what the price check decided', () => {
+describe('choosing the file: what is stored, and the copy made from a spreadsheet', () => {
   test('nothing is shown until someone chooses: a fresh ticket has crew_takeoff null, and the office read carries it', async () => {
     expect(stored('st_j2')).toBeNull();
     const r = await readTicket(ticketRouter, WIDE, 'st_j2');
@@ -301,65 +331,118 @@ describe('choosing the file: what is stored, and what the price check decided', 
     expect(r.body.ticket).toHaveProperty('crew_takeoff', null);
   });
 
-  test('a spreadsheet with no prices: has_prices false, the proved row and a storage reader go to the check', async () => {
-    const r = await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_c');
+  test('an xlsx: the extractor reads the proved row, and its lines are stored as the copy — no has_prices', async () => {
+    const r = await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_x');
     expect(r.statusCode).toBe(200);
     expect(r.body.ok).toBe(true);
     const ct = r.body.crew_takeoff;
     expect(ct).toEqual({
-      attachment_id: 'a_j2_c', filename: 'pull sheet.csv', kind: 'csv', has_prices: false,
+      attachment_id: 'a_j2_x', filename: 'Lead Report.xlsx', kind: 'xlsx',
       set_at: expect.any(String), set_by: WIDE,
+      copy: { lines: LINES, sheet: 'Takeoff', method: 'sheet', made_at: expect.any(String) },
+      copy_problem: null,
     });
+    expect(ct).not.toHaveProperty('has_prices');
     expect(Number.isNaN(Date.parse(ct.set_at))).toBe(false);
+    expect(Number.isNaN(Date.parse(ct.copy.made_at))).toBe(false);
     expect(stored('st_j2')).toEqual(ct);
     expect(r.body.ticket.crew_takeoff).toEqual(ct);
 
-    expect(mockDetect).toHaveBeenCalledTimes(1);
-    const opts = mockDetect.mock.calls[0][0];
-    expect(opts.att).toMatchObject({ id: 'a_j2_c', filename: 'pull sheet.csv', original_key: 'orig/a_j2_c', size_bytes: 1200 });
-    expect((await opts.getBuffer('orig/a_j2_c')).toString()).toBe('bytes of orig/a_j2_c');
-    expect(mockGetBuffer).toHaveBeenCalledWith('orig/a_j2_c');
+    // WITH WHAT the extractor is called: the proved row, a storage reader, the
+    // ticket's org, and the lazy AI gate.
+    expect(mockExtract).toHaveBeenCalledTimes(1);
+    const opts = mockExtract.mock.calls[0][0];
+    expect(opts.att).toMatchObject({ id: 'a_j2_x', filename: 'Lead Report.xlsx', original_key: 'orig/a_j2_x', size_bytes: 20480 });
+    expect(opts.orgId).toBe(1);
+    expect(typeof opts.beforeAi).toBe('function');
+    expect((await opts.getBuffer('orig/a_j2_x')).toString()).toBe('bytes of orig/a_j2_x');
+    expect(mockGetBuffer).toHaveBeenCalledWith('orig/a_j2_x');
 
     // The office read carries it back.
     expect((await readTicket(ticketRouter, WIDE, 'st_j2')).body.ticket.crew_takeoff).toEqual(ct);
   });
 
-  test('a priced spreadsheet is stored has_prices true — the share side withholds it from default links', async () => {
-    mockDetect.mockImplementation(async () => true);
+  test('a CSV: the copy carries the csv method and no sheet', async () => {
+    const r = await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_c');
+    expect(r.statusCode).toBe(200);
+    expect(stored('st_j2')).toEqual({
+      attachment_id: 'a_j2_c', filename: 'pull sheet.csv', kind: 'csv',
+      set_at: expect.any(String), set_by: WIDE,
+      copy: { lines: LINES, sheet: null, method: 'csv', made_at: expect.any(String) },
+      copy_problem: null,
+    });
+  });
+
+  test('the copy is normalizeMaterials\' shape: three strings a line, at most 100, blank descriptions dropped', async () => {
+    const many = [];
+    many.push({ description: '   ', qty: '1', unit: 'ea' });
+    many.push({ description: 'Coil nails', qty: 12, unit: 'box', unit_cost: '$45.00', total: 540 });
+    for (let i = 0; i < 150; i++) many.push({ description: 'Line ' + i, qty: String(i), unit: 'ea' });
+    mockExtract.mockImplementation(async (opts) => readOk(opts.att, { materials: many }));
+    expect((await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_x')).statusCode).toBe(200);
+    const lines = stored('st_j2').copy.lines;
+    expect(lines).toHaveLength(100);
+    expect(lines[0]).toEqual({ description: 'Coil nails', qty: '12', unit: 'box' });
+    expect(lines.every((l) => Object.keys(l).sort().join() === 'description,qty,unit')).toBe(true);
+    expect(lines.every((l) => typeof l.qty === 'string' && typeof l.unit === 'string')).toBe(true);
+    expect(JSON.stringify(stored('st_j2'))).not.toMatch(/unit_cost|\$45|"total"/);
+  });
+
+  test('a read that answers ok with no usable line is copy null and a problem, not an empty copy', async () => {
+    mockExtract.mockImplementation(async (opts) => readOk(opts.att, { materials: [{ description: '' }, null] }));
     const r = await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_x');
     expect(r.statusCode).toBe(200);
-    expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_j2_x', kind: 'xlsx', has_prices: true });
+    expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_j2_x', kind: 'xlsx', copy: null, copy_problem: NO_LINES_PROBLEM });
   });
 
-  test('a PDF cannot be checked: has_prices null, stored', async () => {
-    mockDetect.mockImplementation(async () => null);
-    const r = await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_p');
+  test('a spreadsheet the extractor cannot copy is STORED with copy null and its words — unreadable, not a takeoff, no lines', async () => {
+    for (const [code, error] of [
+      ['unreadable', 'Lead Report.xlsx could not be opened — it may be damaged or password-protected.'],
+      ['not_a_takeoff', 'Lead Report.xlsx does not look like a takeoff.'],
+      ['no_lines', 'No material lines were found in Lead Report.xlsx.'],
+    ]) {
+      mockExtract.mockImplementation(async () => ({ ok: false, code, error }));
+      const r = await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_x');
+      expect({ code, status: r.statusCode }).toEqual({ code, status: 200 });
+      expect(stored('st_j2')).toEqual({
+        attachment_id: 'a_j2_x', filename: 'Lead Report.xlsx', kind: 'xlsx',
+        set_at: expect.any(String), set_by: WIDE, copy: null, copy_problem: error,
+      });
+      expect(r.body.crew_takeoff).toEqual(stored('st_j2'));
+    }
+    // An answer with no words of its own still gets a sentence.
+    mockExtract.mockImplementation(async () => ({ ok: false, code: 'unreadable' }));
+    await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_c');
+    expect(stored('st_j2')).toMatchObject({ copy: null, copy_problem: NO_LINES_PROBLEM });
+  });
+
+  test('an old .xls is allowed again: copy null, the one fix in words, and the file is never read', async () => {
+    const r = await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_old');
     expect(r.statusCode).toBe(200);
-    expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_j2_p', kind: 'pdf', has_prices: null });
+    expect(stored('st_j2')).toEqual({
+      attachment_id: 'a_j2_old', filename: 'Estimate.xls', kind: 'xls',
+      set_at: expect.any(String), set_by: WIDE, copy: null, copy_problem: XLS_PROBLEM,
+    });
+    expect(mockExtract).not.toHaveBeenCalled();
+    expect(mockGetBuffer).not.toHaveBeenCalled();
   });
 
-  test('an old .xls the check answers null for is REFUSED, not stored as "cannot be checked"', async () => {
-    mockDetect.mockImplementation(async () => null);
-    const before = eng.log.length;
-    expect(answer(await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_old'))).toEqual(XLS_422);
-    expect(writesSince(before)).toEqual([]);
-    expect(stored('st_j2')).toBeNull();
+  test('a PDF or a photo is never read: copy null and copy_problem null', async () => {
+    for (const [id, kind, filename] of [['a_j2_p', 'pdf', 'Smith job - 48k bid.pdf'], ['a_j2_img', 'image', 'pull sheet photo.jpg']]) {
+      expect((await choose(ticketRouter, WIDE, 'st_j2', id)).statusCode).toBe(200);
+      expect(stored('st_j2')).toEqual({
+        attachment_id: id, filename, kind, set_at: expect.any(String), set_by: WIDE, copy: null, copy_problem: null,
+      });
+    }
+    expect(mockExtract).not.toHaveBeenCalled();
+    expect(mockGetBuffer).not.toHaveBeenCalled();
+    expect(mockLimiter.calls).toEqual([]);
   });
 
-  test('a SPREADSHEET the check could not read is refused, not stored as "cannot be checked"', async () => {
-    mockDetect.mockImplementation(async () => null);
-    const before = eng.log.length;
-    const r = await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_x');
-    expect(r.statusCode).toBe(422);
-    expect(r.body.error).toMatch(/could not be checked for prices/);
-    expect(writesSince(before)).toEqual([]);
-    expect(stored('st_j2')).toBeNull();
-  });
-
-  test('a file that is not a takeoff type is 422, and the check never runs', async () => {
+  test('a file that is not a takeoff type is 422, and nothing is read', async () => {
     const r = await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_doc');
     expect(answer(r)).toEqual([422, { error: 'That file type cannot be shown on the crew link.' }]);
-    expect(mockDetect).not.toHaveBeenCalled();
+    expect(mockExtract).not.toHaveBeenCalled();
     expect(stored('st_j2')).toBeNull();
   });
 
@@ -371,90 +454,83 @@ describe('choosing the file: what is stored, and what the price check decided', 
     expect(r.body.crew_takeoff).toBeNull();
     expect(r.body.ticket.crew_takeoff).toBeNull();
     expect(stored('st_j2')).toBeNull();
-    expect(mockDetect).toHaveBeenCalledTimes(1);
+    expect(mockExtract).toHaveBeenCalledTimes(1);
   });
 
-  test('the event names the FIELD, never the file', async () => {
-    mockDetect.mockImplementation(async () => null);
+  test('the event names the FIELD, never the file or the copy', async () => {
     const before = eng.log.length;
     await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_p');
+    await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_x');
     await choose(ticketRouter, WIDE, 'st_j2', null);
     const events = eng.all("SELECT kind, actor_user_id, detail FROM service_ticket_events WHERE ticket_id = 'st_j2'");
     expect(events.map((e) => [e.kind, e.actor_user_id, e.detail])).toEqual([
       ['field_changed', WIDE, { fields: ['crew_takeoff'] }],
       ['field_changed', WIDE, { fields: ['crew_takeoff'] }],
+      ['field_changed', WIDE, { fields: ['crew_takeoff'] }],
     ]);
     const eventWrites = writesSince(before).filter((e) => /service_ticket_events/.test(e.sql));
-    expect(JSON.stringify(eventWrites)).not.toMatch(/48k|Smith|\.pdf|a_j2_p/);
+    expect(JSON.stringify(eventWrites)).not.toMatch(/48k|Smith|\.pdf|a_j2_p|Lead Report|Drip edge/);
   });
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * AN OLD .XLS — the finding. A PM picks "Estimate.xls" from an older
- * estimating export with a Unit Cost column. No dialog is shown for a
- * spreadsheet, the price check cannot read an .xls, and the PUT stored
- * has_prices null — which every default crew link showed.
+ * THE LAZY AI GATE — the extract door's. A spreadsheet the header read can map
+ * costs no AI allowance; one the extractor has to hand to the model runs the
+ * limiters first, and a limiter's refusal stands with nothing stored.
  * ══════════════════════════════════════════════════════════════════════════*/
-describe('an old .xls is refused unless the check actually read it', () => {
-  test('the finding\'s binary Estimate.xls, through the REAL price check: 422 telling the PM to save it as .xlsx, nothing written', async () => {
-    mockDetect.mockImplementation((o) => realExtract.detectFilePrices(o));
-    mockGetBuffer.mockImplementation(async (key) => XLS_FILES[key]);
+describe('the AI limiters run only when the extractor asks', () => {
+  test('an extractor that never reaches for the model runs no limiter', async () => {
+    expect((await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_x')).statusCode).toBe(200);
+    expect(mockLimiter.calls).toEqual([]);
+  });
+
+  test('an extractor that asks runs both limiters once, and its lines are stored', async () => {
+    mockExtract.mockImplementation(async (opts) => {
+      const go = await opts.beforeAi();
+      return go ? readOk(opts.att, { method: 'ai-text' }) : { ok: false, code: 'rate_limited', error: '86 is busy — try again in a minute.' };
+    });
+    expect((await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_x')).statusCode).toBe(200);
+    expect(mockLimiter.calls).toEqual(['ai', 'hourly']);
+    expect(stored('st_j2')).toMatchObject({ copy: { lines: LINES, method: 'ai-text' }, copy_problem: null });
+  });
+
+  test('a limiter that answers 429 inside beforeAi: its answer stands, nothing is stored, the slot comes back', async () => {
+    mockExtract.mockImplementation(async (opts) => {
+      const go = await opts.beforeAi();
+      return go ? readOk(opts.att) : { ok: false, code: 'rate_limited', error: '86 is busy — try again in a minute.' };
+    });
+    for (const which of ['ai', 'hourly']) {
+      mockLimiter.ai = which === 'ai';
+      mockLimiter.hourly = which === 'hourly';
+      const before = eng.log.length;
+      const r = await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_x');
+      expect({ which, a: answer(r), writes: r.writes }).toEqual({ which, a: LIMITER_429, writes: 1 });
+      expect(writesSince(before)).toEqual([]);
+      expect(stored('st_j2')).toBeNull();
+    }
+    mockLimiter.ai = false;
+    mockLimiter.hourly = false;
+    expect((await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_x')).statusCode).toBe(200);
+  });
+
+  test('a limiter that FAILED rather than refused (rate_limited, nothing written) is a 429, not a stored problem', async () => {
+    mockExtract.mockImplementation(async () => ({ ok: false, code: 'rate_limited', error: '86 is busy — try again in a minute.' }));
     const before = eng.log.length;
-    expect(answer(await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_ole'))).toEqual(XLS_422);
-    // The check really ran on the stored bytes, and really could not read them.
-    expect(mockGetBuffer.mock.calls).toEqual([['orig/a_j2_ole']]);
-    expect(await mockDetect.mock.results[0].value).toBeNull();
+    expect(answer(await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_x'))).toEqual([429, { error: '86 is busy — try again in a minute.' }]);
     expect(writesSince(before)).toEqual([]);
     expect(stored('st_j2')).toBeNull();
   });
-
-  test('the "Export to Excel" HTML table and the SpreadsheetML file named .xls never land on the link unchecked', async () => {
-    mockDetect.mockImplementation((o) => realExtract.detectFilePrices(o));
-    mockGetBuffer.mockImplementation(async (key) => XLS_FILES[key]);
-    for (const id of ['a_j2_html', 'a_j2_xml']) {
-      const r = await choose(ticketRouter, WIDE, 'st_j2', id);
-      const verdict = await mockDetect.mock.results[mockDetect.mock.results.length - 1].value;
-      // Today the check cannot read either (null) and the door refuses it. If
-      // the check ever learns to read one, its Unit Cost column must come back
-      // PRICED — never stored as null, and never as clean.
-      if (verdict === null) {
-        expect({ id, a: answer(r) }).toEqual({ id, a: XLS_422 });
-        expect(stored('st_j2')).toBeNull();
-      } else {
-        expect({ id, verdict, status: r.statusCode }).toEqual({ id, verdict: true, status: 200 });
-        expect(stored('st_j2')).toMatchObject({ attachment_id: id, has_prices: true });
-      }
-    }
-  });
-
-  test('an .xls whose bytes the check DID read keeps its verdict — the refusal is for null only', async () => {
-    for (const verdict of [false, true]) {
-      mockDetect.mockImplementation(async () => verdict);
-      expect((await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_old')).statusCode).toBe(200);
-      expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_j2_old', kind: 'xls', has_prices: verdict });
-    }
-  });
-
-  test('a PDF or photo is still the only kind stored as null', async () => {
-    mockDetect.mockImplementation(async () => null);
-    for (const [id, status] of [['a_j2_p', 200], ['a_j2_old', 422], ['a_j2_x', 422], ['a_j2_c', 422]]) {
-      expect({ id, status: (await choose(ticketRouter, WIDE, 'st_j2', id)).statusCode }).toEqual({ id, status });
-    }
-    expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_j2_p', kind: 'pdf', has_prices: null });
-  });
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * THE CREW DOOR'S SIZE CAP — the finding. Uploads allow 50 MB; the crew door
- * sends no more than 25 MB. A 38 MB plan-set PDF was stored, the office was
- * told "Takeoff shown on the crew link", and the crew got a 413 every time.
+ * THE CREW DOOR'S SIZE CAP — a file the crew door cannot send is refused, of
+ * every kind, before any read.
  * ══════════════════════════════════════════════════════════════════════════*/
-describe('a file over the crew link\'s size cap is refused before it is checked', () => {
-  test('the finding\'s 38 MB plan-set PDF: 422, no price check, no storage fetch, nothing written', async () => {
-    mockDetect.mockImplementation(async () => null);
+describe('a file over the crew link\'s size cap is refused before it is read', () => {
+  test('the 38 MB plan-set PDF: 422, no read, no storage fetch, nothing written', async () => {
     const before = eng.log.length;
     expect(answer(await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_plans'))).toEqual(TOO_LARGE_422);
-    expect(mockDetect).not.toHaveBeenCalled();
+    expect(mockExtract).not.toHaveBeenCalled();
     expect(mockGetBuffer).not.toHaveBeenCalled();
     expect(writesSince(before)).toEqual([]);
     expect(stored('st_j2')).toBeNull();
@@ -462,10 +538,9 @@ describe('a file over the crew link\'s size cap is refused before it is checked'
 
   test('the cap is materials-extract\'s MAX_FILE_BYTES, the number the share side reads: at it passes, one byte over is refused', async () => {
     expect(realExtract.MAX_FILE_BYTES).toBe(25 * MB);
-    mockDetect.mockImplementation(async () => null);
     eng.db.exec(`UPDATE attachments SET size_bytes = ${realExtract.MAX_FILE_BYTES} WHERE id = 'a_j2_plans'`);
     expect((await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_plans')).statusCode).toBe(200);
-    expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_j2_plans', kind: 'pdf', has_prices: null });
+    expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_j2_plans', kind: 'pdf', copy: null });
 
     eng.db.exec(`UPDATE attachments SET size_bytes = ${realExtract.MAX_FILE_BYTES + 1} WHERE id = 'a_j2_plans'`);
     expect(answer(await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_plans'))).toEqual(TOO_LARGE_422);
@@ -473,10 +548,10 @@ describe('a file over the crew link\'s size cap is refused before it is checked'
     expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_j2_plans' });
   });
 
-  test('an oversized SPREADSHEET is the same size refusal, before the slot or the check', async () => {
+  test('an oversized SPREADSHEET is the same size refusal, before the slot or the read', async () => {
     eng.db.exec(`UPDATE attachments SET size_bytes = ${30 * MB} WHERE id = 'a_j2_x'`);
     expect(answer(await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_x'))).toEqual(TOO_LARGE_422);
-    expect(mockDetect).not.toHaveBeenCalled();
+    expect(mockExtract).not.toHaveBeenCalled();
   });
 });
 
@@ -490,13 +565,13 @@ describe('who may choose: write access on the ticket', () => {
     expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_j2_c', set_by: CREW });
   });
 
-  test('a VIEW grant is the missing-ticket 404, and nothing is checked or written', async () => {
+  test('a VIEW grant is the missing-ticket 404, and nothing is read or written', async () => {
     const before = eng.log.length;
     expect(answer(await choose(ticketRouter, CREW, 'st_j1', 'a_j1_c'))).toEqual(TICKET_404);
     expect(answer(await choose(ticketRouter, CREW, 'st_nope', 'a_j1_c'))).toEqual(TICKET_404);
     expect(answer(await choose(ticketRouter, CREW, 'st_j1', null))).toEqual(TICKET_404);
     expect(writesSince(before)).toEqual([]);
-    expect(mockDetect).not.toHaveBeenCalled();
+    expect(mockExtract).not.toHaveBeenCalled();
   });
 
   test('no job capability is the 403 naming it', async () => {
@@ -517,7 +592,7 @@ describe('who may choose: write access on the ticket', () => {
       expect(r.statusCode).toBe(409);
       expect(r.body.error).toMatch(/closed\. Reopen it/);
     }
-    expect(mockDetect).not.toHaveBeenCalled();
+    expect(mockExtract).not.toHaveBeenCalled();
   });
 });
 
@@ -534,25 +609,25 @@ describe('which files: the ticket\'s own job, lead and estimate — one 404 for 
       expect({ id, a: answer(r) }).toEqual({ id, a: answer(absent) });
     }
     expect(writesSince(before)).toEqual([]);
-    expect(mockDetect).not.toHaveBeenCalled();
+    expect(mockExtract).not.toHaveBeenCalled();
   });
 
   test('the lead\'s file needs LEADS_VIEW and the estimate\'s ESTIMATES_VIEW — the same gates as the picker', async () => {
     expect(answer(await choose(ticketRouter, CREW, 'st_j2', 'a_l1'))).toEqual(FILE_404);
     expect(answer(await choose(ticketRouter, CREW, 'st_j2', 'a_e1'))).toEqual(FILE_404);
     expect(answer(await choose(ticketRouter, JOBS, 'st_j2', 'a_e1'))).toEqual(FILE_404);
-    expect(mockDetect).not.toHaveBeenCalled();
+    expect(mockExtract).not.toHaveBeenCalled();
     expect((await choose(ticketRouter, JOBS, 'st_j2', 'a_l1')).statusCode).toBe(200);
-    mockDetect.mockImplementation(async () => null);
+    expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_l1', kind: 'xlsx', copy: { lines: LINES } });
     expect((await choose(ticketRouter, WIDE, 'st_j2', 'a_e1')).statusCode).toBe(200);
-    expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_e1', kind: 'pdf', has_prices: null });
+    expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_e1', kind: 'pdf', copy: null, copy_problem: null });
   });
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * ONE READ PER USER — the price check pulls the file out of storage and parses
- * it, so it shares the extract door's one-read-per-user slot, taken before
- * the fetch and given back as soon as the check answers.
+ * ONE READ PER USER — making the copy pulls the file out of storage and
+ * parses it, so it shares the extract door's one-read-per-user slot, taken
+ * before the fetch and given back as soon as the extractor answers.
  * ══════════════════════════════════════════════════════════════════════════*/
 const BUSY = [429, { error: 'Still reading your last file — try again in a moment.' }];
 
@@ -564,16 +639,16 @@ function gate() {
 
 async function until(cond) {
   for (let i = 0; i < 5000 && !cond(); i++) await new Promise((r) => setImmediate(r));
-  if (!cond()) throw new Error('the first request never reached the price check');
+  if (!cond()) throw new Error('the first request never reached the extractor');
 }
 
 describe('one file read per user at a time', () => {
-  test('a second choice by the same user while a check is in flight is a 429, and nothing is written', async () => {
+  test('a second spreadsheet choice by the same user while a read is in flight is a 429, and nothing is written', async () => {
     const g = gate();
     let calls = 0;
-    mockDetect.mockImplementation(async () => { calls += 1; if (calls === 1) await g.shut; return false; });
+    mockExtract.mockImplementation(async (opts) => { calls += 1; if (calls === 1) await g.shut; return readOk(opts.att); });
     const first = choose(ticketRouter, WIDE, 'st_j2', 'a_j2_c');
-    await until(() => mockDetect.mock.calls.length === 1);
+    await until(() => mockExtract.mock.calls.length === 1);
 
     const before = eng.log.length;
     expect(answer(await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_x'))).toEqual(BUSY);
@@ -581,28 +656,31 @@ describe('one file read per user at a time', () => {
     expect(answer(await drive(ticketRouter, 'post', '/:id/materials/extract',
       { as: WIDE, params: { id: 'st_j2' }, body: { attachment_id: 'a_j2_x' } }))).toEqual(BUSY);
     expect(writesSince(before)).toEqual([]);
-    expect(mockDetect).toHaveBeenCalledTimes(1);
-    expect(mockGetBuffer).not.toHaveBeenCalled();
+    expect(mockExtract).toHaveBeenCalledTimes(1);
 
-    // Clearing the choice reads no file, so it takes no slot.
-    expect((await choose(ticketRouter, WIDE, 'st_j2', null)).statusCode).toBe(200);
+    // A PDF, a photo and an old .xls read no file, and clearing reads none,
+    // so none of them takes the slot.
+    for (const id of ['a_j2_p', 'a_j2_img', 'a_j2_old', null]) {
+      expect({ id, status: (await choose(ticketRouter, WIDE, 'st_j2', id)).statusCode }).toEqual({ id, status: 200 });
+    }
     // Another user is not held up.
     expect((await choose(ticketRouter, CREW, 'st_j2', 'a_j2_c')).statusCode).toBe(200);
 
     g.open();
     expect((await first).statusCode).toBe(200);
     expect((await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_x')).statusCode).toBe(200);
-    expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_j2_x' });
+    expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_j2_x', copy: { lines: LINES } });
   });
 
-  test('a check that throws still gives the slot back', async () => {
-    mockDetect.mockImplementationOnce(async () => { throw new Error('storage fell over'); });
+  test('a read that throws is a plain 500 and still gives the slot back', async () => {
+    mockExtract.mockImplementationOnce(async () => { throw new Error('storage fell over'); });
     const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      expect((await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_c')).statusCode).toBe(500);
+      expect(answer(await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_c'))).toEqual([500, { error: 'Failed to change the crew link takeoff' }]);
     } finally {
       spy.mockRestore();
     }
+    expect(stored('st_j2')).toBeNull();
     expect((await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_c')).statusCode).toBe(200);
   });
 });
@@ -629,50 +707,53 @@ describe('mutants', () => {
     expect(stored('st_j1')).toMatchObject({ attachment_id: 'a_j1_c' });
   });
 
-  test('never give the read slot back and the user\'s next choice is refused as busy', async () => {
+  test('never give the read slot back and the user\'s next spreadsheet choice is refused as busy', async () => {
     const mut = mutant(TICKET_ROUTES, [[
-      '        hasPrices = await detectFilePrices({ att, getBuffer: (key) => storage.getBuffer(key) });\n'
-        + '      } finally {\n'
-        + '        release();\n'
-        + '      }',
-      '        hasPrices = await detectFilePrices({ att, getBuffer: (key) => storage.getBuffer(key) });\n'
-        + '      } finally {\n'
-        + '      }',
+      '            beforeAi: lazyAiGate(req, res),\n'
+        + '          });\n'
+        + '        } finally {\n'
+        + '          release();\n'
+        + '        }',
+      '            beforeAi: lazyAiGate(req, res),\n'
+        + '          });\n'
+        + '        } finally {\n'
+        + '        }',
     ]]);
     expect((await choose(mut, WIDE, 'st_j2', 'a_j2_c')).statusCode).toBe(200);
     expect(answer(await choose(mut, WIDE, 'st_j2', 'a_j2_c'))).toEqual(BUSY);
-    expect(mockDetect).toHaveBeenCalledTimes(1);
+    expect(mockExtract).toHaveBeenCalledTimes(1);
   });
 
-  test('refuse nothing on an unreadable spreadsheet and a priced xlsx lands on every link as "cannot be checked"', async () => {
-    mockDetect.mockImplementation(async () => null);
+  test('store the extractor\'s lines as they came and a price the extractor carried lands in the copy', async () => {
+    mockExtract.mockImplementation(async (opts) => readOk(opts.att, {
+      materials: [{ description: 'Drip edge 10 ft', qty: '20', unit: 'pc', unit_cost: '$45.00' }],
+    }));
+    expect((await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_x')).statusCode).toBe(200);
+    expect(stored('st_j2').copy.lines).toEqual([{ description: 'Drip edge 10 ft', qty: '20', unit: 'pc' }]);
     const mut = mutant(TICKET_ROUTES, [[
-      "      if (hasPrices === null && (kind === 'xlsx' || kind === 'csv')) {",
-      '      if (false) {',
+      '    const lines = svc.normalizeMaterials(result.materials);',
+      '    const lines = result.materials;',
     ]]);
     expect((await choose(mut, WIDE, 'st_j2', 'a_j2_x')).statusCode).toBe(200);
-    expect(stored('st_j2')).toMatchObject({ kind: 'xlsx', has_prices: null });
+    expect(stored('st_j2').copy.lines).toEqual([{ description: 'Drip edge 10 ft', qty: '20', unit: 'pc', unit_cost: '$45.00' }]);
   });
 
-  test('refuse nothing on an .xls and the finding\'s Estimate.xls lands on every default link as "cannot be checked"', async () => {
-    mockDetect.mockImplementation((o) => realExtract.detectFilePrices(o));
-    mockGetBuffer.mockImplementation(async (key) => XLS_FILES[key]);
-    expect(answer(await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_ole'))).toEqual(XLS_422);
+  test('store a failed limiter as the file\'s problem and "86 is busy" lands on the choice', async () => {
+    mockExtract.mockImplementation(async () => ({ ok: false, code: 'rate_limited', error: '86 is busy — try again in a minute.' }));
     const mut = mutant(TICKET_ROUTES, [[
-      "      if (hasPrices === null && kind === 'xls') {",
-      '      if (false) {',
+      "        if (result && result.ok !== true && result.code === 'rate_limited') {",
+      '        if (false) {',
     ]]);
-    expect((await choose(mut, WIDE, 'st_j2', 'a_j2_ole')).statusCode).toBe(200);
-    expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_j2_ole', kind: 'xls', has_prices: null });
+    expect((await choose(mut, WIDE, 'st_j2', 'a_j2_x')).statusCode).toBe(200);
+    expect(stored('st_j2')).toMatchObject({ copy: null, copy_problem: '86 is busy — try again in a minute.' });
   });
 
   test('drop the size cap and the 38 MB plan set is stored for a door that will never send it', async () => {
-    mockDetect.mockImplementation(async () => null);
     const mut = mutant(TICKET_ROUTES, [[
       '      if (!Number.isSafeInteger(size) || size < 0 || size > MAX_FILE_BYTES) {',
       '      if (false) {',
     ]]);
     expect((await choose(mut, WIDE, 'st_j2', 'a_j2_plans')).statusCode).toBe(200);
-    expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_j2_plans', kind: 'pdf', has_prices: null });
+    expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_j2_plans', kind: 'pdf', copy: null });
   });
 });

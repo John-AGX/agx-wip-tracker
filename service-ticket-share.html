@@ -225,9 +225,11 @@
   }
   .mat-u { font-weight: 500; color: var(--dim); }
 
-  /* The takeoff file the office chose for this link. The server decides
-     whether this link may see it (a sheet with price columns only on links
-     sent with financial details) and serves the bytes through the token. */
+  /* The takeoff file the office chose for this link. The server decides what
+     this link gets — on a link that hides financials a spreadsheet is only
+     ever a generated materials list with the prices removed; the original
+     file goes only to links sent with financial details — and serves the
+     bytes through the token. */
   .takeoff { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
   .takeoff-kind {
     flex: 0 0 auto; font-size: 10px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
@@ -235,6 +237,7 @@
   }
   .takeoff-name { flex: 1 1 auto; min-width: 0; font-size: 14.5px; font-weight: 600; overflow-wrap: anywhere; }
   .takeoff-size { flex: 0 0 auto; color: var(--dim); font-size: 12.5px; }
+  .takeoff-lines { color: var(--dim); font-size: 12.5px; margin: -4px 0 10px; }
 
   #crewname {
     width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border);
@@ -363,18 +366,33 @@
 
   // A PDF or photo opens in the browser; a spreadsheet or CSV is sent as a
   // download (the server sets that), so the button says which will happen.
+  //
+  // tk.copy: the server is serving the price-free copy it made from the
+  // office's spreadsheet (a link that hides financials), not the file itself.
+  // The card says so — the crew gets a materials list, not the estimate — and
+  // shows how many lines it holds instead of a size (the copy is built per
+  // download, so it has none). The same door serves both; the server alone
+  // decides which one this link gets.
   function takeoffHTML(tk) {
     var sheet = tk.kind === 'xlsx' || tk.kind === 'xls' || tk.kind === 'csv';
-    var size = fmtSize(tk.size_bytes);
-    return '<div class="lbl">Takeoff</div>' +
+    var copy = tk.copy === true;
+    var size = copy ? '' : fmtSize(tk.size_bytes);
+    var n = Number(tk.lines);
+    var lines = copy
+      ? (Number.isSafeInteger(n) && n > 0 ? n + (n === 1 ? ' line' : ' lines') + ' — material, quantity and unit'
+        : 'Material, quantity and unit')
+      : '';
+    return '<div class="lbl">' + (copy ? 'Materials list (prices removed)' : 'Takeoff') + '</div>' +
       '<div class="takeoff">' +
         '<span class="takeoff-kind">' + esc(TAKEOFF_KIND[tk.kind] || 'File') + '</span>' +
         '<span class="takeoff-name">' + esc(tk.filename) + '</span>' +
         (size ? '<span class="takeoff-size">' + esc(size) + '</span>' : '') +
       '</div>' +
+      (lines ? '<div class="takeoff-lines">' + esc(lines) + '</div>' : '') +
       '<div class="actions">' +
         '<a class="btn primary" href="' + esc('/api/service-ticket-share/' + encodeURIComponent(token) + '/takeoff') +
-          '" target="_blank" rel="noreferrer noopener">' + (sheet ? 'Download the takeoff' : 'Open the takeoff') + '</a>' +
+          '" target="_blank" rel="noreferrer noopener">' +
+          (copy ? 'Download the materials list' : sheet ? 'Download the takeoff' : 'Open the takeoff') + '</a>' +
       '</div>';
   }
 
@@ -506,9 +524,10 @@
     }
 
     // The takeoff file — present only when the office chose one AND the server
-    // decided this link may see it. The page never decides that: a priced
-    // sheet is simply absent from the read on a link that hides financials,
-    // and the file door refuses it too. The link goes through the token, never
+    // decided this link may see it, and in what form. The page never decides
+    // that: on a link that hides financials a spreadsheet arrives as the
+    // price-free copy (takeoff.copy) or not at all, and the file door serves
+    // the same answer. The link goes through the token, never
     // a storage URL, so revoking the link stops the file with it.
     if (d.takeoff && d.takeoff.filename) {
       html += '<div class="card">' + takeoffHTML(d.takeoff) + '</div>';

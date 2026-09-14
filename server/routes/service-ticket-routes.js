@@ -717,11 +717,11 @@ const FILE_NOT_FOUND = 'File not found';
 const ATTACHMENT_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
 
 // ONE FILE READ PER USER AT A TIME. Reading a takeoff (the extract door) and
-// checking one for prices (the crew-takeoff door) both pull up to 25 MB out of
-// storage and parse it on this process's one thread. The parse is bounded, but
-// a caller who fires twenty reads in parallel would still hold twenty copies of
-// the file and queue twenty parses in front of every other tenant — and the
-// spreadsheet tier deliberately spends no AI rate-limit budget. So each user
+// making a spreadsheet's price-free copy (the crew-takeoff door) both pull up
+// to 25 MB out of storage and parse it on this process's one thread. The parse
+// is bounded, but a caller who fires twenty reads in parallel would still hold
+// twenty copies of the file and queue twenty parses in front of every other
+// tenant — and the spreadsheet tier deliberately spends no AI rate-limit budget. So each user
 // gets one read in flight, across both doors, taken BEFORE the storage fetch
 // and given back in a `finally`. In-process on purpose: there is one replica
 // (rate-limit.js), and a slot that outlived a crash would lock a PM out.
@@ -822,13 +822,28 @@ router.get('/:id/materials/sources', requireAuth, requireOrgId, async (req, res)
   }
 });
 
+// THE LAZY AI GATE, shared by the two doors that run the extractor (the
+// extract door and the crew-takeoff door). The AI rate limiters are not route
+// middleware on either, because a spreadsheet is usually read without any
+// model call — a PM filling ten tickets from one xlsx should not spend the
+// chat budget. The extractor calls the returned beforeAi() once, immediately
+// before it would reach a model, and only then do the limiters run; when one
+// answers 429 it has already written the response, which is why each door
+// checks headersSent after the call. Required on call, like the extractor, so
+// a throw loading rate-limit.js fails one request and not the router.
+function lazyAiGate(req, res) {
+  const { aiChatLimiter, aiChatHourlyLimiter } = require('../rate-limit');
+  const passLimiter = async (limiter) => {
+    let passed = false;
+    await limiter(req, res, (err) => { passed = !err; });
+    return passed;
+  };
+  return async () => (await passLimiter(aiChatLimiter)) && (await passLimiter(aiChatHourlyLimiter));
+}
+
 // POST read material lines out of one of those files. Returns the lines for
-// the editor to show; stores NOTHING. The AI rate limiters are not route
-// middleware here because a spreadsheet is read without any model call — a PM
-// filling ten tickets from one xlsx should not spend the chat budget. The
-// extractor calls beforeAi() once, immediately before it would reach a model,
-// and only then do the limiters run; when one answers 429 it has already
-// written the response, which is why headersSent is checked after the call.
+// the editor to show; stores NOTHING. The AI limiters run only when the
+// extractor asks (lazyAiGate above).
 router.post('/:id/materials/extract', requireAuth, requireOrgId, async (req, res) => {
   try {
     const orgId = req.orgId;
@@ -860,13 +875,7 @@ router.post('/:id/materials/extract', requireAuth, requireOrgId, async (req, res
       // the route census requires every router in the server.
       const { storage } = require('../storage');
       const { extractMaterials } = require('../services/materials-extract');
-      const { aiChatLimiter, aiChatHourlyLimiter } = require('../rate-limit');
-      const passLimiter = async (limiter) => {
-        let passed = false;
-        await limiter(req, res, (err) => { passed = !err; });
-        return passed;
-      };
-      const beforeAi = async () => (await passLimiter(aiChatLimiter)) && (await passLimiter(aiChatHourlyLimiter));
+      const beforeAi = lazyAiGate(req, res);
 
       const result = await extractMaterials({
         att,
@@ -902,16 +911,59 @@ router.post('/:id/materials/extract', requireAuth, requireOrgId, async (req, res
 // NOTHING IS SHOWN UNTIL SOMEONE CHOOSES. crew_takeoff is NULL by default and
 // only this door sets it; attachment_id null clears it.
 //
-// PRICES. John's standing rule is no financial information on a work order.
-// The file is checked when it is picked (detectFilePrices — a spreadsheet's
-// header rows, no model): has_prices true keeps it off every link that hides
-// financials, which is every link unless the PM minted it otherwise. A PDF or
-// photo cannot be checked, is stored as null, and the office is warned before
-// choosing one. A spreadsheet the check could not read — an old .xls always —
-// is refused rather than stored as null. The verdict is stored rather than
-// re-computed on every crew open so a link read never pulls a 25 MB file out
-// of storage to decide. A file over the crew door's size cap is refused too.
+// PRICES — THE PRICE-FREE COPY (John, 2026-09-14). John's standing rule is no
+// financial information on a work order, and no check of a spreadsheet's
+// columns can promise a priced sheet is caught. So a spreadsheet (xlsx, csv,
+// xls) is never handed to a link that hides financials — which is every link
+// unless the PM minted it otherwise. Such a link gets a GENERATED copy holding
+// only material, quantity and unit, and the original goes only to a link sent
+// with financial details.
 //
+// The copy's lines are read HERE, when the file is picked, by the same
+// extractor that fills the Materials list (extractMaterials, under the same
+// one-read-per-user slot and the same lazy AI gate as the extract door), put
+// through normalizeMaterials, and stored as crew_takeoff.copy. A link read then
+// builds the xlsx from those stored lines and never pulls the original out of
+// storage to do it. A spreadsheet that yields no lines — unreadable, not a
+// takeoff, an old .xls — is still stored, with copy null and copy_problem
+// saying why in a plain sentence: a link that hides financials shows nothing
+// for it, a financial link still gets the original.
+//
+// A PDF or photo is not read (copy null, copy_problem null). It is shown on
+// every link exactly as before — the office confirms it holds no prices before
+// choosing it. A file over the crew door's size cap is refused for every kind.
+const XLS_COPY_PROBLEM = 'Old .xls files can\'t be read — save it as .xlsx for a price-free copy.';
+const COPY_NO_LINES = 'No material lines could be read from that file, so links that hide financial details will not show it.';
+// A plain sentence, not a document: the extractor's refusals are one line.
+const COPY_PROBLEM_MAX = 500;
+
+// What extractMaterials answered, as crew_takeoff's { copy, problem }. The
+// lines go through normalizeMaterials — the shape the Materials PATCH stores,
+// at most 100 of them — so the copy holds exactly three strings per line and
+// nothing else the extractor might carry. A read that succeeded with no line
+// left after that is a problem, not an empty copy: an empty copy would give
+// the crew a spreadsheet with a header and nothing under it.
+function copyFromExtraction(result) {
+  if (result && result.ok === true) {
+    const lines = svc.normalizeMaterials(result.materials);
+    if (lines.length) {
+      const source = result.source && typeof result.source === 'object' ? result.source : {};
+      return {
+        copy: {
+          lines: lines,
+          sheet: typeof source.sheet === 'string' && source.sheet ? source.sheet : null,
+          method: typeof result.method === 'string' ? result.method : '',
+          made_at: new Date().toISOString(),
+        },
+        problem: null,
+      };
+    }
+    return { copy: null, problem: COPY_NO_LINES };
+  }
+  const error = result && typeof result.error === 'string' ? result.error.trim() : '';
+  return { copy: null, problem: (error || COPY_NO_LINES).slice(0, COPY_PROBLEM_MAX) };
+}
+
 // Same gates as the Materials PATCH — WRITE access on the ticket, and not on a
 // closed or cancelled ticket — and the same file rule as the extract door:
 // loadTicketFile, so a lead or estimate file this caller could not open by the
@@ -939,9 +991,9 @@ router.put('/:id/crew-takeoff', requireAuth, requireOrgId, async (req, res) => {
       }
       // THE CREW DOOR'S SIZE CAP, on the stored size and before a byte is
       // fetched. Uploads allow 50 MB; the crew link sends no more than
-      // MAX_FILE_BYTES (the price check's own cap, which the share side reads
-      // too), so a 38 MB plan set stored here would show the crew a card whose
-      // file never opens while the office was told it is on the link.
+      // MAX_FILE_BYTES (the extractor's own read cap, which the share side
+      // reads too), so a 38 MB plan set stored here would show the crew a card
+      // whose file never opens while the office was told it is on the link.
       const { MAX_FILE_BYTES } = require('../services/materials-extract');
       const size = att.size_bytes == null ? NaN : Number(att.size_bytes);
       if (!Number.isSafeInteger(size) || size < 0 || size > MAX_FILE_BYTES) {
@@ -950,49 +1002,57 @@ router.put('/:id/crew-takeoff', requireAuth, requireOrgId, async (req, res) => {
             + ' MB) — ask the office to send it another way.',
         });
       }
-      // One read per user at a time, shared with the extract door and taken
-      // before the storage fetch; given back as soon as the check is done.
-      const release = takeFileReadSlot(req, orgId);
-      if (!release) return res.status(429).json({ error: FILE_READ_BUSY });
-      let hasPrices;
-      try {
-        // Required here, not at the top: exceljs and the storage backend are
-        // heavy, and a throw loading either must fail this request only.
-        const { storage } = require('../storage');
-        const { detectFilePrices } = require('../services/materials-extract');
-        // An arrow, not storage.getBuffer bare: the R2 backend's getBuffer reads
-        // this.client and loses its `this` when handed around.
-        hasPrices = await detectFilePrices({ att, getBuffer: (key) => storage.getBuffer(key) });
-      } finally {
-        release();
-      }
-      // A SPREADSHEET that could not be read is refused, not stored as null.
-      // null means "a PDF or photo — check it yourself" and shows on every
-      // link; a priced xlsx whose read failed on a storage hiccup must not
-      // land there under that label. Only a PDF or photo is stored as null.
-      //
-      // An old .xls is a spreadsheet too. The check cannot read one (a binary
-      // workbook, or an "Export to Excel" HTML or XML file named .xls), and
-      // the office is asked nothing before picking a spreadsheet — so storing
-      // null put a Unit Cost column on every default crew link, unwarned. It
-      // is refused with the one thing that fixes it.
-      if (hasPrices === null && kind === 'xls') {
-        return res.status(422).json({
-          error: 'An old Excel .xls file cannot be checked for prices, so it was not put on the crew link. Open it in Excel, save it as .xlsx to the job\'s Files, and pick that.',
-        });
-      }
-      if (hasPrices === null && (kind === 'xlsx' || kind === 'csv')) {
-        return res.status(422).json({
-          error: 'That spreadsheet could not be checked for prices, so it was not put on the crew link. Try again, or save a fresh copy to the job\'s Files and pick that.',
-        });
+      let copy = null;
+      let copyProblem = null;
+      if (kind === 'xls') {
+        // An old .xls cannot be read (a binary workbook, or an "Export to
+        // Excel" HTML or XML file under that name), so there are no lines to
+        // copy and nothing is fetched. Stored all the same: a financial link
+        // still gets the original, and the office is told the one fix.
+        copyProblem = XLS_COPY_PROBLEM;
+      } else if (kind === 'xlsx' || kind === 'csv') {
+        // One read per user at a time, shared with the extract door and taken
+        // before the storage fetch; given back as soon as the read is done.
+        const release = takeFileReadSlot(req, orgId);
+        if (!release) return res.status(429).json({ error: FILE_READ_BUSY });
+        let result;
+        try {
+          // Required here, not at the top: exceljs and the storage backend are
+          // heavy, and a throw loading either must fail this request only.
+          const { storage } = require('../storage');
+          const { extractMaterials } = require('../services/materials-extract');
+          // An arrow, not storage.getBuffer bare: the R2 backend's getBuffer
+          // reads this.client and loses its `this` when handed around.
+          result = await extractMaterials({
+            att,
+            getBuffer: (key) => storage.getBuffer(key),
+            orgId,
+            beforeAi: lazyAiGate(req, res),
+          });
+        } finally {
+          release();
+        }
+        // A limiter answered 429 inside beforeAi. Nothing is stored, and
+        // writing again would throw.
+        if (res.headersSent) return;
+        // A limiter that FAILED rather than refused (a store error passed to
+        // next) is still "try again later" — not a choice stored with a
+        // problem the office would read as the file's fault.
+        if (result && result.ok !== true && result.code === 'rate_limited') {
+          return res.status(429).json({ error: result.error || 'Too many requests — please wait a moment and try again.' });
+        }
+        const made = copyFromExtraction(result);
+        copy = made.copy;
+        copyProblem = made.problem;
       }
       chosen = {
         attachment_id: att.id,
         filename: att.filename == null ? '' : String(att.filename),
         kind: kind,
-        has_prices: hasPrices === true ? true : (hasPrices === false ? false : null),
         set_at: new Date().toISOString(),
         set_by: (req.user && req.user.id) || null,
+        copy: copy,
+        copy_problem: copyProblem,
       };
     }
 

@@ -14,7 +14,9 @@
 //   - look-alikes      the same name in Cyrillic/Greek letters, 0/1/3 for
 //                      o/l/e, another script's digits, or with hidden filler
 //                      letters and blank symbols (U+3164, U+2800) that a
-//                      format-character strip keeps
+//                      format-character strip keeps; a letter from another
+//                      alphabet inside a Latin word, or a symbol, modifier
+//                      letter or stray mark standing in for a letter
 // and pins the Reply-To validator and the org-predicated address lookups
 // (a Reply-To is a users row re-read FRESH and predicated on the org being
 // mailed — never the JWT's email, never a platform admin acting as a tenant).
@@ -230,7 +232,9 @@ describe('orgNameProblem / cleanOrgName — look-alikes and hidden fillers', () 
     'Jos' + cp(0x00E9) + "'s Painting",
     '86 Roofing Co',
     'Projects & Builders 86',
-    'Joe' + cp(0x2615, 0xFE0F) + ' Coffee Roofing',                     // an emoji with its variation selector
+    // An emoji with its variation selector, standing apart from the letters
+    // (attached to a word it is refused: see the third-round tests below).
+    'Joe ' + cp(0x2615, 0xFE0F) + ' Coffee Roofing',
   ])('an ordinary company name still saves and brands: %s', (name) => {
     expect(sender.orgNameProblem(name)).toBeNull();
     expect(sender.cleanOrgName(name)).toBe(name);
@@ -249,7 +253,232 @@ describe('orgNameProblem / cleanOrgName — look-alikes and hidden fillers', () 
       'AG' + cp(0x3164) + 'Exteriors',
       '12345',
       'Pr0ject 86',
+      'AG Ext' + cp(0x0435) + 'riors',
+      'AG Ext' + cp(0x20AC) + 'riors',
     ].forEach((name) => expect(sender.orgNameProblem(name)).toMatch(/^name /));
+  });
+});
+
+// ── the third round: one alphabet per word, nothing odd inside a word ────
+//
+// WHAT WAS WRONG
+// The skeleton compared names against a hand-built look-alike table, and a
+// review still beat it one character at a time. Every name in STILL_BRANDED
+// saved and went out as "<name> via Project 86":
+//   - a letter from another alphabet the table did not list (Myanmar, Tifinagh,
+//     Malayalam, Oriya, Coptic, Deseret, Carian, ...) inside a Latin word;
+//   - a symbol standing in for a letter (a white circle, a euro sign, a down
+//     tack): the skeleton squashed it out, taking the letter's place with it;
+//   - a spacing mark (a Telugu anusvara for the o) or a modifier letter (a
+//     modifier apostrophe, a tatweel), stripped or kept in a way that broke
+//     the match;
+//   - Latin letters the table did not list (r with fishhook, barred o).
+//
+// WHAT IS NOW HELD
+// Three layers, each able to refuse on its own, and the message names the
+// FIRST that did (layers 1 and 2 run before layer 3):
+//   alphabets     every character of a word that belongs to a script shares
+//                 one (Japanese and Korean count their Han with their kana /
+//                 Hangul);
+//   inside a word no symbol but "+", no enclosing mark, no modifier letter or
+//                 spacing mark of no particular script, no Latin modifier
+//                 letter, no mark with no letter to sit on;
+//   platform name the skeleton, its table extended, plus one run of
+//                 punctuation or symbols allowed to stand for one letter.
+// The layer column below is what pins each layer: drop the alphabet rule and
+// the "alphabets" rows fall through to the table and change their message;
+// drop the inside-a-word rule and the "inside a word" rows do the same.
+const LAYER = {
+  alphabets: /^name mixes lookalike letters from different alphabets$/,
+  word: /^name cannot have symbols or stray marks inside a word/,
+  platform: /^name cannot include "Project 86"/,
+};
+
+const STILL_BRANDED = [
+  // [label, name, the layer that must refuse it]
+  ['a euro sign for the e', 'Proj' + cp(0x20AC) + 'ct 86 Security', 'word'],
+  ['a cent sign for the c', 'Proje' + cp(0x00A2) + 't 86 Security', 'word'],
+  ['a white circle for the o', 'Pr' + cp(0x25CB) + 'ject 86 Security', 'word'],
+  ['a white bullet for the o', 'Pr' + cp(0x25E6) + 'ject 86 Security', 'word'],
+  ['a ring operator for the o', 'Pr' + cp(0x2218) + 'ject 86 Security', 'word'],
+  ['an APL rho for the P', cp(0x2374) + 'roject 86 Security', 'word'],
+  ['a down tack for the T', 'PROJEC' + cp(0x22A4) + ' 86', 'word'],
+  ['a modifier-letter apostrophe inside the word', 'Pro' + cp(0x02BC) + 'ject 86', 'word'],
+  ['a modifier vertical line before the 86', 'Project ' + cp(0x02C8) + '86', 'word'],
+  ['an Oriya visarga (no letter to sit on) for the 8', 'Project ' + cp(0x0B03) + '6', 'word'],
+  ['a negative squared P emoji', cp(0x1F17F, 0xFE0F) + 'roject 86', 'word'],
+  ['a Telugu anusvara for the o', 'Pr' + cp(0x0C02) + 'ject 86 Security', 'alphabets'],
+  ['a Sinhala anusvara for the o', 'Pr' + cp(0x0D82) + 'ject 86', 'alphabets'],
+  ['an Arabic tatweel between the words', 'Project' + cp(0x0640) + '86', 'alphabets'],
+  ['a Coptic capital Tau', 'PROJEC' + cp(0x2CA6) + ' 86', 'alphabets'],
+  ['a Cyrillic er with tick', cp(0x048F) + 'roject 86', 'alphabets'],
+  ['a Myanmar wa for the o', 'Pr' + cp(0x101D) + 'ject 86', 'alphabets'],
+  ['a Tifinagh yar for the o', 'Pr' + cp(0x2D54) + 'ject 86', 'alphabets'],
+  ['a Malayalam tta for the o', 'Pr' + cp(0x0D20) + 'ject 86', 'alphabets'],
+  ['an Oriya tta for the o', 'Pr' + cp(0x0B20) + 'ject 86', 'alphabets'],
+  ['a Georgian U+10FF for the o', 'Pr' + cp(0x10FF) + 'ject 86', 'alphabets'],
+  ['a Hebrew samekh for the o', 'Pr' + cp(0x05E1) + 'ject 86', 'alphabets'],
+  ['an Arabic heh for the o', 'Pr' + cp(0x0647) + 'ject 86', 'alphabets'],
+  ['an ideographic number zero for the o', 'Pr' + cp(0x3007) + 'ject 86', 'alphabets'],
+  ['an Armenian yi for the j', 'Pro' + cp(0x0575) + 'ect 86', 'alphabets'],
+  ['a Cherokee small HU for the r', 'P' + cp(0xAB81) + 'oject 86', 'alphabets'],
+  ['a Tifinagh yaddi for the E', 'PROJ' + cp(0x2D39) + 'CT 86', 'alphabets'],
+  ['a Tai Le letter for the e', 'Proj' + cp(0x1971) + 'ct 86', 'alphabets'],
+  ['a Deseret small chee for the C', 'PROJE' + cp(0x1043D) + 'T 86', 'alphabets'],
+  ['a Deseret capital chee for the C', 'PROJE' + cp(0x10415) + 'T 86', 'alphabets'],
+  ['a Carian letter for the C', 'PROJE' + cp(0x102A2) + 'T 86', 'alphabets'],
+  ['a Greek small-capital rho for the P', cp(0x1D29) + 'roject 86', 'alphabets'],
+  ['a Bopomofo letter for the T', 'Projec' + cp(0x3112) + ' 86', 'alphabets'],
+  // Inside ONE alphabet the word rules have nothing to say: the table does.
+  ['a Latin r with fishhook', 'P' + cp(0x027E) + 'oject 86', 'platform'],
+  ['a Latin r without handle', 'P' + cp(0xAB47) + 'oject 86', 'platform'],
+  ['a Latin sideways o', 'Pr' + cp(0x1D11) + 'ject 86', 'platform'],
+  ['a Latin barred o', 'Pr' + cp(0x0275) + 'ject 86', 'platform'],
+  ['a Latin o with long stroke', 'Pr' + cp(0xA74B) + 'ject 86', 'platform'],
+  ['a Latin j with crossed tail', 'Pro' + cp(0x029D) + 'ect 86', 'platform'],
+  ['a Latin j with stroke', 'Pro' + cp(0x0249) + 'ect 86', 'platform'],
+  ['a Latin c with hook', 'Proje' + cp(0x0188) + 't 86', 'platform'],
+  ['an Old Italic ef for the 8 (one letter, one alphabet)', 'Project ' + cp(0x1031A) + '6', 'platform'],
+  ['a Warang Citi letter for the 6', 'Project 8' + cp(0x118D5), 'platform'],
+  // Punctuation is fine inside a word, so a run of it standing for one letter
+  // is caught by the gap check.
+  ['a pair of parentheses for the o', 'Pr()ject 86 Security', 'platform'],
+  ['a dagger for the t', 'Projec' + cp(0x2020) + ' 86', 'platform'],
+];
+
+describe('orgNameProblem — the third round of look-alikes', () => {
+  const ENV = 'Project 86 <notifications@project86.net>';
+
+  test.each(STILL_BRANDED)('%s: refused at save by the right layer, never brands a send', (_label, name, layer) => {
+    expect(sender.orgNameProblem(name)).toMatch(LAYER[layer]);
+    expect(sender.cleanOrgName(name)).toBeNull();
+    expect(sender.fromHeader(ENV, name)).toBe(ENV);
+  });
+
+  test.each([
+    'AG Exteriors, LLC',
+    "O'Brien & Sons, Inc.",
+    'O' + cp(0x2019) + 'Brien Roofing',                                             // the curly apostrophe
+    cp(0x0141, 0x00F3) + 'd' + cp(0x017A) + ' Roofing',                               // Lodz, Polish
+    cp(0x039A, 0x03AC, 0x03C4, 0x03B9) + ' Construction',                            // Greek
+    cp(0x0421, 0x0442, 0x0440, 0x043E, 0x0439) + ' ' + cp(0x041F, 0x0440, 0x043E, 0x0435, 0x043A, 0x0442),   // Russian
+    cp(0x682A, 0x5F0F, 0x4F1A, 0x793E) + ' ' + cp(0x5C71, 0x7530, 0x5EFA, 0x8A2D),   // Japanese KK
+    cp(0x5C71, 0x7530, 0x5EFA, 0x8A2D) + ' ABC',                                     // Japanese, then Latin
+    'Jos' + cp(0x00E9) + "'s Painting",
+    '3M Roofing',
+    '7-Eleven Supply',
+    'A+ Gutters',
+    '#1 Pavers',
+    'Smith/Jones Build',
+    'Tr1nity Roofing',
+    'Nguy' + cp(0x1EC5) + 'n Construction',                                           // Vietnamese
+    cp(0x00D8) + 'rsted Build',
+    'Joe ' + cp(0x2615, 0xFE0F) + ' Coffee Roofing',                                  // a standalone emoji
+    'Project 68 LLC',
+    'Protect 86 Roofing',
+    'Prospect 86',
+    'Projects 86th St',
+    // Modifier letters and spacing marks that belong to a script other than
+    // Latin are that script's letters: real words need them.
+    cp(0x4F50, 0x3005, 0x6728, 0x5EFA, 0x8A2D),                                       // Japanese iteration mark
+    cp(0x30B9, 0x30FC, 0x30D1, 0x30FC, 0x30DB, 0x30FC, 0x30E0),                       // Japanese long-vowel mark
+    cp(0x0928, 0x093F, 0x0930, 0x094D, 0x092E, 0x093E, 0x0923, 0x093E) + ' ' + cp(0x0915, 0x0902, 0x092A, 0x0928, 0x0940),   // Hindi vowel signs
+    cp(0x0B95, 0x0B9F, 0x0BCD, 0x0B9F, 0x0BC1, 0x0BAE, 0x0BBE, 0x0BA9, 0x0BAE, 0x0BCD),   // Tamil vowel signs
+    cp(0x0E01, 0x0E23, 0x0E38, 0x0E07, 0x0E40, 0x0E17, 0x0E1E, 0x0E2F, 0x0E46),       // Thai, with its repetition mark
+    cp(0x5927, 0x97D3) + cp(0xAC74, 0xC124),                                          // Korean: Han and Hangul in one word
+    cp(0x05D1, 0x05E2, 0x05F4, 0x05DE),                                               // Hebrew gershayim ("Ltd.")
+    cp(0x0645, 0x0642, 0x0627, 0x0648, 0x0644, 0x0627, 0x062A),                       // Arabic
+  ])('a real company name passes all three layers: %s', (name) => {
+    expect(sender.orgNameProblem(name)).toBeNull();
+    expect(sender.cleanOrgName(name)).toBe(name);
+    expect(sender.fromHeader(ENV, name)).toBe('"' + name + ' via Project 86" <notifications@project86.net>');
+  });
+
+  test('the alphabet rule refuses on its own, on a name that spells nothing', () => {
+    [
+      'AG Ext' + cp(0x0435) + 'riors',                     // a Cyrillic e
+      'Smith Roo' + cp(0x101D) + 'fing',                    // a Myanmar wa
+      'Acme ' + cp(0x03A1) + 'ainting',                     // a Greek capital rho
+      'Lodge' + cp(0x2CA6) + ' Builders',                   // a Coptic Tau
+    ].forEach((name) => {
+      expect(sender.orgNameProblem(name)).toMatch(LAYER.alphabets);
+      expect(sender.cleanOrgName(name)).toBeNull();
+    });
+  });
+
+  test('the alphabet rule is per word: Latin with Japanese or Korean needs a space between them', () => {
+    expect(sender.orgNameProblem('ABC' + cp(0x5EFA, 0x8A2D))).toMatch(LAYER.alphabets);
+    expect(sender.orgNameProblem('ABC ' + cp(0x5EFA, 0x8A2D))).toBeNull();
+    expect(sender.orgNameProblem('LG' + cp(0xC804, 0xC790))).toMatch(LAYER.alphabets);
+    expect(sender.orgNameProblem('LG ' + cp(0xC804, 0xC790))).toBeNull();
+    // Hiragana and Hangul are no group together.
+    expect(sender.orgNameProblem(cp(0x3072, 0xAC74))).toMatch(LAYER.alphabets);
+  });
+
+  test('the inside-a-word rule refuses on its own, on a name that spells nothing', () => {
+    [
+      'AG Ext' + cp(0x20AC) + 'riors',                     // a euro sign
+      'Acme' + cp(0x25CB) + ' Roofing',                     // a white circle at the word's edge
+      'Joe' + cp(0x2615, 0xFE0F) + ' Coffee Roofing',      // an emoji attached to a word
+      'Hawai' + cp(0x02BB) + 'i Roofing',                   // a modifier letter of no script (the okina)
+      'Acme ' + cp(0x0B03) + 'Roofing',                     // a spacing mark with no letter to sit on
+      'Acme' + cp(0x20DD) + ' Roofing',                     // an enclosing circle
+      'AG<X> Roofing',                                      // "<" is a symbol too (send time blanks it)
+    ].forEach((name) => {
+      expect(sender.orgNameProblem(name)).toMatch(LAYER.word);
+    });
+  });
+
+  test('ordinary punctuation and a lone symbol between words are not inside a word', () => {
+    [
+      'AT&T Roofing', 'Smith, Jones & Co.', 'Roofing (USA)', 'C++ Builders',
+      'Acme | Roofing', 'Acme ' + cp(0x2014) + ' Roofing', 'Acme Roofing: Commercial',
+    ].forEach((name) => expect(sender.orgNameProblem(name)).toBeNull());
+  });
+
+  test('the skeleton folds symbols and spacing marks to their letter and squashes modifier letters', () => {
+    expect(sender.skeleton('Pr' + cp(0x25CB) + 'ject 86')).toBe('project86');
+    expect(sender.skeleton('Proj' + cp(0x20AC) + 'ct 86')).toBe('project86');
+    expect(sender.skeleton('Pr' + cp(0x0C02) + 'ject 86')).toBe('project86');
+    expect(sender.skeleton('PROJEC' + cp(0x2CA6) + ' 86')).toBe('project86');
+    expect(sender.skeleton('Pro' + cp(0x02BC) + 'ject 86')).toBe('project86');
+    expect(sender.skeleton('Project ' + cp(0x1031A) + cp(0x118D5))).toBe('project86');
+  });
+
+  test('the gap check takes ONE run for ONE letter, and never refuses an ordinary neighbour', () => {
+    expect(sender.orgNameProblem('Pro(j)ect 86')).toMatch(LAYER.platform);     // squashed straight through
+    expect(sender.orgNameProblem('P-o-e-t 86')).toBeNull();                     // three gaps are not a spelling
+    expect(sender.orgNameProblem('Projects & Builders 86')).toBeNull();
+    expect(sender.orgNameProblem('Pro-Jet 86 Roofing')).toBeNull();
+  });
+
+  test('every letter, mark and number of this runtime is neutral or in a compiled script', () => {
+    // The list is spelled by hand; a script it misses would turn every letter
+    // of that script into one "Unknown" alphabet. Check it against the
+    // runtime's own Unicode data rather than take it on trust.
+    const names = sender._SCRIPT_NAMES;
+    ['Latin', 'Greek', 'Cyrillic', 'Han', 'Hiragana', 'Katakana', 'Hangul', 'Arabic', 'Devanagari']
+      .forEach((n) => expect(names).toContain(n));
+    const union = new RegExp('[' + names.concat(['Common', 'Inherited'])
+      .map((n) => '\\p{Script_Extensions=' + n + '}').join('') + ']', 'u');
+    const missed = [];
+    for (let c = 0; c < 0x110000; c++) {
+      if (c >= 0xD800 && c <= 0xDFFF) continue;
+      const ch = String.fromCodePoint(c);
+      if (/[\p{L}\p{M}\p{N}]/u.test(ch) && !union.test(ch)) missed.push(c.toString(16));
+    }
+    expect(missed).toEqual([]);
+  });
+
+  test('long names of never-seen characters are judged quickly, with no cache to lean on', () => {
+    const started = Date.now();
+    for (let i = 0; i < 50; i++) {
+      // 200 different CJK Extension B ideographs a name, 10,000 in all, so the
+      // cache never helps within the run.
+      const name = Array.from({ length: 200 }, (_x, j) => cp(0x20000 + i * 200 + j)).join('');
+      expect(sender.orgNameProblem(name)).toBeNull();
+    }
+    expect(Date.now() - started).toBeLessThan(10000);
   });
 });
 

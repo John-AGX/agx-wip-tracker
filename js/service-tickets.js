@@ -755,16 +755,23 @@
   // ── Takeoff on the crew link ─────────────────────────────────────────
   // The PM picks ONE file already on the job / lead / estimate for the crew
   // link to show. What is stored is a small record — attachment id, name,
-  // kind and whether the file has price columns — never a URL: the crew opens
-  // it through the share token, and the server re-proves the file belongs to
-  // the ticket's parents every time. has_prices decides where it shows: a
-  // spreadsheet with price columns only on links sent with financial details
-  // (John's rule: no money on a work order), a clean one everywhere, and a PDF
-  // or photo — which cannot be checked — everywhere, after the office is
-  // warned. An old .xls cannot be checked either, but it is a spreadsheet and
-  // may well carry a Unit Cost column, so it is not offered at all: the office
-  // saves it as .xlsx first. A spreadsheet stored with no verdict (a row from
-  // before that rule) shows only on links sent with financial details.
+  // kind, and for a spreadsheet the price-free copy the server made from it —
+  // never a URL: the crew opens it through the share token, and the server
+  // re-proves the file belongs to the ticket's parents every time.
+  //
+  // Where it shows (John's rule: no money on a work order). A spreadsheet is
+  // NEVER sent as the original file on a link that hides financials (the
+  // default). The server reads it with the same extractor that fills the
+  // materials list and keeps only material, quantity and unit (copy.lines);
+  // those links get a generated .xlsx of just that. Links sent with financial
+  // details get the original. When no copy could be made (copy null, with
+  // copy_problem saying why — an old .xls, a sheet the reader cannot follow)
+  // the file shows only on links sent with financial details. Nothing here
+  // tries to spot price columns any more; the copy is built from what the
+  // reader keeps, so there is no guess to get wrong.
+  //
+  // A PDF or photo cannot be turned into a copy, so it shows as it is on
+  // every link, after the office is warned.
   function crewTakeoffOf(t) {
     var ct = t && t.crew_takeoff;
     // JSONB arrives parsed from pg, but a text column in a test harness (or a
@@ -774,33 +781,60 @@
     return ct && typeof ct === 'object' && ct.attachment_id != null ? ct : null;
   }
 
-  var CREW_STATUS = {
-    priced: 'This file has price columns, so it only shows on crew links sent with financial details. ' +
-      'Links that hide financials (the default) don\'t show it.',
-    clean: 'The crew link shows this file.',
-    unreadable: 'This file could not be checked for prices, so links that hide financials (the default) don\'t show it.',
-    unchecked: 'The crew link shows this whole file. PDFs and photos can\'t be checked for prices — make sure it has none.'
-  };
-  // What the office does about an unreadable file, by kind.
-  var CREW_UNREADABLE_NEXT = {
-    xls: ' Save it as .xlsx to the job\'s Files and pick that one.',
-    xlsx: ' Pick it again to check it.',
-    csv: ' Pick it again to check it.'
-  };
-  // The kinds the server reads cells from. A missing verdict on one of these
-  // never means "a PDF or photo": the server keeps such a row off every link
-  // that hides financials (crewTakeoffFor), so the copy must not say it shows.
+  // The kinds the server makes a price-free copy from. A record of one of
+  // these never reads as "shows the whole file": without a usable copy the
+  // server keeps it off every link that hides financials (crewTakeoffFor).
   var CREW_SHEET_KINDS = { xlsx: 1, xls: 1, csv: 1 };
 
-  // Which status a stored record reads as. Only an explicit false is clean,
-  // and "shows everywhere, unchecked" is only ever a PDF or photo; anything
-  // else without a true/false verdict (an .xls, a failed read stored by an
-  // older build, a hand-written row) is the narrower "could not be checked".
+  // The lines of a stored copy, or null when there is no usable one. The
+  // server serves the copy only when copy.lines is a non-empty list, so an
+  // empty or malformed copy reads exactly like no copy.
+  function crewCopyLines(ct) {
+    var copy = ct && ct.copy;
+    return copy && typeof copy === 'object' && Array.isArray(copy.lines) && copy.lines.length
+      ? copy.lines : null;
+  }
+
+  // Which status a stored record reads as:
+  //   copy      — a spreadsheet with a price-free copy: default links get the
+  //               copy, links with financial details get the original.
+  //   original  — a spreadsheet no copy could be made from: only links sent
+  //               with financial details show it.
+  //   repick    — a spreadsheet stored before copies existed (no copy key at
+  //               all; those rows carried the old has_prices verdict). The
+  //               server treats it as "no copy", and picking it again makes one.
+  //   unchecked — a PDF or photo: every link shows the whole file.
+  // Anything that is not a spreadsheet kind keeps the whole-file warning — the
+  // wider claim, so the office is never told a file is safer than it is.
   function crewTone(ct) {
-    if (ct.has_prices === true) return 'priced';
-    if (ct.has_prices === false) return 'clean';
-    if (ct.has_prices === null && !CREW_SHEET_KINDS[ct.kind]) return 'unchecked';
-    return 'unreadable';
+    if (!CREW_SHEET_KINDS[ct.kind]) return 'unchecked';
+    if (crewCopyLines(ct)) return 'copy';
+    if (!Object.prototype.hasOwnProperty.call(ct, 'copy')) return 'repick';
+    return 'original';
+  }
+
+  // The status line under the file: the PM's only statement of WHICH links
+  // show it and in what form. copy_problem is the server's own plain sentence;
+  // it sits in brackets mid-sentence, so its closing full stop is dropped.
+  function crewStatusText(ct, canEdit) {
+    var tone = crewTone(ct);
+    if (tone === 'copy') {
+      return 'Links that hide financials (the default) get a price-free copy — material, quantity and unit only (' +
+        plural(crewCopyLines(ct).length, 'line') + '). Links sent with financial details get the original file.';
+    }
+    if (tone === 'original') {
+      var why = typeof ct.copy_problem === 'string' ? ct.copy_problem.trim().replace(/\.+$/, '') : '';
+      return 'No price-free copy could be made' + (why ? ' (' + why + ')' : '') +
+        ', so this file only shows on links sent with financial details.';
+    }
+    if (tone === 'repick') {
+      // Only someone who can edit the ticket can pick it again; everyone else
+      // is told what the link does with it meanwhile.
+      return canEdit
+        ? 'Pick this file again to make a price-free copy for the crew link.'
+        : 'This file only shows on links sent with financial details until the office picks it again.';
+    }
+    return 'The crew link shows this whole file. PDFs and photos can\'t be checked for prices — make sure it has none.';
   }
 
   function crewTakeoffHTML(t, canEdit) {
@@ -815,7 +849,7 @@
         : '';
     }
     var tone = crewTone(ct);
-    var status = CREW_STATUS[tone] + (tone === 'unreadable' && canEdit ? (CREW_UNREADABLE_NEXT[ct.kind] || '') : '');
+    var status = crewStatusText(ct, canEdit);
     return '<div class="p86-wo-crew is-' + tone + '">' +
       '<div class="p86-wo-crew-lbl">Takeoff on the crew link</div>' +
       '<div class="p86-wo-crew-file">' +
@@ -1184,29 +1218,33 @@
     return n + ' ' + (n === 1 ? one : (many || one + 's'));
   }
 
-  // An old .xls is never pickable, in either mode. The reader takes .xlsx
-  // only, so it cannot fill the editor; and the price check cannot read one
-  // either, so on the crew link it would be a spreadsheet nobody checked for a
-  // Unit Cost column (the server refuses it too). Saving it as .xlsx fixes
-  // both, and the row says so.
-  function pickable(f) {
-    return !!f && f.kind !== 'xls';
+  // An old .xls cannot be read — the reader takes .xlsx only — so it is not
+  // pickable for filling the editor, and its row says to save it as .xlsx.
+  // On the crew link it IS pickable: nothing is read to put it there, and
+  // the server simply makes no price-free copy from it, so it shows only on
+  // links sent with financial details. The row says that before the pick.
+  function pickable(f, crew) {
+    return !!f && (crew === true || f.kind !== 'xls');
   }
 
   // crewId: in crew mode, the attachment already on the crew link, so its row
   // says so.
   function pickRowHTML(f, idx, crew, crewId) {
-    var legacy = !pickable(f);
+    var legacy = !pickable(f, crew);
+    // Crew mode only: a spreadsheet no price-free copy can come from.
+    var narrow = crew && f.kind === 'xls';
     var current = crew && crewId != null && String(crewId) === String(f.id);
     var meta = [f.folder, fmtBytes(f.size_bytes), fmtDate(f.uploaded_at)].filter(Boolean).join(' · ');
     return '<button type="button" class="p86-wo-pick-row' + (legacy ? ' is-legacy' : '') +
-        (current ? ' is-current' : '') + '" data-idx="' + idx + '"' +
+        (narrow ? ' is-narrow' : '') + (current ? ' is-current' : '') + '" data-idx="' + idx + '"' +
         (legacy ? ' disabled' : '') + '>' +
       '<span class="p86-wo-pick-kind k-' + esc(f.kind) + '">' + esc(PICK_KIND[f.kind] || f.kind) + '</span>' +
       '<span class="p86-wo-pick-main">' +
         '<span class="p86-wo-pick-name">' + esc(f.filename || 'Untitled file') + '</span>' +
         '<span class="p86-wo-pick-meta">' +
-          (legacy ? (crew ? 'Save as .xlsx to put it on the crew link' : 'Save as .xlsx to read it') : esc(meta)) +
+          (legacy ? 'Save as .xlsx to read it'
+            : narrow ? 'Only on links sent with financial details (no price-free copy from .xls)'
+            : esc(meta)) +
         '</span>' +
       '</span>' +
       '<span class="p86-wo-pick-state" aria-hidden="true">' + (current ? 'On the link' : '') + '</span>' +
@@ -1238,8 +1276,9 @@
         '<div class="p86-st-modal-head" id="p86StTakeoffPickHead">' +
           (crew ? 'Show a takeoff on the crew link' : 'Pick a takeoff') + '</div>' +
         (crew
-          ? '<div class="p86-wo-pick-note">The crew opens the file itself. Spreadsheets with price columns ' +
-              'only show on links sent with financial details.</div>'
+          ? '<div class="p86-wo-pick-note">Links that hide financials (the default) get a price-free copy of a ' +
+              'spreadsheet — material, quantity and unit only. Links sent with financial details get the original. ' +
+              'PDFs and photos show as they are.</div>'
           : '<div class="p86-wo-pick-note">Spreadsheets are read directly. PDFs and photos are read by AI, ' +
               'so check every line. Prices are never copied.</div>') +
         '<div class="p86-wo-pick-err" role="alert" hidden></div>' +
@@ -1331,7 +1370,7 @@
       var btn = e.target.closest('.p86-wo-pick-row');
       if (!btn || btn.disabled || busy) return;
       var f = files[Number(btn.getAttribute('data-idx'))];
-      if (!pickable(f)) return;
+      if (!pickable(f, crew)) return;
       busy = true;
       showErr('');
       var allRows = body.querySelectorAll('.p86-wo-pick-row');
@@ -1346,7 +1385,7 @@
         busy = false;
         Array.prototype.forEach.call(allRows, function (b) {
           var ff = files[Number(b.getAttribute('data-idx'))];
-          b.disabled = !pickable(ff);
+          b.disabled = !pickable(ff, crew);
         });
         btn.classList.remove('is-reading');
         btn.removeAttribute('aria-busy');
@@ -1354,9 +1393,11 @@
       }
 
       if (crew) {
-        // A PDF or photo is asked about BEFORE anything is saved: the server
-        // cannot look inside it for prices, so it would go out on every link.
-        // The row reads "Saving…" only once the PM has said yes.
+        // A PDF or photo is asked about BEFORE anything is saved: no
+        // price-free copy can be made from one, so it goes out as it is on
+        // every link. A spreadsheet needs no question — links that hide
+        // financials only ever get its copy, or nothing. The row reads
+        // "Saving…" only once the PM has said yes.
         asking = f.kind === 'pdf' || f.kind === 'image';
         confirmWholeFile(f).then(function (yes) {
           asking = false;
@@ -1537,20 +1578,13 @@
       ' <span class="p86-wo-mat-note-next">Review, then Save materials.</span>';
   }
 
-  // The one question before a file nobody can check goes to the crew. A
-  // spreadsheet or CSV is checked by the server for price columns; a PDF or a
-  // photo cannot be, so it would show on every link, including the ones that
-  // hide financials. Resolves true to go ahead. Never rejects.
-  //
-  // An .xls resolves false with no question: it cannot be checked, and it is
-  // a spreadsheet, so no answer the PM gives makes it safe for a link that
-  // hides financials. The picker never offers one; this covers any other path
-  // that hands one in.
+  // The one question before a whole file goes to the crew. A spreadsheet or
+  // CSV (an old .xls included) never needs it: links that hide financials get
+  // only the server's price-free copy of it, or nothing when none could be
+  // made. A PDF or a photo has no copy, so it would show as it is on every
+  // link, including the ones that hide financials. Resolves true to go ahead.
+  // Never rejects.
   function confirmWholeFile(f) {
-    if (f && !pickable(f)) {
-      toast('Save ' + (f.filename || 'that file') + ' as .xlsx to put it on the crew link.', 'error');
-      return Promise.resolve(false);
-    }
     if (!f || (f.kind !== 'pdf' && f.kind !== 'image')) return Promise.resolve(true);
     if (typeof window.p86Confirm !== 'function') {
       // No dialog helper loaded: refuse rather than send an unchecked file
@@ -1573,12 +1607,14 @@
     return crewTakeoffOf(res && res.ticket);
   }
 
-  // Says "shown" only for a verdict that shows it on a default link; anything
-  // narrower says where it shows instead.
+  // Says in what form, and on which links, the saved file shows. A plain
+  // "shown" is only ever a PDF or photo, which really does show as it is.
   function crewSavedMessage(ct) {
     var tone = ct ? crewTone(ct) : null;
-    if (tone === 'priced') return 'Saved — it shows only on links sent with financial details';
-    if (tone === 'unreadable') return 'Saved — it could not be checked for prices, so it shows only on links sent with financial details';
+    if (tone === 'copy') return 'Takeoff shown on the crew link — default links get a price-free copy';
+    if (tone === 'original' || tone === 'repick') {
+      return 'Takeoff shown on the crew link — only on links sent with financial details';
+    }
     return 'Takeoff shown on the crew link';
   }
 

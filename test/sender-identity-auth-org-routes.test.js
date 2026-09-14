@@ -18,7 +18,8 @@
 //   sendForEvent keeps scope-'system' mail on the platform sender.
 //   Organization names (create, rename, and an invitation's org_name, which
 //   becomes the name at accept) refuse control characters, invisible format
-//   characters and the platform's own name, with a 400 — existing trim and the
+//   characters, a word that mixes alphabets or hides a symbol or stray mark,
+//   and the platform's own name, with a 400 — existing trim and the
 //   200-character cap unchanged.
 //
 // Driven through the real routers and real auth over the pg-sqlite engine.
@@ -79,6 +80,15 @@ const DISGUISED = [
   ['a Hangul filler inside the platform name', 'P' + cp(0x3164) + 'roject 86'],
   ['nothing but a Hangul filler', cp(0x3164)],
   ['ACME padded with 55 blank Braille patterns', 'ACME' + cp(0x2800).repeat(55)],
+  // The third round: names the look-alike table alone still let through. One
+  // per layer of the rule (see test/email-sender.test.js for the full list).
+  ['a Myanmar wa for the o (two alphabets in one word)', 'Pr' + cp(0x101D) + 'ject 86'],
+  ['a Coptic Tau for the T (two alphabets in one word)', 'PROJEC' + cp(0x2CA6) + ' 86'],
+  ['a white circle for the o (a symbol inside a word)', 'Pr' + cp(0x25CB) + 'ject 86 Security'],
+  ['a modifier-letter apostrophe inside the word', 'Pro' + cp(0x02BC) + 'ject 86'],
+  ['a Latin r with fishhook (the table)', 'P' + cp(0x027E) + 'oject 86'],
+  ['a pair of parentheses for the o (the gap check)', 'Pr()ject 86 Security'],
+  ['a Cyrillic e in a name that spells nothing', 'AG Ext' + cp(0x0435) + 'riors'],
 ];
 
 const ADMIN_A = { id: 10, email: 'admin@agx.test', name: 'Ada Admin', role: 'admin', organization_id: 1 };
@@ -270,6 +280,18 @@ describe('POST /api/admin/organizations/invites — platform onboarding', () => 
     expect(engine.all('SELECT * FROM org_invitations')).toHaveLength(0);
     expect(mail()).toHaveLength(0);
   });
+
+  test('the new word-rule messages reach the system admin with the org_name prefix', async () => {
+    const mixed = await call('POST', '/api/admin/organizations/invites', SYS,
+      { email: 'founder@newco.test', org_name: 'AG Ext' + cp(0x0435) + 'riors' });
+    expect(mixed.status).toBe(400);
+    expect(mixed.body.error).toBe('org_name mixes lookalike letters from different alphabets');
+    const symbol = await call('POST', '/api/admin/organizations/invites', SYS,
+      { email: 'founder@newco.test', org_name: 'AG Ext' + cp(0x20AC) + 'riors' });
+    expect(symbol.status).toBe(400);
+    expect(symbol.body.error).toMatch(/^org_name cannot have symbols or stray marks inside a word/);
+    expect(engine.all('SELECT * FROM org_invitations')).toHaveLength(0);
+  });
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -312,6 +334,20 @@ describe('an organization name must be usable as a sender name', () => {
     cp(0x039A, 0x03AC, 0x03C4, 0x03B9) + ' Construction',
     cp(0x682A, 0x5F0F, 0x4F1A, 0x793E) + ' ' + cp(0x5C71, 0x7530, 0x5EFA, 0x8A2D),
     'Jos' + cp(0x00E9) + "'s Painting",
+    // One alphabet per word, and ordinary punctuation inside a word: the
+    // third-round word rules must not refuse these.
+    cp(0x0421, 0x0442, 0x0440, 0x043E, 0x0439) + ' ' + cp(0x041F, 0x0440, 0x043E, 0x0435, 0x043A, 0x0442),
+    cp(0x5C71, 0x7530, 0x5EFA, 0x8A2D) + ' ABC',
+    '3M Roofing',
+    '7-Eleven Supply',
+    'A+ Gutters',
+    '#1 Pavers',
+    'Smith/Jones Build',
+    'Tr1nity Roofing',
+    'Nguy' + cp(0x1EC5) + 'n Construction',
+    cp(0x00D8) + 'rsted Build',
+    'Joe ' + cp(0x2615, 0xFE0F) + ' Coffee Roofing',
+    cp(0x4F50, 0x3005, 0x6728, 0x5EFA, 0x8A2D),          // a Japanese iteration mark (a modifier letter)
   ])('an ordinary name saves: %s', async (name) => {
     const r = await call('PUT', '/api/admin/organizations/1', ADMIN_A, { name: '  ' + name + '  ' });
     expect(r.status).toBe(200);
