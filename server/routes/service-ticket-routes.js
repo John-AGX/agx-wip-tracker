@@ -929,13 +929,46 @@ router.post('/:id/materials/extract', requireAuth, requireOrgId, async (req, res
 // saying why in a plain sentence: a link that hides financials shows nothing
 // for it, a financial link still gets the original.
 //
-// A PDF or photo is not read (copy null, copy_problem null). It is shown on
-// every link exactly as before — the office confirms it holds no prices before
-// choosing it. A file over the crew door's size cap is refused for every kind.
+// A PDF or photo is not read for lines (copy null, copy_problem null). It is
+// shown on every link exactly as before — the office confirms it holds no
+// prices before choosing it. But its BYTES are read, to prove the name: see
+// kindFromBytes below. A file over the crew door's size cap is refused for
+// every kind.
 const XLS_COPY_PROBLEM = 'Old .xls files can\'t be read — save it as .xlsx for a price-free copy.';
 const COPY_NO_LINES = 'No material lines could be read from that file, so links that hide financial details will not show it.';
+// A file named as a PDF or photo whose bytes are neither what its name says
+// nor a spreadsheet (kindFromBytes answered 'unknown'). Nothing can be copied
+// from it and nothing vouches for its bytes, so only a financial link shows it.
+const COPY_NOT_READABLE = 'This file isn\'t a readable PDF, photo or spreadsheet, so it only shows on links sent with financial details.';
 // A plain sentence, not a document: the extractor's refusals are one line.
 const COPY_PROBLEM_MAX = 500;
+
+// WHAT A "PDF" OR "PHOTO" REALLY IS (review, 2026-09-14). takeoffKind reads the
+// NAME first, and a name is only a claim. A priced workbook can reach a job as
+// "Smith bid.pdf" or "Smith bid.jpg": an inbound email attachment keeps the
+// sender's filename and runs no claimed-versus-sniffed check, and an upload
+// that claims application/octet-stream passes the family check. Trusted by
+// name, that file was stored as a PDF, never opened, and handed to every link
+// as the original, Unit Price column and all. The price check that used to
+// catch it sniffed the bytes; this puts the bytes back in charge.
+//
+// So for a PDF or photo by name the PUT reads the file (under the same
+// one-read-per-user slot as a spreadsheet) and asks materials-extract's
+// sniffKind — the magic-byte rule the extractor itself reads by — what it is:
+//   * the kind its name says (a PDF that is a PDF, a photo that is a photo):
+//     the name stands and nothing is copied, as before;
+//   * a spreadsheet (xlsx, xls, csv): stored as THAT kind, so every
+//     spreadsheet rule applies — the price-free copy for xlsx and csv, the one
+//     fix for an old .xls — and the share side never sees a "pdf";
+//   * anything else (an HTML page, a zip, a CSV under a photo's name, or a
+//     photo under a PDF's name, which the crew door could not vouch for
+//     either): 'unknown', which no link that hides financials shows.
+// Returns 'pdf' | 'image' | 'xlsx' | 'xls' | 'csv' | 'unknown'.
+function kindFromBytes(nameKind, byteKind) {
+  if (byteKind === nameKind) return nameKind;
+  if (byteKind === 'xlsx' || byteKind === 'xls' || byteKind === 'csv') return byteKind;
+  return 'unknown';
+}
 
 // What extractMaterials answered, as crew_takeoff's { copy, problem }. The
 // lines go through normalizeMaterials — the shape the Materials PATCH stores,
@@ -985,7 +1018,9 @@ router.put('/:id/crew-takeoff', requireAuth, requireOrgId, async (req, res) => {
       // file are all this one 404 (loadTicketFile answers null for each).
       const att = await loadTicketFile(ticket, req.user, orgId, rawId);
       if (!att) return res.status(404).json({ error: FILE_NOT_FOUND });
-      const kind = takeoffKind(att.filename, att.mime_type);
+      // By name here; a PDF or photo by name is proved from its bytes below
+      // (kindFromBytes), and may be stored as another kind.
+      let kind = takeoffKind(att.filename, att.mime_type);
       if (!kind) {
         return res.status(422).json({ error: 'That file type cannot be shown on the crew link.' });
       }
@@ -1010,25 +1045,40 @@ router.put('/:id/crew-takeoff', requireAuth, requireOrgId, async (req, res) => {
         // copy and nothing is fetched. Stored all the same: a financial link
         // still gets the original, and the office is told the one fix.
         copyProblem = XLS_COPY_PROBLEM;
-      } else if (kind === 'xlsx' || kind === 'csv') {
+      } else {
         // One read per user at a time, shared with the extract door and taken
-        // before the storage fetch; given back as soon as the read is done.
+        // before the storage fetch; given back as soon as the read is done. A
+        // spreadsheet takes it to be copied, and a PDF or photo by name takes
+        // it to have its bytes proved (kindFromBytes) — ONE slot for both, so a
+        // workbook found behind a PDF's name is copied under the same read.
         const release = takeFileReadSlot(req, orgId);
         if (!release) return res.status(429).json({ error: FILE_READ_BUSY });
-        let result;
+        let result = null;
         try {
           // Required here, not at the top: exceljs and the storage backend are
           // heavy, and a throw loading either must fail this request only.
           const { storage } = require('../storage');
-          const { extractMaterials } = require('../services/materials-extract');
-          // An arrow, not storage.getBuffer bare: the R2 backend's getBuffer
-          // reads this.client and loses its `this` when handed around.
-          result = await extractMaterials({
-            att,
-            getBuffer: (key) => storage.getBuffer(key),
-            orgId,
-            beforeAi: lazyAiGate(req, res),
-          });
+          const { extractMaterials, sniffKind } = require('../services/materials-extract');
+          // The bytes a PDF or photo by name was proved from. When they turn
+          // out to be a spreadsheet the extractor is handed these same bytes,
+          // so the file is fetched once. A row with no stored object has no
+          // bytes to prove anything, and sniffs as 'unknown'.
+          let held = null;
+          if (kind === 'pdf' || kind === 'image') {
+            held = att.original_key ? await storage.getBuffer(att.original_key) : null;
+            kind = kindFromBytes(kind, sniffKind(held, att.filename, att.mime_type));
+          }
+          // Only a spreadsheet is read for lines. An arrow, not
+          // storage.getBuffer bare: the R2 backend's getBuffer reads
+          // this.client and loses its `this` when handed around.
+          if (kind === 'xlsx' || kind === 'csv') {
+            result = await extractMaterials({
+              att,
+              getBuffer: (key) => (held != null && key === att.original_key ? held : storage.getBuffer(key)),
+              orgId,
+              beforeAi: lazyAiGate(req, res),
+            });
+          }
         } finally {
           release();
         }
@@ -1041,9 +1091,17 @@ router.put('/:id/crew-takeoff', requireAuth, requireOrgId, async (req, res) => {
         if (result && result.ok !== true && result.code === 'rate_limited') {
           return res.status(429).json({ error: result.error || 'Too many requests — please wait a moment and try again.' });
         }
-        const made = copyFromExtraction(result);
-        copy = made.copy;
-        copyProblem = made.problem;
+        if (kind === 'xlsx' || kind === 'csv') {
+          const made = copyFromExtraction(result);
+          copy = made.copy;
+          copyProblem = made.problem;
+        } else if (kind === 'xls') {
+          // An old .xls that arrived under a PDF's or photo's name: the same
+          // one fix as one picked by its own name.
+          copyProblem = XLS_COPY_PROBLEM;
+        } else if (kind === 'unknown') {
+          copyProblem = COPY_NOT_READABLE;
+        }
       }
       chosen = {
         attachment_id: att.id,

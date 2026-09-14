@@ -100,33 +100,46 @@ function parseFromEnv(envFrom) {
 //      company name, one alphabet a word, passes.
 //
 //   2. NO SYMBOLS OR STRAY MARKS INSIDE A WORD. Inside a word (a run holding a
-//      letter, digit or mark) these are refused: any symbol (\p{S}) except
+//      letter, number or mark) these are refused: any symbol (\p{S}) except
 //      "+", any enclosing mark, a modifier letter or spacing mark that belongs
 //      to no particular script, a modifier letter that belongs to Latin (the
-//      modifier apostrophe U+02BC does), and any mark with no letter in front
-//      of it to sit on (an Oriya visarga after a digit draws an 8). Ordinary
-//      company-name punctuation is not a symbol and stays fine: & ' (and the
-//      curly one) . , - / ( ) # and "+" ("A+ Gutters"). A symbol standing on
-//      its own between words, such as an emoji, is not inside a word.
+//      modifier apostrophe U+02BC does), any mark with no letter in front
+//      of it to sit on (an Oriya visarga after a digit draws an 8), any
+//      combining Latin small letter (an o drawn over the r of "Prject"), and
+//      any number that is not a plain decimal digit, that NFKC leaves as it
+//      is, and that belongs to no particular script or to Latin (a dingbat
+//      circled 8, a negative circled 0 for the o, the Kaktovik, Mayan and
+//      Siyaq numerals, the late Roman numeral six). A word made of nothing
+//      but such numbers is still a word, so "Project <dingbat 8> <dingbat 6>"
+//      is refused as well. Ordinary company-name punctuation is not a symbol
+//      and stays fine: & ' (and the curly one) . , - / ( ) # and "+"
+//      ("A+ Gutters"). A symbol standing on its own between words, such as an
+//      emoji, is not inside a word.
 //        Modifier letters and spacing marks that belong to a script OTHER than
 //      Latin stay allowed as letters of that script, because real words need
 //      them: the Japanese long-vowel and iteration marks, the Thai and Khmer
 //      repetition marks, every Devanagari, Bengali and Tamil vowel sign. They
-//      take part in layer 1, so none of them can sit inside a Latin word.
+//      take part in layer 1, so none of them can sit inside a Latin word. The
+//      same goes for numbers of a script other than Latin (the ideographic
+//      zero of a Japanese name, Ethiopic and Tamil numerals).
 //
 //   3. THE PLATFORM NAME, BY SKELETON (the backstop for look-alikes inside
 //      ONE alphabet: the Latin r with fishhook, an all-Cyrillic spelling, a
 //      digit that draws a letter). The skeleton is the idea of Unicode TR39's,
 //      cut down to what a display name needs: hidden characters dropped, NFKC,
 //      accents dropped, each look-alike (letters, symbols and spacing marks
-//      alike) folded to the Latin letter or ASCII digit it passes for, every
-//      decimal digit of any script read as its ASCII value, the digits
-//      0 1 3 4 5 7 read as the letters o l e a s t, and everything but letters
-//      and digits squashed out, modifier letters included. The disguised names
-//      above all come out as "project86...". Squashing a character out cannot
-//      hide a SUBSTITUTE, so a second pass also accepts one run of punctuation
-//      or symbols standing where one letter of the platform name belongs
-//      ("Pr()ject 86").
+//      alike, combining Latin small letters too) folded to the Latin letter
+//      or ASCII digit it passes for, circled and dingbat digits read as their
+//      ASCII value, every decimal digit of any script read as its ASCII value,
+//      the digits 0 1 3 4 5 7 read as the letters o l e a s t, and everything
+//      but letters and digits squashed out, modifier letters included. The
+//      disguised names above all come out as "project86...". Squashing a
+//      character out cannot hide a SUBSTITUTE, so a second pass also accepts
+//      one run of punctuation or symbols standing where one letter of the
+//      platform name belongs ("Pr()ject 86"). A combining Latin small letter
+//      can be a substitute (an o over the r) or a decoration on the very letter
+//      it names (an e over the e), so a name holding one is also judged with
+//      those letters dropped, as it was before they were folded.
 //
 // orgNameProblem is THE rule. The save-time routes (create, rename, invite)
 // call it on what the admin typed; cleanOrgName calls it on the sanitised
@@ -136,12 +149,16 @@ function parseFromEnv(envFrom) {
 //   - multi-character look-alikes ("rn" for "m", "vv" for "w") and plain
 //     respellings ("P86 Security", "Project Eighty-Six") are not caught;
 //   - a look-alike inside ONE alphabet is caught only when layer 3's table
-//     lists it;
+//     lists it (a number of a script other than Latin, standing as a word of
+//     its own, is judged this way too);
 //   - layers 1 and 2 cost some real names their no-space spelling: a word
 //     mixing Latin with Japanese or Korean ("LG<Hangul>", "ABC<Han>") needs a
 //     space between the two, an emoji needs a space before it ("Joe <coffee>
 //     Roofing", not "Joe<coffee> Roofing"), and a Latin modifier letter such
-//     as the Hawaiian okina is refused (the ASCII apostrophe is fine).
+//     as the Hawaiian okina is refused (the ASCII apostrophe is fine). A
+//     degree sign or a vulgar fraction attached to a number ("360<degree>",
+//     "7<one half>", which NFKC writes with a fraction slash) is a symbol
+//     inside a word and is refused the same way.
 // What always holds is the address: every From is the platform's own verified
 // address and ends "via Project 86".
 
@@ -215,6 +232,72 @@ const LOOKALIKE_SOURCES = {
 const LOOKALIKES = new Map();
 Object.keys(LOOKALIKE_SOURCES).forEach((target) => {
   hexList(LOOKALIKE_SOURCES[target]).forEach((cp) => LOOKALIKES.set(String.fromCodePoint(cp), target));
+});
+
+// Combining Latin small letters (U+0363-036F, U+1DCA, U+1DD3-1DF4): a Latin
+// letter drawn small over or under the character before it. An o drawn over
+// the r of "Prject" reads as "Project"; a fold that strips every mark dropped
+// it and left "prject", with no gap to show that a letter had gone. Each one
+// is keyed here by the Latin letter it draws, so the fold turns it into that
+// letter BEFORE the mark strip. The ligatures ae, ao and av go to the letter
+// they are read as when one stands in for a single letter (e, o, v); i goes to
+// l, the class the table above gives it; long s and esh go to s.
+//
+// These are also the characters layer 2 refuses inside a word
+// (COMBINING_LATIN_LETTERS). Neither NFD nor NFKC produces or rewrites any of
+// them, so the set can be tested on the name as typed.
+const COMBINING_LATIN_LETTER_SOURCES = {
+  a: '0363 1DD3 1DE7 1DF2',
+  b: '1DE8 1DE9',
+  c: '0368 1DD7',
+  d: '0369 1DD8 1DD9',
+  e: '0364 1DD4 1DEA',
+  f: '1DEB',
+  g: '1DDA 1DDB',
+  h: '036A',
+  k: '1DDC',
+  l: '0365 1DDD 1DDE 1DEC',
+  m: '036B 1DDF',
+  n: '1DE0 1DE1',
+  o: '0366 1DD5 1DED 1DF3',
+  p: '1DEE',
+  r: '036C 1DCA 1DE2 1DE3',
+  s: '1DE4 1DE5 1DEF',
+  t: '036D',
+  u: '0367 1DF0 1DF4',
+  v: '036E 1DD6',
+  w: '1DF1',
+  x: '036F',
+  z: '1DE6'
+};
+const COMBINING_LATIN_LETTERS = new Set();
+Object.keys(COMBINING_LATIN_LETTER_SOURCES).forEach((target) => {
+  hexList(COMBINING_LATIN_LETTER_SOURCES[target]).forEach((cp) => COMBINING_LATIN_LETTERS.add(cp));
+});
+Object.keys(COMBINING_LATIN_LETTER_SOURCES).forEach((target) => {
+  hexList(COMBINING_LATIN_LETTER_SOURCES[target]).forEach((cp) => LOOKALIKES.set(String.fromCodePoint(cp), target));
+});
+
+// Circled and dingbat digits that NFKC leaves as they are. (The plain circled
+// digits U+2460 and on, and the parenthesized and full-stop digits, NFKC turns
+// into ASCII digits already.) Each run is [first code point, how many, the
+// value of the first]; every character folds to its value in ASCII digits, so
+// "Project <dingbat circled 8><dingbat circled 6>" reads as "project86", and a
+// negative circled zero standing for the o reads as 0 and then, with the other
+// digits, as the letter o. Layer 2 refuses these inside a word; this fold is
+// the backstop.
+const ENCLOSED_DIGIT_RUNS = [
+  [0x2776, 10, 1],   // DINGBAT NEGATIVE CIRCLED DIGIT ONE .. NUMBER TEN
+  [0x2780, 10, 1],   // DINGBAT CIRCLED SANS-SERIF DIGIT ONE .. NUMBER TEN
+  [0x278A, 10, 1],   // DINGBAT NEGATIVE CIRCLED SANS-SERIF DIGIT ONE .. NUMBER TEN
+  [0x24F5, 10, 1],   // DOUBLE CIRCLED DIGIT ONE .. NUMBER TEN
+  [0x24EB, 10, 11],  // NEGATIVE CIRCLED NUMBER ELEVEN .. TWENTY
+  [0x24FF, 1, 0],    // NEGATIVE CIRCLED DIGIT ZERO
+  [0x1F10B, 1, 0],   // DINGBAT CIRCLED SANS-SERIF DIGIT ZERO
+  [0x1F10C, 1, 0]    // DINGBAT NEGATIVE CIRCLED SANS-SERIF DIGIT ZERO
+];
+ENCLOSED_DIGIT_RUNS.forEach(([first, count, value]) => {
+  for (let i = 0; i < count; i++) LOOKALIKES.set(String.fromCodePoint(first + i), String(value + i));
 });
 
 // The digits a reader takes for letters ("Pr0ject", "Proj3ct").
@@ -360,7 +443,22 @@ PLATFORM_KEYS.forEach((k) => {
 // skeleton, or with ONE run of punctuation or symbols standing where one of
 // its letters belongs ("Pr()ject 86", "Projec<dagger> 86"). Each gap is tried
 // on its own, with every other gap squashed out as the skeleton would.
+//
+// A name holding a combining Latin small letter is judged twice: with each
+// folded to the letter it draws ("Pr<combining o>ject" spells "project"), and
+// with each dropped ("Proje<combining e>ct", an e over the e, spells
+// "project" only that way; folded it is "projeect").
 function spellsPlatformName(name) {
+  const s = String(name == null ? '' : name);
+  if (spellsPlatformNameAsFolded(s)) return true;
+  let dropped = '';
+  for (const ch of s) {
+    if (!COMBINING_LATIN_LETTERS.has(ch.codePointAt(0))) dropped += ch;
+  }
+  return dropped !== s && spellsPlatformNameAsFolded(dropped);
+}
+
+function spellsPlatformNameAsFolded(name) {
   const key = skeleton(name);
   if (PLATFORM_KEYS.some((k) => key.indexOf(k) !== -1)) return true;
   const gapped = gappedKey(name);
@@ -448,11 +546,15 @@ const IN_WORD_PROBLEM = 'name cannot have symbols or stray marks inside a word '
   + '(letters, digits and & \' . , - / ( ) + # are fine)';
 
 const LETTER_OR_NUMBER_RE = /[\p{L}\p{N}]/u;
+// The alphabets whose letters a mark may only accent with U+0300-0362 (see
+// wordProblem): the ones "Project 86" can be spelled or imitated in.
+const CLASSIC_ACCENT_BASE_RE = /[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}]/u;
 const LETTER_OR_MARK_RE = /[\p{L}\p{M}]/u;
 const SYMBOL_RE = /\p{S}/u;
 const ENCLOSING_MARK_RE = /\p{Me}/u;
 const MODIFIER_LETTER_RE = /\p{Lm}/u;
 const SPACING_MARK_RE = /\p{Mc}/u;
+const OTHER_NUMBER_RE = /[\p{No}\p{Nl}]/u;
 
 // Layer 2 for one character of a word; `before` is the character in front of
 // it in the same word (undefined at the start).
@@ -463,6 +565,28 @@ function refusedInsideWord(ch, before) {
     const scripts = scriptsOf(ch);
     return !scripts || scripts.has('Latin');
   }
+  // A number that is not a decimal digit (a dingbat circled 8, a negative
+  // circled 0 for the o, a Kaktovik or Mayan numeral, the late Roman numeral
+  // six). Layer 2 sees the name after NFKC, so every such number here is one
+  // NFKC leaves as it is: the ones it rewrites (a plain circled 8, a
+  // superscript 2, a vulgar half) arrive as the digits and slash NFKC made of
+  // them. The skeleton reads only decimal digits and the circled runs it
+  // lists, so any other such number would stand in the key as itself and
+  // hide the platform name. Like a modifier letter, it is refused when it
+  // belongs to no particular script or to Latin; a number of another script
+  // (the ideographic zero of a Japanese name) is that script's letter and
+  // takes part in layer 1 instead.
+  if (OTHER_NUMBER_RE.test(ch)) {
+    const scripts = scriptsOf(ch);
+    return !scripts || scripts.has('Latin');
+  }
+  // A combining Latin small letter is a letter drawn over another one: an o
+  // over the r of "Prject". No company name needs one, and after a letter the
+  // mark rule below would let it through, so it is refused on its own. (The
+  // skeleton folds it to its letter as a backstop.) U+0363-036F belong to
+  // Latin, so outside a Latin word layer 1 would refuse them anyway; the rest
+  // are Inherited, and no other alphabet writes a Latin letter over its own.
+  if (COMBINING_LATIN_LETTERS.has(ch.codePointAt(0))) return true;
   if (MARK_RE.test(ch) && !VARIATION_SELECTOR_RE.test(ch)) {
     if (before === undefined || !LETTER_OR_MARK_RE.test(before)) return true;
     if (SPACING_MARK_RE.test(ch) && !scriptsOf(ch)) return true;
@@ -480,6 +604,15 @@ function wordProblem(name) {
     const isWord = chars.some((ch) => LETTER_OR_NUMBER_RE.test(ch)
       || (MARK_RE.test(ch) && !VARIATION_SELECTOR_RE.test(ch)));
     if (!isWord) continue;
+    // A mark on a Latin, Greek or Cyrillic letter must be one of the classic
+    // accents (U+0300-0362). Names in those alphabets reach here after NFKC,
+    // which composes every accented letter that has a precomposed form, so a
+    // real name ("Nguyễn", "Łódź", "L'Oréal", "Έργα") carries no other mark.
+    // Everything else in the combining blocks — the combining Latin small
+    // letters (U+0363-036F, U+1AB0-1AFF, U+1DC0-1DFF), the combining Cyrillic
+    // letters (U+2DE0-2DFF, U+A674-A67D), half marks — can draw a letter over
+    // a letter, which is exactly the disguise this check exists to stop, so
+    // the whole class is refused rather than listed character by character.
     for (let i = 0; i < chars.length; i++) {
       if (refusedInsideWord(chars[i], chars[i - 1])) return IN_WORD_PROBLEM;
     }
@@ -492,6 +625,21 @@ function wordProblem(name) {
       } else {
         shared.forEach((s) => { if (!scripts.has(s)) shared.delete(s); });
         if (!shared.size) return MIXED_SCRIPT_PROBLEM;
+      }
+    }
+    // Checked after the alphabet rule, so a mark of another script on a Latin
+    // letter keeps that rule's message; this catches the marks with no script
+    // of their own (Inherited) that the alphabet rule treats as neutral.
+    let base = null;
+    for (let i = 0; i < chars.length; i++) {
+      const ch = chars[i];
+      if (MARK_RE.test(ch) && !VARIATION_SELECTOR_RE.test(ch)) {
+        const cp = ch.codePointAt(0);
+        if (base !== null && CLASSIC_ACCENT_BASE_RE.test(base) && !(cp >= 0x300 && cp <= 0x362)) {
+          return IN_WORD_PROBLEM;
+        }
+      } else if (LETTER_OR_NUMBER_RE.test(ch)) {
+        base = ch;
       }
     }
   }
@@ -733,6 +881,9 @@ module.exports = {
   replyToForUser,
   replyToForOrgAdmin,
   _clearOrgNameCache,
+  // Layer 3 on its own, so a test can pin the skeleton backstop for a name
+  // that layers 1 and 2 already refuse first.
+  _spellsPlatformName: spellsPlatformName,
   // The script names this runtime compiled, for the coverage test.
   _SCRIPT_NAMES: SCRIPT_TESTS.map(([scriptName]) => scriptName)
 };

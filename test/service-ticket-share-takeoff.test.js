@@ -21,6 +21,15 @@
 //                                                 before copies — has_prices)
 //   * sent with financial details                 the original spreadsheet
 //   * PDFs and photos, the office confirms        the original, on every link
+//   * ...but a name is only a claim (review,      on a link that hides
+//     2026-09-14)                                 financials the door reads the
+//                                                 first bytes before it sends
+//                                                 anything, and an original
+//                                                 they do not prove to be the
+//                                                 PDF or photo its name says is
+//                                                 the no-takeoff 404; a row whose
+//                                                 old byte check found prices
+//                                                 (has_prices true) is hidden
 //   * a revoked or expired link stops             loadTicketShare, 410
 //   * a file removed from the job stops           the attachment is re-proved
 //                                                 against the ticket's job,
@@ -106,6 +115,13 @@ function makeWorld(opts) {
       // the workbook), and a spreadsheet over the crew cap.
       att('a_renamed', 'job', 'j1', 'Lead Report.pdf', 'application/pdf'),
       att('a_bigsheet', 'job', 'j1', 'Whole estimate.xlsx', 'application/zip', 1, 30 * 1024 * 1024),
+      // The review's other names for a workbook: under a photo's name, an old
+      // .xls and a CSV behind a PDF's or photo's name. And an iPhone original,
+      // a photo with no browser type.
+      att('a_renamed_jpg', 'job', 'j1', 'Smith bid.jpg', 'application/zip'),
+      att('a_renamed_xls', 'job', 'j1', 'Old bid.pdf', 'application/octet-stream'),
+      att('a_csv_jpg', 'job', 'j1', 'pull sheet.jpg', 'image/jpeg'),
+      att('a_heic', 'job', 'j1', 'IMG_0412.heic', 'image/heic'),
     ].concat(o.attachments || []),
     users: [{ id: 10, organization_id: 1 }, { id: 50, organization_id: 2 }],
   };
@@ -179,12 +195,14 @@ const PNG = pad(Buffer.concat([Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 
 const XLSX = pad(Buffer.concat([Buffer.from([0x50, 0x4B, 0x03, 0x04]), Buffer.from('xl/workbook.xml Unit Cost $45.00')]));
 const XLS = pad(Buffer.from([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]));
 const CSV = pad(Buffer.from('Description,Qty,Unit Cost\r\nDrip edge,20,$45.00\r\n'));
+const HEIC = pad(Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypheic'), Buffer.alloc(16)]));
 const BYTES = {
   'orig/a_pdf': PDF, 'orig/a_xlsx': XLSX, 'orig/a_csv': CSV,
   'orig/a_png': PNG, 'orig/a_fakejpg': pad(Buffer.from('<html><script>alert(1)</script></html>')),
   'orig/a_fakepdf': pad(Buffer.from('<svg onload="alert(1)"></svg>')), 'orig/a_lead': XLSX, 'orig/a_est': PDF,
   'orig/a_other_job': PDF, 'orig/a_weird': PDF, 'orig/a_big': PDF, 'orig/a_xls': XLS, 'orig/a_plans': PDF,
   'orig/a_renamed': XLSX,
+  'orig/a_renamed_jpg': XLSX, 'orig/a_renamed_xls': XLS, 'orig/a_csv_jpg': CSV, 'orig/a_heic': HEIC,
 };
 
 // A storage stream the test feeds by hand: `push` a chunk, `end` it. Its
@@ -659,14 +677,32 @@ describe('the takeoff door serves the chosen file, or its price-free copy, throu
     const png = await open(router, { ticket: { crew_takeoff: fileRow('a_png', 'image') } });
     expect([png.headers['content-type'], png.headers['content-disposition'].split(';')[0]]).toEqual(['image/png', 'inline']);
     expect(png.headers['content-security-policy']).toBe("default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox");
-    const html = await open(router, { ticket: { crew_takeoff: fileRow('a_fakejpg', 'image') } });
+    // Only a link sent WITH financial details gets bytes that did not prove
+    // their name — and then as an opaque download, never rendered.
+    const html = await open(router, { ticket: { crew_takeoff: fileRow('a_fakejpg', 'image') }, share: FINANCIAL_LINK });
     expect([html.headers['content-type'], html.headers['content-disposition'].split(';')[0]]).toEqual(['application/octet-stream', 'attachment']);
     expect(html.headers).toMatchObject(SECURITY);
+    // A default link is refused before anything is sent (see the review's
+    // block below).
+    const spy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const def = await open(router, { ticket: { crew_takeoff: fileRow('a_fakejpg', 'image') }, share: DEFAULT_LINK });
+      expect([def.statusCode, def.body, def.headers['content-type']]).toEqual(NO_TAKEOFF.concat([undefined]));
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   test('a ".pdf" that does not start like a PDF is not rendered either', async () => {
-    const res = await open(router, { ticket: { crew_takeoff: fileRow('a_fakepdf') } });
+    const res = await open(router, { ticket: { crew_takeoff: fileRow('a_fakepdf') }, share: FINANCIAL_LINK });
     expect([res.headers['content-type'], res.headers['content-disposition'].split(';')[0]]).toEqual(['application/octet-stream', 'attachment']);
+    const spy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const def = await open(router, { ticket: { crew_takeoff: fileRow('a_fakepdf') }, share: DEFAULT_LINK });
+      expect([def.statusCode, def.body, def.received().length]).toEqual(NO_TAKEOFF.concat([0]));
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   test('a filename with quotes, a CR/LF and non-ASCII cannot break or add a header', async () => {
@@ -788,6 +824,158 @@ describe('the takeoff door serves the chosen file, or its price-free copy, throu
       expect(res.statusCode).toBe(200);
       expect(res.world.log.filter((q) => /^(INSERT|UPDATE|DELETE)\b/i.test(q.sql))).toEqual([]);
     }
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * A NAME IS ONLY A CLAIM (review, 2026-09-14). The finding: a priced workbook
+ * on the job as "Lead Report.pdf" or "Smith bid.jpg" was a "pdf" or "image" by
+ * takeoffKind, the office's PUT never opened it, and a link that hides
+ * financials was streamed the workbook — Unit Cost column and all — as an
+ * octet-stream download under the PDF's name. A legacy row whose old byte
+ * check had caught it ({kind:'pdf', has_prices:true}) was let through too.
+ *
+ * Three layers now. The PUT stores such a file as the spreadsheet it is (its
+ * own suite); a legacy has_prices row is hidden; and the door reads the first
+ * bytes before it sends anything, refusing an original on a default link that
+ * they do not prove. The CARD reads no byte, deliberately (crewTakeoffFor's
+ * comment): a row picked before the PUT proved bytes can show a card whose
+ * door is the 404 — never the file.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('a workbook under a PDF\'s or photo\'s name never reaches a link that hides financials', () => {
+  let warn;
+  beforeEach(() => { warn = jest.spyOn(console, 'warn').mockImplementation(() => {}); });
+  afterEach(() => { warn.mockRestore(); });
+
+  // The storage stream each open was handed, so "let go" can be measured.
+  const streamsOpened = () => {
+    const opened = [];
+    mockGetStream.mockImplementation(async (key) => {
+      if (!Object.prototype.hasOwnProperty.call(BYTES, key)) throw new Error('no such key ' + key);
+      const stream = Readable.from([BYTES[key]]);
+      opened.push(stream);
+      return { stream, size: BYTES[key].length };
+    });
+    return opened;
+  };
+
+  test('the review\'s repro, as the PUT now stores it: "Lead Report.pdf" holding a workbook is kind xlsx with a copy, and a default link gets the COPY', async () => {
+    // Exactly the row PUT /crew-takeoff writes for a_renamed now.
+    const asPut = row('a_renamed', 'xlsx', {
+      filename: 'Lead Report.pdf',
+      copy: { lines: COPY_LINES, sheet: 'Takeoff', method: 'sheet', made_at: '2026-09-14T09:00:00.000Z' },
+    });
+    const card = await read(router, { ticket: { crew_takeoff: asPut }, share: DEFAULT_LINK });
+    expect(card.body.takeoff).toEqual(copyCard('Materials - Lead Report.xlsx', 2));
+    const res = await open(router, { ticket: { crew_takeoff: asPut }, share: DEFAULT_LINK });
+    expect([res.statusCode, res.headers['content-type'], res.ended]).toEqual([200, XLSX_TYPE, copyBytes(2)]);
+    expect(res.received().toString('latin1')).not.toMatch(/Unit Cost|\$45|workbook\.xml/);
+    expect(fetched()).toBe(0);
+    // A link sent WITH financial details gets the original file.
+    const fin = await open(router, { ticket: { crew_takeoff: asPut }, share: FINANCIAL_LINK });
+    expect([fin.statusCode, fin.ended]).toEqual([200, XLSX]);
+    expect(fin.headers['content-disposition']).toMatch(/^attachment; filename="Lead Report\.pdf"/);
+  });
+
+  test('a row stored as a PDF or photo whose bytes are a workbook, an .xls or a CSV is the no-takeoff 404 at the default-link door: no header, not one byte', async () => {
+    const opened = streamsOpened();
+    for (const [id, kind] of [['a_renamed', 'pdf'], ['a_renamed_jpg', 'image'], ['a_renamed_xls', 'pdf'], ['a_csv_jpg', 'image']]) {
+      const res = await open(router, { ticket: { crew_takeoff: fileRow(id, kind) }, share: DEFAULT_LINK });
+      expect({ id, a: [res.statusCode, res.body], sent: res.received().length, headers: res.headers })
+        .toEqual({ id, a: NO_TAKEOFF, sent: 0, headers: {} });
+      // The storage stream is let go.
+      expect({ id, destroyed: opened[opened.length - 1].destroyed }).toEqual({ id, destroyed: true });
+    }
+    expect(mockGetStream.mock.calls).toEqual([['orig/a_renamed'], ['orig/a_renamed_jpg'], ['orig/a_renamed_xls'], ['orig/a_csv_jpg']]);
+    expect(mockBuild).not.toHaveBeenCalled();
+    // The log says why, and never the file's name (a name can carry a price).
+    expect(warn).toHaveBeenCalled();
+    expect(JSON.stringify(warn.mock.calls)).not.toMatch(/Lead Report|Smith|Old bid|pull sheet/);
+    // ...and the download slot is back.
+    const pdf = await open(router, { ticket: { crew_takeoff: fileRow('a_pdf') }, share: DEFAULT_LINK });
+    expect([pdf.statusCode, pdf.ended]).toEqual([200, PDF]);
+  });
+
+  test('the card for such a row is still offered — the documented trade-off: the card reads no byte, the door is the gate', async () => {
+    const card = await read(router, { ticket: { crew_takeoff: fileRow('a_renamed') }, share: DEFAULT_LINK });
+    expect(card.body.takeoff).toEqual(originalCard('Lead Report.pdf', 'pdf'));
+    // No storage read for the card.
+    expect(fetched()).toBe(0);
+  });
+
+  test('the refusal waits for the first bytes and still goes out before any header when storage yields them slowly', async () => {
+    const feed = handFed();
+    mockGetStream.mockImplementationOnce(async () => ({ stream: feed.stream, size: XLSX.length }));
+    const world = makeWorld({ ticket: { crew_takeoff: fileRow('a_renamed') }, share: DEFAULT_LINK });
+    const req = start(router, DOOR, world, { ip: '192.0.2.70' });
+    await until(() => mockGetStream.mock.calls.length === 1, 'storage opened');
+    // Fewer bytes than the sniff window: nothing is decided, nothing is sent.
+    feed.push(XLSX.subarray(0, 512));
+    for (let i = 0; i < 50; i++) await new Promise((r) => setImmediate(r));
+    expect([req.res.headersSent, req.res.headers, req.res.received().length]).toEqual([false, {}, 0]);
+    feed.push(XLSX.subarray(512));
+    feed.end();
+    const res = await req.done;
+    expect([res.statusCode, res.body, res.received().length, res.headers]).toEqual(NO_TAKEOFF.concat([0, {}]));
+    expect(feed.stream.destroyed).toBe(true);
+
+    // Three bytes at a time: the same.
+    const parts = [];
+    for (let i = 0; i < XLSX.length; i += 3) parts.push(XLSX.subarray(i, i + 3));
+    mockGetStream.mockImplementationOnce(async () => ({ stream: Readable.from(parts), size: XLSX.length }));
+    const trickled = await open(router, { ticket: { crew_takeoff: fileRow('a_renamed_jpg', 'image') }, share: DEFAULT_LINK });
+    expect([trickled.statusCode, trickled.received().length]).toEqual([404, 0]);
+  });
+
+  test('a link sent WITH financial details still gets the original of those rows, as an opaque download', async () => {
+    for (const [id, kind, bytes, name] of [['a_renamed', 'pdf', XLSX, 'Lead Report.pdf'], ['a_renamed_jpg', 'image', XLSX, 'Smith bid.jpg'], ['a_csv_jpg', 'image', CSV, 'pull sheet.jpg']]) {
+      const res = await open(router, { ticket: { crew_takeoff: fileRow(id, kind) }, share: FINANCIAL_LINK });
+      expect({ id, status: res.statusCode, type: res.headers['content-type'], ended: res.ended })
+        .toEqual({ id, status: 200, type: 'application/octet-stream', ended: bytes });
+      expect(res.headers['content-disposition']).toMatch(new RegExp('^attachment; filename="' + name.replace(/\./g, '\\.') + '"'));
+    }
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  test('a legacy {kind:"pdf", has_prices:true} row is hidden on a default link — no card, the door\'s 404, decided before any lookup', async () => {
+    for (const ct of [legacyRow('a_renamed', 'pdf', true), legacyRow('a_renamed_jpg', 'image', true), legacyRow('a_pdf', 'pdf', true)]) {
+      const world = makeWorld({ ticket: { crew_takeoff: ct }, share: DEFAULT_LINK });
+      const card = await run(router, '/service-ticket-share/:token', world);
+      expect({ ct, takeoff: card.body.takeoff, looked: touchedAttachments(world) }).toEqual({ ct, takeoff: null, looked: false });
+      const door = await open(router, { ticket: { crew_takeoff: ct }, share: DEFAULT_LINK });
+      expect({ ct, a: [door.statusCode, door.body], looked: touchedAttachments(door.world) }).toEqual({ ct, a: NO_TAKEOFF, looked: false });
+    }
+    expect(fetched()).toBe(0);
+    // Its verdict narrows only: a financial link still gets the original, and
+    // a legacy row whose check found no prices is still a PDF on every link.
+    const fin = await read(router, { ticket: { crew_takeoff: legacyRow('a_renamed', 'pdf', true) }, share: FINANCIAL_LINK });
+    expect(fin.body.takeoff).toEqual(originalCard('Lead Report.pdf', 'pdf'));
+    for (const hasPrices of [false, null, undefined]) {
+      const def = await read(router, { ticket: { crew_takeoff: legacyRow('a_pdf', 'pdf', hasPrices) }, share: DEFAULT_LINK });
+      expect({ hasPrices, takeoff: def.body.takeoff }).toEqual({ hasPrices, takeoff: originalCard('Field takeoff.pdf', 'pdf') });
+    }
+    // A string "true" is not the verdict; only the boolean a build wrote.
+    const str = await read(router, { ticket: { crew_takeoff: legacyRow('a_pdf', 'pdf', 'true') }, share: DEFAULT_LINK });
+    expect(str.body.takeoff).toEqual(originalCard('Field takeoff.pdf', 'pdf'));
+  });
+
+  test('a real PDF, photo and HEIC photo still open on both kinds of link', async () => {
+    for (const share of [DEFAULT_LINK, FINANCIAL_LINK]) {
+      const pdf = await open(router, { ticket: { crew_takeoff: fileRow('a_pdf') }, share });
+      expect([pdf.statusCode, pdf.headers['content-type'], pdf.ended]).toEqual([200, 'application/pdf', PDF]);
+      const est = await open(router, { ticket: { crew_takeoff: fileRow('a_est') }, share });
+      expect([est.statusCode, est.headers['content-type'], est.ended]).toEqual([200, 'application/pdf', PDF]);
+      const png = await open(router, { ticket: { crew_takeoff: fileRow('a_png', 'image') }, share });
+      expect([png.statusCode, png.headers['content-type'], png.ended]).toEqual([200, 'image/png', PNG]);
+      // A HEIC photo is proved by its ftyp brand; no browser type, so a download.
+      const heic = await open(router, { ticket: { crew_takeoff: fileRow('a_heic', 'image') }, share });
+      expect([heic.statusCode, heic.headers['content-type'], heic.headers['content-disposition'].split(';')[0], heic.ended])
+        .toEqual([200, 'application/octet-stream', 'attachment', HEIC]);
+      const card = await read(router, { ticket: { crew_takeoff: fileRow('a_heic', 'image') }, share });
+      expect(card.body.takeoff).toEqual(originalCard('IMG_0412.heic', 'image'));
+    }
+    expect(warn).not.toHaveBeenCalled();
+    expect(mockBuild).not.toHaveBeenCalled();
   });
 });
 
@@ -1207,6 +1395,14 @@ function mutant(pairs) {
   return require(p);
 }
 
+// The door's byte proof, removed. Paired with the other mutants below: the
+// door now holds a workbook back even when an earlier guard is gone, so each
+// of those shows its hole on the card alone and its leak with this removed.
+const NO_PROOF = [
+  '      if (svc.hidesFinancials(req.share) && !bytesProveOriginal(found.takeoff.kind, first, att)) {',
+  '      if (false) {',
+];
+
 describe('mutants', () => {
   test('the harness refuses an absent anchor', () => {
     expect(() => mutant([['this string is nowhere in the routes', 'x']])).toThrow(/ANCHOR NOT FOUND/);
@@ -1221,12 +1417,76 @@ describe('mutants', () => {
     expect((await open(router, legacy)).statusCode).toBe(404);
     expect(fetched()).toBe(0);
 
-    const mut = mutant([[MAY_SHOW, '  const originalMayShow = (kind) => true;']]);
-    const res = await open(mut, copied);
-    expect([res.statusCode, res.ended]).toEqual([200, XLSX]);
-    expect((await read(mut, copied)).body.takeoff).toEqual(originalCard('Lead Report.xlsx', 'xlsx'));
-    const old = await open(mut, legacy);
-    expect([old.statusCode, old.ended]).toEqual([200, XLSX]);
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // Alone, the card advertises the workbook and the crew loses its copy;
+      // the door's byte proof still keeps the workbook's bytes back.
+      const mut = mutant([[MAY_SHOW, '  const originalMayShow = (kind) => true;']]);
+      expect((await read(mut, copied)).body.takeoff).toEqual(originalCard('Lead Report.xlsx', 'xlsx'));
+      const res = await open(mut, copied);
+      expect([res.statusCode, res.received().length]).toEqual([404, 0]);
+      // With the byte proof gone too, the workbook is streamed.
+      const both = mutant([[MAY_SHOW, '  const originalMayShow = (kind) => true;'], NO_PROOF]);
+      const leaked = await open(both, copied);
+      expect([leaked.statusCode, leaked.ended]).toEqual([200, XLSX]);
+      const old = await open(both, legacy);
+      expect([old.statusCode, old.ended]).toEqual([200, XLSX]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test('drop the door\'s byte proof and a row stored as a PDF whose bytes are a workbook is streamed to a default link — the review\'s finding', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      for (const [id, kind] of [['a_renamed', 'pdf'], ['a_renamed_jpg', 'image']]) {
+        const opts = { ticket: { crew_takeoff: fileRow(id, kind) }, share: DEFAULT_LINK };
+        const shipped = await open(router, opts);
+        expect({ id, a: [shipped.statusCode, shipped.received().length] }).toEqual({ id, a: [404, 0] });
+        const mut = mutant([NO_PROOF]);
+        const res = await open(mut, opts);
+        expect({ id, a: [res.statusCode, res.headers['content-type'], res.ended] })
+          .toEqual({ id, a: [200, 'application/octet-stream', XLSX] });
+        expect(res.received().toString('latin1')).toMatch(/Unit Cost \$45\.00/);
+      }
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test('prove the bytes by the served type alone and a workbook under a PHOTO\'s name passes as an opaque "HEIC"', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const opts = { ticket: { crew_takeoff: fileRow('a_renamed_jpg', 'image') }, share: DEFAULT_LINK };
+      expect((await open(router, opts)).statusCode).toBe(404);
+      const mut = mutant([[
+        '  if (sniffKind(head, att.filename, att.mime_type) !== kind) return false;\n',
+        '',
+      ]]);
+      const res = await open(mut, opts);
+      expect([res.statusCode, res.ended]).toEqual([200, XLSX]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test('drop the has_prices narrowing and a legacy {kind:"pdf", has_prices:true} row is offered — and a priced PDF is sent — on a default link', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const renamed = { ticket: { crew_takeoff: legacyRow('a_renamed', 'pdf', true) }, share: DEFAULT_LINK };
+      const pricedPdf = { ticket: { crew_takeoff: legacyRow('a_pdf', 'pdf', true) }, share: DEFAULT_LINK };
+      expect((await read(router, renamed)).body.takeoff).toBeNull();
+      expect((await open(router, pricedPdf)).statusCode).toBe(404);
+      const mut = mutant([[
+        '  if (chosen.has_prices === true) chosen = Object.assign({}, chosen, { kind: null });\n',
+        '',
+      ]]);
+      expect((await read(mut, renamed)).body.takeoff).toEqual(originalCard('Lead Report.pdf', 'pdf'));
+      const res = await open(mut, pricedPdf);
+      expect([res.statusCode, res.ended]).toEqual([200, PDF]);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test('skip the attachment re-proof on the copy path and a copy of a file taken off the job is still served', async () => {
@@ -1272,23 +1532,42 @@ describe('mutants', () => {
   test('decide on the STORED kind only and a "PDF" whose file is now a spreadsheet is served as the original', async () => {
     const opts = { ticket: { crew_takeoff: fileRow('a_xlsx', 'pdf') }, share: DEFAULT_LINK };
     expect((await read(router, opts)).body.takeoff).toBeNull();
-    const mut = mutant([[
+    const STORED_ONLY = [
       '  if (!(originalMayShow(chosen.kind) && originalMayShow(kind))) {',
       '  if (!originalMayShow(chosen.kind)) {',
-    ]]);
-    const res = await open(mut, opts);
-    expect([res.statusCode, res.ended]).toEqual([200, XLSX]);
+    ];
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // Alone: the card offers the spreadsheet; the door's byte proof holds.
+      const mut = mutant([STORED_ONLY]);
+      expect((await read(mut, opts)).body.takeoff).toEqual(originalCard('Lead Report.xlsx', 'xlsx'));
+      expect((await open(mut, opts)).statusCode).toBe(404);
+      // With the proof gone too, the workbook is streamed.
+      const res = await open(mutant([STORED_ONLY, NO_PROOF]), opts);
+      expect([res.statusCode, res.ended]).toEqual([200, XLSX]);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test('decide on the kind the file has NOW only and a copied spreadsheet renamed .pdf is served as the original', async () => {
     const opts = { ticket: { crew_takeoff: sheetRow('a_renamed', 'xlsx') }, share: DEFAULT_LINK };
     expect((await open(router, opts)).ended).toEqual(copyBytes(2));
-    const mut = mutant([[
+    const NOW_ONLY = [
       '  if (!(originalMayShow(chosen.kind) && originalMayShow(kind))) {',
       '  if (!originalMayShow(kind)) {',
-    ]]);
-    const res = await open(mut, opts);
-    expect([res.statusCode, res.ended]).toEqual([200, XLSX]);
+    ];
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // Alone: the card offers "Lead Report.pdf"; the door's byte proof holds.
+      const mut = mutant([NOW_ONLY]);
+      expect((await read(mut, opts)).body.takeoff).toEqual(originalCard('Lead Report.pdf', 'pdf'));
+      expect((await open(mut, opts)).statusCode).toBe(404);
+      const res = await open(mutant([NOW_ONLY, NO_PROOF]), opts);
+      expect([res.statusCode, res.ended]).toEqual([200, XLSX]);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test('hand the builder the stored lines as they are and a price written into the row reaches the copy', async () => {
@@ -1316,15 +1595,22 @@ describe('mutants', () => {
       '      release = takeTakeoffSlot(req);\n      if (!release) return res.status(429).json({ error: TAKEOFF_BUSY });',
       '      release = () => {};',
     ]]);
-    const feed = handFed();
-    mockGetStream.mockImplementation(async () => ({ stream: feed.stream, size: PDF.length }));
+    // One stalled storage stream per open, as a real backend hands out — the
+    // door reads each one's first bytes before it decides, so sixty readers on
+    // one shared stream would only measure the fake.
+    const feeds = [];
+    mockGetStream.mockImplementation(async () => {
+      const feed = handFed();
+      feeds.push(feed);
+      return { stream: feed.stream, size: PDF.length };
+    });
     const world = makeWorld({ ticket: { crew_takeoff: fileRow('a_pdf') } });
     const reqs = [];
     for (let i = 0; i < 60; i++) reqs.push(start(mut, DOOR, world, { ip: '198.51.100.30' }));
     await until(() => mockGetStream.mock.calls.length === 60, 'sixty storage opens');
     expect(reqs.filter((r) => r.res.body)).toEqual([]);
     for (const r of reqs) r.res.destroy();
-    feed.stream.destroy();
+    for (const feed of feeds) feed.stream.destroy();
     await Promise.all(reqs.map((r) => r.done));
   });
 

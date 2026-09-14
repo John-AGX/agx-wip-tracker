@@ -781,10 +781,12 @@
     return ct && typeof ct === 'object' && ct.attachment_id != null ? ct : null;
   }
 
-  // The kinds the server makes a price-free copy from. A record of one of
-  // these never reads as "shows the whole file": without a usable copy the
-  // server keeps it off every link that hides financials (crewTakeoffFor).
-  var CREW_SHEET_KINDS = { xlsx: 1, xls: 1, csv: 1 };
+  // The only kinds the server sends as the whole file on EVERY link
+  // (ORIGINAL_ON_EVERY_LINK in service-ticket-share-routes.js). Every other
+  // record — a spreadsheet, a kind the reader could not name ('unknown'), a
+  // hand-written row — is kept off links that hide financials unless it has a
+  // copy, so it never reads as "shows the whole file" here.
+  var CREW_WHOLE_FILE_KINDS = { pdf: 1, image: 1 };
 
   // The lines of a stored copy, or null when there is no usable one. The
   // server serves the copy only when copy.lines is a non-empty list, so an
@@ -804,10 +806,11 @@
   //               all; those rows carried the old has_prices verdict). The
   //               server treats it as "no copy", and picking it again makes one.
   //   unchecked — a PDF or photo: every link shows the whole file.
-  // Anything that is not a spreadsheet kind keeps the whole-file warning — the
-  // wider claim, so the office is never told a file is safer than it is.
+  // A row stored before copies whose old byte check found prices
+  // (has_prices true) is not a PDF or photo whatever kind it names — that check
+  // read the bytes — and the server drops its kind, so it reads as a spreadsheet.
   function crewTone(ct) {
-    if (!CREW_SHEET_KINDS[ct.kind]) return 'unchecked';
+    if (CREW_WHOLE_FILE_KINDS[ct.kind] && ct.has_prices !== true) return 'unchecked';
     if (crewCopyLines(ct)) return 'copy';
     if (!Object.prototype.hasOwnProperty.call(ct, 'copy')) return 'repick';
     return 'original';

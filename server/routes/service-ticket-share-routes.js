@@ -611,6 +611,24 @@ async function loadTicketShare(req, res, next) {
 // original goes only to a link sent with financial details. A PDF or photo is
 // served as itself on every link, as before — the office confirms it.
 //
+// A NAME IS ONLY A CLAIM (review, 2026-09-14). A priced workbook that reached
+// the job as "Smith bid.pdf" is a "pdf" to takeoffKind, and this helper reads
+// no byte of the file. Three things keep its bytes off a link that hides
+// financials:
+//   * the office's PUT proves a PDF or photo from its bytes when it is picked,
+//     and stores a workbook found behind the name as the spreadsheet it is
+//     (service-ticket-routes.js, kindFromBytes) — so it gets the copy here;
+//   * a row stored before copies whose own byte check found prices
+//     (has_prices true) is a spreadsheet here whatever kind it names — that
+//     check sniffed the bytes, so its "pdf" is not a PDF;
+//   * the takeoff door reads the first bytes before it sends anything, and on
+//     such a link refuses an original they do not prove (bytesProveOriginal).
+// The CARD is not held to that third check, deliberately: proving the bytes
+// here would open the file in storage on every read of the work order, for
+// every PDF takeoff, to catch only a row picked before the PUT proved bytes.
+// Such a row can show a card whose door answers the no-takeoff 404 — never the
+// file. The door is the gate; no original leaves on a default link unproved.
+//
 // Returns { att, takeoff, copyLines } or null. copyLines is null when the
 // ORIGINAL is served, else the lines the copy is built from; takeoff is the
 // card's whitelist, with filename left null on the copy path (the builder
@@ -659,6 +677,12 @@ async function crewTakeoffFor(ticket, share) {
     try { chosen = JSON.parse(chosen); } catch (e) { return null; }
   }
   if (!chosen || typeof chosen !== 'object') return null;
+  // A ROW STORED BEFORE COPIES whose byte check found prices. That check read
+  // the bytes, not the name, so a workbook saved as "bid.pdf" was caught by it
+  // and stored as {kind:'pdf', has_prices:true}. Its kind is not trusted: it is
+  // dropped, which is a spreadsheet with no copy to a link that hides
+  // financials (no card, no file) and changes nothing on a financial link.
+  if (chosen.has_prices === true) chosen = Object.assign({}, chosen, { kind: null });
   const attachmentId = typeof chosen.attachment_id === 'string' ? chosen.attachment_id : '';
   if (!TAKEOFF_ID_RE.test(attachmentId)) return null;
   const hides = svc.hidesFinancials(share);
@@ -809,6 +833,30 @@ function takeoffContentType(kind, buf) {
   return TAKEOFF_TYPES[kind] || OPAQUE;
 }
 
+// THE BYTES PROVE THE NAME — asked by the takeoff door, on a link that hides
+// financials, before any header or byte of an ORIGINAL is sent. crewTakeoffFor
+// has let the original through only because the stored kind and the file's
+// name both say PDF or photo; this is the first time anything looks at what
+// the file IS. `head` is the first TAKEOFF_SNIFF_BYTES of it (all of it, when
+// smaller). True only when:
+//   * materials-extract's sniffKind — magic bytes first, the rule the office's
+//     PUT proved the file by — says the same kind the name does. A zip or OLE
+//     container is recognised before any PDF or photo test, so a workbook can
+//     never pass as either, whatever text sits in its first bytes;
+//   * and the door would send it as a real PDF or photo type, not the opaque
+//     fallback. The one exception is a HEIC/HEIF photo: sniffKind proves it
+//     from its ftyp brand, but browsers have no type for it here, so it goes
+//     out as an opaque download. Its bytes are still a photo's.
+// Anything else — a workbook, a CSV or an HTML page under a PDF's or photo's
+// name, a photo under a PDF's name — is refused as if nothing were chosen.
+function bytesProveOriginal(kind, head, att) {
+  if (kind !== 'pdf' && kind !== 'image') return false;
+  const { sniffKind } = require('../services/materials-extract');
+  if (sniffKind(head, att.filename, att.mime_type) !== kind) return false;
+  if (takeoffContentType(kind, head) !== OPAQUE) return true;
+  return kind === 'image';
+}
+
 // Content-Disposition with a filename a header cannot be broken by: the plain
 // `filename` is printable ASCII with quotes, backslashes and every control
 // character (a CR/LF would end the header) replaced, and `filename*` carries
@@ -926,7 +974,10 @@ router.get('/service-ticket-share/:token',
 // (loadTicketShare), a spreadsheet reaches a link that hides financials only
 // as its price-free copy, and a file taken off the job stops — each decided by
 // crewTakeoffFor before a byte is read, so a refused request never costs a
-// storage fetch.
+// storage fetch. One refusal comes later, because it needs the bytes: on a
+// link that hides financials an original whose first bytes do not prove it is
+// the PDF or photo its name says (bytesProveOriginal) is the same no-takeoff
+// 404, answered before any header or byte of it is sent.
 //
 // Read-only, and records nothing in the event log: the crew opening the
 // takeoff is not a change to the work order.
@@ -964,7 +1015,8 @@ router.get('/service-ticket-share/:token',
 const TAKEOFF_BUSY = 'This file is already downloading — try again in a moment.';
 const TAKEOFF_TOO_LARGE = 'That file is too large to open here — ask the office for it.';
 const TAKEOFF_FAILED = 'Something went wrong opening that file.';
-// takeoffContentType looks no further than the first 1024 bytes.
+// takeoffContentType looks no further than the first 1024 bytes, and neither
+// does the PDF or photo test in bytesProveOriginal (sniffKind's).
 const TAKEOFF_SNIFF_BYTES = 1024;
 const TAKEOFF_IDLE_MS = 60 * 1000;
 const takeoffDownloads = new Set();
@@ -1079,33 +1131,51 @@ router.get('/service-ticket-share/:token/takeoff',
       const stream = source;
       res.on('close', () => { if (!res.writableFinished && !stream.destroyed) stream.destroy(); });
 
-      // The first TAKEOFF_SNIFF_BYTES are held back only until the type can be
-      // decided from them; after that each chunk goes straight on, at the pace
-      // the reader takes it.
-      await pipeline(source, async function* countAndSniff(chunks) {
-        let head = [];
-        let headLength = 0;
-        let seen = 0;
-        for await (const chunk of chunks) {
-          const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      // THE FIRST BYTES, READ BEFORE ANYTHING IS SENT. The first
+      // TAKEOFF_SNIFF_BYTES (all of the file, when it is smaller) are pulled off
+      // the storage stream here, OUTSIDE the pipeline, and held until the type
+      // is decided from them. On a link that hides financials they must also
+      // prove the file is the PDF or photo its name says (bytesProveOriginal)
+      // — and a refusal has to be the plain no-takeoff 404, which only works
+      // while no header of the file's is set and no byte of it has left. Inside
+      // the pipeline a refusal could only destroy the response.
+      const chunks = source[Symbol.asyncIterator]();
+      const asBuffer = (c) => (Buffer.isBuffer(c) ? c : Buffer.from(c));
+      const head = [];
+      let seen = 0;
+      let ended = false;
+      while (seen < TAKEOFF_SNIFF_BYTES) {
+        const step = await chunks.next();
+        if (step.done) { ended = true; break; }
+        const b = asBuffer(step.value);
+        seen += b.length;
+        if (seen > size) throw new Error('storage sent more than the stored size');
+        head.push(b);
+      }
+      if (ended && seen !== size) throw new Error('storage sent less than the stored size');
+      const first = Buffer.concat(head);
+      if (svc.hidesFinancials(req.share) && !bytesProveOriginal(found.takeoff.kind, first, att)) {
+        // Never the filename in the log: a name can carry a price too.
+        console.warn('[service-ticket-share] takeoff refused: its bytes are not the ' + found.takeoff.kind + ' its name says');
+        return res.status(404).json({ error: 'There is no takeoff file on this work order.' });
+      }
+
+      // Decided. The held bytes go first, and after them each chunk goes
+      // straight on, at the pace the reader takes it, counted against the
+      // stored size.
+      sendHeaders(first);
+      await pipeline(async function* countAndSend() {
+        if (first.length) yield first;
+        if (ended) return;
+        for (;;) {
+          const step = await chunks.next();
+          if (step.done) break;
+          const b = asBuffer(step.value);
           seen += b.length;
           if (seen > size) throw new Error('storage sent more than the stored size');
-          if (!head) { yield b; continue; }
-          head.push(b);
-          headLength += b.length;
-          if (headLength >= TAKEOFF_SNIFF_BYTES) {
-            const first = Buffer.concat(head);
-            head = null;
-            sendHeaders(first);
-            yield first;
-          }
+          yield b;
         }
         if (seen !== size) throw new Error('storage sent less than the stored size');
-        if (head) {
-          const whole = Buffer.concat(head);
-          sendHeaders(whole);
-          yield whole;
-        }
       }, res);
     } catch (e) {
       // The reader closing the tab mid-download is not a server fault.

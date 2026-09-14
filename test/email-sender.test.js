@@ -16,11 +16,14 @@
 //                      letters and blank symbols (U+3164, U+2800) that a
 //                      format-character strip keeps; a letter from another
 //                      alphabet inside a Latin word, or a symbol, modifier
-//                      letter or stray mark standing in for a letter
+//                      letter or stray mark standing in for a letter, a
+//                      combining Latin small letter drawn over another, or a
+//                      circled or dingbat digit standing in for a digit
 // and pins the Reply-To validator and the org-predicated address lookups
 // (a Reply-To is a users row re-read FRESH and predicated on the org being
 // mailed — never the JWT's email, never a platform admin acting as a tenant).
 
+const fs = require('fs');
 const sender = require('../server/email-sender');
 
 const ENV_FROM = 'Project 86 <notifications@project86.net>';
@@ -372,6 +375,7 @@ describe('orgNameProblem — the third round of look-alikes', () => {
     'Smith/Jones Build',
     'Tr1nity Roofing',
     'Nguy' + cp(0x1EC5) + 'n Construction',                                           // Vietnamese
+    'H' + cp(0x00E0) + ' N' + cp(0x1ED9) + 'i Build',                                  // Vietnamese, Ha Noi
     cp(0x00D8) + 'rsted Build',
     'Joe ' + cp(0x2615, 0xFE0F) + ' Coffee Roofing',                                  // a standalone emoji
     'Project 68 LLC',
@@ -479,6 +483,182 @@ describe('orgNameProblem — the third round of look-alikes', () => {
       expect(sender.orgNameProblem(name)).toBeNull();
     }
     expect(Date.now() - started).toBeLessThan(10000);
+  });
+});
+
+// ── the fourth round: circled digits and combining Latin small letters ────
+//
+// WHAT WAS WRONG
+// Both kinds of name below saved and went out as "<name> via Project 86":
+//   - a dingbat or double-circled digit (U+2776-2793, U+24EB-24FF) is an
+//     "other number" of no particular script, and NFKC leaves it as it is
+//     (unlike the plain circled digits, which it turns into 8 and 6). Layer 1
+//     took it as neutral, layer 2 refused only symbols and marks, and the
+//     skeleton read only decimal digits, so the key held the dingbat itself:
+//     "project<dingbat 8><dingbat 6>", no match and no gap. The same held for
+//     every other neutral number NFKC keeps (Kaktovik, Mayan, Siyaq).
+//   - a combining Latin small letter (U+0363-036F, U+1DD3-1DF4) is a mark, so
+//     layer 2 let it sit after a letter, and the fold dropped every mark it
+//     did not list: "Pr<combining o>ject 86" became "prject86", with no gap
+//     for the one-gap pass to find.
+//
+// WHAT IS NOW HELD
+//   inside a word  a number that is not a decimal digit (after NFKC) and
+//                  belongs to no script or to Latin is refused, and so is any
+//                  combining Latin small letter;
+//   the skeleton   folds the circled and dingbat digits to their ASCII value
+//                  and each combining Latin small letter to its letter, before
+//                  the mark strip; a name holding one is also judged with
+//                  those letters dropped, so an e drawn over the e still spells
+//                  the platform name.
+// Each rule is pinned on its own: the layer column (and the names that spell
+// nothing) pins layer 2, and _spellsPlatformName pins the skeleton backstop
+// for names layer 2 already refuses first.
+const FOURTH_ROUND = [
+  // [label, name]
+  ['dingbat circled sans-serif 8 and 6', 'Project ' + cp(0x2787, 0x2785)],
+  ['dingbat negative circled 8 and 6', 'Project ' + cp(0x277D, 0x277B)],
+  ['double circled 8 and 6', 'Project ' + cp(0x24FC, 0x24FA)],
+  ['a negative circled zero for the o', 'Pr' + cp(0x24FF) + 'ject 86'],
+  ['dingbat 8 and 6 as words of their own', 'Project ' + cp(0x2787) + ' ' + cp(0x2785)],
+  ['a combining small o over the r', 'Pr' + cp(0x0366) + 'ject 86'],
+  ['a combining small e over the e', 'Proje' + cp(0x0364) + 'ct 86'],
+  ['a combining small o over the o', 'Pro' + cp(0x0366) + 'ject 86'],
+  ['a combining small ao over the r', 'Pr' + cp(0x1DD5) + 'ject 86'],
+];
+
+// The digits the skeleton reads as letters, as the module does.
+const DIGIT_LETTERS = { 0: 'o', 1: 'l', 3: 'e', 4: 'a', 5: 's', 7: 't' };
+const asKeyDigits = (n) => String(n).replace(/[013457]/g, (d) => DIGIT_LETTERS[d]);
+
+// Every combining Latin small letter of Unicode, by code point.
+const COMBINING_LATIN_SMALL_LETTERS = [];
+for (let c = 0x0363; c <= 0x036F; c++) COMBINING_LATIN_SMALL_LETTERS.push(c);
+COMBINING_LATIN_SMALL_LETTERS.push(0x1DCA);
+for (let c = 0x1DD3; c <= 0x1DF4; c++) COMBINING_LATIN_SMALL_LETTERS.push(c);
+
+describe('orgNameProblem — the fourth round: circled digits and combining Latin small letters', () => {
+  const ENV = 'Project 86 <notifications@project86.net>';
+
+  test.each(FOURTH_ROUND)('%s: refused inside a word, spelled by the skeleton, never brands a send', (_label, name) => {
+    expect(sender.orgNameProblem(name)).toMatch(LAYER.word);
+    expect(sender.cleanOrgName(name)).toBeNull();
+    expect(sender.fromHeader(ENV, name)).toBe(ENV);
+    // The backstop on its own: layer 3 spells the platform name too.
+    expect(sender._spellsPlatformName(name)).toBe(true);
+  });
+
+  test('the skeleton reads circled and dingbat digits as their ASCII value', () => {
+    expect(sender.skeleton('Project ' + cp(0x2787, 0x2785))).toBe('project86');
+    expect(sender.skeleton('Project ' + cp(0x277D, 0x277B))).toBe('project86');
+    expect(sender.skeleton('Project ' + cp(0x24FC, 0x24FA))).toBe('project86');
+    expect(sender.skeleton('Pr' + cp(0x24FF) + 'ject 86')).toBe('project86');
+    expect(sender.skeleton('Project ' + cp(0x2787) + ' ' + cp(0x2785))).toBe('project86');
+    // Every character of every run, "10" to "20" included.
+    [
+      [0x2776, 10, 1], [0x2780, 10, 1], [0x278A, 10, 1], [0x24F5, 10, 1],
+      [0x24EB, 10, 11], [0x24FF, 1, 0], [0x1F10B, 1, 0], [0x1F10C, 1, 0],
+    ].forEach(([first, count, value]) => {
+      for (let i = 0; i < count; i++) {
+        expect([(first + i).toString(16), sender.skeleton('Unit ' + cp(first + i))])
+          .toEqual([(first + i).toString(16), 'unlt' + asKeyDigits(value + i)]);
+      }
+    });
+  });
+
+  test('the skeleton folds a combining Latin small letter to its letter, leaving no hole', () => {
+    expect(sender.skeleton('Pr' + cp(0x0366) + 'ject 86')).toBe('project86');
+    expect(sender.skeleton('Pr' + cp(0x1DD5) + 'ject 86')).toBe('project86');
+    expect(sender.skeleton('Proj' + cp(0x0364) + 'ct 86')).toBe('project86');
+    // Every one of them: standing for the o, the key keeps seven characters.
+    const dropped = COMBINING_LATIN_SMALL_LETTERS.filter((c) => {
+      const ch = cp(c);
+      expect([c.toString(16), /\p{Mn}/u.test(ch)]).toEqual([c.toString(16), true]);
+      return Array.from(sender.skeleton('Pr' + ch + 'ject')).length !== 7;
+    });
+    expect(dropped.map((c) => c.toString(16))).toEqual([]);
+  });
+
+  test('a combining letter over the letter it names is caught with the combining letters dropped', () => {
+    // Folded, these read "projeect86" and "prooject86"; dropped, "project86".
+    expect(sender.skeleton('Proje' + cp(0x0364) + 'ct 86')).toBe('projeect86');
+    expect(sender._spellsPlatformName('Proje' + cp(0x0364) + 'ct 86')).toBe(true);
+    expect(sender._spellsPlatformName('Pro' + cp(0x0366) + 'ject 86')).toBe(true);
+    // And never on an ordinary name.
+    expect(sender._spellsPlatformName('Proje' + cp(0x0364) + 'ct 68')).toBe(false);
+  });
+
+  test('every combining Latin small letter, anywhere in a word, is refused inside the word', () => {
+    const passed = [];
+    COMBINING_LATIN_SMALL_LETTERS.forEach((c) => {
+      const ch = cp(c);
+      ['Pr' + ch + 'ject 86', 'Roo' + ch + 'fing Co', 'Acme' + ch].forEach((name) => {
+        if (!LAYER.word.test(String(sender.orgNameProblem(name)))) passed.push(c.toString(16) + ' ' + JSON.stringify(name));
+      });
+    });
+    expect(passed).toEqual([]);
+  });
+
+  test('the number rule refuses on its own, on names that spell nothing', () => {
+    [
+      'Acme ' + cp(0x2787) + ' Roofing',        // a dingbat 8 as a word of its own
+      'Unit' + cp(0x2781) + ' Builders',        // a dingbat 2 inside a word
+      'Studio ' + cp(0x24FF),                   // a negative circled zero
+      'Late ' + cp(0x2185) + ' Roofing',        // ROMAN NUMERAL SIX LATE FORM, a Latin number
+      'Arctic ' + cp(0x1D2C8) + ' Build',       // a Kaktovik numeral
+    ].forEach((name) => {
+      expect([name, sender.orgNameProblem(name)]).toEqual([name, expect.stringMatching(LAYER.word)]);
+      expect(sender.cleanOrgName(name)).toBeNull();
+    });
+  });
+
+  test('every number NFKC keeps that is not a decimal digit cannot stand for a letter of the platform name', () => {
+    const NUMBER = /[\p{No}\p{Nl}]/u;
+    const NEUTRAL_OR_LATIN = /[\p{Script_Extensions=Common}\p{Script_Extensions=Inherited}\p{Script_Extensions=Latin}]/u;
+    const substitutes = [];
+    const standalone = [];
+    let neutralCount = 0;
+    for (let c = 0; c < 0x110000; c++) {
+      if (c >= 0xD800 && c <= 0xDFFF) continue;
+      const ch = cp(c);
+      if (!NUMBER.test(ch) || ch.normalize('NFKC') !== ch) continue;
+      if (sender.orgNameProblem('Pr' + ch + 'ject 86') === null) substitutes.push(c.toString(16));
+      if (NEUTRAL_OR_LATIN.test(ch)) {
+        neutralCount++;
+        if (!LAYER.word.test(String(sender.orgNameProblem('Project ' + ch)))) standalone.push(c.toString(16));
+      }
+    }
+    expect(neutralCount).toBeGreaterThan(200);
+    expect(substitutes).toEqual([]);
+    expect(standalone).toEqual([]);
+  });
+
+  test.each([
+    'AG Exteriors, LLC',
+    "O'Brien & Sons, Inc.",
+    cp(0x0141, 0x00F3) + 'd' + cp(0x017A) + ' Roofing',                               // Lodz, Polish
+    cp(0x039A, 0x03AC, 0x03C4, 0x03B9) + ' Construction',                            // Greek
+    cp(0x682A, 0x5F0F, 0x4F1A, 0x793E) + ' ' + cp(0x5C71, 0x7530, 0x5EFA, 0x8A2D),   // Japanese KK
+    'Tr1nity Roofing',
+    '3M Roofing',
+    '7-Eleven Supply',
+    'Nguy' + cp(0x1EC5) + 'n Construction',                                           // Vietnamese
+    'H' + cp(0x00E0) + ' N' + cp(0x1ED9) + 'i Build',                                  // Vietnamese, Ha Noi
+    // A number of a script other than Latin is that script's letter: the
+    // ideographic zero in a Japanese name ("2020 Construction").
+    cp(0x4E8C, 0x3007, 0x4E8C, 0x3007) + ' ' + cp(0x5EFA, 0x8A2D),
+    // A plain circled 8 is folded to 8 by NFKC before any rule sees it.
+    'Studio ' + cp(0x2467),
+  ])('a real company name still passes: %s', (name) => {
+    expect(sender.orgNameProblem(name)).toBeNull();
+    expect(sender.cleanOrgName(name)).not.toBeNull();
+  });
+
+  test('a degree sign or a vulgar fraction attached to a number stays refused, as before these rules', () => {
+    // Refused before this round too: the degree sign is a symbol, and NFKC
+    // writes the half with a fraction slash, a symbol.
+    expect(sender.orgNameProblem('360' + cp(0x00B0) + ' Roofing')).toMatch(LAYER.word);
+    expect(sender.orgNameProblem('7' + cp(0x00BD) + ' Roofing')).toMatch(LAYER.word);
   });
 });
 
@@ -635,5 +815,60 @@ describe('replyToForOrgAdmin', () => {
     expect(await sender.replyToForOrgAdmin(fakeDb({ orgs: [], users: [] }), 7)).toBeNull();
     expect(await sender.replyToForOrgAdmin(fakeDb({ orgs: [], users: [] }), null)).toBeNull();
     expect(await sender.replyToForOrgAdmin(fakeDb({ throws: true }), 7)).toBeNull();
+  });
+});
+
+
+// ── A mark on a Latin, Greek or Cyrillic letter is a classic accent or nothing ──
+// The last review found combining letters the lookalike table did not list
+// (Unicode 14's insular r and t, the combining Cyrillic letters) drawing a
+// letter over a letter. The rule refuses the whole class instead of listing
+// characters, and NFKC-composed real names carry no such mark.
+describe('marks on Latin, Greek and Cyrillic letters', () => {
+  const f = String.fromCodePoint;
+  test.each([
+    ['insular r over "oject"', 'P' + f(0x1ACD) + 'oject 86'],
+    ['insular t at the end of "Projec"', 'Projec' + f(0x1ACE) + ' 86'],
+    ['U+1ABF after "Pr"', 'Pr' + f(0x1ABF) + 'oject 86'],
+    ['U+1AC0 after "Pr"', 'Pr' + f(0x1AC0) + 'oject 86'],
+    ['U+1ACC after "Pr"', 'Pr' + f(0x1ACC) + 'oject 86'],
+    ['a combining Cyrillic letter in an all-Cyrillic lookalike', f(0x420) + f(0x433) + f(0x2DEA) + f(0x458) + f(0x435) + f(0x441) + f(0x442) + ' 86'],
+    ['a combining Cyrillic letter from U+A674', f(0x420) + f(0xA67B) + f(0x43E) + f(0x435) + f(0x43A) + f(0x442) + ' 86'],
+    ['a combining Latin small letter o', 'Pr' + f(0x366) + 'ject 86'],
+    ['a supplementary combining letter U+1DE4', 'Pr' + f(0x1DE4) + 'oject 86'],
+  ])('refuses %s', (_label, name) => {
+    expect(sender.orgNameProblem(name)).toMatch(/inside a word/);
+    expect(sender.cleanOrgName(name)).toBeNull();
+  });
+
+  test.each([
+    ['Vietnamese typed with separate accents', 'Nguye' + f(0x302) + f(0x303) + 'n Construction'],
+    ['Polish', f(0x141) + f(0xF3) + 'd' + f(0x17A) + ' Roofing'],
+    ['French', "L'Or" + f(0xE9) + 'al Build'],
+    ['Greek typed with a separate tonos', f(0x395) + f(0x301) + f(0x3C1) + f(0x3B3) + f(0x3B1) + ' Build'],
+    ['Vietnamese', 'H' + f(0xE0) + ' N' + f(0x1ED9) + 'i Build'],
+    ['German', 'M' + f(0xFC) + 'ller GmbH'],
+    ['Hindi, whose vowel signs are marks of its own script', f(0x930) + f(0x93E) + f(0x939) + f(0x941) + f(0x932) + ' Builders'],
+    ['Japanese', f(0x682A) + f(0x5F0F) + f(0x4F1A) + f(0x793E) + ' ' + f(0x5C71) + f(0x7530) + f(0x5EFA) + f(0x8A2D)],
+  ])('still accepts %s', (_label, name) => {
+    expect(sender.orgNameProblem(name)).toBeNull();
+  });
+
+  test('MUTANT: without the classic-accent rule the insular r gets through', () => {
+    const os = require('os');
+    const path = require('path');
+    const real = path.join(__dirname, '..', 'server', 'email-sender.js');
+    const src = fs.readFileSync(real, 'utf8');
+    const anchor = 'if (base !== null && CLASSIC_ACCENT_BASE_RE.test(base) && !(cp >= 0x300 && cp <= 0x362)) {';
+    expect(src.split(anchor).length).toBe(2);
+    const out = src.replace(anchor, 'if (false) {');
+    const tmp = path.join(os.tmpdir(), '_p86_es_marks_' + process.pid + '_' + Math.random().toString(36).slice(2, 8) + '.js');
+    fs.writeFileSync(tmp, out, 'utf8');
+    try {
+      const mutated = require(tmp);
+      expect(mutated.orgNameProblem('P' + f(0x1ACD) + 'oject 86')).toBeNull();
+    } finally {
+      try { fs.unlinkSync(tmp); } catch (_) { /* already gone */ }
+    }
   });
 });

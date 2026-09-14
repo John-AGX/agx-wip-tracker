@@ -298,7 +298,7 @@ describe('a spreadsheet no copy could be made from', () => {
   });
 
   test('FIRES: read "no copy" as a PDF-style row and the spreadsheet claims the whole file shows', async () => {
-    const broken = mutate(TICKETS_SRC, "if (!CREW_SHEET_KINDS[ct.kind]) return 'unchecked';", "if (!ct.copy) return 'unchecked';");
+    const broken = mutate(TICKETS_SRC, "if (CREW_WHOLE_FILE_KINDS[ct.kind] && ct.has_prices !== true) return 'unchecked';", "if (!ct.copy) return 'unchecked';");
     const r = await noCopyRow(broken, { copy_problem: 'x' });
     expect(r.status).toBe(STATUS.whole);
   });
@@ -334,12 +334,39 @@ describe('a row stored before copies existed', () => {
     expect(r.status).not.toBe(STATUS.repick);
   });
 
-  test('a PDF from before keeps the whole-file warning, whatever old verdict it carries', async () => {
-    for (const verdict of [null, 'yes']) {
+  test('a PDF from before keeps the whole-file warning unless its byte check found prices', async () => {
+    for (const verdict of [null, false, 'yes']) {
       const r = await legacyRow(TICKETS_SRC, { attachment_id: 'a_pdf', filename: 'Stair plan.pdf', kind: 'pdf', has_prices: verdict });
       expect(r.cls).toContain('is-unchecked');
       expect(r.status).toBe(STATUS.whole);
     }
+  });
+
+  // The old byte check read the bytes, so a {kind:'pdf', has_prices:true} row
+  // was a workbook with a .pdf name. The server drops its kind and keeps it off
+  // default links; the office must not be told the crew sees the whole file.
+  test('a "pdf" row whose old byte check found prices reads as a spreadsheet to re-pick', async () => {
+    const r = await legacyRow(TICKETS_SRC, { attachment_id: 'a_pdf', filename: 'bid.pdf', kind: 'pdf', has_prices: true });
+    expect(r.cls).toContain('is-repick');
+    expect(r.status).toBe(STATUS.repick);
+  });
+
+  test('FIRES: ignore the old verdict and the priced "pdf" claims the whole file shows', async () => {
+    const broken = mutate(TICKETS_SRC, "if (CREW_WHOLE_FILE_KINDS[ct.kind] && ct.has_prices !== true) return 'unchecked';", "if (CREW_WHOLE_FILE_KINDS[ct.kind]) return 'unchecked';");
+    const r = await legacyRow(broken, { attachment_id: 'a_pdf', filename: 'bid.pdf', kind: 'pdf', has_prices: true });
+    expect(r.status).toBe(STATUS.whole);
+  });
+
+  test("a kind the reader could not name shows the server's reason, not the whole-file warning", async () => {
+    const r = await legacyRow(TICKETS_SRC, Object.assign({ attachment_id: 'a_u', filename: 'takeoff.dat', kind: 'unknown' }, BASE, { copy: null, copy_problem: 'This file is not a spreadsheet the reader can open.' }));
+    expect(r.cls).toContain('is-original');
+    expect(r.status).toBe('No price-free copy could be made (This file is not a spreadsheet the reader can open), so this file only shows on links sent with financial details.');
+  });
+
+  test('FIRES: go back to "anything not a spreadsheet kind is the whole file" and the unknown kind claims it', async () => {
+    const broken = mutate(TICKETS_SRC, "if (CREW_WHOLE_FILE_KINDS[ct.kind] && ct.has_prices !== true) return 'unchecked';", "if (!({ xlsx: 1, xls: 1, csv: 1 })[ct.kind]) return 'unchecked';");
+    const r = await legacyRow(broken, Object.assign({ attachment_id: 'a_u', filename: 'takeoff.dat', kind: 'unknown' }, BASE, { copy: null, copy_problem: 'x' }));
+    expect(r.status).toBe(STATUS.whole);
   });
 
   test('the save toast never says a plain "shown" for a spreadsheet the server answered with no copy key', async () => {
@@ -411,8 +438,12 @@ describe('a PDF or photo is still asked about first', () => {
 });
 
 describe('nothing on the office side reads the old price verdict', () => {
-  test('no has_prices property read, no dead status classes in the script or the stylesheet', () => {
-    expect(TICKETS_SRC).not.toMatch(/\.has_prices\b|\[\s*['"]has_prices['"]\s*\]/);
+  // One read is allowed, and it can only narrow: a priced 'pdf' row stops
+  // reading as the whole file (the server drops that row's kind the same way).
+  test('the old verdict is read only to narrow; no dead status classes in the script or the stylesheet', () => {
+    const reads = TICKETS_SRC.match(/\.has_prices\b|\[\s*['"]has_prices['"]\s*\]/g) || [];
+    expect(reads).toEqual(['.has_prices']);
+    expect(TICKETS_SRC).toContain("if (CREW_WHOLE_FILE_KINDS[ct.kind] && ct.has_prices !== true) return 'unchecked';");
     for (const dead of ['is-priced', 'is-unreadable', 'CREW_STATUS', 'CREW_UNREADABLE_NEXT']) {
       expect(TICKETS_SRC).not.toContain(dead);
     }

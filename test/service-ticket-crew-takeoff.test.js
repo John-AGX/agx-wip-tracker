@@ -20,8 +20,16 @@
 //      crew_takeoff.copy, through normalizeMaterials. A read that yields no
 //      lines is still stored, with copy null and copy_problem in words. An old
 //      .xls is never read: copy null and the one fix. A PDF or photo is never
-//      read: copy null, copy_problem null. There is no price check any more,
-//      and no has_prices.
+//      read FOR LINES: copy null, copy_problem null. There is no price check
+//      any more, and no has_prices.
+//   3b. A NAME IS ONLY A CLAIM (review, 2026-09-14). A PDF or photo by name
+//      has its BYTES read (storage.getBuffer, under the same slot) and sniffed
+//      (materials-extract sniffKind). Bytes of the kind the name says keep 3.
+//      A workbook behind the name is stored as the spreadsheet kind it is and
+//      copied like one ('Lead Report.pdf' holding an xlsx is kind xlsx with a
+//      copy); an OLE .xls is kind xls with the one fix; anything else is kind
+//      'unknown' with copy null and a sentence saying only financial links
+//      show it.
 //   4. The read runs under the extract door's one-read-per-user slot and its
 //      LAZY AI gate: the limiters run only when the extractor asks, and a
 //      limiter's 429 stands with nothing stored.
@@ -60,7 +68,28 @@ jest.mock('../server/services/materials-extract', () => Object.assign(
 const realExtract = jest.requireActual('../server/services/materials-extract.js');
 const MB = 1024 * 1024;
 
-const mockGetBuffer = jest.fn(async (key) => Buffer.from('bytes of ' + key));
+// What storage holds, by key. A file picked as a PDF or photo is proved from
+// its bytes now, so those keys hold bytes of the kind their names say; every
+// other key answers 'bytes of <key>', which the spreadsheet tests read back.
+// The renamed files are the review's: a priced workbook, an OLE .xls, a CSV,
+// an HTML page and a PNG, each under a PDF's or a photo's name.
+const PDF_BYTES = Buffer.from('%PDF-1.4\n1 0 obj\n<< >>\nendobj\n%%EOF\n');
+const JPEG_BYTES = Buffer.concat([Buffer.from([0xFF, 0xD8, 0xFF, 0xE0]), Buffer.from('JFIF photo')]);
+const PNG_BYTES = Buffer.concat([Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), Buffer.from('pngbody')]);
+const HEIC_BYTES = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypheic'), Buffer.alloc(16)]);
+const XLSX_BYTES = Buffer.concat([Buffer.from([0x50, 0x4B, 0x03, 0x04]), Buffer.from('xl/workbook.xml Unit Cost $45.00')]);
+const XLS_BYTES = Buffer.from([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]);
+const mockBytes = {
+  'orig/a_j2_p': PDF_BYTES, 'orig/a_e1': PDF_BYTES, 'orig/a_j2_plans': PDF_BYTES, 'orig/a_j2_img': JPEG_BYTES,
+  'orig/a_j2_heic': HEIC_BYTES,
+  'orig/a_j2_ren': XLSX_BYTES, 'orig/a_j2_renjpg': XLSX_BYTES, 'orig/a_j2_renxls': XLS_BYTES,
+  'orig/a_j2_csvjpg': Buffer.from('Description,Qty,Unit Cost\r\nDrip edge,20,$45.00\r\n'),
+  'orig/a_j2_htmlpdf': Buffer.from('<html><body>Unit Cost $45.00</body></html>'),
+  'orig/a_j2_pngpdf': PNG_BYTES,
+};
+const storedBytes = async (key) => (Object.prototype.hasOwnProperty.call(mockBytes, key)
+  ? mockBytes[key] : Buffer.from('bytes of ' + key));
+const mockGetBuffer = jest.fn(storedBytes);
 jest.mock('../server/storage', () => ({
   storage: { getBuffer: (...args) => mockGetBuffer(...args) },
 }));
@@ -165,7 +194,14 @@ function seed() {
       ('a_j9',     'job', 'j9', 'rival.xlsx',                'application/zip',   1200, '2026-09-10 10:00:00', 2, 50, 'orig/a_j9'),
       ('a_l1',     'lead', 'l1', 'lead-takeoff.xlsx',        'application/zip',   3000, '2026-09-05 10:00:00', 1, 10, 'orig/a_l1'),
       ('a_e1',     'estimate', 'e1', 'priced estimate.pdf',  'application/pdf',   3000, '2026-09-04 10:00:00', 1, 10, 'orig/a_e1'),
-      ('a_j2_plans', 'job', 'j2', 'Plan set.pdf',  'application/pdf',          ${38 * MB}, '2026-09-08 10:00:00', 1, 10, 'orig/a_j2_plans');
+      ('a_j2_plans', 'job', 'j2', 'Plan set.pdf',  'application/pdf',          ${38 * MB}, '2026-09-08 10:00:00', 1, 10, 'orig/a_j2_plans'),
+      ('a_j2_heic', 'job', 'j2', 'IMG_0412.heic',            'image/heic',        4096, '2026-09-11 10:00:00', 1, 10, 'orig/a_j2_heic'),
+      ('a_j2_ren',  'job', 'j2', 'Lead Report.pdf',          'application/zip',   4096, '2026-09-12 10:00:00', 1, 10, 'orig/a_j2_ren'),
+      ('a_j2_renjpg', 'job', 'j2', 'Smith bid.jpg',          'application/zip',   4096, '2026-09-12 10:00:00', 1, 10, 'orig/a_j2_renjpg'),
+      ('a_j2_renxls', 'job', 'j2', 'Old bid.pdf',            'application/octet-stream', 4096, '2026-09-12 10:00:00', 1, 10, 'orig/a_j2_renxls'),
+      ('a_j2_csvjpg', 'job', 'j2', 'pull sheet.jpg',         'image/jpeg',        4096, '2026-09-12 10:00:00', 1, 10, 'orig/a_j2_csvjpg'),
+      ('a_j2_htmlpdf', 'job', 'j2', 'quote.pdf',             'application/pdf',   4096, '2026-09-12 10:00:00', 1, 10, 'orig/a_j2_htmlpdf'),
+      ('a_j2_pngpdf', 'job', 'j2', 'scan.pdf',               'application/pdf',   4096, '2026-09-12 10:00:00', 1, 10, 'orig/a_j2_pngpdf');
   `);
 }
 
@@ -225,7 +261,7 @@ beforeEach(() => {
   mockExtract.mockReset();
   mockExtract.mockImplementation(async (opts) => readOk(opts.att));
   mockGetBuffer.mockReset();
-  mockGetBuffer.mockImplementation(async (key) => Buffer.from('bytes of ' + key));
+  mockGetBuffer.mockImplementation(storedBytes);
   mockLimiter.ai = false;
   mockLimiter.hourly = false;
   mockLimiter.calls = [];
@@ -291,6 +327,7 @@ const TICKET_404 = [404, { error: 'Service ticket not found' }];
 const FILE_404 = [404, { error: 'File not found' }];
 const XLS_PROBLEM = 'Old .xls files can\'t be read — save it as .xlsx for a price-free copy.';
 const NO_LINES_PROBLEM = 'No material lines could be read from that file, so links that hide financial details will not show it.';
+const NOT_READABLE_PROBLEM = 'This file isn\'t a readable PDF, photo or spreadsheet, so it only shows on links sent with financial details.';
 const TOO_LARGE_422 = [422, { error: 'That file is too large for the crew link (over 25 MB) — ask the office to send it another way.' }];
 const NO_WRITE_CAP = [403, { error: 'Missing capability: JOBS_EDIT_ANY JOBS_EDIT_OWN' }];
 const LIMITER_429 = [429, { error: 'Too many requests — please wait a moment and try again.' }];
@@ -427,15 +464,21 @@ describe('choosing the file: what is stored, and the copy made from a spreadshee
     expect(mockGetBuffer).not.toHaveBeenCalled();
   });
 
-  test('a PDF or a photo is never read: copy null and copy_problem null', async () => {
-    for (const [id, kind, filename] of [['a_j2_p', 'pdf', 'Smith job - 48k bid.pdf'], ['a_j2_img', 'image', 'pull sheet photo.jpg']]) {
+  test('a PDF or a photo is never read for lines: its bytes prove its name, copy null and copy_problem null', async () => {
+    for (const [id, kind, filename] of [
+      ['a_j2_p', 'pdf', 'Smith job - 48k bid.pdf'],
+      ['a_j2_img', 'image', 'pull sheet photo.jpg'],
+      // An iPhone original: a photo by its ftyp brand, though no browser type.
+      ['a_j2_heic', 'image', 'IMG_0412.heic'],
+    ]) {
       expect((await choose(ticketRouter, WIDE, 'st_j2', id)).statusCode).toBe(200);
       expect(stored('st_j2')).toEqual({
         attachment_id: id, filename, kind, set_at: expect.any(String), set_by: WIDE, copy: null, copy_problem: null,
       });
     }
     expect(mockExtract).not.toHaveBeenCalled();
-    expect(mockGetBuffer).not.toHaveBeenCalled();
+    // Read once each, to be sniffed — and nothing more.
+    expect(mockGetBuffer.mock.calls).toEqual([['orig/a_j2_p'], ['orig/a_j2_img'], ['orig/a_j2_heic']]);
     expect(mockLimiter.calls).toEqual([]);
   });
 
@@ -470,6 +513,114 @@ describe('choosing the file: what is stored, and the copy made from a spreadshee
     ]);
     const eventWrites = writesSince(before).filter((e) => /service_ticket_events/.test(e.sql));
     expect(JSON.stringify(eventWrites)).not.toMatch(/48k|Smith|\.pdf|a_j2_p|Lead Report|Drip edge/);
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * A NAME IS ONLY A CLAIM (review, 2026-09-14). The finding: a priced workbook
+ * that reached the job as "Lead Report.pdf" or "Smith bid.jpg" (an inbound
+ * email attachment keeps the sender's name; an octet-stream upload passes the
+ * family check) was a "pdf" by takeoffKind, so the PUT never opened it and
+ * stored {kind:'pdf', copy:null} — and every crew link, financials hidden or
+ * not, was then handed the workbook itself. The bytes decide now.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('a PDF or photo by name is proved from its bytes', () => {
+  test('the review\'s repro: "Lead Report.pdf" holding a workbook with Unit Cost $45.00 is stored as an xlsx WITH its copy', async () => {
+    const r = await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_ren');
+    expect(r.statusCode).toBe(200);
+    expect(stored('st_j2')).toEqual({
+      attachment_id: 'a_j2_ren', filename: 'Lead Report.pdf', kind: 'xlsx',
+      set_at: expect.any(String), set_by: WIDE,
+      copy: { lines: LINES, sheet: 'Takeoff', method: 'sheet', made_at: expect.any(String) },
+      copy_problem: null,
+    });
+    expect(r.body.crew_takeoff).toEqual(stored('st_j2'));
+    // The extractor read the proved row, and was handed the SAME bytes the
+    // sniff read: the file left storage once.
+    expect(mockExtract).toHaveBeenCalledTimes(1);
+    const opts = mockExtract.mock.calls[0][0];
+    expect(opts.att).toMatchObject({ id: 'a_j2_ren', filename: 'Lead Report.pdf', original_key: 'orig/a_j2_ren' });
+    expect(await opts.getBuffer('orig/a_j2_ren')).toBe(XLSX_BYTES);
+    expect(mockGetBuffer.mock.calls).toEqual([['orig/a_j2_ren']]);
+    // Nothing of the workbook's but the three scrubbed strings a line.
+    expect(JSON.stringify(stored('st_j2'))).not.toMatch(/Unit Cost|\$45/);
+  });
+
+  test('a real exceljs workbook with Unit Price and Total columns, named "Smith job - 48k bid.pdf", sniffs as the xlsx it is', async () => {
+    const ExcelJS = jest.requireActual('exceljs');
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Takeoff');
+    ws.addRow(['Description', 'Qty', 'Unit', 'Unit Price', 'Total']);
+    ws.addRow(['Drip edge 10 ft', 20, 'pc', 45, 900]);
+    const real = Buffer.from(await wb.xlsx.writeBuffer());
+    mockGetBuffer.mockImplementation(async (key) => (key === 'orig/a_j2_p' ? real : storedBytes(key)));
+    expect((await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_p')).statusCode).toBe(200);
+    expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_j2_p', kind: 'xlsx', copy: { lines: LINES }, copy_problem: null });
+    expect(await mockExtract.mock.calls[0][0].getBuffer('orig/a_j2_p')).toBe(real);
+  });
+
+  test('the same under a photo\'s name: "Smith bid.jpg" holding a workbook is an xlsx with its copy', async () => {
+    expect((await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_renjpg')).statusCode).toBe(200);
+    expect(stored('st_j2')).toMatchObject({
+      attachment_id: 'a_j2_renjpg', filename: 'Smith bid.jpg', kind: 'xlsx', copy: { lines: LINES }, copy_problem: null,
+    });
+    expect(mockExtract).toHaveBeenCalledTimes(1);
+  });
+
+  test('a renamed workbook the extractor cannot copy is still the xlsx it is: copy null and the extractor\'s words', async () => {
+    mockExtract.mockImplementation(async () => ({ ok: false, code: 'not_a_takeoff', error: 'Lead Report.pdf does not look like a takeoff.' }));
+    expect((await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_ren')).statusCode).toBe(200);
+    expect(stored('st_j2')).toMatchObject({ kind: 'xlsx', copy: null, copy_problem: 'Lead Report.pdf does not look like a takeoff.' });
+  });
+
+  test('an OLE .xls behind a PDF\'s name is kind xls with the one fix, and is not handed to the extractor', async () => {
+    expect((await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_renxls')).statusCode).toBe(200);
+    expect(stored('st_j2')).toEqual({
+      attachment_id: 'a_j2_renxls', filename: 'Old bid.pdf', kind: 'xls',
+      set_at: expect.any(String), set_by: WIDE, copy: null, copy_problem: XLS_PROBLEM,
+    });
+    expect(mockExtract).not.toHaveBeenCalled();
+  });
+
+  test('bytes that are neither the name\'s kind nor a spreadsheet are kind unknown: copy null and the sentence', async () => {
+    for (const [id, filename] of [
+      ['a_j2_csvjpg', 'pull sheet.jpg'],     // a CSV under a photo's name
+      ['a_j2_htmlpdf', 'quote.pdf'],         // an HTML page under a PDF's name
+      ['a_j2_pngpdf', 'scan.pdf'],           // a photo under a PDF's name
+    ]) {
+      expect({ id, status: (await choose(ticketRouter, WIDE, 'st_j2', id)).statusCode }).toEqual({ id, status: 200 });
+      expect(stored('st_j2')).toEqual({
+        attachment_id: id, filename, kind: 'unknown',
+        set_at: expect.any(String), set_by: WIDE, copy: null, copy_problem: NOT_READABLE_PROBLEM,
+      });
+    }
+    expect(mockExtract).not.toHaveBeenCalled();
+    expect(mockLimiter.calls).toEqual([]);
+  });
+
+  test('a storage failure proving a PDF is a plain 500: nothing stored, and the slot comes back', async () => {
+    mockGetBuffer.mockImplementationOnce(async () => { throw new Error('R2 NoSuchKey orig/a_j2_p'); });
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(answer(await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_p'))).toEqual([500, { error: 'Failed to change the crew link takeoff' }]);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(stored('st_j2')).toBeNull();
+    expect((await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_p')).statusCode).toBe(200);
+    expect(stored('st_j2')).toMatchObject({ kind: 'pdf', copy: null, copy_problem: null });
+  });
+
+  test('a limiter\'s 429 while copying a renamed workbook stands, with nothing stored', async () => {
+    mockLimiter.ai = true;
+    mockExtract.mockImplementation(async (opts) => {
+      const go = await opts.beforeAi();
+      return go ? readOk(opts.att) : { ok: false, code: 'rate_limited', error: '86 is busy — try again in a minute.' };
+    });
+    const before = eng.log.length;
+    expect(answer(await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_ren'))).toEqual(LIMITER_429);
+    expect(writesSince(before)).toEqual([]);
+    expect(stored('st_j2')).toBeNull();
   });
 });
 
@@ -658,9 +809,15 @@ describe('one file read per user at a time', () => {
     expect(writesSince(before)).toEqual([]);
     expect(mockExtract).toHaveBeenCalledTimes(1);
 
-    // A PDF, a photo and an old .xls read no file, and clearing reads none,
-    // so none of them takes the slot.
-    for (const id of ['a_j2_p', 'a_j2_img', 'a_j2_old', null]) {
+    // A PDF or a photo is read now, to prove its name from its bytes, so it
+    // takes the slot too — busy, and nothing written, not even a sniff.
+    for (const id of ['a_j2_p', 'a_j2_img', 'a_j2_ren']) {
+      expect({ id, a: answer(await choose(ticketRouter, WIDE, 'st_j2', id)) }).toEqual({ id, a: BUSY });
+    }
+    expect(mockGetBuffer).not.toHaveBeenCalled();
+    expect(writesSince(before)).toEqual([]);
+    // An old .xls reads no file, and clearing reads none, so neither takes it.
+    for (const id of ['a_j2_old', null]) {
       expect({ id, status: (await choose(ticketRouter, WIDE, 'st_j2', id)).statusCode }).toEqual({ id, status: 200 });
     }
     // Another user is not held up.
@@ -709,13 +866,15 @@ describe('mutants', () => {
 
   test('never give the read slot back and the user\'s next spreadsheet choice is refused as busy', async () => {
     const mut = mutant(TICKET_ROUTES, [[
-      '            beforeAi: lazyAiGate(req, res),\n'
-        + '          });\n'
+      '              beforeAi: lazyAiGate(req, res),\n'
+        + '            });\n'
+        + '          }\n'
         + '        } finally {\n'
         + '          release();\n'
         + '        }',
-      '            beforeAi: lazyAiGate(req, res),\n'
-        + '          });\n'
+      '              beforeAi: lazyAiGate(req, res),\n'
+        + '            });\n'
+        + '          }\n'
         + '        } finally {\n'
         + '        }',
     ]]);
@@ -746,6 +905,32 @@ describe('mutants', () => {
     ]]);
     expect((await choose(mut, WIDE, 'st_j2', 'a_j2_x')).statusCode).toBe(200);
     expect(stored('st_j2')).toMatchObject({ copy: null, copy_problem: '86 is busy — try again in a minute.' });
+  });
+
+  test('drop the byte sniff and "Lead Report.pdf" holding a priced workbook is stored as a PDF with no copy — the review\'s finding', async () => {
+    expect((await choose(ticketRouter, WIDE, 'st_j2', 'a_j2_ren')).statusCode).toBe(200);
+    expect(stored('st_j2')).toMatchObject({ kind: 'xlsx', copy: { lines: LINES } });
+    const mut = mutant(TICKET_ROUTES, [[
+      '            kind = kindFromBytes(kind, sniffKind(held, att.filename, att.mime_type));',
+      '            // MUTANT: the name decides',
+    ]]);
+    mockExtract.mockClear();
+    expect((await choose(mut, WIDE, 'st_j2', 'a_j2_ren')).statusCode).toBe(200);
+    // The shape the share side then trusted as a PDF on every link.
+    expect(stored('st_j2')).toMatchObject({ attachment_id: 'a_j2_ren', kind: 'pdf', copy: null, copy_problem: null });
+    expect(mockExtract).not.toHaveBeenCalled();
+    // The CSV under a photo's name is let through as a photo the same way.
+    expect((await choose(mut, WIDE, 'st_j2', 'a_j2_csvjpg')).statusCode).toBe(200);
+    expect(stored('st_j2')).toMatchObject({ kind: 'image', copy_problem: null });
+  });
+
+  test('keep the name when the bytes are a spreadsheet and the workbook is stored as a "pdf" again', async () => {
+    const mut = mutant(TICKET_ROUTES, [[
+      "  if (byteKind === 'xlsx' || byteKind === 'xls' || byteKind === 'csv') return byteKind;\n  return 'unknown';",
+      "  if (byteKind === 'xlsx' || byteKind === 'xls' || byteKind === 'csv') return nameKind;\n  return 'unknown';",
+    ]]);
+    expect((await choose(mut, WIDE, 'st_j2', 'a_j2_ren')).statusCode).toBe(200);
+    expect(stored('st_j2')).toMatchObject({ kind: 'pdf', copy: null, copy_problem: null });
   });
 
   test('drop the size cap and the 38 MB plan set is stored for a door that will never send it', async () => {
