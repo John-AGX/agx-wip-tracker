@@ -2,7 +2,14 @@
 // sync-apply.js). Status moves forward only; cost lands on an unlocked PO's line
 // or, ticked on purpose, as an approved addendum on a locked one — never below
 // what is billed; a sub is filled only from exactly one sub of THIS organization.
-// No bill is ever created and no sub portal access is ever granted.
+// No bill is ever created. A PO a sync leaves sent or approved (any active
+// status) with a sub of THIS organization gives that sub portal access to the
+// job's files — the PO page's own grant (services/po-sub-access.js), run after
+// the purchase-order write commits: never for a draft, a PO without a sub, a
+// foreign sub, or a write that did not persist. A sub that already has that
+// access is left alone (nothing rewritten, nothing reported); one whose access
+// is missing — a linked, up-to-date PO included — is counted on the page's safe
+// button, named in its confirm, and given access when it is pressed.
 //
 // Driven through the real express router, requireAuth / requireOrg /
 // ROLES_MANAGE, a JWT, and the pg-sqlite engine derived from server/db.js.
@@ -21,6 +28,48 @@ const engine = createPgSqlite(
   sqliteSchema(tableNames(), { pk: { organizations: 'id', users: 'id', roles: 'name', jobs: 'id', leads: 'id', clients: 'id', job_purchase_orders: 'id', subs: 'id', job_vendor_bills: 'id' } }),
   { jsonColumns: ['data'] }
 );
+// The derived schema carries no constraints. These two are the ones the grant's
+// ON CONFLICT arms name (server/db.js: idx_job_subs_unique_v2 and the table
+// UNIQUE on attachment_folder_grants) — without them every grant would throw
+// at prepare and "no access was granted" would pass for the wrong reason.
+engine.db.exec(`
+  CREATE UNIQUE INDEX idx_job_subs_unique_v2 ON job_subs(job_id, sub_id);
+  CREATE UNIQUE INDEX idx_afg_unique ON attachment_folder_grants(sub_id, entity_type, entity_id, folder);
+`);
+
+// ── the transaction boundary pg-sqlite cannot show ─────────────────────────
+// Postgres runs a pool query on ANOTHER connection: inside a client's open
+// transaction it cannot see that transaction's uncommitted PO, and its own
+// writes survive the transaction's rollback. pg-sqlite has one connection, so
+// it would show neither. Instead, every grant write that reaches the POOL while
+// a client transaction is open is recorded, and the tests require none.
+const txWatch = { open: 0, grantsInsideTx: [], failCommit: 0 };
+const GRANT_WRITE = /INSERT INTO (job_subs|attachment_folder_grants)\b/i;
+{
+  const rawConnect = engine.pool.connect;
+  const rawQuery = engine.pool.query;
+  engine.pool.connect = async () => {
+    const c = await rawConnect();
+    let inTx = false;
+    const close = () => { if (inTx) { inTx = false; txWatch.open--; } };
+    return {
+      query: async (sql, params) => {
+        const t = String(sql).trim().toUpperCase();
+        if (t === 'BEGIN') { inTx = true; txWatch.open++; }
+        if (t === 'COMMIT' && txWatch.failCommit > 0) { txWatch.failCommit--; throw new Error('test: the commit was refused'); }
+        const out = await c.query(sql, params);
+        if (t === 'COMMIT' || t === 'ROLLBACK') close();
+        return out;
+      },
+      release: () => { close(); c.release(); },
+    };
+  };
+  engine.pool.query = async (sql, params) => {
+    if (txWatch.open > 0 && GRANT_WRITE.test(String(sql))) txWatch.grantsInsideTx.push(String(sql).replace(/\s+/g, ' ').slice(0, 60));
+    return rawQuery(sql, params);
+  };
+}
+
 globalThis.__P86_CLICKR_PO_ENGINE__ = engine;
 jest.mock('../server/db', () => ({ pool: globalThis.__P86_CLICKR_PO_ENGINE__.pool }));
 jest.mock('@anthropic-ai/sdk', () => {
@@ -35,6 +84,7 @@ const preview = require('../server/services/clickr/sync-preview');
 const poMatch = require('../server/services/clickr/po-match');
 const { signToken, setRolePool, refreshRoleCache } = require('../server/auth');
 const orgRoutes = require('../server/routes/admin-organizations-routes');
+const poRoutes = require('../server/routes/purchase-order-routes');
 
 const KEY = 'ck_live_Zq9SECRETKEYxy7_0123456789ab';
 const BASE = 'https://api.clickr.cloud';
@@ -95,7 +145,7 @@ function seed() {
     DELETE FROM job_purchase_orders; DELETE FROM job_vendor_bills; DELETE FROM job_subs; DELETE FROM attachment_folder_grants;
     INSERT INTO organizations (id, slug, name) VALUES (1, 'agx', 'AGX Central Florida'), (2, 'other', 'Other Builders');
     INSERT INTO roles (name, label, capabilities) VALUES
-      ('admin', 'Admin', '["ROLES_MANAGE","USERS_MANAGE","JOBS_VIEW_ALL"]'),
+      ('admin', 'Admin', '["ROLES_MANAGE","USERS_MANAGE","JOBS_VIEW_ALL","ESTIMATES_EDIT"]'),
       ('pm', 'PM', '["JOBS_VIEW_ALL","LEADS_VIEW"]');
     INSERT INTO users (id, email, password_hash, name, role, organization_id, active) VALUES
       (10, 'admin@agx.test', 'x', 'Ana Ruiz', 'admin', 1, 1),
@@ -130,6 +180,26 @@ const poRow = (id) => engine.db.prepare('SELECT * FROM job_purchase_orders WHERE
 const poData = (id) => JSON.parse(poRow(id).data);
 const poByBt = (btId) => engine.db.prepare('SELECT * FROM job_purchase_orders WHERE bt_po_id = ?').all(btId);
 const count = (table) => engine.db.prepare('SELECT COUNT(*) AS n FROM ' + table).get().n;
+const setPo = (id, sets) => engine.db.prepare('UPDATE job_purchase_orders SET ' + Object.keys(sets).map((k) => k + ' = ?').join(', ') + ' WHERE id = ?')
+  .run(...Object.values(sets), id);
+
+// What sub portal access exists: the job-level assignment (with the tenant it
+// was stamped with) and the job folder grant that surfaces the job in the portal.
+function access() {
+  return {
+    assigned: engine.db.prepare('SELECT job_id, sub_id, level, organization_id FROM job_subs').all()
+      .map((r) => r.job_id + '/' + r.sub_id + '/' + r.level + '@' + r.organization_id).sort(),
+    granted: engine.db.prepare('SELECT sub_id, entity_type, entity_id, folder FROM attachment_folder_grants').all()
+      .map((r) => r.sub_id + ' -> ' + r.entity_type + ':' + r.entity_id + '/' + r.folder).sort(),
+  };
+}
+const NONE = { assigned: [], granted: [] };
+// Access for these subs on job j-1, stamped with j-1's tenant.
+const onJ1 = (...subs) => ({
+  assigned: subs.map((s) => 'j-1/' + s + '/job@' + AGX).sort(),
+  granted: subs.map((s) => s + ' -> job:j-1/general').sort(),
+});
+const clearAccess = () => engine.db.exec('DELETE FROM job_subs; DELETE FROM attachment_folder_grants;');
 
 let server;
 let baseUrl;
@@ -167,6 +237,9 @@ async function poRows() {
 }
 const byBt = (ds, id) => ds.rows.find((r) => String(r.bt.btId) === String(id));
 
+let warn;
+const refusals = () => warn.mock.calls.map((c) => String(c[0])).filter((m) => /\[po sub-access\] refused:/.test(m));
+
 beforeAll(async () => {
   seed();
   setRolePool(engine.pool);
@@ -174,6 +247,7 @@ beforeAll(async () => {
   const app = express();
   app.use(express.json());
   app.use('/api/admin/organizations', orgRoutes);
+  app.use('/api', poRoutes);
   await new Promise((resolve) => { server = app.listen(0, '127.0.0.1', resolve); });
   baseUrl = 'http://127.0.0.1:' + server.address().port;
   global.fetch = clickrFetch;
@@ -188,7 +262,16 @@ beforeEach(async () => {
   delete process.env.CLICKR_ORG_SLUG;
   preview.forgetFetch(AGX);
   seed();
+  txWatch.grantsInsideTx = [];
+  txWatch.failCommit = 0;
+  warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
   await refreshRoleCache();
+});
+afterEach(() => {
+  // The grant must never have run through the pool inside a PO transaction.
+  expect(txWatch.grantsInsideTx).toEqual([]);
+  expect(txWatch.open).toBe(0);
+  warn.mockRestore();
 });
 
 describe('PREVIEW — purchase orders matched inside their own linked job', () => {
@@ -205,6 +288,10 @@ describe('PREVIEW — purchase orders matched inside their own linked job', () =
     const f1 = Object.fromEntries(r1.corrections.map((c) => [c.field, c]));
     expect(Object.keys(f1).sort()).toEqual(['cost', 'costCode', 'scheduledCompletion', 'status', 'sub']);
     expect([f1.status.value, f1.sub.value, f1.cost.value, f1.scheduledCompletion.to]).toEqual(['approved', 's-1', 5500, '2026-10-01']);
+    // The page says what applying does: the sub gets portal access once the PO is sent or approved.
+    expect(f1.status.note).toMatch(/sub gets portal access to the job's files, as on the PO page/);
+    expect(f1.status.note).not.toMatch(/does not grant/);
+    expect(f1.sub.note).toMatch(/portal access to the job's files once the purchase order is sent or approved/);
 
     // Locked: the status moves forward; the cost is an addendum a person must tick.
     const r2 = byBt(ds, 8002);
@@ -227,9 +314,24 @@ describe('PREVIEW — purchase orders matched inside their own linked job', () =
     expect(byBt(ds, 8015).class).toBe('refused');
     // Another organization's sub of that exact name is not a P86 sub here.
     expect(byBt(ds, 8016).notes.join(' ')).toMatch(/not a P86 sub yet/);
+    // Nothing synced yet, no access anywhere: only active POs with an org sub are due.
+    expect(ds.rows.filter((r) => r.subAccessDue).map((r) => String(r.bt.btId)).sort()).toEqual(['8002', '8003']);
 
     expect(ds.notInBuildertrend.rows.map((p) => p.id)).toEqual(['po-e']);
     expect(JSON.stringify(ds)).not.toContain('po-x');
+  });
+});
+
+describe('PREVIEW — the status note promises portal access only where there is a sub of this organization', () => {
+  const statusNote = async () => (byBt(await poRows(), 8005).corrections.find((c) => c.field === 'status') || {}).note || '';
+  test('no sub, another tenant\'s sub, then a sub of this organization', async () => {
+    // po-f issued; Buildertrend 8005 is approved and names no sub: a forward status correction.
+    setPo('po-f', { status: 'issued' });
+    expect(await statusNote()).not.toMatch(/portal access/);
+    setPo('po-f', { sub_id: 's-x' });
+    expect(await statusNote()).not.toMatch(/portal access/);
+    setPo('po-f', { sub_id: 's-2' });
+    expect(await statusNote()).toMatch(/its sub gets portal access to the job's files, as on the PO page/);
   });
 });
 
@@ -266,14 +368,148 @@ describe('APPLY — forward status, cost on the line or as an approved addendum'
     expect(poMatch.poTotal(poData('po-g'))).toBe(500);
   });
 
-  test('no bill, no sub assignment and no folder grant is ever written', async () => {
+  test('no bill is ever written; sub access only for an active PO with a sub of this organization', async () => {
     const bills = count('job_vendor_bills');
     await put(ADMIN, { mode: 'safe' });
     await put(ADMIN, { btIds: ['8001', '8002'] });
     await put(ADMIN, { mode: 'create' });
     expect(count('job_vendor_bills')).toBe(bills);
-    expect(count('job_subs')).toBe(0);
-    expect(count('attachment_folder_grants')).toBe(0);
+    // s-1: po-c (work complete, linked by safe mode), po-a (8001 approved with its
+    // sub filled) and the created 8010. s-2: po-b. Never s-x (po-h is a draft;
+    // 8016's vendor is another tenant's sub and was never set).
+    expect(access()).toEqual(onJ1('s-1', 's-2'));
+    expect(JSON.stringify(access())).not.toContain('s-x');
+  });
+});
+
+describe('APPLY — sub portal access, as the PO page grants it', () => {
+  test('0001 applied approved with its sub filled: the sub is assigned to the job and granted its files, and the result says so', async () => {
+    expect(access()).toEqual(NONE);
+    const r = await put(ADMIN, { btIds: ['8001'] });
+    expect([r.json.results[0].outcome, r.json.results[0].subAccess, r.json.counts.subAccess]).toEqual(['applied', true, 1]);
+    expect(access()).toEqual(onJ1('s-1'));
+    // Stamped with the job's tenant, granted by the person who pressed Apply.
+    expect(engine.db.prepare('SELECT granted_by FROM attachment_folder_grants').get().granted_by).toBe(10);
+  });
+
+  test('a sub filled on a draft grants nothing; the status move out of draft then grants it', async () => {
+    const sub = await put(ADMIN, { btIds: ['8001'], fields: ['sub'] });
+    expect([poRow('po-a').status, poRow('po-a').sub_id]).toEqual(['draft', 's-1']);
+    expect([sub.json.results[0].outcome, sub.json.results[0].subAccess]).toEqual(['applied', undefined]);
+    expect(access()).toEqual(NONE);
+    const status = await put(ADMIN, { btIds: ['8001'], fields: ['status'] });
+    expect(poRow('po-a').status).toBe('approved');
+    expect(status.json.results[0].subAccess).toBe(true);
+    expect(access()).toEqual(onJ1('s-1'));
+  });
+
+  test('a status move on a PO that already has its sub (po-b, s-2) grants that sub', async () => {
+    const r = await put(ADMIN, { btIds: ['8002'], fields: ['status'] });
+    expect([poRow('po-b').status, r.json.results[0].subAccess]).toEqual(['work_complete', true]);
+    expect(access()).toEqual(onJ1('s-2'));
+  });
+
+  test('an active PO without a sub grants nothing', async () => {
+    const r = await put(ADMIN, { btIds: ['8005'] });
+    expect([r.json.results[0].outcome, poRow('po-f').bt_po_id, r.json.results[0].subAccess]).toEqual(['applied', '8005', undefined]);
+    expect(access()).toEqual(NONE);
+  });
+
+  test('pressing Apply again on a PO already up to date still gives its sub access (POs synced before this rule)', async () => {
+    await put(ADMIN, { btIds: ['8002'], fields: ['status'] });
+    clearAccess();
+    const r = await put(ADMIN, { btIds: ['8002'], fields: ['status'] });
+    expect([r.json.results[0].outcome, r.json.results[0].subAccess]).toEqual(['unchanged', true]);
+    expect(access()).toEqual(onJ1('s-2'));
+    // Pressed once more with the access in place: nothing to give, nothing reported.
+    const again = await put(ADMIN, { btIds: ['8002'], fields: ['status'] });
+    expect([again.json.results[0].outcome, again.json.results[0].subAccess, again.json.counts.subAccess]).toEqual(['unchanged', undefined, undefined]);
+    expect(access()).toEqual(onJ1('s-2'));
+  });
+
+  test('access a sub already has is left alone: who granted it and when are not rewritten', async () => {
+    engine.db.exec(`
+      INSERT INTO job_subs (id, job_id, sub_id, level, status, organization_id) VALUES ('js-hand', 'j-1', 's-2', 'job', 'active', 1);
+      INSERT INTO attachment_folder_grants (id, sub_id, entity_type, entity_id, folder, granted_by, granted_at)
+        VALUES ('afg-hand', 's-2', 'job', 'j-1', 'general', 11, '2026-01-02 03:04:05');
+    `);
+    const r = await put(ADMIN, { btIds: ['8002'], fields: ['status'] });
+    expect([r.json.results[0].outcome, poRow('po-b').status, r.json.results[0].subAccess, r.json.counts.subAccess]).toEqual(['applied', 'work_complete', undefined, undefined]);
+    expect(engine.db.prepare('SELECT id, granted_by, granted_at FROM attachment_folder_grants').all()).toEqual([{ id: 'afg-hand', granted_by: 11, granted_at: '2026-01-02 03:04:05' }]);
+    expect(engine.db.prepare('SELECT id FROM job_subs').all()).toEqual([{ id: 'js-hand' }]);
+    // Only the folder grant removed by hand: it is given again, and reported.
+    engine.db.exec("DELETE FROM attachment_folder_grants");
+    const back = await put(ADMIN, { btIds: ['8002'], fields: ['status'] });
+    expect([back.json.results[0].outcome, back.json.results[0].subAccess]).toEqual(['unchanged', true]);
+    expect(access()).toEqual(onJ1('s-2'));
+  });
+
+  test('the audit entry names every PO whose sub was given access, an unchanged one included', async () => {
+    const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const lastApply = () => log.mock.calls.filter((c) => c[0] === '[AUDIT]').map((c) => JSON.parse(c[1]))
+        .filter((e) => e.action === 'buildertrend.apply').pop();
+      await put(ADMIN, { btIds: ['8002'], fields: ['status'] });
+      clearAccess();
+      const r = await put(ADMIN, { btIds: ['8002'], fields: ['status'] });
+      expect([r.json.results[0].outcome, r.json.results[0].subAccess]).toEqual(['unchanged', true]);
+      const entry = lastApply();
+      expect(entry.detail.counts.subAccess).toBe(1);
+      expect(entry.detail.applied).toEqual([expect.objectContaining({ btId: '8002', p86Id: 'po-b', subAccess: true })]);
+      // An unchanged PO that gave nobody access is still not listed.
+      await put(ADMIN, { btIds: ['8002'], fields: ['status'] });
+      expect(lastApply().detail.applied).toEqual([]);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  test('another tenant\'s sub on an ACTIVE PO is refused by the grant itself', async () => {
+    // po-h carries s-x (organization 2) on AGX's job. Made active, it reaches
+    // the grant — and the grant's own sub-org check refuses it.
+    setPo('po-h', { status: 'approved', is_locked: 1 });
+    const r = await put(ADMIN, { btIds: ['8007'] });
+    expect([r.json.results[0].outcome, poRow('po-h').bt_po_id]).toEqual(['applied', '8007']);
+    expect(r.json.results[0].subAccess).toBeUndefined();
+    expect(access()).toEqual(NONE);
+    expect(refusals()).toHaveLength(1);
+    expect(refusals()[0]).toMatch(/sub s-x is not in org 1/);
+  });
+
+  test('a failed write grants nothing; the same PO grants once its write persists', async () => {
+    txWatch.failCommit = 1;
+    const failed = await put(ADMIN, { btIds: ['8001'] });
+    expect([failed.json.results[0].outcome, failed.json.results[0].subAccess]).toEqual(['failed', undefined]);
+    expect([poRow('po-a').status, poRow('po-a').sub_id, poRow('po-a').bt_po_id]).toEqual(['draft', null, null]);
+    expect(access()).toEqual(NONE);
+    const ok = await put(ADMIN, { btIds: ['8001'] });
+    expect([ok.json.results[0].outcome, ok.json.results[0].subAccess]).toEqual(['applied', true]);
+    expect(access()).toEqual(onJ1('s-1'));
+  });
+
+  test('a failed write on a PO that is ALREADY active with a sub of this organization grants nothing', async () => {
+    // po-b is approved with s-2 before and after the refused commit, so only the
+    // failure itself can keep the grant from running.
+    txWatch.failCommit = 1;
+    const failed = await put(ADMIN, { btIds: ['8002'], fields: ['status'] });
+    expect([failed.json.results[0].outcome, failed.json.results[0].subAccess, failed.json.counts.subAccess]).toEqual(['failed', undefined, undefined]);
+    expect([poRow('po-b').status, poRow('po-b').sub_id, poRow('po-b').bt_po_id]).toEqual(['approved', 's-2', null]);
+    expect(access()).toEqual(NONE);
+    const ok = await put(ADMIN, { btIds: ['8002'], fields: ['status'] });
+    expect([ok.json.results[0].outcome, ok.json.results[0].subAccess]).toEqual(['applied', true]);
+    expect(access()).toEqual(onJ1('s-2'));
+  });
+
+  test('the post-commit re-read is org-scoped: another tenant\'s PO id grants nothing, even with a sub of this organization', async () => {
+    const { grantPoSubAccessAfterCommit } = require('../server/services/clickr/sync-apply');
+    // po-x is on organization 2's job. Given s-1 (organization 1) and approved, only
+    // the re-read's org predicate stops organization 1's grant from reaching j-b.
+    setPo('po-x', { sub_id: 's-1', status: 'approved', is_locked: 1 });
+    expect(await grantPoSubAccessAfterCommit(engine.pool, AGX, 'po-x', ADMIN)).toBe(false);
+    expect(access()).toEqual(NONE);
+    // The same call on this organization's own active PO does grant.
+    expect(await grantPoSubAccessAfterCommit(engine.pool, AGX, 'po-b', ADMIN)).toBe(true);
+    expect(access()).toEqual(onJ1('s-2'));
   });
 });
 
@@ -287,6 +523,9 @@ describe('CREATE — the purchase orders P86 lacks', () => {
     const d = JSON.parse(row.data);
     expect([poMatch.poTotal(d), d.baselineTotal, d.costCode]).toEqual([4200, 4200, 'Subcontractors Costs']);
     expect(typeof d.scope).toBe('string');
+    // Created approved with a sub of this organization: that sub gets access.
+    expect([r.json.results[0].subAccess, r.json.counts.subAccess]).toEqual([true, 1]);
+    expect(access()).toEqual(onJ1('s-1'));
   });
 
   test('bulk: the creatable ones only; an unknown or foreign sub is left blank with the vendor name kept', async () => {
@@ -298,6 +537,18 @@ describe('CREATE — the purchase orders P86 lacks', () => {
     expect([foreign.status, foreign.sub_id, JSON.parse(foreign.data).vendorName]).toEqual(['approved', null, 'Other Tenant Sub']);
     for (const id of ['8012', '8013', '8014', '8015']) expect(poByBt(id)).toHaveLength(0);
     expect(engine.db.prepare("SELECT COUNT(*) AS n FROM job_purchase_orders WHERE job_id = 'j-2'").get().n).toBe(0);
+    // Only 8010 (approved, s-1) grants; the draft and the sub-less approved one do not.
+    const by = Object.fromEntries(r.json.results.map((x) => [x.btId, x.subAccess]));
+    expect([by['8010'], by['8011'], by['8016'], r.json.counts.subAccess]).toEqual([true, undefined, undefined, 1]);
+    expect(access()).toEqual(onJ1('s-1'));
+  });
+
+  test('a create that does not commit grants nothing', async () => {
+    txWatch.failCommit = 1;
+    const r = await put(ADMIN, { mode: 'create', btIds: ['8010'] });
+    expect([r.json.results[0].outcome, r.json.results[0].subAccess]).toEqual(['failed', undefined]);
+    expect(poByBt('8010')).toHaveLength(0);
+    expect(access()).toEqual(NONE);
   });
 });
 
@@ -308,11 +559,74 @@ describe('LINK and GATES', () => {
     expect((await put(ADMIN, { mode: 'link', btId: '8004', p86Id: 'po-d' })).json.counts.linked).toBe(1);
     expect(poRow('po-d').bt_po_id).toBe('8004');
     expect(poRow('po-x').bt_po_id).toBeNull();
+    expect(access()).toEqual(NONE);
+  });
+
+  test('"Link to this one" on a PO already approved with a sub gives that sub access', async () => {
+    setPo('po-d', { sub_id: 's-2', status: 'approved', is_locked: 1 });
+    const r = await put(ADMIN, { mode: 'link', btId: '8004', p86Id: 'po-d' });
+    expect([r.json.counts.linked, r.json.results[0].subAccess, r.json.counts.subAccess]).toEqual([1, true, 1]);
+    expect(access()).toEqual(onJ1('s-2'));
+  });
+
+  test('linking a DRAFT PO with a sub grants nothing', async () => {
+    setPo('po-d', { sub_id: 's-2' });
+    const r = await put(ADMIN, { mode: 'link', btId: '8004', p86Id: 'po-d' });
+    expect([r.json.counts.linked, r.json.results[0].subAccess]).toEqual([1, undefined]);
+    expect(access()).toEqual(NONE);
+  });
+
+  test('a link that does not commit grants nothing', async () => {
+    setPo('po-d', { sub_id: 's-2', status: 'approved', is_locked: 1 });
+    txWatch.failCommit = 1;
+    const r = await put(ADMIN, { mode: 'link', btId: '8004', p86Id: 'po-d' });
+    expect([r.json.results[0].outcome, r.json.results[0].subAccess]).toEqual(['failed', undefined]);
+    expect(poRow('po-d').bt_po_id).toBeNull();
+    expect(access()).toEqual(NONE);
   });
 
   test('a PM is refused and nothing is written', async () => {
     expect((await put(PM, { mode: 'create' })).status).toBe(403);
     expect(poByBt('8010')).toHaveLength(0);
+    expect(access()).toEqual(NONE);
+  });
+});
+
+describe('PO PAGE — the same grant the sync now uses', () => {
+  // The PO page's routes call the grant without awaiting it (it never blocks the
+  // PO write), so wait for its rows — or its refusal — to land.
+  async function settle(done) {
+    for (let i = 0; i < 200 && !done(); i++) await new Promise((r) => setImmediate(r));
+  }
+  const fullRows = () => ({
+    assigned: engine.db.prepare('SELECT job_id, sub_id, level, building_id, phase_id, contract_amt, billed_to_date, status, notes, organization_id FROM job_subs').all(),
+    granted: engine.db.prepare('SELECT sub_id, entity_type, entity_id, folder, folder_id, granted_by FROM attachment_folder_grants').all(),
+  });
+
+  test('issuing a PO with a sub on the PO page writes exactly the rows a sync link of the same PO writes', async () => {
+    expect((await call('PUT', '/api/purchase-orders/po-d', ADMIN, { sub_id: 's-2' })).status).toBe(200);
+    await settle(() => false); // room for a (wrong) grant on a draft to land
+    expect(access()).toEqual(NONE); // still a draft
+    expect((await call('POST', '/api/purchase-orders/po-d/status', ADMIN, { status: 'issued' })).status).toBe(200);
+    await settle(() => count('attachment_folder_grants') > 0);
+    expect(access()).toEqual(onJ1('s-2'));
+    const page = fullRows();
+
+    seed();
+    setPo('po-d', { sub_id: 's-2', status: 'issued', is_locked: 1 });
+    const r = await put(ADMIN, { mode: 'link', btId: '8004', p86Id: 'po-d' });
+    expect(r.json.results[0].subAccess).toBe(true);
+    expect(fullRows()).toEqual(page);
+  });
+
+  test('the PO page refuses another tenant\'s sub at the grant, with the caller\'s org', async () => {
+    // Seeded directly: this proves the grant's own refusal, not what a door does with a foreign sub id.
+    setPo('po-e', { sub_id: 's-x' });
+    expect((await call('POST', '/api/purchase-orders/po-e/status', ADMIN, { status: 'issued' })).status).toBe(200);
+    await settle(() => refusals().length > 0);
+    expect(refusals()).toHaveLength(1);
+    expect(refusals()[0]).toMatch(/sub s-x is not in org 1/);
+    expect(access()).toEqual(NONE);
   });
 });
 
@@ -323,6 +637,11 @@ describe('UNIT', () => {
     expect(poMatch.btPoState('Approved - Assigned Internally', 'Not Complete')).toBe('approved');
     expect(poMatch.btPoState('Internally Approved', 'Complete')).toBe('work_complete');
     expect(poMatch.btPoState('Something new', '')).toBeNull();
+  });
+  test('the matcher\'s portal-access statuses are the grant\'s own', () => {
+    const { PO_ACTIVE_STATUS } = require('../server/services/po-sub-access');
+    expect([...poMatch.SUB_ACCESS_STATUS].sort()).toEqual([...PO_ACTIVE_STATUS].sort());
+    expect(PO_ACTIVE_STATUS.size).toBe(4);
   });
   test('an addendum is refused when there is nothing to record; several lines refuse a line cost', () => {
     expect(poMatch.withAddendum({ lines: [line(100)], baselineTotal: 100 }, 100)).toBeNull();
@@ -354,6 +673,65 @@ describe('PAGE — the Purchase orders tab', () => {
     expect(html).toMatch(/Create 3 Buildertrend-only purchase orders in P86/);
     expect(html).toMatch(/data-btp-pick="cost" data-btp-row="8002"(?! checked)/);
     expect(html).toMatch(/data-btp-pick="status" data-btp-row="8002" checked/);
+    // The create copy says what the sync now does with a sent or approved PO's sub.
+    expect(html).toContain('No bill is created. A sent or approved PO’s sub gets portal access to the job’s files, as on the PO page.');
+    expect(html).not.toContain('no sub portal access is granted');
     T.setTab('jobs');
+  });
+
+  const pageData = (ds) => ({ generatedAt: new Date().toISOString(), elapsedMs: 1, organization: { name: 'AGX' }, p86: { jobs: 1, leads: 0 },
+    datasets: { jobs: { key: 'jobs', rows: [] }, leads: { key: 'leads', rows: [] }, purchaseOrders: ds } });
+
+  test('a linked, up-to-date PO whose sub has no access is counted on the safe button, named in its confirm, and given access', async () => {
+    await put(ADMIN, { mode: 'safe' }); // links every confident PO; po-b (s-2) and po-c (s-1) grant
+    T.resetPicks();
+    T.setTab('purchaseOrders');
+    T.setView('purchaseOrders', 'all');
+    let ds = await poRows();
+    expect(ds.rows.filter((r) => (r.class === 'matched' || r.class === 'conflict') && r.rung !== 'Buildertrend ID')).toHaveLength(0);
+    expect(ds.rows.filter((r) => r.subAccessDue)).toHaveLength(0);
+    expect(T.render(pageData(ds))).toMatch(/data-btp-apply-safe="1" disabled>Link confident matches \+ give subs portal access \(0\)/);
+
+    // Access removed by hand, and another tenant's sub made active on po-h.
+    clearAccess();
+    setPo('po-h', { status: 'approved', is_locked: 1 });
+    ds = await poRows();
+    const r3 = byBt(ds, 8003);
+    expect([r3.class, r3.rung, r3.subAccessDue]).toEqual(['matched', 'Buildertrend ID', true]);
+    expect(r3.notes.join(' ')).toMatch(/no portal access to this job's files yet/);
+    expect([byBt(ds, 8002).subAccessDue, byBt(ds, 8005).subAccessDue, byBt(ds, 8007).subAccessDue]).toEqual([true, false, false]);
+    const html = T.render(pageData(ds));
+    // 8003 has nothing to apply on its own row, but the safe button now reaches it.
+    expect(html).toMatch(/data-btp-apply-safe="1">Link confident matches \+ give subs portal access \(2\)<\/button>/);
+    expect(html).toContain('<span class="btp-tag is-linked">Linked</span>');
+    expect(T.safeConfirmText('purchaseOrders', ds)).toBe('Link 0 confident purchase order matches to Buildertrend? No other field changes. ' +
+      'The sub of 2 sent or approved purchase orders gets portal access to the job’s files, as on the PO page — including where that access was removed by hand.');
+
+    const r = await put(ADMIN, { mode: 'safe' });
+    expect(r.json.counts.subAccess).toBe(2);
+    expect(r.json.results.filter((x) => x.subAccess).map((x) => [x.btId, x.outcome]).sort()).toEqual([['8002', 'unchanged'], ['8003', 'unchanged']]);
+    expect(access()).toEqual(onJ1('s-1', 's-2'));
+    expect(refusals().some((m) => /sub s-x is not in org 1/.test(m))).toBe(true);
+    ds = await poRows();
+    expect(ds.rows.filter((x) => x.subAccessDue)).toHaveLength(0);
+    T.setTab('jobs');
+  });
+
+  test('the confirm dialogs say a sent or approved PO\'s sub gets portal access — on purchase orders only', async () => {
+    const ds = await poRows();
+    expect(T.createAllConfirmText('purchaseOrders', ds)).toContain('Where one has a P86 sub, that sub gets portal access to the job’s files, as on the PO page.');
+    expect(T.safeConfirmText('purchaseOrders', ds)).toMatch(/The sub of 2 sent or approved purchase orders gets portal access to the job’s files, as on the PO page/);
+    for (const key of ['jobs', 'leads', 'clients', 'changeOrders']) {
+      const other = { key, rows: ds.rows };
+      expect(T.createAllConfirmText(key, other)).not.toMatch(/portal access/);
+      expect(T.safeConfirmText(key, other)).not.toMatch(/portal access/);
+    }
+  });
+
+  test('the result sentence names the POs whose sub was given access', () => {
+    expect(T.applyResultText({ mode: 'link', counts: { linked: 1, subAccess: 1 }, results: [{ outcome: 'linked', subAccess: true }] }))
+      .toMatch(/sub portal access granted on 1/);
+    expect(T.applyResultText({ mode: 'rows', counts: { applied: 1 }, results: [{ outcome: 'applied' }] }))
+      .not.toMatch(/portal access/);
   });
 });

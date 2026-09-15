@@ -24,6 +24,9 @@ const path = require('path');
 const read = (...p) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
 const AGENTS = read('server', 'routes', 'admin-agents-routes.js');
 const PO = read('server', 'routes', 'purchase-order-routes.js');
+// The grant itself moved to a service shared with the Buildertrend sync; the
+// route still owns the two doors that call it.
+const PO_GRANT = read('server', 'services', 'po-sub-access.js');
 const SCHED = read('server', 'routes', 'schedule-routes.js');
 const CLASSIFY = require('../server/services/org-table-classification');
 
@@ -76,31 +79,45 @@ describe('2. a body-supplied sub_id bought a durable read channel', () => {
   test('purchase-order-routes now proves the sub is in the tenant', () => {
     // Before: ZERO occurrences of subInOrg / parentSubInOrgSql in the whole
     // file, while it wrote attachment_folder_grants keyed on req.body.sub_id.
+    // The create door still proves it in the route; the grant proves it in
+    // services/po-sub-access.js, which the route requires.
     expect(PO).toMatch(/require\('\.\.\/services\/sub-org-scope'\)/);
-    expect(PO).toMatch(/await subInOrg\(pool, subId, orgId\)/);
+    expect(PO).toMatch(/require\('\.\.\/services\/po-sub-access'\)/);
+    expect(PO_GRANT).toMatch(/require\('\.\/sub-org-scope'\)/);
+    expect(PO_GRANT).toMatch(/await subInOrg\(pool, subId, orgId\)/);
+    // The route no longer carries a copy of the grant that could drift.
+    expect(PO).not.toMatch(/INSERT INTO attachment_folder_grants/);
+    expect(PO).not.toMatch(/INSERT INTO job_subs/);
   });
 
   test('it fails CLOSED — no org, or a foreign sub, grants nothing', () => {
-    const fn = PO.slice(PO.indexOf('async function syncSubAccessForPO'));
+    const at = PO_GRANT.indexOf('async function grantSubAccessForPO');
+    expect(at).toBeGreaterThan(-1);
+    const fn = PO_GRANT.slice(at);
     const head = fn.slice(0, fn.indexOf('INSERT INTO job_subs'));
     expect(head).toMatch(/if \(orgId == null \|\| !\(await subInOrg/);
     expect(head).toMatch(/return;/);
   });
 
   test('the refusal is logged — a skipped grant and a foreign grant look identical outside', () => {
-    expect(PO).toMatch(/\[po sub-access\] refused:/);
+    expect(PO_GRANT).toMatch(/\[po sub-access\] refused:/);
   });
 
   test('the caller\'s org actually reaches the function', () => {
-    expect((PO.match(/syncSubAccessForPO\(rows\[0\], req\.user\.id, req\.user\.organization_id\)/g) || []).length).toBe(2);
-    expect(PO).not.toMatch(/syncSubAccessForPO\(rows\[0\], req\.user\.id\);/);
+    expect((PO.match(/grantSubAccessForPO\(rows\[0\], req\.user\.id, req\.user\.organization_id\)/g) || []).length).toBe(2);
+    // Every call in the route passes the org: none drops it, and no third door appears unchecked.
+    expect((PO.match(/grantSubAccessForPO\(/g) || []).length).toBe(2);
+    expect(PO).not.toMatch(/grantSubAccessForPO\(rows\[0\], req\.user\.id\);/);
+    expect(PO).not.toMatch(/syncSubAccessForPO/);
+    // And the service still takes the org and checks against it.
+    expect(PO_GRANT).toMatch(/async function grantSubAccessForPO\(poRow, userId, orgId\)/);
   });
 
-  test('the file records why STAMPING could not have caught this', () => {
+  test('the grant records why STAMPING could not have caught this', () => {
     // The job_subs INSERT already reads organization_id off the PARENT JOB, so
     // a forged assignment lands stamped with the victim's org and is
     // indistinguishable from their own data — stamping REMOVED the tell.
-    expect(PO).toMatch(/Stamping the[\s\S]{0,30}row REMOVED the orphaned-NULL tell/);
+    expect(PO_GRANT).toMatch(/Stamping the[\s\S]{0,30}row REMOVED the orphaned-NULL tell/);
   });
 });
 

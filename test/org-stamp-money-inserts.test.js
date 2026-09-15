@@ -46,7 +46,10 @@ function columnsOf(stmt) {
 const SITES = [
   ['job_change_orders', ['server', 'routes', 'change-order-routes.js'], 1],
   ['job_change_orders', ['server', 'services', 'job-financials.js'], 1],
-  ['job_subs', ['server', 'routes', 'purchase-order-routes.js'], 1],
+  ['job_subs', ['server', 'services', 'po-sub-access.js'], 1],
+  // The PO page's grant moved out of the route (shared with the Buildertrend
+  // sync); the route keeps no job_subs insert of its own.
+  ['job_subs', ['server', 'routes', 'purchase-order-routes.js'], 0],
   ['job_subs', ['server', 'routes', 'sub-routes.js'], 3],
   ['qb_cost_lines', ['server', 'routes', 'qb-cost-routes.js'], 1],
   ['schedule_entries', ['server', 'routes', 'schedule-routes.js'], 1],

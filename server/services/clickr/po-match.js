@@ -28,7 +28,9 @@
 //            different sub is shown, never applied.
 // Buildertrend's paid amounts are shown only: P86 never creates bills from
 // Buildertrend (QuickBooks is the cost record, and a bill would count it twice).
-// A sync never grants a sub portal access.
+// When a PO is sent or approved (any active status) and has a sub of this
+// organization, the sub gets portal access to the job's files, as it does on
+// the PO page — the same grant, run by sync-apply.js after the write commits.
 
 const match = require('./bt-match');
 const coMoney = require('../money/change-order-totals');
@@ -41,6 +43,10 @@ const str = (v) => (v == null ? '' : String(v));
 const norm = (v) => str(v).trim().replace(/\s+/g, ' ');
 
 const RANK = { draft: 0, issued: 1, approved: 2, work_complete: 3, closed: 4 };
+// The statuses that give a PO's sub portal access: services/po-sub-access.js
+// PO_ACTIVE_STATUS (test/clickr-purchase-orders.test.js pins them equal).
+const SUB_ACCESS_STATUS = new Set(['issued', 'approved', 'work_complete', 'closed']);
+const ACCESS_NOTE = 'Its sub has no portal access to this job\'s files yet. "Link confident matches + give subs portal access" gives it, as on the PO page.';
 const STATUS_LABEL = { draft: 'Draft', issued: 'Issued', approved: 'Approved', work_complete: 'Work complete', closed: 'Closed' };
 
 function parseJsonish(v) {
@@ -129,9 +135,16 @@ function p86PoView(r) {
   return {
     id: r.id, jobId: r.job_id, poNumber: str(r.po_number), title: str(data.title), status: str(r.status),
     locked: r.is_locked === true || r.is_locked === 1, subId: r.sub_id || null, subName: str(r.sub_name),
+    subAccess: r.sub_access == null ? null : (r.sub_access === true || r.sub_access === 1 || r.sub_access === '1' || r.sub_access === 't'),
     btId: norm(r.bt_po_id), data, total: poTotal(data), billed: Number(r.billed) || 0,
     costCode: str(data.costCode), scheduledCompletion: str(data.scheduledCompletion),
   };
+}
+
+// Sent or approved with a sub of THIS organization (its name came through the
+// org-scoped join) whose access to the job's files the read showed missing.
+function subAccessDue(v) {
+  return !!(v.subId && v.subName && SUB_ACCESS_STATUS.has(v.status) && v.subAccess === false);
 }
 
 function poCand(v, rungs) {
@@ -161,6 +174,10 @@ function poProposals(bt, v, subs) {
   const editable = !v.locked && !closed;
   const lockedWhy = closed ? 'A closed purchase order cannot be edited in P86.' : 'Locked in P86 (it has left draft): contract fields change there, through unlock and an addendum.';
 
+  // The sub this PO will carry: its own of this organization, or the one a fill sets.
+  const rs = resolveSub(subs, bt.subName);
+  const orgSub = (v.subId && v.subName) || (!v.subId && editable && rs.sub);
+
   // STATUS — forward only.
   const bs = btPoState(bt.statusText, bt.workStatusText);
   if (!bs) {
@@ -169,7 +186,8 @@ function poProposals(bt, v, subs) {
     notes.push('P86 status "' + v.status + '" is not a purchase-order status, so status was not compared.');
   } else if (RANK[bs] > RANK[v.status]) {
     acc.corrections.push({ field: 'status', label: 'Status', kind: 'value', money: true, from: STATUS_LABEL[v.status], to: STATUS_LABEL[bs], value: bs, p86Value: v.status,
-      note: (v.status === 'draft' ? 'Leaving draft commits the PO: its cost starts to accrue and its price is locked. ' : '') + 'A sync does not grant the sub portal access.' });
+      note: ((v.status === 'draft' ? 'Leaving draft commits the PO: its cost starts to accrue and its price is locked. ' : '')
+        + (orgSub ? 'Once it is sent or approved, its sub gets portal access to the job\'s files, as on the PO page.' : '')).trim() || undefined });
   } else if (RANK[bs] < RANK[v.status]) {
     acc.heldBack.push({ field: 'status', label: 'Status', reason: 'money', bt: STATUS_LABEL[bs], p86: STATUS_LABEL[v.status], applicable: false,
       note: 'A sync never moves a purchase order backwards. If Buildertrend is right, change it in P86.' });
@@ -188,11 +206,11 @@ function poProposals(bt, v, subs) {
   if (btDay && editable) compareField(acc, { field: 'scheduledCompletion', label: 'Estimated completion', bt: btDay, p86: v.scheduledCompletion, same: (a, b) => match.dateKey(a) === match.dateKey(b), literal: () => true });
 
   // SUB
-  const rs = resolveSub(subs, bt.subName);
   if (rs.why && !(v.subId && subKey(v.subName) === subKey(bt.subName))) notes.push(rs.why);
   if (rs.sub) {
     if (!v.subId) {
-      if (editable) acc.corrections.push({ field: 'sub', label: 'Sub/vendor', kind: 'fill', from: '', to: rs.sub.name, value: rs.sub.id, p86Value: null });
+      if (editable) acc.corrections.push({ field: 'sub', label: 'Sub/vendor', kind: 'fill', from: '', to: rs.sub.name, value: rs.sub.id, p86Value: null,
+        note: 'The sub gets portal access to the job\'s files once the purchase order is sent or approved, as on the PO page.' });
       else acc.heldBack.push({ field: 'sub', label: 'Sub/vendor', reason: 'locked', bt: rs.sub.name, p86: '', applicable: false, note: lockedWhy });
     } else if (String(v.subId) !== String(rs.sub.id)) {
       acc.heldBack.push({ field: 'sub', label: 'Sub/vendor', reason: 'review', bt: rs.sub.name, p86: v.subName || String(v.subId), applicable: false,
@@ -281,14 +299,16 @@ function matchPurchaseOrders(btValues, p86) {
           notes: ['The P86 purchase order linked to this one (' + (linked.poNumber || linked.id) + ') is on a different P86 job than Buildertrend\'s job, so nothing is proposed.'] });
       }
       const { acc, notes } = poProposals(b, linked, p86.subs);
-      return row(bt, acc.corrections.length ? 'conflict' : 'matched', Object.assign({ rung: 'Buildertrend ID', job: jobInfo, notes, p86: p86Out(linked) }, acc));
+      if (subAccessDue(linked)) notes.push(ACCESS_NOTE);
+      return row(bt, acc.corrections.length ? 'conflict' : 'matched', Object.assign({ rung: 'Buildertrend ID', job: jobInfo, notes, p86: p86Out(linked), subAccessDue: subAccessDue(linked) }, acc));
     }
     const open = onJob.filter((v) => !v.btId);
     const numKey = isBtBlank(b.poNumber) ? '' : poNumberKey(b.poNumber);
     const byNumber = numKey ? open.filter((v) => poNumberKey(v.poNumber) === numKey) : [];
     if (byNumber.length === 1 && !titlesDisagree(b.title, byNumber[0].title)) {
       const { acc, notes } = poProposals(b, byNumber[0], p86.subs);
-      return row(bt, acc.corrections.length ? 'conflict' : 'matched', Object.assign({ rung: 'PO number', job: jobInfo, notes, p86: p86Out(byNumber[0]) }, acc));
+      if (subAccessDue(byNumber[0])) notes.push(ACCESS_NOTE);
+      return row(bt, acc.corrections.length ? 'conflict' : 'matched', Object.assign({ rung: 'PO number', job: jobInfo, notes, p86: p86Out(byNumber[0]), subAccessDue: subAccessDue(byNumber[0]) }, acc));
     }
     if (byNumber.length) {
       return row(bt, 'ambiguous', { job: jobInfo, candidates: byNumber.map((v) => poCand(v, ['PO number'])),
@@ -325,6 +345,8 @@ function matchPurchaseOrders(btValues, p86) {
       r.class = 'ambiguous';
       r.rung = null;
       r.p86 = null;
+      r.subAccessDue = false;
+      r.notes = r.notes.filter((n) => n !== ACCESS_NOTE);
       r.corrections = []; r.btBlank = []; r.heldBack = []; r.flags = [];
     }
   }
@@ -354,4 +376,4 @@ function notInBuildertrend(rows, btValues, p86) {
   return { rows: listed, notListed };
 }
 
-module.exports = { matchPurchaseOrders, notInBuildertrend, btPoState, poNumberKey, withLineCost, withAddendum, resolveSub, poTotal, RANK };
+module.exports = { matchPurchaseOrders, notInBuildertrend, btPoState, poNumberKey, withLineCost, withAddendum, resolveSub, poTotal, RANK, SUB_ACCESS_STATUS };

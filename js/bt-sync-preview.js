@@ -504,8 +504,48 @@
       if (r['class'] !== 'matched' && r['class'] !== 'conflict') return false;
       if (!r.bt || r.bt.btId == null || r.bt.btId === '') return false;
       if (r.rung !== 'Buildertrend ID') return true;
+      if (ds.key === 'purchaseOrders' && r.subAccessDue === true) return true;
       return ds.key === 'jobs' && (r.corrections || []).some(function (c) { return c.field === 'startDate' && c.kind === 'fill'; });
     }).length;
+  }
+
+  // Purchase orders a safe apply gives sub portal access: a confident match whose
+  // P86 PO is sent or approved with a sub of this organization that the server
+  // read as having no access to the job's files yet — a linked, up-to-date PO
+  // included, so POs synced before the sync granted access can still get it here.
+  function subAccessCount(ds) {
+    if (!ds || ds.key !== 'purchaseOrders') return 0;
+    return (ds.rows || []).filter(function (r) {
+      return (r['class'] === 'matched' || r['class'] === 'conflict') && r.bt && r.bt.btId != null && r.bt.btId !== '' && r.subAccessDue === true;
+    }).length;
+  }
+
+  function safeConfirmText(key, ds) {
+    var n = ds ? safeCount(ds) : 0;
+    if (key === 'purchaseOrders') {
+      var l = ds ? (ds.rows || []).filter(function (r) {
+        return (r['class'] === 'matched' || r['class'] === 'conflict') && r.bt && r.bt.btId != null && r.bt.btId !== '' && r.rung !== 'Buildertrend ID';
+      }).length : 0;
+      var a = subAccessCount(ds);
+      return 'Link ' + l + ' confident purchase order match' + (l === 1 ? '' : 'es') + ' to Buildertrend? No other field changes. ' +
+        'The sub of ' + a + ' sent or approved purchase order' + (a === 1 ? '' : 's') + ' gets portal access to the job’s files, as on the PO page — including where that access was removed by hand.';
+    }
+    return 'Link ' + n + ' confident ' + (NOUN[key] || 'record') + ' match' + (n === 1 ? '' : 'es') + ' to Buildertrend' +
+      (key === 'jobs' ? ' and fill start dates where P86 has none' : '') + '? No other field changes.';
+  }
+
+  function createAllConfirmText(key, ds) {
+    var n = ds ? createCount(ds) : 0;
+    var extra = '';
+    if (key === 'changeOrders' && ds) {
+      var approvedN = (ds.rows || []).filter(function (x) { return x['class'] === 'new' && !x.createBlocked && /^\s*approved\s*$/i.test(x.bt.statusText || ''); }).length;
+      extra = ' ' + approvedN + ' of them are approved in Buildertrend and will join their job’s contract.';
+    }
+    if (key === 'purchaseOrders' && ds) {
+      var committed = (ds.rows || []).filter(function (x) { return x['class'] === 'new' && !x.createBlocked && x.bt.state86 && x.bt.state86 !== 'draft'; }).length;
+      extra = ' ' + committed + ' of them are sent or approved in Buildertrend, so they are created committed and their cost accrues on the job. Where one has a P86 sub, that sub gets portal access to the job’s files, as on the PO page.';
+    }
+    return 'Create ' + n + ' ' + (key === 'jobs' ? 'open and warranty job' : (NOUN[key] || 'record')) + (n === 1 ? '' : 's') + ' in Project 86 from Buildertrend? Each is linked by its Buildertrend id.' + extra;
   }
 
   function createCount(ds) {
@@ -532,6 +572,7 @@
     var parts = res && res.mode === 'create' ? [(c.created || 0) + ' created in P86'] : res && res.mode === 'link' ? [(c.linked || 0) + ' linked'] : [(c.applied || 0) + ' updated'];
     var createNotes = []; ((res && res.results) || []).forEach(function (x) { (x.notes || []).forEach(function (n) { if (createNotes.indexOf(n) === -1) createNotes.push(n); }); });
     if (c.linked) parts.push(c.linked + ' newly linked');
+    if (c.subAccess) parts.push('sub portal access granted on ' + c.subAccess);
     if (c.fields) parts.push(c.fields + ' field' + (c.fields === 1 ? '' : 's') + ' changed');
     if (c.unchanged) parts.push(c.unchanged + ' already up to date');
     if (c.skipped) parts.push(c.skipped + ' skipped');
@@ -683,8 +724,9 @@
       var sc = safeCount(ds);
       var busySafe = _applying === ds.key + ':safe';
       html += '<div class="btp-filters"><button type="button" class="btp-btn btp-apply" data-btp-apply-safe="1"' + (_applying || !sc || !f.complete ? ' disabled' : '') + '>' +
-        (busySafe ? 'Applying…' : (ds.key === 'jobs' ? 'Link confident matches + fill blank start dates' : 'Link confident matches') + ' (' + sc + ')') + '</button>' +
-        '<span class="btp-sub">' + (f.complete ? 'Saves the Buildertrend id on each confident match' + (ds.key === 'jobs' ? ' and fills a start date only where P86 has none' : '') + '. No other field changes.' : 'Needs a complete Buildertrend read.') + '</span></div>';
+        (busySafe ? 'Applying…' : (ds.key === 'jobs' ? 'Link confident matches + fill blank start dates' : ds.key === 'purchaseOrders' ? 'Link confident matches + give subs portal access' : 'Link confident matches') + ' (' + sc + ')') + '</button>' +
+        '<span class="btp-sub">' + (f.complete ? 'Saves the Buildertrend id on each confident match' + (ds.key === 'jobs' ? ' and fills a start date only where P86 has none' : '') + '. No other field changes.' +
+          (ds.key === 'purchaseOrders' ? ' The sub of each sent or approved PO without portal access to the job’s files yet gets it, as on the PO page (' + subAccessCount(ds) + ').' : '') : 'Needs a complete Buildertrend read.') + '</span></div>';
       var cn = createCount(ds);
       var busyCreate = _applying === ds.key + ':create:bulk';
       html += '<div class="btp-filters"><button type="button" class="btp-btn btp-apply" data-btp-create-all="1"' + (_applying || !cn || !f.complete ? ' disabled' : '') + '>' +
@@ -692,7 +734,7 @@
         '<span class="btp-sub">' + (ds.key === 'jobs' ? 'Closed jobs are created one at a time from their row. ' : '') +
         (ds.key === 'clients' ? 'Create clients first — leads and jobs link to a client through its Buildertrend id. ' : '') +
         (ds.key === 'changeOrders' ? 'Each is created on its linked P86 job with Buildertrend’s price and cost as one line, and approved and locked when Buildertrend approved it. A change order whose job is not linked yet waits. ' : '') +
-        (ds.key === 'purchaseOrders' ? 'Each is created on its linked P86 job with Buildertrend’s number, status, cost and sub/vendor (when it is exactly one P86 sub). A sent or approved one is committed and locked, so its cost accrues. No bill is created and no sub portal access is granted. ' : '') +
+        (ds.key === 'purchaseOrders' ? 'Each is created on its linked P86 job with Buildertrend’s number, status, cost and sub/vendor (when it is exactly one P86 sub). A sent or approved one is committed and locked, so its cost accrues. No bill is created. A sent or approved PO’s sub gets portal access to the job’s files, as on the PO page. ' : '') +
         'Possible duplicates and ambiguous rows are never created.</span></div>';
       var note = _applyNote[ds.key];
       if (note) html += '<div class="btp-sentence ' + (note.ok ? 'is-ok' : 'is-bad') + '">' + esc(note.text) + '</div>';
@@ -891,17 +933,7 @@
       if (createAll) {
         createAll.addEventListener('click', function () {
           var ds = _data && _data.datasets && _data.datasets[key];
-          var n = ds ? createCount(ds) : 0;
-          var extra = '';
-          if (key === 'changeOrders' && ds) {
-            var approvedN = (ds.rows || []).filter(function (x) { return x['class'] === 'new' && !x.createBlocked && /^\s*approved\s*$/i.test(x.bt.statusText || ''); }).length;
-            extra = ' ' + approvedN + ' of them are approved in Buildertrend and will join their job’s contract.';
-          }
-          if (key === 'purchaseOrders' && ds) {
-            var committed = (ds.rows || []).filter(function (x) { return x['class'] === 'new' && !x.createBlocked && x.bt.state86 && x.bt.state86 !== 'draft'; }).length;
-            extra = ' ' + committed + ' of them are sent or approved in Buildertrend, so they are created committed and their cost accrues on the job.';
-          }
-          askThen('Create ' + n + ' ' + (key === 'jobs' ? 'open and warranty job' : (NOUN[key] || 'record')) + (n === 1 ? '' : 's') + ' in Project 86 from Buildertrend? Each is linked by its Buildertrend id.' + extra, 'Create', function () {
+          askThen(createAllConfirmText(key, ds), 'Create', function () {
             runApply(key, { mode: 'create' });
           });
         });
@@ -910,9 +942,7 @@
       if (safe) {
         safe.addEventListener('click', function () {
           var ds = _data && _data.datasets && _data.datasets[key];
-          var n = ds ? safeCount(ds) : 0;
-          askThen('Link ' + n + ' confident ' + (NOUN[key] || 'record') + ' match' + (n === 1 ? '' : 'es') + ' to Buildertrend' +
-            (key === 'jobs' ? ' and fill start dates where P86 has none' : '') + '? No other field changes.', 'Apply', function () {
+          askThen(safeConfirmText(key, ds), 'Apply', function () {
             runApply(key, { mode: 'safe' });
           });
         });
@@ -940,7 +970,10 @@
       setTab: function (t) { _tab = t; },
       setArchive: function (a) { _archive = a; _archiveErr = null; },
       resetPicks: function () { _picks = {}; },
-      shapeError: shapeError
+      shapeError: shapeError,
+      applyResultText: applyResultText,
+      safeConfirmText: safeConfirmText,
+      createAllConfirmText: createAllConfirmText
     }
   };
 })();

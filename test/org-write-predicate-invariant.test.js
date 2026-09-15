@@ -87,7 +87,7 @@ const UPSERT_EXEMPT = {
     'Jobs are filtered through the org-scoped allowedJobIds set and the sub comes from an org-scoped subs lookup; organization_id is a sub-select off the parent job. The DO UPDATE arm is additive (contract_amt + EXCLUDED), never a replace.',
   'server/routes/sub-routes.js::attachment_folder_grants':
     'BOTH ends are checked: subInOrg on the sub and grantEntityInOrg / jobInOrg on the entity. The table has no organization_id column of its own (classified parent, via subs).',
-  'server/routes/purchase-order-routes.js::attachment_folder_grants':
+  'server/services/po-sub-access.js::attachment_folder_grants':
     'subInOrg refuses before the write and the job is derived from an already-org-checked PO. Same tenant-less table as above.',
   'server/routes/qb-cost-routes.js::qb_cost_lines':
     'The conflict key IS tenant-derived: id = sha256(job_id‖…) from util/qb-line-id.js, and job ids are filtered through jobIdsInOrg first, so a cross-tenant key cannot be formed.',

@@ -24,8 +24,13 @@
 // price and cost from Buildertrend when their boxes are ticked; a sync never
 // un-approves one and never edits an applied one. PURCHASE ORDERS (po-match.js)
 // move forward in status only, take cost on an unlocked line or as an approved
-// addendum on a locked PO, and never create a bill or grant a sub portal
-// access. Estimates and crew-side data are never written.
+// addendum on a locked PO, and never create a bill. A PO that ends a create,
+// apply or link sent or approved (any active status) with a sub of this
+// organization gives that sub portal access to the job's files, exactly as the
+// PO page does on every save: the SAME grant (services/po-sub-access.js), run
+// after the purchase-order transaction commits on the PO row re-read from the
+// database, never for a draft, a PO without a sub, a foreign sub, or a write
+// that failed. Estimates and crew-side data are never written.
 //
 // MODES
 //   rows — the given Buildertrend ids: link + the ticked fields (every correction
@@ -52,6 +57,7 @@ const coMatch = require('./co-match');
 const poMatch = require('./po-match');
 const coMoney = require('../money/change-order-totals');
 const { coNumberKey } = require('../job-financials');
+const { grantSubAccessForPO } = require('../po-sub-access');
 
 const ACTION_PARAM = 'buildertrend-apply';
 const MAX_ROWS = 200;
@@ -391,6 +397,46 @@ async function applyPurchaseOrder(db, orgId, row, mode, fields) {
   return { applied, linked: !wasLinked, stale };
 }
 
+// SUB PORTAL ACCESS, as the PO page grants it. Called only AFTER the
+// purchase-order transaction has committed and its client is released: the
+// grant writes through the pool, so inside the transaction it would either
+// miss the uncommitted row or survive a rollback of it. The FINAL row is
+// re-read here, org-scoped through its job (never the matcher's in-memory
+// values), and handed to the PO page's own grant, which refuses a draft, a PO
+// without a sub, and a sub outside this organization — so Apply or Link on a PO
+// synced before this rule gives its sub access too.
+// True only when this call gave the sub access it did not have. A sub already
+// assigned to the job AND granted its files is left alone: nothing is written,
+// so a repeat Apply or safe sweep never rewrites who first granted that access
+// or when (a save on the PO page still refreshes granted_by, as it always has).
+// Access someone removed by hand IS given again, as the PO page's next save
+// would; the page counts those POs on its safe button and says so first.
+// Never throws: access is best-effort, as on the PO page, and never turns a
+// committed write into a failure. Scoped the way this file's purchase-order
+// UPDATEs are — through the job, with no tolerance arm of its own: the id is
+// one this operation just wrote or linked.
+const truthy = (v) => v === true || v === 1 || v === '1' || v === 't';
+async function grantPoSubAccessAfterCommit(pool, orgId, poId, user) {
+  if (!poId) return false;
+  try {
+    const r = await pool.query(
+      'SELECT po.id, po.job_id, po.sub_id, po.status, '
+      + 'EXISTS (SELECT 1 FROM job_subs js WHERE js.job_id = po.job_id AND js.sub_id = po.sub_id) AS assigned, '
+      + "EXISTS (SELECT 1 FROM attachment_folder_grants g WHERE g.sub_id = po.sub_id AND g.entity_type = 'job' AND g.entity_id = po.job_id AND g.folder = 'general') AS granted "
+      + 'FROM job_purchase_orders po '
+      + 'WHERE po.id = $1 AND po.job_id IN (SELECT id FROM jobs WHERE organization_id = $2)',
+      [poId, orgId]);
+    if (!r.rows.length) return false;
+    const po = r.rows[0];
+    if (truthy(po.assigned) && truthy(po.granted)) return false;
+    return (await grantSubAccessForPO({ id: po.id, job_id: po.job_id, sub_id: po.sub_id, status: po.status },
+      user && user.id != null ? user.id : null, orgId)) === true;
+  } catch (e) {
+    console.warn('[clickr-apply] purchase order sub access was not granted');
+    return false;
+  }
+}
+
 async function createPurchaseOrder(db, orgId, row, user) {
   const bt = row.bt;
   const btId = norm(bt.btId);
@@ -721,6 +767,7 @@ async function createRecords(org, kind, rows, input, deps) {
       results.push(Object.assign(base, { outcome: 'skipped', reason: 'Buildertrend sent this record without an id, so it is not created.' }));
       continue;
     }
+    let grantFor = null;
     const client = await deps.pool.connect();
     try {
       await client.query('BEGIN');
@@ -734,16 +781,23 @@ async function createRecords(org, kind, rows, input, deps) {
       else {
         results.push(Object.assign(base, { outcome: 'created', p86Id: r.created, notes: r.notes || [] }));
         if (r.regeocode) regeocode.push(r.regeocode);
+        if (kind === 'purchaseOrders') grantFor = base;
       }
     } catch (e) {
+      grantFor = null;
       try { await client.query('ROLLBACK'); } catch (_) { /* ignore */ }
       results.push(Object.assign(base, { outcome: 'failed', reason: 'The create failed inside this server; nothing was written for this record.' }));
     } finally {
       client.release();
     }
+    // Committed and released: the created PO's sub gets access if it is active.
+    if (grantFor && await grantPoSubAccessAfterCommit(deps.pool, org.id, grantFor.p86Id, deps.user)) grantFor.subAccess = true;
   }
   const counts = { created: 0, skipped: 0, failed: 0 };
-  for (const r of results) counts[r.outcome] = (counts[r.outcome] || 0) + 1;
+  for (const r of results) {
+    counts[r.outcome] = (counts[r.outcome] || 0) + 1;
+    if (r.subAccess) counts.subAccess = (counts.subAccess || 0) + 1;
+  }
   if (preview.forgetFetch) preview.forgetFetch(org.id);
   return { status: 200, body: { dataset: kind, mode: 'create', counts, results }, regeocode };
 }
@@ -813,8 +867,12 @@ async function linkDetail(kind, org, row, input, deps, base, skip) {
   } finally {
     client.release();
   }
+  // Committed and released: a linked PO that is already active with a sub of
+  // this organization gets that sub access, as its next save on the PO page would.
+  const linked = Object.assign(base, { outcome: 'linked', linked: true });
+  if (!co && await grantPoSubAccessAfterCommit(deps.pool, org.id, input.p86Id, deps.user)) linked.subAccess = true;
   if (preview.forgetFetch) preview.forgetFetch(org.id);
-  return { status: 200, body: { dataset: kind, mode: 'link', counts: { linked: 1 }, results: [Object.assign(base, { outcome: 'linked', linked: true })] } };
+  return { status: 200, body: { dataset: kind, mode: 'link', counts: Object.assign({ linked: 1 }, linked.subAccess ? { subAccess: 1 } : {}), results: [linked] } };
 }
 
 // ── the operation ────────────────────────────────────────────────────────
@@ -859,6 +917,7 @@ async function apply(org, input, deps) {
       results.push(Object.assign(base, { outcome: 'skipped', reason: 'Buildertrend sent this record without an id, so it cannot be linked.' }));
       continue;
     }
+    let grantFor = null;
     const client = await deps.pool.connect();
     try {
       await client.query('BEGIN');
@@ -869,23 +928,31 @@ async function apply(org, input, deps) {
         : await applyLead(client, org.id, row, mode, input.fields);
       await client.query('COMMIT');
       if (r.skipped) results.push(Object.assign(base, { outcome: 'skipped', reason: r.skipped }));
-      else if (r.unchanged) results.push(Object.assign(base, { outcome: 'unchanged', stale: r.stale }));
-      else {
+      else if (r.unchanged) {
+        results.push(Object.assign(base, { outcome: 'unchanged', stale: r.stale }));
+        if (kind === 'purchaseOrders') grantFor = base;
+      } else {
         results.push(Object.assign(base, { outcome: 'applied', linked: !!r.linked, fields: r.applied, stale: r.stale, contactLinked: !!r.contactLinked }));
         if (r.regeocode) regeocode.push(r.regeocode);
+        if (kind === 'purchaseOrders') grantFor = base;
       }
     } catch (e) {
+      grantFor = null;
       try { await client.query('ROLLBACK'); } catch (_) { /* ignore */ }
       results.push(Object.assign(base, { outcome: 'failed', reason: 'The write failed inside this server; nothing on this record was changed.' }));
     } finally {
       client.release();
     }
+    // Committed and released: an applied or already-up-to-date PO whose final
+    // state is active with a sub of this organization gets that sub access.
+    if (grantFor && await grantPoSubAccessAfterCommit(deps.pool, org.id, grantFor.p86Id, deps.user)) grantFor.subAccess = true;
   }
 
   const counts = { applied: 0, unchanged: 0, skipped: 0, failed: 0, linked: 0, fields: 0 };
   for (const r of results) {
     counts[r.outcome]++;
     if (r.linked) counts.linked++;
+    if (r.subAccess) counts.subAccess = (counts.subAccess || 0) + 1;
     counts.fields += (r.fields || []).length;
   }
   if (preview.forgetFetch) preview.forgetFetch(org.id);
@@ -1042,7 +1109,9 @@ async function handle(req, res, deps) {
         targetId: input.mode === 'safe' ? 'safe updates' : input.mode === 'create' && !input.btIds.length ? 'bulk create' : String(input.btIds.length) + ' records',
         organizationId: org.id,
         detail: { mode: input.mode, counts: out.body.counts,
-          applied: out.body.results.filter((r) => r.outcome === 'applied' || r.outcome === 'created' || r.outcome === 'linked').map((r) => ({ btId: r.btId, p86Id: r.p86Id, linked: r.linked, fields: r.fields, created: r.outcome === 'created' })) },
+          // A PO whose sub was given portal access is listed whatever its outcome
+          // (an unchanged PO included), so every grant names the PO it came from.
+          applied: out.body.results.filter((r) => r.outcome === 'applied' || r.outcome === 'created' || r.outcome === 'linked' || r.subAccess).map((r) => ({ btId: r.btId, p86Id: r.p86Id, linked: r.linked, fields: r.fields, created: r.outcome === 'created', subAccess: !!r.subAccess })) },
       });
       for (const id of out.regeocode || []) geocodeLeadLater(deps.pool, id);
     }
@@ -1054,4 +1123,4 @@ async function handle(req, res, deps) {
   }
 }
 
-module.exports = { handle, handleArchiveList, apply, parseInput, writable, pickedHeldBack, p86JobStatus, ACTION_PARAM };
+module.exports = { handle, handleArchiveList, apply, parseInput, writable, pickedHeldBack, p86JobStatus, ACTION_PARAM, grantPoSubAccessAfterCommit };

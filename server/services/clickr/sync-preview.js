@@ -111,11 +111,15 @@ async function readP86(pool, orgId) {
     + 'FROM job_change_orders co JOIN jobs j ON j.id = co.job_id '
     + 'WHERE j.organization_id = $1 AND j.bt_archived_at IS NULL AND (co.organization_id = $1 OR co.organization_id IS NULL)', [orgId]);
   // Purchase orders on the same terms as change orders, with what is already
-  // billed against each (a Buildertrend cost is never set below it) and the
-  // sub's name only when the sub is this organization's.
+  // billed against each (a Buildertrend cost is never set below it), the
+  // sub's name only when the sub is this organization's, and whether that sub
+  // already has portal access to the job's files (its job assignment AND the
+  // job folder grant — what services/po-sub-access.js writes).
   const pos = await pool.query(
     'SELECT po.id, po.job_id, po.status, po.po_number, po.data, po.is_locked, po.sub_id, po.bt_po_id, s.name AS sub_name, '
-    + "(SELECT COALESCE(SUM(b.amount), 0) FROM job_vendor_bills b WHERE b.po_id = po.id AND b.status <> 'void') AS billed "
+    + "(SELECT COALESCE(SUM(b.amount), 0) FROM job_vendor_bills b WHERE b.po_id = po.id AND b.status <> 'void') AS billed, "
+    + '(EXISTS (SELECT 1 FROM job_subs js WHERE js.job_id = po.job_id AND js.sub_id = po.sub_id) '
+    + "AND EXISTS (SELECT 1 FROM attachment_folder_grants g WHERE g.sub_id = po.sub_id AND g.entity_type = 'job' AND g.entity_id = po.job_id AND g.folder = 'general')) AS sub_access "
     + 'FROM job_purchase_orders po JOIN jobs j ON j.id = po.job_id LEFT JOIN subs s ON s.id = po.sub_id AND s.organization_id = $1 '
     + 'WHERE j.organization_id = $1 AND j.bt_archived_at IS NULL AND (po.organization_id = $1 OR po.organization_id IS NULL)', [orgId]);
   const subs = await pool.query("SELECT id, name FROM subs WHERE organization_id = $1 AND COALESCE(status, 'active') <> 'closed'", [orgId]);

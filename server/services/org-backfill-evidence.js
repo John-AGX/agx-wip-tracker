@@ -75,7 +75,7 @@ const RULES = [
   {
     table: 'job_subs', key: 'job_id',
     join: 'JOIN jobs j ON j.id = t.job_id', source: 'j.organization_id',
-    why: 'The assignment belongs to the job\'s tenant — the same source syncSubAccessForPO already stamps new rows from.',
+    why: 'The assignment belongs to the job\'s tenant — the same source grantSubAccessForPO (services/po-sub-access.js) already stamps new rows from.',
   },
   {
     table: 'node_graphs', key: 'job_id',
