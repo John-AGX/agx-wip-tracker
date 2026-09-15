@@ -704,8 +704,9 @@ describe('PAGE — the Purchase orders tab', () => {
     // 8003 has nothing to apply on its own row, but the safe button now reaches it.
     expect(html).toMatch(/data-btp-apply-safe="1">Link confident matches \+ give subs portal access \(2\)<\/button>/);
     expect(html).toContain('<span class="btp-tag is-linked">Linked</span>');
-    expect(T.safeConfirmText('purchaseOrders', ds)).toBe('Link 0 confident purchase order matches to Buildertrend? No other field changes. ' +
-      'The sub of 2 sent or approved purchase orders gets portal access to the job’s files, as on the PO page — including where that access was removed by hand.');
+    // Every confident match is already linked: the confirm does not offer to link zero.
+    expect(T.safeConfirmText('purchaseOrders', ds)).toBe('The sub of 2 sent or approved purchase orders gets portal access to the job’s files, as on the PO page — including where that access was removed by hand. ' +
+      'Nothing is linked and no other field changes.');
 
     const r = await put(ADMIN, { mode: 'safe' });
     expect(r.json.counts.subAccess).toBe(2);
@@ -721,6 +722,8 @@ describe('PAGE — the Purchase orders tab', () => {
     const ds = await poRows();
     expect(T.createAllConfirmText('purchaseOrders', ds)).toContain('Where one has a P86 sub, that sub gets portal access to the job’s files, as on the PO page.');
     expect(T.safeConfirmText('purchaseOrders', ds)).toMatch(/The sub of 2 sent or approved purchase orders gets portal access to the job’s files, as on the PO page/);
+    // Confident matches still to link: the confirm names them first.
+    expect(T.safeConfirmText('purchaseOrders', ds)).toMatch(/^Link [1-9]\d* confident purchase order match(es)? to Buildertrend\? No other field changes\. The sub of/);
     for (const key of ['jobs', 'leads', 'clients', 'changeOrders']) {
       const other = { key, rows: ds.rows };
       expect(T.createAllConfirmText(key, other)).not.toMatch(/portal access/);

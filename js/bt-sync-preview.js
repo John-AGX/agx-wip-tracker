@@ -527,8 +527,10 @@
         return (r['class'] === 'matched' || r['class'] === 'conflict') && r.bt && r.bt.btId != null && r.bt.btId !== '' && r.rung !== 'Buildertrend ID';
       }).length : 0;
       var a = subAccessCount(ds);
-      return 'Link ' + l + ' confident purchase order match' + (l === 1 ? '' : 'es') + ' to Buildertrend? No other field changes. ' +
-        'The sub of ' + a + ' sent or approved purchase order' + (a === 1 ? '' : 's') + ' gets portal access to the job’s files, as on the PO page — including where that access was removed by hand.';
+      var access = 'The sub of ' + a + ' sent or approved purchase order' + (a === 1 ? '' : 's') + ' gets portal access to the job’s files, as on the PO page — including where that access was removed by hand.';
+      // Nothing left to link (every confident match is already linked): say only what the press does.
+      if (!l) return access + ' Nothing is linked and no other field changes.';
+      return 'Link ' + l + ' confident purchase order match' + (l === 1 ? '' : 'es') + ' to Buildertrend? No other field changes. ' + access;
     }
     return 'Link ' + n + ' confident ' + (NOUN[key] || 'record') + ' match' + (n === 1 ? '' : 'es') + ' to Buildertrend' +
       (key === 'jobs' ? ' and fill start dates where P86 has none' : '') + '? No other field changes.';
