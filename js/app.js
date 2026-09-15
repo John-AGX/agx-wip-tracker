@@ -1871,6 +1871,7 @@
             projects:   'Projects',
             'cost-inbox': 'Cost Inbox',
             'invoices': 'Invoices',
+            'service-tickets': 'Service Tickets',
             orgmap:     'Job Map',
             orgleadsmap: 'Leads Map',
             jobshub:    'Jobs',
@@ -2086,6 +2087,15 @@
                     window.p86Invoices.render(invHost);
                 } else if (invHost) {
                     invHost.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);">Invoices module not loaded.</div>';
+                }
+            } else if (tabName === 'service-tickets') {
+                // Service Tickets — every work order the caller may see, across
+                // jobs and leads (js/service-tickets-page.js).
+                var stHost = document.getElementById('serviceTicketsHost');
+                if (stHost && window.p86ServiceTicketsPage && typeof window.p86ServiceTicketsPage.render === 'function') {
+                    window.p86ServiceTicketsPage.render(stHost);
+                } else if (stHost) {
+                    stHost.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);">Service Tickets module not loaded.</div>';
                 }
             } else if (tabName === 'orgmap') {
                 // Job Map (org "Google Earth") — every geocoded JOB on satellite;

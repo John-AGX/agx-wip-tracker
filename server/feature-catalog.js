@@ -431,7 +431,7 @@ const features = [
     id: 'service-tickets',
     label: 'Service tickets (work orders)',
     blurb: 'A work order on a job or a lead — scope, schedule, priority, tasks and a status line from Draft to Closed.',
-    access_path: 'Job → Service Tickets tab → + New ticket, or a lead → 🔧 Service Ticket',
+    access_path: 'Sidebar → Operations → Service Tickets, or Job → Service Tickets tab → + New ticket, or a lead → 🔧 Service Ticket',
     area: 'Jobs',
     shipped: '2026-09-13',
   },
@@ -477,9 +477,19 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.28';
+const APP_VERSION = '1.29';
 
 const releases = [
+  {
+    version: '1.29',
+    date: '2026-09-14',
+    name: 'Service Tickets page',
+    summary: 'The service tickets you can see, across all your jobs and leads, on one page in the sidebar.',
+    changes: [
+      { type: 'new', text: 'A Service Tickets page. In the sidebar under Operations, Service Tickets sits right below Jobs (on a phone it is the first tile under Operations in More). It lists the service tickets you can see across the company, newest first: the tickets on the jobs you can see, and the tickets on leads if you can see leads. Filter by status with the same pills a job’s Service Tickets tab has (All, Active, Draft, Scheduled, In progress, Awaiting approval, Closed), by priority, by jobs or leads, and search by the ticket’s title, the job number or name, the lead’s name or who it is assigned to. Click a ticket to open it: a ticket on a job opens that job’s Service Tickets tab with the ticket already expanded, and a ticket on a lead opens the lead. The page shows the newest 200 tickets, and its filters and search look through those 200; it says so when it reaches that many.' },
+      { type: 'improved', text: 'The service ticket list now names each ticket’s job (its number and name) or lead, and who it is assigned to, instead of leaving you to work it out. A job or person that is not in your company is never named.' },
+    ],
+  },
   {
     version: '1.28',
     date: '2026-09-14',

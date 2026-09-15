@@ -684,6 +684,11 @@
                                 <button class="tab-btn app-nav-child" data-tab="jobshub" data-jobshub-subtab="submittals" data-virtual-tab="jobshub-submittals" data-p86-icon="import" title="Submittals"><span class="app-nav-label">Submittals</span></button>
                             </div>
                         </div>
+                        <!-- Service Tickets — every work order the caller may see, across
+                             jobs and leads (js/service-tickets-page.js). data-cap is any-of and
+                             mirrors listVisibility in server/services/service-ticket-access.js:
+                             the edit capabilities alone list nothing, so they do not show it. -->
+                        <button class="tab-btn" data-tab="service-tickets" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED LEADS_VIEW" data-p86-icon="daily-logs" title="Service Tickets — every work order across your jobs and leads"><span class="app-nav-label">Service Tickets</span></button>
                         <button class="tab-btn" data-tab="schedule" data-p86-icon="schedule" title="Schedule"><span class="app-nav-label">Schedule</span></button>
                         <button class="tab-btn" data-tab="cost-inbox" data-p86-icon="materials" title="Cost Inbox — capture receipts &amp; field costs"><span class="app-nav-label">Cost Inbox</span></button>
                         <button class="tab-btn" data-tab="invoices" data-p86-icon="exports" title="Invoices &amp; accounts receivable"><span class="app-nav-label">Invoices</span></button>
@@ -1517,6 +1522,12 @@
                      window.p86Invoices.render() here. -->
                 <div id="invoices" class="tab-content">
                     <div id="invoicesHost"></div>
+                </div>
+
+                <!-- Service Tickets — switchTab('service-tickets') mounts
+                     js/service-tickets-page.js window.p86ServiceTicketsPage.render() here. -->
+                <div id="service-tickets" class="tab-content">
+                    <div id="serviceTicketsHost"></div>
                 </div>
 
                 <!-- Job Map (org-level "Google Earth") — every geocoded job on a
@@ -3569,7 +3580,7 @@
          app.js: loadData consults p86SaveMerge.shouldVetoHydrate() on the very
          first hydrate. -->
     <script src="js/save-merge.js?v=5"></script>
-    <script src="js/app.js?v=158"></script>
+    <script src="js/app.js?v=159"></script>
     <!-- The visible signal for a write that has not reached the server.
          Loads AFTER app.js so window.p86PushStatus exists to subscribe to. -->
     <script src="js/save-banner.js?v=3"></script>
@@ -3648,6 +3659,8 @@
          RFIs / Submittals) for the Jobs sidebar dropdown. Uses p86Api +
          appData.jobs + editJob/switchJobSubTab at runtime. -->
     <script src="js/jobs-hub.js?v=27"></script>
+    <!-- Service Tickets page — the org-wide work-order list (#service-tickets). -->
+    <script src="js/service-tickets-page.js?v=1"></script>
     <script src="js/assembly-studio.js?v=4"></script>
     <script src="js/materials-consolidate.js?v=1"></script>
     <!-- Purchase Order editor — full-window overlay opened from the Jobs
@@ -3693,7 +3706,7 @@
          job-media.js above: after api.js and jobs.js so p86Api and appData
          exist, and BEFORE workspace-layout.js, which reads the renderer name
          out of its dispatch maps when a tab is activated. -->
-    <script src="js/service-tickets.js?v=18"></script>
+    <script src="js/service-tickets.js?v=19"></script>
     <!-- Reusable rich-text field (window.p86RichText) — shared WYSIWYG for
          Scope / Terms / notes / proposals / reports. Load before the editors
          that mount it. -->
@@ -3742,7 +3755,7 @@
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
          before the router wraps them. -->
-    <script src="js/router.js?v=34"></script>
+    <script src="js/router.js?v=35"></script>
 
     <!-- Sidebar Recents — client-side recently-opened list. Loads after
          router.js + the entity-open modules so it can wrap editJob /
@@ -4094,6 +4107,7 @@
 
         <div class="p86-mobile-more-section" data-more-section>Operations</div>
         <div class="p86-mobile-more-grid" data-more-grid>
+          <button type="button" class="p86-mobile-more-tile" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED LEADS_VIEW" onclick="p86MoreGo('service-tickets')"><span class="p86-mobile-more-icon" data-p86-icon="daily-logs"></span><span>Service Tickets</span></button>
           <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('cost-inbox')"><span class="p86-mobile-more-icon" data-p86-icon="materials"></span><span>Cost Inbox</span></button>
           <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('invoices')"><span class="p86-mobile-more-icon" data-p86-icon="exports"></span><span>Invoices</span></button>
         </div>

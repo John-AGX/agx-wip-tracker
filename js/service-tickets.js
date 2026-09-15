@@ -2350,6 +2350,7 @@
     if (leadPanelMounted() && api()) {
       work.push(loadLeadPanel(_leadPanel.host, _leadPanel.leadId, true));
     }
+    if (window.p86ServiceTicketsPage && typeof window.p86ServiceTicketsPage.refresh === 'function') work.push(window.p86ServiceTicketsPage.refresh());
     return Promise.all(work);
   }
 
@@ -2357,6 +2358,10 @@
     // The lead surfaces (js/leads.js calls both).
     mountLeadPanel: mountLeadPanel,
     createForLead: createForLead,
+    // The org-wide Service Tickets page (js/service-tickets-page.js) calls this
+    // before navigating to the ticket's job tab; reload() opens it once that
+    // job's list has it, exactly as a ?ticket= link does.
+    openTicket: function (id) { _deepTicket = id == null ? null : String(id); },
     refresh: refresh
   };
 })();

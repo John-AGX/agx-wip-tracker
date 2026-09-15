@@ -283,8 +283,22 @@ router.get('/', requireAuth, async (req, res) => {
     // the existence of someone's private to-dos on every viewer's progress bar,
     // and the bar would disagree with the detail door, which lists the same
     // rows under the same predicate.
+    //
+    // The org-wide Service Tickets page names each ticket's parent and
+    // assignee, so the list carries them as LABELS: the job's number and
+    // title, a lead-only ticket's lead title (a converted lead's ticket is the
+    // job's, exactly as the visibility above decides it) and the assignee's
+    // name. Each join matches the ticket's OWN org and nothing else, so a label
+    // can never be read off another tenant's row — a parent that is not in this
+    // org comes back as a null label, never as someone else's name. The joins
+    // only decorate: they cannot add or drop a row (every join is LEFT and
+    // on a primary key), and the WHERE above qualifies every column with t.
     const { rows } = await pool.query(
       `SELECT ${TICKET_COLS.split(', ').map((c) => 't.' + c).join(', ')},
+              pj.data->>'jobNumber' AS job_number,
+              COALESCE(NULLIF(pj.data->>'title',''), pj.data->>'name') AS job_title,
+              CASE WHEN t.job_id IS NULL THEN pl.title END AS lead_title,
+              au.name AS assignee_name,
               (SELECT COUNT(*)::int FROM tasks k
                 WHERE k.service_ticket_id = t.id AND k.organization_id = t.organization_id
                   AND k.archived_at IS NULL
@@ -294,6 +308,9 @@ router.get('/', requireAuth, async (req, res) => {
                   AND k.archived_at IS NULL AND k.status = 'done'
                   AND (k.scope = 'org' OR (k.scope = 'personal' AND k.owner_user_id = ${caller}))) AS task_done
          FROM service_tickets t
+         LEFT JOIN jobs pj ON pj.id = t.job_id AND pj.organization_id = t.organization_id
+         LEFT JOIN leads pl ON pl.id = t.lead_id AND pl.organization_id = t.organization_id
+         LEFT JOIN users au ON au.id = t.assignee_user_id AND au.organization_id = t.organization_id
         WHERE ${where.join(' AND ')}
         ORDER BY t.created_at DESC
         LIMIT ${limit}`,
