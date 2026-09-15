@@ -340,6 +340,12 @@ router.put('/purchase-orders/:id', requireAuth, requireCapability('ESTIMATES_EDI
     // sub_id is a contract field — frozen while locked.
     const subProvided = !locked && req.body && Object.prototype.hasOwnProperty.call(req.body, 'sub_id');
     const subId = subProvided ? (req.body.sub_id || null) : undefined;
+    // A caller-supplied sub id is proved at this door too, same as the create
+    // door — the grant refusing a foreign sub still left the PO saved pointing
+    // at it. Clearing the sub (null / '') needs no proof.
+    if (subId && !(await subInOrg(pool, subId, req.user.organization_id))) {
+      return res.status(404).json({ error: 'Subcontractor not found' });
+    }
 
     const { rows } = await pool.query(
       `UPDATE job_purchase_orders
