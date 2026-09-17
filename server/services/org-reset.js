@@ -24,6 +24,7 @@
 //       plans, compliance_items (job COIs/licenses),
 //       PROJECT-scoped job_reports (job_id NULL — no cascade reaches them),
 //       messages + message_reads (entity threads + photo-comment threads).
+//   The Buildertrend preview's memory: bt_record_snapshots, bt_preview_views.
 //
 // WHAT IT KEEPS
 //   clients, subs, users, org settings/branding, templates, field tools,
@@ -210,6 +211,15 @@ async function resetOrgData(orgId) {
     await del('service_ticket_events', 'DELETE FROM service_ticket_events WHERE organization_id = $1');
     await del('service_ticket_shares', 'DELETE FROM service_ticket_shares WHERE organization_id = $1');
     await del('service_tickets', 'DELETE FROM service_tickets WHERE organization_id = $1');
+
+    // 9) The Buildertrend preview's memory (services/clickr/since-refresh.js):
+    //    the Buildertrend values its last complete reads saw, and each admin's
+    //    last refresh. A clean slate is a re-seed from Buildertrend; the next
+    //    refresh starts fresh ("remembered from this refresh on") instead of
+    //    marking the re-seeded workspace against a memory from before the wipe.
+    //    Both tables carry their own NOT NULL organization_id — strict equality.
+    await del('bt_record_snapshots', 'DELETE FROM bt_record_snapshots WHERE organization_id = $1');
+    await del('bt_preview_views', 'DELETE FROM bt_preview_views WHERE organization_id = $1');
 
     // NOT HERE ON PURPOSE: user_email_aliases.
     //

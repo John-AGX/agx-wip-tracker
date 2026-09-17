@@ -53,7 +53,11 @@ const { SHARED_NULL_ORG_TABLES } = require('./assemblies');
 const DIRECT = [
   'admin_audit_log', 'agent_jobs', 'agent_reference_links', 'ai_memories',
   'ai_subtasks', 'ai_training_examples', 'ai_watch_runs', 'ai_watches',
-  'assembly_research', 'assembly_tuning_log', 'calendar_events', 'clients',
+  'assembly_research', 'assembly_tuning_log',
+  // The Buildertrend preview's memory (services/clickr/since-refresh.js): each
+  // row's own NOT NULL organization_id is the tenant, never inferred from a job.
+  'bt_preview_views', 'bt_record_snapshots',
+  'calendar_events', 'clients',
   'compliance_items', 'context_load_events', 'cost_categories', 'deal_memory',
   'email_campaigns', 'email_folders', 'email_labels', 'email_rules',
   'email_snippets', 'email_template_overrides', 'email_thread_state',

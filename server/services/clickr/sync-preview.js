@@ -1,9 +1,18 @@
 'use strict';
 // ── BUILDERTREND → PROJECT 86 SYNC PREVIEW ────────────────────────────────
 //
-// READ-ONLY. This module issues SELECTs against the P86 database and GETs
-// against Clickr, and nothing else. It stamps no audit row, caches nothing,
-// geocodes nothing. What a proposal may contain is enforced in ./bt-match.js.
+// READ-ONLY toward Project 86's records. This module issues SELECTs against the
+// P86 database and GETs against Clickr. It stamps no audit row, geocodes
+// nothing, and changes no job, lead, client, change order or purchase order.
+// What a proposal may contain is enforced in ./bt-match.js.
+//
+// ITS OWN MEMORY — the one write. To mark what is NEW or CHANGED in
+// Buildertrend since the viewing admin's previous refresh (./since-refresh.js),
+// a refresh remembers Buildertrend's values in bt_record_snapshots (only for a
+// dataset whose read was complete) and that admin's refresh time in
+// bt_preview_views. Both are keyed on this organization; neither holds a P86
+// value. A failure there never breaks the preview — the dataset just says it
+// could not be compared.
 //
 // ── WHO MAY SEE IT ───────────────────────────────────────────────────────
 // CLICKR_API_KEY is ONE global env var belonging to AG Exteriors' Buildertrend
@@ -33,6 +42,7 @@ const match = require('./bt-match');
 const coMatch = require('./co-match');
 const poMatch = require('./po-match');
 const coMoney = require('../money/change-order-totals');
+const since = require('./since-refresh');
 
 const VIEW_PARAM = 'buildertrend-preview';
 
@@ -296,10 +306,70 @@ function carriesKey(body, apiKey) {
   return false;
 }
 
+// "New / changed since your last refresh" for every dataset whose Clickr read
+// was complete and classified. Returns whether any such dataset existed (the
+// only case in which the caller moves the user's refresh marker).
+async function markSinceRefresh(org, deps, datasets, reads, ctx) {
+  const complete = PREVIEW_KINDS.filter((k) => {
+    const fr = reads[k];
+    const ds = datasets[k];
+    return fr && !fr.error && fr.complete === true && ds && ds.classified === true && !ds.error;
+  });
+  for (const k of PREVIEW_KINDS) {
+    if (complete.indexOf(k) !== -1) continue;
+    const ds = datasets[k];
+    if (ctx.ready && ds && ds.classified) {
+      ds.since = { compared: false, partial: true, previousRefreshAt: ctx.previous ? ctx.previous.toISOString() : null,
+        newCount: 0, changedCount: 0, removed: [], removedTotal: 0, note: since.PARTIAL_NOTE };
+    } else if (ctx.userId != null && ds && ds.classified) {
+      ds.since = { unavailable: true };
+    }
+  }
+  if (!complete.length) return false;
+  if (!ctx.ready) {
+    for (const k of complete) datasets[k].since = { unavailable: true };
+    return true;
+  }
+  const snaps = {};
+  for (const k of complete) {
+    snaps[k] = (reads[k].records || []).map((r) => {
+      const v = readRecord(k, r);
+      return { btId: v.btId, snapshot: since.snapshotOf(k, v) };
+    });
+  }
+  // Nothing carrying the key is ever stored: the same check the response gets.
+  if (carriesKey(snaps, ctx.apiKey)) throw Object.assign(new Error('withheld'), { keyLeak: true });
+  for (const k of complete) {
+    try {
+      const synced = await since.syncSnapshots(deps.pool, org.id, k, snaps[k], ctx.refreshAt);
+      datasets[k].since = since.markDataset(k, datasets[k].rows, synced, ctx.previous);
+    } catch (e) {
+      console.error('[clickr-preview] Buildertrend records could not be remembered; this dataset is not compared with the last refresh');
+      for (const row of datasets[k].rows || []) delete row.since;
+      datasets[k].since = { unavailable: true };
+    }
+  }
+  return true;
+}
+
 async function buildPreview(org, deps) {
   const env = deps.env || process.env;
   const apiKey = env.CLICKR_API_KEY ? String(env.CLICKR_API_KEY).trim() : '';
   const started = (deps.now || Date.now)();
+
+  // The viewing admin's previous refresh. No user, or an unreadable marker:
+  // nothing is marked and the marker is not moved.
+  const userId = deps.user && deps.user.id != null ? deps.user.id : null;
+  let previous = null;
+  let sinceReady = false;
+  if (userId != null) {
+    try {
+      previous = await since.readLastRefresh(deps.pool, org.id, userId);
+      sinceReady = true;
+    } catch (e) {
+      console.error('[clickr-preview] the last refresh could not be read; nothing is marked new or changed');
+    }
+  }
 
   let p86;
   let p86Error = null;
@@ -314,21 +384,32 @@ async function buildPreview(org, deps) {
   const settled = await Promise.allSettled(PREVIEW_KINDS.map((k) =>
     fetchDataset(Object.assign({ datasetId: DATASETS[k].datasetId, label: DATASETS[k].label, idKey: DATASETS[k].idKey }, common))));
   const datasets = {};
+  const reads = {};
   PREVIEW_KINDS.forEach((k, i) => {
     const s = settled[i];
     const fr = s.status === 'fulfilled' ? s.value : {
       records: [], fetched: 0, pages: 0, reportedCount: null, mode: null, complete: false, reason: null, elapsedMs: 0,
       error: { kind: 'internal', message: 'The ' + DATASETS[k].label + ' read failed inside this server before Clickr answered.' },
     };
+    reads[k] = fr;
     datasets[k] = buildDataset(k, fr, p86, p86Error);
     if (fr && !fr.error && fr.complete === true) rememberFetch(org.id, k, fr, (deps.now || Date.now)());
   });
+
+  // This refresh's instant: generatedAt, every snapshot time written now, and
+  // the user's new marker. Never at or before the previous marker.
+  let refreshAt = new Date();
+  if (previous && refreshAt.getTime() <= previous.getTime()) refreshAt = new Date(previous.getTime() + 1);
+  const anyComplete = userId != null
+    ? await markSinceRefresh(org, deps, datasets, reads, { userId, ready: sinceReady, previous, refreshAt, apiKey })
+    : false;
 
   const body = {
     readOnly: true,
     readOnlyNote: 'Preview only. Nothing is written to Project 86 or to Buildertrend.',
     direction: 'Buildertrend is the source of truth: every difference is shown as the correction Project 86 would receive. A blank in Buildertrend never overwrites a Project 86 value; money and job numbers are never auto-corrected; ambiguous matches propose nothing; nothing is proposed for deletion.',
-    generatedAt: new Date().toISOString(),
+    generatedAt: refreshAt.toISOString(),
+    since: userId != null && sinceReady ? { previousRefreshAt: previous ? previous.toISOString() : null } : null,
     organization: { id: org.id, slug: org.slug, name: org.name },
     keyConfigured: !!apiKey,
     p86: { jobs: p86.jobs.length, leads: p86.leads.length, clients: (p86.clients || []).length, unscopedJobs: p86.unscopedJobs, unscopedLeads: p86.unscopedLeads, error: p86Error },
@@ -337,6 +418,18 @@ async function buildPreview(org, deps) {
   };
   if (carriesKey(body, apiKey)) {
     throw Object.assign(new Error('withheld'), { keyLeak: true });
+  }
+  // Moved only once the response has passed the key check (a withheld preview
+  // showed nobody any marks), only after a complete read, and not by the
+  // page's own reload after an Apply (?since=keep): that
+  // reload is not a refresh the admin asked for, and moving the marker would
+  // wipe the marks they are working through.
+  if (anyComplete && sinceReady && !deps.keepMarker) {
+    try {
+      await since.writeLastRefresh(deps.pool, org.id, userId, refreshAt);
+    } catch (e) {
+      console.error('[clickr-preview] the refresh time could not be saved');
+    }
   }
   return body;
 }
@@ -363,7 +456,10 @@ async function handle(req, res, deps) {
   }
   inFlight = true;
   try {
-    const body = await buildPreview(org, Object.assign({ env }, deps));
+    // The viewing admin (requireAuth's verified token) owns the "since your
+    // last refresh" marker; ?since=keep is the page's reload after an Apply.
+    const body = await buildPreview(org, Object.assign({ env, user: req.user || null,
+      keepMarker: !!(req.query && req.query.since === 'keep') }, deps));
     // 200 even when Clickr failed: the failure is a per-dataset sentence. A
     // Clickr 401 must never surface as OUR 401 — the client logs the admin out.
     res.set('Cache-Control', 'no-store');

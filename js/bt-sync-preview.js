@@ -19,7 +19,14 @@
    Jobs default to Buildertrend's Open + Warranty jobs (the ones a sync would
    act on); a toggle shows all. Tiles are recomputed from the rows under that
    toggle. Styling is theme tokens only, so light and dark both come from
-   styles.css. */
+   styles.css.
+
+   NEW / CHANGED SINCE YOUR LAST REFRESH (server/services/clickr/since-refresh.js):
+   the server compares each complete Buildertrend read with what it remembered
+   and marks rows against THIS admin's previous refresh, then moves that admin's
+   marker. The page holds no copy of the marks: every load replaces _data. The
+   reload after an Apply asks the server not to move the marker (?since=keep),
+   so applying one row does not wipe the marks still being worked through. */
 (function () {
   'use strict';
 
@@ -38,7 +45,9 @@
     btblank: 'Buildertrend blank — P86 keeps',
     heldback: 'Held back (money / number)',
     flagged: 'Flagged',
-    notinbt: 'In P86, not in Buildertrend'
+    notinbt: 'In P86, not in Buildertrend',
+    since_new: 'New since your last refresh',
+    since_changed: 'Changed since your last refresh'
   };
   var CHIP = { matched: 'Same', conflict: 'Corrected', ambiguous: 'Ambiguous', possible_duplicate: 'Possible duplicate', 'new': 'Create',
     change_order: 'Change order', not_a_job: 'Not a job', refused: 'Refused', notinbt: 'Not in BT' };
@@ -135,6 +144,10 @@
       '.c-matched{--btp-c:var(--green);}.c-conflict{--btp-c:var(--orange);}.c-ambiguous,.c-possible_duplicate{--btp-c:var(--yellow);}',
       '.c-new{--btp-c:var(--accent);}.c-change_order,.c-heldback{--btp-c:var(--purple);}.c-notinbt,.c-refused{--btp-c:var(--red);}',
       '.c-not_a_job,.c-btblank,.c-flagged{--btp-c:var(--text-dim);}',
+      '.c-since_new{--btp-c:var(--accent);}.c-since_changed{--btp-c:var(--orange);}',
+      '.btp-tab-new{display:inline-block;padding:0 6px;margin-left:4px;border-radius:9px;border:1px solid var(--accent);color:var(--accent);background:transparent;font-size:11px;font-weight:700;line-height:15px;white-space:nowrap;}',
+      '.btp-removed{margin:0 0 10px;font-size:12px;}',
+      '.btp-removed summary{cursor:pointer;color:var(--text-dim);font-weight:600;}',
       '.btp-tile .btp-tile-n{color:var(--btp-c,var(--text));}',
       '.btp-seg{display:inline-flex;border:1px solid var(--border);border-radius:6px;overflow:hidden;flex-wrap:wrap;}',
       '.btp-seg button{border:0;background:transparent;color:var(--text-dim);padding:5px 10px;font-size:12px;font-weight:600;cursor:pointer;}',
@@ -188,13 +201,16 @@
     document.head.appendChild(el);
   }
 
-  function load() {
+  // opts.keepMarker: the reload after an Apply — compared with the admin's last
+  // refresh like any load, without becoming their new last refresh.
+  function load(opts) {
     if (_loading) return;
     _loading = true;
     _err = null;
     paint();
+    var url = ENDPOINT + (opts && opts.keepMarker === true ? '&since=keep' : '');
     var req = (window.p86Api && typeof window.p86Api.get === 'function')
-      ? window.p86Api.get(ENDPOINT)
+      ? window.p86Api.get(url)
       : Promise.reject(new Error('the API client is not loaded'));
     req.then(function (d) {
       var bad = shapeError(d);
@@ -225,6 +241,8 @@
     if (f === 'heldback') return (r.heldBack || []).length > 0;
     if (f === 'flagged') return (r.flags || []).length > 0;
     if (f === 'typo') return (r.corrections || []).some(function (c) { return !!c.typo; });
+    if (f === 'since_new') return !!(r.since && r.since.state === 'new');
+    if (f === 'since_changed') return !!(r.since && r.since.state === 'changed');
     return r['class'] === f;
   }
 
@@ -249,7 +267,7 @@
 
   function countsFor(ds, ui) {
     var c = { matched: 0, conflict: 0, ambiguous: 0, possible_duplicate: 0, 'new': 0, change_order: 0, not_a_job: 0, refused: 0,
-      btblank: 0, heldback: 0, flagged: 0, typo: 0 };
+      btblank: 0, heldback: 0, flagged: 0, typo: 0, since_new: 0, since_changed: 0 };
     var fields = 0, formatOnly = 0, blankFields = 0;
     (ds.rows || []).forEach(function (r) {
       if (!inScope(ds, ui, r)) return;
@@ -259,6 +277,8 @@
       if ((r.heldBack || []).length) c.heldback++;
       if ((r.flags || []).length) c.flagged++;
       if ((r.corrections || []).some(function (x) { return !!x.typo; })) c.typo++;
+      if (r.since && r.since.state === 'new') c.since_new++;
+      if (r.since && r.since.state === 'changed') c.since_changed++;
     });
     var base = c.matched + c.conflict + c.ambiguous + c.possible_duplicate + c['new'];
     return { counts: c, fields: fields, formatOnly: formatOnly, blankFields: blankFields, base: base,
@@ -464,15 +484,71 @@
     return html;
   }
 
+  // "New" / "Changed" in Buildertrend since this admin's last refresh.
+  function sinceChipHTML(r) {
+    var s = r.since;
+    if (!s) return '';
+    if (s.state === 'new') return '<span class="btp-chip c-since_new" data-btp-since-chip="new" title="First seen in Buildertrend since your last refresh">New</span>';
+    if (s.state === 'changed') return '<span class="btp-chip c-since_changed" data-btp-since-chip="changed" title="Changed in Buildertrend since your last refresh">Changed</span>';
+    return '';
+  }
+
+  function sinceValue(v) {
+    return v == null || v === '' ? '<span class="btp-none">blank</span>' : esc(v);
+  }
+
+  function sinceChangesHTML(r) {
+    var s = r.since;
+    if (!s || s.state !== 'changed' || !(s.changes || []).length) return '';
+    return '<div class="btp-block c-since_changed" data-btp-since-changes="1"><div class="btp-block-l">Changed in Buildertrend since your last refresh</div><ul class="btp-list">' +
+      s.changes.map(function (c) {
+        return '<li><b>' + esc(c.label || c.field) + '</b>: ' + sinceValue(c.from) + ' → ' + sinceValue(c.to) + '</li>';
+      }).join('') + '</ul></div>';
+  }
+
+  function sinceCompared(ds) {
+    return !!(ds && ds.since && ds.since.compared === true);
+  }
+
+  // New + changed rows of a dataset, under the same scope rule as its tiles.
+  function sinceCount(ds, ui) {
+    if (!sinceCompared(ds)) return 0;
+    return (ds.rows || []).filter(function (r) {
+      return r.since && (r.since.state === 'new' || r.since.state === 'changed') && inScope(ds, ui, r);
+    }).length;
+  }
+
+  // The dataset's sentence about the comparison, and what left Buildertrend.
+  function sinceHTML(ds) {
+    var s = ds.since;
+    if (!s) return '';
+    if (s.unavailable) {
+      return '<div class="btp-sentence is-warn" data-btp-since="unavailable">Not compared with your last refresh this time — what is new or changed could not be worked out. Refresh again in a moment.</div>';
+    }
+    if (!s.compared) {
+      return '<div class="btp-sentence ' + (s.partial ? 'is-warn' : 'is-ok') + '" data-btp-since="' + (s.partial ? 'partial' : 'first') + '">' + esc(s.note || '') + '</div>';
+    }
+    var when = s.previousRefreshAt ? new Date(s.previousRefreshAt).toLocaleString() : '';
+    var html = '<div class="btp-sentence is-ok" data-btp-since="compared">Compared with your last refresh, ' + esc(when) + '.</div>';
+    var gone = s.removed || [];
+    if (gone.length) {
+      var total = s.removedTotal != null && s.removedTotal > gone.length ? s.removedTotal : gone.length;
+      html += '<details class="btp-removed" data-btp-removed="1"><summary>No longer in Buildertrend since your last refresh (' + esc(total) + ')</summary><ul class="btp-list">' +
+        gone.map(function (g) { return '<li>' + esc(g.label) + '</li>'; }).join('') + '</ul>' +
+        (total > gone.length ? '<div class="btp-meta">and ' + esc(total - gone.length) + ' more</div>' : '') + '</details>';
+    }
+    return html;
+  }
+
   function rowHTML(ds, r) {
     var cls = r['class'];
-    var head = '<span class="btp-chip c-' + esc(cls) + '">' + esc(CHIP[cls] || cls) + (r.bt.coLabel ? ' ' + esc(r.bt.coLabel) : '') + '</span>';
+    var head = '<span class="btp-chip c-' + esc(cls) + '">' + esc(CHIP[cls] || cls) + (r.bt.coLabel ? ' ' + esc(r.bt.coLabel) : '') + '</span>' + sinceChipHTML(r);
     if (r.rung) head += '<span class="btp-rung">via ' + esc(r.rung) + '</span>';
     if (ds.key === 'jobs' && r.bt.scope !== 'open') head += '<span class="btp-rung">' + esc(r.bt.scope === 'closed' ? 'Closed in Buildertrend' : 'no Buildertrend status') + '</span>';
     var notes = (r.notes || []).length ? '<div class="btp-notes">' + r.notes.map(esc).join(' · ') + '</div>' : '';
     head += applyButtonHTML(ds, r);
     return '<div class="btp-row"' + (canApply(r) ? ' data-btp-rowid="' + esc(r.bt.btId) + '"' : '') + '><div class="btp-row-head">' + head + '</div>' +
-      '<div class="btp-pair">' + btSide(ds, r) + p86Side(ds, r) + '</div>' +
+      sinceChangesHTML(r) + '<div class="btp-pair">' + btSide(ds, r) + p86Side(ds, r) + '</div>' +
       correctionsHTML(ds, r) + heldHTML(ds, r) + blankHTML(r) + flagsHTML(r) + alsoHTML(ds, r) + notes + '</div>';
   }
 
@@ -599,7 +675,7 @@
       _applyNote[key] = { ok: !bad, text: okText };
       if (['merge', 'archive', 'restore', 'delete'].indexOf(body.mode) !== -1) { _archiveNote = _applyNote[key]; _archive = null; loadArchive(); }
       (res && res.results || []).forEach(function (x) { if (x.btId) delete _picks[key + ':' + x.btId]; });
-      load();
+      load({ keepMarker: true });
     }).catch(function (e) {
       _applying = null;
       var msg = e && e.data && typeof e.data.error === 'string' ? e.data.error : 'The apply request failed' + (e && e.status ? ' (HTTP ' + e.status + ')' : '') + '.';
@@ -721,6 +797,7 @@
     }
 
     if (ds.classified) {
+      html += sinceHTML(ds);
       var cc = countsFor(ds, ui);
       var nib = ds.notInBuildertrend || {};
       var sc = safeCount(ds);
@@ -747,6 +824,10 @@
           }).join('') + '</div><span class="btp-sub">Scope is Buildertrend’s status. “Not in Buildertrend” is always checked against every job read.</span></div>';
       }
       html += '<div class="btp-tiles">';
+      if (sinceCompared(ds)) {
+        html += tile('since_new', cc.counts.since_new, esc(LABEL.since_new), 'in Buildertrend', ui.f === 'since_new');
+        html += tile('since_changed', cc.counts.since_changed, esc(LABEL.since_changed), 'in Buildertrend', ui.f === 'since_changed');
+      }
       html += tile('conflict', cc.counts.conflict, esc(LABEL.conflict), cc.fields + ' field' + (cc.fields === 1 ? '' : 's') + (cc.formatOnly ? ' · ' + cc.formatOnly + ' formatting only' : ''), ui.f === 'conflict');
       html += tile('matched', cc.counts.matched, esc(LABEL.matched), '', ui.f === 'matched');
       html += tile('new', cc.counts['new'], esc(LABEL['new']), '', ui.f === 'new');
@@ -765,12 +846,14 @@
       html += tile('rate', cc.rate == null ? '—' : Math.round(cc.rate * 100) + '%', 'Match rate', 'of ' + esc(cc.base), false, true);
       html += '</div>';
 
-      var opts = ['all', 'conflict', 'ambiguous', 'possible_duplicate', 'new', 'matched'].concat(ds.key === 'jobs' ? ['change_order', 'not_a_job'] : [])
+      var sinceOpts = sinceCompared(ds) ? ['since_new', 'since_changed'] : [];
+      var opts = ['all'].concat(sinceOpts).concat(['conflict', 'ambiguous', 'possible_duplicate', 'new', 'matched']).concat(ds.key === 'jobs' ? ['change_order', 'not_a_job'] : [])
         .concat(['refused', 'heldback', 'btblank', 'flagged', 'notinbt']);
       html += '<div class="btp-filters"><select class="btp-search" style="flex:0 1 auto;" data-btp-fselect="1" aria-label="Show">' +
         opts.map(function (k) {
           return '<option value="' + k + '"' + (ui.f === k ? ' selected' : '') + '>' + (k === 'all' ? 'All Buildertrend records' : esc(labelFor(ds, k))) + '</option>';
-        }).join('') + (ui.f === 'typo' ? '<option value="typo" selected>Probable BT typos</option>' : '') + '</select>' +
+        }).join('') + (ui.f === 'typo' ? '<option value="typo" selected>Probable BT typos</option>' : '') +
+        ((ui.f === 'since_new' || ui.f === 'since_changed') && !sinceOpts.length ? '<option value="' + ui.f + '" selected>' + esc(LABEL[ui.f]) + '</option>' : '') + '</select>' +
         '<input type="search" class="btp-search" data-btp-q="1" placeholder="Search name, address, P86 number" value="' + esc(ui.q) + '">';
 
       var list;
@@ -816,8 +899,10 @@
       html += '<div class="btp-tabs" role="tablist">' + TABS.map(function (t) {
         var d = _data.datasets && _data.datasets[t[0]];
         var waiting = d && d.rows ? d.rows.filter(function (r) { return r['class'] === 'conflict' && canApply(r); }).length : 0;
+        var fresh = d && d.rows && _ui[t[0]] ? sinceCount(d, _ui[t[0]]) : 0;
         return '<button type="button" role="tab" class="btp-tab' + (_tab === t[0] ? ' is-active' : '') + '" aria-selected="' + (_tab === t[0]) + '" data-btp-tab="' + t[0] + '">' +
-          t[1] + (waiting ? ' <span class="btp-tab-n">' + waiting + '</span>' : '') + '</button>';
+          t[1] + (waiting ? ' <span class="btp-tab-n">' + waiting + '</span>' : '') +
+          (fresh ? ' <span class="btp-tab-new" data-btp-tab-new="' + t[0] + '" title="New or changed in Buildertrend since your last refresh">' + fresh + ' new</span>' : '') + '</button>';
       }).join('') + '</div>';
       if (_tab === 'archive') html += archiveHTML();
       else if (_data.datasets && _data.datasets[_tab]) html += datasetHTML(_data.datasets[_tab]);
@@ -846,7 +931,7 @@
 
   function wire() {
     var r = _host.querySelector('[data-btp-refresh]');
-    if (r) r.addEventListener('click', load);
+    if (r) r.addEventListener('click', function () { load(); });
     Array.prototype.forEach.call(_host.querySelectorAll('[data-btp-restore]'), function (b) {
       b.addEventListener('click', function () {
         runApply(b.getAttribute('data-btp-kind'), { mode: 'restore', p86Id: b.getAttribute('data-btp-restore') });
@@ -968,6 +1053,7 @@
       esc: esc,
       errorSentence: errorSentence,
       render: function (data, err) { _data = data || null; _err = err || null; _loading = false; return pageHTML(); },
+      runApply: runApply,
       setView: function (key, f, scope) { _ui[key].f = f || 'all'; if (scope) _ui[key].scope = scope; _ui[key].shown = PAGE; },
       setTab: function (t) { _tab = t; },
       setArchive: function (a) { _archive = a; _archiveErr = null; },

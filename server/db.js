@@ -1512,6 +1512,29 @@ async function initSchema() {
     ALTER TABLE clients ADD COLUMN IF NOT EXISTS bt_archive_reason TEXT;
     ALTER TABLE clients ADD COLUMN IF NOT EXISTS bt_merged_into TEXT;
     ALTER TABLE clients ADD COLUMN IF NOT EXISTS bt_archived_by INTEGER;
+    -- "New / changed in Buildertrend since your last refresh" on the Buildertrend
+    -- preview (services/clickr/since-refresh.js). bt_record_snapshots remembers
+    -- the Buildertrend values of every record of a COMPLETE read, per
+    -- organization and dataset — Buildertrend values only, never P86's, so an
+    -- Apply can never read as a Buildertrend change. bt_preview_views holds each
+    -- admin's own last refresh; marks are relative to it.
+    CREATE TABLE IF NOT EXISTS bt_record_snapshots (
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      dataset TEXT NOT NULL,
+      bt_id TEXT NOT NULL,
+      snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+      first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      changed_at TIMESTAMPTZ,
+      prev_snapshot JSONB,
+      PRIMARY KEY (organization_id, dataset, bt_id)
+    );
+    CREATE TABLE IF NOT EXISTS bt_preview_views (
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      last_refresh_at TIMESTAMPTZ NOT NULL,
+      PRIMARY KEY (organization_id, user_id)
+    );
 
     -- ---------------------------------------------------------------
     -- Per-org folder templates. Folders in Project 86 are IMPLICIT --

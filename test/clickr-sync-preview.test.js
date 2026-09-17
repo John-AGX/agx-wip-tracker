@@ -27,6 +27,12 @@ const engine = createPgSqlite(
   sqliteSchema(ALL_TABLES, { pk: { organizations: 'id', users: 'id', roles: 'name', jobs: 'id', leads: 'id', clients: 'id', job_change_orders: 'id' } }),
   { jsonColumns: ['data'] }
 );
+// The ON CONFLICT targets of the preview's own memory — server/db.js's primary
+// keys on bt_record_snapshots and bt_preview_views (the derived schema has none).
+engine.db.exec(`
+  CREATE UNIQUE INDEX pk_bt_record_snapshots ON bt_record_snapshots(organization_id, dataset, bt_id);
+  CREATE UNIQUE INDEX pk_bt_preview_views ON bt_preview_views(organization_id, user_id);
+`);
 globalThis.__P86_CLICKR_PREVIEW_ENGINE__ = engine;
 jest.mock('../server/db', () => ({ pool: globalThis.__P86_CLICKR_PREVIEW_ENGINE__.pool }));
 jest.mock('@anthropic-ai/sdk', () => {
@@ -1373,9 +1379,14 @@ describe('HTTP — the key never leaves the server', () => {
   });
 });
 
-describe('HTTP — it writes NOTHING, proved on every table', () => {
-  test('every table identical before and after, and every statement a SELECT', async () => {
+// The preview's ONE write is its own memory of Buildertrend (services/clickr/
+// since-refresh.js): bt_record_snapshots and the admin's bt_preview_views row.
+// Every other table — every Project 86 record — is proved untouched, and every
+// statement that is not a SELECT is one of those writes, for this organization.
+describe('HTTP — it writes NOTHING to Project 86, proved on every table', () => {
+  test('every other table identical before and after; every write is the preview\'s own memory, for this organization', async () => {
     await get('/api/admin/organizations/me', AGX_ADMIN);   // absorb requireAuth's last_seen_at bump
+    const MEMORY = ['bt_record_snapshots', 'bt_preview_views'];
     const before = snapshot();
     expect(Object.keys(before).length).toBe(ALL_TABLES.length);
     const logStart = engine.log.length;
@@ -1383,11 +1394,23 @@ describe('HTTP — it writes NOTHING, proved on every table', () => {
     expect(r.status).toBe(200);
     expect(r.json.datasets.jobs.summary.correctedFields).toBeGreaterThan(0);
     expect(r.json.datasets.leads.classified).toBe(true);
-    expect(snapshot()).toEqual(before);
+    const after = snapshot();
+    for (const t of MEMORY) { delete before[t]; delete after[t]; }
+    expect(after).toEqual(before);
     const stmts = engine.log.slice(logStart);
     expect(stmts.length).toBeGreaterThan(0);
-    expect(stmts.filter((s) => !s.read).map((s) => s.sql)).toEqual([]);
-    expect(stmts.every((s) => /^\s*SELECT\b/i.test(s.sql))).toBe(true);
+    expect(stmts.filter((s) => !s.ok)).toEqual([]);
+    const writes = stmts.filter((s) => !/^\s*SELECT\b/i.test(s.sql));
+    // Jobs and leads read completely here, so both are remembered (inserted, or
+    // touched when an earlier test already remembered them) and the marker moves.
+    expect(writes.some((s) => /^(INSERT INTO|UPDATE) bt_record_snapshots\b/.test(s.sql))).toBe(true);
+    expect(writes.some((s) => /^INSERT INTO bt_preview_views\b/.test(s.sql))).toBe(true);
+    for (const w of writes) {
+      if (/^(BEGIN|COMMIT)$/.test(w.sql)) continue;
+      if (/^INSERT INTO (bt_record_snapshots|bt_preview_views) \(organization_id,/.test(w.sql)) { expect(w.params[0]).toBe(AGX); continue; }
+      if (/^UPDATE bt_record_snapshots SET last_seen_at = \$1::timestamptz WHERE organization_id = \$2 AND dataset = \$3 /.test(w.sql)) { expect(w.params[1]).toBe(AGX); continue; }
+      throw new Error('unexpected write: ' + w.sql);
+    }
   });
 });
 

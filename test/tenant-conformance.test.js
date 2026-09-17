@@ -1250,7 +1250,21 @@ describe('R4 — classify() is checked, never consulted', () => {
   // participants is deliberately NOT modelled as a share row. No token is ever
   // minted for an internal user: a token would bypass their own role, survive
   // their deactivation, and be forwardable outside the company.
-  test('the fixture carries every table server/db.js creates (116) — nothing curated out', () => {
-    expect(TWO.ALL_TABLES.length).toBe(116);
+  // 116 -> 118 with the Buildertrend preview's "new / changed since your last
+  // refresh" memory: `bt_record_snapshots` (the Buildertrend values of every
+  // record of a complete read, per organization, dataset and Buildertrend id)
+  // and `bt_preview_views` (each admin's own last refresh).
+  //
+  // Both are DIRECT — each carries its own NOT NULL organization_id as the
+  // first column of its primary key, so the generic seeder plants org A / org B
+  // / un-stamped rows in each with no curation step. Neither is parent-scoped:
+  // a snapshot is a Buildertrend record, not a child of any P86 job, and a
+  // view row's tenant is its own column, never inferred from its user. Every
+  // statement services/clickr/since-refresh.js runs carries organization_id =
+  // the caller's organization, as a predicate or as the conflict key, and
+  // test/clickr-since-refresh.test.js seeds org 2 rows in both and proves they
+  // are never read or written. Both are wiped by services/org-reset.js.
+  test('the fixture carries every table server/db.js creates (118) — nothing curated out', () => {
+    expect(TWO.ALL_TABLES.length).toBe(118);
   });
 });
