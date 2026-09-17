@@ -5,6 +5,10 @@
 // notification_prefs[key] === false; the push-side gate is
 // notification_prefs.push[key] === false. Both opt-OUT (missing = on).
 //
+// An event may carry an optional `group` (a heading, e.g. 'Work orders'). Rows
+// of one group stay contiguous in this list; My Account prints the heading
+// once, above the first row of the group (js/account.js renderPrefRows).
+//
 // This is deliberately LIGHTER than server/email-events.js — push bodies are
 // one-liners composed at the call site; no templates, no org overrides. If a
 // push event ever needs per-org control, mirror email's isEventEnabled then.
@@ -20,7 +24,13 @@ const NOTIFY_EVENTS = [
   { key: 'event_reminder',      label: 'Calendar reminders',     desc: 'Reminders before your calendar events start.',                              channels: { email: true, push: true } },
   { key: 'reminder',            label: 'Personal reminders',     desc: 'Your own "remind me" reminders when they come due.',                        channels: { email: true, push: true } },
   { key: 'schedule_assignment', label: 'Schedule assignments',   desc: 'When someone adds you to a production day on the Schedule page.',           channels: { email: true, push: false } },
-  { key: 'ticket_approval',     label: 'Work orders to approve', desc: 'When a service ticket you can approve — on a job you run, or one you raised — reaches Work complete, or the crew finishes it through a link you sent.', channels: { email: true, push: true } },
+  // Work orders — six contiguous rows under one heading in My Account.
+  { key: 'ticket_approval',      group: 'Work orders', label: 'Work orders to approve',     desc: 'When a work order you can approve reaches Work complete: on a job you run, one you raised, sent the crew link for, are assigned to or are watching, or on a lead you sell. If nobody on the work order can approve it, the company admins are told. A notice that doesn\'t go through is tried again.', channels: { email: true, push: true } },
+  { key: 'ticket_waiting',       group: 'Work orders', label: 'Work orders still waiting',  desc: 'A morning reminder when a work order you can approve has waited more than 2 business days (your company can change the number). If your work orders digest is on, they are in the digest instead.', channels: { email: true, push: true } },
+  { key: 'ticket_assignment',    group: 'Work orders', label: 'Work order assignments',     desc: 'When someone assigns a work order to you.', channels: { email: true, push: true } },
+  { key: 'ticket_problem',       group: 'Work orders', label: 'Problems flagged by crews',  desc: 'Right away, when a crew flags a problem on a work order you run, sent the link for, are assigned to or are watching: no access, extra damage, material short, a safety issue or something else.', channels: { email: true, push: true } },
+  { key: 'ticket_crew_activity', group: 'Work orders', label: 'Crew activity',              desc: 'What crews do on the crew link: opening it the first time, starting work, finishing or reopening buildings, photos, notes and suggestions. At most one notice per work order every 30 minutes.', channels: { email: true, push: true } },
+  { key: 'work_order_digest',    group: 'Work orders', label: 'Work orders morning digest', desc: 'One message on weekday mornings, only when a work order needs you: waiting for your approval, overdue, scheduled today or tomorrow with the crew link not opened, a crew link about to expire, suggestions or flagged problems waiting.', channels: { email: true, push: true } },
   { key: 'job_assignment',      label: 'Job assignments',        desc: 'When you’re assigned (or reassigned) as the PM on a job.',             channels: { email: true, push: false } },
   { key: 'password_reset',      label: 'Password resets',        desc: 'When an admin resets your password. Recommended to leave on.',              channels: { email: true, push: false } }
 ];

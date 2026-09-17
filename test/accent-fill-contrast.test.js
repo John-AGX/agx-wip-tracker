@@ -99,15 +99,45 @@ describe('office work order: text on the accent fill', () => {
 });
 
 // ── The crew link (service-ticket-share.html): prefers-color-scheme ───────
-const CREW = rules(styleOf(fs.readFileSync(path.join(ROOT, 'service-ticket-share.html'), 'utf8')));
+const CREW_HTML = fs.readFileSync(path.join(ROOT, 'service-ticket-share.html'), 'utf8').replace(/\r\n/g, '\n');
+const CREW = rules(styleOf(CREW_HTML));
+// 1.29: Mark work complete left the field report. Finish whole work order and
+// its "Yes, finish it" are green .btn.go buttons in #finishCard; Flag a
+// problem's Send is a .btn.primary and the kind picked fills with the accent.
 const CREW_CONTROLS = {
   'current step': ['.step', '.step.at'],
   'Navigate / Download the takeoff': ['.btn', '.btn.primary'],
   'Mark Bldg complete': ['.btn', '.btn.go'],
   'Save report': ['#report button'],
-  'Mark work complete': ['#report button', '#report button.big'],
+  'Finish whole work order / Yes, finish it': ['.btn', '.btn.go', '.btn.big'],
+  'Send to the office': ['.btn', '.btn.primary'],
+  'the kind of problem picked': ['.flag-cat', '.flag-cat[aria-checked="true"]'],
   'Send revision': ['#propose'],
 };
+// The buttons those selectors are measured for, as the page's script draws them.
+const CREW_MARKUP = [
+  '<button type="button" id="finishBtn" class="btn go big" disabled>Finish whole work order</button>',
+  '<button type="button" id="finishYes" class="btn go">Yes, finish it</button>',
+  "'<button type=\"button\" class=\"btn primary flag-send\"' + off + '>Send to the office</button>'",
+  '<button type="button" class="flag-cat" role="radio" aria-checked="',
+];
+// Red text on no fill of its own: measured on the ground it sits on.
+const CREW_TEXT_ON = {
+  'Sent back by the office (banner label)': { text: ['.lbl', '.sentback .lbl'], ground: ['.card'] },
+  'Sent back chip': { text: ['.chip', '.chip.back'], ground: ['.bld'] },
+  'Needs office chip': { text: ['.chip', '.chip.flag'], ground: ['.bld'] },
+  'Waiting on the office (building)': { text: ['.flag-state'], ground: ['.bld'] },
+  'Resolved by the office': { text: ['.flag-state', '.flag-state.flag-res'], ground: ['.card'] },
+};
+
+function textOn(sheet, spec, env, tokens) {
+  const color = computed(sheet, spec.text, env, 'color');
+  const fill = computed(sheet, spec.ground, env, 'background-color') || computed(sheet, spec.ground, env, 'background');
+  if (!color || !fill) throw new Error('no colour or ground for ' + spec.text.join(' | '));
+  const fg = resolveColor(color.value, tokens);
+  const bg = resolveColor(fill.value, tokens);
+  return { fg, bg, ratio: Math.round(contrast(fg, bg) * 100) / 100 };
+}
 
 describe('crew link: text on the accent and green fills', () => {
   for (const scheme of ['dark', 'light']) {
@@ -123,7 +153,41 @@ describe('crew link: text on the accent and green fills', () => {
         expect(pairOf(CREW, sels, env, tokens).ratio).toBeGreaterThanOrEqual(AA);
       });
     }
+
+    for (const [name, spec] of Object.entries(CREW_TEXT_ON)) {
+      test(name + ', ' + scheme + ': at least 4.5:1 on its ground', () => {
+        expect(textOn(CREW, spec, env, tokens).ratio).toBeGreaterThanOrEqual(AA);
+      });
+    }
   }
+
+  test('the measured buttons are the ones the page draws, and Mark work complete is gone', () => {
+    for (const m of CREW_MARKUP) expect([m, CREW_HTML.split(m).length - 1]).toEqual([m, 1]);
+    expect(CREW_HTML).not.toContain('#report button.big');
+    expect(CREW_HTML).not.toContain('id="complete"');
+  });
+
+  test('FIRES: the kind picked with white text on the dark accent is 3.75:1', () => {
+    const shipped = rules(`
+      :root { --accent: #2f81f7; --text-2: #c9d1d9; }
+      .flag-cat { background: transparent; color: var(--text-2); }
+      .flag-cat[aria-checked="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+    `);
+    const tokens = tokensOf(shipped, ':root');
+    const env = { width: 390, pointer: 'coarse', scheme: 'dark' };
+    expect(pairOf(shipped, ['.flag-cat', '.flag-cat[aria-checked="true"]'], env, tokens).ratio).toBe(3.75);
+  });
+
+  test('FIRES: a dim red on the light building ground falls under 4.5:1', () => {
+    const shipped = rules(`
+      :root { --sub: #f6f8fa; }
+      .bld { background: var(--sub); }
+      .chip { color: #8b949e; }
+      .chip.flag { color: #f85149; }
+    `);
+    const env = { width: 390, pointer: 'coarse', scheme: 'light' };
+    expect(textOn(shipped, { text: ['.chip', '.chip.flag'], ground: ['.bld'] }, env, tokensOf(shipped, ':root')).ratio).toBeLessThan(AA);
+  });
 
   test('FIRES: white on the dark accent, as shipped, is 3.75:1', () => {
     const shipped = rules(`

@@ -131,6 +131,46 @@ describe('coarse caps and list visibility', () => {
     expect(access.listVisibility({}, capsOf(['JOBS_VIEW_ASSIGNED']))).toEqual({ jobs: 'none', leads: false, userId: null });
     expect(access.listVisibility(null, capsOf(['JOBS_VIEW_ALL']))).toEqual({ jobs: 'none', leads: false, userId: null });
   });
+
+  test('list visibility in READ mode is the default, spelled or not', () => {
+    const caps = capsOf(['JOBS_VIEW_ASSIGNED', 'LEADS_VIEW']);
+    expect(access.listVisibility({ id: 1 }, caps, 'read')).toEqual(access.listVisibility({ id: 1 }, caps));
+    expect(access.listVisibility({ id: 1 }, caps, 'read')).toEqual({ jobs: 'assigned', leads: true, userId: 1 });
+  });
+
+  test('list visibility in WRITE mode — "tickets I can edit" — uses the edit capabilities only', () => {
+    expect(access.listVisibility({ id: 1 }, capsOf(['JOBS_EDIT_ANY', 'LEADS_EDIT']), 'write')).toEqual({ jobs: 'all', leads: true, userId: 1 });
+    expect(access.listVisibility({ id: 1 }, capsOf(['JOBS_EDIT_OWN']), 'write')).toEqual({ jobs: 'assigned', leads: false, userId: 1 });
+    // Seeing every job and every lead is not editing them.
+    expect(access.listVisibility({ id: 1 }, capsOf(['JOBS_VIEW_ALL', 'LEADS_VIEW']), 'write')).toEqual({ jobs: 'none', leads: false, userId: 1 });
+    expect(access.listVisibility({ id: 1 }, capsOf(['JOBS_VIEW_ASSIGNED']), 'write')).toEqual({ jobs: 'none', leads: false, userId: 1 });
+    // And editing is not reading: the read list is its own capability set.
+    expect(access.listVisibility({ id: 1 }, capsOf(['JOBS_EDIT_ANY', 'LEADS_EDIT']), 'read')).toEqual({ jobs: 'none', leads: false, userId: 1 });
+    // The assigned edit tier with no identity is nothing, not everything.
+    expect(access.listVisibility({}, capsOf(['JOBS_EDIT_OWN']), 'write')).toEqual({ jobs: 'none', leads: false, userId: null });
+  });
+
+  test('an unknown list mode shows nothing', () => {
+    const all = capsOf(['JOBS_VIEW_ALL', 'JOBS_EDIT_ANY', 'LEADS_VIEW', 'LEADS_EDIT']);
+    expect(access.listVisibility({ id: 1 }, all, 'delete')).toEqual({ jobs: 'none', leads: false, userId: null });
+    expect(access.listVisibility({ id: 1 }, all, '')).toEqual({ jobs: 'none', leads: false, userId: null });
+  });
+
+  test('MUTANT: read the READ capabilities whatever the mode and a viewer is listed as an editor', () => {
+    const src = fs.readFileSync(ACCESS_PATH, 'utf8').replace(/\r\n/g, '\n');
+    const anchor = '  const m = mode == null ? \'read\' : normalizeMode(mode);';
+    if (src.split(anchor).length !== 2) throw new Error('anchor not found');
+    const mutated = src.replace(anchor, () => '  const m = \'read\';');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p86-st-access-mode-'));
+    const p = path.join(dir, 'service-ticket-access.js');
+    fs.writeFileSync(p, mutated, 'utf8');
+    try {
+      const mod = require(p);
+      expect(mod.listVisibility({ id: 1 }, capsOf(['JOBS_VIEW_ALL', 'LEADS_VIEW']), 'write')).toEqual({ jobs: 'all', leads: true, userId: 1 });
+    } finally {
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) { /* already gone */ }
+    }
+  });
 });
 
 // ── WHEN ../auth CANNOT LOAD ─────────────────────────────────────────────

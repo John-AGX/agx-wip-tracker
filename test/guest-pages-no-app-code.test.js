@@ -181,11 +181,131 @@ describe('service-ticket-share.html — the guest work order (S5: read + field r
     }
   });
 
+  // 1.29: the crew page gained an upload queue, drafts and a signal bar. None
+  // of that is allowed to arrive as a script: the queue core is a pasted copy
+  // (test/photo-queue-parity.test.js keeps it equal to the office module).
+  test('the upload queue is carried INLINE, inside the page\'s own script', () => {
+    const script = html.slice(html.lastIndexOf('<script>'), html.lastIndexOf('</script>'));
+    expect(script).toContain('/* photo-queue core: begin */');
+    expect(script).toContain('/* photo-queue core: end */');
+    expect(script).toContain('var PQ = photoQueueCore();');
+    expect(html).not.toContain('photo-upload-queue.js');
+    expect(html).not.toContain('p86PhotoQueue');
+  });
+
+  test('what the crew types is kept under a PREFIX of the token, never the credential itself', () => {
+    expect(html).toContain("var DRAFT_KEY = 'st-draft:' + token.slice(0, 16);");
+    // Every storage key the page writes, read or removes: the crew name and
+    // the draft key, nothing built from the full token.
+    const keys = [...new Set((html.match(/localStorage\.(?:setItem|getItem|removeItem)\(([^,)]+)/g) || [])
+      .map((m) => m.replace(/^localStorage\.\w+\(/, '').trim()))].sort();
+    expect(keys).toEqual(["'st-crew-name'", 'DRAFT_KEY']);
+  });
+
+  test('every answer is read as text, with the status stamped on a refusal', () => {
+    // A proxy or captive portal answers with HTML; r.json() would throw on it
+    // before the page could tell a bad signal from a dead link.
+    expect(html).not.toMatch(/\.json\(\)/);
+    expect(html).toContain('return r.text().then(function (txt) {');
+    expect(html).toContain('err.status = r.status;');
+    expect(html).toContain('err.retryAfter = retryAfterOf(r, data);');
+  });
+
   test('a refusal from the server is SHOWN, never swallowed', () => {
     // A 403 here means the office changed the link or the work order moved on.
     // Pretending it worked is the worst possible outcome for a crew member who
     // believes their report was filed.
     expect(html).toMatch(/if \(!r\.ok\) throw new Error\(\(data && data\.error\)/);
-    expect(html).toMatch(/msg\(e\.message, true\)/);
+    // 1.30: every save shows saveError(e) — the server's OWN sentence whenever
+    // the server answered at all (e.status), and a sentence a crew member can
+    // act on when the request never arrived. Either spelling keeps this test's
+    // promise; what must never appear is a swallowed catch or the browser's raw
+    // network string.
+    expect(html).toMatch(/msg\(saveError\(e\), true\)|msg\(e\.message, true\)/);
+    expect(html).toContain('return e && e.status ? e.message : NO_ANSWER;');
+  });
+
+  // 1.29: Finish whole work order, the send-back banner and Flag a problem
+  // arrived inline too — no script, no stylesheet, one API base.
+  describe('1.29 crew additions', () => {
+    const script = norm(html.slice(html.lastIndexOf('<script>'), html.lastIndexOf('</script>')));
+    const flagSvc = require('../server/services/service-ticket-flags');
+
+    // The body of one named function in the page script, by brace depth.
+    function fnBody(name) {
+      const at = script.indexOf('function ' + name + '(');
+      if (at === -1 || script.indexOf('function ' + name + '(', at + 1) !== -1) throw new Error('anchor not found');
+      const open = script.indexOf('{', at);
+      let depth = 0;
+      for (let i = open; i < script.length; i++) {
+        if (script[i] === '{') depth++;
+        else if (script[i] === '}' && --depth === 0) return script.slice(open + 1, i);
+      }
+      throw new Error('anchor not found');
+    }
+
+    // The keys of the one object literal a function returns.
+    function returnedKeys(body) {
+      const m = /return \{([\s\S]*?)\n\s*\};/.exec(body);
+      if (!m) throw new Error('no returned object');
+      return m[1].split('\n').map((l) => (/^\s*(\w+)\s*:/.exec(l) || [])[1]).filter(Boolean);
+    }
+
+    test('the problem the page sends is built in ONE place, from the door\'s closed set only', () => {
+      const keys = returnedKeys(fnBody('flagBody'));
+      expect(keys).toEqual(['category', 'note', 'task_id', 'client_ref', 'photos_expected', 'name']);
+      for (const k of keys) expect(flagSvc.CREW_FLAG_FIELDS).toContain(k);
+      // ...and that is the body the flag door gets.
+      expect(fnBody('sendFlag')).toContain('body: JSON.stringify(flagBody(key, f))');
+      expect(script.split('flagBody(').length - 1).toBe(2);
+    });
+
+    test('FIRES: a key outside the closed set is caught', () => {
+      const broken = mutateOnce(fnBody('flagBody'), '      category: f.category,\n', '      category: f.category,\n      status: \'resolved\',\n');
+      const keys = returnedKeys(broken);
+      expect(keys.every((k) => flagSvc.CREW_FLAG_FIELDS.includes(k))).toBe(false);
+    });
+
+    test('every flag control sits behind canWork: both slots, and the one listener that works them', () => {
+      const slots = script.match(/[\s\S]{0,40}'<div class="flag-slot"/g) || [];
+      expect(slots.length).toBe(2);
+      for (const s of slots) expect(s).toMatch(/canWork\s*\?\s*'<div class="flag-slot"$/);
+      expect(fnBody('onFlagEvent')).toContain('if (key == null || !lastCanWork) return;');
+      // The Problems card itself only shows for a link that can work, or when
+      // there is something to read.
+      expect(script).toContain('if (canWork || ticketFlags.length) html += problemsCardHTML(tasks, canWork);');
+      expect(script).toContain('if (canWork) html += finishCardHTML(d, t, tasks, done);');
+    });
+
+    test('a refusal from the problem door is shown in its words', () => {
+      const body = fnBody('sendFlag');
+      expect(body).toContain("return readJSON(r, 'That could not be sent.');");
+      expect(body).toContain('e && e.status ? e.message :');
+    });
+
+    test('problem photos go through the page\'s own queue, to the problem door, with the upload id in a header the door reads', () => {
+      const send = fnBody('sendPhoto');
+      expect(send).toContain("base + '/flags/' + encodeURIComponent(target.flagId) + '/photo'");
+      expect(send).toContain("init.headers = { 'X-Upload-Id': item.uploadId };");
+      expect(fnBody('sendFlag')).toContain("addPhotos(files, { key: 'flag:' + f.flagId, flagId: f.flagId, formKey: key });");
+      const door = fs.readFileSync(path.join(ROOT, 'server/routes/service-ticket-flag-routes.js'), 'utf8');
+      expect(door).toContain("req.headers['x-upload-id']");
+      expect(door).toContain('res.json({ ok: true, photo: {');
+    });
+
+    test('no browser dialog: Finish asks inline', () => {
+      expect(script).not.toMatch(/\bconfirm\(|\bprompt\(|\balert\(/);
+      expect(script).toContain('id="finishConfirm"');
+    });
   });
 });
+
+function norm(s) {
+  return String(s).replace(/\r\n/g, '\n');
+}
+
+function mutateOnce(src, from, to) {
+  const at = src.indexOf(from);
+  if (at === -1 || src.indexOf(from, at + from.length) !== -1) throw new Error('anchor not found');
+  return src.slice(0, at) + to + src.slice(at + from.length);
+}

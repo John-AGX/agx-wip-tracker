@@ -37,6 +37,12 @@ const { sniffMimeFromBytes, sanitizeSvg, mimeFamilyMatches } = require('../util/
 // Job labels go through js/job-label.js inside this resolver, so the outside
 // worker reads the same "RV2006 Waterside 1" the office does.
 const { resolveEntityLabels } = require('../services/entity-labels');
+// A task on a work order (a building on its punch list) sent on a task link is
+// finished or reopened through the same door as the crew's ticket link: the
+// ticket is locked, the crew rule is checked on the locked row, a completion
+// photo is required, and the ticket follows its buildings.
+const workOrder = require('../services/service-ticket-workorder');
+const subtaskDoor = require('../services/service-ticket-subtask-door');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -298,17 +304,96 @@ router.patch('/task-share/:token', loadShare, async (req, res) => {
       sets.push('notes = COALESCE(notes, \'\') || $' + (i++)); vals.push(stamp);
     }
     let markDone = false;
-    if (body.status && STATUSES.has(String(body.status))) {
-      sets.push('status = $' + (i++)); vals.push(String(body.status));
-      if (String(body.status) === 'done') { markDone = true; sets.push('completed_at = COALESCE(completed_at, NOW())'); }
+    let doorResult = null;
+    const statusIn = body.status && STATUSES.has(String(body.status)) ? String(body.status) : null;
+    const flipsDone = !!statusIn && (statusIn === 'done') !== (req.task.status === 'done');
+    const actor = { kind: 'share', shareId: null, label: req.share.recipient_name || req.share.recipient_email || null };
+    const building = !!statusIn && subtaskDoor.isWorkOrderSubtask(req.task);
+    let ticket = null;
+    if (building) {
+      const tR = await pool.query('SELECT * FROM service_tickets WHERE id = $1 AND organization_id = $2',
+        [req.task.service_ticket_id, req.task.organization_id]);
+      ticket = tR.rows[0] || null;
+      if (!ticket) return res.status(404).json({ error: 'This work order is no longer available.' });
     }
-    if (!sets.length) return res.json({ ok: true, task: publicTask(req.task) });
-    sets.push('updated_at = NOW()');
-    vals.push(req.task.id);
-    const upd = await pool.query('UPDATE tasks SET ' + sets.join(', ') + ' WHERE id = $' + i + ' RETURNING *', vals);
+    // The remaining write. On a building it runs inside the ticket lock, on the
+    // same client; on anything else it runs on the pool.
+    const writeRest = async function (db, guard) {
+      if (!sets.length) {
+        const again = await db.query('SELECT * FROM tasks WHERE id = $1 AND organization_id = $2', [req.task.id, req.task.organization_id]);
+        return again.rows[0];
+      }
+      sets.push('updated_at = NOW()');
+      vals.push(req.task.id, req.task.organization_id);
+      const upd = await db.query('UPDATE tasks SET ' + sets.join(', ') + ' WHERE id = $' + i + ' AND organization_id = $' + (i + 1) + (guard || '') + ' RETURNING *', vals);
+      return upd.rows[0] || null;
+    };
+    let row;
+    if (ticket) {
+      // A status on a building is decided under the ticket lock, on the task
+      // row as it is there (A10): the link's copy was read before the lock, and
+      // a building the office finished (or moved) in between is refused rather
+      // than written over. Done-ness goes through the door, which writes the
+      // task's status and completed_at itself; In progress / Blocked / Open are
+      // written on top, in the same transaction.
+      doorResult = await workOrder.withTicketLock(pool, ticket, async function (client, locked) {
+        const fresh = await client.query('SELECT * FROM tasks WHERE id = $1 AND organization_id = $2 FOR UPDATE',
+          [req.task.id, req.task.organization_id]);
+        if (subtaskDoor.taskShifted(req.task, fresh.rows[0])) return subtaskDoor.stale();
+        let result = { ok: true, ticket: locked, ticketStatus: locked.status, movedTo: null };
+        if (flipsDone) {
+          result = await workOrder.setSubtaskDone(client, {
+            ticket: locked,
+            taskId: req.task.id,
+            done: statusIn === 'done',
+            actor: actor,
+            gate: subtaskDoor.crewGate,
+          });
+          if (!result.ok) return result;
+        }
+        if (statusIn !== 'done') { sets.push('status = $' + (i++)); vals.push(statusIn); }
+        const written = await writeRest(client);
+        if (!written) return subtaskDoor.stale();
+        return Object.assign({}, result, { row: written });
+      });
+      if (!doorResult.ok) {
+        const refusal = { error: doorResult.error };
+        if (doorResult.code) refusal.code = doorResult.code;
+        return res.status(doorResult.status || 409).json(refusal);
+      }
+      if (statusIn === 'done') markDone = true;
+      row = doorResult.row;
+    } else {
+      // An org task read on no work order writes its status only while it is
+      // still on none: one put on a work order in between is a building now.
+      let guard = '';
+      if (statusIn) {
+        sets.push('status = $' + (i++)); vals.push(statusIn);
+        if (statusIn === 'done') { markDone = true; sets.push('completed_at = COALESCE(completed_at, NOW())'); }
+        if (req.task.scope === 'org') guard = ' AND service_ticket_id IS NULL';
+      }
+      if (!sets.length) return res.json({ ok: true, task: publicTask(req.task) });
+      row = await writeRest(pool, guard);
+      if (!row && guard) {
+        const stale = subtaskDoor.stale();
+        return res.status(stale.status).json({ error: stale.error, code: stale.code });
+      }
+    }
     if (markDone) await pool.query('UPDATE task_shares SET completed_at = NOW(), last_used_at = NOW() WHERE id = $1', [req.share.id]);
     else await pool.query('UPDATE task_shares SET last_used_at = NOW() WHERE id = $1', [req.share.id]);
-    res.json({ ok: true, task: publicTask(upd.rows[0]), completed: markDone });
+    // After the write committed: the last building done tells the approvers,
+    // naming the office user who sent this link.
+    if (doorResult) {
+      subtaskDoor.notifyMoves([{ ticket: doorResult.ticket, movedTo: doorResult.movedTo }], actor, req.share.created_by);
+    }
+    const out = { ok: true, task: publicTask(row || req.task), completed: markDone };
+    // Shared contracts §4: a door write says what the work order did, so the
+    // link page can say "awaiting approval" or "back in progress". Status and
+    // id only — nothing about the job's money reaches the link.
+    if (doorResult) {
+      out.work_order = { ticket_id: ticket.id, ticket_status: doorResult.ticketStatus, moved_to: doorResult.movedTo || null };
+    }
+    res.json(out);
   } catch (e) {
     console.error('PATCH /api/task-share/:token error:', e);
     res.status(500).json({ error: 'Server error' });
@@ -319,6 +404,16 @@ router.patch('/task-share/:token', loadShare, async (req, res) => {
 router.post('/task-share/:token/photo', loadShare, upload.single('file'), async (req, res) => {
   try {
     if (req.share.completed_at) return res.status(409).json({ error: 'This task was already completed.' });
+    // A building on a work order the office has approved (or closed, or not
+    // issued) takes no more photos from a link — its photos are the record.
+    if (subtaskDoor.isWorkOrderSubtask(req.task)) {
+      const tR = await pool.query('SELECT status FROM service_tickets WHERE id = $1 AND organization_id = $2',
+        [req.task.service_ticket_id, req.task.organization_id]);
+      if (tR.rows[0]) {
+        const gate = subtaskDoor.crewGate(tR.rows[0]);
+        if (!gate.ok) return res.status(gate.status).json({ error: gate.error, code: gate.code });
+      }
+    }
     if (!req.file || !req.file.buffer) return res.status(400).json({ error: 'No file' });
     let buf = req.file.buffer;
     const claimed = req.file.mimetype || 'application/octet-stream';

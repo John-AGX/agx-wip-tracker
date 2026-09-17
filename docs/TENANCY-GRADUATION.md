@@ -192,7 +192,7 @@ the caller's org. This is covered by a named test
 
 ## 9. The `OR organization_id IS NULL` tolerance is retired — **OPEN** `[machine]` — **HIGHEST RISK ITEM ON THIS LIST**
 
-**516** occurrences of `organization_id IS NULL` across `server/`.
+**518** occurrences of `organization_id IS NULL` across `server/`.
 
 497 → 516, net per commit (the count is of the literal, comments included):
 `eda0be04` +1, `4755ea44` +1, `e034406d` +2, `31d779ea` +6, `1a37e687` +4,

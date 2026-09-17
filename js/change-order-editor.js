@@ -338,8 +338,13 @@ function p86Ask(message, opts) {
   // writing `costDraws: []` where there was no key is itself a change, and
   // `costDraws` is money wiring. A key present is written back untouched.
   // This editor OWNS the ten fields below and is a CUSTODIAN of the rest.
+  //
+  // `fromWorkOrder` (1.29) is the link to the work order a change order was
+  // started from. The server owns it — the PUT door puts the stored value
+  // back whatever a body says — so keeping it here is belt and braces: the
+  // editor never sends a payload that would erase it.
   var CO_CUSTODIAL_KEYS = ['completionMode', 'riderScopeName',
-    'buildingAllocations', 'costSource', 'costDraws'];
+    'buildingAllocations', 'costSource', 'costDraws', 'fromWorkOrder'];
 
   function coSavePayload(co) {
     var data = {
@@ -684,6 +689,7 @@ function p86Ask(message, opts) {
         '.total{margin:20px 0 4px;padding:14px 18px;background:#f1f5f9;border-radius:8px;display:flex;justify-content:space-between;align-items:center;}' +
         '.total .l{font-weight:bold;color:#1B3A5C;font-size:15px;} .total .v{font-weight:bold;font-size:22px;color:#1B3A5C;}' +
         '.tax{font-size:12px;color:#666;text-align:right;margin:0 4px 16px;}' +
+        '.photos{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:0 0 8px;} .photos figure{margin:0;break-inside:avoid;page-break-inside:avoid;} .photos img{display:block;width:100%;aspect-ratio:4/3;object-fit:cover;border:1px solid #ddd;border-radius:4px;} .photos figcaption{font-size:10.5px;color:#666;margin-top:2px;}' +
         '.sig{margin-top:40px;display:flex;gap:40px;} .sig .box{flex:1;} .sig .line{border-bottom:1px solid #333;height:34px;} .sig .cap{font-size:11px;color:#666;margin-top:4px;}' +
         '.bar{position:fixed;top:10px;right:10px;} .bar button{font:inherit;padding:8px 16px;border-radius:8px;border:0;background:#1B8541;color:#fff;cursor:pointer;font-weight:bold;}' +
         '@media print{.bar{display:none;} body{padding:0;}}' +
@@ -699,6 +705,7 @@ function p86Ask(message, opts) {
         '</div>' +
         '<h2 class="sec">Scope of Work</h2><div class="scope">' + toHTML(co.scope) + '</div>' +
         (workHTML ? '<h2 class="sec">Included Work</h2>' + workHTML : '') +
+        coDocPhotosHTML(co) +
         '<div class="total"><span class="l">Change Order Total</span><span class="v">' + money(t.total) + '</span></div>' +
         ((t.taxAmount && t.taxAmount > 0) ? '<div class="tax">Includes tax ' + money(t.taxAmount) + '</div>' : '') +
         (co.terms ? '<h2 class="sec">Terms &amp; Conditions</h2><div class="terms">' + toHTML(co.terms) + '</div>' : '') +
@@ -841,6 +848,9 @@ function p86Ask(message, opts) {
                 ? '<span class="p86-co-link-on">⛓ Linked (legacy)</span>'
                 : '') +
             '</div>' +
+            // 1.29: started from a work order — which one, its photos, and a
+            // way back to it. Nothing when the change order was not.
+            fromWorkOrderCardHTML(co) +
           '</aside>' +
           // Line table
           '<section class="p86-co-lines">' +
@@ -912,6 +922,152 @@ function p86Ask(message, opts) {
     if (addCatalog) addCatalog.addEventListener('click', openCatalogDrawer);
     var previewBtn = overlay.querySelector('[data-co-preview]');
     if (previewBtn) previewBtn.addEventListener('click', openCoCustomerDoc);
+    wireFromWorkOrder(overlay);
+  }
+
+  // ── From work order (1.29) ─────────────────────────────────────
+  // A change order started from a work order carries data.fromWorkOrder, a
+  // record the SERVER owns (services/service-ticket-change-order.js): the
+  // ticket's id and title, what it was started from (a building's name among
+  // it) and the photos that show the extra work, by reference. It holds no
+  // money. The card below says where the change order came from, opens those
+  // photos, and goes back to the work order. This editor never writes the
+  // record; it only keeps it on save (CO_CUSTODIAL_KEYS).
+  var FROM_WO_THUMBS = 8;
+  // A full page load to a deep link. A variable so the Node test seam can
+  // watch it; jsdom's location.assign cannot be replaced.
+  var _navigate = function (href) { window.location.assign(href); };
+
+  function fromWorkOrderOf(co) {
+    var link = co && co.fromWorkOrder;
+    if (typeof link === 'string') {
+      try { link = JSON.parse(link); } catch (e) { link = null; }
+    }
+    if (!link || typeof link !== 'object' || Array.isArray(link)) return null;
+    if (link.ticketId == null || String(link.ticketId) === '') return null;
+    return link;
+  }
+
+  // Photos with something to show, in the order the server stored them.
+  function fromWorkOrderPhotos(link) {
+    var list = link && Array.isArray(link.photos) ? link.photos : [];
+    return list.filter(function (p) { return p && (p.thumb_url || p.web_url); });
+  }
+
+  function fromWorkOrderName(link) {
+    var title = String(link.ticketTitle || '').trim() || 'Work order';
+    var building = link.source && link.source.building != null ? String(link.source.building).trim() : '';
+    return building ? title + ' · ' + building : title;
+  }
+
+  function fromWorkOrderCardHTML(co) {
+    var link = fromWorkOrderOf(co);
+    if (!link) return '';
+    var photos = fromWorkOrderPhotos(link);
+    var shown = photos.slice(0, FROM_WO_THUMBS);
+    var more = photos.length - shown.length;
+    var thumbs = shown.map(function (p, i) {
+      var label = p.building ? String(p.building) : (p.filename ? String(p.filename) : 'Photo ' + (i + 1));
+      return '<button type="button" data-co-wo-photo="' + i + '" title="' + escapeAttr(label) + '" aria-label="' + escapeAttr('Open photo: ' + label) + '">' +
+        '<img src="' + escapeAttr(p.thumb_url || p.web_url) + '" alt="" loading="lazy" />' +
+      '</button>';
+    }).join('');
+    if (more > 0) {
+      thumbs += '<span class="p86-co-from-wo-more" title="' + escapeAttr(more + ' more — open a photo and page through them all') + '">+' + more + '</span>';
+    }
+    return '<div class="p86-co-from-wo" id="p86CoFromWorkOrder">' +
+      '<div class="p86-co-from-wo-lbl">From work order</div>' +
+      '<div class="p86-co-from-wo-title">' + escapeHTML(fromWorkOrderName(link)) + '</div>' +
+      (thumbs ? '<div class="p86-co-from-wo-thumbs">' + thumbs + '</div>' : '') +
+      (co.job_id ? '<button type="button" class="ee-btn secondary small" data-co-open-wo>Open work order</button>' : '') +
+    '</div>';
+  }
+
+  // The lightbox's attachment shape, built from the stored references.
+  function fromWorkOrderLightboxList(link) {
+    return fromWorkOrderPhotos(link).map(function (p) {
+      return {
+        id: p.attachment_id,
+        filename: p.filename || '',
+        thumb_url: p.thumb_url || p.web_url,
+        web_url: p.web_url || p.thumb_url,
+        original_url: p.web_url || p.thumb_url,
+        entity_type: p.entity_type,
+        entity_id: p.entity_id,
+        tags: p.kind ? [p.kind] : []
+      };
+    });
+  }
+
+  function wireFromWorkOrder(overlay) {
+    var card = overlay.querySelector('#p86CoFromWorkOrder');
+    if (!card) return;
+    card.addEventListener('click', function (e) {
+      var thumb = e.target && e.target.closest ? e.target.closest('[data-co-wo-photo]') : null;
+      if (thumb && card.contains(thumb)) {
+        var link = fromWorkOrderOf(_state.co);
+        var lb = window.p86Attachments;
+        if (!link || !lb || typeof lb.openLightbox !== 'function') return;
+        var list = fromWorkOrderLightboxList(link);
+        if (!list.length) return;
+        lb.openLightbox(list, Number(thumb.getAttribute('data-co-wo-photo')) || 0, {
+          parentLabel: fromWorkOrderName(link),
+          parentSubtitle: _state.co && _state.co.co_number ? String(_state.co.co_number) : ''
+        });
+        return;
+      }
+      var open = e.target && e.target.closest ? e.target.closest('[data-co-open-wo]') : null;
+      if (open && card.contains(open)) openFromWorkOrder();
+    });
+  }
+
+  // Back to the work order. The editor closes first, and an unsaved edit is
+  // saved before it does — if that save fails the editor stays open with the
+  // error, because leaving would drop what was typed. A job already loaded in
+  // this page opens in place (the way the Work Orders page opens a ticket);
+  // otherwise the same deep link the approval email uses.
+  function openFromWorkOrder() {
+    var co = _state.co;
+    var link = fromWorkOrderOf(co);
+    if (!co || !link || !co.job_id) return;
+    var jobId = String(co.job_id);
+    var ticketId = String(link.ticketId);
+    var href = '/jobs/' + encodeURIComponent(jobId) + '/job-service-tickets?ticket=' + encodeURIComponent(ticketId);
+    function go() {
+      close();
+      var st = window.p86ServiceTickets;
+      var jobs = (window.appData && Array.isArray(window.appData.jobs)) ? window.appData.jobs : [];
+      var loaded = jobs.some(function (j) { return j && String(j.id) === jobId; });
+      if (loaded && st && typeof st.openTicket === 'function') {
+        try { if (st.openTicket(jobId, ticketId) !== false) return; } catch (e) { /* fall through to the link */ }
+      }
+      _navigate(href);
+    }
+    if (_state.saveTimer) { clearTimeout(_state.saveTimer); _state.saveTimer = null; }
+    if (!_state.dirty || coLockReason()) { go(); return; }
+    flushSaveSync().then(go, function (e) {
+      _state.saving = false;
+      _state.saveError = e && e.message ? e.message : 'Save failed';
+      paintSaveStatus();
+    });
+  }
+
+  // The Photos section of the customer document: the work-order photos this
+  // change order was started with. Photos only — the kind and building the
+  // server stored, never a price.
+  function coDocPhotosHTML(co) {
+    var link = fromWorkOrderOf(co);
+    if (!link) return '';
+    var photos = fromWorkOrderPhotos(link);
+    if (!photos.length) return '';
+    return '<h2 class="sec">Photos</h2><div class="photos">' +
+      photos.map(function (p) {
+        var cap = [p.building, p.kind === 'before' ? 'Before' : p.kind === 'completion' ? 'Completion' : '']
+          .filter(Boolean).join(' · ');
+        return '<figure><img src="' + escapeAttr(p.web_url || p.thumb_url) + '" alt="" onerror="this.style.display=\'none\'"/>' +
+          (cap ? '<figcaption>' + escapeHTML(cap) + '</figcaption>' : '') + '</figure>';
+      }).join('') +
+    '</div>';
   }
 
   // ── Rich-text fields (Scope + Terms) ───────────────────────────
@@ -2564,7 +2720,11 @@ function p86Ask(message, opts) {
   window.p86ChangeOrders = {
     openNew: openNew,
     open: openExisting,
-    close: close
+    close: close,
+    // The terms a new change order starts with. Start a change order from a
+    // work order (js/service-ticket-co.js) sends these, so a change order made
+    // there reads like one made with + New Change Order.
+    defaultTerms: DEFAULT_CO_TERMS
   };
 
   // Node-only test seam. Same dual-target shape js/co-draw.js,
@@ -2609,6 +2769,12 @@ function p86Ask(message, opts) {
         // all, and a suite driving it through a guessed name passes while
         // touching nothing. It is the same object, not a copy.
         lineTarget: coLineTarget,
+        // 1.29 From work order card. setNavigate swaps the full-page-load
+        // door so a test can see where Open work order goes.
+        fromWorkOrderCardHTML: fromWorkOrderCardHTML,
+        coDocPhotosHTML: coDocPhotosHTML,
+        openFromWorkOrder: openFromWorkOrder,
+        setNavigate: function (fn) { _navigate = fn; },
       },
     };
   }

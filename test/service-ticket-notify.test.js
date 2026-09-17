@@ -4,17 +4,29 @@
 // work_complete. Driven here against node:sqlite through the pg shim, over the
 // real schema, with the email and push senders injected so what was SENT is the
 // assertion:
-//   * who hears: the job's PM, the ticket's creator and the crew link's sender —
-//     active, in this org, each once, never the person who made the move;
+//   * who hears: the job's PM, the ticket's creator, the crew link's sender, the
+//     assignee, the salesperson on a lead-only ticket and the watchers — active,
+//     in this org, each once, never the person who made the move — and the
+//     company admins when nobody on it can approve it;
 //   * what they hear: the job, the ticket, who finished it, the punch-list tally
 //     and a link that opens the ticket — and no money;
 //   * once per arrival: a second call inside 15 minutes sends nothing, and a
 //     ticket no longer awaiting approval is never announced;
+//   * a notice that does not go through is counted (approval_notice_attempts),
+//     the 4th failure gives up once, everyone muted gives up at once, a success
+//     resets the count, and a cron retry reads exactly like the original notice;
+//   * Notify again changes no bookkeeping unless it claims a send (a gave-up
+//     ticket stays gave-up, a retrying one keeps its count), and once it claims,
+//     a failure starts the schedule from its first step, and it is WORDED after
+//     the arrival it re-sends (the crew, or the office mover) while still being
+//     ADDRESSED from the clicker's own call;
 //   * the email opt-out holds, and a failing sender never throws;
-//   * only people who can still open the ticket are told, a crew-typed name
-//     cannot forge a line or a link, and a claim that reached nobody is given back.
-// The tenancy, actor and dedupe rules are then removed from a copy of the
-// module and shown to fail.
+//   * a crew-typed name cannot forge a line or a link, and a claim that reached
+//     nobody is given back.
+// The dedupe, claim release, status, give-up and Notify-again bookkeeping rules
+// are then removed from a copy of the module and shown to fail. The recipient-list mutants (write mode,
+// the access rule, the users org predicate, the actor exclusion) moved with the
+// code to test/work-order-recipients.test.js.
 'use strict';
 
 const fs = require('fs');
@@ -26,7 +38,7 @@ const { sqliteSchema } = require('./helpers/db-schema');
 const SERVICES = path.join(__dirname, '..', 'server', 'services');
 const REAL = path.join(SERVICES, 'service-ticket-notify.js');
 const TABLES = ['organizations', 'users', 'jobs', 'leads', 'tasks', 'attachments', 'job_access',
-  'service_tickets', 'service_ticket_events', 'service_ticket_shares'];
+  'service_tickets', 'service_ticket_events', 'service_ticket_shares', 'service_ticket_participants'];
 
 // The access rule's own role check, stubbed to a fixed role → capability map so
 // the suite does not need auth's role cache. 'crew' sees only jobs it owns or
@@ -43,7 +55,7 @@ const hasCapability = (user, cap) => String(cap || '').split(/\s+/).filter(Boole
   .some((k) => (ROLE_CAPS[user && user.role] || []).includes(k));
 
 let eng;
-const mutantPaths = [];
+const tmpDirs = [];
 
 beforeAll(() => {
   eng = createPgSqlite(sqliteSchema(TABLES), {
@@ -52,14 +64,14 @@ beforeAll(() => {
 });
 afterAll(() => {
   if (eng) eng.close();
-  for (const p of mutantPaths) { try { fs.unlinkSync(p); } catch (_) {} }
+  for (const d of tmpDirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch (_) {} }
 });
 
 function seed() {
   eng.db.exec(`
     DELETE FROM organizations; DELETE FROM users; DELETE FROM jobs; DELETE FROM leads; DELETE FROM tasks;
     DELETE FROM attachments; DELETE FROM service_tickets; DELETE FROM service_ticket_events; DELETE FROM job_access;
-    DELETE FROM service_ticket_shares;
+    DELETE FROM service_ticket_shares; DELETE FROM service_ticket_participants;
     INSERT INTO organizations (id, name) VALUES (1, 'AGX'), (2, 'Rival');
     INSERT INTO users (id, name, email, role, organization_id, active, notification_prefs) VALUES
       (10, 'Paula PM',      'pm@agx.test',      'pm', 1, 1, '{}'),
@@ -71,15 +83,17 @@ function seed() {
       (17, 'Carl Crew',     'crew@agx.test',    'crew', 1, 1, '{}'),
       (18, 'Mia Muted',     'muted@agx.test',   'admin', 1, 1, '{"ticket_approval":false,"push":{"ticket_approval":false}}'),
       (19, 'Pete OtherPM',  'otherpm@agx.test', 'pm', 1, 1, '{}'),
-      (20, 'Ella Estimator','est@agx.test',     'estimator', 1, 1, '{}');
-    INSERT INTO job_access (job_id, user_id, access_level) VALUES ('j1', 17, 'edit');
+      (20, 'Ella Estimator','est@agx.test',     'estimator', 1, 1, '{}'),
+      (21, 'Wes Watcher',   'wes@agx.test',     'crew', 1, 1, '{}'),
+      (22, 'Sally Sales',   'sales@agx.test',   'pm', 1, 1, '{}');
+    INSERT INTO job_access (job_id, user_id, access_level) VALUES ('j1', 17, 'edit'), ('j1', 21, 'edit');
     INSERT INTO leads (id, title, organization_id) VALUES ('l1', 'Latitude lead', 1);
     INSERT INTO jobs (id, owner_id, lead_id, organization_id, data) VALUES
       ('j1', 10, 'l1', 1, '{"jobNumber":"M1001","title":"BH Management Latitude","street_address":"828 Orienta Ave","city":"Altamonte Springs","state":"FL","zip":"32701","contractAmount":24000}');
-    INSERT INTO service_tickets (id, organization_id, title, job_id, lead_id, status, checklist, created_by) VALUES
-      ('st1', 1, 'Latitude 28 punch list', 'j1', NULL, 'work_complete', '[]', 13),
-      ('stl', 1, 'Lead ticket',           NULL, 'l1', 'work_complete', '[]', 13),
-      ('stp', 1, 'Still in progress',     'j1', NULL, 'in_progress',   '[]', 13);
+    INSERT INTO service_tickets (id, organization_id, title, job_id, lead_id, status, checklist, created_by, completed_at) VALUES
+      ('st1', 1, 'Latitude 28 punch list', 'j1', NULL, 'work_complete', '[]', 13, datetime('now', '-1 minutes')),
+      ('stl', 1, 'Lead ticket',           NULL, 'l1', 'work_complete', '[]', 13, datetime('now', '-1 minutes')),
+      ('stp', 1, 'Still in progress',     'j1', NULL, 'in_progress',   '[]', 13, NULL);
     INSERT INTO tasks (id, organization_id, title, status, scope, service_ticket_id, entity_type, entity_id) VALUES
       ('t782', 1, 'Bldg 782 — Side A: railing', 'done', 'org', 'st1', 'job', 'j1'),
       ('t784', 1, 'Bldg 784 — Side A: post',    'done', 'org', 'st1', 'job', 'j1'),
@@ -118,27 +132,24 @@ function senders(opts) {
 }
 
 const CREW = { kind: 'share', shareId: 'sh1', label: 'Marco' };
+const PAULA = { kind: 'user', userId: 10, label: 'Paula PM' };
 
 function load(mod) { return mod || require(REAL); }
 
-function mutant(find, replace) {
-  const src = fs.readFileSync(REAL, 'utf8');
-  const eol = src.includes('\r\n') ? '\r\n' : '\n';
-  const f = find.split('\n').join(eol);
-  if (src.split(f).length !== 2) throw new Error('MUTATION ANCHOR not found exactly once: ' + find.slice(0, 80));
-  const abs = (name) => JSON.stringify(path.join(SERVICES, name).split(path.sep).join('/'));
-  const out = src.replace(f, replace.split('\n').join(eol))
-    .replace("require('./service-tickets')", 'require(' + abs('service-tickets.js') + ')')
-    .replace("require('./service-ticket-workorder')", 'require(' + abs('service-ticket-workorder.js') + ')')
-    .replace("require('./service-ticket-access')", 'require(' + abs('service-ticket-access.js') + ')')
-    // The sender identity helpers sit one directory up; required lazily, but on
-    // every notice, so a mutant copy must resolve them too.
-    .replace("require('../email-sender')",
-      'require(' + JSON.stringify(path.join(SERVICES, '..', 'email-sender.js').split(path.sep).join('/')) + ')');
-  if (out === src) throw new Error('MUTATION CHANGED NO BYTES');
-  const p = path.join(os.tmpdir(), '_p86_stn_' + process.pid + '_' + Math.random().toString(36).slice(2, 9) + '.js');
+// A copy of the module with ONE rule changed. The anchor is matched against the
+// LF-normalised source and must occur exactly once; relative requires are
+// rewritten to absolute paths so the copy loads the same modules.
+function mutant(anchor, replacement) {
+  const src = fs.readFileSync(REAL, 'utf8').replace(/\r\n/g, '\n');
+  if (src.split(anchor).length !== 2) throw new Error('anchor not found');
+  let out = src.replace(anchor, () => replacement);
+  if (out === src) throw new Error('mutation changed nothing');
+  out = out.replace(/require\((['"])(\.{1,2}\/[^'"]+)\1\)/g,
+    (_m, _q, rel) => 'require(' + JSON.stringify(path.resolve(SERVICES, rel).split(path.sep).join('/')) + ')');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'p86-stn-'));
+  tmpDirs.push(dir);
+  const p = path.join(dir, 'service-ticket-notify.js');
   fs.writeFileSync(p, out, 'utf8');
-  mutantPaths.push(p);
   return require(p);
 }
 
@@ -146,6 +157,29 @@ describe('who hears about it', () => {
   test('the job’s PM, the ticket’s creator and the link’s sender — in that order, each once', async () => {
     const people = await load().approvalRecipients(eng.pool, ticket('st1'), { sharedBy: 14, hasCapability });
     expect(people.map((u) => u.id)).toEqual([10, 13, 14]);
+  });
+
+  test('then the assignee and the people watching it, each once and only if they can approve it', async () => {
+    eng.db.exec(`
+      UPDATE service_tickets SET assignee_user_id = 17 WHERE id = 'st1';
+      INSERT INTO service_ticket_participants (id, organization_id, ticket_id, user_id, access_level, created_at) VALUES
+        ('p1', 1, 'st1', 21, 'view', '2026-09-03 09:00:00'),
+        ('p2', 1, 'st1', 20, 'view', '2026-09-03 09:01:00'),
+        ('p3', 1, 'st1', 17, 'view', '2026-09-03 09:02:00'),
+        ('p_rival', 2, 'st1', 50, 'view', '2026-09-03 08:00:00');
+    `);
+    const people = await load().approvalRecipients(eng.pool, ticket('st1'), { sharedBy: 14, hasCapability });
+    // 20 (estimator) cannot edit the job; 50 is a participant row in another org.
+    expect(people.map((u) => u.id)).toEqual([10, 13, 14, 17, 21]);
+  });
+
+  test('a lead-only ticket also tells the lead’s salesperson; a job ticket does not', async () => {
+    eng.db.exec("UPDATE leads SET salesperson_id = 22 WHERE id = 'l1'");
+    const lead = await load().approvalRecipients(eng.pool, ticket('stl'), { hasCapability });
+    expect(lead.map((u) => u.id)).toEqual([13, 22]);
+    eng.db.exec("UPDATE service_tickets SET lead_id = 'l1' WHERE id = 'st1'");
+    const job = await load().approvalRecipients(eng.pool, ticket('st1'), { hasCapability });
+    expect(job.map((u) => u.id)).toEqual([10, 13]);
   });
 
   test('never the person who made the move, never an inactive user, never another org’s user', async () => {
@@ -175,13 +209,6 @@ describe('who hears about it', () => {
     expect(revoked.map((u) => u.id)).toEqual([10]);
   });
 
-  test('MUTANT: check READ instead of WRITE and a view-only grant is asked to approve', async () => {
-    eng.db.exec("UPDATE service_tickets SET created_by = 17 WHERE id = 'st1'; UPDATE job_access SET access_level = 'view' WHERE user_id = 17;");
-    const mod = mutant("      mode: 'write',", "      mode: 'read',");
-    const people = await mod.approvalRecipients(eng.pool, ticket('st1'), { hasCapability });
-    expect(people.map((u) => u.id)).toContain(17);
-  });
-
   test('a lead ticket goes only to people who can EDIT leads', async () => {
     eng.db.exec("UPDATE service_tickets SET created_by = 20 WHERE id = 'stl'");
     const viewer = await load().approvalRecipients(eng.pool, ticket('stl'), { sharedBy: 17, hasCapability });
@@ -200,27 +227,19 @@ describe('who hears about it', () => {
     expect(granted.map((u) => u.id)).toEqual([10, 19]);
   });
 
-  test('MUTANT: skip the access rule and the creator taken off the job is still emailed', async () => {
-    eng.db.exec("UPDATE service_tickets SET created_by = 17 WHERE id = 'st1'; DELETE FROM job_access WHERE user_id = 17;");
-    const mod = mutant('    if (verdict && verdict.ok) out.push(u);', '    out.push(u);');
-    const people = await mod.approvalRecipients(eng.pool, ticket('st1'), { hasCapability });
-    expect(people.map((u) => u.id)).toContain(17);
+  test('approvalRecipients answers who is ON it: no admin fallback unless asked', async () => {
+    eng.db.exec("UPDATE service_tickets SET created_by = 10 WHERE id = 'st1'");
+    const plain = await load().approvalRecipients(eng.pool, ticket('st1'), { actorUserId: 10, hasCapability });
+    expect(plain).toEqual([]);
+    const asked = await load().approvalRecipients(eng.pool, ticket('st1'), { actorUserId: 10, hasCapability, fallbackToAdmins: true });
+    expect(asked.map((u) => u.id)).toEqual([13, 14, 16, 18]);
   });
 
-  test('MUTANT: drop the org predicate on users and another tenant’s user is told about this job', async () => {
-    // Ray is an ADMIN in his own org: a wide capability the access rule does not
-    // tie to an org, so the users predicate is the only thing keeping him out.
-    const mod = mutant(
-      "WHERE id = ANY($1::int[]) AND organization_id = $2 AND active = TRUE',\n    [wanted, orgId]",
-      "WHERE id = ANY($1::int[]) AND active = TRUE',\n    [wanted]");
-    const people = await mod.approvalRecipients(eng.pool, ticket('st1'), { sharedBy: 50, hasCapability });
-    expect(people.map((u) => u.id)).toContain(50);
-  });
-
-  test('MUTANT: drop the actor exclusion and the PM is emailed about their own click', async () => {
-    const mod = mutant('id && id !== actor && ids.indexOf(id) === i', 'id && ids.indexOf(id) === i');
-    const people = await mod.approvalRecipients(eng.pool, ticket('st1'), { actorUserId: 10, hasCapability });
-    expect(people.map((u) => u.id)).toContain(10);
+  test('re-exports the text helpers it used to own, unchanged', () => {
+    const text = require('../server/services/work-order-notify-text');
+    const mod = load();
+    ['crewName', 'oneLine', 'escHtml', 'appUrl', 'ticketLink'].forEach((k) => expect(mod[k]).toBe(text[k]));
+    expect(mod.EVENT_KEY).toBe('ticket_approval');
   });
 });
 
@@ -239,6 +258,8 @@ describe('what they hear', () => {
     expect(m.text).toContain('Address: 828 Orienta Ave, Altamonte Springs, FL, 32701');
     expect(m.text).toContain('https://project86.net/jobs/j1/job-service-tickets?ticket=st1');
     expect(m.html).toContain('Review and approve');
+    expect(m.html).toContain('You\'re receiving this because you run this job, raised this ticket, sent its crew link, are assigned to it, sell this lead, or are watching it. Toggle notifications in <strong>My Account &rarr; Notifications</strong>.');
+    expect(m.html + m.text).not.toContain('company admin');
     expect(m.tag).toBe('ticket_approval');
     // No money on a work-order notice.
     expect(m.html + m.text).not.toMatch(/24000|24,000|contract/i);
@@ -257,10 +278,11 @@ describe('what they hear', () => {
 
   test('the notice lands on the ticket’s timeline, naming who was told', async () => {
     await load().notifyAwaitingApproval(eng.pool,
-      { ticket: ticket('st1'), actor: { kind: 'user', userId: 10, label: 'Paula PM' }, reason: 'office_moved' }, senders().deps);
+      { ticket: ticket('st1'), actor: PAULA, reason: 'office_moved' }, senders().deps);
     const ev = eventsOf('st1').filter((e) => e.kind === 'approval_notified');
     expect(ev).toHaveLength(1);
     expect(ev[0].actor_kind).toBe('system');
+    // fallback and attempt are absent, not null, when they do not apply.
     expect(ev[0].detail).toEqual({ names: ['Cora Creator'], reason: 'office_moved' });
   });
 
@@ -282,7 +304,7 @@ describe('what they hear', () => {
   test('the office move reads as the status the office sees', async () => {
     const s = senders();
     await load().notifyAwaitingApproval(eng.pool,
-      { ticket: ticket('st1'), actor: { kind: 'user', userId: 10, label: 'Paula PM' }, reason: 'office_moved' }, s.deps);
+      { ticket: ticket('st1'), actor: PAULA, reason: 'office_moved' }, s.deps);
     expect(s.emails[0].text).toContain('Paula PM moved it to Work complete on "Latitude 28 punch list".');
   });
 
@@ -400,6 +422,45 @@ describe('what they hear', () => {
   });
 });
 
+describe('nobody on it can approve it: the company admins are told', () => {
+  test('the admins who can approve it hear, the email says why, and the timeline says so', async () => {
+    eng.db.exec("UPDATE service_tickets SET created_by = 10 WHERE id = 'st1'");
+    const s = senders();
+    const r = await load().notifyAwaitingApproval(eng.pool,
+      { ticket: ticket('st1'), actor: PAULA, reason: 'office_moved' }, s.deps);
+    // 13 and 14 by email; 16 muted email (push only); 18 muted both; 15 inactive; 50 another org.
+    expect(r).toEqual({ sent: 3, recipients: 3 });
+    expect(s.emails.map((m) => m.to)).toEqual(['creator@agx.test', 'sender@agx.test']);
+    expect(s.pushes.map((p) => p.userId)).toEqual([13, 14, 16]);
+    const m = s.emails[0];
+    expect(m.text).toContain('Paula PM moved it to Work complete on "Latitude 28 punch list".\nNobody on this work order can approve it, so it came to you as a company admin.\n');
+    expect(m.html).toContain('<p>Nobody on this work order can approve it, so it came to you as a company admin.</p>');
+    expect(m.html).toContain('You\'re receiving this because you\'re an admin and nobody on this work order can approve it. Toggle notifications');
+    expect(m.subject).toBe('Ready for approval: Latitude 28 punch list — M1001 · BH Management Latitude');
+    const ev = eventsOf('st1').filter((e) => e.kind === 'approval_notified');
+    expect(ev.map((e) => e.detail)).toEqual([
+      { names: ['Cora Creator', 'Sam Sender', 'Olga Optout'], reason: 'office_moved', fallback: 'admins' },
+    ]);
+    expect(ticket('st1').approval_notified_at).not.toBeNull();
+  });
+
+  test('Notify again never falls back: nobody else to tell is no_recipients, and nothing is claimed', async () => {
+    eng.db.exec("UPDATE service_tickets SET created_by = 10 WHERE id = 'st1'");
+    const s = senders();
+    const r = await load().notifyAwaitingApproval(eng.pool,
+      { ticket: ticket('st1'), actor: PAULA, reason: 'notify_again', fallbackToAdmins: false }, s.deps);
+    expect(r.skipped).toBe('no_recipients');
+    expect([s.emails.length, s.pushes.length]).toEqual([0, 0]);
+    expect(ticket('st1').approval_notified_at).toBeNull();
+    // reason notify_again defaults to no fallback too
+    const s2 = senders();
+    const r2 = await load().notifyAwaitingApproval(eng.pool,
+      { ticket: ticket('st1'), actor: PAULA, reason: 'notify_again' }, s2.deps);
+    expect(r2.skipped).toBe('no_recipients');
+    expect(s2.emails).toHaveLength(0);
+  });
+});
+
 describe('once per arrival', () => {
   test('a second call inside 15 minutes sends nothing; after 15 minutes it is announced again', async () => {
     const first = senders();
@@ -425,35 +486,62 @@ describe('once per arrival', () => {
     expect(ticket('stp').approval_notified_at).toBeNull();
   });
 
-  test('someone who muted it on both channels is not claimed for', async () => {
+  test('everyone who could approve it muted it: not claimed for, and it gives up at once, once on the timeline', async () => {
     eng.db.exec("UPDATE service_tickets SET created_by = 18 WHERE id = 'st1'");
     const s = senders();
     const r = await load().notifyAwaitingApproval(eng.pool,
-      { ticket: ticket('st1'), actor: { kind: 'user', userId: 10, label: 'Paula PM' }, reason: 'office_moved' }, s.deps);
+      { ticket: ticket('st1'), actor: PAULA, reason: 'office_moved' }, s.deps);
     expect(r.skipped).toBe('no_recipients');
     expect(ticket('st1').approval_notified_at).toBeNull();
     expect([s.emails.length, s.pushes.length]).toEqual([0, 0]);
+    // A mute is a choice, not "nobody": no admins were asked.
+    const row = ticket('st1');
+    expect(row.approval_notice_gave_up_at).not.toBeNull();
+    expect(row.approval_notice_attempts).toBe(4);
+    const failed = eventsOf('st1').filter((e) => e.kind === 'approval_notice_failed');
+    expect(failed.map((e) => [e.actor_kind, e.detail])).toEqual([['system', { attempts: 4, reason: 'muted' }]]);
   });
 
-  test('a claimed notice that reached nobody is given back, leaves no Progress line, and the next arrival is announced', async () => {
+  test('a claimed notice that reached nobody is given back, counted, leaves no Progress line, and the next arrival resets the count', async () => {
     const dead = senders({ emailFails: true, noPush: true });
     const r = await load().notifyAwaitingApproval(eng.pool, { ticket: ticket('st1'), actor: CREW, reason: 'marked_complete' }, dead.deps);
     expect(r.skipped).toBe('nobody_reached');
     expect(ticket('st1').approval_notified_at).toBeNull();
+    expect(ticket('st1').approval_notice_attempts).toBe(1);
+    expect(ticket('st1').approval_notice_last_try_at).not.toBeNull();
     expect(eventsOf('st1').filter((e) => e.kind === 'approval_notified')).toHaveLength(0);
 
     const live = senders();
     await load().notifyAwaitingApproval(eng.pool, { ticket: ticket('st1'), actor: CREW, reason: 'marked_complete' }, live.deps);
     expect(live.emails).toHaveLength(2);
+    expect(ticket('st1').approval_notice_attempts).toBe(0);
+    expect(ticket('st1').approval_notice_last_try_at).toBeNull();
   });
 
-  test('a failure after the claim gives the claim back', async () => {
+  test('a failure after the claim gives the claim back and counts a try', async () => {
     const failing = {
       query: (sql, params) => (/FROM tasks/.test(sql) ? Promise.reject(new Error('db blip')) : eng.pool.query(sql, params)),
     };
     const r = await load().notifyAwaitingApproval(failing, { ticket: ticket('st1'), actor: CREW, reason: 'marked_complete' }, senders().deps);
     expect(r.skipped).toBe('error');
     expect(ticket('st1').approval_notified_at).toBeNull();
+    expect(ticket('st1').approval_notice_attempts).toBe(1);
+  });
+
+  test('a database that rejects everything still never throws', async () => {
+    const broken = { query: () => Promise.reject(new Error('down')) };
+    const r = await load().notifyAwaitingApproval(broken, { ticket: ticket('st1'), actor: CREW, reason: 'marked_complete' }, senders().deps);
+    expect(r).toEqual({ sent: 0, recipients: 0, skipped: 'error' });
+  });
+
+  test('nobody at all to tell (no admins either) counts a try', async () => {
+    eng.db.exec("UPDATE service_tickets SET created_by = 10 WHERE id = 'st1'; UPDATE users SET role = 'pm' WHERE role = 'admin';");
+    const s = senders();
+    const r = await load().notifyAwaitingApproval(eng.pool,
+      { ticket: ticket('st1'), actor: PAULA, reason: 'office_moved' }, s.deps);
+    expect(r.skipped).toBe('no_recipients');
+    expect(ticket('st1').approval_notified_at).toBeNull();
+    expect(ticket('st1').approval_notice_attempts).toBe(1);
   });
 
   test('MUTANT: never give the claim back and a notice that reached nobody silences the next real one', async () => {
@@ -467,15 +555,6 @@ describe('once per arrival', () => {
     expect(live.emails).toHaveLength(0);
   });
 
-  test('with nobody to tell, nothing is claimed — the next real arrival is still announced', async () => {
-    eng.db.exec("UPDATE service_tickets SET created_by = 10 WHERE id = 'st1'");
-    const s = senders();
-    const r = await load().notifyAwaitingApproval(eng.pool,
-      { ticket: ticket('st1'), actor: { kind: 'user', userId: 10, label: 'Paula PM' }, reason: 'office_moved' }, s.deps);
-    expect(r.skipped).toBe('no_recipients');
-    expect(ticket('st1').approval_notified_at).toBeNull();
-  });
-
   test('MUTANT: drop the 15-minute window and an undo-and-redo emails everyone twice', async () => {
     const mod = mutant(
       '\n          AND (approval_notified_at IS NULL OR approval_notified_at < NOW() - ${DEDUPE})',
@@ -486,10 +565,279 @@ describe('once per arrival', () => {
     expect(again.emails).toHaveLength(2);
   });
 
-  test('MUTANT: drop the status guard and an in-progress ticket is announced as ready', async () => {
-    const mod = mutant(" AND status = 'work_complete'", '');
+  test('MUTANT: drop the status guard on the claim and an in-progress ticket is announced as ready', async () => {
+    const mod = mutant(
+      "WHERE id = $1 AND organization_id = $2 AND status = 'work_complete'\n          AND (approval_notified_at IS NULL",
+      'WHERE id = $1 AND organization_id = $2\n          AND (approval_notified_at IS NULL');
     const s = senders();
     await mod.notifyAwaitingApproval(eng.pool, { ticket: ticket('stp'), actor: CREW, reason: 'marked_complete' }, s.deps);
     expect(s.emails.length).toBeGreaterThan(0);
+  });
+});
+
+describe('retries (the notice cron calls with reason retry)', () => {
+  const dead = () => senders({ emailFails: true, noPush: true });
+
+  test('a retry recovers the crew who finished it, so the email reads exactly like the original', async () => {
+    const arrival = { kind: 'status_changed', detail: { from: 'in_progress', to: 'work_complete', reason: 'all_subtasks_done' } };
+    eng.db.exec(`INSERT INTO service_ticket_events (id, organization_id, ticket_id, kind, actor_kind, share_id, actor_label, detail, created_at)
+      VALUES ('e_old', 1, 'st1', 'status_changed', 'user', NULL, NULL, '{"from":"open","to":"in_progress"}', datetime('now', '-2 hours')),
+             ('e_arr', 1, 'st1', '${arrival.kind}', 'share', 'sh1', 'Marco', '${JSON.stringify(arrival.detail)}', datetime('now', '-30 minutes')),
+             ('e_rival', 2, 'st1', 'status_changed', 'user', NULL, NULL, '{"from":"open","to":"work_complete"}', datetime('now', '-1 minutes'))`);
+    const original = senders();
+    await load().notifyAwaitingApproval(eng.pool,
+      { ticket: ticket('st1'), actor: CREW, reason: 'all_subtasks_done', sharedBy: 14 }, original.deps);
+    expect(original.emails).toHaveLength(3);
+
+    // The same arrival, but the first try reached nobody.
+    eng.db.exec("DELETE FROM service_ticket_events WHERE kind = 'approval_notified'; UPDATE service_tickets SET approval_notified_at = NULL WHERE id = 'st1'");
+    await load().notifyAwaitingApproval(eng.pool,
+      { ticket: ticket('st1'), actor: CREW, reason: 'all_subtasks_done', sharedBy: 14 }, dead().deps);
+    expect(ticket('st1').approval_notice_attempts).toBe(1);
+
+    const retry = senders();
+    const r = await load().notifyAwaitingApproval(eng.pool,
+      { ticket: ticket('st1'), actor: { kind: 'system' }, reason: 'retry' }, retry.deps);
+    expect(r).toEqual({ sent: 3, recipients: 3 });
+    expect(retry.emails.map((m) => [m.to, m.subject, m.text, m.html, m.replyTo]))
+      .toEqual(original.emails.map((m) => [m.to, m.subject, m.text, m.html, m.replyTo]));
+    expect(retry.pushes.map((p) => p.payload)).toEqual(original.pushes.map((p) => p.payload));
+    const ev = eventsOf('st1').filter((e) => e.kind === 'approval_notified');
+    expect(ev.map((e) => e.detail)).toEqual([
+      { names: ['Paula PM', 'Cora Creator', 'Sam Sender'], reason: 'retry', attempt: 2 },
+    ]);
+    expect(ticket('st1').approval_notice_attempts).toBe(0);
+  });
+
+  test('an office arrival is retried as the office move, never telling the mover', async () => {
+    eng.db.exec(`INSERT INTO service_ticket_events (id, organization_id, ticket_id, kind, actor_kind, actor_user_id, detail, created_at)
+      VALUES ('e_arr', 1, 'st1', 'status_changed', 'user', 10, '{"from":"in_progress","to":"work_complete"}', datetime('now', '-30 minutes'))`);
+    const s = senders();
+    await load().notifyAwaitingApproval(eng.pool, { ticket: ticket('st1'), actor: { kind: 'system' }, reason: 'retry' }, s.deps);
+    expect(s.emails.map((m) => m.to)).toEqual(['creator@agx.test']);
+    expect(s.emails[0].text).toContain('Paula PM moved it to Work complete on "Latitude 28 punch list".');
+    expect(s.emails[0].replyTo).toBe('pm@agx.test');
+  });
+
+  test('with no arrival on the timeline the notice is the system’s own', async () => {
+    const s = senders();
+    await load().notifyAwaitingApproval(eng.pool, { ticket: ticket('st1'), actor: { kind: 'system' }, reason: 'retry' }, s.deps);
+    expect(s.emails.map((m) => m.to)).toEqual(['pm@agx.test', 'creator@agx.test']);
+    expect(s.emails[0].text).toContain('Hi Paula PM,\n\nThis work order is ready for your approval.\n');
+    expect(s.emails[0].replyTo).toBe(false);
+    expect(s.pushes[0].payload.body).toBe('M1001 · BH Management Latitude — Latitude 28 punch list: ready for your approval.');
+  });
+
+  test('a retry does not reset the count; the 4th failure gives up and says so exactly once', async () => {
+    for (let i = 1; i <= 4; i++) {
+      const r = await load().notifyAwaitingApproval(eng.pool,
+        { ticket: ticket('st1'), actor: { kind: 'system' }, reason: 'retry' }, dead().deps);
+      expect(r.skipped).toBe('nobody_reached');
+      expect(ticket('st1').approval_notice_attempts).toBe(i);
+      expect(ticket('st1').approval_notice_gave_up_at == null).toBe(i < 4);
+    }
+    await load().notifyAwaitingApproval(eng.pool,
+      { ticket: ticket('st1'), actor: { kind: 'system' }, reason: 'retry' }, dead().deps);
+    const failed = eventsOf('st1').filter((e) => e.kind === 'approval_notice_failed');
+    expect(failed.map((e) => e.detail)).toEqual([{ attempts: 4, reason: 'nobody_reached' }]);
+
+    // Notify again is a fresh arrival: the count and the give-up clear.
+    const live = senders();
+    const r = await load().notifyAwaitingApproval(eng.pool,
+      { ticket: ticket('st1'), actor: { kind: 'user', userId: 13, label: 'Cora Creator' }, reason: 'notify_again' }, live.deps);
+    expect(r.sent).toBe(1);
+    expect(ticket('st1').approval_notice_attempts).toBe(0);
+    expect(ticket('st1').approval_notice_gave_up_at).toBeNull();
+  });
+
+  // Notify again changes no bookkeeping unless it claims a send; otherwise a
+  // click with nobody else to tell would put a gave-up ticket back on the retry
+  // schedule, whose retry (actor: the original mover) falls back to the admins.
+  const bookkeeping = (id) => {
+    const t = ticket(id);
+    return [t.approval_notice_attempts, t.approval_notice_last_try_at, t.approval_notice_gave_up_at];
+  };
+  const GAVE_UP = "UPDATE service_tickets SET approval_notice_attempts = 4, approval_notice_last_try_at = datetime('now', '-5 hours'), approval_notice_gave_up_at = datetime('now', '-5 hours') WHERE id = 'st1'";
+  const RETRYING = "UPDATE service_tickets SET approval_notice_attempts = 2, approval_notice_last_try_at = datetime('now', '-30 minutes') WHERE id = 'st1'";
+  const soleApprover = (mod) => async () => {
+    // Paula runs j1 and raised st1: nobody else on it can approve.
+    eng.db.exec("UPDATE service_tickets SET created_by = 10 WHERE id = 'st1'");
+    eng.db.exec(GAVE_UP);
+    const before = bookkeeping('st1');
+    const s = senders();
+    const r = await mod.notifyAwaitingApproval(eng.pool, { ticket: ticket('st1'), actor: PAULA, reason: 'notify_again' }, s.deps);
+    return { r, s, before, after: bookkeeping('st1') };
+  };
+
+  test('Notify again with nobody else to tell leaves a gave-up ticket gave-up: no reset, no count, no event', async () => {
+    const { r, s, before, after } = await soleApprover(load())();
+    expect(r).toEqual({ sent: 0, recipients: 0, skipped: 'no_recipients' });
+    expect([s.emails.length, s.pushes.length]).toEqual([0, 0]);
+    expect(after).toEqual(before);
+    expect(after[0]).toBe(4);
+    expect(after[2]).not.toBeNull();
+    expect(eventsOf('st1')).toHaveLength(0);
+    expect(ticket('st1').approval_notified_at).toBeNull();
+  });
+
+  test('Notify again where everyone else muted it keeps a retrying ticket on its count (no give-up)', async () => {
+    eng.db.exec("UPDATE service_tickets SET created_by = 18 WHERE id = 'st1'");
+    eng.db.exec(RETRYING);
+    const before = bookkeeping('st1');
+    const r = await load().notifyAwaitingApproval(eng.pool, { ticket: ticket('st1'), actor: PAULA, reason: 'notify_again' }, senders().deps);
+    expect(r.skipped).toBe('no_recipients');
+    expect(bookkeeping('st1')).toEqual(before);
+    expect(eventsOf('st1')).toHaveLength(0);
+  });
+
+  test('Notify again inside the 15-minute window keeps the count', async () => {
+    eng.db.exec(RETRYING);
+    eng.db.exec("UPDATE service_tickets SET approval_notified_at = datetime('now', '-5 minutes') WHERE id = 'st1'");
+    const before = bookkeeping('st1');
+    const r = await load().notifyAwaitingApproval(eng.pool,
+      { ticket: ticket('st1'), actor: { kind: 'user', userId: 13, label: 'Cora Creator' }, reason: 'notify_again' }, senders().deps);
+    expect(r.skipped).toBe('already_notified');
+    expect(bookkeeping('st1')).toEqual(before);
+  });
+
+  test('Notify again that fails before claiming keeps the count; an arrival that fails the same way counts a try', async () => {
+    // Every read fails; the bookkeeping writes still work.
+    const failing = {
+      query: (sql, params) => (/^\s*(UPDATE service_tickets|INSERT INTO service_ticket_events)/.test(sql)
+        ? eng.pool.query(sql, params)
+        : Promise.reject(new Error('db blip'))),
+    };
+    eng.db.exec(RETRYING);
+    const before = bookkeeping('st1');
+    const r = await load().notifyAwaitingApproval(failing,
+      { ticket: ticket('st1'), actor: { kind: 'user', userId: 13, label: 'Cora Creator' }, reason: 'notify_again' }, senders().deps);
+    expect(r.skipped).toBe('error');
+    expect(bookkeeping('st1')).toEqual(before);
+    const arrival = await load().notifyAwaitingApproval(failing, { ticket: ticket('st1'), actor: CREW, reason: 'marked_complete' }, senders().deps);
+    expect(arrival.skipped).toBe('error');
+    expect(ticket('st1').approval_notice_attempts).toBe(1);
+  });
+
+  test('Notify again that claims a send and reaches nobody starts the schedule again from the first step', async () => {
+    eng.db.exec(GAVE_UP);
+    const r = await load().notifyAwaitingApproval(eng.pool,
+      { ticket: ticket('st1'), actor: { kind: 'user', userId: 13, label: 'Cora Creator' }, reason: 'notify_again' }, dead().deps);
+    expect(r.skipped).toBe('nobody_reached');
+    expect(ticket('st1').approval_notice_attempts).toBe(1);
+    expect(ticket('st1').approval_notice_gave_up_at).toBeNull();
+    expect(ticket('st1').approval_notified_at).toBeNull();
+  });
+
+  test('MUTANT: count the no-recipients click and a gave-up ticket accumulates tries it never made', async () => {
+    const mod = mutant(
+      "      if (!isNotifyAgain) {\n        if (candidates.length) await giveUpMuted(db, ticket);\n        else await recordFailure(db, ticket, 'no_recipients');\n      }\n",
+      "      if (candidates.length) await giveUpMuted(db, ticket);\n      else await recordFailure(db, ticket, 'no_recipients');\n");
+    const { after } = await soleApprover(mod)();
+    expect(after[0]).toBe(5);
+  });
+
+  test('MUTANT: reset before the claim (the old order) and a sole-approver click puts a gave-up ticket back on the retry schedule', async () => {
+    const mod = mutant(
+      "    } else if (!isNotifyAgain) {\n      await resetForArrival(db, ticket);\n    }",
+      "    } else {\n      await resetForArrival(db, ticket);\n    }");
+    const { after } = await soleApprover(mod)();
+    expect(after[0]).toBe(0);
+    expect(after[2]).toBeNull();
+  });
+
+  test('MUTANT: drop the status guard from the failure count and an in-progress ticket accumulates attempts', async () => {
+    const drive = async (mod) => {
+      await mod.notifyAwaitingApproval(eng.pool,
+        { ticket: ticket('stp'), actor: PAULA, reason: 'office_moved', fallbackToAdmins: false }, senders().deps);
+      eng.db.exec("UPDATE service_tickets SET created_by = 10 WHERE id = 'stp'");
+      await mod.notifyAwaitingApproval(eng.pool,
+        { ticket: ticket('stp'), actor: PAULA, reason: 'office_moved', fallbackToAdmins: false }, senders().deps);
+      return ticket('stp').approval_notice_attempts;
+    };
+    expect(await drive(load())).toBeNull();
+    seed();
+    const mod = mutant(
+      "approval_notice_gave_up_at END\n        WHERE id = $1 AND organization_id = $2 AND status = 'work_complete'",
+      'approval_notice_gave_up_at END\n        WHERE id = $1 AND organization_id = $2');
+    expect(await drive(mod)).toBeGreaterThan(0);
+  });
+
+  test('MUTANT: raise the give-up threshold and the 4th failure never gives up', async () => {
+    const mod = mutant('>= 4 THEN NOW()', '>= 99 THEN NOW()');
+    for (let i = 1; i <= 4; i++) {
+      await mod.notifyAwaitingApproval(eng.pool,
+        { ticket: ticket('st1'), actor: { kind: 'system' }, reason: 'retry' }, dead().deps);
+    }
+    expect(ticket('st1').approval_notice_attempts).toBe(4);
+    expect(ticket('st1').approval_notice_gave_up_at).toBeNull();
+    expect(eventsOf('st1').filter((e) => e.kind === 'approval_notice_failed')).toHaveLength(0);
+  });
+});
+
+// A re-send is the SAME notice, sent again: it says what the original said.
+// Who receives it is still decided from the caller (the clicker is out of it),
+// so recovering the arrival must move the wording and nothing else.
+describe('Notify again re-sends the original arrival', () => {
+  const CREW_ARRIVAL = "INSERT INTO service_ticket_events (id, organization_id, ticket_id, kind, actor_kind, actor_user_id, share_id, actor_label, detail, created_at) VALUES ('e_arr', 1, 'st1', 'status_changed', 'share', NULL, 'sh1', 'Marco', '{\"from\":\"in_progress\",\"to\":\"work_complete\"}', datetime('now', '-6 hours'))";
+
+  test('the crew who finished it is named and replied to — not the office person clicking the button', async () => {
+    eng.db.exec(CREW_ARRIVAL);
+    const s = senders();
+    // Paula (the job’s PM) clicks Notify again hours after Marco finished.
+    const r = await load().notifyAwaitingApproval(eng.pool,
+      { ticket: ticket('st1'), actor: PAULA, reason: 'notify_again' }, s.deps);
+    expect(r).toEqual({ sent: 1, recipients: 1 });
+    // Unchanged by the recovery: the clicker is still the one left out.
+    expect(s.emails.map((m) => m.to)).toEqual(['creator@agx.test']);
+    const m = s.emails[0];
+    expect(m.text).toContain('Marco (via the crew link) marked the work complete on "Latitude 28 punch list".');
+    expect(m.text).not.toContain('Paula PM');
+    expect(m.html).not.toContain('Paula PM');
+    expect(m.replyTo).toBe('marco@crew.test');
+    expect(s.pushes.map((p) => p.userId)).toEqual([13]);
+    expect(s.pushes[0].payload.body).toBe('M1001 · BH Management Latitude — Latitude 28 punch list: Marco (via the crew link) marked the work complete.');
+    // The timeline still records WHY it went out.
+    const ev = eventsOf('st1').filter((e) => e.kind === 'approval_notified');
+    expect(ev.map((e) => e.detail)).toEqual([{ names: ['Cora Creator'], reason: 'notify_again' }]);
+  });
+
+  test('an office arrival is re-sent as that office move, and the mover still hears it when someone else clicks', async () => {
+    eng.db.exec("INSERT INTO service_ticket_events (id, organization_id, ticket_id, kind, actor_kind, actor_user_id, detail, created_at) VALUES ('e_arr', 1, 'st1', 'status_changed', 'user', 10, '{\"from\":\"in_progress\",\"to\":\"work_complete\"}', datetime('now', '-6 hours'))");
+    // Wes watches it, so somebody other than the mover is on the notice.
+    eng.db.exec("INSERT INTO service_ticket_participants (id, organization_id, ticket_id, user_id, access_level, created_at) VALUES ('p_wes', 1, 'st1', 21, 'view', '2026-09-03 09:00:00')");
+    const s = senders();
+    // Cora clicks; Paula moved it. Wording follows Paula, the recipient list follows Cora.
+    await load().notifyAwaitingApproval(eng.pool,
+      { ticket: ticket('st1'), actor: { kind: 'user', userId: 13, label: 'Cora Creator' }, reason: 'notify_again' }, s.deps);
+    expect(s.emails.map((m) => m.to)).toEqual(['pm@agx.test', 'wes@agx.test']);
+    expect(s.emails[1].text).toContain('Paula PM moved it to Work complete on "Latitude 28 punch list".');
+    expect(s.emails[1].replyTo).toBe('pm@agx.test');
+    // Paula IS that address: a reply to yourself is noise, so hers is dropped.
+    expect(s.emails[0].replyTo).toBe(false);
+    expect(s.emails.map((m) => m.text + m.html).join('')).not.toContain('Cora Creator moved');
+  });
+
+  test('an arrival that cannot be recovered degrades to the system notice, never to the clicker', async () => {
+    const s = senders();
+    await load().notifyAwaitingApproval(eng.pool,
+      { ticket: ticket('st1'), actor: PAULA, reason: 'notify_again' }, s.deps);
+    expect(s.emails.map((m) => m.to)).toEqual(['creator@agx.test']);
+    expect(s.emails[0].text).toContain('Hi Cora Creator,\n\nThis work order is ready for your approval.\n');
+    expect(s.emails[0].replyTo).toBe(false);
+    expect(s.emails[0].text + s.emails[0].html).not.toContain('Paula PM');
+    expect(s.pushes[0].payload.body).toBe('M1001 · BH Management Latitude — Latitude 28 punch list: ready for your approval.');
+  });
+
+  test('MUTANT: word Notify again from the caller and the approvers are told the office clicker finished the crew’s work', async () => {
+    eng.db.exec(CREW_ARRIVAL);
+    const mod = mutant(
+      '    if (isNotifyAgain) {\n      const recovered = await recoverArrival(db, ticket);\n      actor = recovered.actor;\n      how = recovered.how;\n    }\n',
+      '');
+    const s = senders();
+    await mod.notifyAwaitingApproval(eng.pool,
+      { ticket: ticket('st1'), actor: PAULA, reason: 'notify_again' }, s.deps);
+    expect(s.emails[0].text).toContain('Paula PM moved it to Work complete on "Latitude 28 punch list".');
+    expect(s.emails[0].text).not.toContain('Marco');
+    expect(s.emails[0].replyTo).toBe('pm@agx.test');
   });
 });

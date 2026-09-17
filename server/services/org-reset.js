@@ -206,6 +206,8 @@ async function resetOrgData(orgId) {
     //    to the shares cascade — share_id is ON DELETE SET NULL there (a
     //    revoked link must not delete a proposal nobody has read), so deleting
     //    shares would orphan them rather than remove them.
+    //    Flags reference shares and tasks with SET NULL, so they are deleted explicitly.
+    await del('service_ticket_flags', 'DELETE FROM service_ticket_flags WHERE organization_id = $1');
     await del('service_ticket_revisions', 'DELETE FROM service_ticket_revisions WHERE organization_id = $1');
     await del('service_ticket_participants', 'DELETE FROM service_ticket_participants WHERE organization_id = $1');
     await del('service_ticket_events', 'DELETE FROM service_ticket_events WHERE organization_id = $1');

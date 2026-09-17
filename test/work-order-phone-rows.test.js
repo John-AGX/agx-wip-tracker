@@ -27,12 +27,21 @@
 //
 // Each check is also run against the exact rules the findings measured,
 // copied below, and has to come out wrong there.
+//
+// 3. INTERNAL NOTES SHOWED UNDER DETAILS AND THE ACTION BAR. On a phone the
+//    open work order is one flex column and styles.css sends every
+//    .p86-st-detail-main child except the Scope card to order 2, after Details
+//    (order 1). The Internal notes card (css/service-ticket-editor.css, linked
+//    after styles.css) is a detail-main child too, so it fell to the bottom
+//    half, far from the Scope it sits under on a desktop. Asked here of the
+//    two stylesheets together, in link order, against the host's markup.
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
 const { rules } = require('./helpers/css-rules');
-const { computed, px } = require('./helpers/css-cascade');
+const { computed, px, mediaMatches, specificity } = require('./helpers/css-cascade');
+const { JSDOM } = require('jsdom');
 
 const ROOT = path.join(__dirname, '..');
 const STYLES = rules(fs.readFileSync(path.join(ROOT, 'css', 'styles.css'), 'utf8'));
@@ -191,5 +200,125 @@ describe('the swipe rows are touch-only; a narrow mouse window can reach every p
       expect(mouseReachable(SHIPPED_PANE_ROWS, MOUSE_700, sels, barsOf(sels))).toMatchObject({ ok: false, wrap: 'nowrap', sbw: 'none' });
     }
     expect(mouseReachable(SHIPPED_STRIP, MOUSE_700, STRIP, STRIP_BAR)).toMatchObject({ ok: false, wrap: 'nowrap', sbw: 'none', hiddenBar: true });
+  });
+});
+
+// ── 3. Internal notes stays under Scope on a phone ──────────────────────────
+const STYLES_TEXT = fs.readFileSync(path.join(ROOT, 'css', 'styles.css'), 'utf8').replace(/\r\n/g, '\n');
+const EDITOR_TEXT = fs.readFileSync(path.join(ROOT, 'css', 'service-ticket-editor.css'), 'utf8').replace(/\r\n/g, '\n');
+const INTERNAL_RULE = '  #job-service-tickets .p86-st-detail-main > .p86-st-internalcard { order: 0; }\n';
+
+// index.html links styles.css, then service-ticket-editor.css: one sheet, in that order.
+function linked(firstText, secondText) {
+  const a = rules(firstText);
+  const b = rules(secondText).map((r) => Object.assign({}, r, { order: r.order + a.length }));
+  return a.concat(b);
+}
+
+// The open work order as paintDetail draws it (section roots only).
+const DETAIL = new JSDOM(
+  '<div id="job-service-tickets" style="display:block"><div class="p86-st-row is-open"><div class="p86-st-detail">' +
+    '<div class="p86-st-stepper" data-st-sec="stepper" data-n="stepper"></div>' +
+    '<div class="p86-wo-site" data-st-sec="site" data-n="site"></div>' +
+    '<div class="p86-st-revs" data-st-sec="revs" data-n="revisions"></div>' +
+    '<div class="p86-st-detail-grid">' +
+      '<div class="p86-st-detail-main">' +
+        '<div class="p86-st-scopecard" data-n="scope"></div>' +
+        '<div class="p86-st-internalcard" data-st-sec="internal" data-n="internal notes"></div>' +
+        '<div class="p86-wo-mats" data-st-sec="mats" data-n="materials"></div>' +
+        '<div class="p86-wo-punch-head" data-st-sec="punchhead" data-n="punch list"></div>' +
+        '<div class="p86-wo-subs" data-st-sec="subs" data-n="buildings"></div>' +
+        '<div class="p86-st-task-add" data-n="add subtask"></div>' +
+      '</div>' +
+      '<div class="p86-st-detail-side" data-n="details"></div>' +
+    '</div>' +
+    '<div class="p86-st-actions" data-n="actions"></div>' +
+    '<div class="p86-st-sharewrap" hidden data-n="share"></div>' +
+    '<div class="p86-st-parts" data-st-sec="parts" data-n="on this ticket"></div>' +
+    '<div class="p86-st-timeline" data-st-sec="timeline" data-n="progress"></div>' +
+  '</div></div></div>'
+).window.document;
+
+function cmpKey(x, y) {
+  for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] > y[i] ? 1 : -1;
+  return 0;
+}
+
+// The winning value of prop on el at env, over every rule whose selector the
+// element matches (pseudo-element selectors never name it).
+function valueOn(sheet, el, env, prop) {
+  let best = null;
+  for (const rule of sheet) {
+    if (!mediaMatches(rule.media, env)) continue;
+    rule.decls.forEach((d, di) => {
+      if (d.prop !== prop) return;
+      for (const sel of rule.selectors) {
+        if (/::/.test(sel)) continue;
+        let hit = false;
+        try { hit = el.matches(sel); } catch (e) { continue; }
+        if (!hit) continue;
+        const sp = specificity(sel);
+        const key = [/!important/i.test(d.value) ? 1 : 0, sp[0], sp[1], sp[2], rule.order, di];
+        if (!best || cmpKey(key, best.key) >= 0) best = { key, value: d.value.replace(/\s*!important\s*$/i, '') };
+      }
+    });
+  }
+  return best ? best.value : null;
+}
+
+// The flex column's items top to bottom: display:contents boxes give their
+// children to the column, then items sort by order and keep DOM order within.
+function columnOrder(sheet, env) {
+  const detail = DETAIL.querySelector('.p86-st-detail');
+  const items = [];
+  (function walk(parent) {
+    for (const el of Array.from(parent.children)) {
+      if (valueOn(sheet, el, env, 'display') === 'contents') walk(el);
+      else items.push(el);
+    }
+  })(detail);
+  return items
+    .map((el, i) => ({ name: el.getAttribute('data-n'), order: Number(valueOn(sheet, el, env, 'order') || 0), i }))
+    .sort((a, b) => (a.order - b.order) || (a.i - b.i))
+    .map((x) => x.name);
+}
+
+describe('Internal notes on a phone', () => {
+  const PHONE = PHONES[1];
+  const SHEET = linked(STYLES_TEXT, EDITOR_TEXT);
+
+  test('the rule is there once, inside the editor stylesheet 760px block', () => {
+    expect(EDITOR_TEXT.split(INTERNAL_RULE).length).toBe(2);
+    const hits = rules(EDITOR_TEXT).filter((r) => r.selectors.includes('#job-service-tickets .p86-st-detail-main > .p86-st-internalcard') && r.decls.some((d) => d.prop === 'order'));
+    expect(hits.map((r) => r.media)).toEqual([['(max-width: 760px)']]);
+  });
+
+  test('comes right after Scope and before Details and the action bar, on a touch phone and in a narrow mouse window', () => {
+    for (const env of [PHONE, MOUSE_700]) {
+      const col = columnOrder(SHEET, env);
+      expect([env.label, col.slice(0, 6)]).toEqual([env.label, ['stepper', 'site', 'revisions', 'scope', 'internal notes', 'details']]);
+      expect(col.indexOf('internal notes')).toBeLessThan(col.indexOf('actions'));
+      expect(col.indexOf('internal notes')).toBeLessThan(col.indexOf('materials'));
+    }
+  });
+
+  test('the rest of the phone order is as styles.css set it: Details, actions, share, then materials, the punch list and the timeline', () => {
+    expect(columnOrder(SHEET, PHONE)).toEqual([
+      'stepper', 'site', 'revisions', 'scope', 'internal notes', 'details', 'actions', 'share',
+      'materials', 'punch list', 'buildings', 'add subtask', 'on this ticket', 'progress',
+    ]);
+  });
+
+  test('FIRES: without the rule Internal notes drops below Details and the action bar', () => {
+    const broken = linked(STYLES_TEXT, EDITOR_TEXT.replace(INTERNAL_RULE, ''));
+    const col = columnOrder(broken, PHONE);
+    expect(col.indexOf('internal notes')).toBeGreaterThan(col.indexOf('actions'));
+    expect(col.indexOf('internal notes')).toBe(col.indexOf('materials') - 1);
+  });
+
+  test('FIRES: the same rule linked BEFORE styles.css loses on source order', () => {
+    const early = linked(EDITOR_TEXT, STYLES_TEXT);
+    const col = columnOrder(early, PHONE);
+    expect(col.indexOf('internal notes')).toBeGreaterThan(col.indexOf('details'));
   });
 });

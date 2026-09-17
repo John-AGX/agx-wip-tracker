@@ -125,6 +125,8 @@ const TABLES = [
   'organizations', 'users', 'roles', 'jobs', 'job_access', 'leads', 'estimates', 'tasks',
   'service_tickets', 'service_ticket_events', 'service_ticket_shares',
   'service_ticket_revisions', 'service_ticket_participants', 'attachments',
+  // 1.29: the ticket read also lists flags and change orders (best-effort).
+  'service_ticket_flags', 'job_change_orders',
 ];
 
 const WIDE = 10;      // jobs wide + LEADS_VIEW + ESTIMATES_VIEW

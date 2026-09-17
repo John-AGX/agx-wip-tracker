@@ -1,0 +1,271 @@
+// EVERY CODE PATH THAT WRITES `tasks` IS ON THIS LEDGER (1.29).
+//
+// A building on a work order's punch list is an ordinary row in `tasks`. The
+// rules that make a building done — a completion photo, a work order that is
+// not approved or closed, the ticket following its buildings, a timeline line —
+// live in services/service-ticket-workorder.js, and the doors that are not the
+// work order ask services/service-ticket-subtask-door.js. 1.28 shipped with
+// four doors (My Tasks, adding, archiving, task links) that wrote the row
+// directly, and every rule was skippable through them. Nothing noticed, because
+// nothing counted the writers.
+//
+// This file counts them. It walks server/ for a statement that inserts,
+// updates or deletes `tasks`, and every file it finds must be named below with
+// the reason it may, and — where the reason is "it goes through the door" — a
+// check that the door call is really there. A new file that writes tasks fails
+// with the sentence that says what to do.
+//
+// It reads source text on purpose: the question is WHO writes the table, and
+// the answer has to include paths no drive has reached yet. The behaviour of
+// each door is driven in test/work-order-task-doors.test.js,
+// test/service-ticket-workorder.test.js and test/service-ticket-payload.test.js.
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+
+const REPO = path.resolve(__dirname, '..');
+const SERVER = path.join(REPO, 'server');
+const WRITES_TASKS = /UPDATE\s+tasks\b|INSERT\s+INTO\s+tasks\b|DELETE\s+FROM\s+tasks\b/i;
+const UNLISTED = 'A new code path writes tasks. Route work-order subtasks through server/services/service-ticket-subtask-door.js, then add it here.';
+
+function walk(dir, out) {
+  for (const name of fs.readdirSync(dir)) {
+    if (name === 'node_modules' || name.charAt(0) === '.') continue;
+    const full = path.join(dir, name);
+    const st = fs.statSync(full);
+    if (st.isDirectory()) walk(full, out);
+    else if (/\.js$/.test(name)) out.push(full);
+  }
+  return out;
+}
+
+const rel = (full) => path.relative(REPO, full).split(path.sep).join('/');
+const norm = (src) => src.replace(/\r\n/g, '\n');
+
+// The source of one express handler: from its declaration to the next
+// top-level `router.` line (or the exports).
+function handler(src, declaration) {
+  const at = src.indexOf(declaration);
+  if (at < 0) return null;
+  const rest = src.slice(at + declaration.length);
+  const next = rest.search(/\n(router\.|module\.exports)/);
+  return declaration + (next < 0 ? rest : rest.slice(0, next));
+}
+
+function between(src, start, end) {
+  const a = src.indexOf(start);
+  if (a < 0) return null;
+  const b = src.indexOf(end, a + start.length);
+  return src.slice(a, b < 0 ? src.length : b);
+}
+
+// Each entry: why this file may write tasks, and what must stay true of it.
+// check(src) returns a list of problems (empty when the entry holds). `optional`
+// entries may stop writing tasks without failing the ledger.
+const LEDGER = {
+  'server/services/service-ticket-workorder.js': {
+    why: 'THE door: setSubtaskDone completes or reopens a building under the ticket lock.',
+    check(src) {
+      const problems = [];
+      const body = between(src, 'async function applySubtaskDone(', '\n}\n');
+      if (!body || !/UPDATE tasks/.test(body)) problems.push('the task UPDATE is not inside applySubtaskDone');
+      if (!/return withTicketLock\(db, opts\.ticket,/.test(src)) problems.push('setSubtaskDone no longer runs under withTicketLock');
+      if (!body || !/organization_id = \$4/.test(body)) problems.push('the task UPDATE lost its organization predicate');
+      return problems;
+    },
+  },
+  'server/routes/tasks-routes.js': {
+    why: 'My Tasks and the job Tasks panel. Create, edit and archive go through the subtask door for work-order buildings.',
+    check(src) {
+      const problems = [];
+      for (const [label, decl, needs] of [
+        ['POST', "router.post('/', requireAuth", ['subtaskDoor.lockTickets', 'subtaskDoor.structureVerdict', 'workOrder.recountTicket']],
+        ['PATCH', "router.patch('/:id', requireAuth", ['subtaskDoor.lockTickets', 'subtaskDoor.taskShifted', 'subtaskDoor.doneVerdict', 'subtaskDoor.structureVerdict', 'subtaskDoor.assignVerdict', 'workOrder.setSubtaskDone', 'workOrder.recountTicket']],
+        ['DELETE', "router.delete('/:id', requireAuth", ['subtaskDoor.isWorkOrderSubtask', 'subtaskDoor.structureVerdict', 'workOrder.recountTicket']],
+      ]) {
+        const h = handler(src, decl);
+        if (!h) { problems.push(label + ' handler not found'); continue; }
+        for (const n of needs) if (h.indexOf(n + '(') < 0) problems.push(label + ' no longer calls ' + n);
+      }
+      return problems;
+    },
+  },
+  'server/routes/task-share-routes.js': {
+    why: 'A task link sent to a sub. Done-ness on a work-order building goes through workOrder.setSubtaskDone with the crew gate.',
+    check(src) {
+      const problems = [];
+      const h = handler(src, "router.patch('/task-share/:token', loadShare");
+      if (!h) return ['PATCH handler not found'];
+      if (h.indexOf('workOrder.setSubtaskDone(') < 0) problems.push('PATCH no longer calls workOrder.setSubtaskDone');
+      if (h.indexOf('gate: subtaskDoor.crewGate') < 0) problems.push('PATCH no longer passes the crew gate');
+      if (h.indexOf('workOrder.withTicketLock(') < 0 || h.indexOf('subtaskDoor.taskShifted(') < 0) {
+        problems.push('PATCH no longer decides on the task row under the ticket lock');
+      }
+      const photo = handler(src, "router.post('/task-share/:token/photo', loadShare");
+      if (!photo || photo.indexOf('subtaskDoor.crewGate(') < 0) problems.push('the photo door no longer asks the crew gate');
+      return problems;
+    },
+  },
+  'server/services/payload-dispatcher.js': {
+    why: '86: task/todo creates (never on a ticket — TASK_FIELDS has no service_ticket_id) and service_ticket task_adds, which are refused on an approved ticket and followed by recountTicket.',
+    check(src) {
+      const problems = [];
+      const fn = between(src, 'async function dispatchServiceTicket(', '\nconst DISPATCHERS = {');
+      if (!fn) return ['dispatchServiceTicket not found'];
+      const ins = fn.indexOf('INSERT INTO tasks');
+      const recount = fn.indexOf('workOrder.recountTicket(');
+      if (ins < 0) problems.push('task_adds INSERT not found');
+      if (recount < 0 || recount < ins) problems.push('recountTicket does not run after the task_adds INSERT');
+      if (fn.indexOf('subtaskStructureWritable(') < 0 || fn.indexOf('subtaskStructureWritable(') > ins) {
+        problems.push('the approved-ticket refusal does not run before the task_adds INSERT');
+      }
+      const task = between(src, 'const TASK_FIELDS = new Set([', ']);');
+      if (!task || /service_ticket_id/.test(task)) problems.push('a plain 86 task can now be put on a work order without the door');
+      return problems;
+    },
+  },
+  'server/services/org-reset.js': {
+    why: 'Wipes a whole organization. Nothing survives to follow a rule.',
+    check(src) {
+      return /DELETE FROM tasks WHERE organization_id = \$1/.test(src) ? [] : ['the org wipe lost its organization predicate'];
+    },
+  },
+  'server/services/work-order-review.js': {
+    why: 'The office Send back reopens the buildings it names, inside changeStatus under the ticket lock.',
+    optional: true,
+    check(src) {
+      const problems = [];
+      const re = /UPDATE\s+tasks\b/gi;
+      let m;
+      while ((m = re.exec(src))) {
+        const stmt = src.slice(m.index, m.index + 400).split(/RETURNING|`\s*,/)[0];
+        for (const need of ['organization_id', 'service_ticket_id', "status = 'done'"]) {
+          if (stmt.indexOf(need) < 0) problems.push('the send-back UPDATE tasks lost ' + need);
+        }
+      }
+      return problems;
+    },
+  },
+};
+
+// Pure: given files [{rel, src}], the census problems.
+function census(files) {
+  const problems = [];
+  const writers = new Set();
+  for (const f of files) {
+    if (!WRITES_TASKS.test(f.src)) continue;
+    writers.add(f.rel);
+    const entry = LEDGER[f.rel];
+    if (!entry) { problems.push(f.rel + ': ' + UNLISTED); continue; }
+    for (const p of entry.check(norm(f.src))) problems.push(f.rel + ': ' + p);
+  }
+  for (const [file, entry] of Object.entries(LEDGER)) {
+    if (!writers.has(file) && !entry.optional) problems.push(file + ': on the ledger but no longer writes tasks — take it off');
+  }
+  return problems;
+}
+
+const FILES = walk(SERVER, []).map((full) => ({ rel: rel(full), src: fs.readFileSync(full, 'utf8') }));
+const sourceOf = (file) => FILES.find((f) => f.rel === file).src;
+
+// Replace a CRLF-normalised anchor that occurs exactly once.
+function mutate(src, find, replace) {
+  const s = norm(src);
+  if (s.split(find).length !== 2) throw new Error('anchor not found');
+  return s.split(find).join(replace);
+}
+function withFile(file, src) {
+  return FILES.map((f) => (f.rel === file ? { rel: f.rel, src } : f));
+}
+
+describe('the task-path ledger', () => {
+  test('the walk really reaches the files that write tasks', () => {
+    const writers = FILES.filter((f) => WRITES_TASKS.test(f.src)).map((f) => f.rel);
+    expect(writers).toEqual(expect.arrayContaining([
+      'server/routes/tasks-routes.js', 'server/routes/task-share-routes.js',
+      'server/services/payload-dispatcher.js', 'server/services/service-ticket-workorder.js',
+      'server/services/org-reset.js',
+    ]));
+    expect(FILES.length).toBeGreaterThan(100);
+  });
+
+  test('every file that writes tasks is on the ledger, and every entry holds', () => {
+    expect(census(FILES)).toEqual([]);
+  });
+
+  test('every entry says why', () => {
+    for (const entry of Object.values(LEDGER)) expect(entry.why.length).toBeGreaterThan(20);
+  });
+});
+
+describe('the ledger is not decoration', () => {
+  test('a new file that writes tasks fails with the sentence that says what to do', () => {
+    const files = FILES.concat([{ rel: 'server/routes/new-crew-door.js', src: "await pool.query('UPDATE tasks SET status = $1 WHERE id = $2', [s, id]);" }]);
+    expect(census(files)).toEqual(['server/routes/new-crew-door.js: ' + UNLISTED]);
+  });
+
+  test('tasks PATCH without the door call fails', () => {
+    const file = 'server/routes/tasks-routes.js';
+    const src = mutate(sourceOf(file), '        const result = await workOrder.setSubtaskDone(client, {\n',
+      '        const result = await Promise.resolve({ ok: true, ticket: newTicket }); ({\n');
+    expect(census(withFile(file, src))).toEqual([file + ': PATCH no longer calls workOrder.setSubtaskDone']);
+  });
+
+  test('tasks POST without the structure verdict fails', () => {
+    const file = 'server/routes/tasks-routes.js';
+    const src = mutate(sourceOf(file),
+      "        const verdict = await subtaskDoor.structureVerdict(client, { user: req.user, orgId, ticket });\n        if (!verdict.ok) return { refusal: verdict };\n        if (String(body.status) === 'done') {\n",
+      "        if (String(body.status) === 'done') {\n");
+    expect(census(withFile(file, src))).toEqual([file + ': POST no longer calls subtaskDoor.structureVerdict']);
+  });
+
+  test('tasks DELETE without the recount fails', () => {
+    const file = 'server/routes/tasks-routes.js';
+    const src = mutate(sourceOf(file), "        const moved = await workOrder.recountTicket(client, ticket, actor, 'subtask_removed');\n",
+      '        const moved = { ticketStatus: ticket.status, movedTo: null };\n');
+    expect(census(withFile(file, src))).toEqual([file + ': DELETE no longer calls workOrder.recountTicket']);
+  });
+
+  test('the task link without setSubtaskDone fails', () => {
+    const file = 'server/routes/task-share-routes.js';
+    const src = mutate(sourceOf(file), '          result = await workOrder.setSubtaskDone(client, {\n', '          result = await Promise.resolve({\n');
+    expect(census(withFile(file, src))).toEqual([file + ': PATCH no longer calls workOrder.setSubtaskDone']);
+  });
+
+  test('the task link without the re-read under the lock fails', () => {
+    const file = 'server/routes/task-share-routes.js';
+    const src = mutate(sourceOf(file),
+      '        if (subtaskDoor.taskShifted(req.task, fresh.rows[0])) return subtaskDoor.stale();\n', '');
+    expect(census(withFile(file, src))).toEqual([file + ': PATCH no longer decides on the task row under the ticket lock']);
+  });
+
+  test('tasks PATCH without the re-read under the lock, or without the assign verdict, fails', () => {
+    const file = 'server/routes/tasks-routes.js';
+    const noReread = mutate(sourceOf(file),
+      '      if (subtaskDoor.taskShifted(before, fresh.rows[0])) return { refusal: subtaskDoor.stale() };\n', '');
+    expect(census(withFile(file, noReread))).toEqual([file + ': PATCH no longer calls subtaskDoor.taskShifted']);
+    const noAssign = mutate(sourceOf(file),
+      '          const verdict = await subtaskDoor.assignVerdict(client, { user: req.user, orgId, ticket: newTicket });\n', '');
+    expect(census(withFile(file, noAssign))).toEqual([file + ': PATCH no longer calls subtaskDoor.assignVerdict']);
+  });
+
+  test('86 task_adds without the recount fails', () => {
+    const file = 'server/services/payload-dispatcher.js';
+    const src = mutate(sourceOf(file),
+      "    await workOrder.recountTicket(dbClient, before, { kind: 'agent', userId }, 'subtask_added');\n", '');
+    expect(census(withFile(file, src))).toEqual([file + ': recountTicket does not run after the task_adds INSERT']);
+  });
+
+  test('a send-back UPDATE tasks without its organization predicate fails, when the file has one', () => {
+    const file = 'server/services/work-order-review.js';
+    const src = 'await client.query(`UPDATE tasks SET status = \'open\' WHERE id = ANY($1::text[]) AND service_ticket_id = $2 AND status = \'done\' RETURNING id`, p);';
+    const files = FILES.filter((f) => f.rel !== file).concat([{ rel: file, src }]);
+    expect(census(files)).toEqual([file + ': the send-back UPDATE tasks lost organization_id']);
+  });
+
+  test('an entry for a file that stopped writing tasks fails, unless it is optional', () => {
+    const files = FILES.filter((f) => f.rel !== 'server/services/org-reset.js' && f.rel !== 'server/services/work-order-review.js');
+    expect(census(files)).toEqual(['server/services/org-reset.js: on the ledger but no longer writes tasks — take it off']);
+  });
+});

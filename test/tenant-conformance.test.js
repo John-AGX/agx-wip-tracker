@@ -1250,7 +1250,7 @@ describe('R4 — classify() is checked, never consulted', () => {
   // participants is deliberately NOT modelled as a share row. No token is ever
   // minted for an internal user: a token would bypass their own role, survive
   // their deactivation, and be forwardable outside the company.
-  // 116 -> 118 with the Buildertrend preview's "new / changed since your last
+  // 116 -> 119: two with the Buildertrend preview's "new / changed since your last
   // refresh" memory: `bt_record_snapshots` (the Buildertrend values of every
   // record of a complete read, per organization, dataset and Buildertrend id)
   // and `bt_preview_views` (each admin's own last refresh).
@@ -1264,7 +1264,15 @@ describe('R4 — classify() is checked, never consulted', () => {
   // the caller's organization, as a predicate or as the conflict key, and
   // test/clickr-since-refresh.test.js seeds org 2 rows in both and proves they
   // are never read or written. Both are wiped by services/org-reset.js.
-  test('the fixture carries every table server/db.js creates (118) — nothing curated out', () => {
-    expect(TWO.ALL_TABLES.length).toBe(118);
+  // And one with Work Orders 1.30: `service_ticket_flags` (problems a crew
+  // flagged from the share link). It is DIRECT in org-table-classification.js:
+  // it carries its own NOT NULL organization_id, so the generic seeder plants
+  // org A / org B / un-stamped rows in it with no curation step. Its tenant is
+  // never inferred from the share or the task it names — share_id and task_id
+  // are both ON DELETE SET NULL (a revoked link keeps the report, a deleted task
+  // makes it ticket-level), and a flag whose tenant rode either pointer would
+  // lose its tenancy at exactly that moment.
+  test('the fixture carries every table server/db.js creates (119) — nothing curated out', () => {
+    expect(TWO.ALL_TABLES.length).toBe(119);
   });
 });

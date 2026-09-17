@@ -1,32 +1,46 @@
 // THE SERVICE TICKETS PAGE — sidebar → Operations → Service Tickets.
 //
+// 1.29 shipped this page (js/service-tickets-page.js: the newest 200 tickets,
+// filtered in the browser). 1.30 built a second company-wide list beside it
+// (the Work Orders board: server-side views, counts and paging). There is now
+// ONE page: the sidebar row, tab, URL and host are 1.29's, and it runs the
+// board (js/work-orders-board.js over GET /api/service-tickets?board=1) with
+// everything the 1.29 page had that the board lacked.
+//
 // ── WHAT THIS FILE PINS ───────────────────────────────────────────────────
 //   1. THE LIST NAMES EACH TICKET'S PARENT AND ASSIGNEE, FROM THIS ORG ONLY.
-//      GET /api/service-tickets (A1) now returns job_number / job_title /
-//      lead_title / assignee_name. Each label comes from a LEFT JOIN that
-//      matches the ticket's own organization, so a ticket pointed at another
-//      tenant's job, lead or user shows a null label — never that tenant's
-//      name. A converted lead's ticket belongs to its job, so it carries no
-//      lead_title. The joins decorate; they do not change who sees what.
-//   2. THE PAGE (js/service-tickets-page.js) run in jsdom against a stubbed
-//      p86Api: rows, escaping, the status pills and their counts, the priority /
-//      parent / search filters, the 200-row note, the empty states, the row
-//      click that opens the ticket on its job (or the lead), calendar days and
-//      local days in a REAL time zone (a child node started with TZ), the pills
-//      held to js/service-tickets.js's own definitions, filters restored from
-//      storage, keyboard focus across a repaint, the quiet refetch and the
-//      stale-response guard on both the success and the failure path.
+//      GET /api/service-tickets (A1) returns job_number / job_title /
+//      lead_title / assignee_name, and so does its board mode, which the page
+//      reads. Each label comes from a LEFT JOIN that matches the ticket's own
+//      organization, so a ticket pointed at another tenant's job, lead or user
+//      shows a null label — never that tenant's name. A converted lead's
+//      ticket belongs to its job, so it carries no lead_title. The joins
+//      decorate; they do not change who sees what.
+//   2. THE PAGE, run in jsdom against a stubbed p86Api that answers the way
+//      the board does: the job tab's status pills (held to js/service-tickets.js
+//      AND to the server's status groups), the priority / jobs or leads /
+//      search filters, filters remembered under the 1.29 key, the saved views,
+//      keyboard focus across a repaint, the empty and failure states, the
+//      layout rules jsdom cannot lay out, calendar days in a REAL time zone (a
+//      child node started with TZ), a job ticket opened on its job's tab
+//      through the REAL js/service-tickets.js and a lead ticket on the lead,
+//      the quiet refetch, the stale-response guards and ONE refetch per
+//      service_ticket write. openTicket takes both of its call forms.
 //   3. THE WIRING, by position rather than presence: the sidebar row sits
 //      directly below the Jobs accordion inside Operations, the pane, the phone
-//      More tile, the script tag, the router entry, and app.js's switchTab
-//      branch.
+//      More tile, the script and stylesheet, the router entry and app.js's
+//      switchTab branch — and no second page: no Work Orders row, tile, pane,
+//      tab or script, and /work-orders redirects to /service-tickets.
 //
 // ── HOW ───────────────────────────────────────────────────────────────────
 // The server half drives the REAL router (requireAuth over a signed JWT, the
 // real role cache) against node:sqlite through the pg shim, the same harness
 // test/service-ticket-route-access.test.js uses. The page half evaluates the
-// shipped browser file inside a JSDOM window. index.html is parsed with JSDOM
+// shipped browser files inside a JSDOM window. index.html is parsed with JSDOM
 // (no scripts run) so the sidebar assertions are about the real DOM tree.
+// test/work-orders-board-client.test.js drives the same page's requests, rows,
+// crew badges, paging and mutants; test/service-ticket-board-routes.test.js
+// executes the server side of every filter and count.
 'use strict';
 
 process.env.JWT_SECRET = process.env.JWT_SECRET
@@ -39,6 +53,7 @@ const { execFileSync } = require('child_process');
 const { JSDOM } = require('jsdom');
 const { createPgSqlite } = require('./helpers/pg-sqlite');
 const { sqliteSchema } = require('./helpers/db-schema');
+const board = require('../server/services/service-ticket-board');
 
 const ROOT = path.join(__dirname, '..');
 const readText = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
@@ -46,10 +61,14 @@ const readText = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 /* ═══════════════════════════════════════════════════════════════════════════
  * 1. THE SERVER: A1 labels
  * ══════════════════════════════════════════════════════════════════════════*/
+// service_ticket_flags and job_change_orders: the list reads each ticket's
+// open problems (ATTENTION_COLUMNS) and merges the draft change orders started
+// from it, so the tables production has are in the fixture too.
 const TABLES = [
   'organizations', 'users', 'roles', 'jobs', 'job_access', 'leads', 'tasks',
   'service_tickets', 'service_ticket_events', 'service_ticket_shares',
-  'service_ticket_revisions', 'service_ticket_participants', 'attachments',
+  'service_ticket_revisions', 'service_ticket_participants', 'service_ticket_flags',
+  'job_change_orders', 'attachments',
 ];
 
 const WIDE = 10;
@@ -122,12 +141,12 @@ function tokenFor(uid) {
   return auth.signToken({ id: uid, email: uid + '@t.test', name: 'U' + uid, role: u.role, organization_id: u.org });
 }
 
-async function listTickets(router, as) {
+async function listTickets(router, as, query) {
   const layer = router.stack.find((l) => l.route && l.route.path === '/' && l.route.methods.get);
   if (!layer) throw new Error('GET / is not declared');
   const res = fakeRes();
   const req = {
-    method: 'GET', params: {}, query: {}, body: {}, cookies: {},
+    method: 'GET', params: {}, query: query || {}, body: {}, cookies: {},
     headers: { authorization: 'Bearer ' + tokenFor(as) },
     protocol: 'https', get: () => 'project86.test',
   };
@@ -177,6 +196,8 @@ describe('A1 names each ticket\'s job, lead and assignee', () => {
     expect(t.job_title).toBe('Waterside Siding');
     expect(t.lead_title).toBeNull();
     expect(t.assignee_name).toBe('Wendy Wide');
+    // The 1.30 reads the list gained ride along without failing it.
+    expect([t.open_flags, t.pending_suggestions, t.co_draft_count, t.new_from_crew]).toEqual([0, 0, 0, false]);
   });
 
   test('an empty job title falls back to the job name', async () => {
@@ -222,63 +243,144 @@ describe('A1 names each ticket\'s job, lead and assignee', () => {
     expect((await listTickets(ticketRouter, WIDE)).body.tickets.map((t) => t.id))
       .toEqual(['st_xlead', 'st_xjob', 'st_name', 'st_l1', 'st_conv', 'st_j1']);
   });
+
+  test('board mode, which the page reads, names them the same way, from this org only', async () => {
+    const q = { board: '1', view: 'all', limit: '100' };
+    const wide = byId(await listTickets(ticketRouter, WIDE, q));
+    expect(Object.keys(wide).sort()).toEqual(['st_conv', 'st_j1', 'st_l1', 'st_name', 'st_xjob', 'st_xlead']);
+    expect([wide.st_j1.job_number, wide.st_j1.job_title, wide.st_j1.assignee_name]).toEqual(['RV2006', 'Waterside Siding', 'Wendy Wide']);
+    expect([wide.st_name.job_number, wide.st_name.job_title]).toEqual(['S-12', 'Named Only']);
+    expect([wide.st_conv.job_number, wide.st_conv.lead_title]).toEqual(['RV2006', null]);
+    expect([wide.st_xjob.job_number, wide.st_xjob.job_title, wide.st_xjob.assignee_name]).toEqual([null, null, null]);
+    const leader = byId(await listTickets(ticketRouter, LEADER, q));
+    expect([leader.st_l1.lead_title, leader.st_xlead.lead_title]).toEqual(['Maple St reroof', null]);
+    expect(JSON.stringify(wide) + JSON.stringify(leader)).not.toMatch(/RIVAL-(JOB|LEAD|USER|9)/);
+    expect((await listTickets(ticketRouter, NOBODY, q)).body).toEqual({ tickets: [] });
+  });
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * 2. THE PAGE, in jsdom
  * ══════════════════════════════════════════════════════════════════════════*/
-const PAGE_SRC = readText('js/service-tickets-page.js');
+const PAGE_SRC = readText('js/work-orders-board.js');
+const TICKETS_SRC = readText('js/service-tickets.js');
+const REFRESH_SRC = readText('js/refresh.js');
 const JOB_LABEL = require('../js/job-label.js');
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
-async function flush() { for (let i = 0; i < 6; i++) await tick(); }
+async function flush() { for (let i = 0; i < 8; i++) await tick(); }
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// A stand-in for board mode that answers the way the server does: the status
+// group from the server module's own STATUS_GROUPS, priority (none is
+// Normal), jobs or leads, a search over title, WO #, job, lead and assignee,
+// status_counts under everything but the status, and paging.
+function serve(tickets, q, extra) {
+  const x = extra || {};
+  const needle = String(q.q || '').toLowerCase();
+  const other = tickets.filter((t) => {
+    if (q.priority && (t.priority || 'normal') !== q.priority) return false;
+    if (q.parent === 'job' && !t.job_id) return false;
+    if (q.parent === 'lead' && (t.job_id || !t.lead_id)) return false;
+    if (needle && ![t.title, t.ticket_number, t.job_number, t.job_title, t.lead_title, t.assignee_name]
+      .some((v) => String(v == null ? '' : v).toLowerCase().indexOf(needle) >= 0)) return false;
+    return true;
+  });
+  const inGroup = (t, g) => !board.STATUS_GROUPS[g] || board.STATUS_GROUPS[g].indexOf(t.status) >= 0;
+  const matching = other.filter((t) => !q.status_group || inGroup(t, q.status_group));
+  const offset = Number(q.offset) || 0;
+  const limit = Number(q.limit) || 50;
+  const body = {
+    tickets: matching.slice(offset, offset + limit),
+    today: x.today || '2026-09-19',
+    has_more: matching.length > offset + limit,
+    next_offset: matching.length > offset + limit ? offset + limit : null,
+  };
+  if (q.include_counts) {
+    body.total = matching.length;
+    body.counts = Object.assign({ open: 0, my_approvals: 0, overdue: 0, due_week: 0, mine: 0, unassigned: 0, no_link: 0, flagged: 0, suggestions: 0 }, x.counts || {});
+    body.status_counts = {};
+    board.COUNTED_STATUS_GROUPS.forEach((g) => { body.status_counts[g] = other.filter((t) => inGroup(t, g)).length; });
+  }
+  return body;
+}
 
 function makePage(opts) {
   const o = opts || {};
   const dom = new JSDOM(
     '<!doctype html><html><head></head><body>' +
       '<div id="service-tickets" class="tab-content' + (o.inactive ? '' : ' active') + '"><div id="serviceTicketsHost"></div></div>' +
+      (o.jobPane ? '<div id="job-service-tickets"></div>' : '') +
     '</body></html>',
-    { runScripts: 'outside-only', url: 'https://project86.test/service-tickets' }
+    { runScripts: 'outside-only', url: 'https://project86.test' + (o.url || '/service-tickets') }
   );
   const w = dom.window;
   // Saved filters, seeded BEFORE the module is evaluated: it reads them once.
   if (o.storage != null) w.localStorage.setItem('p86_stp_filters', o.storage);
   w.p86JobLabel = JOB_LABEL;
+  w.appData = { jobs: o.jobs || [{ id: 'j1', jobNumber: 'RV2006', title: 'Waterside Siding' }], leads: [] };
   const order = [];
   const listCalls = [];
-  let responder = o.responder || (() => Promise.resolve({ tickets: (o.tickets || []).slice() }));
+  let responder = o.responder || ((q) => Promise.resolve(serve(o.tickets || [], q, o.serve)));
   w.p86Api = {
     serviceTickets: {
-      list: (q) => { listCalls.push(q); return responder(q, listCalls.length); },
+      list: (q) => { listCalls.push(Object.assign({}, q)); return responder(q, listCalls.length); },
     },
   };
-  if (!o.noTicketsModule) w.p86ServiceTickets = { openTicket: (id) => order.push(['openTicket', id]) };
-  w.p86Router = { navigate: (route) => order.push(['navigate', route]) };
+  if (!o.noTicketsModule) w.p86ServiceTickets = { openTicket: function () { order.push(['openTicket'].concat(Array.from(arguments))); return true; } };
+  w.p86Router = { go: (p) => { order.push(['go', p]); return true; }, navigate: (route) => order.push(['navigate', route]) };
+  w.p86Toast = (msg, kind) => order.push(['toast', msg, kind]);
+  if (o.before) o.before(w);
   w.eval(o.src || PAGE_SRC);
+  const page = w.p86WorkOrdersBoard;
+  page._assign = (href) => order.push(['assign', href]);
   const host = w.document.getElementById('serviceTicketsHost');
+  const rows = () => Array.from(host.querySelectorAll('a.p86-wob-row'));
+  const rowOf = (id) => rows().find((r) => r.getAttribute('data-id') === id) || null;
   return {
-    w, dom, host, order, listCalls,
+    w, dom, host, order, listCalls, page,
     setResponder: (fn) => { responder = fn; },
-    render: () => w.p86ServiceTicketsPage.render(host),
-    rows: () => Array.from(host.querySelectorAll('tr.stp-row')),
-    rowIds: () => Array.from(host.querySelectorAll('tr.stp-row')).map((r) => r.getAttribute('data-ticket')),
-    pill: (id) => host.querySelector('.stp-pill[data-filter="' + id + '"]'),
-    count: (id) => Number(host.querySelector('.stp-pill[data-filter="' + id + '"] .stp-pill-n').textContent),
-    cell: (id, label) => {
-      const row = Array.from(host.querySelectorAll('tr.stp-row')).find((r) => r.getAttribute('data-ticket') === id);
-      return row ? row.querySelector('td[data-label="' + label + '"]') : null;
+    render: () => page.render(host),
+    rows,
+    rowOf,
+    rowIds: () => rows().map((r) => r.getAttribute('data-id')),
+    pill: (id) => host.querySelector('.p86-wob-status [data-status="' + id + '"]'),
+    view: (id) => host.querySelector('.p86-wob-views [data-view="' + id + '"]'),
+    count: (el) => { const n = el && el.querySelector('.p86-st-pill-n'); return n ? Number(n.textContent) : null; },
+    // A cell's text without its phone caption.
+    cell: (id, c) => {
+      const row = rowOf(id);
+      const el = row && row.querySelector('.p86-wob-c-' + c);
+      if (!el) return null;
+      const copy = el.cloneNode(true);
+      copy.querySelectorAll('.p86-wob-k').forEach((k) => k.remove());
+      return copy.textContent;
     },
-    body: () => host.querySelector('.stp-body').textContent,
+    parent: (id) => { const row = rowOf(id); return row ? row.querySelector('.p86-wob-job') : null; },
+    list: () => host.querySelector('.p86-wob-list').textContent,
+    last: () => listCalls[listCalls.length - 1],
+    click: (el, init) => {
+      const ev = new w.MouseEvent('click', Object.assign({ bubbles: true, cancelable: true, button: 0 }, init || {}));
+      el.dispatchEvent(ev);
+      return ev;
+    },
+    change: (sel, value) => {
+      const el = host.querySelector(sel);
+      el.value = value;
+      el.dispatchEvent(new w.Event('change', { bubbles: true }));
+      return el;
+    },
   };
 }
 
 function ticket(over) {
   return Object.assign({
-    id: 'st_x', title: 'A ticket', status: 'open', priority: 'normal',
+    id: 'st_x', ticket_number: null, title: 'A ticket', status: 'open', priority: 'normal',
     job_id: 'j1', lead_id: null, job_number: 'RV2006', job_title: 'Waterside Siding',
     lead_title: null, assignee_user_id: null, assignee_name: null,
     task_total: 0, task_done: 0, scheduled_for: null, due_date: null,
+    links_total: 1, links_live: 1, links_opened: 0, pending_suggestions: 0, open_flags: 0,
+    last_crew_at: null, office_seen_at: null, new_from_crew: false, is_overdue: false,
     updated_at: '2026-09-10T15:00:00.000Z', created_at: '2026-09-10T15:00:00.000Z',
   }, over);
 }
@@ -294,46 +396,50 @@ const MIXED = () => [
   ticket({ id: 's_cancel', status: 'cancelled', title: 'Cancelled one', job_id: null, lead_id: 'l2', job_number: null, job_title: null, lead_title: 'Bay St leak' }),
 ];
 
+const FIRST_REQUEST = { board: 1, view: 'all', sort: 'created', limit: 50, offset: 0, include_counts: 1 };
+
 describe('the page renders the list', () => {
-  test('first load says Loading…, fetches the newest 200 once, then renders a row per ticket', async () => {
+  test('first load says Loading…, asks board mode for every ticket, newest first, with counts, then renders a row per ticket', async () => {
     let resolve;
-    const p = makePage({ responder: () => new Promise((r) => { resolve = r; }) });
+    const p = makePage({ responder: (q) => new Promise((r) => { resolve = () => r(serve(MIXED(), q)); }) });
     p.render();
-    expect(p.body()).toMatch(/Loading…/);
+    expect(p.list()).toBe('Loading service tickets…');
     await flush();
-    expect(p.body()).toMatch(/Loading…/);
-    expect(p.listCalls).toEqual([{ limit: 200 }]);
-    resolve({ tickets: MIXED() });
+    expect(p.list()).toBe('Loading service tickets…');
+    expect(p.listCalls).toEqual([FIRST_REQUEST]);
+    resolve();
     await flush();
     expect(p.rowIds()).toEqual(['s_draft', 's_open', 's_sched', 's_prog', 's_done', 's_appr', 's_closed', 's_cancel']);
-    expect(p.host.querySelector('.stp-title').textContent).toBe('Service Tickets');
-    expect(p.host.querySelector('.stp-summary').textContent).toBe('8 tickets');
+    expect(p.host.querySelector('h2').textContent).toBe('Service Tickets');
+    expect(p.host.querySelector('.p86-wob-total').textContent).toBe('8 tickets');
+    expect(p.host.textContent).not.toMatch(/Work Orders/);
   });
 
-  test('the columns: parent label, status label, tasks, assignee, priority dot', async () => {
+  test('the columns: parent label, status label, buildings, assignee, priority dot', async () => {
     const p = makePage({ tickets: [
       ticket({ id: 'a', task_total: 8, task_done: 3, assignee_name: 'Wendy Wide', priority: 'urgent', status: 'work_complete' }),
       ticket({ id: 'b', job_id: null, lead_id: 'l1', job_number: null, job_title: null, lead_title: 'Maple St reroof' }),
-      ticket({ id: 'c', job_number: null, job_title: null }),
+      ticket({ id: 'c', job_id: 'j9', job_number: null, job_title: null }),
       ticket({ id: 'd', job_id: null, lead_id: 'l9', job_number: null, job_title: null, lead_title: null }),
     ] });
     p.render();
     await flush();
-    expect(p.cell('a', 'Job / Lead').textContent).toBe('RV2006 Waterside Siding');
-    expect(p.cell('a', 'Status').textContent).toBe('Work complete');
-    expect(p.cell('a', 'Status').querySelector('.p86-st-status.st-work_complete')).not.toBeNull();
-    expect(p.cell('a', 'Tasks').textContent).toBe('3/8');
-    expect(p.cell('a', 'Assignee').textContent).toBe('Wendy Wide');
-    expect(p.cell('a', 'Priority').querySelector('.p86-st-prio.prio-urgent')).not.toBeNull();
-    expect(p.cell('b', 'Job / Lead').textContent).toBe('Lead · Maple St reroof');
-    expect(p.cell('b', 'Tasks').textContent).toBe('—');
-    expect(p.cell('b', 'Assignee').textContent).toBe('—');
+    expect(p.parent('a').textContent).toBe('RV2006 Waterside Siding');
+    expect(p.cell('a', 'status')).toBe('Work complete');
+    expect(p.rowOf('a').querySelector('.p86-wob-c-status .p86-st-status.st-work_complete')).not.toBeNull();
+    expect(p.rowOf('a').querySelector('.p86-wob-bldg-d').textContent).toBe('3/8');
+    expect(p.cell('a', 'assignee')).toBe('Wendy Wide');
+    expect(p.rowOf('a').querySelector('.p86-wob-c-prio .p86-st-prio.prio-urgent')).not.toBeNull();
+    expect(p.parent('b').textContent).toBe('Lead · Maple St reroof');
+    expect(p.cell('b', 'bldg')).toBe('—');
+    expect(p.cell('b', 'assignee')).toBe('Unassigned');
     // A label the server could not name is said so — never the raw id.
-    expect(p.cell('c', 'Job / Lead').textContent).toBe('Job not found');
-    expect(p.cell('d', 'Job / Lead').textContent).toBe('Lead not found');
-    expect(p.host.querySelector('tbody').textContent).not.toMatch(/\bj1\b|\bl9\b/);
-    // Rows are keyboard-reachable links.
-    expect(p.rows().every((r) => r.getAttribute('tabindex') === '0' && r.getAttribute('role') === 'link')).toBe(true);
+    expect(p.parent('c').textContent).toBe('Job not found');
+    expect(p.parent('c').classList.contains('p86-wob-missing')).toBe(true);
+    expect(p.parent('d').textContent).toBe('Lead not found');
+    expect(p.list()).not.toMatch(/\bj9\b|\bl9\b/);
+    // Rows are real links, so a keyboard reaches them and Enter opens them.
+    expect(p.rows().every((r) => r.tagName === 'A' && /^\/(jobs|leads)\//.test(r.getAttribute('href')))).toBe(true);
   });
 
   test('a hostile title, label and id are text, never markup', async () => {
@@ -345,15 +451,14 @@ describe('the page renders the list', () => {
     p.render();
     await flush();
     expect(p.host.querySelector('img')).toBeNull();
-    expect(p.host.querySelector('tbody script, tbody b, tbody i')).toBeNull();
-    expect(p.cell('st_"><b>id', 'Assignee').textContent).toBe('<i>who</i>');
-    expect(p.host.querySelector('.stp-c-title').textContent).toBe(evil);
+    expect(p.host.querySelector('.p86-wob-list script, .p86-wob-list b, .p86-wob-list i')).toBeNull();
+    expect(p.cell('st_"><b>id', 'assignee')).toBe('<i>who</i>');
+    expect(p.host.querySelector('.p86-wob-title').textContent).toBe(evil);
     expect(p.w.__pwned).toBeUndefined();
     // The id survives the attribute intact, so the click still finds its ticket.
-    p.rows()[0].click();
-    expect(p.order[0]).toEqual(['openTicket', 'st_"><b>id']);
+    p.click(p.rows()[0]);
+    expect(p.order[0]).toEqual(['openTicket', 'j1', 'st_"><b>id']);
   });
-
 });
 
 // ── Days, in a REAL time zone ─────────────────────────────────────────────
@@ -370,17 +475,23 @@ function zoneChild() {
     { runScripts: 'outside-only', url: 'https://project86.test/service-tickets' });
   const w = dom.window;
   w.p86JobLabel = require(payload.jobLabel);
-  w.p86Api = { serviceTickets: { list: () => Promise.resolve({ tickets: payload.tickets }) } };
+  w.p86Api = { serviceTickets: { list: () => Promise.resolve({ tickets: payload.tickets, today: payload.today, has_more: false, next_offset: null }) } };
   w.eval(fs.readFileSync(payload.page, 'utf8'));
   const host = w.document.getElementById('serviceTicketsHost');
-  Promise.resolve(w.p86ServiceTicketsPage.render(host))
+  Promise.resolve(w.p86WorkOrdersBoard.render(host))
     .then(() => new Promise((r) => setTimeout(r, 0)))
     .then(() => {
       const cells = {};
-      host.querySelectorAll('tr.stp-row').forEach((row) => {
+      host.querySelectorAll('a.p86-wob-row').forEach((row) => {
         const o = {};
-        row.querySelectorAll('td[data-label]').forEach((td) => { o[td.getAttribute('data-label')] = td.textContent; });
-        cells[row.getAttribute('data-ticket')] = o;
+        row.querySelectorAll('.p86-wob-cell').forEach((cell) => {
+          const copy = cell.cloneNode(true);
+          const k = copy.querySelector('.p86-wob-k');
+          const label = k ? k.textContent : '';
+          if (k) k.remove();
+          if (label) o[label] = copy.textContent;
+        });
+        cells[row.getAttribute('data-id')] = o;
       });
       process.stdout.write(JSON.stringify({
         zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -396,8 +507,9 @@ function renderInZone(tz, tickets) {
     input: JSON.stringify({
       jsdom: require.resolve('jsdom'),
       jobLabel: path.join(ROOT, 'js', 'job-label.js'),
-      page: path.join(ROOT, 'js', 'service-tickets-page.js'),
+      page: path.join(ROOT, 'js', 'work-orders-board.js'),
       tickets: tickets,
+      today: '2026-09-19',
     }),
     env: Object.assign({}, process.env, { TZ: tz }),
     encoding: 'utf8',
@@ -408,10 +520,9 @@ function renderInZone(tz, tickets) {
 }
 
 describe('days in a real time zone', () => {
-  // 01:30 UTC on Sep 11 is 9:30pm on Sep 10 in New York: the UTC day and the
-  // viewer's local day disagree.
   const TZ_TICKETS = [
-    ticket({ id: 'a', due_date: '2026-09-20', scheduled_for: '2026-09-18T00:00:00.000Z', updated_at: '2026-09-11T01:30:00.000Z' }),
+    ticket({ id: 'a', due_date: '2026-09-20', scheduled_for: '2026-09-18T00:00:00.000Z' }),
+    ticket({ id: 'late', due_date: '2026-09-16T00:00:00.000Z', is_overdue: true }),
   ];
   let ny;
   let utc;
@@ -428,21 +539,20 @@ describe('days in a real time zone', () => {
 
   test('a calendar day is the day it names (20, not 19), in both spellings, in both zones', () => {
     for (const run of [ny, utc]) {
-      expect(run.cells.a.Due).toMatch(/^Sep 20(, 2026)?$/);
-      expect(run.cells.a.Scheduled).toMatch(/^Sep 18(, 2026)?$/);
+      expect(run.cells.a.Due).toMatch(/^Sep 20, 2026$/);
+      expect(run.cells.a.Scheduled).toMatch(/^Sep 18, 2026$/);
     }
   });
 
-  test('updated_at is the viewer\'s LOCAL day: Sep 10 in New York, Sep 11 in UTC', () => {
-    expect(ny.cells.a.Updated).toMatch(/^Sep 10(, 2026)?$/);
-    expect(utc.cells.a.Updated).toMatch(/^Sep 11(, 2026)?$/);
+  test('days late count from the server\'s today, the same in both zones', () => {
+    for (const run of [ny, utc]) expect(run.cells.late.Due).toBe('Sep 16, 2026 · 3 days late');
   });
 });
 
-// The page copies STATUS_LABEL, FILTERS and the pill matching from the job
-// tab. The job tab's own definitions are lifted out of js/service-tickets.js
-// (by balanced brackets) and the RENDERED page is held to them, so an edit on
-// either side that makes a pill or a label mean something different fails.
+// The page's pills copy the job tab's. The job tab's own definitions are
+// lifted out of js/service-tickets.js (by balanced brackets) and the RENDERED
+// page, and the server's status groups it asks for, are held to them, so an
+// edit on any side that makes a pill or a label mean something different fails.
 function liftFrom(src, anchor) {
   const at = src.indexOf(anchor);
   if (at < 0) throw new Error('anchor missing: ' + anchor);
@@ -464,241 +574,341 @@ function liftFrom(src, anchor) {
 }
 
 function jobTabDefs() {
-  const src = readText('js/service-tickets.js').replace(/\r\n/g, '\n');
+  const src = TICKETS_SRC.replace(/\r\n/g, '\n');
   const code = [
     liftFrom(src, '  var STATUSES = ['),
     liftFrom(src, '  var STATUS_LABEL = {'),
     liftFrom(src, '  var FILTERS = ['),
     liftFrom(src, '  function matchesFilter(t) {'),
   ].join(';\n') + ';\n({ STATUSES: STATUSES, STATUS_LABEL: STATUS_LABEL, FILTERS: FILTERS, matchesFilter: matchesFilter })';
-  const sandbox = { _state: { filter: 'all' } };
+  const ME = 7;
+  const sandbox = { _state: { filter: 'all' }, currentUserId: () => ME };
   const defs = vm.runInNewContext(code, sandbox);
   return {
     statuses: JSON.parse(JSON.stringify(defs.STATUSES)),
     labels: JSON.parse(JSON.stringify(defs.STATUS_LABEL)),
     filters: JSON.parse(JSON.stringify(defs.FILTERS)),
-    matches: (status, filter) => { sandbox._state.filter = filter; return defs.matchesFilter({ status: status }); },
+    matches: (status, filter, assignee) => {
+      sandbox._state.filter = filter;
+      return defs.matchesFilter({ status: status, assignee_user_id: assignee === undefined ? null : assignee });
+    },
+    me: ME,
   };
 }
 
-describe('filters', () => {
-  test('status pills: counts, and Active / Awaiting approval / Closed match what the job tab matches', async () => {
-    const p = makePage({ tickets: MIXED() });
-    p.render();
-    await flush();
-    expect(Array.from(p.host.querySelectorAll('.stp-pill')).map((b) => b.getAttribute('data-filter')))
-      .toEqual(['all', 'active', 'draft', 'scheduled', 'in_progress', 'work_complete', 'closed']);
-    expect(p.pill('work_complete').firstChild.textContent.trim()).toBe('Awaiting approval');
-    expect([p.count('all'), p.count('active'), p.count('draft'), p.count('scheduled'),
-      p.count('in_progress'), p.count('work_complete'), p.count('closed')]).toEqual([8, 4, 1, 1, 1, 1, 2]);
-
-    p.pill('active').click();
-    expect(p.rowIds()).toEqual(['s_open', 's_sched', 's_prog', 's_done']);
-    expect(p.pill('active').classList.contains('active')).toBe(true);
-    p.pill('work_complete').click();
-    expect(p.rowIds()).toEqual(['s_done']);
-    p.pill('closed').click();
-    expect(p.rowIds()).toEqual(['s_closed', 's_cancel']);
-    expect(p.host.querySelector('.stp-summary').textContent).toBe('Showing 2 of 8 tickets');
-    p.pill('all').click();
-    expect(p.rowIds()).toHaveLength(8);
-  });
-
-  test('the status filter is client-side: the server is never sent a status', async () => {
-    const p = makePage({ tickets: MIXED() });
-    p.render();
-    await flush();
-    p.pill('active').click();
-    p.pill('closed').click();
-    await p.render();
-    await flush();
-    expect(p.listCalls.every((q) => JSON.stringify(q) === JSON.stringify({ limit: 200 }))).toBe(true);
-  });
-
-  test('priority, parent and search narrow the list, and the pill counts follow them', async () => {
-    const p = makePage({ tickets: MIXED() });
-    p.render();
-    await flush();
-    const prio = p.host.querySelector('.stp-prio');
-    prio.value = 'urgent';
-    prio.dispatchEvent(new p.w.Event('change', { bubbles: true }));
-    expect(p.rowIds()).toEqual(['s_open']);
-    expect(p.count('all')).toBe(1);
-    prio.value = 'all';
-    prio.dispatchEvent(new p.w.Event('change', { bubbles: true }));
-
-    const parent = p.host.querySelector('.stp-parent');
-    parent.value = 'lead';
-    parent.dispatchEvent(new p.w.Event('change', { bubbles: true }));
-    expect(p.rowIds()).toEqual(['s_sched', 's_cancel']);
-    expect(p.count('closed')).toBe(1);
-    parent.value = 'job';
-    parent.dispatchEvent(new p.w.Event('change', { bubbles: true }));
-    expect(p.rowIds()).toEqual(['s_draft', 's_open', 's_prog', 's_done', 's_appr', 's_closed']);
-    parent.value = 'all';
-    parent.dispatchEvent(new p.w.Event('change', { bubbles: true }));
-
-    const search = p.host.querySelector('.stp-search');
-    const type = (v) => { search.value = v; search.dispatchEvent(new p.w.Event('input', { bubbles: true })); };
-    type('WENDY');
-    expect(p.rowIds()).toEqual(['s_open']);
-    type('harbor');
-    expect(p.rowIds()).toEqual(['s_closed']);
-    type('s-40');
-    expect(p.rowIds()).toEqual(['s_closed']);
-    type('maple');
-    expect(p.rowIds()).toEqual(['s_sched']);
-    type('progress one');
-    expect(p.rowIds()).toEqual(['s_prog']);
-    // The search box is not rebuilt under the caret.
-    expect(p.host.querySelector('.stp-search')).toBe(search);
-    type('nothing like this');
-    expect(p.rowIds()).toEqual([]);
-    expect(p.body()).toBe('No tickets match these filters.');
-  });
-
-  test('every pill, its label, what it matches and every status label are the job tab\'s own (js/service-tickets.js)', async () => {
+describe('status pills', () => {
+  test('every pill, its label and what it lists are the job tab\'s own; every status label too', async () => {
     const tab = jobTabDefs();
     expect(tab.statuses).toHaveLength(8);
     const p = makePage({ tickets: tab.statuses.map((s) => ticket({ id: 'p_' + s, status: s })) });
     p.render();
     await flush();
-    expect(Array.from(p.host.querySelectorAll('.stp-pill')).map((b) => [b.getAttribute('data-filter'), b.firstChild.textContent.trim()]))
-      .toEqual(tab.filters.map((f) => [f.id, f.label]));
+    // Mine is the job tab's one person-shaped pill; here it is the Assigned to me view (next test).
+    const tabPills = tab.filters.filter((f) => f.id !== 'mine');
+    expect(tabPills.length).toBe(tab.filters.length - 1);
+    expect(Array.from(p.host.querySelectorAll('.p86-wob-status .p86-st-pill')).map((b) => [b.getAttribute('data-status'), b.firstChild.textContent.trim()]))
+      .toEqual(tabPills.map((f) => [f.id, f.label]));
     let groups = 0;
-    for (const f of tab.filters) {
+    for (const f of tabPills) {
       const want = tab.statuses.filter((s) => tab.matches(s, f.id)).map((s) => 'p_' + s);
       if (f.id !== 'all' && want.length > 1) groups++;
-      p.pill(f.id).click();
-      expect({ filter: f.id, rows: p.rowIds(), count: p.count(f.id) }).toEqual({ filter: f.id, rows: want, count: want.length });
+      p.click(p.pill(f.id));
+      await flush();
+      // What the page asks the server for is the group the job tab's pill matches.
+      const asked = p.last().status_group;
+      expect([f.id, asked === undefined ? null : asked]).toEqual([f.id, f.id === 'all' ? null : asked]);
+      const served = asked ? board.STATUS_GROUPS[asked].slice() : tab.statuses.slice();
+      expect([f.id, served.sort()]).toEqual([f.id, want.map((id) => id.slice(2)).sort()]);
+      expect({ filter: f.id, rows: p.rowIds(), count: p.count(p.pill(f.id)), on: p.pill(f.id).getAttribute('aria-pressed') })
+        .toEqual({ filter: f.id, rows: want, count: want.length, on: 'true' });
     }
     expect(groups).toBeGreaterThan(0); // Active and Closed really are groups on the job tab
-    p.pill('all').click();
+    p.click(p.pill('all'));
+    await flush();
     for (const s of tab.statuses) {
-      const cell = p.cell('p_' + s, 'Status');
-      expect([s, cell.textContent]).toEqual([s, tab.labels[s]]);
-      expect(cell.querySelector('.p86-st-status.st-' + s)).not.toBeNull();
+      expect([s, p.cell('p_' + s, 'status')]).toEqual([s, tab.labels[s]]);
+      expect(p.rowOf('p_' + s).querySelector('.p86-st-status.st-' + s)).not.toBeNull();
     }
   });
 
-  test('filters survive a re-render (module state) and are kept in localStorage', async () => {
+  test('the job tab\'s Mine is the Assigned to me view: the same person, the same statuses', () => {
+    const tab = jobTabDefs();
+    expect(tab.filters.find((f) => f.id === 'mine')).toBeTruthy();
+    expect(PAGE_SRC).toMatch(/\{ id: 'mine', label: 'Assigned to me',/);
+    expect(board.VIEWS.mine).toEqual({ assignee: 'me', status_group: 'open' });
+    const mineStatuses = tab.statuses.filter((s) => tab.matches(s, 'mine', tab.me));
+    expect(board.STATUS_GROUPS.open.slice().sort()).toEqual(mineStatuses.sort());
+    // Someone else's ticket is never Mine.
+    expect(tab.statuses.some((s) => tab.matches(s, 'mine', tab.me + 1))).toBe(false);
+  });
+
+  test('a pill never sends `status` (the list door turns an unknown status into draft); counts come from the server', async () => {
     const p = makePage({ tickets: MIXED() });
     p.render();
     await flush();
-    p.pill('closed').click();
+    expect([p.count(p.pill('all')), p.count(p.pill('active')), p.count(p.pill('draft')), p.count(p.pill('scheduled')),
+      p.count(p.pill('in_progress')), p.count(p.pill('work_complete')), p.count(p.pill('closed'))]).toEqual([8, 4, 1, 1, 1, 1, 2]);
+    p.click(p.pill('active'));
+    await flush();
+    expect(p.rowIds()).toEqual(['s_open', 's_sched', 's_prog', 's_done']);
+    expect(p.pill('active').classList.contains('active')).toBe(true);
+    p.click(p.pill('closed'));
+    await flush();
+    expect(p.rowIds()).toEqual(['s_closed', 's_cancel']);
+    expect(p.host.querySelector('.p86-wob-total').textContent).toBe('2 tickets');
+    expect(p.listCalls.every((q) => !('status' in q))).toBe(true);
+    expect(p.listCalls.map((q) => q.status_group)).toEqual([undefined, 'active', 'closed']);
+    // Every change starts again from the top, with counts.
+    expect(p.listCalls.every((q) => q.offset === 0 && q.include_counts === 1)).toBe(true);
+  });
+});
+
+describe('priority, jobs or leads, and search', () => {
+  test('each narrows the list through the server, and the pill counts follow them', async () => {
+    const p = makePage({ tickets: MIXED() });
+    p.render();
+    await flush();
+    p.change('.p86-wob-prio', 'urgent');
+    await flush();
+    expect(p.last()).toEqual(Object.assign({}, FIRST_REQUEST, { priority: 'urgent' }));
+    expect(p.rowIds()).toEqual(['s_open']);
+    expect(p.count(p.pill('all'))).toBe(1);
+    p.change('.p86-wob-prio', 'all');
+    await flush();
+
+    p.change('.p86-wob-parent', 'lead');
+    await flush();
+    expect(p.last()).toEqual(Object.assign({}, FIRST_REQUEST, { parent: 'lead' }));
+    expect(p.rowIds()).toEqual(['s_sched', 's_cancel']);
+    expect(p.count(p.pill('closed'))).toBe(1);
+    p.change('.p86-wob-parent', 'job');
+    await flush();
+    expect(p.rowIds()).toEqual(['s_draft', 's_open', 's_prog', 's_done', 's_appr', 's_closed']);
+    p.change('.p86-wob-parent', 'all');
+    await flush();
+
+    const search = p.host.querySelector('.p86-wob-search');
+    const type = async (v) => {
+      search.value = v;
+      search.dispatchEvent(new p.w.Event('input', { bubbles: true }));
+      await wait(340);
+      await flush();
+    };
+    await type('WENDY');
+    expect(p.last().q).toBe('WENDY');
+    expect(p.rowIds()).toEqual(['s_open']);
+    await type('harbor');
+    expect(p.rowIds()).toEqual(['s_closed']);
+    await type('s-40');
+    expect(p.rowIds()).toEqual(['s_closed']);
+    await type('maple');
+    expect(p.rowIds()).toEqual(['s_sched']);
+    await type('progress one');
+    expect(p.rowIds()).toEqual(['s_prog']);
+    // The search box is not rebuilt under the caret.
+    expect(p.host.querySelector('.p86-wob-search')).toBe(search);
+    await type('nothing like this');
+    expect(p.rowIds()).toEqual([]);
+    expect(p.list()).toBe('No tickets match “nothing like this”.');
+    await type('');
+    p.change('.p86-wob-prio', 'low');
+    p.change('.p86-wob-parent', 'lead');
+    await flush();
+    expect(p.list()).toBe('No tickets match these filters.');
+  }, 20000);
+
+  test('typing is debounced: one request for the word, not one per key', async () => {
+    const p = makePage({ tickets: MIXED() });
+    p.render();
+    await flush();
+    const search = p.host.querySelector('.p86-wob-search');
+    for (const v of ['M', 'Ma', 'Map', 'Mapl', 'Maple']) {
+      search.value = v;
+      search.dispatchEvent(new p.w.Event('input', { bubbles: true }));
+    }
+    await wait(100);
+    expect(p.listCalls).toHaveLength(1);
+    await wait(300);
+    await flush();
+    expect(p.listCalls).toHaveLength(2);
+    expect(p.last().q).toBe('Maple');
+  });
+});
+
+describe('remembered filters', () => {
+  test('filters survive a re-render (module state) and are kept in localStorage under the 1.29 key', async () => {
+    const p = makePage({ tickets: MIXED() });
+    p.render();
+    await flush();
+    p.click(p.pill('closed'));
+    await flush();
+    p.change('.p86-wob-sort', 'due');
+    await flush();
     await p.render();
     await flush();
     expect(p.pill('closed').classList.contains('active')).toBe(true);
     expect(p.rowIds()).toEqual(['s_closed', 's_cancel']);
-    expect(JSON.parse(p.w.localStorage.getItem('p86_stp_filters')).status).toBe('closed');
+    expect(p.last()).toEqual({ board: 1, view: 'all', sort: 'due', limit: 50, offset: 0, include_counts: 1, status_group: 'closed' });
+    expect(JSON.parse(p.w.localStorage.getItem('p86_stp_filters')))
+      .toEqual({ status: 'closed', view: null, priority: 'all', parent: 'all', q: '', sort: 'due' });
   });
 
-  test('saved filters are RESTORED on a fresh page load', async () => {
+  test('filters the 1.29 page saved are RESTORED on a fresh page load', async () => {
     const p = makePage({ tickets: MIXED(), storage: JSON.stringify({ status: 'closed', priority: 'all', parent: 'lead', q: '' }) });
     p.render();
     await flush();
     expect(p.pill('closed').classList.contains('active')).toBe(true);
     expect(p.pill('all').classList.contains('active')).toBe(false);
-    expect(p.host.querySelector('.stp-parent').value).toBe('lead');
+    expect(p.host.querySelector('.p86-wob-parent').value).toBe('lead');
+    expect(p.listCalls[0]).toEqual(Object.assign({}, FIRST_REQUEST, { status_group: 'closed', parent: 'lead' }));
     expect(p.rowIds()).toEqual(['s_cancel']);
 
     const q = makePage({ tickets: MIXED(), storage: JSON.stringify({ status: 'all', priority: 'urgent', parent: 'all', q: 'wendy' }) });
     q.render();
     await flush();
-    expect(q.host.querySelector('.stp-prio').value).toBe('urgent');
-    expect(q.host.querySelector('.stp-search').value).toBe('wendy');
+    expect(q.host.querySelector('.p86-wob-prio').value).toBe('urgent');
+    expect(q.host.querySelector('.p86-wob-search').value).toBe('wendy');
+    expect(q.listCalls[0]).toEqual(Object.assign({}, FIRST_REQUEST, { priority: 'urgent', q: 'wendy' }));
     expect(q.rowIds()).toEqual(['s_open']);
   });
 
+  test('the view and the sort are remembered too', async () => {
+    const p = makePage({ tickets: MIXED(), storage: JSON.stringify({ status: 'active', view: 'overdue', sort: 'priority' }) });
+    p.render();
+    await flush();
+    expect(p.listCalls[0]).toEqual({ board: 1, view: 'overdue', sort: 'priority', limit: 50, offset: 0, include_counts: 1, status_group: 'active' });
+    expect(p.view('overdue').getAttribute('aria-pressed')).toBe('true');
+    expect(p.host.querySelector('.p86-wob-sort').value).toBe('priority');
+  });
+
   test('junk in storage falls back to the defaults', async () => {
-    const junk = ['{not json', JSON.stringify({ status: 'bogus', priority: 'x', parent: 7, q: 42 }), JSON.stringify(['closed'])];
+    const junk = ['{not json', JSON.stringify({ status: 'bogus', view: 'open', priority: 'x', parent: 7, q: 42, sort: 'toString' }), JSON.stringify(['closed'])];
     for (const raw of junk) {
       const p = makePage({ tickets: MIXED(), storage: raw });
       p.render();
       await flush();
       expect([raw, p.pill('all').classList.contains('active')]).toEqual([raw, true]);
-      expect(p.host.querySelector('.stp-prio').value).toBe('all');
-      expect(p.host.querySelector('.stp-parent').value).toBe('all');
-      expect(p.host.querySelector('.stp-search').value).toBe('');
+      expect([raw, p.listCalls[0]]).toEqual([raw, FIRST_REQUEST]);
+      expect(p.host.querySelector('.p86-wob-prio').value).toBe('all');
+      expect(p.host.querySelector('.p86-wob-parent').value).toBe('all');
+      expect(p.host.querySelector('.p86-wob-search').value).toBe('');
+      expect(p.host.querySelectorAll('.p86-wob-views [aria-pressed="true"]')).toHaveLength(0);
       expect(p.rowIds()).toHaveLength(8);
     }
+  });
+
+  test('?view= on a full load opens that view with the other filters cleared, and leaves the address', async () => {
+    for (const url of ['/service-tickets?view=my_approvals', '/work-orders?view=my_approvals']) {
+      const p = makePage({ url, tickets: MIXED(), storage: JSON.stringify({ status: 'closed', priority: 'urgent', parent: 'lead', q: 'x', view: 'overdue', sort: 'due' }) });
+      p.render();
+      await flush();
+      expect([url, p.listCalls[0]]).toEqual([url, { board: 1, view: 'my_approvals', sort: 'due', limit: 50, offset: 0, include_counts: 1 }]);
+      expect(p.w.location.search).toBe('');
+    }
+    // A view that is not one is ignored, and still taken out of the address.
+    const bad = makePage({ url: '/service-tickets?view=bogus&x=1', tickets: MIXED() });
+    bad.render();
+    await flush();
+    expect(bad.listCalls[0]).toEqual(FIRST_REQUEST);
+    expect(bad.w.location.search).toBe('?x=1');
+  });
+});
+
+describe('saved views', () => {
+  test('a view is pressed on and pressed again off; its count is the server\'s; a view that needs someone is marked', async () => {
+    const p = makePage({ tickets: MIXED(), serve: { counts: { my_approvals: 2, overdue: 0, flagged: 1, unassigned: 5 } } });
+    p.render();
+    await flush();
+    expect(Array.from(p.host.querySelectorAll('.p86-wob-views .p86-st-pill')).map((b) => b.getAttribute('data-view')))
+      .toEqual(['my_approvals', 'overdue', 'due_week', 'mine', 'unassigned', 'no_link', 'flagged', 'suggestions']);
+    expect(p.view('my_approvals').firstChild.textContent.trim()).toBe('My approvals');
+    expect([p.count(p.view('my_approvals')), p.count(p.view('overdue')), p.count(p.view('unassigned'))]).toEqual([2, 0, 5]);
+    expect(['my_approvals', 'overdue', 'flagged', 'unassigned'].map((v) => p.view(v).classList.contains('is-attention')))
+      .toEqual([true, false, true, false]);
+    p.click(p.view('unassigned'));
+    await flush();
+    expect(p.last()).toEqual(Object.assign({}, FIRST_REQUEST, { view: 'unassigned' }));
+    expect(p.view('unassigned').getAttribute('aria-pressed')).toBe('true');
+    p.click(p.view('unassigned'));
+    await flush();
+    expect(p.last()).toEqual(FIRST_REQUEST);
+    expect(p.view('unassigned').getAttribute('aria-pressed')).toBe('false');
+  });
+
+  test('a caller who can see nothing: the empty state and no count badges', async () => {
+    const p = makePage({ responder: () => Promise.resolve({ tickets: [] }) });
+    p.render();
+    await flush();
+    expect(p.list()).toBe("No service tickets yet. Raise one from a job's Service Tickets tab or from a lead.");
+    expect(p.host.querySelectorAll('.p86-st-pill-n')).toHaveLength(0);
   });
 });
 
 describe('keyboard focus survives a repaint', () => {
-  test('pressing a status pill keeps focus on that pill', async () => {
+  test('pressing a status pill or a view keeps focus on it', async () => {
     const p = makePage({ tickets: MIXED() });
     p.render();
     await flush();
-    const before = p.pill('active');
-    before.focus();
-    expect(p.w.document.activeElement).toBe(before);
-    before.click();
-    expect(before.isConnected).toBe(false); // the pills really were rebuilt
-    const now = p.w.document.activeElement;
-    expect(now.isConnected).toBe(true);
-    expect(now.getAttribute('data-filter')).toBe('active');
+    for (const [get, attr, id] of [[p.pill, 'data-status', 'active'], [p.view, 'data-view', 'overdue']]) {
+      const before = get(id);
+      before.focus();
+      expect(p.w.document.activeElement).toBe(before);
+      p.click(before);
+      expect(before.isConnected).toBe(false); // the pills really were rebuilt
+      await flush();
+      const now = p.w.document.activeElement;
+      expect(now.isConnected).toBe(true);
+      expect(now.getAttribute(attr)).toBe(id);
+    }
   });
 
   test('a quiet refetch keeps focus on the same row', async () => {
     const p = makePage({ tickets: MIXED() });
     p.render();
     await flush();
-    const row = p.rows().find((r) => r.getAttribute('data-ticket') === 's_prog');
+    const row = p.rowOf('s_prog');
     row.focus();
     expect(p.w.document.activeElement).toBe(row);
-    await p.w.p86ServiceTicketsPage.refresh();
+    await p.page.refresh();
     await flush();
     expect(row.isConnected).toBe(false);
-    expect(p.w.document.activeElement.getAttribute('data-ticket')).toBe('s_prog');
+    expect(p.w.document.activeElement.getAttribute('data-id')).toBe('s_prog');
+  });
+
+  test('Show more with the keyboard: focus moves to the first row it added', async () => {
+    const many = Array.from({ length: 60 }, (_, i) => ticket({ id: 'm' + i }));
+    const p = makePage({ tickets: many });
+    p.render();
+    await flush();
+    const more = p.host.querySelector('.p86-wob-more');
+    more.focus();
+    p.click(more);
+    await flush();
+    expect(p.rowIds()).toHaveLength(60);
+    expect(p.last()).toEqual({ board: 1, view: 'all', sort: 'created', limit: 50, offset: 50 });
+    expect(p.w.document.activeElement.getAttribute('data-id')).toBe('m50');
   });
 });
 
-describe('notes and empty states', () => {
-  test('exactly 200 rows says it is showing the newest 200; 199 does not', async () => {
-    const many = (n) => Array.from({ length: n }, (_, i) => ticket({ id: 'st_' + i }));
-    const p = makePage({ tickets: many(200) });
-    p.render();
-    await flush();
-    expect(p.body()).toMatch(/Showing the newest 200 tickets\./);
-    const q = makePage({ tickets: many(199) });
-    q.render();
-    await flush();
-    expect(q.body()).not.toMatch(/newest 200/);
-  });
-
-  test('no tickets at all', async () => {
-    const p = makePage({ tickets: [] });
-    p.render();
-    await flush();
-    expect(p.body()).toBe("No service tickets yet. Raise one from a job's Service Tickets tab or from a lead.");
-  });
-
-  test('a failed load says so, escaped', async () => {
+describe('empty and failure states', () => {
+  test('a failed first load offers Try again, and says Loading… while it retries', async () => {
     const p = makePage({ responder: () => Promise.reject(new Error('<b>down</b>')) });
     p.render();
     await flush();
-    expect(p.body()).toBe('Could not load service tickets: <b>down</b>');
-    expect(p.host.querySelector('.stp-body b')).toBeNull();
-  });
-
-  test('coming back after a failed first load says Loading… while it retries, not the old error', async () => {
-    const p = makePage({ responder: () => Promise.reject(new Error('down')) });
-    p.render();
-    await flush();
-    expect(p.body()).toBe('Could not load service tickets: down');
+    expect(p.list()).toBe("Couldn't load service tickets. Try again");
+    expect(p.host.querySelector('.p86-wob-list b')).toBeNull();
     let resolve;
-    p.setResponder(() => new Promise((r) => { resolve = r; }));
-    p.render();
+    p.setResponder((q) => new Promise((r) => { resolve = () => r(serve(MIXED(), q)); }));
+    p.click(p.host.querySelector('.p86-wob-retry'));
     await flush();
-    expect(p.body()).toBe('Loading…');
-    resolve({ tickets: MIXED() });
+    expect(p.list()).toBe('Loading service tickets…');
+    resolve();
     await flush();
     expect(p.rowIds()).toHaveLength(8);
-    expect(p.host.querySelector('.stp-error')).toBeNull();
+    expect(p.host.querySelector('.p86-wob-error')).toBeNull();
   });
 
-  test('a failed QUIET refetch keeps the list up, with the error above it', async () => {
+  test('a failed QUIET refetch keeps the list up and says so', async () => {
     const p = makePage({ tickets: MIXED() });
     p.render();
     await flush();
@@ -706,104 +916,204 @@ describe('notes and empty states', () => {
     p.render();
     await flush();
     expect(p.rowIds()).toHaveLength(8);
-    expect(p.host.querySelector('.stp-body .stp-error').textContent).toBe('Could not load service tickets: blip');
+    expect(p.order).toContainEqual(['toast', "Couldn't refresh service tickets — showing what was loaded before.", 'error']);
+  });
+
+  test('a view with nothing in it says what the view is for', async () => {
+    const p = makePage({ tickets: [], storage: JSON.stringify({ view: 'overdue' }) });
+    p.render();
+    await flush();
+    expect(p.list()).toBe('Nothing is overdue.');
   });
 });
 
 // ── Layout rules jsdom cannot lay out ────────────────────────────────────
-// jsdom has no layout engine, so these read the injected sheet's CSSOM: the
-// three rules that keep the desktop dot visible, the filter controls on one
-// line and the phone card free of a stray caption.
-function stpRules(p) {
+// jsdom has no layout engine, so these read the stylesheet's CSSOM: the rules
+// that keep the desktop dot visible, the filter controls on one line and each
+// phone control a finger's size.
+function sheetRules() {
+  const dom = new JSDOM('<!doctype html><html><head><style>' + readText('css/work-orders-board.css') + '</style></head><body></body></html>');
   const out = [];
   const walk = (list, media) => Array.from(list).forEach((r) => {
     if (r.cssRules && r.media) walk(r.cssRules, r.media.mediaText);
     else if (r.selectorText) out.push({ media: media, sels: r.selectorText.split(',').map((s) => s.trim()), style: r.style });
   });
-  walk(p.w.document.getElementById('p86stp-styles').sheet.cssRules, null);
+  walk(dom.window.document.querySelector('style').sheet.cssRules, null);
   return out;
 }
 const declOf = (rules, sel, phone, prop) => rules
-  .filter((r) => r.sels.includes(sel) && (phone ? /max-width:\s*760px/.test(r.media || '') : r.media === null))
+  .filter((r) => r.sels.includes(sel) && (phone ? /max-width:\s*760px/.test(r.media || '') && !/coarse/.test(r.media || '') : r.media === null))
   .map((r) => r.style.getPropertyValue(prop))
   .filter(Boolean);
 
 describe('layout rules', () => {
-  test('the priority dot is a box in a table cell, the filter controls size to their content, and a phone card has no Priority caption', async () => {
+  test('the priority dot is a box, the filter controls size to the row, and a phone control is finger-sized', async () => {
+    const rules = sheetRules();
+    // css/styles.css .p86-st-prio sizes the dot but sets no display, and an
+    // empty inline span is 0x0.
+    expect(declOf(rules, '.p86-wob-c-prio .p86-st-prio', false, 'display')).toEqual(['inline-block']);
     const p = makePage({ tickets: MIXED() });
     p.render();
     await flush();
-    const rules = stpRules(p);
-    // css/styles.css .p86-st-prio sizes the dot but sets no display, and an
-    // empty inline span in a table cell is 0x0.
-    expect(declOf(rules, '.stp-table .p86-st-prio', false, 'display')).toEqual(['inline-block']);
-    expect(p.host.querySelector('.stp-table td.stp-c-prio > .p86-st-prio')).not.toBeNull();
+    expect(p.host.querySelector('.p86-wob-c-prio > .p86-st-prio')).not.toBeNull();
     // css/styles.css gives every input and select width:100%.
-    expect(declOf(rules, '.stp-select', false, 'width')).toEqual(['auto']);
-    expect(declOf(rules, '.stp-search', false, 'width')).toEqual(['auto']);
-    // The phone rule captions every td[data-label]; the priority cell is
-    // pinned top-right beside the title and must not be.
-    expect(declOf(rules, '.stp-table td[data-label]::before', true, 'content')).toHaveLength(1);
-    expect(declOf(rules, '.stp-table td.stp-c-prio::before', true, 'display')).toEqual(['none']);
+    expect(declOf(rules, '.p86-wob-select', false, 'width')).toEqual(['auto']);
+    expect(declOf(rules, '.p86-wob-search', false, 'width')).toEqual(['auto']);
+    expect(p.host.querySelectorAll('.p86-wob-controls select.p86-wob-select')).toHaveLength(3);
+    // Phone: 44px tall controls with 16px text (no zoom on focus).
+    for (const sel of ['.p86-wob-select', '.p86-wob-search']) {
+      expect([sel, declOf(rules, sel, true, 'min-height')]).toEqual([sel, ['44px']]);
+      expect([sel, declOf(rules, sel, true, 'font-size')]).toEqual([sel, ['16px']]);
+    }
   });
 });
 
+// The real job tab, in a window beside the page, driven the way the app
+// drives it: the router opens the job and renders its Service Tickets tab.
+function jobTabEnv(w, tickets) {
+  w.appState = { currentJobId: null };
+  w.p86Auth = { hasCapability: () => true, getUser: () => ({ id: 1 }) };
+  w.p86Confirm = () => Promise.resolve(true);
+  w.p86ConfirmTernary = () => Promise.resolve(null);
+  w.HTMLElement.prototype.scrollIntoView = function () {};
+  const api = w.p86Api.serviceTickets;
+  const boardList = api.list;
+  api.list = (q) => (q && q.board ? boardList(q) : Promise.resolve({ tickets: tickets.filter((t) => t.job_id === q.job_id) }));
+  api.get = (id) => Promise.resolve({ ticket: tickets.find((t) => t.id === id), tasks: [], events: [], revisions: [], participants: [], shares: [] });
+  api.assignees = () => Promise.resolve({ users: [] });
+  api.shares = () => Promise.resolve({ shares: [] });
+  w.p86Api.users = { list: () => Promise.resolve({ users: [] }) };
+}
+
 describe('opening a ticket', () => {
-  test('a job ticket: openTicket(id) FIRST, then the router opens the job\'s Service Tickets tab', async () => {
-    const p = makePage({ tickets: MIXED() });
+  test('a job ticket, through the REAL job tab: the job\'s Service Tickets tab opens with that ticket expanded', async () => {
+    const jobTickets = [
+      ticket({ id: 'st_77', title: 'Gate', status: 'closed', checklist: [] }),
+      ticket({ id: 'st_78', title: 'Other', status: 'open', checklist: [] }),
+    ];
+    const navigated = [];
+    const p = makePage({
+      jobPane: true,
+      noTicketsModule: true,
+      tickets: jobTickets,
+      before: (w) => {
+        jobTabEnv(w, jobTickets);
+        w.eval(TICKETS_SRC);
+        w.p86Router = {
+          navigate: (route) => {
+            navigated.push(route);
+            w.appState.currentJobId = route.jobId;
+            w.renderJobServiceTickets(route.jobId);
+          },
+        };
+      },
+    });
+    const opened = [];
+    const real = p.w.p86ServiceTickets.openTicket;
+    p.w.p86ServiceTickets.openTicket = function () { opened.push(Array.from(arguments)); return real.apply(this, arguments); };
     p.render();
     await flush();
-    p.rows().find((r) => r.getAttribute('data-ticket') === 's_open').click();
-    expect(p.order).toEqual([
-      ['openTicket', 's_open'],
-      ['navigate', { top: 'jobs', jobId: 'j1', jobSub: 'job-service-tickets' }],
-    ]);
+    p.click(p.rowOf('st_77'));
+    await flush();
+    expect(opened).toEqual([['j1', 'st_77']]);
+    expect(navigated).toEqual([{ top: 'jobs', jobId: 'j1', jobSub: 'job-service-tickets' }]);
+    const open = p.w.document.querySelector('#job-service-tickets .p86-st-row.is-open');
+    expect(open && open.getAttribute('data-ticket')).toBe('st_77');
+    expect(p.order.filter((e) => e[0] === 'assign')).toEqual([]);
   });
 
   test('a lead-only ticket opens the lead, and asks the job tab for nothing', async () => {
     const p = makePage({ tickets: MIXED() });
     p.render();
     await flush();
-    p.rows().find((r) => r.getAttribute('data-ticket') === 's_sched').click();
-    expect(p.order).toEqual([['navigate', { top: 'estimates', estSub: 'leads', leadId: 'l1' }]]);
+    p.click(p.rowOf('s_sched'));
+    expect(p.order).toEqual([['go', '/leads/l1']]);
   });
 
-  test('Enter and Space on a focused row open it; other keys do not', async () => {
-    const p = makePage({ tickets: MIXED() });
+  test('a job this browser has not loaded is a full load of the row\'s link, which opens the ticket from ?ticket=', async () => {
+    const p = makePage({ tickets: [ticket({ id: 'st_far', job_id: 'j7' })] });
     p.render();
     await flush();
-    const row = p.rows().find((r) => r.getAttribute('data-ticket') === 's_prog');
-    row.dispatchEvent(new p.w.KeyboardEvent('keydown', { key: 'a', bubbles: true }));
-    expect(p.order).toEqual([]);
-    row.dispatchEvent(new p.w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-    row.dispatchEvent(new p.w.KeyboardEvent('keydown', { key: ' ', bubbles: true }));
-    expect(p.order.filter((e) => e[0] === 'navigate')).toHaveLength(2);
+    p.click(p.rowOf('st_far'));
+    expect(p.order).toEqual([['assign', '/jobs/j7/job-service-tickets?ticket=st_far']]);
   });
+});
 
-  test('openTicket really opens the ticket on the job tab (js/service-tickets.js consumes it in reload)', async () => {
-    // The real job-tab module, driven the way switchJobSubTab drives it.
+describe('openTicket takes both call forms (js/service-tickets.js)', () => {
+  function jobTab(tickets) {
     const dom = new JSDOM('<!doctype html><html><body><div id="job-service-tickets"></div></body></html>',
       { runScripts: 'outside-only', url: 'https://project86.test/jobs/j1/job-service-tickets' });
     const w = dom.window;
-    const t = { id: 'st_77', title: 'Gate', status: 'open', priority: 'normal', job_id: 'j1', checklist: [] };
-    w.appState = { currentJobId: 'j1' };
+    const navigated = [];
     w.appData = { jobs: [{ id: 'j1', jobNumber: 'RV2006', title: 'Waterside' }], leads: [] };
     w.p86JobLabel = JOB_LABEL;
-    w.p86Api = { serviceTickets: {
-      list: () => Promise.resolve({ tickets: [t, Object.assign({}, t, { id: 'st_78', title: 'Other' })] }),
-      get: () => Promise.resolve({ ticket: t, tasks: [], events: [], revisions: [], participants: [], shares: [] }),
-    } };
     w.p86Toast = () => {};
-    w.eval(readText('js/service-tickets.js'));
-    w.renderJobServiceTickets('j1');
+    w.p86Api = { serviceTickets: { list: () => Promise.resolve({ tickets: [] }) } };
+    jobTabEnv(w, tickets);
+    w.eval(TICKETS_SRC);
+    w.p86Router = {
+      navigate: (route) => { navigated.push(route); w.appState.currentJobId = route.jobId; w.renderJobServiceTickets(route.jobId); },
+    };
+    const openId = () => { const o = w.document.querySelector('.p86-st-row.is-open'); return o && o.getAttribute('data-ticket'); };
+    return { w, navigated, openId };
+  }
+  const T = () => [
+    ticket({ id: 'st_77', title: 'Gate', status: 'open', checklist: [] }),
+    ticket({ id: 'st_78', title: 'Other', status: 'open', checklist: [] }),
+  ];
+
+  test('openTicket(ticketId), the 1.29 form: the ticket is marked, and the job\'s next render expands it', async () => {
+    const t = jobTab(T());
+    t.w.appState.currentJobId = 'j1';
+    t.w.renderJobServiceTickets('j1');
     await flush();
-    expect(w.document.querySelector('.p86-st-row.is-open')).toBeNull();
+    expect(t.openId()).toBeNull();
     // Already on this job's tab: the next render still honours it.
-    w.p86ServiceTickets.openTicket('st_78');
-    w.renderJobServiceTickets('j1');
+    expect(t.w.p86ServiceTickets.openTicket('st_78')).toBe(true);
+    expect(t.navigated).toEqual([]);   // the caller navigates, as the 1.29 page did
+    t.w.renderJobServiceTickets('j1');
     await flush();
-    const open = w.document.querySelector('.p86-st-row.is-open');
-    expect(open && open.getAttribute('data-ticket')).toBe('st_78');
+    expect(t.openId()).toBe('st_78');
+  });
+
+  test('openTicket(ticketId) before any job is on screen opens on the job loaded next', async () => {
+    const t = jobTab(T());
+    expect(t.w.p86ServiceTickets.openTicket('st_77')).toBe(true);
+    t.w.appState.currentJobId = 'j1';
+    t.w.renderJobServiceTickets('j1');
+    await flush();
+    expect(t.openId()).toBe('st_77');
+  });
+
+  test('openTicket(jobId, ticketId) goes to the job and expands the ticket', async () => {
+    const t = jobTab(T());
+    expect(t.w.p86ServiceTickets.openTicket('j1', 'st_78')).toBe(true);
+    await flush();
+    expect(t.navigated).toEqual([{ top: 'jobs', jobId: 'j1', jobSub: 'job-service-tickets' }]);
+    expect(t.openId()).toBe('st_78');
+  });
+
+  test('no ticket id, in either form, is false and opens nothing', async () => {
+    const t = jobTab(T());
+    const st = t.w.p86ServiceTickets;
+    expect([st.openTicket(), st.openTicket(''), st.openTicket(null), st.openTicket('j1', ''), st.openTicket('', 'st_77'), st.openTicket('j1', null)])
+      .toEqual([false, false, false, false, false, false]);
+    expect(t.navigated).toEqual([]);
+    t.w.appState.currentJobId = 'j1';
+    t.w.renderJobServiceTickets('j1');
+    await flush();
+    expect(t.openId()).toBeNull();
+  });
+
+  test('every caller in js/ uses a form openTicket takes', () => {
+    const calls = [];
+    for (const f of fs.readdirSync(path.join(ROOT, 'js')).filter((n) => n.endsWith('.js'))) {
+      const src = readText('js/' + f);
+      for (const m of src.matchAll(/\.openTicket\(([^)]*)\)/g)) calls.push([f, m[1].trim() === '' ? 0 : m[1].split(',').length]);
+    }
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.filter((c) => c[1] < 1 || c[1] > 2)).toEqual([]);
+    expect(calls.map((c) => c[0])).not.toContain('service-tickets-page.js');
   });
 });
 
@@ -813,68 +1123,77 @@ describe('refetching', () => {
     p.render();
     await flush();
     let resolve;
-    p.setResponder(() => new Promise((r) => { resolve = r; }));
+    p.setResponder((q) => new Promise((r) => { resolve = () => r(serve([ticket({ id: 'fresh' })], q)); }));
     p.render();
     await flush();
-    expect(p.body()).not.toMatch(/Loading/);
+    expect(p.list()).not.toMatch(/Loading/);
     expect(p.rowIds()).toHaveLength(8);
-    resolve({ tickets: [ticket({ id: 'fresh' })] });
+    resolve();
     await flush();
     expect(p.rowIds()).toEqual(['fresh']);
   });
 
   test('an older response never overwrites a newer one', async () => {
     const pending = [];
-    const p = makePage({ responder: () => new Promise((r) => pending.push(r)) });
+    const p = makePage({ responder: (q) => new Promise((r) => pending.push((list) => r(serve(list, q)))) });
     p.render();
-    p.render();
+    p.click(p.pill('closed'));
     await flush();
     expect(pending).toHaveLength(2);
-    pending[1]({ tickets: [ticket({ id: 'newer' })] });
+    pending[1]([ticket({ id: 'newer', status: 'closed' })]);
     await flush();
-    pending[0]({ tickets: [ticket({ id: 'older' })] });
+    pending[0]([ticket({ id: 'older' })]);
     await flush();
     expect(p.rowIds()).toEqual(['newer']);
   });
 
   test('an older FAILED response never puts an error over a newer list', async () => {
     const pending = [];
-    const p = makePage({ responder: () => new Promise((res, rej) => pending.push({ res, rej })) });
+    const p = makePage({ responder: (q) => new Promise((res, rej) => pending.push({ res: (list) => res(serve(list, q)), rej })) });
     p.render();
-    p.render();
+    p.click(p.pill('closed'));
     await flush();
     expect(pending).toHaveLength(2);
-    pending[1].res({ tickets: [ticket({ id: 'newer' })] });
+    pending[1].res([ticket({ id: 'newer', status: 'closed' })]);
     await flush();
     pending[0].rej(new Error('older failed'));
     await flush();
-    expect(p.host.querySelector('.stp-body .stp-error')).toBeNull();
-    expect(p.body()).not.toMatch(/older failed/);
+    expect(p.host.querySelector('.p86-wob-error')).toBeNull();
     expect(p.rowIds()).toEqual(['newer']);
   });
 
   test('refresh() refetches only while the page is the one on screen', async () => {
     const p = makePage({ tickets: MIXED() });
-    await p.w.p86ServiceTicketsPage.refresh();
+    await p.page.refresh();
     expect(p.listCalls).toHaveLength(0); // never rendered
     p.render();
     await flush();
-    await p.w.p86ServiceTicketsPage.refresh();
+    await p.page.refresh();
     expect(p.listCalls).toHaveLength(2);
     p.w.document.getElementById('service-tickets').classList.remove('active');
-    await p.w.p86ServiceTicketsPage.refresh();
+    await p.page.refresh();
     expect(p.listCalls).toHaveLength(2);
   });
 
-  test('js/service-tickets.js refresh() calls the page\'s refresh', async () => {
-    const dom = new JSDOM('<!doctype html><html><body></body></html>', { runScripts: 'outside-only', url: 'https://project86.test/' });
-    const w = dom.window;
-    let called = 0;
-    w.appState = { currentJobId: null };
-    w.p86ServiceTicketsPage = { refresh: () => { called++; return Promise.resolve(); } };
-    w.eval(readText('js/service-tickets.js'));
-    await w.p86ServiceTickets.refresh();
-    expect(called).toBe(1);
+  test('a service_ticket write refetches the page ONCE, with the real job tab and js/refresh.js loaded', async () => {
+    const p = makePage({
+      jobPane: true,
+      noTicketsModule: true,
+      tickets: MIXED(),
+      before: (w) => { jobTabEnv(w, []); w.eval(TICKETS_SRC); w.eval(REFRESH_SRC); },
+    });
+    p.render();
+    await flush();
+    const boardCalls = () => p.listCalls.filter((q) => q.board === 1).length;
+    expect(boardCalls()).toBe(1);
+    await p.w.p86Refresh.now('service_ticket', { id: 's_open' });
+    await flush();
+    expect(boardCalls()).toBe(2);
+    // And the job tab's own refresh (the change order module calls it) does not fetch the page again.
+    await p.w.p86ServiceTickets.refresh();
+    await flush();
+    expect(boardCalls()).toBe(2);
+    expect(p.w.p86Refresh.paths('service_ticket')).toEqual(['p86ServiceTickets.refresh', 'p86WorkOrdersBoard.refresh']);
   });
 });
 
@@ -905,6 +1224,16 @@ describe('index.html', () => {
     expect(row.hasAttribute('data-p86-icon')).toBe(true);
   });
 
+  test('ONE company-wide page: no Work Orders row, tile, pane or host anywhere', () => {
+    const doc = index();
+    expect(doc.querySelectorAll('[data-tab="work-orders"]')).toHaveLength(0);
+    expect(doc.getElementById('work-orders')).toBeNull();
+    expect(doc.getElementById('workOrdersHost')).toBeNull();
+    expect(Array.from(doc.querySelectorAll('[onclick]')).filter((b) => /work-orders/.test(b.getAttribute('onclick')))).toEqual([]);
+    const live = readText('index.html').replace(/<!--[\s\S]*?-->/g, '');
+    expect(live).not.toMatch(/>\s*Work Orders\s*</);
+  });
+
   test('the pane sits with the other top-level pages and holds the host', () => {
     const doc = index();
     const pane = doc.getElementById('service-tickets');
@@ -923,32 +1252,43 @@ describe('index.html', () => {
     expect(grid.previousElementSibling.textContent.trim()).toBe('Operations');
     expect(grid.firstElementChild).toBe(tile[0]);
     expect(tile[0].getAttribute('data-cap')).toBe(CAPS);
+    expect(tile[0].textContent.trim()).toBe('Service Tickets');
     expect(tile[0].nextElementSibling.getAttribute('onclick')).toMatch(/p86MoreGo\('cost-inbox'\)/);
   });
 
-  test('the script loads after api.js and job-label.js, right after jobs-hub.js, with a cache-buster', () => {
+  test('the page\'s script loads once, after api.js, job-label.js and js/service-tickets.js; its stylesheet once; the 1.29 page\'s script is gone', () => {
     const scripts = Array.from(index().querySelectorAll('script[src]')).map((s) => s.getAttribute('src'));
-    const at = scripts.findIndex((s) => /^js\/service-tickets-page\.js\?v=\d+$/.test(s));
+    const at = scripts.findIndex((s) => /^js\/work-orders-board\.js\?v=\d+$/.test(s));
     expect(at).toBeGreaterThan(-1);
-    expect(scripts[at - 1]).toMatch(/^js\/jobs-hub\.js\?v=\d+$/);
-    expect(scripts.findIndex((s) => /^js\/api\.js\?v=/.test(s))).toBeLessThan(at);
-    expect(scripts.findIndex((s) => /^js\/job-label\.js\?v=/.test(s))).toBeLessThan(at);
+    expect(scripts.filter((s) => /^js\/work-orders-board\.js/.test(s))).toHaveLength(1);
+    for (const dep of ['api', 'job-label', 'service-tickets']) {
+      const d = scripts.findIndex((s) => new RegExp('^js/' + dep + '\\.js\\?v=').test(s));
+      expect([dep, d > -1 && d < at]).toEqual([dep, true]);
+    }
+    expect(scripts.filter((s) => /service-tickets-page/.test(s))).toEqual([]);
+    expect(fs.existsSync(path.join(ROOT, 'js', 'service-tickets-page.js'))).toBe(false);
+    const links = Array.from(index().querySelectorAll('link[rel="stylesheet"][href]')).map((l) => l.getAttribute('href'));
+    expect(links.filter((h) => /^css\/work-orders-board\.css\?v=\d+$/.test(h))).toHaveLength(1);
   });
 });
 
 describe('router and app.js', () => {
-  function loadRouter(pathname) {
+  function loadRouter(pathname, search) {
     const pushed = [];
+    const replaced = [];
+    const switched = [];
+    const listeners = {};
     const win = {
-      location: { pathname: pathname || '/', search: '', hash: '' },
+      location: { pathname: pathname || '/', search: search || '', hash: '' },
       history: {
-        pushState: (state, title, url) => { pushed.push(url); if (url) win.location.pathname = url; },
-        replaceState: (state, title, url) => { if (url) win.location.pathname = url; },
+        pushState: (state, title, url) => { pushed.push(url); if (url) { win.location.pathname = url.split('?')[0]; } },
+        replaceState: (state, title, url) => { replaced.push(url); if (url) { win.location.pathname = url.split('?')[0]; win.location.search = url.indexOf('?') >= 0 ? url.slice(url.indexOf('?')) : ''; } },
       },
-      addEventListener: () => {},
+      addEventListener: (type, fn) => { listeners[type] = fn; },
       removeEventListener: () => {},
       setTimeout: () => {},
       appState: {},
+      switchTab: (tab) => switched.push(tab),
       document: {
         getElementById: () => null, querySelector: () => null, querySelectorAll: () => [],
         addEventListener: () => {}, readyState: 'complete',
@@ -963,37 +1303,71 @@ describe('router and app.js', () => {
     };
     vm.createContext(sandbox);
     vm.runInContext(readText('js/router.js'), sandbox);
-    return { router: win.p86Router, pushed };
+    return { router: win.p86Router, pushed, replaced, switched, listeners, win };
   }
 
   test('/service-tickets deep-links, and navigate() writes it back', () => {
-    const { router, pushed } = loadRouter('/service-tickets');
+    const { router, pushed, replaced } = loadRouter('/service-tickets');
     expect(router.route().top).toBe('service-tickets');
     expect(router.canGo('/service-tickets')).toBe(true);
+    expect(replaced).toEqual([]);
     router.navigate({ top: 'service-tickets' });
     expect(pushed).toEqual(['/service-tickets']);
   });
 
-  test('app.js: the title, and a switchTab branch that renders the page into its host', () => {
+  test('/work-orders redirects to /service-tickets: on load (keeping the query), through go(), and on Back', () => {
+    const boot = loadRouter('/work-orders', '?view=my_approvals');
+    expect(boot.replaced).toEqual(['/service-tickets?view=my_approvals']);
+    expect(boot.win.location.pathname).toBe('/service-tickets');
+    expect(boot.router.route()).toEqual({ top: 'service-tickets' });
+
+    const r = loadRouter('/');
+    expect(r.replaced).toEqual([]);
+    expect(r.router.canGo('/work-orders')).toBe(true);
+    expect(r.router.tops()).not.toContain('work-orders');
+    expect(r.router.tops()).toContain('service-tickets');
+    expect(r.router.go('/work-orders')).toBe(true);
+    expect(r.pushed).toEqual(['/service-tickets']);
+    expect(r.switched).toEqual(['service-tickets']);
+    // A history entry written while the old tab existed lands on the page too.
+    r.listeners.popstate({ state: { route: { top: 'work-orders' } } });
+    expect(r.switched).toEqual(['service-tickets', 'service-tickets']);
+    // Nothing else is redirected.
+    r.router.go('/invoices');
+    expect(r.pushed).toEqual(['/service-tickets', '/invoices']);
+  });
+
+  test('app.js: the title, and ONE switchTab branch that renders the page into its host', () => {
     const src = readText('js/app.js').replace(/\r\n/g, '\n');
     const titles = src.slice(src.indexOf('var TAB_TITLES = {'), src.indexOf('};', src.indexOf('var TAB_TITLES = {')));
     expect(titles).toMatch(/\n\s*'service-tickets': 'Service Tickets',\n/);
+    expect(titles).not.toMatch(/work-orders/);
 
     const start = src.indexOf('        function switchTab(tabName) {');
     const end = src.indexOf('\n        }\n', start);
     expect(start).toBeGreaterThan(-1);
     const body = src.slice(start, end);
+    // No branch of its own: the retired id is folded into this page at the top.
+    expect(body).not.toMatch(/else if \(tabName === 'work-orders'\)|workOrdersHost|p86ServiceTicketsPage/);
+    expect(body).toMatch(/if \(tabName === 'work-orders'\) tabName = 'service-tickets';/);
     const open = "} else if (tabName === 'service-tickets') {";
     const at = body.indexOf(open);
     expect(at).toBeGreaterThan(-1);
     expect(body.indexOf(open, at + 1)).toBe(-1);
     const branch = body.slice(at + open.length, body.indexOf("} else if (tabName === ", at + open.length));
     expect(branch).toMatch(/document\.getElementById\('serviceTicketsHost'\)/);
-    expect(branch).toMatch(/window\.p86ServiceTicketsPage\.render\(stHost\)/);
+    expect(branch).toMatch(/window\.p86WorkOrdersBoard\.render\(stHost\)/);
     expect(branch).toMatch(/Service Tickets module not loaded\./);
     expect(branch).not.toMatch(/renderJobsMain|p86JobsHubRefresh|p86JobDetailRefresh|load\w*ForJob/);
     // The final catch-all that paints the Jobs list comes AFTER the branch, so
     // the branch is what runs for this tab.
     expect(body.lastIndexOf('renderJobsMain')).toBeGreaterThan(at);
+  });
+
+  test('86 is pointed at /service-tickets only', () => {
+    const src = readText('server/routes/admin-agents-routes.js');
+    const plain = src.split(/\r?\n/).find((l) => l.indexOf("'- Plain pages:") >= 0);
+    expect(plain).toMatch(/ \/service-tickets /);
+    expect(src).not.toMatch(/\/work-orders|Work Orders page|newest 200/);
   });
 });

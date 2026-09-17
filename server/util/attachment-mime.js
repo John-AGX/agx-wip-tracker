@@ -133,4 +133,23 @@ function resolveStoredMime(ext, claimedMime, sniffedMime) {
   return sniffedMime || claimedMime;
 }
 
-module.exports = { sniffMimeFromBytes, sanitizeSvg, mimeFamilyMatches, resolveStoredMime };
+// HEIC / HEIF (1.29). Android phones such as Samsung can save photos this way,
+// and the installed sharp decodes AVIF only (heif with aom, no HEVC), so the
+// server cannot turn one into a thumbnail or a web copy. Where a photo is
+// proof of work (a task or a work order) it is refused with this sentence
+// instead of failing as "Something went wrong."; elsewhere the caller may keep
+// it as a plain file. The crew page and the office upload queue show the same
+// words (js/photo-upload-queue.js HEIC_MESSAGE must equal this).
+const HEIC_REFUSAL = "This photo is in HEIC format (High efficiency), which can't be opened here yet. Use Take photo, or set your camera to save photos as JPEG, then add it again.";
+
+const HEIC_MIMES = new Set(['image/heic', 'image/heif', 'image/heic-sequence', 'image/heif-sequence']);
+
+// By the claimed (or sniffed) MIME, or by the file name when a browser sends a
+// HEIC as application/octet-stream or with no type at all.
+function isHeicUpload(mime, filename) {
+  const m = String(mime == null ? '' : mime).split(';')[0].trim().toLowerCase();
+  if (HEIC_MIMES.has(m)) return true;
+  return /\.(heic|heif)$/i.test(String(filename == null ? '' : filename).trim());
+}
+
+module.exports = { sniffMimeFromBytes, sanitizeSvg, mimeFamilyMatches, resolveStoredMime, HEIC_REFUSAL, isHeicUpload };

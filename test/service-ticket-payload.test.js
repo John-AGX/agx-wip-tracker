@@ -1728,3 +1728,136 @@ describe('materials — a takeoff 86 can draft, with no price on it', () => {
     expect(JSON.parse(boundValue(t0, 'service_tickets', 'materials').value)[0]).not.toHaveProperty('unit_cost');
   });
 });
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 1.29 — 86 FOLLOWS THE PUNCH-LIST RULES
+ * An approved work order's punch list is the record of what was approved, so
+ * 86 cannot add buildings to it; a building added to a work order that is
+ * awaiting approval sends it back to In progress, the same recount every other
+ * door runs; and a new assignee is told, after COMMIT only.
+ * ══════════════════════════════════════════════════════════════════════════*/
+describe('1.29 — task_adds follow the work order', () => {
+  function seedWorkOrders() {
+    eng.db.exec(`
+      INSERT INTO service_tickets (id, organization_id, title, job_id, lead_id, status, priority, approval_notified_at) VALUES
+        ('st_approved', 1, 'Approved list', 'j1', NULL, 'approved', 'normal', NULL),
+        ('st_waiting',  1, 'Awaiting approval', 'j1', NULL, 'work_complete', 'normal', '2026-09-15 08:00:00');
+      INSERT INTO tasks (id, organization_id, title, status, scope, service_ticket_id, entity_type, entity_id) VALUES
+        ('tw1', 1, 'Bldg 1', 'done', 'org', 'st_waiting', 'job', 'j1'),
+        ('ta1', 1, 'Bldg 7', 'done', 'org', 'st_approved', 'job', 'j1');
+    `);
+  }
+  const eventsOf = (id) => eng.all('SELECT kind, actor_kind, actor_user_id, detail FROM service_ticket_events WHERE ticket_id = ? ORDER BY rowid', id);
+
+  test('task_adds on an APPROVED ticket are refused non-retryably, before any write', async () => {
+    seedWorkOrders();
+    const t0 = eng.log.length;
+    const r = await drive(REAL_MOD(), [update('st_approved', { task_adds: [{ title: 'Bldg 8' }] })], JOHN);
+    expect(r.stage).toBe('apply');
+    expect(r.message).toBe('This service ticket is approved. Its punch list is changed in the app after it is reopened. Nothing was saved.');
+    expect([r.detail.code, r.detail.field_path, r.detail.received, r.detail.retryable])
+      .toEqual(['ticket_approved', 'task_adds', 'approved', false]);
+    expect(eng.all("SELECT id FROM tasks WHERE service_ticket_id = 'st_approved'")).toEqual([{ id: 'ta1' }]);
+    expect(eventsOf('st_approved')).toEqual([]);
+    expect(eng.log.slice(t0).filter((e) => /^(INSERT|UPDATE)\b/.test(e.sql))).toHaveLength(0);
+  });
+
+  test('a fields-only edit of an approved ticket is not a punch-list change and still applies', async () => {
+    seedWorkOrders();
+    const r = await drive(REAL_MOD(), [update('st_approved', { fields: { priority: 'high' } })], JOHN);
+    expect(r.stage).toBe('applied');
+  });
+
+  test('MUTANT: without the refusal, 86 adds a building to an approved work order', async () => {
+    seedWorkOrders();
+    const mut = mutate('    if (taskAdds.length && !ticketRules.subtaskStructureWritable(before.status).ok) {', '    if (false) {');
+    const r = await drive(mut, [update('st_approved', { task_adds: [{ title: 'Bldg 8' }] })], JOHN);
+    expect(r.stage).toBe('applied');
+    expect(eng.all("SELECT title FROM tasks WHERE service_ticket_id = 'st_approved' ORDER BY title").map((t) => t.title)).toEqual(['Bldg 7', 'Bldg 8']);
+  });
+
+  test('a building added to a work order awaiting approval sends it back to In progress, on the timeline as 86', async () => {
+    seedWorkOrders();
+    const r = await drive(REAL_MOD(), [update('st_waiting', { task_adds: [{ title: 'Bldg 2' }] })], JOHN);
+    expect(r.stage).toBe('applied');
+    expect(one("SELECT status, completed_at FROM service_tickets WHERE id = 'st_waiting'")).toEqual({ status: 'in_progress', completed_at: null });
+    const ev = eventsOf('st_waiting');
+    expect(ev.map((e) => [e.kind, e.actor_kind, e.actor_user_id])).toEqual([['task_added', 'agent', 10], ['status_changed', 'agent', 10]]);
+    expect(ev[1].detail).toEqual({ from: 'work_complete', to: 'in_progress', reason: 'subtask_added' });
+    // The diff card shows the move it is about to make.
+    const card = r.res.apply_changeset.find((c) => c.entity_type === 'service_ticket');
+    expect([card.before.status, card.after.status]).toEqual(['work_complete', 'in_progress']);
+  });
+
+  test('a dry run of the same payload leaves the work order awaiting approval', async () => {
+    seedWorkOrders();
+    const r = await drive(REAL_MOD(), [update('st_waiting', { task_adds: [{ title: 'Bldg 2' }] })], JOHN, { dryRun: true });
+    expect(r.stage).toBe('applied');
+    expect(one("SELECT status FROM service_tickets WHERE id = 'st_waiting'").status).toBe('work_complete');
+    expect(eventsOf('st_waiting')).toEqual([]);
+  });
+
+  test('task_adds on an open ticket move nothing and write no status row', async () => {
+    const r = await drive(REAL_MOD(), [update('st_open', { task_adds: [{ title: 'Caulk tub' }] })], JOHN);
+    expect(r.stage).toBe('applied');
+    expect(one("SELECT status FROM service_tickets WHERE id = 'st_open'").status).toBe('open');
+    expect(eventsOf('st_open').map((e) => e.kind)).toEqual(['task_added']);
+  });
+
+  test('MUTANT: without the recount, the work order stays awaiting approval with an open building on it', async () => {
+    seedWorkOrders();
+    const mut = mutate("    await workOrder.recountTicket(dbClient, before, { kind: 'agent', userId }, 'subtask_added');\n", '');
+    const r = await drive(mut, [update('st_waiting', { task_adds: [{ title: 'Bldg 2' }] })], JOHN);
+    expect(r.stage).toBe('applied');
+    expect(one("SELECT status FROM service_tickets WHERE id = 'st_waiting'").status).toBe('work_complete');
+  });
+});
+
+describe('1.29 — the assignment notice rides ctx.afterCommit', () => {
+  let calls;
+  let spy;
+  beforeEach(() => {
+    calls = [];
+    spy = jest.spyOn(require('../server/services/work-order-notices'), 'notifyAssigned')
+      .mockImplementation(async (_db, opts) => { calls.push(opts); return { sent: 1 }; });
+  });
+  afterEach(() => { spy.mockRestore(); });
+
+  test('a new assignee on update is told once, after COMMIT, with the snapshot and the approver as the assigner', async () => {
+    const r = await drive(REAL_MOD(), [update('st_open', { fields: { assignee_user_id: 11 } })], JOHN);
+    expect(r.stage).toBe('applied');
+    expect(calls).toHaveLength(1);
+    expect([calls[0].ticket.id, calls[0].ticket.assignee_user_id, calls[0].assigneeUserId, calls[0].previousAssigneeUserId])
+      .toEqual(['st_open', 11, 11, null]);
+    expect(calls[0].actor).toEqual({ kind: 'user', userId: 10, label: null });
+  });
+
+  test('a create with an assignee is told too; a dry run, an unchanged assignee and a later refusal are not', async () => {
+    await drive(REAL_MOD(), [ticket({ title: 'Gutters', job_id: 'j1', assignee_user_id: 11 })], JOHN);
+    expect(calls.map((c) => [c.assigneeUserId, c.previousAssigneeUserId])).toEqual([[11, null]]);
+    calls.length = 0;
+
+    await drive(REAL_MOD(), [update('st_open', { fields: { assignee_user_id: 11 } })], JOHN, { dryRun: true });
+    expect(calls).toEqual([]);
+
+    eng.db.exec("UPDATE service_tickets SET assignee_user_id = 11 WHERE id = 'st_open'");
+    await drive(REAL_MOD(), [update('st_open', { fields: { assignee_user_id: 11, priority: 'high' } })], JOHN);
+    expect(calls).toEqual([]);
+
+    eng.db.exec("UPDATE service_tickets SET assignee_user_id = NULL WHERE id = 'st_open'");
+    const refused = await drive(REAL_MOD(), [
+      update('st_open', { fields: { assignee_user_id: 11 } }),
+      update('st_closed', { fields: { priority: 'high' } }),
+    ], JOHN);
+    expect(refused.stage).toBe('apply');
+    expect(calls).toEqual([]);
+  });
+
+  test('MUTANT: drop the changed-assignee test and an unchanged assignee is told again on every edit', async () => {
+    eng.db.exec("UPDATE service_tickets SET assignee_user_id = 11 WHERE id = 'st_open'");
+    const mut = mutate('  if (assigneeAfter && assigneeAfter !== assigneeBefore && ctx && Array.isArray(ctx.afterCommit)) {',
+      '  if (assigneeAfter && ctx && Array.isArray(ctx.afterCommit)) {');
+    await drive(mut, [update('st_open', { fields: { priority: 'high' } })], JOHN);
+    expect(calls).toHaveLength(1);
+  });
+});

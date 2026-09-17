@@ -16,6 +16,9 @@ const { replyToForUser } = require('../email-sender');
 const { geocodeAddress, geocodeViaGoogle, geocodeViaCensus } = require('../geocoder');
 // Training flywheel — PDF-extraction-vs-saved pairs (see POST / create).
 const { captureExample, TASKS } = require('../services/training-capture');
+// Open work orders on a job the lead chain would cascade. Shared with the job
+// delete (job-routes.js), so both doors that can take a job use one rule.
+const { openTicketsOnJobs } = require('../services/job-ticket-guard');
 
 // ── Lead geocoding (for the leads map view) ─────────────────────────
 // Compose a one-line address from the lead's address fields. Returns null
@@ -604,24 +607,9 @@ const LEAD_JOBS_PREDICATE =
                WHERE id = ANY($1::text[]) AND job_id IS NOT NULL))
    AND (organization_id = $2 OR organization_id IS NULL)`;
 
-// Open (non-archived, non-terminal) service tickets that cascading these JOBS
-// would destroy. db.js states the invariant plainly: "after conversion a ticket
-// is about the JOB, and deleting the originating lead must not take the job's
-// live work order with it." leadsBlockedByTickets only sees tickets with
-// job_id IS NULL, so converted work orders need their own guard. Statuses:
-// draft|open|scheduled|in_progress|work_complete|approved|closed|cancelled.
-async function openTicketsOnJobs(q, jobIds, orgId) {
-  if (!jobIds || !jobIds.length) return 0;
-  const { rows } = await q.query(
-    `SELECT COUNT(*)::int AS n FROM service_tickets
-      WHERE job_id = ANY($1::text[])
-        AND organization_id = $2
-        AND archived_at IS NULL
-        AND status NOT IN ('closed', 'cancelled')`,
-    [jobIds, orgId]
-  );
-  return rows[0] ? rows[0].n : 0;
-}
+// openTicketsOnJobs (open, non-archived, non-terminal service tickets that
+// cascading these JOBS would destroy) lives in services/job-ticket-guard.js,
+// required at the top of this file.
 
 async function deleteLeadChain(client, leadIds, orgId, opts) {
   opts = opts || {};

@@ -339,3 +339,64 @@ describe('attachmentInOrg on a work-order photo', () => {
     await expect(attachmentInOrg(runner(), row, ORG_B)).resolves.toBe(false);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// 4. THE DATABASE CHECK — the third copy of the same list.
+// ─────────────────────────────────────────────────────────────────────────
+// The door (VALID_ENTITY_TYPES) and the resolver (ENTITY_TABLES) agreeing is
+// not enough. server/db.js re-adds attachments_entity_type_check on every boot,
+// and until 1.29 its IN-list stopped at 'bill'. The door accepted
+// 'service_ticket', the resolver resolved it, and Postgres refused the INSERT
+// with 23514 — every crew site photo failed in production while this file was
+// green, because nothing here read the constraint. The list is parsed out of
+// db.js (CRLF-normalised) and must equal the door's set exactly, in both
+// directions: a type the CHECK refuses is a 500 at the door, and a type the
+// CHECK allows but the door does not is a stale entry nobody reads.
+function entityTypeCheckFromDbSource(src) {
+  const s = String(src).replace(/\r\n/g, '\n');
+  const re = /ADD\s+CONSTRAINT\s+attachments_entity_type_check\s+CHECK\s*\(\s*entity_type\s+IN\s*\(([^)]*)\)\s*\)/g;
+  const found = [...s.matchAll(re)];
+  if (found.length !== 1) {
+    throw new Error('expected exactly one attachments_entity_type_check in db.js, found ' + found.length);
+  }
+  const types = found[0][1]
+    .split(',')
+    .map((x) => x.trim().replace(/^'|'$/g, ''))
+    .filter(Boolean);
+  if (types.length < 5) throw new Error('attachments_entity_type_check parse looks wrong: ' + JSON.stringify(types));
+  return types;
+}
+
+function assertCheckMatchesDoor(dbSrc) {
+  const check = entityTypeCheckFromDbSource(dbSrc);
+  const door = validEntityTypesFromSource();
+  expect(new Set(check).size).toBe(check.length);
+  expect([...check].sort()).toEqual([...door].sort());
+}
+
+const DB_JS_PATH = path.resolve(__dirname, '..', 'server', 'db.js');
+
+describe('attachments_entity_type_check accepts exactly what the door accepts', () => {
+  test('the IN-list parsed from server/db.js equals VALID_ENTITY_TYPES', () => {
+    const src = fs.readFileSync(DB_JS_PATH, 'utf8');
+    assertCheckMatchesDoor(src);
+    expect(entityTypeCheckFromDbSource(src)).toContain('service_ticket');
+  });
+
+  test('MUTANT: a copy of db.js whose CHECK lacks service_ticket goes red', () => {
+    const os = require('os');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'w1a-entity-check-'));
+    try {
+      const src = fs.readFileSync(DB_JS_PATH, 'utf8').replace(/\r\n/g, '\n');
+      const anchor = "'purchase_order', 'bill', 'service_ticket'));";
+      if (src.split(anchor).length !== 2) throw new Error('anchor not found');
+      const copy = path.join(dir, 'db.js');
+      fs.writeFileSync(copy, src.replace(anchor, "'purchase_order', 'bill'));"));
+      const mutated = fs.readFileSync(copy, 'utf8');
+      expect(entityTypeCheckFromDbSource(mutated)).not.toContain('service_ticket');
+      expect(() => assertCheckMatchesDoor(mutated)).toThrow();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

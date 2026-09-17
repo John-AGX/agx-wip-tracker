@@ -65,6 +65,7 @@ const taskShareRoutes = require('./routes/task-share-routes');
 const reportShareRoutes = require('./routes/report-share-routes');
 const serviceTicketRoutes = require('./routes/service-ticket-routes');
 const serviceTicketShareRoutes = require('./routes/service-ticket-share-routes');
+const serviceTicketCoPrintRoutes = require('./routes/service-ticket-co-print-routes');
 const notesRoutes = require('./routes/notes-routes');
 const remindersCrudRoutes = require('./routes/reminders-crud-routes');
 const receiptRoutes = require('./routes/receipt-routes');
@@ -302,6 +303,18 @@ app.use('/api', reportShareRoutes);
 // every path is /api/service-tickets/...; the token doors arrive with S4 in a
 // separate router mounted at /api like the two share routers above.
 app.use('/api/service-tickets', serviceTicketRoutes);
+// Notify again (POST /api/service-tickets/:id/notify-approvers) — the office's
+// button on a work order whose ready-for-approval notice reached nobody. Its
+// own small router at the same prefix, mounted right after the ticket routes,
+// so a door that is edited rarely stays out of a file edited often.
+app.use('/api/service-tickets', require('./routes/work-order-notice-routes'));
+// Start a change order from a work order, the printable work order and the
+// completion report for the property manager (/:id/change-orders,
+// /:id/print/work-order, /:id/completion-report...). Office only, and its own
+// router at the same prefix for the same reason as Notify again: these doors
+// stay out of the heavily edited ticket routes file, and none of their paths
+// overlaps a /:id shape there.
+app.use('/api/service-tickets', serviceTicketCoPrintRoutes);
 // Mounted at /api rather than under the tickets prefix because it registers
 // BOTH sides of one credential: /api/service-tickets/:id/share* for the owner
 // and /api/service-ticket-share/:token for the guest — the same arrangement
@@ -553,8 +566,9 @@ setRolePool(pool);
 // /api/auth/me failing) takes over and runs against localStorage.
 // On Railway, DATABASE_URL is always set, so this branch never fires
 // in production.
+let httpServer = null;
 function startServer() {
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Project 86 running on http://localhost:${PORT}`);
     if (process.env.ADMIN_EMAIL) {
       console.log(`Admin user synced from env: ${process.env.ADMIN_EMAIL}`);
@@ -604,6 +618,15 @@ function startServer() {
       } catch (e) {
         console.warn('[reminders] failed to start scanner:', e && e.message);
       }
+      // Work-order notices — ticks every 5 min: approval notice retries (and
+      // claims a crashed send left behind), crew-activity batches at most one
+      // per work order per 30 min, and the weekday morning digest / waiting
+      // reminder. Per org, never throws; skips a tick while shutting down.
+      try {
+        require('./work-order-notify-cron').start();
+      } catch (e) {
+        console.warn('[work-order-notify] failed to start:', e && e.message);
+      }
       // Email Hub snooze wake-up (E3) — ticks every 5 min. Returns snoozed
       // mail to the owner's own Inbox, unread, once snoozed_until passes.
       // Purely in-app: it sends nothing and touches only rows the owner
@@ -647,6 +670,51 @@ function startServer() {
     }
   });
 }
+
+// GRACEFUL SHUTDOWN. A deploy stops the process with SIGTERM (Ctrl+C sends
+// SIGINT locally). Notices a request started and did not wait for — the
+// ready-for-approval email, an assignment, a crew problem — are tracked by
+// services/inflight.js, and without this they were cut off mid-send. So, once:
+// stop taking new connections, stop the work-order notice cron, and give the
+// in-flight sends SHUTDOWN_DRAIN_MS (default 8 s) to finish before exiting.
+// Whatever is still running then is retried by the notice cron (its stale-claim
+// and adoption rules). A hard-stop timer exits regardless 2 s after the budget,
+// in case something holds the drain open. This is the only file that ends the
+// process.
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  const inflight = require('./services/inflight');
+  const budget = Number(process.env.SHUTDOWN_DRAIN_MS) || 8000;
+  console.log('[server] ' + signal + ' received; finishing ' + inflight.size() + ' in-flight notices');
+  const hardStop = setTimeout(() => {
+    console.warn('[server] shutdown drain did not finish in time; exiting');
+    process.exit(0);
+  }, budget + 2000);
+  if (hardStop.unref) hardStop.unref();
+  inflight.beginClosing();
+  try {
+    require('./work-order-notify-cron').stop();
+  } catch (e) {
+    console.warn('[server] could not stop the work-order notice cron:', e && e.message);
+  }
+  try {
+    if (httpServer) httpServer.close();
+  } catch (e) {
+    console.warn('[server] http server close failed:', e && e.message);
+  }
+  let left = 0;
+  try {
+    left = await inflight.drain(budget);
+  } catch (e) {
+    console.warn('[server] drain failed:', e && e.message);
+  }
+  if (left) console.warn('[server] shutdown: ' + left + ' in-flight notice(s) still running; the notice cron retries them');
+  process.exit(0);
+}
+process.once('SIGTERM', () => { shutdown('SIGTERM'); });
+process.once('SIGINT', () => { shutdown('SIGINT'); });
 
 if (!process.env.DATABASE_URL) {
   console.warn('[server] DATABASE_URL not set — starting in offline/static mode. ' +

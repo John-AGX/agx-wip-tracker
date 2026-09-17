@@ -322,6 +322,31 @@ test('a guest note is capped', () => {
   assert.ok(s.length < 2200, 'stamp length ' + s.length);
 });
 
+// ── 1.29: the field-log stamp carries when, and how many photos ─────────
+test('without opts the stamp is byte-identical to the one guest_log already holds', () => {
+  const share = { recipient_name: 'Jose' };
+  assert.strictEqual(st.guestNoteStamp('resident refused access', share),
+    '\n\n— Jose (via shared link): resident refused access');
+  assert.strictEqual(st.guestNoteStamp('x', share, undefined), '\n\n— Jose (via shared link): x');
+  assert.strictEqual(st.guestNoteStamp('x', share, {}), '\n\n— Jose (via shared link): x');
+});
+
+test('with opts.when the stamp carries the time and the photo count', () => {
+  const share = { recipient_name: 'Jose' };
+  const when = 'Sep 15, 2026, 2:32 PM EDT';
+  assert.strictEqual(st.guestNoteStamp('resident refused access', share, { when: when, photoCount: 2 }),
+    '\n\n— Jose (via shared link) · Sep 15, 2026, 2:32 PM EDT · 2 photos: resident refused access');
+  assert.strictEqual(st.guestNoteStamp('one shot', share, { when: when, photoCount: 1 }),
+    '\n\n— Jose (via shared link) · Sep 15, 2026, 2:32 PM EDT · 1 photo: one shot');
+  assert.strictEqual(st.guestNoteStamp('no shots', share, { when: when }),
+    '\n\n— Jose (via shared link) · Sep 15, 2026, 2:32 PM EDT: no shots');
+  assert.strictEqual(st.guestNoteStamp('no shots', share, { when: when, photoCount: 0 }),
+    '\n\n— Jose (via shared link) · Sep 15, 2026, 2:32 PM EDT: no shots');
+  // Still never anonymous, still nothing for a blank note.
+  assert.ok(st.guestNoteStamp('x', null, { when: when }).indexOf('shared link') > -1);
+  assert.strictEqual(st.guestNoteStamp('  ', share, { when: when, photoCount: 3 }), null);
+});
+
 test('a guest name is write-once — it cannot retroactively re-attribute', () => {
   assert.strictEqual(st.guestNameUpdate('Ana', 'Someone Else'), null);
   assert.strictEqual(st.guestNameUpdate('', 'Ana'), 'Ana');
@@ -399,6 +424,110 @@ test('progress is defined for a ticket with no tasks at all', () => {
 test('a closed ticket reports terminal', () => {
   assert.strictEqual(st.ticketProgress({ status: 'closed' }, []).terminal, true);
   assert.strictEqual(st.ticketProgress({ status: 'cancelled' }, []).terminal, true);
+});
+
+// ── 1.29: the punch list's shape, the crew's undo, the open-buildings line ──
+describe('who may change a work order once the office has decided', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const SRC = path.join(__dirname, '..', 'server', 'services', 'service-tickets.js');
+  const made = [];
+  afterAll(() => { for (const p of made) { try { fs.unlinkSync(p); } catch (_) {} } });
+
+  // Copy the module to a temp file with one CRLF-normalised anchor replaced.
+  function mutant(find, replace) {
+    const src = fs.readFileSync(SRC, 'utf8').replace(/\r\n/g, '\n');
+    if (src.split(find).length !== 2) throw new Error('anchor not found');
+    const p = path.join(os.tmpdir(), '_p86_st_' + process.pid + '_' + Math.random().toString(36).slice(2, 9) + '.js');
+    fs.writeFileSync(p, src.replace(find, replace), 'utf8');
+    made.push(p);
+    return require(p);
+  }
+
+  const LOCKED = "This work order is <s>. Reopen it before changing its punch list.";
+  const UNDO = "The office has already acted on this work order, so it can't be taken back from this link. Call the office if work is still needed.";
+
+  test('subtaskStructureWritable: approved, closed and cancelled are locked; every other status is open', () => {
+    for (const s of st.TICKET_STATUSES) {
+      const r = st.subtaskStructureWritable(s);
+      if (s === 'approved' || s === 'closed' || s === 'cancelled') {
+        assert.deepStrictEqual(r, { ok: false, reason: LOCKED.replace('<s>', s) }, s);
+      } else {
+        assert.deepStrictEqual(r, { ok: true }, s);
+      }
+    }
+    assert.deepStrictEqual(st.subtaskStructureWritable(' Approved '),
+      { ok: false, reason: LOCKED.replace('<s>', 'approved') });
+  });
+
+  const own = (over) => Object.assign({
+    actor_kind: 'share', share_id: 'sh1',
+    detail: { from: 'in_progress', to: 'work_complete', reason: 'marked_complete' },
+  }, over || {});
+
+  test('crewMayUndoFinish: a link may take back ITS OWN Mark work complete', () => {
+    assert.deepStrictEqual(st.crewMayUndoFinish('work_complete', own(), 'sh1'), { ok: true });
+    // detail as JSON text, the way a driver that does not parse jsonb hands it back
+    assert.deepStrictEqual(st.crewMayUndoFinish('work_complete',
+      own({ detail: JSON.stringify({ to: 'work_complete', reason: 'marked_complete' }) }), 'sh1'), { ok: true });
+  });
+
+  test('crewMayUndoFinish: anything the office or another link did is refused, with the exact sentence', () => {
+    const refused = { ok: false, reason: UNDO };
+    const cases = {
+      'another link': st.crewMayUndoFinish('work_complete', own({ share_id: 'sh2' }), 'sh1'),
+      'the office': st.crewMayUndoFinish('work_complete', own({ actor_kind: 'user', share_id: null }), 'sh1'),
+      'the last building (all_subtasks_done)': st.crewMayUndoFinish('work_complete',
+        own({ detail: { from: 'in_progress', to: 'work_complete', reason: 'all_subtasks_done' } }), 'sh1'),
+      'no event at all': st.crewMayUndoFinish('work_complete', null, 'sh1'),
+      'no longer work_complete': st.crewMayUndoFinish('approved', own(), 'sh1'),
+      'in progress': st.crewMayUndoFinish('in_progress', own(), 'sh1'),
+      'a move away from work_complete': st.crewMayUndoFinish('work_complete',
+        own({ detail: { from: 'work_complete', to: 'in_progress', reason: 'marked_complete' } }), 'sh1'),
+      'no share id to compare': st.crewMayUndoFinish('work_complete', own({ share_id: null }), null),
+      'unreadable detail': st.crewMayUndoFinish('work_complete', own({ detail: '{not json' }), 'sh1'),
+    };
+    for (const k of Object.keys(cases)) assert.deepStrictEqual(cases[k], refused, k);
+  });
+
+  test('openSubtasksLine pluralises the count and the verb', () => {
+    assert.strictEqual(st.openSubtasksLine(18, 21, 'building'), "18 of 21 buildings aren't");
+    assert.strictEqual(st.openSubtasksLine(1, 21, 'building'), "1 of 21 buildings isn't");
+    assert.strictEqual(st.openSubtasksLine(1, 1, 'building'), "1 of 1 building isn't");
+    assert.strictEqual(st.openSubtasksLine(2, 3, 'subtask') + ' done yet.', "2 of 3 subtasks aren't done yet.");
+  });
+
+  test('MUTANT: without the share-id check, another link could take back a finish', () => {
+    const M = mutant(
+      "  if (shareId == null || lastEvent.share_id == null || String(lastEvent.share_id) !== String(shareId)) return refuse;\n",
+      '');
+    assert.strictEqual(M.crewMayUndoFinish('work_complete', own({ share_id: 'sh2' }), 'sh1').ok, true,
+      'the mutant must let another link through, or the real test proves nothing');
+    assert.strictEqual(st.crewMayUndoFinish('work_complete', own({ share_id: 'sh2' }), 'sh1').ok, false);
+  });
+
+  test('MUTANT: without the reason check, the last building ticking over could be undone from a link', () => {
+    const M = mutant("  if (d.to !== 'work_complete' || d.reason !== 'marked_complete') return refuse;\n",
+      "  if (d.to !== 'work_complete') return refuse;\n");
+    const ev = own({ detail: { to: 'work_complete', reason: 'all_subtasks_done' } });
+    assert.strictEqual(M.crewMayUndoFinish('work_complete', ev, 'sh1').ok, true);
+    assert.strictEqual(st.crewMayUndoFinish('work_complete', ev, 'sh1').ok, false);
+  });
+
+  test('MUTANT: leaving approved out of the lock lets an approved punch list change', () => {
+    const M = mutant("const STRUCTURE_LOCKED_STATUSES = Object.freeze(['approved', 'closed', 'cancelled']);",
+      "const STRUCTURE_LOCKED_STATUSES = Object.freeze(['closed', 'cancelled']);");
+    assert.strictEqual(M.subtaskStructureWritable('approved').ok, true);
+    assert.strictEqual(st.subtaskStructureWritable('approved').ok, false);
+  });
+
+  test('MUTANT: one photo must not read "1 photos"', () => {
+    const M = mutant("(n === 1 ? ' photo' : ' photos')", "' photos'");
+    const opts = { when: 'Sep 15, 2026, 2:32 PM EDT', photoCount: 1 };
+    assert.ok(M.guestNoteStamp('x', { recipient_name: 'A' }, opts).indexOf('· 1 photos:') > -1);
+    assert.ok(st.guestNoteStamp('x', { recipient_name: 'A' }, opts).indexOf('· 1 photo:') > -1);
+  });
 });
 
 // ── Ids ─────────────────────────────────────────────────────────────────

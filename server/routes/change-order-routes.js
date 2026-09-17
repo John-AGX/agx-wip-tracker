@@ -223,6 +223,9 @@ router.post('/jobs/:jobId/change-orders', requireAuth, requireCapability('ESTIMA
     delete data.linked_node_id;
     delete data.created_at;
     delete data.updated_at;
+    // Server-owned link to a work order: only a start from the work order
+    // (services/service-ticket-change-order.js) writes it, never a body.
+    delete data.fromWorkOrder;
     // Ensure a lines[] array always exists so downstream readers can
     // safely .map / .filter without null-guards.
     if (!Array.isArray(data.lines)) data.lines = [];
@@ -265,7 +268,7 @@ router.put('/change-orders/:id', requireAuth, requireCapability('ESTIMATES_EDIT'
     // Org-scoped: a CO outside the caller's org reads as 404 (no
     // cross-tenant edit by guessed id).
     const existing = await pool.query(
-      `SELECT co.status, co.is_locked FROM job_change_orders co
+      `SELECT co.status, co.is_locked, co.data->'fromWorkOrder' AS from_work_order FROM job_change_orders co
          JOIN jobs j ON j.id = co.job_id
         WHERE co.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
       [id, req.user.organization_id]
@@ -293,6 +296,13 @@ router.put('/change-orders/:id', requireAuth, requireCapability('ESTIMATES_EDIT'
     delete data.linked_node_id;
     delete data.created_at;
     delete data.updated_at;
+    // Server-owned link to a work order: the body can neither set, change nor
+    // erase it (an editor that never loaded it would otherwise wipe it on its
+    // next save), so the stored value always goes back on.
+    delete data.fromWorkOrder;
+    let storedLink = existing.rows[0].from_work_order;
+    if (typeof storedLink === 'string') { try { storedLink = JSON.parse(storedLink); } catch (_) { storedLink = null; } }
+    if (storedLink && typeof storedLink === 'object' && !Array.isArray(storedLink)) data.fromWorkOrder = storedLink;
     if (!Array.isArray(data.lines)) data.lines = [];
     // Identity, same as the create door: a stored line that arrived without an
     // id is uneditable in the editor, so heal it on the way through rather

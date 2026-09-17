@@ -309,6 +309,10 @@
   // long-standing flat opt-out the email senders check), push writes
   // prefs.push[key]. Falls back to the local EVENT_DEFS (email-only) if the
   // catalog endpoint is unreachable.
+  //
+  // Rows carrying a `group` print one heading above the group. The work-order
+  // keys (group 'Work orders'): ticket_approval, ticket_waiting,
+  // ticket_assignment, ticket_problem, ticket_crew_activity, work_order_digest.
   function paintPrefs(prefs) {
     var pane = document.getElementById('p86-acct-prefs');
     if (!pane) return;
@@ -329,7 +333,17 @@
   function renderPrefRows(pane, prefs, events, pushConfigured) {
     var pushPrefs = prefs.push || {};
     var html = '';
+    var prevGroup = null;
     events.forEach(function(ev) {
+      // A group heading ("Work orders") above the first row of each group, and
+      // a rule where a group ends so the rows after it don't read as part of it.
+      var group = ev.group ? String(ev.group) : null;
+      if (group && group !== prevGroup) {
+        html += '<div class="p86-pref-group" style="margin:12px 0 4px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--text-dim,#888);">' + escapeHTML(group) + '</div>';
+      } else if (!group && prevGroup) {
+        html += '<div class="p86-pref-group-end" style="margin:8px 0 4px;border-top:1px solid var(--border,rgba(128,128,128,.25));"></div>';
+      }
+      prevGroup = group;
       var ch = ev.channels || { email: true, push: false };
       var toggles = '';
       if (ch.email) {

@@ -384,6 +384,13 @@ function isImageMime(mime) {
 // SAME content sniffing + SVG sanitization as this PM path. Imported by
 // name so every existing call site (and __internals__) is unchanged.
 const { sniffMimeFromBytes, sanitizeSvg, mimeFamilyMatches, resolveStoredMime } = require('../util/attachment-mime');
+// Work Orders 1.29. HEIC_REFUSAL / isHeicUpload: a HEIC photo on a task or a
+// work order is refused with words the crew can act on (sharp here cannot
+// decode HEVC). upload-dedupe: a photo sent twice on a bad signal is stored
+// once. work-order-photo-guard: photo proof on a work order stays put.
+const { HEIC_REFUSAL, isHeicUpload } = require('../util/attachment-mime');
+const { uploadIdFrom, findUpload, isUploadIdConflict, discardKeys } = require('../services/upload-dedupe');
+const photoGuard = require('../services/work-order-photo-guard');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -449,6 +456,20 @@ function callerOrgId(req) {
 // which is the decision already shipped on the users side (guardUserTarget).
 function notFound(res) { return res.status(404).json({ error: 'Not found' }); }
 
+// The office person changing a work-order photo, as the ticket timeline names
+// them (services/work-order-photo-guard.js writes photo_removed /
+// photo_retagged with it).
+function officeActor(req) {
+  return { kind: 'user', userId: (req.user && req.user.id) || null, label: (req.user && req.user.name) || null };
+}
+// A photo-guard refusal (409 photo_locked | last_completion_photo) or an apply
+// that found no row, as the door answers it.
+function sendGuardRefusal(res, outcome) {
+  const body = { error: outcome.error };
+  if (outcome.code) body.code = outcome.code;
+  return res.status(outcome.status || 409).json(body);
+}
+
 // ── WORK-ORDER PHOTOS: THE TICKET'S PARENT DECIDES ──────────────────────────
 // readCapForEntity / writeCapForEntity answer 'service_ticket' with the COARSE
 // list only (services/attachment-entity-access.js says why). Without this call
@@ -463,23 +484,89 @@ function notFound(res) { return res.status(404).json({ error: 'Not found' }); }
 // not-found for EVERY caller, instead of a 403 for some roles that would
 // confirm the work order exists.
 //
+// ── AND SO DOES A BUILDING'S ────────────────────────────────────────────────
+// A work order's buildings are TASK rows, and their before / completion photos
+// go on entity_type 'task' (POST /api/attachments/task/:id). That is where the
+// crew's proof actually lives, and it was reached by the coarse 'task' rule
+// alone — JOBS_* plus LEADS_VIEW / LEADS_EDIT, org-wide, with no question about
+// the job (services/attachment-entity-access.js). The same hole this function
+// closed for the ticket's own photos was therefore still open on the other
+// half: a leads-only user could list and download every building photo on a job
+// they cannot open, and a PM off that job could move a completion photo onto a
+// lead of their own or delete it outright — on an in-progress work order the
+// 1.29 photo guard does not lock, so the proof left the record and the office
+// saw only a photo_removed line by someone who was never on the job.
+//
+// So a task that IS a work order's building is answered by the TICKET's rule
+// too, resolved through the photo guard (task -> service_ticket_id -> ticket,
+// strictly in the caller's org). A task on no ticket — an ordinary to-do, a job
+// task — resolves to null and keeps its own rule, untouched; so does a task row
+// that names no tenant, which cannot resolve a work order at all and whose
+// tenancy the attachment predicate above has already answered.
+const WORK_ORDER_TASK_ENTITY_TYPE = 'task';
+
+// The ticket whose rule governs this entity, with the building it came from, or
+// null for an entity that is not work-order proof (no query runs for a type
+// that cannot be one).
+async function workOrderTicketFor(req, entityType, entityId) {
+  if (entityType === TICKET_ENTITY_TYPE) return { ticketId: entityId, taskId: null };
+  if (entityType !== WORK_ORDER_TASK_ENTITY_TYPE) return null;
+  const wo = await photoGuard.workOrderOf(
+    pool,
+    { entity_type: entityType, entity_id: entityId },
+    callerOrgId(req),
+    { lock: false }
+  );
+  if (!wo || !wo.ticket) return null;
+  return { ticketId: wo.ticket.id, taskId: wo.task ? wo.task.id : null };
+}
+
+// THE ONE EXCEPTION, and only on the WRITE half of a BUILDING.
+// services/service-ticket-subtask-door.js doneVerdict lets a building's
+// ASSIGNEE finish it without any right to edit the job, and finishing a
+// building means uploading (and fixing) its completion photo — so the ticket's
+// write rule alone would refuse a flow 1.29 ships. Nobody can hand themselves
+// this: assignVerdict lets only someone who can edit the parent decide who a
+// building is assigned to. It is an exception to WHO MAY WRITE, not to what may
+// happen to the proof — the photo guard still refuses to let the assignee take
+// the last completion photo off a building that is done, or any photo off an
+// approved or closed work order.
+//
+// The org predicate is the caller's proven organization, not the task's.
+async function isBuildingAssignee(req, taskId) {
+  const orgId = callerOrgId(req);
+  const uid = req.user && req.user.id != null ? Number(req.user.id) : null;
+  if (taskId == null || orgId == null || uid == null || !Number.isFinite(uid)) return false;
+  const r = await pool.query(
+    'SELECT assignee_user_id FROM tasks WHERE id = $1 AND organization_id = $2',
+    [String(taskId), orgId]
+  );
+  const row = r.rows[0];
+  if (!row || row.assignee_user_id == null) return false;
+  return Number(row.assignee_user_id) === uid;
+}
+
 // Returns true when the door may continue. On false the response is written:
 // `notFoundBody` is the exact body the door already gives an absent id, and
 // `forbiddenBody` the 403 body the door already gives a capability miss.
-// Every other entity type returns true without a query — their behaviour is
-// deliberately untouched.
+// Every entity type that cannot be work-order proof returns true without a
+// query — their behaviour is deliberately untouched.
 async function ticketParentOk(req, res, entityType, entityId, mode, notFoundBody, forbiddenBody) {
-  if (entityType !== TICKET_ENTITY_TYPE) return true;
+  const wo = await workOrderTicketFor(req, entityType, entityId);
+  if (!wo) return true;
   const verdict = await ticketAttachmentAccess({
     // An arrow, not pool.query itself: node-pg's query is a method and loses
     // its `this` when handed around bare.
     query: (sql, params) => pool.query(sql, params),
     user: req.user,
-    ticketId: entityId,
+    ticketId: wo.ticketId,
     orgId: callerOrgId(req),
     mode,
   });
   if (verdict.ok === true) return true;
+  // The building's assignee, on the write half only. Asked AFTER the ticket
+  // rule, so it can only ever widen a refusal to an allow — never the reverse.
+  if (mode === 'write' && wo.taskId != null && await isBuildingAssignee(req, wo.taskId)) return true;
   if (verdict.hidden) res.status(404).json(notFoundBody || { error: 'Not found' });
   else res.status(403).json(forbiddenBody || { error: 'Forbidden' });
   return false;
@@ -769,7 +856,7 @@ router.post('/bulk-tag', requireAuth, async (req, res) => {
     if (!add.length && !remove.length) return res.status(400).json({ error: 'nothing to do' });
 
     const { rows } = await pool.query(
-      'SELECT id, entity_type, entity_id, organization_id, uploaded_by, tags, filename FROM attachments WHERE id = ANY($1::text[])',
+      'SELECT id, entity_type, entity_id, organization_id, uploaded_by, tags, filename, mime_type FROM attachments WHERE id = ANY($1::text[])',
       [ids]
     );
     if (rows.length !== ids.length) {
@@ -833,9 +920,44 @@ router.post('/bulk-tag', requireAuth, async (req, res) => {
 
     // Single query with CASE — avoids N round-trips.
     const ids2 = updates.map(function(u) { return u.id; });
-    await Promise.all(updates.map(function(u) {
-      return pool.query('UPDATE attachments SET tags = $1::jsonb WHERE id = $2', [u.next, u.id]);
-    }));
+    // WORK-ORDER PROOF (1.29). A batch that turns building photos from
+    // completion into before (or back) changes what the building proves, so
+    // the whole batch runs under the ticket lock and the photo guard's
+    // verdict: refused on an approved or closed work order, or when a done
+    // building would be left with no completion photo. Nothing is written on a
+    // refusal. Any other batch keeps the plain writes below.
+    const rowsById = new Map(rows.map(function(r) { return [String(r.id), r]; }));
+    const retagged = updates.filter(function(u) {
+      return photoGuard.retagChangesProof(rowsById.get(String(u.id)), JSON.parse(u.next));
+    });
+    // Every row shares one parent (enforced above), so one look says whether
+    // that parent is a work-order building.
+    if (retagged.length && await photoGuard.isWorkOrderPhoto(pool, rowsById.get(String(retagged[0].id)), orgId)) {
+      const nextTags = {};
+      retagged.forEach(function(u) { nextTags[String(u.id)] = JSON.parse(u.next); });
+      const outcome = await photoGuard.changeWorkOrderPhotos(pool, {
+        orgId,
+        atts: retagged.map(function(u) { return rowsById.get(String(u.id)); }),
+        op: 'retag',
+        nextTags,
+        actor: officeActor(req),
+        apply: async function(client) {
+          for (const u of updates) {
+            const up = await client.query(
+              'UPDATE attachments SET tags = $1::jsonb WHERE id = $2 AND organization_id = $3',
+              [u.next, u.id, orgId]
+            );
+            if (!up.rowCount) return { ok: false, status: 404, error: 'One or more attachments not found' };
+          }
+          return { ok: true };
+        },
+      });
+      if (!outcome.ok) return sendGuardRefusal(res, outcome);
+    } else {
+      await Promise.all(updates.map(function(u) {
+        return pool.query('UPDATE attachments SET tags = $1::jsonb WHERE id = $2', [u.next, u.id]);
+      }));
+    }
 
     // Activity log for project entities + bump the org_tags catalog
     // for any newly-added tag values across the batch.
@@ -1008,13 +1130,35 @@ router.get('/recent', requireAuth, async (req, res) => {
     // held only while every row it could list was one the reader might open
     // anyway, and two kinds are not:
     //
-    //   1. WORK-ORDER PHOTOS. A service_ticket attachment is readable only
-    //      through its ticket's PARENT rule (services/attachment-entity-
-    //      access.js ticketAttachmentAccess), which a flat list cannot ask
-    //      row by row. So the widget does not list them at all, for anyone:
-    //      the photo roster and the ticket's own detail are where they
-    //      belong, and both run the rule. The type is a bound parameter, not
-    //      a literal, so the name comes from the one constant the rule uses.
+    //   1. WORK-ORDER PHOTOS — BOTH HALVES. A service_ticket attachment is
+    //      readable only through its ticket's PARENT rule (services/
+    //      attachment-entity-access.js ticketAttachmentAccess), which a flat
+    //      list cannot ask row by row. So the widget does not list them at
+    //      all, for anyone: the photo roster and the ticket's own detail are
+    //      where they belong, and both run the rule. The type is a bound
+    //      parameter, not a literal, so the name comes from the one constant
+    //      the rule uses.
+    //
+    //      A work order's proof is not only the ticket's own site photos.
+    //      Its BUILDINGS are task rows, and the crew's before / completion
+    //      photos hang on entity_type 'task' — the same rows ticketParentOk
+    //      above now resolves through the photo guard and answers with the
+    //      TICKET's rule. Excluding one half and not the other left the
+    //      whole gap open by another name: a caller refused a building's
+    //      completion photo at every door still read it here, with its
+    //      unsigned thumb_url / web_url / original_url. A type name cannot
+    //      say which task is a building, so the second arm asks the tasks
+    //      table: a task row carrying a service_ticket_id IS a work order's
+    //      building, and its photos are listed to NOBODY, exactly as the
+    //      ticket's own are. A task on no ticket — an ordinary to-do, a job
+    //      task — is untouched and its uploads keep appearing.
+    //
+    //      TENANCY, both ways. The subquery is org-scoped, and to TWO orgs
+    //      on purpose: the caller's, and the attachment row's own stamp. The
+    //      caller's alone would have read a foreign task as "not a building"
+    //      and handed org 2's completion photo to org 1 through the uploader
+    //      tolerance arm below. Task ids are unique, so at most one row can
+    //      match either way and the second org can only ever EXCLUDE more.
     //
     //   2. A ROW WITH NO UPLOADER. The guest work-order and task-share doors
     //      write uploaded_by NULL, and the column's ON DELETE SET NULL writes
@@ -1033,11 +1177,15 @@ router.get('/recent', requireAuth, async (req, res) => {
          FROM attachments a
          LEFT JOIN users u ON u.id = a.uploaded_by
         WHERE a.entity_type <> $3
+          AND NOT EXISTS (SELECT 1 FROM tasks t
+                           WHERE a.entity_type = $4 AND t.id = a.entity_id
+                             AND t.service_ticket_id IS NOT NULL
+                             AND t.organization_id IN ($2, a.organization_id))
           AND ((a.uploaded_by IS NOT NULL AND (u.organization_id = $2 OR u.organization_id IS NULL))
                OR (a.uploaded_by IS NULL AND a.organization_id = $2))
         ORDER BY a.uploaded_at DESC
         LIMIT $1`,
-      [limit, orgId, TICKET_ENTITY_TYPE]
+      [limit, orgId, TICKET_ENTITY_TYPE, WORK_ORDER_TASK_ENTITY_TYPE]
     );
     res.json({ attachments: rows });
   } catch (e) {
@@ -1091,6 +1239,18 @@ router.post('/:entityType/:entityId',
         return res.status(400).json({ error: 'Invalid entity reference' });
       }
 
+      // IDEMPOTENT UPLOADS (1.29). On a bad signal a photo can land here and its
+      // answer never reach the page, so the page sends it again with the same
+      // upload_id. The second arrival finds the row the first one wrote — in
+      // the caller's org, on this same parent — and answers "already added"
+      // BEFORE the count cap, sharp or storage run. A malformed id is ignored.
+      const uploadId = uploadIdFrom(req.body);
+      const uploadOrgId = callerOrgId(req);
+      if (uploadId && uploadOrgId != null) {
+        const prior = await findUpload(pool, { orgId: uploadOrgId, entityType, entityId, uploadId });
+        if (prior) return res.json({ ok: true, attachment: prior, duplicate: true });
+      }
+
       // Cap the per-entity total — keeps one runaway upload from hogging
       // storage. Done in JS since the count needs a SELECT either way.
       const countRes = await pool.query(
@@ -1136,6 +1296,17 @@ router.post('/:entityType/:entityId',
       // container back to the real format using the extension.
       const mime = resolveStoredMime(ext, claimedMime, sniffedMime);
 
+      // HEIC / HEIF (1.29). The installed sharp cannot decode it, so the image
+      // pipeline below used to fail with "Input buffer contains unsupported
+      // image format". A confident byte sniff decides; with none, the name
+      // does. On a task or a work order a photo is proof of work, so it is
+      // refused with a sentence the person can act on. Anywhere else it is
+      // kept as a plain file (original only, no thumbnail or web copy).
+      const heic = sniffedMime ? isHeicUpload(mime, null) : isHeicUpload(mime, req.file.originalname);
+      if (heic && (entityType === 'task' || entityType === 'service_ticket')) {
+        return res.status(415).json({ error: HEIC_REFUSAL });
+      }
+
       // SVG sandbox — scrub <script>, <foreignObject>, on*= handlers,
       // and javascript: URIs before storage. Prevents stored XSS via
       // user-uploaded SVGs rendered by other users' browsers.
@@ -1147,7 +1318,7 @@ router.post('/:entityType/:entityId',
       let thumbKey = null, webKey = null, originalKey;
       let width = null, height = null;
 
-      if (isImageMime(mime)) {
+      if (isImageMime(mime) && !heic) {
         // Image pipeline: resize to thumb (200×200 cover) + web (1600px max)
         // + keep original. .rotate() honors EXIF orientation so phone photos
         // stop coming in sideways; the resized variants drop EXIF entirely
@@ -1308,34 +1479,52 @@ router.post('/:entityType/:entityId',
       // worse than an unstamped one, because a forged row arrives correctly
       // stamped and becomes indistinguishable from real data. That is what
       // 79b52ed did to `messages` and a243b76 did to `job_subs`.
-      const ins = await pool.query(
-        `INSERT INTO attachments
-         (id, entity_type, entity_id, filename, mime_type, size_bytes,
-          width, height,
-          thumb_url, web_url, original_url,
-          thumb_key, web_key, original_key,
-          position, uploaded_by, extracted_text, extracted_text_at,
-          markup_of, include_in_proposal, folder,
-          caption, tags, annotations,
-          lat, lng, geo_accuracy, geo_source, taken_at, folder_id,
-          organization_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23::jsonb,$24::jsonb,$25,$26,$27,$28,$29,$30,
-                 (SELECT organization_id FROM users WHERE id = $16))
-         RETURNING *`,
-        [
-          id, entityType, entityId,
-          req.file.originalname, mime, req.file.size,
-          width, height,
-          thumbUrl, webUrl, originalUrl,
-          thumbKey, webKey, originalKey,
-          position, req.user.id, extractedText, extractedAt,
-          markupOf, includeInProposal, folder,
-          initialCaption,
-          JSON.stringify(initialTags),
-          JSON.stringify(initialAnnotations),
-          lat, lng, geoAccuracy, geoSource, takenAt, folderId
-        ]
-      );
+      //
+      // client_upload_id ($31) is the upload id above. The unique partial index
+      // uq_attachments_client_upload is the backstop for two arrivals that both
+      // passed the lookup: the loser's INSERT raises 23505, its freshly stored
+      // bytes are discarded, and it answers with the winner's row.
+      let ins;
+      try {
+        ins = await pool.query(
+          `INSERT INTO attachments
+           (id, entity_type, entity_id, filename, mime_type, size_bytes,
+            width, height,
+            thumb_url, web_url, original_url,
+            thumb_key, web_key, original_key,
+            position, uploaded_by, extracted_text, extracted_text_at,
+            markup_of, include_in_proposal, folder,
+            caption, tags, annotations,
+            lat, lng, geo_accuracy, geo_source, taken_at, folder_id,
+            client_upload_id,
+            organization_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23::jsonb,$24::jsonb,$25,$26,$27,$28,$29,$30,$31,
+                   (SELECT organization_id FROM users WHERE id = $16))
+           RETURNING *`,
+          [
+            id, entityType, entityId,
+            req.file.originalname, mime, req.file.size,
+            width, height,
+            thumbUrl, webUrl, originalUrl,
+            thumbKey, webKey, originalKey,
+            position, req.user.id, extractedText, extractedAt,
+            markupOf, includeInProposal, folder,
+            initialCaption,
+            JSON.stringify(initialTags),
+            JSON.stringify(initialAnnotations),
+            lat, lng, geoAccuracy, geoSource, takenAt, folderId,
+            uploadId
+          ]
+        );
+      } catch (e) {
+        if (!uploadId || !isUploadIdConflict(e)) throw e;
+        await discardKeys(storage, [thumbKey, webKey, originalKey]);
+        const winner = uploadOrgId != null
+          ? await findUpload(pool, { orgId: uploadOrgId, entityType, entityId, uploadId })
+          : null;
+        if (!winner) throw e;
+        return res.json({ ok: true, attachment: winner, duplicate: true });
+      }
       res.json({ ok: true, attachment: ins.rows[0] });
 
       // Project activity: log every new photo so the timeline reflects
@@ -1366,7 +1555,7 @@ router.post('/:entityType/:entityId',
       // Anthropic Files upload happens in the background. The lazy
       // fallback in ai-routes.js catches anything that misses (e.g.
       // server restart between INSERT and upload).
-      if (mime && mime.startsWith('image/')) {
+      if (mime && mime.startsWith('image/') && !heic) {
         setImmediate(() => {
           eagerUploadAttachmentById(id).catch(e => {
             console.warn('[attachments POST] background Anthropic Files upload failed for', id, ':', e.message);
@@ -1408,6 +1597,43 @@ router.delete('/:id', requireAuth, async (req, res) => {
     } else {
       const ok = await hasCapability(req.user, cap);
       if (!ok) return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    // WORK-ORDER PHOTOS (1.29): proof stays put. A photo on a work order, or on
+    // one of its buildings, is deleted only through the photo guard: under the
+    // ticket lock, refused on an approved or closed work order and when it is
+    // the last completion photo on a done building. The ROW goes first and
+    // commits; only then are the blobs destroyed, so a refusal (or a failed
+    // commit) can never leave a photo row pointing at bytes that are gone.
+    // Any other attachment (a document, a plain task's photo) keeps the code
+    // below exactly.
+    if (await photoGuard.isWorkOrderPhoto(pool, att, callerOrgId(req))) {
+      const guardOrgId = callerOrgId(req);
+      const outcome = await photoGuard.changeWorkOrderPhotos(pool, {
+        orgId: guardOrgId,
+        atts: [att],
+        op: 'delete',
+        actor: officeActor(req),
+        apply: async function(client) {
+          const del = await client.query(
+            'DELETE FROM attachments WHERE id = $1 AND organization_id = $2',
+            [att.id, guardOrgId]
+          );
+          return del.rowCount ? { ok: true } : { ok: false, status: 404, error: 'Attachment not found' };
+        },
+      });
+      if (!outcome.ok) return sendGuardRefusal(res, outcome);
+      const committedKeys = [att.thumb_key, att.web_key, att.original_key].filter(Boolean);
+      await Promise.all(committedKeys.map(function(k) {
+        return Promise.resolve()
+          .then(function() { return storage.delete(k); })
+          .catch(function(e) { console.warn('[attachments DELETE] blob delete failed for', k, ':', e && e.message); });
+      }));
+      if (att.anthropic_file_id) {
+        try { await deleteAnthropicFile(att.anthropic_file_id); }
+        catch (e) { console.warn('[attachments DELETE] Anthropic file cleanup failed for', att.id, ':', e && e.message); }
+      }
+      return res.json({ ok: true });
     }
 
     // Documents have null thumb/web keys — only delete what's actually stored.
@@ -1554,8 +1780,35 @@ router.put('/:id', requireAuth, async (req, res) => {
     }
     if (!sets.length) return res.json({ ok: true, unchanged: true });
     params.push(req.params.id);
-    // SAFE: column names are hardcoded conditionals above (caption / position / include_in_proposal / folder); no user-keys loop.
-    await pool.query(`UPDATE attachments SET ${sets.join(', ')} WHERE id = $${p}`, params);
+    // WORK-ORDER PROOF (1.29). New tags that turn a building photo from
+    // completion into before (or back) change what the building proves, so the
+    // save runs under the ticket lock and the photo guard's verdict: refused on
+    // an approved or closed work order, or when a done building would be left
+    // with no completion photo. before -> completion is only logged. Every
+    // other save keeps the plain statement.
+    if (nextTagsForCatalog && photoGuard.retagChangesProof(att, nextTagsForCatalog) &&
+        await photoGuard.isWorkOrderPhoto(pool, att, callerOrgId(req))) {
+      const guardOrgId = callerOrgId(req);
+      const outcome = await photoGuard.changeWorkOrderPhotos(pool, {
+        orgId: guardOrgId,
+        atts: [att],
+        op: 'retag',
+        nextTags: nextTagsForCatalog,
+        actor: officeActor(req),
+        apply: async function(client) {
+          // SAFE: the same hardcoded column list as the statement below, plus the tenant predicate.
+          const up = await client.query(
+            `UPDATE attachments SET ${sets.join(', ')} WHERE id = $${p} AND organization_id = $${p + 1}`,
+            params.concat([guardOrgId])
+          );
+          return up.rowCount ? { ok: true } : { ok: false, status: 404, error: 'Attachment not found' };
+        },
+      });
+      if (!outcome.ok) return sendGuardRefusal(res, outcome);
+    } else {
+      // SAFE: column names are hardcoded conditionals above (caption / position / include_in_proposal / folder); no user-keys loop.
+      await pool.query(`UPDATE attachments SET ${sets.join(', ')} WHERE id = $${p}`, params);
+    }
     res.json({ ok: true });
 
     // Log caption + tag edits on project photos. Other PUT mutations
@@ -1692,12 +1945,35 @@ async function moveAttachment(req, res) {
     const folderRaw = (req.body && typeof req.body.folder === 'string') ? req.body.folder : 'general';
     const folder = sanitizeFolderPath(folderRaw);
 
-    await pool.query(
-      `UPDATE attachments
-         SET entity_type = $1, entity_id = $2, folder = $3, position = $4
-         WHERE id = $5`,
-      [newType, newId, folder, startPos, req.params.id]
-    );
+    // WORK-ORDER PROOF (1.29). Moving a photo off a work order takes it out of
+    // the record exactly as a delete does, so a work-order photo moves only
+    // through the photo guard (same verdicts, timeline photo_removed
+    // how:'moved'). Every other source keeps the plain statement.
+    if (await photoGuard.isWorkOrderPhoto(pool, att, orgId)) {
+      const outcome = await photoGuard.changeWorkOrderPhotos(pool, {
+        orgId,
+        atts: [att],
+        op: 'move',
+        actor: officeActor(req),
+        apply: async function(client) {
+          const mv = await client.query(
+            `UPDATE attachments
+               SET entity_type = $1, entity_id = $2, folder = $3, position = $4
+               WHERE id = $5 AND organization_id = $6`,
+            [newType, newId, folder, startPos, att.id, orgId]
+          );
+          return mv.rowCount ? { ok: true } : { ok: false, status: 404, error: 'Attachment not found' };
+        },
+      });
+      if (!outcome.ok) return sendGuardRefusal(res, outcome);
+    } else {
+      await pool.query(
+        `UPDATE attachments
+           SET entity_type = $1, entity_id = $2, folder = $3, position = $4
+           WHERE id = $5`,
+        [newType, newId, folder, startPos, req.params.id]
+      );
+    }
     res.json({ ok: true, entity_type: newType, entity_id: newId, folder, position: startPos });
   } catch (e) {
     console.error('POST /api/attachments/:id/move error:', e);

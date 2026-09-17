@@ -127,6 +127,10 @@ const KEY_CLASSES = {
   ai_spend_alert_log: {
     klass: 'internal', read: null, write: null,
     note: 'ai-spend-cron.js alert ledger. Writing it suppresses spend alerts.'
+  },
+  work_order_notify_log: {
+    klass: 'internal', read: null, write: null,
+    note: 'work-order-notify-cron.js morning digest ledger ({fires: {"digest|<uid>|<localDate>": ms}}). Writing it suppresses work-order digests and waiting reminders platform-wide.'
   }
 };
 

@@ -410,7 +410,13 @@
     // or unsaved edits (see refresh() in js/service-tickets.js); that guard
     // lives in the module because only the module knows what "unsaved" means
     // for a work order.
-    service_ticket: surfaceEntry(['p86ServiceTickets.refresh'])
+    //
+    // The Service Tickets page (js/work-orders-board.js, sidebar → Operations)
+    // lists the same tickets across every job and lead, so it refreshes too,
+    // from here and only from here (p86ServiceTickets.refresh does not call
+    // it, so one write is one refetch). Off screen it only marks itself stale
+    // and refetches on the next visit.
+    service_ticket: surfaceEntry(['p86ServiceTickets.refresh', 'p86WorkOrdersBoard.refresh'])
   };
 
   // Tasks, to-dos, reminders and calendar events all land on the same four

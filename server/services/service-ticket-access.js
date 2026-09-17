@@ -160,16 +160,25 @@ async function mayAccessTicketParent(opts) {
 //   jobs 'none'     — no job-parented tickets
 //   leads true/false — lead-only tickets (job_id IS NULL)
 // A caller with no usable identity gets nothing, not everything.
-function listVisibility(user, injectedHasCapability) {
+//
+// mode 'read' (the default) is "tickets I can open"; 'write' is "tickets I can
+// edit" — JOBS_EDIT_ANY / JOBS_EDIT_OWN / LEADS_EDIT — which is what "awaiting
+// MY approval" means on the Work Orders page and in the morning digest. For
+// 'write' + 'assigned' the SQL arm must require the job's owner or an 'edit'
+// grant, the same split mayAccessTicketParent draws above. An unknown mode
+// shows nothing.
+function listVisibility(user, injectedHasCapability, mode) {
   const none = { jobs: 'none', leads: false, userId: null };
+  const m = mode == null ? 'read' : normalizeMode(mode);
+  if (!m) return none;
   if (!user) return none;
   const hasCap = loadHasCapability(injectedHasCapability);
   if (!hasCap) return none;
   const uid = userIdOf(user);
   let jobs = 'none';
-  if (hasCap(user, JOB_CAPS.read.wide)) jobs = 'all';
-  else if (hasCap(user, JOB_CAPS.read.narrow) && uid != null) jobs = 'assigned';
-  return { jobs, leads: !!hasCap(user, LEAD_CAPS.read), userId: uid };
+  if (hasCap(user, JOB_CAPS[m].wide)) jobs = 'all';
+  else if (hasCap(user, JOB_CAPS[m].narrow) && uid != null) jobs = 'assigned';
+  return { jobs, leads: !!hasCap(user, LEAD_CAPS[m]), userId: uid };
 }
 
 module.exports = {

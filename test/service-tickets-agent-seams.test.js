@@ -34,6 +34,11 @@ const path = require('path');
 const ROOT = path.join(__dirname, '..');
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8').replace(/\r\n/g, '\n');
 const TICKETS_SRC = read('js/service-tickets.js');
+// 1.29: the office ticket screen runs on the extension registry, the field
+// editor kit and the status move helper, loaded before it as index.html does.
+const EXT_SRC = read('js/service-ticket-ext.js');
+const EDITOR_SRC = read('js/service-ticket-editor.js');
+const MOVE_SRC = read('js/service-ticket-status-move.js');
 const REFRESH_SRC = read('js/refresh.js');
 const VOICE_SRC = read('js/voice-output.js');
 const JOB_LABEL = require('../js/job-label.js');
@@ -84,13 +89,18 @@ function env(opts) {
     },
   };
   const caps = new Set(o.caps || ['LEADS_EDIT']);
-  window.p86Auth = { hasCapability: (k) => caps.has(k) };
+  window.p86Auth = { hasCapability: (k) => caps.has(k), getUser: () => ({ id: 10 }) };
   window.p86AI = o.noAi ? undefined : { ask: jest.fn(), open: jest.fn() };
   window.p86Toast = jest.fn();
   window.alert = jest.fn();
   window.confirm = jest.fn();
   delete window.p86ServiceTickets;
   delete window.renderJobServiceTickets;
+  delete window.p86StExt;
+  delete window.p86ConfirmTernary;
+  window.eval(EXT_SRC);
+  window.eval(EDITOR_SRC);
+  window.eval(MOVE_SRC);
   return { store, calls, job };
 }
 
@@ -209,6 +219,9 @@ describe('refresh() repaints whichever surface is mounted', () => {
 async function driveOpenTicket(src, how) {
   const e = env();
   e.store.job.push(TICKET());
+  // Collapsing a ticket with a typed scope now asks first; this drive answers
+  // Discard changes, which is the collapse the refresh was waiting for.
+  window.p86ConfirmTernary = jest.fn(() => Promise.resolve('secondary'));
   load(src);
   await openJob(e);
   const detail = await expandFirst();
@@ -225,7 +238,10 @@ async function driveOpenTicket(src, how) {
   if (how === 'focused') scope.blur();
   document.querySelector('#job-service-tickets .p86-st-row-head').click();
   await flush();
-  return { refetchedNow, scopeSurvived, refetchedAfterCollapse: jobCalls(e.calls) > n0 };
+  return {
+    refetchedNow, scopeSurvived, refetchedAfterCollapse: jobCalls(e.calls) > n0,
+    asked: window.p86ConfirmTernary.mock.calls.map((c) => c[0] && c[0].title),
+  };
 }
 
 describe('an open ticket holding edits is not repainted, and the refresh is not lost', () => {
@@ -237,7 +253,14 @@ describe('an open ticket holding edits is not repainted, and the refresh is not 
 
   test('...and the refused refresh runs once the ticket is collapsed', async () => {
     const r = await driveOpenTicket(TICKETS_SRC, 'typed-and-left');
+    // The collapse asked about the typed scope before it went.
+    expect(r.asked).toEqual(['Save your changes first?']);
     expect(r.refetchedAfterCollapse).toBe(true);
+  });
+
+  test('a focused but unchanged scope collapses without a question', async () => {
+    const r = await driveOpenTicket(TICKETS_SRC, 'focused');
+    expect(r.asked).toEqual([]);
   });
 
   test('the caret in the scope refuses the repaint too', async () => {
@@ -577,8 +600,10 @@ describe('mutation: each guard, broken, turns its drive wrong', () => {
     const m = mutate(TICKETS_SRC,
       '} else if (f.value !== f.defaultValue) {\n        return true;\n      }', '}');
     const r = await driveOpenTicket(m, 'typed-and-left');
+    // The refetch is the guard failing. Since 1.29 the list rebuild carries the
+    // open ticket across and updates it in place, so the typed scope itself is
+    // no longer the casualty it was.
     expect(r.refetchedNow).toBe(true);
-    expect(r.scopeSurvived).toBe(false);
   });
 
   test('M4 per-option defaultSelected → every untouched select reads dirty and no open ticket ever refreshes', async () => {
@@ -633,8 +658,9 @@ describe('mutation: each guard, broken, turns its drive wrong', () => {
   });
 
   test('M11 no registry entry → an approved ticket moves no surface', async () => {
-    const m = mutate(REFRESH_SRC, "service_ticket: surfaceEntry(['p86ServiceTickets.refresh'])",
-      "service_ticket_gone: surfaceEntry(['p86ServiceTickets.refresh'])");
+    // Anchored on the entry's key only: the Work Orders page adds its own
+    // refresh to the same entry.
+    const m = mutate(REFRESH_SRC, 'service_ticket: surfaceEntry([', 'service_ticket_gone: surfaceEntry([');
     const r = await driveRegistryBundle(m);
     expect(r.ticketRefreshes).toBe(0);
     expect(r.leadCalls).toBe(1);
@@ -694,8 +720,9 @@ describe('mutation: each guard, broken, turns its drive wrong', () => {
     const m = mutate(TICKETS_SRC, 'if (minted && minted.value) return true;', '');
     const r = await driveMintedLink(m);
     expect(r.linkShownBefore).toBe(ONE_TIME_LINK);
+    // The refetch is the guard failing (the rebuild now carries the open
+    // ticket, share panel included, across the repaint).
     expect(r.refetchedNow).toBe(true);
-    expect(r.linkAfterRefresh).not.toBe(ONE_TIME_LINK);
   });
 
   test('M19 no changeset fallback → a Live Writer update is announced as a new ticket', () => {

@@ -19,6 +19,14 @@
 //                  replyTo false. Held at the source because the digest
 //                  assembly is a dozen queries deep; the scope rule itself is
 //                  held in email-send-identity.test.js.
+//   work orders    work-order-notify-cron: the crew-activity batch and the
+//                  morning digest carry senderOrg / organizationId of the
+//                  TICKET's org; the digest has replyTo false; the crew batch's
+//                  Reply-To is the one link's recipient_email re-read by share
+//                  id WITH the org predicate, and false for two links. (The
+//                  standalone waiting reminder's replyTo false is driven in
+//                  work-order-notify-cron.test.js, where business days are
+//                  real — the clock is pinned here.)
 
 const fs = require('fs');
 const path = require('path');
@@ -233,6 +241,102 @@ describe('cert-expiry-cron runOnce', () => {
     await certCron.runOnce({ force: true });
     log.mockRestore();
     expect(mockQueries.some((q) => /FROM users/.test(q.sql))).toBe(false);
+  });
+});
+
+describe('work-order-notify-cron runOnce', () => {
+  const workOrderCron = require('../server/work-order-notify-cron');
+  const ORG = { id: 7, name: 'AG Exteriors', timezone: 'America/New_York', settings: {} };
+  const TICKET = {
+    id: 'c1', organization_id: 7, title: 'Gate punch list', job_id: 'j1', lead_id: null, status: 'in_progress',
+    created_by: 1, assignee_user_id: null, completed_at: null, updated_at: null,
+  };
+  const OWNER = { id: 1, name: 'Owner', email: 'owner@agx.com', role: 'admin', timezone: null, notification_prefs: {} };
+  const WAITING = Object.assign({}, TICKET, {
+    id: 'w1', title: 'Waiting punch list', status: 'work_complete', completed_at: '2026-09-10 12:00:00',
+    scheduled_iso: null, due_iso: null, waited_a_day: 1,
+  });
+
+  function handler(shares) {
+    return (text, params) => {
+      if (/^SELECT id, name, timezone, settings FROM organizations WHERE archived_at IS NULL/.test(text)) return { rows: [ORG] };
+      if (/^SELECT name FROM organizations WHERE id = \$1$/.test(text)) {
+        return { rows: String(params[0]) === '7' ? [{ name: 'AG Exteriors' }] : [] };
+      }
+      // Step A: nothing stale, nothing due.
+      if (/FROM service_tickets t WHERE t\.organization_id = \$1 AND t\.status = 'work_complete'/.test(text)) return { rows: [] };
+      if (/FROM service_tickets WHERE organization_id = \$1 AND status = 'work_complete' AND archived_at IS NULL AND approval_notified_at IS NULL/.test(text)) return { rows: [] };
+      // Step C: one work order with crew activity.
+      if (/FROM service_tickets t JOIN service_ticket_events e/.test(text)) return { rows: [{ id: 'c1', organization_id: 7 }] };
+      if (/^UPDATE service_tickets SET crew_activity_prev_notified_at/.test(text)) return { rows: [TICKET], rowCount: 1 };
+      if (/FROM service_ticket_events e JOIN service_tickets t/.test(text)) {
+        return { rows: shares.map((s, i) => ({
+          id: 'e' + i, kind: 'subtask_completed', actor_kind: 'share', share_id: s.id, actor_label: 'Marco',
+          detail: { task_id: 't1', title: 'Bldg 1' }, created_at: '2026-09-14 13:00:00',
+        })) };
+      }
+      if (/^SELECT id, created_by, recipient_email FROM service_ticket_shares WHERE id = ANY\(\$1::text\[\]\) AND organization_id = \$2$/.test(text)) {
+        return { rows: shares.filter((s) => params[0].includes(s.id) && String(params[1]) === '7') };
+      }
+      if (/^SELECT owner_id FROM jobs WHERE id = \$1 AND organization_id = \$2$/.test(text)) return { rows: [{ owner_id: 1 }] };
+      if (/FROM users WHERE id = ANY\(\$1::int\[\]\) AND organization_id = \$2 AND active = TRUE/.test(text)) return { rows: [OWNER] };
+      if (/data->>'jobNumber' AS job_number, data->>'title' AS title, data->>'address'/.test(text)) return { rows: [{ job_number: 'M1', title: 'Gate job' }] };
+      // Step D: one person in their morning, one work order waiting on them.
+      if (/^SELECT id, timezone FROM users WHERE organization_id = \$1 AND active = TRUE/.test(text)) return { rows: [{ id: 1, timezone: null }] };
+      if (/CAST\(scheduled_for AS TEXT\) AS scheduled_iso/.test(text)) return { rows: [WAITING] };
+      if (/^SELECT id, owner_id, data->>'jobNumber' AS job_number, data->>'title' AS title FROM jobs/.test(text)) {
+        return { rows: [{ id: 'j1', owner_id: 1, job_number: 'M1', title: 'Gate job' }] };
+      }
+      if (/^SELECT id, name, email, role, timezone, notification_prefs FROM users WHERE organization_id = \$1 AND active = TRUE ORDER BY id ASC$/.test(text)) {
+        return { rows: String(params[0]) === '7' ? [OWNER] : [] };
+      }
+      return { rows: [], rowCount: 0 };
+    };
+  }
+
+  async function run(shares) {
+    mockHandler = handler(shares);
+    const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      // Monday 10:00 in New York (the clock mock above pins the hour and day).
+      return await workOrderCron.runOnce({ now: new Date('2026-09-14T14:00:00Z'), deps: { hasCapability: () => true } });
+    } finally {
+      log.mockRestore();
+    }
+  }
+
+  test('the crew batch is sent as the ticket’s org; Reply-To is the one link’s address, re-read in that org', async () => {
+    const out = await run([{ id: 'sh1', created_by: 1, recipient_email: 'marco@crew.test' }]);
+    expect(out.crew.batches).toBe(1);
+    const crew = mockSendEmailCalls.filter((o) => o.tag === 'ticket_crew_activity');
+    expect(crew).toHaveLength(1);
+    expect(crew[0].senderOrg).toEqual({ id: 7, name: 'AG Exteriors' });
+    expect(crew[0].organizationId).toBe(7);
+    expect(crew[0].replyTo).toBe('marco@crew.test');
+    const lookup = mockQueries.find((q) => /FROM service_ticket_shares WHERE id = ANY/.test(q.sql));
+    expect(lookup.sql).toContain('AND organization_id = $2');
+    expect(lookup.params).toEqual([['sh1'], 7]);
+  });
+
+  test('two crew links in one batch: no Reply-To', async () => {
+    await run([
+      { id: 'sh1', created_by: 1, recipient_email: 'marco@crew.test' },
+      { id: 'sh2', created_by: 1, recipient_email: 'jose@crew.test' },
+    ]);
+    const crew = mockSendEmailCalls.filter((o) => o.tag === 'ticket_crew_activity');
+    expect(crew.map((o) => o.replyTo)).toEqual([false]);
+  });
+
+  test('the morning digest is sent as the org, metered to it, with replyTo false', async () => {
+    const out = await run([]);
+    expect(out.digest.digests).toBe(1);
+    const digest = mockSendEmailCalls.filter((o) => o.tag === 'work_order_digest');
+    expect(digest).toHaveLength(1);
+    expect(digest[0].to).toBe('owner@agx.com');
+    expect(digest[0].senderOrg).toEqual({ id: 7, name: 'AG Exteriors' });
+    expect(digest[0].organizationId).toBe(7);
+    expect(digest[0].replyTo).toBe(false);
+    expect(digest[0].subject).toBe('[1 to approve] Work orders needing you today (1)');
   });
 });
 

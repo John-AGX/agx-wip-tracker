@@ -95,6 +95,7 @@ const LEDGER = {
   'js/job-workflow-ui.js:fmtDate': { cal: true, pg: true, inst: true, why: 'workflow item due_date is DATE; isOverdue in the same file shares toLocalDay' },
   'js/jobs-hub.js:fmtDate': { cal: true, pg: true, inst: true, why: 'renders workflow/bill due_date (DATE) alongside updated_at' },
   'js/leads.js:fmtDate': { cal: true, pg: true, inst: true, why: 'lead grid renders DATE columns and timestamps in the same switch' },
+  'js/work-orders-board.js:fmtDate': { cal: true, pg: true, inst: true, why: 'copy of the service-tickets.js reference; renders due_date and scheduled_for (DATE); last crew activity uses fmtAgo' },
 
   // CALENDAR DAYS ONLY. Slice-style by design: taking the day as written is
   // exactly right, and converting it would introduce Bug A. They mishandle an

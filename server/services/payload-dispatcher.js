@@ -23,6 +23,15 @@ const { resolveTz, localWallClockToInstant, DEFAULT_TZ, isCalendarDay } = requir
 // module stays loadable with no JWT_SECRET, which several suites depend on.
 const ticketRules = require('./service-tickets');
 const ticketAccess = require('./service-ticket-access');
+// The work order's punch-list rules: after task_adds the ticket is recounted
+// the same way every other door that adds a building recounts it. Requires
+// only ./service-tickets, so this module stays loadable with no JWT_SECRET.
+const workOrder = require('./service-ticket-workorder');
+// PHOTO PROOF STAYS PUT (Work Orders 1.29, A2). 86's two photo writes that can
+// take proof away from a work order — photo_updates retags and attach_files
+// moves — run through the same guard as the attachment doors. It requires only
+// ./service-tickets and ./service-ticket-workorder, so it loads JWT-free too.
+const photoGuard = require('./work-order-photo-guard');
 // Change orders / purchase orders / invoices live in their own tables; this
 // is the same write layer the REST routes use, taking our transaction client.
 const jobFin = require('./job-financials');
@@ -227,7 +236,7 @@ const TASK_PRIORITIES = new Set(['low', 'normal', 'high', 'urgent']);
 // The writable set is the REST editor's allow-list (EDITABLE_FIELDS in
 // routes/service-ticket-routes.js) MINUS scope_approved, plus the two parent
 // pointers a create needs. It is restated here rather than imported because
-// that list lives in a routes file, and routes/* require ../auth at load —
+// that list lives in a routes file, and route modules require ../auth at load —
 // which would make this module unloadable without a JWT_SECRET.
 const SERVICE_TICKET_FIELDS = new Set([
   'title', 'job_id', 'lead_id', 'scope_proposed', 'internal_notes',
@@ -3560,6 +3569,72 @@ async function dispatchSchedule(dbClient, target, refTable, ctx) {
   };
 }
 
+/**
+ * attachWorkOrderBlocks(dbClient, ids, orgId) -> string[]
+ *
+ * WORK-ORDER PROOF (1.29, corrected 1.30). Of the attachment ids attach_files
+ * was handed, the ones that must NOT move because nothing here can prove they
+ * are not a work order's proof. Fail-closed, and narrow:
+ *
+ *   * WITH an org, only UN-STAMPED rows are in question. A stamped row moves on
+ *     its own `organization_id = $4` after checkWorkOrderPhotos has ruled on
+ *     it; an un-stamped one is never offered to the guard (the guard's SELECT
+ *     carries `organization_id = $2`), so it is stopped here instead.
+ *   * WITH NO org at all, nothing can be proven about a work order, so every
+ *     work-order image is blocked whatever its stamp.
+ *   * Either way the block is for an image on a TICKET or on a BUILDING. A
+ *     photo on a plain job to-do — a task on no work order — is proof of
+ *     nothing, and POST /api/attachments/:id/move has always moved it.
+ *
+ * WHY IT EXISTS. The 1.29 clause asked `entity_type NOT IN ('task',
+ * 'service_ticket')` inside the UPDATE. That predicate cannot tell a building
+ * from an ordinary to-do without a join, so it also froze legacy un-stamped
+ * photos on plain tasks (the guest task-share upload wrote uploaded_by NULL
+ * and, until 2026-09-13, organization_id NULL) and rolled the WHOLE payload
+ * back with "They do not exist, or are not yours" — false on both counts, and
+ * contradicting the comment in the arm itself. This asks the question the guard
+ * asks: work-order-photo-guard.js loadWorkOrderTask, service_ticket_id IS NOT
+ * NULL.
+ *
+ * NO ORGANIZATION PREDICATE ON THE `tasks` LOOKUP, deliberately. It asks
+ * whether the parent is a building AT ALL; scoping it to the caller's org would
+ * make ANOTHER org's building read as a plain to-do and let an un-stamped photo
+ * be pulled across — the exact hole the clause exists to close. It reads one
+ * column for ids the caller already named, and every answer it can give is a
+ * refusal. The UPDATE it feeds carries the tenant predicate.
+ *
+ * Resolved in JS rather than as a sub-select on `tasks` inside the UPDATE so
+ * the statement still names one table — folding the join in would make every
+ * caller of attach_files, most of which never touch a work order, depend on it.
+ */
+async function attachWorkOrderBlocks(dbClient, ids, orgId) {
+  if (!Array.isArray(ids) || !ids.length) return [];
+  const cand = await dbClient.query(
+    `SELECT id, entity_type, entity_id FROM attachments
+      WHERE id = ANY($1::text[])
+        AND entity_type IN ('task', 'service_ticket')
+        AND LOWER(COALESCE(mime_type, '')) LIKE 'image/%'
+        AND ($2::int IS NULL OR organization_id IS NULL)`,
+    [ids, orgId == null ? null : orgId]);
+  if (!cand.rows.length) return [];
+  const blocked = new Set();
+  const taskIds = new Set();
+  for (const row of cand.rows) {
+    if (row.entity_type === 'service_ticket') blocked.add(String(row.id));
+    else taskIds.add(String(row.entity_id));
+  }
+  if (taskIds.size) {
+    const wo = await dbClient.query(
+      `SELECT id FROM tasks WHERE id = ANY($1::text[]) AND service_ticket_id IS NOT NULL`,
+      [Array.from(taskIds)]);
+    const onWorkOrder = new Set(wo.rows.map((r) => String(r.id)));
+    for (const row of cand.rows) {
+      if (row.entity_type === 'task' && onWorkOrder.has(String(row.entity_id))) blocked.add(String(row.id));
+    }
+  }
+  return Array.from(blocked);
+}
+
 // ──────────────────────────────────────────────────────────────────
 // dispatchSystem — platform-side writes (skill packs, field tools,
 // entity links). watch_ops + staff_agent_ops removed 2026-07-03 —
@@ -3860,13 +3935,56 @@ async function dispatchSystem(dbClient, target, refTable, ctx) {
         if (!(await attachmentEntityInOrg(dbClient, et, String(eid), afOrgId))) {
           throw new Error(`attach_files: ${et} ${eid} is not available to attach to. Nothing was saved.`);
         }
+        // WORK-ORDER PROOF (1.29). Moving a photo off a building or a ticket
+        // takes it out of the work order's record exactly as a delete does, so
+        // the rows on a work-order entity go through the photo guard first —
+        // under the ticket lock, the same verdicts POST /api/attachments/:id/move
+        // gets (photo_locked on an approved or closed work order,
+        // last_completion_photo for a done building), and photo_removed
+        // how:'moved' on the timeline after COMMIT. Photos on any other parent,
+        // and photos on a task that is on no work order, are untouched by it.
+        //
+        // The guard sees the rows stamped with this org. The UPDATE below then
+        // moves a work-order image only when it carries that same stamp, so an
+        // un-stamped one cannot slip past the look: it misses, and the
+        // completeness refusal below names it. With no org at all nothing can
+        // be proven about a work order, so no work-order image moves.
+        const afActor = { kind: 'agent', userId: (ctx && ctx.userId) || null, label: null };
+        if (afOrgId) {
+          const onWorkOrders = await dbClient.query(
+            `SELECT id, entity_type, entity_id, mime_type, tags FROM attachments
+              WHERE id = ANY($1::text[]) AND organization_id = $2 AND entity_type IN ('task', 'service_ticket')`,
+            [ids, afOrgId]);
+          if (onWorkOrders.rows.length) {
+            const refusal = await photoGuard.checkWorkOrderPhotos(dbClient, {
+              orgId: afOrgId,
+              atts: onWorkOrders.rows,
+              op: 'move',
+              actor: afActor,
+              afterCommit: ctx && Array.isArray(ctx.afterCommit) ? ctx.afterCommit : undefined,
+            });
+            if (refusal) {
+              throw ticketRefusal(
+                `attach_files: attachment ${refusal.attachment_id}: ${refusal.error} Nothing was saved.`,
+                { code: refusal.code, field_path: `system.link_ops[${ops.link_ops.indexOf(lk)}].attachment_ids`,
+                  received: String(refusal.attachment_id) });
+            }
+          }
+        }
+        // The rows this op may not move: see attachWorkOrderBlocks above. They
+        // are named ids rather than a predicate on the UPDATE because the
+        // question — is this parent a BUILDING or an ordinary to-do — needs a
+        // join the UPDATE should not carry.
+        const afBlocked = await attachWorkOrderBlocks(dbClient, ids, afOrgId);
         const ar = afOrgId
           ? await dbClient.query(
-              `UPDATE attachments SET entity_type = $1, entity_id = $2 WHERE id = ANY($3::text[]) AND (organization_id = $4 OR organization_id IS NULL) RETURNING id`,
-              [et, String(eid), ids, afOrgId])
+              `UPDATE attachments SET entity_type = $1, entity_id = $2 WHERE id = ANY($3::text[]) AND (organization_id = $4 OR organization_id IS NULL)
+                  AND NOT (id = ANY($5::text[])) RETURNING id`,
+              [et, String(eid), ids, afOrgId, afBlocked])
           : await dbClient.query(
-              `UPDATE attachments SET entity_type = $1, entity_id = $2 WHERE id = ANY($3::text[]) RETURNING id`,
-              [et, String(eid), ids]);
+              `UPDATE attachments SET entity_type = $1, entity_id = $2 WHERE id = ANY($3::text[])
+                  AND NOT (id = ANY($4::text[])) RETURNING id`,
+              [et, String(eid), ids, afBlocked]);
         // A write that touched fewer rows than it was handed is a REFUSAL, not
         // a success. Driven before this line existed: ghost ids returned
         // count:0 and the summary still read "System: ~1 updated" (that string
@@ -3987,6 +4105,91 @@ function normalizeReportCoverPage(raw) {
   return out;
 }
 
+// ── A BUILDING'S PHOTO ANSWERS TO ITS WORK ORDER, TOO (1.30) ──────────────
+// A work order's buildings are TASK rows and their before / completion photos
+// go on entity_type 'task' — that is where the crew's proof actually lives.
+// Both agent-side photo gates in this file asked their ticket question of
+// `entity_type === TICKET_ENTITY_TYPE` alone, so a BUILDING photo took the
+// unguarded half and fell through to the coarse 'task' capability
+// (JOBS_EDIT_ANY / JOBS_EDIT_OWN / LEADS_EDIT, org-wide, no question about the
+// job). Executed: the Scribe retagged and captioned crew photos on a work
+// order the approver may not even open, and a Scribe-written report attached
+// those photos and handed their storage URLs to whoever opened the report.
+// The same hole routes/attachment-routes.js closed on the HTTP doors
+// (ticketParentOk / workOrderTicketFor), on the other two doors.
+//
+// The resolution is the photo guard's own: work-order-photo-guard.js
+// workOrderOf, task -> service_ticket_id -> ticket, strictly inside one org,
+// and no query at all for an entity type that cannot be work-order proof. A
+// task on NO ticket — an ordinary to-do, a job task, a legacy un-stamped image
+// on a plain task — resolves to null and keeps its own rule, untouched.
+const WORK_ORDER_TASK_ENTITY_TYPE = 'task';
+
+/**
+ * workOrderTicketFor(dbClient, att, orgId) -> { ticketId, taskId } | null
+ *
+ * The ticket whose rule governs this attachment, with the building it came
+ * from, or null for a row that is not work-order proof. `orgId` scopes the
+ * task -> ticket join only; the ACCESS verdict below carries its own org
+ * predicate, so a caller who cannot prove an org still gets a refusal and
+ * never a pass.
+ */
+async function workOrderTicketFor(dbClient, att, orgId) {
+  if (!att) return null;
+  if (att.entity_type === TICKET_ENTITY_TYPE) return { ticketId: att.entity_id, taskId: null };
+  if (att.entity_type !== WORK_ORDER_TASK_ENTITY_TYPE) return null;
+  const wo = await photoGuard.workOrderOf(
+    dbClient,
+    { entity_type: att.entity_type, entity_id: att.entity_id },
+    orgId == null ? null : orgId,
+    { lock: false }
+  );
+  if (!wo || !wo.ticket) return null;
+  return { ticketId: wo.ticket.id, taskId: wo.task ? wo.task.id : null };
+}
+
+// One resolution per PARENT, not per photo: a batch captioning eight photos on
+// one building asks the join once. Only the link is memoised — the access
+// verdict is asked per row, as it was, so nothing about the existing ticket
+// half changes.
+function workOrderTicketResolver(dbClient, orgId) {
+  const seen = new Map();
+  return async function (att) {
+    if (!att || att.entity_type !== WORK_ORDER_TASK_ENTITY_TYPE) return workOrderTicketFor(dbClient, att, orgId);
+    const key = String(att.entity_id);
+    if (!seen.has(key)) seen.set(key, await workOrderTicketFor(dbClient, att, orgId));
+    return seen.get(key);
+  };
+}
+
+/**
+ * isBuildingAssignee(dbClient, taskId, orgId, actor) -> boolean
+ *
+ * THE ONE EXCEPTION, and only on the WRITE half of a BUILDING — the same one
+ * routes/attachment-routes.js isBuildingAssignee applies, for the same reason:
+ * services/service-ticket-subtask-door.js doneVerdict lets a building's
+ * ASSIGNEE finish it without any right to edit the job, and finishing a
+ * building means uploading and fixing its completion photo. Nobody can hand
+ * themselves this (assignVerdict lets only someone who may edit the parent
+ * decide who a building is assigned to), and it is an exception to WHO MAY
+ * WRITE, never to what may happen to the proof — the photo guard below still
+ * refuses to take the last completion photo off a done building or any photo
+ * off an approved or closed work order.
+ *
+ * The org predicate is the CALLER's proven organization, not the task's.
+ */
+async function isBuildingAssignee(dbClient, taskId, orgId, actor) {
+  const uid = actor && actor.id != null ? Number(actor.id) : null;
+  if (taskId == null || orgId == null || uid == null || !Number.isFinite(uid)) return false;
+  const r = await dbClient.query(
+    'SELECT assignee_user_id FROM tasks WHERE id = $1 AND organization_id = $2',
+    [String(taskId), orgId]
+  );
+  const row = r.rows[0];
+  if (!row || row.assignee_user_id == null) return false;
+  return Number(row.assignee_user_id) === uid;
+}
+
 // ── THE REPORT PHOTO RULE — THE WRITE HALF, FOR THE SCRIBE'S DOOR ─────────
 // normalizeReportSection keeps any string as a photo id, and a report hydrates
 // its section ids into storage URLs. So without this a Scribe-written report
@@ -4001,10 +4204,17 @@ function normalizeReportCoverPage(raw) {
 //     writer cannot read it. A rewrite must never strip a photo another user
 //     added — the read half decides what each reader is shown.
 //   * A NEW id is kept only if the attachment is in the REPORT's organization
-//     (strictly its organization_id, no uploader or NULL arm) and — only when
-//     it is a service_ticket attachment — the WRITER (the approver, resolved
-//     on the transaction) passes ticketAttachmentAccess in READ mode. Photos
-//     from other parents in the same org stay attachable, exactly as before.
+//     (strictly its organization_id, no uploader or NULL arm) and — when it is
+//     WORK-ORDER PROOF: a service_ticket attachment, or (1.30) a photo on one
+//     of that work order's BUILDINGS — the WRITER (the approver, resolved on
+//     the transaction) passes ticketAttachmentAccess in READ mode. Photos from
+//     other parents in the same org stay attachable, exactly as before, and so
+//     does a photo on a task that is on no work order.
+//
+//     The building's assignee exception is deliberately NOT applied here: it is
+//     an exception to who may WRITE a building's own proof (see
+//     isBuildingAssignee above), never to who may pull that proof into a report
+//     other people read.
 //   * Anything else is DROPPED, not refused: absent, foreign and unreadable
 //     ids take one path, so the stored sections and the apply summary say
 //     nothing about which of them exist. The drop is counted (a number, never
@@ -4049,15 +4259,22 @@ async function keepReadableNewReportPhotoIds(dbClient, sections, opts) {
     let actor = null;
     let actorResolved = false;
     const verdicts = new Map();
+    // The task -> ticket join runs in the REPORT's organization — the tenant
+    // the SELECT above has already proved every one of these rows belongs to.
+    // The verdict then carries the CALLER's org, so a writer whose org is not
+    // the report's (or who has none) finds no ticket there and is refused; the
+    // link lookup can only ever decide that a row IS work-order proof.
+    const ticketOf = workOrderTicketResolver(dbClient, reportOrgId);
     for (const att of r.rows) {
-      if (att.entity_type !== TICKET_ENTITY_TYPE) { readable.add(String(att.id)); continue; }
+      const wo = await ticketOf(att);
+      if (!wo) { readable.add(String(att.id)); continue; }
       if (!actorResolved) { actor = await resolveWriteActor(dbClient, opts.ctx); actorResolved = true; }
-      const ticketKey = String(att.entity_id);
+      const ticketKey = String(wo.ticketId);
       if (!verdicts.has(ticketKey)) {
         verdicts.set(ticketKey, await ticketAttachmentAccess({
           query: dbClient.query.bind(dbClient),
           user: actor,
-          ticketId: att.entity_id,
+          ticketId: wo.ticketId,
           orgId: (opts.ctx && opts.ctx.organizationId) != null ? opts.ctx.organizationId : null,
           mode: 'read',
         }));
@@ -4798,6 +5015,11 @@ async function dispatchAttachment(dbClient, target, refTable, ctx) {
   const actor = await resolveWriteActor(dbClient, ctx);
   const actorId = actor ? actor.id : null;
   const attachmentInOrg = loadAttachmentInOrg();
+  // Which work order (if any) governs each photo. The CALLER's org scopes the
+  // task -> ticket join, so another tenant's building can never resolve here;
+  // with no org at all nothing resolves and the coarse capability decides, the
+  // behaviour this arm already had.
+  const ticketOf = workOrderTicketResolver(dbClient, orgId);
 
   // Inventory of what the parent holds, in read_project_photos' own line
   // format, so a refusal and a read describe the same photos the same way.
@@ -4865,15 +5087,31 @@ async function dispatchAttachment(dbClient, target, refTable, ctx) {
     // which a leads-only approver passes on a JOB's ticket — so without this the
     // Scribe could caption crew photos on a work order the approver may not
     // even open, and a jobs-only approver would be refused their own.
-    const ticketVerdict = att.entity_type === TICKET_ENTITY_TYPE
+    //
+    // 1.30: and so does a BUILDING's photo. This asked `entity_type ===
+    // TICKET_ENTITY_TYPE` alone, which left the half the crew's before /
+    // completion proof actually lives on (entity_type 'task') on the coarse
+    // 'task' capability — org-wide, with no question about the job. See
+    // workOrderTicketFor above; a task on no work order resolves to null and
+    // keeps exactly the rule it had.
+    const wo = await ticketOf(att);
+    let ticketVerdict = wo
       ? await ticketAttachmentAccess({
         query: dbClient.query.bind(dbClient),
         user: actor,
-        ticketId: att.entity_id,
+        ticketId: wo.ticketId,
         orgId,
         mode: 'write',
       })
       : null;
+    // The building's assignee, asked AFTER the ticket rule so it can only ever
+    // widen a refusal to an allow, never the reverse — and only on a BUILDING,
+    // never on the ticket's own site photos. See isBuildingAssignee above. The
+    // two arms below are left in terms of `ticketVerdict` exactly as they were.
+    if (ticketVerdict && !ticketVerdict.ok && wo.taskId != null &&
+        await isBuildingAssignee(dbClient, wo.taskId, orgId, actor)) {
+      ticketVerdict = { ok: true };
+    }
     // A ticket that does not load in this org, or a job the narrow-tier
     // approver is not on, is `hidden`: the absent-id refusal, word for word, so
     // the op cannot be used to confirm the work order exists.
@@ -4885,8 +5123,11 @@ async function dispatchAttachment(dbClient, target, refTable, ctx) {
     // approver who holds LEADS_EDIT would be no answer at all.
     if (ticketVerdict && !ticketVerdict.ok) {
       const parentCaps = ticketAccess.capsForParentKind(ticketVerdict.kind, 'write');
+      // A building says what it is. `a task` would be true of the row and
+      // useless to the reader: the capabilities named are the WORK ORDER's.
+      const subject = wo.taskId != null ? "a work order's building" : `a ${att.entity_type}`;
       throw new PayloadValidationError(
-        `${where}: you do not have permission to edit photos on a ${att.entity_type} ` +
+        `${where}: you do not have permission to edit photos on ${subject} ` +
         `(requires ${parentCaps.length ? parentCaps.join(' or ') : 'a job or lead edit capability'}). ` +
         'Nothing was saved.',
         { code: 'missing_capability', field_path: where, received: parentCaps.join(' '), retryable: false }
@@ -4903,6 +5144,47 @@ async function dispatchAttachment(dbClient, target, refTable, ctx) {
       );
     }
     resolved.push({ att, u, where });
+  }
+
+  // ── WORK-ORDER PROOF (1.29) — before anything is written. ──
+  // Tags are a FULL REPLACE, so a list that adds 'before' turns a building's
+  // completion photo into a before photo: the proof a done building stands on,
+  // or part of an approved work order's record. The same guard PUT and
+  // bulk-tag answer to decides it, under the ticket lock: photo_locked on an
+  // approved or closed work order, last_completion_photo when a done building
+  // would be left with none. A refusal saves nothing (pass 2 has not run, and
+  // the throw rolls the payload back). photo_retagged goes on the timeline
+  // after COMMIT, through ctx.afterCommit like every other side effect here.
+  // Photos that are not work-order proof, and tag lists that leave a building
+  // photo the kind it was, never reach the guard (the bulk-tag door's filter).
+  const proofRetags = resolved.filter(({ att, u }) =>
+    Object.prototype.hasOwnProperty.call(u, 'tags') && photoGuard.retagChangesProof(att, normalizeTagsInput(u.tags)));
+  if (proofRetags.length) {
+    if (orgId == null) {
+      // The guard cannot find a work order without an org; refusing is the
+      // only answer that cannot take proof away.
+      throw ticketRefusal(
+        `${proofRetags[0].where}: a building photo cannot change between before and completion without an organization. Nothing was saved.`,
+        { code: 'missing_organization', field_path: `${proofRetags[0].where}.tags`, received: String(proofRetags[0].att.id) });
+    }
+    // Keyed by attachment id and naming every row handed over, as the guard
+    // requires; the value is the array pass 2 will write, through the same
+    // normalizer.
+    const nextTagsById = {};
+    for (const { att, u } of proofRetags) nextTagsById[String(att.id)] = normalizeTagsInput(u.tags);
+    const refusal = await photoGuard.checkWorkOrderPhotos(dbClient, {
+      orgId,
+      atts: proofRetags.map(({ att }) => att),
+      op: 'retag',
+      nextTags: nextTagsById,
+      actor: { kind: 'agent', userId: actorId, label: null },
+      afterCommit: ctx && Array.isArray(ctx.afterCommit) ? ctx.afterCommit : undefined,
+    });
+    if (refusal) {
+      const hit = proofRetags.find(({ att }) => String(att.id) === String(refusal.attachment_id)) || proofRetags[0];
+      throw ticketRefusal(`${hit.where}: ${refusal.error} Nothing was saved.`,
+        { code: refusal.code, field_path: `${hit.where}.tags`, received: String(hit.att.id) });
+    }
   }
 
   // ── PASS 2 — every id resolved and authorized; now write. ──
@@ -5334,6 +5616,14 @@ async function dispatchServiceTicket(dbClient, target, refTable, ctx) {
         'A closed or cancelled ticket is reopened in the app before anything on it changes. Nothing was saved.',
         { code: 'ticket_terminal', field_path: 'entity_id', received: before.status });
     }
+    // An APPROVED work order's punch list is the record of what was approved.
+    // Buildings are added to it only after the office reopens it — the rule
+    // every other door that adds a building follows. Refused before any write.
+    if (taskAdds.length && !ticketRules.subtaskStructureWritable(before.status).ok) {
+      throw ticketRefusal(
+        'This service ticket is approved. Its punch list is changed in the app after it is reopened. Nothing was saved.',
+        { code: 'ticket_approved', field_path: 'task_adds', received: before.status });
+    }
   }
   // ticketValuePresent, not `!= null`: '' clears the assignee (stored NULL),
   // and proving it would look up user Number('') === 0 and refuse a clear.
@@ -5437,8 +5727,39 @@ async function dispatchServiceTicket(dbClient, target, refTable, ctx) {
     });
   }
 
+  // THE TICKET FOLLOWS ITS BUILDINGS. A building added to a work order that is
+  // awaiting approval sends it back to In progress, with a strict timeline row
+  // on this transaction — the same recount the REST doors run. `before` is the
+  // row loaded FOR UPDATE above.
+  if (op === 'update' && taskAdds.length) {
+    await workOrder.recountTicket(dbClient, before, { kind: 'agent', userId }, 'subtask_added');
+  }
+
   const after = await loadTicketSnapshot(dbClient, ticketId, orgId, false);
   if (!after) throw new Error('service_ticket write left no row behind. Nothing was saved.');
+
+  // THE ASSIGNMENT NOTICE, after COMMIT only. The new assignee is told the
+  // work order is theirs — once, only on a real change, never the approver
+  // assigning themselves (notifyAssigned decides the last two). A dry run and a
+  // later target's refusal both roll back and never drain ctx.afterCommit.
+  const assigneeAfter = after.assignee_user_id != null && after.assignee_user_id !== ''
+    ? Number(after.assignee_user_id) : null;
+  const assigneeBefore = before && before.assignee_user_id != null && before.assignee_user_id !== ''
+    ? Number(before.assignee_user_id) : null;
+  if (assigneeAfter && assigneeAfter !== assigneeBefore && ctx && Array.isArray(ctx.afterCommit)) {
+    const snapshot = Object.assign({}, after);
+    ctx.afterCommit.push(async () => {
+      const noticePool = require('../db').pool;
+      const inflight = require('./inflight');
+      const notices = require('./work-order-notices');
+      await inflight.track(notices.notifyAssigned(noticePool, {
+        ticket: snapshot,
+        assigneeUserId: assigneeAfter,
+        previousAssigneeUserId: assigneeBefore,
+        actor: { kind: 'user', userId, label: null },
+      }), 'ticket_assignment');
+    });
+  }
   changesetRows.unshift({ entity_type: 'service_ticket', id: ticketId, before, after });
 
   // THE SUMMARY IS TITLE AND TASK COUNT, AND NOTHING ELSE. It is joined into

@@ -158,6 +158,17 @@
     return Promise.resolve(window.confirm(msg));
   }
 
+  // The toast after a bulk delete that the server refused in part or whole.
+  // One file: the server's own sentence. Several: how many went, how many
+  // were kept, and the first reason.
+  function deleteRefusedText(deleted, total, reasons) {
+    var first = reasons[0];
+    if (total === 1) return first;
+    var keptN = reasons.length;
+    return (deleted ? deleted + ' of ' + total + ' deleted. ' : 'Nothing was deleted. ') +
+      (keptN === 1 ? '1 file was kept: ' : keptN + ' files were kept: ') + first;
+  }
+
   function isImg(f) { return f && /^image\//i.test(f.mime_type || ''); }
   function isPdf(f) { return f && /pdf/i.test(f.mime_type || ''); }
 
@@ -779,8 +790,20 @@
       if (action === 'delete') {
         confirmDlg('Delete ' + ids.length + ' file(s)? This cannot be undone.').then(function (ok) {
           if (!ok) return;
-          Promise.all(ids.map(function (id) { return api().attachments.remove(id).catch(function () {}); }))
-            .then(function () { S.sel = {}; load(); toast('Deleted'); });
+          // A refusal is said, never swallowed: a work order's photo proof
+          // answers 409 { error, code: photo_locked | last_completion_photo },
+          // and that file stays where it is.
+          var kept = [];
+          Promise.all(ids.map(function (id) {
+            return api().attachments.remove(id).then(function () { return true; }, function (er) {
+              kept.push((er && er.message) || 'Delete failed');
+              return false;
+            });
+          })).then(function (res) {
+            S.sel = {}; load();
+            if (!kept.length) { toast('Deleted'); return; }
+            toast(deleteRefusedText(res.filter(Boolean).length, ids.length, kept), 'error');
+          });
         });
       } else if (action === 'move') {
         pickFolder('Move ' + ids.length + ' file(s) to…').then(function (fid) {

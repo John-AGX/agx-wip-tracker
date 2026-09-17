@@ -1,0 +1,149 @@
+/* ============================================================
+   Project 86 — Service ticket office editor (js/service-ticket-editor.js)
+   ------------------------------------------------------------
+   Linked right after css/styles.css. The phone rules at the bottom sit in the
+   same 760px block shape as styles.css and win over its .p86-st-meta
+   nth-child ordering by source order at equal specificity, so every Details
+   row sets BOTH order and grid-column.
+   ============================================================ */
+
+/* Assignee initials on a ticket row. */
+.p86-st-who {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: 0 0 auto; width: 22px; height: 22px; border-radius: 50%;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.02em; line-height: 1;
+  background: color-mix(in srgb, var(--accent, #4f8cff) 22%, transparent);
+  color: var(--text, #fff);
+  border: 1px solid color-mix(in srgb, var(--accent, #4f8cff) 45%, transparent);
+}
+
+/* Title box, first in the scope card. */
+.p86-st-title-in {
+  width: 100%; background: var(--input-bg, #101014); color: var(--text, #fff);
+  border: 1px solid var(--border, #333); border-radius: 6px;
+  padding: 7px 10px; font-size: 14px; font-weight: 600; font-family: inherit;
+}
+.p86-st-title-ro { font-weight: 600; }
+
+/* Save notes: unsaved fields, a refused field, an edit conflict. */
+.p86-st-savearea { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.p86-st-savearea:not(:has(> :not([hidden]))) { display: none; }
+/* The notes below set their own display; a hidden one must still be gone. */
+.p86-st-savearea [hidden] { display: none; }
+.p86-st-dirty {
+  display: inline-block; align-self: flex-start;
+  font-size: 11.5px; color: #d97706;
+  background: color-mix(in srgb, #d97706 14%, transparent);
+  border-radius: 999px; padding: 2px 9px;
+}
+.p86-st-save-err {
+  font-size: 12.5px; line-height: 1.45; color: var(--red, #dc2626);
+  border-left: 3px solid var(--red, #dc2626); padding: 4px 8px;
+  background: color-mix(in srgb, var(--red, #dc2626) 9%, transparent);
+  border-radius: 0 4px 4px 0;
+}
+.p86-st-conflict {
+  font-size: 12.5px; line-height: 1.45; color: var(--text, #fff);
+  border: 1px solid color-mix(in srgb, #d97706 55%, transparent);
+  background: color-mix(in srgb, #d97706 12%, transparent);
+  border-radius: 6px; padding: 8px 10px;
+}
+.p86-st-conflict-use {
+  margin-top: 6px; background: transparent; color: var(--text, #fff);
+  border: 1px solid color-mix(in srgb, #d97706 70%, transparent);
+  border-radius: 5px; padding: 3px 10px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.p86-st-conflict-use:hover { background: color-mix(in srgb, #d97706 20%, transparent); }
+.p86-st-conflict-use:focus-visible { outline: 2px solid var(--accent, #4f8cff); outline-offset: 2px; }
+
+/* A field the server refused. */
+.p86-st-detail .is-invalid,
+.p86-st-modal .is-invalid,
+[data-st-field].is-invalid {
+  border-color: var(--red, #dc2626) !important;
+  outline: 2px solid color-mix(in srgb, var(--red, #dc2626) 55%, transparent);
+  outline-offset: 1px;
+}
+
+/* Internal notes: its own card, marked office only. */
+.p86-st-internalcard { margin-top: 10px; }
+.p86-st-internalcard > .p86-st-lbl { display: flex; align-items: center; gap: 8px; }
+.p86-st-office-chip {
+  text-transform: none; letter-spacing: 0; font-size: 10.5px; font-weight: 600;
+  padding: 1px 7px; border-radius: 999px;
+  background: var(--surface2, rgba(255,255,255,0.06)); color: var(--text-dim, #888);
+  border: 1px solid var(--border, #333);
+}
+.p86-st-help { font-size: 11.5px; color: var(--text-dim, #888); margin-top: 4px; line-height: 1.4; }
+
+/* Details panel additions. */
+.p86-st-meta-v textarea.p86-st-access { font-size: 12.5px; padding: 5px 7px; }
+.p86-st-tel { color: var(--accent, #4f8cff); text-decoration: none; }
+.p86-st-tel:hover { text-decoration: underline; }
+.p86-st-assignee { max-width: 100%; }
+
+/* Address: where the crew is sent, where that comes from, and the override. */
+.p86-st-addr-eff { font-size: 12.5px; line-height: 1.4; }
+.p86-st-addr-src { display: inline-block; font-size: 10.5px; color: var(--text-dim, #888); margin-left: 2px; }
+.p86-st-addr-edit { margin-top: 6px; }
+.p86-st-addr-edit > summary {
+  cursor: pointer; font-size: 12px; color: var(--accent, #4f8cff);
+  list-style-position: inside; padding: 2px 0;
+}
+.p86-st-addr-edit > summary:focus-visible { outline: 2px solid var(--accent, #4f8cff); outline-offset: 2px; border-radius: 3px; }
+.p86-st-addr-fields { display: grid; gap: 6px; margin-top: 6px; }
+.p86-st-addr-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
+.p86-st-addr-fields input { width: 100%; }
+
+/* Restored draft after coming back to the job. */
+.p86-st-draftnote {
+  font-size: 12.5px; line-height: 1.45; color: var(--text, #fff);
+  border-left: 3px solid var(--accent, #4f8cff);
+  background: color-mix(in srgb, var(--accent, #4f8cff) 10%, transparent);
+  border-radius: 0 6px 6px 0; padding: 7px 10px; margin: 8px 0;
+}
+.p86-st-draftnote-discard {
+  margin-left: 6px; background: transparent; color: var(--accent, #4f8cff);
+  border: 0; padding: 0; font: inherit; font-weight: 600; cursor: pointer; text-decoration: underline;
+}
+
+@media (max-width: 760px) {
+  /* Internal notes is a card like Scope, and sits right under it. styles.css
+     sends every .p86-st-detail-main child but the scope card to order 2, after
+     Details and the action bar; this selector has the same specificity and
+     comes later, so the card stays at order 0, next to the Scope it follows. */
+  #job-service-tickets .p86-st-detail-main > .p86-st-internalcard { order: 0; }
+  #job-service-tickets .p86-st-internalcard {
+    margin: 0; padding: 12px 13px;
+    background: var(--surface, #17171c);
+    border: 1px solid var(--border, #333); border-radius: 12px;
+  }
+  #job-service-tickets .p86-st-scope-extra > .p86-st-lbl { margin-top: 14px; }
+  #job-service-tickets .p86-st-title-in { min-height: 44px; font-size: 16px; border-radius: 10px; padding: 8px 12px; }
+  #job-service-tickets .p86-st-detail textarea.p86-st-internal { font-size: 15px; line-height: 1.5; padding: 10px 12px; border-radius: 10px; }
+  #job-service-tickets .p86-st-meta-v textarea.p86-st-access { font-size: 15px; min-height: 64px; padding: 8px 10px; border-radius: 8px; }
+
+  /* Details order: Status; Assigned to; Scheduled | Due; Priority | Site
+     contact; Site phone; Gate code / access; Address. */
+  #job-service-tickets .p86-st-meta[data-for="status"] { order: 1; grid-column: 1 / -1; }
+  #job-service-tickets .p86-st-meta[data-for="assignee_user_id"] { order: 2; grid-column: 1 / -1; }
+  #job-service-tickets .p86-st-meta[data-for="scheduled_for"] { order: 3; grid-column: auto; }
+  #job-service-tickets .p86-st-meta[data-for="due_date"] { order: 4; grid-column: auto; }
+  #job-service-tickets .p86-st-meta[data-for="priority"] { order: 5; grid-column: auto; }
+  #job-service-tickets .p86-st-meta[data-for="site_contact_name"] { order: 6; grid-column: auto; }
+  #job-service-tickets .p86-st-meta[data-for="site_contact_phone"] { order: 7; grid-column: 1 / -1; }
+  #job-service-tickets .p86-st-meta[data-for="access_notes"] { order: 8; grid-column: 1 / -1; }
+  #job-service-tickets .p86-st-meta[data-for="address"] { order: 9; grid-column: 1 / -1; }
+  #job-service-tickets .p86-st-detail-side > .p86-st-savearea { order: 10; grid-column: 1 / -1; margin: 0; }
+
+  /* styles.css lays out the FIRST row as Status (select beside the pill); a
+     row that is not Status keeps its value as a plain block. */
+  #job-service-tickets .p86-st-meta[data-for="status"] .p86-st-meta-v { display: flex; align-items: center; gap: 8px; }
+  #job-service-tickets .p86-st-meta[data-for]:not([data-for="status"]) .p86-st-meta-v { display: block; }
+
+  #job-service-tickets .p86-st-addr-eff { font-size: 14px; }
+  #job-service-tickets .p86-st-addr-edit > summary { font-size: 14px; padding: 9px 0; }
+  #job-service-tickets .p86-st-addr-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  #job-service-tickets .p86-st-addr-row > .p86-st-addr-city { grid-column: 1 / -1; }
+  #job-service-tickets .p86-st-who { width: 24px; height: 24px; font-size: 10.5px; }
+}

@@ -257,7 +257,7 @@ describe('create: every id is new, and only what the approver may read in the re
   });
 
   test('MUTANT: skip the ticket check and a LEADS_EDIT approver attaches a JOB work-order photo', async () => {
-    const mut = mutate('      if (att.entity_type !== TICKET_ENTITY_TYPE) { readable.add(String(att.id)); continue; }',
+    const mut = mutate('      const wo = await ticketOf(att);\n      if (!wo) { readable.add(String(att.id)); continue; }',
       '      if (true) { readable.add(String(att.id)); continue; }');
     await apply(mut, createTarget([P.job_ticket_new]), LEADS);
     expect(ids(newReport().sections)).toEqual([[P.job_ticket_new]]);

@@ -147,7 +147,7 @@ describe('REGISTER 2 — the route population', () => {
     expect(R.unresolved).toEqual(['ipGenericLimiter']);
   });
 
-  test('the mount count is committed (76 app.use with a path)', () => {
+  test('the mount count is committed (80 app.use with a path)', () => {
     // 75 -> 76 on 01e9fdcd, which mounted report-share-routes. Recorded rather
     // than silently bumped: THIS IS THE LEDGER WORKING. A mount landed from
     // another session while this wave was in flight, this number moved, the
@@ -167,10 +167,21 @@ describe('REGISTER 2 — the route population', () => {
     // /api/service-ticket-share/:token for the guest. Same arrangement
     // task-share and report-share use, so a credential's two sides stay in one
     // file and can be read together.
-    expect(R.mounts + R.unresolved.length).toBe(78);
+    //
+    // 78 -> 80 with the two Work Orders (1.30) routers. Both are mounted at
+    // /api/service-tickets right after service-ticket-routes, and both are
+    // small files of their own so their doors stay out of the ticket router
+    // several units were editing at once:
+    //   78 -> 79  work-order-notice-routes       one route, Notify again
+    //   79 -> 80  service-ticket-co-print-routes five routes, the change order
+    //             start and the two printables
+    // Neither declares a path that a '/:id' shape on the router in front of it
+    // could swallow, and every route on both takes :id, so the driven count is
+    // unmoved. The routes themselves are read one by one in the next test.
+    expect(R.mounts + R.unresolved.length).toBe(80);
   });
 
-  test('the ROUTE count is committed (605 across 77 routers)', () => {
+  test('the ROUTE count is committed (615 across 79 routers)', () => {
     // THE NUMBER THE OLD SCAFFOLD DID NOT HAVE. It drove 4 routes on 1 mount
     // and nothing moved when a route was added. This fails when one is.
     //
@@ -339,12 +350,81 @@ describe('REGISTER 2 — the route population', () => {
     //      the WHERE and attachmentInOrg after — so a file removed from or
     //      moved off the job stops being served. It hands back the bytes with
     //      nosniff, no-store and a sandbox CSP, and never the storage URL.
-    expect(R.routes).toBe(605);
-    expect(R.routers).toBe(77);
+    //   605 -> 615, +10 ALL WAIVED, Work Orders (1.30). One door on the ticket
+    //      router, one on its own router, five on another, and three on the
+    //      share router. Every one is a write or takes a path parameter, so the
+    //      driven count does not move:
+    //        GET  /api/service-tickets/assignees/:kind/:parentId
+    //        POST /api/service-tickets/:id/notify-approvers                     <- own router
+    //        POST /api/service-tickets/:id/change-orders                        <- own router
+    //        GET  /api/service-tickets/:id/print/work-order                     <- own router
+    //        GET  /api/service-tickets/:id/completion-report                    <- own router
+    //        POST /api/service-tickets/:id/completion-report/send               <- own router
+    //        POST /api/service-tickets/:id/completion-report/shares/:sid/revoke <- own router
+    //        POST /api/service-ticket-share/:token/flag                         <- public door
+    //        POST /api/service-ticket-share/:token/flags/:flagId/photo          <- public door
+    //        POST /api/service-tickets/:id/flags/:flagId/resolve
+    //      ASSIGNEES fills the Assigned to picker. :kind is job or lead and
+    //      nothing else (404). The parent is proved `id = $1 AND
+    //      organization_id = $2` (assertEntityInOrg) BEFORE the WRITE access
+    //      check, so an absent parent, another tenant's and one the caller is
+    //      not on all answer 404. The users read is `organization_id = $1` on
+    //      the caller's org; each person is then asked mayAccessTicketParent in
+    //      READ mode on that parent, through services/service-ticket-assignees.js
+    //      — the same module the save door proves an assignee with, so the
+    //      picker and the save cannot disagree. Sub-portal and switched-off
+    //      accounts are dropped, and a row is id and name only: no email, phone
+    //      or role.
+    //      NOTIFY-APPROVERS (work-order-notice-routes) loads the ticket
+    //      `id = $1 AND organization_id = $2 AND archived_at IS NULL` on the org
+    //      requireOrgId proved, asks WRITE access through
+    //      services/service-ticket-access, answers 409 unless the ticket is at
+    //      work_complete, and sends through the same notifyAwaitingApproval
+    //      every arrival uses, whose 15-minute claim stops a click, a cron retry
+    //      and a crew arrival from announcing one ticket twice. The body is
+    //      ignored, and this door never falls back to the company admins.
+    //      THE FIVE CHANGE ORDER / PRINT ROUTES (service-ticket-co-print-routes)
+    //      load the ticket through one loadTicket: a NAMED column list with
+    //      `id = $1 AND organization_id = $2`, and a null org reads nothing.
+    //      internal_notes, guest_log, crew_takeoff and scope_approved are not in
+    //      that list, so a printable cannot leak a field the file never read.
+    //      The two GETs ask READ access and the three POSTs WRITE. Starting a
+    //      change order also needs ESTIMATES_EDIT and proves the job `id = $1
+    //      AND organization_id = $2` before a draft is written. The completion
+    //      report's sent links (recipient emails) come back only to a caller
+    //      with WRITE access. Every report_shares statement — the list, the
+    //      resend check, the INSERT and the revoke — carries service_ticket_id
+    //      AND organization_id; the revoke UPDATE is `id = $1 AND
+    //      service_ticket_id = $2 AND organization_id = $3`, so a share id from
+    //      another work order or tenant is the same 404 as an absent one.
+    //      THE THREE FLAG DOORS register onto the share router
+    //      (service-ticket-flag-routes.js registerFlagRoutes, called at the end
+    //      of service-ticket-share-routes.js), so both sides of the one
+    //      credential stay on one router and neither count above moves. The
+    //      two public doors have NO auth — the token is the credential — and
+    //      take organization_id, ticket_id and share_id from the rows
+    //      loadTicketShare selected, never from the body, which is read key by
+    //      key. The photo door's gate (a flag raised through THIS link on this
+    //      ticket, still open, under 2 hours old, under 6 photos) runs BEFORE
+    //      the upload parser, so a refused photo is never buffered, and the
+    //      stored photo is stamped with the ticket's own organization_id. The
+    //      office resolve door loads the ticket through loadOwnedTicket
+    //      (`organization_id = $2`), asks WRITE access, and its UPDATE is pinned
+    //      to `id AND ticket_id AND organization_id AND status = 'open'`.
+    //      NOT DRIVEN HERE, AND SAID SO: GET /api/service-tickets is still one
+    //      route and one driven entry, but ?board=1 (the Work Orders page,
+    //      services/service-ticket-board.js) runs different statements that
+    //      this param-less drive never sends. That no other tenant's work order
+    //      is listed, counted or named there — including through a child row
+    //      that points at ours — is driven by
+    //      test/service-ticket-board-routes.test.js.
+    expect(R.routes).toBe(615);
+    expect(R.routers).toBe(79);
   });
 
-  test('the DRIVEN / COUNTED-WAIVED split is committed (139 driven, 466 counted)', () => {
-    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 139, waived: 466 });
+  test('the DRIVEN / COUNTED-WAIVED split is committed (139 driven, 476 counted)', () => {
+    // 466 -> 476: the ten Work Orders (1.30) routes above, every one waived.
+    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 139, waived: 476 });
   });
 
   test('every counted-waived route is a write or needs a path parameter — nothing else is waived', () => {

@@ -13236,6 +13236,32 @@ body.light-mode .p86-wo-crew:not(.is-empty) { background: rgba(0,0,0,0.035); }
 .p86-wo-sub-actions .p86-wo-up { display: inline-flex; align-items: center; }
 .p86-wo-up .p86-wo-camico { flex: 0 0 auto; margin-right: 5px; }
 .p86-wo-up.is-busy { opacity: 0.55; pointer-events: none; }
+/* Office photo uploads (js/work-order-uploads.js). The tapped tile waits like
+   the tapped button; the status line sits under the photos with Retry and
+   Clear; the head chip shows progress while the card is collapsed; a photo
+   that just landed is ringed until the next read draws it. */
+.p86-wo-addtile.is-busy { opacity: 0.55; pointer-events: none; }
+.p86-wo-upq {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px;
+  font-size: 12px; line-height: 1.45; color: var(--text-dim, #888);
+}
+.p86-wo-upq-line { flex: 1 1 100%; min-width: 0; overflow-wrap: anywhere; }
+.p86-wo-upq.is-bad { color: var(--red, #dc2626); }
+.p86-wo-upq.is-bad .p86-wo-upq-line:first-child { font-weight: 600; }
+.p86-wo-upq-btn {
+  background: transparent; border: 0; padding: 2px 0; font: inherit; font-size: 12px; font-weight: 600;
+  color: var(--accent, #4f8cff); cursor: pointer; text-decoration: underline;
+}
+.p86-wo-upq-btn:focus-visible { outline: 2px solid var(--accent, #4f8cff); outline-offset: 2px; border-radius: 3px; }
+.p86-wo-upchip {
+  font-size: 10.5px; padding: 2px 7px; border-radius: 999px; white-space: nowrap;
+  color: var(--accent, #4f8cff); background: color-mix(in srgb, var(--accent, #4f8cff) 14%, transparent);
+}
+.p86-wo-upchip.is-bad { color: var(--red, #dc2626); background: color-mix(in srgb, var(--red, #dc2626) 14%, transparent); }
+.p86-wo-thumb.is-new { box-shadow: 0 0 0 2px var(--accent, #4f8cff); }
+/* Site photos: the crew's field-report photos, in the Scope card. */
+.p86-wo-sitephotos-sec { margin-top: 10px; }
+.p86-wo-photos.p86-wo-sitephotos { display: flex; flex-wrap: wrap; gap: 6px; }
 .p86-wo-notes { display: flex; flex-direction: column; gap: 4px; }
 .p86-wo-note { font-size: 12.5px; color: var(--text, #fff); line-height: 1.45; }
 .p86-wo-note-by { display: block; font-size: 10.5px; color: var(--text-dim, #888); }
@@ -13521,6 +13547,13 @@ body.light-mode .p86-wo-crew:not(.is-empty) { background: rgba(0,0,0,0.035); }
   }
   #job-service-tickets .p86-wo-side ul { padding-left: 18px; font-size: 13.5px; line-height: 1.5; }
   #job-service-tickets .p86-wo-photos { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  /* Site photos in the Scope card: the same three-up grid as a building. */
+  #job-service-tickets .p86-st-scopecard .p86-wo-sitephotos-sec { margin-top: 14px; }
+  #job-service-tickets .p86-wo-photos.p86-wo-sitephotos { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  /* Upload status: readable, and Retry / Clear big enough for a thumb. */
+  #job-service-tickets .p86-wo-upq { font-size: 13px; gap: 0 14px; }
+  #job-service-tickets .p86-wo-upq-btn { min-height: 40px; padding: 0 4px; font-size: 14px; }
+  #job-service-tickets .p86-wo-upchip { font-size: 11px; line-height: 1.5; padding: 2px 9px; }
   #job-service-tickets .p86-wo-thumb {
     width: auto; height: auto; aspect-ratio: 1 / 1; border-radius: 8px;
     border: 1px solid var(--cell-border, #34343e);

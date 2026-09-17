@@ -1588,7 +1588,7 @@ async function initSchema() {
     END $$;
     ALTER TABLE attachments
       ADD CONSTRAINT attachments_entity_type_check
-      CHECK (entity_type IN ('lead', 'estimate', 'client', 'job', 'sub', 'user', 'org', 'project', 'task', 'purchase_order', 'bill'));
+      CHECK (entity_type IN ('lead', 'estimate', 'client', 'job', 'sub', 'user', 'org', 'project', 'task', 'purchase_order', 'bill', 'service_ticket'));
 
     -- Folder grouping (Phase 3). Free-text folder name per attachment;
     -- 'general' is the default catch-all. Users can move files into
@@ -4712,6 +4712,11 @@ async function initSchema() {
       -- created | status_changed | field_changed | note_added | photo_added |
       -- task_added | task_completed | shared | share_revoked | share_opened |
       -- revision_proposed | revision_accepted | revision_rejected | agent_drafted
+      -- 1.29: task_removed | subtask_completed | subtask_reopened | subtask_note |
+      -- photo_removed | photo_retagged | approval_notified | approval_notice_failed |
+      -- assignee_notified | crew_emailed | flag_raised | flag_resolved | flag_notified |
+      -- change_order_started | completion_report_sent | completion_report_link_off
+      -- Office-typed reasons (status_changed.detail.note, subtask_note with sent_back) are content by design, like subtask_note.
       actor_kind        TEXT NOT NULL DEFAULT 'user',  -- user | share | agent | system
       actor_user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
       share_id          TEXT REFERENCES service_ticket_shares(id) ON DELETE SET NULL,
@@ -4837,6 +4842,98 @@ async function initSchema() {
       ON service_ticket_participants(ticket_id, user_id);
     CREATE INDEX IF NOT EXISTS idx_service_ticket_participants_user
       ON service_ticket_participants(organization_id, user_id);
+
+    -- 1.29 work orders. Every statement is idempotent. No backfill.
+
+    -- A6: an idempotency key from the uploading page, deduped per org and per parent.
+    ALTER TABLE attachments ADD COLUMN IF NOT EXISTS client_upload_id TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_attachments_client_upload
+      ON attachments (organization_id, entity_type, entity_id, client_upload_id)
+      WHERE client_upload_id IS NOT NULL;
+
+    -- A9: approval notice bookkeeping for the CURRENT arrival at Work complete.
+    -- Reset on a fresh arrival or a success. gave_up drives the office banner.
+    -- crew_activity_* is the 30-minute crew batch window, written only with NOW().
+    -- Both indexes lead with organization_id: the cron scans loop over
+    -- organizations and every candidate query is org-filtered.
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS approval_notice_attempts INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS approval_notice_last_try_at TIMESTAMPTZ;
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS approval_notice_gave_up_at TIMESTAMPTZ;
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS crew_activity_notified_at TIMESTAMPTZ;
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS crew_activity_prev_notified_at TIMESTAMPTZ;
+    CREATE INDEX IF NOT EXISTS idx_service_tickets_awaiting_notice
+      ON service_tickets(organization_id, completed_at) WHERE status = 'work_complete' AND archived_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_service_ticket_events_share_recent
+      ON service_ticket_events(organization_id, created_at) WHERE actor_kind = 'share';
+
+    -- B3: who approved or cancelled it, and when. Set only by services/work-order-review.js changeStatus.
+    -- Cleared on unapprove and on reopen. Never in publicTicket.
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS approved_at  TIMESTAMPTZ;
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS approved_by  INTEGER REFERENCES users(id) ON DELETE SET NULL;
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ;
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS cancelled_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+
+    -- B4: when someone who can edit the ticket last opened it (drives New from crew). Office only.
+    ALTER TABLE service_tickets ADD COLUMN IF NOT EXISTS office_seen_at TIMESTAMPTZ;
+
+    -- B4: problems a crew flagged. DIRECT tenancy (its own organization_id).
+    -- A quarantine-style record, like revisions. share_id and task_id are SET NULL:
+    -- revoking a link keeps the report, and a deleted task makes it ticket-level.
+    -- Photos are service_ticket attachments tagged flag, never task attachments,
+    -- so they can never count as completion proof.
+    CREATE TABLE IF NOT EXISTS service_ticket_flags (
+      id                TEXT PRIMARY KEY,
+      organization_id   INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      ticket_id         TEXT NOT NULL REFERENCES service_tickets(id) ON DELETE CASCADE,
+      task_id           TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+      share_id          TEXT REFERENCES service_ticket_shares(id) ON DELETE SET NULL,
+      author_label      TEXT,
+      category          TEXT NOT NULL,
+      note              TEXT NOT NULL,
+      attachment_ids    JSONB NOT NULL DEFAULT '[]'::jsonb,
+      status            TEXT NOT NULL DEFAULT 'open',
+      resolved_by       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      resolved_at       TIMESTAMPTZ,
+      resolution_note   TEXT,
+      client_ref        TEXT,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    DO $service_ticket_flags_category_chk$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'service_ticket_flags_category_chk') THEN
+        ALTER TABLE service_ticket_flags ADD CONSTRAINT service_ticket_flags_category_chk
+          CHECK (category IN ('no_access','extra_damage','material_short','safety','other'));
+      END IF;
+    END $service_ticket_flags_category_chk$;
+    DO $service_ticket_flags_status_chk$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'service_ticket_flags_status_chk') THEN
+        ALTER TABLE service_ticket_flags ADD CONSTRAINT service_ticket_flags_status_chk
+          CHECK (status IN ('open','resolved'));
+      END IF;
+    END $service_ticket_flags_status_chk$;
+    CREATE INDEX IF NOT EXISTS idx_service_ticket_flags_ticket
+      ON service_ticket_flags(ticket_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_service_ticket_flags_open
+      ON service_ticket_flags(organization_id, ticket_id) WHERE status = 'open';
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_service_ticket_flags_client_ref
+      ON service_ticket_flags(ticket_id, client_ref) WHERE client_ref IS NOT NULL;
+
+    -- B5: the Work Orders page sorts and filters by due date across the org.
+    CREATE INDEX IF NOT EXISTS idx_service_tickets_org_due
+      ON service_tickets(organization_id, due_date) WHERE archived_at IS NULL;
+
+    -- B9: completion reports for a work order ride the report share portal without a job_reports row.
+    -- CASCADE, not SET NULL: SET NULL would break the parent CHECK and make a ticket delete fail.
+    ALTER TABLE report_shares ALTER COLUMN report_id DROP NOT NULL;
+    ALTER TABLE report_shares ADD COLUMN IF NOT EXISTS service_ticket_id TEXT
+      REFERENCES service_tickets(id) ON DELETE CASCADE;
+    DO $report_shares_parent_chk$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'report_shares_parent_chk') THEN
+        ALTER TABLE report_shares ADD CONSTRAINT report_shares_parent_chk
+          CHECK (report_id IS NOT NULL OR service_ticket_id IS NOT NULL);
+      END IF;
+    END $report_shares_parent_chk$;
+    CREATE INDEX IF NOT EXISTS idx_report_shares_ticket
+      ON report_shares(service_ticket_id, created_at DESC) WHERE service_ticket_id IS NOT NULL;
 
 
     -- ───────────────────────────────────────────────────────────────

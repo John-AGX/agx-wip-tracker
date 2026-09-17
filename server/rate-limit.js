@@ -507,11 +507,31 @@ const stSharePropose = rateLimit({
   },
 });
 
+// A FLAGGED PROBLEM (1.29) alerts the people on the work order the moment it
+// lands, so a flood is a flood of emails and pushes, not just rows. The same
+// shape as the propose bucket: an hour wide, 20 per address — well above a
+// real crew (the ticket itself also holds at most 20 open flags) and a hard
+// bound on how many alerts one address can set off. Keyed on IP for the same
+// reason as the write bucket: the token is not the attacker's constraint.
+const stShareFlagLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: function (req) { return 'stf:' + (req.ip || 'unknown'); },
+  handler: function (req, res) {
+    const retryAfter = Math.ceil(res.getHeader('Retry-After') || 3600);
+    console.warn('[rate-limit] service-ticket-share flag throttle from', req.ip);
+    jsonHandler(res, retryAfter);
+  },
+});
+
 module.exports = {
   stShareIpLimiter,
   stShareViewLimiter,
   stShareWriteLimiter,
   stSharePropose,
+  stShareFlagLimiter,
   ipLoginLimiter,
   ipGenericLimiter,
   aiChatLimiter,

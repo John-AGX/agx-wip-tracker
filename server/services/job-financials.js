@@ -609,9 +609,20 @@ const PO_RETURNING = `id, job_id, organization_id, owner_id, sub_id, status, po_
 
 // ── change orders ───────────────────────────────────────────────────
 
-async function createChangeOrder(db, { jobId, orgId, ownerId, fields }) {
+// data.fromWorkOrder is the SERVER-OWNED link to the work order a change order
+// was started from (services/service-ticket-change-order.js). Only the
+// `fromWorkOrder` PARAMETER sets it — never `fields`, which is what an agent
+// payload or an editor body reaches — and an update never changes or erases
+// it. cleanCoData is deliberately not the place: it runs on the merged record
+// and would erase the stored link.
+function isPlainRecord(v) {
+  return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
+async function createChangeOrder(db, { jobId, orgId, ownerId, fields, fromWorkOrder }) {
   await assertJobInOrg(db, jobId, orgId);
-  const body = fields || {};
+  const body = Object.assign({}, fields || {});
+  delete body.fromWorkOrder;
   rejectFlatMoney(body, 'change_order');
   const id = genId('co');
   const coNumber = (body.co_number && String(body.co_number).trim()) || await nextCoNumber(db, jobId);
@@ -620,6 +631,7 @@ async function createChangeOrder(db, { jobId, orgId, ownerId, fields }) {
   const data = cleanCoData(Array.isArray(body.lines)
     ? Object.assign({}, body, { lines: stampCoLineIds(normalizeCoLines(body.lines)) })
     : body);
+  if (isPlainRecord(fromWorkOrder)) data.fromWorkOrder = fromWorkOrder;
   const { rows } = await db.query(
     // organization_id off the PARENT JOB, never off the caller — and this is
     // the shared financials service the AGENT write path lands in, so it is the
@@ -672,9 +684,15 @@ async function updateChangeOrder(db, { id, orgId, jobId, fields, lineOps, merge 
   // of `base` are left exactly as stored — repairing a stored row as a
   // side effect of an unrelated field update would move money on a record
   // nobody asked to touch.
-  const incoming = fields || {};
+  const incoming = Object.assign({}, fields || {});
+  delete incoming.fromWorkOrder;
   const data = cleanCoData(Object.assign({}, base, incoming,
     Array.isArray(incoming.lines) ? { lines: stampCoLineIds(normalizeCoLines(incoming.lines)) } : {}));
+  // The work-order link is the stored one, whatever this op merged or replaced.
+  delete data.fromWorkOrder;
+  let storedData = cur.data;
+  if (typeof storedData === 'string') { try { storedData = JSON.parse(storedData); } catch (_) { storedData = null; } }
+  if (isPlainRecord(storedData) && isPlainRecord(storedData.fromWorkOrder)) data.fromWorkOrder = storedData.fromWorkOrder;
   // PER-LINE OPS, applied to the record as it stands. Everything above has
   // already run — the org pin, the job pin, the applied and locked refusals —
   // so a surgical line edit cannot reach a signed change order by a door the

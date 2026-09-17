@@ -19,6 +19,24 @@
     return headers;
   }
 
+  // Seconds the server asked us to wait before trying again, or null. The
+  // Retry-After header wins (a number of seconds, or an HTTP date); a JSON
+  // body's retryAfter is the fallback for a proxy that strips the header.
+  // Guarded because some callers' test doubles have no headers at all.
+  function retryAfterOf(r, data) {
+    var h = null;
+    try { h = (r && r.headers && typeof r.headers.get === 'function') ? r.headers.get('Retry-After') : null; }
+    catch (e) { h = null; }
+    var secs = Number(h);
+    if (!secs && h && isNaN(secs)) {
+      var at = Date.parse(h);
+      if (!isNaN(at)) secs = Math.ceil((at - Date.now()) / 1000);
+    }
+    if (secs > 0) return secs;
+    var body = data && Number(data.retryAfter);
+    return body > 0 ? body : null;
+  }
+
   function handleResponse(r) {
     if (r.status === 401) {
       // Token expired or invalid — bounce to login
@@ -37,6 +55,8 @@
           var perr = new Error(r.ok ? 'Server returned an unreadable response — try again in a moment.'
                                     : ('HTTP ' + r.status));
           perr.status = r.status;
+          perr.data = null;
+          perr.retryAfter = r.ok ? null : retryAfterOf(r, null);
           throw perr;
         }
       }
@@ -44,6 +64,7 @@
         var err = new Error((data && data.error) || ('HTTP ' + r.status));
         err.status = r.status;
         err.data = data;
+        err.retryAfter = retryAfterOf(r, data);
         throw err;
       }
       if (data == null) {
@@ -104,7 +125,14 @@
     // payload: { estimate_id, contractAmount?, estimatedCosts?, workbook? }
     linkEstimate: function(jobId, payload) { return post('/api/jobs/' + encodeURIComponent(jobId) + '/link-estimate', payload); },
     bulkSave: function(appData, baseVersions) { return put('/api/jobs/bulk/save', { appData: appData, baseVersions: baseVersions || undefined }); },
-    remove: function(id) { return del('/api/jobs/' + encodeURIComponent(id)); },
+    // opts.confirmClosedTickets: the closed/cancelled/archived work-order count
+    // the user agreed to lose. Without it the server refuses a job that still
+    // has any (409 CLOSED_TICKETS), so a first delete can never take them.
+    remove: function(id, opts) {
+      var q = (opts && opts.confirmClosedTickets != null)
+        ? '?confirm_closed_tickets=' + encodeURIComponent(opts.confirmClosedTickets) : '';
+      return del('/api/jobs/' + encodeURIComponent(id) + q);
+    },
     reassignOwner: function(id, ownerId, notify) {
       // notify=true asks the server to email the new owner via the
       // standard job-assignment template. Defaults false so older
@@ -198,8 +226,10 @@
   // Multipart upload — bypasses the JSON-only `post` helper since we need
   // a FormData body. Auth header still gets attached. `extra` is an
   // optional plain-object map of extra form fields appended alongside
-  // the file (e.g. markup_of, include_in_proposal).
-  function uploadFile(path, file, extra) {
+  // the file (e.g. markup_of, include_in_proposal). opts.signal (an
+  // AbortSignal) cancels the request, so an upload queue can give up on a
+  // stalled attempt instead of showing "Uploading" forever.
+  function uploadFile(path, file, extra, opts) {
     var fd = new FormData();
     fd.append('file', file);
     if (extra && typeof extra === 'object') {
@@ -212,12 +242,14 @@
     var headers = {};
     var token = getToken();
     if (token) headers['Authorization'] = 'Bearer ' + token;
-    return fetch(path, {
+    var init = {
       method: 'POST',
       headers: headers,
       credentials: 'same-origin',
       body: fd
-    }).then(handleResponse);
+    };
+    if (opts && opts.signal) init.signal = opts.signal;
+    return fetch(path, init).then(handleResponse);
   }
 
   var ai = {
@@ -244,7 +276,8 @@
     // permission was denied or never granted). Callers can override
     // by passing lat/lng directly in `extra`, or pass `extra.geo:false`
     // to skip auto-capture entirely (e.g. for bulk PDF uploads).
-    upload: function(entityType, entityId, file, extra) {
+    // opts: { signal } — forwarded to the fetch on both paths below.
+    upload: function(entityType, entityId, file, extra, opts) {
       var path = '/api/attachments/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId);
       extra = extra || {};
       var skipGeo = extra.geo === false;
@@ -252,7 +285,7 @@
       var looksLikeImage = file && file.type && /^image\//i.test(file.type);
       if (skipGeo || alreadyHasGeo || !looksLikeImage || !window.p86Geo) {
         delete extra.geo;
-        return uploadFile(path, file, extra);
+        return uploadFile(path, file, extra, opts);
       }
       // Best-effort geo capture. If it returns null (denied/timeout/
       // unsupported), we proceed without — the server-side EXIF
@@ -264,7 +297,7 @@
           if (g.accuracy != null) extra.geo_accuracy = g.accuracy;
         }
         delete extra.geo;
-        return uploadFile(path, file, extra);
+        return uploadFile(path, file, extra, opts);
       });
     },
     update: function(id, payload) { return put('/api/attachments/' + encodeURIComponent(id), payload); },
@@ -542,9 +575,54 @@
     },
     // Status has its own door so the transition lattice is enforced in one
     // place — a refused move answers 403 with the reason, not a silent no-op.
-    setStatus: function(id, status, note) {
-      return post('/api/service-tickets/' + encodeURIComponent(id) + '/status',
-        { status: status, note: note || '' });
+    // opts is either the legacy note string, or an object carrying any of
+    // reason, note, expected_status, override, copy_scope, reopen_tasks. Only
+    // keys that are defined are sent: a missing expected_status must stay
+    // missing, not arrive as null and read as "the row changed".
+    setStatus: function(id, status, opts) {
+      var body = { status: status };
+      if (opts && typeof opts === 'object') {
+        ['reason', 'note', 'expected_status', 'override', 'copy_scope', 'reopen_tasks'].forEach(function(k) {
+          if (opts[k] !== undefined) body[k] = opts[k];
+        });
+      } else {
+        body.note = opts || '';
+      }
+      return post('/api/service-tickets/' + encodeURIComponent(id) + '/status', body);
+    },
+    // People who can be assigned a work order on this job or lead: users who
+    // can read the parent. kind is 'job' or 'lead'. Answers { users:[{id, name}] }.
+    assignees: function(kind, parentId) {
+      return get('/api/service-tickets/assignees/' + encodeURIComponent(kind) + '/' + encodeURIComponent(parentId));
+    },
+    // Send the "waiting for your approval" notice again, now.
+    notifyApprovers: function(id) {
+      return post('/api/service-tickets/' + encodeURIComponent(id) + '/notify-approvers', {});
+    },
+    // Close a problem the crew flagged, with an optional office note.
+    resolveFlag: function(id, flagId, note) {
+      return post('/api/service-tickets/' + encodeURIComponent(id) + '/flags/' +
+        encodeURIComponent(flagId) + '/resolve', { note: note == null ? '' : note });
+    },
+    // Start a draft change order on the work order's job from this ticket.
+    startChangeOrder: function(id, payload) {
+      return post('/api/service-tickets/' + encodeURIComponent(id) + '/change-orders', payload || {});
+    },
+    // The printable, price-free work order for the crew.
+    workOrderPrint: function(id) {
+      return get('/api/service-tickets/' + encodeURIComponent(id) + '/print/work-order');
+    },
+    // The completion report for the property manager. opts: { includeNotes }.
+    completionReport: function(id, opts) {
+      return get('/api/service-tickets/' + encodeURIComponent(id) + '/completion-report?include_notes=' +
+        (opts && opts.includeNotes ? '1' : '0'));
+    },
+    sendCompletionReport: function(id, payload) {
+      return post('/api/service-tickets/' + encodeURIComponent(id) + '/completion-report/send', payload || {});
+    },
+    revokeCompletionReport: function(id, shareId) {
+      return post('/api/service-tickets/' + encodeURIComponent(id) + '/completion-report/shares/' +
+        encodeURIComponent(shareId) + '/revoke', {});
     },
     // Soft archive. Child tasks survive — they are field work.
     archive: function(id) {

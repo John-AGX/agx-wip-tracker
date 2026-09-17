@@ -430,7 +430,7 @@ const features = [
   {
     id: 'service-tickets',
     label: 'Service tickets (work orders)',
-    blurb: 'A work order on a job or a lead — scope, schedule, priority, tasks and a status line from Draft to Closed.',
+    blurb: 'A work order on a job or a lead — scope, schedule, assignee, a punch list with photos, and a status from Draft to Closed.',
     access_path: 'Sidebar → Operations → Service Tickets, or Job → Service Tickets tab → + New ticket, or a lead → 🔧 Service Ticket',
     area: 'Jobs',
     shipped: '2026-09-13',
@@ -459,6 +459,55 @@ const features = [
     area: 'AI',
     shipped: '2026-09-13',
   },
+  // ── Work orders (1.30) ─────────────────────────────────────
+  {
+    id: 'work-order-review',
+    label: 'Review & approve a work order',
+    blurb: 'Every building’s before and completion photos on one screen — Approve, or Send back with a reason the crew sees.',
+    access_path: 'A service ticket at Work complete → Review & approve',
+    area: 'Jobs',
+    shipped: '2026-09-17',
+  },
+  {
+    id: 'work-order-flag-problem',
+    label: 'Flag a problem on the crew link',
+    blurb: 'Crews report no access, extra damage, short material or a safety issue, with photos. The office hears right away.',
+    access_path: 'Crew link → a building or the work order → Flag a problem',
+    area: 'Jobs',
+    shipped: '2026-09-17',
+  },
+  {
+    id: 'work-orders-board',
+    label: 'Service Tickets page: saved views, badges and filters',
+    blurb: 'Views for your approvals, overdue, due this week, unassigned and no crew link, each with its count, crew badges on every row, and every ticket you can see, not just the newest 200.',
+    access_path: 'Sidebar → Operations → Service Tickets (phone: More → Service Tickets)',
+    area: 'Jobs',
+    shipped: '2026-09-17',
+  },
+  {
+    id: 'work-order-notices',
+    label: 'Work order notices and morning digest',
+    blurb: 'Assignments, crew problems, crew activity and a weekday digest by email and phone. Each can be turned off.',
+    access_path: 'Avatar → My Account & Notifications → Notifications → Work orders',
+    area: 'Jobs',
+    shipped: '2026-09-17',
+  },
+  {
+    id: 'service-ticket-change-order',
+    label: 'Change order from a work order',
+    blurb: 'Turn extra work found on a work order into a draft change order with its photos — office only.',
+    access_path: 'Service ticket → Start change order',
+    area: 'Jobs',
+    shipped: '2026-09-17',
+  },
+  {
+    id: 'service-ticket-print',
+    label: 'Print a work order or completion report',
+    blurb: 'A price-free paper work order for crews, and a before/after photo report to send the property manager.',
+    access_path: 'Service ticket → Print / PDF',
+    area: 'Jobs',
+    shipped: '2026-09-17',
+  },
 ];
 
 // ── Releases (patch notes) ─────────────────────────────────────
@@ -477,9 +526,48 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.29';
+const APP_VERSION = '1.30';
 
 const releases = [
+  {
+    version: '1.30',
+    date: '2026-09-17',
+    name: 'Work Orders',
+    summary: 'Review and approve a finished work order with every photo on one screen, crews can flag problems and keep working on bad signal, saved views on the Service Tickets page and a morning digest so nothing waits unseen, change orders and completion reports from a work order, and punch-list rules every screen follows.',
+    changes: [
+      { type: 'new', text: 'Review & approve. A work order at Work complete shows a Review & approve bar with its punch-list tally. It opens every building on one screen: before and completion photos side by side, who finished it and when, its latest crew notes, and a marker on any building that isn’t finished or has no completion photo (Needs a look lists just those). From there you can Approve, Send back or Cancel the work order. Approve can copy the proposed scope into the approved scope, and the ticket records who approved it and when.' },
+      { type: 'new', text: 'Send back with a reason the crew sees. Sending work back asks what needs fixing, and you can’t send it without saying. You can also reopen chosen buildings, each with its own note. The work order goes back to In progress and the reopened buildings go back to not finished. Until the work reaches Work complete again, the crew link shows a red Sent back by the office card with your reason and the buildings to redo, and those buildings are tagged Sent back. Whoever the crew link was emailed to gets the reason by email too, with no prices and no link, so they use the link they already have. The Progress list shows whether that email went.' },
+      { type: 'new', text: 'Flag a problem on the crew link. Each building, and the work order itself, has Flag a problem: the crew picks what kind — Can’t get access, More damage than the scope, Short on material, Safety problem or Something else — writes what they found and can add up to 6 photos. The people on the work order — the job’s project manager, whoever raised it or sent a crew link, and whoever it is assigned to — hear about it straight away by email and on their phone. The building shows Needs office on the crew link and in the app until someone in the office resolves it. In the app, the work order lists Problems from the crew at the top, open ones first, with the photos, the name typed on the link and when. Resolve takes a short note on how it was handled, and the crew link shows that note, so keep prices out of it. A view-only link can’t flag anything, nothing can be flagged once the work order is approved, closed or cancelled, and flagging doesn’t change the work order’s status.' },
+      { type: 'new', text: 'Saved views on the Service Tickets page (sidebar → Operations → Service Tickets; on a phone, More → Service Tickets). Under the status pills there is now a row of views, each with its count: My approvals (work complete and waiting for you — on a job you run, or a work order you raised, are assigned or sent the crew link for), Overdue, Due this week (today and the next 6 days), Assigned to me, Unassigned, No link sent (open, scheduled or in progress with no working crew link), Flagged (a problem a crew reported that is still open) and Suggestions (crew suggestions waiting). My approvals, Overdue and Flagged turn red when anything is in them. Press a view again to turn it off. A view works together with the status pills, the priority and jobs or leads filters and the search, and every count on a pill or a view is what you would see if you pressed it with the rest of your choices kept. The page now lists every ticket you can see, not just the newest 200, so the filters and the search look through all of them; Show more loads the next 50. Each row now also shows its work order number, the due date in red with the days late when it is overdue, buildings done (the old Tasks column), whether the crew link was sent and opened, suggestions and problems waiting, New from crew, and when the crew last did something; the Updated column is gone, so sort by Recently updated instead. The search also finds a work order number or an address, and you can sort by newest, due date, priority, scheduled date or recently updated. The page remembers your view, filters, search and sort. You see exactly the work orders the job tab would show you, and no prices.' },
+      { type: 'new', text: 'A work orders morning digest. On weekday mornings, one email and phone notification, and only when something needs you: work orders waiting for your approval (and for how long), overdue work orders, crews scheduled today or tomorrow who haven’t opened their link, crew links about to expire, and suggestions and flagged problems waiting. Work orders that have waited more than 2 business days are marked. With the digest turned off you get a separate Still waiting for approval reminder instead.' },
+      { type: 'new', text: 'Assignments, crew problems and crew activity reach the office. Being assigned a work order sends you an email and a phone notification. A problem a crew flags reaches the project manager, whoever raised the work order or sent a crew link, and the assignee right away. Everything else crews do on the link — opening it the first time, starting work, finishing buildings, photos, notes and suggestions — arrives as one crew update at most every 30 minutes per work order. No prices appear in any of these. Each one, and the morning digest, can be turned off, for email and phone separately, in My Account → Notifications under Work orders.' },
+      { type: 'new', text: 'Start a change order from a work order. When a crew finds extra work, open the work order and press Start change order — on the work order itself, on a crew suggestion, on a building note or on a flagged problem. A short form comes up already filled in: a title, what the extra work is, a quantity and unit, and the photos from that building ticked. Create draft change order makes a Draft change order on the job, numbered like any other, and opens it so you can price it; nothing is sent to anyone. The change order carries a From work order card with the photos and an Open work order button, its Preview PDF shows the photos, and its row on the job’s Change Orders list names the work order. The work order shows CO draft next to its status and lists its change orders, the suggestion, note or problem it came from says “CO-4 started”, and starting a second one from the same thing asks first. Only people who can edit change orders see the button, a work order on a lead needs the lead to become a job first, and nothing about it appears on the crew link.' },
+      { type: 'new', text: 'Print a work order. Print / PDF → Work order opens a page to print or save as a PDF, for a crew or sub without a phone: the job, address, gate code, site contact and office contact, scheduled and due dates, the scope, the checklist, the materials (quantity, unit and material only), every building with a tick box and what is on each side, lines for notes, and a sign-off block. There are no prices on it: the approved scope, internal notes and the crew link takeoff file are never included, and if the scope mentions a dollar amount the page warns you before you print.' },
+      { type: 'new', text: 'A completion report for the property manager. Print / PDF → Completion report shows the scope, then each building with its before and completion photos, who finished it and when, and the crew’s notes, and who approved the work and when — with no prices. Print / Save PDF works at any time (before approval it is marked as a draft). Once the work is approved, Send report emails the property manager a link to a read-only page with the photos — no login, and they can print it or save a PDF — or gives you the link to send yourself. Untick Include crew notes to leave the notes out; if any text on it mentions a dollar amount you are told before sending. Links last 30 days, the list shows whether each was opened, and Turn off ends one. The Progress list records that the completion report was sent.' },
+      { type: 'new', text: 'Edit more of a work order from the office. An open work order now has an editable Title, Assigned to (only people who can open the job or lead are offered), Site phone, Gate code / access, its own address (leave it blank to use the job’s address; the crew link and Navigate use it) and Internal notes. Internal notes are for the office only and never appear on the crew link, a printed work order or a completion report. The New ticket box asks for a Due date and who it’s assigned to, each row shows who a work order is assigned to, and the Mine filter lists yours.' },
+      { type: 'improved', text: 'Your typing is kept. Ticking a building, adding one, uploading a photo or adding a note no longer reloads the work order, so unsaved changes stay in their boxes and the page doesn’t jump. Collapsing the work order, opening another, changing the filter, moving the status, accepting a suggestion, archiving or starting a new ticket first asks Save your changes first? — Save changes, Discard changes or Keep editing. Switching jobs keeps your changes until you come back, and leaving the page asks first.' },
+      { type: 'improved', text: 'Save only saves what you changed, so it can’t undo someone else’s change to another field. If someone changed the same field while you were editing, nothing is overwritten: the work order names the field and your version stays in the box until you save again or use theirs. A bad value is refused with the field named — a date that doesn’t exist, a priority other than Low, Normal, High or Urgent, a phone number without enough digits, or text that’s too long.' },
+      { type: 'improved', text: 'Reasons on the Progress list. Cancelling a work order, reopening a closed or cancelled one, and taking back an approval now ask why, and the reason is saved on its Progress list. The Move to… list asks the same questions, so picking Cancelled by mistake no longer cancels. Cancel reasons stay in the office and never reach the crew link. If the work order changed since you opened it, you’re asked to reload instead of overwriting the change.' },
+      { type: 'improved', text: 'What the crew did shows on the ticket list. Each row on a job’s Service Tickets tab says N problems while the crew has something flagged, N suggestions waiting when a link suggested changes nobody has accepted or declined, and New from crew when the crew added a note, photo, finished building, suggestion or problem since someone who can edit the work order last opened it. The job’s Service Tickets section carries a count of the work orders that need you — red while a problem is open.' },
+      { type: 'improved', text: 'The crew link holds on through bad signal. If the page can’t refresh after a save, it stays as it was and a bar at the top says “Saved. Couldn’t refresh — tap to retry.” Only a link that no longer works (turned off, expired, or the work order removed) replaces the page. Notes typed into a building, the field report and a suggested scope stay put when the page redraws, and are kept on that phone for two weeks if the tab is closed or the phone closes it; a restored note says “Restored what you typed earlier. It hasn’t been sent yet.”' },
+      { type: 'improved', text: 'Photo uploads keep going on the crew link. Photos go up one at a time, each shown as a tile straight away with Waiting, Sending… or Not sent on it, and under the building a line such as “Uploading 3 of 6…” or “4 of 6 added. 2 didn’t go through.” with Retry. A photo that fails is kept and tried again (after 3 seconds, then 15), again when the signal comes back, and whenever you tap Retry, while the rest carry on. An upload that stalls gives up and tries again instead of saying Uploading forever. Picking the same photos again, or a retry after a dropped connection, never adds a second copy. Leaving the page while photos are still going asks first.' },
+      { type: 'improved', text: 'Smaller photos over cellular. Photos are resized on the phone to 2,000 pixels on the long side before they are sent — usually under 1 MB instead of 3–8 MB — keeping the time and place the camera recorded. If a phone can’t resize a photo, the original is sent.' },
+      { type: 'improved', text: 'Photo uploads on a work order in the app work the same way. The Upload or Take photo tile you tapped shows it is busy, each building says how its photos are going (“Uploading 2 of 6…”) with Retry and Clear, each photo appears as it lands, a failed photo is tried again on its own, and leaving the page while photos are going asks first. Photos the crew added to their field report now show in a Site photos strip in the work order’s Scope card.' },
+      { type: 'improved', text: 'Times on the field log. Every new field log entry shows the date and time it was written, in your company’s time zone, and building notes show the time as well as the date.' },
+      { type: 'improved', text: 'More people hear that a work order is ready for approval: whoever it is assigned to, the salesperson on a lead’s work order and people watching it, as well as the job’s project manager, whoever raised it and whoever sent the crew link.' },
+      { type: 'improved', text: 'Notices being sent when the server restarts for an update now finish first.' },
+      { type: 'fixed', text: 'An approval notice that doesn’t go through is tried again. If the ready-for-approval email and phone notification reach nobody — email down, an update restarting the server, no phone set up — Project 86 tries again after 10 minutes, 1 hour and 4 hours. If nobody on a work order can approve it, the company admins are told instead. After the last try the work order says “Nobody has been told this is ready for approval.” with a Notify again button, so you can send it yourself.' },
+      { type: 'fixed', text: 'The “Every subtask is done — the work order is awaiting approval” message now shows when the office ticks the last building, from the work order, My Tasks or the Schedule.' },
+      { type: 'fixed', text: 'Finish whole work order can’t skip the punch list. On the crew link, Finish whole work order stays off until every building on the punch list is marked complete, and it asks before sending. The crew can take it back until the office acts on it. In the app, moving a work order to Work complete with subtasks still open asks first, and the Progress list says so.' },
+      { type: 'fixed', text: 'Photo proof stays put. Photos on an approved or closed work order can’t be deleted, moved or changed from completion to before, and the last completion photo on a finished building can’t be removed until the building is undone. That holds everywhere: on the work order, in Files (which now says why a photo was kept instead of “Deleted”) and when 86 is asked to do it. Removed and changed photos show on the Progress list.' },
+      { type: 'fixed', text: 'My Tasks, the job’s Tasks panel, task links, the Schedule and 86 follow the work-order rules. Finishing a building anywhere needs its completion photo, only people who can edit the job or the task’s assignee can finish or reopen it, an approved work order’s punch list can’t be changed, and the work order moves to Work complete or back to In progress the same way it does on the work order itself.' },
+      { type: 'fixed', text: 'Changing who a building on a work order is assigned to now needs edit access to its job or lead. Before, anyone in the company could reassign one from My Tasks.' },
+      { type: 'fixed', text: 'Deleting a job no longer wipes its work orders. A job with open service tickets can’t be deleted until they are closed or archived, and deleting a job with closed, cancelled or archived tickets asks first and names how many will go with it.' },
+      { type: 'fixed', text: 'Two people can’t overwrite each other. If a work order changed while you had it open — the crew finished, or someone in the office moved it — your move is refused with “This work order just changed. Reload to see the latest.” and nothing is announced.' },
+      { type: 'fixed', text: 'HEIC photos. A photo saved in HEIC (High efficiency) format, which Android phones such as Samsung can use, used to fail with “Something went wrong.” Where the phone’s browser can open it, it is turned into a JPEG before sending; otherwise it is refused straight away with “This photo is in HEIC format (High efficiency), which can’t be opened here yet. Use Take photo, or set your camera to save photos as JPEG, then add it again.”' },
+      { type: 'fixed', text: 'Field report photos. Photos added under Your field report on the crew link could fail to save, and those that saved were shown nowhere. They now appear in a Site photos section on the crew link and on the work order in the app, with who added them and when. Upload photo there takes several at once, and Save report waits for its photos and records the note with them (“· 2 photos”).' },
+    ],
+  },
   {
     version: '1.29',
     date: '2026-09-14',

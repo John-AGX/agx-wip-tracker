@@ -24,7 +24,7 @@ let db;
 
 function makeDb(opts) {
   const o = opts || {};
-  const state = { log: [], ticket: null, shareUpdates: [] };
+  const state = { log: [], ticket: null, shareUpdates: [], tx: [] };
 
   const share = Object.assign({
     id: 'stshare_1',
@@ -60,6 +60,36 @@ function makeDb(opts) {
   const query = async (sql, params) => {
     const text = String(sql).replace(/\s+/g, ' ').trim();
     state.log.push({ sql: text, params: params || [] });
+    // ── 1.29: the crew PATCH runs in a transaction under a row lock ──
+    if (/^(BEGIN|COMMIT|ROLLBACK)$/i.test(text)) {
+      state.tx.push(text.toUpperCase());
+      return { rows: [], rowCount: 0 };
+    }
+    if (/FROM service_tickets WHERE id = \$1 AND organization_id = \$2/i.test(text)) {
+      // The LOCKED read. o.lockedTicket is what the row says NOW, while
+      // loadTicketShare still read the older copy.
+      state.lockParams = params;
+      if (o.lockGone) return { rows: [] };
+      return { rows: [Object.assign({}, ticket, o.lockedTicket || {})] };
+    }
+    if (/SELECT actor_kind, share_id, detail, created_at FROM service_ticket_events/i.test(text)) {
+      state.lastStatusParams = params;
+      return { rows: o.lastStatusEvent ? [o.lastStatusEvent] : [] };
+    }
+    if (/kind IN \('photo_added', 'note_added'\)/i.test(text)) {
+      state.stampParams = params;
+      return { rows: o.stampEvents || [] };
+    }
+    if (/FROM attachments a WHERE a\.entity_type = 'service_ticket'/i.test(text)) {
+      return { rows: o.sitePhotos || [] };
+    }
+    if (/FROM service_ticket_flags/i.test(text)) {
+      // T1's problem list (1.29). o.flags are the stored rows; o.flagsFail
+      // makes the read throw, which must cost the crew only the list.
+      state.flagParams = params;
+      if (o.flagsFail) throw new Error('planted: flags unavailable');
+      return { rows: o.flags || [] };
+    }
     if (/FROM service_ticket_shares WHERE token_hash/i.test(text)) {
       return { rows: o.noShare ? [] : [share] };
     }
@@ -73,7 +103,10 @@ function makeDb(opts) {
     if (/^UPDATE service_tickets SET/i.test(text)) {
       state.updateSql = text;
       state.updateParams = params;
-      return { rows: [Object.assign({}, ticket)], rowCount: 1 };
+      // o.updateMisses: the guarded UPDATE matched no row, because the status
+      // moved between the lock read and the write.
+      if (o.updateMisses) return { rows: [], rowCount: 0 };
+      return { rows: [Object.assign({}, ticket, o.lockedTicket || {})], rowCount: 1 };
     }
     if (/INSERT INTO service_ticket_events/i.test(text)) return { rows: [], rowCount: 1 };
     if (/INSERT INTO service_ticket_revisions/i.test(text)) {
@@ -128,11 +161,13 @@ jest.mock('../server/rate-limit', () => ({
   // "Route.post() requires a callback function but got [object Undefined]" and
   // the whole suite reports 0 tests, which reads like the file was skipped.
   stSharePropose: (req, res, next) => next(),
+  // The flag door's bucket (1.29), listed ahead of the router mounting it.
+  stShareFlagLimiter: (req, res, next) => next(),
 }));
 jest.mock('../server/services/entity-labels', () => ({
   resolveEntityLabels: async () => new Map([['job:j1', 'RV2006 Waterside 1']]),
 }));
-jest.mock('../server/storage', () => ({ storage: { put: async (k) => 'https://cdn/' + k } }));
+jest.mock('../server/storage', () => ({ storage: { put: async (k) => 'https://cdn/' + k, delete: async () => {} } }));
 // The approval notice is pinned in service-ticket-notify.test.js; here only
 // WHETHER the crew doors call it is under test.
 global.__notifyCalls = [];
@@ -227,6 +262,34 @@ describe('S5 — the guest write door refuses everything it should', () => {
     expect(res.statusCode).toBe(409);
   });
 
+  // 1.30. Terminal was never the whole rule: the office APPROVING a work order
+  // closes it to the crew too (a photo added after the approval could not be
+  // taken off again), and a DRAFT has not been issued. The wording is the
+  // wording crewGate already gives on the building and flag doors.
+  test('an APPROVED work order refuses every write, in the words the crew already knows', async () => {
+    for (const body of [{ note: 'one more thing' }, { checklist: [{ text: 'Pull permit', done: true }] }, { status: 'in_progress' }]) {
+      const res = await patch({ ticket: { status: 'approved' } }, body);
+      expect([body, res.statusCode, res.body]).toEqual([body, 409,
+        { error: 'The office has approved this work order. Ask them to reopen it for changes.' }]);
+      expect(db.log.some((q) => /^UPDATE service_tickets SET/i.test(q.sql))).toBe(false);
+      expect(db.tx).toEqual([]);            // refused before a transaction opened
+    }
+  });
+
+  test('a DRAFT work order refuses the field report too — it has not been issued', async () => {
+    const res = await patch({ ticket: { status: 'draft' } }, { note: 'starting early' });
+    expect([res.statusCode, res.body]).toEqual([409, { error: 'This work order has not been issued yet.' }]);
+    expect(db.log.some((q) => /^UPDATE service_tickets SET/i.test(q.sql))).toBe(false);
+  });
+
+  test('APPROVED between the load and the lock: refused on the LOCKED row, and the transaction rolls back', async () => {
+    const res = await patch({ ticket: { status: 'in_progress' }, lockedTicket: { status: 'approved' } }, { note: 'Rails set' });
+    expect([res.statusCode, res.body]).toEqual([409,
+      { error: 'The office has approved this work order. Ask them to reopen it for changes.' }]);
+    expect(db.log.some((q) => /^UPDATE service_tickets SET/i.test(q.sql))).toBe(false);
+    expect(db.tx).toEqual(['BEGIN', 'ROLLBACK']);
+  });
+
   test('a BACKWARDS status is 403 with a reason, not a silent no-op', async () => {
     const res = await patch({ ticket: { status: 'in_progress' } }, { status: 'open' });
     expect(res.statusCode).toBe(403);
@@ -242,7 +305,8 @@ describe('S5 — the guest write door refuses everything it should', () => {
   });
 
   test('a guest CAN do the one thing a crew actually does', async () => {
-    const res = await patch({ ticket: { status: 'in_progress' } }, { status: 'work_complete' });
+    // No buildings on the punch list, so nothing holds the finish back.
+    const res = await patch({ ticket: { status: 'in_progress' }, counts: { total: 0, done: 0 } }, { status: 'work_complete' });
     expect(res.statusCode).toBe(200);
     expect(db.updateSql).toMatch(/status = \$/);
     // completed_at is stamped, and COALESCEd so a second report cannot move it.
@@ -253,7 +317,7 @@ describe('S5 — the guest write door refuses everything it should', () => {
     global.__notifyCalls = [];
     await patch({ ticket: { status: 'in_progress' } }, { note: 'Gate latches now' });
     expect(global.__notifyCalls).toHaveLength(0);
-    const res = await patch({ ticket: { status: 'in_progress' }, share: { created_by: 14, recipient_name: 'Marco' } }, { status: 'work_complete' });
+    const res = await patch({ ticket: { status: 'in_progress' }, share: { created_by: 14, recipient_name: 'Marco' }, counts: { total: 0, done: 0 } }, { status: 'work_complete' });
     expect(res.statusCode).toBe(200);
     expect(global.__notifyCalls).toHaveLength(1);
     const c = global.__notifyCalls[0];
@@ -272,11 +336,15 @@ describe('S5 — what a guest write may TOUCH', () => {
       priority: 'urgent', scheduled_for: '2030-01-01',
     });
     expect(res.statusCode).toBe(200);
+    // The SET list, not the WHERE: since 1.29 the UPDATE is guarded on
+    // organization_id and status, which is a predicate, not a write.
+    const setList = db.updateSql.slice(0, db.updateSql.indexOf(' WHERE '));
+    expect(setList).toMatch(/^UPDATE service_tickets SET /);
     for (const banned of ['title', 'scope_proposed', 'scope_approved', 'internal_notes',
                           'organization_id', 'job_id', 'lead_id', 'assignee_user_id',
                           'ticket_number', 'created_by', 'archived_at', 'priority',
                           'scheduled_for']) {
-      expect(db.updateSql).not.toMatch(new RegExp('\\b' + banned + ' = '));
+      expect(setList).not.toMatch(new RegExp('\\b' + banned + ' = '));
     }
     // Only guest_log moved.
     expect(db.updateSql).toMatch(/guest_log = COALESCE/);
@@ -397,6 +465,26 @@ describe('S5 — the photo door', () => {
     expect(res.statusCode).toBe(409);
   });
 
+  // 1.30. An approved work order's site photos are the record of what was
+  // approved: work-order-photo-guard refuses to let the office delete one, so
+  // a photo the crew link should never have been able to add would be stuck
+  // there until someone unapproved the work order.
+  test('an APPROVED work order cannot receive a photo, and nothing is decoded or stored', async () => {
+    const res = await photo({ ticket: { status: 'approved' } },
+      { buffer: png, mimetype: 'image/png', originalname: 'a.png' });
+    expect([res.statusCode, res.body]).toEqual([409,
+      { error: 'The office has approved this work order. Ask them to reopen it for changes.' }]);
+    expect(db.log.some((q) => /INSERT INTO attachments/i.test(q.sql))).toBe(false);
+    expect(db.log.some((q) => /MAX\(position\)/i.test(q.sql))).toBe(false);
+  });
+
+  test('a DRAFT work order cannot receive a photo either', async () => {
+    const res = await photo({ ticket: { status: 'draft' } },
+      { buffer: png, mimetype: 'image/png', originalname: 'a.png' });
+    expect([res.statusCode, res.body]).toEqual([409, { error: 'This work order has not been issued yet.' }]);
+    expect(db.log.some((q) => /INSERT INTO attachments/i.test(q.sql))).toBe(false);
+  });
+
   test('no file is a 400, not a crash', async () => {
     const res = await photo({}, undefined);
     expect(res.statusCode).toBe(400);
@@ -416,9 +504,18 @@ describe('S5 — the source shape the tests above cannot see', () => {
                               src.indexOf("router.post('/service-ticket-share/:token/photo'"));
     expect(handler).not.toMatch(/for \(const \w+ of Object\.keys\(body\)/);
     expect(handler).not.toMatch(/Object\.keys\(req\.body\)/);
-    for (const named of ['body.name', 'body.checklist', 'body.note', 'body.status']) {
+    for (const named of ['body.checklist', 'body.note', 'body.status']) {
       expect(handler).toContain(named);
     }
+    // The name is named too, in the one write every crew door shares (1.29,
+    // I2): the handler hands the body to applyCrewName, which reads body.name
+    // and nothing else from it.
+    expect(handler).toContain('await applyCrewName(share, body);');
+    const nameHelper = src.slice(src.indexOf('async function applyCrewName('),
+                                 src.indexOf("router.post('/service-ticket-share/:token/subtasks/:taskId/done'"));
+    expect(nameHelper).toContain('body && body.name');
+    expect(nameHelper.match(/body\.[a-z_]+/g)).toEqual(['body.name']);
+    expect(nameHelper).not.toMatch(/Object\.keys\(body\)/);
   });
 
   test('the scope is re-derived from the STORED row on every write', () => {
@@ -771,6 +868,19 @@ describe('T5 — subtask doors on the crew link', () => {
     expect(wrote(/^UPDATE tasks/i)).toBe(false);
   });
 
+  test('approved AFTER the link loaded: the crew rule is asked again of the LOCKED row (work_order_locked)', async () => {
+    const res = await done({
+      ticket: { status: 'in_progress' }, lockedTicket: { status: 'approved' },
+      subtask: {}, photos: [{ tags: ['completion'] }],
+    }, { done: true });
+    expect([res.statusCode, res.body]).toEqual([409, {
+      error: 'The office has approved this work order. Ask them to reopen it for changes.',
+      code: 'work_order_locked',
+    }]);
+    expect(wrote(/^UPDATE tasks/i)).toBe(false);
+    expect(db.tx).toEqual(['BEGIN', 'ROLLBACK']);
+  });
+
   test('a draft or closed work order refuses subtask writes', async () => {
     expect((await done({ ticket: { status: 'draft' }, subtask: {}, photos: [{}] }, { done: true })).statusCode).toBe(409);
     expect((await done({ ticket: { status: 'closed' }, subtask: {}, photos: [{}] }, { done: true })).statusCode).toBe(409);
@@ -864,5 +974,250 @@ describe('T5 — subtask doors on the crew link', () => {
     const res = await photo({ subtask: {} }, {}, { buffer: pdf, mimetype: 'image/png', originalname: 'x.png' });
     expect(res.statusCode).toBe(400);
     expect(wrote(/INSERT INTO attachments/i)).toBe(false);
+  });
+});
+
+// ── 1.29: FINISH WHOLE WORK ORDER (A1) AND THE LOCKED WRITE (A10) ──────────
+// The crew PATCH now runs in one transaction under a lock on the ticket row.
+// Finish is refused while buildings are open — and then nothing at all is
+// written, not even a note typed with it. The gates are re-read on the LOCKED
+// row, the UPDATE is guarded on the org and the locked status, and the approval
+// notice goes out only after a finish that really committed.
+describe('1.29 — Finish whole work order waits for the punch list', () => {
+  const BUILDINGS_OPEN = "18 of 21 buildings aren't finished. Finish each building on the punch list first — the office is told automatically when the last one is done.";
+  const wroteTicket = () => db.log.some((q) => /^UPDATE service_tickets SET/i.test(q.sql));
+  const events = () => db.log.filter((q) => /INSERT INTO service_ticket_events/i.test(q.sql));
+  beforeEach(() => { global.__notifyCalls = []; });
+
+  test('18 of 21 buildings open: 409 with the exact sentence, nothing written, nobody told, rolled back', async () => {
+    const res = await patch({ ticket: { status: 'in_progress' }, counts: { total: 21, done: 3 } }, { status: 'work_complete' });
+    expect([res.statusCode, res.body]).toEqual([409, { error: BUILDINGS_OPEN, code: 'buildings_open', open: 18, total: 21 }]);
+    expect(wroteTicket()).toBe(false);
+    expect(events()).toHaveLength(0);
+    expect(global.__notifyCalls).toHaveLength(0);
+    expect(db.tx).toEqual(['BEGIN', 'ROLLBACK']);
+    // The count was taken on the locked ticket, in its org.
+    const count = db.log.find((q) => /COUNT\(\*\)::int AS total/i.test(q.sql));
+    expect(count.params).toEqual(['st_1', 1]);
+  });
+
+  test('a note typed with a refused finish is NOT appended', async () => {
+    const res = await patch({ ticket: { status: 'in_progress' }, counts: { total: 21, done: 3 } },
+      { status: 'work_complete', note: 'All six stair towers done' });
+    expect(res.statusCode).toBe(409);
+    expect(wroteTicket()).toBe(false);
+    expect(JSON.stringify(db.log.map((q) => q.params))).not.toContain('All six stair towers done');
+  });
+
+  test('the sentence counts in the singular the way the crew page does', async () => {
+    let res = await patch({ ticket: { status: 'in_progress' }, counts: { total: 21, done: 20 } }, { status: 'work_complete' });
+    expect(res.body.error.indexOf("1 of 21 buildings isn't finished.")).toBe(0);
+    res = await patch({ ticket: { status: 'open' }, counts: { total: 1, done: 0 } }, { status: 'work_complete' });
+    expect(res.body.error.indexOf("1 of 1 building isn't finished.")).toBe(0);
+    expect([res.body.open, res.body.total]).toEqual([1, 1]);
+  });
+
+  test('every building done: the finish lands, the event says marked_complete, and the office is told after COMMIT', async () => {
+    const res = await patch({ ticket: { status: 'in_progress' }, counts: { total: 21, done: 21 }, share: { created_by: 14 } },
+      { status: 'work_complete' });
+    expect(res.statusCode).toBe(200);
+    expect(db.tx).toEqual(['BEGIN', 'COMMIT']);
+    const ev = events().find((q) => q.params[3] === 'status_changed');
+    expect(JSON.parse(ev.params[8])).toEqual({ from: 'in_progress', to: 'work_complete', reason: 'marked_complete' });
+    expect([ev.params[4], ev.params[6]]).toEqual(['share', 'stshare_1']);
+    expect(global.__notifyCalls).toHaveLength(1);
+    expect([global.__notifyCalls[0].reason, global.__notifyCalls[0].sharedBy]).toEqual(['marked_complete', 14]);
+    // The link's own bookkeeping, after the write, in the link's org.
+    const shareStat = db.log.find((q) => /^UPDATE service_ticket_shares SET last_used_at/i.test(q.sql));
+    expect(shareStat.sql).toContain('completed_at = NOW()');
+    expect(shareStat.params).toEqual(['stshare_1', 1]);
+  });
+
+  test('THE LOCK DECIDES: a row cancelled since the link loaded it refuses, and nobody is told', async () => {
+    const res = await patch({ ticket: { status: 'in_progress' }, lockedTicket: { status: 'cancelled' }, counts: { total: 0, done: 0 } },
+      { status: 'work_complete', note: 'done' });
+    expect(res.statusCode).toBe(409);
+    expect(res.body.error).toMatch(/cancelled/);
+    expect(wroteTicket()).toBe(false);
+    expect(global.__notifyCalls).toHaveLength(0);
+    expect(db.tx).toEqual(['BEGIN', 'ROLLBACK']);
+    expect(db.lockParams).toEqual(['st_1', 1]);
+  });
+
+  test('a row that is gone at lock time is the no-longer-available 404', async () => {
+    const res = await patch({ lockGone: true }, { note: 'x' });
+    expect([res.statusCode, res.body]).toEqual([404, { error: 'This work order is no longer available.' }]);
+    expect(db.tx).toEqual(['BEGIN', 'ROLLBACK']);
+  });
+
+  test('the guarded UPDATE matching no row is 409 status_changed: no event, no notice', async () => {
+    const res = await patch({ ticket: { status: 'in_progress' }, counts: { total: 0, done: 0 }, updateMisses: true },
+      { status: 'work_complete', note: 'x' });
+    expect([res.statusCode, res.body]).toEqual([409, { error: 'This work order just changed. Reload to see the latest.', code: 'status_changed' }]);
+    expect(events()).toHaveLength(0);
+    expect(global.__notifyCalls).toHaveLength(0);
+    expect(db.tx).toEqual(['BEGIN', 'ROLLBACK']);
+  });
+
+  test('the UPDATE is predicated on the org AND the LOCKED status, not the status the link loaded', async () => {
+    const res = await patch({ ticket: { status: 'in_progress' }, lockedTicket: { status: 'scheduled' }, counts: { total: 0, done: 0 } },
+      { status: 'work_complete' });
+    expect(res.statusCode).toBe(200);
+    expect(db.updateSql).toMatch(/WHERE id = \$(\d+) AND organization_id = \$(\d+) AND status = \$(\d+) RETURNING \*$/);
+    const m = /WHERE id = \$(\d+) AND organization_id = \$(\d+) AND status = \$(\d+)/.exec(db.updateSql);
+    expect([db.updateParams[m[1] - 1], db.updateParams[m[2] - 1], db.updateParams[m[3] - 1]]).toEqual(['st_1', 1, 'scheduled']);
+  });
+
+  test('a backwards move is still judged on the LOCKED row', async () => {
+    // Loaded in_progress, but the row is at work_complete by the time it is
+    // locked: the lattice reads the row as it is NOW.
+    const res = await patch({ ticket: { status: 'in_progress' }, lockedTicket: { status: 'work_complete' } }, { status: 'open' });
+    expect(res.statusCode).toBe(403);
+    expect(res.body.error).toBe('This link cannot move the ticket from work_complete to open.');
+    expect(wroteTicket()).toBe(false);
+  });
+
+  test('the checklist merges against the LOCKED row', async () => {
+    const lockedList = [{ text: 'Pull permit', done: true }, { text: 'Set forms', done: false }, { text: 'Pour', done: false }];
+    const res = await patch({ lockedTicket: { checklist: lockedList } },
+      { checklist: [{ text: 'Pull permit', done: true }, { text: 'Set forms', done: true }, { text: 'Pour', done: false }] });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(db.updateParams[0])).toEqual([
+      { text: 'Pull permit', done: true }, { text: 'Set forms', done: true }, { text: 'Pour', done: false },
+    ]);
+  });
+
+  test('a status the ticket already has writes nothing', async () => {
+    const res = await patch({ ticket: { status: 'in_progress' } }, { status: 'in_progress' });
+    expect(res.statusCode).toBe(200);
+    expect(wroteTicket()).toBe(false);
+    expect(events()).toHaveLength(0);
+  });
+});
+
+describe('1.29 — the crew may take back its OWN finish, and only while nothing has happened since', () => {
+  const UNDO_REFUSAL = "The office has already acted on this work order, so it can't be taken back from this link. Call the office if work is still needed.";
+  const finishedBy = (over) => Object.assign({
+    actor_kind: 'share', share_id: 'stshare_1',
+    detail: { from: 'in_progress', to: 'work_complete', reason: 'marked_complete' },
+    created_at: '2026-09-15T14:00:00Z',
+  }, over || {});
+  beforeEach(() => { global.__notifyCalls = []; });
+
+  test('own marked_complete: back to in_progress, completed_at cleared, event crew_undid_finish, nobody told', async () => {
+    const res = await patch({ ticket: { status: 'work_complete' }, lastStatusEvent: finishedBy() }, { status: 'in_progress' });
+    expect(res.statusCode).toBe(200);
+    expect(db.updateSql).toContain('completed_at = NULL');
+    expect(db.updateSql).not.toContain('approval_notified_at');
+    expect(db.updateParams).toContain('in_progress');
+    const ev = db.log.find((q) => /INSERT INTO service_ticket_events/i.test(q.sql) && q.params[3] === 'status_changed');
+    expect(JSON.parse(ev.params[8])).toEqual({ from: 'work_complete', to: 'in_progress', reason: 'crew_undid_finish' });
+    expect(global.__notifyCalls).toHaveLength(0);
+    expect(db.lastStatusParams).toEqual(['st_1', 1]);
+    const shareStat = db.log.find((q) => /^UPDATE service_ticket_shares SET last_used_at/i.test(q.sql));
+    expect(shareStat.sql).toContain('completed_at = NULL');
+    expect(db.tx).toEqual(['BEGIN', 'COMMIT']);
+  });
+
+  test('the event detail arriving as JSON text still counts', async () => {
+    const res = await patch({ ticket: { status: 'work_complete' },
+      lastStatusEvent: finishedBy({ detail: JSON.stringify({ from: 'in_progress', to: 'work_complete', reason: 'marked_complete' }) }) },
+    { status: 'in_progress' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  const refused = {
+    'another link finished it': finishedBy({ share_id: 'stshare_2' }),
+    'the office moved it': finishedBy({ actor_kind: 'user', share_id: null }),
+    'the last building ticked it over': finishedBy({ detail: { from: 'in_progress', to: 'work_complete', reason: 'all_subtasks_done' } }),
+    'there is no status event at all': null,
+  };
+  for (const [why, last] of Object.entries(refused)) {
+    test('refused with finish_not_yours when ' + why, async () => {
+      const res = await patch({ ticket: { status: 'work_complete' }, lastStatusEvent: last }, { status: 'in_progress', note: 'wait' });
+      expect([res.statusCode, res.body]).toEqual([409, { error: UNDO_REFUSAL, code: 'finish_not_yours' }]);
+      expect(db.log.some((q) => /^UPDATE service_tickets SET/i.test(q.sql))).toBe(false);
+      expect(db.log.some((q) => /INSERT INTO service_ticket_events/i.test(q.sql))).toBe(false);
+      expect(db.tx).toEqual(['BEGIN', 'ROLLBACK']);
+    });
+  }
+
+  test('an undo is judged on the LOCKED row: the office approved it meanwhile', async () => {
+    // 1.30: the crew rule is asked of the LOCKED row before the undo lattice
+    // is, so the answer is the sentence the crew already knows from the
+    // building and flag doors rather than a bare "cannot move". Either way the
+    // undo is refused and nothing is written.
+    const res = await patch({ ticket: { status: 'work_complete' }, lockedTicket: { status: 'approved' }, lastStatusEvent: finishedBy() },
+      { status: 'in_progress' });
+    expect([res.statusCode, res.body]).toEqual([409,
+      { error: 'The office has approved this work order. Ask them to reopen it for changes.' }]);
+    expect(db.log.some((q) => /^UPDATE service_tickets SET/i.test(q.sql))).toBe(false);
+    expect(db.tx).toEqual(['BEGIN', 'ROLLBACK']);
+  });
+
+  // The page shows "Undo — not finished yet" from finish.can_undo on the read.
+  const read = (opts) => {
+    global.__stDb = db = makeDb(opts);
+    return run('get', '/service-ticket-share/:token', {});
+  };
+
+  test('GET finish.can_undo follows the same rule as the door', async () => {
+    let res = await read({ ticket: { status: 'work_complete' }, lastStatusEvent: finishedBy() });
+    expect([res.statusCode, res.body.finish]).toEqual([200, { can_undo: true }]);
+    for (const last of Object.values(refused)) {
+      res = await read({ ticket: { status: 'work_complete' }, lastStatusEvent: last });
+      expect([res.statusCode, res.body.finish]).toEqual([200, { can_undo: false }]);
+    }
+  });
+
+  test('GET: not at work_complete, or a view link, is can_undo false without asking the events', async () => {
+    let res = await read({ ticket: { status: 'in_progress' }, lastStatusEvent: finishedBy() });
+    expect(res.body.finish).toEqual({ can_undo: false });
+    expect(db.lastStatusParams).toBeUndefined();
+    res = await read({ ticket: { status: 'work_complete' }, share: { scope: 'view' }, lastStatusEvent: finishedBy() });
+    expect(res.body.finish).toEqual({ can_undo: false });
+  });
+});
+
+// ── 1.29: the crew read lists the problems flagged on the work order ────────
+describe('T1 — flags on the crew read', () => {
+  const read = (opts) => {
+    global.__stDb = db = makeDb(opts);
+    return run('get', '/service-ticket-share/:token', {});
+  };
+
+  const stored = {
+    id: 'stflag_1', task_id: 't1', category: 'safety', note: 'Loose rail', author_label: 'Marco',
+    status: 'open', attachment_ids: '[]', created_at: '2026-09-14T13:00:00Z', resolved_at: null, resolution_note: null,
+    // Office-only columns a careless SELECT * would carry.
+    share_id: 'stshare_1', client_ref: 'ref-0000001', organization_id: 1, resolved_by: 10,
+  };
+
+  test('no flags is an empty list, read with the ticket row\'s own id and organization', async () => {
+    const res = await read({ ticket: { organization_id: 7 } });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.flags).toEqual([]);
+    expect(db.flagParams).toEqual(['st_1', 7]);
+  });
+
+  test('a stored flag reaches the crew as the whitelist only', async () => {
+    const res = await read({ flags: [stored] });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.flags).toHaveLength(1);
+    expect(Object.keys(res.body.flags[0]).sort()).toEqual(
+      ['author_label', 'category', 'created_at', 'id', 'note', 'photos', 'resolution_note', 'resolved_at', 'status', 'task_id']);
+    const json = JSON.stringify(res.body.flags);
+    for (const leak of ['stshare_1', 'ref-0000001', 'resolved_by', 'organization_id', 'attachment_ids']) expect(json).not.toContain(leak);
+    // No building on the link -> ticket-level.
+    expect(res.body.flags[0].task_id).toBeNull();
+  });
+
+  test('a failing flags read answers the work order with no flags', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    let res;
+    try { res = await read({ flagsFail: true }); } finally { warn.mockRestore(); }
+    expect(res.statusCode).toBe(200);
+    expect(res.body.flags).toEqual([]);
+    expect(res.body.ticket.id).toBe('st_1');
   });
 });

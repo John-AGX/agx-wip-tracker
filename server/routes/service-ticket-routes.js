@@ -34,6 +34,16 @@ const svc = require('../services/service-tickets');
 const access = require('../services/service-ticket-access');
 const workOrder = require('../services/service-ticket-workorder');
 const ticketNotify = require('../services/service-ticket-notify');
+const board = require('../services/service-ticket-board');
+const review = require('../services/work-order-review');
+const fields = require('../services/service-ticket-fields');
+const assignees = require('../services/service-ticket-assignees');
+const inflight = require('../services/inflight');
+const notices = require('../services/work-order-notices');
+// 1.29: what the crew flagged and what the office has seen (B4), and the change
+// orders started from a work order (B8). Office reads only.
+const flagSvc = require('../services/service-ticket-flags');
+const ticketCo = require('../services/service-ticket-change-order');
 
 const router = express.Router();
 
@@ -94,29 +104,48 @@ function callerUserId(req) {
   return Number.isSafeInteger(n) ? n : null;
 }
 
-// PROVE a body-supplied assignee belongs to this organization before it is
-// written. The foreign key only proves the user EXISTS, not whose they are, so
-// without this a ticket could be assigned to another tenant's user — a
-// cross-tenant write that also puts this org's work order on their My Day. Same
-// rule tasks-routes.js applies to a task's assignee and the participant door
-// applies to a participant.
+// PROVE a body-supplied assignee before it is written. The foreign key only
+// proves the user EXISTS, not whose they are, so without a proof a ticket could
+// be assigned to another tenant's user — a cross-tenant write that also puts
+// this org's work order on their My Day.
 //
-// Returns { ok: true, value } with the value to store (null clears it, as an
-// empty string always has), or { ok: false } for anything that is not an
-// in-org user id. A non-integer is refused HERE rather than handed to Postgres,
-// where `id = 'abc'` is a 22P02 and would surface as a 500.
-const ASSIGNEE_REFUSAL = 'Assignee is not a user in this organization';
-async function proveAssignee(raw, orgId) {
-  if (raw === null || raw === '') return { ok: true, value: null };
-  let n = NaN;
-  if (typeof raw === 'number') n = raw;
-  else if (typeof raw === 'string' && /^\s*\d+\s*$/.test(raw)) n = Number(raw);
-  if (!Number.isSafeInteger(n) || n <= 0 || orgId == null) return { ok: false };
-  const { rows } = await pool.query(
-    'SELECT 1 FROM users WHERE id = $1 AND organization_id = $2',
-    [n, orgId]
-  );
-  return rows.length ? { ok: true, value: n } : { ok: false };
+// The proof lives in services/service-ticket-assignees.js
+// proveAssigneeForParent, and it asks more than "in this org": the person must
+// be switched on and able to OPEN the ticket's job or lead (the rule every
+// ticket door asks), so an assignment never points at a work order its assignee
+// gets a 404 on. The shape of the id, and the sentence for "not a user here"
+// (ASSIGNEE_REFUSAL), come from services/service-ticket-fields.js — one copy.
+// A refusal answers 400 { error, field: 'assignee_user_id' }.
+const ASSIGNEE_FIELD = 'assignee_user_id';
+
+// The ticket's own address. A change to any of these with no new coordinates
+// clears lat/lng, so Navigate never pairs a new address with an old pin.
+const ADDRESS_FIELDS = Object.freeze(['street_address', 'city', 'state', 'zip']);
+const COORD_FIELDS = Object.freeze(['lat', 'lng']);
+
+function hasOwn(obj, key) {
+  return !!obj && Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+function actorOf(req) {
+  return {
+    kind: 'user',
+    userId: (req.user && req.user.id) || null,
+    label: (req.user && req.user.name) || null,
+  };
+}
+
+// A fire-and-forget notice, handed to services/inflight.js so a deploy lets it
+// finish. The function is looked up on its module object at call time (tests
+// and the notice cron replace it there), and a synchronous throw is caught the
+// same as a rejection: a notice never fails the write that justified it.
+function trackNotice(label, start) {
+  try {
+    return inflight.track(start(), label);
+  } catch (e) {
+    console.warn('[service-tickets] ' + label + ' failed to start:', e && e.message);
+    return null;
+  }
 }
 
 // A4's allow-list. Anything outside is silently dropped — the same shape
@@ -143,6 +172,11 @@ const TICKET_COLS = [
   'access_notes', 'scheduled_for', 'due_date', 'assignee_user_id',
   'completed_at', 'closed_at', 'archived_at', 'created_by', 'created_at',
   'updated_at', 'materials', 'crew_takeoff',
+  // 1.29: the approval notice's bookkeeping (the office banner reads it) and
+  // who approved or cancelled the work order, and when. Office only — none of
+  // these is in svc.PUBLIC_TICKET_KEYS.
+  'approval_notified_at', 'approval_notice_attempts', 'approval_notice_gave_up_at',
+  'approved_at', 'approved_by', 'cancelled_at', 'cancelled_by',
 ].join(', ');
 
 function newId(prefix) { return svc.genId(prefix); }
@@ -193,12 +227,23 @@ router.get('/', requireAuth, async (req, res) => {
       where.push(sql.split('$$').join('$' + params.length));
     };
 
+    // board=1 is the company-wide Service Tickets page (services/service-ticket-board.js).
+    // A bad view, sort or filter is refused before any statement runs.
+    const bq = board.parseBoardQuery(req.query);
+    if (bq.error) return res.status(400).json({ error: bq.error });
+
     if (req.query.job_id) add('t.job_id = $$', String(req.query.job_id));
     if (req.query.lead_id) add('t.lead_id = $$', String(req.query.lead_id));
     if (req.query.status) add('t.status = $$', svc.normalizeStatus(req.query.status));
-    if (req.query.assignee) add('t.assignee_user_id = $$', Number(req.query.assignee) || -1);
-    // One param, used twice — hence the split/join above.
-    if (req.query.q) add('(t.title ILIKE $$ OR t.ticket_number ILIKE $$)', '%' + String(req.query.q) + '%');
+    // 'me' is the caller and 'none' is unassigned; both used to become -1 and
+    // match nothing.
+    const assigneeWanted = req.query.assignee == null ? '' : String(req.query.assignee);
+    if (assigneeWanted === 'none') where.push('t.assignee_user_id IS NULL');
+    else if (assigneeWanted === 'me') add('t.assignee_user_id = $$', callerUserId(req) ?? -1);
+    else if (req.query.assignee) add('t.assignee_user_id = $$', Number(req.query.assignee) || -1);
+    // One param, used several times — hence the split/join above. The board
+    // also searches the address, the job's number and title and the lead's.
+    if (req.query.q) add(bq.active ? board.SEARCH_SQL : '(t.title ILIKE $$ OR t.ticket_number ILIKE $$)', '%' + String(req.query.q) + '%');
     if (!req.query.include_archived) where.push('t.archived_at IS NULL');
 
     // WHICH TICKETS THIS CALLER MAY SEE AT ALL. This list used to check the org
@@ -266,6 +311,10 @@ router.get('/', requireAuth, async (req, res) => {
     if (!visible.length) return res.json({ tickets: [] });
     where.push('(' + visible.join(' OR ') + ')');
 
+    // Everything `where` references, and nothing more: the board's counts
+    // statement binds these alone (Postgres refuses an unreferenced parameter).
+    const baseParams = params.slice();
+
     // The caller's id, for the private-to-do boundary on the progress counts.
     params.push(callerUserId(req));
     const caller = '$' + params.length;
@@ -284,29 +333,44 @@ router.get('/', requireAuth, async (req, res) => {
     // and the bar would disagree with the detail door, which lists the same
     // rows under the same predicate.
     //
-    // The org-wide Service Tickets page names each ticket's parent and
-    // assignee, so the list carries them as LABELS: the job's number and
-    // title, a lead-only ticket's lead title (a converted lead's ticket is the
-    // job's, exactly as the visibility above decides it) and the assignee's
+    // The list names each ticket's parent and assignee as LABELS (the board
+    // rows of the Service Tickets page carry the same three): the job's number
+    // and title, a lead-only ticket's lead title (a converted lead's ticket is
+    // the job's, exactly as the visibility above decides it) and the assignee's
     // name. Each join matches the ticket's OWN org and nothing else, so a label
     // can never be read off another tenant's row — a parent that is not in this
     // org comes back as a null label, never as someone else's name. The joins
     // only decorate: they cannot add or drop a row (every join is LEFT and
     // on a primary key), and the WHERE above qualifies every column with t.
-    const { rows } = await pool.query(
-      `SELECT ${TICKET_COLS.split(', ').map((c) => 't.' + c).join(', ')},
-              pj.data->>'jobNumber' AS job_number,
-              COALESCE(NULLIF(pj.data->>'title',''), pj.data->>'name') AS job_title,
-              CASE WHEN t.job_id IS NULL THEN pl.title END AS lead_title,
-              au.name AS assignee_name,
-              (SELECT COUNT(*)::int FROM tasks k
+    const taskCountCols = `(SELECT COUNT(*)::int FROM tasks k
                 WHERE k.service_ticket_id = t.id AND k.organization_id = t.organization_id
                   AND k.archived_at IS NULL
                   AND (k.scope = 'org' OR (k.scope = 'personal' AND k.owner_user_id = ${caller}))) AS task_total,
               (SELECT COUNT(*)::int FROM tasks k
                 WHERE k.service_ticket_id = t.id AND k.organization_id = t.organization_id
                   AND k.archived_at IS NULL AND k.status = 'done'
-                  AND (k.scope = 'org' OR (k.scope = 'personal' AND k.owner_user_id = ${caller}))) AS task_done
+                  AND (k.scope = 'org' OR (k.scope = 'personal' AND k.owner_user_id = ${caller}))) AS task_done`;
+
+    // The Service Tickets page: the same where, the same visibility, a slim row.
+    if (bq.active) {
+      const out = await board.runBoard(pool, {
+        orgId, user: req.user, userId: callerUserId(req), query: bq, where, baseParams, params, taskCountCols,
+      });
+      return res.status(out.status).json(out.body);
+    }
+
+    // 1.29 attention (services/service-ticket-flags.js ATTENTION_COLUMNS): open
+    // problems, suggestions waiting, the last crew activity (a link merely
+    // being opened is not activity) and when someone who can edit last opened
+    // the ticket. Each correlated subquery carries its own org predicate.
+    const { rows } = await pool.query(
+      `SELECT ${TICKET_COLS.split(', ').map((c) => 't.' + c).join(', ')},
+              pj.data->>'jobNumber' AS job_number,
+              COALESCE(NULLIF(pj.data->>'title',''), pj.data->>'name') AS job_title,
+              CASE WHEN t.job_id IS NULL THEN pl.title END AS lead_title,
+              au.name AS assignee_name,
+              ${taskCountCols},
+              ${flagSvc.ATTENTION_COLUMNS}
          FROM service_tickets t
          LEFT JOIN jobs pj ON pj.id = t.job_id AND pj.organization_id = t.organization_id
          LEFT JOIN leads pl ON pl.id = t.lead_id AND pl.organization_id = t.organization_id
@@ -316,10 +380,45 @@ router.get('/', requireAuth, async (req, res) => {
         LIMIT ${limit}`,
       params
     );
-    res.json({ tickets: rows });
+    // Counts as numbers and new_from_crew, then the draft change orders started
+    // from each ticket: a separate org-predicated read merged here, never a
+    // subquery, so a database without the change order table still lists
+    // (coDraftCounts answers {} on any error).
+    const listed = rows.map(flagSvc.withAttention);
+    const drafts = await ticketCo.coDraftCounts(pool, orgId, listed);
+    for (const t of listed) t.co_draft_count = Number((drafts && drafts[String(t.id)]) || 0);
+    res.json({ tickets: listed });
   } catch (e) {
     console.error('[service-tickets] list failed', e);
     res.status(500).json({ error: 'Failed to load service tickets' });
+  }
+});
+
+// ── 1.29: who a ticket on this job or lead may be assigned to ─────────────
+// The Assigned to picker's list. Only people who can OPEN the parent
+// (services/service-ticket-assignees.js), id and name only. Asked for WRITE
+// access on the parent, because only someone who can raise or edit a ticket
+// there needs the list: a narrow-tier caller not on the job, an absent job and
+// another tenant's job all get the same 404.
+router.get('/assignees/:kind/:parentId', requireAuth, requireOrgId, async (req, res) => {
+  try {
+    const orgId = req.orgId;
+    const pickedKind = String(req.params.kind || '');
+    if (pickedKind !== 'job' && pickedKind !== 'lead') return res.status(404).json({ error: 'Not found' });
+    const pickedId = String(req.params.parentId || '');
+    const pickedParent = pickedKind === 'job'
+      ? { job_id: pickedId, lead_id: null }
+      : { job_id: null, lead_id: pickedId };
+    const pickedMissing = pickedKind === 'job' ? 'Job not found' : 'Lead not found';
+    const inOrg = pickedId !== '' && (await assertEntityInOrg(pickedKind, pickedId, orgId));
+    if (!inOrg) return res.status(404).json({ error: pickedMissing });
+    const allowed = await ticketAccessOk(req, res, pickedParent, 'write', orgId, pickedMissing);
+    if (!allowed) return;
+    const users = await assignees.eligibleAssignees(pool, { orgId, parent: pickedParent });
+    res.json({ users });
+  } catch (e) {
+    console.error('[service-tickets] assignees failed', e);
+    res.status(500).json({ error: 'Failed to load the people this can be assigned to' });
   }
 });
 
@@ -328,8 +427,12 @@ router.post('/', requireAuth, requireOrgId, async (req, res) => {
   try {
     const orgId = req.orgId;
     const body = req.body || {};
-    const title = String(body.title == null ? '' : body.title).trim().slice(0, 300);
-    if (!title) return res.status(400).json({ error: 'A ticket needs a title' });
+    // The field check runs FIRST. It does not depend on the parent, so it is no
+    // existence oracle, and a bad date or an over-long scope is a 400 naming
+    // the field rather than a Postgres error surfacing as a 500.
+    const checked = fields.validateTicketFields(body, { mode: 'create' });
+    if (!checked.ok) return res.status(400).json({ error: checked.error, field: checked.field });
+    const title = checked.values.title;
 
     const jobId = body.job_id ? String(body.job_id) : null;
     const leadId = body.lead_id ? String(body.lead_id) : null;
@@ -372,22 +475,28 @@ router.post('/', requireAuth, requireOrgId, async (req, res) => {
     const vals = [id, orgId, jobId, leadId, title, (req.user && req.user.id) || null];
 
     // Optional fields go through the same allow-list the PATCH door uses, so
-    // create and edit cannot accept different sets.
-    for (const k of Object.keys(body)) {
-      if (!EDITABLE_FIELDS.has(k) || k === 'title') continue;
-      if (body[k] === undefined) continue;
-      let v = body[k] === '' ? null : body[k];
-      if (k === 'assignee_user_id') {
-        const proved = await proveAssignee(body[k], orgId);
-        if (!proved.ok) return res.status(400).json({ error: ASSIGNEE_REFUSAL });
-        v = proved.value;
-      }
+    // create and edit cannot accept different sets — and they are the CHECKED
+    // values (trimmed, real dates, allowed priorities), never the raw body.
+    for (const k of Object.keys(checked.values)) {
+      if (!EDITABLE_FIELDS.has(k) || k === 'title' || k === ASSIGNEE_FIELD) continue;
       cols.push(k);
-      vals.push(v);
+      vals.push(checked.values[k]);
     }
-    if (body.priority !== undefined) {
-      vals[cols.indexOf('priority')] = svc.normalizePriority(body.priority);
+
+    // The assignee, only now that the parent is settled: they must be able to
+    // open it.
+    if (hasOwn(checked.values, ASSIGNEE_FIELD)) {
+      const newAssignee = await assignees.proveAssigneeForParent(pool, {
+        raw: checked.values[ASSIGNEE_FIELD], orgId, parent,
+      });
+      if (!newAssignee.ok) return res.status(400).json({ error: newAssignee.error, field: ASSIGNEE_FIELD });
+      cols.push(ASSIGNEE_FIELD);
+      vals.push(newAssignee.value);
     }
+
+    const addressProblem = fields.ticketAddressProblem(checked.values);
+    if (addressProblem) return res.status(400).json({ error: addressProblem.error, field: addressProblem.field });
+
     if (Array.isArray(body.checklist)) {
       cols.push('checklist');
       vals.push(JSON.stringify(svc.normalizeChecklist(body.checklist)));
@@ -403,6 +512,17 @@ router.post('/', requireAuth, requireOrgId, async (req, res) => {
       actorUserId: (req.user && req.user.id) || null,
       detail: { parent: jobId ? 'job' : 'lead' },
     });
+    // Tell the new assignee, unless they raised it themselves. After the
+    // INSERT, never awaited.
+    const creator = actorOf(req);
+    if (ticket.assignee_user_id != null && String(ticket.assignee_user_id) !== String(creator.userId)) {
+      trackNotice('ticket_assignment', () => notices.notifyAssigned(pool, {
+        ticket,
+        assigneeUserId: ticket.assignee_user_id,
+        previousAssigneeUserId: null,
+        actor: creator,
+      }));
+    }
     res.json({ ok: true, ticket });
   } catch (e) {
     console.error('[service-tickets] create failed', e);
@@ -492,7 +612,53 @@ router.get('/:id', requireAuth, async (req, res) => {
     const [site, photosByTask, activity] = await Promise.all([
       workOrder.workOrderSite(pool, ticket),
       workOrder.taskPhotosByTask(pool, orgId, tasks.rows.map((t) => t.id)),
-      workOrder.subtaskActivity(pool, orgId, ticket.id),
+      // withIds: each building note carries its event id, so the office can
+      // start a change order from it. The crew link's read leaves it out.
+      workOrder.subtaskActivity(pool, orgId, ticket.id, { withIds: true }),
+    ]);
+
+    // 1.29 extras, each BEST-EFFORT: a failure reading one of them leaves it
+    // empty and the ticket still opens.
+    //   site_photos — the work order's own photos (not a building's), with who
+    //                 added each one.
+    //   review      — who approved or cancelled it, and the send-back the crew
+    //                 is still working from (null once the work arrives at
+    //                 Work complete again).
+    //   flags       — the problems the crew flagged, open first.
+    //   change_orders — the change orders started from this work order: ids,
+    //                 numbers, states and titles, never lines or money.
+    //   office_seen — true when this read stamped office_seen_at, which only a
+    //                 caller who can EDIT the ticket does (a view grant opening
+    //                 it must not clear "New from crew"). Never throws.
+    const [sitePhotos, reviewRead, flags, changeOrders, officeSeen] = await Promise.all([
+      (async () => workOrder.ticketSitePhotos(pool, orgId, ticket.id, { withNames: true }))().catch((e) => {
+        console.warn('[service-tickets] site photos read failed', e && e.message);
+        return [];
+      }),
+      (async () => {
+        const [names, sendBack] = await Promise.all([
+          review.peopleNames(pool, orgId, [ticket.approved_by, ticket.cancelled_by]),
+          review.activeSendBack(pool, ticket, tasks.rows),
+        ]);
+        const nameOf = (id) => (id == null ? null : (names[String(id)] || null));
+        return {
+          approved_by_name: nameOf(ticket.approved_by),
+          cancelled_by_name: nameOf(ticket.cancelled_by),
+          send_back: sendBack || null,
+        };
+      })().catch((e) => {
+        console.warn('[service-tickets] review read failed', e && e.message);
+        return { approved_by_name: null, cancelled_by_name: null, send_back: null };
+      }),
+      (async () => flagSvc.listOfficeFlags(pool, ticket))().catch((e) => {
+        console.warn('[service-tickets] flags read failed', e && e.message);
+        return [];
+      }),
+      (async () => ticketCo.linkedChangeOrders(pool, ticket))().catch((e) => {
+        console.warn('[service-tickets] change orders read failed', e && e.message);
+        return [];
+      }),
+      (async () => flagSvc.markOfficeSeen(pool, req.user, ticket, orgId))().catch(() => false),
     ]);
 
     res.json({
@@ -513,6 +679,11 @@ router.get('/:id', requireAuth, async (req, res) => {
       }),
       revisions: revisions.rows,
       participants: participants.rows,
+      site_photos: Array.isArray(sitePhotos) ? sitePhotos : [],
+      review: reviewRead,
+      flags: Array.isArray(flags) ? flags : [],
+      change_orders: Array.isArray(changeOrders) ? changeOrders : [],
+      office_seen: officeSeen === true,
     });
   } catch (e) {
     console.error('[service-tickets] read failed', e);
@@ -536,59 +707,169 @@ router.patch('/:id', requireAuth, requireOrgId, async (req, res) => {
     }
 
     const body = req.body || {};
-    const sets = [];
-    const params = [];
-    const changed = [];
-    for (const k of Object.keys(body)) {
-      if (!EDITABLE_FIELDS.has(k)) continue;
-      let v = body[k];
-      if (k === 'priority') v = svc.normalizePriority(v);
-      if (v === '') v = null;
-      if (k === 'assignee_user_id' && v !== undefined) {
-        // Proved before ANY statement runs, so a refused assignee leaves the
-        // other fields in the same body unwritten too — a half-applied edit
-        // answering 400 would be worse than either outcome.
-        const proved = await proveAssignee(v, orgId);
-        if (!proved.ok) return res.status(400).json({ error: ASSIGNEE_REFUSAL });
-        v = proved.value;
-      }
-      params.push(v);
-      sets.push(k + ' = $' + params.length);
-      changed.push(k);
+    // One field check for every office write (services/service-ticket-fields.js):
+    // a bad value is a 400 naming the field, and nothing is written.
+    const checked = fields.validateTicketFields(body, { mode: 'update' });
+    if (!checked.ok) return res.status(400).json({ error: checked.error, field: checked.field });
+    const values = {};
+    for (const k of Object.keys(checked.values)) {
+      if (EDITABLE_FIELDS.has(k)) values[k] = checked.values[k];
     }
-    if (Array.isArray(body.checklist)) {
-      params.push(JSON.stringify(svc.normalizeChecklist(body.checklist)));
-      sets.push('checklist = $' + params.length);
-      changed.push('checklist');
-    }
+    const checklist = Array.isArray(body.checklist) ? svc.normalizeChecklist(body.checklist) : null;
     // The optional material list — description and quantity only. An empty
     // list clears it (NULL), so the crew link shows no Materials card.
-    if (Array.isArray(body.materials) || body.materials === null) {
-      const list = svc.normalizeMaterials(body.materials);
-      params.push(list.length ? JSON.stringify(list) : null);
-      sets.push('materials = $' + params.length + '::jsonb');
-      changed.push('materials');
+    const materials = Array.isArray(body.materials) || body.materials === null
+      ? svc.normalizeMaterials(body.materials)
+      : null;
+
+    // A CHANGED assignee is proved before any statement runs, so a refusal
+    // leaves the other fields in the same body unwritten too. An UNCHANGED one
+    // is never re-proved: a ticket whose assignee has since lost access to the
+    // job can still have its title saved.
+    const proved = new Set();
+    const proveNewAssignee = async (raw) => {
+      const verdict = await assignees.proveAssigneeForParent(pool, { raw, orgId, parent: ticket });
+      if (verdict.ok) proved.add(fields.ticketFieldComparable(ASSIGNEE_FIELD, verdict.value));
+      return verdict;
+    };
+    if (hasOwn(values, ASSIGNEE_FIELD)
+        && !fields.sameTicketFieldValue(ASSIGNEE_FIELD, ticket.assignee_user_id, values[ASSIGNEE_FIELD])) {
+      const verdict = await proveNewAssignee(values[ASSIGNEE_FIELD]);
+      if (!verdict.ok) return res.status(400).json({ error: verdict.error, field: ASSIGNEE_FIELD });
+      values[ASSIGNEE_FIELD] = verdict.value;
     }
-    if (!sets.length) return res.json({ ok: true, ticket });
 
-    params.push(ticket.id, orgId);
-    const { rows } = await pool.query(
-      `UPDATE service_tickets SET ${sets.join(', ')}, updated_at = NOW()
-        WHERE id = $${params.length - 1} AND organization_id = $${params.length}
-      RETURNING ${TICKET_COLS}`,
-      params
-    );
-    if (!rows[0]) return res.status(404).json({ error: 'Service ticket not found' });
+    // Changed-only, inside a lock on the row: what "changed" means, and whether
+    // someone else got there first, is decided against the row as it is NOW.
+    const client = await pool.connect();
+    let inTx = false;
+    let row = null;
+    let locked = null;
+    let changed = [];
+    try {
+      await client.query('BEGIN');
+      inTx = true;
+      const refuse = async (status, payload) => {
+        inTx = false;
+        await client.query('ROLLBACK');
+        res.status(status).json(payload);
+        return null;
+      };
 
+      const lockedRes = await client.query(
+        `SELECT ${TICKET_COLS} FROM service_tickets WHERE id = $1 AND organization_id = $2 FOR UPDATE`,
+        [ticket.id, orgId]
+      );
+      locked = lockedRes.rows[0] || null;
+      if (!locked) return await refuse(404, { error: TICKET_NOT_FOUND });
+      if (svc.isTerminal(locked.status)) {
+        return await refuse(409, { error: 'This ticket is ' + locked.status + '. Reopen it before editing.' });
+      }
+
+      // THE CONFLICT CHECK. `expected` carries, per field, the value the page
+      // loaded. A field someone else changed since is refused as a whole save,
+      // naming the fields, so nobody's edit is silently overwritten.
+      const expected = body.expected && typeof body.expected === 'object' && !Array.isArray(body.expected)
+        ? body.expected
+        : null;
+      const conflicts = [];
+      if (expected) {
+        for (const k of Object.keys(values)) {
+          if (!hasOwn(expected, k) || COORD_FIELDS.indexOf(k) >= 0) continue;
+          if (!fields.sameTicketFieldValue(k, locked[k], expected[k])) conflicts.push(k);
+        }
+      }
+      if (conflicts.length) {
+        return await refuse(409, {
+          error: 'Someone else changed ' + fields.labelList(conflicts) + ' while you were editing. Nothing was saved.',
+          code: 'edit_conflict',
+          fields: conflicts,
+          ticket: locked,
+        });
+      }
+
+      const sets = [];
+      const params = [];
+      for (const k of Object.keys(values)) {
+        if (fields.sameTicketFieldValue(k, locked[k], values[k])) continue;
+        params.push(values[k]);
+        sets.push(k + ' = $' + params.length);
+        changed.push(k);
+      }
+
+      // The assignee moved under us to someone other than the value this save
+      // sends: that value was never proved against the row, so prove it now.
+      if (changed.indexOf(ASSIGNEE_FIELD) >= 0
+          && !proved.has(fields.ticketFieldComparable(ASSIGNEE_FIELD, values[ASSIGNEE_FIELD]))) {
+        const verdict = await proveNewAssignee(values[ASSIGNEE_FIELD]);
+        if (!verdict.ok) return await refuse(400, { error: verdict.error, field: ASSIGNEE_FIELD });
+      }
+
+      const addressChanged = changed.some((k) => ADDRESS_FIELDS.indexOf(k) >= 0);
+      if (addressChanged) {
+        const problem = fields.ticketAddressProblem(Object.assign({}, locked, values));
+        if (problem) return await refuse(400, { error: problem.error, field: problem.field });
+        if (!hasOwn(body, 'lat') && !hasOwn(body, 'lng')) sets.push('lat = NULL', 'lng = NULL');
+      }
+
+      if (checklist) {
+        params.push(JSON.stringify(checklist));
+        sets.push('checklist = $' + params.length);
+        changed.push('checklist');
+      }
+      if (materials) {
+        params.push(materials.length ? JSON.stringify(materials) : null);
+        sets.push('materials = $' + params.length + '::jsonb');
+        changed.push('materials');
+      }
+
+      if (!changed.length) {
+        inTx = false;
+        await client.query('COMMIT');
+        return res.json({ ok: true, ticket: locked, changed: [] });
+      }
+
+      params.push(ticket.id, orgId);
+      const { rows } = await client.query(
+        `UPDATE service_tickets SET ${sets.join(', ')}, updated_at = NOW()
+          WHERE id = $${params.length - 1} AND organization_id = $${params.length}
+        RETURNING ${TICKET_COLS}`,
+        params
+      );
+      row = rows[0] || null;
+      if (!row) return await refuse(404, { error: TICKET_NOT_FOUND });
+      inTx = false;
+      await client.query('COMMIT');
+    } catch (e) {
+      if (inTx) {
+        try { await client.query('ROLLBACK'); } catch (_) { /* the original error matters */ }
+      }
+      throw e;
+    } finally {
+      client.release();
+    }
+
+    // After COMMIT, so a failed log can never turn the commit into a rollback.
     // detail is SHAPE, not contents — field NAMES only. Never the values: a
     // scope or a site contact is not something the event log should carry.
-    await logEvent(null, rows[0], 'field_changed', {
+    await logEvent(null, row, 'field_changed', {
       actorUserId: (req.user && req.user.id) || null,
       detail: { fields: changed },
     });
-    res.json({ ok: true, ticket: rows[0] });
+    const editor = actorOf(req);
+    if (changed.indexOf(ASSIGNEE_FIELD) >= 0 && row.assignee_user_id != null
+        && String(row.assignee_user_id) !== String(editor.userId)) {
+      trackNotice('ticket_assignment', () => notices.notifyAssigned(pool, {
+        ticket: row,
+        assigneeUserId: row.assignee_user_id,
+        previousAssigneeUserId: locked.assignee_user_id,
+        actor: editor,
+      }));
+    }
+    res.json({ ok: true, ticket: row, changed });
   } catch (e) {
     console.error('[service-tickets] patch failed', e);
+    if (res.headersSent) return;
     res.status(500).json({ error: 'Failed to update service ticket' });
   }
 });
@@ -600,30 +881,58 @@ router.patch('/:id', requireAuth, requireOrgId, async (req, res) => {
 // crew's Mark complete cannot follow different rules. Photos themselves go
 // through the ordinary attachment door (POST /api/attachments/task/:id, tagged
 // "before" for a before photo).
+//
+// THE OFFICE GATE (1.29), asked by setSubtaskDone on the ticket row it holds
+// LOCKED — never on the copy this request loaded a moment earlier, which a
+// close or a cancel in between would make a lie. It is the ticket-writer arm of
+// services/service-ticket-subtask-door.js doneVerdict, the rule My Tasks and
+// the job's Tasks panel ask of the same person: whoever can edit the job may
+// finish or reopen a building on any work order that is not closed or
+// cancelled. Write access itself was already proved by ticketAccessOk. A
+// refusal is 409 { error, code: 'work_order_locked' }.
+function officeSubtaskGate(lockedRow) {
+  const status = svc.normalizeStatus(lockedRow && lockedRow.status);
+  if (!svc.isTerminal(status)) return { ok: true };
+  return {
+    ok: false,
+    status: 409,
+    error: 'This work order is ' + status + '. Reopen it before changing its punch list.',
+    code: 'work_order_locked',
+  };
+}
+
 router.post('/:id/subtasks/:taskId/done', requireAuth, requireOrgId, async (req, res) => {
   try {
     const orgId = req.orgId;
     const ticket = await loadOwnedTicket(req.params.id, orgId);
     if (!ticket) return res.status(404).json({ error: TICKET_NOT_FOUND });
     if (!(await ticketAccessOk(req, res, ticket, 'write', orgId))) return;
-    if (svc.isTerminal(ticket.status)) {
-      return res.status(409).json({ error: 'This ticket is ' + ticket.status + '. Reopen it before changing subtasks.' });
-    }
+    const finisher = actorOf(req);
     const result = await workOrder.setSubtaskDone(pool, {
       ticket,
       taskId: req.params.taskId,
       done: !!(req.body && req.body.done),
-      actor: { kind: 'user', userId: (req.user && req.user.id) || null, label: (req.user && req.user.name) || null },
+      actor: finisher,
+      gate: officeSubtaskGate,
     });
-    if (!result.ok) return res.status(result.status).json({ error: result.error });
+    if (!result.ok) {
+      // The refusal keeps its code (work_order_locked,
+      // completion_photo_required), so the office can tell "locked" from "add
+      // a photo" without reading the sentence.
+      const refusal = { error: result.error };
+      if (result.code) refusal.code = result.code;
+      return res.status(result.status || 409).json(refusal);
+    }
     // The last subtask just moved the ticket to Awaiting approval: tell the
-    // approvers. Not awaited — the notice never holds up the answer.
+    // approvers. Not awaited — the notice never holds up the answer — but
+    // tracked, so a deploy lets it finish. It describes result.ticket, the row
+    // as it was under the lock with its new status, not the pre-lock copy.
     if (result.movedTo === 'work_complete') {
-      ticketNotify.notifyAwaitingApproval(pool, {
-        ticket,
-        actor: { kind: 'user', userId: (req.user && req.user.id) || null, label: (req.user && req.user.name) || null },
+      trackNotice('ticket_approval', () => ticketNotify.notifyAwaitingApproval(pool, {
+        ticket: result.ticket,
+        actor: finisher,
         reason: 'all_subtasks_done',
-      });
+      }));
     }
     res.json({ ok: true, task: result.task, ticket_status: result.ticketStatus });
   } catch (e) {
@@ -642,6 +951,10 @@ router.post('/:id/subtasks/:taskId/note', requireAuth, requireOrgId, async (req,
       ticket,
       taskId: req.params.taskId,
       note: req.body && req.body.note,
+      // The retry key, when the caller carries one (1.30). Passed straight
+      // through — addSubtaskNote is the one place that decides what a key may
+      // look like, so the office and crew doors cannot drift apart on it.
+      clientRef: req.body && req.body.client_ref,
       actor: { kind: 'user', userId: (req.user && req.user.id) || null, label: (req.user && req.user.name) || null },
     });
     if (!result.ok) return res.status(result.status).json({ error: result.error });
@@ -1154,7 +1467,15 @@ router.put('/:id/crew-takeoff', requireAuth, requireOrgId, async (req, res) => {
 });
 
 // ── A5: status ──────────────────────────────────────────────────────────
-// Its own door so the transition lattice is enforced in exactly one place.
+// Its own door so the transition lattice is enforced in exactly one place
+// (svc.ticketMayTransition). Everything around it — the stale-screen check,
+// required reasons, the approve / cancel stamps, the send-back that reopens
+// buildings, the buildings-still-open override and the guarded UPDATE — is
+// services/work-order-review.js changeStatus, the one status executor.
+//
+// Body: { status, expected_status?, reason? (legacy: note), override?: true,
+//         copy_scope?: true, reopen_tasks?: [id | { id, note }] }
+// Notices go out only after the move COMMITTED, never on a refusal or a no-op.
 router.post('/:id/status', requireAuth, requireOrgId, async (req, res) => {
   try {
     const orgId = req.orgId;
@@ -1163,47 +1484,62 @@ router.post('/:id/status', requireAuth, requireOrgId, async (req, res) => {
 
     if (!(await ticketAccessOk(req, res, ticket, 'write', orgId))) return;
 
-    const next = String((req.body || {}).status || '');
-    const verdict = svc.ticketMayTransition(ticket.status, next, 'user');
-    if (!verdict.ok) return res.status(403).json({ error: verdict.reason });
-    if (next === ticket.status) return res.json({ ok: true, ticket });
-
-    // completed_at is set when the work is reported done and CLEARED when the
-    // ticket moves back off it — the task-share precedent never clears its
-    // equivalent, which leaves a reopened item claiming a completion date.
-    const stamps = [];
-    if (next === 'work_complete') stamps.push('completed_at = COALESCE(completed_at, NOW())');
-    if (next === 'in_progress' || next === 'scheduled' || next === 'open') {
-      stamps.push('completed_at = NULL');
-      // The office sent it back for more work: the next arrival at Work
-      // complete is news, even inside the notice's 15-minute window — that
-      // window is for the crew's own undo-and-redo, not for rework.
-      stamps.push('approval_notified_at = NULL');
-    }
-    if (next === 'closed') stamps.push('closed_at = NOW()');
-    if (next === 'open') stamps.push('closed_at = NULL');
-
-    const { rows } = await pool.query(
-      `UPDATE service_tickets
-          SET status = $1${stamps.length ? ', ' + stamps.join(', ') : ''}, updated_at = NOW()
-        WHERE id = $2 AND organization_id = $3
-      RETURNING ${TICKET_COLS}`,
-      [next, ticket.id, orgId]
-    );
-    if (!rows[0]) return res.status(404).json({ error: 'Service ticket not found' });
-
-    await logEvent(null, rows[0], 'status_changed', {
-      actorUserId: (req.user && req.user.id) || null,
-      detail: { from: ticket.status, to: next },
+    const body = req.body || {};
+    const actor = actorOf(req);
+    const result = await review.changeStatus(pool, {
+      ticket,
+      next: String(body.status || ''),
+      expectedStatus: body.expected_status,
+      reason: body.reason != null ? body.reason : body.note,
+      override: body.override === true,
+      copyScope: body.copy_scope === true,
+      reopenTasks: body.reopen_tasks,
+      actor,
+      returning: TICKET_COLS,
     });
-    if (next === 'work_complete') {
-      ticketNotify.notifyAwaitingApproval(pool, {
-        ticket: rows[0],
-        actor: { kind: 'user', userId: (req.user && req.user.id) || null, label: (req.user && req.user.name) || null },
-        reason: 'office_moved',
-      });
+    if (!result.ok) {
+      const refusal = { error: result.error };
+      for (const k of ['code', 'current_status', 'open', 'total']) {
+        if (result[k] !== undefined) refusal[k] = result[k];
+      }
+      return res.status(result.status).json(refusal);
     }
-    res.json({ ok: true, ticket: rows[0] });
+    if (!result.applied) return res.json({ ok: true, ticket: result.ticket });
+
+    if (result.to === 'work_complete') {
+      trackNotice('ticket_approval', () => ticketNotify.notifyAwaitingApproval(pool, {
+        ticket: result.ticket,
+        actor,
+        reason: 'office_moved',
+      }));
+    }
+
+    const answer = { ok: true, ticket: result.ticket };
+    if (result.action === 'send_back' && result.sendBack) {
+      // The crew hears why by email: every live responding link that has an
+      // address. Looked up here so the answer can say whether anyone is being
+      // emailed; the send itself is not awaited.
+      let recipients = [];
+      try {
+        recipients = await notices.sendBackRecipients(pool, result.ticket);
+      } catch (e) {
+        recipients = [];
+      }
+      if (!Array.isArray(recipients)) recipients = [];
+      if (recipients.length) {
+        trackNotice('ticket_sent_back', () => notices.notifySentBack(pool, {
+          ticket: result.ticket,
+          actor,
+          sendBack: result.sendBack,
+          recipients,
+        }));
+      }
+      answer.send_back = {
+        reopened: (result.sendBack.buildings || []).filter((b) => b && b.reopened).length,
+        crew_emailing: recipients.length,
+      };
+    }
+    res.json(answer);
   } catch (e) {
     console.error('[service-tickets] status failed', e);
     res.status(500).json({ error: 'Failed to change status' });
@@ -1230,6 +1566,25 @@ router.delete('/:id', requireAuth, requireOrgId, async (req, res) => {
       [ticket.id, orgId]
     );
     if (!rows[0]) return res.status(404).json({ error: 'Service ticket not found' });
+
+    // An archived work order does not leave the crew's problems open behind it,
+    // for the same reason closing and cancelling do not (work-order-review.js
+    // changeStatus): the office only gets a Resolve box while a ticket is
+    // reachable, so an open flag on an archived one could never be cleared.
+    // Same helper, same flag_resolved line, org-scoped by the ticket row.
+    //
+    // BEST EFFORT, unlike the close path: that one runs inside the status
+    // transaction and is strict, because a swallowed failure there would turn
+    // COMMIT into a silent no-op. Here the archive UPDATE has already landed on
+    // its own, so a failure to tidy the flags must not turn a successful
+    // archive into a 500 the caller would retry against an already-archived row
+    // (and be told 404).
+    try {
+      await flagSvc.resolveOpenFlagsOnClose(pool, ticket, actorOf(req), 'Archived with the work order.');
+    } catch (e) {
+      console.warn('[service-tickets] archive flag clean-up failed', e && e.message);
+    }
+
     await logEvent(null, ticket, 'field_changed', {
       actorUserId: (req.user && req.user.id) || null,
       detail: { fields: ['archived_at'] },

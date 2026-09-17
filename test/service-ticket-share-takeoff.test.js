@@ -151,6 +151,11 @@ function makeWorld(opts) {
       return { rows: world.users.filter((u) => String(u.id) === String(p[0])) };
     }
     if (/FROM attachments WHERE entity_type = 'task'/i.test(text)) return { rows: [] };
+    // 1.29 reads on T1: the work order's site photos. The newest status event
+    // (finish.can_undo) and the send-back banner are answered by the
+    // service_ticket_events arm above.
+    if (/FROM attachments a WHERE a\.entity_type = 'service_ticket'/i.test(text)) return { rows: [] };
+    if (/FROM service_ticket_flags/i.test(text)) return { rows: [] };
 
     // jobs / leads / estimates keyed on id, with the org predicate honoured
     // only when the statement carries one.
@@ -231,6 +236,7 @@ jest.mock('../server/rate-limit', () => {
   const pass = (req, res, next) => next();
   return {
     stShareIpLimiter: pass, stShareViewLimiter: pass, stShareWriteLimiter: pass, stSharePropose: pass,
+    stShareFlagLimiter: pass,
     ipLoginLimiter: pass, ipGenericLimiter: pass, aiChatLimiter: pass, aiChatHourlyLimiter: pass,
     ingestLimiter: pass, liveJoinLimiter: pass, liveStreamLimiter: pass, liveViewLimiter: pass,
     liveRoomViewLimiter: pass, liveMirrorLimiter: pass, liveSnapLimiter: pass, liveRoomSnapLimiter: pass,

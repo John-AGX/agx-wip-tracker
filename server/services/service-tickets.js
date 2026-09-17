@@ -334,13 +334,25 @@ function normalizeChecklist(list) {
 // two guests writing at once cannot lose one another's note.
 const GUEST_NOTE_MAX = 2000;
 
-function guestNoteStamp(note, share) {
+// opts (1.29) carries a PRE-FORMATTED `when` (date, time and zone, formatted by
+// the caller in the org's timezone, so this module stays require-free) and the
+// number of field-report photos sent with the note:
+//   — Jose (via shared link) · Sep 15, 2026, 2:32 PM EDT · 2 photos: body
+// Without opts the stamp is byte-for-byte what it has always been, so entries
+// already in guest_log and every caller that passes no opts are unchanged.
+function guestNoteStamp(note, share, opts) {
   const body = String(note == null ? '' : note).trim().slice(0, GUEST_NOTE_MAX);
   if (!body) return null;
   const who = (share && String(share.recipient_name || '').trim()) ||
               (share && String(share.recipient_email || '').trim()) ||
               'shared link';
-  return '\n\n— ' + who + ' (via shared link): ' + body;
+  const when = opts && opts.when != null ? String(opts.when).trim() : '';
+  const n = opts ? Math.max(0, Math.floor(Number(opts.photoCount) || 0)) : 0;
+  if (!when && !n) return '\n\n— ' + who + ' (via shared link): ' + body;
+  return '\n\n— ' + who + ' (via shared link)' +
+    (when ? ' · ' + when : '') +
+    (n ? ' · ' + n + (n === 1 ? ' photo' : ' photos') : '') +
+    ': ' + body;
 }
 
 // A guest name is write-once: it labels every note they have already left, so
@@ -468,12 +480,60 @@ function autoStatusForSubtasks(status, allDone) {
   return null;
 }
 
+// Who may change the SHAPE of the punch list (add, move, unlink or archive a
+// building). Once the office has approved, closed or cancelled the work order,
+// the list is the record of what was approved or stopped, so nobody changes it
+// until the ticket is reopened. Draft through work_complete stay open: the
+// office is still assembling or checking the work.
+const STRUCTURE_LOCKED_STATUSES = Object.freeze(['approved', 'closed', 'cancelled']);
+
+function subtaskStructureWritable(status) {
+  const s = normalizeStatus(status);
+  if (STRUCTURE_LOCKED_STATUSES.indexOf(s) >= 0) {
+    return { ok: false, reason: 'This work order is ' + s + '. Reopen it before changing its punch list.' };
+  }
+  return { ok: true };
+}
+
+// A crew link may take back its OWN "Mark work complete", and only while that
+// is still the newest thing that happened to the status. Anything else — the
+// office moved it, another link finished it, the last building ticked it over
+// (reason all_subtasks_done), or it has left work_complete — is the office's
+// to undo. `lastEvent` is the newest status_changed row for the ticket; its
+// detail may arrive as JSON text from a driver that does not parse jsonb.
+const UNDO_FINISH_REFUSAL = "The office has already acted on this work order, so it can't be taken back from this link. Call the office if work is still needed.";
+
+function crewMayUndoFinish(status, lastEvent, shareId) {
+  const refuse = { ok: false, reason: UNDO_FINISH_REFUSAL };
+  if (normalizeStatus(status) !== 'work_complete') return refuse;
+  if (!lastEvent || typeof lastEvent !== 'object') return refuse;
+  let d = lastEvent.detail;
+  if (typeof d === 'string') {
+    try { d = JSON.parse(d); } catch (_) { d = null; }
+  }
+  if (!d || typeof d !== 'object') return refuse;
+  if (lastEvent.actor_kind !== 'share') return refuse;
+  if (shareId == null || lastEvent.share_id == null || String(lastEvent.share_id) !== String(shareId)) return refuse;
+  if (d.to !== 'work_complete' || d.reason !== 'marked_complete') return refuse;
+  return { ok: true };
+}
+
+// "18 of 21 buildings aren't" / "1 of 21 buildings isn't" / "1 of 1 building
+// isn't". Callers append the ending (' finished.' on the crew link, ' done yet.'
+// in the office).
+function openSubtasksLine(open, total, noun) {
+  return open + ' of ' + total + ' ' + (total === 1 ? noun : noun + 's') + ' ' + (open === 1 ? "isn't" : "aren't");
+}
+
 module.exports = {
   normalizeMaterials,
   photoKindOf,
   subtaskMayComplete,
   crewSubtasksWritable,
   autoStatusForSubtasks,
+  subtaskStructureWritable,
+  crewMayUndoFinish,
+  openSubtasksLine,
   genId,
   genToken,
   hashToken,

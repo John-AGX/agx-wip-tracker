@@ -92,7 +92,9 @@ const isImageAttachment = viewerIsImageAttachment();
 const ORG_A = 1;
 const ORG_B = 2;
 
-const TABLES = ['attachments', 'jobs', 'leads', 'job_access', 'roles', 'users'];
+// 'tasks' rides along because the flat /recent widget now asks it which task
+// rows are work-order buildings, so their photos stay off every widget.
+const TABLES = ['attachments', 'jobs', 'leads', 'job_access', 'roles', 'users', 'tasks'];
 const SCHEMA = sqliteSchema(TABLES, {
   pk: { attachments: 'id', jobs: 'id', leads: 'id', roles: 'name', users: 'id' },
 });

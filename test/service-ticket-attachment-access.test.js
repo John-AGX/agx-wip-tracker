@@ -16,6 +16,21 @@
 //   * the narrow job tier (JOBS_VIEW_ASSIGNED / JOBS_EDIT_OWN) was never
 //     narrowed to the jobs the caller is actually on.
 //
+// ── THE SAME DEFECT, THE OTHER HALF (1.30) ────────────────────────────────
+// A work order's BUILDINGS are task rows, and the crew's before / completion
+// photos hang on entity_type 'task'. The ticket rule short-circuited for every
+// entity type but the ticket itself, so the building half kept the coarse
+// 'task' string — JOBS_* plus LEADS_VIEW / LEADS_EDIT, org-wide, no job check.
+// A leads-only user listed and downloaded every building photo on a job they
+// cannot open; a PM off that job moved a completion photo onto a lead of their
+// own, or deleted it, on any work order the 1.29 photo guard does not lock.
+// ticketParentOk now resolves a task through the photo guard (task ->
+// service_ticket_id -> ticket, org-scoped) and asks the ticket's rule, with ONE
+// exception: on the WRITE half, the building's own assignee passes, because
+// service-ticket-subtask-door.js lets them finish a building without the right
+// to edit the job and finishing means uploading its completion photo. A task on
+// no ticket keeps its own rule, untouched.
+//
 // ── THE FIX UNDER TEST ────────────────────────────────────────────────────
 // The flat functions now return the COARSE list for 'service_ticket' (the
 // necessary pre-gate), and every door — list, raw bytes, tag suggest, upload,
@@ -94,8 +109,8 @@ const dispatcher = require('../server/services/payload-dispatcher');
 const auth = require('../server/auth');
 
 const TABLES = [
-  'organizations', 'users', 'roles', 'jobs', 'job_access', 'leads',
-  'service_tickets', 'attachments', 'file_folders', 'org_tags',
+  'organizations', 'users', 'roles', 'jobs', 'job_access', 'leads', 'tasks',
+  'service_tickets', 'service_ticket_events', 'attachments', 'file_folders', 'org_tags',
 ];
 
 // ── the people ────────────────────────────────────────────────────────────
@@ -137,12 +152,25 @@ const PHOTO = {
   j1: 'att_j1', j2: 'att_j2', j3: 'att_j3', l1: 'att_l1',
   foreign: 'att_b', unowned: 'att_unowned', orphan: 'att_orphan', absent: 'att_nope',
 };
+// The BUILDINGS of those work orders — where the before / completion photos
+// actually live (entity_type 'task'). `asg` is a building on job j3, assigned
+// to CREW, who holds no grant on j3: the assignee exception, and nothing else.
+// `plain` is an ordinary org to-do on no ticket — the control that must not move.
+const BUILDING = {
+  j1: 'tk_j1', j2: 'tk_j2', j3: 'tk_j3', l1: 'tk_l1',
+  asg: 'tk_asg', plain: 'tk_plain', foreign: 'tk_b', absent: 'tk_nope',
+};
+const BPHOTO = {
+  j1: 'att_tk_j1', j2: 'att_tk_j2', j3: 'att_tk_j3', l1: 'att_tk_l1',
+  asg: 'att_tk_asg', plain: 'att_tk_plain', foreign: 'att_tk_b', absent: 'att_nope',
+};
 
 function seed() {
   const caps = (list) => "'" + JSON.stringify(list) + "'";
   mockEng.db.exec(`
     DELETE FROM organizations; DELETE FROM users; DELETE FROM roles; DELETE FROM jobs;
-    DELETE FROM job_access; DELETE FROM leads; DELETE FROM service_tickets;
+    DELETE FROM job_access; DELETE FROM leads; DELETE FROM tasks; DELETE FROM service_tickets;
+    DELETE FROM service_ticket_events;
     DELETE FROM attachments; DELETE FROM file_folders; DELETE FROM org_tags;
 
     INSERT INTO organizations (id, name) VALUES (1, 'AGX'), (2, 'Rival Co');
@@ -179,6 +207,18 @@ function seed() {
       ('st_b',  2, 'RIVAL gate', 'j9', NULL, 'open', '[]'),
       ('st_unowned', NULL, 'No tenant named', 'j1', NULL, 'open', '[]');
 
+    -- The buildings on those work orders. tk_asg is assigned to CREW (20), who
+    -- holds no grant on j3; tk_plain hangs on no ticket at all.
+    INSERT INTO tasks (id, organization_id, title, status, scope, service_ticket_id,
+                       entity_type, entity_id, assignee_user_id, archived_at) VALUES
+      ('tk_j1',    1, 'Bldg 1 — j1',   'open', 'org', 'st_j1', 'job',  'j1', NULL, NULL),
+      ('tk_j2',    1, 'Bldg 2 — j2',   'open', 'org', 'st_j2', 'job',  'j2', NULL, NULL),
+      ('tk_j3',    1, 'Bldg 3 — j3',   'open', 'org', 'st_j3', 'job',  'j3', NULL, NULL),
+      ('tk_l1',    1, 'Bldg L — l1',   'open', 'org', 'st_l1', 'lead', 'l1', NULL, NULL),
+      ('tk_asg',   1, 'Bldg 9 — j3',   'open', 'org', 'st_j3', 'job',  'j3', 20,   NULL),
+      ('tk_plain', 1, 'Office to-do',  'open', 'org', NULL,    'job',  'j1', NULL, NULL),
+      ('tk_b',     2, 'Rival bldg',    'open', 'org', 'st_b',  'job',  'j9', NULL, NULL);
+
     -- Crew photos, written the way the guest door writes them: uploaded_by
     -- NULL, organization stamp copied off the ticket.
     INSERT INTO attachments (id, entity_type, entity_id, filename, mime_type, size_bytes,
@@ -192,13 +232,23 @@ function seed() {
       ('att_orphan',  'service_ticket', 'st_gone',    'ORPHAN.jpg',  'image/jpeg', 10, 'k/o_orig.jpg', 'k/o_web.jpg', NULL, '["roof"]', 1, NULL, 0),
       -- CONTROLS: the same shape on a lead and on a job. Their rules must not move.
       ('att_lead', 'lead', 'l1', 'LEAD.jpg', 'image/jpeg', 10, 'k/ld_orig.jpg', 'k/ld_web.jpg', NULL, '["roof"]', 1, 10, 0),
-      ('att_job',  'job',  'j1', 'JOB.jpg',  'image/jpeg', 10, 'k/jb_orig.jpg', 'k/jb_web.jpg', NULL, '["roof"]', 1, 10, 0);
+      ('att_job',  'job',  'j1', 'JOB.jpg',  'image/jpeg', 10, 'k/jb_orig.jpg', 'k/jb_web.jpg', NULL, '["roof"]', 1, 10, 0),
+      -- BUILDING photos: one per building, tags [] (a completion photo).
+      ('att_tk_j1',    'task', 'tk_j1',    'BLDG-J1.jpg',    'image/jpeg', 10, 'k/tj1_orig.jpg', 'k/tj1_web.jpg', NULL, '[]', 1, NULL, 0),
+      ('att_tk_j2',    'task', 'tk_j2',    'BLDG-J2.jpg',    'image/jpeg', 10, 'k/tj2_orig.jpg', 'k/tj2_web.jpg', NULL, '[]', 1, NULL, 0),
+      ('att_tk_j3',    'task', 'tk_j3',    'BLDG-J3.jpg',    'image/jpeg', 10, 'k/tj3_orig.jpg', 'k/tj3_web.jpg', NULL, '[]', 1, NULL, 0),
+      ('att_tk_l1',    'task', 'tk_l1',    'BLDG-L1.jpg',    'image/jpeg', 10, 'k/tl1_orig.jpg', 'k/tl1_web.jpg', NULL, '[]', 1, NULL, 0),
+      ('att_tk_asg',   'task', 'tk_asg',   'BLDG-ASG.jpg',   'image/jpeg', 10, 'k/tas_orig.jpg', 'k/tas_web.jpg', NULL, '[]', 1, NULL, 0),
+      ('att_tk_plain', 'task', 'tk_plain', 'BLDG-PLAIN.jpg', 'image/jpeg', 10, 'k/tpl_orig.jpg', 'k/tpl_web.jpg', NULL, '[]', 1, 10,   0),
+      ('att_tk_b',     'task', 'tk_b',     'BLDG-RIVAL.jpg', 'image/jpeg', 10, 'k/tb_orig.jpg',  'k/tb_web.jpg',  NULL, '[]', 2, NULL, 0);
   `);
 }
 
 beforeAll(async () => {
   mockEng = createPgSqlite(sqliteSchema(TABLES), {
-    jsonColumns: ['checklist', 'capabilities', 'data', 'tags', 'annotations'],
+    // 'detail' is service_ticket_events' jsonb — the photo guard's timeline
+    // rows, written when a building photo is deleted or moved.
+    jsonColumns: ['checklist', 'capabilities', 'data', 'tags', 'annotations', 'detail'],
   });
   // attachment-tags.js serialises catalog writes with an advisory lock; sqlite
   // has neither function. Only reached on a successful tag write.
@@ -372,6 +422,61 @@ const WRITE_DOORS = {
   },
 };
 
+// The same doors, on a BUILDING of a work order (entity_type 'task') — where
+// the before / completion photos are. Keyed on the same named targets.
+const BUILDING_READ_DOORS = {
+  list: {
+    go: (b, u, t) => call(b, u, 'GET', '/api/attachments/task/' + BUILDING[t]),
+    ok: (r) => r.status === 200 && Array.isArray(r.body.attachments) && r.body.attachments.length === 1,
+  },
+  raw: {
+    go: (b, u, t) => call(b, u, 'GET', '/api/attachments/raw/' + BPHOTO[t]),
+    ok: (r) => r.status === 200 && /^BYTES:k\//.test(r.text),
+  },
+  tagSuggest: {
+    // Same reason as the ticket's tag-suggest door: the handler's own statement
+    // is one the sqlite shim cannot prepare, so "allowed" is the statement the
+    // gate let the request REACH. See the note there.
+    go: async (b, u, t) => {
+      const before = mockEng.log.length;
+      const r = await call(b, u, 'GET', '/api/attachments/tags/suggest?entity_type=task&entity_id=' + BUILDING[t]);
+      r.reachedTagQuery = mockEng.log.slice(before).some((e) => /jsonb_array_elements_text\(a\.tags\)/.test(e.sql));
+      return r;
+    },
+    ok: (r) => r.reachedTagQuery === true,
+  },
+  foldersList: {
+    go: (b, u, t) => call(b, u, 'GET', '/api/file-folders/task/' + BUILDING[t]),
+    ok: (r) => r.status === 200 && Array.isArray(r.body.folders),
+  },
+};
+
+const BUILDING_WRITE_DOORS = {
+  upload: {
+    go: (b, u, t) => call(b, u, 'POST', '/api/attachments/task/' + BUILDING[t], { form: uploadForm() }),
+    ok: (r) => r.status === 200 && r.body.ok === true && r.body.attachment && r.body.attachment.entity_type === 'task',
+  },
+  caption: {
+    go: (b, u, t) => call(b, u, 'PUT', '/api/attachments/' + BPHOTO[t], { json: { caption: 'WRITTEN' } }),
+    ok: (r) => r.status === 200 && r.body.ok === true,
+    rowKeyed: true,
+  },
+  delete: {
+    go: (b, u, t) => call(b, u, 'DELETE', '/api/attachments/' + BPHOTO[t]),
+    ok: (r) => r.status === 200 && r.body.ok === true,
+    rowKeyed: true,
+  },
+  bulkTag: {
+    go: (b, u, t) => call(b, u, 'POST', '/api/attachments/bulk-tag', { json: { ids: [BPHOTO[t]], add: ['checked'], skip_catalog: true } }),
+    ok: (r) => r.status === 200 && r.body.ok === true && r.body.changed === 1,
+    rowKeyed: true,
+  },
+  foldersCreate: {
+    go: (b, u, t) => call(b, u, 'POST', '/api/file-folders/task/' + BUILDING[t], { json: { name: 'Before' } }),
+    ok: (r) => r.status === 200 && r.body.folder && r.body.folder.name === 'Before',
+  },
+};
+
 // ═══════════════════════════════════════════════════════════════════════════
 describe('the mutation harness is not the thing being fooled', () => {
   test('an anchor that is not in the file THROWS', () => {
@@ -392,8 +497,8 @@ describe('the mutation harness is not the thing being fooled', () => {
     const src = fs.readFileSync(ROUTES_FILE, 'utf8');
     expect(src.indexOf('\r\n')).toBeGreaterThan(-1);
     expect(() => mutantFile(ROUTES_FILE, [[
-      "  if (entityType !== TICKET_ENTITY_TYPE) return true;\n  const verdict = await ticketAttachmentAccess({",
-      "  if (entityType !== TICKET_ENTITY_TYPE) return true;\n  /* moved */ const verdict = await ticketAttachmentAccess({",
+      "  const wo = await workOrderTicketFor(req, entityType, entityId);\n  if (!wo) return true;",
+      "  const wo = await workOrderTicketFor(req, entityType, entityId);\n  /* moved */ if (!wo) return true;",
     ]])).not.toThrow();
   });
 });
@@ -621,6 +726,220 @@ describe('move and copy — the SOURCE is a work-order photo', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// THE BUILDING HALF (1.30). Everything above, on entity_type 'task' — the
+// rows the crew's before / completion photos actually hang on.
+// ═══════════════════════════════════════════════════════════════════════════
+describe.each(Object.keys(BUILDING_READ_DOORS))('READ door %s on a work order BUILDING photo', (name) => {
+  const door = BUILDING_READ_DOORS[name];
+
+  test('THE FINDING: a LEADS_VIEW-only user is refused a building on a JOB work order', async () => {
+    const b = await shipped();
+    const r = await door.go(b, LEADVIEW, 'j1');
+    expect(answer(r)).toEqual([403, { error: 'Forbidden' }]);
+    expect(r.text).not.toMatch(/BLDG-J1|BYTES:/);
+    expect(door.ok(r)).toBe(false);
+  });
+
+  test('a JOBS_VIEW_ALL user with NO lead capability reads it', async () => {
+    const b = await shipped();
+    expect(door.ok(await door.go(b, JOBVIEW, 'j1'))).toBe(true);
+  });
+
+  test('the narrow tier reads the building on the job it holds a grant on, and not the one it does not', async () => {
+    const b = await shipped();
+    expect(door.ok(await door.go(b, CREW, 'j1'))).toBe(true);
+    const off = await door.go(b, CREW, 'j3');
+    expect(off.status).toBe(404);
+    expect(answer(off)).toEqual(answer(await door.go(b, CREW, 'absent')));
+  });
+
+  test('a building on a LEAD work order follows LEADS_VIEW, not the job capabilities', async () => {
+    const b = await shipped();
+    expect(door.ok(await door.go(b, LEADVIEW, 'l1'))).toBe(true);
+    expect(answer(await door.go(b, JOBVIEW, 'l1'))).toEqual([403, { error: 'Forbidden' }]);
+  });
+
+  test('another org\'s building and an absent one answer identically', async () => {
+    const b = await shipped();
+    const none = answer(await door.go(b, WIDE, 'absent'));
+    expect(none[0]).toBe(404);
+    expect(answer(await door.go(b, WIDE, 'foreign'))).toEqual(none);
+    expect(answer(await door.go(b, RIVAL, 'j1'))).toEqual(answer(await door.go(b, RIVAL, 'absent')));
+  });
+
+  test('CONTROL: a task on NO work order keeps the coarse task rule, untouched', async () => {
+    const b = await shipped();
+    expect(door.ok(await door.go(b, LEADVIEW, 'plain'))).toBe(true);
+    expect(door.ok(await door.go(b, JOBVIEW, 'plain'))).toBe(true);
+  });
+});
+
+describe.each(Object.keys(BUILDING_WRITE_DOORS))('WRITE door %s on a work order BUILDING photo', (name) => {
+  const door = BUILDING_WRITE_DOORS[name];
+
+  test('THE FINDING: a LEADS_EDIT user is refused on a JOB work order\'s building, and the proof is untouched', async () => {
+    const b = await shipped();
+    const r = await door.go(b, LEADS, 'j1');
+    expect(r.status).toBe(403);
+    expect(caption('att_tk_j1')).toBeNull();
+    expect(exists('att_tk_j1')).toBe(true);
+    expect(where('att_tk_j1')).toEqual({ entity_type: 'task', entity_id: 'tk_j1' });
+    expect(mockStorageCalls.filter((c) => c[0] !== 'get')).toEqual([]);
+    expect(mockEng.all("SELECT COUNT(*) AS n FROM attachments WHERE entity_id = 'tk_j1'")[0].n).toBe(1);
+  });
+
+  test('a JOBS_EDIT_ANY user with NO lead capability may write', async () => {
+    const b = await shipped();
+    expect(door.ok(await door.go(b, JOBS, 'j1'))).toBe(true);
+  });
+
+  test('a VIEW grant reads but cannot write — answered like an absent id', async () => {
+    const b = await shipped();
+    const r = await door.go(b, CREW, 'j1');
+    expect(r.status).toBe(404);
+    expect(answer(r)).toEqual(answer(await door.go(b, CREW, 'absent')));
+    expect(caption('att_tk_j1')).toBeNull();
+    expect(exists('att_tk_j1')).toBe(true);
+  });
+
+  test('an EDIT grant may write', async () => {
+    const b = await shipped();
+    expect(door.ok(await door.go(b, CREW, 'j2'))).toBe(true);
+  });
+
+  test('a building on a LEAD work order follows LEADS_EDIT', async () => {
+    const b = await shipped();
+    expect((await door.go(b, JOBS, 'l1')).status).toBe(403);
+    expect(door.ok(await door.go(b, LEADS, 'l1'))).toBe(true);
+  });
+
+  test('another org\'s building and an absent one answer exactly alike', async () => {
+    const b = await shipped();
+    const none = answer(await door.go(b, WIDE, 'absent'));
+    expect(none[0]).toBe(404);
+    expect(answer(await door.go(b, WIDE, 'foreign'))).toEqual(none);
+    expect(exists('att_tk_b')).toBe(true);
+  });
+
+  test('CONTROL: a task on NO work order keeps the coarse task rule, untouched', async () => {
+    const b = await shipped();
+    expect(door.ok(await door.go(b, LEADS, 'plain'))).toBe(true);
+  });
+});
+
+describe('move and copy — the SOURCE is a BUILDING photo', () => {
+  const move = (b, u, photo, type, id) => call(b, u, 'POST', '/api/attachments/' + photo + '/move', { json: { entity_type: type, entity_id: id } });
+  const copy = (b, u, photo, type, id) => call(b, u, 'POST', '/api/attachments/' + photo + '/copy', { json: { entity_type: type, entity_id: id } });
+
+  test('THE FINDING: a leads user cannot lift a completion photo off a job\'s work order onto their own lead', async () => {
+    const b = await shipped();
+    expect(answer(await move(b, LEADS, 'att_tk_j1', 'lead', 'l1'))).toEqual([403, { error: 'No write access on source entity' }]);
+    expect(where('att_tk_j1')).toEqual({ entity_type: 'task', entity_id: 'tk_j1' });
+  });
+
+  test('a view grant is answered like an absent photo; an edit grant moves', async () => {
+    const b = await shipped();
+    expect(answer(await move(b, CREW, 'att_tk_j1', 'job', 'j2'))).toEqual(answer(await move(b, CREW, 'att_nope', 'job', 'j2')));
+    expect(where('att_tk_j1')).toEqual({ entity_type: 'task', entity_id: 'tk_j1' });
+    expect((await move(b, CREW, 'att_tk_j2', 'job', 'j2')).status).toBe(200);
+    expect(where('att_tk_j2')).toEqual({ entity_type: 'job', entity_id: 'j2' });
+    expect((await move(b, JOBS, 'att_tk_j1', 'job', 'j1')).status).toBe(200);
+  });
+
+  test('copy: reading a building photo\'s bytes needs the ticket read rule', async () => {
+    const b = await shipped();
+    expect(answer(await copy(b, LEADS, 'att_tk_j1', 'lead', 'l1'))).toEqual([403, { error: 'No read access on source attachment' }]);
+    expect(mockStorageCalls).toEqual([]);
+    expect(answer(await copy(b, CREW, 'att_tk_j3', 'job', 'j2'))).toEqual(answer(await copy(b, CREW, 'att_nope', 'job', 'j2')));
+    expect((await copy(b, CREW, 'att_tk_j1', 'job', 'j2')).status).toBe(200);   // a VIEW grant READS
+  });
+
+  test('CONTROL: a photo on a task with no work order still moves on the coarse rule', async () => {
+    const b = await shipped();
+    expect((await move(b, LEADS, 'att_tk_plain', 'lead', 'l1')).status).toBe(200);
+    expect(where('att_tk_plain')).toEqual({ entity_type: 'lead', entity_id: 'l1' });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE ONE EXCEPTION. services/service-ticket-subtask-door.js lets a building's
+// ASSIGNEE finish it without the right to edit the job, and finishing means
+// uploading its completion photo — so the assignee passes the WRITE half on
+// THEIR building. Nothing else moves: not the read half, not another building
+// on the same job, and not what the photo guard says may happen to the proof.
+describe('the building ASSIGNEE — the write half only', () => {
+  const assigneeQueries = () => mockEng.log.filter((e) => /SELECT assignee_user_id FROM tasks/.test(e.sql));
+
+  test('CREW is not on job j3 at all: the READ half still refuses the building they are assigned', async () => {
+    const b = await shipped();
+    for (const name of Object.keys(BUILDING_READ_DOORS)) {
+      const door = BUILDING_READ_DOORS[name];
+      const r = await door.go(b, CREW, 'asg');
+      expect([name, r.status]).toEqual([name, 404]);
+      expect(answer(r)).toEqual(answer(await door.go(b, CREW, 'absent')));
+    }
+  });
+
+  test('...but may upload the completion photo that finishing the building requires, and fix it', async () => {
+    const b = await shipped();
+    const up = await BUILDING_WRITE_DOORS.upload.go(b, CREW, 'asg');
+    expect(BUILDING_WRITE_DOORS.upload.ok(up)).toBe(true);
+    expect(up.body.attachment.entity_id).toBe('tk_asg');
+    expect(BUILDING_WRITE_DOORS.caption.ok(await BUILDING_WRITE_DOORS.caption.go(b, CREW, 'asg'))).toBe(true);
+    expect(caption('att_tk_asg')).toBe('WRITTEN');
+    expect(BUILDING_WRITE_DOORS.bulkTag.ok(await BUILDING_WRITE_DOORS.bulkTag.go(b, CREW, 'asg'))).toBe(true);
+    expect(BUILDING_WRITE_DOORS.delete.ok(await BUILDING_WRITE_DOORS.delete.go(b, CREW, 'asg'))).toBe(true);
+    expect(exists('att_tk_asg')).toBe(false);
+  });
+
+  test('the exception is the building they are assigned, not the job: the next building over is refused', async () => {
+    const b = await shipped();
+    const r = await BUILDING_WRITE_DOORS.upload.go(b, CREW, 'j3');
+    expect(answer(r)).toEqual(answer(await BUILDING_WRITE_DOORS.upload.go(b, CREW, 'absent')));
+    expect(r.status).toBe(404);
+    expect(answer(await BUILDING_WRITE_DOORS.caption.go(b, CREW, 'j3'))).toEqual([404, { error: 'Attachment not found' }]);
+    expect(caption('att_tk_j3')).toBeNull();
+  });
+
+  test('it is the ASSIGNEE, not anyone: a leads user is still refused that same building', async () => {
+    const b = await shipped();
+    expect((await BUILDING_WRITE_DOORS.caption.go(b, LEADS, 'asg')).status).toBe(403);
+    expect((await BUILDING_WRITE_DOORS.delete.go(b, LEADS, 'asg')).status).toBe(403);
+    expect(caption('att_tk_asg')).toBeNull();
+    expect(exists('att_tk_asg')).toBe(true);
+  });
+
+  test('the assignee lookup is asked only when the ticket rule already refused, and carries the org predicate', async () => {
+    const b = await shipped();
+    // A caller the ticket rule ALLOWS never reaches the lookup.
+    mockEng.log.length = 0;
+    expect(BUILDING_WRITE_DOORS.caption.ok(await BUILDING_WRITE_DOORS.caption.go(b, JOBS, 'j1'))).toBe(true);
+    expect(assigneeQueries()).toEqual([]);
+    // Nor does a READ the rule refused — the exception is the write half only.
+    mockEng.log.length = 0;
+    await BUILDING_READ_DOORS.list.go(b, CREW, 'asg');
+    expect(assigneeQueries()).toEqual([]);
+    // The write the rule refused asks it, in the caller's organization.
+    mockEng.log.length = 0;
+    await BUILDING_WRITE_DOORS.caption.go(b, CREW, 'asg');
+    const asked = assigneeQueries();
+    expect(asked.length).toBe(1);
+    expect(asked[0].sql).toMatch(/WHERE id = \$1 AND organization_id = \$2/);
+    expect(asked[0].params).toEqual(['tk_asg', 1]);
+  });
+
+  test('the photo guard still governs what the assignee may remove', async () => {
+    const b = await shipped();
+    mockEng.db.exec("UPDATE tasks SET status = 'done' WHERE id = 'tk_asg'");
+    const r = await BUILDING_WRITE_DOORS.delete.go(b, CREW, 'asg');
+    expect(r.status).toBe(409);
+    expect(r.body.code).toBe('last_completion_photo');
+    expect(exists('att_tk_asg')).toBe(true);
+    expect(mockStorageCalls.filter((c) => c[0] === 'delete')).toEqual([]);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // FINDING K. move and copy validated the BODY and the DESTINATION before they
 // proved the SOURCE, so a source that must answer like an absent id did not
 // when the body was bad or the destination absent: the absent id got
@@ -691,24 +1010,56 @@ describe('move and copy — a refused SOURCE answers before the body or destinat
 // JOIN, is every row with no uploader at all. The guest work-order door writes
 // uploaded_by NULL, so every tenant's Recent Files listed every tenant's crew
 // photos, with their storage URLs.
+//
+// AND THE SIBLING IT LEFT OPEN (1.30). Finding A's exclusion named ONE bound
+// type, so it covered the ticket's own site photos and not the BUILDINGS' —
+// entity_type 'task', where the crew's before / completion photos actually
+// live. A caller refused a building's completion photo at every door above
+// still read it here, with its unsigned thumb_url / web_url / original_url.
+// The widget now asks the tasks table instead of a type name: a task carrying
+// a service_ticket_id IS a work order's building, so its photos are listed to
+// nobody, exactly as the ticket's are. A task on no ticket is untouched.
 const recentIds = async (b, uid) => {
   const r = await call(b, uid, 'GET', '/api/attachments/recent?limit=24');
   expect(r.status).toBe(200);
   return { ids: r.body.attachments.map((a) => a.id).sort(), text: r.text };
 };
 const TICKET_PHOTO_IDS = Object.values(PHOTO).filter((id) => id !== 'att_nope');
+// The building photos that ARE a work order's proof. BPHOTO.plain is left out
+// deliberately: tk_plain hangs on no ticket, so its photo is an ordinary task
+// upload that must go on being listed — the control that says this predicate
+// excludes BUILDINGS, not tasks.
+const BUILDING_PHOTO_IDS = [BPHOTO.j1, BPHOTO.j2, BPHOTO.j3, BPHOTO.l1, BPHOTO.asg, BPHOTO.foreign];
 function seedRecentExtras() {
   // Beside the work-order photos seed() already writes (all uploaded_by NULL):
   mockEng.db.exec(`
     INSERT INTO attachments (id, entity_type, entity_id, filename, mime_type, size_bytes,
                              original_key, tags, organization_id, uploaded_by, position) VALUES
-      -- a task-share guest upload: no uploader, stamped with its task's org
+      -- a task-share guest upload: no uploader, stamped with its task's org.
+      -- t1 / t9 are task ids with NO tasks row behind them, so the building
+      -- subquery finds nothing and these answer exactly what they answered.
       ('att_guest_task',   'task', 't1', 'GUEST-TASK-A.jpg', 'image/jpeg', 10, 'k/gt_a.jpg', '[]', 1,    NULL, 0),
       ('att_guest_task_b', 'task', 't9', 'GUEST-TASK-B.jpg', 'image/jpeg', 10, 'k/gt_b.jpg', '[]', 2,    NULL, 0),
       -- no uploader AND no stamp: nothing names a tenant, so no tenant lists it
       ('att_nobody',       'job',  'j1', 'NOBODY.jpg',       'image/jpeg', 10, 'k/nb.jpg',   '[]', NULL, NULL, 0),
       -- an ordinary upload whose row stamp is missing: the UPLOADER arm, unchanged
-      ('att_legacy',       'job',  'j1', 'LEGACY.jpg',       'image/jpeg', 10, 'k/lg.jpg',   '[]', NULL, 10,   0);
+      ('att_legacy',       'job',  'j1', 'LEGACY.jpg',       'image/jpeg', 10, 'k/lg.jpg',   '[]', NULL, 10,   0),
+      -- a BUILDING photo an in-org USER uploaded: the uploader arm admits it,
+      -- so ONLY the tasks subquery keeps it off. att_st_by_user's mirror.
+      ('att_tk_by_user',   'task', 'tk_j3', 'BLDG-BY-USER.jpg', 'image/jpeg', 10, 'k/tbu.jpg', '[]', 1, 10, 0);
+  `);
+}
+
+// Org 2's BUILDING photo, uploaded by a user carrying no organization stamp.
+// The tolerance arm admits that row to every tenant, and the CALLER's own org
+// can never see tk_b as a building — only the attachment row's own stamp can.
+function seedForeignBuildingRow() {
+  mockEng.db.exec(`
+    INSERT INTO users (id, name, email, role, organization_id) VALUES
+      (61, 'Ulf Unstamped', 'u61@nowhere.test', 'sta_wide', NULL);
+    INSERT INTO attachments (id, entity_type, entity_id, filename, mime_type, size_bytes,
+                             original_key, tags, organization_id, uploaded_by, position) VALUES
+      ('att_tk_b_tolerated', 'task', 'tk_b', 'BLDG-RIVAL-TOLERATED.jpg', 'image/jpeg', 10, 'k/tbt.jpg', '[]', 2, 61, 0);
   `);
 }
 
@@ -719,8 +1070,12 @@ describe('GET /api/attachments/recent (flat mode) never lists a work-order photo
     const rival = await recentIds(b, RIVAL);
     for (const id of TICKET_PHOTO_IDS) expect(rival.ids).not.toContain(id);
     expect(rival.text).not.toMatch(/CREW-J1|CREW-J2|CREW-J3|CREW-L1|UNOWNED|ORPHAN|GUEST-TASK-A|NOBODY/);
-    // Its own tenant's guest upload is its own.
+    // ...nor org 1's BUILDING photos, whose rows name org 1 and no uploader.
+    expect(rival.text).not.toMatch(/BLDG-J1|BLDG-J2|BLDG-J3|BLDG-L1|BLDG-ASG|BLDG-PLAIN/);
+    // Its own tenant's guest upload, and nothing else: org 2's OWN building
+    // photo is off the widget for org 2, exactly as org 1's are for org 1.
     expect(rival.ids).toEqual(['att_guest_task_b']);
+    expect(rival.text).not.toContain('BLDG-RIVAL.jpg');
   });
 
   test('...nor to an in-org user who FAILS the ticket rule — nor to one who passes it', async () => {
@@ -736,17 +1091,92 @@ describe('GET /api/attachments/recent (flat mode) never lists a work-order photo
     // photo to anyone; the roster and the ticket detail are where they live.
     const wide = await recentIds(b, WIDE);
     for (const id of TICKET_PHOTO_IDS) expect(wide.ids).not.toContain(id);
+    // The BUILDINGS' before / completion photos are the same proof under
+    // another entity type, and they go on the same terms.
+    for (const id of BUILDING_PHOTO_IDS) {
+      expect(wide.ids).not.toContain(id);
+      expect(leadview.ids).not.toContain(id);
+      expect(crew.ids).not.toContain(id);
+    }
+    expect(leadview.text).not.toMatch(/BLDG-J1|BLDG-J2|BLDG-J3|BLDG-L1|BLDG-ASG|BLDG-BY-USER/);
   });
 
   test('ordinary in-org uploads still appear, exactly as before', async () => {
     seedRecentExtras();
     const b = await shipped();
-    const expected = ['att_guest_task', 'att_job', 'att_lead', 'att_legacy'];
+    // No filter any more — this is the WHOLE list. A task on no ticket
+    // (att_tk_plain) and a task with no tasks row at all (att_guest_task) are
+    // both still in it; every work-order building's photo is not.
+    const expected = ['att_guest_task', 'att_job', 'att_lead', 'att_legacy', 'att_tk_plain'];
     expect((await recentIds(b, WIDE)).ids).toEqual(expected);
     expect((await recentIds(b, LEADVIEW)).ids).toEqual(expected);
     expect((await recentIds(b, NOBODY)).ids).toEqual(expected);
     // And never another tenant's, uploader-stamped or not.
     expect((await recentIds(b, WIDE)).ids).not.toContain('att_guest_task_b');
+  });
+
+  // THE SIBLING GAP, CLOSED (1.30). Finding A's exclusion was a bound parameter
+  // naming ONE type — TICKET_ENTITY_TYPE — so a work order's BUILDING photos
+  // (entity_type 'task') were still listed here, with their unsigned storage
+  // URLs, to any in-org caller the ticket rule refuses at the doors above. A
+  // type name cannot say which task is a building, so the widget asks the
+  // tasks table: a task carrying a service_ticket_id is one.
+  test('THE GAP: a BUILDING photo is not listed to the caller its own door refuses', async () => {
+    const b = await shipped();
+    const leadview = await recentIds(b, LEADVIEW);
+    expect(leadview.ids).not.toContain('att_tk_j1');
+    expect(leadview.text).not.toContain('BLDG-J1.jpg');
+    // The door for that very photo refuses the same caller — and the widget
+    // now agrees with it instead of handing the file over behind its back.
+    expect((await BUILDING_READ_DOORS.list.go(b, LEADVIEW, 'j1')).status).toBe(403);
+    // ...and the ticket's own photos are excluded, as finding A left them.
+    for (const id of TICKET_PHOTO_IDS) expect(leadview.ids).not.toContain(id);
+  });
+
+  test('...nor to a caller who PASSES the ticket rule, exactly as a ticket photo is not', async () => {
+    const b = await shipped();
+    // JOBS really can read j1's buildings at their own door.
+    expect(BUILDING_READ_DOORS.list.ok(await BUILDING_READ_DOORS.list.go(b, JOBS, 'j1'))).toBe(true);
+    // The flat list still cannot ask the rule row by row, so it lists the
+    // proof to nobody; the roster and the ticket's detail are where it lives.
+    const jobs = await recentIds(b, JOBS);
+    for (const id of BUILDING_PHOTO_IDS) expect(jobs.ids).not.toContain(id);
+    expect(jobs.text).not.toMatch(/BLDG-J1|BLDG-J2|BLDG-J3|BLDG-L1|BLDG-ASG/);
+  });
+
+  test('a building photo an in-org USER uploaded goes too — the uploader arm would have admitted it', async () => {
+    seedRecentExtras();
+    const b = await shipped();
+    // Nothing but the tasks subquery is keeping this row off: its uploader is
+    // user 10, stamped org 1, which is the caller's own organization.
+    for (const uid of [WIDE, LEADVIEW, CREW, NOBODY]) {
+      const r = await recentIds(b, uid);
+      expect(r.ids).not.toContain('att_tk_by_user');
+      expect(r.text).not.toContain('BLDG-BY-USER.jpg');
+    }
+  });
+
+  test('a task on NO ticket is not a building: its photo is listed exactly as before', async () => {
+    const b = await shipped();
+    const wide = await recentIds(b, WIDE);
+    expect(wide.ids).toContain('att_tk_plain');
+    expect(wide.text).toContain('BLDG-PLAIN.jpg');
+    // ...to every in-org caller, since the widget runs no per-entity rule on it.
+    expect((await recentIds(b, NOBODY)).ids).toContain('att_tk_plain');
+  });
+
+  test("a FOREIGN tenant's building photo riding the uploader tolerance is excluded by the row's own stamp", async () => {
+    seedForeignBuildingRow();
+    const b = await shipped();
+    // Its uploader has no organization, so the tolerance arm admits the row to
+    // every tenant; the task it hangs on belongs to org 2.
+    for (const uid of [WIDE, LEADVIEW, NOBODY]) {
+      const r = await recentIds(b, uid);
+      expect(r.ids).not.toContain('att_tk_b_tolerated');
+      expect(r.text).not.toContain('BLDG-RIVAL-TOLERATED.jpg');
+    }
+    // Nor to its own tenant, which sees tk_b as the building it is.
+    expect((await recentIds(b, RIVAL)).ids).not.toContain('att_tk_b_tolerated');
   });
 
   test('roster mode is a different door and is untouched by this', async () => {
@@ -987,6 +1417,59 @@ describe('MUTANT: each attachment door\'s ticket check, removed', () => {
   });
 });
 
+describe('MUTANT: the BUILDING half of the rule (1.30)', () => {
+  test('the task arm removed — the shipped short-circuit back: leads-only reads, and a leads editor takes the proof', async () => {
+    const b = await serveMutant({ routePairs: [[
+      '  if (entityType !== WORK_ORDER_TASK_ENTITY_TYPE) return null;', '  return null;']] });
+    // Reads every building photo on a job they cannot open...
+    const listed = await BUILDING_READ_DOORS.list.go(b, LEADVIEW, 'j1');
+    expect(listed.status).toBe(200);
+    expect(listed.text).toContain('BLDG-J1.jpg');
+    expect((await BUILDING_READ_DOORS.raw.go(b, LEADVIEW, 'j1')).text).toBe('BYTES:k/tj1_web.jpg');
+    // ...moves a completion photo onto a lead of their own...
+    const moved = await call(b, LEADS, 'POST', '/api/attachments/att_tk_j3/move', { json: { entity_type: 'lead', entity_id: 'l1' } });
+    expect(moved.status).toBe(200);
+    expect(where('att_tk_j3')).toEqual({ entity_type: 'lead', entity_id: 'l1' });
+    // ...and deletes another outright, blob and all.
+    expect(BUILDING_WRITE_DOORS.delete.ok(await BUILDING_WRITE_DOORS.delete.go(b, LEADS, 'j1'))).toBe(true);
+    expect(exists('att_tk_j1')).toBe(false);
+    expect(mockStorageCalls).toContainEqual(['delete', 'k/tj1_orig.jpg']);
+  });
+
+  test('the ticket half is unharmed by the task arm — the mutant still refuses a ticket photo', async () => {
+    const b = await serveMutant({ routePairs: [[
+      '  if (entityType !== WORK_ORDER_TASK_ENTITY_TYPE) return null;', '  return null;']] });
+    expect(answer(await READ_DOORS.list.go(b, LEADVIEW, 'j1'))).toEqual([403, { error: 'Forbidden' }]);
+  });
+
+  test('the assignee exception removed: the building\'s own assignee can no longer finish it', async () => {
+    const b = await serveMutant({ routePairs: [[
+      "  if (mode === 'write' && wo.taskId != null && await isBuildingAssignee(req, wo.taskId)) return true;",
+      '  /* MUTANT */']] });
+    const r = await BUILDING_WRITE_DOORS.upload.go(b, CREW, 'asg');
+    expect(r.status).toBe(404);
+    expect(BUILDING_WRITE_DOORS.upload.ok(r)).toBe(false);
+    expect((await BUILDING_WRITE_DOORS.caption.go(b, CREW, 'asg')).status).toBe(404);
+  });
+
+  test('the exception widened to anyone: a leads editor writes a building they were never assigned', async () => {
+    const b = await serveMutant({ routePairs: [[
+      '  return Number(row.assignee_user_id) === uid;', '  return true;']] });
+    expect(BUILDING_WRITE_DOORS.caption.ok(await BUILDING_WRITE_DOORS.caption.go(b, LEADS, 'asg'))).toBe(true);
+    expect(caption('att_tk_asg')).toBe('WRITTEN');
+  });
+
+  test('the exception widened to the READ half: the assignee reads a job they are not on', async () => {
+    const b = await serveMutant({ routePairs: [[
+      "  if (mode === 'write' && wo.taskId != null && await isBuildingAssignee(req, wo.taskId)) return true;",
+      '  if (wo.taskId != null && await isBuildingAssignee(req, wo.taskId)) return true;']] });
+    expect(BUILDING_READ_DOORS.list.ok(await BUILDING_READ_DOORS.list.go(b, CREW, 'asg'))).toBe(true);
+    // The shipped file answers the same call like an absent id.
+    const s = await shipped();
+    expect((await BUILDING_READ_DOORS.list.go(s, CREW, 'asg')).status).toBe(404);
+  });
+});
+
 describe('MUTANT: file-folders-routes.js — the MODE each gate names', () => {
   const CREATE_GATE = "router.post('/:entityType/:entityId',\n  requireAuth,\n  requireDynamicCapability(req => entityTypeOk(req.params.entityType) ? writeCapForEntity(req.params.entityType) : null, 'write'),";
 
@@ -1047,8 +1530,8 @@ describe('MUTANT: payload-dispatcher.js dispatchAttachment', () => {
 
   test('the ticket verdict never computed: a leads approver captions a JOB ticket\'s photo', async () => {
     const mod = loadDispatcher([[
-      "    const ticketVerdict = att.entity_type === TICKET_ENTITY_TYPE",
-      "    const ticketVerdict = false"]]);
+      "    let ticketVerdict = wo\n",
+      "    let ticketVerdict = false\n"]]);
     expect((await photoUpdate(mod, LEADS, 'att_j1')).stage).toBe('applied');
     expect(caption('att_j1')).toBe('SCRIBED');
   });
@@ -1142,13 +1625,20 @@ describe('MUTANT: move / copy validating the body BEFORE the source is proved (f
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MUTANTS for finding A.
+const BUILDING_EXCLUSION =
+  "          AND NOT EXISTS (SELECT 1 FROM tasks t\n" +
+  "                           WHERE a.entity_type = $4 AND t.id = a.entity_id\n" +
+  "                             AND t.service_ticket_id IS NOT NULL\n" +
+  "                             AND t.organization_id IN ($2, a.organization_id))\n";
 const RECENT_WHERE =
   "        WHERE a.entity_type <> $3\n" +
+  BUILDING_EXCLUSION +
   "          AND ((a.uploaded_by IS NOT NULL AND (u.organization_id = $2 OR u.organization_id IS NULL))\n" +
   "               OR (a.uploaded_by IS NULL AND a.organization_id = $2))";
 
-// The flat predicate exactly as it shipped before finding A.
-const ORIGINAL_WHERE = "        WHERE ($3 = $3) AND (u.organization_id = $2 OR u.organization_id IS NULL)";
+// The flat predicate exactly as it shipped before finding A. $3 AND $4 are
+// kept referenced: both are still bound, and an engine counts what it binds.
+const ORIGINAL_WHERE = "        WHERE ($3 = $3) AND ($4 = $4) AND (u.organization_id = $2 OR u.organization_id IS NULL)";
 const recentFull = async (base, uid) => {
   const r = await call(base, uid, 'GET', '/api/attachments/recent?limit=24');
   expect(r.status).toBe(200);
@@ -1170,13 +1660,16 @@ function seedUploaderRows() {
       ('att_st_by_user',     'service_ticket', 'st_j3', 'ST-BY-USER.jpg', 'image/jpeg', 10, 'k/su.jpg', '[]', 1, 10, 0);
   `);
 }
-// For each caller: the uploader-stamped, non-ticket rows `candidate` lists,
-// compared field for field with what `original` lists. Sorted by id, because
-// the fixture's rows share an uploaded_at and a tie's order is the engine's,
-// not the predicate's. Returns the callers for whom they differ.
+// The two rows the exclusions are ABOUT, set aside so the comparison below is
+// about everything else. Each is asserted by name in the test that uses this.
+const EXCLUDED_BY_DESIGN = ['att_st_by_user', 'att_tk_by_user'];
+// For each caller: the uploader-stamped rows `candidate` lists that are not
+// work-order proof, compared field for field with what `original` lists.
+// Sorted by id, because the fixture's rows share an uploaded_at and a tie's
+// order is the engine's, not the predicate's. Returns the callers who differ.
 async function uploaderRowsThatMoved(candidate, original) {
   const keep = (rows) => rows
-    .filter((a) => a.uploaded_by != null && a.entity_type !== 'service_ticket')
+    .filter((a) => a.uploaded_by != null && EXCLUDED_BY_DESIGN.indexOf(a.id) < 0)
     .sort((x, y) => (x.id < y.id ? -1 : 1));
   const moved = [];
   for (const uid of [WIDE, LEADVIEW, CREW, NOBODY, RIVAL]) {
@@ -1202,6 +1695,42 @@ describe('MUTANT: GET /recent flat mode (finding A)', () => {
     const b = await serveMutant({ routePairs: [["        WHERE a.entity_type <> $3\n", "        WHERE ($3 = $3)\n"]] });
     expect((await recentIds(b, LEADVIEW)).ids).toContain('att_j1');
     expect((await recentIds(b, CREW)).ids).toContain('att_j3');
+    // ...and the building exclusion held on its own.
+    expect((await recentIds(b, LEADVIEW)).ids).not.toContain('att_tk_j1');
+  });
+
+  // 1.30: the sibling gap, reopened.
+  test('BUILDING exclusion removed: a caller the doors refuse lists the building photo again', async () => {
+    seedRecentExtras();
+    const b = await serveMutant({ routePairs: [[BUILDING_EXCLUSION, "          AND ($4 = $4)\n"]] });
+    const leadview = await recentIds(b, LEADVIEW);
+    expect(leadview.ids).toEqual(expect.arrayContaining(['att_tk_j1', 'att_tk_by_user']));
+    expect(leadview.text).toContain('BLDG-J1.jpg');
+    // ...while that photo's own door goes on refusing the same caller. That
+    // disagreement IS the gap: the door says no and the widget hands it over.
+    expect((await BUILDING_READ_DOORS.list.go(b, LEADVIEW, 'j1')).status).toBe(403);
+    // The ticket exclusion held on its own, as it did before.
+    for (const id of TICKET_PHOTO_IDS) expect(leadview.ids).not.toContain(id);
+  });
+
+  test('the building exclusion is not a blanket task ban: drop `service_ticket_id IS NOT NULL` and an ordinary to-do loses its photo', async () => {
+    const b = await serveMutant({ routePairs: [[
+      "                             AND t.service_ticket_id IS NOT NULL\n", '']] });
+    expect((await recentIds(b, WIDE)).ids).not.toContain('att_tk_plain');
+    // The shipped statement lists it — the mutant lost a row the fix keeps.
+    expect((await recentIds(await shipped(), WIDE)).ids).toContain('att_tk_plain');
+  });
+
+  test("the row's own stamp dropped from the subquery's org predicate: a foreign building photo rides the tolerance arm in", async () => {
+    seedForeignBuildingRow();
+    const b = await serveMutant({ routePairs: [[
+      "                             AND t.organization_id IN ($2, a.organization_id))\n",
+      "                             AND t.organization_id IN ($2))\n"]] });
+    const wide = await recentIds(b, WIDE);
+    expect(wide.ids).toContain('att_tk_b_tolerated');
+    expect(wide.text).toContain('BLDG-RIVAL-TOLERATED.jpg');
+    // Its own tenant never saw it either way — the caller's own org arm.
+    expect((await recentIds(b, RIVAL)).ids).not.toContain('att_tk_b_tolerated');
   });
 
   test('DIFFERENTIAL: every row WITH an uploader answers what the original predicate answered, for every caller', async () => {
@@ -1210,10 +1739,13 @@ describe('MUTANT: GET /recent flat mode (finding A)', () => {
     const b = await shipped();
     expect(await uploaderRowsThatMoved(b, original)).toEqual([]);
     for (const uid of [WIDE, LEADVIEW, CREW, NOBODY]) {
-      // The one uploader row the comparison sets aside really was listed by
-      // the original to this org, and really is gone now.
-      expect((await recentFull(original, uid)).map((a) => a.id)).toContain('att_st_by_user');
-      expect((await recentFull(b, uid)).map((a) => a.id)).not.toContain('att_st_by_user');
+      // The two uploader rows the comparison sets aside really were listed by
+      // the original to this org, and really are gone now: the ticket's own
+      // photo (finding A) and a BUILDING's (1.30).
+      for (const id of EXCLUDED_BY_DESIGN) {
+        expect((await recentFull(original, uid)).map((a) => a.id)).toContain(id);
+        expect((await recentFull(b, uid)).map((a) => a.id)).not.toContain(id);
+      }
     }
     // The fixture exercises both uploader arms, or the equality proves little.
     expect((await recentFull(b, RIVAL)).map((a) => a.id)).toEqual(expect.arrayContaining(['att_unstamped_user', 'att_rival_upload']));

@@ -21,6 +21,13 @@
 // S7 adds the agent seams: "Draft with 86" on the job manager and the lead
 // panel, "Ask 86" on an open ticket, and a refresh() that repaints whichever
 // surface is mounted when an agent write lands (js/refresh.js calls it).
+//
+// 1.29 (Work Orders) keeps the PM's typing: an open ticket updates in place
+// (sections and building cards are swapped only when they change), Save sends
+// only the fields that changed with what they were when loaded, and anything
+// that would redraw the fields asks "Save your changes first?" first. Other
+// office modules add to this screen through window.p86StExt
+// (js/service-ticket-ext.js) instead of being called from here.
 // ============================================================
 (function () {
   'use strict';
@@ -38,11 +45,22 @@
   // One open ticket at a time, keyed by job. Module-level so a repaint that
   // arrives while a ticket is expanded can restore it.
   // `stale` is the deferred-refresh latch; see refresh() at the bottom.
-  var _state = { jobId: null, filter: 'all', openId: null, tickets: [], busy: false, stale: false, openSubs: {}, taskTitles: {} };
-  // Read at load, before the router rewrites the URL without its query.
+  // `listedJob` is the job whose list `tickets` holds (null while one loads).
+  var _state = { jobId: null, filter: 'all', openId: null, tickets: [], listedJob: null, busy: false, stale: false, openSubs: {}, taskTitles: {}, drafts: {}, scrollToOpen: false };
+  // A ticket to open once its job's list loads: { jobId, ticketId }. The one
+  // read from the URL at load (before the router rewrites it without its
+  // query) names no job and goes to the first list loaded; one from
+  // openTicket() is for its own job only.
   var _deepTicket = (function () {
-    try { return new URLSearchParams(location.search).get('ticket') || null; } catch (_) { return null; }
+    try {
+      var id = new URLSearchParams(location.search).get('ticket');
+      return id ? { jobId: null, ticketId: id } : null;
+    } catch (_) { return null; }
   })();
+
+  function deepFor(jobId) {
+    return !!_deepTicket && (_deepTicket.jobId == null || String(_deepTicket.jobId) === String(jobId));
+  }
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -56,6 +74,53 @@
   function api() {
     return (window.p86Api && window.p86Api.serviceTickets) || null;
   }
+
+  // ── 1.29 host seams ──────────────────────────────────────────────────
+  // The field editor kit (js/service-ticket-editor.js) and the extension
+  // registry (js/service-ticket-ext.js) are looked up at call time, like the
+  // AI panel. With no editor kit the ticket FIELDS render read-only (building
+  // cards, photos and materials still work); with no registry there are
+  // simply no extensions.
+  function editor() {
+    var e = window.p86StEditor;
+    return (e && typeof e.dirtyKeys === 'function' && typeof e.swapSection === 'function') ? e : null;
+  }
+
+  function ext() {
+    var x = window.p86StExt;
+    return (x && typeof x.collect === 'function') ? x : null;
+  }
+
+  function extCollect() {
+    var x = ext();
+    if (!x) return [];
+    try { return x.collect.apply(x, arguments) || []; } catch (e) { return []; }
+  }
+
+  function extFirst() {
+    var x = ext();
+    if (!x || typeof x.first !== 'function') return undefined;
+    try { return x.first.apply(x, arguments); } catch (e) { return undefined; }
+  }
+
+  function extHtml() {
+    var x = ext();
+    if (!x || typeof x.html !== 'function') return '';
+    try {
+      var s = x.html.apply(x, arguments);
+      return typeof s === 'string' ? s : '';
+    } catch (e) { return ''; }
+  }
+
+  function currentUserId() {
+    try {
+      var a = window.p86Auth;
+      var u = a && typeof a.getUser === 'function' ? a.getUser() : null;
+      return u && u.id != null ? u.id : null;
+    } catch (e) { return null; }
+  }
+
+  function noop() {}
 
   // Editable unless the job carries an explicit _canEdit:false gate — mirrors
   // js/job-media.js. Fail OPEN (the server still enforces write capability);
@@ -192,10 +257,12 @@
     work_complete: 'Work complete', approved: 'Approved', closed: 'Closed', cancelled: 'Cancelled'
   };
   // The filter pills. 'active' is the useful default view for a PM — everything
-  // that still needs someone to do something.
+  // that still needs someone to do something. 'mine' is what is assigned to
+  // the person looking, still open.
   var FILTERS = [
     { id: 'all', label: 'All' },
     { id: 'active', label: 'Active' },
+    { id: 'mine', label: 'Mine' },
     { id: 'draft', label: 'Draft' },
     { id: 'scheduled', label: 'Scheduled' },
     { id: 'in_progress', label: 'In progress' },
@@ -203,11 +270,17 @@
     { id: 'closed', label: 'Closed' }
   ];
   var PRIORITY_LABEL = { low: 'Low', normal: 'Normal', high: 'High', urgent: 'Urgent' };
+  var STALE = 'This work order just changed. Reload to see the latest.';
 
   function matchesFilter(t) {
     var f = _state.filter;
     if (f === 'all') return true;
     if (f === 'active') return ['open', 'scheduled', 'in_progress', 'work_complete'].indexOf(t.status) >= 0;
+    if (f === 'mine') {
+      var me = currentUserId();
+      return me != null && t.assignee_user_id != null && String(t.assignee_user_id) === String(me) &&
+        t.status !== 'closed' && t.status !== 'cancelled';
+    }
     if (f === 'closed') return t.status === 'closed' || t.status === 'cancelled';
     return t.status === f;
   }
@@ -227,6 +300,18 @@
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
   }
 
+  // An INSTANT for reading: 'Sep 14, 3:05 PM', with the year only when it is
+  // not this one. A building note carries a timestamp, never a calendar day,
+  // so it is shown in the reader's own zone with its time.
+  function fmtWhen(v) {
+    if (!v) return '';
+    var d = new Date(v);
+    if (isNaN(d.getTime())) return '';
+    var o = { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' };
+    if (d.getFullYear() !== new Date().getFullYear()) o.year = 'numeric';
+    return d.toLocaleString(undefined, o);
+  }
+
   function pane() { return document.getElementById('job-service-tickets'); }
 
   function toast(msg, kind) {
@@ -235,6 +320,36 @@
   }
 
   // ── Paint ────────────────────────────────────────────────────────────
+  function listCtx() {
+    return { jobId: _state.jobId, leadId: null, tickets: _state.tickets, filter: _state.filter };
+  }
+
+  function pillCount(id) {
+    var save = _state.filter;
+    _state.filter = id;
+    try {
+      return _state.tickets.filter(matchesFilter).length;
+    } finally {
+      _state.filter = save;
+    }
+  }
+
+  function pillInnerHTML(f) {
+    var n = pillCount(f.id);
+    return esc(f.label) + (n ? ' <span class="p86-st-pill-n">' + n + '</span>' : '');
+  }
+
+  // The open work order, carried across a list rebuild: the node itself, with
+  // its listeners and whatever is typed in it, instead of a fresh "Loading…"
+  // and a rebuild from the server row.
+  function keptDetail(host) {
+    if (!_state.openId) return null;
+    var row = host.querySelector('.p86-st-row.is-open');
+    if (!row || row.getAttribute('data-ticket') !== String(_state.openId)) return null;
+    var d = row.querySelector('.p86-st-detail');
+    return (d && d._st && d._st.painted) ? d : null;
+  }
+
   function paint() {
     var host = pane();
     if (!host) return;
@@ -242,14 +357,11 @@
     var shown = _state.tickets.filter(matchesFilter);
 
     var pills = FILTERS.map(function (f) {
-      var n = _state.tickets.filter(function (t) {
-        var save = _state.filter; _state.filter = f.id;
-        var m = matchesFilter(t); _state.filter = save; return m;
-      }).length;
       return '<button class="p86-st-pill' + (_state.filter === f.id ? ' active' : '') +
-        '" data-filter="' + escAttr(f.id) + '">' + esc(f.label) +
-        (n ? ' <span class="p86-st-pill-n">' + n + '</span>' : '') + '</button>';
+        '" data-filter="' + escAttr(f.id) + '">' + pillInnerHTML(f) + '</button>';
     }).join('');
+
+    var kept = keptDetail(host);
 
     host.innerHTML =
       '<div class="p86-st-wrap">' +
@@ -275,36 +387,162 @@
     wire(host);
     if (_state.openId) {
       var openRow = host.querySelector('[data-ticket="' + escAttr(_state.openId) + '"]');
-      if (openRow) expand(openRow, _state.openId);
+      if (openRow) {
+        var fresh = openRow.querySelector('.p86-st-detail');
+        if (kept && fresh) {
+          openRow.replaceChild(kept, fresh);
+          openRow.classList.add('is-open');
+          kept.hidden = false;
+          updateDetail(kept, _state.openId).catch(function (e) {
+            try { console.warn('[service-tickets] ticket refresh failed:', e); } catch (_) {}
+          });
+        } else {
+          expand(openRow, _state.openId);
+        }
+        if (_state.scrollToOpen) {
+          _state.scrollToOpen = false;
+          if (typeof openRow.scrollIntoView === 'function') {
+            try { openRow.scrollIntoView({ block: 'start' }); } catch (e) { /* old engine */ }
+          }
+        }
+      }
     }
+    fillWhoChips(host);
+    extCollect('onListPainted', host, listCtx());
   }
 
   function rowHTML(t) {
-    var total = Number(t.task_total || 0);
-    var done = Number(t.task_done || 0);
     return '<div class="p86-st-row" data-ticket="' + escAttr(t.id) + '">' +
-      '<div class="p86-st-row-head">' +
-        '<span class="p86-st-prio prio-' + esc(t.priority || 'normal') + '" ' +
-          'title="' + escAttr(PRIORITY_LABEL[t.priority] || 'Normal') + ' priority"></span>' +
-        (t.ticket_number ? '<span class="p86-st-num">' + esc(t.ticket_number) + '</span>' : '') +
-        '<span class="p86-st-title">' + esc(t.title || 'Untitled ticket') + '</span>' +
-        '<span class="p86-st-status st-' + esc(t.status) + '">' + esc(STATUS_LABEL[t.status] || t.status) + '</span>' +
-        (total ? '<span class="p86-st-tasks">' + done + '/' + total + '</span>' : '') +
-        (t.scheduled_for ? '<span class="p86-st-when">' + esc(fmtDate(t.scheduled_for)) + '</span>' : '') +
-      '</div>' +
+      '<div class="p86-st-row-head">' + rowHeadInnerHTML(t) + '</div>' +
       '<div class="p86-st-detail" hidden></div>' +
     '</div>';
+  }
+
+  function rowHeadInnerHTML(t) {
+    var total = Number(t.task_total || 0);
+    var done = Number(t.task_done || 0);
+    return '<span class="p86-st-prio prio-' + esc(t.priority || 'normal') + '" ' +
+        'title="' + escAttr(PRIORITY_LABEL[t.priority] || 'Normal') + ' priority"></span>' +
+      (t.ticket_number ? '<span class="p86-st-num">' + esc(t.ticket_number) + '</span>' : '') +
+      '<span class="p86-st-title">' + esc(t.title || 'Untitled ticket') + '</span>' +
+      '<span class="p86-st-status st-' + esc(t.status) + '">' + esc(STATUS_LABEL[t.status] || t.status) + '</span>' +
+      extHtml('rowBadges', t, listCtx()) +
+      whoChipHTML(t) +
+      (total ? '<span class="p86-st-tasks">' + done + '/' + total + '</span>' : '') +
+      (t.scheduled_for ? '<span class="p86-st-when">' + esc(fmtDate(t.scheduled_for)) + '</span>' : '');
+  }
+
+  // Who it is assigned to, as initials. The name comes from the list row when
+  // the server sends one, otherwise from the staff directory, filled in when
+  // that answers.
+  function whoChipHTML(t) {
+    var ed = editor();
+    if (!ed || t.assignee_user_id == null || t.assignee_user_id === '') return '';
+    var name = String(t.assignee_name || '').trim() || ed.nameOf(t.assignee_user_id);
+    return '<span class="p86-st-who" data-user="' + escAttr(t.assignee_user_id) + '"' +
+      (name ? ' title="' + escAttr('Assigned to ' + name) + '"' : ' data-st-pending="1"') + '>' +
+      esc(name ? ed.initials(name) : '') + '</span>';
+  }
+
+  function fillWhoChips(root) {
+    var ed = editor();
+    if (!ed || !root || !root.querySelector('.p86-st-who[data-st-pending]')) return;
+    Promise.resolve(ed.directory()).then(function () {
+      Array.prototype.forEach.call(root.querySelectorAll('.p86-st-who[data-st-pending]'), function (chip) {
+        var name = ed.nameOf(chip.getAttribute('data-user'));
+        chip.removeAttribute('data-st-pending');
+        chip.textContent = name ? ed.initials(name) : '?';
+        chip.setAttribute('title', name ? 'Assigned to ' + name : 'Assigned');
+      });
+    }).catch(noop);
+  }
+
+  function ticketRow(id) {
+    for (var i = 0; i < _state.tickets.length; i++) {
+      if (String(_state.tickets[i].id) === String(id)) return _state.tickets[i];
+    }
+    return null;
+  }
+
+  // Rows of a detail sub-read that are in one state. Not an array (a sub-read
+  // that failed, or a caller that sent none) counts as none.
+  function countInState(rows, status) {
+    if (!Array.isArray(rows)) return 0;
+    return rows.filter(function (x) { return x && x.status === status; }).length;
+  }
+
+  // The job's Service Tickets chip counts the rows this screen holds, so it
+  // follows them whenever they are corrected in place.
+  function fillJobChipFromRows() {
+    if (_state.jobId == null || _state.jobId === '') return;
+    var flags = window.p86TicketFlags;
+    if (!flags || typeof flags.fillJobChip !== 'function') return;
+    try { flags.fillJobChip(_state.jobId, _state.tickets); } catch (e) { /* the chip is a nicety */ }
+  }
+
+  // After an in-place update: the row head and the pill counts follow the
+  // ticket, without rebuilding the list (and the open ticket under it). `r` is
+  // the detail read the update was made from.
+  //
+  // The attention counters (open_flags, pending_suggestions, co_draft_count)
+  // are added by the LIST route only — the detail read's ticket carries none of
+  // them — so merging it would leave the badge above the panel saying a
+  // suggestion is still waiting after it was accepted, or a problem still open
+  // after it was resolved. They are recomputed here from the read's own rows.
+  // What that costs: the detail's revisions come back LIMIT 50 and its flags
+  // are capped at the office list limit (open ones sort first, so the open
+  // count is exact below the cap), and flags and change orders are best-effort
+  // sub-reads that arrive as [] when they fail — so a failed sub-read zeroes
+  // the badge, which is exactly what the empty panel drawn beside it says.
+  // new_from_crew is left to markSeen.
+  function patchRowHead(d, t, r) {
+    var read = (r && typeof r === 'object') ? r : {};
+    var progress = read.progress;
+    var row = d.closest('.p86-st-row');
+    var entry = ticketRow(t.id);
+    if (entry) {
+      Object.assign(entry, t);
+      if (progress && typeof progress === 'object') {
+        if (progress.tasksTotal != null) entry.task_total = progress.tasksTotal;
+        if (progress.tasksDone != null) entry.task_done = progress.tasksDone;
+      }
+      entry.pending_suggestions = countInState(read.revisions, 'pending');
+      entry.open_flags = countInState(read.flags, 'open');
+      entry.co_draft_count = countInState(read.change_orders, 'draft');
+    }
+    var head = row && row.querySelector('.p86-st-row-head');
+    if (head) {
+      var html = rowHeadInnerHTML(entry || t);
+      if (head._stHtml !== html) { head.innerHTML = html; head._stHtml = html; }
+      fillWhoChips(head);
+    }
+    if (entry) fillJobChipFromRows();
+    var host = pane();
+    if (!host) return;
+    Array.prototype.forEach.call(host.querySelectorAll('.p86-st-pill'), function (b) {
+      var id = b.getAttribute('data-filter');
+      var f = FILTERS.filter(function (x) { return x.id === id; })[0];
+      if (!f) return;
+      var inner = pillInnerHTML(f);
+      if (b._stHtml !== inner) { b.innerHTML = inner; b._stHtml = inner; }
+    });
   }
 
   function wire(host) {
     host.querySelectorAll('.p86-st-pill').forEach(function (b) {
       b.addEventListener('click', function () {
-        _state.filter = b.getAttribute('data-filter');
-        paint();
+        var want = b.getAttribute('data-filter');
+        leaveOpenTicket().then(function (go) {
+          if (!go) return;
+          _state.filter = want;
+          paint();
+        });
       });
     });
     var nb = host.querySelector('.p86-st-new');
-    if (nb) nb.addEventListener('click', openCreate);
+    if (nb) nb.addEventListener('click', function () {
+      leaveOpenTicket().then(function (go) { if (go) openCreate(); });
+    });
     var d86 = host.querySelector('.p86-st-draft86');
     if (d86) d86.addEventListener('click', function () { draftForJob(_state.jobId); });
 
@@ -313,11 +551,16 @@
         var row = h.closest('.p86-st-row');
         var id = row && row.getAttribute('data-ticket');
         if (!id) return;
-        if (_state.openId === id) { collapse(row); _state.openId = null; flushStale(); return; }
-        // Only one expanded at a time — a work order is read one at a time.
-        host.querySelectorAll('.p86-st-row').forEach(collapse);
-        _state.openId = id;
-        expand(row, id);
+        // Collapsing or opening another ticket redraws the fields, so typed
+        // changes are asked about first.
+        leaveOpenTicket().then(function (go) {
+          if (!go) return;
+          if (_state.openId === id) { collapse(row); _state.openId = null; flushStale(); return; }
+          // Only one expanded at a time — a work order is read one at a time.
+          host.querySelectorAll('.p86-st-row').forEach(collapse);
+          _state.openId = id;
+          expand(row, id);
+        });
       });
     });
   }
@@ -325,7 +568,11 @@
   function collapse(row) {
     row.classList.remove('is-open');
     var d = row.querySelector('.p86-st-detail');
-    if (d) { d.hidden = true; d.innerHTML = ''; }
+    if (d) {
+      d.hidden = true;
+      d.innerHTML = '';
+      if (d._st) d._st.painted = false;
+    }
   }
 
   // ── Expanded detail ──────────────────────────────────────────────────
@@ -334,13 +581,15 @@
     var d = row.querySelector('.p86-st-detail');
     if (!d) return;
     d.hidden = false;
+    if (d._st) d._st.painted = false;
     d.innerHTML = '<div class="p86-st-loading">Loading…</div>';
     if (!api()) { d.innerHTML = '<div class="p86-st-loading">Service tickets are unavailable.</div>'; return; }
 
     api().get(id).then(function (r) {
       // The user may have collapsed or switched rows while this was in flight.
-      if (_state.openId !== id) return;
+      if (_state.openId !== id || !d.isConnected) return;
       paintDetail(d, r);
+      extCollect('onRowExpanded', row, ticketRow(id) || (r && r.ticket) || null, r, listCtx());
     }).catch(function (e) {
       if (_state.openId !== id) return;
       d.innerHTML = '<div class="p86-st-loading" style="color:#f87171;">' +
@@ -348,96 +597,120 @@
     });
   }
 
-  function paintDetail(d, r) {
-    var t = r.ticket || {};
-    var canEdit = canEditJob(_state.jobId) && t.status !== 'closed' && t.status !== 'cancelled';
-    var events = r.events || [];
-    // Timeline rows name the building a photo or note landed on.
-    _state.taskTitles = {};
-    (r.tasks || []).forEach(function (k) { _state.taskTitles[String(k.id)] = k.title || ''; });
+  // ── The detail context (d._st) ───────────────────────────────────────
+  // One object per detail element for its whole life, so a closure or an
+  // extension holding it always reads the live ticket (ctx.t is updated in
+  // place) and the last read (ctx.r). The shape other modules may use is the
+  // Work Orders 1.29 contract (shared contracts 5.2); base, html, extHtml,
+  // cardHtml, tasksById, fieldsEdit and painted are the host's own.
+  function makeCtx(d) {
+    var ctx = {
+      ticketId: null, t: null, r: null, canEdit: false, jobId: null, leadId: null,
+      toast: toast,
+      refresh: function (opts) {
+        return updateDetail(d, ctx.ticketId, opts).catch(function (e) {
+          try { console.warn('[service-tickets] ticket refresh failed:', e); } catch (_) {}
+        });
+      },
+      reload: function () {
+        if (ctx.ticketId != null) _state.openId = String(ctx.ticketId);
+        return reload();
+      },
+      leave: function () { return leaveOpenTicket(); },
+      taskTitle: function (id) { return _state.taskTitles[String(id)] || ''; },
+      parseSubtaskTitle: parseSubtaskTitle,
+      api: api
+    };
+    d._st = ctx;
+    return ctx;
+  }
 
-    // The stepper shows position on the lattice at a glance. cancelled is not
-    // a step on the line — it is a branch off it — so it renders as a note
-    // rather than a position.
-    var LINE = ['draft', 'open', 'scheduled', 'in_progress', 'work_complete', 'approved', 'closed'];
+  function indexTasks(ctx, r) {
+    _state.taskTitles = {};
+    ctx.tasksById = {};
+    ((r && r.tasks) || []).forEach(function (k) {
+      _state.taskTitles[String(k.id)] = k.title || '';
+      ctx.tasksById[String(k.id)] = k;
+    });
+  }
+
+  // Tags a section's root with data-st-sec (the same rule as the editor kit's
+  // sec(), kept here so sections still carry their keys without the kit). An
+  // empty section is an empty <template>: no box, no gap, still swappable.
+  function sec(key, html) {
+    var k = esc(key);
+    var s = html == null ? '' : String(html);
+    if (!/\S/.test(s)) return '<template data-st-sec="' + k + '"></template>';
+    var tagged = false;
+    var out = s.replace(/^(\s*<[A-Za-z][A-Za-z0-9-]*)/, function (m) {
+      tagged = true;
+      return m + ' data-st-sec="' + k + '"';
+    });
+    return tagged ? out : '<div data-st-sec="' + k + '">' + s + '</div>';
+  }
+
+  function findSec(root, key) {
+    if (!root || !root.querySelector) return null;
+    return root.querySelector('[data-st-sec="' + String(key).replace(/["\\]/g, '\\$&') + '"]');
+  }
+
+  // Extension sections, by slot, in registry order. A key is taken once.
+  var SLOTS = ['banner', 'afterSite', 'scopeCard', 'afterRevisions', 'statusMeta', 'actions'];
+
+  function extSections(ctx) {
+    var out = {};
+    SLOTS.forEach(function (s) { out[s] = []; });
+    var seen = {};
+    extCollect('detailSections', ctx).forEach(function (list) {
+      (Array.isArray(list) ? list : [list]).forEach(function (s) {
+        if (!s || typeof s.key !== 'string' || !s.key || !out[s.slot] || seen[s.key]) return;
+        seen[s.key] = true;
+        out[s.slot].push({
+          key: s.key, slot: s.slot,
+          html: typeof s.html === 'string' ? s.html : '',
+          wire: typeof s.wire === 'function' ? s.wire : null
+        });
+      });
+    });
+    return out;
+  }
+
+  function slotHTML(list, ctx) {
+    return list.map(function (s) {
+      ctx.extHtml[s.key] = s.html;
+      return sec(s.key, s.html);
+    }).join('');
+  }
+
+  function wireSec(node, s, ctx) {
+    if (!node || !s.html || !s.wire) return;
+    try { s.wire(node, ctx); } catch (e) {
+      try { console.warn('[p86StExt] section ' + s.key, e); } catch (_) {}
+    }
+  }
+
+  // The stepper shows position on the lattice at a glance. cancelled is not
+  // a step on the line — it is a branch off it — so it renders as a note
+  // rather than a position.
+  var LINE = ['draft', 'open', 'scheduled', 'in_progress', 'work_complete', 'approved', 'closed'];
+
+  function stepperHTML(t) {
     var at = LINE.indexOf(t.status);
-    var stepper = t.status === 'cancelled'
+    return t.status === 'cancelled'
       ? '<div class="p86-st-cancelled">This ticket was cancelled.</div>'
       : '<div class="p86-st-stepper">' + LINE.map(function (s, i) {
           return '<span class="p86-st-step' + (i <= at ? ' done' : '') + (i === at ? ' at' : '') + '">' +
             esc(STATUS_LABEL[s]) + '</span>';
         }).join('') + '</div>';
+  }
 
-    d.innerHTML =
-      stepper +
-      siteHTML(r.site) +
-      revisionsHTML(r.revisions || [], canEdit) +
-      '<div class="p86-st-detail-grid">' +
-        '<div class="p86-st-detail-main">' +
-          // A plain block on a desktop (no rule of its own there); on a phone
-          // it is the Scope card — the one wrapper the card layout needs,
-          // since label and box are otherwise loose siblings.
-          '<div class="p86-st-scopecard">' +
-          '<label class="p86-st-lbl">Proposed scope</label>' +
-          (canEdit
-            ? '<textarea class="p86-st-scope" rows="5" placeholder="What needs doing, and where.">' +
-                esc(t.scope_proposed || '') + '</textarea>'
-            : '<div class="p86-st-ro">' + (t.scope_proposed ? esc(t.scope_proposed) : '<em>No scope written.</em>') + '</div>') +
-          (t.scope_approved
-            ? '<label class="p86-st-lbl">Approved scope</label><div class="p86-st-ro">' + esc(t.scope_approved) + '</div>'
-            : '') +
-          (t.guest_log
-            ? '<label class="p86-st-lbl">Field log</label><div class="p86-st-ro p86-st-guestlog">' + esc(t.guest_log) + '</div>'
-            : '') +
-          '</div>' +
-          materialsHTML(t, canEdit) +
-          tasksHTML(r.tasks || [], canEdit) +
-        '</div>' +
-        '<div class="p86-st-detail-side">' +
-          metaRow('Status', statusControl(t, canEdit)) +
-          metaRow('Priority', canEdit
-            ? select('p86-st-prio-sel', ['low', 'normal', 'high', 'urgent'], t.priority || 'normal', PRIORITY_LABEL)
-            : esc(PRIORITY_LABEL[t.priority] || 'Normal')) +
-          metaRow('Scheduled', canEdit
-            ? '<input type="date" class="p86-st-sched" value="' + escAttr((t.scheduled_for || '').slice(0, 10)) + '" />'
-            : esc(fmtDate(t.scheduled_for) || '—')) +
-          metaRow('Due', canEdit
-            ? '<input type="date" class="p86-st-due" value="' + escAttr((t.due_date || '').slice(0, 10)) + '" />'
-            : esc(fmtDate(t.due_date) || '—')) +
-          metaRow('Site contact', canEdit
-            ? '<input type="text" class="p86-st-contact" value="' + escAttr(t.site_contact_name || '') + '" placeholder="Name" />'
-            : esc(t.site_contact_name || '—')) +
-          (t.street_address && !(r.site && r.site.address)
-            ? metaRow('Address', esc([t.street_address, t.city, t.state].filter(Boolean).join(', ')))
-            : '') +
-        '</div>' +
-      '</div>' +
-      // Ask 86 is a READ, so it is not behind canEdit: a closed or cancelled
-      // ticket is exactly the one somebody asks "what happened here" about.
-      ((canEdit || aiAsk()) ? '<div class="p86-st-actions">' +
-        (canEdit
-          ? '<button class="ee-btn primary p86-st-save">Save</button>' +
-            '<button class="ee-btn secondary p86-st-share">&#x1F517; Share</button>' +
-            '<button class="ee-btn secondary p86-st-archive">Archive</button>'
-          : '') +
-        (aiAsk()
-          ? '<button class="ee-btn secondary p86-st-ask86" title="Ask 86 about this work order">Ask 86</button>'
-          : '') +
-      '</div>' : '') +
-      '<div class="p86-st-sharewrap" hidden></div>' +
-      participantsHTML(r.participants || [], canEdit) +
-      (events.length ? '<div class="p86-st-timeline">' +
-        '<label class="p86-st-lbl">Progress</label>' +
-        events.map(eventHTML).join('') +
-      '</div>' : '');
-
-    // On a touch phone the stepper is one row that scrolls sideways
-    // (styles.css, the 760px pointer: coarse block), so "Approved" or
-    // "Closed" can start off screen. Centre the current step by moving the
-    // ROW's scrollLeft only — scrollIntoView would also scroll the page, and
-    // this repaints after every photo and note. A desktop stepper, and a
-    // narrow mouse window's, wraps and never overflows, so there this does
-    // nothing.
+  // On a touch phone the stepper is one row that scrolls sideways
+  // (styles.css, the 760px pointer: coarse block), so "Approved" or
+  // "Closed" can start off screen. Centre the current step by moving the
+  // ROW's scrollLeft only — scrollIntoView would also scroll the page. A
+  // desktop stepper, and a narrow mouse window's, wraps and never overflows,
+  // so there this does nothing.
+  function centreStep(d) {
     var stepRow = d.querySelector('.p86-st-stepper');
     var atStep = stepRow && stepRow.querySelector('.p86-st-step.at');
     if (atStep && stepRow.scrollWidth > stepRow.clientWidth) {
@@ -445,6 +718,112 @@
       var ar = atStep.getBoundingClientRect();
       stepRow.scrollLeft += (ar.left + ar.width / 2) - (sr.left + sr.width / 2);
     }
+  }
+
+  function parentWordOf(t) { return (t && t.lead_id && !t.job_id) ? 'lead' : 'job'; }
+
+  function scopeExtraHTML(t) {
+    var html =
+      (t.scope_approved
+        ? '<label class="p86-st-lbl">Approved scope</label><div class="p86-st-ro">' + esc(t.scope_approved) + '</div>'
+        : '') +
+      (t.guest_log
+        ? '<label class="p86-st-lbl">Field log</label><div class="p86-st-ro p86-st-guestlog">' + esc(t.guest_log) + '</div>'
+        : '');
+    return html ? '<div class="p86-st-scope-extra">' + html + '</div>' : '';
+  }
+
+  // The status control and whatever extensions put beside it. The wrapper
+  // has no box of its own, so the phone's status row lays out as before.
+  function statusWrapHTML(t, canEdit) {
+    return '<span class="p86-st-statusctl" style="display:contents">' + statusControl(t, canEdit) + '</span>';
+  }
+
+  function timelineHTML(events, ctx) {
+    return events.length ? '<div class="p86-st-timeline">' +
+      '<label class="p86-st-lbl">Progress</label>' +
+      events.map(function (e) { return eventHTML(e, ctx); }).join('') +
+    '</div>' : '';
+  }
+
+  function paintDetail(d, r) {
+    var t = r.ticket || {};
+    var ed = editor();
+    var canEdit = canEditJob(_state.jobId) && t.status !== 'closed' && t.status !== 'cancelled';
+    var ctx = (d._st && String(d._st.ticketId) === String(t.id)) ? d._st : makeCtx(d);
+    ctx.t = ctx.t ? Object.assign(ctx.t, t) : t;
+    ctx.ticketId = t.id;
+    ctx.r = r;
+    ctx.canEdit = canEdit;
+    ctx.fieldsEdit = canEdit && !!ed;
+    ctx.jobId = _state.jobId;
+    ctx.leadId = t.lead_id || null;
+    ctx.base = ed ? ed.baseOf(ctx.t) : {};
+    ctx.html = {};
+    ctx.extHtml = {};
+    ctx.cardHtml = {};
+    ctx.painted = false;
+    indexTasks(ctx, r);
+    t = ctx.t;
+    var tasks = r.tasks || [];
+    var secs = extSections(ctx);
+    var H = ctx.html;
+    function put(key, html) {
+      H[key] = html == null ? '' : String(html);
+      return sec(key, H[key]);
+    }
+    H.addreff = ed ? ed.addressLineHTML(t, r.site, parentWordOf(t)) : '';
+
+    var side;
+    var statusHTML = put('status', statusWrapHTML(t, canEdit)) + slotHTML(secs.statusMeta, ctx);
+    if (ed) {
+      side = ed.sideFieldsHTML(t, ctx.fieldsEdit, r.site, parentWordOf(t), { statusHTML: statusHTML });
+    } else {
+      side = metaRow('status', 'Status', statusHTML) +
+        metaRow('priority', 'Priority', esc(PRIORITY_LABEL[t.priority] || 'Normal')) +
+        metaRow('scheduled_for', 'Scheduled', esc(fmtDate(t.scheduled_for) || '—')) +
+        metaRow('due_date', 'Due', esc(fmtDate(t.due_date) || '—')) +
+        metaRow('site_contact_name', 'Site contact', esc(t.site_contact_name || '—')) +
+        (canEdit ? '<div class="p86-st-help p86-st-noeditor" role="note">Editing is unavailable — refresh the page.</div>' : '');
+    }
+
+    d.innerHTML =
+      put('stepper', stepperHTML(t)) +
+      slotHTML(secs.banner, ctx) +
+      put('site', siteHTML(r.site)) +
+      slotHTML(secs.afterSite, ctx) +
+      put('revs', revisionsHTML(r.revisions || [], canEdit, ctx)) +
+      slotHTML(secs.afterRevisions, ctx) +
+      '<div class="p86-st-detail-grid">' +
+        '<div class="p86-st-detail-main">' +
+          // A plain block on a desktop (no rule of its own there); on a phone
+          // it is the Scope card — the one wrapper the card layout needs,
+          // since label and box are otherwise loose siblings.
+          '<div class="p86-st-scopecard">' +
+          (ed ? ed.titleFieldHTML(t, ctx.fieldsEdit) : '') +
+          '<label class="p86-st-lbl">Proposed scope</label>' +
+          (ctx.fieldsEdit
+            ? '<textarea class="p86-st-scope" data-st-field="scope_proposed" rows="5" placeholder="What needs doing, and where.">' +
+                esc(t.scope_proposed || '') + '</textarea>'
+            : '<div class="p86-st-ro">' + (t.scope_proposed ? esc(t.scope_proposed) : '<em>No scope written.</em>') + '</div>') +
+          put('scopeextra', scopeExtraHTML(t)) +
+          slotHTML(secs.scopeCard, ctx) +
+          '</div>' +
+          (ed ? put('internal', ed.internalNotesHTML(t, ctx.fieldsEdit)) : '') +
+          put('mats', materialsHTML(t, canEdit)) +
+          put('punchhead', punchHeadHTML(tasks)) +
+          subsSectionHTML(tasks, canEdit, ctx) +
+          taskAddHTML(canEdit) +
+        '</div>' +
+        '<div class="p86-st-detail-side">' + side + '</div>' +
+      '</div>' +
+      actionsHTML(ctx, secs) +
+      '<div class="p86-st-sharewrap" hidden></div>' +
+      put('parts', participantsHTML(r.participants || [], canEdit)) +
+      put('timeline', timelineHTML(r.events || [], ctx));
+
+    if (ctx.fieldsEdit) restoreDraft(d, ctx);
+    centreStep(d);
     // The phone scope box grows with its text through CSS field-sizing. A
     // browser without it (older iOS Safari) gets the same from its height.
     var scopeBox = d.querySelector('textarea.p86-st-scope');
@@ -455,8 +834,167 @@
       fitScope();
     }
 
-    wireDetail(d, t);
-    wireWorkOrder(d, t, r.tasks || [], canEdit);
+    wireActions(d);
+    wireMove(findSec(d, 'status'), d);
+    wireRevisions(findSec(d, 'revs'), d);
+    wireParticipants(findSec(d, 'parts'), d);
+    wireMaterials(findSec(d, 'mats'), d);
+    Array.prototype.forEach.call(d.querySelectorAll('.p86-wo-sub'), function (card) { wireCard(d, card); });
+    if (!d._stDirtyWired) {
+      d._stDirtyWired = true;
+      d.addEventListener('input', onDirtyInput);
+      d.addEventListener('change', onDirtyInput);
+    }
+    if (ed && ctx.fieldsEdit) {
+      var who = d.querySelector('select[data-st-field="assignee_user_id"]');
+      if (who) {
+        ed.fillAssignees(who, { kind: parentWordOf(t), id: parentWordOf(t) === 'lead' ? t.lead_id : (t.job_id || _state.jobId) },
+          t.assignee_user_id).catch(noop);
+      }
+    }
+    if (ed && typeof ed.fillNames === 'function') Promise.resolve(ed.fillNames(d)).catch(noop);
+    ctx.painted = true;
+
+    SLOTS.forEach(function (slot) {
+      secs[slot].forEach(function (s) { wireSec(findSec(d, s.key), s, ctx); });
+    });
+    if (!d._stExtWired) {
+      d._stExtWired = true;
+      extCollect('wireDetail', d, ctx);
+    }
+    if (ed && ctx.fieldsEdit) ed.showDirty(d, ed.dirtyKeys(d, ctx.base));
+    extCollect('afterPaint', d, ctx);
+  }
+
+  function actionsHTML(ctx, secs) {
+    var canEdit = ctx.canEdit;
+    var extra = slotHTML(secs.actions, ctx);
+    var anyExtra = secs.actions.some(function (s) { return !!s.html; });
+    return (
+      // Ask 86 is a READ, so it is not behind canEdit: a closed or cancelled
+      // ticket is exactly the one somebody asks "what happened here" about.
+      ((canEdit || aiAsk()) ? '<div class="p86-st-actions">' +
+        (canEdit
+          ? (ctx.fieldsEdit ? '<button class="ee-btn primary p86-st-save">Save</button>' : '') +
+            '<button class="ee-btn secondary p86-st-share">&#x1F517; Share</button>' +
+            '<button class="ee-btn secondary p86-st-archive">Archive</button>'
+          : '') +
+        (aiAsk()
+          ? '<button class="ee-btn secondary p86-st-ask86" title="Ask 86 about this work order">Ask 86</button>'
+          : '') +
+        extra +
+      '</div>' : (anyExtra ? '<div class="p86-st-actions">' + extra + '</div>' : ''))
+    );
+  }
+
+  function onDirtyInput(e) {
+    var d = e.currentTarget;
+    var ctx = d && d._st;
+    var ed = editor();
+    if (!ctx || !ed || !ctx.fieldsEdit || !ctx.painted) return;
+    ed.showDirty(d, ed.dirtyKeys(d, ctx.base));
+    syncDraftNote(d);
+  }
+
+  // The "your changes are back" note stays only while one of the boxes it
+  // names still holds an unsaved change: once they are saved, discarded,
+  // replaced by their version or typed back, it goes.
+  function syncDraftNote(d) {
+    var note = d && d.querySelector && d.querySelector('.p86-st-draftnote');
+    if (!note) return;
+    var ed = editor();
+    var ctx = d._st;
+    var dirty = (ed && ctx && ctx.fieldsEdit) ? ed.dirtyKeys(d, ctx.base) : [];
+    var keys = note._stKeys || [];
+    if (!keys.some(function (k) { return dirty.indexOf(k) !== -1; })) note.remove();
+  }
+
+  // ── Unsaved work that outlives a job switch ──────────────────────────
+  function stashDraft(d, keys) {
+    var ed = editor();
+    var ctx = d && d._st;
+    if (!ed || !ctx || !ctx.fieldsEdit) return [];
+    var list = keys || ed.dirtyKeys(d, ctx.base);
+    if (!list.length) return list;
+    var values = {};
+    var base = {};
+    list.forEach(function (k) {
+      var c = ed.controlOf(d, k);
+      if (!c) return;
+      values[k] = c.value;
+      base[k] = ctx.base[k];
+    });
+    _state.drafts[String(ctx.ticketId)] = { values: values, base: base, jobId: ctx.jobId != null ? ctx.jobId : _state.jobId };
+    return list;
+  }
+
+  // A kept draft counts as unsaved work only while it can still come back: a
+  // ticket on a job whose list is not loaded (nothing known about it), or one
+  // on the loaded list that is still open for editing. One closed, cancelled
+  // or archived since cannot be put back in any box, so it must not make the
+  // browser ask before every page leave. It is kept all the same, and returns
+  // if the ticket is reopened.
+  function draftCanReturn(id) {
+    var dr = _state.drafts[id];
+    if (!dr) return false;
+    if (dr.jobId == null || _state.listedJob == null || String(dr.jobId) !== String(_state.listedJob)) return true;
+    var row = ticketRow(id);
+    return !!row && row.status !== 'closed' && row.status !== 'cancelled';
+  }
+
+  // Typed values go back into the boxes; each box's default stays the server
+  // value, so it reads as unsaved, and its base is what the PM started from,
+  // so a Save still catches someone else's change in between.
+  function restoreDraft(d, ctx) {
+    var ed = editor();
+    var id = String(ctx.ticketId);
+    var dr = _state.drafts[id];
+    if (!ed || !dr) return;
+    delete _state.drafts[id];
+    var restored = [];
+    Object.keys(dr.values || {}).forEach(function (k) {
+      var c = ed.controlOf(d, k);
+      if (!c) return;
+      c.value = dr.values[k];
+      ctx.base[k] = dr.base[k];
+      restored.push(k);
+    });
+    if (!restored.length) return;
+    var grid = d.querySelector('.p86-st-detail-grid');
+    if (!grid) return;
+    grid.insertAdjacentHTML('beforebegin', ed.draftNoteHTML(restored));
+    var note = grid.previousElementSibling;
+    if (note) note._stKeys = restored;
+    var btn = note && note.querySelector('.p86-st-draftnote-discard');
+    if (btn) btn.addEventListener('click', function () {
+      resetFields(d, d._st, restored);
+      note.remove();
+    });
+  }
+
+  // Put the server's value back in each box and make it the base again.
+  function resetFields(d, ctx, keys) {
+    var ed = editor();
+    if (!ed || !ctx) return;
+    (keys || []).forEach(function (k) {
+      var v = ctx.t && ctx.t[k] !== undefined ? ctx.t[k] : null;
+      ed.setControl(d, k, v);
+      ctx.base[k] = v;
+    });
+    ed.clearInvalid(d);
+    var box = d.querySelector('.p86-st-conflict');
+    if (box) { box.hidden = true; box.innerHTML = ''; }
+    ed.showDirty(d, ctx.fieldsEdit ? ed.dirtyKeys(d, ctx.base) : []);
+    syncDraftNote(d);
+  }
+
+  function discardExtras(d) {
+    Array.prototype.forEach.call(d.querySelectorAll('.p86-wo-note-in, .p86-st-task-new'), function (i) { i.value = ''; });
+    Array.prototype.forEach.call(d.querySelectorAll('.p86-wo-mats-form'), function (f) {
+      if (f.hasAttribute('data-filling')) return;
+      f.hidden = true;
+      f.innerHTML = '';
+    });
   }
 
   // ── Suggestions from a `propose` link ────────────────────────────────────
@@ -478,7 +1016,7 @@
     return esc(String(v));
   }
 
-  function revisionHTML(rev, canEdit) {
+  function revisionHTML(rev, canEdit, ctx) {
     var fields = (rev.fields && typeof rev.fields === 'object') ? rev.fields : {};
     var keys = Object.keys(fields).filter(function (k) { return PROPOSED_LABEL[k]; });
     if (!keys.length) return '';
@@ -514,15 +1052,16 @@
             '<button class="ee-btn secondary p86-st-rev-reject">Reject</button>' +
           '</div>'
         : '') +
+      extHtml('revisionActions', rev, ctx) +
     '</div>';
   }
 
-  function revisionsHTML(revisions, canEdit) {
+  function revisionsHTML(revisions, canEdit, ctx) {
     var rows = revisions.filter(function (r) { return r && r.fields; });
     if (!rows.length) return '';
     var pending = rows.filter(function (r) { return r.status === 'pending'; });
     var done = rows.filter(function (r) { return r.status !== 'pending'; });
-    var body = pending.concat(done).map(function (r) { return revisionHTML(r, canEdit); }).join('');
+    var body = pending.concat(done).map(function (r) { return revisionHTML(r, canEdit, ctx); }).join('');
     if (!body) return '';
     return '<div class="p86-st-revs' + (pending.length ? ' has-pending' : '') + '">' +
       '<label class="p86-st-lbl">Suggestions' +
@@ -575,8 +1114,15 @@
   // and completion photos, crew notes, and a complete box. Completing needs at
   // least one completion photo — the server enforces it (409), the card only
   // says so up front so nobody finds out by clicking.
-  function tasksHTML(tasks, canEdit) {
-    var live = tasks.filter(function (t) { return !t.archived_at; });
+  //
+  // Three pieces, so an update can redraw the header and each card on its own
+  // and leave the Add box (and what is typed in it) where it is.
+  function liveTasks(tasks) {
+    return (tasks || []).filter(function (t) { return !t.archived_at; });
+  }
+
+  function punchHeadHTML(tasks) {
+    var live = liveTasks(tasks);
     var done = live.filter(function (t) { return t.status === 'done'; }).length;
     var pct = live.length ? Math.round((done / live.length) * 100) : 0;
     // .p86-wo-punch-head groups the label and the progress bar: nothing on a
@@ -589,18 +1135,28 @@
       (live.length
         ? '<div class="p86-st-bar-track"><div class="p86-st-bar-fill" style="width:' + pct + '%"></div></div>'
         : '<div class="p86-st-ro"><em>No subtasks under this work order yet.</em></div>') +
-      '</div>' +
-      (live.length
-        ? '<div class="p86-wo-subs">' + live.map(function (t) { return subtaskHTML(t, canEdit); }).join('') + '</div>'
-        : '') +
-      (canEdit
-        ? '<div class="p86-st-task-add">' +
-            '<input type="text" class="p86-st-task-new" placeholder="Add a subtask — e.g. Bldg 790 — Side A: …" />' +
-            '<button class="ee-btn secondary p86-st-task-go">Add</button>' +
-          '</div>' +
-          '<div class="p86-st-task-note">Subtasks stay on the job\'s Tasks list and in My Tasks — ' +
-            'the work order groups them, it does not hide them.</div>'
-        : '');
+      '</div>';
+  }
+
+  function subsSectionHTML(tasks, canEdit, ctx) {
+    var live = liveTasks(tasks);
+    if (!live.length) return sec('subs', '');
+    return '<div class="p86-wo-subs" data-st-sec="subs">' + live.map(function (t) {
+      var html = subtaskHTML(t, canEdit, ctx);
+      if (ctx) ctx.cardHtml[String(t.id)] = html;
+      return html;
+    }).join('') + '</div>';
+  }
+
+  function taskAddHTML(canEdit) {
+    return canEdit
+      ? '<div class="p86-st-task-add">' +
+          '<input type="text" class="p86-st-task-new" placeholder="Add a subtask — e.g. Bldg 790 — Side A: …" />' +
+          '<button class="ee-btn secondary p86-st-task-go">Add</button>' +
+        '</div>' +
+        '<div class="p86-st-task-note">Subtasks stay on the job\'s Tasks list and in My Tasks — ' +
+          'the work order groups them, it does not hide them.</div>'
+      : '';
   }
 
   // "Bldg 784 — Side A: rail post; tread 3 · Side D: stringer" → a heading and
@@ -627,7 +1183,7 @@
   var CAM_ICON_TILE = '<svg class="p86-wo-camico" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false">' + CAM_ICON_PATH + '</svg>';
   var CAM_ICON_BTN = '<svg class="p86-wo-camico" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">' + CAM_ICON_PATH + '</svg>';
 
-  function subtaskHTML(t, canEdit) {
+  function subtaskHTML(t, canEdit, ctx) {
     var parsed = parseSubtaskTitle(t.title);
     var photos = t.photos || [];
     var completion = photos.filter(function (p) { return p.kind !== 'before'; }).length;
@@ -658,6 +1214,7 @@
           (isDone
             ? '<span class="p86-wo-doneby">Done' + (t.completed_by ? ' · ' + esc(t.completed_by) : '') + '</span>'
             : (completion ? '' : '<span class="p86-wo-needs">Needs photo</span>')) +
+          extHtml('cardMeta', t, ctx) +
         '</span>' +
       '</div>' +
       '<div class="p86-wo-sub-body"' + (open ? '' : ' hidden') + '>' +
@@ -681,7 +1238,7 @@
           // The dashed tiles at the end of the row, as on the crew link:
           // Take photo and Upload photo. display:none on a desktop; on a
           // phone each opens the matching completion-photo input below (wired
-          // in wireWorkOrder), so an upload from a tile or a button goes down
+          // in wireCard), so an upload from a tile or a button goes down
           // one path. On a phone the tiles ARE the completion buttons: the
           // two completion labels below are hidden there (styles.css).
           (canEdit
@@ -708,7 +1265,8 @@
         (notes.length
           ? '<div class="p86-wo-notes">' + notes.map(function (n) {
               return '<div class="p86-wo-note"><span class="p86-wo-note-by">' + esc(n.by || '') +
-                (n.at ? ' · ' + esc(fmtDate(n.at)) : '') + '</span>' + esc(n.note) + '</div>';
+                (n.at ? ' · ' + esc(fmtWhen(n.at)) : '') + '</span>' + esc(n.note) +
+                extHtml('noteActions', n, t, ctx) + '</div>';
             }).join('') + '</div>'
           : '') +
         (canEdit
@@ -911,8 +1469,10 @@
     '</div>';
   }
 
-  function metaRow(label, html) {
-    return '<div class="p86-st-meta"><span class="p86-st-meta-k">' + esc(label) + '</span>' +
+  // Only used when the editor kit is missing; the kit draws the Details panel
+  // otherwise. data-for places the row in the phone grid.
+  function metaRow(key, label, html) {
+    return '<div class="p86-st-meta" data-for="' + escAttr(key) + '"><span class="p86-st-meta-k">' + esc(label) + '</span>' +
       '<span class="p86-st-meta-v">' + html + '</span></div>';
   }
 
@@ -947,7 +1507,43 @@
         : '');
   }
 
-  function eventHTML(e) {
+  // A column name reads as jargon on the timeline, so every field the office
+  // can change has a plain name. The server logs names only, never values, so
+  // "what it was changed to" is on the ticket, not here.
+  var FIELD_LABEL = {
+    title: 'the title', scope_proposed: 'the scope', scope_approved: 'the approved scope',
+    priority: 'the priority', scheduled_for: 'the scheduled date', due_date: 'the due date',
+    assignee_user_id: 'the assignee', site_contact_name: 'the site contact',
+    site_contact_phone: 'the site phone', access_notes: 'the gate code / access notes',
+    street_address: 'the address', city: 'the address', state: 'the address', zip: 'the address',
+    internal_notes: 'the internal notes', materials: 'the materials', crew_takeoff: 'the crew link takeoff'
+  };
+
+  var STATUS_REASON = {
+    all_subtasks_done: ' — every subtask done',
+    marked_complete: ' — the crew finished the whole work order',
+    crew_undid_finish: ' — the crew took back Finish whole work order',
+    subtask_added: ' — a subtask was added',
+    subtask_removed: ' — its last subtask was removed'
+  };
+
+  function photoKindWord(k) {
+    return k === 'before' ? 'before' : (k === 'site' ? 'site' : 'completion');
+  }
+
+  function statusSuffix(detail) {
+    var s = STATUS_REASON[detail.reason] || '';
+    if (detail.override === 'buildings_open' && detail.open != null && detail.total != null &&
+        isFinite(Number(detail.open)) && isFinite(Number(detail.total))) {
+      s += ' with ' + Number(detail.open) + ' of ' + Number(detail.total) + ' subtasks still open';
+    }
+    if (typeof detail.note === 'string' && detail.note.trim()) {
+      s += ' — “' + esc(detail.note.trim()) + '”';
+    }
+    return s;
+  }
+
+  function eventHTML(e, ctx) {
     // A name on a guest row is a CLAIM, not identity — a bearer token cannot
     // prove who is holding it — so the row says how it arrived rather than
     // presenting the name the way an authenticated actor's is presented.
@@ -958,6 +1554,8 @@
       created: 'raised the ticket',
       note_added: 'added a field note',
       photo_added: 'added a photo',
+      photo_removed: 'removed a photo',
+      photo_retagged: 'changed a photo',
       shared: 'sent a link',
       share_revoked: 'turned a link off',
       share_opened: 'opened the link',
@@ -967,34 +1565,68 @@
       agent_drafted: 'drafted this with 86',
       subtask_completed: 'finished a subtask',
       subtask_reopened: 'reopened a subtask',
-      subtask_note: 'added a subtask note'
+      subtask_note: 'added a subtask note',
+      task_added: 'added a subtask',
+      task_removed: 'removed a subtask'
     };
-    // A column name reads as jargon on the timeline; the few that do not say
-    // what they are get a plain name. The server logs names only, never the
-    // file itself, so "which file" is in the Materials section, not here.
-    var FIELD_LABEL = { crew_takeoff: 'the crew link takeoff' };
     var detail = e.detail;
     if (typeof detail === 'string') { try { detail = JSON.parse(detail); } catch (_) { detail = null; } }
     e = Object.assign({}, e, { detail: detail });
+    // The building's name as it is now, or — for a building since removed or
+    // moved — the title the event recorded.
     var task = detail && detail.task_id != null ? _state.taskTitles[String(detail.task_id)] : '';
-    var head = task ? esc(parseSubtaskTitle(task).head) : '';
+    var titled = task || (detail && typeof detail.title === 'string' && detail.title.trim() ? detail.title : '');
+    var head = titled ? esc(parseSubtaskTitle(titled).head) : '';
     var ON_TASK = {
       subtask_completed: 'finished ' + head,
       subtask_reopened: 'reopened ' + head,
-      subtask_note: 'added a note on ' + head
+      subtask_note: 'added a note on ' + head,
+      task_added: 'added ' + head,
+      task_removed: (detail && detail.reason === 'archived') ? 'removed ' + head : 'took ' + head + ' off this work order'
     };
-    var what = e.kind === 'status_changed' && e.detail
-      ? 'moved it to ' + esc(STATUS_LABEL[e.detail.to] || e.detail.to) +
-        (e.detail.reason === 'all_subtasks_done' ? ' — every subtask done' : '')
-      : e.kind === 'approval_notified' && e.detail && Array.isArray(e.detail.names) && e.detail.names.length
-        ? 'told ' + esc(e.detail.names.join(', ')) + ' it is ready for approval'
-      : e.kind === 'photo_added' && e.detail && e.detail.task_id != null
-        ? 'added a ' + (e.detail.kind === 'before' ? 'before' : 'completion') + ' photo' + (head ? ' on ' + head : '')
-      : (head && ON_TASK[e.kind])
-        ? ON_TASK[e.kind]
-      : e.kind === 'field_changed' && e.detail && e.detail.fields
-        ? 'edited ' + esc((e.detail.fields || []).map(function (k) { return FIELD_LABEL[k] || k; }).join(', '))
-        : esc(VERB[e.kind] || String(e.kind || '').replace(/_/g, ' '));
+
+    // An extension that owns this kind words it first.
+    var own = extCollect('eventWhat', e, {
+      esc: esc,
+      head: function (id) {
+        var tt = _state.taskTitles[String(id)];
+        return tt ? parseSubtaskTitle(tt).head : '';
+      },
+      statusLabel: function (s) { return STATUS_LABEL[s] || String(s == null ? '' : s); },
+      detail: detail
+    });
+
+    var what;
+    if (own.length) {
+      what = String(own[0]);
+    } else if (e.kind === 'status_changed' && detail) {
+      what = 'moved it to ' + esc(STATUS_LABEL[detail.to] || detail.to) + statusSuffix(detail);
+    } else if (e.kind === 'approval_notified' && detail && Array.isArray(detail.names) && detail.names.length) {
+      what = 'told ' + esc(detail.names.join(', ')) + ' it is ready for approval';
+    } else if (e.kind === 'photo_added' && detail && detail.task_id != null) {
+      what = 'added a ' + (detail.kind === 'before' ? 'before' : 'completion') + ' photo' + (head ? ' on ' + head : '');
+    } else if (e.kind === 'photo_added' && detail && detail.flag_id == null) {
+      what = 'added a site photo';
+    } else if (e.kind === 'photo_removed' && detail) {
+      what = 'removed a ' + photoKindWord(detail.kind) + ' photo' + (head ? ' from ' + head : '');
+    } else if (e.kind === 'photo_retagged' && detail) {
+      what = 'changed a ' + photoKindWord(detail.from) + ' photo to a ' + photoKindWord(detail.to) + ' photo' +
+        (head ? ' on ' + head : '');
+    } else if (e.kind === 'note_added' && detail && Number(detail.photo_count) > 0) {
+      var n = Math.floor(Number(detail.photo_count));
+      what = 'added a field note with ' + n + (n === 1 ? ' photo' : ' photos');
+    } else if (head && ON_TASK[e.kind]) {
+      what = ON_TASK[e.kind];
+    } else if (e.kind === 'field_changed' && detail && detail.fields) {
+      var names = [];
+      (Array.isArray(detail.fields) ? detail.fields : []).forEach(function (k) {
+        var nm = FIELD_LABEL[k] || String(k);
+        if (names.indexOf(nm) === -1) names.push(nm);
+      });
+      what = 'edited ' + esc(names.join(', '));
+    } else {
+      what = esc(VERB[e.kind] || String(e.kind || '').replace(/_/g, ' '));
+    }
     return '<div class="p86-st-event' + (e.actor_kind === 'share' ? ' is-guest' : '') + '">' +
       '<span class="p86-st-event-who">' + who + '</span> ' +
       '<span class="p86-st-event-what">' + what + '</span> ' +
@@ -1002,129 +1634,424 @@
     '</div>';
   }
 
-  // Re-read just this ticket (photos and notes do not change the list row).
-  function refreshDetail(d, id) {
+  // ── In-place updates ─────────────────────────────────────────────────
+  // Re-read this ticket and change only what changed: each section is
+  // swapped when its markup differs, each building card likewise, and a field
+  // the PM has changed and not saved is left exactly as it is. The page keeps
+  // its scroll position around opts.anchor.
+  function updateDetail(d, id, opts) {
+    var o = opts || {};
+    if (!d || !api()) return Promise.resolve();
     return api().get(id).then(function (r) {
-      if (_state.openId !== id) return;
-      paintDetail(d, r);
+      if (String(_state.openId) !== String(id) || !d.isConnected) return;
+      var ctx = d._st;
+      var ed = editor();
+      var t = (r && r.ticket) || {};
+      if (!ed || !ctx || !ctx.painted || String(ctx.ticketId) !== String(t.id)) {
+        paintDetail(d, r);
+        return;
+      }
+      var canEdit = canEditJob(_state.jobId) && t.status !== 'closed' && t.status !== 'cancelled';
+      if (canEdit !== ctx.canEdit) {
+        // Closed, cancelled or reopened elsewhere: the controls change, so the
+        // detail is rebuilt. Typed changes are kept as a draft, not saved.
+        var keys = ctx.fieldsEdit ? ed.dirtyKeys(d, ctx.base) : [];
+        if (keys.length) {
+          stashDraft(d, keys);
+          toast('This work order was ' + (STATUS_LABEL[t.status] || t.status) +
+            ' while you were editing — your changes to ' + ed.labelList(keys) + ' were not saved.', 'error');
+        }
+        paintDetail(d, r);
+        // The list row follows, so a draft kept for a ticket that can no
+        // longer be edited stops counting as unsaved work.
+        patchRowHead(d, t, r);
+        return;
+      }
+      return ed.keepScroll(anchorNow(d, o.anchor), function () { patchDetail(d, r); }, d);
     });
   }
 
-  function wireWorkOrder(d, t, tasks, canEdit) {
-    var byId = {};
-    tasks.forEach(function (k) { byId[String(k.id)] = k; });
+  // The scroll anchor, looked up when the update lands rather than when it
+  // was asked for: a card or section redrawn by another update in between is
+  // detached, measures at the top of nothing, and would scroll the wrong box.
+  // The element itself while it is on the page, else the card or section now
+  // drawn in its place, else none (the kit keeps the first thing on screen).
+  function anchorNow(d, el) {
+    if (!el || el.nodeType !== 1) return null;
+    if (el.isConnected) return el;
+    var keyed = el.closest ? el.closest('[data-task],[data-st-sec]') : null;
+    if (!keyed || !d || !d.querySelector) return null;
+    var attr = keyed.hasAttribute('data-task') ? 'data-task' : 'data-st-sec';
+    var val = String(keyed.getAttribute(attr)).replace(/["\\]/g, '\\$&');
+    var now = d.querySelector('[' + attr + '="' + val + '"]');
+    return (now && now.isConnected) ? now : null;
+  }
 
-    d.querySelectorAll('.p86-wo-sub').forEach(function (card) {
-      var taskId = card.getAttribute('data-task');
-      var task = byId[taskId] || {};
-      var photos = task.photos || [];
-      var body = card.querySelector('.p86-wo-sub-body');
-      var toggle = card.querySelector('.p86-wo-sub-toggle');
+  // The old name, for callers that still use it.
+  function refreshDetail(d, id) {
+    return updateDetail(d, id);
+  }
 
-      function setOpen(open) {
-        if (!body) return;
-        body.hidden = !open;
-        card.classList.toggle('is-open', open);
-        if (toggle) toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-        if (open) _state.openSubs[taskId] = true; else delete _state.openSubs[taskId];
+  function patchDetail(d, r) {
+    var ed = editor();
+    var ctx = d._st;
+    var dirty = ctx.fieldsEdit ? ed.dirtyKeys(d, ctx.base) : [];
+    Object.assign(ctx.t, r.ticket || {});
+    ctx.r = r;
+    indexTasks(ctx, r);
+    var t = ctx.t;
+    var canEdit = ctx.canEdit;
+    var H = ctx.html;
+    function swap(key, html, wireFn) {
+      return ed.swapSection(d, key, html == null ? '' : String(html), H, wireFn);
+    }
+
+    if (swap('stepper', stepperHTML(t))) centreStep(d);
+    swap('site', siteHTML(r.site));
+    swap('revs', revisionsHTML(r.revisions || [], canEdit, ctx), function (n) { wireRevisions(n, d); });
+    swap('scopeextra', scopeExtraHTML(t));
+    var internal = findSec(d, 'internal');
+    if (internal && dirty.indexOf('internal_notes') === -1 && !holdsCaret(internal)) {
+      swap('internal', ed.internalNotesHTML(t, ctx.fieldsEdit));
+    }
+    swap('addreff', ed.addressLineHTML(t, r.site, parentWordOf(t)));
+    // Not while someone is choosing a move, or one is on its way.
+    var mv = d.querySelector('.p86-st-move');
+    if (!(mv && (mv.disabled || document.activeElement === mv))) {
+      swap('status', statusWrapHTML(t, canEdit), function (n) { wireMove(n, d); });
+    }
+    var pick = d.querySelector('.p86-st-part-user');
+    if (!(pick && pick.value)) {
+      swap('parts', participantsHTML(r.participants || [], canEdit), function (n) { wireParticipants(n, d); });
+    }
+    swap('timeline', timelineHTML(r.events || [], ctx));
+    swap('punchhead', punchHeadHTML(r.tasks || []));
+
+    // An open materials editor (or a file being read into it) is left alone;
+    // only the crew link row under it follows the ticket.
+    var form = d.querySelector('.p86-wo-mats-form');
+    if (!form || (form.hidden && !form.hasAttribute('data-filling'))) {
+      swap('mats', materialsHTML(t, canEdit), function (n) { wireMaterials(n, d); });
+    } else {
+      var crew = d.querySelector('.p86-wo-crew');
+      var crewHtml = crewTakeoffHTML(t, canEdit);
+      if (crew && crewHtml) {
+        crew.outerHTML = crewHtml;
+        delete H.mats;
       }
-      if (toggle) toggle.addEventListener('click', function () { setOpen(body.hidden); });
+    }
 
-      card.querySelectorAll('.p86-wo-thumb').forEach(function (b) {
-        b.addEventListener('click', function () {
-          if (!window.p86Attachments || !window.p86Attachments.openLightbox) return;
-          window.p86Attachments.openLightbox(photos, Number(b.getAttribute('data-idx')) || 0, {
-            parentLabel: parseSubtaskTitle(task.title).head,
-            parentSubtitle: t.title || ''
-          });
-        });
-      });
+    syncCards(d, ctx, r.tasks || []);
+    syncFields(d, ctx, dirty);
+    patchExtSections(d, ctx);
+    patchRowHead(d, t, r);
+    if (ctx.fieldsEdit) ed.showDirty(d, ed.dirtyKeys(d, ctx.base));
+    syncDraftNote(d);
+    extCollect('afterPaint', d, ctx);
+  }
 
-      if (!canEdit) return;
+  // Building cards, one at a time: a changed card is redrawn carrying the note
+  // typed in it (and the caret), a new one is put in its place, a removed one
+  // goes.
+  function syncCards(d, ctx, tasks) {
+    var holder = findSec(d, 'subs');
+    if (!holder || !holder.parentNode) return;
+    var doc = d.ownerDocument;
+    var live = liveTasks(tasks);
+    if (!live.length) {
+      if (holder.tagName !== 'TEMPLATE') {
+        var empty = doc.createElement('template');
+        empty.setAttribute('data-st-sec', 'subs');
+        holder.parentNode.replaceChild(empty, holder);
+      }
+      ctx.cardHtml = {};
+      return;
+    }
+    if (holder.tagName === 'TEMPLATE') {
+      var box = doc.createElement('div');
+      box.className = 'p86-wo-subs';
+      box.setAttribute('data-st-sec', 'subs');
+      holder.parentNode.replaceChild(box, holder);
+      holder = box;
+    }
+    var byId = {};
+    Array.prototype.forEach.call(holder.children, function (c) {
+      var k = c.getAttribute('data-task');
+      if (k != null) byId[k] = c;
+    });
+    var keep = {};
+    var prev = null;
+    live.forEach(function (task) {
+      var id = String(task.id);
+      var html = subtaskHTML(task, ctx.canEdit, ctx);
+      var card = byId[id];
+      if (!card || ctx.cardHtml[id] !== html) {
+        var tpl = doc.createElement('template');
+        tpl.innerHTML = html;
+        var fresh = tpl.content.firstElementChild;
+        if (!fresh) return;
+        var oldIn = card && card.querySelector('.p86-wo-note-in');
+        var focused = !!(oldIn && doc.activeElement === oldIn);
+        var selStart = focused ? oldIn.selectionStart : null;
+        var selEnd = focused ? oldIn.selectionEnd : null;
+        if (card) holder.replaceChild(fresh, card);
+        else holder.insertBefore(fresh, prev ? prev.nextSibling : holder.firstChild);
+        var newIn = fresh.querySelector('.p86-wo-note-in');
+        if (oldIn && newIn && oldIn.value) newIn.value = oldIn.value;
+        if (focused && newIn) {
+          try { newIn.focus(); newIn.setSelectionRange(selStart, selEnd); } catch (e) { /* not focusable */ }
+        }
+        ctx.cardHtml[id] = html;
+        wireCard(d, fresh);
+        card = fresh;
+      } else if (card.previousElementSibling !== prev) {
+        holder.insertBefore(card, prev ? prev.nextSibling : holder.firstChild);
+      }
+      keep[id] = true;
+      prev = card;
+    });
+    Object.keys(byId).forEach(function (id) {
+      if (keep[id]) return;
+      if (byId[id].parentNode) byId[id].parentNode.removeChild(byId[id]);
+      delete ctx.cardHtml[id];
+    });
+  }
 
-      var check = card.querySelector('.p86-wo-check');
-      if (check) check.addEventListener('click', function () {
-        var done = task.status !== 'done';
-        var hasCompletion = photos.some(function (p) { return p.kind !== 'before'; });
-        if (done && !hasCompletion) {
-          setOpen(true);
-          toast('Add a completion photo before marking this complete.', 'error');
+  // Every field NOT changed by the PM takes the server's value (and that value
+  // becomes its default and its base). A changed field keeps the typing and
+  // the base it started from, so Save can still see a conflict.
+  function syncFields(d, ctx, dirty) {
+    var ed = editor();
+    if (!ed || !ctx.fieldsEdit) return;
+    ed.FIELDS.forEach(function (f) {
+      if (dirty.indexOf(f.key) !== -1) return;
+      var c = ed.controlOf(d, f.key);
+      if (!c) return;
+      var v = ctx.t[f.key] === undefined ? null : ctx.t[f.key];
+      ctx.base[f.key] = v;
+      if (ed.norm(f.key, c.value) !== ed.norm(f.key, v)) ed.setControl(d, f.key, v);
+    });
+  }
+
+  function patchExtSections(d, ctx) {
+    var ed = editor();
+    var secs = extSections(ctx);
+    var now = {};
+    SLOTS.forEach(function (slot) {
+      var list = secs[slot];
+      list.forEach(function (s, i) {
+        now[s.key] = true;
+        if (!findSec(d, s.key)) {
+          var added = insertSec(d, slot, list, i, s);
+          if (added) {
+            ctx.extHtml[s.key] = s.html;
+            wireSec(added, s, ctx);
+          }
           return;
         }
-        check.disabled = true;
-        api().setSubtaskDone(t.id, taskId, done).then(function (res) {
-          if (res && res.ticketStatus === 'work_complete' && t.status !== 'work_complete') {
-            toast('Every subtask is done — the work order is awaiting approval.');
-          }
-          _state.openId = t.id;
-          return reload();
-        }).catch(function (e) {
-          check.disabled = false;
-          toast(e && e.message ? e.message : 'Could not update the subtask', 'error');
-        });
+        ed.swapSection(d, s.key, s.html, ctx.extHtml, function (n) { wireSec(n, s, ctx); });
       });
+    });
+    // A section its module no longer returns is emptied, not left stale.
+    Object.keys(ctx.extHtml).forEach(function (key) {
+      if (!now[key]) ed.swapSection(d, key, '', ctx.extHtml);
+    });
+  }
 
-      // Each tile opens its own completion input: Take photo the camera one,
-      // Upload photo the library one.
-      var camTile = card.querySelector('.p86-wo-camtile');
-      var addTile = card.querySelector('.p86-wo-addtile:not(.p86-wo-camtile)');
-      var completionCam = card.querySelector('.p86-wo-up.p86-wo-cam input[data-kind="completion"]');
-      var completionIn = card.querySelector('.p86-wo-up:not(.p86-wo-cam) input[data-kind="completion"]');
-      if (camTile && completionCam) camTile.addEventListener('click', function () { completionCam.click(); });
-      if (addTile && completionIn) addTile.addEventListener('click', function () { completionIn.click(); });
+  var SLOT_AFTER = { banner: 'stepper', afterSite: 'site', afterRevisions: 'revs', statusMeta: 'status' };
 
-      card.querySelectorAll('.p86-wo-up input[type=file]').forEach(function (inp) {
-        inp.addEventListener('change', function () {
-          var files = Array.prototype.slice.call(inp.files || []);
-          inp.value = '';
-          if (!files.length || !window.p86Api || !window.p86Api.attachments) return;
-          var kind = inp.getAttribute('data-kind') === 'before' ? 'before' : 'completion';
-          var label = inp.parentNode;
-          if (label) label.classList.add('is-busy');
-          toast('Uploading ' + files.length + ' photo' + (files.length === 1 ? '' : 's') + '…');
-          // One at a time: a crew phone on one bar of LTE should not open
-          // six parallel uploads and lose all of them.
-          files.reduce(function (p, f) {
-            return p.then(function () {
-              return window.p86Api.attachments.upload('task', taskId, f, { tags: kind });
-            });
-          }, Promise.resolve()).then(function () {
-            _state.openSubs[taskId] = true;
-            return refreshDetail(d, t.id);
-          }).catch(function (e) {
-            if (label) label.classList.remove('is-busy');
-            toast(e && e.message ? e.message : 'Could not upload the photo', 'error');
-            return refreshDetail(d, t.id);
-          });
-        });
-      });
-
-      var noteIn = card.querySelector('.p86-wo-note-in');
-      var noteGo = card.querySelector('.p86-wo-note-go');
-      function addNote() {
-        var note = (noteIn && noteIn.value || '').trim();
-        if (!note) return;
-        noteGo.disabled = true;
-        api().addSubtaskNote(t.id, taskId, note).then(function () {
-          _state.openSubs[taskId] = true;
-          return refreshDetail(d, t.id);
-        }).catch(function (e) {
-          noteGo.disabled = false;
-          toast(e && e.message ? e.message : 'Could not add the note', 'error');
-        });
+  // A section that was not there at the last paint goes after the nearest
+  // earlier section of its slot, or at the slot's own place.
+  function insertSec(d, slot, list, i, s) {
+    var tpl = d.ownerDocument.createElement('template');
+    tpl.innerHTML = sec(s.key, s.html);
+    var fresh = tpl.content.firstElementChild;
+    if (!fresh) return null;
+    for (var j = i - 1; j >= 0; j--) {
+      var before = findSec(d, list[j].key);
+      if (before && before.parentNode) {
+        before.parentNode.insertBefore(fresh, before.nextSibling);
+        return fresh;
       }
-      if (noteGo) noteGo.addEventListener('click', addNote);
-      if (noteIn) noteIn.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter') { e.preventDefault(); addNote(); }
+    }
+    if (SLOT_AFTER[slot]) {
+      var a = findSec(d, SLOT_AFTER[slot]);
+      if (!a || !a.parentNode) return null;
+      a.parentNode.insertBefore(fresh, a.nextSibling);
+      return fresh;
+    }
+    var holder = d.querySelector(slot === 'scopeCard' ? '.p86-st-scopecard' : '.p86-st-actions');
+    if (!holder) return null;
+    holder.appendChild(fresh);
+    return fresh;
+  }
+
+  // One building card. Everything it does reads the task from ctx.tasksById
+  // at click time, so a card that outlives an update acts on the task as it
+  // is now, not as it was when the card was drawn.
+  function wireCard(d, card) {
+    var taskId = card.getAttribute('data-task');
+    function ctxNow() { return d._st || {}; }
+    function task() { return (ctxNow().tasksById || {})[taskId] || {}; }
+    function photos() { return task().photos || []; }
+    var body = card.querySelector('.p86-wo-sub-body');
+    var toggle = card.querySelector('.p86-wo-sub-toggle');
+
+    function setOpen(open) {
+      if (!body) return;
+      body.hidden = !open;
+      card.classList.toggle('is-open', open);
+      if (toggle) toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) _state.openSubs[taskId] = true; else delete _state.openSubs[taskId];
+      // The card on screen is now the open (or closed) one, so an update that
+      // draws it the same way leaves it alone.
+      var ctx = ctxNow();
+      if (ctx.cardHtml && ctx.cardHtml[taskId] != null && ctx.tasksById && ctx.tasksById[taskId]) {
+        ctx.cardHtml[taskId] = subtaskHTML(ctx.tasksById[taskId], ctx.canEdit, ctx);
+      }
+    }
+    if (toggle) toggle.addEventListener('click', function () { setOpen(body.hidden); });
+
+    card.querySelectorAll('.p86-wo-thumb').forEach(function (b) {
+      b.addEventListener('click', function () {
+        if (!window.p86Attachments || !window.p86Attachments.openLightbox) return;
+        window.p86Attachments.openLightbox(photos(), Number(b.getAttribute('data-idx')) || 0, {
+          parentLabel: parseSubtaskTitle(task().title).head,
+          parentSubtitle: (ctxNow().t && ctxNow().t.title) || ''
+        });
       });
     });
 
+    if (!ctxNow().canEdit) return;
+
+    // Which control started a photo pick — a tile or a button — so the upload
+    // module can mark that one busy. The click the tile or label passes on to
+    // its hidden input is not a tap of its own.
+    card.addEventListener('click', function (e) {
+      var el = e.target;
+      if (!el || !el.closest || el.tagName === 'INPUT') return;
+      var tap = el.closest('.p86-wo-addtile, .p86-wo-up');
+      if (tap && card.contains(tap)) card._p86LastTap = tap;
+    }, true);
+
+    var check = card.querySelector('.p86-wo-check');
+    if (check) check.addEventListener('click', function () {
+      var ctx = ctxNow();
+      var done = task().status !== 'done';
+      var hasCompletion = photos().some(function (p) { return p.kind !== 'before'; });
+      if (done && !hasCompletion) {
+        setOpen(true);
+        toast('Add a completion photo before marking this complete.', 'error');
+        return;
+      }
+      check.disabled = true;
+      var wasStatus = ctx.t && ctx.t.status;
+      api().setSubtaskDone(ctx.ticketId, taskId, done).then(function (res) {
+        if (res && res.ticket_status === 'work_complete' && wasStatus !== 'work_complete') {
+          toast('Every subtask is done — the work order is awaiting approval.');
+        }
+        return updateDetail(d, ctx.ticketId, { anchor: card }).catch(noop);
+      }, function (e) {
+        check.disabled = false;
+        var code = e && e.data && e.data.code;
+        if (code === 'completion_photo_required') setOpen(true);
+        toast(e && e.message ? e.message : 'Could not update the subtask', 'error');
+        // A locked work order has changed under the screen: show it as it is.
+        if (code === 'work_order_locked') return updateDetail(d, ctx.ticketId, { anchor: card }).catch(noop);
+      }).then(function () {
+        if (check.isConnected) check.disabled = false;
+      });
+    });
+
+    // Each tile opens its own completion input: Take photo the camera one,
+    // Upload photo the library one.
+    var camTile = card.querySelector('.p86-wo-camtile');
+    var addTile = card.querySelector('.p86-wo-addtile:not(.p86-wo-camtile)');
+    var completionCam = card.querySelector('.p86-wo-up.p86-wo-cam input[data-kind="completion"]');
+    var completionIn = card.querySelector('.p86-wo-up:not(.p86-wo-cam) input[data-kind="completion"]');
+    if (camTile && completionCam) camTile.addEventListener('click', function () { completionCam.click(); });
+    if (addTile && completionIn) addTile.addEventListener('click', function () { completionIn.click(); });
+
+    card.querySelectorAll('.p86-wo-up input[type=file]').forEach(function (inp) {
+      inp.addEventListener('change', function () {
+        var files = Array.prototype.slice.call(inp.files || []);
+        inp.value = '';
+        var ctx = ctxNow();
+        var kind = inp.getAttribute('data-kind') === 'before' ? 'before' : 'completion';
+        // The office upload queue (js/work-order-uploads.js) when it is on the
+        // page: retries, a busy tile and thumbnails as each photo lands.
+        var uploads = window.p86WorkOrderUploads;
+        if (files.length && uploads && typeof uploads.addPhotos === 'function') {
+          uploads.addPhotos(card, inp, files, {
+            ticketId: ctx.ticketId,
+            taskId: taskId,
+            kind: kind,
+            onSettled: function () {
+              _state.openSubs[taskId] = true;
+              return updateDetail(d, ctx.ticketId, { anchor: card }).catch(noop);
+            }
+          });
+          return;
+        }
+        if (!files.length || !window.p86Api || !window.p86Api.attachments) return;
+        var label = inp.parentNode;
+        if (label) label.classList.add('is-busy');
+        toast('Uploading ' + files.length + ' photo' + (files.length === 1 ? '' : 's') + '…');
+        // One at a time: a crew phone on one bar of LTE should not open
+        // six parallel uploads and lose all of them.
+        files.reduce(function (p, f) {
+          return p.then(function () {
+            return window.p86Api.attachments.upload('task', taskId, f, { tags: kind });
+          });
+        }, Promise.resolve()).then(function () {
+          _state.openSubs[taskId] = true;
+          if (label) label.classList.remove('is-busy');
+          return updateDetail(d, ctx.ticketId, { anchor: card });
+        }).catch(function (e) {
+          if (label) label.classList.remove('is-busy');
+          toast(e && e.message ? e.message : 'Could not upload the photo', 'error');
+          return updateDetail(d, ctx.ticketId, { anchor: card }).catch(noop);
+        });
+      });
+    });
+
+    var noteIn = card.querySelector('.p86-wo-note-in');
+    var noteGo = card.querySelector('.p86-wo-note-go');
+    function addNote() {
+      var ctx = ctxNow();
+      var note = (noteIn && noteIn.value || '').trim();
+      if (!note) return;
+      noteGo.disabled = true;
+      api().addSubtaskNote(ctx.ticketId, taskId, note).then(function () {
+        _state.openSubs[taskId] = true;
+        // Cleared before the update, which would otherwise carry the note just
+        // sent into the redrawn card.
+        if (noteIn) noteIn.value = '';
+        noteGo.disabled = false;
+        return updateDetail(d, ctx.ticketId, { anchor: card }).catch(noop);
+      }, function (e) {
+        noteGo.disabled = false;
+        toast(e && e.message ? e.message : 'Could not add the note', 'error');
+      });
+    }
+    if (noteGo) noteGo.addEventListener('click', addNote);
+    if (noteIn) noteIn.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); addNote(); }
+    });
+  }
+
+  // The Materials section, wired each time it is drawn (a section swap draws
+  // it again). Listeners hang off the section's own nodes.
+  function wireMaterials(node, d) {
+    if (!node || !node.querySelector || !d._st) return;
+    function ctxNow() { return d._st || {}; }
     // Materials editor: rows of qty / unit / material. No price column —
     // the server drops any key that is not one of those three anyway.
-    var matsEdit = d.querySelector('.p86-wo-mats-edit');
-    var matsForm = d.querySelector('.p86-wo-mats-form');
+    var matsEdit = node.querySelector('.p86-wo-mats-edit');
+    var matsForm = node.querySelector('.p86-wo-mats-form');
     if (matsEdit && matsForm) matsEdit.addEventListener('click', function () {
       if (!matsForm.hidden) { matsForm.hidden = true; matsForm.innerHTML = ''; return; }
+      var t = ctxNow().t || {};
       var list = Array.isArray(t.materials) && t.materials.length ? t.materials : [{}];
       matsForm.hidden = false;
       matsForm.innerHTML =
@@ -1144,14 +2071,15 @@
           '<button type="button" class="ee-btn primary p86-wo-mat-save">Save materials</button>' +
         '</div>';
     });
-    // Wired ONCE per paint, not inside the Edit handler above. It used to be
+    // Wired ONCE per draw, not inside the Edit handler above. It used to be
     // added on every open, so an editor closed and reopened answered each click
     // twice — two saves racing, one of them from the detached rows of the first
-    // open, and (now) two pickers and two metered reads of the same file. The
-    // rows container is looked up per click because each open rebuilds it.
+    // open, and two pickers and two metered reads of the same file. The rows
+    // container is looked up per click because each open rebuilds it.
     if (matsForm) matsForm.addEventListener('click', function (e) {
       var rows = matsForm.querySelector('.p86-wo-mat-rows');
       if (!rows) return;
+      var t = ctxNow().t || {};
       if (e.target.closest('.p86-wo-mat-fill')) { openTakeoffPicker(matsForm, t); return; }
       var rm = e.target.closest('.p86-wo-mat-rm');
       if (rm) { var row = rm.closest('.p86-wo-mat-row'); if (row) row.remove(); return; }
@@ -1177,8 +2105,11 @@
         sv.disabled = true;
         api().update(t.id, { materials: next.length ? next : null }).then(function () {
           toast('Materials saved');
-          return refreshDetail(d, t.id);
-        }).catch(function (err) {
+          // Closed first, so the update below draws the saved list.
+          matsForm.hidden = true;
+          matsForm.innerHTML = '';
+          return updateDetail(d, t.id, { anchor: node }).catch(noop);
+        }, function (err) {
           sv.disabled = false;
           toast(err && err.message ? err.message : 'Could not save the materials', 'error');
         });
@@ -1190,8 +2121,8 @@
     // "Also show this file on the crew link" button inside the editor's read
     // summary too — so the editor's own listener above stays exactly as it is
     // (a click on that button matches none of its branches and falls through).
-    var mats = d.querySelector('.p86-wo-mats');
-    if (mats && canEdit) mats.addEventListener('click', function (e) {
+    if (ctxNow().canEdit) node.addEventListener('click', function (e) {
+      var t = ctxNow().t || {};
       if (e.target.closest('.p86-wo-crew-pick, .p86-wo-crew-change')) {
         if (matsForm) openTakeoffPicker(matsForm, t, { purpose: 'crew' });
         return;
@@ -1673,71 +2604,38 @@
     });
   }
 
-  // Show the new crew-link file. Normally a plain re-read of the ticket. But
-  // the "Also show" button sits right under lines just read into the editor
-  // and not yet saved, and a repaint rebuilds the editor from the server row —
-  // those lines would be gone. So when the open ticket holds edits (the same
-  // rule the background refresh obeys), only the crew row is redrawn in place.
+  // Show the new crew-link file. The "Also show" button sits right under lines
+  // just read into the editor and not yet saved; an in-place update leaves an
+  // open editor alone and redraws only the crew row, so those lines stay.
+  // Without the editor kit (no in-place update) the old rule holds: when the
+  // open ticket holds edits, only the crew row is redrawn.
   function afterCrewTakeoff(d, t, res) {
     t.crew_takeoff = crewFromResponse(res);
     if (!d) return Promise.resolve();
-    var row = d.closest('.p86-st-row');
-    if (row && row.parentNode && detailHoldsEdits(row.parentNode)) {
-      var old = d.querySelector('.p86-wo-crew');
-      // Only an editor reaches this, so the row is drawn with its controls.
-      if (old) old.outerHTML = crewTakeoffHTML(t, true);
-      var ct = t.crew_takeoff;
-      Array.prototype.forEach.call(d.querySelectorAll('.p86-wo-mat-crew'), function (b) {
-        if (ct && String(b.getAttribute('data-att')) === String(ct.attachment_id)) b.remove();
-      });
-      return Promise.resolve();
+    var ct = t.crew_takeoff;
+    Array.prototype.forEach.call(d.querySelectorAll('.p86-wo-mat-crew'), function (b) {
+      if (ct && String(b.getAttribute('data-att')) === String(ct.attachment_id)) b.remove();
+    });
+    if (!(editor() && d._st && d._st.painted)) {
+      var row = d.closest('.p86-st-row');
+      if (row && row.parentNode && detailHoldsEdits(row.parentNode)) {
+        var old = d.querySelector('.p86-wo-crew');
+        // Only an editor reaches this, so the row is drawn with its controls.
+        if (old) old.outerHTML = crewTakeoffHTML(t, true);
+        return Promise.resolve();
+      }
     }
-    return refreshDetail(d, t.id).catch(function () {
+    return updateDetail(d, t.id).catch(function () {
       toast('Saved, but the ticket could not be reloaded — collapse and reopen it to see the change.', 'error');
     });
   }
 
-  function wireDetail(d, t) {
-    var mv = d.querySelector('.p86-st-move');
-    if (mv) mv.addEventListener('change', function () {
-      var to = mv.value;
-      if (!to) return;
-      mv.disabled = true;
-      api().setStatus(t.id, to).then(function () {
-        return reload();
-      }).catch(function (e) {
-        mv.disabled = false;
-        mv.value = '';
-        toast(e && e.message ? e.message : 'Could not change the status', 'error');
-      });
-    });
-
+  // The static controls of a detail: Save, Share, Archive, Ask 86 and the
+  // Add subtask box. None of them is swapped by an update, so they are wired
+  // once per full paint.
+  function wireActions(d) {
     var save = d.querySelector('.p86-st-save');
-    if (save) save.addEventListener('click', function () {
-      if (_state.busy) return;
-      _state.busy = true;
-      save.disabled = true;
-      var payload = {};
-      var sc = d.querySelector('.p86-st-scope');
-      if (sc) payload.scope_proposed = sc.value;
-      var pr = d.querySelector('.p86-st-prio-sel');
-      if (pr) payload.priority = pr.value;
-      var sd = d.querySelector('.p86-st-sched');
-      if (sd) payload.scheduled_for = sd.value || null;
-      var du = d.querySelector('.p86-st-due');
-      if (du) payload.due_date = du.value || null;
-      var ct = d.querySelector('.p86-st-contact');
-      if (ct) payload.site_contact_name = ct.value;
-      api().update(t.id, payload).then(function () {
-        toast('Ticket saved');
-        return reload();
-      }).catch(function (e) {
-        toast(e && e.message ? e.message : 'Could not save', 'error');
-      }).then(function () {
-        _state.busy = false;
-        if (save) save.disabled = false;
-      });
-    });
+    if (save) save.addEventListener('click', function () { saveTicket(d); });
 
     // Add a task under this ticket. entity_type/entity_id are stamped from the
     // ticket's own parent so the task lands on the JOB as well — sending only
@@ -1746,6 +2644,7 @@
     var addGo = d.querySelector('.p86-st-task-go');
     var addIn = d.querySelector('.p86-st-task-new');
     function addTask() {
+      var t = d._st.t;
       var title = (addIn && addIn.value || '').trim();
       if (!title || !window.p86Api || !window.p86Api.tasks) return;
       addGo.disabled = true;
@@ -1756,8 +2655,8 @@
         entity_id: t.job_id || t.lead_id
       }).then(function () {
         if (addIn) addIn.value = '';
-        _state.openId = t.id;
-        return reload();
+        // In place: whatever else is typed on the ticket stays in its box.
+        return updateDetail(d, t.id, { anchor: d.querySelector('.p86-st-task-add') }).catch(noop);
       }).catch(function (e) {
         toast(e && e.message ? e.message : 'Could not add the task', 'error');
       }).then(function () { if (addGo) addGo.disabled = false; });
@@ -1773,25 +2672,29 @@
       if (!wrap) return;
       if (!wrap.hidden) { wrap.hidden = true; wrap.innerHTML = ''; return; }
       wrap.hidden = false;
-      paintSharePanel(wrap, t);
+      paintSharePanel(wrap, d._st.t);
     });
 
     var arch = d.querySelector('.p86-st-archive');
     if (arch) arch.addEventListener('click', function () {
-      // p86Confirm, never native confirm() — it no-ops inside the installed PWA.
-      var ask = window.p86Confirm
-        ? window.p86Confirm({
-            title: 'Archive this ticket?',
-            message: 'It leaves the list. Tasks under it are kept — archiving a work order must not delete field work.',
-            confirmText: 'Archive', danger: true
-          })
-        : Promise.resolve(true);
-      Promise.resolve(ask).then(function (yes) {
-        if (!yes) return;
-        return api().archive(t.id).then(function () {
-          _state.openId = null;
-          toast('Ticket archived');
-          return reload();
+      var t = d._st.t;
+      leaveOpenTicket().then(function (go) {
+        if (!go) return;
+        // p86Confirm, never native confirm() — it no-ops inside the installed PWA.
+        var ask = window.p86Confirm
+          ? window.p86Confirm({
+              title: 'Archive this ticket?',
+              message: 'It leaves the list. Tasks under it are kept — archiving a work order must not delete field work.',
+              confirmText: 'Archive', danger: true
+            })
+          : Promise.resolve(true);
+        return Promise.resolve(ask).then(function (yes) {
+          if (!yes) return;
+          return api().archive(t.id).then(function () {
+            _state.openId = null;
+            toast('Ticket archived');
+            return reload();
+          });
         });
       }).catch(function (e) {
         toast(e && e.message ? e.message : 'Could not archive', 'error');
@@ -1799,50 +2702,227 @@
     });
 
     var ask86 = d.querySelector('.p86-st-ask86');
-    if (ask86) ask86.addEventListener('click', function () { askAboutTicket(t); });
+    if (ask86) ask86.addEventListener('click', function () { askAboutTicket(d._st.t); });
+  }
 
-    wireRevisions(d, t);
-    wireParticipants(d, t);
+  // Move to… A move redraws the status and can reopen buildings, so unsaved
+  // changes are asked about first. A module that needs a reason for the move
+  // (js/work-order-review.js) answers confirmMove with the extra body, or null
+  // to cancel. The move is sent with the status on screen, so a work order
+  // moved by someone else in the meantime is refused, not overwritten.
+  function wireMove(node, d) {
+    var mv = node && node.querySelector ? node.querySelector('.p86-st-move') : null;
+    if (!mv) return;
+    mv.addEventListener('change', function () {
+      var ctx = d._st;
+      var to = mv.value;
+      if (!to || !ctx) return;
+      var t = ctx.t;
+      var from = t.status;
+      mv.disabled = true;
+      function reset() {
+        mv.disabled = false;
+        mv.value = '';
+      }
+      function settle() {
+        reset();
+        try { mv.blur(); } catch (e) { /* detached */ }
+        return updateDetail(d, ctx.ticketId, { anchor: d.querySelector('.p86-st-meta[data-for="status"]') });
+      }
+      leaveOpenTicket().then(function (go) {
+        if (!go) { reset(); return; }
+        var asked = extFirst('confirmMove', ctx, to);
+        return Promise.resolve(asked === undefined ? {} : asked).then(function (extra) {
+          if (extra === null) { reset(); return; }
+          var body = (extra && typeof extra === 'object') ? extra : {};
+          var move = typeof window.p86MoveTicketStatus === 'function'
+            ? window.p86MoveTicketStatus(t, to, body)
+            : api().setStatus(t.id, to, Object.assign({ expected_status: t.status }, body)).then(function (res) {
+                return { outcome: 'moved', response: res, ticket: (res && res.ticket) || null };
+              });
+          return Promise.resolve(move).then(function (out) {
+            if (!out || out.outcome === 'cancelled') { reset(); return; }
+            if (out.outcome === 'stale') {
+              toast(out.message || STALE, 'error');
+              return settle();
+            }
+            extCollect('afterStatus', ctx, out.response, from, to);
+            return settle();
+          });
+        });
+      }).catch(function (e) {
+        toast(e && e.message ? e.message : 'Could not change the status', 'error');
+        return settle().catch(noop);
+      });
+    });
+  }
+
+  // ── Save, and the unsaved-changes question ───────────────────────────
+  function openDetail() {
+    var host = pane();
+    var d = host && host.querySelector('.p86-st-row.is-open .p86-st-detail');
+    return (d && d._st && d._st.painted) ? d : null;
+  }
+
+  // Saves only the fields that changed, with what they were when loaded.
+  // Resolves true when there is nothing left unsaved, false otherwise.
+  function saveTicket(d) {
+    var ed = editor();
+    var ctx = d && d._st;
+    if (!ed || !ctx || !ctx.fieldsEdit || !api()) return Promise.resolve(false);
+    var keys = ed.dirtyKeys(d, ctx.base);
+    if (!keys.length) {
+      toast('No changes to save.');
+      return Promise.resolve(true);
+    }
+    if (_state.busy) return Promise.resolve(false);
+    _state.busy = true;
+    var save = d.querySelector('.p86-st-save');
+    if (save) save.disabled = true;
+    ed.clearInvalid(d);
+    var patch = ed.buildPatch(d, ctx.base, keys);
+    function done() {
+      _state.busy = false;
+      if (save) save.disabled = false;
+    }
+    return api().update(ctx.ticketId, patch).then(function (res) {
+      done();
+      var row = (res && res.ticket) || {};
+      keys.forEach(function (k) {
+        var v = Object.prototype.hasOwnProperty.call(row, k) ? row[k] : patch[k];
+        ed.setControl(d, k, v);
+        ctx.base[k] = v;
+        ctx.t[k] = v;
+      });
+      var box = d.querySelector('.p86-st-conflict');
+      if (box) { box.hidden = true; box.innerHTML = ''; }
+      ed.showDirty(d, ed.dirtyKeys(d, ctx.base));
+      syncDraftNote(d);
+      toast('Ticket saved');
+      return updateDetail(d, ctx.ticketId, { anchor: save }).catch(noop).then(function () { return true; });
+    }, function (err) {
+      done();
+      var data = (err && err.data) || {};
+      if (err && err.status === 400 && data.field) {
+        ed.markInvalid(d, data.field, data.error || err.message);
+        return false;
+      }
+      if (err && err.status === 409 && data.code === 'edit_conflict') {
+        var theirs = (data.ticket && typeof data.ticket === 'object') ? data.ticket : {};
+        var fields = Array.isArray(data.fields) ? data.fields : [];
+        // Their value is now the starting point for those fields, so the next
+        // Save replaces it knowingly. Fields this PM did not touch take theirs.
+        fields.forEach(function (k) {
+          if (Object.prototype.hasOwnProperty.call(theirs, k)) ctx.base[k] = theirs[k];
+        });
+        ed.FIELDS.forEach(function (f) {
+          if (keys.indexOf(f.key) !== -1 || !Object.prototype.hasOwnProperty.call(theirs, f.key)) return;
+          ctx.t[f.key] = theirs[f.key];
+          ctx.base[f.key] = theirs[f.key];
+          if (ed.controlOf(d, f.key) && ed.norm(f.key, ed.controlOf(d, f.key).value) !== ed.norm(f.key, theirs[f.key])) {
+            ed.setControl(d, f.key, theirs[f.key]);
+          }
+        });
+        ed.showConflict(d, fields, theirs, function (used, src) {
+          (used || []).forEach(function (k) {
+            if (!Object.prototype.hasOwnProperty.call(src, k)) return;
+            ctx.base[k] = src[k];
+            ctx.t[k] = src[k];
+          });
+          ed.showDirty(d, ed.dirtyKeys(d, ctx.base));
+        });
+        ed.showDirty(d, ed.dirtyKeys(d, ctx.base));
+        return false;
+      }
+      toast(err && err.message ? err.message : 'Could not save', 'error');
+      updateDetail(d, ctx.ticketId).catch(noop);
+      return false;
+    });
+  }
+
+  // Before anything that redraws or drops the open ticket's fields. Resolves
+  // true to go on (nothing unsaved, saved, or discarded), false to stay.
+  function leaveOpenTicket() {
+    var d = openDetail();
+    var ed = editor();
+    if (!d || !ed) return Promise.resolve(true);
+    var ctx = d._st;
+    var keys = ctx.fieldsEdit ? ed.dirtyKeys(d, ctx.base) : [];
+    var extras = ed.unsavedExtras(d);
+    if (!keys.length && !extras.length) return Promise.resolve(true);
+    return Promise.resolve(ed.confirmUnsaved({
+      keys: keys,
+      extras: extras,
+      save: function () { return saveTicket(d); }
+    })).then(function (answer) {
+      if (answer === 'discard') {
+        resetFields(d, ctx, keys);
+        discardExtras(d);
+        delete _state.drafts[String(ctx.ticketId)];
+      }
+      return answer === 'saved' || answer === 'discard';
+    }, function () { return false; });
+  }
+
+  // Unsaved changes anywhere on this surface: the open ticket, a draft kept
+  // from another job, or a New ticket box with something in it.
+  function hasUnsavedWork() {
+    if (Object.keys(_state.drafts).some(draftCanReturn)) return true;
+    if (typeof _createTyped === 'function' && _createTyped()) return true;
+    var ed = editor();
+    var d = openDetail();
+    if (!ed || !d) return false;
+    var ctx = d._st;
+    return (ctx.fieldsEdit && ed.dirtyKeys(d, ctx.base).length > 0) || ed.unsavedExtras(d).length > 0;
   }
 
   // Accept takes the CHECKED fields only, so "take the new scope, ignore the
   // date they suggested" is one click. Sending nothing checked is refused here
   // rather than making the round trip to be told 400.
-  function wireRevisions(d, t) {
-    Array.prototype.forEach.call(d.querySelectorAll('.p86-st-rev'), function (row) {
+  function wireRevisions(node, d) {
+    if (!node || !node.querySelectorAll) return;
+    Array.prototype.forEach.call(node.querySelectorAll('.p86-st-rev'), function (row) {
       var id = row.getAttribute('data-rev');
       var acc = row.querySelector('.p86-st-rev-accept');
       var rej = row.querySelector('.p86-st-rev-reject');
 
       if (acc) acc.addEventListener('click', function () {
+        var t = d._st.t;
         var picked = Array.prototype.map.call(
           row.querySelectorAll('.p86-st-rev-pick:checked'), function (c) { return c.value; });
         if (!picked.length) { toast('Tick at least one field to accept.', 'error'); return; }
         acc.disabled = true;
         if (rej) rej.disabled = true;
-        api().acceptRevision(t.id, id, picked).then(function () {
-          toast('Applied ' + picked.length + (picked.length === 1 ? ' field' : ' fields'));
-          _state.openId = t.id;
-          return reload();
-        }).catch(function (e) {
+        function release() {
           acc.disabled = false;
           if (rej) rej.disabled = false;
-          // A second accept is a 404 by predicate — say what that means rather
-          // than showing "not found" for a row still on screen.
-          toast(e && /not found/i.test(e.message || '')
-            ? 'That suggestion was already handled — reload to see where it went.'
-            : (e && e.message) || 'Could not apply the suggestion', 'error');
+        }
+        // Accepting writes the ticket's fields, so typed changes are settled
+        // first.
+        leaveOpenTicket().then(function (go) {
+          if (!go) { release(); return; }
+          return api().acceptRevision(t.id, id, picked).then(function () {
+            toast('Applied ' + picked.length + (picked.length === 1 ? ' field' : ' fields'));
+            return updateDetail(d, t.id, { anchor: row }).catch(noop);
+          }, function (e) {
+            release();
+            // A second accept is a 404 by predicate — say what that means rather
+            // than showing "not found" for a row still on screen.
+            toast(e && /not found/i.test(e.message || '')
+              ? 'That suggestion was already handled — reload to see where it went.'
+              : (e && e.message) || 'Could not apply the suggestion', 'error');
+          });
         });
       });
 
       if (rej) rej.addEventListener('click', function () {
+        var t = d._st.t;
         rej.disabled = true;
         if (acc) acc.disabled = true;
         api().rejectRevision(t.id, id).then(function () {
           toast('Suggestion declined');
-          _state.openId = t.id;
-          return reload();
-        }).catch(function (e) {
+          return updateDetail(d, t.id, { anchor: row }).catch(noop);
+        }, function (e) {
           rej.disabled = false;
           if (acc) acc.disabled = false;
           toast(e && e.message ? e.message : 'Could not decline', 'error');
@@ -1854,12 +2934,13 @@
   // The picker is filled from the org's own users. A body-supplied id only
   // proves a user exists, never whose they are — the server re-proves the org
   // regardless of what this list contains.
-  function wireParticipants(d, t) {
-    var sel = d.querySelector('.p86-st-part-user');
-    var lvl = d.querySelector('.p86-st-part-lvl-sel');
-    var go = d.querySelector('.p86-st-part-go');
+  function wireParticipants(node, d) {
+    if (!node || !node.querySelector) return;
+    var sel = node.querySelector('.p86-st-part-user');
+    var lvl = node.querySelector('.p86-st-part-lvl-sel');
+    var go = node.querySelector('.p86-st-part-go');
     var already = {};
-    Array.prototype.forEach.call(d.querySelectorAll('.p86-st-part'), function (p) {
+    Array.prototype.forEach.call(node.querySelectorAll('.p86-st-part'), function (p) {
       already[String(p.getAttribute('data-user'))] = true;
     });
 
@@ -1878,27 +2959,30 @@
     }
 
     if (go) go.addEventListener('click', function () {
+      var t = d._st.t;
       if (!sel || !sel.value) return;
       go.disabled = true;
       api().addParticipant(t.id, sel.value, lvl ? lvl.value : 'view').then(function () {
         toast('Added to the ticket');
-        _state.openId = t.id;
-        return reload();
-      }).catch(function (e) {
+        // The picker is emptied first: while it holds a choice the update
+        // leaves the section alone.
+        sel.value = '';
+        return updateDetail(d, t.id, { anchor: node }).catch(noop);
+      }, function (e) {
         go.disabled = false;
         toast(e && e.message ? e.message : 'Could not add them', 'error');
       });
     });
 
-    Array.prototype.forEach.call(d.querySelectorAll('.p86-st-part-rm'), function (btn) {
+    Array.prototype.forEach.call(node.querySelectorAll('.p86-st-part-rm'), function (btn) {
       btn.addEventListener('click', function () {
+        var t = d._st.t;
         var uid = btn.parentNode && btn.parentNode.getAttribute('data-user');
         if (!uid) return;
         btn.disabled = true;
         api().removeParticipant(t.id, uid).then(function () {
-          _state.openId = t.id;
-          return reload();
-        }).catch(function (e) {
+          return updateDetail(d, t.id, { anchor: node }).catch(noop);
+        }, function (e) {
           btn.disabled = false;
           toast(e && e.message ? e.message : 'Could not remove them', 'error');
         });
@@ -2135,25 +3219,41 @@
   }
 
   // ── Create ───────────────────────────────────────────────────────────
+  // While the New ticket box is up: does it hold anything typed or chosen.
+  var _createTyped = null;
+
   function openCreate(opts) {
+    var o = (opts && typeof opts === 'object' && !opts.target) ? opts : {};
+    var leadId = o.leadId;
+    var ed = editor();
     var prior = document.getElementById('p86StCreate');
     if (prior) prior.remove();
     var wrap = document.createElement('div');
     wrap.id = 'p86StCreate';
     wrap.className = 'p86-st-modal-back';
     wrap.innerHTML =
-      '<div class="p86-st-modal">' +
-        '<div class="p86-st-modal-head">New service ticket</div>' +
-        '<label class="p86-st-lbl">Title</label>' +
-        '<input type="text" id="p86StTitle" placeholder="e.g. Warranty call — gate will not latch" />' +
-        '<label class="p86-st-lbl">Proposed scope</label>' +
-        '<textarea id="p86StScope" rows="4" placeholder="What needs doing, and where."></textarea>' +
+      '<div class="p86-st-modal" role="dialog" aria-modal="true" aria-labelledby="p86StCreateHead">' +
+        '<div class="p86-st-modal-head" id="p86StCreateHead">New service ticket</div>' +
+        '<label class="p86-st-lbl" for="p86StTitle">Title</label>' +
+        '<input type="text" id="p86StTitle" data-st-field="title" maxlength="300" placeholder="e.g. Warranty call — gate will not latch" />' +
+        '<label class="p86-st-lbl" for="p86StScope">Proposed scope</label>' +
+        '<textarea id="p86StScope" data-st-field="scope_proposed" rows="4" placeholder="What needs doing, and where."></textarea>' +
         '<div class="p86-st-modal-row">' +
           '<div><label class="p86-st-lbl">Priority</label>' +
             select('p86-st-modal-prio', ['low', 'normal', 'high', 'urgent'], 'normal', PRIORITY_LABEL) + '</div>' +
-          '<div><label class="p86-st-lbl">Scheduled</label>' +
-            '<input type="date" id="p86StSched" /></div>' +
+          '<div><label class="p86-st-lbl" for="p86StSched">Scheduled</label>' +
+            '<input type="date" id="p86StSched" data-st-field="scheduled_for" /></div>' +
         '</div>' +
+        '<div class="p86-st-modal-row">' +
+          '<div><label class="p86-st-lbl" for="p86StDue">Due</label>' +
+            '<input type="date" id="p86StDue" data-st-field="due_date" /></div>' +
+          '<div><label class="p86-st-lbl" for="p86StAssignee">Assigned to</label>' +
+            '<select id="p86StAssignee" data-st-field="assignee_user_id">' +
+              '<option value="" selected>Unassigned</option>' +
+              '<option value="" disabled>Loading people…</option>' +
+            '</select></div>' +
+        '</div>' +
+        '<div class="p86-st-save-err" role="alert" hidden></div>' +
         '<div class="p86-st-modal-actions">' +
           '<button class="ee-btn secondary" id="p86StCancel">Cancel</button>' +
           '<button class="ee-btn primary" id="p86StCreateGo">Create</button>' +
@@ -2161,27 +3261,103 @@
       '</div>';
     document.body.appendChild(wrap);
     var titleEl = wrap.querySelector('#p86StTitle');
+    var prioEl = wrap.querySelector('.p86-st-modal-prio');
+    if (prioEl) prioEl.setAttribute('data-st-field', 'priority');
+    var whoEl = wrap.querySelector('#p86StAssignee');
+    var errEl = wrap.querySelector('.p86-st-save-err');
     if (titleEl) titleEl.focus();
 
-    function close() { wrap.remove(); }
-    wrap.addEventListener('click', function (e) { if (e.target === wrap) close(); });
-    wrap.querySelector('#p86StCancel').addEventListener('click', close);
+    // Only people who can open the job (or lead) are offered.
+    var parent = leadId ? { kind: 'lead', id: leadId } : { kind: 'job', id: _state.jobId };
+    function dropLoading() {
+      Array.prototype.slice.call(whoEl.options).forEach(function (op) { if (op.disabled) op.remove(); });
+    }
+    if (whoEl) {
+      if (ed && parent.id) Promise.resolve(ed.fillAssignees(whoEl, parent, null)).then(dropLoading, dropLoading);
+      else dropLoading();
+    }
+
+    function val(sel) {
+      var el = wrap.querySelector(sel);
+      return el ? String(el.value || '') : '';
+    }
+    function typed() {
+      return !!(val('#p86StTitle').trim() || val('#p86StScope').trim() || val('#p86StSched') ||
+        val('#p86StDue') || val('#p86StAssignee') || (val('.p86-st-modal-prio') || 'normal') !== 'normal');
+    }
+
+    var closed = false;
+    var asking = false;
+    function close() {
+      if (closed) return;
+      closed = true;
+      document.removeEventListener('keydown', onKey);
+      if (_createTyped === typed) _createTyped = null;
+      wrap.remove();
+    }
+    // Nothing typed: it just closes. Something typed: ask first.
+    function askClose() {
+      if (closed || asking) return;
+      if (!typed()) { close(); return; }
+      if (typeof window.p86Confirm !== 'function') {
+        // Never native confirm(), which no-ops inside the installed PWA.
+        toast('Clear what you typed, or create the ticket.', 'error');
+        return;
+      }
+      asking = true;
+      Promise.resolve(window.p86Confirm({
+        title: 'Discard this new ticket?',
+        message: 'What you typed will be lost.',
+        confirmText: 'Discard',
+        confirmLabel: 'Discard',
+        cancelText: 'Keep editing',
+        cancelLabel: 'Keep editing',
+        destructive: true,
+        danger: true
+      })).then(function (yes) {
+        asking = false;
+        if (yes === true) close();
+      }, function () { asking = false; });
+    }
+    function onKey(e) {
+      if (e.key !== 'Escape' || asking || closed) return;
+      e.preventDefault();
+      askClose();
+    }
+    _createTyped = typed;
+    document.addEventListener('keydown', onKey);
+    wrap.addEventListener('click', function (e) { if (e.target === wrap) askClose(); });
+    wrap.querySelector('#p86StCancel').addEventListener('click', askClose);
+
+    function showErr(field, message) {
+      if (ed) { ed.markInvalid(wrap, field, message); return; }
+      errEl.textContent = message;
+      errEl.hidden = false;
+      var c = wrap.querySelector('[data-st-field="' + field + '"]');
+      if (c) c.focus();
+    }
+
     wrap.querySelector('#p86StCreateGo').addEventListener('click', function () {
-      var title = (titleEl && titleEl.value || '').trim();
-      if (!title) { if (titleEl) titleEl.focus(); return; }
+      if (ed) ed.clearInvalid(wrap);
+      else { errEl.textContent = ''; errEl.hidden = true; }
+      var title = val('#p86StTitle').trim();
+      if (!title) { showErr('title', 'Give the ticket a title.'); return; }
       var go = wrap.querySelector('#p86StCreateGo');
       go.disabled = true;
-      var leadId = opts && opts.leadId;
-      api().create({
+      var payload = {
         // Exactly one parent is set here. The other is filled in later by the
         // convert carry-forward, never by the client.
         job_id: leadId ? undefined : _state.jobId,
         lead_id: leadId || undefined,
         title: title,
-        scope_proposed: (wrap.querySelector('#p86StScope') || {}).value || '',
-        priority: (wrap.querySelector('.p86-st-modal-prio') || {}).value || 'normal',
-        scheduled_for: (wrap.querySelector('#p86StSched') || {}).value || null
-      }).then(function (r) {
+        scope_proposed: val('#p86StScope'),
+        priority: val('.p86-st-modal-prio') || 'normal',
+        scheduled_for: val('#p86StSched') || null,
+        due_date: val('#p86StDue') || null
+      };
+      var who = val('#p86StAssignee');
+      if (/^\d+$/.test(who)) payload.assignee_user_id = Number(who);
+      api().create(payload).then(function (r) {
         close();
         toast('Ticket created');
         // A ticket raised from a lead repaints the LEAD panel; the job
@@ -2191,6 +3367,12 @@
         return reload();
       }).catch(function (e) {
         go.disabled = false;
+        var data = e && e.data;
+        var field = data && typeof data.field === 'string' && /^[a-z_]+$/.test(data.field) ? data.field : '';
+        if (e && e.status === 400 && field && wrap.querySelector('[data-st-field="' + field + '"]')) {
+          showErr(field, data.error || e.message);
+          return;
+        }
         toast(e && e.message ? e.message : 'Could not create the ticket', 'error');
       });
     });
@@ -2202,15 +3384,29 @@
     // Any refetch issued now is newer than the write a deferred refresh was
     // waiting to show, so it satisfies that refresh too.
     _state.stale = false;
-    return api().list({ job_id: _state.jobId }).then(function (r) {
+    var jobId = _state.jobId;
+    return api().list({ job_id: jobId }).then(function (r) {
+      // A list for a job no longer on screen is not painted over the new one.
+      if (String(_state.jobId) !== String(jobId)) return;
       _state.tickets = (r && r.tickets) || [];
-      // The approval email and push link here as ?ticket=<id>: open that ticket
+      _state.listedJob = jobId;
+      // The approval email and push link here as ?ticket=<id>, and the Service
+      // Tickets page opens a ticket the same way (openTicket): open that ticket
       // once — and only if it IS one of this job's tickets, so a value from the
-      // URL never reaches a selector. Consumed either way.
-      if (_deepTicket) {
-        var want = _deepTicket;
+      // URL never reaches a selector. Consumed either way. One openTicket()
+      // left for another job waits for that job.
+      if (deepFor(jobId)) {
+        var want = _deepTicket.ticketId;
         _deepTicket = null;
-        if (_state.tickets.some(function (t) { return String(t.id) === want; })) _state.openId = want;
+        var hit = ticketRow(want);
+        if (hit) {
+          _state.openId = String(hit.id);
+          // A filter that hides it would open a ticket nobody can see.
+          if (!matchesFilter(hit)) _state.filter = 'all';
+          _state.scrollToOpen = true;
+        } else {
+          toast("That work order isn't in this job's list. It may have been archived.", 'error');
+        }
       }
       paint();
     }).catch(function (e) {
@@ -2232,11 +3428,72 @@
       host.innerHTML = '<div class="p86-st-empty">Service tickets couldn\'t load — try refreshing the page.</div>';
       return;
     }
+    // A ticket waiting to open on some other job is not opened later, out of
+    // the blue, when that job comes round again.
+    if (_deepTicket && _deepTicket.jobId != null && !deepFor(jobId)) _deepTicket = null;
+    // Back on the job already on screen (a tab switch): the list is refreshed
+    // quietly, and a ticket holding edits is not touched at all — the refresh
+    // waits for it, as a background refresh does.
+    if (_state.jobId === jobId && host.querySelector('.p86-st-wrap')) {
+      // Sent here to open one of its tickets (openTicket): asked about like a
+      // click on another row.
+      if (deepFor(jobId) && openDeepHere(host)) return;
+      if (detailHoldsEdits(host)) {
+        _state.stale = true;
+        wireLatch(host);
+        return;
+      }
+      reload();
+      return;
+    }
     // A different job means a different list; keep the expanded ticket only
-    // while we are on the job it belongs to.
-    if (_state.jobId !== jobId) { _state.jobId = jobId; _state.openId = null; _state.tickets = []; }
+    // while we are on the job it belongs to. Its unsaved changes are kept as a
+    // draft for when it is opened again.
+    if (_state.jobId !== jobId) {
+      var open = openDetail();
+      if (open) stashDraft(open);
+      _state.jobId = jobId; _state.openId = null; _state.tickets = []; _state.listedJob = null;
+    }
     host.innerHTML = '<div class="p86-st-empty">Loading service tickets…</div>';
     reload();
+  }
+
+  // openTicket() for the job already painted in the pane. Consumed now, so
+  // nothing is left waiting to open on a later, unrelated reload.
+  //   - The ticket is already the open one: it is scrolled into view and the
+  //     caller goes on as on any return to the tab (returns false).
+  //   - Another ticket: the open one's typed changes are asked about first,
+  //     as a click on another row does. Go, and the list is read again with
+  //     that ticket to open (a filter hiding it reset, a missing one told);
+  //     Keep editing, and the open ticket stays as it is (returns true).
+  function openDeepHere(host) {
+    var want = String(_deepTicket.ticketId);
+    var jobId = _state.jobId;
+    _deepTicket = null;
+    var kept = keptDetail(host);
+    if (kept && String(_state.openId) === want) {
+      var row = kept.closest('.p86-st-row');
+      if (row && typeof row.scrollIntoView === 'function') {
+        try { row.scrollIntoView({ block: 'start' }); } catch (e) { /* old engine */ }
+      }
+      return false;
+    }
+    leaveOpenTicket().then(function (go) {
+      if (!go || String(_state.jobId) !== String(jobId)) return;
+      _deepTicket = { jobId: String(jobId), ticketId: want };
+      return reload();
+    });
+    return true;
+  }
+
+  // Leaving the page with unsaved changes asks first (the browser's own
+  // question; its wording cannot be set).
+  if (typeof window.addEventListener === 'function') {
+    window.addEventListener('beforeunload', function (e) {
+      if (!hasUnsavedWork()) return;
+      e.preventDefault();
+      e.returnValue = '';
+    });
   }
 
   window.renderJobServiceTickets = renderJobServiceTickets;
@@ -2350,18 +3607,55 @@
     if (leadPanelMounted() && api()) {
       work.push(loadLeadPanel(_leadPanel.host, _leadPanel.leadId, true));
     }
-    if (window.p86ServiceTicketsPage && typeof window.p86ServiceTicketsPage.refresh === 'function') work.push(window.p86ServiceTicketsPage.refresh());
+    // The company-wide Service Tickets page is NOT refreshed from here: js/refresh.js
+    // calls its own refresh (p86WorkOrdersBoard.refresh) beside this one, and a
+    // second call from here would fetch that list twice for every write.
     return Promise.all(work);
+  }
+
+  // Open one work order on its job's Service Tickets tab (the Service Tickets
+  // page calls this). The ticket is expanded once the job's list loads; a
+  // filter hiding it is reset to All, and a ticket no longer on the list says so.
+  //
+  // openTicket(ticketId), with ONE argument, is the 1.29 form: it only marks
+  // that ticket to open on the next job list loaded, whichever job that is, and
+  // the caller navigates to the job itself. It returns true once marked.
+  function openTicket(jobId, ticketId) {
+    if (arguments.length < 2) {
+      var only = jobId;
+      if (only == null || only === '') return false;
+      _deepTicket = { jobId: null, ticketId: String(only) };
+      return true;
+    }
+    if (!jobId || ticketId == null || ticketId === '') return false;
+    _deepTicket = { jobId: String(jobId), ticketId: String(ticketId) };
+    var router = window.p86Router;
+    if (router && typeof router.navigate === 'function') {
+      router.navigate({ top: 'jobs', jobId: jobId, jobSub: 'job-service-tickets' });
+      // A router that does not draw the tab again (already on that route)
+      // leaves the link waiting: open it on the pane that is there.
+      var host = pane();
+      if (deepFor(jobId) && _deepTicket.jobId != null && String(_state.jobId) === String(jobId) &&
+          host && host.querySelector('.p86-st-wrap')) {
+        if (!openDeepHere(host)) {
+          if (detailHoldsEdits(host)) { _state.stale = true; wireLatch(host); } else reload();
+        }
+      }
+      return true;
+    }
+    try { if (typeof window.switchTab === 'function') window.switchTab('jobs'); } catch (e) { /* no tabs */ }
+    if (typeof window.editJob === 'function') window.editJob(jobId);
+    setTimeout(function () {
+      try { if (typeof window.switchJobSubTab === 'function') window.switchJobSubTab('job-service-tickets'); } catch (e) { /* no tab */ }
+    }, 60);
+    return true;
   }
 
   window.p86ServiceTickets = {
     // The lead surfaces (js/leads.js calls both).
     mountLeadPanel: mountLeadPanel,
     createForLead: createForLead,
-    // The org-wide Service Tickets page (js/service-tickets-page.js) calls this
-    // before navigating to the ticket's job tab; reload() opens it once that
-    // job's list has it, exactly as a ?ticket= link does.
-    openTicket: function (id) { _deepTicket = id == null ? null : String(id); },
-    refresh: refresh
+    refresh: refresh,
+    openTicket: openTicket
   };
 })();

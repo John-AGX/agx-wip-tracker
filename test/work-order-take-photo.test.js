@@ -22,7 +22,10 @@
 //      or a view-only link gets no camera control and no file input at all.
 //   2. Office: the Take photo tile opens the camera completion input, the
 //      Upload photo tile the library one, and a camera input's file goes up
-//      through p86Api.attachments.upload with the input's kind. On a phone
+//      through the office upload queue (js/work-order-uploads.js) to
+//      p86Api.attachments.upload with the input's kind and an upload id, plus
+//      the queue's abort signal. Without that module on the page the host's
+//      own one-at-a-time fallback still uploads it. On a phone
 //      the tiles ARE the completion controls: the two completion labels are
 //      hidden there, and a tile still opens (and uploads through) its hidden
 //      input.
@@ -39,10 +42,11 @@
 //      "Windows NT", and the CSS hides every camera control under that class
 //      even for a finger; an Android or iPhone user agent is not marked.
 //   6. Crew field report (canRespond && live, so a draft too): Take photo
-//      (#photoCam, capture) next to Upload photo (#photo, no capture), both
-//      role=button labels that Enter / Space open, both POSTing their file to
-//      the work order's photo door; Take photo hidden for a mouse and under
-//      no-capture, Upload photo never.
+//      (#photoCam, capture, one shot) next to Upload photo (#photo, no
+//      capture, several at once), both role=button labels that Enter / Space
+//      open, both putting their photos in the page's upload queue, which
+//      POSTs each one with its upload id to the work order's photo door; Take
+//      photo hidden for a mouse and under no-capture, Upload photo never.
 //
 // Each guard is also shown to FIRE: the drive is re-run against a copy of the
 // shipped source with that guard broken, and the outcome has to come out
@@ -60,6 +64,13 @@ const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8').replace(/\r\
 const TICKETS_SRC = read('js/service-tickets.js');
 const SHARE_HTML = read('service-ticket-share.html');
 const STYLES_SRC = read('css/styles.css');
+// What index.html loads ahead of (and just after) js/service-tickets.js.
+const EXT_SRC = read('js/service-ticket-ext.js');
+const QUEUE_SRC = read('js/photo-upload-queue.js');
+const UPLOADS_SRC = read('js/work-order-uploads.js');
+const EDITOR_SRC = read('js/service-ticket-editor.js');
+const MOVE_SRC = read('js/service-ticket-status-move.js');
+const UPLOAD_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 const JOB_LABEL = require('../js/job-label.js');
 
 function count(src, needle) {
@@ -167,9 +178,13 @@ function officeEnv(src, opts) {
       materialSources: jest.fn(() => Promise.resolve({ files: [] })),
     },
     attachments: {
-      upload: jest.fn((...args) => { state.uploads.push(args); return Promise.resolve({ ok: true }); }),
+      upload: jest.fn((...args) => {
+        state.uploads.push(args);
+        return Promise.resolve({ ok: true, attachment: { id: 'att_' + state.uploads.length, thumb_url: '/t/new.jpg', web_url: '/w/new.jpg' } });
+      }),
     },
   };
+  window.p86Api.serviceTickets.assignees = jest.fn(() => Promise.resolve({ users: [] }));
   window.p86Auth = { hasCapability: () => true };
   window.p86Toast = jest.fn();
   window.p86Confirm = jest.fn(() => Promise.resolve(true));
@@ -177,6 +192,15 @@ function officeEnv(src, opts) {
   window.confirm = jest.fn();
   delete window.p86ServiceTickets;
   delete window.renderJobServiceTickets;
+  // The page's own order: the extension registry, the upload queue, the
+  // office upload module, the editor kit and the status move, then the host.
+  // opts.noUploads leaves the upload module off, for the host's fallback.
+  for (const g of ['p86StExt', 'p86PhotoQueue', 'p86WorkOrderUploads', 'p86StEditor', 'p86MoveTicketStatus']) delete window[g];
+  window.eval(EXT_SRC);
+  window.eval(QUEUE_SRC);
+  if (!opts.noUploads) window.eval(UPLOADS_SRC);
+  window.eval(EDITOR_SRC);
+  window.eval(MOVE_SRC);
   window.eval(src);
   return state;
 }
@@ -355,8 +379,8 @@ describe('office: the tiles open their own completion input', () => {
 
 // Pick a file on one of building 784's camera inputs, found by its button text
 // (not by its attributes, so a mutated data-kind is still found).
-async function officeCameraUpload(src, buttonText) {
-  const s = officeEnv(src);
+async function officeCameraUpload(src, buttonText, opts) {
+  const s = officeEnv(src, opts);
   const d = await openTicket();
   const card = d.querySelector('.p86-wo-sub[data-task="tk_784"]');
   const lab = Array.from(card.querySelectorAll('.p86-wo-sub-actions label')).find((l) => labelText(l) === buttonText);
@@ -364,21 +388,31 @@ async function officeCameraUpload(src, buttonText) {
   const file = pickFile(lab.querySelector('input[type=file]'));
   await flush();
   return {
-    uploads: s.uploads.map((a) => [a[0], a[1], a[2] === file ? 'the picked file' : a[2], a[3]]),
+    uploads: s.uploads.map((a) => a.slice(0, 2).concat([a[2] === file ? 'the picked file' : a[2]], a.slice(3))),
     refreshed: window.p86Api.serviceTickets.get.mock.calls.length > gets,
   };
 }
 
+// One upload through the office queue: the building task, the file, its kind
+// and upload id, and the queue's abort signal.
+const QUEUED = (kind) => ['task', 'tk_784', 'the picked file', { tags: kind, upload_id: expect.stringMatching(UPLOAD_ID_RE) }, { signal: expect.anything() }];
+
 describe('office: a camera shot uploads down the same path as a library pick', () => {
   test('Take completion photo uploads to the building task tagged completion, then refreshes', async () => {
     const r = await officeCameraUpload(TICKETS_SRC, 'Take completion photo');
-    expect(r.uploads).toEqual([['task', 'tk_784', 'the picked file', { tags: 'completion' }]]);
+    expect(r.uploads).toEqual([QUEUED('completion')]);
     expect(r.refreshed).toBe(true);
   });
 
   test('Take before photo uploads tagged before', async () => {
     const r = await officeCameraUpload(TICKETS_SRC, 'Take before photo');
-    expect(r.uploads).toEqual([['task', 'tk_784', 'the picked file', { tags: 'before' }]]);
+    expect(r.uploads).toEqual([QUEUED('before')]);
+  });
+
+  test('without js/work-order-uploads.js the host still uploads the shot itself, tagged, and refreshes', async () => {
+    const r = await officeCameraUpload(TICKETS_SRC, 'Take completion photo', { noUploads: true });
+    expect(r.uploads).toEqual([['task', 'tk_784', 'the picked file', { tags: 'completion' }]]);
+    expect(r.refreshed).toBe(true);
   });
 
   test('FIRES: wire only the library inputs and a camera shot is never uploaded', async () => {
@@ -392,7 +426,7 @@ describe('office: a camera shot uploads down the same path as a library pick', (
     const r = await officeCameraUpload(mutate(TICKETS_SRC,
       'Take before photo<input type="file" accept="image/*" capture="environment" hidden data-kind="before" />',
       'Take before photo<input type="file" accept="image/*" capture="environment" hidden data-kind="completion" />'), 'Take before photo');
-    expect(r.uploads).toEqual([['task', 'tk_784', 'the picked file', { tags: 'completion' }]]);
+    expect(r.uploads).toEqual([QUEUED('completion')]);
   });
 });
 
@@ -971,8 +1005,8 @@ describe('office phone: the tiles still open, and upload through, the hidden com
     const gets = window.p86Api.serviceTickets.get.mock.calls.length;
     const file = pickFile(r.addInputs[0]);
     await flush();
-    expect(uploads.map((a) => [a[0], a[1], a[2] === file ? 'the picked file' : a[2], a[3]]))
-      .toEqual([['task', 'tk_784', 'the picked file', { tags: 'completion' }]]);
+    expect(uploads.map((a) => a.slice(0, 2).concat([a[2] === file ? 'the picked file' : a[2]], a.slice(3))))
+      .toEqual([QUEUED('completion')]);
     expect(window.p86Api.serviceTickets.get.mock.calls.length).toBeGreaterThan(gets);
   });
 
@@ -1279,23 +1313,27 @@ describe('crew link on Windows: the script marks <html> no-capture and the inlin
 // The field report at the bottom of the crew link (rendered when the link can
 // respond and the work order is live, a draft included) has its own pair:
 // Take photo (#photoCam, capture="environment", one shot) then Upload photo
-// (#photo, the library, no capture), both labels with role=button and
-// tabindex=0, both sending their file to the work order's photo door, and
+// (#photo, the library, no capture, several at once), both labels with
+// role=button and tabindex=0, both sending their photos through the upload
+// queue to the work order's photo door (upload_id first, then the file), and
 // Take photo hidden on the same two conditions as the punch list's camera.
+// The queue's status line for the report (#rupq) says how it went.
 
 const REPORT_DOOR = '/api/service-ticket-share/' + TOKEN + '/photo';
 
 // The source anchors, each exactly once in the (EOL-normalized) script.
 const REPORT_CAM_LABEL = '\'<label class="file cam-file" tabindex="0" role="button">\' + CAM_ICON(16) +';
 const REPORT_CAM_INPUT = '\'Take photo<input type="file" id="photoCam" accept="image/*" capture="environment" /></label>\'';
-const REPORT_UPLOAD_LABEL = '\'<label class="file" tabindex="0" role="button"><input type="file" id="photo" accept="image/*" />Upload photo</label>\'';
+const REPORT_UPLOAD_LABEL = '\'<label class="file" tabindex="0" role="button"><input type="file" id="photo" accept="image/*" multiple />Upload photo</label>\'';
 const REPORT_WIRE_INPUTS = "[document.getElementById('photoCam'), photoInput].forEach(function (inp) {";
 const REPORT_WIRE_KEYS = "Array.prototype.forEach.call(document.querySelectorAll('#report label[role=button]'), openFileOnKey);";
-const REPORT_CLEAR = "}).then(function () { msg('Photo added.'); inp.value = ''; })";
+const REPORT_CLEAR =
+  "        inp.value = '';\n" +
+  "        if (!files.length) return;\n" +
+  "        addPhotos(files, { key: 'site' });";
 const REPORT_FORM =
-  "        var fd = new FormData();\n" +
-  "        fd.append('file', f);\n" +
-  "        fetch('/api/service-ticket-share/' + encodeURIComponent(token) + '/photo', {";
+  "    fd.append('upload_id', item.uploadId);\n" +
+  "    fd.append('file', item.blob || item.file, item.name);";
 const CAM_ICON_ARIA = '" aria-hidden="true" focusable="false">\'';
 
 // The report's button row, child by child, as the tests read it.
@@ -1327,7 +1365,7 @@ const REPORT_CAM = {
 const REPORT_UPLOAD = {
   tag: 'label', className: 'file', text: 'Upload photo', role: 'button', tabindex: '0',
   icon: null,
-  input: { id: 'photo', accept: 'image/*', capture: null, multiple: false },
+  input: { id: 'photo', accept: 'image/*', capture: null, multiple: true },
 };
 const REPORT_SAVE = { tag: 'button', className: null, text: 'Save report', role: null, tabindex: null, icon: null, input: null };
 const REPORT_ROW = [REPORT_CAM, REPORT_UPLOAD, REPORT_SAVE];
@@ -1367,7 +1405,7 @@ describe('crew link field report: Take photo next to Upload photo', () => {
   });
 
   test('FIRES: capture on #photo is caught (Android would lose the library)', async () => {
-    await crewEnv(mutate(SHARE_SCRIPT, REPORT_UPLOAD_LABEL, REPORT_UPLOAD_LABEL.replace('accept="image/*" />', 'accept="image/*" capture="environment" />')));
+    await crewEnv(mutate(SHARE_SCRIPT, REPORT_UPLOAD_LABEL, REPORT_UPLOAD_LABEL.replace('accept="image/*" multiple />', 'accept="image/*" multiple capture="environment" />')));
     expect(reportRow()[1].input).toEqual(Object.assign({}, REPORT_UPLOAD.input, { capture: 'environment' }));
   });
 
@@ -1387,7 +1425,8 @@ describe('crew link field report: Take photo next to Upload photo', () => {
 });
 
 // Pick a file on a report input found by its label's text; record what was
-// POSTed, the message, and every assignment to the input's value.
+// POSTed, the report's upload status line, the message, and every assignment
+// to the input's value.
 async function reportUpload(script, text) {
   const env = await crewEnv(script);
   const inp = reportLabel(text).querySelector('input[type=file]');
@@ -1397,6 +1436,7 @@ async function reportUpload(script, text) {
   pickFile(inp, 'IMG_0077.jpg');
   await flush();
   const m = document.getElementById('msg');
+  const upq = document.querySelector('#rupq .upq-t');
   return {
     posts: env.calls.filter((c) => c.init.method === 'POST').map((c) => {
       const fd = c.init.body;
@@ -1409,6 +1449,7 @@ async function reportUpload(script, text) {
       };
     }),
     otherCalls: env.calls.filter((c) => c.init.method !== 'POST').length,
+    status: upq ? upq.textContent : '',
     msg: m ? m.textContent : null,
     bad: !!m && m.classList.contains('bad'),
     cleared,
@@ -1416,16 +1457,17 @@ async function reportUpload(script, text) {
 }
 
 const REPORT_POSTED = {
-  posts: [{ url: REPORT_DOOR, isForm: true, fields: ['file'], file: 'IMG_0077.jpg' }],
+  posts: [{ url: REPORT_DOOR, isForm: true, fields: ['upload_id', 'file'], file: 'IMG_0077.jpg' }],
   otherCalls: 0,
-  msg: 'Photo added.',
+  status: 'Photo added.',
+  msg: '',
   bad: false,
   cleared: [''],
 };
-const REPORT_NOTHING = { posts: [], otherCalls: 0, msg: '', bad: false, cleared: [] };
+const REPORT_NOTHING = { posts: [], otherCalls: 0, status: '', msg: '', bad: false, cleared: [] };
 
 describe('crew link field report: both photo inputs send their file to the photo door', () => {
-  test('Take photo POSTs FormData with the file to /photo, says "Photo added." and clears the input', async () => {
+  test('Take photo POSTs FormData (upload_id, then the file) to /photo, the status line says "Photo added." and the input is cleared', async () => {
     expect(await reportUpload(undefined, 'Take photo')).toEqual(REPORT_POSTED);
   });
 
@@ -1446,12 +1488,12 @@ describe('crew link field report: both photo inputs send their file to the photo
   });
 
   test('FIRES: the file under another field name is caught', async () => {
-    const r = await reportUpload(mutate(SHARE_SCRIPT, REPORT_FORM, REPORT_FORM.replace("fd.append('file', f);", "fd.append('photo', f);")), 'Take photo');
-    expect(r.posts).toEqual([{ url: REPORT_DOOR, isForm: true, fields: ['photo'], file: null }]);
+    const r = await reportUpload(mutate(SHARE_SCRIPT, REPORT_FORM, REPORT_FORM.replace("fd.append('file', ", "fd.append('photo', ")), 'Take photo');
+    expect(r.posts).toEqual([{ url: REPORT_DOOR, isForm: true, fields: ['upload_id', 'photo'], file: null }]);
   });
 
-  test('FIRES: without the clear after success the same shot cannot be picked again', async () => {
-    const broken = mutate(SHARE_SCRIPT, REPORT_CLEAR, "}).then(function () { msg('Photo added.'); })");
+  test('FIRES: without the clear the same shot cannot be picked again', async () => {
+    const broken = mutate(SHARE_SCRIPT, REPORT_CLEAR, REPORT_CLEAR.replace("inp.value = '';\n", ''));
     for (const text of ['Take photo', 'Upload photo']) {
       const r = await reportUpload(broken, text);
       expect(r).toEqual(Object.assign({}, REPORT_POSTED, { cleared: [] }));

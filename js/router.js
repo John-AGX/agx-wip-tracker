@@ -93,6 +93,18 @@
   // TAB_TITLES key); the URL slug for it is '/files' — friendlier and
   // matches the header icon's purpose. parsePath/serializeRoute do the
   // translation.
+  // Retired top-level paths, and the tab each one lands on now. The URL is
+  // rewritten to the new path (boot, go) so the old one does not linger.
+  //   /work-orders — the company-wide work order list built for 1.30 became
+  //   the Service Tickets page; work order emails still link the old path.
+  var REDIRECT_TOPS = { 'work-orders': 'service-tickets' };
+  function redirectedTop(top) {
+    return Object.prototype.hasOwnProperty.call(REDIRECT_TOPS, top) ? REDIRECT_TOPS[top] : null;
+  }
+  function isRedirectPath(pathname) {
+    var first = String(pathname || '').split('/').filter(Boolean)[0];
+    return !!first && redirectedTop(first) !== null;
+  }
   var KNOWN_TOP_TABS = ['summary', 'my-files', 'field-tools', 'jobs', 'jobshub', 'estimates', 'schedule', 'plans', 'assembly-studio', 'insights', 'admin', 'projects', 'orgmap', 'orgleadsmap', 'console', 'cost-inbox', 'invoices', 'service-tickets', 'my-day', 'my-tasks', 'messages', 'email-hub'];
 
   // ── URL <-> route object ──────────────────────────────────────
@@ -136,6 +148,10 @@
     if (top === 'leads') {
       route.top = 'estimates'; route.estSub = 'leads';
       if (parts[1]) route.leadId = parts[1];
+      return route;
+    }
+    if (redirectedTop(top)) {
+      route.top = redirectedTop(top);
       return route;
     }
     if (KNOWN_TOP_TABS.indexOf(top) === -1) return route;
@@ -673,6 +689,7 @@
 
   function onPopState(e) {
     var route = (e.state && e.state.route) ? e.state.route : parsePath(location.pathname);
+    if (route && redirectedTop(route.top)) route = { top: redirectedTop(route.top) };
     applyRoute(route);
   }
 
@@ -767,7 +784,8 @@
         if (clean.charAt(0) !== '/') return false;   // same-origin, absolute-path only
         var route = parsePath(clean);
         if (!route || !route.top) return false;
-        try { history.pushState({ route: route }, '', clean); } catch (e) { /* noop */ }
+        var pushPath = isRedirectPath(clean) ? serializeRoute(route) : clean;
+        try { history.pushState({ route: route }, '', pushPath); } catch (e) { /* noop */ }
         applyRoute(route);
         return true;
       }
@@ -777,6 +795,13 @@
     // Bare `/` → leave it for auth.js + nav-state to handle so users
     // who haven't migrated yet don't lose their last-place.
     var initial = parsePath(location.pathname);
+    // A retired path is rewritten in place, keeping its query and hash for
+    // whatever reads them later.
+    if (initial.top && isRedirectPath(location.pathname)) {
+      try {
+        history.replaceState({ route: initial }, '', serializeRoute(initial) + (location.search || '') + (location.hash || ''));
+      } catch (e) { /* defensive — some envs reject replaceState */ }
+    }
     if (initial.top) {
       // Replay only once the app shell is actually visible. auth.js boot
       // is async (token refresh → /me → capabilities → showApp()) and can

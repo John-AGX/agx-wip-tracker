@@ -20,6 +20,13 @@
 //     POST   /api/service-ticket-share/:token/photo
 //     POST   /api/service-ticket-share/:token/revision            propose
 //
+//   FLAG A PROBLEM (1.29) — declared in service-ticket-flag-routes.js and
+//   registered onto THIS router at the bottom of the file, so they share its
+//   mount and its token loader:
+//     POST   /api/service-ticket-share/:token/flag                 raise (public)
+//     POST   /api/service-ticket-share/:token/flags/:flagId/photo  one photo (public)
+//     POST   /api/service-tickets/:id/flags/:flagId/resolve        the office resolves
+//
 // THE THREE SCOPES, and why there is no fourth. 'view' reads. 'respond' files a
 // FIELD REPORT — a note, a photo, a checklist tick, a forward-only status move
 // — every one of which is something the holder OWNS: their work, their
@@ -55,7 +62,7 @@ const { callerOrgId } = require('../org-access');
 const { sendEmail, isEnabled: emailIsEnabled } = require('../email');
 const multer = require('multer');
 const sharp = require('sharp');
-const { sniffMimeFromBytes, sanitizeSvg, mimeFamilyMatches } = require('../util/attachment-mime');
+const { sniffMimeFromBytes, sanitizeSvg, mimeFamilyMatches, HEIC_REFUSAL, isHeicUpload } = require('../util/attachment-mime');
 const { storage } = require('../storage');
 const { stShareIpLimiter, stShareViewLimiter, stShareWriteLimiter, stSharePropose } = require('../rate-limit');
 
@@ -68,6 +75,32 @@ const svc = require('../services/service-tickets');
 const access = require('../services/service-ticket-access');
 const workOrder = require('../services/service-ticket-workorder');
 const ticketNotify = require('../services/service-ticket-notify');
+const review = require('../services/work-order-review');
+const uploadDedupe = require('../services/upload-dedupe');
+const inflight = require('../services/inflight');
+const subtaskDoor = require('../services/service-ticket-subtask-door');
+const flagSvc = require('../services/service-ticket-flags');
+const { formatInTz } = require('../timezone');
+
+// What a crew phone is told when a photo upload fails before the handler sees
+// it. A bad signal cuts uploads off part way, and the page retries those; a
+// photo over the size cap will never go, so it says what to do instead.
+const PHOTO_TOO_LARGE = "That photo is over 50 MB and can't be sent. Take it again, or pick a smaller photo.";
+const PHOTO_CUT_OFF = 'The upload was cut off before it finished. Try again.';
+const PHOTO_UNREADABLE = "That photo couldn't be read. Take it again, or pick a different photo.";
+
+// The one-photo body parser for the crew photo doors. The library's own errors
+// would reach express's error handler as a 500 with no words a crew member can
+// act on; here the size cap is a 413 and any other parse failure (a body cut
+// off by a dropped connection) is a 408 the page retries.
+const singlePhoto = upload.single('file');
+function multerOnePhoto(req, res, next) {
+  singlePhoto(req, res, function (err) {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: PHOTO_TOO_LARGE });
+    return res.status(408).json({ error: PHOTO_CUT_OFF });
+  });
+}
 
 const router = express.Router();
 
@@ -268,7 +301,7 @@ router.post('/service-tickets/:id/share', requireAuth, requireOrgId, async (req,
     });
 
     const { rows } = await pool.query(
-      'SELECT ' + SHARE_COLS + ' FROM service_ticket_shares WHERE id = $1', [id]);
+      'SELECT ' + SHARE_COLS + ' FROM service_ticket_shares WHERE id = $1 AND organization_id = $2', [id, orgId]);
     res.json({ ok: true, share: rows[0], link: link, email_sent: emailSent, email_error: emailError });
   } catch (e) {
     console.error('[service-ticket-share] mint failed', e);
@@ -361,7 +394,7 @@ router.get('/service-tickets/:id/revisions', requireAuth, async (req, res) => {
               r.created_at,
               (s.id IS NOT NULL AND s.revoked_at IS NOT NULL) AS via_revoked_link
          FROM service_ticket_revisions r
-         LEFT JOIN service_ticket_shares s ON s.id = r.share_id
+         LEFT JOIN service_ticket_shares s ON s.id = r.share_id AND s.organization_id = r.organization_id
         WHERE ${where}
         ORDER BY r.created_at DESC LIMIT 100`,
       params
@@ -869,6 +902,31 @@ function takeoffDisposition(type, filename) {
   return type + '; filename="' + ascii + '"; filename*=UTF-8\'\'' + encoded;
 }
 
+// A read the crew page can live without: its failure is logged and answered
+// with the fallback, so it never fails the work order.
+async function bestEffort(label, work, fallback) {
+  try {
+    return await work();
+  } catch (e) {
+    console.error('[service-ticket-share] ' + label + ' lookup failed', e && e.message);
+    return fallback;
+  }
+}
+
+// finish: { can_undo } for T1. True only while the ticket is at Work complete
+// and the newest status event is THIS link's own "Finish whole work order" —
+// the same rule the PATCH undo path enforces under the lock, so the button the
+// page shows and the door behind it cannot disagree (except for a race, which
+// the door answers with finish_not_yours).
+async function crewFinishState(ticket, share) {
+  if (svc.normalizeStatus(ticket.status) !== 'work_complete') return { can_undo: false };
+  if (!svc.scopeAllows(share.scope, 'respond')) return { can_undo: false };
+  return bestEffort('finish state', async () => {
+    const last = await workOrder.lastStatusEvent(pool, ticket);
+    return { can_undo: svc.crewMayUndoFinish(ticket.status, last, share.id).ok === true };
+  }, { can_undo: false });
+}
+
 // T1 — read the work order.
 router.get('/service-ticket-share/:token',
   stShareIpLimiter, stShareViewLimiter, loadTicketShare, async (req, res) => {
@@ -882,7 +940,7 @@ router.get('/service-ticket-share/:token',
         `UPDATE service_ticket_shares
             SET opened_at = COALESCE(opened_at, NOW()), last_used_at = NOW(),
                 view_count = view_count + 1
-          WHERE id = $1`, [share.id]
+          WHERE id = $1 AND organization_id = $2`, [share.id, ticket.organization_id]
       ).catch(function () { /* a stat is not worth failing a read over */ });
       if (!share.opened_at) {
         logEvent(ticket, 'share_opened', {
@@ -920,6 +978,30 @@ router.get('/service-ticket-share/:token',
         workOrder.subtaskActivity(pool, ticket.organization_id, ticket.id),
       ]);
 
+      // 1.29 additions, each BEST-EFFORT like the takeoff card below: a failed
+      // lookup costs the crew that one piece, never the work order.
+      //
+      //   finish      whether THIS link may still take back its own "Finish
+      //               whole work order" (services/service-tickets.js
+      //               crewMayUndoFinish over the newest status event).
+      //   site_photos the work order's field-report photos, as a crew
+      //               whitelist: no filename, no original_url, no uploader id,
+      //               and `by` never names someone in the office.
+      //   send_back   the office's reason for sending the work back, shown on
+      //               every link until the next arrival at Work complete. No
+      //               user id, no name, no cancel reason (a cancel is never a
+      //               send-back), and nothing added to publicTicket.
+      const [finish, sitePhotos, sendBack] = await Promise.all([
+        crewFinishState(ticket, share),
+        bestEffort('site photos', async () => {
+          const photos = await workOrder.ticketSitePhotos(pool, ticket.organization_id, ticket.id, { withNames: false });
+          return photos.map(function (p) {
+            return { id: p.id, thumb_url: p.thumb_url, web_url: p.web_url, uploaded_at: p.uploaded_at, by: p.by };
+          });
+        }, []),
+        bestEffort('send-back banner', () => review.activeSendBack(pool, ticket, tasks.rows), null),
+      ]);
+
       // The takeoff card, when the office chose a file this link may show.
       // Best-effort like the stats above: a failed lookup, or a copy that
       // would not build, costs the crew the card, never the work order.
@@ -928,6 +1010,18 @@ router.get('/service-ticket-share/:token',
         takeoff = await crewTakeoffCard(await crewTakeoffFor(ticket, share));
       } catch (e) {
         console.error('[service-ticket-share] takeoff lookup failed', e && e.message);
+      }
+
+      // Problems flagged on this work order (1.29): open ones, and ones the
+      // office resolved in the last 14 days, as the crew whitelist
+      // (flagSvc.publicFlag — no link id, no resolver, no client ref). Every
+      // link on the ticket sees them, a view link included. Best-effort: a
+      // failed read costs the crew the list, never the work order.
+      let flags = [];
+      try {
+        flags = await flagSvc.listCrewFlags(pool, ticket, tasks.rows.map((t) => t.id));
+      } catch (e) {
+        console.warn('[service-ticket-share] flags lookup failed', e && e.message);
       }
 
       res.json({
@@ -959,6 +1053,10 @@ router.get('/service-ticket-share/:token',
         // { filename, kind, size_bytes, copy, lines } or null — see
         // crewTakeoffFor. copy true: the price-free xlsx, size_bytes null.
         takeoff: takeoff,
+        finish: finish,
+        site_photos: sitePhotos,
+        send_back: sendBack,
+        flags: flags,
       });
     } catch (e) {
       console.error('[service-ticket-share] read failed', e);
@@ -1206,8 +1304,74 @@ router.get('/service-ticket-share/:token/takeoff',
 //               same "expires on completion" burn task-share implements.
 //   transition— checked through the SHARE lattice, which is forward-only
 //               inside the crew band.
+//
+// UNDER ONE LOCK (1.29). The checklist, the note and the status land in one
+// transaction under SELECT ... FOR UPDATE on the ticket, and every gate that
+// matters is re-checked on that LOCKED row, never on the row loadTicketShare
+// read a moment earlier:
+//   * Finish whole work order is refused while any building on the punch list
+//     is open (409 buildings_open), and then NOTHING is written — not even a
+//     note typed alongside it. The office is told automatically when the last
+//     building is done, so there is no reason to finish around the punch list.
+//   * "Undo — not finished yet" (in_progress from work_complete, a move the
+//     share lattice otherwise refuses) is allowed only while the newest status
+//     event is this link's own finish (409 finish_not_yours otherwise).
+//   * The UPDATE is guarded on organization_id AND the locked status, so an
+//     office move that lands between the read and the write answers
+//     409 status_changed instead of being overwritten.
+//   * Events are strict, and the approval notice goes out only after COMMIT,
+//     only for a finish that really applied.
+const BUILDINGS_OPEN_ENDING = " finished. Finish each building on the punch list first — the office is told automatically when the last one is done.";
+const WORK_ORDER_GONE = 'This work order is no longer available.';
+
+// The field-log stamp's date, time and zone, in the org's timezone. Read
+// best-effort OUTSIDE the transaction: a failed statement inside one aborts it
+// on Postgres, and a missing timezone must not cost the crew its note.
+async function crewStampWhen(orgId) {
+  let tz = null;
+  try {
+    const r = await pool.query('SELECT timezone FROM organizations WHERE id = $1', [orgId]);
+    tz = (r.rows[0] && r.rows[0].timezone) || null;
+  } catch (e) { tz = null; }
+  return formatInTz(new Date(), tz, {
+    month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+  });
+}
+
+// How many field-report photos this link added since its last note: its
+// photo_added events with no task_id (a building photo) and no flag_id (a
+// flagged problem's photo), newest first, until its newest note_added.
+async function crewReportPhotoCount(db, ticket, share) {
+  const r = await db.query(
+    `SELECT kind, created_at, detail FROM service_ticket_events
+      WHERE ticket_id = $1 AND organization_id = $2 AND share_id = $3
+        AND kind IN ('photo_added', 'note_added')
+      ORDER BY created_at DESC LIMIT 200`,
+    [ticket.id, ticket.organization_id, share.id]
+  );
+  let n = 0;
+  for (const e of r.rows) {
+    if (e.kind === 'note_added') break;
+    if (e.kind !== 'photo_added') continue;
+    let d = e.detail;
+    if (typeof d === 'string') { try { d = JSON.parse(d); } catch (_) { d = null; } }
+    const tagged = d && typeof d === 'object' && ((d.task_id != null && d.task_id !== '') || (d.flag_id != null && d.flag_id !== ''));
+    if (!tagged) n += 1;
+  }
+  return n;
+}
+
+function storedChecklist(v) {
+  if (typeof v === 'string') {
+    try { return JSON.parse(v); } catch (_) { return []; }
+  }
+  return v;
+}
+
 router.patch('/service-ticket-share/:token',
   stShareIpLimiter, stShareWriteLimiter, loadTicketShare, async (req, res) => {
+    let client = null;
+    let open = false;
     try {
       const share = req.share;
       const ticket = req.ticket;
@@ -1217,34 +1381,129 @@ router.patch('/service-ticket-share/:token',
       if (!svc.scopeAllows(share.scope, 'respond')) {
         return res.status(403).json({ error: 'This link is view-only.' });
       }
-      if (svc.isTerminal(ticket.status)) {
-        return res.status(409).json({ error: 'This work order is ' + ticket.status + ' and can no longer be updated.' });
+      // The CREW rule, not merely "not terminal": approved and draft belong to
+      // the office, exactly as they do on the building and flag doors. An
+      // approved work order's photos and field log are the record of what was
+      // approved (work-order-photo-guard refuses to remove a photo from one),
+      // so a link that is still live must not be able to add to them.
+      const gate = svc.crewSubtasksWritable(ticket.status);
+      if (!gate.ok) {
+        return res.status(409).json({ error: gate.reason });
       }
 
       const body = req.body || {};
-      const sets = [];
-      const params = [];
-      const changed = [];
 
       // 1. name → the SHARE's recipient_name, NOT the ticket. Write-once,
       //    because it labels every note already left; letting it change would
       //    retroactively re-attribute them. Set BEFORE the note stamp is
       //    composed so a guest's first action already carries their name.
-      const newName = svc.guestNameUpdate(share.recipient_name, body.name);
-      if (newName) {
-        await pool.query(
-          'UPDATE service_ticket_shares SET recipient_name = $1 WHERE id = $2 AND recipient_name IS NULL',
-          [newName, share.id]
-        );
-        share.recipient_name = newName;
+      await applyCrewName(share, body);
+
+      const wantsChecklist = Array.isArray(body.checklist);
+      const wantsNote = svc.guestNoteStamp(body.note, share) !== null;
+      const wantsStatus = body.status != null && String(body.status) !== '';
+      // IDEMPOTENT (1.30), the key the photo and flag doors already carry. The
+      // page mints one client_ref per UNSENT note and sends the same one again
+      // when it retries, so a save that landed and lost its answer does not
+      // append the crew's note to the field log twice. A body without one (an
+      // old cached page) always writes, exactly as the flag door treats a
+      // missing key. Shape only — an opaque token, never contents.
+      const noteRef = typeof body.client_ref === 'string' && flagSvc.CLIENT_REF_RE.test(body.client_ref)
+        ? body.client_ref : null;
+      if (!wantsChecklist && !wantsNote && !wantsStatus) {
+        return res.json({ ok: true, ticket: svc.publicTicket(ticket, share) });
+      }
+      const when = wantsNote ? await crewStampWhen(ticket.organization_id) : null;
+
+      client = await pool.connect();
+      await client.query('BEGIN');
+      open = true;
+      const refuse = async (status, payload) => {
+        open = false;
+        await client.query('ROLLBACK');
+        return res.status(status).json(payload);
+      };
+
+      const lr = await client.query(
+        'SELECT * FROM service_tickets WHERE id = $1 AND organization_id = $2 AND archived_at IS NULL FOR UPDATE',
+        [ticket.id, ticket.organization_id]
+      );
+      const locked = lr.rows[0];
+      if (!locked) return refuse(404, { error: WORK_ORDER_GONE });
+      // The same crew rule again, on the LOCKED row, so an approval the office
+      // commits between the load and the FOR UPDATE refuses and writes nothing.
+      const lockedGate = svc.crewSubtasksWritable(locked.status);
+      if (!lockedGate.ok) {
+        return refuse(409, { error: lockedGate.reason });
+      }
+      const from = svc.normalizeStatus(locked.status);
+
+      // 4 (decided first, so a refusal writes nothing). status → the share
+      //    lattice, on the LOCKED row. A refusal is a 403 WITH THE REASON, not
+      //    a silent no-op: a crew member who cannot mark work complete needs
+      //    to know why.
+      let nextStatus = null;
+      let reason = null;
+      if (wantsStatus) {
+        const asked = String(body.status).trim().toLowerCase();
+        if (asked === 'in_progress' && from === 'work_complete') {
+          // "Undo — not finished yet": this link's own finish, and nothing
+          // since. Undo keeps approval_notified_at and never notifies.
+          const last = await workOrder.lastStatusEvent(client, locked);
+          const undo = svc.crewMayUndoFinish(locked.status, last, share.id);
+          if (!undo.ok) return refuse(409, { error: undo.reason, code: 'finish_not_yours' });
+          nextStatus = 'in_progress';
+          reason = 'crew_undid_finish';
+        } else {
+          const verdict = svc.ticketMayTransition(locked.status, asked, 'share');
+          if (!verdict.ok) return refuse(403, { error: verdict.reason });
+          if (asked !== from) {
+            if (asked === 'work_complete') {
+              // Only live org subtasks count — the punch list the crew sees.
+              const counts = await workOrder.subtaskCounts(client, locked);
+              if (counts.total > 0 && counts.done < counts.total) {
+                const openCount = counts.total - counts.done;
+                return refuse(409, {
+                  error: svc.openSubtasksLine(openCount, counts.total, 'building') + BUILDINGS_OPEN_ENDING,
+                  code: 'buildings_open',
+                  open: openCount,
+                  total: counts.total,
+                });
+              }
+              reason = 'marked_complete';
+            }
+            nextStatus = asked;
+          }
+        }
       }
 
+      // Did THIS link already append THIS note to THIS work order? One lookup,
+      // under the same FOR UPDATE that holds the ticket row, so two retries
+      // racing are serialized and no second unique index is needed. A hit drops
+      // the note and lets the rest of the PATCH (a checklist tick, a finish)
+      // proceed — a retried Save report answers ok, it does not refuse.
+      let noteAlreadyStored = false;
+      if (wantsNote && noteRef) {
+        const seen = await client.query(
+          `SELECT 1 FROM service_ticket_events
+            WHERE ticket_id = $1 AND organization_id = $2 AND share_id = $3
+              AND kind = 'note_added' AND detail->>'client_ref' = $4
+            LIMIT 1`,
+          [locked.id, locked.organization_id, share.id, noteRef]
+        );
+        noteAlreadyStored = seen.rows.length > 0;
+      }
+
+      const sets = [];
+      const params = [];
+      const changed = [];
+
       // 2. checklist → only `done` flips land. normalizeGuestChecklist diffs
-      //    against what is STORED; additions, deletions, reorders and text
-      //    edits are dropped silently. The office owns what the list says, the
-      //    guest owns whether each line is finished.
-      if (Array.isArray(body.checklist)) {
-        const merged = svc.normalizeGuestChecklist(ticket.checklist, body.checklist);
+      //    against what is STORED (the locked row); additions, deletions,
+      //    reorders and text edits are dropped silently. The office owns what
+      //    the list says, the guest owns whether each line is finished.
+      if (wantsChecklist) {
+        const merged = svc.normalizeGuestChecklist(storedChecklist(locked.checklist), body.checklist);
         params.push(JSON.stringify(merged));
         sets.push('checklist = $' + params.length + '::jsonb');
         changed.push('checklist');
@@ -1253,86 +1512,106 @@ router.patch('/service-ticket-share/:token',
       // 3. note → APPENDED in SQL, never read-modify-write, so two guests
       //    writing at once cannot lose one another's note. Targets guest_log,
       //    NOT internal_notes — a guest must not be able to grow a field the
-      //    office writes into.
-      const stamp = svc.guestNoteStamp(body.note, share);
-      if (stamp) {
+      //    office writes into. The stamp carries the date, time and zone, and
+      //    how many field-report photos this link sent with the note.
+      let photoCount = 0;
+      if (wantsNote && !noteAlreadyStored) {
+        photoCount = await crewReportPhotoCount(client, locked, share);
+        const stamp = svc.guestNoteStamp(body.note, share, { when: when, photoCount: photoCount });
         params.push(stamp);
         sets.push("guest_log = COALESCE(guest_log, '') || $" + params.length);
         changed.push('note');
       }
 
-      // 4. status → the share lattice. A refusal is a 403 WITH THE REASON,
-      //    not a silent no-op: a crew member who cannot mark work complete
-      //    needs to know why.
-      let nextStatus = null;
-      if (body.status != null && String(body.status) !== '') {
-        const verdict = svc.ticketMayTransition(ticket.status, body.status, 'share');
-        if (!verdict.ok) return res.status(403).json({ error: verdict.reason });
-        nextStatus = String(body.status);
-        if (nextStatus !== ticket.status) {
-          params.push(nextStatus);
-          sets.push('status = $' + params.length);
-          changed.push('status');
-          // completed_at is only ever SET by a guest, only ever CLEARED by a
-          // PM. task-share never clears its equivalent, which leaves a
-          // reopened item still claiming a completion date.
-          if (nextStatus === 'work_complete') {
-            sets.push('completed_at = COALESCE(completed_at, NOW())');
-          }
+      if (nextStatus) {
+        params.push(nextStatus);
+        sets.push('status = $' + params.length);
+        changed.push('status');
+        // completed_at is SET by a finish (COALESCEd, so a second report
+        // cannot move it) and cleared only by the crew taking its own finish
+        // back, or by the office.
+        if (nextStatus === 'work_complete') {
+          sets.push('completed_at = COALESCE(completed_at, NOW())');
+        } else if (reason === 'crew_undid_finish') {
+          sets.push('completed_at = NULL');
         }
       }
 
-      if (!sets.length) return res.json({ ok: true, ticket: svc.publicTicket(ticket, share) });
+      if (!sets.length) {
+        open = false;
+        await client.query('ROLLBACK');
+        return res.json({ ok: true, ticket: svc.publicTicket(locked, share) });
+      }
 
-      params.push(ticket.id);
-      const { rows } = await pool.query(
+      params.push(locked.id, locked.organization_id, locked.status);
+      const up = await client.query(
         'UPDATE service_tickets SET ' + sets.join(', ') + ', updated_at = NOW() ' +
-        'WHERE id = $' + params.length + ' RETURNING *',
+        'WHERE id = $' + (params.length - 2) + ' AND organization_id = $' + (params.length - 1) +
+        ' AND status = $' + params.length + ' RETURNING *',
         params
       );
-      if (!rows[0]) return res.status(404).json({ error: 'This work order is no longer available.' });
-
-      pool.query('UPDATE service_ticket_shares SET last_used_at = NOW()' +
-        (nextStatus === 'work_complete' ? ', completed_at = NOW()' : '') +
-        ' WHERE id = $1', [share.id]).catch(function () {});
+      const row = up.rows[0];
+      if (!row) return refuse(409, { error: review.STALE_ERROR, code: 'status_changed' });
 
       // Every guest write appends an attributed event. A bearer token cannot
       // identify a person, so the honest record is "this arrived through the
       // link sent to <recipient>" — actor_label is a CLAIM and the UI says so.
+      // Strict: inside the transaction a swallowed failure would turn COMMIT
+      // into a silent ROLLBACK.
       const label = share.recipient_name || share.recipient_email || null;
-      if (changed.indexOf('status') >= 0) {
-        await logEvent(ticket, 'status_changed', {
-          actorKind: 'share', shareId: share.id, actorLabel: label,
-          detail: { from: ticket.status, to: nextStatus },
-        });
-      }
-      // Mark work complete: the crew is telling the office the job is done, so
-      // the office hears it (the job's PM, the ticket's creator, the link's
-      // sender). Not awaited — the crew's save never waits on an email.
-      if (changed.indexOf('status') >= 0 && nextStatus === 'work_complete') {
-        ticketNotify.notifyAwaitingApproval(pool, {
-          ticket: rows[0],
-          actor: { kind: 'share', shareId: share.id, label: label },
-          reason: 'marked_complete',
-          sharedBy: share.created_by,
-        });
+      const actor = { kind: 'share', shareId: share.id, label: label };
+      if (nextStatus) {
+        const detail = { from: locked.status, to: nextStatus };
+        if (reason) detail.reason = reason;
+        await workOrder.insertEvent(client, locked, 'status_changed', actor, detail, { strict: true });
       }
       const other = changed.filter(function (c) { return c !== 'status'; });
       if (other.length) {
-        await logEvent(ticket, other.indexOf('note') >= 0 ? 'note_added' : 'field_changed', {
-          actorKind: 'share', shareId: share.id, actorLabel: label,
-          detail: { fields: other },
-        });
+        const detail = { fields: other };
+        if (photoCount > 0) detail.photo_count = photoCount;
+        // The key the next retry looks for. Written on the note_added event
+        // only, which is what the lookup above reads.
+        if (noteRef && other.indexOf('note') >= 0) detail.client_ref = noteRef;
+        await workOrder.insertEvent(client, locked, other.indexOf('note') >= 0 ? 'note_added' : 'field_changed',
+          actor, detail, { strict: true });
+      }
+
+      await client.query('COMMIT');
+      open = false;
+
+      // After COMMIT, best-effort: the link's own bookkeeping.
+      pool.query('UPDATE service_ticket_shares SET last_used_at = NOW()' +
+        (nextStatus === 'work_complete' ? ', completed_at = NOW()' : '') +
+        (reason === 'crew_undid_finish' ? ', completed_at = NULL' : '') +
+        ' WHERE id = $1 AND organization_id = $2', [share.id, locked.organization_id]).catch(function () {});
+
+      // Finish whole work order: the crew is telling the office the job is
+      // done, so the office hears it (the job's PM, the ticket's creator, the
+      // link's sender). Only for a finish that applied; an undo never notifies.
+      // Not awaited — the crew's save never waits on an email — but tracked, so
+      // a deploy lets the send finish.
+      if (nextStatus === 'work_complete') {
+        inflight.track(ticketNotify.notifyAwaitingApproval(pool, {
+          ticket: row,
+          actor: actor,
+          reason: 'marked_complete',
+          sharedBy: share.created_by,
+        }), 'ticket_approval');
       }
 
       res.json({
         ok: true,
-        ticket: svc.publicTicket(rows[0], share),
+        ticket: svc.publicTicket(row, share),
         share: svc.publicShare(Object.assign({}, share)),
       });
     } catch (e) {
+      if (client && open) {
+        try { await client.query('ROLLBACK'); } catch (_) { /* the connection is already gone */ }
+      }
       console.error('[service-ticket-share] guest patch failed', e);
-      res.status(500).json({ error: 'Something went wrong saving that.' });
+      if (!res.headersSent) res.status(500).json({ error: 'Something went wrong saving that.' });
+    } finally {
+      if (client) client.release();
     }
   });
 
@@ -1369,14 +1648,7 @@ router.post('/service-ticket-share/:token/revision',
         return res.status(400).json({ error: 'There is nothing here we can pass on.' });
       }
 
-      const newName = svc.guestNameUpdate(share.recipient_name, body.name);
-      if (newName) {
-        await pool.query(
-          'UPDATE service_ticket_shares SET recipient_name = $1 WHERE id = $2 AND recipient_name IS NULL',
-          [newName, share.id]
-        );
-        share.recipient_name = newName;
-      }
+      await applyCrewName(share, body);
 
       const label = share.recipient_name || share.recipient_email || null;
       const id = svc.genId('strev');
@@ -1389,8 +1661,8 @@ router.post('/service-ticket-share/:token/revision',
          JSON.stringify(fields), String(body.note == null ? '' : body.note).slice(0, 2000) || null]
       );
 
-      pool.query('UPDATE service_ticket_shares SET last_used_at = NOW() WHERE id = $1', [share.id])
-        .catch(function () {});
+      pool.query('UPDATE service_ticket_shares SET last_used_at = NOW() WHERE id = $1 AND organization_id = $2',
+        [share.id, ticket.organization_id]).catch(function () {});
       await logEvent(ticket, 'revision_proposed', {
         actorKind: 'share', shareId: share.id, actorLabel: label,
         // SHAPE, not contents — the field NAMES only. The proposed text itself
@@ -1420,6 +1692,14 @@ async function storeShareImage(file, baseKey) {
     return { error: 'File contents do not match its type', status: 400 };
   }
   const mime = sniffed || claimed;
+  // HEIC (1.29), before the image-only check so a HEIC sent with no browser
+  // type still gets the sentence that says what to do. The installed image
+  // library cannot decode one, so it is refused here with that sentence rather
+  // than failing below as a server error. Bytes that prove some OTHER format
+  // (a JPEG merely named .heic) are not refused by the name.
+  if (isHeicUpload(mime, file.originalname) && (!sniffed || sniffed === 'image/heic')) {
+    return { error: HEIC_REFUSAL, status: 415 };
+  }
   // Images only — no PDFs or documents from an outside link.
   if (typeof mime !== 'string' || mime.indexOf('image/') !== 0) {
     return { error: 'Only photos can be uploaded here', status: 400 };
@@ -1429,10 +1709,18 @@ async function storeShareImage(file, baseKey) {
   const ext = (String(file.originalname || '').match(/\.([a-z0-9]+)$/i) || [, 'jpg'])[1].toLowerCase();
   let thumbUrl = null, webUrl = null, originalUrl, thumbKey = null, webKey = null, originalKey, width = null, height = null;
   if (isRaster) {
-    const meta = await sharp(buf, { limitInputPixels: 50000000 }).rotate().metadata();
-    width = meta.width || null; height = meta.height || null;
-    const thumbBuf = await sharp(buf, { limitInputPixels: 50000000 }).rotate().resize(200, 200, { fit: 'cover' }).jpeg({ quality: 80 }).toBuffer();
-    const webBuf = await sharp(buf, { limitInputPixels: 50000000 }).rotate().resize(1600, 1600, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer();
+    // Every decode happens BEFORE anything is stored, so a photo the library
+    // cannot read (garbage bytes under an image type, a truncated file) is a
+    // 422 the crew can act on, with nothing left behind in storage.
+    let thumbBuf, webBuf;
+    try {
+      const meta = await sharp(buf, { limitInputPixels: 50000000 }).rotate().metadata();
+      width = meta.width || null; height = meta.height || null;
+      thumbBuf = await sharp(buf, { limitInputPixels: 50000000 }).rotate().resize(200, 200, { fit: 'cover' }).jpeg({ quality: 80 }).toBuffer();
+      webBuf = await sharp(buf, { limitInputPixels: 50000000 }).rotate().resize(1600, 1600, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer();
+    } catch (e) {
+      return { error: PHOTO_UNREADABLE, status: 422 };
+    }
     thumbKey = baseKey + '_thumb.jpg'; webKey = baseKey + '_web.jpg'; originalKey = baseKey + '_orig.' + ext;
     thumbUrl = await storage.put(thumbKey, thumbBuf, 'image/jpeg');
     webUrl = await storage.put(webKey, webBuf, 'image/jpeg');
@@ -1448,8 +1736,34 @@ async function storeShareImage(file, baseKey) {
 // Copied from task-share-routes wholesale, including the magic-byte sniff
 // BEFORE anything is stored, because the failure it prevents (a file whose
 // contents disagree with its claimed type) is the same here.
+//
+// IDEMPOTENT (1.29). On a bad signal the photo can land and its answer never
+// reach the phone, so the page sends it again with the same upload_id. The
+// second arrival finds the row the first one wrote (per org, per ticket) and
+// answers duplicate:true, storing nothing and logging nothing. Two arrivals
+// racing past that lookup meet the unique index: the loser throws its stored
+// bytes away and answers with the winner's row.
+
+// The answer for a site photo row, fresh or found again. A whitelist: the
+// page needs where to show it and when it was taken, nothing else.
+function sitePhotoAnswer(row, duplicate) {
+  const out = {
+    ok: true,
+    attachment: {
+      id: row.id, filename: row.filename, thumb_url: row.thumb_url,
+      web_url: row.web_url, original_url: row.original_url,
+    },
+    photo: {
+      id: row.id, kind: 'site', thumb_url: row.thumb_url, web_url: row.web_url,
+      uploaded_at: row.uploaded_at == null ? null : row.uploaded_at,
+    },
+  };
+  if (duplicate) out.duplicate = true;
+  return out;
+}
+
 router.post('/service-ticket-share/:token/photo',
-  stShareIpLimiter, stShareWriteLimiter, loadTicketShare, upload.single('file'),
+  stShareIpLimiter, stShareWriteLimiter, loadTicketShare, multerOnePhoto,
   async (req, res) => {
     try {
       const share = req.share;
@@ -1457,43 +1771,70 @@ router.post('/service-ticket-share/:token/photo',
       if (!svc.scopeAllows(share.scope, 'respond')) {
         return res.status(403).json({ error: 'This link is view-only.' });
       }
-      if (svc.isTerminal(ticket.status)) {
-        return res.status(409).json({ error: 'This work order is ' + ticket.status + ' and can no longer be updated.' });
+      // The crew rule, BEFORE storeShareImage: a refused photo is never decoded
+      // or stored. Approved is the office's — a site photo added after the
+      // approval could not be taken off again (work-order-photo-guard).
+      const gate = svc.crewSubtasksWritable(ticket.status);
+      if (!gate.ok) {
+        return res.status(409).json({ error: gate.reason });
       }
+      await applyCrewName(share, req.body);
+
+      // Scoped by the ticket row's organization_id, never the request.
+      const uploadId = uploadDedupe.uploadIdFrom(req.body);
+      const findAgain = () => uploadDedupe.findUpload(pool, {
+        orgId: ticket.organization_id, entityType: 'service_ticket', entityId: ticket.id, uploadId: uploadId,
+      });
+      if (uploadId) {
+        const prior = await findAgain();
+        if (prior) return res.json(sitePhotoAnswer(prior, true));
+      }
+
       const id = 'att_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
       const img = await storeShareImage(req.file, 'service_ticket/' + ticket.id + '/' + id);
       if (img.error) return res.status(img.status).json({ error: img.error });
       const { buf, mime, width, height, thumbUrl, webUrl, originalUrl, thumbKey, webKey, originalKey } = img;
 
       const posR = await pool.query(
-        "SELECT COALESCE(MAX(position), -1) AS max_pos FROM attachments WHERE entity_type = 'service_ticket' AND entity_id = $1",
-        [ticket.id]
+        "SELECT COALESCE(MAX(position), -1) AS max_pos FROM attachments WHERE entity_type = 'service_ticket' AND entity_id = $1 AND organization_id = $2",
+        [ticket.id, ticket.organization_id]
       );
       const position = (posR.rows[0] && posR.rows[0].max_pos != null) ? Number(posR.rows[0].max_pos) + 1 : 0;
 
-      const ins = await pool.query(
-        // uploaded_by is NULL by design — this door is a logged-out crew
-        // member, so there is no user to attribute. organization_id is stamped
-        // from the PARENT TICKET row already in hand (loadTicketShare
-        // SELECTed it), never from the request. That is the same evidence the
-        // read path uses to resolve the tenant.
-        `INSERT INTO attachments (id, entity_type, entity_id, folder, filename, mime_type, size_bytes, width, height, thumb_url, web_url, original_url, thumb_key, web_key, original_key, position, uploaded_by, organization_id)
-         VALUES ($1,'service_ticket',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
-         RETURNING id, filename, thumb_url, web_url, original_url`,
-        [id, ticket.id, 'general', req.file.originalname, mime, buf.length, width, height,
-         thumbUrl, webUrl, originalUrl, thumbKey, webKey, originalKey, position, null,
-         ticket.organization_id]
-      );
+      let ins;
+      try {
+        ins = await pool.query(
+          // uploaded_by is NULL by design — this door is a logged-out crew
+          // member, so there is no user to attribute. organization_id is stamped
+          // from the PARENT TICKET row already in hand (loadTicketShare
+          // SELECTed it), never from the request. That is the same evidence the
+          // read path uses to resolve the tenant. client_upload_id stays the
+          // LAST parameter.
+          `INSERT INTO attachments (id, entity_type, entity_id, folder, filename, mime_type, size_bytes, width, height, thumb_url, web_url, original_url, thumb_key, web_key, original_key, position, uploaded_by, organization_id, uploaded_at, client_upload_id)
+           VALUES ($1,'service_ticket',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW(),$18)
+           RETURNING id, filename, thumb_url, web_url, original_url, uploaded_at`,
+          [id, ticket.id, 'general', req.file.originalname, mime, buf.length, width, height,
+           thumbUrl, webUrl, originalUrl, thumbKey, webKey, originalKey, position, null,
+           ticket.organization_id, uploadId]
+        );
+      } catch (e) {
+        if (!uploadId || !uploadDedupe.isUploadIdConflict(e)) throw e;
+        await uploadDedupe.discardKeys(storage, [thumbKey, webKey, originalKey]);
+        const winner = await findAgain();
+        if (!winner) throw e;
+        return res.json(sitePhotoAnswer(winner, true));
+      }
 
-      pool.query('UPDATE service_ticket_shares SET last_used_at = NOW() WHERE id = $1', [share.id])
-        .catch(function () {});
+      pool.query('UPDATE service_ticket_shares SET last_used_at = NOW() WHERE id = $1 AND organization_id = $2',
+        [share.id, ticket.organization_id]).catch(function () {});
       await logEvent(ticket, 'photo_added', {
         actorKind: 'share', shareId: share.id,
         actorLabel: share.recipient_name || share.recipient_email || null,
-        detail: { mime: mime },
+        // attachment_id is how Site photos names who added each photo.
+        detail: { mime: mime, attachment_id: ins.rows[0].id },
       });
 
-      res.json({ ok: true, attachment: ins.rows[0] });
+      res.json(sitePhotoAnswer(ins.rows[0], false));
     } catch (e) {
       console.error('[service-ticket-share] guest photo failed', e);
       res.status(500).json({ error: 'Something went wrong uploading that.' });
@@ -1514,6 +1855,14 @@ router.post('/service-ticket-share/:token/photo',
 //              org, a private to-do or an archived row answers the same 404.
 // Completing needs a completion photo, and the ticket follows its subtasks —
 // both inside workOrder.setSubtaskDone, the door the office checkbox uses too.
+//
+// crewGate below reads the ticket loadTicketShare loaded, before any lock: it
+// answers a view link or a closed work order without opening a transaction.
+// It is not the decision. The done door hands setSubtaskDone the same crew rule
+// as its gate (subtaskDoor.crewGate), which asks it again of the LOCKED row, so
+// an approval the office saves between the load and the lock refuses the tick
+// (409 work_order_locked) instead of finishing a building on an approved work
+// order.
 function crewGate(req, res) {
   if (!svc.scopeAllows(req.share.scope, 'respond')) {
     res.status(403).json({ error: 'This link is view-only.' });
@@ -1531,12 +1880,17 @@ function crewActor(share) {
   return { kind: 'share', shareId: share.id, label: share.recipient_name || share.recipient_email || null };
 }
 
+// The crew's name → the SHARE's recipient_name, write-once (recipient_name IS
+// NULL), because it labels every note already left. The one copy of that write:
+// the field report, the site photo, the building doors and the flag doors all
+// call it. The organization is the share row's own, as loaded by its token,
+// never anything in the request.
 async function applyCrewName(share, body) {
   const newName = svc.guestNameUpdate(share.recipient_name, body && body.name);
   if (newName) {
     await pool.query(
-      'UPDATE service_ticket_shares SET recipient_name = $1 WHERE id = $2 AND recipient_name IS NULL',
-      [newName, share.id]
+      'UPDATE service_ticket_shares SET recipient_name = $1 WHERE id = $2 AND organization_id = $3 AND recipient_name IS NULL',
+      [newName, share.id, share.organization_id]
     );
     share.recipient_name = newName;
   }
@@ -1553,17 +1907,26 @@ router.post('/service-ticket-share/:token/subtasks/:taskId/done',
         taskId: req.params.taskId,
         done: !!(req.body && req.body.done),
         actor: crewActor(share),
+        // The crew rule again, on the row setSubtaskDone holds locked.
+        gate: subtaskDoor.crewGate,
       });
-      if (!result.ok) return res.status(result.status).json({ error: result.error });
-      pool.query('UPDATE service_ticket_shares SET last_used_at = NOW() WHERE id = $1', [share.id])
-        .catch(function () {});
+      if (!result.ok) {
+        const refusal = { error: result.error };
+        if (result.code) refusal.code = result.code;
+        return res.status(result.status).json(refusal);
+      }
+      pool.query('UPDATE service_ticket_shares SET last_used_at = NOW() WHERE id = $1 AND organization_id = $2',
+        [share.id, req.ticket.organization_id]).catch(function () {});
       if (result.movedTo === 'work_complete') {
-        ticketNotify.notifyAwaitingApproval(pool, {
-          ticket: req.ticket,
+        // Not awaited, but tracked, so a deploy lets the send finish. The
+        // notice describes the LOCKED row as the door left it (its status after
+        // the recount), never the copy loadTicketShare read before the lock.
+        inflight.track(ticketNotify.notifyAwaitingApproval(pool, {
+          ticket: result.ticket,
           actor: crewActor(share),
           reason: 'all_subtasks_done',
           sharedBy: share.created_by,
-        });
+        }), 'ticket_approval');
       }
       res.json({ ok: true, done: result.task.status === 'done', ticket_status: result.ticketStatus });
     } catch (e) {
@@ -1583,10 +1946,11 @@ router.post('/service-ticket-share/:token/subtasks/:taskId/note',
         taskId: req.params.taskId,
         note: req.body && req.body.note,
         actor: crewActor(share),
+        clientRef: req.body && req.body.client_ref,
       });
       if (!result.ok) return res.status(result.status).json({ error: result.error });
-      pool.query('UPDATE service_ticket_shares SET last_used_at = NOW() WHERE id = $1', [share.id])
-        .catch(function () {});
+      pool.query('UPDATE service_ticket_shares SET last_used_at = NOW() WHERE id = $1 AND organization_id = $2',
+        [share.id, req.ticket.organization_id]).catch(function () {});
       res.json({ ok: true });
     } catch (e) {
       console.error('[service-ticket-share] subtask note failed', e);
@@ -1595,7 +1959,7 @@ router.post('/service-ticket-share/:token/subtasks/:taskId/note',
   });
 
 router.post('/service-ticket-share/:token/subtasks/:taskId/photo',
-  stShareIpLimiter, stShareWriteLimiter, loadTicketShare, upload.single('file'),
+  stShareIpLimiter, stShareWriteLimiter, loadTicketShare, multerOnePhoto,
   async (req, res) => {
     try {
       if (!crewGate(req, res)) return;
@@ -1605,6 +1969,22 @@ router.post('/service-ticket-share/:token/subtasks/:taskId/photo',
       const task = await workOrder.loadSubtask(pool, ticket, req.params.taskId);
       if (!task) return res.status(404).json({ error: 'That subtask is not on this work order.' });
       await applyCrewName(share, req.body);
+
+      // Idempotent like the site photo door (T3), deduped per org and per
+      // subtask — only once the subtask is proved to be this ticket's.
+      const uploadId = uploadDedupe.uploadIdFrom(req.body);
+      const findAgain = () => uploadDedupe.findUpload(pool, {
+        orgId: ticket.organization_id, entityType: 'task', entityId: task.id, uploadId: uploadId,
+      });
+      const duplicateAnswer = (row) => ({
+        ok: true,
+        duplicate: true,
+        photo: { id: row.id, kind: svc.photoKindOf(row.tags), thumb_url: row.thumb_url, web_url: row.web_url },
+      });
+      if (uploadId) {
+        const prior = await findAgain();
+        if (prior) return res.json(duplicateAnswer(prior));
+      }
 
       const kind = req.body && String(req.body.kind) === 'before' ? 'before' : 'completion';
       const id = 'att_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
@@ -1617,25 +1997,36 @@ router.post('/service-ticket-share/:token/subtasks/:taskId/photo',
       );
       const position = (posR.rows[0] && posR.rows[0].max_pos != null) ? Number(posR.rows[0].max_pos) + 1 : 0;
 
-      const ins = await pool.query(
-        // An ordinary TASK attachment — the same row the task modal shows — so
-        // the photo lives on the subtask it proves. uploaded_by NULL (a
-        // logged-out crew member); organization_id from the TICKET row in hand,
-        // never the request. The tag says before or completion.
-        `INSERT INTO attachments (id, entity_type, entity_id, folder, filename, mime_type, size_bytes, width, height, thumb_url, web_url, original_url, thumb_key, web_key, original_key, position, uploaded_by, organization_id, tags)
-         VALUES ($1,'task',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb)
-         RETURNING id, thumb_url, web_url`,
-        [id, task.id, 'general', req.file.originalname, img.mime, img.buf.length, img.width, img.height,
-         img.thumbUrl, img.webUrl, img.originalUrl, img.thumbKey, img.webKey, img.originalKey, position, null,
-         ticket.organization_id, JSON.stringify([kind])]
-      );
+      let ins;
+      try {
+        ins = await pool.query(
+          // An ordinary TASK attachment — the same row the task modal shows — so
+          // the photo lives on the subtask it proves. uploaded_by NULL (a
+          // logged-out crew member); organization_id from the TICKET row in hand,
+          // never the request. The tag says before or completion.
+          // client_upload_id is appended LAST ($19), so every earlier parameter
+          // keeps its place.
+          `INSERT INTO attachments (id, entity_type, entity_id, folder, filename, mime_type, size_bytes, width, height, thumb_url, web_url, original_url, thumb_key, web_key, original_key, position, uploaded_by, organization_id, tags, client_upload_id)
+           VALUES ($1,'task',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb,$19)
+           RETURNING id, thumb_url, web_url`,
+          [id, task.id, 'general', req.file.originalname, img.mime, img.buf.length, img.width, img.height,
+           img.thumbUrl, img.webUrl, img.originalUrl, img.thumbKey, img.webKey, img.originalKey, position, null,
+           ticket.organization_id, JSON.stringify([kind]), uploadId]
+        );
+      } catch (e) {
+        if (!uploadId || !uploadDedupe.isUploadIdConflict(e)) throw e;
+        await uploadDedupe.discardKeys(storage, [img.thumbKey, img.webKey, img.originalKey]);
+        const winner = await findAgain();
+        if (!winner) throw e;
+        return res.json(duplicateAnswer(winner));
+      }
 
-      pool.query('UPDATE service_ticket_shares SET last_used_at = NOW() WHERE id = $1', [share.id])
-        .catch(function () {});
+      pool.query('UPDATE service_ticket_shares SET last_used_at = NOW() WHERE id = $1 AND organization_id = $2',
+        [share.id, ticket.organization_id]).catch(function () {});
       await logEvent(ticket, 'photo_added', {
         actorKind: 'share', shareId: share.id,
         actorLabel: share.recipient_name || share.recipient_email || null,
-        detail: { task_id: task.id, kind: kind },
+        detail: { task_id: task.id, kind: kind, attachment_id: ins.rows[0].id },
       });
 
       res.json({ ok: true, photo: { id: ins.rows[0].id, kind: kind, thumb_url: ins.rows[0].thumb_url, web_url: ins.rows[0].web_url } });
@@ -1644,5 +2035,23 @@ router.post('/service-ticket-share/:token/subtasks/:taskId/photo',
       res.status(500).json({ error: 'Something went wrong uploading that.' });
     }
   });
+
+// ── Flag a problem (1.29) ───────────────────────────────────────────────
+// The three flag doors land on this router, with this file's own token
+// loader, crew gate, crew actor, name write and image pipeline, so a flag is
+// held to exactly the rules a building tick or a photo is. The photo door's
+// body parser is multerOnePhoto (413 / 408 in words a crew can act on), and
+// the flag module puts its own gate ahead of it, so a refused photo is never
+// buffered. Registration throws if any dependency is missing.
+require('./service-ticket-flag-routes').registerFlagRoutes(router, {
+  loadTicketShare,
+  crewGate,
+  crewActor,
+  applyCrewName,
+  storeShareImage,
+  upload: { single: () => multerOnePhoto },
+  ticketAccessOk,
+  loadOwnedTicket,
+});
 
 module.exports = router;

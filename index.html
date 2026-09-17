@@ -251,11 +251,21 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&display=swap">
     <link rel="stylesheet" href="css/vendor/leaflet.css?v=1">
-    <link rel="stylesheet" href="css/styles.css?v=320">
+    <link rel="stylesheet" href="css/styles.css?v=321">
     <link rel="stylesheet" href="css/report-style-packs.css?v=5">
     <link rel="stylesheet" href="css/workspace-layout.css?v=70">
     <link rel="stylesheet" href="css/workspace.css?v=41">
+    <!-- Work Orders (1.30): the office ticket editor, Review & approve, crew flags.
+         After styles.css and workspace-layout.css so they win at equal specificity. -->
+    <link rel="stylesheet" href="css/service-ticket-editor.css?v=2">
+    <link rel="stylesheet" href="css/work-order-review.css?v=1">
+    <link rel="stylesheet" href="css/service-ticket-flags.css?v=1">
+    <!-- Start a change order and Print / PDF on a work order (1.30), and the
+         From work order card in the change order editor. -->
+    <link rel="stylesheet" href="css/service-ticket-co-print.css?v=1">
     <link rel="stylesheet" href="css/schedule.css?v=38">
+    <!-- The Service Tickets page (js/work-orders-board.js). -->
+    <link rel="stylesheet" href="css/work-orders-board.css?v=2">
     <!-- Accidental-edit protection layer. Two attribute-driven gates
          ([data-edit-gate], [data-row-edit-gate]) lock form inputs
          behind a pencil toggle / row-tap so stray taps can't mutate
@@ -685,7 +695,7 @@
                             </div>
                         </div>
                         <!-- Service Tickets — every work order the caller may see, across
-                             jobs and leads (js/service-tickets-page.js). data-cap is any-of and
+                             jobs and leads (js/work-orders-board.js). data-cap is any-of and
                              mirrors listVisibility in server/services/service-ticket-access.js:
                              the edit capabilities alone list nothing, so they do not show it. -->
                         <button class="tab-btn" data-tab="service-tickets" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED LEADS_VIEW" data-p86-icon="daily-logs" title="Service Tickets — every work order across your jobs and leads"><span class="app-nav-label">Service Tickets</span></button>
@@ -1525,7 +1535,7 @@
                 </div>
 
                 <!-- Service Tickets — switchTab('service-tickets') mounts
-                     js/service-tickets-page.js window.p86ServiceTicketsPage.render() here. -->
+                     js/work-orders-board.js window.p86WorkOrdersBoard.render() here. -->
                 <div id="service-tickets" class="tab-content">
                     <div id="serviceTicketsHost"></div>
                 </div>
@@ -3482,7 +3492,7 @@
          order, coalesced by entity type and never over a focused editor.
          Every entry resolves its renderers off window at CALL time, so this
          can load early without caring what has defined itself yet. -->
-    <script src="js/refresh.js?v=6"></script>
+    <script src="js/refresh.js?v=8"></script>
     <script src="js/geolocation.js?v=1"></script>
     <script src="js/assembly-formula.js?v=1"></script>
     <!-- The ONE job-label formatter (window.p86JobLabel): jobNumber + ' ' +
@@ -3505,7 +3515,7 @@
          server can never be two opinions. Pure math, no DOM. Loads before
          nodegraph/ui.js (the CO editor) and js/job-audit.js (R12). -->
     <script src="js/co-draw.js?v=1"></script>
-    <script src="js/api.js?v=100"></script>
+    <script src="js/api.js?v=101"></script>
     <!-- Multi-market M1: client-side markets cache. Must load BEFORE any
          surface whose picker calls window.p86MarketNames() (jobs.js). -->
     <script src="js/markets.js?v=7"></script>
@@ -3514,7 +3524,7 @@
          self-contained — it SUMS getJobWIP(), deriving no money itself. -->
     <script src="js/market-pnl.js?v=4"></script>
     <script src="js/header-weather.js?v=3"></script>
-    <script src="js/account.js?v=9"></script>
+    <script src="js/account.js?v=10"></script>
     <script src="js/voice-input.js?v=11"></script>
     <script src="js/voice-output.js?v=5"></script>
     <script src="js/attachments.js?v=30"></script>
@@ -3569,7 +3579,7 @@
     <script src="js/job-costs-import.js?v=17"></script>
     <script src="js/qb-costs-view.js?v=25"></script>
     <script src="js/insights.js?v=14"></script>
-    <script src="js/schedule.js?v=53"></script>
+    <script src="js/schedule.js?v=54"></script>
     <script src="js/my-day.js?v=9"></script>
     <!-- Shared entity card (job/lead/estimate Pulse card) — window.p86EntityCard.
          Loads before its callers (entities-map.js, workspace-layout.js). -->
@@ -3580,7 +3590,7 @@
          app.js: loadData consults p86SaveMerge.shouldVetoHydrate() on the very
          first hydrate. -->
     <script src="js/save-merge.js?v=5"></script>
-    <script src="js/app.js?v=159"></script>
+    <script src="js/app.js?v=161"></script>
     <!-- The visible signal for a write that has not reached the server.
          Loads AFTER app.js so window.p86PushStatus exists to subscribe to. -->
     <script src="js/save-banner.js?v=3"></script>
@@ -3596,11 +3606,11 @@
     <script src="js/email-hub.js?v=27"></script>
     <script src="js/agent-tasks.js?v=14"></script>
     <script src="js/crew-chip.js?v=2"></script>
-    <script src="js/file-explorer.js?v=17"></script>
+    <script src="js/file-explorer.js?v=18"></script>
     <script src="js/my-files.js?v=28"></script>
     <!-- Tasks / To-Do UI. Loads after my-files.js (reuses window.p86Toast)
          and after api.js/auth.js (p86Api.tasks + p86Auth). -->
-    <script src="js/tasks.js?v=28"></script>
+    <script src="js/tasks.js?v=29"></script>
     <!-- Google Maps JS API loader + tag-icon registry for photo pins.
          Both load before projects-map.js so the map renderer can
          reference window.p86Maps + window.p86TagIcons. -->
@@ -3659,8 +3669,6 @@
          RFIs / Submittals) for the Jobs sidebar dropdown. Uses p86Api +
          appData.jobs + editJob/switchJobSubTab at runtime. -->
     <script src="js/jobs-hub.js?v=27"></script>
-    <!-- Service Tickets page — the org-wide work-order list (#service-tickets). -->
-    <script src="js/service-tickets-page.js?v=1"></script>
     <script src="js/assembly-studio.js?v=4"></script>
     <script src="js/materials-consolidate.js?v=1"></script>
     <!-- Purchase Order editor — full-window overlay opened from the Jobs
@@ -3695,7 +3703,7 @@
     <script src="js/progress-core.js?v=1"></script>
     <script src="js/co-completion.js?v=1"></script>
     <script src="js/progress.js?v=4"></script>
-    <script src="js/jobs.js?v=245"></script>
+    <script src="js/jobs.js?v=247"></script>
     <script src="js/doc-import.js?v=8"></script>
     <script src="js/job-workflow-ui.js?v=7"></script>
     <!-- Job sidebar Files + Photos tabs (renderJobFiles / renderJobPhotos).
@@ -3706,7 +3714,27 @@
          job-media.js above: after api.js and jobs.js so p86Api and appData
          exist, and BEFORE workspace-layout.js, which reads the renderer name
          out of its dispatch maps when a tab is activated. -->
-    <script src="js/service-tickets.js?v=19"></script>
+    <!-- Work Orders (1.30): what js/service-tickets.js builds on, so BEFORE it and before any
+         module that registers with window.p86StExt: the extension registry, the
+         status mover, the photo upload queue and the office editor kit. -->
+    <script src="js/service-ticket-ext.js?v=1"></script>
+    <script src="js/service-ticket-status-move.js?v=1"></script>
+    <script src="js/photo-upload-queue.js?v=1"></script>
+    <!-- Office photo uploads through that queue, and Site photos (registers with p86StExt). -->
+    <script src="js/work-order-uploads.js?v=1"></script>
+    <script src="js/service-ticket-editor.js?v=1"></script>
+    <script src="js/service-tickets.js?v=22"></script>
+    <!-- The Service Tickets page (#service-tickets, window.p86WorkOrdersBoard), then the
+         modules that register with window.p86StExt: Review & approve, notice banners, flags. -->
+    <script src="js/work-orders-board.js?v=2"></script>
+    <script src="js/work-order-review.js?v=1"></script>
+    <script src="js/work-order-notices.js?v=1"></script>
+    <script src="js/service-ticket-flags.js?v=1"></script>
+    <!-- Start change order, then Print / PDF (work order and completion report). Both
+         register with p86StExt; the change order module opens window.p86ChangeOrders
+         (js/change-order-editor.js, below) only when clicked. -->
+    <script src="js/service-ticket-co.js?v=1"></script>
+    <script src="js/service-ticket-print.js?v=2"></script>
     <!-- Reusable rich-text field (window.p86RichText) — shared WYSIWYG for
          Scope / Terms / notes / proposals / reports. Load before the editors
          that mount it. -->
@@ -3718,7 +3746,7 @@
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which
          carries the window.p86Api.changeOrders wrapper). -->
-    <script src="js/change-order-editor.js?v=35"></script>
+    <script src="js/change-order-editor.js?v=36"></script>
     <script src="js/materials-drawer.js?v=15"></script>
     <script src="js/estimate-doc-layouts.js?v=1"></script>
     <script src="js/estimate-preview.js?v=18"></script>
@@ -3750,12 +3778,12 @@
 
     <script src="js/workspace.js?v=56"></script>
     <script src="js/workspace-gc.js?v=1"></script>
-    <script src="js/workspace-layout.js?v=112"></script>
+    <script src="js/workspace-layout.js?v=113"></script>
 
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
          before the router wraps them. -->
-    <script src="js/router.js?v=35"></script>
+    <script src="js/router.js?v=37"></script>
 
     <!-- Sidebar Recents — client-side recently-opened list. Loads after
          router.js + the entity-open modules so it can wrap editJob /

@@ -870,6 +870,18 @@ function renderJobsMain() {
                     'title="Change-order COST, and what carries it. Uncommitted cost accrues nothing — projected cost understates this job by that amount.">' +
                     '<span style="color:var(--text-dim,#888);">CO cost</span>' + bits.join('') + '</div>';
             }
+            // 1.29: a change order started from a work order names it under
+            // its title. data.fromWorkOrder is written by the server only
+            // (services/service-ticket-change-order.js) and holds no money.
+            function fromWorkOrderLine(c) {
+                var link = c && c.fromWorkOrder;
+                if (typeof link === 'string') { try { link = JSON.parse(link); } catch (e) { link = null; } }
+                if (!link || typeof link !== 'object' || link.ticketId == null) return '';
+                var name = String(link.ticketTitle || '').trim() || 'Work order';
+                var building = link.source && link.source.building != null ? String(link.source.building).trim() : '';
+                return '<div class="p86-co-row-from-wo" style="margin-top:2px;font-size:11px;color:var(--text-dim,#888);">' +
+                    'From work order: ' + escapeHTML(name) + (building ? ' · ' + escapeHTML(building) : '') + '</div>';
+            }
             var bodyHTML;
             if (!rows.length) {
                 bodyHTML =
@@ -881,7 +893,7 @@ function renderJobsMain() {
                     var total = coTotal(c);
                     return '<tr class="overview-row" style="cursor:pointer;border-bottom:1px solid var(--overlay-light,rgba(255,255,255,0.04));" data-co-open="' + escapeHTML(c.id) + '" title="Click to open">' +
                         '<td style="white-space:nowrap;padding:8px 10px;"><strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(c.co_number || 'CO') + '</strong></td>' +
-                        '<td style="padding:8px 10px;font-size:12.5px;color:var(--text,#fff);">' + escapeHTML(c.title || '(untitled)') + '</td>' +
+                        '<td style="padding:8px 10px;font-size:12.5px;color:var(--text,#fff);">' + escapeHTML(c.title || '(untitled)') + fromWorkOrderLine(c) + '</td>' +
                         '<td style="white-space:nowrap;padding:8px 10px;">' + statusBadge(c.status || 'draft') + '</td>' +
                         '<td class="num" style="text-align:right;white-space:nowrap;padding:8px 10px;font-family:inherit;font-size:13px;color:var(--green,#34d399);font-weight:600;">' + formatCurrency(total) + '</td>' +
                         '<td style="white-space:nowrap;padding:8px 10px;font-size:11px;">' + costCell(c) + '</td>' +
@@ -2860,15 +2872,77 @@ function renderJobsMain() {
             if (!window.p86Api || !window.p86Api.isAuthenticated()) {
                 return Promise.resolve({ ok: ids.slice(), failed: [] });
             }
-            var ok = [], failed = [];
-            return Promise.all(ids.map(function(id) {
-                return window.p86Api.jobs.remove(id)
+            var ok = [], failed = [], withTickets = [];
+            // THE one server call. confirm = the closed/cancelled/archived
+            // ticket count the user agreed to lose (second pass only).
+            function removeOne(id, confirm) {
+                var opts = confirm != null ? { confirmClosedTickets: confirm } : undefined;
+                return window.p86Api.jobs.remove(id, opts)
                     .then(function() { ok.push(id); })
                     .catch(function(err) {
                         if (err && err.status === 404) { ok.push(id); return; }   // already gone
+                        var data = (err && err.data) || null;
+                        if (confirm == null && err && err.status === 409 && data &&
+                                data.code === 'CLOSED_TICKETS' && data.tickets) {
+                            withTickets.push({ id: id, tickets: data.tickets });
+                            return;
+                        }
+                        // OPEN_TICKETS (and a count that changed since the
+                        // confirm) land here with the server's own sentence.
                         failed.push({ id: id, message: (err && err.message) || 'unknown error' });
                     });
-            })).then(function() { return { ok: ok, failed: failed }; });
+            }
+            return Promise.all(ids.map(function(id) { return removeOne(id); }))
+                .then(function() {
+                    if (!withTickets.length) return;
+                    // Closed work orders go with the job only when the user
+                    // says so, once for the whole batch.
+                    return _confirmDelete('service tickets', closedTicketsConfirm(withTickets))
+                        .then(function(yes) {
+                            if (!yes) {
+                                withTickets.forEach(function(w) {
+                                    failed.push({ id: w.id, message: 'Not deleted — it has service tickets you chose to keep.' });
+                                });
+                                return;
+                            }
+                            return Promise.all(withTickets.map(function(w) {
+                                return removeOne(w.id, w.tickets.total);
+                            }));
+                        });
+                })
+                .then(function() { return { ok: ok, failed: failed }; });
+        }
+        // The wording of the one "Delete service tickets too?" question.
+        // p86Confirm escapes the message, so it is passed as plain text.
+        function closedTicketsConfirm(withTickets) {
+            var plural = function(n, one, many) { return n === 1 ? one : many; };
+            if (withTickets.length === 1) {
+                var t = withTickets[0].tickets || {};
+                var n = Number(t.total) || 0;
+                var j = (appData.jobs || []).find(function(x) { return x.id === withTickets[0].id; });
+                var name = (j && (j.title || j.name)) || withTickets[0].id;
+                var parts = [];
+                if (t.closed) parts.push(t.closed + ' closed');
+                if (t.cancelled) parts.push(t.cancelled + ' cancelled');
+                if (t.archived) parts.push(t.archived + ' archived');
+                return {
+                    title: 'Delete service tickets too?',
+                    message: '"' + name + '" has ' + n + ' service ' + plural(n, 'ticket', 'tickets') +
+                        ' that ' + plural(n, 'is', 'are') + ' closed, cancelled or archived' +
+                        (parts.length ? ' (' + parts.join(', ') + ')' : '') +
+                        '. Deleting the job deletes ' + plural(n, 'it', 'them') + ' for good, with ' +
+                        plural(n, 'its', 'their') + ' approval history, timeline and crew links. This cannot be undone.',
+                    confirmLabel: 'Delete job and ' + n + ' ' + plural(n, 'ticket', 'tickets')
+                };
+            }
+            var total = withTickets.reduce(function(sum, w) { return sum + (Number(w.tickets && w.tickets.total) || 0); }, 0);
+            return {
+                title: 'Delete service tickets too?',
+                message: withTickets.length + ' of these jobs have closed, cancelled or archived service tickets (' +
+                    total + ' in total). Deleting those jobs deletes the tickets for good, with their approval history, ' +
+                    'timeline and crew links. This cannot be undone.',
+                confirmLabel: 'Delete them too'
+            };
         }
         function reportJobDeleteFailures(failed) {
             if (!failed || !failed.length) return;

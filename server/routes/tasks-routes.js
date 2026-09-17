@@ -42,6 +42,14 @@ const { sendEmail } = require('../email');
 const emailSender = require('../email-sender');
 // The one job-label formatter, shared with the browser (window.p86JobLabel).
 const jobLabel = require('../../js/job-label');
+// A task with service_ticket_id is a BUILDING ON A WORK ORDER. Finishing,
+// reopening, adding, moving, unlinking or archiving one goes through the same
+// rules the office checkbox and the crew link use: the ticket is locked, the
+// caller's right to it is decided (subtaskDoor), and completing, the timeline
+// and the ticket's own status happen in services/service-ticket-workorder.js.
+const svc = require('../services/service-tickets');
+const workOrder = require('../services/service-ticket-workorder');
+const subtaskDoor = require('../services/service-ticket-subtask-door');
 
 const router = express.Router();
 
@@ -307,6 +315,39 @@ async function serviceTicketOk(orgId, ticketId) {
   return rows.length > 0;
 }
 
+// The office user as a timeline actor on a work order.
+function userActor(req) {
+  return { kind: 'user', userId: (req.user && req.user.id) || null, label: (req.user && req.user.name) || null };
+}
+
+// One transaction on its own client. `work(client)` answers { refusal } to
+// roll back (nothing it wrote survives) or anything else to commit. A throw
+// rolls back and rethrows.
+async function inTransaction(work) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const out = await work(client);
+    await client.query(out && out.refusal ? 'ROLLBACK' : 'COMMIT');
+    return out;
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch (_) { /* the throw is the news */ }
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+function sendRefusal(res, refusal) {
+  const body = { error: refusal.error };
+  if (refusal.code) body.code = refusal.code;
+  return res.status(refusal.status || 409).json(body);
+}
+
+function workOrderOut(ticket, moved) {
+  return { ticket_id: ticket.id, ticket_status: moved.ticketStatus, moved_to: moved.movedTo || null };
+}
+
 // ──────────────────────────────────────────────────────────────────
 // GET /api/tasks
 // Query params:
@@ -536,16 +577,52 @@ router.post('/', requireAuth, async (req, res) => {
     // If created already-done, stamp completed_at.
     if (body.status === 'done') { cols.push('completed_at'); vals.push('NOW()'); }
 
+    // A BUILDING ADDED TO A WORK ORDER. Written as an org subtask that starts
+    // open (both stated, never left to a column default), under the ticket's
+    // lock, by someone who can edit the ticket's job or lead, and only while
+    // the ticket is not approved, closed or cancelled. It is a timeline line,
+    // and a ticket awaiting approval goes back to In progress. A personal
+    // to-do hanging off a ticket is its owner's and never a subtask.
+    const onWorkOrder = !wantPersonal && !!body.service_ticket_id;
+    if (onWorkOrder) {
+      if (cols.indexOf('status') < 0) { cols.push('status'); vals.push("'open'"); }
+      cols.push('scope'); vals.push("'org'");
+    }
+
     const sql = 'INSERT INTO tasks (' + cols.join(', ') + ') VALUES (' + vals.join(', ') + ') RETURNING *';
-    const { rows } = await pool.query(sql, params);
-    const task = rows[0];
+    let task;
+    let workOrderResult = null;
+    if (onWorkOrder) {
+      const ticketId = String(body.service_ticket_id);
+      const actor = userActor(req);
+      const out = await inTransaction(async (client) => {
+        const ticket = (await subtaskDoor.lockTickets(client, orgId, [ticketId])).get(ticketId);
+        if (!ticket) return { refusal: { status: 400, error: 'Invalid service ticket' } };
+        const verdict = await subtaskDoor.structureVerdict(client, { user: req.user, orgId, ticket });
+        if (!verdict.ok) return { refusal: verdict };
+        if (String(body.status) === 'done') {
+          return { refusal: { status: 409, error: subtaskDoor.MSG.startsOpen, code: 'subtask_starts_open' } };
+        }
+        const inserted = (await client.query(sql, params)).rows[0];
+        await workOrder.insertEvent(client, ticket, 'task_added', actor,
+          { task_id: inserted.id, title: String(inserted.title || '').slice(0, 200) }, { strict: true });
+        const moved = await workOrder.recountTicket(client, ticket, actor, 'subtask_added');
+        return { task: inserted, workOrder: workOrderOut(ticket, moved) };
+      });
+      if (out.refusal) return sendRefusal(res, out.refusal);
+      task = out.task;
+      workOrderResult = out.workOrder;
+    } else {
+      const { rows } = await pool.query(sql, params);
+      task = rows[0];
+    }
 
     // Notify on assignment to someone other than the creator.
     if (task.assignee_user_id && Number(task.assignee_user_id) !== Number(req.user.id)) {
       maybeNotifyAssignee(task, req.user.id, { reason: 'created' });
     }
 
-    res.json({ task: task });
+    res.json(workOrderResult ? { task: task, work_order: workOrderResult } : { task: task });
   } catch (e) {
     console.error('POST /api/tasks error:', e);
     res.status(500).json({ error: 'Server error' });
@@ -569,6 +646,41 @@ router.patch('/:id', requireAuth, async (req, res) => {
     if (!prior.rowCount) return res.status(404).json({ error: 'Task not found' });
     const before = prior.rows[0];
 
+    // THE PUNCH-LIST DOOR. A change to done-ness on a building of a work order,
+    // or putting a task on, moving it between or taking it off a work order,
+    // does not write the task directly: it runs under the tickets' locks with
+    // the rules the office checkbox and the crew link use (see the header of
+    // services/service-ticket-subtask-door.js). Everything else a PATCH carries
+    // — title, notes, due date, the link itself — is still the generic UPDATE
+    // below, run on the same transaction.
+    const has = (k) => Object.prototype.hasOwnProperty.call(body, k);
+    const statusIn = has('status') && STATUSES.has(String(body.status)) ? String(body.status) : null;
+    const finalStatus = statusIn || before.status;
+    const touchesDone = (finalStatus === 'done') !== (before.status === 'done');
+    const oldTicketId = before.service_ticket_id != null && before.service_ticket_id !== '' ? String(before.service_ticket_id) : null;
+    const sentTicketId = has('service_ticket_id') && body.service_ticket_id != null && body.service_ticket_id !== ''
+      ? String(body.service_ticket_id) : null;
+    const newTicketId = has('service_ticket_id') ? sentTicketId : oldTicketId;
+    const linkChange = has('service_ticket_id') && sentTicketId !== oldTicketId;
+    const onWorkOrder = !!(newTicketId || oldTicketId);
+    // Any status write and any reassignment on a building also runs under the
+    // ticket lock: the status so it is decided on the task row as it is under
+    // the lock, not as it was read above (A10 — a crew tick landing in between
+    // would otherwise be written over); the assignee because the assignee may
+    // finish a building (doneVerdict), so naming one is a ticket writer's call.
+    const assignRaw = has('assignee_user_id') ? body.assignee_user_id : undefined;
+    const assignTo = assignRaw === undefined ? undefined
+      : ((assignRaw === '' || assignRaw == null) ? null : Number(assignRaw));
+    const assignChange = assignTo !== undefined && (assignTo === null || Number.isInteger(assignTo)) &&
+      Number(before.assignee_user_id) !== Number(assignTo);
+    const statusChange = !!statusIn && statusIn !== before.status;
+    const throughDoor = before.scope === 'org' && !before.archived_at &&
+      ((touchesDone && onWorkOrder) || linkChange || (onWorkOrder && (statusChange || assignChange)));
+    // The door owns status and completed_at when done-ness changes on a task
+    // that ends up on a work order. A task being taken OFF one keeps the
+    // generic status write, because it is no longer a subtask afterwards.
+    const doorOwnsDone = throughDoor && touchesDone && !!newTicketId;
+
     const sets = [];
     const params = [];
     let pn = 1;
@@ -587,6 +699,7 @@ router.patch('/:id', requireAuth, async (req, res) => {
         if (!KINDS.has(String(val))) continue; val = String(val);
       } else if (key === 'status') {
         if (!STATUSES.has(String(val))) continue; val = String(val);
+        if (doorOwnsDone) continue;
       } else if (key === 'priority') {
         if (!PRIORITIES.has(String(val))) continue; val = String(val);
       } else if (key === 'due_date') {
@@ -637,7 +750,7 @@ router.patch('/:id', requireAuth, async (req, res) => {
     }
 
     // completed_at bookkeeping — sync with status transitions.
-    if (Object.prototype.hasOwnProperty.call(body, 'status') && STATUSES.has(String(body.status))) {
+    if (!doorOwnsDone && has('status') && STATUSES.has(String(body.status))) {
       if (String(body.status) === 'done' && before.status !== 'done') {
         sets.push('completed_at = NOW()');
       } else if (String(body.status) !== 'done' && before.status === 'done') {
@@ -645,24 +758,144 @@ router.patch('/:id', requireAuth, async (req, res) => {
       }
     }
 
-    if (!sets.length) return res.json({ task: before });
-    sets.push('updated_at = NOW()');
-
-    params.push(req.params.id, orgId, Number(req.user.id));
-    const sql =
-      'UPDATE tasks SET ' + sets.join(', ') +
-      ' WHERE id = $' + (pn++) + ' AND organization_id = $' + (pn++) +
-      "   AND (scope = 'org' OR (scope = 'personal' AND owner_user_id = $" + (pn++) + '))' +
-      ' RETURNING *';
-    const r = await pool.query(sql, params);
-    if (!r.rowCount) return res.status(404).json({ error: 'Task not found' });
-    const task = r.rows[0];
-
-    if (assigneeChangedTo != null && Number(assigneeChangedTo) !== Number(req.user.id)) {
-      maybeNotifyAssignee(task, req.user.id, { reason: 'reassigned' });
+    if (!sets.length && !throughDoor) return res.json({ task: before });
+    // An org task that was on no work order when it was read writes its status
+    // or assignee without the lock, so the write only lands if it is STILL on
+    // none: a task put on a work order in between is a building now, and its
+    // status and assignee are the door's to decide.
+    const stillUnlinked = !throughDoor && before.scope === 'org' && !before.archived_at && !oldTicketId &&
+      (statusChange || assignChange);
+    let sql = null;
+    if (sets.length) {
+      sets.push('updated_at = NOW()');
+      params.push(req.params.id, orgId, Number(req.user.id));
+      sql =
+        'UPDATE tasks SET ' + sets.join(', ') +
+        ' WHERE id = $' + (pn++) + ' AND organization_id = $' + (pn++) +
+        "   AND (scope = 'org' OR (scope = 'personal' AND owner_user_id = $" + (pn++) + '))' +
+        (stillUnlinked ? ' AND service_ticket_id IS NULL' : '') +
+        ' RETURNING *';
     }
 
-    res.json({ task: task });
+    if (!throughDoor) {
+      const r = await pool.query(sql, params);
+      if (!r.rowCount && stillUnlinked) return sendRefusal(res, subtaskDoor.stale());
+      if (!r.rowCount) return res.status(404).json({ error: 'Task not found' });
+      const task = r.rows[0];
+
+      if (assigneeChangedTo != null && Number(assigneeChangedTo) !== Number(req.user.id)) {
+        maybeNotifyAssignee(task, req.user.id, { reason: 'reassigned' });
+      }
+
+      return res.json({ task: task });
+    }
+
+    const actor = userActor(req);
+    const out = await inTransaction(async (client) => {
+      const locked = await subtaskDoor.lockTickets(client, orgId, [oldTicketId, newTicketId]);
+      const oldTicket = oldTicketId ? (locked.get(oldTicketId) || null) : null;
+      const newTicket = newTicketId ? (locked.get(newTicketId) || null) : null;
+      if (newTicketId && !newTicket) return { refusal: { status: 400, error: 'Invalid service ticket' } };
+
+      // The task as it is NOW, under the tickets' locks. Every door that
+      // changes a building locks its ticket first, so no other door can move,
+      // finish or reopen this row between this read and COMMIT. If one did so
+      // between the read above and the lock, what this request decided from
+      // `before` is stale: refuse, never write over it.
+      const fresh = await client.query(
+        'SELECT * FROM tasks WHERE id = $1 AND organization_id = $2' +
+        "   AND (scope = 'org' OR (scope = 'personal' AND owner_user_id = $3)) FOR UPDATE",
+        [before.id, orgId, Number(req.user.id)]
+      );
+      if (!fresh.rows[0]) return { refusal: { status: 404, error: 'Task not found' } };
+      if (subtaskDoor.taskShifted(before, fresh.rows[0])) return { refusal: subtaskDoor.stale() };
+      const current = fresh.rows[0];
+
+      if (linkChange) {
+        for (const t of [oldTicket, newTicket]) {
+          if (!t) continue;
+          const verdict = await subtaskDoor.structureVerdict(client, { user: req.user, orgId, ticket: t });
+          if (!verdict.ok) return { refusal: verdict };
+        }
+        if (newTicket && finalStatus === 'done') {
+          const photos = (await workOrder.taskPhotosByTask(client, orgId, [before.id])).get(String(before.id)) || [];
+          if (!svc.subtaskMayComplete(photos).ok) {
+            return { refusal: { status: 409, error: subtaskDoor.MSG.doneNeedsPhoto, code: 'completion_photo_required' } };
+          }
+        }
+      } else {
+        // Not a link change, so newTicket is the ticket the task is on.
+        if (touchesDone) {
+          const verdict = await subtaskDoor.doneVerdict(client, { user: req.user, orgId, ticket: newTicket, task: current });
+          if (!verdict.ok) return { refusal: verdict };
+        }
+        if (assignChange) {
+          const verdict = await subtaskDoor.assignVerdict(client, { user: req.user, orgId, ticket: newTicket });
+          if (!verdict.ok) return { refusal: verdict };
+        }
+      }
+
+      let task = current;
+      if (sql) {
+        const r = await client.query(sql, params);
+        if (!r.rowCount) return { refusal: { status: 404, error: 'Task not found' } };
+        task = r.rows[0];
+      }
+
+      const title = String(before.title || '').slice(0, 200);
+      if (linkChange && oldTicket) {
+        await workOrder.insertEvent(client, oldTicket, 'task_removed', actor,
+          { task_id: before.id, title, reason: newTicket ? 'moved' : 'unlinked' }, { strict: true });
+      }
+      if (linkChange && newTicket) {
+        await workOrder.insertEvent(client, newTicket, 'task_added', actor,
+          { task_id: before.id, title }, { strict: true });
+      }
+
+      const moves = [];
+      let summary = null;
+      if (doorOwnsDone) {
+        const result = await workOrder.setSubtaskDone(client, {
+          ticket: newTicket, taskId: before.id, done: finalStatus === 'done', actor,
+        });
+        if (!result.ok) return { refusal: result };
+        moves.push({ ticket: result.ticket, movedTo: result.movedTo });
+        summary = workOrderOut(newTicket, result);
+        // Reopening lands on 'open'; a PATCH that asked for In progress or
+        // Blocked gets that status on top.
+        if (finalStatus === 'in_progress' || finalStatus === 'blocked') {
+          await client.query(
+            'UPDATE tasks SET status = $1, updated_at = NOW() WHERE id = $2 AND organization_id = $3',
+            [finalStatus, before.id, orgId]
+          );
+        }
+      } else if (linkChange && newTicket) {
+        const moved = await workOrder.recountTicket(client, newTicket, actor, 'subtask_added');
+        moves.push({ ticket: Object.assign({}, newTicket, { status: moved.ticketStatus }), movedTo: moved.movedTo });
+        summary = workOrderOut(newTicket, moved);
+      }
+      if (linkChange && oldTicket) {
+        const moved = await workOrder.recountTicket(client, oldTicket, actor, 'subtask_removed');
+        moves.push({ ticket: Object.assign({}, oldTicket, { status: moved.ticketStatus }), movedTo: moved.movedTo });
+        if (!summary) summary = workOrderOut(oldTicket, moved);
+      }
+
+      const again = await client.query(
+        'SELECT * FROM tasks WHERE id = $1 AND organization_id = $2' +
+        "   AND (scope = 'org' OR (scope = 'personal' AND owner_user_id = $3))",
+        [before.id, orgId, Number(req.user.id)]
+      );
+      return { task: again.rows[0] || task, moves, workOrder: summary };
+    });
+    if (out.refusal) return sendRefusal(res, out.refusal);
+
+    // After COMMIT only: the last building done tells the approvers.
+    subtaskDoor.notifyMoves(out.moves, actor, null);
+    if (assigneeChangedTo != null && Number(assigneeChangedTo) !== Number(req.user.id)) {
+      maybeNotifyAssignee(out.task, req.user.id, { reason: 'reassigned' });
+    }
+
+    res.json(out.workOrder ? { task: out.task, work_order: out.workOrder } : { task: out.task });
   } catch (e) {
     console.error('PATCH /api/tasks/:id error:', e);
     res.status(500).json({ error: 'Server error' });
@@ -674,12 +907,58 @@ router.delete('/:id', requireAuth, async (req, res) => {
   try {
     const orgId = callerOrgId(req);
     if (!orgId) return res.status(404).json({ error: 'Task not found' });
-    const r = await pool.query(
-      'UPDATE tasks SET archived_at = NOW(), updated_at = NOW() ' +
-      ' WHERE id = $1 AND organization_id = $2 AND archived_at IS NULL' +
+    // Archiving a BUILDING takes it off its work order's punch list: the same
+    // write rule as adding one, a timeline line, and a recount — archiving the
+    // last open building finishes the work order and tells the approvers.
+    const prior = await pool.query(
+      'SELECT * FROM tasks WHERE id = $1 AND organization_id = $2 AND archived_at IS NULL' +
       "   AND (scope = 'org' OR (scope = 'personal' AND owner_user_id = $3))",
       [req.params.id, orgId, Number(req.user.id)]
     );
+    const before = prior.rows[0];
+    if (before && subtaskDoor.isWorkOrderSubtask(before)) {
+      const actor = userActor(req);
+      const ticketId = String(before.service_ticket_id);
+      const out = await inTransaction(async (client) => {
+        const ticket = (await subtaskDoor.lockTickets(client, orgId, [ticketId])).get(ticketId);
+        if (!ticket) return { refusal: { status: 404, error: 'Task not found' } };
+        const verdict = await subtaskDoor.structureVerdict(client, { user: req.user, orgId, ticket });
+        if (!verdict.ok) return { refusal: verdict };
+        // Only while it is still on the ticket just locked: a building moved to
+        // another work order in between would come off that one unrecounted.
+        const r = await client.query(
+          'UPDATE tasks SET archived_at = NOW(), updated_at = NOW() ' +
+          ' WHERE id = $1 AND organization_id = $2 AND archived_at IS NULL' +
+          "   AND (scope = 'org' OR (scope = 'personal' AND owner_user_id = $3))" +
+          '   AND service_ticket_id = $4',
+          [req.params.id, orgId, Number(req.user.id), ticketId]
+        );
+        if (!r.rowCount) return { refusal: subtaskDoor.stale() };
+        await workOrder.insertEvent(client, ticket, 'task_removed', actor,
+          { task_id: before.id, title: String(before.title || '').slice(0, 200), reason: 'archived' }, { strict: true });
+        const moved = await workOrder.recountTicket(client, ticket, actor, 'subtask_removed');
+        return {
+          moves: [{ ticket: Object.assign({}, ticket, { status: moved.ticketStatus }), movedTo: moved.movedTo }],
+          workOrder: workOrderOut(ticket, moved),
+        };
+      });
+      if (out.refusal) return sendRefusal(res, out.refusal);
+      subtaskDoor.notifyMoves(out.moves, actor, null);
+      return res.json({ ok: true, work_order: out.workOrder });
+    }
+
+    // An org task read on no work order is archived only if it is still on
+    // none — one put on a work order in between is a building, and archiving
+    // it is the door's.
+    const stillUnlinked = !!before && before.scope === 'org' && before.service_ticket_id == null;
+    const r = await pool.query(
+      'UPDATE tasks SET archived_at = NOW(), updated_at = NOW() ' +
+      ' WHERE id = $1 AND organization_id = $2 AND archived_at IS NULL' +
+      "   AND (scope = 'org' OR (scope = 'personal' AND owner_user_id = $3))" +
+      (stillUnlinked ? ' AND service_ticket_id IS NULL' : ''),
+      [req.params.id, orgId, Number(req.user.id)]
+    );
+    if (!r.rowCount && stillUnlinked) return sendRefusal(res, subtaskDoor.stale());
     if (!r.rowCount) return res.status(404).json({ error: 'Task not found' });
     res.json({ ok: true });
   } catch (e) {

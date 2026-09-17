@@ -1335,12 +1335,18 @@
           var t = byId[id];
           var next = (t && t.status === 'done') ? 'open' : 'done';
           toggle.disabled = true;
-          api().update(id, { status: next }).then(function () {
+          api().update(id, { status: next }).then(function (res) {
+            // A building on a work order: say when ticking it moved the work order.
+            var wo = res && res.work_order;
+            if (wo && wo.moved_to === 'work_complete') toast('Every subtask is done — the work order is awaiting approval.', 'success');
+            else if (wo && wo.moved_to === 'in_progress') toast('The work order is back in progress.', 'info');
             refresh();
             if (typeof opts.onChange === 'function') opts.onChange();
           }).catch(function (err) {
             toggle.disabled = false;
             toast((err && err.message) || 'Could not update', 'error');
+            // No completion photo yet: open the task so one can be added.
+            if (err && err.data && err.data.code === 'completion_photo_required') openDetail(id);
           });
         });
         if (open) open.addEventListener('click', function () { openDetail(id); });

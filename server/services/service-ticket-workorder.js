@@ -176,17 +176,115 @@ async function taskPhotosByTask(db, orgId, taskIds) {
 }
 
 /**
- * subtaskActivity(db, orgId, ticketId) -> Map<taskId, { notes[], completed_by, completed_at }>
+ * ticketSitePhotos(db, orgId, ticketId, { withNames }) -> photo[]
+ *
+ * The work order's SITE photos: images on the ticket itself (entity_type
+ * 'service_ticket'), newest first, at most 60. Photos tagged 'flag' belong to
+ * a flagged problem and are left out IN THE WHERE, before the LIMIT, so a
+ * ticket carrying a wall of flag photos still shows its site photos; the JS
+ * filter below stays as the case-insensitive backstop. `by` names who added
+ * each one — the crew link's label (or 'Crew link') for a photo with no
+ * uploader, otherwise the uploader's name when withNames is set (the office
+ * read) or 'Office' (the crew read, which never shows office names). via_link
+ * says it came from a link.
+ */
+const SITE_PHOTO_LIMIT = 60;
+
+function tagList(tags) {
+  let list = tags;
+  if (typeof list === 'string') {
+    try { list = JSON.parse(list); } catch (_) { list = [list]; }
+  }
+  return Array.isArray(list) ? list.map(function (t) { return String(t).toLowerCase(); }) : [];
+}
+
+async function ticketSitePhotos(db, orgId, ticketId, opts) {
+  if (orgId == null || ticketId == null || String(ticketId) === '') return [];
+  const withNames = !!(opts && opts.withNames);
+  // The flag exclusion is a WHERE PREDICATE, not a post-filter. The LIMIT runs
+  // in the database, so filtering afterwards let flag photos eat the window:
+  // FLAG_OPEN_CAP (20) open flags x FLAG_PHOTO_CAP (6) photos = 120 rows on the
+  // SAME parent (service-ticket-flag-routes.js inserts them as entity_type
+  // 'service_ticket', entity_id = ticket.id, tags ['flag']), and resolved flags
+  // keep theirs forever — so a busy ticket returned an EMPTY Site photos card
+  // while every field-report photo was still in the table.
+  //
+  // `$3 = ANY (SELECT jsonb_array_elements_text(tags))` is the containment
+  // idiom this codebase already uses (admin-agents-routes.js:2785). The JS
+  // filter below STAYS and is not redundant: it lowercases, while
+  // normalizeTagsInput preserves the case a retag typed, so a hand-typed 'Flag'
+  // is caught there and only there.
+  const r = await db.query(
+    `SELECT a.id, a.filename, a.mime_type, a.thumb_url, a.web_url, a.original_url, a.uploaded_at, a.uploaded_by, a.tags` +
+      (withNames ? ', u.name AS uploader_name' : '') + `
+       FROM attachments a` +
+      (withNames ? `
+       LEFT JOIN users u ON u.id = a.uploaded_by AND u.organization_id = a.organization_id` : '') + `
+      WHERE a.entity_type = 'service_ticket' AND a.entity_id = $1 AND a.organization_id = $2
+        AND a.mime_type LIKE 'image/%'
+        AND NOT ($3 = ANY (SELECT jsonb_array_elements_text(tags)))
+      ORDER BY a.uploaded_at DESC LIMIT 120`,
+    [String(ticketId), orgId, 'flag']
+  );
+  const rows = r.rows
+    .filter(function (row) { return tagList(row.tags).indexOf('flag') < 0; })
+    .slice(0, SITE_PHOTO_LIMIT);
+  if (!rows.length) return [];
+
+  const labels = new Map();
+  if (rows.some(function (row) { return row.uploaded_by == null; })) {
+    const ev = await db.query(
+      `SELECT actor_label, detail FROM service_ticket_events
+        WHERE ticket_id = $1 AND organization_id = $2 AND kind = 'photo_added' AND actor_kind = 'share'
+        ORDER BY created_at DESC LIMIT 500`,
+      [String(ticketId), orgId]
+    );
+    for (const e of ev.rows) {
+      let d = e.detail;
+      if (typeof d === 'string') { try { d = JSON.parse(d); } catch (_) { d = null; } }
+      const key = d && d.attachment_id != null ? String(d.attachment_id) : null;
+      if (!key || labels.has(key)) continue;
+      const label = e.actor_label != null ? String(e.actor_label).trim() : '';
+      labels.set(key, label);
+    }
+  }
+
+  return rows.map(function (row) {
+    const viaLink = row.uploaded_by == null;
+    const by = viaLink
+      ? (labels.get(String(row.id)) || 'Crew link')
+      : ((withNames && row.uploader_name && String(row.uploader_name).trim()) || 'Office');
+    return {
+      id: row.id,
+      filename: row.filename,
+      mime_type: row.mime_type,
+      thumb_url: row.thumb_url,
+      web_url: row.web_url,
+      original_url: row.original_url,
+      uploaded_at: row.uploaded_at,
+      by: by,
+      via_link: viaLink,
+    };
+  });
+}
+
+/**
+ * subtaskActivity(db, orgId, ticketId, opts) -> Map<taskId, { notes[], completed_by, completed_at }>
  *
  * Per-subtask notes and "who finished it" live in the ticket's event log —
  * append-only and attributed — rather than in tasks.notes, which the office
  * overwrites (a crew note and an office edit would race; see task-share).
+ *
+ * opts.withIds (the office read only) adds each note's event `id`, so a note
+ * can be addressed later. Without it the output is exactly what the crew link
+ * has always received.
  */
-async function subtaskActivity(db, orgId, ticketId) {
+async function subtaskActivity(db, orgId, ticketId, opts) {
   const out = new Map();
   if (orgId == null || !ticketId) return out;
+  const withIds = !!(opts && opts.withIds);
   const r = await db.query(
-    `SELECT kind, actor_kind, actor_label, detail, created_at
+    `SELECT id, kind, actor_kind, actor_label, detail, created_at
        FROM service_ticket_events
       WHERE ticket_id = $1 AND organization_id = $2
         AND kind IN ('subtask_note', 'subtask_completed', 'subtask_reopened')
@@ -202,7 +300,9 @@ async function subtaskActivity(db, orgId, ticketId) {
     const slot = out.get(taskId);
     const who = e.actor_label || (e.actor_kind === 'share' ? 'Shared link' : 'Office');
     if (e.kind === 'subtask_note' && d.note) {
-      slot.notes.push({ note: String(d.note), by: who, at: e.created_at });
+      const item = { note: String(d.note), by: who, at: e.created_at };
+      if (withIds) item.id = e.id;
+      slot.notes.push(item);
     } else if (e.kind === 'subtask_completed') {
       slot.completed_by = who;
       slot.completed_at = e.created_at;
@@ -227,7 +327,12 @@ async function loadSubtask(db, ticket, taskId) {
   return r.rows[0] || null;
 }
 
-async function insertEvent(db, ticket, kind, actor, detail) {
+// opts.strict RETHROWS after logging. Inside BEGIN..COMMIT every event insert
+// must be strict: on Postgres a failed INSERT aborts the transaction, and a
+// swallowed failure turns the later COMMIT into a silent ROLLBACK of the whole
+// change. Outside a transaction the default (log and carry on) stays right: an
+// event is the record of a write that has already happened.
+async function insertEvent(db, ticket, kind, actor, detail, opts) {
   try {
     await db.query(
       `INSERT INTO service_ticket_events
@@ -239,65 +344,118 @@ async function insertEvent(db, ticket, kind, actor, detail) {
     );
   } catch (e) {
     console.error('[service-ticket-workorder] event log failed', kind, e.message);
+    if (opts && opts.strict) throw e;
   }
 }
 
 /**
- * setSubtaskDone(db, { ticket, taskId, done, actor }) ->
- *   { ok: true, task, ticketStatus } | { ok: false, status, error }
- *
- * THE one door for completing or reopening a subtask — the office's checkbox
- * and the crew link both come through here, so the rules cannot differ:
- *   * completing needs at least one COMPLETION photo on that subtask;
- *   * every change is an attributed event (who finished Bldg 784, and when);
- *   * the ticket follows its subtasks (autoStatusForSubtasks): the last one
- *     done moves it to work_complete, undoing one moves it back to in_progress.
- * The caller has already decided WHETHER this actor may write (ticket access
- * for the office; scope + crewSubtasksWritable for a link).
+ * subtaskCounts(db, ticket) -> { total, done }
+ * Over the same live org subtasks the crew sees and setSubtaskDone counts.
  */
-async function setSubtaskDone(db, opts) {
-  const ticket = opts.ticket;
-  const done = !!opts.done;
-  const task = await loadSubtask(db, ticket, opts.taskId);
-  if (!task) return { ok: false, status: 404, error: 'That subtask is not on this work order.' };
-
-  if (done) {
-    const photos = (await taskPhotosByTask(db, ticket.organization_id, [task.id])).get(String(task.id)) || [];
-    const verdict = svc.subtaskMayComplete(photos);
-    if (!verdict.ok) return { ok: false, status: 409, error: verdict.reason };
-  }
-
-  const wasDone = task.status === 'done';
-  let updated = task;
-  if (wasDone !== done) {
-    const r = await db.query(
-      `UPDATE tasks
-          SET status = $1,
-              completed_at = ${done ? 'COALESCE(completed_at, NOW())' : 'NULL'},
-              updated_at = NOW()
-        WHERE id = $2 AND service_ticket_id = $3 AND organization_id = $4
-        RETURNING id, title, status, completed_at`,
-      [done ? 'done' : 'open', task.id, ticket.id, ticket.organization_id]
-    );
-    updated = r.rows[0] || task;
-    await insertEvent(db, ticket, done ? 'subtask_completed' : 'subtask_reopened', opts.actor,
-      { task_id: task.id, title: String(task.title || '').slice(0, 200) });
-  }
-
-  // Does the ticket move? Counted over the same live org subtasks the crew sees.
-  let ticketStatus = ticket.status;
-  // Set only when THIS call's guarded UPDATE moved the ticket — the signal the
-  // routes use to announce an arrival at work_complete exactly once.
-  let movedTo = null;
-  const counts = await db.query(
+async function subtaskCounts(db, ticket) {
+  if (!ticket || ticket.id == null || ticket.organization_id == null) return { total: 0, done: 0 };
+  const r = await db.query(
     `SELECT COUNT(*)::int AS total,
             COUNT(*) FILTER (WHERE status = 'done')::int AS done
        FROM tasks
       WHERE service_ticket_id = $1 AND organization_id = $2 AND archived_at IS NULL AND scope = 'org'`,
     [ticket.id, ticket.organization_id]
   );
-  const c = counts.rows[0] || { total: 0, done: 0 };
-  const allDone = Number(c.total) > 0 && Number(c.done) === Number(c.total);
+  const c = r.rows[0] || {};
+  return { total: Number(c.total) || 0, done: Number(c.done) || 0 };
+}
+
+/**
+ * lastStatusEvent(db, ticket) -> { actor_kind, share_id, detail, created_at } | null
+ * The newest status_changed row for the ticket (detail parsed when a driver
+ * hands it back as text).
+ */
+async function lastStatusEvent(db, ticket) {
+  if (!ticket || ticket.id == null || ticket.organization_id == null) return null;
+  const r = await db.query(
+    `SELECT actor_kind, share_id, detail, created_at FROM service_ticket_events
+      WHERE ticket_id = $1 AND organization_id = $2 AND kind = 'status_changed'
+      ORDER BY created_at DESC, id DESC LIMIT 1`,
+    [ticket.id, ticket.organization_id]
+  );
+  const row = r.rows[0];
+  if (!row) return null;
+  let d = row.detail;
+  if (typeof d === 'string') { try { d = JSON.parse(d); } catch (_) { d = null; } }
+  return { actor_kind: row.actor_kind, share_id: row.share_id, detail: d || {}, created_at: row.created_at };
+}
+
+/**
+ * withTicketLock(db, ticket, work) -> whatever work returns
+ *
+ * Runs `work(client, lockedRow)` with the ticket row locked FOR UPDATE, so
+ * every door that changes a punch list — the office checkbox, the crew link,
+ * My Tasks, a task link, 86 — decides on the row as it is NOW, not on the copy
+ * a request loaded a moment earlier.
+ *   * db with .release is a client already inside the caller's transaction:
+ *     no BEGIN or COMMIT here, the caller owns both.
+ *   * db with .connect is a pool: connect, BEGIN, work, then COMMIT — or
+ *     ROLLBACK when the work answers ok === false or throws — and release.
+ *   * db with neither (a query-only test fake) runs the work directly.
+ * The lock read carries the org, so a ticket id from another tenant is simply
+ * not there.
+ */
+const TICKET_GONE = 'This work order is no longer available.';
+
+async function withTicketLock(db, ticket, work) {
+  const run = async function (client) {
+    if (!ticket || ticket.id == null || ticket.organization_id == null) {
+      return { ok: false, status: 404, error: TICKET_GONE };
+    }
+    const r = await client.query(
+      'SELECT * FROM service_tickets WHERE id = $1 AND organization_id = $2 FOR UPDATE',
+      [ticket.id, ticket.organization_id]
+    );
+    const locked = r.rows[0];
+    if (!locked) return { ok: false, status: 404, error: TICKET_GONE };
+    return work(client, locked);
+  };
+
+  if (db && typeof db.release === 'function') return run(db);
+  if (!db || typeof db.connect !== 'function') return run(db);
+
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    let result;
+    try {
+      result = await run(client);
+    } catch (e) {
+      try { await client.query('ROLLBACK'); } catch (_) { /* the throw below is the news */ }
+      throw e;
+    }
+    if (result && result.ok === false) await client.query('ROLLBACK');
+    else await client.query('COMMIT');
+    return result;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * recountTicket(db, ticket, actor, hint) -> { ticketStatus, movedTo }
+ *
+ * The ticket follows its subtasks (autoStatusForSubtasks): all live org
+ * subtasks done moves it to work_complete, anything open again on a ticket
+ * awaiting approval moves it back to in_progress. `ticket` must be the row the
+ * caller holds locked. The UPDATE is guarded on that status, and the event is
+ * strict because callers run inside a transaction.
+ *
+ * hint names why a ticket went BACK (subtask_added, subtask_removed); an
+ * arrival is always all_subtasks_done. movedTo is set only when THIS call's
+ * guarded UPDATE moved the ticket — the signal the doors use to announce an
+ * arrival at work_complete exactly once.
+ */
+async function recountTicket(db, ticket, actor, hint) {
+  let ticketStatus = ticket.status;
+  let movedTo = null;
+  const c = await subtaskCounts(db, ticket);
+  const allDone = c.total > 0 && c.done === c.total;
   const next = svc.autoStatusForSubtasks(ticket.status, allDone);
   if (next && next !== ticket.status) {
     const r = await db.query(
@@ -312,18 +470,108 @@ async function setSubtaskDone(db, opts) {
     if (r.rows[0]) {
       ticketStatus = r.rows[0].status;
       movedTo = next;
-      await insertEvent(db, ticket, 'status_changed', opts.actor,
-        { from: ticket.status, to: next, reason: allDone ? 'all_subtasks_done' : 'subtask_reopened' });
+      await insertEvent(db, ticket, 'status_changed', actor,
+        { from: ticket.status, to: next, reason: allDone ? 'all_subtasks_done' : (hint || 'subtask_reopened') },
+        { strict: true });
+      // The OFFICE sending a ticket back (a new building, an untick) makes the
+      // next arrival at Work complete news, even inside the approval notice's
+      // 15-minute window.
+      //
+      // 'agent' counts as the office: 86 adding a building runs THIS recount
+      // (payload-dispatcher.js hands it { kind: 'agent', userId }), and it is
+      // the office asking. Left out, the stale approval_notified_at stood, the
+      // notice claim (service-ticket-notify.js) answered 'already_notified',
+      // the cron's retry only looks at approval_notified_at IS NULL, and the
+      // crew-activity fallback suppresses a work_complete ticket's rows — so
+      // the second arrival reached nobody, ever. An explicit allow-list rather
+      // than `!== 'share'`: 'system' (the notice cron) must NOT clear it.
+      if (actor && (actor.kind === 'user' || actor.kind === 'agent') && movedTo === 'in_progress') {
+        await db.query(
+          `UPDATE service_tickets SET approval_notified_at = NULL
+            WHERE id = $1 AND organization_id = $2 AND approval_notified_at IS NOT NULL`,
+          [ticket.id, ticket.organization_id]
+        );
+      }
     }
   }
+  return { ticketStatus: ticketStatus, movedTo: movedTo };
+}
+
+/**
+ * setSubtaskDone(db, { ticket, taskId, done, actor, gate? }) ->
+ *   { ok: true, task, ticketStatus, movedTo, ticket }
+ *   | { ok: false, status, error, code? }
+ *
+ * THE one door for completing or reopening a subtask — the office's checkbox,
+ * the crew link, My Tasks and a task link all come through here, so the rules
+ * cannot differ:
+ *   * it decides on the LOCKED ticket row (withTicketLock), never on the copy
+ *     the caller loaded;
+ *   * opts.gate(lockedRow), when given, runs first and may refuse with
+ *     { ok:false, status, error, code } (work_order_locked);
+ *   * completing needs at least one COMPLETION photo on that subtask
+ *     (code completion_photo_required);
+ *   * the task UPDATE is guarded, so a double tap writes one event;
+ *   * every change is an attributed, strict event (who finished Bldg 784);
+ *   * the ticket follows its subtasks (recountTicket).
+ * result.ticket is the locked row with its status after the recount — the row
+ * a notice should describe.
+ */
+async function setSubtaskDone(db, opts) {
+  return withTicketLock(db, opts.ticket, function (client, locked) {
+    return applySubtaskDone(client, locked, opts);
+  });
+}
+
+async function applySubtaskDone(db, ticket, opts) {
+  if (typeof opts.gate === 'function') {
+    const g = await opts.gate(ticket);
+    if (g && g.ok === false) {
+      return { ok: false, status: g.status || 409, error: g.error, code: g.code };
+    }
+  }
+  const done = !!opts.done;
+  const task = await loadSubtask(db, ticket, opts.taskId);
+  if (!task) return { ok: false, status: 404, error: 'That subtask is not on this work order.' };
+
+  if (done) {
+    const photos = (await taskPhotosByTask(db, ticket.organization_id, [task.id])).get(String(task.id)) || [];
+    const verdict = svc.subtaskMayComplete(photos);
+    if (!verdict.ok) return { ok: false, status: 409, error: verdict.reason, code: 'completion_photo_required' };
+  }
+
+  const wasDone = task.status === 'done';
+  let updated = task;
+  if (wasDone !== done) {
+    const r = await db.query(
+      `UPDATE tasks
+          SET status = $1,
+              completed_at = ${done ? 'COALESCE(completed_at, NOW())' : 'NULL'},
+              updated_at = NOW()
+        WHERE id = $2 AND service_ticket_id = $3 AND organization_id = $4
+          AND ${done ? "status <> 'done'" : "status = 'done'"}
+        RETURNING id, title, status, completed_at`,
+      [done ? 'done' : 'open', task.id, ticket.id, ticket.organization_id]
+    );
+    if (r.rows[0]) {
+      updated = r.rows[0];
+      await insertEvent(db, ticket, done ? 'subtask_completed' : 'subtask_reopened', opts.actor,
+        { task_id: task.id, title: String(task.title || '').slice(0, 200) }, { strict: true });
+    }
+  }
+
+  // Does the ticket move? Counted over the same live org subtasks the crew sees.
+  const moved = await recountTicket(db, ticket, opts.actor, null);
 
   // The OFFICE unticking a building is a send-back for rework, so the next
   // arrival at Work complete is news even inside the approval notice's
   // 15-minute window (services/service-ticket-notify.js) — whether or not this
   // untick moved the ticket (it may already be In progress from a crew undo).
   // The crew undoing its own tick keeps the window: that undo-and-redo is what
-  // the window is for.
-  if (!done && wasDone && opts.actor && opts.actor.kind === 'user') {
+  // the window is for. 'agent' is the office too, for the same reason and in
+  // the same shape as recountTicket above — no caller hands an agent actor here
+  // today, and the two doors must not drift apart when one does.
+  if (!done && wasDone && opts.actor && (opts.actor.kind === 'user' || opts.actor.kind === 'agent')) {
     await db.query(
       `UPDATE service_tickets SET approval_notified_at = NULL
         WHERE id = $1 AND organization_id = $2 AND approval_notified_at IS NOT NULL`,
@@ -331,23 +579,79 @@ async function setSubtaskDone(db, opts) {
     );
   }
 
-  return { ok: true, task: updated, ticketStatus: ticketStatus, movedTo: movedTo };
+  return {
+    ok: true,
+    task: updated,
+    ticketStatus: moved.ticketStatus,
+    movedTo: moved.movedTo,
+    ticket: Object.assign({}, ticket, { status: moved.ticketStatus }),
+  };
 }
 
+// The shape of the retry key the crew page mints — one opaque token per UNSENT
+// note, sent again by every retry of that same note. Spelled here rather than
+// imported from service-ticket-flags.js, which owns the other copy: that module
+// requires THIS one, so reaching back for the constant would be a require cycle
+// (and a lazy require would not resolve from the temp copies the mutation
+// suites load). Shape only — never contents, never an id of ours.
+const CLIENT_REF_RE = /^[A-Za-z0-9_-]{8,64}$/;
+
 /**
- * addSubtaskNote(db, { ticket, taskId, note, actor }) -> { ok } | { ok:false, status, error }
+ * addSubtaskNote(db, { ticket, taskId, note, actor, clientRef }) ->
+ *   { ok, duplicate? } | { ok:false, status, error }
  * An attributed, append-only note on one subtask.
+ *
+ * IDEMPOTENT (1.30), the key the site-photo, building-photo and flag doors
+ * already carry. A crew phone on a dead spot sends the note, loses the answer
+ * and sends it again; without a key the building's field log grows the same
+ * sentence twice and the crew cannot delete either one. So the caller may pass
+ * the page's `client_ref`: if this work order already carries a subtask_note
+ * written under that key by the same link, nothing is written and the answer is
+ * the one a first save gets — a retry lands, it is not refused.
+ *
+ * The lookup and the insert run under ONE withTicketLock, so two retries
+ * arriving together are serialized on the ticket row and no second unique index
+ * is needed. A body with no key always writes, exactly as the flag door treats a
+ * missing key — an old cached page must not start silently dropping notes.
  */
 async function addSubtaskNote(db, opts) {
   const text = String(opts.note == null ? '' : opts.note).trim().slice(0, 2000);
   if (!text) return { ok: false, status: 400, error: 'Write a note first.' };
-  const task = await loadSubtask(db, opts.ticket, opts.taskId);
-  if (!task) return { ok: false, status: 404, error: 'That subtask is not on this work order.' };
-  await insertEvent(db, opts.ticket, 'subtask_note', opts.actor, { task_id: task.id, note: text });
-  return { ok: true };
+  const ref = typeof opts.clientRef === 'string' && CLIENT_REF_RE.test(opts.clientRef)
+    ? opts.clientRef : null;
+  const shareId = (opts.actor && opts.actor.shareId) || null;
+
+  return withTicketLock(db, opts.ticket, async function (client) {
+    const task = await loadSubtask(client, opts.ticket, opts.taskId);
+    if (!task) return { ok: false, status: 404, error: 'That subtask is not on this work order.' };
+
+    if (ref) {
+      // Scoped to this ticket, this org and this link: `IS NOT DISTINCT FROM`
+      // rather than `=` so the office door (share_id NULL) is deduped by the
+      // same statement instead of never matching.
+      const seen = await client.query(
+        `SELECT 1 FROM service_ticket_events
+          WHERE ticket_id = $1 AND organization_id = $2
+            AND share_id IS NOT DISTINCT FROM $3
+            AND kind = 'subtask_note' AND detail->>'client_ref' = $4
+          LIMIT 1`,
+        [opts.ticket.id, opts.ticket.organization_id, shareId, ref]
+      );
+      if (seen.rows.length) return { ok: true, duplicate: true };
+    }
+
+    const detail = { task_id: task.id, note: text };
+    if (ref) detail.client_ref = ref;
+    // Strict: inside the lock's transaction a swallowed failure would turn
+    // COMMIT into a silent ROLLBACK and answer ok with nothing written.
+    await insertEvent(client, opts.ticket, 'subtask_note', opts.actor, detail, { strict: true });
+    return { ok: true };
+  });
 }
 
 module.exports = {
   workOrderSite, workOrderContact, taskPhotosByTask, subtaskActivity,
   loadSubtask, setSubtaskDone, addSubtaskNote, joinAddress,
+  insertEvent, subtaskCounts, lastStatusEvent, ticketSitePhotos,
+  withTicketLock, recountTicket,
 };

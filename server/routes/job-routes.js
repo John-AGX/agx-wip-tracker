@@ -11,6 +11,11 @@ const markets = require('../services/markets');
 // Job numbering is a per-org REGISTRY (type → prefix → counter), not a fixed
 // pair of prefixes. See the convert guard below.
 const jobTypes = require('../services/job-types');
+// A job delete cascades its work orders (service_tickets.job_id ON DELETE
+// CASCADE). The delete refuses on open ones and asks for the closed count.
+const ticketGuard = require('../services/job-ticket-guard');
+// The delete that takes closed work orders with the job leaves a tier-B row.
+const { auditLog } = require('../audit');
 
 const router = express.Router();
 
@@ -782,6 +787,62 @@ router.delete('/:id', requireAuth, requireRole('admin'), async (req, res) => {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Job not found' });
     }
+    // Work orders. service_tickets.job_id is ON DELETE CASCADE, so the DELETE
+    // below takes every ticket on this job with its events, revisions, crew
+    // links and flags. Decided here, inside the transaction, after the job row
+    // is locked (no new ticket can attach to a locked job). The ticket rows are
+    // locked too, so one cannot be reopened between the count and the delete.
+    //
+    // ORDER BY id is LOCK DISCIPLINE, not presentation — nothing reads this
+    // result set. Every other door that locks more than one work order walks
+    // them in sorted id order, and says why: services/service-ticket-subtask-
+    // door.js lockTickets — "Tickets are always locked in sorted id order, so
+    // two requests moving tasks between the same two tickets cannot deadlock."
+    // Unordered, this loop takes them in Postgres heap order, which is the same
+    // unstable ordering that wrote 0 of 1205 rows on the 08.13.26 QB import
+    // (the header in routes/qb-cost-routes.js). Moving a building between two
+    // work orders on this job locks both in id order; so does this loop now, so
+    // neither can be behind the other on a row the other already holds.
+    //
+    // The jobs FOR UPDATE above stays FIRST and stays FOR UPDATE. A job delete
+    // is jobs-before-tickets by construction (the cascade runs that way), and
+    // the strength is load-bearing for the OPEN_TICKETS guard below: an INSERT
+    // INTO service_tickets takes FOR KEY SHARE on the jobs row for its job_id
+    // FK, and FOR UPDATE conflicts with it — that is what "no new ticket can
+    // attach to a locked job" buys. Any door that locks a ticket and then
+    // reaches this job's row has to take jobs first to agree with that order.
+    await client.query(
+      'SELECT id FROM service_tickets WHERE job_id = $1 AND organization_id = $2 ORDER BY id FOR UPDATE',
+      [jobId, orgId]
+    );
+    // (1) An open work order is never deleted with its job.
+    const openTickets = await ticketGuard.openTicketsOnJobs(client, [jobId], orgId);
+    if (openTickets > 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        error: ticketGuard.openTicketsMessage(openTickets),
+        code: 'OPEN_TICKETS',
+        openTicketCount: openTickets
+      });
+    }
+    // (2) Closed, cancelled or archived ones go only when the caller echoes the
+    //     exact count back (?confirm_closed_tickets=N). A DELETE has no body,
+    //     and a count that must match refuses a confirmation made on a stale
+    //     preview.
+    const retired = await ticketGuard.retiredTicketsOnJobs(client, [jobId], orgId);
+    if (retired.total > 0 && Number(req.query && req.query.confirm_closed_tickets) !== retired.total) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        error: ticketGuard.closedTicketsMessage(retired.total),
+        code: 'CLOSED_TICKETS',
+        tickets: {
+          total: retired.total,
+          closed: retired.closed,
+          cancelled: retired.cancelled,
+          archived: retired.archived
+        }
+      });
+    }
     // Singular delete: the parent lead + estimate are KEPT. But un-strand them
     // so nothing is left pointing at a job that no longer exists:
     // (a) Unlock + detach the linked estimate. If we left it is_locked=TRUE it
@@ -813,6 +874,23 @@ router.delete('/:id', requireAuth, requireRole('admin'), async (req, res) => {
       [jobId, orgId]
     );
     await client.query('COMMIT');
+    // After COMMIT only: a row for a delete that rolled back would be false.
+    // Fire-and-forget, like the lead delete rows: tier B never rejects, and the
+    // transaction's client is not held while the row is written.
+    if (retired.total) {
+      auditLog(req, {
+        action: 'job.delete_with_service_tickets',
+        targetType: 'job',
+        targetId: jobId,
+        organizationId: orgId,
+        detail: {
+          ticket_ids: retired.ids,
+          closed: retired.closed,
+          cancelled: retired.cancelled,
+          archived: retired.archived
+        }
+      });
+    }
     res.json({ ok: true });
   } catch (e) {
     if (client) { try { await client.query('ROLLBACK'); } catch (_) {} }

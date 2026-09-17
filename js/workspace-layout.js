@@ -1064,6 +1064,8 @@
       // carries no paid split — unknown, so show nothing rather than guess.
       var ar = w.arOutstanding;
       chip('job-invoices', (ar != null && ar > 0) ? sm(ar) : '', 'b');
+      // Service Tickets — tickets needing the office (crew problems, suggestions, new crew activity)
+      if (window.p86TicketFlags && typeof window.p86TicketFlags.fillJobChip === 'function') window.p86TicketFlags.fillJobChip(jobId);
       // Attention strip
       var attn=document.getElementById('appJobnavAttn');
       if (attn) {

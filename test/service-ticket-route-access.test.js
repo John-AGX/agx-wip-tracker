@@ -64,6 +64,9 @@ const TABLES = [
   // The detail and the share read now carry each subtask's photos (the
   // work-order view), so the ticket read touches attachments too.
   'attachments',
+  // 1.29: the list reads each ticket's open problems (a correlated subquery,
+  // so the table must exist) and the detail reads flags and change orders.
+  'service_ticket_flags', 'job_change_orders',
 ];
 
 // The people. Role names are deliberately NOT 'admin' / 'system_admin', so no
@@ -249,7 +252,13 @@ function absolutizeRequires(src, fromDir) {
   });
 }
 
-function mutant(file, pairs) {
+// `redirects` maps a module the copy requires (absolute path) to another file —
+// so a route copy can load a MUTATED service instead of the shipped one.
+function mutant(file, pairs, redirects) {
+  return require(writeMutant(file, pairs, redirects));
+}
+
+function writeMutant(file, pairs, redirects) {
   const SOURCE = fs.readFileSync(file, 'utf8');
   const eol = SOURCE.indexOf('\r\n') !== -1 ? '\r\n' : '\n';
   let out = SOURCE;
@@ -271,9 +280,15 @@ function mutant(file, pairs) {
   }
   const p = path.join(os.tmpdir(), '_p86_st_mutant_' + process.pid + '_'
     + Math.random().toString(36).slice(2, 10) + '.js');
-  fs.writeFileSync(p, absolutizeRequires(out, path.dirname(file)), 'utf8');
+  let copy = absolutizeRequires(out, path.dirname(file));
+  for (const [from, to] of Object.entries(redirects || {})) {
+    const fromRef = 'require(' + JSON.stringify(from.split(path.sep).join('/')) + ')';
+    if (copy.split(fromRef).length - 1 < 1) throw new Error('REDIRECT NOT FOUND: ' + fromRef);
+    copy = copy.split(fromRef).join('require(' + JSON.stringify(to.split(path.sep).join('/')) + ')');
+  }
+  fs.writeFileSync(p, copy, 'utf8');
   mutantPaths.push(p);
-  return require(p);
+  return p;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -671,7 +686,12 @@ describe('another user\'s personal to-do is absent from the detail, the progress
  * HOLE 4 — THE ASSIGNEE
  * ══════════════════════════════════════════════════════════════════════════*/
 describe('assignee_user_id is proved to be a user in this organization', () => {
-  const REFUSAL = { error: 'Assignee is not a user in this organization' };
+  // 1.29: a refusal names the field, so the office form can mark the picker.
+  const REFUSAL = { error: 'Assignee is not a user in this organization', field: 'assignee_user_id' };
+  const CANT_OPEN_J2 = {
+    error: "That person can't open this job, so they can't be assigned. Give them access to the job first, or pick someone else.",
+    field: 'assignee_user_id',
+  };
 
   test('CREATE: a foreign user is 400 and nothing is inserted; an absent id gets the same answer', async () => {
     const foreign = await createTicket(ticketRouter, WIDE, { title: 'assigned', job_id: 'j1', assignee_user_id: RIVAL });
@@ -681,13 +701,24 @@ describe('assignee_user_id is proved to be a user in this organization', () => {
     expect(eng.count("SELECT 1 FROM service_tickets WHERE title = 'assigned'")).toBe(0);
   });
 
-  test('CREATE: an in-org user is stored as a number, and an empty string stores NULL', async () => {
-    const ok = await createTicket(ticketRouter, WIDE, { title: 'assigned', job_id: 'j1', assignee_user_id: String(OTHER) });
+  test('CREATE: an in-org user who can open the job is stored as a number, and an empty string stores NULL', async () => {
+    // CREW holds a view grant on j1: enough to open it, so enough to be assigned.
+    const ok = await createTicket(ticketRouter, WIDE, { title: 'assigned', job_id: 'j1', assignee_user_id: String(CREW) });
     expect(ok.statusCode).toBe(200);
-    expect(row(ok.body.ticket.id).assignee_user_id).toBe(OTHER);
+    expect(row(ok.body.ticket.id).assignee_user_id).toBe(CREW);
     const cleared = await createTicket(ticketRouter, WIDE, { title: 'unassigned', job_id: 'j1', assignee_user_id: '' });
     expect(cleared.statusCode).toBe(200);
     expect(row(cleared.body.ticket.id).assignee_user_id).toBeNull();
+  });
+
+  test('CREATE and PATCH: an in-org user who cannot open the job is refused with the can\'t-open sentence', async () => {
+    // OTHER holds a grant on j4 only.
+    const made = await createTicket(ticketRouter, WIDE, { title: 'assigned', job_id: 'j2', assignee_user_id: OTHER });
+    expect([made.statusCode, made.body]).toEqual([400, CANT_OPEN_J2]);
+    expect(eng.count("SELECT 1 FROM service_tickets WHERE title = 'assigned'")).toBe(0);
+    const patched = await patchTicket(ticketRouter, WIDE, 'st_j2', { title: 'half applied?', assignee_user_id: OTHER });
+    expect([patched.statusCode, patched.body]).toEqual([400, CANT_OPEN_J2]);
+    expect([row('st_j2').title, row('st_j2').assignee_user_id]).toEqual(['Gate on j2', null]);
   });
 
   test('PATCH: a foreign user is 400, and the OTHER fields in that body are not written either', async () => {
@@ -697,12 +728,12 @@ describe('assignee_user_id is proved to be a user in this organization', () => {
     expect(row('st_j2').assignee_user_id).toBeNull();
   });
 
-  test('PATCH: an in-org user lands, and null / empty clears as it always has', async () => {
-    expect((await patchTicket(ticketRouter, WIDE, 'st_j2', { assignee_user_id: OTHER })).statusCode).toBe(200);
-    expect(row('st_j2').assignee_user_id).toBe(OTHER);
+  test('PATCH: an in-org user who can open the job lands, and null / empty clears as it always has', async () => {
+    expect((await patchTicket(ticketRouter, WIDE, 'st_j2', { assignee_user_id: CREW })).statusCode).toBe(200);
+    expect(row('st_j2').assignee_user_id).toBe(CREW);
     expect((await patchTicket(ticketRouter, WIDE, 'st_j2', { assignee_user_id: '' })).statusCode).toBe(200);
     expect(row('st_j2').assignee_user_id).toBeNull();
-    await patchTicket(ticketRouter, WIDE, 'st_j2', { assignee_user_id: OTHER });
+    await patchTicket(ticketRouter, WIDE, 'st_j2', { assignee_user_id: CREW });
     expect((await patchTicket(ticketRouter, WIDE, 'st_j2', { assignee_user_id: null })).statusCode).toBe(200);
     expect(row('st_j2').assignee_user_id).toBeNull();
   });
@@ -907,10 +938,14 @@ describe('mutants: private to-dos', () => {
 });
 
 describe('mutants: the assignee', () => {
+  const ASSIGNEES = path.join(__dirname, '..', 'server', 'services', 'service-ticket-assignees.js');
+
   test('skip the proof on CREATE and another tenant\'s user is written onto the ticket', async () => {
     const mut = mutant(TICKET_ROUTES, [[
-      '        const proved = await proveAssignee(body[k], orgId);',
-      '        const proved = { ok: true, value: body[k] };']]);
+      '      const newAssignee = await assignees.proveAssigneeForParent(pool, {\n'
+        + '        raw: checked.values[ASSIGNEE_FIELD], orgId, parent,\n'
+        + '      });',
+      '      const newAssignee = { ok: true, value: checked.values[ASSIGNEE_FIELD] };']]);
     const r = await createTicket(mut, WIDE, { title: 'assigned', job_id: 'j1', assignee_user_id: RIVAL });
     expect(r.statusCode).toBe(200);
     expect(row(r.body.ticket.id).assignee_user_id).toBe(RIVAL);
@@ -918,8 +953,8 @@ describe('mutants: the assignee', () => {
 
   test('skip the proof on PATCH and the same cross-tenant write lands', async () => {
     const mut = mutant(TICKET_ROUTES, [[
-      '        const proved = await proveAssignee(v, orgId);',
-      '        const proved = { ok: true, value: v };']]);
+      '      const verdict = await assignees.proveAssigneeForParent(pool, { raw, orgId, parent: ticket });',
+      '      const verdict = { ok: true, value: raw };']]);
     expect((await patchTicket(mut, WIDE, 'st_j2', { assignee_user_id: RIVAL })).statusCode).toBe(200);
     expect(row('st_j2').assignee_user_id).toBe(RIVAL);
   });
@@ -927,11 +962,14 @@ describe('mutants: the assignee', () => {
   test('drop the org predicate from the proof and a foreign user passes while an absent one still fails', async () => {
     // The point of this mutant: existence is NOT tenancy. A check that only
     // proves the user exists is exactly what the foreign key already did.
-    const mut = mutant(TICKET_ROUTES, [[
-      "    'SELECT 1 FROM users WHERE id = $1 AND organization_id = $2',",
-      "    'SELECT 1 FROM users WHERE id = $1 AND $2 IS NOT NULL',"]]);
+    const service = writeMutant(ASSIGNEES, [[
+      "    'SELECT id, name, role, active, sub_id FROM users WHERE id = $1 AND organization_id = $2',",
+      "    'SELECT id, name, role, active, sub_id FROM users WHERE id = $1 AND $2 IS NOT NULL',"]]);
+    const mut = mutant(TICKET_ROUTES, [], { [require.resolve(ASSIGNEES)]: service });
     expect((await createTicket(mut, WIDE, { title: 'assigned', job_id: 'j1', assignee_user_id: RIVAL })).statusCode).toBe(200);
     expect((await createTicket(mut, WIDE, { title: 'ghost', job_id: 'j1', assignee_user_id: 9999 })).statusCode).toBe(400);
+    // ...and the shipped proof still refuses the same foreign user.
+    expect((await createTicket(ticketRouter, WIDE, { title: 'assigned2', job_id: 'j1', assignee_user_id: RIVAL })).statusCode).toBe(400);
   });
 });
 
@@ -982,7 +1020,8 @@ describe('the office doors announce an arrival at Awaiting approval', () => {
 describe('the office sending a ticket back clears the approval notice window', () => {
   test('Work complete -> In progress clears approval_notified_at, so the next arrival is announced', async () => {
     eng.db.exec("UPDATE service_tickets SET status = 'work_complete', approval_notified_at = datetime('now') WHERE id = 'st_j2'");
-    const r = await drive(ticketRouter, 'post', '/:id/status', { as: WIDE, params: { id: 'st_j2' }, body: { status: 'in_progress' } });
+    // A send-back needs a reason (1.29); without one it is a 400 by design.
+    const r = await drive(ticketRouter, 'post', '/:id/status', { as: WIDE, params: { id: 'st_j2' }, body: { status: 'in_progress', reason: 'Re-photo Bldg 2' } });
     expect(r.statusCode).toBe(200);
     expect([row('st_j2').status, row('st_j2').approval_notified_at]).toEqual(['in_progress', null]);
   });

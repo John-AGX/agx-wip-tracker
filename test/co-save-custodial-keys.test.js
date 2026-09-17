@@ -36,8 +36,11 @@
 const editor = require('../js/change-order-editor.js');
 const T = editor.__test;
 
+// fromWorkOrder (Work Orders, 1.30) is the link to the work order a change
+// order was started from. The server owns it and puts it back on every PUT,
+// but an editor save that dropped it would still be a payload erasing a link.
 const CUSTODIAL = ['completionMode', 'riderScopeName', 'buildingAllocations',
-  'costSource', 'costDraws'];
+  'costSource', 'costDraws', 'fromWorkOrder'];
 
 // The ten fields the editor genuinely owns. Named here so that a future key
 // added to the owned set has to be added deliberately in two places.
@@ -96,6 +99,7 @@ describe('custodial keys survive a save', () => {
     const co = baseCo();
     const value = key === 'buildingAllocations' ? [{ buildingId: 'b1', amount: 100 }]
       : key === 'costDraws' ? [{ poId: 'po_1', amount: 500 }]
+      : key === 'fromWorkOrder' ? { v: 1, ticketId: 'st_1', ticketTitle: 'Gate repair', source: { kind: 'ticket', id: null, taskId: null }, photos: [] }
       : 'sentinel-' + key;
     co[key] = value;
     expect(T.coSavePayload(co)[key]).toEqual(value);

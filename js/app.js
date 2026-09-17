@@ -1904,6 +1904,11 @@
         };
 
         function switchTab(tabName) {
+            // The company-wide work order list is the Service Tickets page. A saved
+            // last-tab (or any caller) still naming the page it was built as
+            // lands there instead of on a pane that no longer exists; js/router.js
+            // does the same for the /work-orders URL.
+            if (tabName === 'work-orders') tabName = 'service-tickets';
             document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
             document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
             // Clear accordion parent "contains active page" cues; the
@@ -2090,10 +2095,11 @@
                 }
             } else if (tabName === 'service-tickets') {
                 // Service Tickets — every work order the caller may see, across
-                // jobs and leads (js/service-tickets-page.js).
+                // jobs and leads, with status pills, saved views and filters
+                // (js/work-orders-board.js). /work-orders redirects here.
                 var stHost = document.getElementById('serviceTicketsHost');
-                if (stHost && window.p86ServiceTicketsPage && typeof window.p86ServiceTicketsPage.render === 'function') {
-                    window.p86ServiceTicketsPage.render(stHost);
+                if (stHost && window.p86WorkOrdersBoard && typeof window.p86WorkOrdersBoard.render === 'function') {
+                    window.p86WorkOrdersBoard.render(stHost);
                 } else if (stHost) {
                     stHost.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);">Service Tickets module not loaded.</div>';
                 }

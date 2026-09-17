@@ -34,6 +34,15 @@
   var STORAGE_KEY = 'p86-schedule-entries';
   var SETTINGS_KEY = 'p86-schedule-settings';
 
+  // A short message at the bottom of the screen. js/my-files.js publishes
+  // window.p86Toast as a function with a .show twin; either shape is fine.
+  function schToast(msg, kind) {
+    try {
+      if (typeof window.p86Toast === 'function') window.p86Toast(msg, kind);
+      else if (window.p86Toast && typeof window.p86Toast.show === 'function') window.p86Toast.show(msg, kind);
+    } catch (e) { /* a toast is a courtesy */ }
+  }
+
   function loadCachedEntries() {
     try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]') || []; }
     catch (e) { return []; }
@@ -1279,10 +1288,26 @@
         e.stopPropagation();
         var id = cb.getAttribute('data-task-id');
         if (!window.p86Api || !window.p86Api.tasks) return;
-        window.p86Api.tasks.update(id, { status: cb.checked ? 'done' : 'open' })
-          .then(function() { return fetchTasks(); })
+        var wanted = cb.checked;
+        window.p86Api.tasks.update(id, { status: wanted ? 'done' : 'open' })
+          .then(function(res) {
+            var wo = res && res.work_order;
+            if (wo && wo.moved_to === 'work_complete') schToast('Every subtask is done — the work order is awaiting approval.', 'success');
+            else if (wo && wo.moved_to === 'in_progress') schToast('The work order is back in progress.', 'info');
+            return fetchTasks();
+          })
           .then(function() { renderDaySummarySidebar(el); renderGrid(); })
-          .catch(function(err) { console.warn('[schedule] task update failed:', err && err.message); });
+          .catch(function(err) {
+            // The server refused (a building on a work order with no completion
+            // photo, or a locked work order): put the box back and say why.
+            cb.checked = !wanted;
+            console.warn('[schedule] task update failed:', err && err.message);
+            schToast((err && err.message) || 'Could not update the task.', 'error');
+            if (err && err.data && err.data.code === 'completion_photo_required' &&
+                window.p86Tasks && typeof window.p86Tasks.openDetail === 'function') {
+              window.p86Tasks.openDetail(id);
+            }
+          });
       });
     });
     // Reminder checkboxes → mark done.

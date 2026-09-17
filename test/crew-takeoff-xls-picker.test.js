@@ -40,6 +40,10 @@ const path = require('path');
 const ROOT = path.join(__dirname, '..');
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8').replace(/\r\n/g, '\n');
 const TICKETS_SRC = read('js/service-tickets.js');
+// Loaded before the tickets source, as index.html does: the field editor kit
+// (in-place updates) and the extension registry.
+const EDITOR_SRC = read('js/service-ticket-editor.js');
+const EXT_SRC = read('js/service-ticket-ext.js');
 const SHARE_HTML = read('service-ticket-share.html');
 const STYLES = read('css/styles.css');
 const JOB_LABEL = require('../js/job-label.js');
@@ -123,6 +127,9 @@ function env(src, ticket, opts) {
   window.confirm = jest.fn();
   delete window.p86ServiceTickets;
   delete window.renderJobServiceTickets;
+  delete window.p86StExt;
+  window.eval(EXT_SRC);
+  window.eval(EDITOR_SRC);
   window.eval(src);
   return state;
 }

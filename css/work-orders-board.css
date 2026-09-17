@@ -1,0 +1,181 @@
+/* ============================================================
+   Project 86 — the Service Tickets page (js/work-orders-board.js)
+   ------------------------------------------------------------
+   Linked after css/schedule.css. Tokens only, each with a dark fallback, and
+   the pill, status and priority classes come from styles.css (.p86-st-*), so
+   the page and the job's Service Tickets tab read as one thing.
+
+   Desktop: the status pills, the saved views, then the filters on one line,
+   over a grid list under a column header that scrolls sideways inside its own
+   wrapper when the window is narrow. At 760px and below every row is a card,
+   and on a touch phone each pill row scrolls sideways without ever bleeding
+   past the page edge.
+   ============================================================ */
+
+.p86-wob { padding: 16px 20px 32px; color: var(--text, #fff); }
+
+.p86-wob-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 12px; margin-bottom: 12px;
+}
+.p86-wob-h { margin: 0; font-size: 20px; font-weight: 700; color: var(--text, #fff); }
+.p86-wob-sub { font-size: 13px; color: var(--text-dim, #888); margin-top: 2px; }
+.p86-wob-total {
+  font-size: 12px; color: var(--text-dim, #888); margin-top: 6px;
+  font-variant-numeric: tabular-nums; min-height: 1em;
+}
+
+.p86-wob-pills { margin-bottom: 10px; }
+.p86-wob-pills .p86-st-pill { white-space: nowrap; }
+
+/* The saved views: a quiet label, then the pills. The label sits on the first
+   row's baseline, so a narrow window that wraps the pills does not strand it
+   halfway down them. */
+.p86-wob-viewsrow { display: flex; align-items: baseline; gap: 8px; min-width: 0; margin-bottom: 10px; }
+.p86-wob-viewsrow .p86-wob-views { margin-bottom: 0; min-width: 0; }
+.p86-wob-views-label {
+  flex: 0 0 auto; font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--text-dim, #888);
+}
+/* A view that needs someone (My approvals, Overdue, Flagged) with anything in it. */
+.p86-wob-views .p86-st-pill.is-attention:not(.active) { border-color: var(--red, #dc2626); }
+.p86-wob-views .p86-st-pill.is-attention:not(.active) .p86-st-pill-n {
+  color: var(--red, #dc2626); font-weight: 700; opacity: 1;
+}
+
+.p86-wob-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+/* styles.css gives every input and select width: 100%, which would put each
+   control on a line of its own; these size to the row instead. */
+.p86-wob-search {
+  flex: 1 1 260px; width: auto; min-width: 0; max-width: 420px;
+  background: var(--input-bg, #101014); color: var(--text, #fff);
+  border: 1px solid var(--border, #333); border-radius: 6px;
+  padding: 7px 10px; font-size: 13px; font-family: inherit;
+}
+.p86-wob-select {
+  flex: 0 0 auto; width: auto; background: var(--input-bg, #101014); color: var(--text, #fff);
+  border: 1px solid var(--border, #333); border-radius: 6px;
+  padding: 7px 8px; font-size: 13px; font-family: inherit;
+}
+.p86-wob-search:focus-visible, .p86-wob-select:focus-visible {
+  outline: 2px solid var(--accent, #4f8cff); outline-offset: 1px;
+}
+
+.p86-wob-scroll { overflow-x: auto; }
+
+.p86-wob-colhead,
+.p86-wob-row {
+  display: grid;
+  grid-template-columns: 14px minmax(220px, 2.4fr) 120px 110px 150px 130px 90px minmax(170px, 1.4fr);
+  column-gap: 12px; align-items: center; min-width: 1040px;
+}
+.p86-wob-colhead {
+  padding: 6px 10px; font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--text-dim, #888);
+  border-bottom: 1px solid var(--border, #333);
+}
+.p86-wob.is-empty .p86-wob-colhead { display: none; }
+
+.p86-wob-row {
+  padding: 9px 10px; text-decoration: none; color: var(--text, #fff);
+  border-bottom: 1px solid var(--border, #333); font-size: 13px;
+}
+.p86-wob-row:hover { background: var(--row-hover, rgba(255, 255, 255, 0.05)); }
+.p86-wob-row:focus-visible { outline: 2px solid var(--accent, #4f8cff); outline-offset: -2px; }
+
+.p86-wob-cell { min-width: 0; font-variant-numeric: tabular-nums; }
+/* The per-cell label: read on a phone, visually hidden on desktop. */
+.p86-wob-k {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap;
+}
+/* styles.css sizes the dot but sets no display, and an empty inline span is 0x0. */
+.p86-wob-c-prio .p86-st-prio { display: inline-block; vertical-align: middle; }
+.p86-wob-c-main { display: flex; flex-direction: column; gap: 2px; }
+.p86-wob-titleline { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.p86-wob-title {
+  font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.p86-wob-job {
+  font-size: 12px; color: var(--text-dim, #888);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.p86-wob-job.p86-wob-missing { font-style: italic; }
+.p86-wob-dim { color: var(--text-dim, #888); }
+.p86-wob-c-due.is-late { color: var(--red, #dc2626); font-weight: 600; }
+.p86-wob-c-due.is-today { color: var(--yellow, #d97706); font-weight: 600; }
+.p86-wob-bldg-m { display: none; }
+
+.p86-wob-c-crew { display: flex; flex-wrap: wrap; gap: 4px; }
+.p86-wob-chip {
+  display: inline-flex; align-items: center; white-space: nowrap;
+  font-size: 11px; line-height: 1.3; padding: 1px 7px; border-radius: 999px;
+  border: 1px solid var(--cell-border, var(--border, #333)); color: var(--text-dim, #aaa);
+}
+.p86-wob-chip.is-warn { color: var(--yellow, #d97706); border-color: var(--yellow, #d97706); }
+.p86-wob-chip.is-alert { color: var(--red, #dc2626); border-color: var(--red, #dc2626); }
+.p86-wob-chip.is-info { color: var(--accent, #4f8cff); border-color: var(--accent, #4f8cff); }
+.p86-wob-chip.is-quiet { border-color: transparent; padding-left: 2px; padding-right: 2px; }
+
+.p86-wob-state { padding: 24px 4px; }
+.p86-wob-error { color: var(--text-dim, #888); font-size: 13px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+.p86-wob-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  flex-wrap: wrap; padding-top: 12px; font-size: 12px; color: var(--text-dim, #888);
+}
+.p86-wob-foot:empty { display: none; }
+
+/* ── phone ─────────────────────────────────────────────────────────────── */
+@media (max-width: 760px) {
+  .p86-wob { padding: 12px 12px 24px; }
+  .p86-wob-colhead { display: none; }
+  .p86-wob-scroll { overflow-x: visible; }
+
+  .p86-wob-list { display: flex; flex-direction: column; gap: 8px; }
+  .p86-wob-row {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px;
+    min-width: 0; min-height: 44px;
+    background: var(--surface, #17171c); border: 1px solid var(--border, #333);
+    border-radius: 12px; padding: 11px 13px;
+  }
+  /* meta | due, then the title, the job, and the chips. */
+  .p86-wob-c-prio { order: 1; display: inline-flex; }
+  .p86-wob-c-status { order: 2; }
+  .p86-wob-c-due { order: 3; margin-left: auto; font-size: 12px; }
+  .p86-wob-c-main { order: 4; flex: 1 0 100%; }
+  .p86-wob-c-sched { order: 5; }
+  .p86-wob-c-assignee { order: 6; }
+  .p86-wob-c-bldg { order: 7; }
+  .p86-wob-c-crew { order: 8; flex: 1 0 100%; }
+  .p86-wob-title { font-size: 15px; white-space: normal; }
+  .p86-wob-job { white-space: normal; }
+  .p86-wob-c-sched, .p86-wob-c-assignee, .p86-wob-c-bldg {
+    font-size: 12px; color: var(--text-dim, #aaa);
+    display: inline-flex; align-items: baseline; gap: 4px;
+  }
+  .p86-wob-c-sched .p86-wob-k, .p86-wob-c-due .p86-wob-k,
+  .p86-wob-c-assignee .p86-wob-k, .p86-wob-c-bldg .p86-wob-k {
+    position: static; width: auto; height: auto; overflow: visible; clip: auto;
+    font-size: 11px; color: var(--text-dim, #888); margin-right: 2px;
+  }
+  .p86-wob-c-due .p86-wob-k { display: none; }
+  .p86-wob-bldg-d { display: none; }
+  .p86-wob-bldg-m { display: inline; }
+  .p86-wob-c-crew:empty { display: none; }
+
+  .p86-wob-pills .p86-st-pill { min-height: 40px; padding: 0 14px; font-size: 13px; }
+  .p86-wob-search { min-height: 44px; font-size: 16px; max-width: none; flex-basis: 100%; }
+  .p86-wob-select { min-height: 44px; font-size: 16px; flex: 1 1 auto; }
+  .p86-wob-more { width: 100%; min-height: 44px; }
+  .p86-wob-refresh { min-height: 40px; }
+}
+
+@media (max-width: 760px) and (pointer: coarse) {
+  .p86-wob-pills {
+    flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-x: contain;
+    scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  }
+  .p86-wob-pills::-webkit-scrollbar { display: none; }
+  .p86-wob-pills .p86-st-pill { flex: 0 0 auto; }
+}
