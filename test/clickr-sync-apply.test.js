@@ -276,6 +276,92 @@ describe('per-record apply', () => {
 });
 
 
+// J2. data.btStatus used to be stamped at CREATE and never touched again, and
+// nothing read it: a job Buildertrend later moved to Warranty or Closed kept the
+// word it was born with. Every apply and every link refreshes it — and it is the
+// ONLY thing a status writes without a ticked box.
+describe('what Buildertrend calls the job NOW (data.btStatus)', () => {
+  test('every apply and every link writes it; data.status stays put', async () => {
+    expect(jobData('j-1').btStatus).toBeUndefined();
+    await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: [] });
+    expect(jobData('j-1').btStatus).toBe('Open');
+    expect(jobData('j-1').status).toBe('In Progress');
+    // "Link to this one" on an ambiguous row writes it too.
+    const r = await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'link', btId: '333', p86Id: 'j-3' });
+    expect(r.json.results[0].outcome).toBe('linked');
+    expect([jobBt('j-3'), jobData('j-3').btStatus, jobData('j-3').status]).toEqual(['333', 'Open', 'In Progress']);
+  });
+
+  test('REFRESHED, not the word it was born with: Warranty and Closed reach P86 with no P86 status that means either', async () => {
+    const rec = BT_JOBS.find((j) => String(j.jobId) === '111');
+    const was = rec.jobStatus;
+    try {
+      // WARRANTY — P86 has no such status, so only the word is recorded.
+      rec.jobStatus = 'Warranty';
+      preview.forgetFetch(AGX);
+      await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: [] });
+      expect([jobData('j-1').btStatus, jobData('j-1').status]).toEqual(['Warranty', 'In Progress']);
+
+      // CLOSED — there IS a correction now, and it still only lands when ticked.
+      rec.jobStatus = 'Closed';
+      preview.forgetFetch(AGX);
+      await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: [] });
+      expect([jobData('j-1').btStatus, jobData('j-1').status]).toEqual(['Closed', 'In Progress']);
+      preview.forgetFetch(AGX);
+      const r = await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: ['status'] });
+      expect(r.json.results[0].fields).toEqual([{ field: 'status', from: 'In Progress', to: 'Completed' }]);
+      expect([jobData('j-1').btStatus, jobData('j-1').status]).toEqual(['Closed', 'Completed']);
+    } finally {
+      rec.jobStatus = was;
+      preview.forgetFetch(AGX);
+    }
+  });
+
+  test('safe mode writes the word and no other field; a second press is still unchanged', async () => {
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+    expect([jobData('j-1').btStatus, jobData('j-2').btStatus]).toEqual(['Open', 'Open']);
+    expect(jobData('j-1').contractAmount).toBe(12000);
+    expect(jobData('j-1').status).toBe('In Progress');
+    expect(jobData('j-2').street_address).toBe('');
+    preview.forgetFetch(AGX);
+    const again = await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'safe' });
+    expect(again.json.counts).toMatchObject({ applied: 0, unchanged: 2 });
+  });
+
+  test('a Buildertrend BLANK clears the word rather than recording the dash', async () => {
+    // Buildertrend writes '--' and friends for "nothing here". They are blanks, not
+    // a status, so the word is cleared — recording the dash would show the P86 side
+    // reading "Buildertrend: --".
+    await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: [] });
+    expect(jobData('j-1').btStatus).toBe('Open');
+    const rec = BT_JOBS.find((j) => String(j.jobId) === '111');
+    const was = rec.jobStatus;
+    try {
+      for (const blank of ['--', 'N/A', '   ']) {
+        rec.jobStatus = blank;
+        preview.forgetFetch(AGX);
+        await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: [] });
+        expect(jobData('j-1').btStatus).toBe('');
+        expect(jobData('j-1').status).toBe('In Progress');
+        // Put a real word back so the next blank has something to clear.
+        rec.jobStatus = 'Open';
+        preview.forgetFetch(AGX);
+        await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: [] });
+        expect(jobData('j-1').btStatus).toBe('Open');
+      }
+    } finally {
+      rec.jobStatus = was;
+      preview.forgetFetch(AGX);
+    }
+  });
+
+  test('a created job carries it from the start', async () => {
+    await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'create', btIds: ['446'] });
+    const made = engine.db.prepare('SELECT * FROM jobs WHERE bt_job_id = ?').get('446');
+    expect(JSON.parse(made.data)).toMatchObject({ btStatus: 'Warranty', status: 'In Progress' });
+  });
+});
+
 describe('choosing what applies — ticked fields, contract price, job number, lead revenue', () => {
   test('a fields list applies only what is ticked; an empty list links only', async () => {
     const r = await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['222'], fields: [] });

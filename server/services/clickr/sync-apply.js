@@ -71,6 +71,21 @@ const str = (v) => (v == null ? '' : String(v));
 const norm = (v) => str(v).trim().replace(/\s+/g, ' ');
 const CONFIDENT = new Set(['matched', 'conflict']);
 
+// WHAT BUILDERTREND SAYS NOW, kept on the P86 record as data.btStatus. It is
+// Buildertrend's own word (Open, Warranty, Closed; Approved, Pending, Draft,
+// Declined), never a P86 status: data.status moves only when a person ticks the
+// status correction. It used to be stamped at CREATE and never refreshed, so a
+// job or change order whose Buildertrend status later changed kept the word it
+// was born with. Every apply and every link refreshes it.
+const btStatusText = (v) => (match.isBtBlank(v) ? '' : norm(v));
+// The data blob with data.btStatus set, or null when it already says that. Only
+// ever a plain object is touched: anything unreadable is left exactly as it is.
+function withBtStatus(data, text) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  if (norm(data.btStatus) === text) return null;
+  return Object.assign({}, data, { btStatus: text });
+}
+
 // P86 may hold 0, '' or null for "no figure": compared as numbers.
 const moneyEq = (a, b) => Math.abs((Number(a) || 0) - (Number(b) || 0)) < 0.005;
 const LEAD_REVENUE_COLUMNS = { estimatedRevenueMin: 'estimated_revenue_low', estimatedRevenueMax: 'estimated_revenue_high' };
@@ -165,11 +180,16 @@ async function applyJob(db, orgId, row, mode, fields) {
     // re-geocodes lazily when geocode_address no longer equals it.
     data.address = [data.street_address, data.city, data.state, data.zip].filter((x) => norm(x)).join(', ');
   }
+  // What Buildertrend calls this job NOW (J2). Not a correction and not shown
+  // as an applied field: it is P86 learning Buildertrend's own word, so a
+  // Warranty or Closed job reads correctly where P86 has no matching status.
+  const nextBtStatus = withBtStatus(data, btStatusText(row.bt.status));
+  if (nextBtStatus) data.btStatus = nextBtStatus.btStatus;
   const wasLinked = linkedTo === btId;
-  if (!applied.length && wasLinked) return { unchanged: true, stale };
+  if (!applied.length && wasLinked && !nextBtStatus) return { unchanged: true, stale };
   await db.query('UPDATE jobs SET data = $1::jsonb, bt_job_id = $2, updated_at = NOW() WHERE id = $3 AND organization_id = $4',
     [JSON.stringify(data), btId, job.id, orgId]);
-  return { applied, linked: !wasLinked, stale };
+  return { applied, linked: !wasLinked, stale, btStatus: !!nextBtStatus };
 }
 
 // ── change orders ────────────────────────────────────────────────────────
@@ -227,6 +247,10 @@ async function applyChangeOrder(db, orgId, row, mode, fields) {
     data = next;
     applied.push({ field: c.field, from: c.from, to: c.to });
   }
+  // What Buildertrend calls this change order NOW (C2), so its Pending is
+  // distinguishable from its Draft where P86 has both as a draft.
+  const nextBtStatus = withBtStatus(data, btStatusText(row.bt.statusText));
+  if (nextBtStatus) data = nextBtStatus;
   const wasLinked = linkedTo === btId;
   let approvedAt = null;
   if (approve) {
@@ -238,7 +262,7 @@ async function applyChangeOrder(db, orgId, row, mode, fields) {
       applied.push({ field: 'status', from: 'draft', to: 'approved' });
     }
   }
-  if (!applied.length && wasLinked) return { unchanged: true, stale };
+  if (!applied.length && wasLinked && !nextBtStatus) return { unchanged: true, stale };
   await db.query('UPDATE job_change_orders SET data = $1::jsonb, bt_co_id = $2, updated_at = NOW() WHERE id = $3 AND job_id IN (SELECT id FROM jobs WHERE organization_id = $4)',
     [JSON.stringify(data), btId, co.id, orgId]);
   if (approvedAt) {
@@ -247,7 +271,7 @@ async function applyChangeOrder(db, orgId, row, mode, fields) {
     await db.query("UPDATE job_change_orders SET status = 'approved', approved_at = $1, approved_by = NULL, is_locked = TRUE WHERE id = $2 AND status = 'draft' AND job_id IN (SELECT id FROM jobs WHERE organization_id = $3)",
       [approvedAt, co.id, orgId]);
   }
-  return { applied, linked: !wasLinked, stale };
+  return { applied, linked: !wasLinked, stale, btStatus: !!nextBtStatus };
 }
 
 async function createChangeOrder(db, orgId, row, user) {
@@ -381,20 +405,38 @@ async function applyPurchaseOrder(db, orgId, row, mode, fields) {
         if (data.baselineTotal == null) data = Object.assign({}, data, { baselineTotal: poMatch.poTotal(Object.assign({}, data, { baselineTotal: undefined })) });
         if (data.revising) { data = Object.assign({}, data); delete data.revising; }
       }
-      if (poMatch.RANK[status] >= poMatch.RANK.approved && !data.approvedInBuildertrend) {
-        data = Object.assign({}, data, { approvedInBuildertrend: { by: norm(row.bt.approvalUser) } });
-      }
       applied.push({ field: 'status', from: po.status, to: status });
     }
   }
+  // WHO approved it in Buildertrend (P4): the sub/vendor, or the builder
+  // internally. P86's own 'approved' means the sub e-signed, so the word is kept
+  // apart — nothing here writes data.acceptance or claims an e-sign. Stamped
+  // whenever Buildertrend says an approval and the purchase order's FINAL P86
+  // status is approved or past it, NOT only when a correction moved it there:
+  // the two agreeing is exactly the case that raises no correction, and it used
+  // to be the case that could never record this. A recall never stamps one —
+  // Buildertrend withdrew that approval.
+  let stampedApproval = false;
+  const btState = poMatch.btPoState(row.bt.statusText, row.bt.workStatusText);
+  if (!row.bt.isRecalled && poMatch.RANK[btState] >= poMatch.RANK.approved && poMatch.RANK[status] >= poMatch.RANK.approved) {
+    const kind = poMatch.btApprovalKind(row.bt.statusText);
+    const had = data.approvedInBuildertrend;
+    if (!had) {
+      data = Object.assign({}, data, { approvedInBuildertrend: { by: norm(row.bt.approvalUser), kind: kind } });
+      stampedApproval = true;
+    } else if (kind && had.kind !== kind) {
+      data = Object.assign({}, data, { approvedInBuildertrend: Object.assign({}, had, { kind: kind }) });
+      stampedApproval = true;
+    }
+  }
   const wasLinked = linkedTo === btId;
-  if (!applied.length && wasLinked) return { unchanged: true, stale };
+  if (!applied.length && wasLinked && !stampedApproval) return { unchanged: true, stale };
   await db.query(
     `UPDATE job_purchase_orders SET data = $1::jsonb, sub_id = $2, status = $3, is_locked = $4, bt_po_id = $5,
        approved_at = CASE WHEN $3 IN ('approved', 'work_complete') AND approved_at IS NULL THEN NOW() ELSE approved_at END, updated_at = NOW()
      WHERE id = $6 AND job_id IN (SELECT id FROM jobs WHERE organization_id = $7)`,
     [JSON.stringify(data), subId, status, nowLocked, btId, po.id, orgId]);
-  return { applied, linked: !wasLinked, stale };
+  return { applied, linked: !wasLinked, stale, approvalStamp: stampedApproval };
 }
 
 // SUB PORTAL ACCESS, as the PO page grants it. Called only AFTER the
@@ -471,7 +513,7 @@ async function createPurchaseOrder(db, orgId, row, user) {
   if (!rs.sub && !match.isBtBlank(bt.subName)) data.vendorName = norm(bt.subName);
   const locked = status !== 'draft';
   if (locked) data.baselineTotal = cost;
-  if (poMatch.RANK[status] >= poMatch.RANK.approved) data.approvedInBuildertrend = { by: norm(bt.approvalUser) };
+  if (poMatch.RANK[status] >= poMatch.RANK.approved) data.approvedInBuildertrend = { by: norm(bt.approvalUser), kind: poMatch.btApprovalKind(bt.statusText) };
   if (Math.abs(poMatch.poTotal(data) - cost) >= 0.005) return { skipped: 'P86 could not reproduce Buildertrend\'s cost on this purchase order, so it is not created.' };
   const id = genId('po_');
   await db.query(
@@ -825,12 +867,19 @@ async function linkRecord(org, kind, rows, input, deps) {
   const client = await deps.pool.connect();
   try {
     await client.query('BEGIN');
-    const cur = await client.query('SELECT id, ' + col + ' AS bt FROM ' + table + ' WHERE id = $1 AND organization_id = $2 FOR UPDATE', [input.p86Id, org.id]);
+    const cur = await client.query('SELECT id, ' + col + ' AS bt' + (kind === 'jobs' ? ', data' : '') + ' FROM ' + table + ' WHERE id = $1 AND organization_id = $2 FOR UPDATE', [input.p86Id, org.id]);
     if (!cur.rows.length) { await client.query('ROLLBACK'); return skip('That P86 record is not in this organization.'); }
     if (norm(cur.rows[0].bt) && norm(cur.rows[0].bt) !== base.btId) { await client.query('ROLLBACK'); return skip('That P86 record is already linked to a different Buildertrend record.'); }
     const taken = await client.query('SELECT id FROM ' + table + ' WHERE organization_id = $1 AND ' + col + ' = $2 AND id <> $3', [org.id, base.btId, input.p86Id]);
     if (taken.rows.length) { await client.query('ROLLBACK'); return skip('Another P86 record is already linked to this Buildertrend record.'); }
     await client.query('UPDATE ' + table + ' SET ' + col + ' = $1 WHERE id = $2 AND organization_id = $3', [base.btId, input.p86Id, org.id]);
+    // A linked job learns Buildertrend's current word for it too (J2), on the
+    // same key and nothing else: data.status is not touched here.
+    const nextJobBt = kind === 'jobs' ? withBtStatus(cur.rows[0].data, btStatusText(row.bt.status)) : null;
+    if (nextJobBt) {
+      await client.query('UPDATE jobs SET data = $1::jsonb, updated_at = NOW() WHERE id = $2 AND organization_id = $3',
+        [JSON.stringify(nextJobBt), input.p86Id, org.id]);
+    }
     await client.query('COMMIT');
   } catch (e) {
     try { await client.query('ROLLBACK'); } catch (_) { /* ignore */ }
@@ -860,6 +909,12 @@ async function linkDetail(kind, org, row, input, deps, base, skip) {
     }
     if (co) await client.query('UPDATE job_change_orders SET bt_co_id = $1 WHERE id = $2 AND job_id IN (SELECT id FROM jobs WHERE organization_id = $3)', [base.btId, rec.id, org.id]);
     else await client.query('UPDATE job_purchase_orders SET bt_po_id = $1 WHERE id = $2 AND job_id IN (SELECT id FROM jobs WHERE organization_id = $3)', [base.btId, rec.id, org.id]);
+    // A linked change order learns Buildertrend's current word for it (C2).
+    const nextCoBt = co ? withBtStatus(parseData(rec.data), btStatusText(row.bt.statusText)) : null;
+    if (nextCoBt) {
+      await client.query('UPDATE job_change_orders SET data = $1::jsonb, updated_at = NOW() WHERE id = $2 AND job_id IN (SELECT id FROM jobs WHERE organization_id = $3)',
+        [JSON.stringify(nextCoBt), rec.id, org.id]);
+    }
     await client.query('COMMIT');
   } catch (e) {
     try { await client.query('ROLLBACK'); } catch (_) { /* ignore */ }
@@ -932,7 +987,7 @@ async function apply(org, input, deps) {
         results.push(Object.assign(base, { outcome: 'unchanged', stale: r.stale }));
         if (kind === 'purchaseOrders') grantFor = base;
       } else {
-        results.push(Object.assign(base, { outcome: 'applied', linked: !!r.linked, fields: r.applied, stale: r.stale, contactLinked: !!r.contactLinked }));
+        results.push(Object.assign(base, { outcome: 'applied', linked: !!r.linked, fields: r.applied, stale: r.stale, contactLinked: !!r.contactLinked, btStatus: !!r.btStatus, approvalStamp: !!r.approvalStamp }));
         if (r.regeocode) regeocode.push(r.regeocode);
         if (kind === 'purchaseOrders') grantFor = base;
       }
@@ -953,6 +1008,11 @@ async function apply(org, input, deps) {
     counts[r.outcome]++;
     if (r.linked) counts.linked++;
     if (r.subAccess) counts.subAccess = (counts.subAccess || 0) + 1;
+    // Neither is a P86 field: they are what Buildertrend says, recorded beside
+    // it. Counted apart so a press that only did this does not read as a bare
+    // "N updated" with no field named.
+    if (r.btStatus) counts.statusWord = (counts.statusWord || 0) + 1;
+    if (r.approvalStamp) counts.approvalKind = (counts.approvalKind || 0) + 1;
     counts.fields += (r.fields || []).length;
   }
   if (preview.forgetFetch) preview.forgetFetch(org.id);

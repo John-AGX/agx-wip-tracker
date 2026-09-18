@@ -615,6 +615,39 @@ describe('MATCHER — leads (no status key exists; revenue $0 is blank)', () => 
     expect(nib.rows.map((p) => p.id).sort()).toEqual(['pl-odd', 'pl-open-orphan']);
     expect(nib.notListed).toBe(1);
   });
+
+  // L1. Buildertrend's Leads dataset holds OPEN leads only, so a lead it sells,
+  // loses or closes simply stops arriving. P86 is told, and nothing else.
+  test('a lead linked to a Buildertrend lead that left the open list is MARKED, after a complete read only, and nothing is proposed for it', () => {
+    const linked = P86.map((p) => (p.id === 'pl-open-orphan' ? Object.assign({}, p, { bt_lead_id: '  77880  ' }) : p));
+    const complete = match.notInBuildertrend(rows, linked, 'leads', { readComplete: true });
+    const gone = complete.rows.find((p) => p.id === 'pl-open-orphan');
+    expect(gone.linkedGone).toBe(true);
+    // Nothing is proposed: no correction, no new status, no archive.
+    for (const k of ['corrections', 'heldBack', 'flags', 'btBlank', 'proposedStatus', 'archive']) expect(gone[k]).toBeUndefined();
+    expect(gone.status).toBe('new');
+    // A lead that carries no Buildertrend id says nothing either way.
+    expect(complete.rows.find((p) => p.id === 'pl-odd').linkedGone).toBeUndefined();
+
+    // A PARTIAL read proves nothing: the Buildertrend lead may be in the part never fetched.
+    const partial = match.notInBuildertrend(rows, linked, 'leads', { readComplete: false });
+    expect(partial.rows.find((p) => p.id === 'pl-open-orphan').linkedGone).toBeUndefined();
+    expect(match.notInBuildertrend(rows, linked, 'leads').rows.find((p) => p.id === 'pl-open-orphan').linkedGone).toBeUndefined();
+
+    // And an id the read DID carry is not "gone", even when this lead is unreached.
+    const still = P86.map((p) => (p.id === 'pl-open-orphan' ? Object.assign({}, p, { bt_lead_id: String(rows[0].bt.btId) }) : p));
+    expect(match.notInBuildertrend(rows, still, 'leads', { readComplete: true }).rows.find((p) => p.id === 'pl-open-orphan').linkedGone).toBeUndefined();
+
+    // BOTH SIDES are normalised. Padding on the BUILDERTREND id must not make a
+    // lead that IS still open read as sold, lost or closed — the mark is the only
+    // thing this list says about it, and it cannot be a false positive.
+    const padded = [{ bt: { index: 0, btId: '  77880  ', raw: 'padded' }, p86: null, candidates: [] }];
+    const clean = P86.map((p) => (p.id === 'pl-open-orphan' ? Object.assign({}, p, { bt_lead_id: '77880' }) : p));
+    expect(match.notInBuildertrend(padded, clean, 'leads', { readComplete: true }).rows.find((p) => p.id === 'pl-open-orphan').linkedGone).toBeUndefined();
+    // A DIFFERENT id in the read still leaves it marked, so the check has teeth.
+    const other = [{ bt: { index: 0, btId: '  99999  ', raw: 'padded' }, p86: null, candidates: [] }];
+    expect(match.notInBuildertrend(other, clean, 'leads', { readComplete: true }).rows.find((p) => p.id === 'pl-open-orphan').linkedGone).toBe(true);
+  });
 });
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -985,6 +1018,10 @@ function clickrFetch(url, opts) {
   if (clickrMode === 'unauthorized-echo') return respond(401, { error: 'bad token ' + KEY + ' (Authorization: Bearer ' + KEY + ')' });
   if (clickrMode === 'throw-with-key') return Promise.reject(new Error('socket hang up while sending Bearer ' + KEY));
   if (clickrMode === 'malformed-next-jobs' && u.pathname.includes(DATASETS.jobs.datasetId)) return respond(200, envelope(HTTP_JOBS, 9, { next: 'http://[::1' }));
+  if (clickrMode === 'malformed-next-leads' && u.pathname.includes(DATASETS.leads.datasetId)) {
+    const LP = leadsOverride || HTTP_LEADS;
+    return respond(200, envelope(LP, LP.length + 3, { next: 'http://[::1' }));
+  }
   const skip = Number(u.searchParams.get('skip') || 0);
   const limit = Number(u.searchParams.get('limit') || 200);
   if (u.pathname.includes(DATASETS.jobs.datasetId)) return respond(200, envelope(HTTP_JOBS.slice(skip, skip + limit), HTTP_JOBS.length));
@@ -1107,6 +1144,46 @@ describe('HTTP — the preview over real-shape Clickr pages', () => {
     expect(jobs.notInBuildertrend.rows.map((x) => x.id)).toEqual(['j-a2']);
     expect(jobs.notInBuildertrend.notListed).toBe(1);
     expect(r.json.readOnly).toBe(true);
+  });
+
+  test('a P86 lead whose Buildertrend lead is no longer open is marked in "not in Buildertrend", and nothing is proposed for it', async () => {
+    // Buildertrend serves the Gazebo lead only: "Cross Tenant Probe" has left its
+    // open list, and l-a2 still carries that Buildertrend lead's id.
+    leadsOverride = [HTTP_LEADS[0]];
+    engine.db.prepare('UPDATE leads SET bt_lead_id = ? WHERE id = ?').run('bt-gone-1', 'l-a2');
+    try {
+      const r = await get(PREVIEW, AGX_ADMIN);
+      expect(r.json.datasets.leads.fetch.complete).toBe(true);
+      const nib = r.json.datasets.leads.notInBuildertrend;
+      expect(nib.rows.find((p) => p.id === 'l-a2')).toMatchObject({ linkedGone: true });
+      expect(nib.sentence).toMatch(/Buildertrend sold, lost or closed it, so it left that open list. Nothing is proposed for it./);
+      // No Buildertrend row reached it, so nothing anywhere proposes anything for it.
+      expect(JSON.stringify(r.json.datasets.leads.rows)).not.toContain('l-a2');
+    } finally {
+      engine.db.prepare('UPDATE leads SET bt_lead_id = NULL WHERE id = ?').run('l-a2');
+    }
+  });
+
+  test('after a PARTIAL leads read the sentence says NO lead is marked, because none is', async () => {
+    // The mark is gated on a complete read. If the sentence still described the
+    // convention, an unmarked lead carrying a Buildertrend id would read as "still
+    // open in Buildertrend" — the one conclusion a partial read cannot support.
+    clickrMode = 'malformed-next-leads';
+    engine.db.prepare('UPDATE leads SET bt_lead_id = ? WHERE id = ?').run('bt-gone-1', 'l-a2');
+    try {
+      const r = await get(PREVIEW, AGX_ADMIN);
+      const leads = r.json.datasets.leads;
+      expect(leads.fetch.complete).toBe(false);
+      const nib = leads.notInBuildertrend;
+      // Nothing is marked...
+      expect(nib.rows.every((p) => p.linkedGone === undefined)).toBe(true);
+      // ...and the sentence says so, instead of the complete-read convention.
+      expect(nib.sentence).toMatch(/No lead is marked as having left that open list/);
+      expect(nib.sentence).not.toMatch(/Buildertrend sold, lost or closed it/);
+      expect(nib.sentence).toMatch(/NOT RELIABLE/);
+    } finally {
+      engine.db.prepare('UPDATE leads SET bt_lead_id = NULL WHERE id = ?').run('l-a2');
+    }
   });
 
   test('the legacy per-job CO list is summed exactly as the WIP rollup sums it', async () => {
@@ -1480,5 +1557,145 @@ describe('PAGE — js/bt-sync-preview.js', () => {
     } finally {
       global.fetch = saved;
     }
+  });
+
+  // ── J1. The default scope is "Open + Warranty"; closing a job is the
+  // commonest Buildertrend status change there is, and it moves the row out of
+  // that scope. A confident row carrying anything about STATUS stays in view.
+  const jobRow = (n, scope, cls, extra) => Object.assign({
+    bt: { index: n, btId: String(n), raw: 'ROW' + n, status: scope === 'closed' ? 'Closed' : 'Open', scope: scope,
+      street: '', city: '', state: '', zip: '', projectedStart: '', contractText: '' },
+    class: cls, rung: 'number',
+    p86: { id: 'p' + n, jobNumber: 'S' + n, title: 'Job ' + n, status: 'In Progress', street: '', city: '', state: '', zip: '' },
+    corrections: [], btBlank: [], heldBack: [], flags: [], candidates: [], notes: [],
+  }, extra || {});
+  const JOB_ROWS = [
+    // Closed in Buildertrend, still active in P86: the correction that must be seen.
+    jobRow(1, 'closed', 'conflict', { corrections: [{ field: 'status', label: 'Status', kind: 'value', from: 'In Progress', to: 'Closed', toP86: 'Completed' }] }),
+    // Closed in Buildertrend and agreed in P86: nothing about status, so out of scope.
+    jobRow(2, 'closed', 'matched'),
+    // Closed, with a status item held back.
+    jobRow(3, 'closed', 'matched', { heldBack: [{ field: 'status', label: 'Status', bt: 'Closed', p86: 'In Progress', applicable: false, note: 'held' }] }),
+    // Closed, with a status FLAG.
+    jobRow(4, 'closed', 'matched', { flags: [{ field: 'status', label: 'Status', text: 'not mapped' }] }),
+    // Closed and AMBIGUOUS. Nothing is proposed for it, so nothing pulls it into
+    // scope — not even a status item a future server leaves on the row.
+    jobRow(5, 'closed', 'ambiguous', { p86: null, candidates: [], flags: [{ field: 'status', label: 'Status', text: 'left over' }] }),
+    jobRow(6, 'open', 'matched'),
+    // Warranty: in scope already, and P86 has no such word.
+    jobRow(7, 'open', 'matched'),
+  ];
+  JOB_ROWS[6].bt.status = 'Warranty';
+  JOB_ROWS[6].flags = [{ field: 'status', label: 'Status', text: 'Buildertrend says Warranty' }];
+  const jobsDs = () => ({ key: 'jobs', label: 'Jobs', datasetId: 'd-jobs',
+    fetch: { fetched: 7, reportedCount: 7, pages: 1, mode: 'skip/limit', complete: true, reason: null, elapsedMs: 1 },
+    error: null, sentence: 'Fetched 7 of 7 jobs in 1 page — every record Clickr reported.', classified: true, mapping: null,
+    rows: JOB_ROWS.map((r) => JSON.parse(JSON.stringify(r))),
+    notInBuildertrend: { reliable: true, count: 0, notListed: 0, sentence: 'none', rows: [] } });
+  const pageWith = (datasets) => ({ generatedAt: new Date().toISOString(), elapsedMs: 1, organization: { name: 'AGX' },
+    p86: { jobs: 7, leads: 0, clients: 0, unscopedJobs: 0, unscopedLeads: 0, error: null },
+    datasets: Object.assign({ jobs: { key: 'jobs', rows: [], classified: false, fetch: {} }, leads: { key: 'leads', rows: [], classified: false, fetch: {} } }, datasets) });
+
+  test('a closed Buildertrend job carrying a status correction, held-back item or flag is in scope under “Open + Warranty”', () => {
+    const data = pageWith({ jobs: jobsDs() });
+    T.setTab('jobs');
+    T.setView('jobs', 'all', 'open');
+    const html = T.render(data);
+    for (const n of [1, 3, 4, 6, 7]) expect(html).toContain('ROW' + n);
+    // Closed with nothing to say about status, and a closed ambiguous row: hidden.
+    expect(html).not.toContain('ROW2');
+    expect(html).not.toContain('ROW5');
+    expect(html).toContain('>5 shown</span>');
+    // The scope sub-text says why a closed job is here at all.
+    expect(html).toContain('Closed Buildertrend jobs appear here when their P86 status no longer matches.');
+
+    // The tiles and the filters count exactly the rows the same rule shows.
+    T.setView('jobs', 'matched', 'open');
+    expect(T.render(data)).toContain('>4 shown</span>');
+    T.setView('jobs', 'conflict', 'open');
+    expect(T.render(data)).toContain('>1 shown</span>');
+    T.setView('jobs', 'ambiguous', 'open');
+    expect(T.render(data)).toContain('>0 shown</span>');
+
+    // “All jobs” still shows every row.
+    T.setView('jobs', 'all', 'all');
+    const all = T.render(data);
+    for (const n of [1, 2, 3, 4, 5, 6, 7]) expect(all).toContain('ROW' + n);
+    expect(all).toContain('>7 shown</span>');
+    T.setView('jobs', 'all', 'open');
+  });
+
+  // ── J2/C2. A linked job whose Buildertrend word has MOVED carries no
+  // correction — P86 has no Warranty and no Pending — so its row shows a bare
+  // "Linked" tag with nothing to press. The safe press is the thing that records
+  // the word, so it has to stay live for exactly these rows; otherwise a fully
+  // linked dataset never learns another Buildertrend word again.
+  const linkedJob = (n, due) => Object.assign(jobRow(n, 'open', 'matched'), { rung: 'Buildertrend ID', btStatusDue: due });
+
+  test('a linked job whose Buildertrend word has moved keeps the safe press live, and the button says what it records', () => {
+    const rows = [linkedJob(11, true), linkedJob(12, false)];
+    rows[0].bt.status = 'Warranty';
+    rows[0].flags = [{ field: 'status', label: 'Status', text: 'Buildertrend says Warranty' }];
+    const ds = Object.assign(jobsDs(), { rows });
+    T.setTab('jobs');
+    T.setView('jobs', 'all', 'all');
+    const html = T.render(pageWith({ jobs: ds }));
+
+    // The row offers nothing of its own: there is no correction to tick.
+    expect(html).toContain('<span class="btp-tag is-linked">Linked</span>');
+    expect(html).not.toContain('data-btp-apply="11"');
+    // The safe press reaches it, counts it, and names what it will record.
+    expect(html).toMatch(/data-btp-apply-safe="1">Link confident matches \+ fill blank start dates \(1\)</);
+    expect(html).toContain('Records what Buildertrend now calls 1 job, beside the P86 status, which does not change.');
+    expect(T.safeConfirmText('jobs', ds)).toContain('Records what Buildertrend now calls 1 job');
+
+    // Once every word is recorded there is nothing left to press.
+    const done = Object.assign(jobsDs(), { rows: [linkedJob(11, false), linkedJob(12, false)] });
+    expect(T.render(pageWith({ jobs: done })))
+      .toMatch(/data-btp-apply-safe="1" disabled>Link confident matches \+ fill blank start dates \(0\)</);
+    expect(T.safeConfirmText('jobs', done)).toBe('Nothing is left to link. Start dates are filled only where P86 has none. No P86 status, money or other field changes.');
+  });
+
+  test('the safe button owns up to covering Buildertrend jobs the scope hides', () => {
+    // The scope buttons filter the LIST; the press covers the whole read. The
+    // count and the list therefore disagree on purpose, so the sub-text says so
+    // — the way the create button says closed jobs are created one at a time.
+    T.setTab('jobs');
+    T.setView('jobs', 'all', 'open');
+    const html = T.render(pageWith({ jobs: jobsDs() }));
+    expect(html).toContain('>5 shown</span>');
+    expect(html).toMatch(/data-btp-apply-safe="1">Link confident matches \+ fill blank start dates \(6\)</);
+    expect(html).toContain('Every confident match counts here, including Buildertrend jobs the scope above hides.');
+  });
+
+  // ── J2. P86 has no Warranty and no Closed, so the row says Buildertrend's
+  // own word — the same word an apply saves on the job (data.btStatus).
+  test('the P86 side of a job row names Buildertrend’s own status', () => {
+    const data = pageWith({ jobs: jobsDs() });
+    T.setTab('jobs');
+    T.setView('jobs', 'all', 'all');
+    const html = T.render(data);
+    expect(html).toContain('Buildertrend: Warranty');
+    expect(html).toContain('Buildertrend: Closed');
+    T.setView('jobs', 'all', 'open');
+  });
+
+  // ── L1. The wording is the lead's own, not the change orders'.
+  test('a P86 lead whose Buildertrend lead left the open list says what that means, and offers nothing', () => {
+    const leads = { key: 'leads', label: 'Leads', datasetId: 'd-leads',
+      fetch: { fetched: 1, reportedCount: 1, pages: 1, mode: 'skip/limit', complete: true, reason: null, elapsedMs: 1 },
+      error: null, sentence: 'ok', classified: true, mapping: null, rows: [],
+      notInBuildertrend: { reliable: true, count: 1, notListed: 0, sentence: 'review only',
+        rows: [{ id: 'l-9', title: 'Sold Elsewhere', status: 'sent', state86: 'open', client: 'HOA', street: '', city: '', state: '', zip: '', linkedGone: true }] } };
+    T.setTab('leads');
+    T.setView('leads', 'notinbt');
+    const html = T.render(pageWith({ leads: leads }));
+    expect(html).toContain('no longer an open lead in Buildertrend (sold, lost or closed there)');
+    expect(html).not.toContain('linked to a Buildertrend change order');
+    // Nothing is proposed: no status, no archive.
+    expect(html).not.toContain('data-btp-archive=');
+    expect(html).toContain('not archived: Buildertrend sends open leads only');
+    T.setView('leads', 'all');
+    T.setTab('jobs');
   });
 });

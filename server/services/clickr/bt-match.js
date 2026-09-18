@@ -568,6 +568,18 @@ function coreTitle(title, numbers) {
   return s;
 }
 
+// BUILDERTREND'S OWN WORD against the word P86 stored for it (data.btStatus,
+// written only by sync-apply.js). A Warranty job and a Pending change order
+// carry no correction at all — P86 has no such status — so without this signal
+// a confident, already-linked row would offer nothing to press and P86 would
+// keep the word it was linked with for ever. Blank-aware on the Buildertrend
+// side, exactly as sync-apply.js writes it, so a blank sentinel does not leave
+// the safe press permanently due.
+function btStatusDue(btWord, stored) {
+  const now = isBtBlank(btWord) ? '' : str(btWord).trim().replace(/\s+/g, ' ');
+  return now !== str(stored).trim().replace(/\s+/g, ' ');
+}
+
 function p86JobView(row) {
   const d = row.data || {};
   return {
@@ -582,6 +594,8 @@ function p86JobView(row) {
     startDate: str(d.startDate),
     contractAmount: d.contractAmount == null ? '' : str(d.contractAmount),
     state86: p86JobState(d.status),
+    // What Buildertrend last called it, as sync-apply.js recorded it (J2).
+    btStatus: str(d.btStatus).trim(),
     // jobs.bt_job_id — set only by sync-apply.js when an admin applies a match.
     btId: row.bt_job_id == null ? '' : str(row.bt_job_id).trim(),
   };
@@ -859,6 +873,7 @@ function matchJobs(btValues, p86Rows, ctx) {
       const { acc, notes } = jobProposals(Object.assign({}, bt, { title }, moneyIn), p, c);
       const row = {
         bt, class: acc.corrections.length ? 'conflict' : 'matched', rung: rungName, p86: jobCand(p, [rungName]),
+        btStatusDue: btStatusDue(bt.status, p.btStatus),
         corrections: acc.corrections, btBlank: acc.btBlank, heldBack: acc.heldBack, flags: acc.flags,
         candidates: [], notes: cNotes.concat(notes), p86Duplicates: [],
       };
@@ -1276,8 +1291,20 @@ function demoteCollisions(rows, noun) {
 // Jobs: only ACTIVE P86 jobs are listed (Completed/Archived are counted);
 // a status outside P86's vocabulary is listed as unknown.
 // Leads: only OPEN P86 leads are listed; sold/lost/no-opportunity are expected
-// absent (Buildertrend's Leads dataset is open leads only) and are counted.
-function notInBuildertrend(rows, p86Rows, kind) {
+// absent (Buildertrend's Leads dataset is open leads only) and are counted. One
+// still open in P86 that carries the id of a Buildertrend lead NO record of a
+// COMPLETE read carried is marked `linkedGone`: Buildertrend sold, lost or
+// closed it, so it left the open list. Nothing is proposed for it — "gone from
+// the open list" is not a P86 status, and P86 may be right to keep working it.
+function notInBuildertrend(rows, p86Rows, kind, opts) {
+  // Only a COMPLETE read makes "no Buildertrend record carries this id" mean
+  // anything: after a partial read the id may sit in the part never fetched.
+  const readComplete = !!(opts && opts.readComplete);
+  const btIdsRead = new Set();
+  for (const r of rows) {
+    const k = r.bt && r.bt.btId != null ? String(r.bt.btId).trim() : '';
+    if (k) btIdsRead.add(k);
+  }
   const reached = new Set();
   // A possible P86 duplicate next to a confident match is NOT reached (it may be
   // a real P86-only record), but it is linked back to the row it resembles.
@@ -1318,7 +1345,8 @@ function notInBuildertrend(rows, p86Rows, kind) {
       if (reached.has(p.id)) continue;
       if (p.state86 === 'closed') { notListed++; continue; }
       listed.push(link({ id: p.id, title: p.title, status: p.status, state86: p.state86 || 'unknown', client: p.client,
-        street: p.street, city: p.city, state: p.state, zip: p.zip }));
+        street: p.street, city: p.city, state: p.state, zip: p.zip,
+        linkedGone: readComplete && p.btId && !btIdsRead.has(p.btId) ? true : undefined }));
     }
   }
   return { rows: listed, notListed };
@@ -1573,6 +1601,6 @@ module.exports = {
   parseJobName, exactNumberKey, looseNumberKey, namesAgree, nameEvidence, placeEvidence, streetsMatchStrict, streetsAgree, samePlace,
   nearIndex, bigrams, GENERIC,
   isBtBlank, isP86Blank, textKey, streetKey, cityKey, stateKey, zipKey, dateKey, fuzzyEq, osa, charSimilarity,
-  parseMoney, fmtMoney, compareField, compareMoney, btJobState, btScope, p86JobState, p86LeadState,
+  parseMoney, fmtMoney, compareField, compareMoney, btJobState, btScope, p86JobState, p86LeadState, btStatusDue,
   p86JobView, p86LeadView, coreTitle, personKey,
 };

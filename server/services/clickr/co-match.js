@@ -177,8 +177,22 @@ function coProposals(bt, v) {
 
   // STATUS
   const bs = btCoState(bt.statusText);
-  if (isBtBlank(bt.statusText) || !bs) {
-    if (!isBtBlank(bt.statusText)) notes.push('Buildertrend status "' + norm(bt.statusText) + '" is not Approved, Pending or Draft, so status was not compared.');
+  if (isBtBlank(bt.statusText)) {
+    // Buildertrend says nothing about this change order's status. Nothing shown.
+  } else if (!bs) {
+    // Anything that is not Approved, Pending or Draft — DECLINED above all. It
+    // used to be a bare note, so a change order Buildertrend declined while P86
+    // counts it in the contract went by with nothing flagged and money standing.
+    const said = norm(bt.statusText);
+    if (v.status === 'approved' || v.status === 'applied') {
+      acc.heldBack.push({ field: 'status', label: 'Status', reason: 'money', bt: said, p86: v.status, applicable: false,
+        note: 'Buildertrend says ' + said + '; P86 counts this change order in the contract. A sync never un-approves — change it in P86.' });
+    } else if (v.status === 'draft') {
+      acc.flags.push({ field: 'status', label: 'Status',
+        text: 'Buildertrend says ' + said + ', which is not a P86 change-order status. Not mapped — P86 keeps this change order as a draft and counts nothing.' });
+    } else {
+      notes.push('Buildertrend status "' + said + '" is not Approved, Pending or Draft, so status was not compared.');
+    }
   } else if (bs === 'approved' && v.status === 'draft') {
     if (v.linkedNode) {
       acc.heldBack.push({ field: 'status', label: 'Status', reason: 'money', bt: 'Approved', p86: 'draft', applicable: false,
@@ -257,7 +271,7 @@ function matchChangeOrders(btValues, p86) {
           notes: ['The P86 change order linked to this one (' + (linked.coNumber || linked.id) + ') is on a different P86 job than Buildertrend\'s job, so nothing is proposed. Move or unlink it in P86.'] });
       }
       const { acc, notes } = coProposals(b, linked);
-      return row(bt, acc.corrections.length ? 'conflict' : 'matched', Object.assign({ rung: 'Buildertrend ID', job: jobInfo, notes, p86: p86Out(linked) }, acc));
+      return row(bt, acc.corrections.length ? 'conflict' : 'matched', Object.assign({ rung: 'Buildertrend ID', job: jobInfo, notes, p86: p86Out(linked), btStatusDue: match.btStatusDue(b.statusText, linked.data && linked.data.btStatus) }, acc));
     }
 
     const open = onJob.filter((v) => !v.btId);
@@ -266,7 +280,7 @@ function matchChangeOrders(btValues, p86) {
     if (byNumber.length === 1 && !titlesDisagree(b.title, byNumber[0].title)) {
       const v = byNumber[0];
       const { acc, notes } = coProposals(b, v);
-      return row(bt, acc.corrections.length ? 'conflict' : 'matched', Object.assign({ rung: 'CO number', job: jobInfo, notes, p86: p86Out(v) }, acc));
+      return row(bt, acc.corrections.length ? 'conflict' : 'matched', Object.assign({ rung: 'CO number', job: jobInfo, notes, p86: p86Out(v), btStatusDue: match.btStatusDue(b.statusText, v.data && v.data.btStatus) }, acc));
     }
     if (byNumber.length) {
       return row(bt, 'ambiguous', { job: jobInfo, candidates: byNumber.map((v) => coCand(v, ['CO number'])),

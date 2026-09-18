@@ -71,6 +71,10 @@ const BT_COS = [
   coRec(7011, 111, 'CO-0010', 'Node CO', 'Approved', 40, 30),
   coRec(7012, 111, 'CO-0011', 'Linked on the wrong job', 'Approved', 50, 40),
   coRec(7013, 111, 'CO-0013', 'Deleted in BT', 'Approved', 60, 50, { isDeleted: true }),
+  // C1. Declined is not one of the three P86 maps. Against a change order P86
+  // counts in the contract it is a held-back item; against a draft, a flag.
+  coRec(7014, 111, 'CO-0014', 'Declined extra', 'Declined', 500, 300),
+  coRec(7015, 111, 'CO-0015', 'Declined draft', 'Declined', 200, 120),
 ];
 
 function clickrFetch(url) {
@@ -115,6 +119,8 @@ function seed() {
   co.run('co-h', 'j-1', 10, 'draft', 'CO-10', JSON.stringify({ title: 'Node CO', lines: [line({ id: 'lh', unitCost: 30, unitSell: 40 })] }), 0, AGX, null);
   engine.db.prepare("UPDATE job_change_orders SET linked_node_id = 'node-1' WHERE id = 'co-h'").run();
   co.run('co-i', 'j-3', 10, 'draft', 'CO-11', JSON.stringify({ title: 'Linked on the wrong job', lines: [line({ id: 'li', unitCost: 40, unitSell: 50 })] }), 0, AGX, '7012');
+  co.run('co-j', 'j-1', 10, 'approved', 'CO-14', JSON.stringify({ title: 'Declined extra', lines: [line({ id: 'lj', unitCost: 300, unitSell: 500 })] }), 1, AGX, null);
+  co.run('co-k', 'j-1', 10, 'draft', 'CO-15', JSON.stringify({ title: 'Declined draft', lines: [line({ id: 'lk', unitCost: 120, unitSell: 200 })] }), 0, AGX, null);
   co.run('co-x', 'j-b', 20, 'draft', 'CO-1', JSON.stringify({ title: 'Extra railing', lines: [line({ id: 'lx', unitCost: 800, markup: 25 })] }), 0, OTHER, null);
 }
 
@@ -247,6 +253,46 @@ describe('PREVIEW — every Buildertrend change order matched inside its own lin
   });
 });
 
+describe('PREVIEW — a Buildertrend status P86 does not map (C1)', () => {
+  test('Declined on a change order P86 counts in the contract is held back, never applicable', async () => {
+    const ds = await coRows();
+    const r = byBt(ds, 7014);
+    expect([r.class, r.p86.id]).toEqual(['matched', 'co-j']);
+    expect(r.corrections).toEqual([]);
+    const h = r.heldBack.find((x) => x.field === 'status');
+    expect([h.applicable, h.bt, h.p86]).toEqual([false, 'Declined', 'approved']);
+    expect(h.note).toBe('Buildertrend says Declined; P86 counts this change order in the contract. A sync never un-approves — change it in P86.');
+    // It is no longer a bare note that leaves the money unflagged.
+    expect(r.notes.join(' ')).not.toMatch(/was not compared/);
+    expect(r.flags).toEqual([]);
+  });
+
+  test('Declined on a P86 DRAFT is a flag: nothing is counted, so nothing is held back', async () => {
+    const ds = await coRows();
+    const r = byBt(ds, 7015);
+    expect([r.class, r.p86.id]).toEqual(['matched', 'co-k']);
+    expect(r.corrections).toEqual([]);
+    expect(r.heldBack).toEqual([]);
+    expect(r.flags.map((f) => f.field)).toEqual(['status']);
+    expect(r.flags[0].text).toBe('Buildertrend says Declined, which is not a P86 change-order status. Not mapped — P86 keeps this change order as a draft and counts nothing.');
+    expect(r.notes.join(' ')).not.toMatch(/was not compared/);
+  });
+
+  test('the Approved correction and the never-un-approve rule are untouched', async () => {
+    const ds = await coRows();
+    expect(byBt(ds, 7001).corrections.find((c) => c.field === 'status')).toMatchObject({ from: 'draft', to: 'approved', money: true });
+    expect(byBt(ds, 7002).heldBack.map((h) => [h.field, h.applicable, h.note]))
+      .toEqual([['status', false, 'A sync never un-approves a change order. If Buildertrend is right, revert it to draft in P86.']]);
+    // A blank Buildertrend status still says nothing at all.
+    const blank = coMatch.matchChangeOrders(
+      [{ btId: '9001', coNumber: 'CO-0001', title: 'Extra railing', jobId: '111', jobName: 'Job 111', statusText: '', builderCost: 800, totalPrice: 1000 }],
+      { jobs: [{ id: 'j-1', bt_job_id: '111', data: { jobNumber: 'RV2000', title: 'Waterside III' } }],
+        coRows: [{ id: 'co-a', job_id: 'j-1', status: 'draft', co_number: 'CO-1', is_locked: 0, bt_co_id: null,
+          data: JSON.stringify({ title: 'Extra railing', lines: [{ description: 'x', qty: 1, unitCost: 800, unitSell: 1000 }] }) }] })[0];
+    expect([blank.heldBack, blank.flags, blank.notes]).toEqual([[], [], []]);
+  });
+});
+
 describe('APPLY — ticked fields only; approve, price and cost land exactly', () => {
   test('every correction on CO-0001: approved and locked with Buildertrend\'s date, price and cost to the cent, linked', async () => {
     const r = await put(ADMIN, { btIds: ['7001'] });
@@ -279,10 +325,52 @@ describe('APPLY — ticked fields only; approve, price and cost land exactly', (
   });
 
   test('an applied change order is never edited, even when price is asked for by name', async () => {
-    const before = coRow('co-c').data;
+    const before = coData('co-c');
     await put(ADMIN, { btIds: ['7003'], fields: ['price', 'title', 'status'] });
-    expect(coRow('co-c').data).toBe(before);
+    const after = coData('co-c');
+    // C2 records what Buildertrend calls it now, and that is the ONLY difference:
+    // no title, no line, no price, no cost and no status of the change order moves.
+    expect(after.btStatus).toBe('Approved');
+    delete after.btStatus;
+    expect(after).toEqual(before);
     expect(coRow('co-c').status).toBe('applied');
+    expect(Boolean(coRow('co-c').is_locked)).toBe(true);
+  });
+
+  // ── C2 ─────────────────────────────────────────────────────────────────
+  test('every apply and every link records what Buildertrend calls the change order NOW', async () => {
+    expect(coData('co-b').btStatus).toBeUndefined();
+    // 7002 is Pending against an approved P86 change order: nothing moves, and
+    // P86 still learns the word — Pending is not Draft, though both are a P86 draft.
+    await put(ADMIN, { btIds: ['7002'], fields: ['status'] });
+    expect(coRow('co-b').status).toBe('approved');
+    expect(coData('co-b').btStatus).toBe('Pending');
+    // "Link to this one" on an ambiguous row records it too.
+    const r = await put(ADMIN, { mode: 'link', btId: '7008', p86Id: 'co-d' });
+    expect(r.json.results[0].outcome).toBe('linked');
+    expect(coRow('co-d').bt_co_id).toBe('7008');
+    expect(coData('co-d').btStatus).toBe('Draft');
+    expect([coRow('co-b').status, coRow('co-d').status]).toEqual(['approved', 'draft']);
+    expect([coData('co-b').btStatus, coData('co-d').btStatus]).toEqual(['Pending', 'Draft']);
+  });
+
+  test('a REFRESHED word, not the one it was born with: a create then an apply after the status moved', async () => {
+    await put(ADMIN, { mode: 'create', btIds: ['7005'] });   // Pending in Buildertrend
+    const made = coByBt('7005')[0];
+    expect(JSON.parse(made.data).btStatus).toBe('Pending');
+    // Buildertrend approves it; the next apply refreshes the word and approves it.
+    const rec = BT_COS.find((c) => c.changeOrderId === '7005');
+    const was = rec.approvalStatusText;
+    rec.approvalStatusText = 'Approved';
+    try {
+      preview.forgetFetch(AGX);
+      await put(ADMIN, { btIds: ['7005'], fields: ['status'] });
+      const row = coByBt('7005')[0];
+      expect([row.status, JSON.parse(row.data).btStatus]).toEqual(['approved', 'Approved']);
+    } finally {
+      rec.approvalStatusText = was;
+      preview.forgetFetch(AGX);
+    }
   });
 
   test('a Site Plan-linked draft is not approved by a sync, even when status is asked for by name', async () => {
@@ -413,6 +501,19 @@ describe('PAGE — the Change orders tab', () => {
     const nib = T.render(data);
     expect(nib).toContain('CO-12 Orphan in P86');
     expect(nib).not.toContain('data-btp-archive=');
+    T.setTab('jobs');
+  });
+
+  test('the P86 side names the Buildertrend status, so Pending is not read as Draft (C2)', async () => {
+    const ds = await coRows();
+    const data = { generatedAt: new Date().toISOString(), elapsedMs: 1, organization: { name: 'AGX' }, p86: { jobs: 1, leads: 0 },
+      datasets: { jobs: { key: 'jobs', rows: [] }, leads: { key: 'leads', rows: [] }, changeOrders: ds } };
+    T.setTab('changeOrders');
+    T.setView('changeOrders', 'all');
+    const html = T.render(data);
+    expect(html).toContain('Buildertrend: Pending');
+    expect(html).toContain('Buildertrend: Declined');
+    expect(html).toContain('Buildertrend: Draft');
     T.setTab('jobs');
   });
 });

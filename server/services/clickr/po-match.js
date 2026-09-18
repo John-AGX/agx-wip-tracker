@@ -15,7 +15,20 @@
 //            Draft → draft, Sent to Sub/Vendor → issued, any Approved → approved,
 //            Approved + work Complete → work_complete. Leaving draft locks the PO
 //            and freezes its price, as P86's own status route does. A sync never
-//            moves a PO backwards and never closes one.
+//            moves a PO backwards and never closes one. A P86 CLOSED purchase
+//            order is the END of one, so Buildertrend approved or work complete
+//            AGREES with it: nothing is corrected and nothing is held back, and
+//            only a Buildertrend draft or sent PO is called out — as Buildertrend
+//            being behind, not P86. WHICH Buildertrend approval it was (the sub's
+//            or the builder's own) is kept in data.approvedInBuildertrend.kind,
+//            because P86's own 'approved' means the sub e-signed.
+//   recalled — a Buildertrend purchase order marked recalled is refused while no
+//            P86 purchase order is linked to it (nothing is ever created from
+//            one). Once a P86 purchase order IS linked, the row is computed
+//            normally and carries a never-applicable status item naming what P86
+//            still has, so a person can act on it. That item is the WHOLE status
+//            story: nothing else about status is proposed, so no box ever offers
+//            to carry an approval Buildertrend has withdrawn.
 //   cost   — Buildertrend's cost against P86's committed total. An unlocked
 //            draft with one line (or none) takes it on the line; a locked PO
 //            takes the difference as an APPROVED ADDENDUM — P86's own way a
@@ -68,6 +81,22 @@ function btPoState(approvalText, workText) {
   else if (a === 'sub vendor approved' || a === 'internally approved' || a.startsWith('approved')) s = 'approved';
   if (s === 'approved' && textKey(workText) === 'complete') s = 'work_complete';
   return s;
+}
+
+// WHO approved it in Buildertrend. Three Buildertrend texts land on P86's one
+// 'approved' — "Sub/Vendor Approved", "Internally Approved" and "Approved -
+// Assigned Internally" — and in P86 'approved' means the SUB e-signed. The
+// distinction is kept (data.approvedInBuildertrend.kind) instead of being lost
+// in the mapping. It is never P86 acceptance and never claims an e-sign.
+// ONLY those three carry a kind. btPoState keeps a broader fallback on purpose,
+// because Buildertrend's vocabulary is not closed — but an unrecognised
+// "Approved …" text never says WHO approved it, so it returns null (no claim)
+// rather than inventing one of the two.
+function btApprovalKind(approvalText) {
+  const a = textKey(approvalText);
+  if (a === 'sub vendor approved') return 'sub';
+  if (a === 'internally approved' || a === 'approved assigned internally') return 'internal';
+  return null;
 }
 
 function contentLines(data) {
@@ -141,6 +170,22 @@ function p86PoView(r) {
   };
 }
 
+// WHICH Buildertrend approval a committed purchase order carries, against what
+// P86 stored (data.approvedInBuildertrend.kind). Buildertrend must say an
+// approval, P86 must already be approved or past it, and a recall never counts.
+// A purchase order P86 already had approved raises no correction at all, so
+// without this the distinction could only ever be stored by a purchase order
+// that still had a forward move left in it.
+function approvalKindDue(bt, v) {
+  if (bt.isRecalled) return false;
+  const kind = btApprovalKind(bt.statusText);
+  if (!kind) return false;
+  const bs = btPoState(bt.statusText, bt.workStatusText);
+  if (!(RANK[bs] >= RANK.approved) || !(RANK[v.status] >= RANK.approved)) return false;
+  const had = v.data && v.data.approvedInBuildertrend;
+  return !had || had.kind !== kind;
+}
+
 // Sent or approved with a sub of THIS organization (its name came through the
 // org-scoped join) whose access to the job's files the read showed missing.
 function subAccessDue(v) {
@@ -178,12 +223,34 @@ function poProposals(bt, v, subs) {
   const rs = resolveSub(subs, bt.subName);
   const orgSub = (v.subId && v.subName) || (!v.subId && editable && rs.sub);
 
+  const p86StatusLabel = STATUS_LABEL[v.status] || v.status;
+
   // STATUS — forward only.
   const bs = btPoState(bt.statusText, bt.workStatusText);
-  if (!bs) {
+  if (bt.isRecalled) {
+    // RECALLED IN BUILDERTREND (P3). The row used to be refused outright, so a
+    // P86 purchase order already issued or approved stood with nothing said about
+    // it. The recall REPLACES the status comparison rather than sitting beside it:
+    // Buildertrend withdrew the approval, so proposing to carry that approval
+    // forward — committing the PO, locking its price and starting its cost — would
+    // contradict this very item. P86 keeps what it has and a person decides.
+    acc.heldBack.push({ field: 'status', label: 'Status', reason: 'review', bt: 'Recalled', p86: p86StatusLabel, applicable: false,
+      note: 'Recalled in Buildertrend. P86 still has this purchase order as ' + p86StatusLabel
+        + '. A recall is never applied — decide in P86 what happens to it.' });
+  } else if (!bs) {
     if (!isBtBlank(bt.statusText)) notes.push('Buildertrend status "' + norm(bt.statusText) + '" is not one P86 maps, so status was not compared.');
   } else if (RANK[v.status] == null) {
     notes.push('P86 status "' + v.status + '" is not a purchase-order status, so status was not compared.');
+  } else if (closed) {
+    // P86 CLOSED is the end of a purchase order (P1). Buildertrend approved or
+    // work complete is the same place, not a step backwards, so it AGREES:
+    // nothing is corrected and nothing is held back. Only a Buildertrend
+    // purchase order still in draft or sent is genuinely behind — and it is
+    // Buildertrend that is behind, not P86.
+    if (bs === 'draft' || bs === 'issued') {
+      acc.heldBack.push({ field: 'status', label: 'Status', reason: 'review', bt: STATUS_LABEL[bs], p86: p86StatusLabel, applicable: false,
+        note: 'Buildertrend is behind P86 here: P86 closed this purchase order. Nothing is proposed — move it on in Buildertrend if P86 is right.' });
+    }
   } else if (RANK[bs] > RANK[v.status]) {
     acc.corrections.push({ field: 'status', label: 'Status', kind: 'value', money: true, from: STATUS_LABEL[v.status], to: STATUS_LABEL[bs], value: bs, p86Value: v.status,
       note: ((v.status === 'draft' ? 'Leaving draft commits the PO: its cost starts to accrue and its price is locked. ' : '')
@@ -280,10 +347,16 @@ function matchPurchaseOrders(btValues, p86) {
   const rows = btValues.map((b, index) => {
     const cost = parseMoney(b.cost);
     const bt = Object.assign({ index, scope: 'open', raw: [b.poNumber, b.title].filter((x) => !isBtBlank(x)).map(norm).join(' '),
-      costText: cost.kind === 'value' ? fmtMoney(cost.value) : '$0.00', state86: btPoState(b.statusText, b.workStatusText) }, b);
+      costText: cost.kind === 'value' ? fmtMoney(cost.value) : '$0.00', state86: btPoState(b.statusText, b.workStatusText),
+      approvalKind: btApprovalKind(b.statusText) }, b);
     const btId = norm(b.btId);
     if (!btId) return row(bt, 'refused', { notes: ['Buildertrend sent this purchase order without an id.'] });
-    if (b.isDeleted || b.isRecalled) return row(bt, 'refused', { notes: [b.isDeleted ? 'Deleted in Buildertrend.' : 'Recalled in Buildertrend.'] });
+    if (b.isDeleted) return row(bt, 'refused', { notes: ['Deleted in Buildertrend.'] });
+    // RECALLED (P3). An UNLINKED one stays refused, as a deleted one does:
+    // nothing is ever created from it. One a P86 purchase order is already
+    // linked to is computed like any other row, so what P86 still holds is
+    // named instead of vanishing with the row.
+    if (b.isRecalled && !byBtId.get(btId)) return row(bt, 'refused', { notes: ['Recalled in Buildertrend, and no P86 purchase order is linked to it.'] });
     const job = jobByBt.get(norm(b.jobId));
     if (!job) {
       return row(bt, 'refused', { waitingOnJob: true,
@@ -300,7 +373,7 @@ function matchPurchaseOrders(btValues, p86) {
       }
       const { acc, notes } = poProposals(b, linked, p86.subs);
       if (subAccessDue(linked)) notes.push(ACCESS_NOTE);
-      return row(bt, acc.corrections.length ? 'conflict' : 'matched', Object.assign({ rung: 'Buildertrend ID', job: jobInfo, notes, p86: p86Out(linked), subAccessDue: subAccessDue(linked) }, acc));
+      return row(bt, acc.corrections.length ? 'conflict' : 'matched', Object.assign({ rung: 'Buildertrend ID', job: jobInfo, notes, p86: p86Out(linked), subAccessDue: subAccessDue(linked), approvalKindDue: approvalKindDue(b, linked) }, acc));
     }
     const open = onJob.filter((v) => !v.btId);
     const numKey = isBtBlank(b.poNumber) ? '' : poNumberKey(b.poNumber);
@@ -308,7 +381,7 @@ function matchPurchaseOrders(btValues, p86) {
     if (byNumber.length === 1 && !titlesDisagree(b.title, byNumber[0].title)) {
       const { acc, notes } = poProposals(b, byNumber[0], p86.subs);
       if (subAccessDue(byNumber[0])) notes.push(ACCESS_NOTE);
-      return row(bt, acc.corrections.length ? 'conflict' : 'matched', Object.assign({ rung: 'PO number', job: jobInfo, notes, p86: p86Out(byNumber[0]), subAccessDue: subAccessDue(byNumber[0]) }, acc));
+      return row(bt, acc.corrections.length ? 'conflict' : 'matched', Object.assign({ rung: 'PO number', job: jobInfo, notes, p86: p86Out(byNumber[0]), subAccessDue: subAccessDue(byNumber[0]), approvalKindDue: approvalKindDue(b, byNumber[0]) }, acc));
     }
     if (byNumber.length) {
       return row(bt, 'ambiguous', { job: jobInfo, candidates: byNumber.map((v) => poCand(v, ['PO number'])),
@@ -346,6 +419,7 @@ function matchPurchaseOrders(btValues, p86) {
       r.rung = null;
       r.p86 = null;
       r.subAccessDue = false;
+      r.approvalKindDue = false;
       r.notes = r.notes.filter((n) => n !== ACCESS_NOTE);
       r.corrections = []; r.btBlank = []; r.heldBack = []; r.flags = [];
     }
@@ -376,4 +450,4 @@ function notInBuildertrend(rows, btValues, p86) {
   return { rows: listed, notListed };
 }
 
-module.exports = { matchPurchaseOrders, notInBuildertrend, btPoState, poNumberKey, withLineCost, withAddendum, resolveSub, poTotal, RANK, SUB_ACCESS_STATUS };
+module.exports = { matchPurchaseOrders, notInBuildertrend, btPoState, btApprovalKind, approvalKindDue, poNumberKey, withLineCost, withAddendum, resolveSub, poTotal, RANK, SUB_ACCESS_STATUS };

@@ -176,7 +176,14 @@ function notInBtSentence(ds, reliable, fr, p86Error, n, notListed) {
     ? ' Only change orders on P86 jobs whose Buildertrend job sent change orders in this read are listed; ' + notListed + ' on other jobs are not (Clickr\'s change-order dataset covers open jobs only).'
     : ds.key === 'purchaseOrders'
     ? ' Only purchase orders on P86 jobs whose Buildertrend job sent purchase orders in this read are listed; ' + notListed + ' on other jobs are not (Clickr\'s purchase-order dataset covers open jobs only).'
-    : ' Only open P86 leads are listed; ' + notListed + ' sold, lost or no-opportunity leads are expected to be absent (Buildertrend\'s Leads dataset holds open leads only).';
+    : ' Only open P86 leads are listed; ' + notListed + ' sold, lost or no-opportunity leads are expected to be absent (Buildertrend\'s Leads dataset holds open leads only).'
+      // The mark itself is gated on a COMPLETE read (bt-match.js
+      // notInBuildertrend), so after a partial one this must not describe a
+      // convention that is not in force: an unmarked lead would read as "still
+      // open in Buildertrend", which is the one conclusion that cannot be drawn.
+      + (reliable
+        ? ' One that carries a Buildertrend lead id is marked: Buildertrend sold, lost or closed it, so it left that open list. Nothing is proposed for it.'
+        : ' No lead is marked as having left that open list: this Buildertrend read did not reach every record, so an id missing from it may sit in the part never fetched.');
   const base = n + ' Project 86 ' + noun + ' were not reached by any Buildertrend record. Review only — nothing is proposed for deletion.' + extra;
   if (reliable) return base;
   return base + ' NOT RELIABLE: ' + (p86Error ? 'Project 86 could not be read completely' : 'Buildertrend\'s read could not be confirmed complete (fetched ' + fr.fetched
@@ -225,7 +232,11 @@ function buildDataset(kind, fr, p86, p86Error) {
     ? coMatch.notInBuildertrend(rows, values, p86)
     : kind === 'purchaseOrders'
     ? poMatch.notInBuildertrend(rows, values, p86)
-    : match.notInBuildertrend(rows, kind === 'jobs' ? p86.jobs : kind === 'clients' ? (p86.clients || []) : p86.leads, kind);
+    // readComplete: a P86 lead is called "no longer an open lead in Buildertrend"
+    // only when the Buildertrend read reached every record. After a partial read
+    // its Buildertrend lead may simply be in the part never fetched.
+    : match.notInBuildertrend(rows, kind === 'jobs' ? p86.jobs : kind === 'clients' ? (p86.clients || []) : p86.leads, kind,
+      { readComplete: fr.complete === true });
   const reliable = fr.complete === true && !p86Error;
   out.classified = true;
   out.rows = rows;

@@ -124,6 +124,11 @@ const BT_POS = [
   poRec(8014, 111, '0014', 'Deleted PO', 'Sub/Vendor Approved', 300, { deleted: true }),
   poRec(8015, 111, '0015', 'Recalled PO', 'Sub/Vendor Approved', 300, { recalled: true }),
   poRec(8016, 111, '0016', 'Foreign sub only', 'Approved - Assigned Internally', 1200, { sub: 'Other Tenant Sub' }),
+  // P1: P86 closed this purchase order; Buildertrend is still in draft, so it is
+  // BUILDERTREND that is behind.
+  poRec(8018, 111, '0018', 'Closed here, draft there', 'Draft', 500),
+  // P3: recalled in Buildertrend, with a P86 purchase order already linked to it.
+  poRec(8019, 111, '0019', 'Recalled but linked', 'Sub/Vendor Approved', 700, { recalled: true }),
 ];
 
 function clickrFetch(url) {
@@ -170,6 +175,9 @@ function seed() {
   po.run('po-f', 'j-1', AGX, 10, null, 'approved', '0005', JSON.stringify({ title: 'Low cost', lines: [line(1000)], baselineTotal: 1000 }), 1);
   po.run('po-g', 'j-1', AGX, 10, null, 'closed', '0006', JSON.stringify({ title: 'Closed PO', lines: [line(500)], baselineTotal: 500 }), 1);
   po.run('po-h', 'j-1', null, 10, 's-x', 'draft', '0007', JSON.stringify({ title: 'Null org PO', lines: [line(100)] }), 0);
+  po.run('po-i', 'j-1', AGX, 10, null, 'closed', '0018', JSON.stringify({ title: 'Closed here, draft there', lines: [line(500)], baselineTotal: 500 }), 1);
+  po.run('po-j', 'j-1', AGX, 10, null, 'approved', '0019', JSON.stringify({ title: 'Recalled but linked', lines: [line(700)], baselineTotal: 700 }), 1);
+  engine.db.prepare("UPDATE job_purchase_orders SET bt_po_id = '8019' WHERE id = 'po-j'").run();
   po.run('po-x', 'j-b', OTHER, 20, null, 'draft', '0001', JSON.stringify({ title: 'Exterior paint labor', lines: [line(5000)] }), 0);
   const bill = engine.db.prepare('INSERT INTO job_vendor_bills (id, job_id, po_id, status, amount, organization_id) VALUES (?,?,?,?,?,?)');
   bill.run('b-1', 'j-1', 'po-b', 'open', 1000, AGX);
@@ -302,7 +310,9 @@ describe('PREVIEW — purchase orders matched inside their own linked job', () =
     expect(byBt(ds, 8003).heldBack.map((h) => [h.field, h.applicable])).toEqual([['status', false], ['sub', false]]);
     expect(byBt(ds, 8004).class).toBe('ambiguous');
     expect(byBt(ds, 8005).heldBack.map((h) => [h.field, h.applicable])).toEqual([['cost', false]]);
-    expect(byBt(ds, 8006).heldBack.map((h) => [h.field, h.applicable])).toEqual([['status', false], ['cost', false]]);
+    // P1: P86 closed is the END of a purchase order, so Buildertrend approved
+    // AGREES with it — only the cost difference is left to show.
+    expect(byBt(ds, 8006).heldBack.map((h) => [h.field, h.applicable])).toEqual([['cost', false]]);
     expect(byBt(ds, 8007).p86.id).toBe('po-h');
     // Its sub belongs to another organization: the name never reaches the page.
     expect(byBt(ds, 8007).p86.subName).toBe('');
@@ -319,6 +329,57 @@ describe('PREVIEW — purchase orders matched inside their own linked job', () =
 
     expect(ds.notInBuildertrend.rows.map((p) => p.id)).toEqual(['po-e']);
     expect(JSON.stringify(ds)).not.toContain('po-x');
+  });
+});
+
+describe('PREVIEW — a closed P86 purchase order, a recall, and which approval it was', () => {
+  test('P1 — Buildertrend approved or work complete agrees with a P86 closed purchase order; nothing is held back and nothing corrected', async () => {
+    const ds = await poRows();
+    const r6 = byBt(ds, 8006);             // Sub/Vendor Approved vs P86 closed
+    expect(r6.heldBack.map((h) => h.field)).not.toContain('status');
+    expect(r6.corrections.map((c) => c.field)).not.toContain('status');
+    expect(JSON.stringify(r6)).not.toMatch(/never moves a purchase order backwards/);
+  });
+
+  test('P1 — a Buildertrend draft against a P86 closed purchase order is called out as BUILDERTREND being behind', async () => {
+    const ds = await poRows();
+    const r = byBt(ds, 8018);
+    expect([r.class, r.rung, r.p86.id]).toEqual(['matched', 'PO number', 'po-i']);
+    expect(r.corrections).toEqual([]);
+    const st = r.heldBack.find((h) => h.field === 'status');
+    expect([st.applicable, st.bt, st.p86]).toEqual([false, 'Draft', 'Closed']);
+    expect(st.note).toBe('Buildertrend is behind P86 here: P86 closed this purchase order. Nothing is proposed — move it on in Buildertrend if P86 is right.');
+    expect(st.note).not.toMatch(/never moves a purchase order backwards/);
+  });
+
+  test('P3 — a recalled purchase order a P86 one is LINKED to is computed and names what P86 still has', async () => {
+    const ds = await poRows();
+    const r = byBt(ds, 8019);
+    expect([r.class, r.rung, r.p86.id]).toEqual(['matched', 'Buildertrend ID', 'po-j']);
+    expect(r.corrections).toEqual([]);
+    const st = r.heldBack.find((h) => h.bt === 'Recalled');
+    expect([st.field, st.applicable, st.p86]).toEqual(['status', false, 'Approved']);
+    expect(st.note).toBe('Recalled in Buildertrend. P86 still has this purchase order as Approved. A recall is never applied — decide in P86 what happens to it.');
+  });
+
+  test('P3 — an UNLINKED recalled purchase order stays refused, and is never created', async () => {
+    const ds = await poRows();
+    const r = byBt(ds, 8015);
+    expect([r.class, r.p86]).toEqual(['refused', null]);
+    expect(r.notes.join(' ')).toBe('Recalled in Buildertrend, and no P86 purchase order is linked to it.');
+    const created = await put(ADMIN, { mode: 'create' });
+    expect(created.json.results.some((x) => x.btId === '8015')).toBe(false);
+    expect(poByBt('8015')).toHaveLength(0);
+  });
+
+  test('P4 — the row says which Buildertrend approval it was, and never claims a P86 e-sign', async () => {
+    const ds = await poRows();
+    expect(byBt(ds, 8001).bt.approvalKind).toBe('sub');            // Sub/Vendor Approved
+    expect(byBt(ds, 8005).bt.approvalKind).toBe('internal');       // Internally Approved
+    expect(byBt(ds, 8016).bt.approvalKind).toBe('internal');       // Approved - Assigned Internally
+    expect(byBt(ds, 8004).bt.approvalKind).toBeNull();             // Draft
+    expect(byBt(ds, 8003).bt.approvalKind).toBeNull();             // Sent to Sub/Vendor - Pending
+    expect(JSON.stringify(ds)).not.toMatch(/e-sign/i);
   });
 });
 
@@ -366,6 +427,56 @@ describe('APPLY — forward status, cost on the line or as an approved addendum'
     expect(poMatch.poTotal(poData('po-f'))).toBe(1000);
     await put(ADMIN, { btIds: ['8006'], fields: ['cost'] });
     expect(poMatch.poTotal(poData('po-g'))).toBe(500);
+  });
+
+  test('P4 — which Buildertrend approval it was is stored, at apply and at create', async () => {
+    // APPLY: 0001 is "Sub/Vendor Approved" and moves the P86 draft to approved.
+    await put(ADMIN, { btIds: ['8001'], fields: ['status'] });
+    expect(poData('po-a').approvedInBuildertrend).toEqual({ by: 'Catica Office', kind: 'sub' });
+    // The distinction is stored, never a P86 acceptance: nothing claims an e-sign.
+    expect(poData('po-a').acceptance).toBeUndefined();
+    // CREATE: 0010 is the sub's approval, 0016 the builder's own.
+    await put(ADMIN, { mode: 'create' });
+    const made = (btId) => JSON.parse(poByBt(btId)[0].data);
+    expect(made('8010').approvedInBuildertrend).toEqual({ by: 'Catica Office', kind: 'sub' });
+    expect(made('8016').approvedInBuildertrend).toEqual({ by: 'Catica Office', kind: 'internal' });
+    expect(made('8016').acceptance).toBeUndefined();
+    // A draft carries no approval at all.
+    expect(made('8011').approvedInBuildertrend).toBeUndefined();
+  });
+
+  test('P4 — a purchase order P86 ALREADY has approved records which approval it was, though nothing moves', async () => {
+    // 8005 is "Internally Approved" and po-f is already approved, so the two
+    // AGREE: there is no status correction, which is exactly the case the stamp
+    // used to sit inside and therefore never reached. It is also the common one.
+    const ds = await poRows();
+    const r5 = byBt(ds, 8005);
+    expect([r5.class, r5.p86.id, r5.approvalKindDue]).toEqual(['matched', 'po-f', true]);
+    expect(r5.corrections.map((c) => c.field)).not.toContain('status');
+    expect(poData('po-f').approvedInBuildertrend).toBeUndefined();
+
+    // The safe press reaches it, and is what records it.
+    const r = await put(ADMIN, { mode: 'safe' });
+    expect(poData('po-f').approvedInBuildertrend).toEqual({ by: 'Catica Office', kind: 'internal' });
+    expect([poRow('po-f').status, poRow('po-f').is_locked]).toEqual(['approved', 1]);
+    expect(r.json.counts.approvalKind).toBeGreaterThan(0);
+    // Never a P86 acceptance: nothing claims the sub e-signed.
+    expect(poData('po-f').acceptance).toBeUndefined();
+
+    // Recorded once: the next read no longer asks, and pressing again is unchanged.
+    const after = await poRows();
+    expect(byBt(after, 8005).approvalKindDue).toBe(false);
+    const again = await put(ADMIN, { btIds: ['8005'], fields: [] });
+    expect(again.json.results[0].outcome).toBe('unchanged');
+  });
+
+  test('P4 — a RECALLED purchase order never records an approval Buildertrend withdrew', async () => {
+    // 8019 says "Sub/Vendor Approved" and po-j is approved, but Buildertrend
+    // recalled it: the approval is not P86's to record.
+    const ds = await poRows();
+    expect(byBt(ds, 8019).approvalKindDue).toBe(false);
+    await put(ADMIN, { mode: 'safe' });
+    expect(poData('po-j').approvedInBuildertrend).toBeUndefined();
   });
 
   test('no bill is ever written; sub access only for an active PO with a sub of this organization', async () => {
@@ -631,6 +742,51 @@ describe('PO PAGE — the same grant the sync now uses', () => {
 });
 
 describe('UNIT', () => {
+  // One Buildertrend purchase order against one P86 purchase order, straight
+  // through the matcher. Nothing here touches BT_POS, so the whole-set counts
+  // the PREVIEW tests pin stay exactly as they are.
+  const probe = (bt, p86) => poMatch.matchPurchaseOrders([Object.assign({ btId: '9001', jobId: '111', poNumber: '0099',
+    title: 'Probe PO', statusText: 'Sub/Vendor Approved', workStatusText: 'Not Complete', cost: 700, subName: null,
+    isDeleted: false, isRecalled: false, approvalUser: 'Catica Office', costCodes: [], estCompleteDate: null, jobName: 'Job 111' }, bt)], {
+    jobs: [{ id: 'j-1', bt_job_id: '111', data: { jobNumber: 'RV2004', title: 'Citi Lakes' } }],
+    poRows: [Object.assign({ id: 'po-probe', job_id: 'j-1', po_number: '0099', status: 'draft', is_locked: 0,
+      data: JSON.stringify({ title: 'Probe PO', lines: [line(700)], baselineTotal: 700 }),
+      bt_po_id: null, sub_id: null, sub_name: null, sub_access: null, billed: 0 }, p86)],
+    subs: [] })[0];
+  const statusItems = (r) => (r.heldBack || []).filter((h) => h.field === 'status');
+
+  test('P1 — Buildertrend WORK COMPLETE agrees with a P86 closed purchase order, exactly as an approval does', () => {
+    // The two are the same place. Nothing is corrected and nothing is held back.
+    const done = probe({ workStatusText: 'Complete' }, { status: 'closed', is_locked: 1 });
+    expect(done.bt.state86).toBe('work_complete');
+    expect(done.corrections.map((c) => c.field)).not.toContain('status');
+    expect(statusItems(done)).toEqual([]);
+    // And the approval on its own, which the fixtures already cover, still agrees.
+    const appr = probe({}, { status: 'closed', is_locked: 1 });
+    expect(statusItems(appr)).toEqual([]);
+    // Buildertrend genuinely behind is still called out — as BUILDERTREND behind.
+    for (const [text, label] of [['Draft', 'Draft'], ['Sent to Sub/Vendor - Pending', 'Issued']]) {
+      const behind = probe({ statusText: text }, { status: 'closed', is_locked: 1 });
+      expect(statusItems(behind).map((h) => [h.bt, h.p86, h.applicable])).toEqual([[label, 'Closed', false]]);
+      expect(statusItems(behind)[0].note).toMatch(/^Buildertrend is behind P86 here/);
+    }
+  });
+
+  test('P3 — a RECALLED purchase order never proposes a forward status move, whatever P86 still has', () => {
+    // The held-back item says a recall is never applied. A correction beside it
+    // would BE that application — and a pre-ticked, money-flagged one at that.
+    for (const status of ['draft', 'issued', 'approved', 'work_complete', 'closed']) {
+      const r = probe({ isRecalled: true }, { status, is_locked: status === 'draft' ? 0 : 1, bt_po_id: '9001' });
+      expect([status, r.rung]).toEqual([status, 'Buildertrend ID']);
+      expect(r.corrections.map((c) => c.field)).not.toContain('status');
+      // Exactly ONE status item, and it is the recall: never two Status rows.
+      const st = statusItems(r);
+      expect(st).toHaveLength(1);
+      expect([st[0].bt, st[0].applicable]).toEqual(['Recalled', false]);
+      expect(st[0].note).toMatch(/A recall is never applied/);
+    }
+  });
+
   test('Buildertrend statuses map forward-only onto P86\'s', () => {
     expect(poMatch.btPoState('Draft', 'Not Complete')).toBe('draft');
     expect(poMatch.btPoState('Sent to Sub/Vendor - Pending', 'Complete')).toBe('issued');
@@ -638,6 +794,30 @@ describe('UNIT', () => {
     expect(poMatch.btPoState('Internally Approved', 'Complete')).toBe('work_complete');
     expect(poMatch.btPoState('Something new', '')).toBeNull();
   });
+  test('P4 — the three Buildertrend approvals, and nothing else, carry a kind', () => {
+    expect(poMatch.btApprovalKind('Sub/Vendor Approved')).toBe('sub');
+    expect(poMatch.btApprovalKind('Internally Approved')).toBe('internal');
+    expect(poMatch.btApprovalKind('Approved - Assigned Internally')).toBe('internal');
+    for (const t of ['Draft', 'Sent to Sub/Vendor - Pending', '', null, 'Recalled']) expect(poMatch.btApprovalKind(t)).toBeNull();
+    // Of the texts P86 knows, exactly the three approvals carry a kind.
+    for (const t of ['Sub/Vendor Approved', 'Internally Approved', 'Approved - Assigned Internally', 'Draft', 'Sent to Sub/Vendor - Pending']) {
+      expect(poMatch.btApprovalKind(t) != null).toBe(poMatch.btPoState(t, 'Not Complete') === 'approved');
+    }
+  });
+
+  test('P4 — an unrecognised “Approved …” text says nothing about WHO approved it', () => {
+    // btPoState keeps a broad fallback on purpose: Buildertrend's vocabulary is
+    // not closed, and any approval still commits the purchase order. The KIND
+    // must not follow it — the page prints it as a sentence about a person, so
+    // guessing "internally" from a text that never said it is a false claim.
+    for (const t of ['Approved', 'Approved - Assigned to Sub', 'Approved by Sub/Vendor', 'approvedX']) {
+      expect(poMatch.btApprovalKind(t)).toBeNull();
+      expect(poMatch.btPoState(t, 'Not Complete')).toBe('approved');
+    }
+    // With no kind to record, nothing is due — and nothing claims one.
+    expect(poMatch.approvalKindDue({ statusText: 'Approved', workStatusText: 'Not Complete' }, { status: 'approved', data: {} })).toBe(false);
+  });
+
   test('the matcher\'s portal-access statuses are the grant\'s own', () => {
     const { PO_ACTIVE_STATUS } = require('../server/services/po-sub-access');
     expect([...poMatch.SUB_ACCESS_STATUS].sort()).toEqual([...PO_ACTIVE_STATUS].sort());
@@ -706,7 +886,7 @@ describe('PAGE — the Purchase orders tab', () => {
     expect(html).toContain('<span class="btp-tag is-linked">Linked</span>');
     // Every confident match is already linked: the confirm does not offer to link zero.
     expect(T.safeConfirmText('purchaseOrders', ds)).toBe('The sub of 2 sent or approved purchase orders gets portal access to the job’s files, as on the PO page — including where that access was removed by hand. ' +
-      'Nothing is linked and no other field changes.');
+      'Nothing is linked and no P86 status, money or other field changes.');
 
     const r = await put(ADMIN, { mode: 'safe' });
     expect(r.json.counts.subAccess).toBe(2);
@@ -718,12 +898,44 @@ describe('PAGE — the Purchase orders tab', () => {
     T.setTab('jobs');
   });
 
+  test('P4 — a linked, up-to-date PO whose Buildertrend approval was never recorded keeps the safe press live', async () => {
+    // A purchase order P86 already has approved raises no correction, so its row
+    // shows a bare "Linked" tag. The safe press is the only thing that records
+    // which Buildertrend approval it carries, so it has to reach such a row.
+    await put(ADMIN, { mode: 'safe' });
+    T.resetPicks();
+    T.setTab('purchaseOrders');
+    T.setView('purchaseOrders', 'all');
+    let ds = await poRows();
+    expect(ds.rows.filter((r) => r.approvalKindDue)).toHaveLength(0);
+    expect(T.render(pageData(ds))).toMatch(/data-btp-apply-safe="1" disabled>Link confident matches \+ give subs portal access \(0\)/);
+
+    // po-f as a purchase order synced BEFORE this rule: approved in P86 and
+    // linked, with nothing stored about which Buildertrend approval it was.
+    const d = poData('po-f');
+    delete d.approvedInBuildertrend;
+    setPo('po-f', { data: JSON.stringify(d) });
+    ds = await poRows();
+    expect(byBt(ds, 8005).approvalKindDue).toBe(true);
+    expect(byBt(ds, 8005).corrections.map((c) => c.field)).not.toContain('status');
+    const html = T.render(pageData(ds));
+    expect(html).toMatch(/data-btp-apply-safe="1">Link confident matches \+ give subs portal access \(1\)</);
+    expect(html).toContain('Records which Buildertrend approval 1 committed purchase order carries: the sub’s, or the builder’s own.');
+    expect(T.safeConfirmText('purchaseOrders', ds)).toContain('Records which Buildertrend approval 1 committed purchase order carries');
+
+    // Pressing it records the approval and the button falls quiet again.
+    await put(ADMIN, { mode: 'safe' });
+    expect(poData('po-f').approvedInBuildertrend).toEqual({ by: 'Catica Office', kind: 'internal' });
+    expect(T.render(pageData(await poRows()))).toMatch(/data-btp-apply-safe="1" disabled>Link confident matches \+ give subs portal access \(0\)/);
+    T.setTab('jobs');
+  });
+
   test('the confirm dialogs say a sent or approved PO\'s sub gets portal access — on purchase orders only', async () => {
     const ds = await poRows();
     expect(T.createAllConfirmText('purchaseOrders', ds)).toContain('Where one has a P86 sub, that sub gets portal access to the job’s files, as on the PO page.');
     expect(T.safeConfirmText('purchaseOrders', ds)).toMatch(/The sub of 2 sent or approved purchase orders gets portal access to the job’s files, as on the PO page/);
     // Confident matches still to link: the confirm names them first.
-    expect(T.safeConfirmText('purchaseOrders', ds)).toMatch(/^Link [1-9]\d* confident purchase order match(es)? to Buildertrend\? No other field changes\. The sub of/);
+    expect(T.safeConfirmText('purchaseOrders', ds)).toMatch(/^Link [1-9]\d* confident purchase order match(es)? to Buildertrend\? No P86 status, money or other field changes\. The sub of/);
     for (const key of ['jobs', 'leads', 'clients', 'changeOrders']) {
       const other = { key, rows: ds.rows };
       expect(T.createAllConfirmText(key, other)).not.toMatch(/portal access/);
@@ -731,10 +943,33 @@ describe('PAGE — the Purchase orders tab', () => {
     }
   });
 
+  test('P4 — the P86 side says which Buildertrend approval it was', async () => {
+    const ds = await poRows();
+    T.resetPicks();
+    T.setTab('purchaseOrders');
+    T.setView('purchaseOrders', 'all');
+    const html = T.render(pageData(ds));
+    expect(html).toContain('Approved in Buildertrend by the sub');
+    expect(html).toContain('Approved in Buildertrend internally');
+    expect(html).not.toMatch(/e-sign/i);
+    T.setTab('jobs');
+  });
+
   test('the result sentence names the POs whose sub was given access', () => {
     expect(T.applyResultText({ mode: 'link', counts: { linked: 1, subAccess: 1 }, results: [{ outcome: 'linked', subAccess: true }] }))
       .toMatch(/sub portal access granted on 1/);
     expect(T.applyResultText({ mode: 'rows', counts: { applied: 1 }, results: [{ outcome: 'applied' }] }))
       .not.toMatch(/portal access/);
+  });
+
+  test('the result sentence names what a press RECORDED, so “N updated” is never bare', () => {
+    // Neither is a P86 field, so both leave fields at 0. Reported as a bare
+    // "2 updated" they would read as two records changed with nothing to show.
+    expect(T.applyResultText({ mode: 'safe', counts: { applied: 2, fields: 0, statusWord: 2 }, results: [] }))
+      .toBe('2 updated · Buildertrend’s own word recorded on 2.');
+    expect(T.applyResultText({ mode: 'safe', counts: { applied: 1, fields: 0, approvalKind: 1 }, results: [] }))
+      .toBe('1 updated · which Buildertrend approval recorded on 1.');
+    // Nothing recorded, nothing claimed.
+    expect(T.applyResultText({ mode: 'rows', counts: { applied: 1, fields: 1 }, results: [] })).not.toMatch(/recorded on/);
   });
 });

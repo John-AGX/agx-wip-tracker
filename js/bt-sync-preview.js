@@ -18,8 +18,12 @@
 
    Jobs default to Buildertrend's Open + Warranty jobs (the ones a sync would
    act on); a toggle shows all. Tiles are recomputed from the rows under that
-   toggle. Styling is theme tokens only, so light and dark both come from
-   styles.css.
+   toggle. One exception, and it is the important one: a confident job row that
+   carries a status correction, a held-back status item or a status flag is in
+   scope whichever way the toggle is set. Closing a job is the commonest status
+   change Buildertrend makes, and it moves the row out of "Open + Warranty" — so
+   the correction it produces must not sit behind a toggle nobody presses.
+   Styling is theme tokens only, so light and dark both come from styles.css.
 
    NEW / CHANGED SINCE YOUR LAST REFRESH (server/services/clickr/since-refresh.js):
    the server compares each complete Buildertrend read with what it remembered
@@ -230,9 +234,28 @@
     return parts.join(' · ');
   }
 
+  // A confident job row that carries anything about STATUS — a correction, a
+  // held-back item or a flag. The commonest Buildertrend status change there is
+  // closes a job, which moves its row to the "closed" scope: under the default
+  // "Open + Warranty" its "status -> Completed" correction was invisible unless
+  // someone thought to switch to "All jobs". Such a row is IN SCOPE whatever
+  // the toggle says.
+  function carriesStatusItem(ds, r) {
+    if (ds.key !== 'jobs') return false;
+    var cls = r['class'];
+    if (cls !== 'matched' && cls !== 'conflict') return false;
+    var aboutStatus = function (x) { return !!x && x.field === 'status'; };
+    return (r.corrections || []).some(aboutStatus) ||
+      (r.heldBack || []).some(aboutStatus) ||
+      (r.flags || []).some(aboutStatus);
+  }
+
+  // THE one place scope is decided: the rows, the tiles, the counts, the
+  // filters and the "new since your last refresh" count all ask this.
   function inScope(ds, ui, r) {
     if (ds.key !== 'jobs' || ui.scope === 'all') return true;
-    return r.bt && r.bt.scope === ui.scope;
+    if (r.bt && r.bt.scope === ui.scope) return true;
+    return carriesStatusItem(ds, r);
   }
 
   function passesFilter(r, f) {
@@ -364,11 +387,20 @@
       if (a) meta.push(esc(a));
       if (ds.key === 'leads' && p.client) meta.push('Client: ' + esc(p.client));
       if (ds.key === 'clients' && p.email) meta.push(esc(p.email));
+      // Buildertrend's OWN word, which applying saves on the P86 record
+      // (data.btStatus). P86 has no Warranty and no Pending, so without this a
+      // Warranty job reads "In Progress" and a pending change order reads
+      // "draft" with nothing to tell it from a Buildertrend draft.
+      if (ds.key === 'jobs' && r.bt.status) meta.push('Buildertrend: ' + esc(r.bt.status));
       if (ds.key === 'changeOrders') {
+        if (r.bt.statusText) meta.push('Buildertrend: ' + esc(r.bt.statusText));
         if (r.job) meta.push('on ' + esc(r.job.label));
         meta.push('Price ' + esc(p.incomeText || '?') + ' · cost ' + esc(p.costsText || '?'));
       }
       if (ds.key === 'purchaseOrders') {
+        // P86's own "approved" means the sub e-signed. Buildertrend's three
+        // approvals all land on it, so which one it was is said out loud.
+        if (r.bt.approvalKind) meta.push('Approved in Buildertrend ' + (r.bt.approvalKind === 'sub' ? 'by the sub' : 'internally'));
         if (r.job) meta.push('on ' + esc(r.job.label));
         meta.push('Cost ' + esc(p.totalText || '?') + (p.subName ? ' · ' + esc(p.subName) : ''));
       }
@@ -575,12 +607,42 @@
     return '<button type="button" class="btp-btn btp-apply" data-btp-apply="' + esc(r.bt.btId) + '"' + (_applying || (!n && linked) ? ' disabled' : '') + '>' + applyLabel(ds, r) + '</button>';
   }
 
+  // A confident row the safe press would still LINK. The safe button counts more
+  // than this (see safeCount), so the confirm names links and the rest apart.
+  function unlinkedConfidentCount(ds) {
+    return ((ds && ds.rows) || []).filter(function (r) {
+      return (r['class'] === 'matched' || r['class'] === 'conflict') && r.bt && r.bt.btId != null && r.bt.btId !== '' && r.rung !== 'Buildertrend ID';
+    }).length;
+  }
+
+  // A confident job or change order whose Buildertrend word has moved since P86
+  // recorded it (r.btStatusDue, from the matcher). Buildertrend Warranty and
+  // Pending are not P86 statuses, so such a row carries no correction at all:
+  // without counting it here a linked one would offer nothing to press ever
+  // again, and P86 would keep the word it was linked with.
+  function statusWordCount(ds) {
+    if (!ds || (ds.key !== 'jobs' && ds.key !== 'changeOrders')) return 0;
+    return (ds.rows || []).filter(function (r) {
+      return (r['class'] === 'matched' || r['class'] === 'conflict') && r.bt && r.bt.btId != null && r.bt.btId !== '' && r.btStatusDue === true;
+    }).length;
+  }
+
+  // A confident purchase order P86 has approved whose stored approval does not
+  // yet say WHICH Buildertrend approval it was (the sub's or the builder's own).
+  function approvalKindCount(ds) {
+    if (!ds || ds.key !== 'purchaseOrders') return 0;
+    return (ds.rows || []).filter(function (r) {
+      return (r['class'] === 'matched' || r['class'] === 'conflict') && r.bt && r.bt.btId != null && r.bt.btId !== '' && r.approvalKindDue === true;
+    }).length;
+  }
+
   function safeCount(ds) {
     return (ds.rows || []).filter(function (r) {
       if (r['class'] !== 'matched' && r['class'] !== 'conflict') return false;
       if (!r.bt || r.bt.btId == null || r.bt.btId === '') return false;
       if (r.rung !== 'Buildertrend ID') return true;
-      if (ds.key === 'purchaseOrders' && r.subAccessDue === true) return true;
+      if (ds.key === 'purchaseOrders' && (r.subAccessDue === true || r.approvalKindDue === true)) return true;
+      if (r.btStatusDue === true) return true;
       return ds.key === 'jobs' && (r.corrections || []).some(function (c) { return c.field === 'startDate' && c.kind === 'fill'; });
     }).length;
   }
@@ -596,20 +658,47 @@
     }).length;
   }
 
+  // NOTHING ELSE CHANGES used to be the whole promise. A safe press now also
+  // records Buildertrend's OWN word beside the P86 status (jobs, change orders)
+  // and which Buildertrend approval a committed purchase order carries, so both
+  // are named. No P86 status and no money move either way.
   function safeConfirmText(key, ds) {
-    var n = ds ? safeCount(ds) : 0;
+    var l = unlinkedConfidentCount(ds);
+    var TAIL = ' No P86 status, money or other field changes.';
     if (key === 'purchaseOrders') {
-      var l = ds ? (ds.rows || []).filter(function (r) {
-        return (r['class'] === 'matched' || r['class'] === 'conflict') && r.bt && r.bt.btId != null && r.bt.btId !== '' && r.rung !== 'Buildertrend ID';
-      }).length : 0;
       var a = subAccessCount(ds);
+      var k = approvalKindCount(ds);
       var access = 'The sub of ' + a + ' sent or approved purchase order' + (a === 1 ? '' : 's') + ' gets portal access to the job’s files, as on the PO page — including where that access was removed by hand.';
+      var kind = k ? ' Records which Buildertrend approval ' + k + ' committed purchase order' + (k === 1 ? '' : 's') + ' carr' + (k === 1 ? 'ies' : 'y') + ': the sub’s, or the builder’s own.' : '';
       // Nothing left to link (every confident match is already linked): say only what the press does.
-      if (!l) return access + ' Nothing is linked and no other field changes.';
-      return 'Link ' + l + ' confident purchase order match' + (l === 1 ? '' : 'es') + ' to Buildertrend? No other field changes. ' + access;
+      if (!l) return access + kind + ' Nothing is linked and no P86 status, money or other field changes.';
+      return 'Link ' + l + ' confident purchase order match' + (l === 1 ? '' : 'es') + ' to Buildertrend?' + TAIL + ' ' + access + kind;
     }
-    return 'Link ' + n + ' confident ' + (NOUN[key] || 'record') + ' match' + (n === 1 ? '' : 'es') + ' to Buildertrend' +
-      (key === 'jobs' ? ' and fill start dates where P86 has none' : '') + '? No other field changes.';
+    var w = statusWordCount(ds);
+    var noun = NOUN[key] || 'record';
+    var word = w ? ' Records what Buildertrend now calls ' + w + ' ' + noun + (w === 1 ? '' : 's') + ', beside the P86 status, which does not change.' : '';
+    if (!l) return 'Nothing is left to link.' + word + (key === 'jobs' ? ' Start dates are filled only where P86 has none.' : '') + TAIL;
+    return 'Link ' + l + ' confident ' + noun + ' match' + (l === 1 ? '' : 'es') + ' to Buildertrend' +
+      (key === 'jobs' ? ' and fill start dates where P86 has none' : '') + '?' + word + TAIL;
+  }
+
+  // What the safe press does, named. Every value in it is a count this page
+  // computed, so there is nothing here to escape.
+  function safeSubText(ds) {
+    var t = 'Saves the Buildertrend id on each confident match' + (ds.key === 'jobs' ? ' and fills a start date only where P86 has none' : '') + '.';
+    var w = statusWordCount(ds);
+    if (w) t += ' Records what Buildertrend now calls ' + w + ' ' + (NOUN[ds.key] || 'record') + (w === 1 ? '' : 's') + ', beside the P86 status, which does not change.';
+    if (ds.key === 'purchaseOrders') {
+      t += ' The sub of each sent or approved PO without portal access to the job’s files yet gets it, as on the PO page (' + subAccessCount(ds) + ').';
+      var k = approvalKindCount(ds);
+      if (k) t += ' Records which Buildertrend approval ' + k + ' committed purchase order' + (k === 1 ? '' : 's') + ' carr' + (k === 1 ? 'ies' : 'y') + ': the sub’s, or the builder’s own.';
+    }
+    t += ' No P86 status, money or other field changes.';
+    // The scope buttons filter the LIST; this press covers the whole read, as
+    // "Not in Buildertrend" does. Said out loud, the way the create button says
+    // closed jobs are created one at a time.
+    if (ds.key === 'jobs') t += ' Every confident match counts here, including Buildertrend jobs the scope above hides.';
+    return t;
   }
 
   function createAllConfirmText(key, ds) {
@@ -651,6 +740,8 @@
     var createNotes = []; ((res && res.results) || []).forEach(function (x) { (x.notes || []).forEach(function (n) { if (createNotes.indexOf(n) === -1) createNotes.push(n); }); });
     if (c.linked) parts.push(c.linked + ' newly linked');
     if (c.subAccess) parts.push('sub portal access granted on ' + c.subAccess);
+    if (c.statusWord) parts.push('Buildertrend’s own word recorded on ' + c.statusWord);
+    if (c.approvalKind) parts.push('which Buildertrend approval recorded on ' + c.approvalKind);
     if (c.fields) parts.push(c.fields + ' field' + (c.fields === 1 ? '' : 's') + ' changed');
     if (c.unchanged) parts.push(c.unchanged + ' already up to date');
     if (c.skipped) parts.push(c.skipped + ' skipped');
@@ -734,7 +825,11 @@
     if (p.email) meta.push(esc(p.email));
     if (p.client) meta.push('Client: ' + esc(p.client));
     if (p.jobLabel) meta.push('on ' + esc(p.jobLabel));
-    if (p.linkedGone) meta.push('linked to a Buildertrend change order that is no longer in Buildertrend');
+    if (p.linkedGone) {
+      meta.push(ds.key === 'leads'
+        ? 'no longer an open lead in Buildertrend (sold, lost or closed there)'
+        : 'linked to a Buildertrend ' + (NOUN[ds.key] || 'record') + ' that is no longer in Buildertrend');
+    }
     var a = addr(p);
     if (a) meta.push(esc(a));
     var archiveBtn = (ds.key === 'changeOrders' || ds.key === 'purchaseOrders') ? ''
@@ -804,8 +899,7 @@
       var busySafe = _applying === ds.key + ':safe';
       html += '<div class="btp-filters"><button type="button" class="btp-btn btp-apply" data-btp-apply-safe="1"' + (_applying || !sc || !f.complete ? ' disabled' : '') + '>' +
         (busySafe ? 'Applying…' : (ds.key === 'jobs' ? 'Link confident matches + fill blank start dates' : ds.key === 'purchaseOrders' ? 'Link confident matches + give subs portal access' : 'Link confident matches') + ' (' + sc + ')') + '</button>' +
-        '<span class="btp-sub">' + (f.complete ? 'Saves the Buildertrend id on each confident match' + (ds.key === 'jobs' ? ' and fills a start date only where P86 has none' : '') + '. No other field changes.' +
-          (ds.key === 'purchaseOrders' ? ' The sub of each sent or approved PO without portal access to the job’s files yet gets it, as on the PO page (' + subAccessCount(ds) + ').' : '') : 'Needs a complete Buildertrend read.') + '</span></div>';
+        '<span class="btp-sub">' + (f.complete ? safeSubText(ds) : 'Needs a complete Buildertrend read.') + '</span></div>';
       var cn = createCount(ds);
       var busyCreate = _applying === ds.key + ':create:bulk';
       html += '<div class="btp-filters"><button type="button" class="btp-btn btp-apply" data-btp-create-all="1"' + (_applying || !cn || !f.complete ? ' disabled' : '') + '>' +
@@ -821,7 +915,7 @@
         html += '<div class="btp-filters"><div class="btp-seg" role="group" aria-label="Buildertrend job scope">' +
           [['open', 'Open + Warranty'], ['all', 'All jobs']].map(function (s) {
             return '<button type="button" data-btp-scope="' + s[0] + '" class="' + (ui.scope === s[0] ? 'is-active' : '') + '">' + s[1] + '</button>';
-          }).join('') + '</div><span class="btp-sub">Scope is Buildertrend’s status. “Not in Buildertrend” is always checked against every job read.</span></div>';
+          }).join('') + '</div><span class="btp-sub">Scope is Buildertrend’s status. Closed Buildertrend jobs appear here when their P86 status no longer matches. “Not in Buildertrend” is always checked against every job read.</span></div>';
       }
       html += '<div class="btp-tiles">';
       if (sinceCompared(ds)) {
