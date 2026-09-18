@@ -46,7 +46,9 @@
     other: 'Problem'
   };
 
-  var STATE_LABEL = { draft: 'Draft', approved: 'Approved', applied: 'Applied' };
+  // "Pending approval", never a bare "Pending": on these screens a bare
+  // pending also means a placeholder unit cost and an unsigned PO addendum.
+  var STATE_LABEL = { draft: 'Draft', pending: 'Pending approval', approved: 'Approved', applied: 'Applied' };
 
   var MSG = {
     title: 'Give the change order a title.',
@@ -177,6 +179,10 @@
     var draft = rows.some(function (c) { return c && c.status === 'draft'; });
     if (draft) {
       return '<span class="p86-st-co-chip is-draft" title="A change order was started from this work order. Office only.">CO draft</span>';
+    }
+    var pending = rows.some(function (c) { return c && c.status === 'pending'; });
+    if (pending) {
+      return '<span class="p86-st-co-chip is-pending" title="A change order from this work order is with the owner for approval. Office only.">CO pending</span>';
     }
     var approved = rows.some(function (c) { return c && (c.status === 'approved' || c.status === 'applied'); });
     if (approved) {

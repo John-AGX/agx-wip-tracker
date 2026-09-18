@@ -309,6 +309,7 @@
   function jobStatusColor(status) {
     var s = String(status || '').toLowerCase();
     if (s === 'on hold' || s === 'on_hold') return '#fbbf24';
+    if (s === 'warranty') return '#a78bfa';
     if (s === 'completed' || s === 'complete') return '#38bdf8';
     if (s === 'archived' || s === 'closed') return '#8b90a5';
     return '#34d399'; // open / in progress / new

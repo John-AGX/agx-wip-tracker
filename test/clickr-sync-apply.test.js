@@ -292,15 +292,23 @@ describe('what Buildertrend calls the job NOW (data.btStatus)', () => {
     expect([jobBt('j-3'), jobData('j-3').btStatus, jobData('j-3').status]).toEqual(['333', 'Open', 'In Progress']);
   });
 
-  test('REFRESHED, not the word it was born with: Warranty and Closed reach P86 with no P86 status that means either', async () => {
+  test('REFRESHED, not the word it was born with: Warranty and Closed only move the P86 status when ticked', async () => {
     const rec = BT_JOBS.find((j) => String(j.jobId) === '111');
     const was = rec.jobStatus;
     try {
-      // WARRANTY — P86 has no such status, so only the word is recorded.
+      // WARRANTY — the word is recorded on every apply; the P86 status moves
+      // only when 'status' is ticked. Asserted on the DATABASE ROW, never on
+      // results[].fields: a report of what was applied is not a write.
       rec.jobStatus = 'Warranty';
       preview.forgetFetch(AGX);
       await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: [] });
       expect([jobData('j-1').btStatus, jobData('j-1').status]).toEqual(['Warranty', 'In Progress']);
+      preview.forgetFetch(AGX);
+      const w = await put(APPLY, ADMIN, { dataset: 'jobs', btIds: ['111'], fields: ['status'] });
+      expect(w.json.results[0].fields).toEqual([{ field: 'status', from: 'In Progress', to: 'Warranty' }]);
+      expect([jobData('j-1').btStatus, jobData('j-1').status]).toEqual(['Warranty', 'Warranty']);
+      // Put it back for the Closed half below, through the same door.
+      engine.db.prepare("UPDATE jobs SET data = json_set(data, '$.status', 'In Progress') WHERE id = 'j-1'").run();
 
       // CLOSED — there IS a correction now, and it still only lands when ticked.
       rec.jobStatus = 'Closed';
@@ -358,7 +366,7 @@ describe('what Buildertrend calls the job NOW (data.btStatus)', () => {
   test('a created job carries it from the start', async () => {
     await put(APPLY, ADMIN, { dataset: 'jobs', mode: 'create', btIds: ['446'] });
     const made = engine.db.prepare('SELECT * FROM jobs WHERE bt_job_id = ?').get('446');
-    expect(JSON.parse(made.data)).toMatchObject({ btStatus: 'Warranty', status: 'In Progress' });
+    expect(JSON.parse(made.data)).toMatchObject({ btStatus: 'Warranty', status: 'Warranty' });
   });
 });
 
@@ -515,7 +523,11 @@ describe('create — a Buildertrend-only record comes into P86 linked by its id'
     expect(j.organization_id).toBe(1);
     expect(j.client_id).toBe('c-a');
     const w = JSON.parse(jobByBt('446').data);
-    expect(w).toMatchObject({ jobNumber: 'WO9001', status: 'In Progress', btStatus: 'Warranty', jobType: 'Work Order' });
+    // A Buildertrend Warranty job is CREATED as Warranty now. data.notes must
+    // stay EMPTY: it used to carry 'Buildertrend status: Warranty.' as a
+    // stand-in for the missing status, overwriting the job's own notes field
+    // (the one the Job Information card renders and its edit card writes).
+    expect(w).toMatchObject({ jobNumber: 'WO9001', status: 'Warranty', btStatus: 'Warranty', jobType: 'Work Order', notes: '' });
     // Closed history is not created in bulk; ambiguous WO16 rows never are.
     expect(jobByBt('445')).toBeUndefined();
     expect(jobByBt('333')).toBeUndefined();

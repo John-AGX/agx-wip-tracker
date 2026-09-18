@@ -26,9 +26,11 @@
  *   2. A change order belonging to a DIFFERENT job never reaches this job's
  *      cards.
  *   3. A draft change order appears on NO card, and neither does any status
- *      that is not `approved` or `applied` — `rejected` and `void` are held
- *      too, though the server's STATUS_VALUES does not currently mint them, so
- *      the filter stays an allow-list rather than a deny-list if it ever does.
+ *      that is not `approved` or `applied` — `pending` (a real status: sent to
+ *      the owner, nobody has signed it) is held for the same reason a draft is,
+ *      and `rejected` and `void` are held too, though the server's STATUS_VALUES
+ *      does not mint those, so the filter stays an allow-list rather than a
+ *      deny-list if it ever does.
  *   4. A building with genuinely no allocated change orders still SAYS SO IN
  *      WORDS. The fix must never turn a true "none" into a blank.
  *   5. NOTHING AT REST REPRICES. The stored row is not mutated, and the job's
@@ -143,6 +145,14 @@ const CO_DRAFT_B2 = serverCO({
   id: 'co-c', status: 'draft', co_number: 'CO-0003',
   data: { title: 'Not approved yet', lines: line(50000), buildingAllocations: [{ buildingId: B.two, pct: 100 }] },
 });
+/* PENDING — a real, mintable status. Worth $0 exactly as a draft is, so it
+ * must appear on no card. This one is allocated to Building 1 and carries
+ * more money than everything approved on that building put together, so a
+ * leak is unmissable. */
+const CO_PENDING_B1 = serverCO({
+  id: 'co-p', status: 'pending', co_number: 'CO-0006',
+  data: { title: 'Sent for approval', lines: line(250000), buildingAllocations: [{ buildingId: B.one, pct: 100 }] },
+});
 const CO_REJECTED_B1 = serverCO({
   id: 'co-d', status: 'rejected', co_number: 'CO-0004',
   data: { title: 'Turned down', lines: line(70000), buildingAllocations: [{ buildingId: B.one, pct: 100 }] },
@@ -158,7 +168,7 @@ const CO_OTHER_JOB = serverCO({
   data: { title: 'Someone else money', lines: line(123456), buildingAllocations: [{ buildingId: B.one, pct: 100 }] },
 });
 
-const ALL_COS = [CO_APPROVED_B1, CO_APPLIED_SPLIT, CO_DRAFT_B2, CO_REJECTED_B1, CO_VOID_B3, CO_OTHER_JOB];
+const ALL_COS = [CO_APPROVED_B1, CO_APPLIED_SPLIT, CO_DRAFT_B2, CO_PENDING_B1, CO_REJECTED_B1, CO_VOID_B3, CO_OTHER_JOB];
 
 function makeAppData() {
   return {
@@ -353,12 +363,26 @@ describe("2 · a change order on another job never reaches this job's cards", ()
 /* ═══════════════════════════════════════════════════════════════════════════
  * 3 · THE STATUS FILTER — the second half of the same edit
  * ═══════════════════════════════════════════════════════════════════════════ */
-describe('3 · a draft, rejected or void change order appears on NO card', () => {
-  test('3a · none of the three unapproved statuses reaches any building', () => {
+describe('3 · a draft, pending, rejected or void change order appears on NO card', () => {
+  test('3a · none of the four unapproved statuses reaches any building', () => {
     const H = build(makeAppData());
     const seen = [];
     BUILDINGS.forEach((b) => H.getCOsConnectedTo('t1', b.id).forEach((r) => seen.push(r.co.co_number)));
-    ['CO-0003', 'CO-0004', 'CO-0005'].forEach((n) => expect(seen).not.toContain(n));
+    ['CO-0003', 'CO-0004', 'CO-0005', 'CO-0006'].forEach((n) => expect(seen).not.toContain(n));
+    // Not vacuous: the pending change order really is in the fixture, really
+    // is allocated 100% to a building on this job, and really carries money.
+    expect(seen.length).toBeGreaterThan(0);
+  });
+
+  test('3a-ii · PENDING is $0 on the card, and is $0 in the money shaper too', () => {
+    // The card and the contract answer the same question the same way; a
+    // change order that is invisible on one and counted on the other is the
+    // failure this clause exists to prevent.
+    const coMoney = require('../server/services/money/change-order-totals');
+    const shaped = coMoney.shapeChangeOrderRow({ id: 'x', status: 'pending', co_number: 'CO-0006',
+      data: { title: 'Sent for approval', lines: line(250000) } });
+    expect([shaped.counted, shaped.income, shaped.costs]).toEqual([false, 0, 0]);
+    expect(shaped.proposedIncome).toBeGreaterThan(0);
   });
 
   test('3b · approved and applied both DO reach — the filter is not a blanket', () => {
@@ -443,7 +467,7 @@ describe('4 · a building with no allocated change orders still says so', () => 
     // The dangerous near-miss: money exists in the store, none of it qualifies,
     // and the card must say "none" rather than render an empty list.
     const app = makeAppData();
-    app.jobChangeOrders = [CO_DRAFT_B2, CO_REJECTED_B1, CO_VOID_B3].map((c) => Object.assign({}, c));
+    app.jobChangeOrders = [CO_DRAFT_B2, CO_PENDING_B1, CO_REJECTED_B1, CO_VOID_B3].map((c) => Object.assign({}, c));
     const html = paintCards(app, build(app).getCOsConnectedTo);
     expect(html.split(EMPTY_WORDS).length - 1).toBe(BUILDINGS.length);
     expect(html).not.toContain('CO-0003');

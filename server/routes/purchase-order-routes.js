@@ -581,7 +581,7 @@ router.post('/purchase-orders/:id/addendum', requireAuth, requireCapability('EST
   try {
     const id = req.params.id;
     const cur = await pool.query(
-      `SELECT po.data,
+      `SELECT po.data, po.status,
               j.data->>'jobNumber' AS job_number, j.data->>'title' AS job_title,
               COALESCE((SELECT SUM(amount) FROM job_vendor_bills b
                           WHERE b.po_id = po.id AND b.status <> 'void'), 0) AS billed
@@ -589,6 +589,14 @@ router.post('/purchase-orders/:id/addendum', requireAuth, requireCapability('EST
         WHERE po.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
       [id, req.user.organization_id]);
     if (!cur.rowCount) return res.status(404).json({ error: 'Not found' });
+    // CLOSED is the END of a purchase order: no edit, no unlock, no re-lock,
+    // no delete — and, from here on, no addendum. This was the one write door
+    // without the check its siblings all have, and the one that moves MONEY:
+    // approving a pending addendum raises the committed total of a purchase
+    // order that was closed on the promise that it could not change.
+    if (cur.rows[0].status === 'closed') {
+      return res.status(409).json({ error: 'Cannot record an addendum on a closed purchase order' });
+    }
     const data = { ...(cur.rows[0].data || {}) };
     if (data.baselineTotal == null) {
       return res.status(400).json({ error: 'This PO has no committed baseline yet — issue or approve it first.' });

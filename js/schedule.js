@@ -60,7 +60,7 @@
       // DEFAULT_STATUS_SET happens after that const is hoisted at
       // module scope so this is safe.
       statusFilter: {
-        'New': true, 'In Progress': true, 'Backlog': true
+        'New': true, 'In Progress': true, 'Backlog': true, 'Warranty': true
       },
       // Default Job Type filter: all on. PMs typically narrow this
       // manually (e.g., a renovations PM toggles off Service tickets).
@@ -99,6 +99,30 @@
       // filter treats "all off" as wildcard).
       if (!merged.statusFilter || typeof merged.statusFilter !== 'object') {
         merged.statusFilter = Object.assign({}, defaults.statusFilter);
+      } else {
+        // PER-KEY backfill for a job STATUS added AFTER this user last saved
+        // (Warranty). Identical in shape and reasoning to the jobTypeFilter
+        // backfill below: the object-level guard above only fires when the
+        // whole filter is missing, so every existing user's saved settings
+        // carry the old key set and a new status reads as `undefined` →
+        // falsy → its jobs silently absent from the board and the sidebar,
+        // with no pill to turn back on. An explicit `false` is a real
+        // choice and is honored; only a MISSING key is seeded.
+        //
+        // ONLY when at least one status is already on. "All off" is
+        // WILDCARD on this bar too (see filteredJobs) — a user in that
+        // state is currently seeing every job, and seeding one key to true
+        // would turn their wildcard into a single-status filter that hides
+        // every other job.
+        var _anyStatusOn = STATUS_FILTERS.some(function (k) { return merged.statusFilter[k] === true; }) ||
+          Object.keys(merged.statusFilter).some(function (k) { return merged.statusFilter[k] === true; });
+        if (_anyStatusOn) {
+          STATUS_FILTERS.forEach(function (k) {
+            if (typeof merged.statusFilter[k] !== 'boolean') {
+              merged.statusFilter[k] = DEFAULT_STATUS_SET[k] === true;
+            }
+          });
+        }
       }
       if (!merged.jobTypeFilter || typeof merged.jobTypeFilter !== 'object') {
         merged.jobTypeFilter = Object.assign({}, defaults.jobTypeFilter);
@@ -483,8 +507,8 @@
   // Empty selection (user toggles every pill off) surfaces every
   // job — there's no useful "match nothing" state, so we treat
   // empty as wildcard. Same convention for both bars.
-  var STATUS_FILTERS = ['New', 'In Progress', 'Backlog', 'On Hold', 'Completed', 'Archived'];
-  var DEFAULT_STATUS_SET = { 'New': true, 'In Progress': true, 'Backlog': true };
+  var STATUS_FILTERS = ['New', 'In Progress', 'Backlog', 'On Hold', 'Warranty', 'Completed', 'Archived'];
+  var DEFAULT_STATUS_SET = { 'New': true, 'In Progress': true, 'Backlog': true, 'Warranty': true };
 
   var JOB_TYPE_FILTERS = ['Service', 'Mid-Tier Service', 'Renovation', 'Work Order'];
   var DEFAULT_JOB_TYPE_SET = { 'Service': true, 'Mid-Tier Service': true, 'Renovation': true, 'Work Order': true };
@@ -3881,6 +3905,8 @@
       filteredJobs: filteredJobs,
       JOB_TYPE_FILTERS: JOB_TYPE_FILTERS,
       DEFAULT_JOB_TYPE_SET: DEFAULT_JOB_TYPE_SET,
+      STATUS_FILTERS: STATUS_FILTERS,
+      DEFAULT_STATUS_SET: DEFAULT_STATUS_SET,
       SETTINGS_KEY: SETTINGS_KEY,
       _state: _state
     };

@@ -177,6 +177,7 @@
       '.btp-tag.is-typo{color:var(--red);border-color:var(--red);}',
       '.btp-tag.is-linked{color:var(--green);border-color:var(--green);margin-left:auto;}',
       '.btp-tag.is-money{color:var(--purple);border-color:var(--purple);}',
+      '.btp-tag.is-permanent{color:var(--red);border-color:var(--red);}',
       '.btp-pick{margin:0 6px 0 0;vertical-align:-2px;cursor:pointer;}',
       'label.btp-fix-f{cursor:pointer;display:flex;align-items:baseline;}',
       '.btp-tabs{display:flex;gap:4px;border-bottom:1px solid var(--border);margin:0 0 12px;flex-wrap:wrap;}',
@@ -325,6 +326,10 @@
       if (bt.jobName) meta.push('Job: ' + esc(bt.jobName));
       meta.push('Status: ' + (bt.statusText ? esc(bt.statusText) : '<i>blank</i>') + (bt.workStatusText ? ' · work ' + esc(bt.workStatusText) : ''));
       meta.push('Cost ' + esc(bt.costText));
+      // The close offer turns on Buildertrend's PAID status exactly. Printing
+      // it is not decoration: without it the page asks for a permanent press
+      // on a fact it never shows.
+      if (bt.paidStatusText) meta.push('Paid: ' + esc(bt.paidStatusText));
       if (bt.subName) meta.push('Sub/vendor: ' + esc(bt.subName));
     } else if (ds.key === 'clients') {
       if (bt.email) meta.push(esc(bt.email));
@@ -490,7 +495,7 @@
         var box = h.applicable ? pickBox(ds, r, h.field, picks[h.field] === true) : '';
         return '<div class="btp-fix"><label class="btp-fix-f">' + box + esc(h.label || h.field) + '</label>' +
           '<div>P86 ' + (h.p86 ? '<b>' + esc(h.p86) + '</b>' : '<span class="btp-none">blank</span>') + ' · Buildertrend <b>' + esc(h.bt) + '</b>' +
-          '<span class="btp-tag">' + esc(h.reason) + '</span></div>' +
+          '<span class="btp-tag' + (h.reason === 'permanent' ? ' is-permanent' : '') + '">' + esc(h.reason) + '</span></div>' +
           (h.note ? '<div class="btp-fix-note">' + esc(h.note) + '</div>' : '') + '</div>';
       }).join('') + '</div>';
   }
@@ -616,10 +621,11 @@
   }
 
   // A confident job or change order whose Buildertrend word has moved since P86
-  // recorded it (r.btStatusDue, from the matcher). Buildertrend Warranty and
-  // Pending are not P86 statuses, so such a row carries no correction at all:
-  // without counting it here a linked one would offer nothing to press ever
-  // again, and P86 would keep the word it was linked with.
+  // recorded it (r.btStatusDue, from the matcher). A row whose two sides agree
+  // carries no correction at all: without counting it here a linked one would
+  // offer nothing to press ever again, and P86 would keep the word it was
+  // linked with. (Warranty and Pending used to be the standing example — P86
+  // now has both statuses, so they are ordinary agreeing rows.)
   function statusWordCount(ds) {
     if (!ds || (ds.key !== 'jobs' && ds.key !== 'changeOrders')) return 0;
     return (ds.rows || []).filter(function (r) {
@@ -775,10 +781,37 @@
     });
   }
 
-  function askThen(message, label, fn) {
+  // `danger` is a 4th parameter, not a new function: every existing call site
+  // passes three arguments, so it arrives undefined -> false and nothing about
+  // those dialogs changes.
+  // What pressing Apply on ONE row has to say first, or null when it may just
+  // go. Closing takes precedence over the money sentence and says the word
+  // PERMANENT; 'close' is excluded from the money set so it can never be named
+  // in both. Lifted out of the click handler so it can be read back in a test.
+  function rowConfirm(key, row, fields) {
+    var picked = fields || [];
+    var money = (row ? (row.corrections || []).concat(row.heldBack || []) : []).filter(function (x) {
+      return picked.indexOf(x.field) !== -1 && x.field !== 'close' && (x.money || x.reason === 'money' || x.field === 'jobNumber');
+    });
+    var moneyList = money.map(function (x) { return (x.label || x.field) + ' → ' + (x.to || x.bt); }).join(', ');
+    if (picked.indexOf('close') !== -1) {
+      return { danger: true, label: 'Close it permanently',
+        message: 'Close this purchase order in Project 86? This is PERMANENT — a closed purchase order cannot be edited, unlocked, revised by addendum or deleted, by anyone, and it drops off the Purchase orders hub’s open list.'
+          + (money.length
+            ? ' The same press FIRST applies ' + moneyList + ', and that figure is then frozen for ever. Its sub keeps portal access.'
+            : ' Its cost does not change and its sub keeps portal access.') };
+    }
+    if (money.length) {
+      return { danger: false, label: 'Apply',
+        message: 'Apply ' + moneyList + ' to this ' + (NOUN[key] || 'record') + '?' };
+    }
+    return null;
+  }
+
+  function askThen(message, label, fn, danger) {
     if (typeof window.p86Confirm === 'function') {
       Promise.resolve(window.p86Confirm({ title: 'Apply Buildertrend updates', message: message, confirmLabel: label, confirmText: label,
-        cancelLabel: 'Cancel', cancelText: 'Cancel', danger: false, destructive: false })).then(function (ok) { if (ok) fn(); });
+        cancelLabel: 'Cancel', cancelText: 'Cancel', danger: !!danger, destructive: !!danger })).then(function (ok) { if (ok) fn(); });
     } else if (window.confirm(message)) {
       fn();
     }
@@ -1066,13 +1099,10 @@
           var ds = _data && _data.datasets && _data.datasets[key];
           var row = ds && (ds.rows || []).filter(function (x) { return String(x.bt.btId) === id; })[0];
           var fields = row ? pickedFields(ds, row) : [];
-          var money = row ? (row.corrections || []).concat(row.heldBack || []).filter(function (x) { return fields.indexOf(x.field) !== -1 && (x.money || x.reason === 'money' || x.field === 'jobNumber'); }) : [];
           var go = function () { runApply(key, { btIds: [id], fields: fields }); };
-          if (money.length) {
-            askThen('Apply ' + money.map(function (x) { return (x.label || x.field) + ' → ' + (x.to || x.bt); }).join(', ') + ' to this ' + (NOUN[key] || 'record') + '?', 'Apply', go);
-          } else {
-            go();
-          }
+          var ask = rowConfirm(key, row, fields);
+          if (ask) askThen(ask.message, ask.label, go, ask.danger);
+          else go();
         });
       });
       Array.prototype.forEach.call(sec.querySelectorAll('[data-btp-pick]'), function (cb) {
@@ -1155,6 +1185,8 @@
       shapeError: shapeError,
       applyResultText: applyResultText,
       safeConfirmText: safeConfirmText,
+      rowConfirm: rowConfirm,
+      pickedFields: pickedFields,
       createAllConfirmText: createAllConfirmText
     }
   };

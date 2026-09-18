@@ -534,11 +534,19 @@ function looseNumberKey(v) {
 }
 
 // P86 job status vocabulary (js/jobs.js edit card: New, Backlog, In Progress,
-// On Hold, Completed, Archived). Anything else is UNKNOWN.
+// On Hold, Warranty, Completed, Archived). Anything else is UNKNOWN — and a
+// status outside this vocabulary stops ALL status comparison for that job
+// (jobProposals below), so a status P86 really has must be IN here or its
+// jobs go quiet.
+//
+// Warranty is its OWN state, deliberately not folded into P86_ACTIVE: the
+// two questions "has Buildertrend reopened this warranty job" and "has
+// Buildertrend closed it" both need to tell warranty apart from in-progress.
 const P86_ACTIVE = new Set(['new', 'backlog', 'in progress', 'on hold']);
 function p86JobState(v) {
   const t = str(v).trim().toLowerCase().replace(/\s+/g, ' ');
   if (!t) return null;
+  if (t === 'warranty') return 'warranty';
   if (P86_ACTIVE.has(t)) return 'active';
   if (t === 'completed') return 'completed';
   if (t === 'archived') return 'archived';
@@ -569,10 +577,12 @@ function coreTitle(title, numbers) {
 }
 
 // BUILDERTREND'S OWN WORD against the word P86 stored for it (data.btStatus,
-// written only by sync-apply.js). A Warranty job and a Pending change order
-// carry no correction at all — P86 has no such status — so without this signal
-// a confident, already-linked row would offer nothing to press and P86 would
-// keep the word it was linked with for ever. Blank-aware on the Buildertrend
+// written only by sync-apply.js). A row whose two sides already AGREE carries
+// no correction at all — so without this signal a confident, already-linked
+// row would offer nothing to press and P86 would keep the word it was linked
+// with for ever. (Warranty jobs and Pending change orders used to be the
+// standing example, because P86 had neither status; it now has both, and they
+// are ordinary agreeing rows.) Blank-aware on the Buildertrend
 // side, exactly as sync-apply.js writes it, so a blank sentinel does not leave
 // the safe press permanently due.
 function btStatusDue(btWord, stored) {
@@ -627,13 +637,23 @@ function jobProposals(bt, p, ctx) {
     notes.push('Buildertrend status "' + str(bt.status).trim() + '" is not Open, Closed or Warranty, so it was not compared.');
   } else if (!p.state86) {
     notes.push('P86 status "' + str(p.status) + '" is outside P86\'s job status vocabulary, so status was not compared.');
-  } else if (bs === 'warranty') {
-    acc.flags.push({ field: 'status', label: 'Status',
-      text: 'Buildertrend says Warranty, which has no P86 status. Not mapped — P86 keeps "' + p.status + '".' });
+  } else if (bs === 'warranty' && (p.state86 === 'active' || p.state86 === 'completed')) {
+    // P86 has a Warranty status of its own now, so this is an ordinary
+    // forward correction rather than a flag that could never be acted on.
+    // ENUMERATED, not negated: a job goes into warranty from active work or
+    // from completion. An ARCHIVED P86 job is deliberately left alone — what a
+    // Buildertrend status should do to one is not decided, and the note below
+    // ("the job stays active") would be untrue of a job coming out of the
+    // archive. Warranty on both sides falls through with nothing, as it should.
+    acc.corrections.push({ field: 'status', label: 'Status', kind: 'value', from: p.status, to: 'Warranty', toP86: 'Warranty',
+      note: 'Warranty is a P86 job status: the job stays active — its WIP, backlog, revenue earned and margin are unchanged, and it can still raise POs, COs and RFIs.' });
   } else if (bs === 'open' && p.state86 !== 'active') {
     acc.corrections.push({ field: 'status', label: 'Status', kind: 'value', from: p.status, to: 'Open', toP86: 'In Progress',
       note: 'Buildertrend Open is an active P86 status; "In Progress" is shown. Confirm which active status a sync should set.' });
-  } else if (bs === 'closed' && p.state86 === 'active') {
+  } else if (bs === 'closed' && (p.state86 === 'active' || p.state86 === 'warranty')) {
+    // 'warranty' belongs here or a job that is Warranty on BOTH sides goes
+    // permanently quiet the day Buildertrend closes it: no correction, no
+    // note, a clean-looking matched row. Found months later, if ever.
     acc.corrections.push({ field: 'status', label: 'Status', kind: 'value', from: p.status, to: 'Closed', toP86: 'Completed' });
   }
 

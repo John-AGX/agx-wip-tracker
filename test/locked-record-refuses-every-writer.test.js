@@ -367,7 +367,7 @@ describe('P3 — inspection works in both states', () => {
   });
 
   test('change order · the assembly strip opens and reads the same in every lock state', async () => {
-    const states = [['approved', true], ['applied', false], ['draft', false]];
+    const states = [['approved', true], ['applied', false], ['draft', false], ['pending', false]];
     const htmls = [];
     for (const [status, locked] of states) {
       const h = bootCO(status, locked);
@@ -463,6 +463,7 @@ describe('P4 — a refused action says why and arms no save', () => {
 describe('P5 — the client predicate is the server predicate', () => {
   const COMBOS = [
     { status: 'draft', is_locked: false },
+    { status: 'pending', is_locked: false },  // sent to the owner, still editable
     { status: 'approved', is_locked: true },
     { status: 'approved', is_locked: false },  // admin unlocked to correct it
     { status: 'applied', is_locked: false },   // admin unlocked an APPLIED one
@@ -568,6 +569,10 @@ describe('P5 — the client predicate is the server predicate', () => {
     // THE AGREEMENT — one row per combination, so a disagreement names itself.
     expect(results).toEqual([
       { status: 'draft',    is_locked: false, serverRefuses: false, serverIssuedUpdate: true,  serverLeftRowIdentical: false, clientRefuses: false },
+      // Byte-identical to the draft row above, deliberately: 'pending' means
+      // sent to the owner, not signed by them, so nothing is committed and
+      // nothing locks.
+      { status: 'pending',  is_locked: false, serverRefuses: false, serverIssuedUpdate: true,  serverLeftRowIdentical: false, clientRefuses: false },
       { status: 'approved', is_locked: true,  serverRefuses: true,  serverIssuedUpdate: false, serverLeftRowIdentical: true,  clientRefuses: true },
       { status: 'approved', is_locked: false, serverRefuses: false, serverIssuedUpdate: true,  serverLeftRowIdentical: false, clientRefuses: false },
       { status: 'applied',  is_locked: false, serverRefuses: true,  serverIssuedUpdate: false, serverLeftRowIdentical: true,  clientRefuses: true },

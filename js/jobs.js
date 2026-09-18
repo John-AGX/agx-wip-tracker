@@ -14,6 +14,20 @@ function p86Ask(message, opts) {
   }
   return Promise.resolve(window.confirm(message));
 }
+
+// A job status -> its .badge class. This used to be THREE byte-identical
+// ternaries ~1,500 lines apart (the jobs table, the job detail header and
+// the Job Information card). A status added to two of them fell through to
+// 'on-track' on the third and rendered identically to In Progress, which is
+// exactly how a new status ships half-invisible. One writer now.
+function jobStatusBadgeClass(status) {
+    var s = String(status == null ? '' : status);
+    if (s === 'On Hold') return 'at-risk';
+    if (s === 'Warranty') return 'warranty';
+    if (s === 'Completed') return 'on-track';
+    if (s === 'Archived') return 'not-started';
+    return 'on-track';
+}
 function renderJobsMain() {
             renderJobsTable();
             calculateJobsSummary();
@@ -790,13 +804,19 @@ function renderJobsMain() {
                 return new Date(b.updated_at || 0) - new Date(a.updated_at || 0);
             });
             function statusBadge(s) {
+                // 'pending' = sent to the owner, awaiting approval. It counts $0,
+                // exactly as a draft does. The label used to fall through to
+                // 'Applied' — the terminal status, in the terminal colour — on a
+                // money surface, which is the worst possible wrong word here.
                 var color = s === 'approved' ? 'var(--green,#34d399)'
                           : s === 'applied' ? 'var(--accent,#4f8cff)'
+                          : s === 'pending' ? 'var(--yellow,#fbbf24)'
                           : '#cbd5e1';
                 var bg = s === 'approved' ? 'rgba(52,211,153,0.12)'
                        : s === 'applied' ? 'rgba(79,140,255,0.12)'
+                       : s === 'pending' ? 'rgba(251,191,36,0.12)'
                        : 'rgba(148,163,184,0.12)';
-                var label = s === 'draft' ? 'Draft' : s === 'approved' ? 'Approved' : 'Applied';
+                var label = s === 'draft' ? 'Draft' : s === 'approved' ? 'Approved' : s === 'pending' ? 'Pending approval' : 'Applied';
                 return '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;letter-spacing:0.4px;text-transform:uppercase;color:' + color + ';background:' + bg + ';">' + label + '</span>';
             }
             function coTotal(c) {
@@ -1828,7 +1848,7 @@ function renderJobsMain() {
             var n = _jobsSelected.size;
             if (!n) { window.p86BulkRibbon.hide(bar); return; }
             // Status options: the standard lifecycle set + any other statuses in use.
-            var std = ['In Progress', 'On Hold', 'Completed', 'Archived'];
+            var std = ['In Progress', 'On Hold', 'Warranty', 'Completed', 'Archived'];
             var seen = {}; std.forEach(function(s) { seen[s] = true; });
             (appData.jobs || []).forEach(function(j) { if (j.status && !seen[j.status]) { seen[j.status] = true; std.push(j.status); } });
             var actions = [
@@ -1855,7 +1875,13 @@ function renderJobsMain() {
             if (!jobs.length) { if (typeof window.p86Toast === 'function') window.p86Toast('No editable jobs selected.', 'error'); return; }
             bulkConfirm({ title: 'Set status', message: 'Set ' + jobs.length + ' job(s) to "' + v + '"?', confirmLabel: 'Set status' }).then(function(ok) {
                 if (!ok) return;
-                jobs.forEach(function(j) { j.status = v; });
+                jobs.forEach(function(j) {
+                    if (v === 'Archived' && j.status !== 'Archived') {
+                        j.btArchivedFromStatus = j.status || '';
+                        j.archivedAt = new Date().toISOString();
+                    }
+                    j.status = v;
+                });
                 saveData();
                 var skipped = _jobsSelected.size - jobs.length;
                 if (typeof window.p86Toast === 'function') window.p86Toast('Status set on ' + jobs.length + ' job(s)' + (skipped ? ' (' + skipped + ' view-only skipped)' : '') + '.', 'success');
@@ -2171,7 +2197,7 @@ function renderJobsMain() {
                     recalcSubCosts(job.id);
                 }
                 const w = getJobWIP(job.id);
-                const statusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
+                const statusClass = jobStatusBadgeClass(job.status);
                 const typeLabel = job.jobType ? `<span style="font-size: 11px; color: var(--text-dim); font-weight: normal; margin-left: 6px;">${escapeHTML(job.jobType)}${job.market ? `<span style="margin-left: 8px; opacity: 0.7;">${escapeHTML(job.market)}</span>` : ''}</span>` : '';
 
                 const row = document.createElement('tr');
@@ -2810,8 +2836,17 @@ function renderJobsMain() {
             const job = appData.jobs.find(j => j.id === appState.currentJobId);
             if (!job) return;
             if (job.status === 'Archived') {
-                // Unarchive — no confirm needed, it's a recoverable toggle
-                job.status = 'Completed';
+                // Unarchive — no confirm needed, it's a recoverable toggle.
+                // Put back the status this job was archived FROM, the way
+                // services/clickr/reconcile-merge.js restores one (same slot,
+                // data.btArchivedFromStatus, so an archive from either door
+                // restores through either door). Without the stash this line
+                // rewrote every archived job to Completed on the way back —
+                // losing Warranty, and Backlog / New / On Hold with it. A job
+                // archived before the stash existed has none: it keeps this
+                // path's long-standing answer.
+                job.status = job.btArchivedFromStatus || 'Completed';
+                delete job.btArchivedFromStatus;
                 job.updatedAt = new Date().toISOString();
                 saveData();
                 renderJobDetail(job.id);
@@ -2826,6 +2861,8 @@ function renderJobsMain() {
               : Promise.resolve(window.confirm('Archive this job?'));
             go.then(function(ok) {
               if (!ok) return;
+              // Stash what it was, so Unarchive/Restore can put it back.
+              if (job.status !== 'Archived') job.btArchivedFromStatus = job.status || '';
               job.status = 'Archived';
               job.archivedAt = new Date().toISOString();
               job.updatedAt = new Date().toISOString();
@@ -3105,6 +3142,18 @@ function renderJobsMain() {
                 // value across a day boundary when it's read in another timezone.
                 if ((v = gv('edit-jobStartDate')) !== null) job.startDate = (v || '').trim();
                 if ((v = gv('edit-jobEndDate')) !== null) job.endDate = (v || '').trim();
+                // Archiving from THIS card stashes the prior status, into the
+                // same slot archiveCurrentJob and services/clickr/reconcile-
+                // merge.js use, so Restore / Unarchive puts back what the job
+                // actually was instead of guessing In Progress. Read straight
+                // off the control rather than through gv(): the write below has
+                // to keep its one-line shape, which is what the save-invariant
+                // suite discovers every saved field by.
+                const _nextStatus = (document.getElementById('edit-jobStatus') || {}).value;
+                if (_nextStatus === 'Archived' && job.status !== 'Archived') {
+                    job.btArchivedFromStatus = job.status || '';
+                    job.archivedAt = new Date().toISOString();
+                }
                 if ((v = gv('edit-jobStatus')) !== null) job.status = v;
                 if ((v = gv('edit-jobNotes')) !== null) job.notes = v.trim();
                 if (touched) {
@@ -3161,7 +3210,7 @@ function renderJobsMain() {
                     // but opts() unions whatever this job actually holds, so a
                     // status that was renamed, imported, or set by an agent is
                     // shown and survives instead of being rewritten to 'New'.
-                    'job-info-status':    () => '<select id="edit-jobStatus" style="' + SST + '">' + opts(['New', 'Backlog', 'In Progress', 'On Hold', 'Completed', 'Archived'], job.status) + '</select>',
+                    'job-info-status':    () => '<select id="edit-jobStatus" style="' + SST + '">' + opts(['New', 'Backlog', 'In Progress', 'On Hold', 'Warranty', 'Completed', 'Archived'], job.status) + '</select>',
                     'job-info-notes':     () => '<textarea id="edit-jobNotes" rows="3" style="' + IST + 'resize:vertical;">' + escapeHTML(job.notes || '') + '</textarea>'
                 };
                 Object.keys(FIELDS).forEach((cellId) => {
@@ -3651,7 +3700,7 @@ function renderJobsMain() {
                     _srcHost.style.display = _chips ? 'flex' : 'none';
                 }
             } catch (_eSrc) { /* non-fatal — chip is a convenience */ }
-            const detailStatusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
+            const detailStatusClass = jobStatusBadgeClass(job.status);
             document.getElementById('job-detail-status').innerHTML = `<span class="badge ${detailStatusClass}">${escapeHTML(job.status)}</span>`;
             // job-detail-contract used to live in the header meta row but was
             // removed when the header collapsed — Total Income now reads off
@@ -3714,7 +3763,7 @@ function renderJobsMain() {
                     ? (window.p86EntityCard.shortDate(job.endDate) || '—')
                     : '—';
             }
-            const statusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
+            const statusClass = jobStatusBadgeClass(job.status);
             document.getElementById('job-info-status').innerHTML = `<span class="badge ${statusClass}">${escapeHTML(job.status)}</span>`;
             document.getElementById('job-info-notes').textContent = job.notes || '—';
             // Project Address — carried from the lead/estimate at conversion;
@@ -7876,7 +7925,11 @@ function renderJobsMain() {
         function restoreJob(jobId) {
             var job = appData.jobs.find(function(j) { return j.id === jobId; });
             if (!job) return;
-            job.status = 'In Progress';
+            // The status it was archived FROM (see archiveCurrentJob). A job
+            // archived before the stash existed keeps this path's long-standing
+            // answer.
+            job.status = job.btArchivedFromStatus || 'In Progress';
+            delete job.btArchivedFromStatus;
             saveData();
             renderArchivedJobs();
         }

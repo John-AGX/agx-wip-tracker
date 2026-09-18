@@ -320,3 +320,44 @@ describe('the card is covered field by field, not by name', () => {
     expect(FIELDS_SRC).toMatch(/id="edit-jobPM"[\s\S]{0,120}opts\(pmNames\(\)/);
   });
 });
+
+/* ══ 5 · archiving FROM THIS CARD keeps the status it was archived from ══
+ * The card's status picker offers Archived, and since this build it offers
+ * Warranty too. The save wrote the status straight through with no stash, so
+ * Restore on the Archived tab fell back to 'In Progress' and a Warranty (or
+ * Backlog / New / On Hold / Completed) job came back as something else. Same
+ * slot js/jobs.js archiveCurrentJob and services/clickr/reconcile-merge.js
+ * use — see test/job-archive-restores-status.test.js for the other doors. */
+describe('archiving from the Job Information card', () => {
+  const FROM = ['New', 'Backlog', 'In Progress', 'On Hold', 'Warranty', 'Completed'];
+
+  test.each(FROM)('a %s job archived from the card stashes the status it came from', (status) => {
+    const w = makeWorld({ status: status });
+    w.toggle();                                     // open the card
+    const sel = document.getElementById('edit-jobStatus');
+    expect(Array.from(sel.options).map((o) => o.value)).toContain('Archived');
+    sel.value = 'Archived';
+    w.toggle();                                     // save
+    expect(w.job.status).toBe('Archived');
+    expect(w.job.btArchivedFromStatus).toBe(status);
+    expect(typeof w.job.archivedAt).toBe('string');
+  });
+
+  test('every other status change through the card is an ordinary write', () => {
+    const w = makeWorld({ status: 'Warranty' });
+    w.toggle();
+    document.getElementById('edit-jobStatus').value = 'On Hold';
+    w.toggle();
+    expect(w.job.status).toBe('On Hold');
+    expect('btArchivedFromStatus' in w.job).toBe(false);
+    expect('archivedAt' in w.job).toBe(false);
+  });
+
+  test('re-saving an already-Archived job does not overwrite the stash', () => {
+    const w = makeWorld({ status: 'Archived', btArchivedFromStatus: 'Warranty' });
+    w.toggle();
+    document.getElementById('edit-jobNotes').value = 'touched';
+    w.toggle();
+    expect(w.job.btArchivedFromStatus).toBe('Warranty');
+  });
+});

@@ -371,11 +371,13 @@ describe('MATCHER — jobs', () => {
     expect(r.corrections).toEqual([expect.objectContaining({ field: 'status', from: 'Completed', to: 'Open', toP86: 'In Progress' })]);
   });
 
-  test('WARRANTY is flagged, not mapped, and is not a correction', () => {
+  test('WARRANTY is a real P86 status now: a correction, not a flag', () => {
     const r = one(rows, 'S5100 Sunset Roof');
-    expect(r.class).toBe('matched');
-    expect(r.flags).toEqual([expect.objectContaining({ field: 'status' })]);
-    expect(r.flags[0].text).toMatch(/Warranty/);
+    expect(r.class).toBe('conflict');
+    expect(r.flags).toEqual([]);
+    expect(r.corrections).toEqual([expect.objectContaining({
+      field: 'status', kind: 'value', from: 'In Progress', to: 'Warranty', toP86: 'Warranty' })]);
+    expect(r.corrections[0].note).toMatch(/WIP, backlog, revenue earned and margin are unchanged/);
   });
 
   test('a P86 status outside P86\'s vocabulary is UNKNOWN: no status proposal', () => {
@@ -450,11 +452,94 @@ describe('MATCHER — jobs', () => {
 
   test('the match rate excludes change orders, not-a-job and refused rows', () => {
     const s = match.summarise(rows);
-    expect(s.counts).toEqual({ matched: 4, conflict: 3, ambiguous: 14, possible_duplicate: 2, new: 2, change_order: 1, not_a_job: 2, refused: 1 });
+    expect(s.counts).toEqual({ matched: 3, conflict: 4, ambiguous: 14, possible_duplicate: 2, new: 2, change_order: 1, not_a_job: 2, refused: 1 });
     expect(s.matchRateBase).toBe(25);
     expect(s.matchRate).toBeCloseTo(7 / 25, 10);
     const open = match.summarise(rows, (r) => r.bt.scope === 'open');
     expect(open.records).toBe(rows.filter((r) => ['Open', 'Warranty'].includes(r.bt.status)).length);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// JOBS — WARRANTY, P86's own status
+// ══════════════════════════════════════════════════════════════════════════
+//
+// Warranty is a state86 of its OWN and is deliberately NOT folded into
+// 'active'. Both directions depend on that: folded in, "Buildertrend reopened
+// this warranty job" could never fire; left out of the vocabulary entirely, a
+// P86 job literally set to Warranty stops ALL status comparison and a later
+// Buildertrend Closed proposes nothing at all, with no note, on a row that
+// renders as a clean match.
+describe('MATCHER — jobs — Warranty is in the vocabulary, in its own state', () => {
+  test('the vocabulary itself: Warranty maps to its own state, never to active', () => {
+    expect(match.p86JobState('Warranty')).toBe('warranty');
+    expect(match.p86JobState('warranty')).toBe('warranty');
+    expect(match.p86JobState('In Progress')).toBe('active');
+    expect(match.p86JobState('Nonsense')).toBe(null);
+  });
+
+  const P86 = [
+    pJob('w-same', { jobNumber: 'W1000', title: 'Warranty Job', status: 'Warranty' }),
+    pJob('w-close', { jobNumber: 'W1001', title: 'Warranty Closing', status: 'Warranty' }),
+    pJob('w-open', { jobNumber: 'W1002', title: 'Warranty Reopening', status: 'Warranty' }),
+    pJob('w-into', { jobNumber: 'W1003', title: 'Active Job' }),
+    pJob('w-done', { jobNumber: 'W1004', title: 'Finished Job', status: 'Completed' }),
+    pJob('w-arch', { jobNumber: 'W1005', title: 'Archived Job', status: 'Archived' }),
+  ];
+  const coTotals = new Map(P86.map((p) => [p.id, { computable: true, count: 0, total: 0, source: 'no change orders in P86' }]));
+  const BT = [
+    jobRec('W1000 Warranty Job', { jobStatus: 'Warranty' }),
+    jobRec('W1001 Warranty Closing', { jobStatus: 'Closed' }),
+    jobRec('W1002 Warranty Reopening', { jobStatus: 'Open' }),
+    jobRec('W1003 Active Job', { jobStatus: 'Warranty' }),
+    jobRec('W1004 Finished Job', { jobStatus: 'Warranty' }),
+    jobRec('W1005 Archived Job', { jobStatus: 'Warranty' }),
+  ];
+  const wrows = match.matchJobs(BT.map(readJob), P86, { coTotals });
+  const statusOf = (raw) => one(wrows, raw).corrections.filter((c) => c.field === 'status');
+
+  test('Warranty on BOTH sides agrees: matched, no correction, no flag, no note', () => {
+    const r = one(wrows, 'W1000 Warranty Job');
+    expect(r.class).toBe('matched');
+    noProposals(r);
+    expect(r.notes).toEqual([]);
+  });
+
+  test('Buildertrend CLOSED against a P86 Warranty job still proposes Completed', () => {
+    // Without warranty in the closed arm this row proposes NOTHING, silently.
+    expect(statusOf('W1001 Warranty Closing')).toEqual([expect.objectContaining({
+      field: 'status', from: 'Warranty', to: 'Closed', toP86: 'Completed' })]);
+    expect(one(wrows, 'W1001 Warranty Closing').notes).toEqual([]);
+  });
+
+  test('Buildertrend OPEN against a P86 Warranty job proposes In Progress (warranty is not folded into active)', () => {
+    expect(statusOf('W1002 Warranty Reopening')).toEqual([expect.objectContaining({
+      field: 'status', from: 'Warranty', to: 'Open', toP86: 'In Progress' })]);
+  });
+
+  test('Buildertrend WARRANTY against an active P86 job proposes Warranty', () => {
+    expect(statusOf('W1003 Active Job')).toEqual([expect.objectContaining({
+      field: 'status', from: 'In Progress', to: 'Warranty', toP86: 'Warranty' })]);
+    expect(one(wrows, 'W1003 Active Job').flags).toEqual([]);
+  });
+
+  test('Buildertrend WARRANTY against a COMPLETED P86 job proposes Warranty', () => {
+    // The ordinary way a job enters its warranty period.
+    expect(statusOf('W1004 Finished Job')).toEqual([expect.objectContaining({
+      field: 'status', from: 'Completed', to: 'Warranty', toP86: 'Warranty' })]);
+  });
+
+  test('Buildertrend WARRANTY against an ARCHIVED P86 job proposes NOTHING', () => {
+    // The arm ENUMERATES the states a job goes into warranty from, as the
+    // closed arm does. Negating it (`p.state86 !== 'warranty'') also fired on
+    // 'archived': a correction, ticked by default, no confirm — one press
+    // un-archived the job back into Active Jobs, the Schedule board, market P&L
+    // and the WIP roll-up. What a Buildertrend status should do to an archived
+    // P86 job is not decided, and the correction's own note ("the job stays
+    // active") would be untrue of one coming out of the archive.
+    expect(statusOf('W1005 Archived Job')).toEqual([]);
+    const r = one(wrows, 'W1005 Archived Job');
+    expect(r.corrections.map((c) => c.field)).not.toContain('status');
   });
 });
 

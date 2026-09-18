@@ -118,10 +118,18 @@ function writable(kind, row, mode, fields) {
 // Held-back items a person TICKED. Only in rows mode, only when the request
 // names the field, only items the matcher marks applicable (job number, lead
 // revenue). Approved change orders and unparsed money are never applicable.
+//
+// The `mode !== 'rows' || !fields` guard is what keeps every one of these out
+// of safe mode AND out of an "apply everything" press that names no fields at
+// all. That matters most for 'close', which is permanent. Do not weaken it,
+// and do NOT add 'close' to PO_FIELDS — writable() would then apply it as an
+// ordinary correction.
 function pickedHeldBack(kind, row, mode, fields) {
   if (mode !== 'rows' || !fields || kind === 'changeOrders') return [];
-  // A locked purchase order's cost, as an approved addendum.
-  if (kind === 'purchaseOrders') return (row.heldBack || []).filter((h) => h.applicable === true && h.field === 'cost' && fields.indexOf('cost') !== -1);
+  // A locked purchase order's cost, as an approved addendum; and the close
+  // offer, which is never proposed and never automatic.
+  if (kind === 'purchaseOrders') return (row.heldBack || []).filter((h) => h.applicable === true
+    && (h.field === 'cost' || h.field === 'close') && fields.indexOf(h.field) !== -1);
   const allowed = kind === 'jobs' ? { jobNumber: 1 } : kind === 'clients' ? CLIENT_COLUMNS : LEAD_REVENUE_COLUMNS;
   const pick = new Set(fields);
   return (row.heldBack || []).filter((h) => h.applicable === true && allowed[h.field] && pick.has(h.field));
@@ -229,9 +237,12 @@ async function applyChangeOrder(db, orgId, row, mode, fields) {
   let data = parseData(co.data);
   const applied = [];
   const stale = [];
-  let approve = null;
+  // The status move, held out of the loop below and resolved after it. Named
+  // statusMove and not `approve`: it is no longer always an approval, and
+  // leaving it called `approve` is how the next reader mis-edits this.
+  let statusMove = null;
   for (const c of writable('changeOrders', row, mode, fields)) {
-    if (c.field === 'status') { approve = c; continue; }
+    if (c.field === 'status') { statusMove = c; continue; }
     if (co.status === 'applied') { stale.push((c.label || c.field) + ' — the change order is applied'); continue; }
     if (c.field === 'title') {
       if (norm(data.title) !== norm(c.from)) { stale.push(c.label || c.field); continue; }
@@ -252,14 +263,35 @@ async function applyChangeOrder(db, orgId, row, mode, fields) {
   const nextBtStatus = withBtStatus(data, btStatusText(row.bt.statusText));
   if (nextBtStatus) data = nextBtStatus;
   const wasLinked = linkedTo === btId;
+  // The two unsigned statuses. A change order at either counts $0 and is
+  // editable; a move BETWEEN them is not an approval and must not stamp one.
+  const UNSIGNED = ['draft', 'pending'];
   let approvedAt = null;
-  if (approve) {
-    if (co.status !== 'draft') stale.push('Status — P86 is no longer a draft');
-    else if (norm(co.linked_node_id)) stale.push('Status — linked to a Site Plan node; approve it in P86');
-    else {
-      approvedAt = coMatch.approvalInstant(row.bt.statusChangedDate) || new Date().toISOString();
-      data = Object.assign({}, data, { approvedInBuildertrend: { by: norm(row.bt.statusChangedBy), date: match.dateKey(row.bt.statusChangedDate) || null } });
-      applied.push({ field: 'status', from: 'draft', to: 'approved' });
+  let statusTo = null;            // the column value to write when it is not an approval
+  const statusFrom = co.status;   // the optimistic race guard for both UPDATEs
+  if (statusMove) {
+    // The applied guard is re-asserted PER TARGET VALUE here, because the loop
+    // above `continue`s past it for the status field. An approved or applied
+    // change order is never moved by a sync, whatever the target.
+    if (statusMove.value === 'approved') {
+      if (UNSIGNED.indexOf(co.status) === -1) stale.push('Status — P86 has this change order at ' + co.status + ', not draft or pending');
+      else if (norm(co.linked_node_id)) stale.push('Status — linked to a Site Plan node; approve it in P86');
+      else {
+        approvedAt = coMatch.approvalInstant(row.bt.statusChangedDate) || new Date().toISOString();
+        data = Object.assign({}, data, { approvedInBuildertrend: { by: norm(row.bt.statusChangedBy), date: match.dateKey(row.bt.statusChangedDate) || null } });
+        applied.push({ field: 'status', from: co.status, to: 'approved' });
+      }
+    } else if (statusMove.value === 'pending' || statusMove.value === 'draft') {
+      // No approvedAt, no is_locked, no approvedInBuildertrend, no node-link
+      // guard: nothing about this move commits anything.
+      if (UNSIGNED.indexOf(co.status) === -1) stale.push('Status — P86 has this change order at ' + co.status + ', and a sync never un-approves one');
+      else if (co.status === statusMove.value) stale.push('Status — P86 already has this change order at ' + co.status);
+      else {
+        statusTo = statusMove.value;
+        applied.push({ field: 'status', from: co.status, to: statusTo });
+      }
+    } else {
+      stale.push('Status — ' + statusMove.value + ' is not a status a sync sets');
     }
   }
   if (!applied.length && wasLinked && !nextBtStatus) return { unchanged: true, stale };
@@ -268,8 +300,22 @@ async function applyChangeOrder(db, orgId, row, mode, fields) {
   if (approvedAt) {
     // Approved = locked, as the status route does. The approver is Buildertrend's
     // (kept in data.approvedInBuildertrend): no P86 user is stamped as approver.
-    await db.query("UPDATE job_change_orders SET status = 'approved', approved_at = $1, approved_by = NULL, is_locked = TRUE WHERE id = $2 AND status = 'draft' AND job_id IN (SELECT id FROM jobs WHERE organization_id = $3)",
-      [approvedAt, co.id, orgId]);
+    // The race guard widens to BOTH unsigned statuses, or approving a pending
+    // change order matches no row and silently does nothing.
+    await db.query("UPDATE job_change_orders SET status = 'approved', approved_at = $1, approved_by = NULL, is_locked = TRUE WHERE id = $2 AND status = $3 AND job_id IN (SELECT id FROM jobs WHERE organization_id = $4)",
+      [approvedAt, co.id, statusFrom, orgId]);
+  } else if (statusTo) {
+    // THE SECOND UPDATE. Without it a move to pending (or back to draft) writes
+    // the data blob, pushes { field: 'status', to: 'pending' } into `applied`,
+    // reports outcome 'applied' to the page — and leaves the status column
+    // exactly where it was. Reported success, nothing moved. Any test for this
+    // must assert the DATABASE ROW, never results[].fields.
+    //
+    // statusFrom is the optimistic race guard, mirroring the approval UPDATE:
+    // is_locked and approved_at are deliberately not touched, because neither
+    // unsigned status has anything to lock or to stamp.
+    await db.query('UPDATE job_change_orders SET status = $1 WHERE id = $2 AND status = $3 AND job_id IN (SELECT id FROM jobs WHERE organization_id = $4)',
+      [statusTo, co.id, statusFrom, orgId]);
   }
   return { applied, linked: !wasLinked, stale, btStatus: !!nextBtStatus };
 }
@@ -309,7 +355,12 @@ async function createChangeOrder(db, orgId, row, user) {
     line.costPending = true;
     notes.push('“' + title + '” has no builder cost in Buildertrend, so its cost is set to the price and marked as a placeholder.');
   }
-  const approved = coMatch.btCoState(bt.statusText) === 'approved';
+  // THREE different questions used to hang off one boolean: what status to
+  // write, whether to stamp approved_at, and whether to lock. Only the last two
+  // are the same question.
+  const bs = coMatch.btCoState(bt.statusText);
+  const approved = bs === 'approved';
+  const bornStatus = approved ? 'approved' : (bs === 'pending' ? 'pending' : 'draft');
   const data = { title, lines: [line], defaultMarkup: 0, btStatus: match.isBtBlank(bt.statusText) ? '' : norm(bt.statusText) };
   if (approved) data.approvedInBuildertrend = { by: norm(bt.statusChangedBy), date: match.dateKey(bt.statusChangedDate) || null };
   const m = coMoney.changeOrderMoney(data);
@@ -318,7 +369,7 @@ async function createChangeOrder(db, orgId, row, user) {
   await db.query(
     'INSERT INTO job_change_orders (id, job_id, owner_id, status, co_number, data, approved_at, approved_by, is_locked, organization_id, bt_co_id) '
     + 'VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, NULL, $8, (SELECT organization_id FROM jobs WHERE id = $2), $9)',
-    [id, jobId, user && user.id != null ? user.id : null, approved ? 'approved' : 'draft', number, JSON.stringify(data),
+    [id, jobId, user && user.id != null ? user.id : null, bornStatus, number, JSON.stringify(data),
       approved ? (coMatch.approvalInstant(bt.statusChangedDate) || new Date().toISOString()) : null, approved, btId]);
   return { created: id, notes };
 }
@@ -361,6 +412,12 @@ async function applyPurchaseOrder(db, orgId, row, mode, fields) {
   const stale = [];
   let move = null;
   const locked = po.is_locked === true || po.is_locked === 1;
+  // A price change nobody has recorded: the purchase order is unlocked to
+  // revise, or its lines no longer sum to its committed baseline. Read from the
+  // LOCKED row BEFORE this transaction's own writes, because a ticked status
+  // correction deletes data.revising further down and the cost addendum rewrites
+  // data.addendums — either would hide exactly the state the close must refuse.
+  const unrecordedPriceChange = poMatch.unrecordedPriceChange(data);
   const editable = !locked && po.status !== 'closed';
   for (const c of writable('purchaseOrders', row, mode, fields)) {
     if (c.field === 'status') { move = c; continue; }
@@ -383,7 +440,14 @@ async function applyPurchaseOrder(db, orgId, row, mode, fields) {
       applied.push({ field: 'cost', from: c.from, to: c.to });
     }
   }
+  let closeIt = null;
   for (const h of pickedHeldBack('purchaseOrders', row, mode, fields)) {
+    // The close is resolved AFTER the status block below, against the status
+    // that block leaves behind. Resolving it here would (a) let a ticked
+    // status correction overwrite 'closed' back down to 'work_complete' in
+    // the same transaction, and (b) fall into this loop's first line and
+    // push a nonsense 'Cost — the purchase order is no longer locked'.
+    if (h.field === 'close') { closeIt = h; continue; }
     if (!locked || po.status === 'closed') { stale.push('Cost — the purchase order is no longer locked'); continue; }
     if (!moneyEq(poMatch.poTotal(data), h.p86Value)) { stale.push('Cost'); continue; }
     if (h.value < (Number(po.billed) || 0) - 0.005) { stale.push('Cost — below what is already billed'); continue; }
@@ -406,6 +470,34 @@ async function applyPurchaseOrder(db, orgId, row, mode, fields) {
         if (data.revising) { data = Object.assign({}, data); delete data.revising; }
       }
       applied.push({ field: 'status', from: po.status, to: status });
+    }
+  }
+  // CLOSE — permanent, and the last thing resolved, so approved →
+  // work_complete → closed composes in ONE transaction and one UPDATE, with
+  // two entries in `applied`. It reads the MUTATED local `status`, never
+  // po.status, which is what makes that composition work and what stops a
+  // ticked status correction from undoing a ticked close.
+  //
+  // Re-checked against the LOCKED row rather than the preview: the preview is
+  // a proposal that may be minutes old, and this is the one write that cannot
+  // be taken back.
+  if (closeIt) {
+    if (status === 'closed') stale.push('Close — the purchase order is already closed');
+    else if (poMatch.RANK[status] == null || poMatch.RANK[status] < poMatch.RANK.approved) {
+      stale.push('Close — P86 has this purchase order at ' + status + ', not approved or work complete');
+    } else if ((Array.isArray(data.addendums) ? data.addendums : []).some((a) => a && a.status === 'pending')) {
+      stale.push('Close — this purchase order has an addendum awaiting a signature');
+    } else if (unrecordedPriceChange) {
+      stale.push('Close — this purchase order is unlocked to revise and its lines no longer match its committed baseline; record the price change as an addendum first');
+    } else {
+      applied.push({ field: 'close', from: status, to: 'closed' });
+      status = 'closed';
+      nowLocked = true;
+      // Match the status route item for item: it clears a revision in flight
+      // and freezes the committed baseline the first time it locks. It does
+      // NOT write data.acceptance — a sync never forges a sub's e-signature.
+      if (data.baselineTotal == null) data = Object.assign({}, data, { baselineTotal: poMatch.poTotal(Object.assign({}, data, { baselineTotal: undefined })) });
+      if (data.revising) { data = Object.assign({}, data); delete data.revising; }
     }
   }
   // WHO approved it in Buildertrend (P4): the sub/vendor, or the builder
@@ -433,7 +525,7 @@ async function applyPurchaseOrder(db, orgId, row, mode, fields) {
   if (!applied.length && wasLinked && !stampedApproval) return { unchanged: true, stale };
   await db.query(
     `UPDATE job_purchase_orders SET data = $1::jsonb, sub_id = $2, status = $3, is_locked = $4, bt_po_id = $5,
-       approved_at = CASE WHEN $3 IN ('approved', 'work_complete') AND approved_at IS NULL THEN NOW() ELSE approved_at END, updated_at = NOW()
+       approved_at = CASE WHEN $3 IN ('approved', 'work_complete', 'closed') AND approved_at IS NULL THEN NOW() ELSE approved_at END, updated_at = NOW()
      WHERE id = $6 AND job_id IN (SELECT id FROM jobs WHERE organization_id = $7)`,
     [JSON.stringify(data), subId, status, nowLocked, btId, po.id, orgId]);
   return { applied, linked: !wasLinked, stale, approvalStamp: stampedApproval };
@@ -518,7 +610,7 @@ async function createPurchaseOrder(db, orgId, row, user) {
   const id = genId('po_');
   await db.query(
     'INSERT INTO job_purchase_orders (id, job_id, organization_id, owner_id, sub_id, status, po_number, data, is_locked, approved_at, approved_by, bt_po_id) '
-    + "VALUES ($1, $2, (SELECT organization_id FROM jobs WHERE id = $2), $3, $4, $5, $6, $7::jsonb, $8, CASE WHEN $5 IN ('approved', 'work_complete') THEN NOW() ELSE NULL END, NULL, $9)",
+    + "VALUES ($1, $2, (SELECT organization_id FROM jobs WHERE id = $2), $3, $4, $5, $6, $7::jsonb, $8, CASE WHEN $5 IN ('approved', 'work_complete', 'closed') THEN NOW() ELSE NULL END, NULL, $9)",
     [id, jobId, user && user.id != null ? user.id : null, rs.sub ? rs.sub.id : null, status, number, JSON.stringify(data), locked, btId]);
   return { created: id, notes };
 }
@@ -726,6 +818,7 @@ async function createLead(db, orgId, row, user) {
 function p86JobStatus(btStatus) {
   const s = match.btJobState(btStatus);
   if (s === 'closed') return 'Completed';
+  if (s === 'warranty') return 'Warranty';
   return 'In Progress';
 }
 
@@ -768,7 +861,7 @@ async function createJob(db, orgId, row, user) {
     startDate: start || '',
     endDate: '',
     street_address: val(bt.street), city: val(bt.city), state: val(bt.state), zip: val(bt.zip),
-    notes: match.btJobState(bt.status) === 'warranty' ? 'Buildertrend status: Warranty.' : '',
+    notes: '',
     pctComplete: 0,
     invoicedToDate: 0,
     createdAt: now,
@@ -1045,6 +1138,12 @@ function parseInput(body) {
         return { error: 'fields must be a list of field names.' };
       }
       fields = b.fields;
+      // Closing a purchase order is the one write with no route back — no edit,
+      // no unlock, no addendum, no delete. The page only ever sends it with a
+      // single id and a confirm; the endpoint now refuses any other shape.
+      if (dataset === 'purchaseOrders' && fields.indexOf('close') !== -1 && ids.length > 1) {
+        return { error: 'Closing a purchase order is permanent and is applied one row at a time.' };
+      }
     }
     return { dataset, mode, btIds: ids.map(String), fields };
   }

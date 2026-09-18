@@ -44,9 +44,22 @@ const router = express.Router();
 // 'applied' is terminal — once a CO has been consumed by the WIP in
 // the field, we don't let it move back, only delete (and only by
 // admin during the deletion-allowed window).
-const STATUS_VALUES = ['draft', 'approved', 'applied'];
+//
+// 'pending' = PENDING APPROVAL: written up and sent to the owner, nobody has
+// signed it. It is worth exactly $0 — the money readers are allow-lists of
+// ('approved','applied') and a pending change order is outside all of them,
+// the same way a draft is — and it stays editable and unlocked. It is a
+// place to stand between "I am still writing this" and "the customer signed".
+//
+//   draft → approved stays a DIRECT hop: the whole existing corpus depends on
+//   it and Buildertrend already holds dozens of approved change orders that
+//   were never pending in P86.
+//   pending → applied is deliberately NOT allowed: 'applied' means the field
+//   consumed it, which cannot be true of something nobody signed.
+const STATUS_VALUES = ['draft', 'pending', 'approved', 'applied'];
 const ALLOWED_TRANSITIONS = {
-  draft: ['approved'],
+  draft: ['pending', 'approved'],
+  pending: ['draft', 'approved'],
   approved: ['draft', 'applied'],
   applied: []
 };
@@ -104,7 +117,8 @@ router.get('/jobs/:jobId/change-orders', requireAuth, async (req, res) => {
 
 // GET /api/change-orders/summary — org-wide rollup for the Summary
 // page attention card. Counts open COs (status='draft' or 'approved')
-// and rough total dollar value across all active jobs. Org-scoped via
+// (status='draft', 'pending' or 'approved') and rough total dollar value
+// across all active jobs. Org-scoped via
 // the job join's organization_id filter (Wave 1.A).
 router.get('/change-orders/summary', requireAuth, async (req, res) => {
   try {
@@ -112,13 +126,14 @@ router.get('/change-orders/summary', requireAuth, async (req, res) => {
     const r = await pool.query(`
       SELECT
         COUNT(*) FILTER (WHERE co.status = 'draft')::int     AS draft_count,
+        COUNT(*) FILTER (WHERE co.status = 'pending')::int   AS pending_count,
         COUNT(*) FILTER (WHERE co.status = 'approved')::int  AS approved_count,
-        COUNT(*) FILTER (WHERE co.status IN ('draft', 'approved'))::int AS open_count
+        COUNT(*) FILTER (WHERE co.status IN ('draft', 'pending', 'approved'))::int AS open_count
       FROM job_change_orders co
       JOIN jobs j ON j.id = co.job_id
       WHERE (j.organization_id = $1 OR j.organization_id IS NULL)
     `, [orgId]);
-    res.json(r.rows[0] || { draft_count: 0, approved_count: 0, open_count: 0 });
+    res.json(r.rows[0] || { draft_count: 0, pending_count: 0, approved_count: 0, open_count: 0 });
   } catch (err) {
     console.error('GET /api/change-orders/summary error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -126,8 +141,9 @@ router.get('/change-orders/summary', requireAuth, async (req, res) => {
 });
 
 // GET /api/change-orders — cross-job org-wide list for the Jobs hub.
-// Query: ?status=open|all|draft|approved|applied, ?job=<jobId>, ?limit=
-//   open (default) = draft OR approved (still in play; not yet applied).
+// Query: ?status=open|all|draft|pending|approved|applied, ?job=<jobId>, ?limit=
+//   open (default) = draft, pending OR approved (still in play; not yet
+//   applied). 'pending' = sent to the owner, awaiting approval, $0.
 // Joins jobs for a display label (job_number / job_title). Org-scoped via
 // the same jobs.organization_id filter the /summary route uses.
 router.get('/change-orders', requireAuth, async (req, res) => {
@@ -139,7 +155,7 @@ router.get('/change-orders', requireAuth, async (req, res) => {
     const statusQ = String(req.query.status || 'open').toLowerCase();
     if (req.query.job) { where.push('co.job_id = $' + (pn++)); params.push(String(req.query.job)); }
     if (statusQ === 'open') {
-      where.push("co.status IN ('draft', 'approved')");
+      where.push("co.status IN ('draft', 'pending', 'approved')");
     } else if (statusQ && statusQ !== 'all' && STATUS_VALUES.includes(statusQ)) {
       where.push('co.status = $' + (pn++)); params.push(statusQ);
     }
@@ -361,7 +377,7 @@ router.post('/change-orders/:id/status', requireAuth, async (req, res) => {
     );
     if (!rows.length) return res.status(404).json({ error: 'Not found' });
     const current = rows[0].status;
-    if (!ALLOWED_TRANSITIONS[current].includes(next)) {
+    if (!(ALLOWED_TRANSITIONS[current] || []).includes(next)) {
       return res.status(409).json({ error: 'Transition not allowed: ' + current + ' → ' + next });
     }
 

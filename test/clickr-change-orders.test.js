@@ -278,6 +278,35 @@ describe('PREVIEW — a Buildertrend status P86 does not map (C1)', () => {
     expect(r.notes.join(' ')).not.toMatch(/was not compared/);
   });
 
+  test('Declined on a P86 PENDING change order is a flag, not a passive note', async () => {
+    // Declining is the natural exit from pending — P86 has it out for the
+    // owner's signature and the owner said no. It used to fall through to the
+    // trailing note arm, which was unreachable for a real status until this
+    // build added `pending` to the vocabulary: a dim 11px line, no flag, no
+    // Flagged filter, no flagged tile, and a clean "matched" chip.
+    const r = coMatch.matchChangeOrders(
+      [{ btId: '9101', coNumber: 'CO-0101', title: 'Extra railing', jobId: '111', jobName: 'Job 111',
+        statusText: 'Declined', builderCost: 800, totalPrice: 1000 }],
+      { jobs: [{ id: 'j-1', bt_job_id: '111', data: { jobNumber: 'RV2000', title: 'Waterside III' } }],
+        coRows: [{ id: 'co-p', job_id: 'j-1', status: 'pending', co_number: 'CO-0101', is_locked: 0, bt_co_id: null,
+          data: JSON.stringify({ title: 'Extra railing', lines: [{ qty: 1, unitPrice: 1000, unitCost: 800 }] }) }] })[0];
+    expect(r.flags.map((f) => f.field)).toEqual(['status']);
+    expect(r.flags[0].text).toBe('Buildertrend says Declined, which is not a P86 change-order status. Not mapped — P86 keeps this change order pending approval and counts nothing.');
+    expect(r.notes.join(' ')).not.toMatch(/was not compared/);
+    // The status is FLAGGED, never proposed either way: a sync does not decline
+    // a change order, and it does not un-pend one.
+    expect(r.corrections.map((c) => c.field)).not.toContain('status');
+    expect(r.heldBack.map((h) => h.field)).not.toContain('status');
+    // And a P86 DRAFT still says "as a draft", word for word.
+    const draftRow = coMatch.matchChangeOrders(
+      [{ btId: '9102', coNumber: 'CO-0102', title: 'Extra railing', jobId: '111', jobName: 'Job 111',
+        statusText: 'Declined', builderCost: 800, totalPrice: 1000 }],
+      { jobs: [{ id: 'j-1', bt_job_id: '111', data: { jobNumber: 'RV2000', title: 'Waterside III' } }],
+        coRows: [{ id: 'co-q', job_id: 'j-1', status: 'draft', co_number: 'CO-0102', is_locked: 0, bt_co_id: null,
+          data: JSON.stringify({ title: 'Extra railing', lines: [{ qty: 1, unitPrice: 1000, unitCost: 800 }] }) }] })[0];
+    expect(draftRow.flags[0].text).toMatch(/keeps this change order as a draft and counts nothing\.$/);
+  });
+
   test('the Approved correction and the never-un-approve rule are untouched', async () => {
     const ds = await coRows();
     expect(byBt(ds, 7001).corrections.find((c) => c.field === 'status')).toMatchObject({ from: 'draft', to: 'approved', money: true });
@@ -413,7 +442,11 @@ describe('CREATE — the change orders P86 lacks, on the job they belong to', ()
     expect(r.json.counts.created).toBe(2);
     expect(coByBt('7004')).toHaveLength(1);
     const [pending] = coByBt('7005');
-    expect(pending.status).toBe('draft');
+    // A Buildertrend PENDING change order is born PENDING in P86 now — the
+    // whole point of the status. Unlocked, approved_at NULL: nobody signed it.
+    expect(pending.status).toBe('pending');
+    expect(pending.is_locked).toBeFalsy();
+    expect(pending.approved_at == null).toBe(true);
     const d = JSON.parse(pending.data);
     expect(d.lines[0].costPending).toBe(true);
     expect(coMoney.changeOrderMoney(d)).toEqual({ income: 300, costs: 300 });
@@ -515,5 +548,215 @@ describe('PAGE — the Change orders tab', () => {
     expect(html).toContain('Buildertrend: Declined');
     expect(html).toContain('Buildertrend: Draft');
     T.setTab('jobs');
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// PENDING — P86's own un-signed change-order status
+// ══════════════════════════════════════════════════════════════════════════
+//
+// Buildertrend has had a Pending change order for ever; P86 had nowhere to put
+// one, so btCoState resolved it and the proposal logic dropped it. Now:
+//
+//   BT Pending  vs P86 draft    -> a $0 correction to pending
+//   BT Draft    vs P86 pending  -> a $0 correction back to draft
+//   BT Approved vs P86 pending  -> the SAME money correction a draft gets
+//   BT anything vs P86 approved/applied -> still held back, never applicable
+//
+// EVERY apply assertion below reads the DATABASE ROW's status column. It does
+// NOT read results[].fields — the bug this feature was most likely to ship was
+// a status the response reported as applied while the column never moved,
+// because the only UPDATE that ever wrote it sat inside `if (approvedAt)`.
+describe('PENDING — the un-signed status, end to end', () => {
+  // Extra Buildertrend records for the length of ONE test, then removed: no
+  // other describe's classes or counts move.
+  async function withBt(recs, fn) {
+    const n = BT_COS.length;
+    BT_COS.push(...recs);
+    preview.forgetFetch(AGX);
+    try { return await fn(); } finally { BT_COS.length = n; preview.forgetFetch(AGX); }
+  }
+  // A P86 change order at an arbitrary status. seed() runs in beforeEach, so
+  // these are gone again by the next test.
+  function addCo(id, status, coNumber, title, unitCost, unitSell, locked) {
+    engine.db.prepare('INSERT INTO job_change_orders (id, job_id, owner_id, status, co_number, data, is_locked, organization_id, bt_co_id) VALUES (?,?,?,?,?,?,?,?,?)')
+      .run(id, 'j-1', 10, status, coNumber, JSON.stringify({ title: title, lines: [line({ id: id + '-l', unitCost: unitCost, unitSell: unitSell })] }), locked ? 1 : 0, AGX, null);
+  }
+
+  test('PREVIEW — Buildertrend Pending on a P86 DRAFT is a $0 correction to pending', async () => {
+    addCo('co-p1', 'draft', 'CO-20', 'Pending arm A', 100, 150);
+    await withBt([coRec(7100, 111, 'CO-0020', 'Pending arm A', 'Pending', 150, 100)], async () => {
+      const r = byBt(await coRows(), 7100);
+      expect([r.class, r.p86.id]).toEqual(['conflict', 'co-p1']);
+      const s = r.corrections.find((c) => c.field === 'status');
+      expect(s).toMatchObject({ kind: 'value', from: 'draft', to: 'pending', value: 'pending', p86Value: 'draft', money: false });
+      // money:false is load-bearing: it keeps this out of the money confirm
+      // sentence on the page AND out of safe mode.
+      expect(s.note).toMatch(/counts nothing/);
+      expect(r.heldBack).toEqual([]);
+    });
+  });
+
+  test('PREVIEW — Buildertrend Draft on a P86 PENDING is a $0 correction back to draft', async () => {
+    addCo('co-p2', 'pending', 'CO-21', 'Pending arm B', 100, 150);
+    await withBt([coRec(7101, 111, 'CO-0021', 'Pending arm B', 'Draft', 150, 100)], async () => {
+      const r = byBt(await coRows(), 7101);
+      expect(r.p86.id).toBe('co-p2');
+      expect(r.corrections.find((c) => c.field === 'status'))
+        .toMatchObject({ from: 'pending', to: 'draft', value: 'draft', p86Value: 'pending', money: false });
+    });
+  });
+
+  test('PREVIEW — Buildertrend Approved on a P86 PENDING is the money correction, FROM pending', async () => {
+    addCo('co-p3', 'pending', 'CO-22', 'Pending arm C', 100, 150);
+    await withBt([coRec(7102, 111, 'CO-0022', 'Pending arm C', 'Approved', 150, 100)], async () => {
+      const r = byBt(await coRows(), 7102);
+      const s = r.corrections.find((c) => c.field === 'status');
+      // from/p86Value must carry the REAL status: sync-apply uses p86Value as
+      // the optimistic guard, so a hardcoded 'draft' makes every approval of a
+      // pending change order silently stale.
+      expect(s).toMatchObject({ from: 'pending', to: 'approved', value: 'approved', p86Value: 'pending', money: true });
+    });
+  });
+
+  test('PREVIEW — a sync still never un-approves: Buildertrend Pending on a P86 APPROVED is held back', async () => {
+    const r = byBt(await coRows(), 7002);
+    expect(r.corrections).toEqual([]);
+    expect(r.heldBack.map((h) => [h.field, h.applicable])).toEqual([['status', false]]);
+  });
+
+  test('APPLY — the ROW moves to pending. Not results[].fields: the ROW.', async () => {
+    addCo('co-p1', 'draft', 'CO-20', 'Pending arm A', 100, 150);
+    await withBt([coRec(7100, 111, 'CO-0020', 'Pending arm A', 'Pending', 150, 100)], async () => {
+      await coRows();
+      const r = await put(ADMIN, { btIds: ['7100'], fields: ['status'] });
+      expect(r.status).toBe(200);
+      const row = coRow('co-p1');
+      expect(row.status).toBe('pending');
+      // Nothing about pending commits anything: no lock, no approval stamp.
+      expect(Boolean(row.is_locked)).toBe(false);
+      expect(row.approved_at == null).toBe(true);
+      expect(coData('co-p1').approvedInBuildertrend).toBeUndefined();
+      // And the response agreed with the row, rather than instead of it.
+      expect(r.json.results[0].fields.map((f) => [f.field, f.to])).toContainEqual(['status', 'pending']);
+    });
+  });
+
+  test('APPLY — pending back to draft moves the ROW too', async () => {
+    addCo('co-p2', 'pending', 'CO-21', 'Pending arm B', 100, 150);
+    await withBt([coRec(7101, 111, 'CO-0021', 'Pending arm B', 'Draft', 150, 100)], async () => {
+      await coRows();
+      await put(ADMIN, { btIds: ['7101'], fields: ['status'] });
+      expect(coRow('co-p2').status).toBe('draft');
+    });
+  });
+
+  test('APPLY — approving a PENDING change order lands approved, locked and stamped', async () => {
+    addCo('co-p3', 'pending', 'CO-22', 'Pending arm C', 100, 150);
+    await withBt([coRec(7102, 111, 'CO-0022', 'Pending arm C', 'Approved', 150, 100)], async () => {
+      await coRows();
+      await put(ADMIN, { btIds: ['7102'], fields: ['status'] });
+      const row = coRow('co-p3');
+      // The approval UPDATE's race guard used to be `AND status = 'draft'`,
+      // which matched no row here and wrote nothing while reporting success.
+      expect(row.status).toBe('approved');
+      expect(Boolean(row.is_locked)).toBe(true);
+      expect(String(row.approved_at)).toMatch(/^2026-03-04/);
+      expect(row.approved_by).toBeNull();
+    });
+  });
+
+  test('APPLY — SAFE MODE never moves a change order to or from pending', async () => {
+    addCo('co-p1', 'draft', 'CO-20', 'Pending arm A', 100, 150);
+    addCo('co-p2', 'pending', 'CO-21', 'Pending arm B', 100, 150);
+    await withBt([coRec(7100, 111, 'CO-0020', 'Pending arm A', 'Pending', 150, 100),
+                  coRec(7101, 111, 'CO-0021', 'Pending arm B', 'Draft', 150, 100)], async () => {
+      const r = await put(ADMIN, { mode: 'safe' });
+      expect(r.status).toBe(200);
+      expect([coRow('co-p1').status, coRow('co-p2').status]).toEqual(['draft', 'pending']);
+      // It DID link them — so this is not vacuous on "safe mode did nothing".
+      expect([coRow('co-p1').bt_co_id, coRow('co-p2').bt_co_id]).toEqual(['7100', '7101']);
+    });
+  });
+
+  test('APPLY — an APPLIED change order is never moved to pending, even when asked for by name', async () => {
+    // The `applied` guard is skipped for the status field by the writable loop
+    // (`continue`), so it has to be re-asserted per target value in the tail.
+    await withBt([coRec(7103, 111, 'CO-0005', 'Gate repair', 'Pending', 999, 300)], async () => {
+      await coRows();
+      const r = await put(ADMIN, { btIds: ['7103'], fields: ['status'] });
+      expect(coRow('co-c').status).toBe('applied');
+      expect(Boolean(coRow('co-c').is_locked)).toBe(true);
+      expect((r.json.results[0].fields || []).map((f) => f.field)).not.toContain('status');
+    });
+  });
+
+  test('APPLY — an APPROVED change order is never moved back to pending or draft', async () => {
+    await withBt([coRec(7104, 111, 'CO-0002', 'Paint touch up', 'Draft', 700, 500)], async () => {
+      await coRows();
+      await put(ADMIN, { btIds: ['7104'], fields: ['status'] });
+      expect(coRow('co-b').status).toBe('approved');
+    });
+  });
+
+  test('CREATE — a Buildertrend PENDING change order is born pending, unlocked, unstamped', async () => {
+    const r = await put(ADMIN, { mode: 'create', btIds: ['7005'] });
+    expect(r.status).toBe(200);
+    const made = coByBt('7005');
+    expect(made).toHaveLength(1);
+    expect(made[0].status).toBe('pending');
+    expect(Boolean(made[0].is_locked)).toBe(false);
+    expect(made[0].approved_at == null).toBe(true);
+    expect(JSON.parse(made[0].data).approvedInBuildertrend).toBeUndefined();
+  });
+
+  test('THE MATCHER never proposes ANY status move on an approved or applied change order', () => {
+    // TWO GATES, and this is the one that is reachable. The apply door
+    // re-reads Buildertrend and re-matches P86 from scratch before it writes,
+    // so a correction the matcher will not emit can never be ticked; the
+    // writer then re-asserts the same rule per target value against the row it
+    // holds under FOR UPDATE, for a write that lands between the two.
+    //
+    // Swept over the whole space rather than one fixture, because the failure
+    // is one careless arm, not one careless row.
+    const p86Row = (status) => ({ id: 'co-probe', job_id: 'j-1', status, co_number: 'CO-1', is_locked: 1, bt_co_id: null,
+      data: JSON.stringify({ title: 'Probe', lines: [line({ id: 'l1', unitCost: 100, unitSell: 150 })] }) });
+    for (const said of ['Draft', 'Pending', 'Approved', 'Declined', '']) {
+      for (const status of ['approved', 'applied']) {
+        const r = coMatch.matchChangeOrders(
+          [{ btId: '9001', coNumber: 'CO-1', title: 'Probe', jobId: '111', jobName: 'Job 111',
+            statusText: said, builderCost: 100, totalPrice: 150 }],
+          { jobs: [{ id: 'j-1', bt_job_id: '111', data: { jobNumber: 'RV2000', title: 'Waterside III' } }],
+            coRows: [p86Row(status)] })[0];
+        expect([said, status, r.corrections.filter((c) => c.field === 'status')])
+          .toEqual([said, status, []]);
+      }
+    }
+    // Not vacuous: the SAME sweep against a draft does produce one, for Approved.
+    const onDraft = coMatch.matchChangeOrders(
+      [{ btId: '9001', coNumber: 'CO-1', title: 'Probe', jobId: '111', jobName: 'Job 111',
+        statusText: 'Approved', builderCost: 100, totalPrice: 150 }],
+      { jobs: [{ id: 'j-1', bt_job_id: '111', data: { jobNumber: 'RV2000', title: 'Waterside III' } }],
+        coRows: [Object.assign(p86Row('draft'), { is_locked: 0 })] })[0];
+    expect(onDraft.corrections.filter((c) => c.field === 'status')).toHaveLength(1);
+  });
+
+  test('PENDING IS WORTH $0 — the money readers are allow-lists and pending is in none of them', () => {
+    // Executed, not asserted from source: the shaper the contract, WIP, backlog
+    // and pay-application readers all sit on is asked directly.
+    const rows = ['draft', 'pending', 'approved', 'applied'].map((s) => ({
+      id: 'm-' + s, status: s, co_number: 'CO-' + s,
+      data: { title: s, lines: [line({ id: 'ml', unitCost: 100, unitSell: 500 })] },
+    }));
+    const shaped = rows.map(coMoney.shapeChangeOrderRow);
+    const by = Object.fromEntries(shaped.map((c) => [c.status, c]));
+    expect([by.draft.counted, by.pending.counted, by.approved.counted, by.applied.counted])
+      .toEqual([false, false, true, true]);
+    // The income a NOT-counted change order contributes is zero, not "its own",
+    // so nothing downstream can accidentally sum it.
+    expect([by.draft.income, by.pending.income]).toEqual([0, 0]);
+    expect(by.approved.income).toBe(500);
+    // Its real figure is still visible for display, on a separate key.
+    expect(by.pending.proposedIncome).toBe(500);
   });
 });

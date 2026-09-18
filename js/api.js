@@ -405,7 +405,8 @@
       return del('/api/change-orders/' + encodeURIComponent(id));
     },
     // Cross-job org-wide list for the Jobs hub. opts: { status?:'open'|'all'|
-    // 'draft'|'approved'|'applied', job?:jobId, limit? }. Default open.
+    // 'draft'|'pending'|'approved'|'applied', job?:jobId, limit? }. Default
+    // open = draft + pending + approved.
     listAll: function(opts) {
       opts = opts || {};
       var qs = [];

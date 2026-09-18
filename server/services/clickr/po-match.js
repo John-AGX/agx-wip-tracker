@@ -15,13 +15,21 @@
 //            Draft → draft, Sent to Sub/Vendor → issued, any Approved → approved,
 //            Approved + work Complete → work_complete. Leaving draft locks the PO
 //            and freezes its price, as P86's own status route does. A sync never
-//            moves a PO backwards and never closes one. A P86 CLOSED purchase
+//            moves a PO backwards. A P86 CLOSED purchase
 //            order is the END of one, so Buildertrend approved or work complete
 //            AGREES with it: nothing is corrected and nothing is held back, and
 //            only a Buildertrend draft or sent PO is called out — as Buildertrend
 //            being behind, not P86. WHICH Buildertrend approval it was (the sub's
 //            or the builder's own) is kept in data.approvedInBuildertrend.kind,
 //            because P86's own 'approved' means the sub e-signed.
+//   close  — OFFERED, never proposed. When Buildertrend has the purchase order
+//            approved, its work Complete AND its payment status exactly Paid,
+//            a P86 purchase order at approved or work_complete may be CLOSED.
+//            It is a held-back item on its own field key ('close', never
+//            'status'), unticked, applicable, out of safe mode, and it says
+//            plainly that closing is permanent. btPoState is NOT taught
+//            'closed' — see the note on it — so nothing is ever created closed
+//            and no ordinary forward correction can reach it.
 //   recalled — a Buildertrend purchase order marked recalled is refused while no
 //            P86 purchase order is linked to it (nothing is ever created from
 //            one). Once a P86 purchase order IS linked, the row is computed
@@ -73,6 +81,14 @@ function poNumberKey(v) {
   return m ? m[1] : norm(v).toUpperCase();
 }
 
+// NEVER TEACH THIS FUNCTION 'closed'. It is the shared mapper: poProposals
+// uses it for the status correction, matchPurchaseOrders ships its answer as
+// bt.state86 ("would be created as") and sync-apply.js's createPurchaseOrder
+// takes its initial status from it. Returning 'closed' here would turn a close
+// into a plain forward correction TICKED BY DEFAULT, let a create mint a
+// born-closed, permanently uneditable, undeletable purchase order with no
+// e-signature, and put it inside safe mode's create sweep. The close offer is
+// a separate, unticked item on its own field key; see poProposals.
 function btPoState(approvalText, workText) {
   const a = textKey(approvalText);
   let s = null;
@@ -110,6 +126,27 @@ function rawLinesTotal(data) {
 function approvedAddSum(data) {
   return (Array.isArray(data && data.addendums) ? data.addendums : [])
     .reduce((s, a) => s + (a && a.status === 'approved' ? (Number(a.delta) || 0) : 0), 0);
+}
+
+// Is there a price change on this purchase order that NOBODY HAS RECORDED?
+// True when it is unlocked to revise, or when its line items no longer sum to
+// what it has committed. P86's own /relock route refuses exactly this shape
+// (409 price_changed: record it as an addendum, e-signed), and a person can
+// also leave it behind by moving the status while revising — that route clears
+// `revising` without asking about the price.
+//
+// Buildertrend cost addendums are left OUT of the committed sum on purpose:
+// withAddendum below records that money without touching the lines, so counting
+// them would report an unrecorded change on every purchase order the sync has
+// ever corrected — the one case where the change IS recorded. Same formula as
+// purchase-order-routes.js /relock otherwise, half-cent tolerance included.
+function unrecordedPriceChange(data) {
+  const d = data || {};
+  if (d.revising) return true;
+  if (d.baselineTotal == null) return false;   // legacy PO: nothing to reconcile
+  const nativeAdds = (Array.isArray(d.addendums) ? d.addendums : [])
+    .reduce((s, a) => s + (a && a.status === 'approved' && a.source !== 'buildertrend' ? (Number(a.delta) || 0) : 0), 0);
+  return Math.abs(Math.round((rawLinesTotal(d) - ((Number(d.baselineTotal) || 0) + nativeAdds)) * 100) / 100) >= 0.005;
 }
 
 // The committed total P86 counts (baseline + approved addendums when locked).
@@ -258,6 +295,71 @@ function poProposals(bt, v, subs) {
   } else if (RANK[bs] < RANK[v.status]) {
     acc.heldBack.push({ field: 'status', label: 'Status', reason: 'money', bt: STATUS_LABEL[bs], p86: STATUS_LABEL[v.status], applicable: false,
       note: 'A sync never moves a purchase order backwards. If Buildertrend is right, change it in P86.' });
+  }
+
+  // CLOSE — offered, never proposed (John, 2026-09-18). Buildertrend has this
+  // purchase order approved, its work Complete and its payment status exactly
+  // Paid, so P86 MAY close it. Everything about this item is deliberate:
+  //
+  //   field 'close', not 'status' — against a P86 purchase order at `approved`
+  //     a status correction to work_complete is ALREADY pushed and ticked by
+  //     default, and the page keys its tick boxes, its applied `fields` array
+  //     and the server's writable()/pickedHeldBack() all on the field NAME. Two
+  //     items called 'status' on one row collide in three places at once.
+  //   reason 'permanent', not 'money' — 'money' would fold it into the money
+  //     confirm sentence on the page. Closing moves no money at all; what it
+  //     costs is the ability to ever change this record again.
+  //   applicable true, and the page defaults every applicable held-back item to
+  //     UNTICKED. pickedHeldBack refuses it unless the request names it by
+  //     field, which is what keeps it out of safe mode and out of an
+  //     "apply everything" press.
+  //   textKey(...) === 'paid' EXACTLY. textKey lowercases and collapses
+  //     punctuation, so 'Partially Paid' becomes 'partially paid'. A
+  //     .includes('paid') or .endsWith('paid') would both match it. Never
+  //     use either.
+  //   RANK >= approved — below that the sub never e-signed (approved_at and
+  //     data.acceptance are stamped only on the approved transition), and a
+  //     close would freeze that for ever with no route back.
+  //   no pending addendum — approving one raises the committed total, and the
+  //     addendum route now refuses a closed purchase order outright.
+  //   not mid-revision — a purchase order unlocked to revise, or whose lines no
+  //     longer sum to its committed baseline, carries a price change nobody has
+  //     recorded. It is INVISIBLE on this row: poTotal returns baseline +
+  //     approved addendums once a baseline is frozen, so P86's shown total still
+  //     agrees with Buildertrend while the edited line value sits outside it.
+  //     P86's own re-lock route refuses exactly this shape (409 price_changed:
+  //     record it as an addendum, e-signed). Closing would freeze it with every
+  //     door back already shut, so the offer is withheld and the reason shown.
+  //   NOT gated on bt.amountPaid (shown only, never trusted: Buildertrend can
+  //     record Paid with a null amount) and NOT on P86's billed total (P86
+  //     creates no bills from Buildertrend by design, so billed = 0 is normal).
+  const btPaidDone = textKey(bt.paidStatusText) === 'paid';
+  const pendingAddendum = (Array.isArray(v.data && v.data.addendums) ? v.data.addendums : [])
+    .some((a) => a && a.status === 'pending');
+  const unrecorded = unrecordedPriceChange(v.data);
+  const closeInRange = !bt.isRecalled && bs === 'work_complete' && btPaidDone
+    && RANK[v.status] != null && RANK[v.status] >= RANK.approved && RANK[v.status] < RANK.closed;
+  if (closeInRange && !pendingAddendum && !unrecorded) {
+    acc.heldBack.push({ field: 'close', label: 'Close', reason: 'permanent',
+      bt: 'Closed', p86: p86StatusLabel, value: 'closed', p86Value: v.status, applicable: true,
+      note: 'Buildertrend has this purchase order approved, its work Complete and its payment status Paid. '
+        + 'Closing it in P86 is PERMANENT: a closed purchase order cannot be edited, unlocked, revised by addendum or deleted, by anyone, ever — '
+        + 'and it drops off the Purchase orders hub\'s open list. Its cost does not change (a closed purchase order still counts exactly what it counts today) '
+        + 'and its sub keeps portal access to the job\'s files. This is Buildertrend\'s settlement record, not a P86 payment: P86 creates no bills from '
+        + 'Buildertrend, so this purchase order may still show $0.00 billed here.' });
+  } else if (closeInRange && pendingAddendum) {
+    acc.heldBack.push({ field: 'close', label: 'Close', reason: 'review',
+      bt: 'Closed', p86: p86StatusLabel, applicable: false,
+      note: 'Buildertrend has this purchase order paid and complete, but P86 has an addendum on it still awaiting a signature. '
+        + 'Closing would freeze the purchase order with that addendum unresolved and no way to approve it. Settle it in P86 first.' });
+  } else if (closeInRange) {
+    acc.heldBack.push({ field: 'close', label: 'Close', reason: 'review',
+      bt: 'Closed', p86: p86StatusLabel, applicable: false,
+      note: 'Buildertrend has this purchase order paid and complete, but P86 has it '
+        + (v.data && v.data.revising ? 'unlocked to revise' : 'holding line items that no longer sum to its committed total')
+        + ', so there is a price change on it that nobody has recorded. The total shown here is still the committed one, so that difference is not on this row. '
+        + 'Record it as an addendum in P86 (it is e-signed) or put the lines back and re-lock it, then close it. Closing now would freeze the purchase order '
+        + 'with that change lost for ever — a closed purchase order cannot be edited, unlocked, revised by addendum or deleted.' });
   }
 
   // TITLE
@@ -450,4 +552,4 @@ function notInBuildertrend(rows, btValues, p86) {
   return { rows: listed, notListed };
 }
 
-module.exports = { matchPurchaseOrders, notInBuildertrend, btPoState, btApprovalKind, approvalKindDue, poNumberKey, withLineCost, withAddendum, resolveSub, poTotal, RANK, SUB_ACCESS_STATUS };
+module.exports = { matchPurchaseOrders, notInBuildertrend, btPoState, btApprovalKind, approvalKindDue, poNumberKey, withLineCost, withAddendum, resolveSub, poTotal, unrecordedPriceChange, RANK, SUB_ACCESS_STATUS };

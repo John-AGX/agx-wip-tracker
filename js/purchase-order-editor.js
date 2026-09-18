@@ -203,6 +203,13 @@
     var locked = (st === 'closed') || !!_po.is_locked;
     var canUnlock = !!_po.is_locked && st !== 'closed';
     var step = NEXT_STEP[st];
+    // `locked` means "the CONTRACT is read-only" — it gates the fields, and
+    // that is right for a work_complete PO. It is not the right question for
+    // the forward STEP button: every PO past draft is locked, so gating the
+    // step on it made Close PO unpressable and left work_complete a dead end
+    // with no way out inside P86 at all. Closing changes no money and no
+    // field; it is the status route's own last legal transition.
+    var canStep = !!step && (!locked || st === 'work_complete');
     var jobLabel = window.p86JobLabel(_po.job_number, _po.job_title, { fallback: '' });
 
     ov.innerHTML =
@@ -216,7 +223,7 @@
           '<div class="po-ed-head-r">' +
             '<span class="po-ed-saved" id="po-ed-saved"></span>' +
             (st === 'draft' ? '<button class="ee-btn" id="po-ed-import" title="Prefill this PO from a Buildertrend Purchase Order PDF export">&#x2913; Import PDF</button>' : '') +
-            (step && !locked ? '<button class="ee-btn primary" id="po-ed-step">' + esc(step.label) + '</button>' : '') +
+            (canStep ? '<button class="ee-btn primary" id="po-ed-step">' + esc(step.label) + '</button>' : '') +
             (canUnlock ? '<button class="ee-btn" id="po-ed-unlock" title="Unlock to revise the price — the change is recorded as an addendum">&#x1F513; Unlock to revise</button>' : '') +
             '<button class="ee-btn" id="po-ed-print">Print</button>' +
             '<button class="ee-btn" id="po-ed-close">Close</button>' +
@@ -911,26 +918,47 @@
     }
     return Promise.resolve(window.prompt(message, def || ''));
   }
-  function askYesNo(message) {
+  // `opts` is a 2nd parameter, not a new function: the two ordinary step
+  // confirms pass nothing, so it arrives undefined and nothing about them
+  // changes. p86Confirm reads `destructive`, falling back to `danger`; both are
+  // passed, as js/bt-sync-preview.js askThen does.
+  function askYesNo(message, opts) {
+    opts = opts || {};
+    var label = opts.label || 'Continue';
     if (typeof window.p86Confirm === 'function') {
-      return window.p86Confirm({ title: 'Confirm', message: message, confirmText: 'Continue', confirmLabel: 'Continue' })
+      return window.p86Confirm({ title: opts.title || 'Confirm', message: message,
+        confirmText: label, confirmLabel: label, danger: !!opts.danger, destructive: !!opts.danger })
         .then(function (v) { return !!v; });
     }
     return Promise.resolve(!!window.confirm(message));
   }
 
+  // CLOSED is the end of a purchase order: ALLOWED_TRANSITIONS.closed is empty
+  // and every write door refuses it (edit, unlock, re-lock, addendum, delete).
+  // There is no undo anywhere in P86, so the confirm has to say so — word for
+  // word what the Buildertrend preview says for the very same write.
+  var CLOSE_WARNING = 'Close this purchase order in Project 86? This is PERMANENT — a closed purchase order cannot be edited, '
+    + 'unlocked, revised by addendum or deleted, by anyone, and it drops off the Purchase orders hub\u2019s open list. '
+    + 'Its cost does not change and its sub keeps portal access.';
+
   function advanceStatus() {
     var step = NEXT_STEP[_po.status || 'draft'];
     if (!step) return;
-    var gate = (step.to === 'approved')
-      ? askText('Subcontractor name (as signing):', _po.sub_name || '').then(function (nm) {
-          // Cancel resolves null/undefined; an empty string is a real answer
-          // but is not a signature, so it is treated as a cancel too.
-          if (nm == null || !String(nm).trim()) return null;
-          return { name: String(nm).trim(), date: todayISO() };
-        })
-      : askYesNo('Move this PO to "' + (STATUS_LABEL[step.to] || step.to) + '"?')
-          .then(function (ok) { return ok ? false : null; });
+    var gate;
+    if (step.to === 'approved') {
+      gate = askText('Subcontractor name (as signing):', _po.sub_name || '').then(function (nm) {
+        // Cancel resolves null/undefined; an empty string is a real answer
+        // but is not a signature, so it is treated as a cancel too.
+        if (nm == null || !String(nm).trim()) return null;
+        return { name: String(nm).trim(), date: todayISO() };
+      });
+    } else if (step.to === 'closed') {
+      gate = askYesNo(CLOSE_WARNING, { title: 'Close this purchase order', label: 'Close it permanently', danger: true })
+        .then(function (ok) { return ok ? false : null; });
+    } else {
+      gate = askYesNo('Move this PO to "' + (STATUS_LABEL[step.to] || step.to) + '"?')
+        .then(function (ok) { return ok ? false : null; });
+    }
 
     gate.then(function (acceptance) {
       if (acceptance === null) return;   // cancelled

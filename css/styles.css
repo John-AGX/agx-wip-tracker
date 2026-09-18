@@ -2888,6 +2888,14 @@
             color: var(--red);
         }
 
+        /* Warranty — a job still ours, no longer in production. Violet so it
+           reads as neither active green nor finished blue. Light-mode twin
+           below with the rest. */
+        .badge.warranty {
+            background: rgba(167, 139, 250, 0.2);
+            color: #a78bfa;
+        }
+
         /* Lead status badges — semantic palette per pipeline stage.
            Shape inherits from the base `.badge` rule above (10px, uppercase,
            tight tracking, pill); only color + bg varies per status. Same
@@ -2927,6 +2935,7 @@
         body.light-mode .badge.lead-lost        { background: rgba(220,38,38,.10);   color: #b91c1c; }
         body.light-mode .badge.lead-new         { background: rgba(37,99,235,.10);   color: #1d4ed8; }
         body.light-mode .badge.lead-sent        { background: rgba(37,99,235,.09);   color: #2563eb; }
+        body.light-mode .badge.warranty         { background: rgba(124,58,237,.11);  color: #6d28d9; }
 
         /* Inline-colored chips (jobs-hub PO/RFI/Submittal, estimates list)
            now carry only a single --c color var; derive tint + text from it
@@ -2947,6 +2956,7 @@
         body.light-mode .p86-co-status-pill.status-draft    { background: #eef1f4;              border-color: #d7dce3;               color: #475569; }
         body.light-mode .p86-co-status-pill.status-approved { background: rgba(5,150,105,.12);  border-color: rgba(5,150,105,.35);   color: #047857; }
         body.light-mode .p86-co-status-pill.status-applied  { background: rgba(37,99,235,.12);  border-color: rgba(37,99,235,.35);   color: #1d4ed8; }
+        body.light-mode .p86-co-status-pill.status-pending  { background: rgba(217,119,6,.13);  border-color: rgba(217,119,6,.35);   color: #b45309; }
 
         /* ── Light-mode panel/dropdown sweep ───────────────────────────
            Header popovers (avatar menu, notifications, directory) were a
@@ -9703,6 +9713,13 @@ body.light-mode .p86-pv-tag-modal-chip {
   background: rgba(79, 140, 255, 0.14);
   border-color: rgba(79, 140, 255, 0.45);
   color: #4f8cff;
+}
+/* Pending approval — sent to the owner, still $0 on the contract. Amber,
+   the same warning colour jobs-hub already gives it. */
+.p86-co-status-pill.status-pending {
+  background: rgba(251, 191, 36, 0.14);
+  border-color: rgba(251, 191, 36, 0.45);
+  color: #fbbf24;
 }
 
 /* Status transition menu (anchored under the pill) */

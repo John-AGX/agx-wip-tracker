@@ -126,7 +126,8 @@ function p86Ask(message, opts) {
   // "Set status" menu to transitions the server will actually accept,
   // so bulk changes don't 409-fail on illegal jumps.
   var CO_TRANSITIONS = {
-    draft: ['approved'],
+    draft: ['pending', 'approved'],
+    pending: ['draft', 'approved'],
     approved: ['draft', 'applied'],
     applied: []
   };
@@ -160,10 +161,14 @@ function p86Ask(message, opts) {
   }
   function poSum(po) { return ((po && po.lines) || []).reduce(function (s, l) { return s + poLineTotal(l); }, 0); }
   function money(n) { n = Number(n) || 0; return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
-  function statusBadge(status) {
+  // The chip is shared with purchase orders, RFIs, submittals and bills, so a
+  // word is overridden per list rather than in the title-caser.
+  var CO_STATUS_LABEL = { pending: 'Pending approval' };
+  function statusBadge(status, labels) {
     var s = String(status || '').toLowerCase();
     var c = STATUS_COLOR[s] || '#8b90a5';
-    var label = s.replace(/_/g, ' ').replace(/\b\w/g, function (m) { return m.toUpperCase(); });
+    var label = (labels && labels[s])
+      || s.replace(/_/g, ' ').replace(/\b\w/g, function (m) { return m.toUpperCase(); });
     return '<span class="badge p86-statuschip" style="--c:' + c + ';">' + esc(label) + '</span>';
   }
 
@@ -396,7 +401,9 @@ function p86Ask(message, opts) {
       if (!n) { window.p86BulkRibbon.hide(bar); return; }
       function bulkSetStatus(v) {
         var ids = Array.from(_selected);
-        bulkConfirm({ title: 'Set status', message: 'Set ' + ids.length + ' item(s) to "' + v.replace(/_/g, ' ') + '"?', confirmLabel: 'Set status' }).then(function (ok) {
+        var ask = (cfg.bulk.statusConfirm && cfg.bulk.statusConfirm(v, ids.length))
+          || { title: 'Set status', message: 'Set ' + ids.length + ' item(s) to "' + v.replace(/_/g, ' ') + '"?', confirmLabel: 'Set status' };
+        bulkConfirm(ask).then(function (ok) {
           if (!ok) return;
           Promise.all(ids.map(function (id) { return cfg.bulk.setStatus(id, v).then(function () { return true; }).catch(function () { return false; }); }))
             .then(function (res) {
@@ -600,7 +607,7 @@ function p86Ask(message, opts) {
       viewsPage: 'change_orders',
       bulk: {
         idAttr: 'data-co-id',
-        statusOptions: ['draft', 'approved', 'applied'],
+        statusOptions: ['draft', 'pending', 'approved', 'applied'],
         transitions: CO_TRANSITIONS,
         setStatus: function (id, v) { return window.p86Api.changeOrders.setStatus(id, v); },
         remove: function (id) { return window.p86Api.changeOrders.remove(id); }
@@ -614,8 +621,9 @@ function p86Ask(message, opts) {
         }
       },
       statusOptions: [
-        { v: 'open', label: 'Open (draft + approved)' }, { v: 'all', label: 'All' },
-        { v: 'draft', label: 'Draft' }, { v: 'approved', label: 'Approved' }, { v: 'applied', label: 'Applied' }
+        { v: 'open', label: 'Open (draft + pending + approved)' }, { v: 'all', label: 'All' },
+        { v: 'draft', label: 'Draft' }, { v: 'pending', label: 'Pending approval' },
+        { v: 'approved', label: 'Approved' }, { v: 'applied', label: 'Applied' }
       ],
       fetch: function (st) {
         return window.p86Api.changeOrders.listAll({ status: st.status, job: st.job })
@@ -633,7 +641,7 @@ function p86Ask(message, opts) {
               '<td data-col="co"><strong>' + esc(r.co_number || '') + '</strong></td>' +
               '<td data-col="job">' + esc(jobLabelFromRow(r)) + '</td>' +
               '<td data-col="title">' + esc(r.title || '(untitled)') + '</td>' +
-              '<td data-col="status">' + statusBadge(r.status) + '</td>' +
+              '<td data-col="status">' + statusBadge(r.status, CO_STATUS_LABEL) + '</td>' +
               '<td data-col="updated">' + esc(fmtDate(r.updated_at)) + '</td>' +
             '</tr>';
           }).join('') + '</tbody></table></div>';
@@ -704,6 +712,16 @@ function p86Ask(message, opts) {
         idAttr: 'data-po-id',
         statusOptions: ['draft', 'issued', 'approved', 'work_complete', 'closed'],
         transitions: PO_TRANSITIONS,
+        // CLOSED is the end of a purchase order: no edit, no unlock, no
+        // addendum, no delete, and no undo anywhere in P86. Same sentence the
+        // PO editor and the Buildertrend preview use for the same write.
+        statusConfirm: function (v, n) {
+          if (v !== 'closed') return null;
+          return { title: 'Close purchase orders', confirmLabel: 'Close them permanently', danger: true,
+            message: 'Close ' + n + ' purchase order(s) in Project 86? This is PERMANENT \u2014 a closed purchase order cannot be edited, '
+              + 'unlocked, revised by addendum or deleted, by anyone, and it drops off this list\u2019s open view. '
+              + 'Their cost does not change and their subs keep portal access.' };
+        },
         setStatus: function (id, v) { return window.p86Api.purchaseOrders.setStatus(id, v); },
         remove: function (id) { return window.p86Api.purchaseOrders.remove(id); }
       },

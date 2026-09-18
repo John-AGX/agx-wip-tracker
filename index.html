@@ -251,7 +251,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&display=swap">
     <link rel="stylesheet" href="css/vendor/leaflet.css?v=1">
-    <link rel="stylesheet" href="css/styles.css?v=321">
+    <link rel="stylesheet" href="css/styles.css?v=322">
     <link rel="stylesheet" href="css/report-style-packs.css?v=5">
     <link rel="stylesheet" href="css/workspace-layout.css?v=70">
     <link rel="stylesheet" href="css/workspace.css?v=41">
@@ -262,7 +262,7 @@
     <link rel="stylesheet" href="css/service-ticket-flags.css?v=1">
     <!-- Start a change order and Print / PDF on a work order (1.30), and the
          From work order card in the change order editor. -->
-    <link rel="stylesheet" href="css/service-ticket-co-print.css?v=1">
+    <link rel="stylesheet" href="css/service-ticket-co-print.css?v=2">
     <link rel="stylesheet" href="css/schedule.css?v=38">
     <!-- The Service Tickets page (js/work-orders-board.js). -->
     <link rel="stylesheet" href="css/work-orders-board.css?v=2">
@@ -961,8 +961,10 @@
                                 <select id="statusFilter" onchange="filterJobs()" style="width: 200px; margin: 0;">
                                     <option value="">All Active</option>
                                     <option value="New">New</option>
+                                    <option value="Backlog">Backlog</option>
                                     <option value="In Progress">In Progress</option>
                                     <option value="On Hold">On Hold</option>
+                                    <option value="Warranty">Warranty</option>
                                     <option value="Completed">Completed</option>
                                     <option value="Archived">Archived</option>
                                 </select>
@@ -2306,8 +2308,10 @@
                     <label>Status</label>
                     <select id="jobStatus">
                         <option value="New">New</option>
+                        <option value="Backlog">Backlog</option>
                         <option value="In Progress">In Progress</option>
                         <option value="On Hold">On Hold</option>
+                        <option value="Warranty">Warranty</option>
                         <option value="Completed">Completed</option>
                         <option value="Archived">Archived</option>
                     </select>
@@ -3515,7 +3519,7 @@
          server can never be two opinions. Pure math, no DOM. Loads before
          nodegraph/ui.js (the CO editor) and js/job-audit.js (R12). -->
     <script src="js/co-draw.js?v=1"></script>
-    <script src="js/api.js?v=101"></script>
+    <script src="js/api.js?v=102"></script>
     <!-- Multi-market M1: client-side markets cache. Must load BEFORE any
          surface whose picker calls window.p86MarketNames() (jobs.js). -->
     <script src="js/markets.js?v=7"></script>
@@ -3543,7 +3547,7 @@
     <script src="js/admin-dashboard.js?v=3"></script>
     <script src="js/admin.js?v=147"></script>
     <!-- Read-only Buildertrend -> P86 sync preview (Admin -> Organization). -->
-    <script src="js/bt-sync-preview.js?v=15"></script>
+    <script src="js/bt-sync-preview.js?v=16"></script>
     <!-- Act-as / disguise mode: persistent "Acting as NAME — Exit" banner +
          window.p86ActAs(userId). Self-contained; re-fetches /api/auth/me. -->
     <script src="js/actas.js?v=1"></script>
@@ -3579,18 +3583,18 @@
     <script src="js/job-costs-import.js?v=17"></script>
     <script src="js/qb-costs-view.js?v=25"></script>
     <script src="js/insights.js?v=14"></script>
-    <script src="js/schedule.js?v=54"></script>
+    <script src="js/schedule.js?v=55"></script>
     <script src="js/my-day.js?v=9"></script>
     <!-- Shared entity card (job/lead/estimate Pulse card) — window.p86EntityCard.
          Loads before its callers (entities-map.js, workspace-layout.js). -->
-    <script src="js/entity-card.js?v=9"></script>
+    <script src="js/entity-card.js?v=10"></script>
     <!-- Lead/estimate context card mounted into #app-sidebar (uses p86EntityCard). -->
     <script src="js/entity-subnav.js?v=3"></script>
     <!-- The pure decision core of the job/estimate save path. MUST load before
          app.js: loadData consults p86SaveMerge.shouldVetoHydrate() on the very
          first hydrate. -->
     <script src="js/save-merge.js?v=5"></script>
-    <script src="js/app.js?v=161"></script>
+    <script src="js/app.js?v=162"></script>
     <!-- The visible signal for a write that has not reached the server.
          Loads AFTER app.js so window.p86PushStatus exists to subscribe to. -->
     <script src="js/save-banner.js?v=3"></script>
@@ -3668,14 +3672,14 @@
     <!-- Jobs Hub — cross-job index pages (Purchase Orders / Change Orders /
          RFIs / Submittals) for the Jobs sidebar dropdown. Uses p86Api +
          appData.jobs + editJob/switchJobSubTab at runtime. -->
-    <script src="js/jobs-hub.js?v=27"></script>
+    <script src="js/jobs-hub.js?v=28"></script>
     <script src="js/assembly-studio.js?v=4"></script>
     <script src="js/materials-consolidate.js?v=1"></script>
     <!-- Purchase Order editor — full-window overlay opened from the Jobs
          hub Purchase Orders list. Uses p86Api.purchaseOrders + subs. -->
     <script src="js/purchase-order-import.js?v=1"></script>
     <script src="js/sub-access-prompt.js?v=1"></script>
-    <script src="js/purchase-order-editor.js?v=21"></script>
+    <script src="js/purchase-order-editor.js?v=22"></script>
     <script src="js/pay-applications.js?v=15"></script>
     <!-- Shared pricing pipeline — math used by estimate-editor +
          estimate-preview + the upcoming change-order-editor. Loads
@@ -3703,7 +3707,7 @@
     <script src="js/progress-core.js?v=1"></script>
     <script src="js/co-completion.js?v=1"></script>
     <script src="js/progress.js?v=4"></script>
-    <script src="js/jobs.js?v=247"></script>
+    <script src="js/jobs.js?v=248"></script>
     <script src="js/doc-import.js?v=8"></script>
     <script src="js/job-workflow-ui.js?v=7"></script>
     <!-- Job sidebar Files + Photos tabs (renderJobFiles / renderJobPhotos).
@@ -3733,7 +3737,7 @@
     <!-- Start change order, then Print / PDF (work order and completion report). Both
          register with p86StExt; the change order module opens window.p86ChangeOrders
          (js/change-order-editor.js, below) only when clicked. -->
-    <script src="js/service-ticket-co.js?v=1"></script>
+    <script src="js/service-ticket-co.js?v=2"></script>
     <script src="js/service-ticket-print.js?v=2"></script>
     <!-- Reusable rich-text field (window.p86RichText) — shared WYSIWYG for
          Scope / Terms / notes / proposals / reports. Load before the editors
@@ -3746,7 +3750,7 @@
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which
          carries the window.p86Api.changeOrders wrapper). -->
-    <script src="js/change-order-editor.js?v=36"></script>
+    <script src="js/change-order-editor.js?v=37"></script>
     <script src="js/materials-drawer.js?v=15"></script>
     <script src="js/estimate-doc-layouts.js?v=1"></script>
     <script src="js/estimate-preview.js?v=18"></script>

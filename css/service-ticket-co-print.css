@@ -15,6 +15,7 @@
   border: 1px solid var(--border, #333); color: var(--text-dim, #aaa);
 }
 .p86-st-co-chip.is-draft { color: var(--purple, #8b5cf6); border-color: var(--purple, #8b5cf6); background: rgba(139, 92, 246, 0.10); }
+.p86-st-co-chip.is-pending { color: var(--yellow, #d97706); border-color: var(--yellow, #d97706); background: rgba(217, 119, 6, 0.10); }
 .p86-st-co-chip.is-approved { color: var(--green, #059669); border-color: var(--green, #059669); background: rgba(5, 150, 105, 0.10); }
 .p86-st-statusctl + .p86-st-co-chip,
 .p86-st-meta-v .p86-st-co-chip { margin-left: 6px; }
@@ -40,6 +41,7 @@
   color: var(--text-dim, #aaa); border: 1px solid var(--border, #333);
 }
 .p86-st-co-state.is-draft { color: var(--purple, #8b5cf6); border-color: var(--purple, #8b5cf6); }
+.p86-st-co-state.is-pending { color: var(--yellow, #d97706); border-color: var(--yellow, #d97706); }
 .p86-st-co-state.is-approved,
 .p86-st-co-state.is-applied { color: var(--green, #059669); border-color: var(--green, #059669); }
 .p86-st-co-row .p86-st-co-open { flex: 0 0 auto; padding: 4px 10px; font-size: 12px; }

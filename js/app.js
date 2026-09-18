@@ -872,7 +872,7 @@
                     attentionCard('Overdue Invoices', overdueInv,  '#f87171', "window.switchTab('jobs');",   'Past due, unpaid') +
                     attentionCard('Open Leads',       openLeads,   '#22d3ee', leadsClick,                   'New + working') +
                     attentionCard('Pending Estimates', pendingEsts,'#fbbf24', estsClick,                    'Draft / not sent') +
-                    attentionCard('Active Jobs',      activeJobs,  '#34d399', "window.switchTab('jobs');",   'Open + in progress') +
+                    attentionCard('Active Jobs',      activeJobs,  '#34d399', "window.switchTab('jobs');",   'Open, in progress + warranty') +
                     // Wave 3 — workflow items card. Counts hydrate async
                     // after first paint via fetchWorkflowAttentionCounts;
                     // the placeholders render as 0 so the card lays out
@@ -1082,6 +1082,7 @@
             window.p86Api.get('/api/change-orders/summary').then(function (sum) {
                 if (!card.isConnected) return;
                 var draft = (sum && sum.draft_count) || 0;
+                var pending = (sum && sum.pending_count) || 0;
                 var approved = (sum && sum.approved_count) || 0;
                 var open = (sum && sum.open_count) || 0;
                 var countEl = card.querySelector('[data-co-open-count]');
@@ -1089,7 +1090,7 @@
                 if (countEl) countEl.textContent = String(open);
                 if (subEl) {
                     if (open === 0) subEl.textContent = 'No COs in flight';
-                    else subEl.textContent = draft + ' draft · ' + approved + ' approved';
+                    else subEl.textContent = draft + ' draft · ' + pending + ' pending · ' + approved + ' approved';
                 }
             }).catch(function() { /* silent */ });
         }
@@ -1134,7 +1135,7 @@
                 var jobs = (ent.jobs && ent.jobs.active) || 0;
                 var openCOs = 0;
                 if (ent.change_orders) {
-                    openCOs = (ent.change_orders.draft || 0) + (ent.change_orders.approved || 0);
+                    openCOs = (ent.change_orders.draft || 0) + (ent.change_orders.pending || 0) + (ent.change_orders.approved || 0);
                 }
                 var reports = (ent.reports && ent.reports.total) || 0;
                 var photosWeek = (ent.photos && ent.photos.last_7d_uploaded) || 0;

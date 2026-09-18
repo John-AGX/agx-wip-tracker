@@ -973,3 +973,617 @@ describe('PAGE — the Purchase orders tab', () => {
     expect(T.applyResultText({ mode: 'rows', counts: { applied: 1, fields: 1 }, results: [] })).not.toMatch(/recorded on/);
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════
+// CLOSE — Buildertrend approved + work Complete + PAID may OFFER P86 'closed'
+// ══════════════════════════════════════════════════════════════════════════
+//
+// Closing a purchase order in P86 is the one write with no supported way back:
+// edit, unlock, re-lock, addendum, delete and every status transition all refuse
+// a closed purchase order, and a sync can never undo it either (RANK[bt] is
+// always below RANK.closed, so the backwards item is not applicable). So the
+// offer is held back, never a correction; on its OWN field key 'close', never
+// 'status'; unticked by default; refused in safe mode and in an apply that names
+// no fields; and its confirm says the word permanent.
+describe('CLOSE — the offer', () => {
+  // The isolated matcher probe: nothing here touches BT_POS, so every whole-set
+  // count the PREVIEW tests pin stays exactly as it is. Same shape as the one
+  // in describe('UNIT'), with Buildertrend's paid status added — it is the
+  // field this whole feature turns on.
+  const probe = (bt, p86) => poMatch.matchPurchaseOrders([Object.assign({ btId: '9001', jobId: '111', poNumber: '0099',
+    title: 'Probe PO', statusText: 'Sub/Vendor Approved', workStatusText: 'Not Complete', paidStatusText: 'Not Paid',
+    cost: 700, subName: null, amountPaid: 0,
+    isDeleted: false, isRecalled: false, approvalUser: 'Catica Office', costCodes: [], estCompleteDate: null, jobName: 'Job 111' }, bt)], {
+    jobs: [{ id: 'j-1', bt_job_id: '111', data: { jobNumber: 'RV2004', title: 'Citi Lakes' } }],
+    poRows: [Object.assign({ id: 'po-probe', job_id: 'j-1', po_number: '0099', status: 'draft', is_locked: 0,
+      data: JSON.stringify({ title: 'Probe PO', lines: [line(700)], baselineTotal: 700 }),
+      bt_po_id: null, sub_id: null, sub_name: null, sub_access: null, billed: 0 }, p86)],
+    subs: [] })[0];
+  const closeOf = (r) => (r.heldBack || []).filter((h) => h.field === 'close');
+  const PAID_DONE = { statusText: 'Sub/Vendor Approved', workStatusText: 'Complete', paidStatusText: 'Paid' };
+
+  test('approved + Complete + Paid against a P86 approved purchase order OFFERS the close', () => {
+    const r = probe(PAID_DONE, { status: 'approved', is_locked: 1 });
+    const c = closeOf(r);
+    expect(c).toHaveLength(1);
+    expect([c[0].label, c[0].reason, c[0].applicable, c[0].value, c[0].p86Value, c[0].bt, c[0].p86])
+      .toEqual(['Close', 'permanent', true, 'closed', 'approved', 'Closed', 'Approved']);
+    // It is NOT a correction: a correction is ticked by default.
+    expect(r.corrections.map((x) => x.field)).not.toContain('close');
+    // The note is the whole agreement, in words.
+    expect(c[0].note).toMatch(/cannot be edited, unlocked, revised by addendum or deleted/);
+    expect(c[0].note).toMatch(/cost does not change/);
+    expect(c[0].note).toMatch(/sub keeps portal access/);
+    expect(c[0].note).toMatch(/drops off the Purchase orders hub/);
+    // It must not claim P86 verified the payment.
+    expect(c[0].note).toMatch(/creates no bills from Buildertrend/);
+  });
+
+  test('from work_complete it is the ONLY item, and the row still reads as a match', () => {
+    const r = probe(PAID_DONE, { status: 'work_complete', is_locked: 1 });
+    expect(r['class']).toBe('matched');
+    expect(r.corrections).toEqual([]);
+    expect(r.heldBack.map((h) => h.field)).toEqual(['close']);
+    expect(closeOf(r)[0].p86Value).toBe('work_complete');
+  });
+
+  test('PARTIALLY PAID is refused — the exact-equality guard', () => {
+    // textKey collapses 'Partially Paid' to 'partially paid'. .includes('paid')
+    // and .endsWith('paid') would BOTH match it. This is the assertion that
+    // stops either from being written.
+    expect(closeOf(probe(Object.assign({}, PAID_DONE, { paidStatusText: 'Partially Paid' }), { status: 'approved', is_locked: 1 }))).toEqual([]);
+    // And the offer really does fire on the same row when the word is Paid, so
+    // this is not vacuous.
+    expect(closeOf(probe(PAID_DONE, { status: 'approved', is_locked: 1 }))).toHaveLength(1);
+  });
+
+  test('NOT PAID, blank paid status, and work NOT complete are each refused on their own', () => {
+    for (const bt of [
+      Object.assign({}, PAID_DONE, { paidStatusText: 'Not Paid' }),
+      Object.assign({}, PAID_DONE, { paidStatusText: '' }),
+      Object.assign({}, PAID_DONE, { workStatusText: 'Not Complete' }),
+      Object.assign({}, PAID_DONE, { statusText: 'Sent to Sub/Vendor - Pending' }),
+      Object.assign({}, PAID_DONE, { statusText: 'Draft' }),
+    ]) {
+      expect([bt.statusText, bt.workStatusText, bt.paidStatusText, closeOf(probe(bt, { status: 'approved', is_locked: 1 })).length])
+        .toEqual([bt.statusText, bt.workStatusText, bt.paidStatusText, 0]);
+    }
+  });
+
+  test('a P86 purchase order BEHIND approved gets the forward correction and NO close', () => {
+    // Below approved the sub never e-signed: approved_at and data.acceptance are
+    // stamped only on the approved transition, and a close would freeze that for
+    // ever with no route back. The person applies the status, refreshes, and the
+    // close is offered next preview. Two presses, two refreshes.
+    for (const status of ['draft', 'issued']) {
+      const r = probe(PAID_DONE, { status, is_locked: status === 'draft' ? 0 : 1 });
+      expect([status, closeOf(r).length]).toEqual([status, 0]);
+      expect([status, r.corrections.some((c) => c.field === 'status')]).toEqual([status, true]);
+    }
+  });
+
+  test('an ALREADY CLOSED purchase order is offered nothing, and its existing items are untouched', () => {
+    const r = probe(PAID_DONE, { status: 'closed', is_locked: 1 });
+    expect(closeOf(r)).toEqual([]);
+    expect(r.corrections.map((c) => c.field)).not.toContain('status');
+  });
+
+  test('a RECALLED purchase order is never closed, however paid and complete Buildertrend says it is', () => {
+    const r = probe(Object.assign({}, PAID_DONE, { isRecalled: true }), { status: 'approved', is_locked: 1, bt_po_id: '9001' });
+    expect(closeOf(r)).toEqual([]);
+    // The recall item is still the whole status story.
+    expect(r.heldBack.filter((h) => h.field === 'status').map((h) => h.bt)).toEqual(['Recalled']);
+  });
+
+  test('a PENDING ADDENDUM blocks the close, and says why rather than going silent', () => {
+    const withPending = { status: 'approved', is_locked: 1,
+      data: JSON.stringify({ title: 'Probe PO', lines: [line(700)], baselineTotal: 700,
+        addendums: [{ id: 'a1', seq: 1, delta: 100, status: 'pending' }] }) };
+    const c = closeOf(probe(PAID_DONE, withPending));
+    expect(c).toHaveLength(1);
+    expect([c[0].applicable, c[0].reason]).toEqual([false, 'review']);
+    expect(c[0].note).toMatch(/awaiting a signature/);
+    // An APPROVED addendum does not block it. Baseline 700 + approved 100 = the
+    // 800 the lines carry, which is the state the addendum route leaves behind.
+    const approvedAdd = { status: 'approved', is_locked: 1,
+      data: JSON.stringify({ title: 'Probe PO', lines: [line(800)], baselineTotal: 700,
+        addendums: [{ id: 'a1', seq: 1, delta: 100, status: 'approved' }] }) };
+    expect(closeOf(probe(PAID_DONE, approvedAdd))[0].applicable).toBe(true);
+  });
+
+  test('a purchase order UNLOCKED TO REVISE is refused the close, and told why', () => {
+    // The row that made this necessary: P86 committed 700, someone unlocked it
+    // and typed 1,750 into the lines. poTotal still returns the BASELINE, so the
+    // preview's P86 total reads $700.00 against Buildertrend's $700.00 — a
+    // perfect match with 1,050 of edited line value nowhere on the page. Closing
+    // shuts every door back (edit, unlock, re-lock, addendum, delete), so the
+    // money could never be recorded by anyone.
+    const revising = { status: 'work_complete', is_locked: 0,
+      data: JSON.stringify({ title: 'Probe PO', lines: [line(1750)], baselineTotal: 700, revising: true }) };
+    const r = probe(PAID_DONE, revising);
+    const c = closeOf(r);
+    expect(c).toHaveLength(1);
+    expect([c[0].applicable, c[0].reason]).toEqual([false, 'review']);
+    expect(c[0].note).toMatch(/unlocked to revise/);
+    expect(c[0].note).toMatch(/nobody has recorded/);
+    expect(c[0].note).toMatch(/addendum/);
+    // And the drift really is invisible on the row, which is the whole point.
+    expect(poMatch.poTotal({ lines: [line(1750)], baselineTotal: 700, revising: true })).toBe(700);
+  });
+
+  test('a LOCKED purchase order whose lines drifted from its baseline is refused too', () => {
+    // Reachable without `revising`: POST /purchase-orders/:id/status deletes
+    // data.revising on any transition and never asks about the price, so
+    // unlock -> edit -> "Mark work complete" leaves exactly this shape.
+    const drifted = { status: 'work_complete', is_locked: 1,
+      data: JSON.stringify({ title: 'Probe PO', lines: [line(1750)], baselineTotal: 700 }) };
+    const c = closeOf(probe(PAID_DONE, drifted));
+    expect([c.length, c[0].applicable, c[0].reason]).toEqual([1, false, 'review']);
+    expect(c[0].note).toMatch(/no longer sum to its committed total/);
+  });
+
+  test('a BUILDERTREND cost addendum is NOT an unrecorded price change', () => {
+    // withAddendum records Buildertrend's cost WITHOUT touching the lines, on
+    // purpose. Counting it as drift would withhold the close on every purchase
+    // order the sync has ever corrected — the one case where it IS recorded.
+    const btAdd = { status: 'work_complete', is_locked: 1,
+      data: JSON.stringify({ title: 'Probe PO', lines: [line(700)], baselineTotal: 700,
+        addendums: [{ id: 'add_bt_1', seq: 1, delta: 100, status: 'approved', source: 'buildertrend' }] }) };
+    expect(closeOf(probe(PAID_DONE, btAdd))[0].applicable).toBe(true);
+    // A LEGACY purchase order with no frozen baseline has nothing to reconcile.
+    const legacy = { status: 'work_complete', is_locked: 1,
+      data: JSON.stringify({ title: 'Probe PO', lines: [line(1750)] }) };
+    expect(closeOf(probe(PAID_DONE, legacy))[0].applicable).toBe(true);
+  });
+
+  test('unrecordedPriceChange, asked directly — the mutation check', () => {
+    const u = poMatch.unrecordedPriceChange;
+    expect(u({ lines: [line(700)], baselineTotal: 700 })).toBe(false);
+    expect(u({ lines: [line(700)], baselineTotal: 700, revising: true })).toBe(true);
+    expect(u({ lines: [line(1750)], baselineTotal: 700 })).toBe(true);
+    expect(u({ lines: [line(700)] })).toBe(false);
+    // Half a cent is the tolerance, as /relock uses.
+    expect(u({ lines: [line(700.004)], baselineTotal: 700 })).toBe(false);
+    expect(u({ lines: [line(700.01)], baselineTotal: 700 })).toBe(true);
+  });
+
+  test("btPoState is NEVER taught 'closed' — the guard against a later simplification", () => {
+    // It is the shared mapper: the status correction, bt.state86 ("would be
+    // created as") and createPurchaseOrder's initial status all read it.
+    // Returning 'closed' would make the close a pre-ticked forward correction
+    // and let a create mint a born-closed, undeletable purchase order.
+    const texts = ['Draft', 'Sent to Sub/Vendor - Pending', 'Sub/Vendor Approved', 'Internally Approved',
+      'Approved - Assigned Internally', 'Approved', 'Recalled', 'Closed', 'Paid', '', null];
+    const works = ['Not Complete', 'Complete', 'Closed', '', null];
+    const seen = new Set();
+    for (const t of texts) for (const w of works) seen.add(String(poMatch.btPoState(t, w)));
+    expect([...seen].sort()).toEqual(['approved', 'draft', 'issued', 'null', 'work_complete']);
+    expect(poMatch.btPoState('Sub/Vendor Approved', 'Complete')).toBe('work_complete');
+  });
+
+  test('the whole-set preview: 8002 is approved + Complete and NOT paid, so it is offered no close', async () => {
+    // Same approval, same work status; only the paid status differs. This is the
+    // regression guard on the existing fixture set.
+    const ds = await poRows();
+    expect(byBt(ds, 8002).heldBack.map((h) => h.field)).not.toContain('close');
+    // And no row anywhere carries 'close' as a CORRECTION.
+    for (const r of ds.rows) expect((r.corrections || []).map((c) => c.field)).not.toContain('close');
+  });
+});
+
+describe('CLOSE — applying it', () => {
+  // Buildertrend records live for the length of ONE test, so every whole-set
+  // count the other describes pin is untouched.
+  async function withBt(recs, fn) {
+    const n = BT_POS.length;
+    BT_POS.push(...recs);
+    preview.forgetFetch(AGX);
+    try { return await fn(); } finally { BT_POS.length = n; preview.forgetFetch(AGX); }
+  }
+  const paidRec = (id, num, title, o) => poRec(id, 111, num, title, 'Sub/Vendor Approved', 700,
+    Object.assign({ work: 'Complete', extra: { paidStatusText: 'Paid', paidStatus: 3, amountPaid: 700, amountRemaining: 0 } }, o || {}));
+  function addPo(id, poNumber, status, extra) {
+    engine.db.prepare('INSERT INTO job_purchase_orders (id, job_id, organization_id, owner_id, sub_id, status, po_number, data, is_locked) VALUES (?,?,?,?,?,?,?,?,?)')
+      .run(id, 'j-1', AGX, 10, (extra && extra.sub_id) || null, status, poNumber,
+        JSON.stringify(Object.assign({ title: 'Settled work', lines: [line(700)], baselineTotal: 700 }, (extra && extra.data) || {})), 1);
+  }
+
+  test('NO fields named: the status stays put and nothing closes', async () => {
+    addPo('po-k', '0017', 'work_complete');
+    await withBt([paidRec(8017, '0017', 'Settled work')], async () => {
+      await poRows();
+      const r = await put(ADMIN, { btIds: ['8017'] });
+      expect(r.status).toBe(200);
+      // writable() with fields = null applies every CORRECTION; pickedHeldBack
+      // returns [] the moment a fields list is absent. That is what makes close opt-in.
+      expect(poRow('po-k').status).toBe('work_complete');
+    });
+  });
+
+  test("fields: ['close'] closes it — locked, approved_at stamped, money and bills untouched", async () => {
+    addPo('po-k', '0017', 'work_complete');
+    const billsBefore = count('job_vendor_bills');
+    await withBt([paidRec(8017, '0017', 'Settled work')], async () => {
+      await poRows();
+      const r = await put(ADMIN, { btIds: ['8017'], fields: ['close'] });
+      expect(r.status).toBe(200);
+      const row = poRow('po-k');
+      expect(row.status).toBe('closed');
+      expect(Boolean(row.is_locked)).toBe(true);
+      // THE DEAD END: 'closed' had to be added to the approved_at CASE. The
+      // status route stamps only on next === 'approved' and closed has no legal
+      // transition out, so a NULL here could never be filled by anything again.
+      expect(row.approved_at == null).toBe(false);
+      // Closing costs nothing and earns nothing.
+      expect(poMatch.poTotal(poData('po-k'))).toBe(700);
+      expect(poData('po-k').addendums).toBeUndefined();
+      expect(count('job_vendor_bills')).toBe(billsBefore);
+      expect(r.json.results[0].fields.map((f) => [f.field, f.to])).toContainEqual(['close', 'closed']);
+    });
+  });
+
+  test('a mid-revision purchase order is never closed, asked for by name or not', async () => {
+    // Refused twice over. The matcher withholds the offer (applicable: false),
+    // so pickedHeldBack never returns it; and applyPurchaseOrder re-asks the
+    // same question against the LOCKED row, because the row it is handed was
+    // read before the transaction began. That re-check reads the row AS READ:
+    // the status block deletes data.revising when a ticked status correction
+    // locks the purchase order, which would otherwise hide this exact state.
+    engine.db.prepare('INSERT INTO job_purchase_orders (id, job_id, organization_id, owner_id, sub_id, status, po_number, data, is_locked) VALUES (?,?,?,?,?,?,?,?,?)')
+      .run('po-k', 'j-1', AGX, 10, null, 'work_complete', '0017',
+        JSON.stringify({ title: 'Settled work', lines: [line(1750)], baselineTotal: 700, revising: true }), 0);
+    await withBt([paidRec(8017, '0017', 'Settled work')], async () => {
+      const ds = await poRows();
+      const row = byBt(ds, '8017');
+      expect((row.heldBack || []).filter((h) => h.field === 'close').map((h) => h.applicable)).toEqual([false]);
+      const r = await put(ADMIN, { btIds: ['8017'], fields: ['close'] });
+      expect(r.status).toBe(200);
+      expect(poRow('po-k').status).toBe('work_complete');
+      expect((r.json.results[0].fields || []).map((f) => f.field)).not.toContain('close');
+      // The revision itself is untouched, so it can still be settled.
+      expect(poData('po-k').revising).toBe(true);
+    });
+    // The apply-side re-check is the race guard for the window between the read
+    // that built this row and the SELECT … FOR UPDATE inside the transaction.
+    // It reads the row as read, never the mutated local, and it refuses.
+    const SA = require('fs').readFileSync(require('path').join(__dirname, '..', 'server', 'services', 'clickr', 'sync-apply.js'), 'utf8');
+    expect(SA).toMatch(/const unrecordedPriceChange = poMatch\.unrecordedPriceChange\(data\);/);
+    expect(SA).toMatch(/\} else if \(unrecordedPriceChange\) \{\r?\n\s*stale\.push\('Close — this purchase order is unlocked to revise/);
+  });
+
+  test('ONE ROW AT A TIME: a close naming many purchase orders is refused outright', async () => {
+    // pickedHeldBack keeps the close out of safe mode and out of a fields-less
+    // "apply everything" press. It does not stop one request from naming 200
+    // ids beside fields: ['close'], which would close every one of them
+    // permanently under a single capability check and no confirm.
+    addPo('po-k', '0017', 'work_complete');
+    addPo('po-l', '0021', 'work_complete');
+    await withBt([paidRec(8017, '0017', 'Settled work'), paidRec(8021, '0021', 'Other work')], async () => {
+      await poRows();
+      const r = await put(ADMIN, { btIds: ['8017', '8021'], fields: ['close'] });
+      expect(r.status).toBe(400);
+      expect(r.json.error).toMatch(/one row at a time/);
+      expect([poRow('po-k').status, poRow('po-l').status]).toEqual(['work_complete', 'work_complete']);
+      // Not vacuous: the SAME ids, one at a time, really do close.
+      expect((await put(ADMIN, { btIds: ['8017'], fields: ['close'] })).status).toBe(200);
+      expect(poRow('po-k').status).toBe('closed');
+      // A many-row apply that does NOT name close is untouched.
+      expect((await put(ADMIN, { btIds: ['8021'], fields: ['title'] })).status).toBe(200);
+    });
+  });
+
+  test('SAFE MODE never closes, even on a row that is offered it', async () => {
+    addPo('po-k', '0017', 'work_complete');
+    await withBt([paidRec(8017, '0017', 'Settled work')], async () => {
+      const r = await put(ADMIN, { mode: 'safe' });
+      expect(r.status).toBe(200);
+      expect(poRow('po-k').status).toBe('work_complete');
+      // It DID link it, so this is not "safe mode did nothing".
+      expect(poRow('po-k').bt_po_id).toBe('8017');
+    });
+  });
+
+  test('PARTIALLY PAID refuses the close even when it is asked for by name', async () => {
+    addPo('po-k', '0017', 'work_complete');
+    await withBt([paidRec(8017, '0017', 'Settled work', { extra: { paidStatusText: 'Partially Paid', amountPaid: 300, amountRemaining: 400 } })], async () => {
+      await poRows();
+      const r = await put(ADMIN, { btIds: ['8017'], fields: ['close'] });
+      expect(poRow('po-k').status).toBe('work_complete');
+      expect((r.json.results[0].fields || []).map((f) => f.field)).not.toContain('close');
+    });
+  });
+
+  test('ORDERING — a ticked status correction and a ticked close COMPOSE, and the close wins', async () => {
+    // The held-back loop runs BEFORE the status block. Resolving the close there
+    // would let approved -> work_complete overwrite 'closed' back down, in the
+    // same transaction, while the applied list reported both.
+    addPo('po-k', '0017', 'approved');
+    await withBt([paidRec(8017, '0017', 'Settled work')], async () => {
+      await poRows();
+      const r = await put(ADMIN, { btIds: ['8017'], fields: ['status', 'close'] });
+      expect(poRow('po-k').status).toBe('closed');
+      const got = r.json.results[0].fields.map((f) => [f.field, f.to]);
+      expect(got).toContainEqual(['status', 'work_complete']);
+      expect(got).toContainEqual(['close', 'closed']);
+      // …and the order is status first, close last.
+      expect(got.findIndex((g) => g[0] === 'close')).toBeGreaterThan(got.findIndex((g) => g[0] === 'status'));
+    });
+  });
+
+  test('close ALONE from approved skips the rung, and still stamps approved_at', async () => {
+    addPo('po-k', '0017', 'approved');
+    await withBt([paidRec(8017, '0017', 'Settled work')], async () => {
+      await poRows();
+      await put(ADMIN, { btIds: ['8017'], fields: ['close'] });
+      expect(poRow('po-k').status).toBe('closed');
+      expect(poRow('po-k').approved_at == null).toBe(false);
+    });
+  });
+
+  // TWO GATES. The apply door re-reads Buildertrend and re-matches P86 from
+  // scratch before it writes anything, so a purchase order whose P86 side moved
+  // since the preview is no longer OFFERED the close at all — that is the first
+  // gate, and it is the one these two drives exercise. sync-apply then
+  // re-checks the item against the row it holds under FOR UPDATE (a second
+  // gate, for a write that lands between the match and the transaction), which
+  // is why the assertion below is about the ROW and not about a message.
+  test('FORGED — close named on a purchase order P86 has moved back to issued does not close it', async () => {
+    addPo('po-k', '0017', 'work_complete');
+    await withBt([paidRec(8017, '0017', 'Settled work')], async () => {
+      await poRows();
+      setPo('po-k', { status: 'issued' });
+      const r = await put(ADMIN, { btIds: ['8017'], fields: ['close'] });
+      expect(poRow('po-k').status).toBe('issued');
+      expect((r.json.results[0].fields || []).map((f) => f.field)).not.toContain('close');
+    });
+  });
+
+  test('FORGED — close named on a purchase order that gained a pending addendum does not close it', async () => {
+    addPo('po-k', '0017', 'work_complete');
+    await withBt([paidRec(8017, '0017', 'Settled work')], async () => {
+      await poRows();
+      setPo('po-k', { data: JSON.stringify({ title: 'Settled work', lines: [line(700)], baselineTotal: 700,
+        addendums: [{ id: 'a1', seq: 1, delta: 50, status: 'pending' }] }) });
+      const r = await put(ADMIN, { btIds: ['8017'], fields: ['close'] });
+      expect(poRow('po-k').status).toBe('work_complete');
+      expect((r.json.results[0].fields || []).map((f) => f.field)).not.toContain('close');
+    });
+  });
+
+  test('the request cannot smuggle a close past pickedHeldBack', async () => {
+    // pickedHeldBack is the gate between "the person ticked a box" and "the
+    // writer sees an item". It is exported, so it is asked directly with the
+    // three shapes a forged request would take.
+    const sa = require('../server/services/clickr/sync-apply');
+    const offered = { heldBack: [{ field: 'close', applicable: true }] };
+    const blocked = { heldBack: [{ field: 'close', applicable: false }] };
+    // Ticked, in rows mode, on an applicable item: the ONLY way through.
+    expect(sa.pickedHeldBack('purchaseOrders', offered, 'rows', ['close'])).toHaveLength(1);
+    // Safe mode, no fields list at all, and a not-applicable item: none.
+    expect(sa.pickedHeldBack('purchaseOrders', offered, 'safe', ['close'])).toEqual([]);
+    expect(sa.pickedHeldBack('purchaseOrders', offered, 'rows', null)).toEqual([]);
+    expect(sa.pickedHeldBack('purchaseOrders', offered, 'rows', ['cost'])).toEqual([]);
+    expect(sa.pickedHeldBack('purchaseOrders', blocked, 'rows', ['close'])).toEqual([]);
+    // And 'close' is NOT in PO_FIELDS, so writable() can never apply it as an
+    // ordinary correction either.
+    expect(sa.writable('purchaseOrders', { corrections: [{ field: 'close', value: 'closed' }] }, 'rows', ['close'])).toEqual([]);
+  });
+
+  test('the sub keeps portal access after a close, and a second close is refused', async () => {
+    addPo('po-k', '0017', 'work_complete', { sub_id: 's-1' });
+    await withBt([paidRec(8017, '0017', 'Settled work')], async () => {
+      await poRows();
+      await put(ADMIN, { btIds: ['8017'], fields: ['close'] });
+      expect(poRow('po-k').status).toBe('closed');
+      expect(access()).toEqual(onJ1('s-1'));
+
+      const again = await poRows();
+      // The row now shows the ordinary backwards held-back, never a close.
+      expect(byBt(again, 8017).heldBack.map((h) => h.field)).not.toContain('close');
+      const r2 = await put(ADMIN, { btIds: ['8017'], fields: ['close'] });
+      expect(['unchanged', 'applied']).toContain(r2.json.results[0].outcome);
+      expect(poRow('po-k').status).toBe('closed');
+    });
+  });
+});
+
+describe('CLOSE — the page', () => {
+  const fs2 = require('fs');
+  const path2 = require('path');
+  const vm2 = require('vm');
+  const src2 = fs2.readFileSync(path2.join(__dirname, '..', 'js', 'bt-sync-preview.js'), 'utf8');
+  const win2 = {};
+  vm2.runInNewContext(src2, { window: win2, document: {}, console });
+  const T2 = win2.p86BtSyncPreview._test;
+  const pageData = (ds) => ({ generatedAt: new Date().toISOString(), elapsedMs: 1, organization: { name: 'AGX' }, p86: { jobs: 1, leads: 0 },
+    datasets: { jobs: { key: 'jobs', rows: [] }, leads: { key: 'leads', rows: [] }, purchaseOrders: ds } });
+
+  async function withBt(recs, fn) {
+    const n = BT_POS.length;
+    BT_POS.push(...recs);
+    preview.forgetFetch(AGX);
+    try { return await fn(); } finally { BT_POS.length = n; preview.forgetFetch(AGX); }
+  }
+  const paidRec = (id, num, title, o) => poRec(id, 111, num, title, 'Sub/Vendor Approved', 700,
+    Object.assign({ work: 'Complete', extra: { paidStatusText: 'Paid', paidStatus: 3, amountPaid: 700, amountRemaining: 0 } }, o || {}));
+
+  test('the close box is rendered, UNTICKED, and Buildertrend\'s paid status is on the page', async () => {
+    engine.db.prepare('INSERT INTO job_purchase_orders (id, job_id, organization_id, owner_id, sub_id, status, po_number, data, is_locked) VALUES (?,?,?,?,?,?,?,?,?)')
+      .run('po-k', 'j-1', AGX, 10, null, 'work_complete', '0017', JSON.stringify({ title: 'Settled work', lines: [line(700)], baselineTotal: 700 }), 1);
+    await withBt([paidRec(8017, '0017', 'Settled work')], async () => {
+      const ds = await poRows();
+      T2.resetPicks();
+      T2.setTab('purchaseOrders');
+      T2.setView('purchaseOrders', 'all');
+      const html = T2.render(pageData(ds));
+      // Same shape the addendum box is asserted with: present, and NOT checked.
+      expect(html).toMatch(/data-btp-pick="close" data-btp-row="8017"(?! checked)/);
+      // The person is being asked to act on "Paid" — so the page shows it.
+      expect(html).toContain('Paid: Paid');
+      expect(html).toContain('<span class="btp-tag is-permanent">permanent</span>');
+      T2.setTab('jobs');
+    });
+  });
+
+  test('a Partially Paid row gets no close box at all', async () => {
+    engine.db.prepare('INSERT INTO job_purchase_orders (id, job_id, organization_id, owner_id, sub_id, status, po_number, data, is_locked) VALUES (?,?,?,?,?,?,?,?,?)')
+      .run('po-k', 'j-1', AGX, 10, null, 'work_complete', '0017', JSON.stringify({ title: 'Settled work', lines: [line(700)], baselineTotal: 700 }), 1);
+    await withBt([paidRec(8017, '0017', 'Settled work', { extra: { paidStatusText: 'Partially Paid', amountPaid: 300, amountRemaining: 400 } })], async () => {
+      const ds = await poRows();
+      T2.resetPicks();
+      T2.setTab('purchaseOrders');
+      T2.setView('purchaseOrders', 'all');
+      const html = T2.render(pageData(ds));
+      expect(html).not.toContain('data-btp-pick="close"');
+      expect(html).toContain('Paid: Partially Paid');
+      T2.setTab('jobs');
+    });
+  });
+
+  test('the close confirm, asked directly: it says PERMANENT and what can never be done again', () => {
+    const row = { corrections: [], heldBack: [{ field: 'close', label: 'Close', reason: 'permanent', applicable: true, value: 'closed', bt: 'Closed' }] };
+    const ask = T2.rowConfirm('purchaseOrders', row, ['close']);
+    expect(ask).not.toBeNull();
+    expect(ask.danger).toBe(true);
+    expect(ask.label).toBe('Close it permanently');
+    expect(ask.message).toMatch(/This is PERMANENT/);
+    expect(ask.message).toMatch(/cannot be edited, unlocked, revised by addendum or deleted/);
+    expect(ask.message).toMatch(/drops off the Purchase orders hub/);
+    expect(ask.message).toMatch(/cost does not change/);
+    expect(ask.message).toMatch(/sub keeps portal access/);
+  });
+
+  test('CLOSING takes precedence over the money sentence, and close is never named in both', () => {
+    const row = { corrections: [{ field: 'status', label: 'Status', money: true, from: 'Approved', to: 'Work complete' }],
+      heldBack: [{ field: 'close', label: 'Close', reason: 'permanent', applicable: true, bt: 'Closed' }] };
+    const ask = T2.rowConfirm('purchaseOrders', row, ['status', 'close']);
+    expect(ask.danger).toBe(true);
+    expect(ask.message).toMatch(/This is PERMANENT/);
+    // The money move is still named, once, as a rider.
+    expect(ask.message).toMatch(/The same press FIRST applies Status → Work complete/);
+    expect((ask.message.match(/Close/g) || []).length).toBeGreaterThan(0);
+    expect(ask.message).not.toMatch(/Close → Closed/);
+  });
+
+  test('with a COST ticked beside it, the confirm never says the cost does not change', () => {
+    // The reassurance is true of closing ALONE. With a cost addendum in the same
+    // press the cost really does move — and is then frozen for ever — so the
+    // sentence that would contradict the rider two clauses later is dropped.
+    const row = { corrections: [],
+      heldBack: [{ field: 'cost', label: 'Cost', reason: 'money', applicable: true, bt: '$8,000.00', p86: '$7,000.00' },
+        { field: 'close', label: 'Close', reason: 'permanent', applicable: true, bt: 'Closed' }] };
+    const ask = T2.rowConfirm('purchaseOrders', row, ['cost', 'close']);
+    expect(ask.danger).toBe(true);
+    expect(ask.message).toMatch(/This is PERMANENT/);
+    expect(ask.message).not.toMatch(/cost does not change/);
+    expect(ask.message).toMatch(/FIRST applies Cost → \$8,000\.00/);
+    expect(ask.message).toMatch(/frozen for ever/);
+    // Close alone still carries the reassurance, so this is not a blanket removal.
+    const alone = T2.rowConfirm('purchaseOrders',
+      { corrections: [], heldBack: [{ field: 'close', label: 'Close', reason: 'permanent', applicable: true, bt: 'Closed' }] }, ['close']);
+    expect(alone.message).toMatch(/cost does not change/);
+  });
+
+  test('an ordinary money press is unchanged, and a press with nothing at stake asks nothing', () => {
+    const moneyRow = { corrections: [{ field: 'cost', label: 'Cost', money: true, from: '$1', to: '$2' }], heldBack: [] };
+    const ask = T2.rowConfirm('purchaseOrders', moneyRow, ['cost']);
+    expect([ask.danger, ask.label]).toEqual([false, 'Apply']);
+    expect(ask.message).toBe('Apply Cost → $2 to this purchase order?');
+    expect(T2.rowConfirm('purchaseOrders', { corrections: [{ field: 'title', label: 'Title', to: 'x' }], heldBack: [] }, ['title'])).toBeNull();
+  });
+
+  test('askThen carries the danger flag through, and its other callers still get a plain dialog', () => {
+    const src = fs2.readFileSync(path2.join(__dirname, '..', 'js', 'bt-sync-preview.js'), 'utf8');
+    expect(src).toMatch(/function askThen\(message, label, fn, danger\)/);
+    expect(src).toMatch(/danger: !!danger, destructive: !!danger/);
+    // Every other call site passes three arguments -> undefined -> false.
+    const threeArg = src.match(/askThen\([^;]*?\);/g) || [];
+    expect(threeArg.length).toBeGreaterThan(1);
+    expect(src).toMatch(/askThen\(ask\.message, ask\.label, go, ask\.danger\)/);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// PHASE 0 — the two doors that had to be fixed BEFORE the offer could ship
+// ══════════════════════════════════════════════════════════════════════════
+describe("P86's own Close door", () => {
+  const fs3 = require('fs');
+  const path3 = require('path');
+  const SRC = fs3.readFileSync(path3.join(__dirname, '..', 'js', 'purchase-order-editor.js'), 'utf8');
+
+  // The shipped expression, lifted and evaluated with its free variables
+  // injected — so a change to it changes what this test runs.
+  const m = SRC.match(/var canStep = ([^;]+);/);
+  const canStep = (st, step, locked) => {
+    expect(m).not.toBeNull();
+    // eslint-disable-next-line no-new-func
+    return new Function('st', 'step', 'locked', 'return (' + m[1] + ');')(st, step, locked);
+  };
+
+  test('the old step-and-not-locked gate is gone', () => {
+    // Every purchase order past draft is locked, so that gate made Close PO —
+    // the only forward step a work_complete purchase order has — unpressable,
+    // and left work_complete a dead end inside P86 entirely.
+    expect(SRC).not.toMatch(/step && !locked \?/);
+    expect(SRC).toMatch(/\(canStep \?/);
+  });
+
+  test('a LOCKED work_complete purchase order can still be closed in P86', () => {
+    expect(canStep('work_complete', { to: 'closed', label: 'Close PO' }, true)).toBe(true);
+  });
+
+  test('closing from the PO editor says PERMANENT, in a danger dialog', () => {
+    // The door Phase 0.1 opened routed every non-approval step through one
+    // generic gate: "Confirm / Move this PO to \"Closed\"? / Continue" — the same
+    // words as the fully reversible Issue and Mark work complete steps, for the
+    // one write with no undo anywhere in P86.
+    expect(SRC).toMatch(/var CLOSE_WARNING = /);
+    const w = SRC.match(/var CLOSE_WARNING = ([\s\S]*?);\r?\n/);
+    expect(w).not.toBeNull();
+    // eslint-disable-next-line no-new-func
+    const text = new Function('return (' + w[1] + ');')();
+    expect(text).toMatch(/This is PERMANENT/);
+    expect(text).toMatch(/cannot be edited, unlocked, revised by addendum or deleted/);
+    expect(text).toMatch(/drops off the Purchase orders hub/);
+    // It is wired to the closed step only, and carries the danger flag.
+    expect(SRC).toMatch(/step\.to === 'closed'/);
+    expect(SRC).toMatch(/askYesNo\(CLOSE_WARNING, \{ title: [^}]*label: 'Close it permanently', danger: true \}\)/);
+    expect(SRC).toMatch(/danger: !!opts\.danger, destructive: !!opts\.danger/);
+    // The two ordinary steps still get the plain dialog: askYesNo's 2nd
+    // parameter arrives undefined for them.
+    expect(SRC).toMatch(/askYesNo\('Move this PO to "' \+ \(STATUS_LABEL\[step\.to\] \|\| step\.to\) \+ '"\?'\)/);
+  });
+
+  test('every other locked status keeps its read-only step button, and closed has no step', () => {
+    expect(canStep('approved', { to: 'work_complete', label: 'x' }, true)).toBe(false);
+    expect(canStep('issued', { to: 'approved', label: 'x' }, true)).toBe(false);
+    expect(canStep('draft', { to: 'issued', label: 'x' }, false)).toBe(true);
+    expect(canStep('closed', undefined, true)).toBeFalsy();
+  });
+});
+
+describe('the addendum route refuses a CLOSED purchase order', () => {
+  test('approving a pre-existing pending addendum on a closed purchase order is 409, and the money does not move', async () => {
+    // Path (a) of the route. It was the ONLY purchase-order write door with no
+    // closed check — it did not even SELECT the status — and it RAISES a closed
+    // purchase order's committed total.
+    setPo('po-g', { data: JSON.stringify({ title: 'Closed PO', lines: [line(500)], baselineTotal: 500,
+      addendums: [{ id: 'add-1', seq: 1, delta: 250, status: 'pending' }] }) });
+    const before = poMatch.poTotal(poData('po-g'));
+    const r = await call('POST', '/api/purchase-orders/po-g/addendum', ADMIN, { addendumId: 'add-1', approve: true });
+    expect(r.status).toBe(409);
+    expect(String(r.json.error)).toMatch(/closed purchase order/);
+    expect(poData('po-g').addendums[0].status).toBe('pending');
+    expect(poMatch.poTotal(poData('po-g'))).toBe(before);
+  });
+
+  test('THE MUTATION — the same call on an OPEN purchase order still works', async () => {
+    // Not vacuous: without this the 409 above could be coming from anywhere.
+    setPo('po-c', { data: JSON.stringify({ title: 'Roofing', lines: [line(2000)], baselineTotal: 2000,
+      addendums: [{ id: 'add-2', seq: 1, delta: 250, status: 'pending' }] }) });
+    const r = await call('POST', '/api/purchase-orders/po-c/addendum', ADMIN, { addendumId: 'add-2', approve: true });
+    expect(r.status).toBe(200);
+    expect(poData('po-c').addendums[0].status).toBe('approved');
+    expect(poMatch.poTotal(poData('po-c'))).toBe(2250);
+  });
+});

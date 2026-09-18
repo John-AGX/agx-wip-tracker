@@ -18,8 +18,13 @@
 //
 // What a confident row proposes:
 //   title  — a correction (not on an APPLIED change order: terminal in P86).
-//   status — Buildertrend Approved on a P86 draft is a MONEY correction (an
-//            approved change order joins the contract, WIP and pay apps).
+//   status — FOUR arms, because P86 now has a `pending` of its own:
+//            Buildertrend Approved on a P86 draft OR pending is a MONEY
+//            correction (an approved change order joins the contract, WIP and
+//            pay apps); Buildertrend Pending on a P86 draft, and Buildertrend
+//            Draft on a P86 pending, are plain value corrections worth $0 on
+//            both sides (money: false — neither is a money press and neither
+//            auto-applies in safe mode).
 //            A sync never un-approves: Buildertrend Pending/Draft on an approved
 //            or applied P86 change order is held back, not applicable.
 //   price  — Buildertrend's total price against P86's income, computed by the
@@ -187,21 +192,36 @@ function coProposals(bt, v) {
     if (v.status === 'approved' || v.status === 'applied') {
       acc.heldBack.push({ field: 'status', label: 'Status', reason: 'money', bt: said, p86: v.status, applicable: false,
         note: 'Buildertrend says ' + said + '; P86 counts this change order in the contract. A sync never un-approves — change it in P86.' });
-    } else if (v.status === 'draft') {
+    } else if (v.status === 'draft' || v.status === 'pending') {
       acc.flags.push({ field: 'status', label: 'Status',
-        text: 'Buildertrend says ' + said + ', which is not a P86 change-order status. Not mapped — P86 keeps this change order as a draft and counts nothing.' });
+        text: 'Buildertrend says ' + said + ', which is not a P86 change-order status. Not mapped — P86 keeps this change order '
+          + (v.status === 'pending' ? 'pending approval' : 'as a draft') + ' and counts nothing.' });
     } else {
       notes.push('Buildertrend status "' + said + '" is not Approved, Pending or Draft, so status was not compared.');
     }
-  } else if (bs === 'approved' && v.status === 'draft') {
+  } else if (bs === 'approved' && (v.status === 'draft' || v.status === 'pending')) {
+    // From EITHER unsigned status. The from/p86Value carry v.status, never the
+    // literal 'draft': sync-apply.js uses p86Value as the optimistic race
+    // guard on the UPDATE, so a hardcoded 'draft' would make every approval of
+    // a pending change order silently stale.
     if (v.linkedNode) {
-      acc.heldBack.push({ field: 'status', label: 'Status', reason: 'money', bt: 'Approved', p86: 'draft', applicable: false,
+      acc.heldBack.push({ field: 'status', label: 'Status', reason: 'money', bt: 'Approved', p86: v.status, applicable: false,
         note: 'This change order is linked to a Site Plan node. Approve it in P86 so its lines move to the node.' });
     } else {
       const day = match.dateKey(bt.statusChangedDate);
-      acc.corrections.push({ field: 'status', label: 'Status', kind: 'value', money: true, from: 'draft', to: 'approved', value: 'approved', p86Value: 'draft',
+      acc.corrections.push({ field: 'status', label: 'Status', kind: 'value', money: true, from: v.status, to: 'approved', value: 'approved', p86Value: v.status,
         note: 'An approved change order joins the contract (WIP, backlog, pay applications) and is locked.' + (day ? ' Approval date: ' + day + ', from Buildertrend.' : '') });
     }
+  } else if (bs === 'pending' && v.status === 'draft') {
+    // $0 both sides: a pending change order is outside every money allow-list,
+    // exactly as a draft is. money: false keeps it out of the money confirm
+    // sentence on the page AND out of safe mode (isSafeCorrection is jobs/
+    // startDate only), so it stays a deliberate press either way.
+    acc.corrections.push({ field: 'status', label: 'Status', kind: 'value', money: false, from: 'draft', to: 'pending', value: 'pending', p86Value: 'draft',
+      note: 'Pending approval: sent to the owner, nobody has signed it. It stays editable and it counts nothing — no contract, WIP, backlog or pay-application figure moves.' });
+  } else if (bs === 'draft' && v.status === 'pending') {
+    acc.corrections.push({ field: 'status', label: 'Status', kind: 'value', money: false, from: 'pending', to: 'draft', value: 'draft', p86Value: 'pending',
+      note: 'Buildertrend has this change order back at draft. Both statuses count nothing, so no money moves either way.' });
   } else if (bs !== 'approved' && (v.status === 'approved' || v.status === 'applied')) {
     acc.heldBack.push({ field: 'status', label: 'Status', reason: 'money', bt: bs === 'pending' ? 'Pending' : 'Draft', p86: v.status, applicable: false,
       note: 'A sync never un-approves a change order. If Buildertrend is right, revert it to draft in P86.' });

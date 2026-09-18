@@ -170,10 +170,18 @@ describe('the buttons, chips and list', () => {
     expect(t.sourceButtonHTML('flag', 'f"><img>', [])).toContain('data-co-src-id="f&quot;&gt;&lt;img&gt;"');
   });
 
-  test('chipHTML: CO draft over CO approved over nothing', () => {
+  test('chipHTML: CO draft over CO pending over CO approved over nothing', () => {
     expect(t.chipHTML(linked)).toContain('>CO draft</span>');
     expect(t.chipHTML(linked).indexOf('<span class="p86-st-co-chip is-draft"')).toBe(0);
     expect(t.chipHTML(linked.slice(1))).toContain('>CO approved</span>');
+    // The two arms were exhaustive over draft|approved|applied. Move the work
+    // order's only change order to pending and BOTH some() calls went false:
+    // the chip vanished and the ticket read as though none was ever started.
+    expect(t.chipHTML([{ id: 'c9', status: 'pending' }])).toContain('>CO pending</span>');
+    expect(t.chipHTML([{ id: 'c9', status: 'pending' }])).toContain('is-pending');
+    // Draft still outranks it, and approved does not hide it.
+    expect(t.chipHTML([{ id: 'c8', status: 'draft' }, { id: 'c9', status: 'pending' }])).toContain('>CO draft</span>');
+    expect(t.chipHTML([{ id: 'c9', status: 'pending' }, { id: 'ca', status: 'approved' }])).toContain('>CO pending</span>');
     expect(t.chipHTML([])).toBe('');
     expect(t.rowChipHTML({ co_draft_count: 2 })).toContain('>CO draft</span>');
     expect(t.rowChipHTML({ co_draft_count: 0 })).toBe('');
@@ -188,6 +196,11 @@ describe('the buttons, chips and list', () => {
     expect(html).toContain('>Draft</span>');
     expect(html).toContain('>Approved</span>');
     expect(html).toContain('>Applied</span>');
+    // "Pending approval", never a bare "Pending" — and the pill has a class to
+    // colour, which it did not when stateLabel fell to its generic capitaliser.
+    const pend = t.listHTML([{ id: 'c9', co_number: 'CO-9', title: 'Extra', status: 'pending' }]);
+    expect(pend).toContain('>Pending approval</span>');
+    expect(pend).toContain('p86-st-co-state is-pending');
     expect(html.match(/data-co-open="/g)).toHaveLength(3);
     expect(t.listHTML(linked, { canOpen: false })).not.toContain('data-co-open');
     expect(t.listHTML([])).toBe('');

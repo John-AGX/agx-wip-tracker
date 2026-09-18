@@ -2533,6 +2533,7 @@ function p86Ask(message, opts) {
     var s = (_state.co && _state.co.status) || 'draft';
     pill.className = 'p86-co-status-pill status-' + s;
     var label = s === 'draft' ? 'Draft'
+              : s === 'pending' ? 'Pending approval'
               : s === 'approved' ? 'Approved'
               : s === 'applied' ? 'Applied'
               : s;
@@ -2541,6 +2542,8 @@ function p86Ask(message, opts) {
       ? 'Applied — locked. WIP has consumed these costs.'
       : s === 'approved'
       ? 'Approved — locked / read-only. Move back to Draft (or unlock) to edit.'
+      : s === 'pending'
+      ? 'Pending approval — sent to the owner, nobody has signed it. Still editable, and still $0 on the contract.'
       : 'Click to change status';
   }
 
@@ -2589,17 +2592,28 @@ function p86Ask(message, opts) {
     }).catch(function (e) { alert('Unlock failed: ' + (e && e.message || e)); });
   }
 
+  // MUST mirror the server's ALLOWED_TRANSITIONS
+  // (server/routes/change-order-routes.js) and js/jobs-hub.js CO_TRANSITIONS.
+  // test/change-order-status-lattice.test.js pins all three equal.
+  var CO_TRANSITIONS = {
+    draft: ['pending', 'approved'],
+    pending: ['draft', 'approved'],
+    approved: ['draft', 'applied'],
+    applied: []
+  };
+
   function openStatusTransition() {
     var co = _state.co;
     if (!co) return;
     var current = co.status || 'draft';
-    var allowed = {
-      draft: ['approved'],
-      approved: ['draft', 'applied'],
-      applied: []
-    }[current] || [];
+    var allowed = CO_TRANSITIONS[current] || [];
     if (!allowed.length) {
-      alert('Applied change orders cannot be re-transitioned.');
+      // Name the status actually being refused. This used to say "Applied
+      // change orders cannot be re-transitioned" for ANY status the inline
+      // copy had not heard of — a lie on a pending change order.
+      alert(current === 'applied'
+        ? 'Applied change orders cannot be re-transitioned.'
+        : 'A change order at "' + current + '" has no status move available.');
       return;
     }
     var prior = document.getElementById('p86CoStatusMenu');
@@ -2611,8 +2625,10 @@ function p86Ask(message, opts) {
       var msg = '';
       if (next === 'approved') msg = '<small>Applies the CO to the job and impacts WIP.</small>';
       else if (next === 'applied') msg = '<small>Marks the CO as consumed by the field. Locks edits.</small>';
+      else if (next === 'pending') msg = '<small>Sends it to the owner. Still editable, still $0 on the contract.</small>';
       else if (next === 'draft') msg = '<small>Returns to editable state; re-approve to re-apply.</small>';
       var label = next === 'draft' ? 'Move back to Draft'
+                : next === 'pending' ? 'Send for approval'
                 : next === 'approved' ? 'Approve (signed by customer)'
                 : 'Mark as Applied';
       return '<button data-next="' + next + '">' +

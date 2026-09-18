@@ -1311,12 +1311,12 @@ const JOB_TOOLS = [
   {
     name: 'read_wip_summary',
     description:
-      'Company-wide WIP roll-up. Returns per-job financial summary (contract value, costs, % complete, revenue earned, JTD profit/margin, backlog, invoiced, unbilled) PLUS portfolio totals. Use this for "what\'s under contract right now", "show me our biggest jobs by remaining backlog", "any margin red flags", "what\'s our total billed-to-date". This is the AGGREGATE rollup — replaces the need to fan out per-job WIP reads. Filter by status (e.g. "In Progress" excludes Completed/Archived). Costs include linked QuickBooks actuals and vendor bills; accrued adds open PO and sub commitments. Auto-tier.',
+      'Company-wide WIP roll-up. Returns per-job financial summary (contract value, costs, % complete, revenue earned, JTD profit/margin, backlog, invoiced, unbilled) PLUS portfolio totals. Use this for "what\'s under contract right now", "show me our biggest jobs by remaining backlog", "any margin red flags", "what\'s our total billed-to-date". This is the AGGREGATE rollup — replaces the need to fan out per-job WIP reads. Filter by status — one exact status, not a category (e.g. "In Progress" matches only jobs set to In Progress). Costs include linked QuickBooks actuals and vendor bills; accrued adds open PO and sub commitments. Auto-tier.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        status: { type: 'string', description: 'Filter to one status: New / In Progress / Backlog / On Hold / Completed / Archived. Omit to include all.' },
+        status: { type: 'string', description: 'Filter to one status: New / In Progress / Backlog / On Hold / Warranty / Completed / Archived. Omit to include all.' },
         sort_by: { type: 'string', enum: ['backlog', 'contract', 'margin', 'pct_complete'], description: 'Sort key for the per-job list. Default backlog (descending = biggest remaining first).' },
         limit: { type: 'integer', minimum: 1, maximum: 200, description: 'Max jobs in per-job list (totals still cover the full filtered set). Default 20.' }
       },
@@ -1331,7 +1331,7 @@ const JOB_TOOLS = [
       additionalProperties: false,
       properties: {
         q: { type: 'string' },
-        status: { type: 'string', description: 'Optional status filter ("New", "In Progress", "Backlog", "On Hold", "Completed", "Archived").' },
+        status: { type: 'string', description: 'Optional status filter ("New", "In Progress", "Backlog", "On Hold", "Warranty", "Completed", "Archived").' },
         limit: { type: 'integer', minimum: 1, maximum: 100 }
       },
       required: []
@@ -6931,7 +6931,7 @@ const ClientDirectoryTools = [
       type: 'object',
       properties: {
         q: { type: 'string', description: 'Optional fuzzy match against job number, title, or client name.' },
-        status: { type: 'string', description: 'Optional filter — "New", "In Progress", "Backlog", "On Hold", "Completed", "Archived".' },
+        status: { type: 'string', description: 'Optional filter — "New", "In Progress", "Backlog", "On Hold", "Warranty", "Completed", "Archived".' },
         limit: { type: 'integer', description: 'Max rows (default 30, max 100).' }
       }
     }
@@ -8120,14 +8120,14 @@ const PROJECT_INLINE_TOOLS = [
     name: 'read_change_orders',
     tier: 'auto',
     description:
-      'List/read CHANGE ORDERS on a job, INCLUDING THEIR LINE ITEMS. READ-ONLY. Org-scoped. Pass `job_id` to restrict to one job, `co_id` to read one (accepts the co_ row id OR the CO number like "CO-3"), `status` to scope (draft|approved|applied). Returns the co_ ROW ID, the CO number, status and lock state, the income (the price to the owner) and the cost, and every line with its `line_id`, description, qty, unit cost, promised Unit Sell and markup. THE co_ ID AND THE line_id ARE THE ADDRESSES A WRITE NEEDS: read the change order before asking the Scribe to change a line on it, and pass the ids you read. Use for "what change orders are on job X", "what is on CO-3", "why does CO-3 show no profit", and before ANY change-order edit.',
+      'List/read CHANGE ORDERS on a job, INCLUDING THEIR LINE ITEMS. READ-ONLY. Org-scoped. Pass `job_id` to restrict to one job, `co_id` to read one (accepts the co_ row id OR the CO number like "CO-3"), `status` to scope (draft|pending|approved|applied; pending = sent to the owner, awaiting approval, and counts $0 exactly as a draft does). Returns the co_ ROW ID, the CO number, status and lock state, the income (the price to the owner) and the cost, and every line with its `line_id`, description, qty, unit cost, promised Unit Sell and markup. THE co_ ID AND THE line_id ARE THE ADDRESSES A WRITE NEEDS: read the change order before asking the Scribe to change a line on it, and pass the ids you read. Use for "what change orders are on job X", "what is on CO-3", "why does CO-3 show no profit", and before ANY change-order edit.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         job_id: { type: 'string', description: 'Optional — restrict to one job.' },
         co_id: { type: 'string', description: 'Optional — one change order, by co_ row id or by CO number ("CO-3").' },
-        status: { type: 'string', description: 'Optional status filter (draft | approved | applied).' },
+        status: { type: 'string', description: 'Optional status filter (draft | pending | approved | applied).' },
         filter: { type: 'string', description: 'Case-insensitive substring on co_number or title.' },
         limit: { type: 'number', description: 'Cap results. Default 20, max 100.' },
       },
@@ -16401,7 +16401,8 @@ async function execProjectInlineTool(name, input, ctx) {
         ' · income ' + money(m.income) + ' · cost ' + money(m.costs) +
         (x.job_number ? ' · job ' + x.job_number : (x.job_id ? ' · job ' + x.job_id : '')) +
         (x.status !== 'approved' && x.status !== 'applied'
-          ? '  [DRAFT — contributes $0 to the job WIP until approved]' : ''));
+          ? '  [' + (x.status === 'pending' ? 'PENDING APPROVAL — sent to the owner, nobody has signed it' : String(x.status || 'draft').toUpperCase())
+            + ' — contributes $0 to the job WIP until approved]' : ''));
       const lines = Array.isArray(d.lines) ? d.lines : [];
       if (!lines.length) { out.push('    (no line items — this change order is worth $0)'); continue; }
       let n = 0;
