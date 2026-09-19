@@ -125,6 +125,21 @@ const LEDGER = {
       return problems;
     },
   },
+  'server/services/client-merge.js': {
+    why: 'A client merge repoints what was filed against the folded client. It moves tasks.entity_id and nothing else - not status, not service_ticket_id - so no work-order rule is reachable through it and there is nothing for the subtask door to decide.',
+    check(src) {
+      const problems = [];
+      const hits = src.match(/UPDATE\s+tasks\b/gi) || [];
+      if (hits.length !== 1) problems.push('expected exactly one tasks statement, found ' + hits.length);
+      const at = src.search(/UPDATE\s+tasks\b/i);
+      const stmt = at < 0 ? '' : src.slice(at, at + 300).split('"')[0];
+      if (stmt.indexOf('SET entity_id = $1, updated_at = NOW()') < 0) problems.push('the merge no longer moves ONLY entity_id on tasks');
+      if (stmt.indexOf("entity_type = 'client'") < 0) problems.push('the tasks move is no longer scoped to client rows');
+      if (stmt.indexOf('organization_id') < 0) problems.push('the tasks move lost its organization predicate');
+      if (/status|service_ticket_id|done/i.test(stmt)) problems.push('the merge now touches work-order fields on tasks');
+      return problems;
+    },
+  },
   'server/services/org-reset.js': {
     why: 'Wipes a whole organization. Nothing survives to follow a rule.',
     check(src) {

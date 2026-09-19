@@ -418,13 +418,19 @@ describe('REGISTER 2 — the route population', () => {
     //      is listed, counted or named there — including through a child row
     //      that points at ours — is driven by
     //      test/service-ticket-board-routes.test.js.
-    expect(R.routes).toBe(615);
+    //      615 -> 616: POST /api/clients/merge (client-routes.js), the fold
+    //      that replaced the directory's browser-orchestrated merge. A WRITE,
+    //      so it is waived here and driven instead by test/client-merge.test.js,
+    //      which names another organization's client as each side in turn and
+    //      asserts the 404 AND that no row moved. No new router.
+    expect(R.routes).toBe(616);
     expect(R.routers).toBe(79);
   });
 
-  test('the DRIVEN / COUNTED-WAIVED split is committed (139 driven, 476 counted)', () => {
+  test('the DRIVEN / COUNTED-WAIVED split is committed (139 driven, 477 counted)', () => {
     // 466 -> 476: the ten Work Orders (1.30) routes above, every one waived.
-    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 139, waived: 476 });
+    // 476 -> 477: POST /api/clients/merge, a write (see the note above).
+    expect({ driven: R.driveable, waived: R.waived }).toEqual({ driven: 139, waived: 477 });
   });
 
   test('every counted-waived route is a write or needs a path parameter — nothing else is waived', () => {

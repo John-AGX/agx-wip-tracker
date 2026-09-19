@@ -509,11 +509,15 @@ function p86Ask(message, opts) {
   }
 
   // ──────────────────────────────────────────────────────────────────
-  // Manual merge — pick a survivor, fold the other in. Mirrors 86's
-  // merge_clients tool (directory surface) but driven from the UI. Server endpoint
-  // doesn't exist as a one-off yet, so we do it via two PUT/DELETE
-  // calls plus children/leads reparenting client-side. Safer to add a
-  // proper /api/clients/merge endpoint later, but this works today.
+  // Manual merge — pick a survivor, fold the other in.
+  //
+  // This used to be orchestrated from here: a blank-fill PUT computed off the
+  // local cache, a PUT per child client, then a DELETE. It moved children and
+  // nothing else, so the DELETE orphaned every lead and project (FK SET NULL)
+  // and left jobs, invoices, payments and estimates pointing at a row that no
+  // longer existed — while the modal copy promised leads and estimates were
+  // reparented. All of it is now POST /api/clients/merge, one transaction,
+  // server-side; see server/services/client-merge.js.
   // ──────────────────────────────────────────────────────────────────
   function openClientMergeModal(sourceId) {
     ensureClientsCache().then(function() {
@@ -555,7 +559,7 @@ function p86Ask(message, opts) {
         '<div class="modal-header">Merge Client</div>' +
         '<div style="padding:18px 20px;">' +
           '<input type="hidden" id="clientMerge_sourceId" />' +
-          '<p style="margin:0 0 10px;color:var(--text-dim,#aaa);font-size:13px;">Fold <strong id="clientMerge_sourceName" style="color:var(--text,#fff);"></strong> into another client. The survivor keeps its data; only its empty fields are filled from the source. Children, linked leads, and estimates of the source are reparented to the survivor. The source row is then deleted.</p>' +
+          '<p style="margin:0 0 10px;color:var(--text-dim,#aaa);font-size:13px;">Fold <strong id="clientMerge_sourceName" style="color:var(--text,#fff);"></strong> into another client. The survivor keeps everything it already has; only its blank fields are filled from the folded record — its own name, company, community and short name are never changed. Its child clients, leads, estimates, jobs, projects, invoices, payments and filed documents all move to the survivor, and estimates and jobs stop showing the folded client\'s name. The folded row is then deleted. It all happens at once — if any part fails, nothing changes.</p>' +
           '<label style="font-size:12px;color:var(--text-dim,#aaa);">Survivor</label>' +
           '<select id="clientMerge_targetId" style="width:100%;margin-top:4px;"></select>' +
           '<p id="clientMerge_status" style="margin-top:10px;font-size:12px;"></p>' +
@@ -583,51 +587,45 @@ function p86Ask(message, opts) {
     statusEl.style.color = 'var(--text-dim,#aaa)';
     statusEl.textContent = 'Merging…';
 
-    // Look the two rows up locally so we can fill survivor's blanks from
-    // the source. The server doesn't have a dedicated merge endpoint yet,
-    // so we orchestrate from the client.
-    var src = _clients.find(function(x) { return x.id === sourceId; });
-    var dst = _clients.find(function(x) { return x.id === targetId; });
-    if (!src || !dst) {
-      btn.disabled = false;
-      statusEl.style.color = '#e74c3c';
-      statusEl.textContent = 'Could not resolve clients in cache.';
-      return;
-    }
-    // Fill blanks on dst from src
-    var fillFields = EDITABLE_FIELDS.concat(['parent_client_id']);
-    var patch = {};
-    fillFields.forEach(function(f) {
-      if ((dst[f] === null || dst[f] === undefined || dst[f] === '') && src[f]) {
-        patch[f] = src[f];
-      }
-    });
-
-    // Reparent any children of src to dst
-    var children = _clients.filter(function(x) { return x.parent_client_id === sourceId; });
-
-    var work = Promise.resolve();
-    if (Object.keys(patch).length) {
-      work = work.then(function() { return window.p86Api.clients.update(targetId, patch); });
-    }
-    children.forEach(function(child) {
-      work = work.then(function() { return window.p86Api.clients.update(child.id, { parent_client_id: targetId }); });
-    });
-    work = work
-      .then(function() { return window.p86Api.clients.remove(sourceId); })
-      .then(function() {
+    // One call. The blank-fill, the reference moves and the delete are the
+    // server's job — the local cache is a VIEW of the directory and was never
+    // a safe place to decide what points at a client from.
+    window.p86Api.clients.merge(sourceId, targetId)
+      .then(function(res) {
         statusEl.style.color = '#34d399';
-        statusEl.textContent = 'Merged.';
+        statusEl.textContent = 'Merged. ' + describeMergeResult(res);
         setTimeout(function() {
           closeModal('clientMergeModal');
           reloadClientsCache();
-        }, 500);
+        }, 1600);
       })
       .catch(function(err) {
         btn.disabled = false;
         statusEl.style.color = '#e74c3c';
         statusEl.textContent = 'Failed: ' + (err.message || err);
       });
+  }
+
+  // Report what the SERVER says it moved, not what the UI hoped it would.
+  // A merge that moved nothing says so; the old copy claimed leads and
+  // estimates had been reparented whether or not any existed.
+  function describeMergeResult(res) {
+    var moved = (res && res.moved) || {};
+    var labels = {
+      children: 'child client', leads: 'lead', estimates: 'estimate',
+      jobs: 'job', projects: 'project', invoices: 'invoice', payments: 'payment'
+    };
+    var parts = [];
+    Object.keys(labels).forEach(function(k) {
+      var n = moved[k] || 0;
+      if (n) parts.push(n + ' ' + labels[k] + (n === 1 ? '' : 's'));
+    });
+    var also = (res && res.also) || {};
+    var otherN = Object.keys(also).reduce(function(sum, k) { return sum + (also[k] || 0); }, 0);
+    if (otherN) parts.push(otherN + ' filed item' + (otherN === 1 ? '' : 's'));
+    var filled = (res && res.filled) || [];
+    var tail = filled.length ? ' Filled ' + filled.length + ' blank field' + (filled.length === 1 ? '' : 's') + '.' : '';
+    return (parts.length ? 'Moved ' + parts.join(', ') + '.' : 'Nothing was attached to it.') + tail;
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -752,8 +750,10 @@ function p86Ask(message, opts) {
       });
   }
 
-  // Field list mirrors the server's EDITABLE_FIELDS in client-routes.js.
-  // Used to clear the form on open and to read it back on submit.
+  // Field list mirrors the server's EDITABLE_FIELDS, which now lives in
+  // server/services/client-merge.js (the route imports it from there).
+  // Used to clear the form on open and to read it back on submit — NOT to
+  // decide what a merge fills any more; that is the server's list.
   var EDITABLE_FIELDS = [
     'name', 'client_type', 'activation_status',
     'first_name', 'last_name', 'email',
@@ -1130,6 +1130,34 @@ function p86Ask(message, opts) {
   // in BT custom-field names get stripped before lookup, and the comparison
   // is case-insensitive — so "Cm Email*" or "CM EMAIL*" both work.
   var BT_HEADER_MAP = {
+    // The Buildertrend record id, mapped to clients.bt_contact_id, which is
+    // rung 0 of the import's match ladder (server/routes/client-routes.js).
+    // The "Client Contacts" sheet AGX exports today has NO id column at all
+    // — its header row is Name, Activation Status, Phone, Cell, Address,
+    // City, State, Zip, Jobs, Lead Opportunities, Email, First/Last Name and
+    // the starred custom fields. So this mapping is INERT on that sheet and
+    // is meant to be: an id is never invented, derived from a name, or
+    // guessed. It only does anything the day Buildertrend is asked to
+    // include the column, and then rung 0 starts working on its own.
+    //
+    // Only the two headers that unambiguously NAME the Buildertrend record
+    // are mapped. A bare id header - "ID", "Id", "Client ID", "#" - is
+    // deliberately NOT here. In a re-exported, CSV-round-tripped or
+    // hand-built sheet such a column is overwhelmingly a row index (or the
+    // customer's own account number), and the import stamps whatever it
+    // finds onto clients.bt_contact_id as a genuine Buildertrend identity.
+    // The next import of the same sheet in a different row order - one
+    // property added, one row deleted, a re-sort - then matches on rung 0,
+    // which nothing downstream can outrank, and writes each row's name,
+    // address, phone and contacts onto a DIFFERENT client, with errors[]
+    // empty, skipped 0, and no undo. A wrong id under a UNIQUE index is
+    // worse than no id at all.
+    //
+    // If Buildertrend is ever asked for the column and the sheet in hand
+    // really does head it "ID", that line is added deliberately, with the
+    // sheet on screen.
+    'contact id': 'bt_contact_id',
+    'buildertrend id': 'bt_contact_id',
     'name': 'name',
     'activation status': 'activation_status',
     'phone': 'phone',
@@ -1234,8 +1262,11 @@ function p86Ask(message, opts) {
         return;
       }
       if (!(await p86Ask('Found ' + rows.length + ' client rows. Import them now?\n\n' +
-                   'Existing clients (matched by name, case-insensitive) will be updated. ' +
-                   'New clients will be created. Parents are auto-created from Company Name when needed.',
+                   'Existing clients are matched on the Buildertrend id first, then a ' +
+                   'one-to-one email, then the name (case- and spacing-insensitive), and updated. ' +
+                   'New clients will be created. Parents are auto-created from Company Name when needed.\n\n' +
+                   'A row whose email already belongs to a DIFFERENT client is not imported ' +
+                   '— it is listed afterwards as a possible duplicate so you can merge instead.',
                    { confirmLabel: 'Import', danger: false }))) {
         return;
       }
@@ -1253,20 +1284,35 @@ function p86Ask(message, opts) {
   function renderImportResult(res) {
     var body = document.getElementById('clientImportResult_body');
     var lines = [
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:14px;">' +
         statBlock('New clients', res.inserted || 0, '#34d399') +
         statBlock('Updated', res.updated || 0, '#4f8cff') +
+        // A refused row is not an error and not a success. It has its own
+        // tile because "384 rows, 0 errors" is exactly what the old import
+        // said on the day it minted a duplicate.
+        statBlock('Skipped (possible dup)', res.skipped || 0, '#fb923c') +
         statBlock('Parent firms created', res.parentsCreated || 0, '#fbbf24') +
         statBlock('Total rows', res.total || 0, 'var(--text-dim,#888)') +
       '</div>'
     ];
+    // Which rung did the work. Without it the panel cannot tell you whether
+    // your Buildertrend ids matched anything or whether every row fell
+    // through to the name again.
+    var mb = res.matchedBy || {};
+    if ((mb.bt_contact_id || 0) + (mb.email || 0) + (mb.name || 0) > 0) {
+      lines.push('<div style="font-size:11px;color:var(--text-dim,#888);margin-bottom:12px;">' +
+        'Matched by: Buildertrend id ' + (mb.bt_contact_id || 0) +
+        '  \u00b7  email ' + (mb.email || 0) +
+        '  \u00b7  name ' + (mb.name || 0) + '</div>');
+    }
     var errs = res.errors || [];
     if (errs.length) {
       lines.push('<div style="font-size:12px;color:#f87171;margin-bottom:6px;font-weight:600;">' +
-        errs.length + ' row(s) had errors:</div>');
+        errs.length + ' row(s) need attention:</div>');
       lines.push('<div style="max-height:160px;overflow-y:auto;font-size:11px;font-family:monospace;background:rgba(248,113,113,0.05);border:1px solid rgba(248,113,113,0.2);border-radius:6px;padding:8px;">');
       errs.slice(0, 50).forEach(function(e) {
-        lines.push('<div>Row ' + e.row + (e.name ? ' (' + escapeHTML(e.name) + ')' : '') + ': ' + escapeHTML(e.error) + '</div>');
+        var tag = e.reason ? '<span style="color:#fb923c;">[' + escapeHTML(e.reason) + '] </span>' : '';
+        lines.push('<div style="margin-bottom:4px;">Row ' + e.row + (e.name ? ' (' + escapeHTML(e.name) + ')' : '') + ': ' + tag + escapeHTML(e.error) + '</div>');
       });
       if (errs.length > 50) lines.push('<div style="color:var(--text-dim,#888);">…and ' + (errs.length - 50) + ' more</div>');
       lines.push('</div>');

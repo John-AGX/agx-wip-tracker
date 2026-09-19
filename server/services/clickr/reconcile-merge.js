@@ -224,6 +224,14 @@ async function moveFolders(db, entityType, loserId, survivorId, moved) {
     if (twin) {
       await db.query('UPDATE attachments SET folder_id = $1 WHERE folder_id = $2', [twin.id, f.id]);
       await db.query('UPDATE file_folders SET parent_id = $1 WHERE parent_id = $2', [twin.id, f.id]);
+      // attachment_folder_grants.folder_id is ON DELETE CASCADE, not SET NULL like
+      // attachments.folder_id above. Without this the DELETE takes the sub's whole
+      // GRANT ROW with it and the sub silently loses the files that were just
+      // moved into the twin. Repoint before the DELETE. (Same fix, same reason, as
+      // services/client-merge.js.) The `folder` string is left alone on purpose:
+      // it is part of UNIQUE (sub_id, entity_type, entity_id, folder) and the
+      // portal matches folder OR folder_id, so the id alone restores access.
+      await db.query('UPDATE attachment_folder_grants SET folder_id = $1 WHERE folder_id = $2', [twin.id, f.id]);
       await db.query('DELETE FROM file_folders WHERE id = $1', [f.id]);
       moved.file_folders_folded = (moved.file_folders_folded || 0) + 1;
     } else {

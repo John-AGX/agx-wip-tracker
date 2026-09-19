@@ -526,9 +526,22 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.31';
+const APP_VERSION = '1.32';
 
 const releases = [
+  {
+    version: '1.32',
+    date: '2026-09-19',
+    name: 'Merging a duplicate client, and an import that stops making them',
+    summary: 'Folding one client into another now actually moves its leads, estimates and everything else filed against it before deleting it — it used to move neither. And importing a Buildertrend client sheet matches on the Buildertrend id rather than the name, so the same property can no longer arrive twice under two spellings.',
+    changes: [
+      { type: 'fixed', text: 'Merge Client moves the work, not just the name. The dialog has always promised that the folded client’s leads and estimates move to the survivor. Nothing moved them. A lead lost its client outright, and an estimate, job, invoice or payment kept pointing at a row that no longer existed. Everything filed against a client now moves in one step that either completes or does nothing: leads, estimates, jobs, projects, invoices, payments, child clients, and every file, task, reminder, calendar entry, photo, plan, report and compliance item attached to it. Folders of the same name are folded together rather than duplicated, a subcontractor keeps portal access to the files that moved, and the folded client’s notes are added to the survivor instead of being destroyed with it.' },
+      { type: 'fixed', text: 'A merge tells you what it did. The result names how many leads, estimates, jobs, projects, invoices, payments and filed items moved, and which of the survivor’s blank fields were filled in. The survivor’s own name, company, community and short name are never changed — the point of picking a survivor is that you keep its identity.' },
+      { type: 'fixed', text: 'A merge refuses rather than guessing. It will not run when the two clients are the same row, when the folded client is a parent of the survivor (which would put a loop in the directory), when both carry different Buildertrend contacts, or when the survivor is archived. A Buildertrend link on the folded client moves to the survivor rather than being deleted with it. Asking 86 to merge two clients now goes through the same code, with the same protections — it had the same gap.' },
+      { type: 'improved', text: 'Importing a Buildertrend client sheet matches on identity, not spelling. A row is matched first by its Buildertrend contact id, then by an email that unambiguously belongs to one client whose name agrees, and only then by name — and the name comparison now ignores double spaces and the different dash characters Excel and Buildertrend produce, which used to be enough on their own to create a second client. Company rows are matched the same way, so a firm no longer forks into two.' },
+      { type: 'improved', text: 'An import refuses to create a client it suspects is a duplicate. If a row would be new but its email already belongs to a differently-named client, or its name matches two clients at once, it is skipped and listed with both names and the reason rather than quietly imported. Skipped rows are counted on their own tile, and the result breaks down how many rows matched by Buildertrend id, by email and by name. One manager’s address legitimately covering several properties is still imported normally.' },
+    ],
+  },
   {
     version: '1.31',
     date: '2026-09-18',

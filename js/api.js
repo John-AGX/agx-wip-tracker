@@ -206,6 +206,12 @@
     create: function(payload) { return post('/api/clients', payload); },
     update: function(id, payload) { return put('/api/clients/' + encodeURIComponent(id), payload); },
     remove: function(id) { return del('/api/clients/' + encodeURIComponent(id)); },
+    // Fold sourceId into targetId. One server transaction — the blank-fill,
+    // every repointed reference and the delete. Resolves to
+    // { ok, moved:{leads,estimates,jobs,projects,invoices,payments,children}, also, filled }.
+    merge: function(sourceId, targetId) {
+      return post('/api/clients/merge', { sourceId: sourceId, targetId: targetId });
+    },
     importBatch: function(rows) { return post('/api/clients/import', { rows: rows }); },
     addNote: function(id, body, sourceAgent) {
       return post('/api/clients/' + encodeURIComponent(id) + '/notes', {

@@ -71,7 +71,8 @@ const jobData = (id) => JSON.parse(one('SELECT data FROM jobs WHERE id = ?', id)
 
 function seed() {
   for (const t of ['jobs', 'leads', 'clients', 'estimates', 'job_change_orders', 'job_purchase_orders', 'schedule_entries', 'attachments', 'file_folders',
-    'tasks', 'job_access', 'qb_cost_lines', 'invoices', 'lead_graphs', 'node_graphs', 'users', 'roles', 'organizations', 'job_subs']) {
+    'tasks', 'job_access', 'qb_cost_lines', 'invoices', 'lead_graphs', 'node_graphs', 'users', 'roles', 'organizations', 'job_subs',
+    'attachment_folder_grants']) {
     run('DELETE FROM ' + t);
   }
   engine.db.exec(`
@@ -104,6 +105,13 @@ function seed() {
   run("INSERT INTO file_folders (id, entity_type, entity_id, parent_id, name, path) VALUES ('f-keep-photos', 'job', 'j-keep', NULL, 'Photos', '/Photos')");
   run("INSERT INTO file_folders (id, entity_type, entity_id, parent_id, name, path) VALUES ('f-dup-photos', 'job', 'j-dup', NULL, 'photos', '/photos')");
   run("INSERT INTO file_folders (id, entity_type, entity_id, parent_id, name, path) VALUES ('f-dup-permits', 'job', 'j-dup', NULL, 'Permits', '/Permits')");
+  // A sub's access grant on the folder that is about to be FOLDED away.
+  // attachment_folder_grants.folder_id is ON DELETE CASCADE in db.js, so the
+  // fold's DELETE destroys the whole grant ROW in Postgres unless moveFolders
+  // repoints it first — and the sub silently loses the files the merge has just
+  // moved into the survivor's folder. The harness emits no foreign keys, so what
+  // it can prove is that the pointer lands on the twin rather than on a dead id.
+  run("INSERT INTO attachment_folder_grants (id, sub_id, entity_type, entity_id, folder, folder_id) VALUES ('g-dup-photos', 'sub-1', 'job', 'j-dup', 'photos', 'f-dup-photos')");
   run("INSERT INTO job_access (job_id, user_id, access_level) VALUES ('j-keep', 11, 'edit'), ('j-dup', 11, 'view'), ('j-dup', 12, 'edit')");
   run("INSERT INTO node_graphs (job_id, data) VALUES ('j-dup', '{\"nodes\":[]}')");
 
@@ -179,6 +187,9 @@ describe('merge a duplicate job into the Buildertrend-linked job', () => {
     expect(one("SELECT entity_id, folder_id FROM attachments WHERE id = 'a1'")).toEqual({ entity_id: 'j-keep', folder_id: 'f-keep-photos' });
     expect(one("SELECT COUNT(*) AS n FROM file_folders WHERE id = 'f-dup-photos'").n).toBe(0);
     expect(one("SELECT entity_id FROM file_folders WHERE id = 'f-dup-permits'").entity_id).toBe('j-keep');
+    // The sub's grant followed the folder instead of being cascaded away with it.
+    expect(one("SELECT folder_id FROM attachment_folder_grants WHERE id = 'g-dup-photos'").folder_id)
+      .toBe('f-keep-photos');
     // job_access: user 11 already had access to the kept job — that row stays; user 12 moves.
     expect(q("SELECT user_id FROM job_access WHERE job_id = 'j-keep' ORDER BY user_id").map((x) => x.user_id)).toEqual([11, 12]);
     expect(res.kept).toEqual({ job_access: 1 });

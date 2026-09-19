@@ -192,7 +192,26 @@ the caller's org. This is covered by a named test
 
 ## 9. The `OR organization_id IS NULL` tolerance is retired — **OPEN** `[machine]` — **HIGHEST RISK ITEM ON THIS LIST**
 
-**518** occurrences of `organization_id IS NULL` across `server/`.
+**551** occurrences of `organization_id IS NULL` across `server/`.
+
+518 → 551: the client merge (`services/client-merge.js` and the
+`POST /api/clients/merge` route that calls it). Thirty-three statements, and
+the whole point of the file is that each carries the predicate ITSELF rather
+than leaning on the org-scoped `FOR UPDATE` read of the two client rows above
+it. They reach `clients`, `leads`, `projects`, `jobs`, `invoices`, `payments`,
+`estimates`, `file_folders`, `live_rooms` and nine polymorphic tables — every
+one of which already carries the arm, so the surface grew and the tolerance
+did not reach a table that had been clean. Three tables it also writes
+(`job_reports`, `ai_sessions`, `attachment_folder_grants`) have no
+`organization_id` column at all and so add nothing to this count; they are
+predicated on the `(entity_type, entity_id)` pair, and item 8 above is what
+closes that gap for `ai_sessions`.
+
+The thirty-third is the one that moves nothing: a post-loop re-read of
+`file_folders` still filed against the source, which refuses the merge rather
+than let the `DELETE FROM clients` below it orphan them. It carries the arm
+for the same reason as the loop it guards — a stray folder of ANOTHER tenant
+naming our source id must not be able to block this org's merge.
 
 497 → 516, net per commit (the count is of the literal, comments included):
 `eda0be04` +1, `4755ea44` +1, `e034406d` +2, `31d779ea` +6, `1a37e687` +4,

@@ -67,6 +67,10 @@ const { resolveTz, formatInTz, isCalendarDay } = require('../timezone');
 const ticketAccess = require('../services/service-ticket-access');
 const ticketSvc = require('../services/service-tickets');
 const { deleteSkillDeep, anthropicDisplayTitle } = require('../services/anthropic-skills');
+// The client merge, shared with POST /api/clients/merge. 86's merge_clients
+// tool used to carry its own copy, which moved children and leads and left
+// everything else pointing at the row it deleted.
+const { mergeClients } = require('../services/client-merge');
 
 const router = express.Router();
 
@@ -6846,7 +6850,7 @@ const ClientDirectoryTools = [
   {
     name: 'merge_clients',
     tier: 'approval',
-    description: "Merge two duplicate clients. The 'keep' client is the survivor; data from 'merge_from' is folded into it (only filling empty fields, never overwriting), then merge_from is deleted. Any properties parented to merge_from get reparented to keep.",
+    description: "Merge two duplicate clients. The 'keep' client is the survivor; data from 'merge_from' is folded into it (only filling empty fields, never overwriting), then merge_from is deleted. Everything that pointed at merge_from moves to keep first — child properties, leads, estimates, jobs, projects, invoices, payments and filed documents — and estimates and jobs stop displaying merge_from's name. One transaction: a failure changes nothing.",
     input_schema: {
       type: 'object',
       properties: {
@@ -7066,45 +7070,34 @@ async function execClientDirectoryTool(name, input, ctx) {
         : `Detached "${child.rows[0].name}" from its parent.`;
     }
     case 'merge_clients': {
-      const keep = await pool.query('SELECT * FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)', [input.keep_client_id, _cdRequireOrg('modify client records')]);
-      const from = await pool.query('SELECT * FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)', [input.merge_from_client_id, _cdRequireOrg('modify client records')]);
-      if (!keep.rows.length) throw new Error('keep_client_id not found');
-      if (!from.rows.length) throw new Error('merge_from_client_id not found');
-      if (input.keep_client_id === input.merge_from_client_id) throw new Error('keep and merge_from are the same client.');
-      const k = keep.rows[0];
-      const f = from.rows[0];
+      // ONE implementation of a client merge, shared with POST
+      // /api/clients/merge. What used to be here was the browser's broken
+      // orchestration copied into the server: a blank-fill UPDATE and two
+      // reparent UPDATEs with NO tenant predicate on any of them, a DELETE,
+      // and a comment admitting estimates were skipped. So an approved merge
+      // left the folded client's jobs, projects, invoices, payments and
+      // estimates pointing at a deleted row — and the three unpredicated
+      // statements matched on a VALUE, which is the same shape as the
+      // delete_client defect fixed directly below.
+      const _mcOrg = _cdRequireOrg('modify client records');
       const cli = await pool.connect();
+      let out;
       try {
         await cli.query('BEGIN');
-        // Fold: only fill blanks on keep from from
-        const sets = [];
-        const params = [];
-        let p = 1;
-        for (const col of CLIENT_EDITABLE_FIELDS) {
-          if ((k[col] === null || k[col] === '') && f[col]) {
-            sets.push(col + ' = $' + p++);
-            params.push(f[col]);
-          }
-        }
-        if (sets.length) {
-          sets.push('updated_at = NOW()');
-          params.push(input.keep_client_id);
-          // SAFE: column names iterate constant CLIENT_EDITABLE_FIELDS array above.
-          await cli.query(`UPDATE clients SET ${sets.join(', ')} WHERE id = $${p}`, params);
-        }
-        // Reparent any children of merge_from to keep
-        await cli.query('UPDATE clients SET parent_client_id = $1 WHERE parent_client_id = $2', [input.keep_client_id, input.merge_from_client_id]);
-        // Move leads/estimates that pointed at merge_from to keep (estimates store client_id in JSONB; skip for now)
-        await cli.query('UPDATE leads SET client_id = $1 WHERE client_id = $2', [input.keep_client_id, input.merge_from_client_id]);
-        await cli.query('DELETE FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)', [input.merge_from_client_id, _cdRequireOrg('modify client records')]);
+        out = await mergeClients(cli, _mcOrg, input.merge_from_client_id, input.keep_client_id);
+        if (out.refused) { await cli.query('ROLLBACK'); throw new Error(out.refused); }
         await cli.query('COMMIT');
       } catch (e) {
-        await cli.query('ROLLBACK');
+        try { await cli.query('ROLLBACK'); } catch (_) { /* returning to the pool either way */ }
         throw e;
       } finally {
         cli.release();
       }
-      return `Merged "${f.name}" into "${k.name}".`;
+      const m = out.moved || {};
+      const parts = Object.keys(m).filter((k) => m[k]).map((k) => m[k] + ' ' + k);
+      return `Merged "${out.source.name}" into "${out.survivor.name}"`
+        + (parts.length ? ' (moved ' + parts.join(', ') + ')' : ' (nothing was attached to it)')
+        + (out.filled && out.filled.length ? ', filling ' + out.filled.join(', ') : '') + '.';
     }
     case 'split_client_into_parent_and_property': {
       const orig = await pool.query('SELECT * FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)', [input.client_id, _cdRequireOrg('modify client records')]);
