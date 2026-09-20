@@ -4425,6 +4425,53 @@ async function initSchema() {
       ON tasks(organization_id, owner_user_id, status)
       WHERE scope = 'personal' AND archived_at IS NULL;
 
+    -- ── THE BUILDERTREND TO-DO A TASK CAME FROM ────────────────────────
+    -- Stamped ONLY by server/services/clickr/sync-apply.js when an admin
+    -- applies a confident match on the Tasks tab of the Buildertrend preview.
+    -- NULL = never linked.
+    --
+    -- UNIQUE PER ORGANIZATION, not unique outright, and that is a DELIBERATE
+    -- departure from bt_co_id / bt_po_id / bt_bill_id. Those three are unique
+    -- outright because their rows can still carry a NULL organization_id and
+    -- every sync read reaches them through their JOB. Neither is true here:
+    -- tasks.organization_id is NOT NULL, and the sync reads a task by its own
+    -- column. So this takes the shape of bt_job_id / bt_lead_id /
+    -- bt_contact_id, whose columns are NOT NULL too. Same contract either way —
+    -- one Buildertrend record links to at most one P86 record — under the
+    -- predicate that is actually true of this table.
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS bt_task_id TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_org_bt_task_id ON tasks(organization_id, bt_task_id) WHERE bt_task_id IS NOT NULL;
+
+    -- BUILDERTREND'S OWN STATUS WORD, AND IT IS NOT COMPLETION.
+    --
+    -- Clickr's tasks dataset sends TWO fields that both read like completion and
+    -- disagree: isCompleted (88 of 578 done) and status ("Completed" on 544).
+    -- completedAt is carried by exactly the 88 isCompleted calls done, so
+    -- isCompleted is the per-task flag and status is measuring the Buildertrend
+    -- to-do LIST. tasks.status is therefore driven by isCompleted ALONE, and
+    -- Buildertrend's word is parked HERE so a person can see it without it ever
+    -- being mistaken for the task's state.
+    --
+    -- It is its own column because tasks has no data JSONB. Every other dataset
+    -- keeps this word as data.btStatus; writing it into tasks.notes instead
+    -- would put a status word inside text a person owns, and writing it into
+    -- tasks.checklist would show a person a checklist item nobody added.
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS bt_task_status TEXT;
+
+    -- WHEN THE SYNC LAST WROTE THIS TASK, stamped in the SAME statement as
+    -- updated_at by every write services/clickr/sync-apply.js makes, and by
+    -- nothing else.
+    --
+    -- It is how "a person edited this" is ANSWERED rather than assumed. Every
+    -- human write door on this table (tasks-routes.js, task-share-routes.js,
+    -- work-order-review.js) stamps updated_at = NOW(), so updated_at moving PAST
+    -- bt_synced_at means somebody changed the task after the sync last touched
+    -- it — and NULL means the sync never wrote it at all, which makes the
+    -- content a person's from the first keystroke. task-match.js personEdited()
+    -- reads it and FAILS CLOSED: anything it cannot prove counts as a person's,
+    -- and a sync does not rewrite what somebody typed.
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS bt_synced_at TIMESTAMPTZ;
+
     -- Task share links — send a single task to an outside worker (a sub's crew)
     -- by email and let them complete it with NO account. The random token IS the
     -- access, scoped to ONE task; usable while not revoked and not past expiry.

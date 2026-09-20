@@ -43,6 +43,12 @@ const coMatch = require('./co-match');
 const poMatch = require('./po-match');
 const billMatch = require('./bill-match');
 const estimateMatch = require('./estimate-match');
+const taskMatch = require('./task-match');
+// The ONE spelling of "not a work-order building", so this list is held to the
+// same wording as every other (test/work-order-task-read-ledger.test.js). The
+// scope = 'org' predicate beside it already rules out the personal arm, so this
+// adds no rows — it adds the shared sentence.
+const subtaskDoor = require('../service-ticket-subtask-door');
 const coMoney = require('../money/change-order-totals');
 const since = require('./since-refresh');
 
@@ -174,6 +180,41 @@ async function readP86(pool, orgId) {
     'SELECT e.id, e.attached_job_id, e.bt_worksheet_id, e.data, e.is_locked, e.sent_at, e.sent_count, '
     + 'e.approval_status, e.accepted_at, e.approved_at, e.declined_at '
     + 'FROM estimates e WHERE e.organization_id = $1 AND e.bt_worksheet_id IS NOT NULL AND e.attached_job_id IS NULL', [orgId]);
+  // ORG TASKS FILED UNDER A JOB. No tolerance arm: tasks.organization_id is
+  // NOT NULL, so there is no older row carrying none and an `OR IS NULL` here
+  // would be a door with nothing behind it. This organisation appears in the
+  // SAME literal three times — the task's own column, its job's, and the
+  // assignee join — so a task of another tenant, a task on another tenant's
+  // job, and another tenant's user as a name are all unreachable.
+  //
+  // A task reaches its job through the POLYMORPHIC entity_type/entity_id pair,
+  // not a job_id column, which is why entity_type = 'job' is pinned and
+  // entity_id is aliased job_id for the matcher.
+  //
+  // TWO EXCLUSIONS, BOTH LOAD-BEARING:
+  //   * scope = 'org'. A 'personal' row is a private To-do belonging to
+  //     owner_user_id and visible to nobody else; it is not an org task, an
+  //     imported task is never one, and this sync neither reads nor writes one.
+  //   * service_ticket_id IS NULL. A task carrying one is a WORK-ORDER
+  //     BUILDING, not a to-do: it lives on its service ticket, it is finished
+  //     there under the photo rule, and completing one moves the TICKET through
+  //     services/service-ticket-subtask-door.js — a door a write from this sync
+  //     would walk straight past. Excluded HERE, in the read, so a building can
+  //     never be a candidate, a match or a write target anywhere downstream.
+  //
+  // ARCHIVED TASKS ARE DELIBERATELY INCLUDED. Every other read in this file
+  // hides archived rows; this one must not. A task a person archived is still
+  // the P86 twin of its Buildertrend to-do, and hiding it would make that to-do
+  // read as NEW and create a second copy of the thing somebody put away.
+  // task-match.js locks it instead: shown, matched, and never written.
+  const tasks = await pool.query(
+    'SELECT t.id, t.title, t.notes, t.status, t.priority, t.kind, t.due_date, t.completed_at, t.archived_at, '
+    + 't.assignee_user_id, t.entity_id AS job_id, t.bt_task_id, t.bt_task_status, t.bt_synced_at, t.updated_at, '
+    + 'u.name AS assignee_name '
+    + 'FROM tasks t JOIN jobs j ON j.id = t.entity_id '
+    + 'LEFT JOIN users u ON u.id = t.assignee_user_id AND u.organization_id = $1 '
+    + "WHERE t.organization_id = $1 AND j.organization_id = $1 AND j.bt_archived_at IS NULL "
+    + "AND t.entity_type = 'job' AND t.scope = 'org' AND " + subtaskDoor.notAWorkOrderBuildingSql('t'), [orgId]);
   const subs = await pool.query("SELECT id, name FROM subs WHERE organization_id = $1 AND COALESCE(status, 'active') <> 'closed'", [orgId]);
   const users = await pool.query(
     'SELECT id, name FROM users WHERE organization_id = $1 AND active = true', [orgId]);
@@ -191,6 +232,7 @@ async function readP86(pool, orgId) {
     poRows: pos.rows,
     billRows: bills.rows,
     estimateRows: estsOnJob.rows.concat(estsLoose.rows),
+    taskRows: tasks.rows,
     subs: subs.rows,
     directory: { users: users.rows.map((r) => ({ id: r.id, name: r.name })), clients: clients.rows.map((r) => ({ id: r.id, name: r.name })) },
     clients: clients.rows,
@@ -227,6 +269,10 @@ function notInBtSentence(ds, reliable, fr, p86Error, n, notListed) {
     ? ' Only estimates filed under a P86 job whose Buildertrend job sent estimate lines in this read are listed; ' + notListed
       + ' on other jobs, and every estimate that belongs to a lead rather than a job, are not.'
       + ' A P86 estimate nothing in Buildertrend reached is expected: P86 writes proposals Buildertrend never sees. Nothing is proposed for deletion.'
+    : ds.key === 'tasks'
+    ? ' Only org tasks filed under a P86 job whose Buildertrend job sent tasks in this read are listed; ' + notListed
+      + ' on other jobs are not. Private To-dos and work-order buildings are not tasks this sync reads at all.'
+      + ' A P86 task nothing in Buildertrend reached is expected: P86 writes tasks Buildertrend never sees. Nothing is proposed for deletion, and a sync never archives one.'
     : ds.key === 'bills'
     ? ' Only bills on P86 jobs whose Buildertrend job sent bills in this read are listed; ' + notListed + ' on other jobs are not (Clickr\'s bills dataset covers open jobs only).'
       + ' A P86 bill nothing in Buildertrend reached is expected: P86 records bills Buildertrend never sees. Nothing is proposed for deletion, and a sync never voids one.'
@@ -257,10 +303,15 @@ function matchRows(kind, values, p86) {
   // Estimates are the one dataset whose RECORDS are not the rows: a record is
   // one LINE, and matchEstimates groups them into worksheets itself.
   if (kind === 'estimates') return estimateMatch.matchEstimates(values, { jobs: p86.jobs, estimateRows: p86.estimateRows || [] });
+  // Tasks need the USER DIRECTORY too: a Buildertrend assignee is a NAME and
+  // P86's assignee_user_id is a real foreign key, so the only way from one to
+  // the other is this organisation's own active users, read WHERE
+  // organization_id = the caller's (see readP86 above).
+  if (kind === 'tasks') return taskMatch.matchTasks(values, { jobs: p86.jobs, taskRows: p86.taskRows || [], users: (p86.directory && p86.directory.users) || [] });
   return match.matchLeads(values, p86.leads, { directory: p86.directory });
 }
 
-const PREVIEW_KINDS = ['jobs', 'leads', 'clients', 'changeOrders', 'purchaseOrders', 'bills', 'estimates'];
+const PREVIEW_KINDS = ['jobs', 'leads', 'clients', 'changeOrders', 'purchaseOrders', 'bills', 'estimates', 'tasks'];
 
 function buildDataset(kind, fr, p86, p86Error) {
   const ds = DATASETS[kind];
@@ -296,6 +347,8 @@ function buildDataset(kind, fr, p86, p86Error) {
     ? billMatch.notInBuildertrend(rows, values, p86)
     : kind === 'estimates'
     ? estimateMatch.notInBuildertrend(rows, values, p86)
+    : kind === 'tasks'
+    ? taskMatch.notInBuildertrend(rows, values, p86)
     // readComplete: a P86 lead is called "no longer an open lead in Buildertrend"
     // only when the Buildertrend read reached every record. After a partial read
     // its Buildertrend lead may simply be in the part never fetched.
@@ -573,4 +626,4 @@ function forgetFetch(orgId) {
 
 let inFlight = false;
 
-module.exports = { handle, buildPreview, rememberFetch, cachedFetch, forgetFetch, readP86, matchRows, changeOrderTotals, ownerSlug, fetchedSentence, carriesKey, VIEW_PARAM };
+module.exports = { PREVIEW_KINDS, handle, buildPreview, rememberFetch, cachedFetch, forgetFetch, readP86, matchRows, changeOrderTotals, ownerSlug, fetchedSentence, carriesKey, VIEW_PARAM };

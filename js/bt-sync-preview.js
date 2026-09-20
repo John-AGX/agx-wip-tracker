@@ -83,29 +83,30 @@
     changeOrders: { f: 'all', scope: 'all', q: '', waitJob: '', waitJobLabel: '', shown: PAGE },
     purchaseOrders: { f: 'all', scope: 'all', q: '', waitJob: '', waitJobLabel: '', shown: PAGE },
     bills: { f: 'all', scope: 'all', q: '', waitJob: '', waitJobLabel: '', shown: PAGE },
-    estimates: { f: 'all', scope: 'all', q: '', waitJob: '', waitJobLabel: '', shown: PAGE }
+    estimates: { f: 'all', scope: 'all', q: '', waitJob: '', waitJobLabel: '', shown: PAGE },
+    tasks: { f: 'all', scope: 'all', q: '', waitJob: '', waitJobLabel: '', shown: PAGE }
   };
   // Apply (server/services/clickr/sync-apply.js). The server re-reads both
   // sides and re-matches; the page only says which Buildertrend ids to act on.
   var APPLY_ENDPOINT = '/api/admin/organizations/me?action=buildertrend-apply';
   var _applying = null;          // 'jobs:safe' | 'jobs:<btId>' | ...
-  var _applyNote = { jobs: null, leads: null, clients: null, changeOrders: null, purchaseOrders: null, bills: null, estimates: null };   // { ok, text }
+  var _applyNote = { jobs: null, leads: null, clients: null, changeOrders: null, purchaseOrders: null, bills: null, estimates: null, tasks: null };   // { ok, text }
   // What a person ticked, per row: _picks['jobs:<btId>'][field] = true/false.
   // Corrections start ticked; held-back items a person may apply start unticked.
   var _picks = {};
-  var TABS = [['overview', 'Overview'], ['jobs', 'Jobs'], ['leads', 'Leads'], ['clients', 'Clients'], ['changeOrders', 'Change orders'], ['purchaseOrders', 'Purchase orders'], ['bills', 'Bills'], ['estimates', 'Estimates'], ['archive', 'Archive']];
+  var TABS = [['overview', 'Overview'], ['jobs', 'Jobs'], ['leads', 'Leads'], ['clients', 'Clients'], ['changeOrders', 'Change orders'], ['purchaseOrders', 'Purchase orders'], ['bills', 'Bills'], ['estimates', 'Estimates'], ['tasks', 'Tasks'], ['archive', 'Archive']];
   var ARCHIVE_ENDPOINT = '/api/admin/organizations/me?view=buildertrend-archive';
   var _archive = null;       // [{ kind, id, label, reason, mergedInto, archivedAt, attached, deletable }]
   var _archiveErr = null;
   var _archiveNote = null;
-  var NOUN = { jobs: 'job', leads: 'lead', clients: 'client', changeOrders: 'change order', purchaseOrders: 'purchase order', bills: 'bill', estimates: 'estimate' };
+  var NOUN = { jobs: 'job', leads: 'lead', clients: 'client', changeOrders: 'change order', purchaseOrders: 'purchase order', bills: 'bill', estimates: 'estimate', tasks: 'task' };
   var _tab = 'overview';
-  try { var _savedTab = window.localStorage && window.localStorage.getItem('btp.tab'); if (_savedTab === 'overview' || _savedTab === 'jobs' || _savedTab === 'leads' || _savedTab === 'clients' || _savedTab === 'changeOrders' || _savedTab === 'purchaseOrders' || _savedTab === 'bills' || _savedTab === 'estimates' || _savedTab === 'archive') _tab = _savedTab; } catch (e) { /* storage blocked */ }
+  try { var _savedTab = window.localStorage && window.localStorage.getItem('btp.tab'); if (_savedTab === 'overview' || _savedTab === 'jobs' || _savedTab === 'leads' || _savedTab === 'clients' || _savedTab === 'changeOrders' || _savedTab === 'purchaseOrders' || _savedTab === 'bills' || _savedTab === 'estimates' || _savedTab === 'tasks' || _savedTab === 'archive') _tab = _savedTab; } catch (e) { /* storage blocked */ }
 
   // The three datasets that hang off a linked JOB rather than standing alone.
   // Their P86 side is reviewed in P86, never archived from here, and their
   // "refused" bucket is mostly "its job is not linked yet".
-  var DETAIL_KINDS = { changeOrders: 1, purchaseOrders: 1, bills: 1, estimates: 1 };
+  var DETAIL_KINDS = { changeOrders: 1, purchaseOrders: 1, bills: 1, estimates: 1, tasks: 1 };
 
   // What the Show box calls the view it is in, including the Overview's own
   // filters and the one that names a single Buildertrend job.
@@ -419,6 +420,18 @@
       if (bt.vendorName) meta.push('Pay to: ' + esc(bt.vendorName));
       if ((bt.relatedPurchaseOrderIds || []).length) meta.push('BT purchase order' + (bt.relatedPurchaseOrderIds.length === 1 ? ' ' : 's ') + esc(bt.relatedPurchaseOrderIds.join(', ')));
       if (bt.dueDate) meta.push('Due ' + esc(String(bt.dueDate).slice(0, 10)));
+    } else if (ds.key === 'tasks') {
+      if (bt.jobName) meta.push('Job: ' + esc(bt.jobName));
+      // BOTH FIELDS, ALWAYS, AND LABELLED. Clickr sends two things that read
+      // like completion and disagree — isCompleted (the task) and status (the
+      // to-do LIST). This page shows the flag that decides it and the word that
+      // does not, side by side, because a page that printed only "Completed"
+      // would be printing the field this whole tab is braced against.
+      meta.push('Completed: ' + esc(bt.doneText) + (bt.completedDay ? ' on ' + esc(bt.completedDay) : ''));
+      meta.push('BT list status: ' + (bt.statusText ? esc(bt.statusText) : '<i>blank</i>') + ' <span class="btp-none">(not completion)</span>');
+      if (bt.dueDay) meta.push('Due ' + esc(bt.dueDay));
+      if ((bt.assigneeNames || []).length) meta.push('Assigned: ' + esc(bt.assigneeNames.join(', ')));
+      if (bt.notes) meta.push('Has notes');
     } else if (ds.key === 'estimates') {
       if (bt.jobName) meta.push('Job: ' + esc(bt.jobName));
       // A ROW IS A WORKSHEET AND A RECORD IS A LINE, so the line count is not
@@ -518,6 +531,15 @@
         // THE GUARD, ON THE PAGE. A row that proposes nothing has to say why,
         // or it reads as a row with nothing to do.
         if (p.lifecycle) meta.push('Sent or sold — ' + esc(p.lifecycle));
+      }
+      if (ds.key === 'tasks') {
+        if (r.job) meta.push('on ' + esc(r.job.label));
+        if (p.archived) meta.push('Archived in P86');
+        if (p.dueDate) meta.push('Due ' + esc(p.dueDate));
+        meta.push(p.assigneeName ? 'Assigned: ' + esc(p.assigneeName) : 'Unassigned');
+        // THE GUARD, ON THE PAGE. A row whose text proposes nothing has to say
+        // why, or it reads as a row with nothing to do.
+        if (p.edited) meta.push('A person wrote this task — its words are not rewritten');
       }
       if (ds.key === 'bills') {
         if (r.bt.paymentStatusText) meta.push('Buildertrend: ' + esc(r.bt.paymentStatusText));
@@ -757,7 +779,7 @@
   // linked with. (Warranty and Pending used to be the standing example — P86
   // now has both statuses, so they are ordinary agreeing rows.)
   function statusWordCount(ds) {
-    if (!ds || (ds.key !== 'jobs' && ds.key !== 'changeOrders' && ds.key !== 'bills' && ds.key !== 'estimates')) return 0;
+    if (!ds || (ds.key !== 'jobs' && ds.key !== 'changeOrders' && ds.key !== 'bills' && ds.key !== 'estimates' && ds.key !== 'tasks')) return 0;
     return (ds.rows || []).filter(function (r) {
       return (r['class'] === 'matched' || r['class'] === 'conflict') && r.bt && r.bt.btId != null && r.bt.btId !== '' && r.btStatusDue === true;
     }).length;
@@ -833,6 +855,12 @@
       t += ' A bill’s amount, its bill number and its purchase order are applied one row at a time, and its amount only when you tick it.' +
         ' No P86 bill is created, voided or deleted by this press.';
     }
+    if (ds.key === 'tasks') {
+      t += ' NO MONEY IS INVOLVED ON THIS TAB — a task carries no cost, no price and no contract.' +
+        ' What it carries is a commitment somebody acts on, so NOTHING on a task is applied by this press except the Buildertrend id:' +
+        ' completing a task, retitling it, and replacing notes or a due date P86 already holds are each ticked by name on their own row.' +
+        ' No P86 task is created, completed, archived, deleted or re-assigned by this press.';
+    }
     if (ds.key === 'purchaseOrders') {
       t += ' The sub of each sent or approved PO without portal access to the job’s files yet gets it, as on the PO page (' + subAccessCount(ds) + ').';
       var k = approvalKindCount(ds);
@@ -862,6 +890,13 @@
         .reduce(function (n, x) { return n + (x.bt.lineCount || 0); }, 0);
       extra = ' Each becomes a real P86 estimate on its linked job, with Buildertrend’s own ' + lineN + ' line item' + (lineN === 1 ? '' : 's')
         + ' and section groups, and is born unsent, unlocked and not approved. Deleted Buildertrend lines are left out.';
+    }
+    if (key === 'tasks' && ds) {
+      var doneN = (ds.rows || []).filter(function (x) { return x['class'] === 'new' && x.bt.state86 === 'done'; }).length;
+      var unassignedN = (ds.rows || []).filter(function (x) { return x['class'] === 'new' && !(x.bt.assigneeNames || []).length; }).length;
+      extra = ' No money is involved: a task carries no cost, no price and no contract. Each becomes an org task on its linked P86 job, visible to the whole team.' +
+        ' ' + doneN + ' of them are finished in Buildertrend and are created done. ' + unassignedN + ' name nobody in Buildertrend;' +
+        ' any whose assignee is not exactly one P86 user is created UNASSIGNED rather than guessed at.';
     }
     if (key === 'bills' && ds) {
       var paidN = (ds.rows || []).filter(function (x) { return x['class'] === 'new' && x.bt.state86 === 'paid'; }).length;
@@ -1093,6 +1128,7 @@
         (ds.key === 'purchaseOrders' ? 'Each is created on its linked P86 job with Buildertrend’s number, status, cost and sub/vendor (when it is exactly one P86 sub). A sent or approved one is committed and locked, so its cost accrues. No bill is created. A sent or approved PO’s sub gets portal access to the job’s files, as on the PO page. ' : '') +
         (ds.key === 'estimates' ? 'Each Buildertrend WORKSHEET becomes one real P86 estimate on its linked job, carrying that worksheet’s line items in Buildertrend’s own groups, and is born unsent, unlocked and not approved. A worksheet whose job is not linked yet waits, and one carrying a line Project 86 cannot price at Buildertrend’s own owner price is refused whole rather than imported at a number that is not Buildertrend’s. ' : '') +
         (ds.key === 'bills' ? 'Each is created on its linked P86 job at Buildertrend’s amount, with its vendor invoice number, dates and vendor, and its purchase order only where P86 has already imported that exact Buildertrend PO. Deleted and duplicated Buildertrend bills are never created. ' : '') +
+        (ds.key === 'tasks' ? 'NO MONEY IS INVOLVED HERE — a task carries no cost, no price and no contract. Each becomes an ORG task on its linked P86 job (visible to the whole team, never a private To-do and never a work-order building), with Buildertrend’s title, notes and due date, done where Buildertrend has it done, and assigned only where the Buildertrend name is exactly one P86 user — otherwise UNASSIGNED rather than guessed. A task whose job is not linked yet waits. ' : '') +
         'Possible duplicates and ambiguous rows are never created.</span></div>';
       var note = _applyNote[ds.key];
       if (note) html += '<div class="btp-sentence ' + (note.ok ? 'is-ok' : 'is-bad') + '">' + esc(note.text) + '</div>';
@@ -1182,12 +1218,14 @@
   // exists (rows grouped by the Buildertrend job they wait on), and the tests
   // hold the two against each other.
 
-  var DS_ORDER = ['jobs', 'leads', 'clients', 'changeOrders', 'purchaseOrders', 'bills', 'estimates'];
-  // The four datasets whose rows can be BLOCKED: a change order, purchase
-  // order, bill or estimate worksheet whose Buildertrend job is not linked to a
+  var DS_ORDER = ['jobs', 'leads', 'clients', 'changeOrders', 'purchaseOrders', 'bills', 'estimates', 'tasks'];
+  // The datasets whose rows can be BLOCKED: a change order, purchase order,
+  // bill, estimate worksheet or task whose Buildertrend job is not linked to a
   // P86 job is refused with waitingOnJob and can do nothing until that job
-  // exists in P86 and carries the Buildertrend id.
-  var WAIT_KINDS = ['changeOrders', 'purchaseOrders', 'bills', 'estimates'];
+  // exists in P86 and carries the Buildertrend id. Tasks span 64 Buildertrend
+  // jobs, so leaving them out here would drop the largest contributor to the
+  // chain's ranking while the Tasks tab still showed the rows.
+  var WAIT_KINDS = ['changeOrders', 'purchaseOrders', 'bills', 'estimates', 'tasks'];
 
   function dsOf(key) {
     return (_data && _data.datasets && _data.datasets[key]) || null;
@@ -1959,6 +1997,12 @@
     // For test/clickr-sync-preview.test.js: the escaping, the failure sentence,
     // and the whole page rendered from a given response, with no DOM.
     _test: {
+      // The Overview walks these, the tabs walk the server's own list, and a
+      // dataset in one but not the other is a count that disagrees with the
+      // rows it claims to reach. Held against PREVIEW_KINDS by a test.
+      DS_ORDER: DS_ORDER,
+      WAIT_KINDS: WAIT_KINDS,
+      TABS: TABS,
       esc: esc,
       errorSentence: errorSentence,
       render: function (data, err) { _data = data || null; _err = err || null; _loading = false; return pageHTML(); },

@@ -124,6 +124,30 @@ const SNAPSHOT_FIELDS = {
   // numbers that move when a LINE is added, removed, re-priced or re-marked-up.
   // The line totals are what make a line edit visible at all — without them a
   // worksheet could be rewritten from top to bottom and still read unchanged.
+  // TASKS. What a person would call a change to a to-do: its words, whose job
+  // it is, whether it is FINISHED, when, when it is due, and who has it.
+  //
+  // 'completed' reads isCompleted and NOT status, for the reason the registry
+  // entry in field-map.js spells out: the two disagree, and status describes the
+  // Buildertrend to-do LIST. Buildertrend's word is carried here TOO, under its
+  // own name, so a refresh can say "Buildertrend now calls this list Completed"
+  // without that ever reading as "this task is done".
+  //
+  // 'completed' is the one BOOLEAN in this file and 'assignee' the one LIST, so
+  // both get a normalizer of their own below rather than being squeezed through
+  // normText — which answers null for a boolean and for an array, and would have
+  // made completion, the single most important fact on this dataset, invisible
+  // to every since-comparison.
+  tasks: [
+    ['title', 'Title', 'title', 'text'],
+    ['job', 'Job', 'jobName', 'text'],
+    ['completed', 'Completed', 'isCompleted', 'bool'],
+    ['btStatus', 'Buildertrend status (not completion)', 'statusText', 'text'],
+    ['completedAt', 'Completed on', 'completedAt', 'day'],
+    ['dueDate', 'Due date', 'dueDate', 'day'],
+    ['assignee', 'Assigned to', 'assignedUsers', 'list'],
+    ['notes', 'Notes', 'notes', 'text'],
+  ],
   estimates: [
     ['job', 'Job', 'jobName', 'text'],
     ['contractPrice', 'Contract price', 'contractPrice', 'money'],
@@ -159,7 +183,28 @@ function normDay(v) {
   return k || null;
 }
 
-const NORM = { text: normText, money: normMoney, day: normDay };
+// Buildertrend's completion flag, three-state exactly as field-map's readTask
+// hands it over: true, false, or "Buildertrend did not say". A null must stay a
+// null and never collapse into 'No', or a dataset that stopped sending booleans
+// would read as 578 tasks all turning not-done on one refresh.
+function normBool(v) {
+  if (v === true) return 'Yes';
+  if (v === false) return 'No';
+  return null;
+}
+
+// A list of names as one comparable string, in the order Buildertrend sent it.
+// An empty list is null (nobody assigned), not '' — so "nobody" and "not
+// carried" read the same, which is what they mean.
+function normList(v) {
+  if (Array.isArray(v)) {
+    const parts = v.map((x) => normText(x)).filter((x) => x != null);
+    return parts.length ? parts.join(', ') : null;
+  }
+  return normText(v);
+}
+
+const NORM = { text: normText, money: normMoney, day: normDay, bool: normBool, list: normList };
 
 // readRecord(dataset, rec) -> flat object of normalized Buildertrend values.
 // ONE RECORD IN, ONE SNAPSHOT OUT — which is why it refuses estimates: there,
@@ -271,6 +316,7 @@ function snapshotLabel(dataset, snap, btId) {
   else if (dataset === 'purchaseOrders') label = [s.poNumber, s.title].filter(Boolean).join(' ') + (s.job ? ' (' + s.job + ')' : '');
   else if (dataset === 'bills') label = [s.billNumber, s.title].filter(Boolean).join(' ') + (s.job ? ' (' + s.job + ')' : '');
   else if (dataset === 'estimates') label = s.job ? 'Estimate on ' + s.job : '';
+  else if (dataset === 'tasks') label = (s.title || '') + (s.job ? ' (' + s.job + ')' : '');
   else if (dataset === 'leads') label = s.title || '';
   else label = s.name || '';
   label = String(label).trim();

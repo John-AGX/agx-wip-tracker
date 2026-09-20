@@ -62,6 +62,7 @@ const coMatch = require('./co-match');
 const poMatch = require('./po-match');
 const billMatch = require('./bill-match');
 const estimateMatch = require('./estimate-match');
+const taskMatch = require('./task-match');
 const coMoney = require('../money/change-order-totals');
 const { coNumberKey } = require('../job-financials');
 const { grantSubAccessForPO } = require('../po-sub-access');
@@ -115,7 +116,17 @@ const BILL_DATE_COLUMNS = { billDate: 'bill_date', dueDate: 'due_date' };
 // second lock — writable() could not apply any of them even if a correction of
 // that name ever appeared on a row. Do not add them.
 const ESTIMATE_FIELDS = { job: 1 };
-const DATASET_KINDS = ['jobs', 'leads', 'clients', 'changeOrders', 'purchaseOrders', 'bills', 'estimates'];
+// A TASK's writable CORRECTIONS, and all three are FILLS. The matcher emits a
+// correction ONLY where P86 holds nothing at all — no notes, no due date, no
+// assignee — so applying one destroys nothing a person wrote. Every value that
+// would REPLACE something P86 already holds is a held-back item instead, and
+// 'status' and 'title' are deliberately ABSENT from this table for the same
+// reason 'amount' is absent from BILL_FIELDS: it is the second lock, so
+// writable() could not apply either one even if a correction of that name ever
+// appeared on a row. Completing a task and re-titling it are both ticked by
+// name or they do not happen. Do not add them.
+const TASK_FIELDS = { notes: 1, dueDate: 1, assignee: 1 };
+const DATASET_KINDS = ['jobs', 'leads', 'clients', 'changeOrders', 'purchaseOrders', 'bills', 'estimates', 'tasks'];
 
 function isSafeCorrection(kind, c) {
   return kind === 'jobs' && c.field === 'startDate' && c.kind === 'fill';
@@ -131,6 +142,7 @@ function writable(kind, row, mode, fields) {
     : kind === 'purchaseOrders' ? PO_FIELDS
     : kind === 'bills' ? BILL_FIELDS
     : kind === 'estimates' ? ESTIMATE_FIELDS
+    : kind === 'tasks' ? TASK_FIELDS
     : kind === 'clients' ? CLIENT_COLUMNS
     : Object.assign({ salesperson: 1, client: 1 }, LEAD_FIELD_COLUMNS);
   const pick = fields ? new Set(fields) : null;
@@ -167,6 +179,20 @@ function pickedHeldBack(kind, row, mode, fields) {
   // estimate to be applied to.
   if (kind === 'estimates') return (row.heldBack || []).filter((h) => h.applicable === true
     && (h.field === 'lines' || h.field === 'title') && fields.indexOf(h.field) !== -1);
+  // A TASK has no money on it, and everything here reaches a write on exactly
+  // the same terms anyway — out of safe mode, and out of an "apply everything"
+  // press that names no fields at all. What is at stake instead is a
+  // COMMITMENT:
+  //   status  — COMPLETING a task. It leaves every open list and comes off the
+  //             person's My Day, and somebody may have been about to do it.
+  //   title   — the rung-1 MATCH KEY, offered only where P86 holds none.
+  //   notes,  — a REPLACEMENT for something P86 already holds. The matcher
+  //   dueDate   marks these applicable only on a task the sync itself wrote and
+  //             nobody has edited since; applyTask re-proves that against the
+  //             LOCKED row before writing either.
+  if (kind === 'tasks') return (row.heldBack || []).filter((h) => h.applicable === true
+    && (h.field === 'status' || h.field === 'title' || h.field === 'notes' || h.field === 'dueDate')
+    && fields.indexOf(h.field) !== -1);
   const allowed = kind === 'jobs' ? { jobNumber: 1 } : kind === 'clients' ? CLIENT_COLUMNS : LEAD_REVENUE_COLUMNS;
   const pick = new Set(fields);
   return (row.heldBack || []).filter((h) => h.applicable === true && allowed[h.field] && pick.has(h.field));
@@ -1075,6 +1101,226 @@ async function createEstimate(db, orgId, row, user) {
   return { created: id, notes };
 }
 
+// ── tasks ────────────────────────────────────────────────────────────────
+// A Buildertrend to-do becomes a Project 86 ORG TASK on the job its
+// Buildertrend job is linked to. NO MONEY IS INVOLVED — nothing here touches a
+// contract, a cost, a price or a payable.
+//
+// Org-scoped in the SAME SQL LITERAL as the read, three times over: the task's
+// own organization_id, its JOB's, and (on the assignee) the user's. There is no
+// tolerance arm, because tasks.organization_id is NOT NULL: the `OR ... IS
+// NULL` arm the job-scoped tables carry would be a door with nothing behind it.
+//
+// The same two exclusions the preview read carries, repeated here because this
+// is the LOCK and a lock that trusts an earlier SELECT is not a lock:
+//   * scope = 'org'      — a private To-do is its owner's and is never touched;
+//   * service_ticket_id IS NULL — a WORK-ORDER BUILDING is not a to-do. Marking
+//     one done moves its TICKET, through services/service-ticket-subtask-door.js
+//     and work-order.recountTicket, which a plain UPDATE from here would walk
+//     straight past. It is unreachable from this module by construction.
+async function lockedTask(db, orgId, taskId, btJobId) {
+  await db.query('SELECT id FROM tasks WHERE id = $1 FOR UPDATE', [taskId]);
+  const cur = await db.query(
+    'SELECT t.id, t.title, t.notes, t.status, t.due_date, t.completed_at, t.archived_at, t.assignee_user_id, '
+    + 't.entity_id AS job_id, t.bt_task_id, t.bt_task_status, t.bt_synced_at, t.updated_at '
+    + 'FROM tasks t JOIN jobs j ON j.id = t.entity_id '
+    + 'WHERE t.id = $1 AND t.organization_id = $2 AND j.organization_id = $2 AND j.bt_job_id = $3 AND j.bt_archived_at IS NULL '
+    + "AND t.entity_type = 'job' AND t.scope = 'org' AND t.service_ticket_id IS NULL",
+    [taskId, orgId, btJobId]);
+  return cur.rows[0] || null;
+}
+
+async function taskLinkedElsewhere(db, orgId, btId, exceptId) {
+  const taken = await db.query(
+    'SELECT id FROM tasks WHERE organization_id = $1 AND bt_task_id = $2 AND id <> $3', [orgId, btId, exceptId || '']);
+  return taken.rows.length > 0;
+}
+
+// An ACTIVE user of THIS organisation, or nothing. assignee_user_id is a real
+// foreign key, and the FK alone proves only that a user EXISTS — never whose
+// they are. The only door from a proposal's assignee id to a real person.
+async function userOfOrg(db, orgId, userId) {
+  const n = Number(userId);
+  if (!Number.isInteger(n)) return null;
+  const r = await db.query('SELECT id, name FROM users WHERE id = $1 AND organization_id = $2 AND active = true', [n, orgId]);
+  return r.rows[0] || null;
+}
+
+const taskDay = (v) => (taskMatch.dayKey(v) || null);
+const blankText = (v) => v == null || String(v).trim() === '';
+
+async function applyTask(db, orgId, row, mode, fields) {
+  const btId = norm(row.bt.btId);
+  const task = await lockedTask(db, orgId, row.p86.id, norm(row.bt.jobId));
+  if (!task) return { skipped: 'The P86 task is no longer an org task on the job linked to this Buildertrend job.' };
+  const linkedTo = norm(task.bt_task_id);
+  if (linkedTo && linkedTo !== btId) return { skipped: 'This P86 task is already linked to a different Buildertrend task.' };
+  if (await taskLinkedElsewhere(db, orgId, btId, task.id)) return { skipped: 'Another P86 task is already linked to this Buildertrend task.' };
+
+  // BOTH GUARDS RE-DECIDED FROM THE LOCKED ROW, through the matcher's own
+  // functions so the sentence a person read and the refusal enforced here
+  // cannot drift apart. The preview may be minutes old; a task can be finished,
+  // archived or edited inside that window.
+  const view = taskMatch.p86TaskView(task);
+  const locked = taskMatch.lockOf(view);
+  const edited = taskMatch.personEdited(view);
+  const settledWord = view.archived ? 'the task is archived in P86' : 'the task is done in P86';
+
+  let title = task.title;
+  let notes = task.notes;
+  let dueDate = taskDay(task.due_date);
+  let assignee = task.assignee_user_id == null ? null : task.assignee_user_id;
+  let status = task.status;
+  let completedAt = task.completed_at || null;
+  const applied = [];
+  const stale = [];
+
+  // THE FILLS. writable() can only ever hand back a fill here (see TASK_FIELDS),
+  // and each re-check below is what makes that true against the LOCKED row
+  // rather than against the preview.
+  for (const c of writable('tasks', row, mode, fields)) {
+    if (locked) { stale.push((c.label || c.field) + ' — ' + settledWord); continue; }
+    if (c.field === 'notes') {
+      if (!blankText(notes)) { stale.push('Notes — P86 has notes now'); continue; }
+      notes = String(c.to).slice(0, 5000);
+      applied.push({ field: 'notes', from: '', to: notes });
+    } else if (c.field === 'dueDate') {
+      if (dueDate) { stale.push('Due date — P86 has one now'); continue; }
+      const next = match.dateKey(c.to) || null;
+      if (!next) { stale.push(c.label || c.field); continue; }
+      dueDate = next;
+      applied.push({ field: 'dueDate', from: '', to: next });
+    } else if (c.field === 'assignee') {
+      if (assignee != null) { stale.push('Assignee — P86 has one now'); continue; }
+      const u = await userOfOrg(db, orgId, c.value);
+      if (!u) { stale.push('Assignee — not an active user of this organisation'); continue; }
+      assignee = u.id;
+      applied.push({ field: 'assignee', from: '', to: u.name });
+    }
+  }
+
+  // THE COMMITMENT — only what the request named by field.
+  for (const h of pickedHeldBack('tasks', row, mode, fields)) {
+    if (locked) { stale.push((h.label || h.field) + ' — ' + settledWord); continue; }
+    if (h.field === 'status') {
+      // FORWARD ONLY, and forward means DONE. A sync never re-opens a task.
+      // isCompleted is re-read here and nothing else is: Buildertrend's status
+      // word does not decide this and must never be able to.
+      if (status === 'done') { stale.push('Completed — P86 already has it done'); continue; }
+      if (taskMatch.btTaskStatus(row.bt.isCompleted) !== 'done') { stale.push('Completed — Buildertrend no longer has this task done'); continue; }
+      status = 'done';
+      // The day Buildertrend recorded, or today the way P86's own task form
+      // stamps it (routes/tasks-routes.js). completed_at and status are
+      // bookkeeping for each other on this table and a done task with no
+      // completion date would be a row P86's own doors never write.
+      completedAt = match.dateKey(row.bt.completedAt) || new Date().toISOString();
+      applied.push({ field: 'status', from: task.status, to: 'done' });
+    } else if (h.field === 'title') {
+      if (norm(title) !== norm(h.p86Value)) { stale.push(h.label || h.field); continue; }
+      const next = norm(h.value).slice(0, 500);
+      if (!next) { stale.push(h.label || h.field); continue; }
+      title = next;
+      applied.push({ field: 'title', from: h.p86, to: next });
+    } else if (h.field === 'notes') {
+      if (edited) { stale.push('Notes — a person has written on this task since the sync last wrote it'); continue; }
+      if (norm(notes) !== norm(h.p86Value)) { stale.push(h.label || h.field); continue; }
+      notes = String(h.value).slice(0, 5000);
+      applied.push({ field: 'notes', from: h.p86, to: notes });
+    } else if (h.field === 'dueDate') {
+      if (edited) { stale.push('Due date — a person has changed this task since the sync last wrote it'); continue; }
+      if (taskMatch.dayKey(dueDate) !== taskMatch.dayKey(h.p86Value)) { stale.push(h.label || h.field); continue; }
+      const next = match.dateKey(h.value) || null;
+      if (!next) { stale.push(h.label || h.field); continue; }
+      dueDate = next;
+      applied.push({ field: 'dueDate', from: h.p86, to: next });
+    }
+  }
+
+  // BUILDERTREND'S OWN STATUS WORD, beside the task and never as one. A BLANK
+  // never erases what P86 holds (the standing rule), so this only ever writes a
+  // word Buildertrend actually sent.
+  const word = btStatusText(row.bt.statusText);
+  const wordDue = !!word && norm(task.bt_task_status) !== word;
+  const wasLinked = linkedTo === btId;
+  if (!applied.length && wasLinked && !wordDue) return { unchanged: true, stale };
+
+  // bt_synced_at IS REFRESHED, NEVER MINTED, and that is the whole of what
+  // keeps a person's words theirs. It is non-null on exactly the tasks this
+  // sync CREATED (createTask stamps it). A task a person wrote and the sync
+  // merely matched or linked keeps NULL there for good, so personEdited()
+  // answers "a person's" on it for good and no differing value on it is ever
+  // applicable. Setting it here unconditionally would hand the sync ownership
+  // of a task it had only ever filled one blank field on.
+  await db.query(
+    `UPDATE tasks SET title = $1, notes = $2, due_date = $3, assignee_user_id = $4, status = $5, completed_at = $6,
+       bt_task_id = $7, bt_task_status = $8,
+       bt_synced_at = CASE WHEN bt_synced_at IS NULL THEN NULL ELSE NOW() END, updated_at = NOW()
+     WHERE id = $9 AND organization_id = $10`,
+    [title, notes, dueDate, assignee, status, completedAt, btId, wordDue ? word : task.bt_task_status, task.id, orgId]);
+  return { applied, linked: !wasLinked, stale, btStatus: wordDue };
+}
+
+async function createTask(db, orgId, row, user) {
+  const bt = row.bt;
+  const btId = norm(bt.btId);
+  const job = await db.query('SELECT id FROM jobs WHERE organization_id = $1 AND bt_job_id = $2 AND bt_archived_at IS NULL', [orgId, norm(bt.jobId)]);
+  if (job.rows.length !== 1) return { skipped: 'Its Buildertrend job is not linked to a P86 job.' };
+  const jobId = job.rows[0].id;
+  if (await taskLinkedElsewhere(db, orgId, btId, null)) return { skipped: 'A P86 task is already linked to this Buildertrend task.' };
+
+  const title = match.isBtBlank(bt.title) ? '' : norm(bt.title).slice(0, 500);
+  if (!title) return { skipped: 'Buildertrend sent this task without a title, and a P86 task must have one, so it is not created.' };
+  const notes = [];
+
+  // COMPLETION FROM isCompleted, NEVER FROM status. See field-map.js: the two
+  // disagree on the live dataset and status is describing the Buildertrend
+  // to-do LIST. A flag that is neither true nor false is not an answer, so the
+  // task is created OPEN and the row says so rather than guessing DONE.
+  const want = taskMatch.btTaskStatus(bt.isCompleted);
+  const status = want === 'done' ? 'done' : 'open';
+  if (want == null) {
+    notes.push('Buildertrend’s completion flag on this task is not true or false, so it was created open. Its status word "'
+      + (match.isBtBlank(bt.statusText) ? 'blank' : norm(bt.statusText)) + '" is not completion and is never read as one.');
+  }
+  const completedDay = match.dateKey(bt.completedAt);
+  let completedAt = null;
+  if (status === 'done') {
+    completedAt = completedDay || new Date().toISOString();
+    if (!completedDay) notes.push('Buildertrend has this task finished but recorded no completion date, so P86 stamped today’s, as its own task form does.');
+  }
+
+  // THE ASSIGNEE — exactly one active user of THIS organisation, read in a
+  // statement carrying this organisation, or NOBODY. An unassigned task is
+  // honest; a wrongly assigned one is a commitment put on somebody who does not
+  // know they have it.
+  const users = (await db.query('SELECT id, name FROM users WHERE organization_id = $1 AND active = true', [orgId])).rows;
+  const ra = taskMatch.resolveAssignee(users, bt.assignedUsers);
+  if (ra.why) notes.push(ra.why);
+
+  const word = btStatusText(bt.statusText);
+  if (word) {
+    notes.push('Buildertrend calls this to-do “' + word + '”. That word is recorded beside the task (never as its status) — it describes the Buildertrend to-do list, not whether the task is finished.');
+  }
+
+  const id = genId('task_');
+  // ORG TASK, stamped from the JOB'S organisation and not the request's, linked
+  // to its job through the POLYMORPHIC entity_type/entity_id pair exactly as
+  // routes/tasks-routes.js writes it. kind 'todo' and priority 'normal' are
+  // P86's own defaults, stated rather than left to the column: Buildertrend
+  // sends neither, and a sync does not invent a punch item or an urgent one.
+  // service_ticket_id is NEVER set — an imported to-do is not a work-order
+  // building. scope 'org' is a literal, so no input can make one private.
+  await db.query(
+    'INSERT INTO tasks (id, organization_id, title, notes, kind, status, priority, due_date, assignee_user_id, created_by, '
+    + 'entity_type, entity_id, scope, completed_at, bt_task_id, bt_task_status, bt_synced_at) '
+    + "VALUES ($1, (SELECT organization_id FROM jobs WHERE id = $2), $3, $4, 'todo', $5, 'normal', $6, $7, $8, "
+    + "'job', $2, 'org', $9, $10, $11, NOW())",
+    [id, jobId, title, match.isBtBlank(bt.notes) ? null : String(bt.notes).slice(0, 5000), status,
+      match.dateKey(bt.dueDate) || null, ra.user ? ra.user.id : null,
+      user && user.id != null ? user.id : null, completedAt, btId, word || null]);
+  return { created: id, notes };
+}
+
 // ── leads ────────────────────────────────────────────────────────────────
 async function applyLead(db, orgId, row, mode, fields) {
   const btId = norm(row.bt.btId);
@@ -1371,6 +1617,7 @@ async function createRecords(org, kind, rows, input, deps) {
         : kind === 'purchaseOrders' ? await createPurchaseOrder(client, org.id, row, deps.user)
         : kind === 'bills' ? await createBill(client, org.id, row, deps.user)
         : kind === 'estimates' ? await createEstimate(client, org.id, row, deps.user)
+        : kind === 'tasks' ? await createTask(client, org.id, row, deps.user)
         : kind === 'clients' ? await createClient(client, org.id, row)
         : await createLead(client, org.id, row, deps.user);
       await client.query('COMMIT');
@@ -1417,7 +1664,7 @@ async function linkRecord(org, kind, rows, input, deps) {
   const skip = (reason) => ({ status: 200, body: { dataset: kind, mode: 'link', counts: { linked: 0, skipped: 1 }, results: [Object.assign(base, { outcome: 'skipped', reason })] } });
   if (row.class === 'matched' || row.class === 'conflict') return skip('This Buildertrend record already has a confident P86 match.');
   if (listed.indexOf(String(input.p86Id)) === -1) return skip('That P86 record is not one of the candidates listed for this Buildertrend record.');
-  if (kind === 'changeOrders' || kind === 'purchaseOrders' || kind === 'bills' || kind === 'estimates') return linkDetail(kind, org, row, input, deps, base, skip);
+  if (kind === 'changeOrders' || kind === 'purchaseOrders' || kind === 'bills' || kind === 'estimates' || kind === 'tasks') return linkDetail(kind, org, row, input, deps, base, skip);
   const [table, col] = LINK_TABLE[kind];
   const client = await deps.pool.connect();
   try {
@@ -1449,11 +1696,12 @@ async function linkRecord(org, kind, rows, input, deps) {
 // A change order, purchase order or bill is linked only on the P86 job its
 // Buildertrend job is linked to. The link writes the Buildertrend id and
 // NOTHING else — no money, no status.
-const DETAIL_NOUN = { changeOrders: 'change order', purchaseOrders: 'purchase order', bills: 'bill', estimates: 'estimate' };
+const DETAIL_NOUN = { changeOrders: 'change order', purchaseOrders: 'purchase order', bills: 'bill', estimates: 'estimate', tasks: 'task' };
 async function linkDetail(kind, org, row, input, deps, base, skip) {
   const co = kind === 'changeOrders';
   const bill = kind === 'bills';
   const est = kind === 'estimates';
+  const task = kind === 'tasks';
   const noun = DETAIL_NOUN[kind];
   const client = await deps.pool.connect();
   try {
@@ -1466,13 +1714,18 @@ async function linkDetail(kind, org, row, input, deps, base, skip) {
       // loose arm of lockedEstimate) is deliberately out of reach here: it is not
       // a candidate, so nothing can name it.
       : est ? await lockedEstimate(client, org.id, input.p86Id, norm(row.bt.jobId), null)
+      // A task is reached through its job like the other four, and its
+      // entity_id IS that job (lockedTask pins entity_type = 'job' and aliases
+      // it), so the rec.job_id check below is the same check it is for a bill.
+      : task ? await lockedTask(client, org.id, input.p86Id, norm(row.bt.jobId))
       : await lockedPurchaseOrder(client, org.id, input.p86Id, norm(row.bt.jobId));
     if (!rec || !row.job || rec.job_id !== row.job.id) { await client.query('ROLLBACK'); return skip('That P86 ' + noun + ' is not on the job linked to this Buildertrend job.'); }
-    const current = norm(co ? rec.bt_co_id : bill ? rec.bt_bill_id : est ? rec.bt_worksheet_id : rec.bt_po_id);
+    const current = norm(co ? rec.bt_co_id : bill ? rec.bt_bill_id : est ? rec.bt_worksheet_id : task ? rec.bt_task_id : rec.bt_po_id);
     if (current && current !== base.btId) { await client.query('ROLLBACK'); return skip('That P86 ' + noun + ' is already linked to a different Buildertrend ' + noun + '.'); }
     const elsewhere = co ? await coLinkedElsewhere(client, org.id, base.btId, rec.id)
       : bill ? await billLinkedElsewhere(client, org.id, base.btId, rec.id)
       : est ? await estimateLinkedElsewhere(client, org.id, base.btId, rec.id)
+      : task ? await taskLinkedElsewhere(client, org.id, base.btId, rec.id)
       : await poLinkedElsewhere(client, org.id, base.btId, rec.id);
     if (elsewhere) {
       await client.query('ROLLBACK'); return skip('Another P86 ' + noun + ' is already linked to this Buildertrend ' + noun + '.');
@@ -1480,12 +1733,24 @@ async function linkDetail(kind, org, row, input, deps, base, skip) {
     if (co) await client.query('UPDATE job_change_orders SET bt_co_id = $1 WHERE id = $2 AND job_id IN (SELECT id FROM jobs WHERE organization_id = $3)', [base.btId, rec.id, org.id]);
     else if (bill) await client.query('UPDATE job_vendor_bills SET bt_bill_id = $1, updated_at = NOW() WHERE id = $2 AND job_id IN (SELECT id FROM jobs WHERE organization_id = $3)', [base.btId, rec.id, org.id]);
     else if (est) await client.query('UPDATE estimates SET bt_worksheet_id = $1 WHERE id = $2 AND attached_job_id IN (SELECT id FROM jobs WHERE organization_id = $3)', [base.btId, rec.id, org.id]);
+    // THE LINK, AND NOTHING ELSE. bt_synced_at is deliberately NOT stamped: a
+    // task a person wrote stays a person's, and a link is not the sync writing
+    // its content. That NULL is what makes personEdited() refuse to overwrite
+    // this task's notes or due date for as long as it exists.
+    else if (task) await client.query('UPDATE tasks SET bt_task_id = $1, updated_at = NOW() WHERE id = $2 AND organization_id = $3', [base.btId, rec.id, org.id]);
     else await client.query('UPDATE job_purchase_orders SET bt_po_id = $1 WHERE id = $2 AND job_id IN (SELECT id FROM jobs WHERE organization_id = $3)', [base.btId, rec.id, org.id]);
     // A linked change order learns Buildertrend's current word for it (C2).
     const nextCoBt = co ? withBtStatus(parseData(rec.data), btStatusText(row.bt.statusText)) : null;
     if (nextCoBt) {
       await client.query('UPDATE job_change_orders SET data = $1::jsonb, updated_at = NOW() WHERE id = $2 AND job_id IN (SELECT id FROM jobs WHERE organization_id = $3)',
         [JSON.stringify(nextCoBt), rec.id, org.id]);
+    }
+    // A linked task learns Buildertrend's own WORD for its to-do list, on its
+    // own column and nothing else: tasks.status is not touched here, and a
+    // Buildertrend blank never erases what P86 holds.
+    const taskWord = task ? btStatusText(row.bt.statusText) : '';
+    if (task && taskWord && norm(rec.bt_task_status) !== taskWord) {
+      await client.query('UPDATE tasks SET bt_task_status = $1, updated_at = NOW() WHERE id = $2 AND organization_id = $3', [taskWord, rec.id, org.id]);
     }
     await client.query('COMMIT');
   } catch (e) {
@@ -1497,7 +1762,7 @@ async function linkDetail(kind, org, row, input, deps, base, skip) {
   // Committed and released: a linked PO that is already active with a sub of
   // this organization gets that sub access, as its next save on the PO page would.
   const linked = Object.assign(base, { outcome: 'linked', linked: true });
-  if (!co && !bill && !est && await grantPoSubAccessAfterCommit(deps.pool, org.id, input.p86Id, deps.user)) linked.subAccess = true;
+  if (kind === 'purchaseOrders' && await grantPoSubAccessAfterCommit(deps.pool, org.id, input.p86Id, deps.user)) linked.subAccess = true;
   if (preview.forgetFetch) preview.forgetFetch(org.id);
   return { status: 200, body: { dataset: kind, mode: 'link', counts: Object.assign({ linked: 1 }, linked.subAccess ? { subAccess: 1 } : {}), results: [linked] } };
 }
@@ -1553,6 +1818,7 @@ async function apply(org, input, deps) {
         : kind === 'purchaseOrders' ? await applyPurchaseOrder(client, org.id, row, mode, input.fields)
         : kind === 'bills' ? await applyBill(client, org.id, row, mode, input.fields)
         : kind === 'estimates' ? await applyEstimate(client, org.id, row, mode, input.fields)
+        : kind === 'tasks' ? await applyTask(client, org.id, row, mode, input.fields)
         : kind === 'clients' ? await applyClient(client, org.id, row, mode, input.fields)
         : await applyLead(client, org.id, row, mode, input.fields);
       await client.query('COMMIT');
@@ -1596,7 +1862,7 @@ async function apply(org, input, deps) {
 function parseInput(body) {
   const b = body || {};
   const dataset = b.dataset;
-  if (DATASET_KINDS.indexOf(dataset) === -1) return { error: 'dataset must be "jobs", "leads", "clients", "changeOrders", "purchaseOrders", "bills" or "estimates".' };
+  if (DATASET_KINDS.indexOf(dataset) === -1) return { error: 'dataset must be "jobs", "leads", "clients", "changeOrders", "purchaseOrders", "bills", "estimates" or "tasks".' };
   if (b.mode === 'link') {
     const btId = (typeof b.btId === 'string' || typeof b.btId === 'number') ? String(b.btId).trim() : '';
     const p86Id = (typeof b.p86Id === 'string' || typeof b.p86Id === 'number') ? String(b.p86Id).trim() : '';
@@ -1745,7 +2011,7 @@ async function handle(req, res, deps) {
     if (out.status === 200) {
       auditLog(req, {
         action: input.mode === 'create' ? 'buildertrend.create' : input.mode === 'link' ? 'buildertrend.link' : 'buildertrend.apply',
-        targetType: input.dataset === 'jobs' ? 'job' : input.dataset === 'clients' ? 'client' : input.dataset === 'changeOrders' ? 'change_order' : input.dataset === 'purchaseOrders' ? 'purchase_order' : input.dataset === 'bills' ? 'bill' : input.dataset === 'estimates' ? 'estimate' : 'lead',
+        targetType: input.dataset === 'jobs' ? 'job' : input.dataset === 'clients' ? 'client' : input.dataset === 'changeOrders' ? 'change_order' : input.dataset === 'purchaseOrders' ? 'purchase_order' : input.dataset === 'bills' ? 'bill' : input.dataset === 'estimates' ? 'estimate' : input.dataset === 'tasks' ? 'task' : 'lead',
         targetId: input.mode === 'safe' ? 'safe updates' : input.mode === 'create' && !input.btIds.length ? 'bulk create' : String(input.btIds.length) + ' records',
         organizationId: org.id,
         detail: { mode: input.mode, counts: out.body.counts,

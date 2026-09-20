@@ -443,6 +443,25 @@ const FULL_LEDGER = {
     why: 'Label resolution for a draft line: the titles of ids the draft already names, read by id. A building named in a draft still needs its name shown.',
     check: pinnedReads('the label read'),
   },
+  'server/services/clickr/sync-preview.js': {
+    kind: 'general',
+    why: 'The P86 side of the Buildertrend preview: the org tasks a Buildertrend task could be. It is a LIST, so it subtracts the buildings — Buildertrend has no building rows, and matching one on a task title would land a Buildertrend to-do on a punch-list item.',
+    check(src) {
+      const problems = [];
+      const reads = readStatements(src).filter(function (r) { return /FROM tasks/i.test(r); });
+      if (!reads.length) return ['the tasks read was not found'];
+      reads.forEach(function (stmt, i) {
+        if (stmt.indexOf("entity_type = 'job'") < 0) problems.push('tasks read #' + (i + 1) + ' no longer pins entity_type to job');
+        if (stmt.indexOf("scope = 'org'") < 0) problems.push('tasks read #' + (i + 1) + ' no longer pins scope to org');
+      });
+      return problems;
+    },
+  },
+  'server/services/clickr/sync-apply.js': {
+    kind: 'ticket-scoped',
+    why: 'Re-reads the ONE task it is about to write, by id, under the same lock as the write, and carries the same three predicates the preview list does so a building cannot be the row even by id. It never lists tasks.',
+    check: pinnedReads('the task re-read'),
+  },
   'server/services/org-reset.js': {
     kind: 'ticket-scoped',
     sweep: 'the tenant wipe: an org-wide count and DELETE, not a list anybody reads',
@@ -518,6 +537,7 @@ describe('the task-read census', () => {
     const readers = FILES.filter((f) => READS_TASKS.test(f.src)).map((f) => f.rel);
     expect(readers).toEqual(expect.arrayContaining([
       'server/reminders-cron.js', 'server/routes/ai-routes.js', 'server/routes/tasks-routes.js',
+      'server/services/clickr/sync-preview.js',
       'server/routes/service-ticket-routes.js', 'server/services/service-ticket-subtask-door.js',
       'server/services/work-order-attention.js', 'server/services/org-reset.js',
     ]));
@@ -541,6 +561,8 @@ describe('the task-read census', () => {
     const general = Object.entries(FULL_LEDGER).filter(([, e]) => e.kind === 'general').map(([f]) => f).sort();
     expect(general).toEqual([
       'server/reminders-cron.js', 'server/routes/ai-routes.js', 'server/routes/tasks-routes.js',
+      // The Buildertrend preview's P86 side is a task LIST too, from 1.40.
+      'server/services/clickr/sync-preview.js',
     ]);
     for (const file of general) expect([file, excludes(sourceOf(file))]).toEqual([file, true]);
   });

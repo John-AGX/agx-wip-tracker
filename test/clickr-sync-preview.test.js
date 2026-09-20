@@ -2043,9 +2043,11 @@ describe('OVERVIEW — js/bt-sync-preview.js', () => {
   vm.runInNewContext(src, { window: win, document: {}, console });
   const T = win.p86BtSyncPreview._test;
 
-  const KEYS = ['jobs', 'leads', 'clients', 'changeOrders', 'purchaseOrders', 'bills', 'estimates'];
+  // Every dataset the server returns — the page flags one it expected and did
+  // not receive, so a fixture short of PREVIEW_KINDS reads as a failed dataset.
+  const KEYS = ['jobs', 'leads', 'clients', 'changeOrders', 'purchaseOrders', 'bills', 'estimates', 'tasks'];
   const LABELS = { jobs: 'Jobs', leads: 'Leads', clients: 'Clients', changeOrders: 'Change orders',
-    purchaseOrders: 'Purchase orders', bills: 'Bills', estimates: 'Estimates' };
+    purchaseOrders: 'Purchase orders', bills: 'Bills', estimates: 'Estimates', tasks: 'Tasks' };
 
   const mapping = (o) => Object.assign({ recordCount: 1, requiredKey: 'k', requiredNonEmpty: 1, requiredUsable: 1,
     requiredOk: true, refusal: null, fields: [{ key: 'k', carriedBy: 1, nonEmpty: 1, required: true }],
@@ -2113,8 +2115,8 @@ describe('OVERVIEW — js/bt-sync-preview.js', () => {
       ['id:902', 1, 'decide'],   // one CO behind a job nobody can pick
       ['', 1, 'unnamed'],        // a bill that names no job at all
     ]);
-    expect(list[0].counts).toEqual({ changeOrders: 1, purchaseOrders: 2, bills: 0, estimates: 4 });
-    expect(list[1].counts).toEqual({ changeOrders: 3, purchaseOrders: 2, bills: 1, estimates: 0 });
+    expect(list[0].counts).toEqual({ changeOrders: 1, purchaseOrders: 2, bills: 0, estimates: 4, tasks: 0 });
+    expect(list[1].counts).toEqual({ changeOrders: 3, purchaseOrders: 2, bills: 1, estimates: 0, tasks: 0 });
     expect(T.blockerSummary(list)).toEqual({
       create: { jobs: 1, blocked: 7 },
       link: { jobs: 1, blocked: 6 },
@@ -2431,5 +2433,36 @@ describe('OVERVIEW — js/bt-sync-preview.js', () => {
     expect(html).toContain('&lt;img src=x');
     expect(html).not.toMatch(/<img/i);
     expect(html).not.toMatch(/onerror="/);
+  });
+});
+
+// ── the Overview and the tabs walk the SAME datasets ──────────────────────
+// A dataset the server returns but the Overview does not walk is a count that
+// disagrees with the rows it claims to reach: the tab shows them, the Overview
+// never counts them, and the chain under-ranks the jobs blocking them. This
+// happened once already — tasks shipped while DS_ORDER still named seven
+// datasets, and tasks span 64 Buildertrend jobs.
+describe('the Overview walks every dataset the server returns', () => {
+  const win = {};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'js', 'bt-sync-preview.js'), 'utf8'),
+    { window: win, document: {}, console });
+  const T = win.p86BtSyncPreview._test;
+
+  test('DS_ORDER is exactly PREVIEW_KINDS, in the server order', () => {
+    expect(T.DS_ORDER).toEqual(preview.PREVIEW_KINDS);
+  });
+
+  test('every WAIT_KIND is a dataset the server returns', () => {
+    expect(T.WAIT_KINDS.length).toBeGreaterThan(0);
+    for (const k of T.WAIT_KINDS) expect(preview.PREVIEW_KINDS).toContain(k);
+  });
+
+  test('every dataset has a tab, and every tab but Overview and Archive is a dataset', () => {
+    const tabKeys = T.TABS.map((t) => t[0]);
+    for (const k of preview.PREVIEW_KINDS) expect(tabKeys).toContain(k);
+    for (const k of tabKeys) {
+      if (k === 'overview' || k === 'archive') continue;
+      expect(preview.PREVIEW_KINDS).toContain(k);
+    }
   });
 });

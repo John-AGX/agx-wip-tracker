@@ -48,9 +48,18 @@ const { summarize, RULE } = scout;
 const BASE = 'https://api.clickr.cloud';
 const KEY = 'clickr_live_scoutkey_0123456789abcdef';
 
-// The real Tasks dataset id (578 records in Clickr, declared nowhere): the
-// question this tool was built for.
-const DS_MAIN = '6aa5da9184f8135cf0cc6327';
+// AN UNDECLARED DATASET — the question this tool was built for, and the whole
+// point of the assertions below is that field-map.js does NOT know it.
+//
+// This used to be the REAL Tasks dataset id (6aa5da9184f8135cf0cc6327), because
+// at the time that dataset was declared nowhere. The scout was then pointed at
+// it, measured all 578 records, and the measurement is what DATASETS.tasks was
+// written from — so the id stopped being undeclared and this fixture stopped
+// being about the thing it names. Holding it as a literal here would have made
+// this suite go red every time the tool did its job, which is the wrong
+// incentive: the fixture is now a made-up id, and the DECLARED side of the same
+// rule is covered by DS_DECLARED below.
+const DS_MAIN = 'dd11ee22ff334455aabbccdd';
 const DS_SMALL = 'aa11bb22cc33dd44ee55ff66';
 const DS_PARTIAL = 'bb11cc22dd33ee44ff556677';
 const DS_DECLARED = DATASETS.jobs.datasetId;

@@ -526,9 +526,21 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.39';
+const APP_VERSION = '1.40';
 
 const releases = [
+  {
+    version: '1.40',
+    date: '2026-09-20',
+    name: 'Buildertrend to-dos',
+    summary: 'The eighth Buildertrend dataset. A Buildertrend to-do becomes a Project 86 org task on the job it belongs to — and the sync reads the completion flag that Buildertrend’s own data backs up, not the one that disagrees with it.',
+    changes: [
+      { type: 'new', text: 'Tasks are read from Buildertrend and offered on their own tab: 578 to-dos across 64 jobs. Each one is matched to a Project 86 task first by a Buildertrend id already saved on it, then by its job and title. A to-do whose Buildertrend job is not linked to a Project 86 job waits for that job rather than failing, and two Project 86 tasks that could both be the row are refused rather than guessed between. No money is involved anywhere in this dataset.' },
+      { type: 'new', text: 'Completion is read from the flag the data actually supports. Buildertrend carries two answers that disagree — one says 88 of the 578 are finished, the other says 544 — and only the first is backed by a completion date, carried by exactly those 88. So 490 of these are open work, not history, and the second answer is recorded as Buildertrend’s own word without ever being read as completion. Nothing maps onto In progress or Blocked, because Buildertrend has no word for either.' },
+      { type: 'improved', text: 'A person’s work is never overwritten. A task somebody edited, completed or archived in Project 86 is not rewritten by the sync, and a task the sync has never written is treated as theirs. A to-do already assigned to somebody is never re-assigned, and a Buildertrend name that matches nobody, matches two people, or names several people at once leaves the task unassigned and says so — an unassigned task is honest, a wrongly assigned one is worse than none.' },
+      { type: 'improved', text: 'Punch-list buildings stay out of it. A building on a work order is a task row, so the sync reads and writes tasks through the same exclusion every other task list uses, and a Buildertrend to-do can never land on one.' },
+    ],
+  },
   {
     version: '1.39',
     date: '2026-09-20',

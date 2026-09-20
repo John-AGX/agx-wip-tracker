@@ -252,6 +252,85 @@ const DATASETS = {
       'hasRelatedPurchaseOrder', 'dateAdded', 'isDeleted',
     ],
   },
+  // TASKS — Buildertrend's to-dos: 578 records over 64 jobs. UNLIKE bills and
+  // estimates, these key names were never a claim off a detail panel waiting to
+  // be settled. They are what services/clickr/scout.js MEASURED over a complete
+  // read of the live dataset on 2026-09-20 (fetched 578 of 578, 3 pages,
+  // complete). Every key below is carried by at least one record and nothing
+  // undeclared is carried at all. Clickr's record-detail panel lists eight
+  // fields; 'notes' (141 records) and 'dueDate' (128) are NOT among them and
+  // were found only by that measurement, which is the argument for measuring.
+  //
+  // THE ONE THING THIS ENTRY EXISTS TO SAY OUT LOUD:
+  // isCompleted AND status DISAGREE, AND ONLY isCompleted IS COMPLETION.
+  //
+  //     isCompleted   578 carried, 578 non-empty, 2 distinct: false 490, true 88
+  //     status        578 carried, 578 non-empty, 2 distinct: Completed 544, Pending 34
+  //     completedAt    88 carried,  88 non-empty, 3 distinct
+  //
+  // completedAt is carried by EXACTLY 88 records — the same 88 isCompleted
+  // calls done — so isCompleted is the per-task completion flag. 544
+  // "Completed" against 88 completions is not a task-level fact at all; it is
+  // almost certainly the state of the Buildertrend to-do LIST the task hangs
+  // on. (Three distinct completion dates across 88 tasks says the same thing
+  // from the other side: those 88 were closed on three days, in batches, which
+  // is what finishing a LIST looks like and not what 88 people finishing 88
+  // jobs looks like.) So the real split is 490 OPEN and 88 DONE.
+  //
+  // task-match.js therefore reads isCompleted and nothing else for completion,
+  // and carries Buildertrend's own status WORD across to tasks.bt_task_status —
+  // beside the P86 status, never as one. Reading status as completion instead
+  // would mark 456 open tasks finished in a single press. If a later
+  // measurement contradicts this, the measurement is what says so; this comment
+  // is not evidence.
+  tasks: {
+    key: 'tasks',
+    label: 'Tasks',
+    noun: 'task',
+    datasetId: '6aa5da9184f8135cf0cc6327',
+    // jobName, for the reason bills and estimates use it, plus one the
+    // measurement supplies.
+    //
+    // WHY: a task is matched ONLY inside the P86 job its Buildertrend job is
+    // linked to, and a record with no job is refused whatever else it carries —
+    // so a dataset that lost its job column is a dataset that classifies
+    // nothing, which is the condition this 95% guard exists to catch. jobName
+    // read usable on 578 of 578.
+    //
+    //   NOT taskId — it is the idKey. A required key that is the id asks only
+    //     "did Clickr send ids", which fetchDataset already dedupes on and
+    //     reports, and it would sit at 100% with every business field renamed
+    //     underneath it.
+    //   NOT jobId — the real matching key, but an opaque number. usableName
+    //     screens through isBtBlank, a TEXT blankness test that answers false
+    //     for every number, so a numeric key passes this guard VACUOUSLY and
+    //     proves nothing about the dataset. jobName is its human twin: it moves
+    //     when the job columns are renamed, and it is what the row prints.
+    //   NOT isCompleted — worse than vacuous, in the other direction.
+    //     scalarText() answers null for a boolean, so usableName would read 0
+    //     of 578 and REFUSE THE WHOLE DATASET over a key that is present and
+    //     correct on every record.
+    //   NOT status — it would pass at 578 of 578, and that is the trap. This
+    //     entry exists to warn that status is not what it looks like; making it
+    //     the dataset's admission test would stake 578 rows on the one field
+    //     nothing here is allowed to trust.
+    //   NOT title — the rung-2 match key, and a match key's job is to
+    //     discriminate rows, not to admit a dataset. It repeats heavily (153
+    //     distinct over 578) and a blank one must cost THAT ROW its rung, never
+    //     cost the tab its 578 rows.
+    requiredKey: 'jobName',
+    // THE TASK'S OWN id — 578 distinct over 578 records, which is what an
+    // identity looks like. fetchDataset dedupes the read on idKey and marks a
+    // read PARTIAL when one arrives twice, and a partial read blocks every
+    // apply, so keying on jobId (64 distinct) would make 578 tasks look like 64
+    // records arriving over and over and would block the tab outright.
+    idKey: 'taskId',
+    keys: [
+      'taskId', 'title', 'jobId', 'jobName',
+      'isCompleted', 'status', 'completedAt', 'dueDate',
+      'assignedUsers', 'notes',
+    ],
+  },
 };
 
 function isPlainObject(v) {
@@ -531,6 +610,54 @@ function readEstimateLine(rec) {
   };
 }
 
+// A Buildertrend TO-DO. Every key is read EXACTLY as declared in the registry
+// and never through a fallback of names (see the header of this file), so a key
+// Clickr renames reads as ABSENT here and shows itself in describeMapping —
+// never as a wrong value.
+function readTask(rec) {
+  const r = isPlainObject(rec) ? rec : {};
+  const assigned = scalarText(r.assignedUsers);
+  return {
+    btId: scalarText(r.taskId),
+    title: scalarText(r.title),
+    jobId: scalarText(r.jobId),
+    jobName: scalarText(r.jobName),
+    // THE COMPLETION FLAG, AND IT IS THREE-STATE ON PURPOSE.
+    //
+    // The live dataset sends booleans (490 false, 88 true) and `=== true` is
+    // the reading every other flag in this file uses. It is wrong here, because
+    // the answer it gives to a value that is NOT a boolean is "not done" — so a
+    // retyped or renamed field would report all 578 tasks open, quietly, with
+    // no diagnostic and no refusal, and the one dataset whose completion is
+    // already contested would have lost it in silence. true is done, false is
+    // open, and ANYTHING ELSE (absent, a string, a number) is null: Buildertrend
+    // did not say. task-match.js proposes no completion on a null and says why
+    // on the row.
+    isCompleted: r.isCompleted === true ? true : (r.isCompleted === false ? false : null),
+    // BUILDERTREND'S OWN STATUS WORD, WHICH IS NOT COMPLETION — see the registry
+    // entry for the measurement that settles that. Read through scalarText so a
+    // numeric code arrives as its own digits rather than as null, and carried
+    // across as a word (tasks.bt_task_status) beside the P86 status.
+    statusText: scalarText(r.status),
+    completedAt: scalarText(r.completedAt),
+    dueDate: scalarText(r.dueDate),
+    notes: scalarText(r.notes),
+    // ASSIGNED PEOPLE, PLURAL, and the plural is the whole difficulty: P86's
+    // assignee_user_id is one real foreign key to users(id). A LIST is read
+    // through names(), which takes the two shapes a Clickr list arrives in
+    // (plain strings, or objects carrying a name) and nothing else.
+    //
+    // A BARE STRING IS ONE NAME AND IS NEVER SPLIT. No comma, no slash, no
+    // semicolon: "Ruiz, Ana" is one person, and splitting on a delimiter would
+    // invent two who do not exist and then hand one of them somebody's work. If
+    // a single string really does hold two people it resolves to nobody and the
+    // task imports UNASSIGNED, which is the honest outcome. What a list of
+    // names MEANS is decided in task-match.js resolveAssignee, not here.
+    assignedUsers: Array.isArray(r.assignedUsers) ? names(r.assignedUsers)
+      : (assigned != null && assigned.trim() !== '' ? [assigned.trim()] : []),
+  };
+}
+
 function readRecord(kind, rec) {
   if (kind === 'jobs') return readJob(rec);
   if (kind === 'clients') return readClient(rec);
@@ -538,6 +665,7 @@ function readRecord(kind, rec) {
   if (kind === 'purchaseOrders') return readPurchaseOrder(rec);
   if (kind === 'bills') return readBill(rec);
   if (kind === 'estimates') return readEstimateLine(rec);
+  if (kind === 'tasks') return readTask(rec);
   return readLead(rec);
 }
 
@@ -591,4 +719,4 @@ function describeMapping(kind, records) {
   };
 }
 
-module.exports = { DATASETS, REQUIRED_SHARE, readRecord, readJob, readLead, readChangeOrder, readPurchaseOrder, readBill, readEstimateLine, describeMapping, customField, isPlainObject };
+module.exports = { DATASETS, REQUIRED_SHARE, readRecord, readJob, readLead, readChangeOrder, readPurchaseOrder, readBill, readEstimateLine, readTask, describeMapping, customField, isPlainObject };
