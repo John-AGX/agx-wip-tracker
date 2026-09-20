@@ -743,6 +743,7 @@ describe('PAGE — Apply buttons appear only where an apply can do something', (
 
   test('a corrected row offers "Apply N selected + link"; a same row offers "Link only"; a linked row with nothing to do says Linked', () => {
     T.resetPicks();
+    T.setTab('jobs');
     const html = T.render(data([
       baseRow('conflict', { corrections: [{ field: 'startDate', kind: 'fill', from: '', to: '2026-02-25' }] }),
       baseRow('matched', { bt: { btId: '222', raw: 'S2000', title: 'W', scope: 'open' } }),

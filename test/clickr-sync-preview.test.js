@@ -1849,6 +1849,7 @@ describe('PAGE — js/bt-sync-preview.js', () => {
   });
 
   test('a synthetic response with markup in EVERY rendered string: candidates, not-in-BT, held back, blanks, flags, notes, sentences, mapping keys', () => {
+    T.setTab('jobs');
     const x = XSS;
     const cand = { id: x, jobNumber: x, title: x, status: x, street: x, city: x, state: x, zip: x, rungs: [x] };
     const row = (cls, extra) => Object.assign({ bt: { raw: x, status: x, street: x, city: x, state: x, zip: x, projectedStart: x, contractText: x, scope: 'open', coLabel: x, contactName: x, salesperson: x },
@@ -1867,6 +1868,7 @@ describe('PAGE — js/bt-sync-preview.js', () => {
   });
 
   test('every server string in a real preview response is escaped when rendered', async () => {
+    T.setTab('jobs');
     const saved = global.fetch;
     const evilJobs = [jobRec('S1050 ' + XSS, { street: '1 Harbor Dr', city: XSS }), jobRec(XSS), jobRec('WO16 ' + XSS), jobRec('WO16 b')];
     global.fetch = (url) => {
@@ -2024,5 +2026,410 @@ describe('PAGE — js/bt-sync-preview.js', () => {
     expect(html).toContain('not archived: Buildertrend sends open leads only');
     T.setView('leads', 'all');
     T.setTab('jobs');
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// THE OVERVIEW TAB — the dependency chain, the money, the health, and the one
+// invariant that stops the page lying: every count it prints is the length of
+// the list its own button lands on. Executed on the real file, no DOM.
+// ══════════════════════════════════════════════════════════════════════════
+
+describe('OVERVIEW — js/bt-sync-preview.js', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'js', 'bt-sync-preview.js'), 'utf8');
+  // Its own window, so nothing here depends on the tab or filter another
+  // describe left behind.
+  const win = {};
+  vm.runInNewContext(src, { window: win, document: {}, console });
+  const T = win.p86BtSyncPreview._test;
+
+  const KEYS = ['jobs', 'leads', 'clients', 'changeOrders', 'purchaseOrders', 'bills', 'estimates'];
+  const LABELS = { jobs: 'Jobs', leads: 'Leads', clients: 'Clients', changeOrders: 'Change orders',
+    purchaseOrders: 'Purchase orders', bills: 'Bills', estimates: 'Estimates' };
+
+  const mapping = (o) => Object.assign({ recordCount: 1, requiredKey: 'k', requiredNonEmpty: 1, requiredUsable: 1,
+    requiredOk: true, refusal: null, fields: [{ key: 'k', carriedBy: 1, nonEmpty: 1, required: true }],
+    missingKeys: [], unexpectedKeys: [] }, o || {});
+
+  const ds = (key, o) => Object.assign({
+    key, label: LABELS[key], datasetId: 'd-' + key,
+    fetch: { fetched: 1, reportedCount: 1, pages: 1, mode: 'skip/limit', complete: true, reason: null, elapsedMs: 7 },
+    error: null, sentence: 'Fetched 1 of 1 — every record Clickr reported.', classified: true,
+    mapping: mapping(), summary: null, summaryOpen: null, rows: [],
+    notInBuildertrend: { reliable: true, count: 0, notListed: 0, sentence: 'none', rows: [] },
+  }, o || {});
+
+  const page = (over) => ({
+    readOnly: true, generatedAt: '2026-09-20T12:00:00.000Z', elapsedMs: 9100,
+    organization: { id: 1, slug: 'agx', name: 'AGX Central Florida' },
+    p86: { jobs: 3, leads: 1, clients: 1, unscopedJobs: 0, unscopedLeads: 0, error: null },
+    datasets: KEYS.reduce((acc, k) => { acc[k] = (over && over[k]) || ds(k, { fetch: { fetched: 0, reportedCount: 0, pages: 1, mode: 'skip/limit', complete: true, reason: null, elapsedMs: 1 } }); return acc; }, {}),
+  });
+
+  // A row of a job-scoped dataset that is refused ONLY because its Buildertrend
+  // job is not a linked P86 job — the real shape co/po/bill/estimate-match emit.
+  const waiting = (n, jobId, jobName) => ({
+    bt: { index: n, btId: 'w' + n, raw: 'WAIT' + n, jobId, jobName, scope: 'open',
+      statusText: 'Approved', priceText: '$0.00', costText: '$0.00', amountText: '$0.00',
+      paidText: '$0.00', remainingText: '$0.00', ownerText: '$0.00', contractText: '$0.00', lineCount: 1 },
+    class: 'refused', rung: null, p86: null, waitingOnJob: true,
+    corrections: [], btBlank: [], heldBack: [], flags: [], candidates: [], notes: [
+      'Its Buildertrend job "' + jobName + '" is not linked to a P86 job yet. Link or create the job on the Jobs tab, then refresh.'],
+  });
+
+  const jobRow = (btId, raw, cls, extra) => Object.assign({
+    bt: { index: 0, btId: String(btId), raw, status: 'Open', scope: 'open', street: '', city: '', state: '', zip: '',
+      projectedStart: '', contractText: '$0.00' },
+    class: cls, rung: cls === 'matched' || cls === 'conflict' ? 'number' : null,
+    p86: cls === 'matched' || cls === 'conflict' ? { id: 'p' + btId, jobNumber: 'S' + btId, title: raw, status: 'In Progress', street: '', city: '', state: '', zip: '' } : null,
+    corrections: [], btBlank: [], heldBack: [], flags: [], candidates: [], notes: [],
+  }, extra || {});
+
+  // ── 1. THE DEPENDENCY CHAIN ───────────────────────────────────────────
+  // Four datasets waiting on the same two Buildertrend jobs, plus a third job
+  // nobody can identify and a set of rows that name no job at all.
+  const DEP = () => page({
+    jobs: ds('jobs', { fetch: { fetched: 3, reportedCount: 3, pages: 1, mode: 'skip/limit', complete: true, reason: null, elapsedMs: 7 },
+      rows: [
+        jobRow(900, 'S0001 Alpha', 'matched'),                    // confident, NOT linked -> one press links it
+        jobRow(901, 'S0002 Bravo', 'new'),                        // nothing in P86 -> create it
+        jobRow(902, 'S0003 Charlie', 'ambiguous', { candidates: [] }), // a person has to pick
+      ] }),
+    changeOrders: ds('changeOrders', { rows: [waiting(1, '900', 'S0001 Alpha'), waiting(2, '900', 'S0001 Alpha'),
+      waiting(3, '900', 'S0001 Alpha'), waiting(4, '901', 'S0002 Bravo'), waiting(5, '902', 'S0003 Charlie')] }),
+    purchaseOrders: ds('purchaseOrders', { rows: [waiting(6, '900', 'S0001 Alpha'), waiting(7, '900', 'S0001 Alpha'),
+      waiting(8, '901', 'S0002 Bravo'), waiting(9, '901', 'S0002 Bravo')] }),
+    bills: ds('bills', { rows: [waiting(10, '900', 'S0001 Alpha'), waiting(11, '', '')] }),
+    estimates: ds('estimates', { rows: [waiting(12, '901', 'S0002 Bravo'), waiting(13, '901', 'S0002 Bravo'),
+      waiting(14, '901', 'S0002 Bravo'), waiting(15, '901', 'S0002 Bravo')] }),
+  });
+
+  test('the chain ranks Buildertrend jobs by how much each one unblocks, and names what each needs', () => {
+    T.render(DEP());
+    const list = T.blockers();
+    expect(list.map((b) => [b.key, b.total, b.action])).toEqual([
+      ['id:901', 7, 'create'],   // 1 CO + 2 POs + 4 worksheets
+      ['id:900', 6, 'link'],     // 3 COs + 2 POs + 1 bill
+      ['id:902', 1, 'decide'],   // one CO behind a job nobody can pick
+      ['', 1, 'unnamed'],        // a bill that names no job at all
+    ]);
+    expect(list[0].counts).toEqual({ changeOrders: 1, purchaseOrders: 2, bills: 0, estimates: 4 });
+    expect(list[1].counts).toEqual({ changeOrders: 3, purchaseOrders: 2, bills: 1, estimates: 0 });
+    expect(T.blockerSummary(list)).toEqual({
+      create: { jobs: 1, blocked: 7 },
+      link: { jobs: 1, blocked: 6 },
+      decide: { jobs: 1, blocked: 1 },
+      unnamed: { jobs: 1, blocked: 1 },
+    });
+  });
+
+  // THE ARITHMETIC AND THE CLICK ARE TWO DIFFERENT COMPUTATIONS. The chain
+  // groups rows by the job they wait on; the click filters the destination
+  // tab. If they ever disagree the page is lying about what a press reaches.
+  test('every blocked count in the chain is the number of rows its own click reaches', () => {
+    const data = DEP();
+    T.render(data);
+    const list = T.blockers();
+    let checked = 0;
+    list.forEach((b) => {
+      ['changeOrders', 'purchaseOrders', 'bills', 'estimates'].forEach((k) => {
+        const target = { key: k, f: 'waitjob', scope: 'all', waitJob: b.key, waitJobLabel: b.jobName };
+        expect([b.key, k, T.countTarget(target)]).toEqual([b.key, k, b.counts[k]]);
+        if (!b.counts[k]) return;
+        // ...and the destination tab, rendered, shows exactly that many.
+        T.navigate(target);
+        expect(T.render(data)).toContain('>' + b.counts[k] + ' shown</span>');
+        checked++;
+      });
+    });
+    expect(checked).toBe(8);
+    T.navigate({ key: 'jobs', f: 'all', scope: 'all' });
+  });
+
+  test('the chain leads with the sentence a person can act on, and drops to a sentence when nothing waits', () => {
+    const html = (T.navigate({ key: 'jobs', f: 'all', scope: 'all' }), T.setTab('overview'), T.render(DEP()));
+    expect(html).toContain('15 records across 4 datasets are waiting on 4 Buildertrend jobs.');
+    expect(html).toContain('<b>Chasing 1 job</b> unblocks 1 record');
+    expect(html).toContain('<b>Creating 1 job</b> unblocks 7 records');
+    expect(html).toContain('<b>Linking 1 job</b> unblocks 6 records');
+    expect(html).toContain('S0002 Bravo');
+    expect(T.render(page())).toContain('data-btp-dep-none="1">Nothing is waiting on a job.');
+  });
+
+  // ── 2. MONEY ──────────────────────────────────────────────────────────
+  const moneyRow = (n, cls, bt, held) => ({
+    bt: Object.assign({ index: n, btId: 'm' + n, raw: 'MONEY' + n, scope: 'open', costText: '$0.00', amountText: '$0.00',
+      ownerText: '$0.00', contractText: '$0.00', paidText: '$0.00', remainingText: '$0.00', lineCount: 1 }, bt || {}),
+    class: cls, rung: cls === 'matched' ? 'Buildertrend ID' : null,
+    p86: cls === 'matched' ? { id: 'p' + n, title: 'P' + n, amountText: '$0.00', totalText: '$0.00', lineCount: 1 } : null,
+    corrections: [], btBlank: [], heldBack: held || [], flags: [], candidates: [], notes: [],
+  });
+
+  const MONEY = () => page({
+    bills: ds('bills', { rows: [
+      // Tickable: one figure on each side.
+      moneyRow(1, 'matched', {}, [{ field: 'amount', label: 'Amount', reason: 'money', money: true,
+        bt: '$1,500.25', p86: '$1,200.00', value: 1500.25, p86Value: 1200, applicable: true, note: 'tick it' }]),
+      // NOT applicable: P86 has it paid. Never counted, never totalled.
+      moneyRow(2, 'matched', {}, [{ field: 'amount', label: 'Amount', reason: 'money', money: true,
+        bt: '$999.99', p86: '$500.00', value: 999.99, p86Value: 500, applicable: false, note: 'settled' }]),
+      // Created by one press, at Buildertrend's amount.
+      moneyRow(3, 'new', { amountText: '$400.00' }),
+    ] }),
+    purchaseOrders: ds('purchaseOrders', { rows: [
+      // reason 'money' with no money flag — the addendum item, which counts.
+      moneyRow(4, 'matched', {}, [{ field: 'cost', label: 'Cost', reason: 'money',
+        bt: '$300.50', p86: '$100.50', value: 300.5, p86Value: 100.5, applicable: true, note: 'addendum' }]),
+      moneyRow(5, 'new', { costText: '$2,000.00', state86: 'issued' }),
+      moneyRow(6, 'new', { costText: '$1,250.50', state86: 'draft' }),
+      moneyRow(7, 'new', { costText: 'unparsed', state86: 'issued' }),
+    ] }),
+    estimates: ds('estimates', { rows: [
+      // Tickable and about money, but its value is a whole set of line items.
+      moneyRow(8, 'matched', {}, [{ field: 'lines', label: 'Line items', reason: 'money', money: true,
+        bt: '4 lines · cost $10.00', p86: '3 lines', value: { lines: [] }, p86Value: 'fingerprint', applicable: true, note: 'replaces the lines' }]),
+      moneyRow(9, 'new', { ownerText: '$12,345.67' }),
+    ] }),
+    clients: ds('clients', { rows: [
+      // Applicable, but not about money at all.
+      moneyRow(10, 'matched', {}, [{ field: 'email', label: 'Email', reason: 'differs',
+        bt: 'a@b.c', p86: 'x@y.z', value: 'a@b.c', applicable: true, note: 'differs' }]),
+    ] }),
+  });
+
+  test('money totals count only what a person could tick, and never add two different things', () => {
+    T.setTab('overview');
+    T.render(MONEY());
+    const m = T.moneyAtStake();
+    // The $999.99 bill is held back and NOT applicable: it is not in the total,
+    // not in the item count, and it is named separately for review.
+    expect(m.tick).toEqual({ items: 3, rows: 3, bt: 1800.75, p86: 1300.5, noFigure: 1, delta: 500.25 });
+    expect(m.review).toEqual({ items: 1, rows: 1 });
+    // The committed and the draft purchase orders are never summed together.
+    expect(m.committed).toEqual({ n: 2, total: 2000, unreadable: 1 });
+    expect(m.draft).toEqual({ n: 1, total: 1250.5, unreadable: 0 });
+    expect(m.bills).toEqual({ n: 1, total: 400, unreadable: 0 });
+    expect(m.estimates).toEqual({ n: 1, total: 12345.67, unreadable: 0 });
+
+    // ...and the group does not REACH that bill either: a row whose only
+    // money item cannot be ticked is not "money waiting for a tick".
+    expect(T.countTarget({ key: 'bills', f: 'money', scope: 'all' })).toBe(1);
+    const g = T.groups().filter((x) => x.id === 'money')[0];
+    expect(g.parts.map((p) => [p.key, p.n])).toEqual([['purchaseOrders', 1], ['bills', 1], ['estimates', 1]]);
+    expect(g.n).toBe(3);
+  });
+
+  test('the money section says the figures are proposed and owns up to what is not in the total', () => {
+    T.setTab('overview');
+    const html = T.render(MONEY());
+    expect(html).toContain('every one of them is PROPOSED');
+    expect(html).toContain('Buildertrend <b>$1,800.75</b> against Project 86’s <b>$1,300.50</b>');
+    expect(html).toContain('a difference of <b>$500.25</b>');
+    expect(html).toContain('a whole set of line items rather than one figure, so they are not in that total');
+    expect(html).toContain('cannot be ticked at all');
+    expect(html).not.toMatch(/applied to Project 86 already/);
+  });
+
+  test('money is read back out of the text the server formatted, and a range is no figure at all', () => {
+    expect([T.moneyNum('$1,234.56'), T.moneyNum('-$99.00'), T.moneyNum('$0.00')]).toEqual([1234.56, -99, 0]);
+    expect([T.moneyNum('$1.00 – $2.00'), T.moneyNum('unparsed'), T.moneyNum(''), T.moneyNum(null)])
+      .toEqual([null, null, null, null]);
+  });
+
+  // ── 3. SYNC HEALTH ────────────────────────────────────────────────────
+  test('a declared key no record carried renders as a DEFECT; keys P86 does not read do not', () => {
+    T.setTab('overview');
+    const html = T.render(page({
+      // The condition that has shipped twice: a key P86 reads that nothing sends.
+      estimates: ds('estimates', { mapping: mapping({ missingKeys: ['item'], unexpectedKeys: [{ key: 'itemTitle', carriedBy: 277 }] }) }),
+      // Keys Buildertrend sends that P86 does not read — information, not a fault.
+      leads: ds('leads', { mapping: mapping({ missingKeys: [], unexpectedKeys: [{ key: 'hasBeenContacted', carriedBy: 74 }] }) }),
+    }));
+    expect(html).toContain('data-btp-health-defect="estimates"');
+    expect(html).toContain('declared key no record carried: <b>item</b>');
+    expect(html).not.toContain('data-btp-health-defect="leads"');
+    expect(html).toContain('data-btp-health-extra="leads"');
+    expect(html).toContain('information, not a fault');
+    expect(html).toContain('<b>1 mapping defect.</b>');
+    const h = T.health();
+    expect(h.filter((x) => x.defect).map((x) => x.key)).toEqual(['estimates']);
+  });
+
+  test('a partial read is shown as partial, above every count it limits', () => {
+    T.setTab('overview');
+    const html = T.render(page({
+      jobs: ds('jobs', { fetch: { fetched: 300, reportedCount: 708, pages: 3, mode: 'skip/limit', complete: false,
+        reason: 'the page limit was reached', elapsedMs: 4200 } }),
+    }));
+    expect(html).toContain('data-btp-health-read="jobs">Partial');
+    expect(html).toContain('300 of 708 fetched');
+    expect(html).toContain('<b>1 read partial</b> — every count on this page covers only what was fetched.');
+    expect(T.health().filter((x) => x.read === 'partial').map((x) => x.key)).toEqual(['jobs']);
+  });
+
+  test('a dataset whose fetch failed, and one whose mapping refused, each read as what they are', () => {
+    T.setTab('overview');
+    const html = T.render(page({
+      bills: ds('bills', { error: { kind: 'internal', message: 'The Bills read failed inside this server before Clickr answered.' },
+        mapping: null, classified: false, rows: [],
+        fetch: { fetched: 0, reportedCount: null, pages: 0, mode: null, complete: false, reason: null, elapsedMs: 0 } }),
+      changeOrders: ds('changeOrders', { error: { kind: 'mapping', message: 'Only 3 of 55 change orders records carry a usable "coNumber".' },
+        mapping: mapping({ refusal: 'Only 3 of 55 change orders records carry a usable "coNumber".', requiredOk: false }),
+        classified: false, rows: [] }),
+    }));
+    expect(html).toContain('data-btp-health-read="bills">Failed');
+    expect(html).toContain('The Bills read failed inside this server');
+    // The read itself was complete; it is the MAPPING that refused.
+    expect(html).toContain('data-btp-health-read="changeOrders">Complete');
+    expect(html).toContain('data-btp-health-defect="changeOrders"');
+    expect(html).toContain('Mapping refused: Only 3 of 55');
+    // ...and it is said ONCE, as the defect it is.
+    expect(html.split('Only 3 of 55 change orders records').length - 1).toBe(1);
+    expect(html).toContain('<b>1 dataset failed.</b>');
+    // A dataset that classified nothing contributes nothing, and nothing throws.
+    expect(T.groups().every((g) => g.n === 0)).toBe(true);
+  });
+
+  // ── 4. THE INVARIANT ──────────────────────────────────────────────────
+  // A spread wide enough that every group has something in it.
+  const row = (key, n, cls, extra) => Object.assign({
+    bt: { index: n, btId: key + n, raw: key.toUpperCase() + n, scope: 'open', jobId: '900', jobName: 'S0001 Alpha',
+      status: 'Open', statusText: 'Approved', street: '', city: '', state: '', zip: '', projectedStart: '',
+      contractText: '$0.00', costText: '$10.00', amountText: '$10.00', ownerText: '$10.00', priceText: '$10.00',
+      paidText: '$0.00', remainingText: '$0.00', lineCount: 1, state86: 'issued' },
+    class: cls, rung: null, p86: null, corrections: [], btBlank: [], heldBack: [], flags: [], candidates: [], notes: [],
+  }, extra || {});
+
+  const SPREAD = () => page({
+    jobs: ds('jobs', { rows: [
+      jobRow(900, 'S0001 Alpha', 'matched'),
+      row('jobs', 1, 'new'),
+      Object.assign(row('jobs', 2, 'new'), { bt: Object.assign(row('jobs', 2, 'new').bt, { scope: 'closed' }) }),
+      row('jobs', 3, 'ambiguous'),
+      row('jobs', 4, 'possible_duplicate'),
+      row('jobs', 5, 'conflict', { p86: { id: 'p5', jobNumber: 'S5', title: 'five', status: 'In Progress', street: '', city: '', state: '', zip: '' },
+        rung: 'number', corrections: [{ field: 'city', label: 'City', kind: 'value', from: 'Tampa', to: 'Orlando' }] }),
+      row('jobs', 6, 'refused', { notes: ['Buildertrend marks this job deleted, so it is not matched and never created.'] }),
+      row('jobs', 7, 'refused', { notes: ['Buildertrend marks this job deleted, so it is not matched and never created.'] }),
+      row('jobs', 8, 'not_a_job', { notes: ['No job number at the front of the name.'] }),
+    ] }),
+    bills: ds('bills', { rows: [
+      row('bills', 1, 'new'),
+      waiting(20, '901', 'S0002 Bravo'),
+      row('bills', 2, 'matched', { rung: 'Buildertrend ID', p86: { id: 'pb2', billNumber: 'B2', title: 'b', amountText: '$1.00' },
+        heldBack: [{ field: 'amount', label: 'Amount', reason: 'money', money: true, bt: '$10.00', p86: '$1.00',
+          value: 10, p86Value: 1, applicable: true, note: 'tick it' }] }),
+      row('bills', 3, 'refused', { notes: ['Deleted in Buildertrend.'] }),
+    ] }),
+    estimates: ds('estimates', { rows: [waiting(21, '901', 'S0002 Bravo'), row('estimates', 1, 'new')] }),
+  });
+
+  test('EVERY group count is the number of rows its click actually reaches', () => {
+    const data = SPREAD();
+    T.setTab('overview');
+    T.render(data);
+    const gs = T.groups();
+    // Nothing empty: a test that passes because every group is zero proves nothing.
+    expect(gs.map((g) => g.id)).toEqual(['blocked', 'create', 'disagree', 'money', 'undecided', 'refused']);
+    expect(gs.every((g) => g.n > 0)).toBe(true);
+    let parts = 0;
+    gs.forEach((g) => {
+      // The group claims exactly the sum of its parts.
+      expect([g.id, g.n]).toEqual([g.id, g.parts.reduce((s, p) => s + p.n, 0)]);
+      g.parts.forEach((p) => {
+        parts++;
+        // ...and each part's click lands on a list of exactly that length.
+        T.navigate({ key: p.key, f: p.f, scope: p.scope });
+        const html = T.render(data);
+        expect([g.id, p.key, p.f, html.indexOf('>' + p.n + ' shown</span>') >= 0]).toEqual([g.id, p.key, p.f, true]);
+        T.setTab('overview');
+      });
+    });
+    expect(parts).toBeGreaterThanOrEqual(8);
+    // The group's own number, as the page prints it.
+    const html = T.render(data);
+    gs.forEach((g) => {
+      expect(html).toContain('data-btp-group-n="' + g.id + '">' + g.n + '<');
+    });
+  });
+
+  test('the refusal reasons add up to the refused group, and waiting rows are not counted twice', () => {
+    const data = SPREAD();
+    T.setTab('overview');
+    T.render(data);
+    const refused = T.groups().filter((g) => g.id === 'refused')[0];
+    const blocked = T.groups().filter((g) => g.id === 'blocked')[0];
+    const reasons = T.refusalReasons();
+    expect(reasons.reduce((s, r) => s + r.n, 0)).toBe(refused.n);
+    expect(reasons[0]).toEqual({ why: 'Buildertrend marks this job deleted, so it is not matched and never created.', n: 2 });
+    // The two waiting rows are in "blocked" and NOWHERE else.
+    expect(blocked.n).toBe(2);
+    expect(reasons.some((r) => /not linked to a P86 job yet/.test(r.why))).toBe(false);
+  });
+
+  test('the create group counts exactly what the Create press makes, and says so about closed jobs', () => {
+    const data = SPREAD();
+    T.setTab('overview');
+    const html = T.render(data);
+    const create = T.groups().filter((g) => g.id === 'create')[0];
+    // jobs1 (open) + bills1 + estimates1 are in the one press; jobs2 is closed.
+    expect(create.parts.map((p) => [p.key, p.f, p.n])).toEqual([
+      ['jobs', 'creatable', 1], ['bills', 'creatable', 1], ['estimates', 'creatable', 1], ['jobs', 'closed_new', 1],
+    ]);
+    expect(create.n).toBe(4);
+    expect(html).toContain('closed in Buildertrend — created one at a time from the row');
+    // The dashboard's count and the Jobs tab's own Create button agree.
+    T.navigate({ key: 'jobs', f: 'creatable', scope: 'all' });
+    expect(T.render(data)).toContain('Create 1 Buildertrend-only open + warranty job in P86');
+    T.setTab('overview');
+  });
+
+  // ── 5. THE EDGES ──────────────────────────────────────────────────────
+  test('the page renders with zero rows everywhere and claims nothing', () => {
+    T.setTab('overview');
+    const html = T.render(page());
+    expect(html).toContain('Nothing is waiting on a job.');
+    expect(html).toContain('data-btp-group-n="create">0<');
+    expect(html).toContain('Every dataset read completely and every declared key arrived.');
+    expect(T.blockers()).toEqual([]);
+    expect(T.refusalReasons()).toEqual([]);
+  });
+
+  test('the Show box on the destination names the view its rows are in, including one Buildertrend job', () => {
+    const data = DEP();
+    T.navigate({ key: 'changeOrders', f: 'waitjob', scope: 'all', waitJob: 'id:900', waitJobLabel: 'S0001 Alpha' });
+    const html = T.render(data);
+    expect(html).toContain('<option value="waitjob" selected>Waiting on S0001 Alpha</option>');
+    expect(html).toContain('>3 shown</span>');
+    T.navigate({ key: 'bills', f: 'money', scope: 'all' });
+    expect(T.render(data)).toContain('<option value="money" selected>Money waiting for a tick</option>');
+    T.setTab('overview');
+  });
+
+  test('the automatic sync has a place to land, and the page says there is not one yet', () => {
+    T.setTab('overview');
+    const html = T.render(page());
+    expect(html).toContain('data-btp-run-slot="1"');
+    expect(html).toContain('No sync runs on its own yet');
+    expect(html).toContain('its last run, what it changed and its undo appear in this block');
+    // It is the FIRST thing on the tab, above everything a person presses.
+    expect(html.indexOf('data-btp-run-slot="1"')).toBeLessThan(html.indexOf('data-btp-dash="dependencies"'));
+  });
+
+  test('every server string the Overview prints is escaped', () => {
+    const x = '<img src=x onerror="alert(1)">\'&';
+    const refusedWithMarkup = Object.assign(waiting(2, '', ''), { waitingOnJob: false, notes: [x] });
+    const bad = page({
+      jobs: ds('jobs', { label: x, sentence: x, mapping: mapping({ missingKeys: [x], unexpectedKeys: [{ key: x, carriedBy: 2 }] }),
+        fetch: { fetched: 1, reportedCount: 1, pages: 1, mode: x, complete: false, reason: x, elapsedMs: 1 },
+        rows: [jobRow(900, x, 'ambiguous')] }),
+      bills: ds('bills', { label: x, rows: [waiting(1, '900', x), refusedWithMarkup] }),
+    });
+    bad.organization.name = x;
+    T.setTab('overview');
+    const html = T.render(bad);
+    expect(html).toContain('&lt;img src=x');
+    expect(html).not.toMatch(/<img/i);
+    expect(html).not.toMatch(/onerror="/);
   });
 });

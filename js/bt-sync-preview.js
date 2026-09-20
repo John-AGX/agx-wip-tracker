@@ -30,7 +30,15 @@
    and marks rows against THIS admin's previous refresh, then moves that admin's
    marker. The page holds no copy of the marks: every load replaces _data. The
    reload after an Apply asks the server not to move the marker (?since=keep),
-   so applying one row does not wipe the marks still being worked through. */
+   so applying one row does not wipe the marks still being worked through.
+
+   THE OVERVIEW TAB (the first one) answers "what do I do next, and in what
+   order" out of the SAME response, with no extra request: the dependency
+   chain (which Buildertrend job, once it is a linked P86 job, unblocks how
+   many change orders, purchase orders, bills and estimate worksheets), the
+   work grouped by what a person does rather than by dataset, the money at
+   stake as proposals, and the read's own health. Every count it prints is the
+   length of the list its own button lands on — see countTarget(). */
 (function () {
   'use strict';
 
@@ -50,6 +58,13 @@
     heldback: 'Held back (money / number)',
     flagged: 'Flagged',
     notinbt: 'In P86, not in Buildertrend',
+    typo: 'Probable BT typos',
+    creatable: 'Would be created by one press',
+    closed_new: 'Closed in Buildertrend — created one at a time',
+    waiting: 'Waiting on its job',
+    waitjob: 'Waiting on one Buildertrend job',
+    money: 'Money waiting for a tick',
+    refused_only: 'Refused for another reason',
     since_new: 'New since your last refresh',
     since_changed: 'Changed since your last refresh'
   };
@@ -62,13 +77,13 @@
   var _err = null;
   var _loading = false;
   var _ui = {
-    jobs: { f: 'all', scope: 'open', q: '', shown: PAGE },
-    leads: { f: 'all', scope: 'all', q: '', shown: PAGE },
-    clients: { f: 'all', scope: 'all', q: '', shown: PAGE },
-    changeOrders: { f: 'all', scope: 'all', q: '', shown: PAGE },
-    purchaseOrders: { f: 'all', scope: 'all', q: '', shown: PAGE },
-    bills: { f: 'all', scope: 'all', q: '', shown: PAGE },
-    estimates: { f: 'all', scope: 'all', q: '', shown: PAGE }
+    jobs: { f: 'all', scope: 'open', q: '', waitJob: '', waitJobLabel: '', shown: PAGE },
+    leads: { f: 'all', scope: 'all', q: '', waitJob: '', waitJobLabel: '', shown: PAGE },
+    clients: { f: 'all', scope: 'all', q: '', waitJob: '', waitJobLabel: '', shown: PAGE },
+    changeOrders: { f: 'all', scope: 'all', q: '', waitJob: '', waitJobLabel: '', shown: PAGE },
+    purchaseOrders: { f: 'all', scope: 'all', q: '', waitJob: '', waitJobLabel: '', shown: PAGE },
+    bills: { f: 'all', scope: 'all', q: '', waitJob: '', waitJobLabel: '', shown: PAGE },
+    estimates: { f: 'all', scope: 'all', q: '', waitJob: '', waitJobLabel: '', shown: PAGE }
   };
   // Apply (server/services/clickr/sync-apply.js). The server re-reads both
   // sides and re-matches; the page only says which Buildertrend ids to act on.
@@ -78,19 +93,26 @@
   // What a person ticked, per row: _picks['jobs:<btId>'][field] = true/false.
   // Corrections start ticked; held-back items a person may apply start unticked.
   var _picks = {};
-  var TABS = [['jobs', 'Jobs'], ['leads', 'Leads'], ['clients', 'Clients'], ['changeOrders', 'Change orders'], ['purchaseOrders', 'Purchase orders'], ['bills', 'Bills'], ['estimates', 'Estimates'], ['archive', 'Archive']];
+  var TABS = [['overview', 'Overview'], ['jobs', 'Jobs'], ['leads', 'Leads'], ['clients', 'Clients'], ['changeOrders', 'Change orders'], ['purchaseOrders', 'Purchase orders'], ['bills', 'Bills'], ['estimates', 'Estimates'], ['archive', 'Archive']];
   var ARCHIVE_ENDPOINT = '/api/admin/organizations/me?view=buildertrend-archive';
   var _archive = null;       // [{ kind, id, label, reason, mergedInto, archivedAt, attached, deletable }]
   var _archiveErr = null;
   var _archiveNote = null;
   var NOUN = { jobs: 'job', leads: 'lead', clients: 'client', changeOrders: 'change order', purchaseOrders: 'purchase order', bills: 'bill', estimates: 'estimate' };
-  var _tab = 'jobs';
-  try { var _savedTab = window.localStorage && window.localStorage.getItem('btp.tab'); if (_savedTab === 'jobs' || _savedTab === 'leads' || _savedTab === 'clients' || _savedTab === 'changeOrders' || _savedTab === 'purchaseOrders' || _savedTab === 'bills' || _savedTab === 'estimates' || _savedTab === 'archive') _tab = _savedTab; } catch (e) { /* storage blocked */ }
+  var _tab = 'overview';
+  try { var _savedTab = window.localStorage && window.localStorage.getItem('btp.tab'); if (_savedTab === 'overview' || _savedTab === 'jobs' || _savedTab === 'leads' || _savedTab === 'clients' || _savedTab === 'changeOrders' || _savedTab === 'purchaseOrders' || _savedTab === 'bills' || _savedTab === 'estimates' || _savedTab === 'archive') _tab = _savedTab; } catch (e) { /* storage blocked */ }
 
   // The three datasets that hang off a linked JOB rather than standing alone.
   // Their P86 side is reviewed in P86, never archived from here, and their
   // "refused" bucket is mostly "its job is not linked yet".
   var DETAIL_KINDS = { changeOrders: 1, purchaseOrders: 1, bills: 1, estimates: 1 };
+
+  // What the Show box calls the view it is in, including the Overview's own
+  // filters and the one that names a single Buildertrend job.
+  function filterName(ds, ui) {
+    if (ui.f === 'waitjob') return 'Waiting on ' + (ui.waitJobLabel || 'one Buildertrend job');
+    return labelFor(ds, ui.f) || ui.f;
+  }
 
   // A change order is "refused" mostly because its job is not linked yet.
   function labelFor(ds, k) {
@@ -205,7 +227,41 @@
       '.btp-diag th,.btp-diag td{border-bottom:1px solid var(--border);padding:4px 6px;text-align:left;vertical-align:top;}',
       '.btp-scroll{overflow-x:auto;}',
       '.btp-code{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px;overflow-wrap:anywhere;}',
-      '@media (max-width:640px){.btp-pair{grid-template-columns:minmax(0,1fr);}.btp-tile-n{font-size:17px;}.btp-ds{padding:10px;}.btp-tiles{grid-template-columns:repeat(2,minmax(0,1fr));}}'
+      '.btp-run{border:1px dashed var(--border);border-radius:10px;background:var(--surface);padding:10px 12px;margin:0 0 14px;color:var(--text-dim);font-size:12px;line-height:1.5;}',
+      '.btp-run b{color:var(--text);}',
+      '.btp-dash-sec{border:1px solid var(--border);border-radius:10px;background:var(--card-bg);padding:12px 14px;margin:0 0 16px;min-width:0;}',
+      '.btp-dash-h{font-size:15px;font-weight:700;}',
+      '.btp-dash-w{color:var(--text-dim);font-size:12px;line-height:1.45;margin:3px 0 10px;}',
+      '.btp-lead{font-size:13px;line-height:1.55;margin:0 0 10px;}',
+      '.btp-grp{border:1px solid var(--border);border-radius:8px;background:var(--surface);padding:8px 10px;margin:0 0 8px;}',
+      '.btp-grp-h{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;}',
+      '.btp-grp-n{font-size:22px;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums;color:var(--btp-c,var(--text));}',
+      '.btp-grp-t{font-size:13px;font-weight:700;}',
+      '.btp-grp-w{color:var(--text-dim);font-size:12px;line-height:1.45;margin:2px 0 6px;}',
+      '.btp-parts{display:flex;gap:6px;flex-wrap:wrap;}',
+      '.btp-part{border:1px solid var(--border);background:var(--surface2);color:var(--text);border-radius:14px;padding:3px 10px;font:inherit;font-size:12px;cursor:pointer;text-align:left;min-width:0;overflow-wrap:anywhere;}',
+      '.btp-part:hover{border-color:var(--accent);}',
+      '.btp-part-n{font-weight:700;font-variant-numeric:tabular-nums;}',
+      '.btp-part-s{color:var(--text-dim);}',
+      '.btp-linkish{border:0;background:transparent;color:var(--accent);font:inherit;padding:0;cursor:pointer;text-align:inherit;text-decoration:underline;overflow-wrap:anywhere;}',
+      '.btp-linkish:hover{color:var(--text);}',
+      '.btp-dep{width:100%;border-collapse:collapse;font-size:12px;}',
+      '.btp-dep th,.btp-dep td{border-bottom:1px solid var(--border);padding:5px 6px;text-align:left;vertical-align:top;}',
+      '.btp-dep th{color:var(--text-dim);font-size:10px;text-transform:uppercase;letter-spacing:.3px;font-weight:700;}',
+      '.btp-dep .btp-num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}',
+      '.btp-act,.btp-hbadge{display:inline-block;font-size:11px;font-weight:700;border-radius:10px;padding:1px 8px;border:1px solid var(--btp-c,var(--border));color:var(--text);white-space:nowrap;}',
+      '.a-link{--btp-c:var(--green);}.a-create{--btp-c:var(--accent);}.a-decide{--btp-c:var(--yellow);}',
+      '.a-stuck,.a-missing{--btp-c:var(--red);}.a-linked{--btp-c:var(--text-dim);}',
+      '.btp-dep-why,.btp-why{margin:8px 0 0;font-size:12px;color:var(--text-dim);line-height:1.5;}',
+      '.btp-dep-why b,.btp-why b{color:var(--text);}',
+      '.btp-money{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;}',
+      '.btp-mcard{border:1px solid var(--border);border-radius:8px;background:var(--surface);padding:8px 10px;min-width:0;}',
+      '.btp-mn{font-size:19px;font-weight:700;line-height:1.15;font-variant-numeric:tabular-nums;color:var(--btp-c,var(--text));}',
+      '.btp-health{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:8px;}',
+      '.btp-hrow{border:1px solid var(--border);border-radius:8px;background:var(--surface);padding:8px 10px;min-width:0;}',
+      '.btp-hrow .btp-row-head{margin:0 0 4px;}',
+      '.btp-hrow .btp-link{margin-left:auto;}',
+      '@media (max-width:640px){.btp-pair{grid-template-columns:minmax(0,1fr);}.btp-tile-n{font-size:17px;}.btp-ds{padding:10px;}.btp-tiles{grid-template-columns:repeat(2,minmax(0,1fr));}.btp-dash-sec{padding:10px;}.btp-dep{font-size:11px;}.btp-money,.btp-health{grid-template-columns:minmax(0,1fr);}}'
     ].join('\n');
     var el = document.createElement('style');
     el.id = 'btp-styles';
@@ -266,7 +322,10 @@
     return carriesStatusItem(ds, r);
   }
 
-  function passesFilter(r, f) {
+  // A dashboard button and a tile reach their rows through ONE function, so
+  // a count printed on the Overview and the list it lands on cannot drift.
+  // Every filter above the fence is untouched; the six below are additive.
+  function passesFilter(ds, r, f, ui) {
     if (f === 'all') return true;
     if (f === 'btblank') return (r.btBlank || []).length > 0;
     if (f === 'heldback') return (r.heldBack || []).length > 0;
@@ -274,13 +333,25 @@
     if (f === 'typo') return (r.corrections || []).some(function (c) { return !!c.typo; });
     if (f === 'since_new') return !!(r.since && r.since.state === 'new');
     if (f === 'since_changed') return !!(r.since && r.since.state === 'changed');
+    // ── the Overview's own targets ──
+    // Exactly what one press of this tab's Create button would make.
+    if (f === 'creatable') return isCreatable(ds, r);
+    // Closed in Buildertrend: never in that press, made one at a time from its row.
+    if (f === 'closed_new') return ds.key === 'jobs' && r['class'] === 'new' && !r.createBlocked
+      && r.bt && r.bt.btId != null && r.bt.btId !== '' && r.bt.scope !== 'open';
+    if (f === 'waiting') return r.waitingOnJob === true;
+    // Waiting on ONE named Buildertrend job — the dependency chain's click.
+    if (f === 'waitjob') return r.waitingOnJob === true && waitKey(r) === ((ui && ui.waitJob) || '');
+    if (f === 'money') return hasTickableMoney(r);
+    // Refused for a reason OTHER than a job that is not linked: those are their own group.
+    if (f === 'refused_only') return r['class'] === 'refused' && r.waitingOnJob !== true;
     return r['class'] === f;
   }
 
   function visibleRows(ds, ui) {
     var q = ui.q.trim().toLowerCase();
     return (ds.rows || []).filter(function (r) {
-      if (!inScope(ds, ui, r) || !passesFilter(r, ui.f)) return false;
+      if (!inScope(ds, ui, r) || !passesFilter(ds, r, ui.f, ui)) return false;
       if (!q) return true;
       var hay = [r.bt.raw, r.bt.contactName, r.bt.email, r.bt.street, r.bt.city, r.bt.jobName, r.job && r.job.label, r.p86 && r.p86.title, r.p86 && r.p86.jobNumber, r.p86 && r.p86.coNumber, r.p86 && r.p86.poNumber, r.p86 && r.p86.billNumber, r.bt.billNumber, r.bt.vendorName, r.p86 && r.p86.subName, r.bt.subName, r.p86 && r.p86.email].join(' ').toLowerCase();
       return hay.indexOf(q) >= 0;
@@ -800,10 +871,10 @@
     return 'Create ' + n + ' ' + (key === 'jobs' ? 'open and warranty job' : (NOUN[key] || 'record')) + (n === 1 ? '' : 's') + ' in Project 86 from Buildertrend? Each is linked by its Buildertrend id.' + extra;
   }
 
+  // ONE definition of "what the Create press makes" — isCreatable(), in the
+  // Overview block below. The button's count and the dashboard's cannot drift.
   function createCount(ds) {
-    return (ds.rows || []).filter(function (r) {
-      return r['class'] === 'new' && !r.createBlocked && r.bt && r.bt.btId != null && r.bt.btId !== '' && (ds.key !== 'jobs' || r.bt.scope === 'open');
-    }).length;
+    return (ds.rows || []).filter(function (r) { return isCreatable(ds, r); }).length;
   }
 
   function applyResultText(res) {
@@ -1060,8 +1131,12 @@
       html += '<div class="btp-filters"><select class="btp-search" style="flex:0 1 auto;" data-btp-fselect="1" aria-label="Show">' +
         opts.map(function (k) {
           return '<option value="' + k + '"' + (ui.f === k ? ' selected' : '') + '>' + (k === 'all' ? 'All Buildertrend records' : esc(labelFor(ds, k))) + '</option>';
-        }).join('') + (ui.f === 'typo' ? '<option value="typo" selected>Probable BT typos</option>' : '') +
-        ((ui.f === 'since_new' || ui.f === 'since_changed') && !sinceOpts.length ? '<option value="' + ui.f + '" selected>' + esc(LABEL[ui.f]) + '</option>' : '') + '</select>' +
+        }).join('') +
+        // A filter the list above does not carry — an Overview target, a typo
+        // sweep, or "new since" on a dataset that could not be compared — is
+        // still the SELECTED option, or the box would name a view these rows
+        // are not in.
+        (opts.indexOf(ui.f) === -1 ? '<option value="' + esc(ui.f) + '" selected>' + esc(filterName(ds, ui)) + '</option>' : '') + '</select>' +
         '<input type="search" class="btp-search" data-btp-q="1" placeholder="Search name, address, P86 number" value="' + esc(ui.q) + '">';
 
       var list;
@@ -1084,6 +1159,625 @@
     }
     html += diagnosticHTML(ds);
     return html + '</section>';
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // THE OVERVIEW TAB — "what do I do next, and in what order"
+  // ══════════════════════════════════════════════════════════════════════
+  //
+  // Built ENTIRELY out of the response the seven tabs already render. It adds
+  // no request, no route and no server field: every figure below is walked out
+  // of _data.datasets. It is a TAB rather than a page because the one thing it
+  // must do — take a person to exactly the rows it counted — is setting another
+  // tab's filter, and because the preview is one slow single-flight GET that a
+  // second page would have to build again.
+  //
+  // THE ONE RULE THAT KEEPS IT HONEST. A number is shown next to a click only
+  // when that number IS the length of the list the click lands on. Every
+  // counted link is a TARGET — { key, f, scope, q, waitJob } — and its count
+  // comes from countTarget(), which runs the SAME visibleRows() the destination
+  // tab runs, under the same scope rule. A group's count is the sum of its
+  // parts' counts and nothing else, so a group can never claim more than its
+  // clicks reach. The dependency chain is the one place a second arithmetic
+  // exists (rows grouped by the Buildertrend job they wait on), and the tests
+  // hold the two against each other.
+
+  var DS_ORDER = ['jobs', 'leads', 'clients', 'changeOrders', 'purchaseOrders', 'bills', 'estimates'];
+  // The four datasets whose rows can be BLOCKED: a change order, purchase
+  // order, bill or estimate worksheet whose Buildertrend job is not linked to a
+  // P86 job is refused with waitingOnJob and can do nothing until that job
+  // exists in P86 and carries the Buildertrend id.
+  var WAIT_KINDS = ['changeOrders', 'purchaseOrders', 'bills', 'estimates'];
+
+  function dsOf(key) {
+    return (_data && _data.datasets && _data.datasets[key]) || null;
+  }
+
+  function dsLabel(key) {
+    var ds = dsOf(key);
+    return (ds && ds.label) || key;
+  }
+
+  // A target's view, built fresh so counting never touches the real _ui.
+  function targetUi(t) {
+    return { f: t.f, scope: t.scope || 'all', q: t.q || '', waitJob: t.waitJob || '', shown: PAGE };
+  }
+
+  function countTarget(t) {
+    var ds = dsOf(t.key);
+    if (!ds || !ds.classified) return 0;
+    return visibleRows(ds, targetUi(t)).length;
+  }
+
+  // The click. It puts the destination tab into exactly the view countTarget()
+  // measured, so what lands on screen is the list whose length was printed.
+  function navigate(t) {
+    var ui = _ui[t.key];
+    if (!ui) return;
+    ui.f = t.f;
+    ui.scope = t.scope || 'all';
+    ui.q = t.q || '';
+    ui.waitJob = t.waitJob || '';
+    ui.waitJobLabel = t.waitJobLabel || '';
+    ui.shown = PAGE;
+    _tab = t.key;
+    try { if (window.localStorage) window.localStorage.setItem('btp.tab', _tab); } catch (e) { /* storage blocked */ }
+    paint();
+  }
+
+  // ── THE DEPENDENCY CHAIN ───────────────────────────────────────────────
+  //
+  // Which Buildertrend job is each waiting row waiting on? Its own id when it
+  // has one, and its name when it does not — the two keys the matchers
+  // themselves use. A row carrying neither lands in one bucket of its own,
+  // which is reachable like any other (waitJob '').
+  function waitKey(r) {
+    var b = r && r.bt;
+    var id = b && b.jobId != null ? String(b.jobId).trim() : '';
+    if (id) return 'id:' + id;
+    var n = b && b.jobName != null ? String(b.jobName).trim().toLowerCase().replace(/\s+/g, ' ') : '';
+    return n ? 'name:' + n : '';
+  }
+
+  // The Jobs row for a blocking Buildertrend job: by Buildertrend id, then by
+  // the job name exactly as Buildertrend wrote it on both records.
+  function jobRowFor(b) {
+    var jobs = dsOf('jobs');
+    if (!jobs || !jobs.classified) return null;
+    var rows = jobs.rows || [];
+    var i;
+    var bt;
+    if (b.jobId) {
+      for (i = 0; i < rows.length; i++) {
+        bt = rows[i].bt;
+        if (bt && bt.btId != null && String(bt.btId).trim() === b.jobId) return rows[i];
+      }
+    }
+    if (b.jobName) {
+      var want = b.jobName.toLowerCase().replace(/\s+/g, ' ');
+      for (i = 0; i < rows.length; i++) {
+        bt = rows[i].bt;
+        var raw = bt && bt.raw != null ? String(bt.raw).trim().toLowerCase().replace(/\s+/g, ' ') : '';
+        if (raw && raw === want) return rows[i];
+      }
+    }
+    return null;
+  }
+
+  // What has to happen to that job before anything behind it can move. The
+  // order is the order of effort: a link is one press for all of them, a create
+  // is one press for the open ones, and a decision is a person per job.
+  var ACTIONS = {
+    link: { order: 0, label: 'Link it', verb: 'Linking',
+      why: 'P86 already holds this job and the match is confident. “Link confident matches” on the Jobs tab links every one of them in one press.' },
+    create: { order: 1, label: 'Create it', verb: 'Creating',
+      why: 'Nothing in P86 matches it. Creating it from the Jobs tab links it by Buildertrend id at the same time.' },
+    decide: { order: 2, label: 'Decide which job', verb: 'Deciding on',
+      why: 'More than one P86 job could be this one, so nothing is proposed until a person picks it on the Jobs tab.' },
+    stuck: { order: 3, label: 'Not a job in P86', verb: 'Sorting out',
+      why: 'The Jobs tab could not treat this Buildertrend job as a job — no job number, a change-order row, or refused. Fix it in Buildertrend.' },
+    linked: { order: 4, label: 'Already linked — refresh', verb: 'Refreshing',
+      why: 'The Jobs tab has this one linked by Buildertrend id already, so this read is older than that link. Press Refresh.' },
+    missing: { order: 5, label: 'Not in the Jobs read', verb: 'Reading',
+      why: 'No Buildertrend job in this read carries that id or name — the Jobs read may be partial, or the job may have been deleted there.' },
+    unnamed: { order: 6, label: 'No job on the record', verb: 'Chasing',
+      why: 'These records reached Project 86 naming no Buildertrend job at all, by id or by name. Nothing here can find their job — fix them in Buildertrend.' }
+  };
+
+  var ACTION_ORDER = ['link', 'create', 'decide', 'stuck', 'linked', 'missing', 'unnamed'];
+
+  function blockerAction(b, row) {
+    if (!b.jobId && !b.jobName) return 'unnamed';
+    if (!row) return 'missing';
+    var c = row['class'];
+    if (c === 'new') return 'create';
+    if (c === 'matched' || c === 'conflict') return row.rung === 'Buildertrend ID' ? 'linked' : 'link';
+    if (c === 'ambiguous' || c === 'possible_duplicate') return 'decide';
+    return 'stuck';
+  }
+
+  // Every waiting row, grouped by the Buildertrend job it waits on, ranked by
+  // how much that one job unblocks. This is the arithmetic the page leads with.
+  function blockers() {
+    var byKey = {};
+    var order = [];
+    WAIT_KINDS.forEach(function (key) {
+      var ds = dsOf(key);
+      if (!ds || !ds.classified) return;
+      (ds.rows || []).forEach(function (r) {
+        if (r.waitingOnJob !== true) return;
+        var k = waitKey(r);
+        if (!byKey[k]) {
+          byKey[k] = { key: k, jobId: k.indexOf('id:') === 0 ? k.slice(3) : '', jobName: '', counts: {}, total: 0 };
+          WAIT_KINDS.forEach(function (x) { byKey[k].counts[x] = 0; });
+          order.push(k);
+        }
+        var b = byKey[k];
+        if (!b.jobName && r.bt && r.bt.jobName) b.jobName = String(r.bt.jobName).trim();
+        b.counts[key]++;
+        b.total++;
+      });
+    });
+    var list = order.map(function (k) { return byKey[k]; });
+    list.forEach(function (b) {
+      b.jobRow = jobRowFor(b);
+      b.action = blockerAction(b, b.jobRow);
+    });
+    list.sort(function (a, b) {
+      if (b.total !== a.total) return b.total - a.total;
+      var ao = ACTIONS[a.action].order;
+      var bo = ACTIONS[b.action].order;
+      if (ao !== bo) return ao - bo;
+      var an = a.jobName || a.key;
+      var bn = b.jobName || b.key;
+      return an < bn ? -1 : an > bn ? 1 : 0;
+    });
+    return list;
+  }
+
+  // Jobs and blocked records per action, so the page can say "linking these N
+  // jobs unblocks this much" instead of listing 60 rows and hoping.
+  function blockerSummary(list) {
+    var by = {};
+    (list || []).forEach(function (b) {
+      if (!by[b.action]) by[b.action] = { jobs: 0, blocked: 0 };
+      by[b.action].jobs++;
+      by[b.action].blocked += b.total;
+    });
+    return by;
+  }
+
+  // ── MONEY ──────────────────────────────────────────────────────────────
+  //
+  // Every money figure on this page comes back out of the text the server
+  // already formatted (fmtMoney: "$1,234.56", "-$1,234.56"). A range, a word or
+  // anything else reads as no figure at all and is counted apart rather than
+  // guessed at.
+  function moneyNum(text) {
+    if (text == null) return null;
+    var s = String(text).trim();
+    if (!s) return null;
+    var neg = s.charAt(0) === '-';
+    if (neg) s = s.slice(1);
+    if (s.charAt(0) !== '$') return null;
+    s = s.slice(1).replace(/,/g, '');
+    if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
+    var n = Number(s);
+    if (!isFinite(n)) return null;
+    return neg ? -n : n;
+  }
+
+  function num(v) {
+    return typeof v === 'number' && isFinite(v);
+  }
+
+  function round2(n) {
+    return Math.round(n * 100) / 100;
+  }
+
+  function fmtUSD(n) {
+    if (!num(n)) return '';
+    var neg = n < 0;
+    return (neg ? '-$' : '$') + Math.abs(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  }
+
+  // A held-back item that is about money. `money: true` is how most of them are
+  // marked; a few carry only `reason: 'money'` (the purchase-order addendum is
+  // the one that matters), so both count.
+  function isMoneyItem(h) {
+    return !!h && (h.money === true || h.reason === 'money');
+  }
+
+  // Money a person could tick on this row. NOT-APPLICABLE items are never
+  // counted: P86 has the bill paid, the change order applied, the purchase
+  // order closed — a sync does not move them and nothing is waiting on a press.
+  function isTickableMoney(h) {
+    return isMoneyItem(h) && h.applicable === true;
+  }
+
+  function hasTickableMoney(r) {
+    return (r.heldBack || []).some(isTickableMoney);
+  }
+
+  // What one press of "Create …" on a dataset would create, exactly. createCount()
+  // is this rule, so the dashboard's count and the button's count are one thing.
+  function isCreatable(ds, r) {
+    return r['class'] === 'new' && !r.createBlocked && r.bt && r.bt.btId != null && r.bt.btId !== ''
+      && (ds.key !== 'jobs' || r.bt.scope === 'open');
+  }
+
+  function creatableRows(key) {
+    var ds = dsOf(key);
+    if (!ds || !ds.classified) return [];
+    return (ds.rows || []).filter(function (r) { return isCreatable(ds, r); });
+  }
+
+  function sumText(rows, read) {
+    var out = { n: rows.length, total: 0, unreadable: 0 };
+    rows.forEach(function (r) {
+      var v = moneyNum(read(r));
+      if (v == null) out.unreadable++;
+      else out.total += v;
+    });
+    out.total = round2(out.total);
+    return out;
+  }
+
+  function moneyAtStake() {
+    var tick = { items: 0, rows: 0, bt: 0, p86: 0, noFigure: 0 };
+    var review = { items: 0, rows: 0 };
+    DS_ORDER.forEach(function (key) {
+      var ds = dsOf(key);
+      if (!ds || !ds.classified) return;
+      (ds.rows || []).forEach(function (r) {
+        var t = 0;
+        var v = 0;
+        (r.heldBack || []).forEach(function (h) {
+          if (!isMoneyItem(h)) return;
+          if (isTickableMoney(h)) {
+            tick.items++;
+            t++;
+            // A single figure on both sides can be totalled. An item whose
+            // value is a whole set of line items cannot, and is counted apart
+            // rather than folded into a dollar sum nobody could check.
+            if (num(h.value) && num(h.p86Value)) { tick.bt += h.value; tick.p86 += h.p86Value; }
+            else tick.noFigure++;
+          } else {
+            review.items++;
+            v++;
+          }
+        });
+        if (t) tick.rows++;
+        if (v) review.rows++;
+      });
+    });
+    tick.bt = round2(tick.bt);
+    tick.p86 = round2(tick.p86);
+    tick.delta = round2(tick.bt - tick.p86);
+
+    var po = dsOf('purchaseOrders');
+    var poRows = creatableRows('purchaseOrders');
+    var committed = sumText(poRows.filter(function (r) { return r.bt && r.bt.state86 && r.bt.state86 !== 'draft'; }),
+      function (r) { return r.bt.costText; });
+    var draft = sumText(poRows.filter(function (r) { return !(r.bt && r.bt.state86 && r.bt.state86 !== 'draft'); }),
+      function (r) { return r.bt.costText; });
+    var bills = sumText(creatableRows('bills'), function (r) { return r.bt.amountText; });
+    var estimates = sumText(creatableRows('estimates'), function (r) { return r.bt.ownerText; });
+    return { tick: tick, review: review, committed: committed, draft: draft, bills: bills, estimates: estimates,
+      poRead: !!(po && po.classified) };
+  }
+
+  // ── SYNC HEALTH ────────────────────────────────────────────────────────
+  //
+  // A DECLARED KEY NO RECORD CARRIES IS A DEFECT, not a note: it has shipped
+  // twice ('item' on estimates, and a whole dataset refusing on a markup type
+  // nobody could see), and both times the diagnostic held the answer while the
+  // page said nothing. Keys the records carry that P86 does not read are
+  // information about Buildertrend, not a fault here, and read that way.
+  function health() {
+    return DS_ORDER.map(function (key) {
+      var ds = dsOf(key);
+      if (!ds) {
+        return { key: key, label: key, absent: true, read: 'failed', defect: false,
+          missingKeys: [], unexpectedKeys: [], error: 'This server did not send a ' + key + ' comparison.' };
+      }
+      var f = ds.fetch || {};
+      var m = ds.mapping;
+      // A dataset whose FETCH failed never reached describeMapping, so a null
+      // mapping beside an error is the fetch failing — not a silent mapping.
+      var failed = !!(ds.error && !m);
+      return {
+        key: key,
+        label: ds.label || key,
+        read: failed ? 'failed' : (f.complete === true ? 'complete' : 'partial'),
+        fetched: f.fetched == null ? 0 : f.fetched,
+        reported: f.reportedCount == null ? null : f.reportedCount,
+        elapsedMs: f.elapsedMs == null ? null : f.elapsedMs,
+        reason: f.reason || null,
+        classified: ds.classified === true,
+        error: ds.error ? ds.error.message : null,
+        refusal: m && m.refusal ? m.refusal : null,
+        missingKeys: (m && m.missingKeys) || [],
+        unexpectedKeys: (m && m.unexpectedKeys) || [],
+        defect: !!((m && m.refusal) || (m && m.missingKeys && m.missingKeys.length))
+      };
+    });
+  }
+
+  // ── THE WORK QUEUES ────────────────────────────────────────────────────
+  //
+  // Grouped by what a PERSON DOES, across all seven datasets at once, because
+  // "create these" is one job whether the thing is a job, a bill or a
+  // worksheet. Each part is one click into one dataset's filtered list.
+  function partDefs(f, note) {
+    return DS_ORDER.map(function (k) { return { key: k, f: f, note: note }; });
+  }
+
+  function groupDefs() {
+    return [
+      { id: 'blocked', tone: 'refused', title: 'Blocked behind a job that is not linked',
+        why: 'Nothing can be created or corrected on these until their Buildertrend job is a P86 job carrying the Buildertrend id. The chain above says which jobs, and in which order.',
+        parts: WAIT_KINDS.map(function (k) { return { key: k, f: 'waiting' }; }) },
+      { id: 'create', tone: 'new', title: 'Would be created in Project 86',
+        why: 'Buildertrend holds these and P86 does not. Each count is exactly what that tab’s one Create press makes — ambiguous rows and possible duplicates are never created.',
+        parts: partDefs('creatable').concat([{ key: 'jobs', f: 'closed_new', note: 'closed in Buildertrend — created one at a time from the row' }]) },
+      { id: 'disagree', tone: 'conflict', title: 'Fields that disagree',
+        why: 'P86 holds these already and Buildertrend says something different. Money and job numbers are never in that press — they wait for a tick below.',
+        parts: partDefs('conflict') },
+      { id: 'money', tone: 'heldback', title: 'Money waiting for a tick',
+        why: 'A figure a sync will never move on its own. Each of these rows carries at least one money item a person may tick on purpose.',
+        parts: partDefs('money') },
+      { id: 'undecided', tone: 'ambiguous', title: 'Cannot be told apart',
+        why: 'Two or more P86 records could be the Buildertrend one, or one looks like it without matching. Nothing is proposed and nothing is created until a person picks.',
+        parts: partDefs('ambiguous', 'ambiguous').concat(partDefs('possible_duplicate', 'possible duplicate')) },
+      { id: 'refused', tone: 'notinbt', title: 'Refused — nothing can be proposed',
+        why: 'Deleted in Buildertrend, sent without an id or a name, or carrying something P86 cannot hold. Rows waiting on a job are counted in their own group above, not here.',
+        parts: partDefs('refused_only') }
+    ];
+  }
+
+  function groups() {
+    return groupDefs().map(function (g) {
+      var parts = g.parts.map(function (p) {
+        return { key: p.key, f: p.f, scope: 'all', note: p.note || '', label: dsLabel(p.key), n: countTarget(p) };
+      }).filter(function (p) { return p.n > 0; });
+      // THE GROUP'S COUNT IS THE SUM OF ITS PARTS AND NOTHING ELSE.
+      g.parts = parts;
+      g.n = parts.reduce(function (s, p) { return s + p.n; }, 0);
+      return g;
+    });
+  }
+
+  // Why each refused row was refused — the matcher's own first sentence,
+  // counted. Every row the "Refused" group reaches is in exactly one bucket, so
+  // these add up to that group's count.
+  function refusalReasons() {
+    var by = {};
+    var order = [];
+    DS_ORDER.forEach(function (key) {
+      var ds = dsOf(key);
+      if (!ds || !ds.classified) return;
+      (ds.rows || []).forEach(function (r) {
+        if (r['class'] !== 'refused' || r.waitingOnJob === true) return;
+        var why = (r.notes || [])[0] || 'No reason was given.';
+        if (!by[why]) { by[why] = { why: why, n: 0 }; order.push(why); }
+        by[why].n++;
+      });
+    });
+    return order.map(function (w) { return by[w]; }).sort(function (a, b) {
+      if (b.n !== a.n) return b.n - a.n;
+      return a.why < b.why ? -1 : a.why > b.why ? 1 : 0;
+    });
+  }
+
+  // ── RENDER ─────────────────────────────────────────────────────────────
+
+  function goBtn(t, inner, cls) {
+    return '<button type="button" class="' + cls + '" data-btp-go="' + esc(JSON.stringify(t)) + '">' + inner + '</button>';
+  }
+
+  function partBtn(p) {
+    return goBtn({ key: p.key, f: p.f, scope: p.scope },
+      '<span class="btp-part-n">' + esc(p.n) + '</span> ' + esc(p.label) + (p.note ? ' <span class="btp-part-s">' + esc(p.note) + '</span>' : ''),
+      'btp-part');
+  }
+
+  // ── WHERE THE AUTOMATIC SYNC GOES ──────────────────────────────────────
+  // An automatic sync that applies changes unattended — with an audit of every
+  // automatic write and an undo — is a SEPARATE change and is NOT built here.
+  // This block is the hole it drops into: the first thing on the Overview,
+  // above everything a person presses by hand. When the runner ships,
+  // runStatusHTML() renders its last run, what it wrote and its undo in place
+  // of this sentence, reading its own field off the response. Nothing below
+  // moves, because nothing below reads this block.
+  function runStatusHTML() {
+    return '<div class="btp-run" data-btp-run-slot="1"><b>Every change here is one you press.</b> ' +
+      'No sync runs on its own yet, so nothing below is a record of an automatic write and there is nothing to undo. ' +
+      'When an automatic sync arrives, its last run, what it changed and its undo appear in this block.</div>';
+  }
+
+  function depHTML() {
+    var list = blockers();
+    var sum = blockerSummary(list);
+    var html = '<section class="btp-dash-sec" data-btp-dash="dependencies">' +
+      '<div class="btp-dash-h">What one job unblocks</div>' +
+      '<div class="btp-dash-w">A change order, purchase order, bill or estimate worksheet whose Buildertrend job is not linked to a P86 job can do nothing at all. ' +
+      'These are those rows, grouped by the job they are waiting on and ranked by how much each job releases. Work down this list and everything below it gets smaller.</div>';
+    if (!list.length) {
+      return html + '<div class="btp-sentence is-ok" data-btp-dep-none="1">Nothing is waiting on a job.</div></section>';
+    }
+    var blockedTotal = list.reduce(function (s, b) { return s + b.total; }, 0);
+    var lead = [];
+    ACTION_ORDER.forEach(function (a) {
+      var s = sum[a];
+      if (!s) return;
+      lead.push('<b>' + esc(ACTIONS[a].verb) + ' ' + esc(s.jobs) + ' job' + (s.jobs === 1 ? '' : 's') + '</b> unblocks ' +
+        esc(s.blocked) + ' record' + (s.blocked === 1 ? '' : 's') + ' <span class="btp-meta">(' + esc(ACTIONS[a].label.toLowerCase()) + ')</span>');
+    });
+    var kinds = WAIT_KINDS.filter(function (k) {
+      return list.some(function (b) { return b.counts[k] > 0; });
+    }).length;
+    html += '<div class="btp-lead" data-btp-dep-lead="1">' + esc(blockedTotal) + ' record' + (blockedTotal === 1 ? '' : 's') +
+      ' across ' + esc(kinds) + ' dataset' + (kinds === 1 ? '' : 's') + ' ' + (blockedTotal === 1 ? 'is' : 'are') +
+      ' waiting on ' + esc(list.length) + ' Buildertrend job' + (list.length === 1 ? '' : 's') + '. ' +
+      lead.join('. ') + '.</div>';
+    html += '<div class="btp-scroll"><table class="btp-dep"><thead><tr><th>Buildertrend job</th><th>What it needs</th>' +
+      WAIT_KINDS.map(function (k) { return '<th class="btp-num">' + esc(dsLabel(k)) + '</th>'; }).join('') +
+      '<th class="btp-num">Blocked</th></tr></thead><tbody>';
+    html += list.map(function (b) {
+      var act = ACTIONS[b.action];
+      var name = b.jobName || (b.jobId ? 'Buildertrend job ' + b.jobId : '(no job named on these records)');
+      var jobLink = b.jobName
+        ? goBtn({ key: 'jobs', f: 'all', scope: 'all', q: b.jobName }, esc(name), 'btp-linkish')
+        : esc(name);
+      return '<tr data-btp-dep-row="' + esc(b.key) + '"><td>' + jobLink + '</td>' +
+        '<td><span class="btp-act a-' + esc(b.action) + '">' + esc(act.label) + '</span></td>' +
+        WAIT_KINDS.map(function (k) {
+          var n = b.counts[k];
+          if (!n) return '<td class="btp-num"><span class="btp-none">—</span></td>';
+          return '<td class="btp-num">' + goBtn({ key: k, f: 'waitjob', scope: 'all', waitJob: b.key, waitJobLabel: name },
+            esc(n), 'btp-linkish') + '</td>';
+        }).join('') +
+        '<td class="btp-num"><b>' + esc(b.total) + '</b></td></tr>';
+    }).join('');
+    html += '</tbody></table></div>';
+    html += '<ul class="btp-list btp-dep-why">' + ACTION_ORDER.filter(function (a) { return sum[a]; })
+      .map(function (a) { return '<li><b>' + esc(ACTIONS[a].label) + '</b> — ' + esc(ACTIONS[a].why) + '</li>'; }).join('') + '</ul>';
+    return html + '</section>';
+  }
+
+  function groupsHTML() {
+    var gs = groups();
+    var html = '<section class="btp-dash-sec" data-btp-dash="groups">' +
+      '<div class="btp-dash-h">What there is to do</div>' +
+      '<div class="btp-dash-w">Every Buildertrend record in this read, grouped by what a person would do with it rather than by which tab it sits on. ' +
+      'Each count is the length of the list its own button lands on.</div>';
+    html += gs.map(function (g) {
+      var body = g.parts.length
+        ? '<div class="btp-parts">' + g.parts.map(partBtn).join('') + '</div>'
+        : '<div class="btp-none">Nothing.</div>';
+      var extra = '';
+      if (g.id === 'money') extra = moneyLinesHTML();
+      if (g.id === 'refused') {
+        var rs = refusalReasons();
+        if (rs.length) {
+          extra = '<ul class="btp-list btp-why">' + rs.slice(0, 8).map(function (x) {
+            return '<li><b>' + esc(x.n) + '</b> — ' + esc(x.why) + '</li>';
+          }).join('') + (rs.length > 8 ? '<li class="btp-meta">and ' + esc(rs.length - 8) + ' more reasons</li>' : '') + '</ul>';
+        }
+      }
+      return '<div class="btp-grp c-' + esc(g.tone) + '" data-btp-group="' + esc(g.id) + '">' +
+        '<div class="btp-grp-h"><span class="btp-grp-n" data-btp-group-n="' + esc(g.id) + '">' + esc(g.n) + '</span>' +
+        '<span class="btp-grp-t">' + esc(g.title) + '</span></div>' +
+        '<div class="btp-grp-w">' + esc(g.why) + '</div>' + body + extra + '</div>';
+    }).join('');
+    return html + '</section>';
+  }
+
+  // The money sentence that belongs inside the "Money waiting for a tick"
+  // group: what those ticks are worth, and what they are NOT.
+  function moneyLinesHTML() {
+    var m = moneyAtStake();
+    var t = m.tick;
+    var bits = [];
+    if (t.items) {
+      bits.push('<li>Buildertrend <b>' + esc(fmtUSD(t.bt)) + '</b> against Project 86’s <b>' + esc(fmtUSD(t.p86)) + '</b> on ' +
+        esc(t.items - t.noFigure) + ' item' + (t.items - t.noFigure === 1 ? '' : 's') + ' that carry one figure on each side — a difference of <b>' +
+        esc(fmtUSD(t.delta)) + '</b>. <span class="btp-meta">Proposed, not applied: nothing moves until the box is ticked and the press confirmed.</span></li>');
+    }
+    if (t.noFigure) {
+      bits.push('<li><b>' + esc(t.noFigure) + '</b> more tickable item' + (t.noFigure === 1 ? ' is' : 's are') +
+        ' a whole set of line items rather than one figure, so they are not in that total. <span class="btp-meta">Adding them to it would be adding two different things.</span></li>');
+    }
+    if (m.review.items) {
+      bits.push('<li><b>' + esc(m.review.items) + '</b> money item' + (m.review.items === 1 ? '' : 's') +
+        ' on ' + esc(m.review.rows) + ' row' + (m.review.rows === 1 ? '' : 's') + ' cannot be ticked at all — P86 has them settled, applied or closed. ' +
+        '<span class="btp-meta">Shown for review, never applied, and never in a total on this page.</span></li>');
+    }
+    if (!bits.length) return '';
+    return '<ul class="btp-list btp-why">' + bits.join('') + '</ul>';
+  }
+
+  function moneyCard(tone, n, label, sub) {
+    return '<div class="btp-mcard c-' + tone + '"><div class="btp-mn">' + esc(n) + '</div>' +
+      '<div class="btp-tile-l">' + esc(label) + '</div><div class="btp-tile-s">' + esc(sub) + '</div></div>';
+  }
+
+  function moneyHTML() {
+    var m = moneyAtStake();
+    var html = '<section class="btp-dash-sec" data-btp-dash="money">' +
+      '<div class="btp-dash-h">Money at stake</div>' +
+      '<div class="btp-dash-w">Every figure here is Buildertrend’s, and every one of them is PROPOSED. Nothing on this page has been applied to Project 86, ' +
+      'and no two of these are added together — they are different kinds of money and a single total would mean nothing.</div>' +
+      '<div class="btp-money">';
+    html += moneyCard('heldback', fmtUSD(m.tick.delta) || '$0.00', 'Waiting for a tick',
+      m.tick.items + ' held-back money item' + (m.tick.items === 1 ? '' : 's') + ' · Buildertrend ' + (fmtUSD(m.tick.bt) || '$0.00') + ' vs P86 ' + (fmtUSD(m.tick.p86) || '$0.00'));
+    html += moneyCard('conflict', fmtUSD(m.committed.total) || '$0.00', 'Committed POs not in P86',
+      m.committed.n + ' purchase order' + (m.committed.n === 1 ? '' : 's') + ' sent or approved in Buildertrend — creating them starts that cost on the job'
+      + (m.committed.unreadable ? ' · ' + m.committed.unreadable + ' sent no readable cost' : ''));
+    html += moneyCard('new', fmtUSD(m.draft.total) || '$0.00', 'Draft POs not in P86',
+      m.draft.n + ' still a draft in Buildertrend — created uncommitted, so nothing accrues yet'
+      + (m.draft.unreadable ? ' · ' + m.draft.unreadable + ' sent no readable cost' : ''));
+    html += moneyCard('notinbt', fmtUSD(m.bills.total) || '$0.00', 'Bills not in P86',
+      m.bills.n + ' bill' + (m.bills.n === 1 ? '' : 's') + ' — real money owed, which accrues on the job and counts toward its PO’s %-billed'
+      + (m.bills.unreadable ? ' · ' + m.bills.unreadable + ' sent no readable amount' : ''));
+    html += moneyCard('matched', fmtUSD(m.estimates.total) || '$0.00', 'Estimate worksheets not in P86',
+      m.estimates.n + ' worksheet' + (m.estimates.n === 1 ? '' : 's') + ' at Buildertrend’s owner price — a proposal, born unsent and unapproved'
+      + (m.estimates.unreadable ? ' · ' + m.estimates.unreadable + ' sent no readable price' : ''));
+    return html + '</div></section>';
+  }
+
+  function healthHTML() {
+    var rows = health();
+    var partial = rows.filter(function (h) { return h.read === 'partial'; }).length;
+    var failed = rows.filter(function (h) { return h.read === 'failed'; }).length;
+    var defects = rows.filter(function (h) { return h.defect; }).length;
+    var html = '<section class="btp-dash-sec" data-btp-dash="health">' +
+      '<div class="btp-dash-h">Sync health</div>' +
+      '<div class="btp-dash-w">What this read actually reached, and whether the fields it reads are the fields Buildertrend sends. ' +
+      'A declared key no record carries is a DEFECT — nothing can ever be proposed from it, and it reads as absent rather than wrong. ' +
+      'Keys the records carry that Project 86 does not read are information about Buildertrend, not a fault here.</div>';
+    html += '<div class="btp-lead" data-btp-health-lead="1">' +
+      (_data && _data.generatedAt ? 'Read ' + esc(new Date(_data.generatedAt).toLocaleString()) + ' in ' + esc(_data.elapsedMs) + ' ms. ' : '') +
+      (failed ? '<b>' + esc(failed) + ' dataset' + (failed === 1 ? '' : 's') + ' failed.</b> ' : '') +
+      (partial ? '<b>' + esc(partial) + ' read' + (partial === 1 ? '' : 's') + ' partial</b> — every count on this page covers only what was fetched. ' : '') +
+      (defects ? '<b>' + esc(defects) + ' mapping defect' + (defects === 1 ? '' : 's') + '.</b>' : (failed || partial ? '' : 'Every dataset read completely and every declared key arrived.')) +
+      '</div>';
+    html += '<div class="btp-health">' + rows.map(function (h) {
+      var tone = h.read === 'failed' ? 'refused' : h.read === 'partial' ? 'ambiguous' : 'matched';
+      var badge = h.read === 'failed' ? 'Failed' : h.read === 'partial' ? 'Partial' : 'Complete';
+      var s = '<div class="btp-hrow" data-btp-health="' + esc(h.key) + '">' +
+        '<div class="btp-row-head"><span class="btp-hbadge c-' + tone + '" data-btp-health-read="' + esc(h.key) + '">' + esc(badge) + '</span>' +
+        '<b>' + esc(h.label) + '</b>' +
+        (h.absent ? '' : goBtn({ key: h.key, f: 'all', scope: 'all' }, 'Open', 'btp-btn btp-link')) + '</div>';
+      s += '<div class="btp-meta">' + esc(h.fetched) + ' of ' + (h.reported == null ? '?' : esc(h.reported)) + ' fetched' +
+        (h.elapsedMs == null ? '' : ' · ' + esc(h.elapsedMs) + ' ms') + '</div>';
+      if (h.reason) s += '<div class="btp-notes">' + esc(h.reason) + '</div>';
+      // A mapping refusal IS this dataset's error sentence, and it is printed
+      // once, as the defect it is — not twice, as a note and a defect.
+      if (h.error && h.error !== h.refusal) s += '<div class="btp-notes">' + esc(h.error) + '</div>';
+      if (h.refusal) {
+        s += '<div class="btp-fix-note is-typo" data-btp-health-defect="' + esc(h.key) + '">Mapping refused: ' + esc(h.refusal) + '</div>';
+      } else if (h.missingKeys.length) {
+        s += '<div class="btp-fix-note is-typo" data-btp-health-defect="' + esc(h.key) + '">Defect — declared key' +
+          (h.missingKeys.length === 1 ? '' : 's') + ' no record carried: <b>' + h.missingKeys.map(esc).join(', ') + '</b>. ' +
+          'Nothing can be proposed from ' + (h.missingKeys.length === 1 ? 'it' : 'them') + ', and ' +
+          (h.missingKeys.length === 1 ? 'it reads' : 'they read') + ' as absent rather than wrong.</div>';
+      } else if (h.classified) {
+        s += '<div class="btp-fix-note">Every declared key arrived.</div>';
+      }
+      if (h.unexpectedKeys.length) {
+        s += '<div class="btp-notes" data-btp-health-extra="' + esc(h.key) + '">' + esc(h.unexpectedKeys.length) +
+          ' key' + (h.unexpectedKeys.length === 1 ? '' : 's') + ' arrived that P86 does not read — information, not a fault: <span class="btp-code">' +
+          h.unexpectedKeys.slice(0, 6).map(function (k) { return esc(k.key); }).join(' · ') + '</span></div>';
+      }
+      return s + '</div>';
+    }).join('') + '</div>';
+    return html + '</section>';
+  }
+
+  function dashboardHTML() {
+    return runStatusHTML() + depHTML() + groupsHTML() + moneyHTML() + healthHTML();
   }
 
   function pageHTML() {
@@ -1112,7 +1806,8 @@
           t[1] + (waiting ? ' <span class="btp-tab-n">' + waiting + '</span>' : '') +
           (fresh ? ' <span class="btp-tab-new" data-btp-tab-new="' + t[0] + '" title="New or changed in Buildertrend since your last refresh">' + fresh + ' new</span>' : '') + '</button>';
       }).join('') + '</div>';
-      if (_tab === 'archive') html += archiveHTML();
+      if (_tab === 'overview') html += dashboardHTML();
+      else if (_tab === 'archive') html += archiveHTML();
       else if (_data.datasets && _data.datasets[_tab]) html += datasetHTML(_data.datasets[_tab]);
       else html += '<div class="btp-sentence is-warn">This server has not sent the ' + esc(_tab) + ' comparison yet — it may still be running the previous version. Press Refresh in a minute.</div>';
     }
@@ -1140,6 +1835,15 @@
   function wire() {
     var r = _host.querySelector('[data-btp-refresh]');
     if (r) r.addEventListener('click', function () { load(); });
+    // Every counted button on the Overview carries its own target, and the
+    // target is what countTarget() measured.
+    Array.prototype.forEach.call(_host.querySelectorAll('[data-btp-go]'), function (b) {
+      b.addEventListener('click', function () {
+        var t;
+        try { t = JSON.parse(b.getAttribute('data-btp-go')); } catch (e) { return; }
+        navigate(t);
+      });
+    });
     Array.prototype.forEach.call(_host.querySelectorAll('[data-btp-restore]'), function (b) {
       b.addEventListener('click', function () {
         runApply(b.getAttribute('data-btp-kind'), { mode: 'restore', p86Id: b.getAttribute('data-btp-restore') });
@@ -1259,7 +1963,7 @@
       errorSentence: errorSentence,
       render: function (data, err) { _data = data || null; _err = err || null; _loading = false; return pageHTML(); },
       runApply: runApply,
-      setView: function (key, f, scope) { _ui[key].f = f || 'all'; if (scope) _ui[key].scope = scope; _ui[key].shown = PAGE; },
+      setView: function (key, f, scope) { _ui[key].f = f || 'all'; if (scope) _ui[key].scope = scope; _ui[key].waitJob = ''; _ui[key].waitJobLabel = ''; _ui[key].shown = PAGE; },
       setTab: function (t) { _tab = t; },
       setArchive: function (a) { _archive = a; _archiveErr = null; },
       resetPicks: function () { _picks = {}; },
@@ -1268,7 +1972,17 @@
       safeConfirmText: safeConfirmText,
       rowConfirm: rowConfirm,
       pickedFields: pickedFields,
-      createAllConfirmText: createAllConfirmText
+      createAllConfirmText: createAllConfirmText,
+      // The Overview: each figure it prints, and the click that goes with it.
+      navigate: navigate,
+      countTarget: countTarget,
+      blockers: blockers,
+      blockerSummary: blockerSummary,
+      groups: groups,
+      refusalReasons: refusalReasons,
+      moneyAtStake: moneyAtStake,
+      moneyNum: moneyNum,
+      health: health
     }
   };
 })();

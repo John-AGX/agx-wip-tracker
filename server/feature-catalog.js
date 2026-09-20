@@ -526,9 +526,21 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.38';
+const APP_VERSION = '1.39';
 
 const releases = [
+  {
+    version: '1.39',
+    date: '2026-09-20',
+    name: 'The Buildertrend preview tells you what to do first',
+    summary: 'An Overview above the tabs that reads the whole sync at once: which jobs are holding up the most other records, what is waiting on you grouped by what you would do about it, how much money is proposed, and whether each dataset was read cleanly.',
+    changes: [
+      { type: 'new', text: 'The chain. A change order, purchase order, bill or estimate worksheet whose Buildertrend job is not linked to a Project 86 job can do nothing until that job exists, and until now each one sat in a different tab looking like its own problem. The Overview groups them by the job they are stuck behind and ranks those jobs by how much each one unblocks, so creating a handful of jobs releases everything waiting on them. Each entry says what it needs and takes you straight to it.' },
+      { type: 'new', text: 'What is waiting on you, grouped by what you would do rather than by dataset: records to create, records blocked behind a job, fields that disagree, money waiting to be ticked, rows that cannot be told apart, and rows refused with the reason. Every group takes you to exactly those rows already filtered — and every count is the number of rows its own click reaches, which is checked by a test so the page cannot quietly drift from the tabs.' },
+      { type: 'new', text: 'Sync health per dataset: whether the read was complete or cut short, how many records arrived, and how the Buildertrend fields line up with what Project 86 reads. A field Project 86 expects that no record carries is shown as a defect, because it is one — that exact condition has shipped twice. Fields Buildertrend carries that Project 86 does not read are shown as information, not a fault.' },
+      { type: 'improved', text: 'Money on the Overview is always labelled proposed, never applied, counts only what you could actually tick, and says what it has left out rather than folding unlike figures into one total.' },
+    ],
+  },
   {
     version: '1.38',
     date: '2026-09-20',
